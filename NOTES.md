@@ -1048,6 +1048,17 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     through its environment while `up` still waits for that shell, so readiness must fail and the
     cleanup path is exercised even when startup is fast. In a nested box, bwrap may take a fraction
     of a second to exit after `up` returns, so the cleanup checks poll for completion.
+80. **The suite, hardened** (2026-09-25, ideas from a read of Cua's test kit). A suite that passes
+    must have checked:
+    - *No silent passes*: checks that depended on the machine (`[ -f … ] && check`, `command -v
+      zenity`) passed unseen when skipped; they are `skip`s now, counted and listed at the end, and
+      fail under `--strict` / `OMABOX_TEST_STRICT=1`. A test that runs no check fails, a PATTERN that
+      matches no test exits 2 (`test/run.sh zzznomatch` passed with 0 checks), `t_unit_registry`
+      fails for a `t_*` function missing from UNIT/BOX, and an unfiltered run needs 340 checks (175
+      of them unit; 360 ran). The runner is one function (an edit mid-run cannot change it).
+    - *Provenance*: the first line names the checkout (sha, dirty), the Hyprland boxes start and the
+      host's running one, aquamarine (the box's and the system's), quickshell, labwc, bwrap, the
+      render node and driver, and the kernel.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

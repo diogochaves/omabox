@@ -2,13 +2,16 @@
 # shellcheck disable=SC2016 # single-quoted $VARS are expanded inside the box
 # omabox's regression suite: what NOTES' findings verified, as checks that run in real boxes.
 #
-#   test/run.sh              every test (~2-3 min; boxes are named t<pid>-*, all torn down)
+#   test/run.sh              every test (~4 min; boxes are named t<pid>-*, all torn down)
 #   test/run.sh unit         only the fast ones (no box)
-#   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd)
+#   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd); a PATTERN
+#                            that matches no test exits 2
+#   --strict (or OMABOX_TEST_STRICT=1): a skipped check (a tool this machine lacks) fails
 #
 # Never touches the real desktop: every box is headless, and the last test checks that the host's
 # focused workspace and window are what they were before. Needs a Hyprland session (read-only hyprctl)
 # and the host ports 8093/8094 free (a throwaway HTTP server for the network tests).
+# A test that runs no check fails, and so does a full run with fewer checks than MIN_CHECKS.
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
@@ -17,7 +20,11 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLI=$ROOT/bin/omabox
 P=t$$                      # box name prefix
 TMP=$(mktemp -d)
-pass=0 fail=0 failed=()
+pass=0 fail=0 failed=() skips=()
+STRICT=${OMABOX_TEST_STRICT:-0}
+# A full run's floor (360 checks, 175 of them unit, on 2026-09-25): a test that silently stops
+# checking shows up here even when everything that did run passed.
+MIN_CHECKS=340 MIN_UNIT=170
 
 cleanup() {
   local b
@@ -35,6 +42,12 @@ check() { local n=$1; shift; local out; if out=$("$@" 2>&1); then ok "$n"; else 
 check_eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "want [$2] got [$3]"; fi; }
 check_fails() { local n=$1; shift; local out; if out=$("$@" 2>&1); then no "$n" "succeeded: $out"; else ok "$n"; fi; }
 check_match() { if [[ $3 =~ $2 ]]; then ok "$1"; else no "$1" "want /$2/ got [$3]"; fi; }
+# skip NAME WHY: a check this machine cannot run (a missing tool or file), counted and listed at the
+# end instead of passing unseen; under --strict it fails.
+skip() {
+  skips+=("$CUR: $1 ($2)"); printf '  \e[33mskip\e[0m %s (%s)\n' "$1" "$2"
+  [ "$STRICT" = 0 ] || no "$1" "skipped under --strict: $2"
+}
 # Poll a command until it succeeds (SECONDS timeout).
 until_ok() { local t=$1; shift; local end=$((SECONDS + t)); until "$@" >/dev/null 2>&1; do [ $SECONDS -lt $end ] || return 1; sleep 0.2; done; }
 # A fresh git repo named $P-SUFFIX: a throwaway `run` from it gets a name no box of the user's has
@@ -218,6 +231,13 @@ t_unit_version() {
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
 }
 
+# Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
+t_unit_registry() {
+  check_eq "every t_* function is in UNIT or BOX, once" "$(declare -F | awk '$3 ~ /^t_/ {print $3}' | sort)" \
+    "$(printf '%s\n' "${UNIT[@]}" "${BOX[@]}" | sort)"
+  check_eq "UNIT has only t_unit_*, BOX none" "" "$(printf '%s\n' "${UNIT[@]}" | grep -v '^t_unit_'; printf '%s\n' "${BOX[@]}" | grep '^t_unit_')"
+}
+
 t_unit_cli() {
   check_eq "inside a box OMABOX=1 is not a box name" "$(basename "$ROOT")" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
   check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
@@ -298,6 +318,8 @@ t_main() {
       "$(ob run -b "$B" -- env WAYLAND_DISPLAY=wayland-0 wlr-randr --json | jq -r '.[0].modes[] | select(.current) | "\(.width) \(.height)"')"
   else
     check_eq "headless screen" HEADLESS-2 "$screen_name"
+    skip "NVIDIA's private Wayland screen, nodes and parent output" \
+      "the render node's driver is $(lib render_driver "$(lib render_node)"), not nvidia"
   fi
   # shot
   local png=$TMP/main.png
@@ -351,11 +373,14 @@ t_main() {
   check_eq "run from the repo runs in the repo" "$ROOT" "$(cd "$ROOT" && "$CLI" run -b "$B" -- pwd)"
   # Omarchy's terminal setup in the box HOME (finding 69): an app id reaches the terminal, so window
   # rules (About's float/center) match
-  [ -f /usr/share/omarchy/applications/foot.desktop ] &&
+  if [ -f /usr/share/omarchy/applications/foot.desktop ]; then
     check "foot's desktop entry passes --app-id" grep -q '^X-TerminalArgAppId=' "$D/home/.local/share/applications/foot.desktop"
-  [ -f "$HOME/.config/foot/foot.ini" ] && check "the user's foot config (theme colours)" test -f "$D/home/.config/foot/foot.ini"
+  else skip "foot's desktop entry passes --app-id" "no Omarchy foot.desktop on this machine"; fi
+  if [ -f "$HOME/.config/foot/foot.ini" ]; then check "the user's foot config (theme colours)" test -f "$D/home/.config/foot/foot.ini"
+  else skip "the user's foot config (theme colours)" "no ~/.config/foot/foot.ini"; fi
   # ...on top of the stock HOME (/etc/skel), never the user's secrets, and Omarchy's toggles apply
-  [ -d /etc/skel/.config/omarchy ] && check "the box HOME starts from /etc/skel" test -f "$D/home/.local/state/omarchy/toggles/hypr/flags.lua"
+  if [ -d /etc/skel/.config/omarchy ]; then check "the box HOME starts from /etc/skel" test -f "$D/home/.local/state/omarchy/toggles/hypr/flags.lua"
+  else skip "the box HOME starts from /etc/skel" "no /etc/skel/.config/omarchy"; fi
   check_fails "no api-keys.env in the box HOME" test -e "$D/home/.config/omarchy/api-keys.env"
   ob run -b "$B" -- omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1
   check "an Omarchy toggle applies (gaps off)" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j getoption general:gaps_out | jq -e '.css == \"0 0 0 0\"'"
@@ -604,7 +629,7 @@ t_keys() {
     ob keys -b "$B" -t 'aÜbα😀' -s 300 Return >/dev/null
     until_ok 5 ob run -b "$B" -- test -s /tmp/x11
     check_eq "an X11 app gets characters outside the layout" 'aÜbα😀' "$(ob run -b "$B" -- cat /tmp/x11)"
-  fi
+  else skip "an X11 app gets characters outside the layout" "no zenity"; fi
   check "pointer: click, then move" ob pointer -b "$B" -- click move 10 10
   check_eq "pointer: sleep -1 refused" 2 "$(timeout 5 "$CLI" pointer -b "$B" -- sleep -1 >/dev/null 2>&1; echo $?)"
   ob keys -b "$B" -s 3000 a >/dev/null 2>&1 & local k=$!
@@ -941,33 +966,77 @@ t_guard() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
+UNIT=(t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
+  t_unit_registry)
 BOX=(t_main t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
-hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
-ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
 
-tests=("${UNIT[@]}" "${BOX[@]}")
-if [ "${1:-}" = unit ]; then tests=("${UNIT[@]}")
-elif [ $# -gt 0 ]; then
-  sel=(); for t in "${tests[@]}"; do for p in "$@"; do [[ $t == *"$p"* ]] && { sel+=("$t"); break; }; done; done
-  tests=("${sel[@]}")
-fi
+# What this run ran on, for comparing a failure with a run that passed: the checkout, the stack a box
+# is made of (the Hyprland binary boxes start and the host's running one can differ after an upgrade),
+# and the GPU.
+provenance() {
+  local sha dirty="" so aq rn drv
+  sha=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null) || sha=unknown
+  [ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ] || dirty=+dirty
+  so=$(ldd "$(command -v Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}')
+  aq=$(readlink -f "$ROOT/build/prefix/lib/$so" 2>/dev/null); aq=${aq##*.so.}
+  rn=$(lib render_node 2>/dev/null); drv=$(readlink -f "/sys/class/drm/${rn##*/}/device/driver" 2>/dev/null)
+  printf 'omabox %s %s%s, Hyprland %s (host session %s), aquamarine %s (system %s), quickshell %s, labwc %s, bwrap %s, %s (%s), kernel %s\n' \
+    "$(cat "$ROOT/VERSION")" "$sha" "$dirty" "$(Hyprland --version 2>/dev/null | awk 'NR == 1 {print $2}')" \
+    "$(hostctl -j version | jq -r '.tag // "?"')" "${aq:-?}" "$(pkg-config --modversion aquamarine 2>/dev/null || echo ?)" \
+    "$(quickshell --version 2>/dev/null | awk 'NR == 1 {print $2}')" "$(labwc --version 2>/dev/null | awk 'NR == 1 {print $2}')" \
+    "$(bwrap --version | awk '{print $2}')" "${rn:-no render node}" "${drv##*/}" "$(uname -r)"
+}
 
-for CUR in "${tests[@]}"; do
-  echo "${CUR#t_}"
-  "$CUR"
-done
+# The runner as one function, read whole before it starts: an edit to this file during a run (another
+# agent's, in the same checkout) cannot change what the rest of the run does (as finding 66 did for
+# bin/omabox).
+main() {
+  # (Underscored: the tests run inside this function and see its locals.)
+  local _a _pats=() _filtered=0 _t _p _sel=() _n _unit_n=0
+  for _a; do case $_a in --strict) STRICT=1 ;; *) _pats+=("$_a") ;; esac; done
+  tests=("${UNIT[@]}" "${BOX[@]}")
+  if [ "${_pats[*]}" = unit ]; then tests=("${UNIT[@]}")
+  elif [ ${#_pats[@]} -gt 0 ]; then
+    _filtered=1
+    for _t in "${tests[@]}"; do for _p in "${_pats[@]}"; do [[ $_t == *"$_p"* ]] && { _sel+=("$_t"); break; }; done; done
+    # A mistyped pattern would run nothing and pass: each one must match a test.
+    for _p in "${_pats[@]}"; do
+      [[ " ${tests[*]} " == *"$_p"* ]] || { echo "no test matches '$_p' (tests: ${tests[*]#t_})"; exit 2; }
+    done
+    tests=("${_sel[@]}")
+  fi
 
-echo "host"
-CUR=host
-check_eq "host workspace untouched" "$ws0" "$(hostctl -j activeworkspace | jq .id)"
-check_eq "host focused window untouched (fails if you switched windows meanwhile)" "$win0" "$(hostctl -j activewindow | jq -r '.address // ""')"
+  hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
+  ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
+  echo "provenance: $(provenance)"
 
-echo
-echo "$pass passed, $fail failed"
-for f in "${failed[@]}"; do echo "  FAIL $f"; done
-[ $fail = 0 ]
+  for CUR in "${tests[@]}"; do
+    echo "${CUR#t_}"
+    _n=$((pass + fail + ${#skips[@]}))
+    "$CUR"
+    [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
+    [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))
+  done
+
+  echo "host"
+  CUR=host
+  check_eq "host workspace untouched" "$ws0" "$(hostctl -j activeworkspace | jq .id)"
+  check_eq "host focused window untouched (fails if you switched windows meanwhile)" "$win0" "$(hostctl -j activewindow | jq -r '.address // ""')"
+  if [ $_filtered = 0 ]; then
+    [ ${#tests[@]} = ${#UNIT[@]} ] || [ $((pass + fail)) -ge $MIN_CHECKS ] ||
+      no "a full run has at least $MIN_CHECKS checks" "$((pass + fail)) ran (a test stopped checking?)"
+    [ $_unit_n -ge $MIN_UNIT ] || no "the unit tests have at least $MIN_UNIT checks" "$_unit_n ran"
+  fi
+
+  echo
+  echo "$pass passed, $fail failed, ${#skips[@]} skipped"
+  for f in "${skips[@]}"; do echo "  skip $f"; done
+  for f in "${failed[@]}"; do echo "  FAIL $f"; done
+  [ $fail = 0 ]
+}
+
+main "$@"
