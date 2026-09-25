@@ -1104,6 +1104,10 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       missed unless it also took focus), and a window of the suite's that closed before its focus
       was looked up is unattributed. A run
       under the guard or from a guarded shell finds the host session the CLI's way.
+      A full run of 80-86 together (while the maintainer worked) failed five tests and the
+      end check on `activelayout>>hl-virtual-keyboard-fcitx5`: Omarchy's input method re-sends its
+      layout on every focus change of the user's. `omabox keys` is anonymous there
+      (`hl-virtual-keyboard-unknown`, seen in a stand-in box), so fcitx5 is always the user's now.
 81. **Windows as targets: `omabox windows`, `shot/click/keys --window`, `shot --fit`, `click --in`**
     (2026-09-25; ideas borrowed from Cua's zoom/capture and its screenshot scaling, re-done for a
     box). No new tool or protocol: the box's grim 1.5 has `-T ID` (ext-image-copy-capture of a

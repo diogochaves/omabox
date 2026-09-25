@@ -191,7 +191,8 @@ while True:
 # Windows of omabox's own: an interactive box (class aquamarine; its title names no box, so any counts,
 # unless it is your own box opened meanwhile) and peek (class omabox-peek, "omabox peek: NAME"; the
 # tool started by hand is "omabox peek"). A virtual keyboard's layout event is `omabox keys` reaching
-# that compositor; OMABOX_TEST_HOST_KEYBOARDS (a regex) names your own (wayvnc, an input method).
+# that compositor (ours is anonymous there: hl-virtual-keyboard-unknown); Omarchy's input method,
+# fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names others (wayvnc).
 leak_scan() {
   local pre=$1 line data cls title kb notes=()
   while IFS= read -r line; do
@@ -214,7 +215,8 @@ leak_scan() {
         else notes+=("focus $cls"); fi ;;
       activelayout\>\>*virtual-keyboard*)
         kb=${line#*>>}; kb=${kb%%,*}
-        if [ -n "${OMABOX_TEST_HOST_KEYBOARDS:-}" ] && [[ $kb =~ $OMABOX_TEST_HOST_KEYBOARDS ]]; then notes+=("keyboard $kb")
+        if [ "$kb" = hl-virtual-keyboard-fcitx5 ] ||
+           { [ -n "${OMABOX_TEST_HOST_KEYBOARDS:-}" ] && [[ $kb =~ $OMABOX_TEST_HOST_KEYBOARDS ]]; }; then notes+=("keyboard $kb")
         else echo "leak: keys from a virtual keyboard ($kb)"; fi ;;
       workspacev2\>\>*) data=${line#*>>}; notes+=("workspace ${data#*,}") ;;
     esac
@@ -454,6 +456,7 @@ t_unit_leak_scan() {
   check_eq "...a peek of yours is not a leak" "" "$(leaks 'openwindow>>a,9,omabox-peek,omabox peek: mine' '~ 0xa pid=5 class=omabox-peek title=omabox peek: mine')"
   check_match "a virtual keyboard's keys" "^leak: keys from a virtual keyboard \(hl-virtual-keyboard-unknown\)" "$(scan 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
   check_eq "...not one named as yours (OMABOX_TEST_HOST_KEYBOARDS)" "" "$(OMABOX_TEST_HOST_KEYBOARDS='^hl-virtual-keyboard-unknown$' leaks 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
+  check_eq "...nor Omarchy's input method (fcitx5, on every focus change of yours)" "" "$(leaks 'activelayout>>hl-virtual-keyboard-fcitx5,English (US)')"
   check_eq "your own windows, focus and workspaces: one note, no leak" "note: not the suite's: window firefox, focus firefox, workspace 3" \
     "$(scan 'openwindow>>b,3,firefox,a, title' 'activewindowv2>>b' '~ 0xb pid=9 class=firefox' 'workspacev2>>3,3' '~ 0xb pid=9 class=firefox')"
   check_eq "a log slice starts after its marker and ends before the next" "b" \
