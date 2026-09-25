@@ -23,7 +23,8 @@ say what replaced it.
 ```
 $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home/ (-> ~/.cache/omabox/<name>/home),
                                   box.json (options, pidns), info.json (bwrap child-pid), pid + pasta.pid
-                                  (--net isolated), used (idle clock), launch.sh, box.log, reap.log
+                                  (--net isolated), used (idle clock), launch.sh, box.log, reap.log,
+                                  shots.tsv (what each shot is of, for click --in: 81)
 [systemd-run --user --scope]      --systemd only: a delegated cgroup the box's user manager owns (61)
 [pasta --splice-only]             --net isolated only: own netns, loopback, the --allow ports (44, 45)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
@@ -1103,6 +1104,57 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       missed unless it also took focus), and a window of the suite's that closed before its focus
       was looked up is unattributed. A run
       under the guard or from a guarded shell finds the host session the CLI's way.
+81. **Windows as targets: `omabox windows`, `shot/click/keys --window`, `shot --fit`, `click --in`**
+    (2026-09-25; ideas borrowed from Cua's zoom/capture and its screenshot scaling, re-done for a
+    box). No new tool or protocol: the box's grim 1.5 has `-T ID` (ext-image-copy-capture of a
+    foreign toplevel), and Hyprland's id for it is the `stableId` `hyprctl -j clients` reports (hex).
+    Seen in boxes: the capture is the window's own pixels, its size exactly the client's `size`, with
+    no border, nothing that covers it and no trace of the cover; a window on another workspace, on
+    `special:scratch`, an inactive group tab and an XWayland window capture too (the last three in
+    the analysis boxes only), 21-36 ms each; a bad id exits 1 ("cannot find toplevel") and an idle
+    window does not hang it. **The first capture can be stale**: a window off screen that keeps
+    redrawing (a clock in foot) gets no frame callbacks, stops drawing, and its first capture was the
+    frame from 15 s earlier; one ~100 ms later was current (the export asks it to draw). So a window
+    shot is always primed: captured, 100 ms, captured again (`t_window` fails without it). A window
+    that draws once after being idle renders at once and was never stale. Other facts it rests on:
+    `at` excludes the border (border 2 + gaps 10 → at 12), the order of `hyprctl clients` is the
+    stacking order (later on top) except that floating windows stay above tiled ones even after
+    `alter_zorder top` on the tiled one, fullscreen above the rest and a shown special workspace
+    above its workspace; `visible` is true for windows on hidden workspaces (useless: on screen =
+    the workspace is shown and `hidden` is false). From the analysis boxes only: the shell's layers
+    (bar, menus, panels) are all full-screen surfaces, so they are not counted as covering anything
+    and there is no `--layer`; a popup or menu past its window's edge is clipped in a window shot
+    (whole in a full one).
+    Focusing a window (`hl.dsp.focus({ window = 'address:…' })`) shows its workspace, opens a special
+    one, brings an inactive tab to the front; a float also needs `hl.dsp.window.alter_zorder`. A
+    click right after that workspace switch (0.18 s, animations on) landed in the window (foot's
+    mouse reporting read the right cell).
+    - SEL (`bin/omabox`'s usage) picks exactly one mapped window: none or several is exit 2 with the
+      candidates, never the first match (the resolver is jq, `WIN_JQ`/`WIN_SEL_JQ`, unit-tested on
+      made-up JSON). `click --window SEL X Y` takes window coordinates, refuses a point outside the
+      window, focuses the window when it is off screen or something covers that point, checks again
+      and refuses naming the window still on top (a tiled window under a float stays under it);
+      `--no-raise` refuses at once. `keys --window` focuses, waits for it, then types.
+    - Screenshot scale (Cua downscales everything to 1024x768 and rescales in its agent loop). Measured
+      with Opus 5.5 reading shots through Claude Code: 1920x1080 is seen 1:1 (max error 0.7 px);
+      2560x1440 and 3440x1440 are downscaled by Claude Code to 2000 px wide with a "multiply by
+      1.28/1.72" note: with the factor max 1.5 px off, without it 544/1364 px. So full resolution
+      stays the default; `--fit N` caps the longest side (grim `-s`, rounded up since grim truncates).
+      The likelier miss was cropped shots (`--active`, `-g`): the image starts at the crop's origin
+      but `click` takes screen pixels.
+    - So every shot is recorded in `$D/shots.tsv` (the box cannot see it): path, size and mtime, the
+      box's mode, the window's address or the region's origin, the size covered and the image's.
+      A cropped or scaled shot says so in one stderr line (stdout stays the path). `click --in SHOT X
+      Y` and `pointer --in` take that image's pixels: the screen pixel under the pixel's centre, from
+      the window's *current* position for a window shot (it may have moved; resized is refused), from
+      the fixed origin for `-g`. A file that is not a shot of this box, changed since, or a mode
+      change is refused. `--active` is now `--window active` (the window's own pixels instead of a
+      crop of the screen); install.sh checks that grim has `-T`.
+    - Not done: occlusion ignores layers that take input (an open panel), and pinned or
+      override-redirect windows only approximately follow the stacking rule; an app that stops
+      rendering when hidden and ignores the export's frame callback would still come out stale (only
+      foot checked). An interactive box whose window is hidden gets no frame for `-T` either (assumed:
+      it goes through the same timeout message as `shot`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

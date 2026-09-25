@@ -945,6 +945,9 @@ t_unit_install() {
   check_eq "the skill is a link" "$ROOT/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "no dir for an agent that is not installed" test -e "$h/.codex"
   check_fails "the agent guard is never turned on without asking" test -e "$h/.claude/settings.json"
+  printf '#!/bin/sh\necho "  -g <geometry>   Set the region to capture."\n' > "$stub/grim"; chmod +x "$stub/grim"
+  check_match "a grim with no -T (window capture, finding 81) stops it" "no -T" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
+  rm "$stub/grim"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
   check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
 }
@@ -1230,11 +1233,169 @@ t_guard() {
   ob down "$B" >/dev/null
 }
 
+# Window selectors and what covers what (finding 81), on hyprctl JSON made up for it: floats above
+# tiled windows whatever their order, later above earlier otherwise, fullscreen and a shown special
+# workspace above the rest; off-screen workspaces, inactive group tabs and unmapped windows.
+t_unit_window_select() {
+  local c m m_sp a='{"address":"0xb"}'
+  c=$(jq -nc '
+    def w($a; $cl; $t; $ws; $x; $y; $w; $h; $fl): {address: $a, stableId: "1", class: $cl, title: $t,
+      initialClass: $cl, initialTitle: $t, pid: 10, workspace: {id: $ws, name: ($ws | tostring)}, at: [$x, $y],
+      size: [$w, $h], floating: $fl, fullscreen: 0, xwayland: false, mapped: true, hidden: false};
+    [w("0xf"; "zenity"; "Question"; 1; 100; 100; 300; 200; true),
+     w("0xa"; "foot"; "A"; 1; 0; 0; 1000; 1000; false) + {pid: 42, initialTitle: "first"},
+     w("0xb"; "foot"; "B"; 1; 1000; 0; 900; 1000; false),
+     w("0xg"; "foot"; "B tab"; 1; 1000; 0; 900; 1000; false) + {hidden: true},
+     w("0x2"; "zenity"; "Other"; 1; 450; 350; 100; 100; true),
+     w("0xc"; "Chromium"; "Docs - Chromium"; 5; 0; 0; 1900; 1000; false),
+     w("0xd"; "foot"; "scratch"; -98; 500; 500; 200; 200; true),
+     w("0xe"; "foot"; "gone"; 1; 0; 0; 10; 10; false) + {mapped: false}]')
+  m='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":0}}]'
+  m_sp='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":-98}}]'
+  local W Wsp; W=$(lib win_annotate "$c" "$m" "$a") Wsp=$(lib win_annotate "$c" "$m_sp" "$a")
+  sel() { lib win_select "$W" "$@" 2>/dev/null | jq -r .address; }
+  check_eq "title:RE" 0xa "$(sel 'title:^A$')"
+  check_eq "a word: part of the title, any case" 0xc "$(sel docs)"
+  check_eq "a word: the class, any case" 0xc "$(sel chromium)"
+  check_eq "pid:N and a word, ANDed" 0xa "$(sel pid:42 foot)"
+  check_eq "an address, any case" 0xa "$(sel 0xA)"
+  check_eq "address:0x..." 0xa "$(sel address:0xa)"
+  check_eq "active" 0xb "$(sel active)"
+  check_eq "initialTitle:RE" 0xa "$(sel initialTitle:^first)"
+  check_eq "class:RE ANDed with title:RE" 0x2 "$(sel class:zen 'title:^oth')"
+  check_eq "several matches: exit 2" 2 "$(lib win_select "$W" foot >/dev/null 2>&1; echo $?)"
+  check_match "...listing them" "matches 4 windows.*0xa.*0xb.*0xg.*0xd" "$(lib win_select "$W" foot 2>&1 | tr '\n' ' ')"
+  check_eq "none: exit 2" 2 "$(lib win_select "$W" nope >/dev/null 2>&1; echo $?)"
+  check_match "...listing the box's windows" "no window matches nope.*0xf" "$(lib win_select "$W" nope 2>&1 | tr '\n' ' ')"
+  check_eq "an unmapped window is not a window" 2 "$(lib win_select "$W" 'title:^gone$' >/dev/null 2>&1; echo $?)"
+  check_match "a bad regex: exit 2, said" "bad window selector" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  check_match "...rc 2" "rc=2" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  cov() { jq -r --arg a "$2" '.[] | select(.address == $a) | [.cover[].address] | join(" ")' <<<"$1"; }
+  on() { jq -r --arg a "$2" '.[] | select(.address == $a) | .onscreen' <<<"$1"; }
+  check_eq "floats cover the tiled window under them, though one is earlier in the list" "0xf 0x2" "$(cov "$W" 0xa)"
+  check_eq "...a tiled window never covers a float" "" "$(cov "$W" 0xf)"
+  check_eq "...a later float covers an earlier one" "0x2" "$(jq -r '.[] | select(.address == "0xf") | .cover[0].address // ""' <<<"$(lib win_annotate "$(jq -c 'map(if .address == "0x2" then .at = [150, 150] else . end)' <<<"$c")" "$m" "$a")")"
+  check_eq "...and not the other way" "" "$(cov "$W" 0x2)"
+  check_eq "another workspace is off screen" false "$(on "$W" 0xc)"
+  check_eq "an inactive group tab is off screen" false "$(on "$W" 0xg)"
+  check_eq "...and covers nothing" "" "$(cov "$W" 0xb)"
+  check_eq "a hidden special workspace is off screen" false "$(on "$W" 0xd)"
+  check_eq "a shown one is on screen" true "$(on "$Wsp" 0xd)"
+  check_eq "...above the workspace under it" "0xf 0x2 0xd" "$(cov "$Wsp" 0xa)"
+  local Wfs; Wfs=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$a")
+  check_eq "a fullscreen window: nothing covers it" "" "$(cov "$Wfs" 0xa)"
+  check_eq "...it covers the rest" 0xa "$(cov "$Wfs" 0xf | tr ' ' '\n' | grep -x 0xa)"
+  local A; A=$(jq -c '.[] | select(.address == "0xa")' <<<"$W")
+  check_match "a point under the float is covered, named" "covered there by 0xf zenity" "$(lib win_blocked "$A" 150 150)"
+  check_eq "a point beside it is not" "" "$(lib win_blocked "$A" 900 900)"
+  check_match "off screen says so" "not on screen \(workspace 5\)" "$(lib win_blocked "$(jq -c '.[] | select(.address == "0xc")' <<<"$W")" 1 1)"
+  # --in (finding 81): image pixel -> screen pixel under its centre
+  check_eq "1:1 maps to itself" "0 1919" "$(lib img_px 0 1920 1920) $(lib img_px 1919 1920 1920)"
+  check_eq "x1.92: 500 of 1000 is 960" 960 "$(lib img_px 500 1000 1920)"
+  check_eq "x1.92: the last pixel stays inside" 1919 "$(lib img_px 999 1000 1920)"
+  check_eq "x0.5 (an image larger than the screen)" 50 "$(lib img_px 101 200 100)"
+}
+
+# Window-targeted shot, click and keys, and --in (finding 81), with the box's own windows: two
+# tiled terminals, a float over one, others on hidden workspaces.
+t_window() {
+  local B=$P-win
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  term() { ob run -b "$B" -d -- foot -T "$1" sh -c "$2" >/dev/null; until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.title == \"$1\")'"; }
+  win() { ob windows -b "$B" --json | jq -c --arg t "$1" '.[] | select(.title == $t)'; }
+  addr() { win "$1" | jq -r .address; }
+  at() { win "$1" | jq -r '"\(.at[0] + ('"${2:-0}"')), \(.at[1] + ('"${3:-0}"'))"'; }
+  size() { win "$1" | jq -r '"\(.size[0]) x \(.size[1])"'; }
+  disp() { ob hyprctl -b "$B" dispatch "$1" >/dev/null; }
+  pos() { ob hyprctl -b "$B" cursorpos; }
+  term A 'sleep 600'; term B 'sleep 600'
+  sleep 1   # A shrinks as B opens: its buffer is the window's size once that settles
+  local o=$TMP/win
+  mkdir -p "$o"
+  check_eq "an ambiguous selector: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
+  check_eq "0xdead: exit 2" 2 "$(ob shot -b "$B" -w 0xdead >/dev/null 2>&1; echo $?)"
+  check_match "...no window matches, the windows listed" "no window matches 0xdead.*\"A\"" "$(ob shot -b "$B" -w 0xdead 2>&1 | tr '\n' ' ')"
+  ob shot -b "$B" -w 'title:^A$' -o "$o/a.png" >/dev/null 2>&1
+  check_match "shot --window: the window's size" "$(size A)," "$(file "$o/a.png")"
+  check_match "windows lists them" "foot +\"B\"" "$(ob windows -b "$B")"
+  # A float over A: A's own pixels still, and said to be covered
+  term C 'sleep 600'
+  local c; c=$(addr C)
+  disp "hl.dsp.window.float({ action = 'enable', window = 'address:$c' })"
+  disp "hl.dsp.window.resize({ x = 400, y = 300, window = 'address:$c' })"
+  disp "hl.dsp.window.move({ x = 100, y = 100, window = 'address:$c' })"
+  until_ok 5 bash -c "'$CLI' windows -b '$B' --json | jq -e '.[] | select(.title == \"A\") | .cover != []'"
+  local err; err=$(ob shot -b "$B" -w 'title:^A$' -o "$o/a2.png" 2>&1 >/dev/null)
+  check_match "a covered window: its full size" "$(size A)," "$(file "$o/a2.png")"
+  check_match "...stderr says what covers it" "covered by $c foot \"C\"" "$err"
+  ob click -b "$B" --window 'title:^A$' 10 10 >/dev/null 2>&1
+  check_eq "click --window: window coordinates" "$(at A 10 10)" "$(pos)"
+  check_match "a point under another window is refused, naming it" "covered there by $c" "$(ob click -b "$B" --window 'title:^A$' 150 150 2>&1)"
+  check_fails "a point outside the window is refused" ob click -b "$B" --window B 5000 5
+  # Another workspace: B moves to 5; a click raises it
+  local b; b=$(addr B)
+  disp "hl.dsp.window.move({ workspace = '5', follow = false, window = 'address:$b' })"
+  until_ok 5 bash -c "'$CLI' windows -b '$B' --json | jq -e '.[] | select(.title == \"B\") | .onscreen == false'"
+  check_fails "--no-raise refuses a window off screen" ob click -b "$B" --window B --no-raise 1 1
+  check_eq "...and switches nothing" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq .id)"
+  ob click -b "$B" --window B 20 30 >/dev/null 2>&1
+  check_eq "click on a window on workspace 5 shows 5" 5 "$(ob hyprctl -b "$B" -j activeworkspace | jq .id)"
+  check_eq "...and lands in it" "$(at B 20 30)" "$(pos)"
+  err=$(ob shot -b "$B" --active -o "$o/act.png" 2>&1 >/dev/null)
+  check_match "--active is the active window" "window $b " "$err"
+  check_match "...its size" "$(size B)," "$(file "$o/act.png")"
+  ob click -b "$B" --in "$o/act.png" 0 0 >/dev/null 2>&1
+  check_eq "click --in a window shot: 0,0 is its corner" "$(at B)" "$(pos)"
+  # Priming (finding 81): a window off screen that keeps redrawing stops getting frames; the first
+  # capture after a while is from long ago. Its colour comes from a file.
+  term P 'while :; do printf "\033[4%sm\033[2J" "$(cat /tmp/col 2>/dev/null || echo 1)"; sleep 0.05; done'
+  disp "hl.dsp.window.move({ workspace = '6', follow = false, window = 'address:$(addr P)' })"
+  sleep 0.5
+  ob shot -b "$B" -w 'title:^P$' -o "$o/p1.png" >/dev/null 2>&1
+  ob run -b "$B" -- sh -c 'echo 4 > /tmp/col'; sleep 1
+  ob shot -b "$B" -w 'title:^P$' -o "$o/p2.png" >/dev/null 2>&1
+  check_fails "a window off screen: the shot is fresh, not an old frame" cmp -s "$o/p1.png" "$o/p2.png"
+  check_eq "...and shooting it switched nothing" 5 "$(ob hyprctl -b "$B" -j activeworkspace | jq .id)"
+  # keys --window: focus, then type
+  term K 'cat > /tmp/typed'
+  disp "hl.dsp.window.move({ workspace = '7', follow = false, window = 'address:$(addr K)' })"
+  ob keys -b "$B" --window 'title:^K$' -t hi Return ctrl+d >/dev/null 2>&1
+  check "keys --window types into it" until_ok 5 ob run -b "$B" -- test -s /tmp/typed
+  check_eq "...what was typed" hi "$(ob run -b "$B" -- cat /tmp/typed)"
+  # --fit and --in on the screen (idea 4)
+  err=$(ob shot -b "$B" -o "$o/full.png" 2>&1 >/dev/null)
+  check_eq "a 1:1 shot says nothing extra" "" "$err"
+  err=$(ob shot -b "$B" --fit 1000 -o "$o/fit.png" 2>&1 >/dev/null)
+  check_match "--fit 1000: 1000 wide" "1000 x 562," "$(file "$o/fit.png")"
+  check_match "...stderr names the factor and --in" "1000x562 image of the screen's 1920x1080 at 0,0 \(x1.92\); click with --in $o/fit.png" "$err"
+  ob click -b "$B" --in "$o/fit.png" 500 270 >/dev/null 2>&1
+  check_eq "click --in a scaled shot" "960, 519" "$(pos)"
+  ob pointer -b "$B" --in "$o/fit.png" -- move 250 100 >/dev/null 2>&1
+  check_eq "pointer --in" "480, 193" "$(pos)"
+  err=$(ob shot -b "$B" -g "300,200 400x100" -o "$o/g.png" 2>&1 >/dev/null)
+  check_match "-g says it is cropped" "400x100 image of the screen's 400x100 at 300,200" "$err"
+  ob click -b "$B" --in "$o/g.png" 7 9 >/dev/null 2>&1
+  check_eq "click --in a -g shot: from its origin" "307, 209" "$(pos)"
+  check_match "--in a file that is not a shot: refused" "not a shot of box" "$(ob click -b "$B" --in /etc/hostname 1 1 2>&1)"
+  check_match "--in outside the image: refused" "outside the image" "$(ob click -b "$B" --in "$o/g.png" 400 1 2>&1)"
+  touch "$o/g.png"
+  check_match "--in a file changed since: refused" "changed since" "$(ob click -b "$B" --in "$o/g.png" 1 1 2>&1)"
+  # A window shot follows its window: C moved after the shot
+  ob shot -b "$B" -w 'title:^C$' -o "$o/c.png" >/dev/null 2>&1
+  disp "hl.dsp.window.move({ x = 700, y = 300, window = 'address:$c' })"
+  until_ok 5 bash -c "'$CLI' windows -b '$B' --json | jq -e '.[] | select(.title == \"C\") | .at == [700, 300]'"
+  ob click -b "$B" --in "$o/c.png" 5 6 >/dev/null 2>&1
+  check_eq "click --in a window shot after the window moved: where it is now" "705, 306" "$(pos)"
+  ob mode -b "$B" 1280x720 >/dev/null
+  check_match "--in after a mode change: refused" "mode is 1280x720@60" "$(ob click -b "$B" --in "$o/full.png" 1 1 2>&1)"
+  ob down "$B" >/dev/null
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
+UNIT=(t_unit_config t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
   t_unit_registry t_unit_leak_scan)
-BOX=(t_leak_control t_main t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_leak_control t_main t_window t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

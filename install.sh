@@ -38,6 +38,8 @@ if [ ${#missing[@]} -gt 0 ]; then
 else
   echo "all present"
 fi
+# `omabox shot --window` captures a window by its toplevel id (grim -T, 1.5+; NOTES finding 81).
+grim -h 2>&1 | grep -q -- '^ *-T ' || die "this grim cannot capture a window (no -T): omabox needs grim 1.5 or later"
 
 step "Patched aquamarine ($AQ_COMMIT) in build/prefix"
 if [ "$(cat "$AQ_PREFIX/.omabox-commit" 2>/dev/null)" = "$AQ_COMMIT" ]; then
