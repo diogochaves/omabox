@@ -97,6 +97,19 @@ until_ok() {
   now=$((($(now_ms) - t0) / 100))
   [ $((now * 200)) -le "$lim" ] || note "slow wait: $((now / 10)).$((now % 10))s of ${t}s for: $*"
 }
+# holds T CMD...: the command succeeds now and keeps succeeding for T seconds (a "stays so" check: one
+# look after a sleep misses a state that changed and came back).
+holds() {
+  local t=$1; shift; local t0 lim; t0=$(now_ms) lim=$(to_ms "$t")
+  while "$@" >/dev/null 2>&1; do
+    [ $(($(now_ms) - t0)) -lt "$lim" ] || return 0
+    sleep 0.2
+  done
+  echo "held for $(($(now_ms) - t0)) ms of ${t}s: $*"; return 1
+}
+# For until_ok: nothing of box NAME runs any more (its dir in no command line); its reaper is gone.
+none_running() { ! pgrep -f "$XDG_RUNTIME_DIR/omabox/$1/" >/dev/null; }
+reaper_gone() { ! pgrep -f "omabox _reap $1 " >/dev/null; }
 # A fresh git repo named $P-SUFFIX: a throwaway `run` from it gets a name no box of the user's has
 # (from $ROOT it would be "omabox", which `omabox up` in the checkout also takes).
 tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$r"; }
@@ -332,8 +345,8 @@ t_main() {
   local secret=$'omabox-t66 = with\nnewline'
   check_eq "--pass hands one over, as it is" "$(printf %q "$secret")" \
     "$(OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- bash -c 'printf %q "$OMABOX_T66"')"
-  (OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- sleep 2 >/dev/null 2>&1 &)
-  sleep 1
+  (OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- sleep 2.066 >/dev/null 2>&1 &)
+  until_ok 5 pgrep -fx 'sleep 2.066'   # the run is under way
   check_fails "...never in any command line" grep -qs omabox-t66 /proc/[0-9]*/cmdline
   check_fails "--pass of an unset variable fails (no silent skip)" env -u OMABOX_T66 "$CLI" run -b "$B" --pass OMABOX_T66 -- true
   check_fails "--pass takes a name only" ob run -b "$B" --pass 'A=1' -- true
@@ -454,7 +467,7 @@ t_isolated() {
   mkdir -p "$TMP/www" && echo hello > "$TMP/www/index.html"
   python3 -m http.server 8093 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & HTTP_PID=$!
   python3 -m http.server 8094 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & local other=$!
-  sleep 0.5
+  until_ok 5 curl -sf --max-time 1 -o /dev/null http://127.0.0.1:8093/ && until_ok 5 curl -sf --max-time 1 -o /dev/null http://127.0.0.1:8094/
   check "up --net isolated --allow 8093" ob up "$B" --net isolated --allow 8093
   check_eq "allowed host port reachable" hello "$(ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8093/)"
   check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8094/
@@ -484,13 +497,14 @@ t_reap_race() {
   check "the idle reaper decides and waits for the lock" until_ok 30 pgrep -f "^flock -w 60 [0-9]+$"
   local j=$XDG_RUNTIME_DIR/omabox/$B/box.json
   jq '.created = "a new box"' "$j" > "$j.t" && mv "$j.t" "$j"   # the new box, as `up` writes it
-  exec {lock}>&-; sleep 3
+  exec {lock}>&-
+  until_ok 10 reaper_gone "$B"   # it had decided: it goes once it had the lock
   check_eq "...and leaves the new box alone" up "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   ob down "$B" >/dev/null 2>&1
   B=$P-rc
   ob up "$B" --idle 20s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
   ob run -b "$B" -- sh -c 'echo 1 > "$XDG_RUNTIME_DIR/omabox.closed"; hyprctl dispatch "hl.dsp.exit()"' >/dev/null 2>&1
-  sleep 12   # two polls
+  until_ok 20 reaper_gone "$B"   # its first poll after the box died decides, then it goes
   check_eq "a headless box that wrote the closed file and died stays dead" dead "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   check "...its logs kept" test -e "$XDG_RUNTIME_DIR/omabox/$B/box.log"
   ob down "$B" >/dev/null 2>&1
@@ -517,8 +531,7 @@ t_systemd() {
   local scope; scope=$(systemctl --user list-units --no-legend "omabox-$B-*" | awk '{print $1}')
   check_match "host scope exists" "^omabox-$B-" "$scope"
   check "down" ob down "$B"
-  sleep 1
-  check_eq "host scope gone" "" "$(systemctl --user list-units --no-legend "omabox-$B-*")"
+  check "host scope gone" until_ok 5 bash -c "[ -z \"\$(systemctl --user list-units --no-legend 'omabox-$B-*')\" ]"
 }
 
 # A box must not be able to aim the host-side tools elsewhere (finding 63): its runtime dir is its
@@ -548,8 +561,7 @@ t_race() {
   # bwrap is two processes per box (its monitor, and the box's PID 1)
   check_eq "one box" 2 "$(pgrep -fc "bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
   check "down" ob down "$B"
-  sleep 0.5
-  check_eq "nothing of it left running" 0 "$(pgrep -fc "$XDG_RUNTIME_DIR/omabox/$B/" || true)"
+  check "nothing of it left running" until_ok 5 none_running "$B"
 }
 
 # A failed `up` does not leave a box running unseen (finding 63): the box is killed, its dir kept for
@@ -587,8 +599,7 @@ t_hyprland_dies() {
 t_no_shell() {
   local B=$P-bare
   check "up --no-shell" ob up "$B" --no-shell
-  sleep 2
-  check_fails "no quickshell running" ob run -b "$B" -- pgrep -x quickshell
+  check "no quickshell starts" holds 2 bash -c "! '$CLI' run -b '$B' -- pgrep -x quickshell"
   check "down" ob down "$B"
 }
 
@@ -612,8 +623,7 @@ t_isolated_no_pidfile() {
   check "up --net isolated" ob up "$B" --net isolated --no-shell
   rm -f "$XDG_RUNTIME_DIR/omabox/$B/pid"
   check "down" ob down "$B"
-  sleep 0.5
-  check_eq "nothing of it left running" 0 "$(pgrep -fc "$XDG_RUNTIME_DIR/omabox/$B/" || true)"
+  check "nothing of it left running" until_ok 5 none_running "$B"
 }
 
 # `run` into a box counts as use; after it expires, `run` says so instead of starting a throwaway.
@@ -766,7 +776,7 @@ t_widget() {
   local B=$P-wg
   ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
   local H; H=$(ob path "$B")/home
-  printf '#!/bin/sh\ncase "$1" in\n  ls) cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
+  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   printf '#!/bin/sh\necho "xdg-open $*" >> "$HOME/actions"; exec sleep 300\n' > "$H/.local/bin/xdg-open"
   printf '#!/bin/sh\necho "notify-send $*" >> "$HOME/actions"\n' > "$H/.local/bin/notify-send"
   chmod +x "$H/.local/bin/omabox" "$H/.local/bin/xdg-open" "$H/.local/bin/notify-send"
@@ -774,39 +784,45 @@ t_widget() {
   jq -n "[$row + {name: \"a\"}, $row + {name: \"b\"}]" > "$H/list.json"; : > "$H/actions"
   # shellcheck disable=SC2329 # called through until_ok and check_fails
   panel() { ob hyprctl -b "$B" -j layers | grep -q omarchy-keyboard-panel; }
-  sleep 6   # a poll with the list
+  # shellcheck disable=SC2329 # called through until_ok
+  lines_over() { [ "$(grep -c -- "$3" "$1" 2>/dev/null)" -gt "$2" ]; }
+  # A list poll that started after this call: the stub logs each `ls` before it reads the list, so
+  # that poll read the list as it is now (then a moment for the widget to take it in).
+  polled() { local n; n=$(grep -c . "$H/polls" 2>/dev/null); until_ok 12 lines_over "$H/polls" "${n:-0}" .; sleep 0.3; }
+  polled
   ob run -b "$B" -- omarchy-shell chaves.omabox open
   check "the panel opens" until_ok 3 panel
   check "...and reads the settings from the CLI (finding 70)" until_ok 3 grep -qx "config --json" "$H/actions"
   ob keys -b "$B" Down Down >/dev/null
   jq "[$row + {name: \"0new\"}] + ." "$H/list.json" > "$H/l" && mv "$H/l" "$H/list.json"
-  sleep 3   # a poll (2 s while open) puts 0new above b
+  polled   # (every 2 s while open) 0new is above b now
   ob keys -b "$B" s >/dev/null
   check "the selection follows its box (shot b, not a)" until_ok 3 grep -qx "shot -b b" "$H/actions"
   check "the viewer is started" until_ok 3 grep -q "^xdg-open $H" <(sed "s|/home/sbx|$H|" "$H/actions")
-  ob run -b "$B" -- omarchy-shell chaves.omabox open; sleep 1
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
   ob keys -b "$B" Down p >/dev/null
   check "an action runs while the viewer is open" until_ok 3 grep -q "^peek -b " "$H/actions"
   # n: a new interactive box under the name the CLI picks, then brought forward (finding 73)
-  ob run -b "$B" -- omarchy-shell chaves.omabox open; sleep 1
-  ob keys -b "$B" n >/dev/null; sleep 1
-  check_fails "one n starts nothing (a stray key; finding 74)" grep -qx "up --interactive --new" "$H/actions"
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" n >/dev/null
+  check "one n starts nothing (a stray key; finding 74)" holds 1 bash -c "! grep -qx 'up --interactive --new' '$H/actions'"
   ob keys -b "$B" n >/dev/null
   check "n n starts a new interactive box (up --interactive --new)" until_ok 3 grep -qx "up --interactive --new" "$H/actions"
   check "...and shows the box it printed" until_ok 3 grep -qx "peek -b box-9 --focus" "$H/actions"
   # bar-icon (finding 72), read again whenever the settings file changes. always (the default):
   # the panel opens with no boxes, for its settings; auto: opened with none, it stays shut, and
   # does not pop up later when a box comes
-  echo '[]' > "$H/list.json"; sleep 6
+  echo '[]' > "$H/list.json"; polled
   ob run -b "$B" -- omarchy-shell chaves.omabox open
   check "bar-icon always (default): the panel opens with no boxes" until_ok 3 panel
   ob keys -b "$B" Escape >/dev/null
+  local reads; reads=$(grep -c "^config --json$" "$H/actions")
   echo '{"bar-icon":"auto"}' > "$H/config.json"; echo "bar-icon=auto" > "$H/.config/omabox/config"
-  sleep 2
-  ob run -b "$B" -- omarchy-shell chaves.omabox open; sleep 1
-  check_fails "bar-icon auto: opened with no boxes, it stays shut" panel
-  jq -n "[$row + {name: \"a\"}]" > "$H/list.json"; sleep 6
-  check_fails "...and does not pop up when one comes" panel
+  until_ok 5 lines_over "$H/actions" "$reads" "^config --json$"; sleep 0.3   # read again, taken in
+  ob run -b "$B" -- omarchy-shell chaves.omabox open
+  check "bar-icon auto: opened with no boxes, it stays shut" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
+  jq -n "[$row + {name: \"a\"}]" > "$H/list.json"; polled
+  check "...and does not pop up when one comes" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
   mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
   check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
   ob down "$B" >/dev/null
@@ -983,24 +999,29 @@ t_guard() {
   # close ends it; `omabox config` changes a running box that took it from the config
   local cl=(ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'class:aquamarine' })")
   state() { "${in[@]}" "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
-  # shellcheck disable=SC2329 # called through until_ok
+  # shellcheck disable=SC2329 # called through until_ok and holds
   gone() { [ "$(state "$1")" = gone ]; }
+  # shellcheck disable=SC2329
+  is() { [ "$(state "$1")" = "$2" ]; }
   "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
-  "${cl[@]}" >/dev/null; sleep 2
-  check_eq "confirm-close: the box stays after a close" up "$(state cc)"
+  "${cl[@]}" >/dev/null
+  check "confirm-close: the box stays after a close" holds 2 is cc up
   check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
   "${cl[@]}" >/dev/null
   check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
   "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1
   "${in[@]}" "$CLI" config confirm-close on >/dev/null
-  "${cl[@]}" >/dev/null; sleep 2
-  check_eq "config confirm-close on reaches a running box" up "$(state lv)"
+  "${cl[@]}" >/dev/null
+  check "config confirm-close on reaches a running box" holds 2 is lv up
   "${in[@]}" "$CLI" config confirm-close off >/dev/null
   "${cl[@]}" >/dev/null
   check "...and off again: one close ends it, cleared" until_ok 8 gone lv
   # A box that dies without being closed stays dead, logs kept, until `down`
   "${in[@]}" "$CLI" up cr --interactive --no-shell >/dev/null 2>&1
-  "${in[@]}" "$CLI" run -b cr -- pkill -KILL -x Hyprland >/dev/null 2>&1; sleep 5
+  "${in[@]}" "$CLI" run -b cr -- pkill -KILL -x Hyprland >/dev/null 2>&1
+  until_ok 10 is cr dead
+  # its reaper's first poll after that decides, then it goes
+  until_ok 10 bash -c "! '$CLI' run -b '$B' -- pgrep -f 'omabox _reap cr '"
   check_eq "an interactive box that crashed stays dead" dead "$(state cr)"
   "${in[@]}" "$CLI" down cr >/dev/null 2>&1
   check "up --size host under the guard" "${in[@]}" "$CLI" up inner2 --size host --no-shell --idle 0

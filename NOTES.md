@@ -1067,6 +1067,12 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       last wait that timed out. `until_ok` says what it last saw when it times out, and notes a wait
       that took over half its deadline (the widget's "cannot run" notification took 13 of 20 s, the
       killed throwaway's teardown 9 of 15: the next slower machine is where those fail).
+    - *Waits instead of sleeps*: 20 fixed sleeps became waits for what they stood for (the reaper
+      process gone once it has decided, the widget stub's log of each `ls` poll and settings read,
+      the panel's layer, the scope, the servers), and "stays so" checks use `holds T CMD` (true now
+      and all of T) instead of a sleep and one look. A full run: 237 s to 214 s on this machine.
+      The sleeps left are the scenario itself (`t_run_idle`'s use, a key sent mid-`down`), a reload
+      whose end has no signal, and an X11 window that takes keys a moment after it maps.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
