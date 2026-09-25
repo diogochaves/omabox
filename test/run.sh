@@ -1036,6 +1036,8 @@ t_unit_install() {
   rmdir "$h/.claude/skills/omabox"
   check "install.sh in a clean HOME" env HOME="$h" PATH="$stub:$PATH" "$ROOT/install.sh"
   check_eq "the skill is a link" "$ROOT/skill" "$(readlink "$h/.claude/skills/omabox")"
+  check "...of the directory: the reference SKILL.md points to comes with it, for every agent" \
+    bash -c "grep -q 'reference.md' '$h/.agents/skills/omabox/SKILL.md' && test -f '$h/.agents/skills/omabox/reference.md' && test -f '$h/.claude/skills/omabox/reference.md'"
   check_fails "no dir for an agent that is not installed" test -e "$h/.codex"
   check_fails "the agent guard is never turned on without asking" test -e "$h/.claude/settings.json"
   printf '#!/bin/sh\necho "  -g <geometry>   Set the region to capture."\n' > "$stub/grim"; chmod +x "$stub/grim"

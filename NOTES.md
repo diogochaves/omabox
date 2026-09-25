@@ -1253,6 +1253,27 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     it, `click`/`keys`/`keys --pass` against the inner box, the marks on the stand-in's screen, and
     nothing left after 3.5 s. Not done (the design's trimmings): a pointer trail, scroll marks, a
     setting to turn marks off.
+86. **The skill says how to drive an app, and what to do when it goes wrong** (2026-09-25, the last
+    idea from the study of trycua/cua, written once 81-85 existed so it names real commands). Every
+    rule traces to something agents did here: input sent twice (every `keys` call is delivered,
+    finding 41), typing into a field that had lost focus (76), clicks where a direct route was there
+    (the shell's IPC, a seeded HOME), `pkill -f` killing the agent's own shell (a stress-test
+    report), `alacritty` missing in a box, two agents on one name. New: a "Driving an app" section
+    (look, act once, look again; never resend what you have not seen land; type only into a field
+    seen focused; set state directly; stop when a shot shows the goal), a symptom → next step table
+    ending in real commands (`--wait`, `click --in`, `shot --window`, `keys --window`, `up --new`),
+    `B=$(omabox up --new)` in the loop (its stdout is only the name: `t_new`). Cua's
+    partial/unverifiable input states became the one fact that every call is delivered. The direct
+    route was read from Omarchy's source (`/usr/share/omarchy/bin/omarchy-shell`, `shell/shell.qml`),
+    not guessed: `omarchy-shell shell summon|toggle|hide ID` for any plugin, third-party ones included,
+    `shell call ID METHOD ARG` for a loaded panel's function; checked in a box (`shell summon
+    chaves.omabox` opened the widget's panel, `hide` closed it, an unknown method answered
+    `unknown`). What is not safety (screen size and GPU cost, waiting options, mounts, stubs,
+    `--systemd`, Xwayland, cores, logs, the IPC list, peek and interactive detail) moved to
+    `skill/reference.md`, one file (agents do not reliably follow a tree of links); the skill is linked
+    as a directory for every agent, so it ships with it (`t_unit_install`). SKILL.md: 2,458 words on
+    main, 2,818 with the lines 81-85 added, 2,487 now; the safety sections (the project table, the
+    guard, tests, what a box cannot test, `/sys`, network and HOME) are all still in it.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -1278,3 +1299,10 @@ Bugs and ideas live in the GitHub issues. Known gaps:
 - Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
   in; a host overlay would touch the real desktop). A peek that starts while a `click` is deciding
   whether to write can miss marks until the next peek (the file removed under it); not seen.
+- Findings 80-86 never ran on NVIDIA (the NVIDIA card here is bound to vfio). They should hold on the
+  NVIDIA screen (`WAYLAND-1`, finding 77): they read the screen from `hyprctl monitors` (the first one
+  that is enabled), not by name, so shots, `--in`, marks and `mode` do not care what it is called.
+  `tools/still` binds the one `wl_output` a box offers, and screencopy already works there for
+  `shot`. Assumed, not seen: that `grim -T` (ext-image-copy-capture) and screencopy with damage
+  both work with NVIDIA's renderer, and that labwc's headless parent sends the frame callbacks that
+  let `wait` see a change. `t_main` skips its NVIDIA checks here, saying why.
