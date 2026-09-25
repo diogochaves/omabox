@@ -81,8 +81,10 @@ down, an interactive box's hidden window renders nothing): never 0 for what coul
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
-(1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. Closing an interactive
-box's window ends the box; \`omabox config confirm-close on\` asks first (a second close is a yes).
+(1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
+click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
+Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
+second close is a yes).
 $PASS_KEY toggles sending SUPER keys to an interactive box.
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
@@ -973,6 +975,17 @@ re_quote() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g'; }
 # The pid of this box's peek window, if one is open.
 peek_pid() { pgrep -f "^$(re_quote "$PEEK --box $D/run/")" | head -1 | grep .; }
 
+# What click/pointer/keys did, one line each, for the peek window to draw (finding 85; the formats are
+# in tools/peek). Only while a peek window is open. $D/marks is in the box dir, which the box cannot
+# see: nothing in it can forge marks or read them. Emptied past 64 KB (peek starts over), gone at down.
+mark() {
+  local f=$D/marks
+  [ $# -gt 0 ] || return 0
+  peek_pid >/dev/null || { rm -f "$f"; return 0; }
+  [ ! -f "$f" ] || [ "$(stat -c %s "$f")" -le 65536 ] || : > "$f"
+  (umask 077; printf '%s\n' "$@" >> "$f") 2>/dev/null || true
+}
+
 # The box dir and its HOME. A user manager (--systemd) leaves mode-000 entries in the runtime dir
 # (systemd/inaccessible): ours, but rm cannot enter them until they are made writable.
 rm_box() {
@@ -1411,15 +1424,28 @@ cmd_keys() {
   model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
   options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
   local kb=("$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@")
+  # Marks for a peek window, once sent: a secret only as its length.
+  local lines=() i=0 t
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -s|--delay) shift ;;
+      -t) t=${2//[[:cntrl:]]/ }; [ -z "$t" ] || lines+=("text ${t:0:200}"); shift ;;
+      -T) t=$(caller_env "${pass[i]}"); [ -z "$t" ] || lines+=("secret ${#t}"); t=""; i=$((i + 1)) ;;
+      *) lines+=("combo $1") ;;
+    esac
+    shift
+  done
   if [ "$SETTLE_WAIT" = 1 ]; then
     # --wait: the screen before the keys, then a change and quiet after them. The cursor hides on a
     # key press: not a change.
     local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
     settle_begin settle "${SETTLE_ARGS[@]}"
     settle_act keys_send
+    mark "${lines[@]}"
     settle_end settle "$SETTLE_JSON" "the keys were sent"
   else
     keys_send
+    mark "${lines[@]}"
   fi
 }
 # The keyboard tool (kb, pass: cmd_keys's), each --pass value on its stdin, NUL-terminated.
@@ -1462,12 +1488,18 @@ cmd_click() {
   local seq=(move "$x" "$y" click "$btn")
   [ $double = 1 ] && seq+=(click "$btn")
   local ext; ext=$(extent)
-  [ "$SETTLE_WAIT" = 1 ] || { on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; return; }
+  # The mark (for a peek window) has the screen pixels the click went to, however they were given.
+  if [ "$SETTLE_WAIT" != 1 ]; then
+    on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+    mark "ptr $ext ${seq[*]}"
+    return
+  fi
   # --wait: the cursor where it is and where it goes is not the change looked for.
   local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
   settle_begin settle "${SETTLE_ARGS[@]}"
   settle_act on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+  mark "ptr $ext ${seq[*]}"
   settle_end settle "$SETTLE_JSON" "the click was sent"
 }
 
@@ -1500,7 +1532,10 @@ cmd_pointer() {
     done
     set -- "${args[@]}"
   fi
-  on_box "$BOX_POINTER" --extent "$(extent)" "$@"
+  # The mark has screen pixels: --in's moves as mapped above.
+  local ext; ext=$(extent)
+  on_box "$BOX_POINTER" --extent "$ext" "$@"
+  mark "ptr $ext $*"
 }
 
 # --- waiting ------------------------------------------------------------------------------------
@@ -1943,8 +1978,10 @@ cmd_peek() {
   [ -S "$sock" ] && [ ! -L "$sock" ] || die "peek: $sock is not the box's Wayland socket"
   output=$(on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0].name // empty')
   [[ $output =~ ^[A-Za-z0-9_-]+$ ]] || die "peek: box '$NAME' reports no usable output ($output)"
+  # A fresh marks file (finding 85) that only we can read; peek reads what is added to it.
+  rm -f "$D/marks"; (umask 077; : > "$D/marks")
   # Launched by the host Hyprland: its exec rules put exactly this window on that workspace, unfocused.
-  host_eval "hl.exec_cmd('$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\"', { workspace = '$ws silent', no_initial_focus = true })"
+  host_eval "hl.exec_cmd('$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
   say "peek at box '$NAME' on $(ws_text "$ws") (view only; close it with SUPER+W, or it goes with the box)"
   [ $focus = 1 ] || return 0
   local deadline=$((SECONDS + 5))

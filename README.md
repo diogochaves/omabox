@@ -157,6 +157,9 @@ The box's bar has the built-in widgets plus the plugins you mount, nothing else.
 - `omabox peek -b NAME`: a live, view-only window of a headless box (an agent's included) on your
   workspace 9 (or the one you set, below), opened without focus. It only copies frames out, so it never disturbs the agent;
   it closes with SUPER+W or when the box goes down. `omabox shot -b NAME` for a single frame.
+  What the agent does shows on it for a few seconds: a ring where it points and clicks, and the keys
+  it types at the bottom (a password typed with `keys --pass` as `*`). Only in the peek window: the
+  box's own screen and screenshots never have them.
 - `omabox up --interactive`: the box is a real window on workspace 9 (or the one you set), and you use it directly with
   your GPU, keyboard and mouse. **SUPER+ALT+ESCAPE** toggles sending SUPER keys to the box instead of
   your desktop. Passthrough turns itself off when focus leaves the box, or on the first key you press

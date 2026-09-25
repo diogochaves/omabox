@@ -187,7 +187,8 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
 
 - `omabox peek` opens a live, view-only window of your headless box on the user's workspace 9 (or the
   one they set with `omabox config workspace`) without
-  taking focus. Only when the user asks to watch; it does not affect the box.
+  taking focus. Only when the user asks to watch; it does not affect the box. Your `click`, `pointer`
+  and `keys` show on it for ~3 s (a ring, key captions; `--pass` values as `*`), never in your shots.
 - `omabox up --interactive` makes the box a real window on that workspace that the user drives (SUPER+ALT+ESCAPE
   sends SUPER keys to it). Only when the user asks for it. `shot` does not work while that window is
   hidden; agents use headless boxes. `omabox config` holds the user's settings: change them only when

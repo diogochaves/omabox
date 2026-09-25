@@ -20,6 +20,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   cursor are not changes. Costs nothing while the screen is idle (`tools/still`).
 - `omabox keys --pass VAR` types one of your variables (a password) without putting it on a command
   line, where the process list would show it.
+- The peek window shows what the agent does for a few seconds: a ring that follows its pointer and
+  clicks, and captions of the keys it types (secrets as `*`). Drawn over the view only, never into the
+  box's screen or its screenshots.
 
 ### Changed
 

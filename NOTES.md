@@ -1221,6 +1221,34 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     types it as `-t` would, from an argv copy in memory. Checked in a box (`t_keys`): the value (spaces,
     `=`, Ü) lands in a terminal exactly, in order with `-t`, and no `/proc/*/cmdline` has it while the
     tool is typing; `-t -T` is still text; an unset or malformed name fails before anything is sent.
+85. **Marks in peek: what the agent does, over the view** (2026-09-25, from the study of trycua/cua).
+    A box's cursor is already in every frame: headless Hyprland draws it in software
+    (`no_hardware_cursors`), so it is in every `omabox shot` and peek too (`grim -c` changes nothing),
+    it starts at the screen's centre, and it hides on any key press (`cursor:hide_on_key_press`). Tiny
+    at peek's scale, gone after keys, and it says nothing about clicks or keys. (Every agent screenshot
+    has that arrow in it: noise for anything that compares shots, and it can cover UI.)
+    Now `click`, `pointer` and `keys` append a line to `<box dir>/marks` (`ptr WxH <pointer commands>`,
+    `combo KEY`, `text TEXT` (≤200 characters, control characters as spaces), `secret N`: a `--pass`
+    value only as its length) once the tool has sent them, and only while a peek window of the box
+    is open; otherwise the file is removed. The box dir is out of the box's reach, so nothing in a box
+    can forge or read marks. Mode 0600, emptied past 64 KB, fresh for each `peek`, gone with `down`.
+    `tools/peek --marks FILE` reads it from its end on inotify in the same poll loop, validates each
+    line whole (anything else, or a line over 1 KB, is ignored) and draws, in a desynchronized
+    `wl_subsurface` over its window (empty input region): a ring that glides (120 ms) to where the
+    pointer went, a ripple per click (`right`/`middle` labelled), and key captions at the bottom
+    (keys within 1.5 s share one, at most 3, the last 40 characters; ASCII only, from the public-domain
+    font8x8, `tools/peek/font8x8.h`), all faded out 3 s after the last one. The subsurface has frame
+    callbacks of its own and is only drawn while something is on show, then unmapped: an idle or
+    hidden peek costs what it did. Only in the peek window: the box's own frames and every shot stay
+    clean. No new dependency (wayland-client; no libm). Checked in a box whose peek shows its own
+    screen, with a process named like a host peek relaying `<box dir>/marks` into it (`t_peek`): the
+    ring's centre within 8 px of the clicked point, a caption, a secret mark without its value, all gone
+    after 3.5 s, junk lines drawing nothing and not stopping a good line after them, the 64 KB reset,
+    no file without a peek window, CPU after the marks no higher than before them, still idle hidden.
+    And end to end in a box standing in for the host (finding 26): `omabox up` and `omabox peek` inside
+    it, `click`/`keys`/`keys --pass` against the inner box, the marks on the stand-in's screen, and
+    nothing left after 3.5 s. Not done (the design's trimmings): a pointer trail, scroll marks, a
+    setting to turn marks off.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -1243,3 +1271,6 @@ Bugs and ideas live in the GitHub issues. Known gaps:
   when hidden).
 - AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
   user setups remain open.
+- Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
+  in; a host overlay would touch the real desktop). A peek that starts while a `click` is deciding
+  whether to write can miss marks until the next peek (the file removed under it); not seen.

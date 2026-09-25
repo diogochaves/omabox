@@ -915,17 +915,88 @@ t_keys() {
 
 # peek, run inside a box on that box's own screen (never on the host): it draws, and hidden on another
 # workspace it stops capturing (finding 64; the old one scaled 30 frames a second nobody saw).
+# Marks (finding 85): what `click`/`keys` did, drawn by that peek over its view. The CLI writes them
+# only for a host peek of the box, so a stand-in named like one relays them to the peek in the box.
 t_peek() {
   local B=$P-peek
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  local D; D=$(ob path "$B")
   local wd; wd=$(ob run -b "$B" -- sh -c 'echo $WAYLAND_DISPLAY')
-  ob run -b "$B" -d -- "$ROOT/tools/peek/omabox-peek" --box "/run/user/$UID/$wd" --fps 30 >/dev/null 2>&1
+  ob run -b "$B" -d -- "$ROOT/tools/peek/omabox-peek" --box "/run/user/$UID/$wd" --fps 30 --marks "/run/user/$UID/marks-in" >/dev/null 2>&1
   check "peek opens a window" until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\")'"
   local pid; pid=$(ob hyprctl -b "$B" -j clients | jq '.[] | select(.class == "omabox-peek") | .pid')
   ticks() { ob run -b "$B" -- sh -c "a=\$(cut -d' ' -f14,15 /proc/$pid/stat | tr ' ' +); sleep 2; b=\$(cut -d' ' -f14,15 /proc/$pid/stat | tr ' ' +); echo \$(( (b) - (a) ))"; }
   local shown; shown=$(ticks)
   check "peek draws while shown (CPU ticks: $shown)" test "$shown" -gt 5
+  # A quarter of the screen, bottom right: a box point X,Y is at 940 + X/2, 520 + Y/2 in the view, and
+  # the view's copy of itself (it shows its own screen) lies well away from any mark.
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.float({ window = 'class:omabox-peek' })" >/dev/null
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.resize({ window = 'class:omabox-peek', x = 960, y = 540 })" >/dev/null
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ window = 'class:omabox-peek', x = 940, y = 520 })" >/dev/null
+  check "peek floats at 940,520 960x540" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\") | .at == [940, 520] and .size == [960, 540]'"
+  sleep 0.5; local base; base=$(ticks)   # at this size, before any mark
+  # Accent pixels (#ff3cc8) in the box's screen within X0 Y0 X1 Y1: "COUNT CX CY", the centre of their
+  # bounding box.
+  # shellcheck disable=SC2329 # called through accent_ok and no_accent
+  accent() {
+    ob run -b "$B" -- grim -t ppm - > "$TMP/peek.ppm"
+    python3 - "$TMP/peek.ppm" "$@" <<'PY'
+import re, sys
+d = open(sys.argv[1], "rb").read()
+m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", d)
+w, px = int(m[1]), d[m.end():]
+x0, y0, x1, y1 = map(int, sys.argv[2:])
+hits = [(x, y) for y in range(y0, y1) for x in range(x0, x1)
+        if px[(y * w + x) * 3] > 200 and px[(y * w + x) * 3 + 1] < 110 and px[(y * w + x) * 3 + 2] > 150]
+if not hits: print(0, 0, 0)
+else: print(len(hits), (min(x for x, _ in hits) + max(x for x, _ in hits)) // 2, (min(y for _, y in hits) + max(y for _, y in hits)) // 2)
+PY
+  }
+  # shellcheck disable=SC2329 # called through until_ok and holds
+  # For until_ok: at least MIN accent pixels there (centred within 8 px of CX,CY when given); prints them.
+  accent_ok() {
+    local n=$1 a; shift; read -ra a <<< "$(accent "$1" "$2" "$3" "$4")"; echo "${a[*]}"
+    [ "${a[0]}" -ge "$n" ] || return 1
+    [ $# -lt 6 ] || (( a[1] - $5 >= -8 && a[1] - $5 <= 8 && a[2] - $6 >= -8 && a[2] - $6 <= 8 ))
+  }
+  # shellcheck disable=SC2329
+  no_accent() { local a; read -ra a <<< "$(accent "$@")"; echo "${a[*]}"; [ "${a[0]}" = 0 ]; }
+  ob click -b "$B" 100 100 >/dev/null
+  check "no marks file without a peek window" test ! -e "$D/marks"
+  # The stand-in: a process named as `omabox peek` runs it, relaying $D/marks into the box.
+  (exec -a "$ROOT/tools/peek/omabox-peek --box $D/run/stand-in" tail -n +1 -F "$D/marks" >> "$D/run/marks-in" 2>/dev/null) & local relay=$!
+  until_ok 5 pgrep -f "^$ROOT/tools/peek/omabox-peek --box $D/run/stand-in"
+  ob click -b "$B" 700 400 >/dev/null
+  check_eq "click writes a mark" "ptr 1920x1080 move 700 400 click left" "$(cat "$D/marks" 2>&1)"
+  check_eq "the marks file is the user's only" 600 "$(stat -c %a "$D/marks")"
+  until_ok 5 grep -q "move 700 400" "$D/run/marks-in"
+  check "a ring where the click went" until_ok 3 accent_ok 21 1230 660 1350 780 1290 720
+  T_PW="pw-$P" "$CLI" keys -b "$B" -t hi --pass T_PW >/dev/null
+  until_ok 5 grep -q "^secret" "$D/run/marks-in"
+  check_eq "keys marks: text, and a secret as its length only" "text hi|secret $((3 + ${#P}))|" "$(grep -v ^ptr "$D/marks" | tr '\n' '|')"
+  check_fails "...never its value" grep -q "pw-$P" "$D/marks"
+  check "a key caption at the bottom" until_ok 3 accent_ok 51 1100 990 1740 1060
+  { head -c 70000 /dev/zero | tr '\0' x; echo; } >> "$D/marks"
+  ob click -b "$B" 700 400 >/dev/null
+  check_eq "past 64 KB the marks file starts over" "ptr 1920x1080 move 700 400 click left" "$(cat "$D/marks")"
+  sleep 3.5
+  check "marks gone ~3 s after the last one" no_accent 940 520 1900 1060
+  # Junk is ignored whole (and does not stop what follows): unknown kinds, out-of-range and bad
+  # numbers, control characters, a line too long to be one, then a good line.
+  printf '%s\n' 'junk' 'ptr 1920x1080 move 1920 10' 'ptr 1920x1080 move 10' 'ptr 0x1080 click' 'ptr 1920x1080 hover 1 1' \
+    'combo a b' 'secret -1' 'text' "text $(printf 'x%.0s' {1..201})" "$(printf 'y%.0s' {1..2000})" $'text a\tb' >> "$D/run/marks-in"
+  check "junk marks draw nothing" holds 1 no_accent 940 520 1900 1060
+  printf 'ptr 1920x1080 move 300 200 click\n' >> "$D/run/marks-in"
+  check "...and a good line after it still does" until_ok 3 accent_ok 21 1030 560 1150 680   # around 1090,620
+  check "peek is still running" kill -0 "$(pgrep -f "omabox-peek --box /run/user/$UID/$wd" | head -1)"
+  kill "$relay" 2>/dev/null; wait "$relay" 2>/dev/null
+  ob click -b "$B" 10 10 >/dev/null
+  check "the marks file goes with the peek window" test ! -e "$D/marks"
+  sleep 3.2
+  local after; after=$(ticks)
+  check "marks cost nothing once gone (CPU ticks: $after, before any: $base)" test "$after" -le $((base + base / 2 + 3))
   ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ workspace = '5', follow = false })" >/dev/null; sleep 0.5
+  printf 'combo super+space\nptr 1920x1080 move 5 5 click\n' >> "$D/run/marks-in"   # nothing to show them on
   local hidden; hidden=$(ticks)
   check "peek idles while hidden (CPU ticks: $hidden)" test "$hidden" -le 2
   check_fails "peek refuses junk --fps" "$ROOT/tools/peek/omabox-peek" --box /nonexistent --fps abc
@@ -1260,7 +1331,7 @@ t_guard() {
 # tiled windows whatever their order, later above earlier otherwise, fullscreen and a shown special
 # workspace above the rest; off-screen workspaces, inactive group tabs and unmapped windows.
 t_unit_window_select() {
-  local c m m_sp a='{"address":"0xb"}'
+  local c m m_sp act='{"address":"0xb"}'
   c=$(jq -nc '
     def w($a; $cl; $t; $ws; $x; $y; $w; $h; $fl): {address: $a, stableId: "1", class: $cl, title: $t,
       initialClass: $cl, initialTitle: $t, pid: 10, workspace: {id: $ws, name: ($ws | tostring)}, at: [$x, $y],
@@ -1275,7 +1346,7 @@ t_unit_window_select() {
      w("0xe"; "foot"; "gone"; 1; 0; 0; 10; 10; false) + {mapped: false}]')
   m='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":0}}]'
   m_sp='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":-98}}]'
-  local W Wsp; W=$(lib win_annotate "$c" "$m" "$a") Wsp=$(lib win_annotate "$c" "$m_sp" "$a")
+  local W Wsp; W=$(lib win_annotate "$c" "$m" "$act") Wsp=$(lib win_annotate "$c" "$m_sp" "$act")
   sel() { lib win_select "$W" "$@" 2>/dev/null | jq -r .address; }
   check_eq "title:RE" 0xa "$(sel 'title:^A$')"
   check_eq "a word: part of the title, any case" 0xc "$(sel docs)"
@@ -1297,7 +1368,7 @@ t_unit_window_select() {
   on() { jq -r --arg a "$2" '.[] | select(.address == $a) | .onscreen' <<<"$1"; }
   check_eq "floats cover the tiled window under them, though one is earlier in the list" "0xf 0x2" "$(cov "$W" 0xa)"
   check_eq "...a tiled window never covers a float" "" "$(cov "$W" 0xf)"
-  check_eq "...a later float covers an earlier one" "0x2" "$(jq -r '.[] | select(.address == "0xf") | .cover[0].address // ""' <<<"$(lib win_annotate "$(jq -c 'map(if .address == "0x2" then .at = [150, 150] else . end)' <<<"$c")" "$m" "$a")")"
+  check_eq "...a later float covers an earlier one" "0x2" "$(jq -r '.[] | select(.address == "0xf") | .cover[0].address // ""' <<<"$(lib win_annotate "$(jq -c 'map(if .address == "0x2" then .at = [150, 150] else . end)' <<<"$c")" "$m" "$act")")"
   check_eq "...and not the other way" "" "$(cov "$W" 0x2)"
   check_eq "another workspace is off screen" false "$(on "$W" 0xc)"
   check_eq "an inactive group tab is off screen" false "$(on "$W" 0xg)"
@@ -1305,7 +1376,7 @@ t_unit_window_select() {
   check_eq "a hidden special workspace is off screen" false "$(on "$W" 0xd)"
   check_eq "a shown one is on screen" true "$(on "$Wsp" 0xd)"
   check_eq "...above the workspace under it" "0xf 0x2 0xd" "$(cov "$Wsp" 0xa)"
-  local Wfs; Wfs=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$a")
+  local Wfs; Wfs=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act")
   check_eq "a fullscreen window: nothing covers it" "" "$(cov "$Wfs" 0xa)"
   check_eq "...it covers the rest" 0xa "$(cov "$Wfs" 0xf | tr ' ' '\n' | grep -x 0xa)"
   local A; A=$(jq -c '.[] | select(.address == "0xa")' <<<"$W")
