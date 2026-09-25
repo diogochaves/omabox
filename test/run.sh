@@ -1461,7 +1461,7 @@ t_window() {
   ob keys -b "$B" --window 'title:^K$' -t hi Return ctrl+d >/dev/null 2>&1
   check "keys --window types into it" until_ok 5 ob run -b "$B" -- test -s /tmp/typed
   check_eq "...what was typed" hi "$(ob run -b "$B" -- cat /tmp/typed)"
-  # --fit and --in on the screen (idea 4)
+  # --fit and --in on the screen
   err=$(ob shot -b "$B" -o "$o/full.png" 2>&1 >/dev/null)
   check_eq "a 1:1 shot says nothing extra" "" "$err"
   err=$(ob shot -b "$B" --fit 1000 -o "$o/fit.png" 2>&1 >/dev/null)

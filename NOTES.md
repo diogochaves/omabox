@@ -1049,8 +1049,9 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     through its environment while `up` still waits for that shell, so readiness must fail and the
     cleanup path is exercised even when startup is fast. In a nested box, bwrap may take a fraction
     of a second to exit after `up` returns, so the cleanup checks poll for completion.
-80. **The suite, hardened** (2026-09-25, ideas from a read of Cua's test kit). A suite that passes
-    must have checked:
+Findings 80-86 started from reading Cua (github.com/trycua/cua, MIT), a computer-use agent platform;
+the designs here were measured in boxes and built for a contained desktop, and no code was taken from it.
+80. **The suite, hardened** (2026-09-25). A suite that passes must have checked:
     - *No silent passes*: checks that depended on the machine (`[ -f … ] && check`, `command -v
       zenity`) passed unseen when skipped; they are `skip`s now, counted and listed at the end, and
       fail under `--strict` / `OMABOX_TEST_STRICT=1`. A test that runs no check fails, a PATTERN that
@@ -1109,8 +1110,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       layout on every focus change of the user's. `omabox keys` is anonymous there
       (`hl-virtual-keyboard-unknown`, seen in a stand-in box), so fcitx5 is always the user's now.
 81. **Windows as targets: `omabox windows`, `shot/click/keys --window`, `shot --fit`, `click --in`**
-    (2026-09-25; ideas borrowed from Cua's zoom/capture and its screenshot scaling, re-done for a
-    box). No new tool or protocol: the box's grim 1.5 has `-T ID` (ext-image-copy-capture of a
+    (2026-09-25). No new tool or protocol: the box's grim 1.5 has `-T ID` (ext-image-copy-capture of a
     foreign toplevel), and Hyprland's id for it is the `stableId` `hyprctl -j clients` reports (hex).
     Seen in boxes: the capture is the window's own pixels, its size exactly the client's `size`, with
     no border, nothing that covers it and no trace of the cover; a window on another workspace, on
@@ -1139,7 +1139,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       window, focuses the window when it is off screen or something covers that point, checks again
       and refuses naming the window still on top (a tiled window under a float stays under it);
       `--no-raise` refuses at once. `keys --window` focuses, waits for it, then types.
-    - Screenshot scale (Cua downscales everything to 1024x768 and rescales in its agent loop). Measured
+    - Screenshot scale (an agent loop could downscale every shot and rescale its clicks). Measured
       with Opus 5.5 reading shots through Claude Code: 1920x1080 is seen 1:1 (max error 0.7 px);
       2560x1440 and 3440x1440 are downscaled by Claude Code to 2000 px wide with a "multiply by
       1.28/1.72" note: with the factor max 1.5 px off, without it 544/1364 px. So full resolution
@@ -1159,8 +1159,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       rendering when hidden and ignores the export's frame callback would still come out stale (only
       foot checked). An interactive box whose window is hidden gets no frame for `-T` either (assumed:
       it goes through the same timeout message as `shot`).
-82. **`omabox wait` and `--wait` on keys, click and run -d** (2026-09-25; the idea from Cua's
-    `verify_state`, which polls every 100 ms for 2 stable samples, re-done for a box). Agents slept
+82. **`omabox wait` and `--wait` on keys, click and run -d** (2026-09-25). Agents slept
     between actions and guessed how long. Measured in the analysis boxes (1920x1080@60, shell): a
     menu settles ~130 ms after its key, a notification ~240, typing in foot ~210, a terminal ~660;
     first to last frame of an app launch 300-850 ms (zenity) to 650-1200 (chromium); the largest gap
@@ -1176,8 +1175,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       too, so a change drawn between two requests cannot be missed.
     - **Settle** (`--wait`) = the screen before the action (the tool prints `ready` on its first
       frame, then the CLI acts), a change within `--start` (2 s; 5 s for `run -d`), then `--quiet`
-      (300 ms) without one. Cua's "stable" can pass before a slow reaction has begun; this cannot. No
-      change at all is `unsatisfied: nothing changed in 2.00s` (exit 124) and stderr says the input
+      (300 ms) without one, so it cannot pass before a slow reaction has begun, as a check for a few
+      stable samples in a row could. No change at all is `unsatisfied: nothing changed in 2.00s` (exit 124) and stderr says the input
       was sent anyway: the agent should look, not resend. `wait still` is quiet from now, `wait
       change` the first change; `-g` or `--window SEL` watch a region (a window's place on the screen:
       one off screen is refused).
@@ -1190,7 +1189,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     - `wait window SEL [--gone|--focused]` (the resolver of finding 81: several matches is exit 2,
       never a guess; `--gone` counts any), `wait layer NAMESPACE [--gone]` and `wait cmd -- CMD` (exit
       0 inside the box) poll every 100 ms; a window or layer must hold on 2 polls in a row. Absence can
-      be asserted, which Cua cannot.
+      be asserted (`--gone`).
     - **Exit 0 satisfied, 124 unsatisfied at `--timeout` (10 s; at most 10 min), 1 unknown**, never 0
       for what could not be seen: the box went down mid-wait (`unknown: box 'x' went down after
       1.50s`), or an interactive box whose window is hidden, which renders nothing (finding 24).
@@ -1216,7 +1215,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     a terminal full of text (1920x1080, 5 shots each): grim's default level 124 ms and 739 KB a
     shot, `grim -l 1` 46 ms and 915 KB (+24%); `omabox shot` end to end 160 → 82 ms. The analysis
     box (another screen) had 621 → 100 ms and +13%. Pixels are the same (PNG is lossless).
-84. **`omabox keys --pass VAR`** (2026-09-25, from the study of trycua/cua). An agent typing a
+84. **`omabox keys --pass VAR`** (2026-09-25). An agent typing a
     password into a login form had only `keys -t "$PW"`, which puts it in `omabox`'s, `nsenter`'s and
     the keyboard tool's argv: any user's `ps` shows it. `--pass VAR` (repeatable, in order with the
     other tokens) takes the value from the caller's environment as `run --pass` does (finding 66,
@@ -1225,7 +1224,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     types it as `-t` would, from an argv copy in memory. Checked in a box (`t_keys`): the value (spaces,
     `=`, Ü) lands in a terminal exactly, in order with `-t`, and no `/proc/*/cmdline` has it while the
     tool is typing; `-t -T` is still text; an unset or malformed name fails before anything is sent.
-85. **Marks in peek: what the agent does, over the view** (2026-09-25, from the study of trycua/cua).
+85. **Marks in peek: what the agent does, over the view** (2026-09-25).
     A box's cursor is already in every frame: headless Hyprland draws it in software
     (`no_hardware_cursors`), so it is in every `omabox shot` and peek too (`grim -c` changes nothing),
     it starts at the screen's centre, and it hides on any key press (`cursor:hide_on_key_press`). Tiny
@@ -1253,8 +1252,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     it, `click`/`keys`/`keys --pass` against the inner box, the marks on the stand-in's screen, and
     nothing left after 3.5 s. Not done (the design's trimmings): a pointer trail, scroll marks, a
     setting to turn marks off.
-86. **The skill says how to drive an app, and what to do when it goes wrong** (2026-09-25, the last
-    idea from the study of trycua/cua, written once 81-85 existed so it names real commands). Every
+86. **The skill says how to drive an app, and what to do when it goes wrong** (2026-09-25, written
+    once 81-85 existed so it names real commands). Every
     rule traces to something agents did here: input sent twice (every `keys` call is delivered,
     finding 41), typing into a field that had lost focus (76), clicks where a direct route was there
     (the shell's IPC, a seeded HOME), `pkill -f` killing the agent's own shell (a stress-test
@@ -1262,8 +1261,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     (look, act once, look again; never resend what you have not seen land; type only into a field
     seen focused; set state directly; stop when a shot shows the goal), a symptom → next step table
     ending in real commands (`--wait`, `click --in`, `shot --window`, `keys --window`, `up --new`),
-    `B=$(omabox up --new)` in the loop (its stdout is only the name: `t_new`). Cua's
-    partial/unverifiable input states became the one fact that every call is delivered. The direct
+    `B=$(omabox up --new)` in the loop (its stdout is only the name: `t_new`). Instead of states such
+    as partial or unverifiable input, one fact: every call is delivered. The direct
     route was read from Omarchy's source (`/usr/share/omarchy/bin/omarchy-shell`, `shell/shell.qml`),
     not guessed: `omarchy-shell shell summon|toggle|hide ID` for any plugin, third-party ones included,
     `shell call ID METHOD ARG` for a loaded panel's function; checked in a box (`shell summon
