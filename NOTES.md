@@ -1073,6 +1073,36 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       and all of T) instead of a sleep and one look. A full run: 237 s to 214 s on this machine.
       The sleeps left are the scenario itself (`t_run_idle`'s use, a key sent mid-`down`), a reload
       whose end has no signal, and an X11 window that takes keys a moment after it maps.
+    - *A leak detector, and its positive control*. The only host checks were two compares at the
+      end (focused workspace and window): a leak that was undone before the end passed, and you
+      switching windows during a run failed it (a run ended 359/1 on that, cause unknown). Hyprland's
+      event socket (`.socket2.sock`) reports `openwindow`, `activewindowv2`, `workspacev2` and
+      `activelayout>>hl-virtual-keyboard-…,…` (what `omabox keys` causes) live, reverted ones
+      included; the host log is no use (debug is off: no virtual keyboard lines). The suite listens
+      to it for the whole run (read-only, as a bar does; nothing is written to it), a python watcher
+      logging to the run's folder with a marker per test. On each focus change it asks for the
+      focused window (`hyprctl -j activewindow`, the read the end checks already did) and reads that
+      process's `/proc` environ for `OMABOX_SUITE` (exported by the suite) and `OMABOX_NAME` (what
+      `run` gives a box's processes); for an interactive box's window (class `aquamarine`, a title
+      naming no box) its bwrap's command line names the box dir. After each test, the test fails on
+      a window, or focus, that is this run's, an interactive or peek window (by title, `omabox peek:
+      NAME`), any box's process, or a virtual keyboard's layout event (`OMABOX_TEST_HOST_KEYBOARDS`
+      names your own: wayvnc, an input method); everything else is one "not the suite's" note. The
+      end compares stay, but a change the log shows was not the suite's passes, named.
+      `t_leak_control` runs first among the box tests: the same watcher, inside a box standing in for
+      the host, sees nothing while quiet, then a box's window taking focus, a workspace switch and
+      back, and a key from `omabox keys` are leaked into it on purpose, and each must be reported;
+      if it fails, the host verdict fails ("a clean host log proves nothing"). Proven by breaking
+      it: with the watcher no longer logging layout events or reading `OMABOX_NAME`, the control
+      failed both checks and the host verdict failed; restored, it passes. `t_unit_leak_scan` checks
+      the reading of each event, on lines as Hyprland 0.56 sends them.
+      What it cannot see: pointer motion and clicks have no event (seen only when they move focus),
+      a workspace switch has no owner (a switch alone that ends where the log shows passes), an
+      interactive box's `openwindow` has no pid (while an interactive box of yours started during
+      the run exists, such a window is taken as yours, so one of the suite's opening then would be
+      missed unless it also took focus), and a window of the suite's that closed before its focus
+      was looked up is unattributed. A run
+      under the guard or from a guarded shell finds the host session the CLI's way.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

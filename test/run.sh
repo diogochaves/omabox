@@ -8,9 +8,13 @@
 #                            that matches no test exits 2
 #   --strict (or OMABOX_TEST_STRICT=1): a skipped check (a tool this machine lacks) fails
 #
-# Never touches the real desktop: every box is headless, and the last test checks that the host's
-# focused workspace and window are what they were before. Needs a Hyprland session (read-only hyprctl)
-# and the host ports 8093/8094 free (a throwaway HTTP server for the network tests).
+# Never touches the real desktop: every box is headless. The host's Hyprland is only read: its event
+# socket is listened to for the whole run, and a window, focus change or virtual keyboard of the
+# suite's showing up there fails the test that was running (t_leak_control first proves that on a box
+# standing in for the host); the end checks that the host's focused workspace and window are what
+# they were, or changed by events that were not the suite's (you working meanwhile). Pointer motion
+# has no event: it is only seen when it moves focus. Needs a Hyprland session, python3, and the host
+# ports 8093/8094 free (a throwaway HTTP server for the network tests).
 # A test that runs no check fails, and so does a full run with fewer checks than MIN_CHECKS.
 # Each run keeps a folder (the last 5 runs are kept) in ~/.local/state/omabox/test/: its provenance
 # and, for a test's first failure, what its boxes showed then (screen, windows, focus, pointer,
@@ -22,6 +26,7 @@ unset CLAUDE_CONFIG_DIR CODEX_HOME
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLI=$ROOT/bin/omabox
 P=t$$                      # box name prefix
+export OMABOX_SUITE=$P     # marks what the suite starts on the host, for the leak detector
 TMP=$(mktemp -d)
 pass=0 fail=0 failed=() skips=()
 STRICT=${OMABOX_TEST_STRICT:-0}
@@ -34,6 +39,7 @@ cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
+  [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -58,12 +64,13 @@ evidence() {
   [ ! -e "$e/boxes" ] || return 0
   mkdir -p "$e/boxes"
   [ ! -s "$TMP/until.last" ] || cp "$TMP/until.last" "$e/last-wait.txt"
+  slice "$EVID/host-events.log" "$CUR" > "$e/host-events.log" 2>/dev/null
   for b in $("$CLI" ls --json 2>/dev/null | jq -r --arg p "$P-" '.[] | select((.name | startswith($p)) and .state == "up") | .name'); do
     d=$e/boxes/$b; mkdir -p "$d"; bd=$("$CLI" path "$b")
     timeout 10 "$CLI" shot -b "$b" -o "$d/screen.png" >/dev/null 2>&1
     for q in clients layers activewindow activeworkspace devices; do timeout 5 "$CLI" hyprctl -b "$b" -j "$q" > "$d/$q.json" 2>&1; done
     timeout 5 "$CLI" hyprctl -b "$b" cursorpos > "$d/cursorpos" 2>&1
-    for f in "$bd/box.log" "$bd"/home/*.log "$bd"/run/hypr/*/hyprland.log; do [ -f "$f" ] && tail -n 100 "$f" > "$d/${f##*/}"; done
+    for f in "$bd/box.log" "$bd"/home/*.log "$bd"/run/hypr/*/hyprland.log "$bd/run/events.log"; do [ -f "$f" ] && tail -n 100 "$f" > "$d/${f##*/}"; done
   done
   printf '       evidence: %s\n' "$e"
 }
@@ -119,6 +126,145 @@ tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$
 mkdir -p "$TMP/lib/bin"
 sed '/^main "\$@"; exit$/d' "$CLI" > "$TMP/lib/bin/omabox"
 lib() { bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
+
+# --- the leak detector (finding 80) --------------------------------------------------------------
+
+# Listens to a Hyprland's event socket (.socket2.sock: read-only, what a bar listens to; nothing is
+# ever written to it) and logs, timestamped, the events a box's input or windows would cause there.
+# On a focus change it asks that compositor which window has focus (`hyprctl -j activewindow`, as the
+# end-of-run checks do) and reads that client's /proc environ for OMABOX_SUITE / OMABOX_NAME: the
+# window is the suite's, or a box's, when they are set. Stops when its socket closes or PARENT goes.
+# The same code watches the host and, in t_leak_control, a box standing in for it.
+#   python3 -c "$WATCHER" SOCKET [PARENT]
+WATCHER='
+import json, os, re, select, socket, subprocess, sys, time
+def say(s):
+    sys.stdout.write("%.3f %s\n" % (time.time(), s)); sys.stdout.flush()
+path, parent = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 0
+try:
+    os.chdir(os.path.dirname(path))   # a box dir path is past the 108 bytes of a socket address
+    s = socket.socket(socket.AF_UNIX); s.connect(os.path.basename(path))
+except OSError as e:
+    say("== watcher failed: %s" % e); sys.exit(1)
+KEEP = ("openwindow>>", "closewindow>>", "activewindowv2>>", "workspacev2>>", "activelayout>>")
+def focused():
+    try:
+        w = json.loads(subprocess.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True, timeout=5).stdout)
+    except Exception as e:
+        return "? %s" % e
+    pid, cls, tags = w.get("pid", -1), w.get("class"), []
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as f:
+            for kv in f.read().split(b"\0"):
+                k, _, v = kv.decode(errors="replace").partition("=")
+                if k in ("OMABOX_SUITE", "OMABOX_NAME"): tags.append("%s=%s" % (k, v))
+    except Exception:
+        tags.append("environ=unreadable")
+    if cls == "aquamarine":   # an interactive box: its bwrap binds <box dir>/run; no title names it
+        try:
+            m = re.search(rb"/omabox/([A-Za-z0-9_.-]+)/run\0", open("/proc/%d/cmdline" % pid, "rb").read())
+            if m: tags.append("box=%s" % m.group(1).decode())
+        except Exception:
+            pass
+    if cls == "omabox-peek": cls += " title=%s" % w.get("title")   # "omabox peek: NAME"
+    return " ".join(["%s pid=%s" % (w.get("address"), pid)] + tags + ["class=%s" % cls])
+say("== watching")
+buf = b""
+while True:
+    ready = select.select([s], [], [], 2)[0]
+    if parent and not os.path.exists("/proc/%d" % parent): break
+    if not ready: continue
+    d = s.recv(65536)
+    if not d:
+        say("== the event socket closed"); break
+    *lines, buf = (buf + d).split(b"\n")
+    for l in lines:
+        l = l.decode(errors="replace")
+        if not l.startswith(KEEP): continue
+        say(l)
+        if l.startswith("activewindowv2>>") and l != "activewindowv2>>": say("~ " + focused())
+'
+
+# leak_scan PREFIX < LOG: what in a watcher's log is the suite's (a box's name starts with PREFIX, the
+# suite's own processes carry OMABOX_SUITE=${PREFIX%-}) or omabox's, one `leak: ...` line each, and one
+# `note: ...` line for the rest (the user's own windows and workspace switches while the suite runs).
+# Windows of omabox's own: an interactive box (class aquamarine; its title names no box, so any counts,
+# unless it is your own box opened meanwhile) and peek (class omabox-peek, "omabox peek: NAME"; the
+# tool started by hand is "omabox peek"). A virtual keyboard's layout event is `omabox keys` reaching
+# that compositor; OMABOX_TEST_HOST_KEYBOARDS (a regex) names your own (wayvnc, an input method).
+leak_scan() {
+  local pre=$1 line data cls title kb notes=()
+  while IFS= read -r line; do
+    line=${line#* }
+    case $line in
+      openwindow\>\>*)
+        IFS=, read -r _ _ cls title <<<"${line#*>>}"
+        if [ "$cls" = aquamarine ] && data=$(their_new_box "$pre"); then notes+=("window of your box $data")
+        elif data=$(omabox_window "$pre" "$cls" "$title"); then echo "leak: a window opened: $data"
+        else notes+=("window $cls"); fi ;;
+      '~ '*)
+        cls=${line#* class=} title=""
+        [[ $cls != *' title='* ]] || { title=${cls#* title=}; cls=${cls%% title=*}; }
+        if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* || $line == *" OMABOX_NAME=$pre"* || $line == *" box=$pre"* ]]; then
+          echo "leak: focus went to a window of this run's: ${line#\~ }"
+        elif [[ $line == *" OMABOX_NAME="* ]]; then
+          echo "leak: focus went to a box's process (another run's, or yours): ${line#\~ }"
+        elif [[ $line == *" box="* ]]; then data=${line#* box=}; notes+=("focus on your box ${data%% *}")
+        elif data=$(omabox_window "$pre" "$cls" "$title"); then echo "leak: focus went to $data"
+        else notes+=("focus $cls"); fi ;;
+      activelayout\>\>*virtual-keyboard*)
+        kb=${line#*>>}; kb=${kb%%,*}
+        if [ -n "${OMABOX_TEST_HOST_KEYBOARDS:-}" ] && [[ $kb =~ $OMABOX_TEST_HOST_KEYBOARDS ]]; then notes+=("keyboard $kb")
+        else echo "leak: keys from a virtual keyboard ($kb)"; fi ;;
+      workspacev2\>\>*) data=${line#*>>}; notes+=("workspace ${data#*,}") ;;
+    esac
+  done
+  [ ${#notes[@]} = 0 ] || echo "note: not the suite's: $(printf '%s\n' "${notes[@]}" | awk '!seen[$0]++ && n++ < 8' | paste -sd, - | sed 's/,/, /g')"
+}
+# omabox_window PREFIX CLASS TITLE: says what the window is when it is one of omabox's that is not the
+# user's (TITLE empty: unknown).
+omabox_window() {
+  case $2 in
+    aquamarine) echo "an interactive box's window ($2${3:+ \"$3\"})" ;;
+    omabox-peek)
+      case $3 in
+        "omabox peek: $1"*|"omabox peek"|"") echo "a peek window${3:+ \"$3\"}" ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}
+# An interactive box of the user's (not PREFIX*) started during this run: whose window a new
+# aquamarine window most likely is (that event names no box).
+their_new_box() {
+  find "$XDG_RUNTIME_DIR/omabox" -mindepth 2 -maxdepth 2 -name box.json -newer "$EVID/provenance" \
+    -exec jq -r --arg p "$1" 'select(.mode == "interactive" and (.name | startswith($p) | not)) | .name' {} + 2>/dev/null | sed -n 1p | grep .
+}
+# slice FILE FROM [TO]: a watcher log's lines after the marker "== FROM" (up to "== TO", or the end).
+slice() { awk -v a="== $2" -v b="== ${3:-}" '{m = substr($0, index($0, " ") + 1)} f && m == b {exit} f; m == a {f = 1}' "$1"; }
+# After each test: what of it reached the host's desktop fails it; what is not the suite's is shown.
+host_scan() {
+  local out; out=$(slice "$EVID/host-events.log" "$1" | leak_scan "$P-")
+  [[ $out != *leak:* ]] || no "nothing of it reached the host desktop" "$(grep '^leak:' <<<"$out")"
+  [[ $out != *note:* ]] || printf '       (host, %s)\n' "$(grep '^note:' <<<"$out" | cut -c7-)"
+}
+# host_same NAME WANT GOT workspace|window: the host's focus at the end is what it was, or it changed
+# through events that were not the suite's (you working meanwhile): the watcher saw the change, and
+# nothing of the suite's reached the host all run. (A workspace switch has no owner in its event: one
+# made by a leak and seen alone would pass here; the per-test scans still see what came with it.)
+host_same() {
+  local seen="" log=$EVID/host-events.log last
+  if [ "$2" = "$3" ]; then ok "$1"; return; fi
+  if [ "$4" = workspace ]; then grep -q "^[0-9.]* workspacev2>>$3," "$log" && seen=1
+  else
+    last=$(grep -E '^[0-9.]* (~ |activewindowv2>>$)' "$log" | tail -n 1 | cut -d' ' -f2-)
+    { [ -n "$3" ] && [[ $last == "~ $3 "* ]]; } || { [ -z "$3" ] && [ "$last" = "activewindowv2>>" ]; } && seen=1
+  fi
+  if [ -n "$seen" ] && ! leak_scan "$P-" < "$log" | grep '^leak:' >/dev/null; then
+    ok "$1 by the suite (it is $3 now: focus events that were not the suite's)"
+  elif [ -n "$seen" ]; then no "$1" "want [$2] got [$3]"
+  else no "$1" "want [$2] got [$3]; no event to it in the host's log"; fi
+}
 
 # --- tests ---------------------------------------------------------------------------------------
 
@@ -289,6 +435,58 @@ t_unit_version() {
   check_eq "the widget's manifest has it" "$v" "$(jq -r .version "$ROOT/plugin/manifest.json")"
   check_match "...and its Settings face" "pluginVersion: \"$v\"" "$(grep pluginVersion "$ROOT/plugin/Panel.qml")"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
+}
+
+# The leak detector's reading of events (finding 80), on lines as the watcher logs them (the
+# interactive window's openwindow is Hyprland 0.56's, seen in a stand-in box).
+t_unit_leak_scan() {
+  scan() { printf '1.000 %s\n' "$@" | leak_scan t1-; }
+  leaks() { scan "$@" | grep '^leak:'; }
+  check_match "a box of this run's taking focus" "^leak: focus went to a window of this run's: .*OMABOX_NAME=t1-main" "$(scan '~ 0xa pid=5 OMABOX_NAME=t1-main class=foot')"
+  check_match "...a process the suite started" "^leak: focus went to a window of this run's" "$(scan '~ 0xa pid=5 OMABOX_SUITE=t1 class=foot')"
+  check_match "...another run's box: a leak too, said so" "^leak: .*another run's" "$(scan '~ 0xa pid=5 OMABOX_NAME=t12-main class=foot')"
+  check_eq "...another suite's process is not this one's" "" "$(leaks '~ 0xa pid=5 OMABOX_SUITE=t12 class=foot')"
+  check_match "an interactive box's window opening" "^leak: a window opened: an interactive box's window" "$(scan 'openwindow>>5fc37ecc6c80,9,aquamarine,aquamarine - WAYLAND-1')"
+  check_match "focus on an interactive box of this run's" "^leak: focus went to a window of this run's" "$(scan '~ 0xa pid=5 environ=unreadable box=t1-x class=aquamarine')"
+  check_match "...on one of yours: a note" "^note: .*focus on your box mine$" "$(scan '~ 0xa pid=5 box=mine class=aquamarine')"
+  check_match "a peek of this run's box" "^leak: a window opened: a peek window" "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b')"
+  check_match "...the peek tool started on its own" "^leak: focus went to a peek window" "$(scan '~ 0xa pid=5 class=omabox-peek title=omabox peek')"
+  check_eq "...a peek of yours is not a leak" "" "$(leaks 'openwindow>>a,9,omabox-peek,omabox peek: mine' '~ 0xa pid=5 class=omabox-peek title=omabox peek: mine')"
+  check_match "a virtual keyboard's keys" "^leak: keys from a virtual keyboard \(hl-virtual-keyboard-unknown\)" "$(scan 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
+  check_eq "...not one named as yours (OMABOX_TEST_HOST_KEYBOARDS)" "" "$(OMABOX_TEST_HOST_KEYBOARDS='^hl-virtual-keyboard-unknown$' leaks 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
+  check_eq "your own windows, focus and workspaces: one note, no leak" "note: not the suite's: window firefox, focus firefox, workspace 3" \
+    "$(scan 'openwindow>>b,3,firefox,a, title' 'activewindowv2>>b' '~ 0xb pid=9 class=firefox' 'workspacev2>>3,3' '~ 0xb pid=9 class=firefox')"
+  check_eq "a log slice starts after its marker and ends before the next" "b" \
+    "$(printf '1 a\n2 == x\n3 b\n4 == y\n5 c\n' > "$TMP/slice"; slice "$TMP/slice" x y | cut -d' ' -f2)"
+}
+
+# The leak detector, proven (finding 80): the watcher the host gets, on a box standing in for the
+# host. Quiet, it reports nothing; then a box's window taking focus, a workspace switch and back, and a
+# key from `omabox keys` are leaked into the stand-in on purpose, and each must be reported. A clean
+# host log means something only then: when this test fails, so does the host's verdict.
+t_leak_control() {
+  local S=$P-ctl f0=$fail log
+  ob up "$S" --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
+  log=$(ob path -b "$S")/run/events.log
+  ob run -b "$S" -d -- sh -c 'exec python3 -c "$1" "$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" >> "$XDG_RUNTIME_DIR/events.log" 2>&1' sh "$WATCHER" >/dev/null 2>&1
+  check "the watcher listens to the stand-in's events" until_ok 10 grep -q ' == watching$' "$log"
+  mark() { ob run -b "$S" -- sh -c 'printf "%s == %s\n" "$(date +%s.%3N)" "$1" >> "$XDG_RUNTIME_DIR/events.log"' sh "$1"; }
+  # shellcheck disable=SC2329 # called through until_ok
+  reported() { slice "$log" leaks | leak_scan "$P-" | grep -- "$1" >/dev/null; }  # (not -q: its early exit would fail the pipe)
+  mark quiet
+  ob shot -b "$S" -o "$TMP/ctl.png" >/dev/null 2>&1; ob hyprctl -b "$S" -j clients >/dev/null
+  mark leaks
+  ob run -b "$S" -d -- foot sleep 60 >/dev/null 2>&1
+  until_ok 10 bash -c "'$CLI' hyprctl -b '$S' -j activewindow | jq -e '.class == \"foot\"'"
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '3' })" >/dev/null
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null
+  ob keys -b "$S" a >/dev/null
+  check "a box's window taking focus is reported, with the box" until_ok 5 reported "^leak: focus went to a window of this run's: .*OMABOX_NAME=$S class=foot"
+  check "a key from omabox keys is reported" until_ok 5 reported '^leak: keys from a virtual keyboard'
+  check "a workspace switch and back is noted" until_ok 5 reported '^note: .*workspace 3, workspace 1'
+  check_eq "...and while quiet, nothing" "" "$(slice "$log" quiet leaks | leak_scan "$P-")"
+  ob down "$S" >/dev/null 2>&1
+  [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }
 
 # Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
@@ -1035,8 +1233,8 @@ t_guard() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
-  t_unit_registry)
-BOX=(t_main t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+  t_unit_registry t_unit_leak_scan)
+BOX=(t_leak_control t_main t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
@@ -1087,20 +1285,35 @@ main() {
   done
   provenance > "$EVID/provenance"
   echo "provenance: $(cat "$EVID/provenance")"
+  # The host's event socket, listened to for the whole run (finding 80).
+  local _sig; _sig=$(bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
+  HYPRLAND_INSTANCE_SIGNATURE=$_sig python3 -c "$WATCHER" "$XDG_RUNTIME_DIR/hypr/$_sig/.socket2.sock" $$ >> "$EVID/host-events.log" 2>&1 &
+  WATCH_PID=$!
+  until_ok 5 grep -q ' == watching$' "$EVID/host-events.log" || { echo "cannot listen to the host's events: $(cat "$EVID/host-events.log")"; exit 2; }
 
   for CUR in "${tests[@]}"; do
     echo "${CUR#t_}"
     _n=$((pass + fail + ${#skips[@]}))
     rm -f "$TMP/until.last"
+    printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
     "$CUR"; notes
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))
+    host_scan "$CUR"
   done
 
   echo "host"
   CUR=host
-  check_eq "host workspace untouched" "$ws0" "$(hostctl -j activeworkspace | jq .id)"
-  check_eq "host focused window untouched (fails if you switched windows meanwhile)" "$win0" "$(hostctl -j activewindow | jq -r '.address // ""')"
+  printf '%s == host\n' "$(date +%s.%3N)" >> "$EVID/host-events.log"
+  sleep 0.5   # the last test's events, still on their way
+  host_scan host
+  check "the host's event watcher ran to the end" kill -0 "$WATCH_PID"
+  if [[ " ${tests[*]} " == *" t_leak_control "* ]]; then
+    if [ "${LEAK_PROVEN:-0}" = 1 ]; then ok "the leak detector is proven (t_leak_control)"
+    else no "the leak detector is proven (t_leak_control)" "it failed: a clean host log proves nothing this run"; fi
+  else echo "       (the leak detector is unproven this run: t_leak_control did not run)"; fi
+  host_same "host workspace untouched" "$ws0" "$(hostctl -j activeworkspace | jq .id)" workspace
+  host_same "host focused window untouched" "$win0" "$(hostctl -j activewindow | jq -r '.address // ""')" window
   if [ $_filtered = 0 ]; then
     [ ${#tests[@]} = ${#UNIT[@]} ] || [ $((pass + fail)) -ge $MIN_CHECKS ] ||
       no "a full run has at least $MIN_CHECKS checks" "$((pass + fail)) ran (a test stopped checking?)"

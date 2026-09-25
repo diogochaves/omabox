@@ -10,7 +10,8 @@ Read first: `NOTES.md`: architecture, reproduce steps, what was verified, findin
 open gaps. `bin/omabox` is the CLI, `share/` runs inside the box, `tools/` holds the C helpers (pointer,
 keyboard, wlfd, peek), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
 Code, Codex, OpenCode, pi and Hermes), `plugin/` is the bar widget, `test/run.sh` is the regression
-suite (run it in full before each commit; `test/run.sh unit` is the fast tier).
+suite (run it in full before each commit; `test/run.sh unit` is the fast tier; a failure's evidence
+is in `~/.local/state/omabox/test/`).
 `spike/` is the original record; the CLI supersedes it.
 
 ## Non-negotiables
