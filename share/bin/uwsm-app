@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# omabox stand-in for uwsm-app, first on the box's PATH. Omarchy launches every app through
+# `uwsm-app -- CMD` (binds, menu, app launcher), which asks the systemd user manager to run it as a
+# unit. A box has no user manager by default ("Failed to connect to user scope bus"), so apps never
+# appeared.
+# Start the app directly instead, detached, returning at once like uwsm does. Output: ~/apps.log.
+# (An `up --systemd` box has a user manager, but this stays first on PATH: apps start the same way in
+# every box.)
+term=0 topts=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --) shift; break ;;
+    -T) term=1 ;;
+    -s|-t|-a|-u|-d|-p|-S) shift ;;   # unit options: meaningless without systemd
+    -h|--help) echo "uwsm-app (omabox stand-in): uwsm-app [-T [--app-id=ID] [--title=T] [--dir=D]] [--] CMD|ID.desktop[:action]|PATH.desktop [ARG...]"; exit 0 ;;
+    -*) [ $term = 1 ] && topts+=("$1") ;;   # after -T, the terminal's own (uwsm passes them on too)
+    *) break ;;
+  esac
+  shift
+done
+if [ $# -eq 0 ]; then
+  [ $term = 1 ] || { echo "uwsm-app (omabox): nothing to run" >&2; exit 1; }
+  set -- xdg-terminal-exec "${topts[@]}"
+elif [[ $1 == /*.desktop ]] && [ -f "$1" ]; then
+  set -- gio launch "$@"                  # a desktop file by path (gtk-launch takes only IDs)
+elif [[ $1 == *.desktop || $1 == *.desktop:* ]] && ! command -v "$1" >/dev/null; then
+  set -- gtk-launch "${1%%:*}" "${@:2}"   # desktop entry ID (the :action part is not supported)
+elif [ $term = 1 ]; then
+  set -- xdg-terminal-exec "${topts[@]}" "$@"
+fi
+command -v "$1" >/dev/null || { echo "uwsm-app (omabox): $1: command not found" >&2; exit 1; }
+echo "$(date +%T) uwsm-app: $*" >> "$HOME/apps.log"
+setsid -f "$@" </dev/null >>"$HOME/apps.log" 2>&1

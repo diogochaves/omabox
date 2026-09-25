@@ -1,0 +1,1725 @@
+#!/usr/bin/env bash
+# omabox: a contained, invisible Hyprland + Omarchy desktop ("box") for agents.
+# Architecture, findings and safety rules: NOTES.md. Usage: omabox help.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+BOXES=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/omabox
+# Box HOMEs live on disk, not in the runtime dir: a box writing a lot there would otherwise fill the
+# tmpfs the real session's sockets live on (finding 50). <box dir>/home links to it.
+HOMES=${XDG_CACHE_HOME:-$HOME/.cache}/omabox
+POINTER=$ROOT/tools/pointer/omabox-pointer
+KEYBOARD=$ROOT/tools/keyboard/omabox-keyboard
+PEEK=$ROOT/tools/peek/omabox-peek
+WLFD=$ROOT/tools/wlfd/omabox-wlfd
+AQUAMARINE=$ROOT/build/prefix/lib
+PASS_KEY="SUPER + ALT + ESCAPE"
+READY_TIMEOUT=${OMABOX_READY_TIMEOUT:-30}
+HOST_SIG="" HOST_WL=""   # host_session's, never the caller's
+PASS=()   # run --pass: the caller's variables for the command
+# The fake display the agent guard (`omabox guard`) gives agents' shells (finding 65).
+GUARD=omabox-guard
+
+usage() {
+  cat <<EOF
+omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
+
+  omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
+            [--ro-bind DIR[:DEST]]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
+            [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell]
+            [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
+            [--new]                                      a free name, box-1, box-2, ... (printed)
+  omabox run [-b NAME] [-d] [--pass VAR]... [UP OPTIONS] -- CMD [ARG...]
+                                                         UP OPTIONS: up's, for a throwaway box only
+  omabox shot [-b NAME] [-o FILE | FILE] [--active | -g "X,Y WxH"]
+  omabox keys [-b NAME] (COMBO | -t TEXT | -s MS)...     e.g. super+space  -t hello  Return
+  omabox click [-b NAME] X Y [left|right|middle] [--double]
+  omabox pointer [-b NAME] -- ARGS...                    raw omabox-pointer (move/click/scroll/down/up)
+  omabox hyprctl [-b NAME] ARGS...
+  omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
+  omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
+  omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
+  omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
+  omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
+  omabox path [NAME | -b NAME]                           the box dir (HOME is <dir>/home)
+  omabox down [NAME | -b NAME | --all]
+  omabox ls [--json]
+  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon
+  omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
+  omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
+  omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
+  omabox --version
+
+NAME defaults to \$OMABOX, else the current git repo's name, else "default".
+\`omabox run\` with no box up starts a throwaway box for the command, with the current repo
+mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
+A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
+box up, \`run\` uses it and the repo is read-only there (tests that write into the tree: down first).
+--net isolated --allow PORTS on a throwaway \`run\` keeps tests off your real local services.
+\`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
+variables (a password too: never on a command line). --env KEY=VAL is the box session's, on \`up\`.
+--no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+\$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
+Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
+(1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. Closing an interactive
+box's window ends the box; \`omabox config confirm-close on\` asks first (a second close is a yes).
+$PASS_KEY toggles sending SUPER keys to an interactive box.
+A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
+peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
+A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
+Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
+Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
+The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
+exist, so a window, hyprctl or grim outside a box fails instead of reaching your desktop; omabox
+still works, and \`omabox host\` runs a command you asked for on the real desktop.
+Crashes in a box skip the desktop's crash notifications (core limit 1 byte; raise it inside for a core).
+EOF
+}
+
+die() { echo "omabox: $*" >&2; exit 1; }
+optarg() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"; }   # optarg "$@" before reading $2
+say() { echo "omabox: $*" >&2; }
+
+# --- settings ------------------------------------------------------------------------------------
+# ~/.config/omabox/config, KEY=VALUE lines: what `omabox config` and the bar widget change (finding
+# 70). A value that does not check out is ignored with a warning, never used.
+CONFIG=$HOME/.config/omabox/config
+CONF_KEYS=(workspace confirm-close bar-icon)
+conf_default() { case $1 in workspace) echo 9 ;; confirm-close) echo off ;; bar-icon) echo always ;; esac; }
+# A value for KEY, printed in its normal form, or a failure.
+conf_check() {
+  case $1 in
+    workspace) ws_check "$2" ;;
+    confirm-close) case $2 in on|true|yes|1) echo on ;; off|false|no|0) echo off ;; *) return 1 ;; esac ;;
+    bar-icon) case $2 in auto|always) echo "$2" ;; *) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+# Where interactive and peek windows open: a workspace 1-99, `special` (Omarchy's scratchpad, which
+# SUPER+S shows) or special:NAME. It goes into the host's Lua: nothing but these shapes passes.
+ws_check() {
+  case $1 in
+    special) echo special:scratchpad ;;
+    special:*) [[ ${1#special:} =~ ^[A-Za-z0-9_-]{1,32}$ ]] && echo "$1" ;;
+    *) [[ $1 =~ ^[1-9][0-9]?$ ]] && echo "$1" ;;
+  esac
+}
+ws_text() {
+  case $1 in
+    special:scratchpad) echo "the scratchpad (SUPER+S shows it)" ;;
+    special:*) echo "special workspace ${1#special:}" ;;
+    *) echo "workspace $1" ;;
+  esac
+}
+conf_get() {
+  local v=""
+  [ -f "$CONFIG" ] && v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONFIG" | tail -n 1 | sed 's/[[:space:]]*$//')
+  if [ -n "$v" ]; then
+    conf_check "$1" "$v" && return 0
+    say "$CONFIG: ignoring $1=$v"
+  fi
+  conf_default "$1"
+}
+# Set KEY (or remove it: back to the default), keeping the rest of the file, comments included.
+# Through a link to its target (a config kept in a dotfiles repo stays a link), one change at a time
+# (the widget and the CLI may set at once).
+conf_set() {
+  mkdir -p "$(dirname "$CONFIG")"
+  local file=$CONFIG lock tmp
+  [ ! -L "$file" ] || file=$(readlink -f "$file")
+  exec {lock}>"$(dirname "$CONFIG")/.config.lock"
+  flock -w 10 "$lock" || true
+  tmp=$(mktemp "$file.XXXXXX")
+  [ -f "$file" ] && { grep -v "^[[:space:]]*$1[[:space:]]*=" "$file" > "$tmp" || true; }
+  [ -z "${2:-}" ] || echo "$1=$2" >> "$tmp"
+  mv "$tmp" "$file"
+  exec {lock}>&-
+}
+
+# --- box selection -------------------------------------------------------------------------------
+
+default_name() {
+  local top
+  # Inside a box OMABOX=1 marks the box (with OMABOX_NAME), not a box named "1".
+  if [ -n "${OMABOX:-}" ] && [ -z "${OMABOX_NAME:-}" ]; then echo "$OMABOX"
+  elif top=$(git rev-parse --show-toplevel 2>/dev/null); then basename "$top"
+  else echo default
+  fi
+}
+
+# Sets NAME and D (the box dir). Names end up in paths and window titles: keep them tame.
+select_box() {
+  NAME=${1:-$(default_name)}
+  NAME=$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40)
+  [[ $NAME =~ ^[A-Za-z0-9] ]] || die "bad box name: $NAME"
+  D=$BOXES/$NAME
+}
+
+# The box's PID 1 on the host, or nothing. An isolated box runs inside pasta's pid namespace (Arch's
+# pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: isolated_pid
+# records the host one (and is asked again if `up` never got to it). A recorded pid is only the box's
+# while it is still in the box's own pid namespace (box.json `pidns`, written by `up`): after the box
+# died and the pid was reused, it is some other process of the user's, which `down` must not SIGKILL
+# and `run` must not enter.
+box_pid() {
+  local pid
+  if [ "$(meta net)" = isolated ]; then
+    pid=$(cat "$D/pid" 2>/dev/null) || { isolated_pid && pid=$(cat "$D/pid" 2>/dev/null); } || true
+  else
+    pid=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) || true
+  fi
+  [ -n "$pid" ] || return 0
+  local ns want; ns=$(readlink "/proc/$pid/ns/pid" 2>/dev/null) || return 0
+  [ "$ns" != "$(readlink /proc/self/ns/pid)" ] || return 0
+  want=$(meta pidns)
+  [ -z "$want" ] || [ "$ns" = "$want" ] || return 0
+  echo "$pid"
+}
+isolated_pid() {
+  local inner pasta bw p
+  inner=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) && [ -n "$inner" ] || return 1
+  pasta=$(cat "$D/pasta.pid" 2>/dev/null) && bw=$(pgrep -P "$pasta" | head -1) || return 1
+  for p in $(pgrep -P "$bw"); do   # pasta -> bwrap -> the box's PID 1, whose pid in pasta's ns is $inner
+    [ "$(awk '/^NSpid:/ {print $3}' "/proc/$p/status" 2>/dev/null)" = "$inner" ] && { echo "$p" > "$D/pid"; return 0; }
+  done
+  return 1
+}
+box_alive() { local pid; pid=$(box_pid) && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
+
+need_box() {
+  if box_alive; then touch "$D/used" 2>/dev/null || true; return 0; fi
+  [ -f "$BOXES/.expired-$NAME" ] && die "box '$NAME' went down after $(cat "$BOXES/.expired-$NAME") idle (start it again with: omabox up $NAME; --idle 0 keeps it)"
+  [ -f "$D/box.json" ] && die "box '$NAME' is dead (logs: $D/box.log $D/home/*.log; clear it with: omabox down $NAME)"
+  local have; have=$(list_names | tr '\n' ' ')
+  die "no box '$NAME' is up (${have:+up: $have; }start one with: omabox up $NAME)"
+}
+
+list_names() { local d; for d in "$BOXES"/*/; do [ -f "$d/info.json" ] && basename "$d"; done 2>/dev/null; true; }
+
+# --- talking to a box ----------------------------------------------------------------------------
+
+# One value from the environment Hyprland's children get (share/hyprland.lua writes it at start). The
+# file is in the box's runtime dir, which the box can write: only a tame name is taken (finding 63).
+box_env() {
+  local v; v=$(tr '\0' '\n' < "$D/run/omabox.env" | sed -n "s/^$1=//p" | head -1)
+  [[ $v =~ ^[A-Za-z0-9_.-]+$ ]] && echo "$v"
+}
+
+# Tools the box has at /opt/omabox/bin (bound read-only by `up`).
+BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
+BOX_POINTER=/opt/omabox/bin/omabox-pointer
+
+# Run a tool against the box's compositor (grim, hyprctl, the keyboard and pointer), inside the box's
+# mount namespace with a clean environment (finding 63). Its sockets live in the box's runtime dir,
+# which the box can write: resolved from the host, a socket the box swapped for a symlink would send
+# `keys`, `click` or `shot` to any compositor the host can reach, the user's included. Inside, every
+# path resolves in the box's own view, where only the box is. (Also short enough for Hyprland's
+# socket path, which from the host dir is past the 108-byte limit, finding 7.) stdin/stdout pass
+# through: `grim -` writes the host's file.
+on_box() {
+  local pid wd sig
+  pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
+  wd=$(box_env WAYLAND_DISPLAY) || die "box '$NAME': no WAYLAND_DISPLAY in its omabox.env"
+  sig=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || die "box '$NAME': no HYPRLAND_INSTANCE_SIGNATURE in its omabox.env"
+  nsenter -t "$pid" -U -m --preserve-credentials -- env -i PATH=/usr/bin XDG_RUNTIME_DIR="/run/user/$UID" \
+    WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" "$@"
+}
+
+# A variable of the caller's as it was when omabox started (run --pass): from /proc, not ${!NAME},
+# which would give omabox's own ROOT, D or NAME instead of the caller's. Fails when it is not there.
+caller_env() {
+  local kv
+  while IFS= read -r -d '' kv; do
+    [[ $kv == "$1="* ]] && { printf '%s' "${kv#*=}"; return 0; }
+  done < "/proc/$$/environ"
+  return 1
+}
+
+# Run a command inside the box's namespaces (unprivileged: we own its user namespace) with the
+# session environment. Working directory: $PWD when it is the same directory in the box (a mount of
+# it: same device and inode, or an overlay of it), else the box HOME. Not just any dir of that name:
+# /home/USER and /tmp exist in a box too, empty or the box's own (finding 63).
+# PATH (findings 47, 57): omabox's stand-ins, the box HOME's ~/.local/bin (stubs), then the caller's
+# PATH in its order (so the same node or python wins as on the host), keeping only absolute dirs the
+# box can see, then the rest of the box's own: the order the session itself has.
+box_exec() {
+  local env=() cwd=/home/sbx pid
+  pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
+  mapfile -d '' env < "$D/run/omabox.env"
+  local here there
+  here=$(stat -c %d:%i -- "$PWD" 2>/dev/null) || here=""
+  there=$(nsenter -t "$pid" -U -m --preserve-credentials stat -c %d:%i -- "$PWD" 2>/dev/null) || there=""
+  if [ -n "$here" ] && [ "$here" = "$there" ]; then cwd=$PWD
+  elif [ -n "$there" ] && jq -e --arg p "$PWD/" 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' "$D/box.json" >/dev/null 2>&1; then cwd=$PWD
+  fi
+  # An isolated box's network too; a host-network box shares the host's, which is not ours to join.
+  local ns=(-U -m -p -u -i); [ "$(meta net)" = isolated ] && ns+=(-n)
+  # `run --pass VAR` (finding 66): the caller's values go through a pipe (printf is a builtin: no
+  # argv), never on a command line, where the process list would show a password to every user.
+  local pass=() pfd
+  if [ ${#PASS[@]} -gt 0 ]; then
+    exec {pfd}< <(for v in "${PASS[@]}"; do printf '%s=%s\0' "$v" "$(caller_env "$v")"; done)
+    pass=(OMABOX_PASS_FD="$pfd")
+  fi
+  # shellcheck disable=SC2016 # $1/$@ belong to the inner bash
+  nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
+    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="${PATH:-}" "${pass[@]}" bash -c '
+      if [ -n "${OMABOX_PASS_FD:-}" ]; then
+        while IFS= read -r -d "" kv <&"$OMABOX_PASS_FD"; do export "$kv"; done
+        eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
+      fi
+      cd "$1" && shift
+      p=/opt/omabox/share/bin:/home/sbx/.local/bin; set -f; IFS=:
+      for d in $OMABOX_CALLER_PATH $PATH; do
+        case $d in /*) ;; *) continue ;; esac
+        case ":$p:" in *":$d:"*) ;; *) [ -d "$d" ] && p=$p:$d ;; esac
+      done
+      unset IFS OMABOX_CALLER_PATH; set +f; PATH=$p exec -- "$@"' bash "$cwd" "$@"
+  local rc=$?
+  [ ${#pass[@]} -eq 0 ] || exec {pfd}<&-
+  return $rc
+}
+
+# Processes in a box, and what `run` starts there, get a core limit of exactly 1 byte: the kernel then
+# skips the core helper (systemd-coredump), so a crash in a box (an app under test, a Qt program with
+# no display) never becomes a "Process crashed" notification on the user's desktop through
+# omarchy-crash-watch (finding 67). The hard limit stays: `ulimit -c unlimited` inside gets cores back.
+# With a hard limit of 0 there are no cores to skip.
+nocore() {
+  if [ "$(ulimit -Hc)" = 0 ]; then "$@"; else prlimit --core=1: "$@"; fi
+}
+
+# The user's Hyprland session, for what omabox does on the host on purpose (interactive windows,
+# peek, --size host): sets HOST_SIG and HOST_WL (its Wayland socket, a path). The environment's
+# session when it names a live one, else the only one in the runtime dir: so omabox still reaches the
+# desktop from a shell whose display was taken away on purpose (the agent guard, finding 65). With
+# several and none named, it refuses rather than guess.
+host_session() {
+  [ -z "${HOST_SIG:-}" ] || return 0
+  local sig=${HYPRLAND_INSTANCE_SIGNATURE:-} all
+  all=$(HYPRLAND_INSTANCE_SIGNATURE=$GUARD hyprctl -j instances 2>/dev/null) && jq -e 'type == "array"' <<<"$all" >/dev/null 2>&1 || all='[]'
+  # A signature left from a session that crashed (a tmux shell outlived it) names a dir whose socket
+  # file stays: only a live instance counts.
+  if [ -z "$sig" ] || ! jq -e --arg s "$sig" 'any(.[]; .instance == $s)' <<<"$all" >/dev/null; then
+    case $(jq length <<<"$all") in
+      1) sig=$(jq -r '.[0].instance' <<<"$all") ;;
+      0) die "no Hyprland session in $XDG_RUNTIME_DIR/hypr: this needs the user's desktop" ;;
+      *) die "several Hyprland sessions: set HYPRLAND_INSTANCE_SIGNATURE to one of $(jq -r 'map(.instance) | join(", ")' <<<"$all")" ;;
+    esac
+  fi
+  local wl; wl=$(jq -r --arg s "$sig" 'first(.[] | select(.instance == $s) | .wl_socket) // empty' <<<"$all")
+  [[ $wl =~ ^[A-Za-z0-9._-]+$ ]] && [ -S "$XDG_RUNTIME_DIR/$wl" ] || die "Hyprland session $sig: no Wayland socket found"
+  HOST_SIG=$sig HOST_WL=$XDG_RUNTIME_DIR/$wl
+}
+
+# hyprctl on the user's session (host_session), wherever this shell's display points.
+host_hyprctl() {
+  host_session
+  HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG hyprctl "$@"
+}
+
+# A screen mode for a headless box: WxH (@60), WxH@HZ, or `host` for the user's focused monitor
+# (a read-only hyprctl on the host; scale stays 1). Prints WxH@HZ.
+parse_mode() {
+  local m=$1
+  if [ "$m" = host ]; then
+    host_session
+    m=$(host_hyprctl -j monitors | jq -r 'map(select(.focused)) | .[0] // empty |
+      "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"') && [ -n "$m" ] || die "no focused monitor on the host"
+  fi
+  [[ $m =~ ^[1-9][0-9]*x[1-9][0-9]*(@[0-9]+(\.[0-9]+)?)?$ ]] || die "a size is WxH, WxH@HZ or host, got $1"
+  [[ $m == *@* ]] || m=$m@60
+  # The rate as box_screen prints it (60.0 and 060 are 60), so `mode` can compare; never 0.
+  local hz; hz=$(awk -v h="${m#*@}" 'BEGIN { h = int(h * 100 + 0.5) / 100; if (h <= 0) exit 1; printf "%g", h }') ||
+    die "a refresh rate is above 0, got ${m#*@}"
+  echo "${m%@*}@$hz"
+}
+
+# The layout's size, for mapping absolute pointer coordinates.
+extent() {
+  on_box hyprctl -j monitors | jq -r '[.[] | select(.disabled | not)] |
+    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"'
+}
+
+wait_ready() {
+  local want_shell=$1 deadline=$((SECONDS + READY_TIMEOUT))
+  until [ -s "$D/run/omabox.env" ]; do
+    box_alive || die "box '$NAME' died while starting; logs: $D/home/*.log $D/box.log"
+    [ $SECONDS -lt $deadline ] || die "Hyprland not up after ${READY_TIMEOUT}s; logs: $D/home/*.log"
+    sleep 0.1
+  done
+  [ "$want_shell" = 1 ] || return 0
+  # The bar on screen and the tray watcher on the bus: what tray/notification tests need.
+  until on_box hyprctl -j layers 2>/dev/null | grep -q '"omarchy-bar"' &&
+        box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; do
+    box_alive || die "box '$NAME' died while starting; logs: $D/home/*.log"
+    [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
+    sleep 0.1
+  done
+  # And the notification server (the built-in one, or a mounted plugin's: every box has one, finding
+  # 42), which registers up to ~3 s after the bar: a `notify-send` right after `up` failed with
+  # ServiceUnknown (finding 62). A server that never comes is a warning, not a failed box.
+  local nd=$((SECONDS + 5))
+  # (NameHasOwner: `busctl status` exits 0 for a name nobody owns yet.)
+  until [ "$(box_exec busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus \
+           NameHasOwner s org.freedesktop.Notifications 2>/dev/null)" = "b true" ]; do
+    [ $SECONDS -lt $nd ] || { say "no notification server on the box's bus yet; see $D/home/shell.log"; break; }
+    sleep 0.1
+  done
+  # The bar paints its widgets ~150 ms after it maps and animates in for ~500 ms more: wait until its
+  # pixels hold still (3 identical captures), so the first screenshot shows a finished bar. Not for
+  # interactive boxes: a window the host is not showing is not rendered, so screencopy never returns.
+  [ "$(meta mode)" = interactive ] && return 0
+  local geom last="" now same=0
+  geom=$(on_box hyprctl -j layers | jq -r 'first(.. | objects | select(.namespace? == "omarchy-bar")) | "\(.x),\(.y) \(.w)x\(.h)"')
+  while [ $same -lt 3 ] && [ $SECONDS -lt $deadline ]; do
+    now=$(on_box timeout 2 grim -g "$geom" - 2>/dev/null | md5sum) || now=""   # a missed frame: try again
+    if [ "$now" = "$last" ]; then same=$((same + 1)); else same=0; last=$now; fi
+    sleep 0.1
+  done
+}
+
+# --- up ------------------------------------------------------------------------------------------
+
+# The GPU render node the box renders with: $OMABOX_RENDER_NODE, else the first usable one. Only ever a
+# render node (renderD*), never a card node: that is the seat (finding 5).
+render_node() {
+  local n=${OMABOX_RENDER_NODE:-}
+  if [ -z "$n" ]; then
+    for n in /dev/dri/renderD*; do [ -r "$n" ] && [ -w "$n" ] && break; n=""; done
+  fi
+  [[ $n =~ ^/dev/dri/renderD[0-9]+$ ]] && [ -r "$n" ] && [ -w "$n" ] ||
+    die "no usable GPU render node (/dev/dri/renderD*); set OMABOX_RENDER_NODE"
+  echo "$n"
+}
+
+# Resolve --plugin PATH|ID to "id<TAB>realpath".
+resolve_plugin() {
+  local p=$1 dir id
+  if [ -f "$p/manifest.json" ]; then dir=$(readlink -f "$p")
+  elif [ -f "$HOME/.config/omarchy/plugins/$p/manifest.json" ]; then dir=$(readlink -f "$HOME/.config/omarchy/plugins/$p")
+  else die "plugin not found: $p (a plugin dir with manifest.json, or an id under ~/.config/omarchy/plugins)"
+  fi
+  id=$(jq -r '.id // empty' "$dir/manifest.json")
+  [ -n "$id" ] || die "no id in $dir/manifest.json"
+  printf '%s\t%s\n' "$id" "$dir"
+}
+
+# The box's fake HOME: the user's Omarchy look, no secrets (never api-keys.env, keyrings, tokens).
+# shell.json keeps the user's bar settings but only the built-in widgets plus the plugins mounted
+# into this box, each enabled where its manifest says it belongs. --stock-bar starts from Omarchy's
+# default shell.json instead, without the user's shell.toml: the bar most people have (finding 60). Idle times out after ~11 days
+# (no screensaver or lock without real input, finding 10) while Stay Awake still reads off (51).
+seed_home() {
+  local h=$D/home state=$HOME/.local/state/omarchy/current bg id dir kinds section
+  # First the HOME a new Omarchy user starts with (/etc/skel, finding 69): Omarchy's configs, desktop
+  # entries, menu extension, toggles, migrations marked done. Not nvim's 85 MB of plugins, nor the
+  # XDG autostart entries (what starts in a box is omabox's choice). The user's look goes on top.
+  if [ -d /etc/skel/.config/omarchy ]; then
+    tar -C /etc/skel --exclude=./.local/share/nvim --exclude=./.config/autostart -cf - . | tar -C "$h" -xf -
+  fi
+  mkdir -p "$h/.config/omarchy/plugins" "$h/.config/omabox" "$h/.local/state/omarchy/current" "$h/.local/state/omarchy/indicators"
+  local shell_json=$HOME/.config/omarchy/shell.json
+  if [ "$STOCK_BAR" = 1 ]; then
+    shell_json=/usr/share/omarchy/config/omarchy/shell.json
+    [ -f "$shell_json" ] || die "--stock-bar: no $shell_json in this Omarchy"
+  else
+    cp "$HOME/.config/omarchy/shell.toml" "$h/.config/omarchy/" 2>/dev/null || true
+  fi
+  local ids; ids=$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R . | jq -s .)
+  # A user who swapped the built-in notifications for a plugin (e.g. njpatel.omapager) has it disabled, and that
+  # plugin is not in the box: turn the built-in back on unless a mounted plugin serves them itself.
+  local notify=true p
+  for p in "${PLUGINS[@]}"; do grep -rqs --include='*.qml' NotificationServer "${p#*$'\t'}" && notify=false; done
+  jq --argjson keep "$ids" --argjson notify $notify '
+      def keep: (if type == "object" then .id else . end) as $i | ($i | startswith("omarchy.")) or ($keep | index($i));
+      if $notify and .disabledPlugins then .disabledPlugins -= ["omarchy.notifications"] else . end
+      | .idle = {screensaver: 1000000, lock: 1000000}
+      | if (.bar.layout? | type) == "object" then .bar.layout |= map_values(map(select(keep))) else . end
+      | if .plugins then .plugins |= map(select(keep)) else . end
+      | (.bar.centerAnchor? // "") as $a
+      | if $a != "" and (($a | startswith("omarchy.")) or ($keep | index($a)) | not)
+        then del(.bar.centerAnchor) else . end' \
+    "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
+    echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"
+  for p in "${PLUGINS[@]}"; do
+    id=${p%%$'\t'*}; dir=${p#*$'\t'}
+    kinds=$(jq -c '.kinds // []' "$dir/manifest.json")
+    section=$(jq -r '.barWidget.defaultSection // "center"' "$dir/manifest.json")
+    jq --arg id "$id" --arg sec "$section" --argjson kinds "$kinds" '
+        def ids: [(.bar.layout // {})[]?[]? | if type == "object" then .id else . end] + [(.plugins // [])[].id];
+        if ($kinds | index("bar")) then .bar.id = $id
+        elif (ids | index($id)) then .
+        elif ($kinds | index("bar-widget")) then .bar.layout[$sec] = ((.bar.layout[$sec] // []) + [{id: $id}])
+        else .plugins = ((.plugins // []) + [{id: $id}]) end' \
+      "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
+    mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
+  done
+  cp -rL "$state/theme" "$h/.local/state/omarchy/current/theme"
+  cp "$state/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null || true
+  if bg=$(readlink "$state/background"); then
+    ln -sfn "/home/sbx/.local/state/omarchy/current/theme/${bg#*/current/theme/}" "$h/.local/state/omarchy/current/background"
+  fi
+  # The rest of the user's look (finding 69), none of it secret: terminal configs (they include the
+  # theme's colours) and the terminal choice, branding (About sizes its window from about.txt), the
+  # menu extension, custom themes (the theme picker), Hyprland toggles. Never ~/.config/omarchy
+  # wholesale: api-keys.env lives there, and hooks are the user's scripts.
+  for dir in foot alacritty ghostty kitty; do seed_copy "$HOME/.config/$dir" "$h/.config/$dir"; done
+  cp "$HOME/.config/"*xdg-terminals.list "$h/.config/" 2>/dev/null || true
+  for dir in branding extensions; do seed_copy "$HOME/.config/omarchy/$dir" "$h/.config/omarchy/$dir"; done
+  # Each theme on its own: one linked in from the repo it is developed in is followed that far.
+  for dir in "$HOME/.config/omarchy/themes"/*/; do
+    [ -d "$dir" ] && seed_copy "$dir" "$h/.config/omarchy/themes/$(basename "$dir")"
+  done
+  mkdir -p "$h/.local/state/omarchy/toggles"
+  seed_copy "$HOME/.local/state/omarchy/toggles/hypr" "$h/.local/state/omarchy/toggles/hypr"
+  # Without /etc/skel (an older Omarchy), at least the desktop entries: foot's X-TerminalArgAppId is
+  # what makes xdg-terminal-exec pass --app-id, which Omarchy's window rules match (About's float).
+  if [ ! -d "$h/.local/share/applications" ] && [ -d /usr/share/omarchy/applications ]; then
+    mkdir -p "$h/.local/share/applications"
+    cp /usr/share/omarchy/applications/*.desktop "$h/.local/share/applications/" 2>/dev/null || true
+  fi
+  # Git's identity only (finding 48): commits and release dry-runs need one. Never the rest of the
+  # user's git config (credential helpers, tokens in URLs).
+  local key val
+  for key in user.name user.email; do
+    val=$(git config --global "$key" 2>/dev/null) && git config --file "$h/.gitconfig" "$key" "$val"
+  done
+}
+
+# Copy one of the user's dirs into the box HOME (seed_home). The dir itself may be a link (dotfiles), but
+# links inside it stay links, to host paths the box does not have, instead of bringing in what they
+# point at (finding 74: a theme linked from its repo brought its .env and .git/config, a link to
+# api-keys.env the keys). No hidden files or node_modules, and nothing refuse_src keeps out of a mount.
+# seed_copy SRC DEST
+seed_copy() {
+  local src; src=$(readlink -f -- "$1" 2>/dev/null) && [ -d "$src" ] || return 0
+  ! refuse_src "$src" >/dev/null || return 0
+  mkdir -p "$2"
+  (
+    shopt -s nullglob; cd "$src" || exit 0
+    set -- *; [ $# -gt 0 ] || exit 0
+    tar --exclude='.[!.]*' --exclude=node_modules --exclude=api-keys.env -cf - -- "$@"
+  ) 2>/dev/null | tar -C "$2" -xf - 2>/dev/null || true
+}
+
+# A read-only mount spec, DIR or DIR:DEST (DEST absolute, e.g. ~/nas:/mnt/nas to test path mapping):
+# prints "src<TAB>dest" (both resolved), or fails if DIR does not exist.
+robind_spec() {
+  local src=$1 dest=""
+  if [[ $1 == *:/* ]]; then src=${1%%:/*}; dest=/${1#*:/}; fi
+  src=${src/#\~/$HOME}
+  [ -e "$src" ] || return 1
+  src=$(readlink -f -- "$src")
+  [ -z "$dest" ] || dest=$(realpath -m -- "$dest")   # //usr and /a/../usr are /usr
+  printf '%s\t%s\n' "$src" "${dest:-$src}"
+}
+
+# Why a host path must not go into a box (prints the reason), or nothing (fails) when it may (finding
+# 63). Read-only mounts, overlays and plugin dirs are files the box's code can read, and sockets it can
+# connect() to whatever the network mode. Refused: anything that contains HOME, ~/.config/omarchy
+# (api-keys.env) or /tmp; anything inside or containing the secret stores, the runtime dir, /run, the
+# kernel's trees, or /tmp's socket dirs (X11, tmux, ssh-agent). A repo in /tmp or a plugin under
+# ~/.config/omarchy/plugins is fine.
+refuse_src() {
+  local s x; s=$(readlink -f -- "$1" 2>/dev/null) || s=$1; s=${s%/}/
+  for x in "$HOME" "$HOME/.config/omarchy" /tmp; do
+    x=${x%/}/
+    case "$x" in "$s"*) echo "it contains $x"; return 0 ;; esac
+  done
+  for x in "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.local/share/keyrings" "$HOME/.password-store" \
+           "$HOME/.aws" "$HOME/.kube" "$HOME/.docker" "$HOME/.netrc" \
+           "${XDG_RUNTIME_DIR:-/run/user/$UID}" /run /dev /proc /sys /tmp/.X11-unix /tmp/.ICE-unix \
+           /tmp/tmux-* /tmp/ssh-* /tmp/gpg-*; do
+    [[ $x == *\** ]] && continue   # a glob that matched nothing
+    x=${x%/}/
+    case "$s" in "$x"*) echo "it is inside $x (secrets or live sockets)"; return 0 ;; esac
+    case "$x" in "$s"*) echo "it contains $x (secrets or live sockets)"; return 0 ;; esac
+  done
+  return 1
+}
+
+# Why a path inside the box must not be mounted over (prints the reason), or fails when it may: the
+# system dirs, the runtime dir, and omabox's own mounts or anything above them. Inside the box's /tmp
+# (its own tmpfs) is fine, so a repo in /tmp mounts at its own path; /tmp itself and Xwayland's socket
+# dirs are not.
+refuse_dest() {
+  local d=${1%/}/ x
+  case "$d" in
+    /|/usr/*|/etc/*|/proc/*|/dev/*|/sys/*|/run/*|/bin/*|/lib/*|/lib64/*|/tmp/|/tmp/.X11-unix/*|/tmp/.ICE-unix/*|/opt/omabox/*|/home/sbx/*)
+      echo "that is the box's own system, runtime dir, /tmp or HOME"; return 0 ;;
+  esac
+  for x in /home/sbx/ /opt/omabox/ /tmp/; do
+    case "$x" in "$d"*) echo "it would hide $x"; return 0 ;; esac
+  done
+  return 1
+}
+
+cmd_up() {
+  STOCK_BAR=0
+  local systemd=0 owner=""
+  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=host allow="" idle=${OMABOX_IDLE:-2h}
+  local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --size) optarg "$@"; size=$2; shift ;;
+      --workspace) optarg "$@"; ws=$(ws_check "$2") || die "--workspace: 1-99, special (the scratchpad, SUPER+S) or special:NAME, got $2"; shift ;;
+      --new) new=1 ;;
+      --confirm-close) confirm=on ;;
+      --no-confirm-close) confirm=off ;;
+      --interactive|-i) interactive=1 ;;
+      --plugin) optarg "$@"; plugin_args+=("$2"); shift ;;
+      --overlay) optarg "$@"; [ -d "$2" ] || die "--overlay: no such directory: $2"; overlays+=("$(readlink -f -- "$2")"); shift ;;
+      --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec"); shift ;;
+      --net) optarg "$@"; net=$2; shift ;;
+      --allow) optarg "$@"; allow=$2; shift ;;
+      --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"; envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
+      --idle) optarg "$@"; idle=$2; shift ;;
+      --owner) optarg "$@"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
+      --stock-bar) STOCK_BAR=1 ;;
+      --systemd) systemd=1 ;;
+      --xwayland) xwayland=1 ;;
+      --no-shell) shell=0 ;;
+      -h|--help) usage; return ;;
+      -*) die "up: unknown option $1" ;;
+      *) [ -z "$name" ] || die "up: one box name, got $name and $1"; name=$1 ;;
+    esac
+    shift
+  done
+  if [ $new = 1 ]; then
+    # A name no box has (finding 73): box-1, box-2, ... The choice holds a lock until the box's dir
+    # exists, so two at once (a double click in the widget) never pick the same one. Printed on stdout.
+    [ -z "$name" ] || die "up: --new picks the name itself, got $name too"
+    mkdir -p "$BOXES"
+    exec {NEWLOCK}>"$BOXES/.lock-new"
+    flock -w 60 "$NEWLOCK" || die "another up --new is still choosing a name; try again"
+    local n=1; while [ -e "$BOXES/box-$n" ]; do n=$((n + 1)); done
+    name=box-$n
+  fi
+  select_box "$name"
+  size=$(parse_mode "$size")
+  local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
+  [ $interactive = 0 ] || idle_s=0
+  [ $interactive = 1 ] || [ -z "$ws$confirm" ] || die "up: --workspace and --confirm-close are for --interactive (peek takes --workspace)"
+  # Settings (finding 70): the flags, else ~/.config/omabox/config. confirm_close_from says whether a
+  # later `omabox config confirm-close` changes this box too.
+  local confirm_from=flag
+  [ -n "$ws" ] || ws=$(conf_get workspace)
+  [ -n "$confirm" ] || { confirm=$(conf_get confirm-close); confirm_from=config; }
+  case $net in host|isolated) ;; *) die "up: --net is host (the default) or isolated" ;; esac
+  [ -z "$allow" ] || [ "$net" = isolated ] || die "up: --allow needs --net isolated"
+  [[ -z $allow || $allow =~ ^[0-9]+(,[0-9]+)*$ ]] || die "up: --allow takes ports: 8081,8082"
+  check_install
+  # One `up` or `down` per name at a time: two agents in one repo both running `omabox up` would
+  # otherwise each start a box on the same dir, and one would be orphaned where `down` cannot see it.
+  mkdir -p "$BOXES"
+  exec {LOCK}>"$BOXES/.lock-$NAME"
+  flock -w 60 "$LOCK" || die "box '$NAME' is busy (another up or down); try again"
+  if box_alive; then
+    touch "$D/used" 2>/dev/null || true
+    say "box '$NAME' is already up (options ignored; omabox down $NAME to change them)"
+    return 0
+  fi
+  [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
+    die "--systemd needs your systemd user manager (systemctl --user) to delegate the box a cgroup"
+  [ "$net" = host ] || command -v pasta >/dev/null || die "--net isolated needs pasta: sudo pacman -S passt"
+  PLUGINS=()
+  local p; for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
+  for p in "${PLUGINS[@]}"; do
+    why=$(refuse_src "${p#*$'\t'}") && die "refusing to mount plugin ${p#*$'\t'} into a box: $why"
+  done
+
+  # Host code, read-only (at the same path unless DIR:DEST): the repo `up` runs from, mise's
+  # toolchains, ~/.config/omabox/ro-bind, --ro-bind. Checked before anything is created: a refusal
+  # leaves no box dir. What the user named is refused loudly; what omabox adds by itself is skipped.
+  local top
+  if top=$(git rev-parse --show-toplevel 2>/dev/null); then
+    if why=$(refuse_src "$top"); then say "not mounting the repo $top: $why"
+    else robinds=("$top"$'\t'"$top" "${robinds[@]}"); fi
+  fi
+  # Language toolchains mise installed (node, python, ...): interpreters and compilers, no secrets.
+  # Mounted so `omabox run` finds the same ones as the host (finding 47); rustup's ~/.cargo is not.
+  local mise=${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs
+  [ -d "$mise" ] && robinds+=("$(readlink -f "$mise")"$'\t'"$(readlink -f "$mise")")
+  if [ -f "$HOME/.config/omabox/ro-bind" ]; then
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%%[[:space:]]#*}; [[ $line == \#* ]] && continue      # comments: whole line, or after a space
+      line=${line#"${line%%[![:space:]]*}"}; line=${line%"${line##*[![:space:]]}"}   # trim, keep inner spaces
+      [ -n "$line" ] || continue
+      if spec=$(robind_spec "$line"); then robinds+=("$spec")
+      else say "$HOME/.config/omabox/ro-bind: skipping $line (no such path)"; fi
+    done < "$HOME/.config/omabox/ro-bind"
+  fi
+  local src dest ro_args=()
+  for p in "${robinds[@]}"; do
+    src=${p%%$'\t'*} dest=${p#*$'\t'}
+    why=$(refuse_src "$src") && die "refusing to mount $src into a box: $why"
+    why=$(refuse_dest "$dest") && die "refusing to mount $src at $dest in a box: $why"
+    ro_args+=(--ro-bind "$src" "$dest")
+  done
+  for p in "${overlays[@]}"; do
+    why=$(refuse_src "$p") && die "refusing to overlay $p in a box: $why"
+    why=$(refuse_dest "$p") && die "refusing to overlay $p in a box: $why"
+  done
+
+  rm_box; rm -f "$BOXES/.expired-$NAME"; mkdir -p "$D/run" "$HOMES/$NAME/home"; ln -s "$HOMES/$NAME/home" "$D/home"
+  # The name is taken now (its dir exists): let the next `up --new` choose, and keep the lock out of
+  # the box's long-lived processes.
+  [ -z "${NEWLOCK:-}" ] || exec {NEWLOCK}>&-
+  sweep_homes
+  seed_home
+  # Read again as late as possible: a change made while this box was being set up (the widget's
+  # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
+  # confirm_live sees the box.
+  [ "$confirm_from" = flag ] || confirm=$(conf_get confirm-close)
+  jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
+    --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
+    --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
+    --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" \
+    --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
+    --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
+    --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" \
+    '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
+      idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays}
+      + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
+      + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from} else {} end)' > "$D/box.json"
+  [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
+
+  # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
+  # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in.
+  local render run=/run/user/$UID
+  render=$(render_node)
+  # The host's name in both network modes (finding 54): pasta's own UTS namespace would otherwise
+  # name an isolated box pasta-HOST.
+  local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
+    --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --ro-bind /etc /etc
+    --proc /proc --dev /dev --dev-bind "$render" "$render" --ro-bind /sys /sys
+    --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
+    --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$AQUAMARINE" /opt/omabox/lib
+    --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER")
+  args+=("${ro_args[@]}")
+  # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,
+  # below) writable as its whole /sys/fs/cgroup under a cgroup namespace, and the marker systemd
+  # checks for a systemd-booted system. @CGROUP@ is filled in inside the scope.
+  [ $systemd = 0 ] || args+=(--unshare-cgroup --bind @CGROUP@ /sys/fs/cgroup --dir /run/systemd/system)
+  # DNS (finding 52): /etc is the host's but /run is the box's, so a resolv.conf linking into /run
+  # (systemd-resolved's stub, NetworkManager's) points at nothing. A host-network box gets that one
+  # file; an isolated box has no network to resolve names for.
+  # (A link whose directory is missing makes readlink -f fail: no file to bind, not a silent exit.)
+  local resolv; resolv=$(readlink -f /etc/resolv.conf) || resolv=""
+  if [ "$net" = host ] && [[ $resolv = /run/* ]] && [ -f "$resolv" ]; then args+=(--ro-bind "$resolv" "$resolv"); fi
+  for p in "${PLUGINS[@]}"; do args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}"); done
+  for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
+  # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
+  args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
+    --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "${PATH:-}"
+    --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
+    --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell"
+    "${envs[@]}" /opt/omabox/share/session.sh)
+
+  local launch=(bwrap)
+  if [ $interactive = 1 ]; then
+    host_session
+    [ -x "$WLFD" ] || die "missing $WLFD: run install.sh"
+    launch=("$WLFD" "$HOST_WL" bwrap)
+  fi
+  if [ "$net" = isolated ]; then
+    # pasta gives the box its own network with only a loopback (--splice-only: no interface, no
+    # route, so no internet and no LAN) and splices just the allowed ports to the host's loopback;
+    # every other direction is off explicitly, since pasta's default is to forward whatever is
+    # bound. Its namespace maps us to root, so bwrap maps back to our uid. pasta closes inherited
+    # fds: bwrap's info fd is opened inside it, and omabox-wlfd connects from inside (a unix socket).
+    # pasta adds its own pid namespace (no --no-pidns in Arch's yet), so it writes its pid for
+    # isolated_pid to find the box's.
+    # shellcheck disable=SC2016 # $0 and $@ belong to the inner sh
+    launch=(pasta -q --splice-only -t none -u none -U none -T "${allow:-none}" -P "$D/pasta.pid" --
+      sh -c 'exec 3>"$0"; exec "$@"' "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)")
+  fi
+  # --systemd: the whole box (pasta too) runs in a transient scope of the user's manager that delegates
+  # its cgroup, the only way an unprivileged sandbox gets a cgroup subtree of its own to manage. The
+  # scope goes by itself once everything in it has died (`down` kills PID 1).
+  local sdenv=()
+  if [ $systemd = 1 ]; then
+    # shellcheck disable=SC2016 # expanded inside the scope
+    launch=(systemd-run --user --scope --quiet --collect --expand-environment=no -p Delegate=yes --unit "omabox-$NAME-$$"
+      bash -c 'cg=/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup); exec "${@//@CGROUP@/$cg}"' omabox-cgroup "${launch[@]}")
+    sdenv=(XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR")   # systemd-run finds the user manager through it
+  fi
+  # No --die-with-parent: the box outlives this command; `omabox down` (or closing an
+  # interactive box's window) ends it.
+  # env -i keeps Hyprland's exec-rule token (finding 45): the host matches a new window to its exec
+  # rule by the launched pid or by this token in the client's environment, and pasta forks, so an
+  # isolated box's window only lands on its workspace through the token. bwrap drops it inside.
+  { printf '#!/usr/bin/env bash\nexec'
+    # USER/LOGNAME too (finding 49): widgets and scripts name the user from them. SHELL, which login
+    # sets on the host (terminals and multiplexers open it), and every locale variable, not only LANG
+    # (finding 58: LC_TIME and the rest are the user's formats).
+    # (login_shell, not shell: that is cmd_up's "wait for the Omarchy shell" flag, finding 62.)
+    local login_shell; login_shell=$(getent passwd "$(id -un)" | cut -d: -f7); [ -x "$login_shell" ] || login_shell=/bin/bash
+    printf ' %q' env -i PATH=/usr/bin TERM=dumb LANG="${LANG:-C.UTF-8}" USER="$(id -un)" LOGNAME="$(id -un)" SHELL="$login_shell" "${sdenv[@]}"
+    local v; for v in LANGUAGE ${!LC_*}; do [ -z "${!v:-}" ] || printf ' %q' "$v=${!v}"; done
+    # shellcheck disable=SC2016 # expanded when launch.sh runs, under the host's exec rule
+    printf ' %s' '${HL_EXEC_RULE_TOKEN:+HL_EXEC_RULE_TOKEN=$HL_EXEC_RULE_TOKEN}'
+    [ "$(ulimit -Hc)" = 0 ] || printf ' %q' prlimit --core=1:   # nocore, for the whole box
+    printf ' %q' setsid "${launch[@]}" --unsetenv HL_EXEC_RULE_TOKEN "${args[@]}"
+    printf ' 3>%q </dev/null >%q 2>&1\n' "$D/info.json" "$D/box.log"
+  } > "$D/launch.sh"
+  # From here a box may be running: if `up` fails, kill it rather than leave it running unseen, with no
+  # idle expiry. The dir stays, so the logs `die` points at can be read; `ls` shows it dead, `down`
+  # clears it.
+  trap '[ $? = 0 ] || kill_box' EXIT
+  if [ $interactive = 1 ]; then
+    install_passthrough
+    # Launched by the host Hyprland so its exec rules apply to exactly this process's window: onto
+    # the configured workspace (9 unless changed, finding 70) without focus. (Aquamarine names every nested window "aquamarine"; a class rule
+    # would also catch any other nested Hyprland the user runs.)
+    host_eval "hl.exec_cmd('bash $(lua_str "$D/launch.sh")', { workspace = '$ws silent', no_initial_focus = true })"
+  else
+    bash "$D/launch.sh" {LOCK}>&- &
+  fi
+  local deadline=$((SECONDS + 10))
+  until [ -n "$(box_pid)" ]; do
+    [ $SECONDS -lt $deadline ] || die "bwrap did not start; see $D/box.log"
+    sleep 0.05
+  done
+  # What box_pid checks from now on: this box's pid namespace, not a later owner of the pid.
+  local ns; ns=$(readlink "/proc/$(box_pid)/ns/pid")
+  jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  wait_ready "$shell"
+  trap - EXIT
+  [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop)"
+  touch "$D/used"
+  if [ "$idle_s" != 0 ] || [ -n "$owner" ] || [ $interactive = 1 ]; then
+    setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
+  fi
+  local screen; screen=$(box_screen); say "box '$NAME' up (${screen#* }) in $D"
+  [ $new = 0 ] || echo "$NAME"
+}
+
+# What `up` needs from install.sh: the helpers, and the patched aquamarine under the soname the
+# installed Hyprland links (after an Arch update to a new soname, the box would otherwise silently run
+# the unpatched system library).
+check_install() {
+  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] || die "missing $KEYBOARD or $POINTER: run install.sh"
+  local want
+  want=$(ldd "$(command -v Hyprland || echo /usr/bin/Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}') || true
+  [ -n "$want" ] || die "cannot tell which libaquamarine Hyprland links (ldd $(command -v Hyprland))"
+  [ -e "$AQUAMARINE/$want" ] || die "Hyprland links $want but $AQUAMARINE lacks it: run install.sh"
+}
+
+# A value inside a single-quoted Lua string sent to the host Hyprland. Our own paths only; anything
+# that could end the string is refused rather than escaped.
+lua_str() {
+  [[ $1 != *[\'\"\\$'\n']* ]] || die "unsafe characters in a path for the host Hyprland: $1"
+  printf '%s' "$1"
+}
+
+# SIGKILL the box's PID 1 (the kernel then kills everything in its pid namespace; SIGTERM is ignored,
+# finding 6) and pasta's, if it is isolated; wait for them, at most 10 s. The dir stays.
+kill_box() {
+  local pid pasta
+  pid=$(box_pid) || true
+  pasta=$(cat "$D/pasta.pid" 2>/dev/null) || true
+  [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
+  # A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does.
+  [ -n "$pid" ] && pkill -CONT -f "^nsenter -t $pid " 2>/dev/null
+  # An isolated box whose pid was never found: pasta's own pid namespace holds it, end that instead.
+  if [ -n "$pasta" ] && [ "$(cat "/proc/$pasta/comm" 2>/dev/null)" = pasta ]; then
+    kill -KILL "$pasta" "$(pgrep -P "$pasta" | head -1)" 2>/dev/null
+  fi
+  local end=$((SECONDS + 10))
+  while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
+    [ $SECONDS -lt $end ] || { say "box '$NAME': PID 1 ($pid) still exiting after 10 s ($(cat "/proc/$pid/wchan" 2>/dev/null))"; return 1; }
+    sleep 0.05
+  done
+  true
+}
+
+# 30m, 2h, 90s, 45 (minutes), 0 → seconds.
+duration() {
+  [[ $1 =~ ^([0-9]{1,6})([smh]?)$ ]] || return 1
+  local n=$((10#${BASH_REMATCH[1]}))   # decimal: 010 is ten, not octal eight
+  case ${BASH_REMATCH[2]} in s) echo "$n" ;; h) echo $((n * 3600)) ;; *) echo $((n * 60)) ;; esac
+}
+
+# Seconds as the user would write them: 90s, 30m, 2h.
+human_duration() {
+  if [ $(($1 % 3600)) = 0 ] && [ "$1" -gt 0 ]; then echo "$(($1 / 3600))h"
+  elif [ $(($1 % 60)) = 0 ] && [ "$1" -gt 0 ]; then echo "$(($1 / 60))m"
+  else echo "${1}s"; fi
+}
+
+# Idle expiry (finding 59), a host process per headless box started by `up`: agents forget `down`, and
+# a box holds ~500 MB and a GPU client. Idle = no omabox command naming the box (need_box and `run`
+# touch $D/used), no peek window on it, and no `omabox run` still running in it. `run`'s throwaway
+# boxes get one too, with no idle limit but an owner: the `omabox run` process; when that is gone
+# (killed with SIGKILL, so its EXIT trap never ran), so is the box. Exits when the box goes, or when a
+# new box took the name (its creation time differs). A throwaway box found dead once its run is gone
+# is cleared too: its run's teardown gave up on it (PID 1 slow to exit under load) and nobody reads its
+# logs; other dead boxes stay for theirs.
+cmd__reap() {
+  select_box "$1"; local created=$2 idle owner mode; idle=$(meta idle); owner=$(meta owner); mode=$(meta mode)
+  [ -n "$idle" ] || idle=0
+  [ "$idle" -gt 0 ] || [ -n "$owner" ] || [ "$mode" = interactive ] || return 0
+  local every=$((idle / 4)); [ $every -le 60 ] || every=60; [ $every -ge 5 ] || every=5
+  # An interactive box closed by its user goes from the widget and `ls` within a poll or so.
+  [ "$mode" != interactive ] || every=2
+  while sleep "$every"; do
+    [ "$(meta created)" = "$created" ] || return 0
+    if ! box_alive; then
+      if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then DOWN_IF_CREATED=$created cmd_down "$NAME"
+      # Ended on purpose (its window closed, or "Shut down" when asked): nothing to keep. A box that
+      # died any other way stays dead, logs and all, until `down` (finding 71). Interactive only: the
+      # file is the box's to write, and a headless box has no window to close (finding 74).
+      elif [ "$mode" = interactive ] && [ -f "$D/run/omabox.closed" ]; then
+        say "$(date -Is) box '$NAME': closed by its user: clearing it"
+        DOWN_IF_CREATED=$created cmd_down "$NAME"
+      fi
+      return 0
+    fi
+    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+      say "$(date -Is) box '$NAME': its omabox run ($owner) is gone: taking it down"
+      DOWN_IF_CREATED=$created cmd_down "$NAME"; return 0
+    fi
+    [ "$idle" -gt 0 ] || continue
+    local pid; pid=$(box_pid)
+    if peek_pid >/dev/null || pgrep -f "^nsenter -t $pid " >/dev/null; then
+      touch "$D/used"; continue
+    fi
+    [ $(($(date +%s) - $(stat -c %Y "$D/used"))) -ge "$idle" ] || continue
+    local human; human=$(human_duration "$idle")
+    say "$(date -Is) box '$NAME' idle for $human: taking it down"
+    DOWN_IF_CREATED=$created cmd_down "$NAME"
+    [ -d "$D" ] || echo "$human" > "$BOXES/.expired-$NAME"
+    return 0
+  done
+}
+
+# Write VALUE to a file in a box's runtime dir (<box dir>/run/FILE). The box can write that dir too, so
+# never open what is there: a link to a host file would be written through, a FIFO would block
+# (finding 74; set -C still followed a link to a FIFO). A new file in the box dir, which the box cannot
+# see, renamed over it. box_file PATH VALUE
+box_file() {
+  local tmp; tmp=$(mktemp "$(dirname "$(dirname "$1")")/.write.XXXXXX") || return 1
+  { printf '%s\n' "$2" > "$tmp" && mv -fT "$tmp" "$1"; } || { rm -f "$tmp"; return 1; }
+}
+
+# A regular expression matching $1 literally (for pgrep -f).
+re_quote() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g'; }
+
+# The pid of this box's peek window, if one is open.
+peek_pid() { pgrep -f "^$(re_quote "$PEEK --box $D/run/")" | head -1 | grep .; }
+
+# The box dir and its HOME. A user manager (--systemd) leaves mode-000 entries in the runtime dir
+# (systemd/inaccessible): ours, but rm cannot enter them until they are made writable.
+rm_box() {
+  [[ $D == "$BOXES"/?* ]] || return 0
+  chmod -R u+rwX "$D/run" 2>/dev/null || true
+  rm -rf "$D" "${HOMES:?}/$NAME"
+}
+
+# HOMEs whose box is gone: the runtime dir is cleared at logout or reboot, ~/.cache is not. The box dir
+# is always created before its HOME, so a box being set up right now is never swept.
+sweep_homes() {
+  local h
+  for h in "$HOMES"/*/; do
+    h=${h%/}; [ -d "$h" ] && [ ! -e "$BOXES/${h##*/}" ] && rm -rf "$h"
+  done
+  true
+}
+
+# Host side of interactive mode. Runtime-only (hyprctl eval): gone at the next host config reload,
+# never written to the user's config. Adds the "omabox" submap in which only the toggle key is bound,
+# so every other key (SUPER binds included) reaches the focused box. Passthrough ends by itself, so
+# nobody gets stuck with SUPER swallowed: when focus goes to another window, or on the first key
+# pressed while the pointer is off the box (clicking the host bar leaves the box focused, so focus
+# alone does not tell; that first key, usually SUPER, still reaches the box, the rest are the host's).
+# Versioned: a newer omabox replaces the hooks of an older one in a running Hyprland.
+install_passthrough() {
+  host_eval "if (omabox_pass_version or 0) < 2 then
+    for _, sub in ipairs(omabox_pass_subs or {}) do sub:remove() end
+    if not omabox_passthrough then
+      omabox_passthrough = true
+      hl.define_submap('omabox', function()
+        hl.bind('$PASS_KEY', hl.dsp.submap('reset'), { description = 'omabox: stop passing keys to the box' })
+      end)
+      hl.bind('$PASS_KEY', hl.dsp.submap('omabox'), { description = 'omabox: pass keys to the box' })
+    end
+    omabox_pass_version = 2
+    local function over_box()
+      local c = hl.get_cursor_pos()
+      if not c then return false end
+      for _, w in ipairs(hl.get_windows({ class = 'aquamarine' })) do
+        local a, s = w.at, w.size
+        if w.mapped and not w.hidden and w.workspace and w.workspace.visible
+          and c.x >= a.x and c.x < a.x + s.x and c.y >= a.y and c.y < a.y + s.y then return true end
+      end
+      return false
+    end
+    local function leave()
+      if hl.get_current_submap() == 'omabox' then hl.dispatch(hl.dsp.submap('reset')) end
+    end
+    omabox_pass_subs = {
+      hl.on('window.active', function(w) if not (w and w.class == 'aquamarine') then leave() end end),
+      hl.on('input.keyboard.key', function(_, _, state)
+        if state == 1 and hl.get_current_submap() == 'omabox' and not over_box() then leave() end
+      end),
+    }
+  end"
+}
+
+# Lua on the host Hyprland; its errors are ours to report.
+host_eval() {
+  local out; out=$(host_hyprctl eval "$1" 2>&1) || true
+  [ "$out" = ok ] || die "host hyprctl eval failed: $out"
+}
+
+# --- run -----------------------------------------------------------------------------------------
+
+cmd_run() {
+  local name="" detach=0 up_args=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -d|--detach) detach=1 ;;
+      --pass) optarg "$@"
+        [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "run: --pass takes a variable name, got $2"
+        caller_env "$2" >/dev/null || die "run: --pass $2: not in this command's environment (export it first)"
+        PASS+=("$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--net|--allow|--env|--idle) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --xwayland|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
+      -h|--help) usage; return ;;
+      --) shift; break ;;
+      -*) die "run: unknown option $1 (the command goes after --; --interactive is up's only)" ;;
+      *) break ;;
+    esac
+    shift
+  done
+  [ $# -gt 0 ] || die "run: nothing to run (omabox run -- CMD ...)"
+  select_box "$name"
+  if box_alive; then
+    [ ${#up_args[@]} -eq 0 ] || say "box '$NAME' is already up: ${up_args[*]} ignored"
+    touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
+    if [ $detach = 1 ]; then
+      local log; log=$D/home/run-$(date +%s%N).log
+      # setsid -f forks and exits, so nsenter exits too and the command is reparented to the box's
+      # PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
+      box_exec setsid -f "$@" </dev/null >"$log" 2>&1
+      say "started in box '$NAME' (log: $log)"
+      return 0
+    fi
+    local rc=0
+    box_exec "$@" || rc=$?
+    touch "$D/used" 2>/dev/null || true
+    return $rc
+  fi
+  [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
+  # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
+  # replaced by a throwaway: that would run the command on the host network without the box's mounts
+  # (its --net isolated included), and hide what happened to it.
+  [ -z "$name" ] && [ -z "${OMABOX:-}" ] && [ ! -d "$D" ] && [ ! -f "$BOXES/.expired-$NAME" ] || need_box
+  # Throwaway box for this one command. The repo is an overlay: the command can write build
+  # output, logs and caches there, the host checkout never changes, and it all goes at teardown.
+  # Only a repo that may go into a box, never the directory we happen to be in (from ~ that would be
+  # all of HOME, finding 63); outside one the command runs in the box HOME.
+  local top why overlay=()
+  if top=$(git rev-parse --show-toplevel 2>/dev/null); then
+    if why=$(refuse_src "$top"); then say "not overlaying $top: $why"; else overlay=(--overlay "$top"); fi
+  fi
+  # The name keeps its -run<pid> whatever the base's length: two runs in one repo never share a box.
+  select_box "$(printf '%s' "$NAME" | cut -c1-28)-run$$"
+  # A teardown that fails says why (the box's reaper retries it once this process is gone).
+  trap 'out=$(cmd_down "$NAME" 2>&1) || say "$out"' EXIT
+  # `up` as its own process: its errors reach the user and its `set -e` holds (inside a `||` here it
+  # would not). --owner: if this process is killed outright, the box's reaper takes the box down.
+  local err
+  if ! err=$("$ROOT/bin/omabox" up "$NAME" "${overlay[@]}" --idle 0 --owner $$ "${up_args[@]}" 2>&1 >/dev/null); then
+    printf '%s\n' "$err" | grep -v "^omabox: box '$NAME' up " >&2
+    die "throwaway box failed to start"
+  fi
+  local rc=0
+  box_exec "$@" || rc=$?
+  return $rc
+}
+
+# --- driving ------------------------------------------------------------------------------------
+
+cmd_shot() {
+  local name="" out="" geom="" active=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -o|--output) optarg "$@"; out=$2; shift ;;
+      -g) optarg "$@"; geom=$2; shift ;;
+      --active) active=1 ;;
+      -*) die "shot: unknown option $1" ;;
+      *) out=$1 ;;
+    esac
+    shift
+  done
+  select_box "$name"; need_box
+  [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
+  [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
+  out=$(readlink -f -- "$out")
+  if [ $active = 1 ]; then
+    geom=$(on_box hyprctl -j activewindow | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else empty end')
+    [ -n "$geom" ] || die "shot --active: no focused window in box '$NAME'"
+  fi
+  local grim=(grim); [ -n "$geom" ] && grim+=(-g "$geom")
+  # grim runs in the box (on_box) and writes to stdout; the file is ours. Renamed into place, so a
+  # failed capture never leaves a half-written or empty PNG at $out.
+  if ! on_box timeout 10 "${grim[@]}" - > "$out.part" || [ ! -s "$out.part" ]; then
+    rm -f "$out.part"
+    [ "$(meta mode)" = interactive ] &&
+      die "shot: no frame from interactive box '$NAME': the host only renders it while its window is visible ($(ws_text "$(meta workspace)"))"
+    die "shot: grim failed"
+  fi
+  mv "$out.part" "$out"
+  echo "$out"
+}
+
+# Keys through tools/keyboard (not wtype: finding 13). Tokens: COMBO (super+space, ctrl+shift+t,
+# Return, a), -t TEXT, -s MS. The layout is the box's, so keycodes mean what Hyprland thinks they mean.
+cmd_keys() {
+  local name="" toks=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      *) toks+=("$1") ;;
+    esac
+    shift
+  done
+  set -- "${toks[@]}"
+  select_box "$name"; need_box
+  [ $# -gt 0 ] || die "keys: nothing to send"
+  # The box's own keyboard settings, so keycodes mean to the keymap what they mean to its binds
+  # (kb_options like altwin:swap_lalt_lwin move Super).
+  local layout variant model options
+  layout=$(on_box hyprctl -j getoption input:kb_layout | jq -r '.str // "us"' | cut -d, -f1)
+  variant=$(on_box hyprctl -j getoption input:kb_variant | jq -r '.str // ""' | cut -d, -f1)
+  model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
+  options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
+  on_box "$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@"
+}
+
+cmd_click() {
+  local name="" btn=left double=0 xy=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --double) double=1 ;;
+      left|right|middle) btn=$1 ;;
+      *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$1") ;;
+    esac
+    shift
+  done
+  [ ${#xy[@]} -eq 2 ] || die "click: need X Y"
+  select_box "$name"; need_box
+  local seq=(move "${xy[0]}" "${xy[1]}" click "$btn")
+  [ $double = 1 ] && seq+=(click "$btn")
+  on_box "$BOX_POINTER" --extent "$(extent)" "${seq[@]}"
+}
+
+# -b NAME before the arguments (and before `--` for pointer); everything else goes to the tool.
+cmd_pointer() {
+  local name=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  select_box "$name"; need_box
+  on_box "$BOX_POINTER" --extent "$(extent)" "$@"
+}
+
+cmd_hyprctl() {
+  local name=""
+  while [ "${1:-}" = -b ] || [ "${1:-}" = --box ]; do optarg "$@"; name=$2; shift 2; done
+  select_box "$name"; need_box
+  on_box hyprctl "$@"
+}
+
+# The box's screen: output name and mode (WxH@HZ as Hyprland reports it).
+box_screen() {
+  on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0] // empty |
+    "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
+}
+
+# Change a headless box's mode live. `hyprctl keyword monitor` fails under the Lua config ("keyword
+# can't work with non-legacy parsers"), so it goes through eval; omabox.mode keeps it over a reload.
+cmd_mode() {
+  local name="" want=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -*) die "mode: unknown option $1" ;;
+      *) want=$1 ;;
+    esac
+    shift
+  done
+  select_box "$name"; need_box
+  local screen; screen=$(box_screen)
+  [ -n "$want" ] || { echo "$screen"; return; }
+  [ "$(meta mode)" = headless ] || die "mode: box '$NAME' is interactive: its window's size is its mode"
+  want=$(parse_mode "$want")
+  local out; out=$(on_box hyprctl eval "hl.monitor({ output = '${screen%% *}', mode = '$want', position = '0x0', scale = 1 })" 2>&1) || true
+  [ "$out" = ok ] || die "mode: hyprctl eval failed: $out"
+  local deadline=$((SECONDS + 5))
+  until screen=$(box_screen) && [ "${screen#* }" = "$want" ]; do
+    [ $SECONDS -lt $deadline ] || die "mode: asked for $want, box reports ${screen#* }"
+    sleep 0.1
+  done
+  # Kept only once the box has it: omabox.mode for a config reload, box.json for `ls`.
+  box_file "$D/run/omabox.mode" "$want" || die "mode: could not record $want for the box's config reloads"
+  jq --arg s "$want" '.size = $s' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  echo "$screen"
+}
+
+# GPU engine time of this box's processes, as % of wall time, by process name. Host-wide tools sum
+# DRM fdinfo by name, so a box's Hyprland and quickshell merge with the real ones; here a process
+# belongs to the box when it is in the box's pid namespace. Any driver that reports drm-engine-*;
+# a DRM client shared by several fds or processes counts once (drm-pdev + drm-client-id).
+cmd_gpu() {
+  local name="" secs=5 json=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
+      -*) die "gpu: unknown option $1" ;;
+      *) { [[ $1 =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v s="$1" 'BEGIN { exit !(s > 0) }'; } || die "gpu: SECONDS is a number above 0, got $1"; secs=$1 ;;
+    esac
+    shift
+  done
+  select_box "$name"; need_box
+  local ns; ns=$(readlink "/proc/$(box_pid)/ns/pid") || die "gpu: cannot read the box's pid namespace"
+  local pat=${ns//\[/\\[}; pat=${pat//\]/\\]}   # pid:[N] is a glob to find -lname
+  # Global, not local: the EXIT trap runs after this function has returned (or on Ctrl-C).
+  GPU_TMP=$(mktemp -d); trap 'rm -rf "$GPU_TMP"' EXIT
+  local tmp=$GPU_TMP
+  # One line per DRM client and engine: time, pdev/client-id, engine, ns, pid, name.
+  snap() {
+    local pids p
+    pids=$(find /proc/[0-9]*/ns/pid -maxdepth 0 -lname "$pat" 2>/dev/null | cut -d/ -f3) || true
+    for p in $pids; do
+      # shellcheck disable=SC2016 # awk's own $ fields
+      awk -v pid="$p" -v comm="$(tr -s ' \t' _ < "/proc/$p/comm" 2>/dev/null)" '
+        FNR == 1 { flush() }
+        /^drm-pdev:/ { pdev = $2 } /^drm-client-id:/ { cid = $2 }
+        /^drm-engine-/ && !/^drm-engine-capacity-/ { e = $1; sub(/^drm-engine-/, "", e); sub(/:$/, "", e); eng[e] = $2 }
+        function flush(  k) { if (cid != "") for (k in eng) print pdev "/" cid, k, eng[k], pid, comm; pdev = cid = ""; delete eng }
+        END { flush() }' "/proc/$p/fdinfo/"* 2>/dev/null || true
+    done
+  }
+  local t0 t1
+  t0=$(date +%s%N); snap > "$tmp/a"
+  sleep "$secs"
+  t1=$(date +%s%N); snap > "$tmp/b"
+  local screen; screen=$(box_screen)
+  # A client first seen in the second sample started during the window: all its time counts. Every
+  # process holding a client is listed, idle ones at 0.0.
+  awk -v wall=$((t1 - t0)) '
+    FNR == NR { a[$1 " " $2] = $3; next }
+    !(($1 " " $2) in seen) { seen[$1 " " $2]; if (!($1 in who)) who[$1] = $5
+      d = $3 - a[$1 " " $2]; if (d < 0) d = 0; t[who[$1]] += d; te[who[$1] " " $2] += d }
+    END { for (n in t) printf "%s %.1f\n", n, t[n] / wall * 100
+          for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }' "$tmp/a" "$tmp/b" > "$tmp/r"
+  if [ $json = 1 ]; then
+    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" '
+      [inputs | split(" ")] as $r |
+      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs,
+        percent: ([$r[] | select(.[0] != "engine") | {(.[0]): (.[1] | tonumber)}] | add // {}),
+        engines: (reduce ($r[] | select(.[0] == "engine")) as $e ({}; .[$e[1]][$e[2]] = ($e[3] | tonumber))) }' < "$tmp/r"
+    return
+  fi
+  echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
+  grep -v '^engine ' "$tmp/r" | sort -k2 -rn | awk '{ printf "  %-20s %5.1f%%\n", $1, $2 }'
+  grep -qv '^engine ' "$tmp/r" || echo "  (no GPU time)"
+}
+
+# A live, view-only window of a headless box on the user's workspace 9 (or the configured one,
+# finding 70), opened without focus: frames
+# copied out of the box (tools/peek), nothing sent in, so it never disturbs what an agent is doing.
+# --focus (the bar widget's click, so the user asked for it) then brings that window forward, and for
+# an interactive box its own window; it never focuses anything unasked.
+cmd_peek() {
+  local name="" fps=10 focus=0 ws=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --fps) optarg "$@"; fps=$2; shift ;;
+      --workspace) optarg "$@"; ws=$(ws_check "$2") || die "--workspace: 1-99, special (the scratchpad, SUPER+S) or special:NAME, got $2"; shift ;;
+      --focus) focus=1 ;;
+      -*) die "peek: unknown option $1" ;;
+      *) [ -z "$name" ] || die "peek: one box name, got $name and $1"; name=$1 ;;
+    esac
+    shift
+  done
+  [[ $fps =~ ^[1-9][0-9]?$ ]] || die "peek: --fps is 1 to 99, got $fps"
+  select_box "$name"; need_box
+  host_session
+  if [ "$(meta mode)" = interactive ]; then
+    # omabox-wlfd connects and execs bwrap, so the host sees the window as the outer bwrap's.
+    [ $focus = 1 ] && { focus_pid "$(ps -o ppid= -p "$(box_pid)" | tr -d ' ')"; return; }
+    say "box '$NAME' is interactive: it is already a window on $(ws_text "$(meta workspace)")"; return
+  fi
+  local pid; pid=$(peek_pid) || true
+  if [ -n "$pid" ]; then
+    [ $focus = 1 ] && { focus_pid "$pid"; return; }
+    say "box '$NAME' already has a peek window"; return
+  fi
+  [ -n "$ws" ] || ws=$(conf_get workspace)
+  [ -x "$PEEK" ] || die "missing $PEEK: run install.sh"
+  # peek itself runs on the host (it is a window there) and connects to the box's socket from the
+  # host's side of its runtime dir, which the box can write: only a real socket, no symlink (finding
+  # 63; tools/peek also checks every frame it is sent). Everything that goes into the host's Lua is
+  # a checked, tame value.
+  local wd sock output
+  wd=$(box_env WAYLAND_DISPLAY) || die "peek: box '$NAME' has no WAYLAND_DISPLAY"
+  sock=$D/run/$wd
+  [ -S "$sock" ] && [ ! -L "$sock" ] || die "peek: $sock is not the box's Wayland socket"
+  output=$(on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0].name // empty')
+  [[ $output =~ ^[A-Za-z0-9_-]+$ ]] || die "peek: box '$NAME' reports no usable output ($output)"
+  # Launched by the host Hyprland: its exec rules put exactly this window on that workspace, unfocused.
+  host_eval "hl.exec_cmd('$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\"', { workspace = '$ws silent', no_initial_focus = true })"
+  say "peek at box '$NAME' on $(ws_text "$ws") (view only; close it with SUPER+W, or it goes with the box)"
+  [ $focus = 1 ] || return 0
+  local deadline=$((SECONDS + 5))
+  until pid=$(peek_pid) && host_hyprctl -j clients | jq -e --argjson p "$pid" 'any(.pid == $p)' >/dev/null; do
+    [ $SECONDS -lt $deadline ] || die "peek window did not appear"
+    sleep 0.05
+  done
+  focus_pid "$pid"
+}
+
+# Focus a host window by its pid; Hyprland switches to its workspace.
+focus_pid() {
+  [[ $1 =~ ^[0-9]+$ ]] || die "no window to focus"
+  host_eval "hl.dispatch(hl.dsp.focus({ window = 'pid:$1' }))"
+}
+
+# NAME, -b NAME, or nothing (the default box): for commands that take nothing else.
+name_arg() {
+  local cmd=$1 name=""; shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -*) die "$cmd: unknown option $1" ;;
+      *) [ -z "$name" ] || die "$cmd: one box name, got $name and $1"; name=$1 ;;
+    esac
+    shift
+  done
+  printf '%s' "$name"
+}
+
+# share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: the new pid appearing there is
+# the restart (a project's own quickshell in the box is not the Omarchy shell, finding 63).
+cmd_restart_shell() {
+  local name; name=$(name_arg restart-shell "$@") || exit 1
+  select_box "$name"; need_box
+  local old; old=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) || old=""
+  on_box hyprctl dispatch "hl.dsp.exec_cmd('/opt/omabox/share/shell.sh')" >/dev/null
+  local deadline=$((SECONDS + 15)) new
+  until new=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [ -n "$new" ] && [ "$new" != "$old" ]; do
+    [ $SECONDS -lt $deadline ] || die "shell did not restart; see $D/home/shell.log"
+    sleep 0.1
+  done
+  wait_ready 1
+  say "shell restarted in box '$NAME'"
+}
+
+# --- guard ---------------------------------------------------------------------------------------
+
+# The agent guard (findings 65-67): agents' shell commands get a display that does not exist, so a
+# window, hyprctl or grim outside a box fails instead of reaching the desktop. It stops accidents, not
+# an agent that sets the variables back on purpose, and not the session bus. Also:
+# - QT_QPA_PLATFORMTHEME blank: Omarchy's gtk3 makes even an offscreen Qt program (ctest's) start GTK,
+#   which exits with "cannot open display" (finding 66);
+# - QT_FORCE_STDERR_LOGGING: a Qt program with no display aborts, and without a terminal its reason
+#   went to the journal: now the agent reads it;
+# - a core limit of 1 byte, so that abort does not reach omarchy-crash-watch's notification (see nocore).
+GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1)
+GUARD_NOTE="omabox guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). Anything that may open a \
+window (apps, test binaries run outside ctest), hyprctl, grim and keyring checks go through omabox (load the omabox \
+skill). Never point WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real session. Only when the \
+user asked for their real desktop in this task, run that command with: omabox host -- CMD"
+# Claude Code: a SessionStart hook writes the exports to $CLAUDE_ENV_FILE, which Claude Code sources
+# before every shell command of the session, subagents' included, and prints the note into the
+# context. Not the settings' `env` block: that also changes Claude Code's own process (clipboard
+# paste, opening the browser). The hook is ours if its command mentions $GUARD.
+GUARD_HOOK="if [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]}; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
+else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi"
+# shellcheck disable=SC2016 # jq, not shell
+GUARD_JQ='def ours: (.command? // "") | contains($g);
+  def strip: if any(.hooks.SessionStart[]?.hooks[]?; ours) then
+      .hooks.SessionStart |= map(if any(.hooks[]?; ours) then (.hooks |= map(select(ours | not))) | select(.hooks != []) else . end)
+      | if .hooks.SessionStart == [] then del(.hooks.SessionStart) else . end
+      | if .hooks == {} then del(.hooks) else . end
+    else . end;'
+# Codex: its shell_environment_policy.set, in a marked block of config.toml (no note: nothing checked
+# yet makes a Codex hook add to the context). No core limit there: Codex sets variables, not limits.
+GUARD_CODEX="# >>> omabox guard (\`omabox guard off\` removes this block)
+[shell_environment_policy.set]
+$(for kv in "${GUARD_ENV[@]}"; do printf '%s = "%s"\n' "${kv%%=*}" "${kv#*=}"; done)
+# <<< omabox guard"
+
+# Write a settings file the way both agents need: through a link to its target, a .bak-<ts> of the
+# old one, its mode kept, renamed into place. guard_write FILE CONTENT
+guard_write() {
+  local file=$1 tmp bak=""
+  mkdir -p "$(dirname "$file")"
+  tmp=$(mktemp "$file.omabox.XXXXXX")
+  if [ -e "$file" ]; then
+    bak=$file.bak-$(date +%s.%N)   # (two changes in one second each keep their own)
+    cp -p "$file" "$bak"
+    chmod --reference="$file" "$tmp"
+  fi
+  if ! { printf '%s' "$2" > "$tmp" && mv "$tmp" "$file"; }; then rm -f "$tmp"; die "could not write $file"; fi
+  say "guard $ACT in $file${bak:+ (was: $bak)}; new sessions pick it up"
+}
+
+# guard_claude state|on|off: prints the state, or applies.
+guard_claude() {
+  local file; file=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+  [ ! -L "$file" ] || file=$(readlink -f "$file")   # a settings file linked from a dotfiles repo
+  local cur='{}'
+  if [ -e "$file" ]; then
+    cur=$(cat "$file") || die "cannot read $file"
+    jq -e 'type == "object"' <<<"$cur" >/dev/null 2>&1 || die "$file is not a JSON object: not touched"
+  fi
+  local want
+  case $1 in
+    state) jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
+      [.hooks.SessionStart[]?.hooks[]? | select(ours)]
+      | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur"
+      return ;;
+    on) want=$(jq --arg g "$GUARD" --arg c "$GUARD_HOOK" "$GUARD_JQ"' strip | .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]' <<<"$cur") ;;
+    off) want=$(jq --arg g "$GUARD" "$GUARD_JQ"' strip' <<<"$cur") ;;
+  esac
+  if [ "$(jq -S . <<<"$want")" = "$(jq -S . <<<"$cur")" ]; then say "guard already $1 in $file"; return; fi
+  guard_write "$file" "$want"$'\n'
+}
+
+# guard_codex state|on|off. TOML is edited as text (our block only) and the result checked with
+# python's tomllib: a config whose own shell_environment_policy.set would clash is refused, untouched.
+guard_codex() {
+  local file; file=${CODEX_HOME:-$HOME/.codex}/config.toml
+  [ ! -L "$file" ] || file=$(readlink -f "$file")
+  local out
+  out=$(python3 - "$1" "$file" "$GUARD_CODEX" <<'PY'
+import sys, tomllib
+mode, path, block = sys.argv[1:]
+try:
+    cur = open(path).read()
+except FileNotFoundError:
+    cur = ""
+lines = block.split("\n")
+begin, end, mine = "# >>> omabox guard", lines[-1], lines[1:-1]
+keys = {l.split(" = ")[0] for l in mine[1:]}
+def ours(l):   # our header, or one of our keys with any value (an older block's)
+    return l == mine[0] or l.split(" = ")[0] in keys
+def fail(msg):
+    print("ERR " + msg); sys.exit(1)
+def find(s):
+    # (start, end, inner lines) of our block, or None. Codex keeps the file's last comment, our end
+    # marker, at the very end when it adds a table (codex mcp add, a trusted project), so what follows
+    # our lines inside the markers may be Codex's own.
+    i = s.find(begin)
+    if i < 0 or (i > 0 and s[i - 1] != "\n"):
+        return None
+    j = s.find("\n" + end, i)
+    if j < 0:
+        fail(f"{path}: an omabox guard block with no end marker: not touched")
+    k = j + 1 + len(end) + (1 if s[j + 1 + len(end):j + 2 + len(end)] == "\n" else 0)
+    return i, k, s[i:j].split("\n")[1:]
+def strip(s):
+    b = find(s)
+    if not b:
+        return s
+    i, k, inner = b
+    rest = [l for l in inner if not ours(l)]
+    while rest and not rest[0].strip():
+        rest.pop(0)
+    # Only whole tables may stay: a key of someone else's left above them would join the table
+    # before our block once our header is gone.
+    if rest and not rest[0].startswith("["):
+        fail(f"{path}: something was added inside the omabox guard block: not touched; remove the block by hand")
+    kept = "\n".join(rest).rstrip("\n")
+    if s[:i].endswith("\n\n") and not kept:
+        i -= 1
+    return s[:i] + (kept + "\n" if kept else "") + s[k:]
+try:
+    tomllib.loads(cur)
+except tomllib.TOMLDecodeError as e:
+    fail(f"{path} is not valid TOML ({e}): not touched")
+b = find(cur)
+on = bool(b) and b[2][:len(mine)] == mine
+if mode == "state":
+    state = "off" if not b else ("on" if on else "outdated")
+    print(f"STATE Codex ({path}): {state}")
+    sys.exit()
+base = strip(cur)
+want = base
+if mode == "on" and on:
+    want = cur
+elif mode == "on":
+    want = base + ("\n" if base and not base.endswith("\n\n") else "") + ("" if not base or base.endswith("\n") else "\n") + block + "\n"
+    try:
+        tomllib.loads(want)
+    except tomllib.TOMLDecodeError as e:
+        fail(f"{path}: its own shell_environment_policy clashes with the guard's ({e}): not touched; add these under [shell_environment_policy.set] by hand:\n{block}")
+if want == cur:
+    print("SAME")
+else:
+    print("WANT"); sys.stdout.write(want + ".")   # the dot keeps $(...) from eating trailing newlines
+PY
+) || die "${out#ERR }"
+  case $out in
+    STATE*) echo "${out#STATE }" ;;
+    SAME) say "guard already $1 in $file" ;;
+    WANT*) out=${out#WANT$'\n'}; guard_write "$file" "${out%.}" ;;
+  esac
+}
+
+guard_agent() {
+  case $1 in claude) guard_claude "$2" ;; codex) guard_codex "$2" ;; esac
+}
+
+cmd_guard() {
+  local act=${1:-} which=${2:-all}
+  case $act in
+    exec)
+      # Any other agent, whole: everything it runs inherits the guard (its own process loses the
+      # display too: clipboard, opening a browser).
+      shift; [ "${1:-}" != -- ] || shift
+      [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
+      export "${GUARD_ENV[@]}"; prlimit --pid $$ --core=1: 2>/dev/null || true
+      exec "$@" ;;
+    ""|on|off) ;;
+    *) die "guard: on or off [claude|codex], exec -- CMD, or nothing to show it" ;;
+  esac
+  case $which in all|claude|codex) ;; *) die "guard: which agent? claude or codex, got $which" ;; esac
+  [ $# -le 2 ] || die "guard: too many arguments"
+  # With no agent named: every one that is installed (its config dir exists); Claude Code always.
+  local agents=()
+  [ "$which" = codex ] || agents+=(claude)
+  if [ "$which" = codex ] || { [ "$which" = all ] && [ -d "${CODEX_HOME:-$HOME/.codex}" ]; }; then agents+=(codex); fi
+  local a
+  if [ -z "$act" ]; then
+    local states=() s
+    # A config it cannot read is reported for that agent; the others are still shown.
+    for a in "${agents[@]}"; do s=$(guard_agent "$a" state 2>&1) || s="$a: ${s#omabox: }"; states+=("$s"); echo "$s"; done
+    if [ "${WAYLAND_DISPLAY:-}" = "$GUARD" ]; then echo "this shell: guarded"; else echo "this shell: reaches the desktop"; fi
+    if printf '%s\n' "${states[@]}" | grep -qv ': on$'; then
+      echo; echo "\`omabox guard on\` gives agents' shell commands:"
+      echo "  ${GUARD_ENV[*]}, and a core limit of 1 byte (Claude Code)"
+      echo "and tells Claude Code's agents: $GUARD_NOTE"
+    fi
+    return
+  fi
+  ACT=$act
+  for a in "${agents[@]}"; do guard_agent "$a" "$act"; done
+}
+
+# `omabox host -- CMD`: one command on the user's real desktop, from a guarded shell, when the user
+# asked for it (finding 67). The session as omabox finds it (host_session); DISPLAY and the Qt theme
+# as the user manager has them (uwsm exports the session there); cores as usual. It says what it runs,
+# so the exception is on the record.
+cmd_host() {
+  [ "${1:-}" != -- ] || shift
+  [ $# -gt 0 ] || die "host: nothing to run (omabox host -- CMD ...)"
+  host_session
+  local sysenv v val; sysenv=$(systemctl --user show-environment 2>/dev/null) || sysenv=""
+  for v in DISPLAY QT_QPA_PLATFORMTHEME; do
+    val=$(sed -n "s/^$v=//p" <<<"$sysenv")
+    if [[ $val =~ ^[A-Za-z0-9:._-]+$ ]]; then export "$v=$val"; else unset "$v"; fi
+  done
+  export WAYLAND_DISPLAY="${HOST_WL##*/}" HYPRLAND_INSTANCE_SIGNATURE="$HOST_SIG"
+  unset QT_FORCE_STDERR_LOGGING
+  ulimit -Sc "$(ulimit -Hc)" 2>/dev/null || true
+  say "on your real desktop: $*"
+  exec "$@"
+}
+
+cmd_env() {
+  local name; name=$(name_arg env "$@") || exit 1
+  select_box "$name"; need_box
+  # The box bus is private and its Hyprland socket path too long to reach directly: for those use
+  # `omabox run` and `omabox hyprctl`. Plain Wayland clients (wl-paste, wlr-randr, ...) work with this.
+  # The socket is in the box's runtime dir: a tool pointed at it talks to whatever the box put there.
+  local wd; wd=$(box_env WAYLAND_DISPLAY) || die "box '$NAME' has no WAYLAND_DISPLAY"
+  printf 'export WAYLAND_DISPLAY=%q\nunset DISPLAY WAYLAND_SOCKET HYPRLAND_INSTANCE_SIGNATURE\n' "$D/run/$wd"
+}
+
+cmd_path() {
+  local name; name=$(name_arg path "$@") || exit 1
+  select_box "$name"
+  box_alive && touch "$D/used" 2>/dev/null   # seeding a box's HOME through its path is using it
+  echo "$D"
+}
+
+# --- lifecycle -----------------------------------------------------------------------------------
+
+# PID 1 of a pid namespace ignores SIGTERM from outside (finding 6): kill_box SIGKILLs it and the
+# kernel kills everything in the namespace. Takes the box's lock, so it waits for an `up` in progress.
+# Show or change the settings (finding 70). The bar widget uses --json and KEY VALUE.
+cmd_config() {
+  local json=0 args=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --json) json=1 ;;
+      -h|--help) echo "usage: omabox config [--json] | KEY | KEY VALUE | KEY default   (keys: ${CONF_KEYS[*]})"; return ;;
+      -*) die "config: unknown option $1" ;;
+      *) args+=("$1") ;;
+    esac
+    shift
+  done
+  local k v
+  case ${#args[@]} in
+    0)
+      if [ $json = 1 ]; then
+        for k in "${CONF_KEYS[@]}"; do printf '%s\t%s\n' "$k" "$(conf_get "$k")"; done |
+          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s 'add'
+      else
+        for k in "${CONF_KEYS[@]}"; do echo "$k=$(conf_get "$k")"; done
+      fi ;;
+    1) k=${args[0]}; [ -n "$(conf_default "$k")" ] || die "config: unknown key $k (keys: ${CONF_KEYS[*]})"
+       conf_get "$k" ;;
+    2) k=${args[0]}; [ -n "$(conf_default "$k")" ] || die "config: unknown key $k (keys: ${CONF_KEYS[*]})"
+       if [ "${args[1]}" = default ]; then conf_set "$k"; v=$(conf_default "$k")
+       else v=$(conf_check "$k" "${args[1]}") || die "config: bad $k: ${args[1]} ($(conf_help "$k"))"; conf_set "$k" "$v"; fi
+       [ "$k" = confirm-close ] && confirm_live "$v"
+       echo "$k=$v" ;;
+    *) die "config: KEY [VALUE]" ;;
+  esac
+}
+conf_help() {
+  case $1 in
+    workspace) echo "1-99, special (the scratchpad, SUPER+S) or special:NAME" ;;
+    confirm-close) echo "on or off" ;;
+    bar-icon) echo "always (the default) or auto (only while boxes exist)" ;;
+  esac
+}
+
+# confirm-close is live: running interactive boxes that took it from the config follow a change
+# (--confirm-close / --no-confirm-close on `up` pins a box's own).
+confirm_live() {
+  local d
+  for d in "$BOXES"/*/; do
+    [ "$(jq -r 'select(.mode == "interactive") | .confirm_close_from // empty' "$d/box.json" 2>/dev/null)" = config ] || continue
+    write_confirm_flag "$d/run" "$1"
+  done
+}
+# The flag the box's Hyprland reads when its window closes.
+write_confirm_flag() {
+  box_file "$1/omabox.confirm-close" "$2" 2>/dev/null || say "could not update ${1%/run}'s confirm-close"
+}
+
+cmd_down() {
+  local names=() n all=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --all) all=1 ;;
+      -b|--box) optarg "$@"; names+=("$2"); shift ;;
+      -*) die "down: unknown option $1" ;;
+      *) names+=("$1") ;;
+    esac
+    shift
+  done
+  if [ $all = 1 ]; then
+    [ ${#names[@]} = 0 ] || die "down: --all or names, not both"
+    mapfile -t names < <(list_names)
+  fi
+  [ $all = 1 ] || [ ${#names[@]} -gt 0 ] || names=("$(default_name)")
+  local rc=0
+  for n in "${names[@]}"; do
+    select_box "$n"
+    rm -f "$BOXES/.expired-$NAME"
+    [ -d "$D" ] || { say "no box '$NAME'"; continue; }
+    mkdir -p "$BOXES"
+    local lock; exec {lock}>"$BOXES/.lock-$NAME"
+    # The reaper takes a box down through here while holding nothing; anyone else waits for an `up`.
+    flock -w 60 "$lock" || { say "box '$NAME' is busy (an up in progress?); not taken down"; rc=1; exec {lock}>&-; continue; }
+    # The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
+    # started a new box under the name (finding 74). Not that one.
+    if [ -n "${DOWN_IF_CREATED:-}" ] && [ "$(meta created)" != "$DOWN_IF_CREATED" ]; then exec {lock}>&-; continue; fi
+    local p; p=$(peek_pid) && kill "$p" 2>/dev/null   # its peek window, if one is open
+    if ! kill_box; then rc=1; exec {lock}>&-; continue; fi
+    # Its reaper, unless that is us: nothing may be left running for a box that is gone.
+    for p in $(pgrep -f "^(/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox") _reap $(re_quote "$NAME") "); do
+      [ "$p" = $$ ] || [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null
+    done
+    rm_box
+    exec {lock}>&-
+    say "box '$NAME' down"
+  done
+  return $rc
+}
+
+# --json is for the bar widget (plugin/): one array, a single pass, with peek state.
+cmd_ls() {
+  local n
+  if [ "${1:-}" = --json ]; then
+    for n in $(list_names); do
+      select_box "$n"
+      local state=dead peeking=false
+      box_alive && state=up
+      peek_pid >/dev/null && peeking=true
+      jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking \
+        '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
+          bar: (.bar // "user"), systemd: (.systemd // false)} + {state: $state, peeking: $peeking}' "$D/box.json" 2>/dev/null ||
+        jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false}'
+    done | jq -s -c .
+    return
+  fi
+  # IDLE: minutes since the box was last used, of its limit (it goes down when they meet).
+  printf '%-24s %-11s %-16s %-6s %-9s %-9s %s\n' NAME MODE SIZE STATE NET IDLE PLUGINS
+  for n in $(list_names); do
+    select_box "$n"
+    local state=dead idle; box_alive && state=up
+    idle=$(meta idle)
+    if [ "${idle:-0}" -gt 0 ] && [ -f "$D/used" ]; then
+      idle="$((($(date +%s) - $(stat -c %Y "$D/used")) / 60))m/$(human_duration "$idle")"
+    else idle=never; fi
+    printf '%-24s %-11s %-16s %-6s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$(meta size)" "$state" "$(meta net)" "$idle" \
+      "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
+  done
+}
+
+# Everything runs from main, called on the file's last line: bash reads a script as it runs it, so
+# with ~/.local/bin/omabox linked to a working copy, an edit made while a command ran used to land in
+# the middle of what it was still reading ("line 1207: q: command not found"). By the time that line
+# is read, bash has the whole file (finding 66).
+main() {
+  local cmd=${1:-help}; shift || true
+  case $cmd in
+    up) cmd_up "$@" ;;
+    run) cmd_run "$@" ;;
+    shot|screenshot) cmd_shot "$@" ;;
+    keys) cmd_keys "$@" ;;
+    click) cmd_click "$@" ;;
+    pointer) cmd_pointer "$@" ;;
+    hyprctl) cmd_hyprctl "$@" ;;
+    peek) cmd_peek "$@" ;;
+    restart-shell) cmd_restart_shell "$@" ;;
+    mode) cmd_mode "$@" ;;
+    gpu) cmd_gpu "$@" ;;
+    env) cmd_env "$@" ;;
+    path) cmd_path "$@" ;;
+    down) cmd_down "$@" ;;
+    ls|list) cmd_ls "$@" ;;
+    config) cmd_config "$@" ;;
+    guard) cmd_guard "$@" ;;
+    host) cmd_host "$@" ;;
+    _reap) cmd__reap "$@" ;;
+    help|-h|--help) usage ;;
+    version|-V|--version) echo "omabox $(cat "$ROOT/VERSION")" ;;
+    *) say "unknown command: $cmd"; usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"; exit

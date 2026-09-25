@@ -1,0 +1,11 @@
+build/
+tools/pointer/omabox-pointer
+tools/pointer/*-protocol.[ch]
+tools/wlfd/omabox-wlfd
+tools/keyboard/omabox-keyboard
+tools/keyboard/*-protocol.[ch]
+tools/peek/omabox-peek
+tools/peek/*-protocol.[ch]
+
+# Private to this machine: working state and personal agent notes (never pushed)
+.local/

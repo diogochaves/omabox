@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# omabox stand-in: Omarchy's helper writes the theme colour into /etc's browser policies through
+# sudo or pkexec, which a box never has (no setuid, no polkit), so omarchy-theme-set ended with
+# "pkexec must be setuid root". The host's policies are not the box's to change: do nothing.
+exit 0

@@ -1,0 +1,6 @@
+sway 1:1.12-4
+wayvnc 0.10.1-1
+hyprland 0.56.2-2
+aquamarine 0.15.0-2
+quickshell 0.3.1-1
+bubblewrap 0.12.0-1

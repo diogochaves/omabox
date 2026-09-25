@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# omabox stand-in for uwsm (see uwsm-app next to it): a box's session is not a uwsm one.
+case ${1:-} in
+  app) shift; exec uwsm-app "$@" ;;
+  # Logout: end the box (everything in its pid namespace). Never outside a box: on the host,
+  # kill -1 is every process of the user's, the real session included.
+  stop) [ -d /opt/omabox/share ] || { echo "uwsm (omabox): not in a box, refusing to stop" >&2; exit 1; }
+        kill -KILL -1 ;;
+  *) echo "uwsm $* (omabox): not available in a box" >&2; exit 0 ;;
+esac
