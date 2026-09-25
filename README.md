@@ -102,8 +102,11 @@ omabox ls                              # boxes, mode, size, state, plugins
 ```
 
 Boxes are named after the current git repo, so agents in different repos never share one (unless
-two repos have the same directory name: pass `-b` then). Use
-`-b NAME` or `OMABOX=NAME` to run several, and `--size 3440x1440` for another screen size
+two repos have the same directory name: pass `-b` then). Inside a Claude Code or Codex session (or
+an agent started with `omabox guard exec`) the name also gets the session's id, `myrepo-5cc72cdc`, so
+two agents in one repo each get their own box, and that box goes down when its agent exits instead
+of waiting out the idle limit. `omabox ls` shows the names; `OMABOX_SESSION=` (empty) turns this off.
+Use `-b NAME` or `OMABOX=NAME` to run several or to share one on purpose, and `--size 3440x1440` for another screen size
 (`3440x1440@144` for a refresh rate, `host` for your focused monitor; `omabox mode` changes it live).
 A headless box goes down by itself after 2 hours with no `omabox` command against it, no peek window
 and no `omabox run` in progress (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`).
@@ -231,7 +234,8 @@ the skill answers.
   whose own `set` table would clash is refused, untouched, with the lines to add by hand). The
   variables only: no core limit, no note. Checked through `codex sandbox`, not in a logged-in session.
 - **Anything else**: `omabox guard exec -- AGENT` starts the agent itself under the guard. Its own
-  process loses the display too (clipboard, opening a browser to log in).
+  process loses the display too (clipboard, opening a browser to log in). It also gets a session of
+  its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and Codex.
 
 omabox keeps working: boxes have their own display, and `up --interactive`, `peek` and `--size host`
 find your session by themselves. Work you ask for on your real desktop ("switch my theme", `hyprctl
