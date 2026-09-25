@@ -1319,7 +1319,8 @@ cmd_shot() {
   [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
   out=$(readlink -f -- "$out")
   # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
-  local grim=(grim) win="" where lw lh
+  # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
+  local grim=(grim -l 1) win="" where lw lh
   if [ ${#sels[@]} -gt 0 ]; then
     win=$(win_select "$(box_windows)" "${sels[@]}")
     local id; id=$(jq -r .stableId <<<"$win")

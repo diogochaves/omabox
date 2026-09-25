@@ -1207,6 +1207,11 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       ignored like a caret (said, `--strict`); Qt's and Chromium's carets, GTK4's (1x18 in the
       analysis) and the busy cursor's exact size are not measured here; the cursor rectangle assumes
       Hyprland's default cursor size (24).
+83. **`shot` compresses less: PNG level 1** (2026-09-25, seen while measuring 82). Most of a shot's
+    time was grim's PNG compression, for a file an agent reads once. Measured in a shell box with
+    a terminal full of text (1920x1080, 5 shots each): grim's default level 124 ms and 739 KB a
+    shot, `grim -l 1` 46 ms and 915 KB (+24%); `omabox shot` end to end 160 → 82 ms. The analysis
+    box (another screen) had 621 → 100 ms and +13%. Pixels are the same (PNG is lossless).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

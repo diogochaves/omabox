@@ -23,6 +23,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 - `shot --active` is `shot --window active`: the window's own pixels, not a crop of the screen.
 - install.sh checks that grim can capture a window (`-T`, grim 1.5).
+- `shot` is about twice as fast (PNG compression level 1; files ~20% larger).
 
 ## 0.1.1 — 2026-09-25
 
