@@ -485,10 +485,20 @@ t_race() {
 t_failed_up() {
   local B=$P-fail
   local out
-  if out=$(env OMABOX_READY_TIMEOUT=1 "$CLI" up "$B" 2>&1); then no "up fails (shell ready timeout 1 s)" "$out"; else ok "up fails (shell ready timeout 1 s)"; fi
-  local st; st=$(ob ls --json | jq -r ".[] | select(.name == \"$B\") | .state")
-  if [ "$st" = dead ]; then ok "the box is dead, not running"; else no "the box is dead, not running" "state $st; up said: $out"; fi
-  check_eq "nothing of it running" 0 "$(pgrep -fc "bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
+  # Disable the shell inside the box while up still expects it. A one-second timeout alone can pass
+  # on a fast machine, so it does not reliably exercise failed-start cleanup.
+  if out=$(env OMABOX_READY_TIMEOUT=2 "$CLI" up "$B" --env OMABOX_SHELL=0 2>&1); then
+    no "up fails when the expected shell never starts" "$out"
+  else
+    ok "up fails when the expected shell never starts"
+  fi
+  # The namespace and bwrap parent can take a moment to exit after the failed command returns.
+  # shellcheck disable=SC2329 # called through until_ok
+  failed_box_dead() { [ "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')" = dead ]; }
+  # shellcheck disable=SC2329 # called through until_ok
+  failed_box_processes_gone() { [ "$(pgrep -fc "bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)" = 0 ]; }
+  check "the box becomes dead, not running" until_ok 10 failed_box_dead
+  check "nothing of it remains running" until_ok 10 failed_box_processes_gone
   check "down clears it" ob down "$B"
 }
 

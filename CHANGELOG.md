@@ -9,6 +9,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 - Headless boxes now start and resize on NVIDIA GPUs with a render node, without exposing the host
   display or DRM card. A custom bar without a tray no longer holds startup at the tray check.
+- Startup checks for the screen resize helper before creating a box.
 
 ## 0.1.0 — 2026-09-25
 

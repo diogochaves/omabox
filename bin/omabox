@@ -837,6 +837,7 @@ cmd_up() {
 # the unpatched system library).
 check_install() {
   [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] || die "missing $KEYBOARD or $POINTER: run install.sh"
+  [ -x /usr/bin/wlr-randr ] || die "missing /usr/bin/wlr-randr: run install.sh"
   local want
   want=$(ldd "$(command -v Hyprland || echo /usr/bin/Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}') || true
   [ -n "$want" ] || die "cannot tell which libaquamarine Hyprland links (ldd $(command -v Hyprland))"

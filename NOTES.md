@@ -1036,6 +1036,17 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     counters in `/proc/*/fdinfo`, so `omabox gpu` reports no per-process figures. Default and
     `--net isolated` boxes, 1920x1080 screenshots, input, live resize and host focus were checked;
     broader NVIDIA hardware remains untested.
+78. **Check the NVIDIA resize helper before starting a box** (2026-09-25). The NVIDIA headless path
+    calls `/usr/bin/wlr-randr` to size labwc's private output. `install.sh` installs it, but an
+    incomplete or older installation could fail only after `up` created the box directory. `up`
+    now checks for the helper alongside its other installed files before creating the box. The
+    agent skill also states the missing per-process GPU counters observed with driver 615.71.09.
+79. **Make the failed-start cleanup test deterministic** (2026-09-25). The old test relied on a
+    one-second startup timeout, but a warm box completed within that second on this machine and
+    left the test's expected dead-box assertions failing. The test now suppresses the box's shell
+    through its environment while `up` still waits for that shell, so readiness must fail and the
+    cleanup path is exercised even when startup is fast. In a nested box, bwrap may take a fraction
+    of a second to exit after `up` returns, so the cleanup checks poll for completion.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

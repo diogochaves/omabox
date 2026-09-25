@@ -68,7 +68,9 @@ changes it on a running box.
 put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
 only; `--json`). Never read host-wide tools (nvtop, radeontop, scripts summing `/proc/*/fdinfo` by
 name) while a box is up: they add the box's Hyprland and quickshell to the user's. Match the mode:
-anything that repaints per frame costs ~2.4x more at 144 Hz than at the default 60.
+anything that repaints per frame costs ~2.4x more at 144 Hz than at the default 60. NVIDIA driver
+615.71.09 does not expose the per-process DRM counters this command needs; on that driver `gpu`
+reports no percentages.
 
 ## Tests that touch the desktop
 
