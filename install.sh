@@ -11,7 +11,7 @@ AQ_COMMIT=7bb8bdf4
 AQ_SRC=$ROOT/build/aquamarine
 AQ_PREFIX=$ROOT/build/prefix
 PKGS=(
-  labwc bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret   # run a box
+  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret   # run a box
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
   passt                                                                  # up --net isolated (pasta)
   wayland libxkbcommon base-devel pkgconf                                               # tools/

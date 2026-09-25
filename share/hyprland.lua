@@ -58,14 +58,16 @@ if interactive then
     end, { timeout = 250, type = "repeat" })
   end
 else
-  -- WAYLAND-1 is only the bootstrap window inside labwc; the real screen is a headless output.
-  hl.monitor({ output = "WAYLAND-1", disabled = true })
+  -- NVIDIA's GBM driver cannot allocate the linear buffers aquamarine asks for on a synthetic
+  -- headless output. Use the private labwc Wayland output as the screen on that driver.
+  local waylandScreen = os.getenv("OMABOX_WAYLAND_SCREEN") == "1"
+  if not waylandScreen then hl.monitor({ output = "WAYLAND-1", disabled = true }) end
   -- OMABOX_SIZE is WxH@HZ; `omabox mode` writes a later choice to omabox.mode so a reload keeps it.
   local mode = os.getenv("OMABOX_SIZE") or "1920x1080@60"
   local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.mode")
   if f then mode = f:read("l") or mode; f:close() end
   if not mode:find("@") then mode = mode .. "@60" end
-  hl.monitor({ output = "HEADLESS-2", mode = mode, position = "0x0", scale = 1 })
+  hl.monitor({ output = waylandScreen and "WAYLAND-1" or "HEADLESS-2", mode = mode, position = "0x0", scale = 1 })
 end
 hl.config({
   debug = { vfr = true, disable_logs = false },
@@ -75,7 +77,9 @@ hl.config({
 
 hl.on("hyprland.start", function()
   if not interactive then
-    hl.exec_cmd("/usr/bin/hyprctl output create headless HEADLESS-2")
+    if os.getenv("OMABOX_WAYLAND_SCREEN") ~= "1" then
+      hl.exec_cmd("/usr/bin/hyprctl output create headless HEADLESS-2")
+    end
     -- A headless box has no input devices, and with none on the seat Hyprland drops focus changes:
     -- a shell panel then never gets the keys of a later `omabox keys`, nor a pointer the click of a
     -- later `omabox click` on the same spot (NOTES finding 41). Keep an idle keyboard and pointer.

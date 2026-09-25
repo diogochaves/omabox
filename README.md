@@ -41,8 +41,8 @@ and the pictures here again (it needs wf-recorder).
 
 ## What you need
 
-- **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config). Built and tested on Omarchy 4.0.4 and
-  Hyprland 0.56.2, on an AMD and an Intel iGPU. Not tested on NVIDIA.
+- **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config). Built and tested with Hyprland 0.56.2
+  on AMD and Intel iGPUs, and on an NVIDIA RTX 4070 SUPER with driver 615.71.09.
 - **A GPU render node** (`/dev/dri/renderD*`): a box renders on the GPU. The first usable one is
   picked; `OMABOX_RENDER_NODE` overrides.
 - A patched aquamarine (Hyprland's backend library), until a release ships
@@ -111,8 +111,10 @@ and no `omabox run` in progress (`--idle 30m`, `--idle 0` for never, or `OMABOX_
 real systemd user manager (`systemctl --user`, `systemd-run --user` timers) for plugins that manage a
 service or schedule alarms.
 `--env KEY=VAL` sets a variable for the whole box session (a plugin's API base pointed at a stub).
-`omabox gpu 10` measures the GPU time of one box's processes: use it with `--size host` to see what an
-animation costs, since tools that sum GPU time by process name add a box's Hyprland to yours.
+`omabox gpu 10` measures the GPU time of one box's processes when the driver reports per-process DRM
+engine counters. NVIDIA 615.71.09 does not report them, so `gpu` shows no per-process figures there.
+Use `--size host` to see what an animation costs on drivers that provide counters, since tools that
+sum GPU time by process name add a box's Hyprland to yours.
 `omabox help` lists every flag.
 
 ### Tests that touch the desktop
@@ -123,7 +125,8 @@ omabox run -- ctest --test-dir build --output-on-failure
 
 With no box up, `run` starts a throwaway box, mounts the current repo as a **discarded overlay**
 (the tests can write `build/Testing/`, your checkout never changes), runs the command and tears the
-box down. Tray and notification tests register with the box's bar instead of piling up in yours.
+box down. Notification tests register with the box's bar instead of piling up in yours. Tray tests
+need a tray in the box's bar; use `omabox run --stock-bar -- ctest ...` if your own bar omits it.
 `up`'s options apply to that throwaway box: `omabox run --net isolated --allow 8081 -- ctest ...`
 keeps tests that talk to 127.0.0.1 away from your real services.
 With `-b NAME` (or `OMABOX=NAME`) the box must be up: `run` fails rather than start a throwaway.
@@ -353,8 +356,8 @@ project and moves on its own, so it may do more, or differently, by now: check i
 
 ## Known limitations
 
-- Tested on Omarchy 4.0.4 with Hyprland 0.56.2, on two machines (an AMD and an Intel iGPU). Not on
-  NVIDIA, and not yet on anyone else's machine.
+- Tested with Hyprland 0.56.2 on AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER
+  (driver 615.71.09). Other NVIDIA models and drivers remain untested.
 - Of the agents the skill is installed for, Claude Code and OpenCode were checked end to end; Codex,
   pi and Hermes find the skill, but no run of theirs reached a model here.
 - Two checks in `test/run.sh` fail now and then under load: `t_widget`'s "the viewer is started"
@@ -374,8 +377,8 @@ project and moves on its own, so it may do more, or differently, by now: check i
 
 ## Contributing
 
-Contributions are welcome, and so are people trying it on setups it has not seen yet: NVIDIA, other
-GPUs, multi-monitor desks, a fresh Omarchy install. Bug reports, fixes, tests and ideas all help;
+Contributions are welcome, and so are people trying it on other NVIDIA models, other GPUs,
+multi-monitor desks, or a fresh Omarchy install. Bug reports, fixes, tests and ideas all help;
 [CONTRIBUTING.md](CONTRIBUTING.md) says how, and what a report needs.
 
 ## License
