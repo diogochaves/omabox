@@ -12,6 +12,9 @@
 # focused workspace and window are what they were before. Needs a Hyprland session (read-only hyprctl)
 # and the host ports 8093/8094 free (a throwaway HTTP server for the network tests).
 # A test that runs no check fails, and so does a full run with fewer checks than MIN_CHECKS.
+# Each run keeps a folder (the last 5 runs are kept) in ~/.local/state/omabox/test/: its provenance
+# and, for a test's first failure, what its boxes showed then (screen, windows, focus, pointer,
+# devices, logs) and every failure's full output.
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
@@ -25,6 +28,7 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # A full run's floor (360 checks, 175 of them unit, on 2026-09-25): a test that silently stops
 # checking shows up here even when everything that did run passed.
 MIN_CHECKS=340 MIN_UNIT=170
+EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 
 cleanup() {
   local b
@@ -35,8 +39,34 @@ cleanup() {
 trap cleanup EXIT
 
 ob() { "$CLI" "$@"; }
-ok() { pass=$((pass + 1)); printf '  \e[32mok\e[0m   %s\n' "$1"; }
-no() { fail=$((fail + 1)); failed+=("$CUR: $1"); printf '  \e[31mFAIL\e[0m %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "${2:0:300}"; }
+# Notes from inside checks (a slow wait), whose output is captured: shown before the next result.
+note() { printf '       (%s)\n' "$*" >> "$TMP/notes"; }
+notes() { [ ! -s "$TMP/notes" ] || { cat "$TMP/notes"; : > "$TMP/notes"; }; }
+ok() { notes; pass=$((pass + 1)); printf '  \e[32mok\e[0m   %s\n' "$1"; }
+no() {
+  notes; fail=$((fail + 1)); failed+=("$CUR: $1"); printf '  \e[31mFAIL\e[0m %s\n' "$1"
+  [ -n "${2:-}" ] && printf '       %s\n' "${2:0:300}"
+  evidence "$1" "${2:-}"
+}
+# What a failed test left, for reading after the run: every failure's whole output, and at its first
+# failure, while its boxes are still up, each live $P-* box's screen, windows, layers, focus, pointer,
+# devices and log tails, and the last wait that timed out.
+evidence() {
+  local e=$EVID/${CUR:-none} b d q f bd
+  mkdir -p "$e" 2>/dev/null || return 0
+  printf '%s\n%s\n\n' "$1" "$2" >> "$e/failures.txt"
+  [ ! -e "$e/boxes" ] || return 0
+  mkdir -p "$e/boxes"
+  [ ! -s "$TMP/until.last" ] || cp "$TMP/until.last" "$e/last-wait.txt"
+  for b in $("$CLI" ls --json 2>/dev/null | jq -r --arg p "$P-" '.[] | select((.name | startswith($p)) and .state == "up") | .name'); do
+    d=$e/boxes/$b; mkdir -p "$d"; bd=$("$CLI" path "$b")
+    timeout 10 "$CLI" shot -b "$b" -o "$d/screen.png" >/dev/null 2>&1
+    for q in clients layers activewindow activeworkspace devices; do timeout 5 "$CLI" hyprctl -b "$b" -j "$q" > "$d/$q.json" 2>&1; done
+    timeout 5 "$CLI" hyprctl -b "$b" cursorpos > "$d/cursorpos" 2>&1
+    for f in "$bd/box.log" "$bd"/home/*.log "$bd"/run/hypr/*/hyprland.log; do [ -f "$f" ] && tail -n 100 "$f" > "$d/${f##*/}"; done
+  done
+  printf '       evidence: %s\n' "$e"
+}
 # check NAME CMD...: the command must succeed. check_eq NAME WANT GOT. check_fails NAME CMD...
 check() { local n=$1; shift; local out; if out=$("$@" 2>&1); then ok "$n"; else no "$n" "$out"; fi; }
 check_eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "want [$2] got [$3]"; fi; }
@@ -48,8 +78,25 @@ skip() {
   skips+=("$CUR: $1 ($2)"); printf '  \e[33mskip\e[0m %s (%s)\n' "$1" "$2"
   [ "$STRICT" = 0 ] || no "$1" "skipped under --strict: $2"
 }
-# Poll a command until it succeeds (SECONDS timeout).
-until_ok() { local t=$1; shift; local end=$((SECONDS + t)); until "$@" >/dev/null 2>&1; do [ $SECONDS -lt $end ] || return 1; sleep 0.2; done; }
+now_ms() { local u=${EPOCHREALTIME//[!0-9]/}; echo $((u / 1000)); }
+to_ms() { local s=${1%.*} f=0; [[ $1 != *.* ]] || f=${1#*.}000; echo $((10#$s * 1000 + 10#${f:0:3})); }
+# until_ok T CMD...: poll the command until it succeeds, T seconds at most. Timing out, it says so with
+# the command's last output (kept for the evidence too); a wait that needed over half of T is noted:
+# a slower machine may need more.
+until_ok() {
+  local t=$1; shift; local t0 now out lim; t0=$(now_ms) lim=$(to_ms "$t")
+  until out=$("$@" 2>&1); do
+    now=$(now_ms)
+    if [ $((now - t0)) -ge "$lim" ]; then
+      printf 'until_ok %s %s\nlast output: %s\n' "$t" "$*" "$out" > "$TMP/until.last"
+      echo "timed out after ${t}s: $*; last output: ${out:0:200}"
+      return 1
+    fi
+    sleep 0.2
+  done
+  now=$((($(now_ms) - t0) / 100))
+  [ $((now * 200)) -le "$lim" ] || note "slow wait: $((now / 10)).$((now % 10))s of ${t}s for: $*"
+}
 # A fresh git repo named $P-SUFFIX: a throwaway `run` from it gets a name no box of the user's has
 # (from $ROOT it would be "omabox", which `omabox up` in the checkout also takes).
 tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$r"; }
@@ -1012,12 +1059,19 @@ main() {
 
   hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
   ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
-  echo "provenance: $(provenance)"
+  # The run's folder, and the last 5 runs' (a run still going, another agent's, is never removed).
+  (umask 077; mkdir -p "$EVID")
+  local _d; for _d in $(find "${EVID%/*}" -mindepth 1 -maxdepth 1 -type d -name '*-t[0-9]*' | sort -r | tail -n +6); do
+    kill -0 "${_d##*-t}" 2>/dev/null || rm -rf "$_d"
+  done
+  provenance > "$EVID/provenance"
+  echo "provenance: $(cat "$EVID/provenance")"
 
   for CUR in "${tests[@]}"; do
     echo "${CUR#t_}"
     _n=$((pass + fail + ${#skips[@]}))
-    "$CUR"
+    rm -f "$TMP/until.last"
+    "$CUR"; notes
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))
   done
@@ -1036,6 +1090,7 @@ main() {
   echo "$pass passed, $fail failed, ${#skips[@]} skipped"
   for f in "${skips[@]}"; do echo "  skip $f"; done
   for f in "${failed[@]}"; do echo "  FAIL $f"; done
+  [ $fail = 0 ] || echo "evidence: $EVID"
   [ $fail = 0 ]
 }
 

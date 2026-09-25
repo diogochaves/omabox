@@ -1059,6 +1059,14 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     - *Provenance*: the first line names the checkout (sha, dirty), the Hyprland boxes start and the
       host's running one, aquamarine (the box's and the system's), quickshell, labwc, bwrap, the
       render node and driver, and the kernel.
+    - *Evidence*: a failure's output was cut at 300 characters, `until_ok` threw its command's output
+      away, and nothing outlived the run. Each run has a folder,
+      `~/.local/state/omabox/test/<date>-t<pid>/` (0700; the last 5 runs, never one still going):
+      the provenance, every failure's whole output, and at a test's first failure, while its boxes
+      are up, each box's screen, clients, layers, focus, cursor, devices and log tails, and the
+      last wait that timed out. `until_ok` says what it last saw when it times out, and notes a wait
+      that took over half its deadline (the widget's "cannot run" notification took 13 of 20 s, the
+      killed throwaway's teardown 9 of 15: the next slower machine is where those fail).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
