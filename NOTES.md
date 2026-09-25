@@ -49,8 +49,8 @@ interactive: no labwc; Hyprland nests in the host Hyprland through one fd (tools
              launched by the host's hl.exec_cmd with rules → workspace 9 silent; WAYLAND-1 is the screen
 ```
 
-Driving it from the host is `omabox` (`omabox help`): `hyprctl`, `grim` (shot), the keyboard and the
-pointer all run inside the box's mount namespace (`nsenter -U -m`), so they only ever see the box's
+Driving it from the host is `omabox` (`omabox help`): `hyprctl`, `grim` (shot), the keyboard, the
+pointer and `omabox-still` (`wait`, finding 82) all run inside the box's mount namespace (`nsenter -U -m`), so they only ever see the box's
 sockets (finding 63). The spike's manual way (a symlinked runtime dir, `wtype`, the pointer run from a
 host shell) is history and unsafe: `wtype` sends the wrong keys (13), and a tool run from a host shell
 drives the real desktop; both tools now refuse to run outside a box.
@@ -79,8 +79,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    ```
    It must provide the soname the installed Hyprland links (`ldd $(command -v Hyprland)`); only the
    nested Hyprland loads it. `omabox up` checks this too.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek` (need `wayland-scanner`; protocol XML is
-   vendored).
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still` (need `wayland-scanner`;
+   protocol XML is vendored).
 4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
    `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when those exist); `plugin/` as
    `~/.config/omarchy/plugins/chaves.omabox`. A real directory where a link goes stops the install.
@@ -1155,6 +1155,58 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       rendering when hidden and ignores the export's frame callback would still come out stale (only
       foot checked). An interactive box whose window is hidden gets no frame for `-T` either (assumed:
       it goes through the same timeout message as `shot`).
+82. **`omabox wait` and `--wait` on keys, click and run -d** (2026-09-25; the idea from Cua's
+    `verify_state`, which polls every 100 ms for 2 stable samples, re-done for a box). Agents slept
+    between actions and guessed how long. Measured in the analysis boxes (1920x1080@60, shell): a
+    menu settles ~130 ms after its key, a notification ~240, typing in foot ~210, a terminal ~660;
+    first to last frame of an app launch 300-850 ms (zenity) to 650-1200 (chromium); the largest gap
+    between two changed frames inside any animation 51 ms, so 300 ms of quiet is a 6x margin. An idle
+    box changes no pixel in 65 s.
+    - **How**: `tools/still` (`omabox-still`, bound at `/opt/omabox/bin` like the keyboard and pointer,
+      refusing to run outside a box) asks for frames with wlr-screencopy's `copy_with_damage`, which
+      Hyprland only completes when the output is drawn again: waiting on an idle screen costs
+      nothing (0 CPU ticks in 10 s; a 20 Hz repaint of a 909x1020 window: 26 ticks in 10 s, 2.6% of a
+      core). Its damage rectangles are always the whole output and some frames come with damage but
+      the same pixels, so every frame is compared with the one before, pixel by pixel. Before it
+      answers "nothing changed" or "still" it takes one plain copy (never waits) and compares that
+      too, so a change drawn between two requests cannot be missed.
+    - **Settle** (`--wait`) = the screen before the action (the tool prints `ready` on its first
+      frame, then the CLI acts), a change within `--start` (2 s; 5 s for `run -d`), then `--quiet`
+      (300 ms) without one. Cua's "stable" can pass before a slow reaction has begun; this cannot. No
+      change at all is `unsatisfied: nothing changed in 2.00s` (exit 124) and stderr says the input
+      was sent anyway: the agent should look, not resend. `wait still` is quiet from now, `wait
+      change` the first change; `-g` or `--window SEL` watch a region (a window's place on the screen:
+      one off screen is refused).
+    - **Not changes** (said in the line, `--strict` counts them): a change 4 px or thinner in either
+      direction (a caret: foot's beam blinks as 2x20, reported `caret?`) and the software cursor, which
+      is in every frame (headless, `no_hardware_cursors`) and hides on a key press: seen as 16x27 from
+      1 px up and left of its hotspot, and right after `up` a cursor change reaching ~38 px below it,
+      so the ignored rectangle is 56x56 from 8 px up and left of where the cursor is before the
+      action, and where a click sends it.
+    - `wait window SEL [--gone|--focused]` (the resolver of finding 81: several matches is exit 2,
+      never a guess; `--gone` counts any), `wait layer NAMESPACE [--gone]` and `wait cmd -- CMD` (exit
+      0 inside the box) poll every 100 ms; a window or layer must hold on 2 polls in a row. Absence can
+      be asserted, which Cua cannot.
+    - **Exit 0 satisfied, 124 unsatisfied at `--timeout` (10 s; at most 10 min), 1 unknown**, never 0
+      for what could not be seen: the box went down mid-wait (`unknown: box 'x' went down after
+      1.50s`), or an interactive box whose window is hidden, which renders nothing (finding 24).
+      Found in a stand-in host: right after `up --interactive` the tool did get a first frame (drawn
+      before the window was hidden) and then nothing, and waited out the whole timeout; so the
+      plain copy taken before an answer must come within `--first` (2 s) too. Now `unknown: box
+      'inner' not rendered (its window is hidden on workspace 9)` in 2.05-2.6 s, every time.
+    - One line on stdout (`satisfied: settled after 0.40s (last change 0.08s at 0,12 1920x1068;
+      ignored 56x56 at 952,532: cursor)`) or `--json`. Waiting is use (idle expiry, finding 59):
+      `need_box` touches `used`, and a long wait again every 30 s. The tool's stdin is a pipe from
+      the CLI (`--tied`): when the CLI goes (Ctrl-C, an action that failed) the tool ends with it
+      instead of holding the box's socket until its timeout.
+    - Seen in boxes: `wait still` on an idle box 0.31-0.36 s; `keys --wait -t hello` into foot settled
+      in 0.34-0.42 s; SUPER+SPACE (the menu) 0.40 s, Escape 0.37 s, then `wait layer omarchy-menu
+      [--gone]` 0.12 s; `run -d --wait -- foot` 0.85-1.23 s; `shift` alone: 124, nothing changed.
+    - Not done: late content passes `still` (a list filled from the network after a pause of more
+      than `--quiet`: wait for a title or a `cmd`); a thin progress bar or a spinner 4 px wide is
+      ignored like a caret (said, `--strict`); Qt's and Chromium's carets, GTK4's (1x18 in the
+      analysis) and the busy cursor's exact size are not measured here; the cursor rectangle assumes
+      Hyprland's default cursor size (24).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

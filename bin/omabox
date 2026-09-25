@@ -11,6 +11,7 @@ HOMES=${XDG_CACHE_HOME:-$HOME/.cache}/omabox
 POINTER=$ROOT/tools/pointer/omabox-pointer
 KEYBOARD=$ROOT/tools/keyboard/omabox-keyboard
 PEEK=$ROOT/tools/peek/omabox-peek
+STILL=$ROOT/tools/still/omabox-still
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 AQUAMARINE=$ROOT/build/prefix/lib
 PASS_KEY="SUPER + ALT + ESCAPE"
@@ -29,13 +30,16 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell]
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      a free name, box-1, box-2, ... (printed)
-  omabox run [-b NAME] [-d] [--pass VAR]... [UP OPTIONS] -- CMD [ARG...]
+  omabox run [-b NAME] [-d [--wait]] [--pass VAR]... [UP OPTIONS] -- CMD [ARG...]
                                                          UP OPTIONS: up's, for a throwaway box only
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active | -g "X,Y WxH"] [--fit N]
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
-  omabox keys [-b NAME] [--window SEL] (COMBO | -t TEXT | -s MS)...   e.g. super+space  -t hello  Return
-  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] X Y [left|right|middle] [--double]
+  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | -s MS)...   e.g. super+space  -t hello  Return
+  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [left|right|middle] [--double]
   omabox pointer [-b NAME] [--in SHOT] -- ARGS...        raw omabox-pointer (move/click/scroll/down/up)
+  omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
+         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--strict] | change [-g GEOM | --window SEL]
+               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | cmd -- CMD [ARG...]
   omabox hyprctl [-b NAME] ARGS...
   omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
@@ -68,6 +72,12 @@ coordinates and focuses it first when it is off screen or covered there (--no-ra
 \`keys --window\` focuses it, then types. --fit N scales a shot's longest side down to N pixels.
 A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`pointer --in\`) take that
 image's pixels (a window shot follows the window if it moved).
+\`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
+count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
+[--quiet 300ms] [--timeout 10s] [--json]: a change within --start (5s for run -d), then quiet.
+Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
+down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
+Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. Closing an interactive
@@ -218,6 +228,7 @@ box_env() {
 # Tools the box has at /opt/omabox/bin (bound read-only by `up`).
 BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
 BOX_POINTER=/opt/omabox/bin/omabox-pointer
+BOX_STILL=/opt/omabox/bin/omabox-still
 
 # Run a tool against the box's compositor (grim, hyprctl, the keyboard and pointer), inside the box's
 # mount namespace with a clean environment (finding 63). Its sockets live in the box's runtime dir,
@@ -742,7 +753,7 @@ cmd_up() {
     --proc /proc --dev /dev --dev-bind "$render" "$render" --ro-bind /sys /sys
     --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
     --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$AQUAMARINE" /opt/omabox/lib
-    --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER")
+    --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER" --ro-bind "$STILL" "$BOX_STILL")
   [ -z "$nvidia_dev" ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl --dev-bind "$nvidia_dev" "$nvidia_dev")
   args+=("${ro_args[@]}")
   # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,
@@ -848,7 +859,7 @@ cmd_up() {
 # installed Hyprland links (after an Arch update to a new soname, the box would otherwise silently run
 # the unpatched system library).
 check_install() {
-  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] || die "missing $KEYBOARD or $POINTER: run install.sh"
+  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] || die "missing $KEYBOARD, $POINTER or $STILL: run install.sh"
   # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
   [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$(render_node)")" != nvidia ] ||
     die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
@@ -1033,6 +1044,7 @@ cmd_run() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -d|--detach) detach=1 ;;
+      --wait|--start|--quiet|--timeout|--strict|--json) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
       --pass) optarg "$@"
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "run: --pass takes a variable name, got $2"
         caller_env "$2" >/dev/null || die "run: --pass $2: not in this command's environment (export it first)"
@@ -1047,16 +1059,24 @@ cmd_run() {
     shift
   done
   [ $# -gt 0 ] || die "run: nothing to run (omabox run -- CMD ...)"
+  settle_opts_check
+  [ "$SETTLE_WAIT" = 0 ] || [ $detach = 1 ] || die "run: --wait goes with -d (a command run to its end has nothing to wait for)"
   select_box "$name"
   if box_alive; then
     [ ${#up_args[@]} -eq 0 ] || say "box '$NAME' is already up: ${up_args[*]} ignored"
     touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
     if [ $detach = 1 ]; then
       local log; log=$D/home/run-$(date +%s%N).log
+      # --wait: until what it opens has settled (a first frame within 5 s unless --start says).
+      if [ "$SETTLE_WAIT" = 1 ]; then
+        local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+        settle_begin settle --start 5000 "${SETTLE_ARGS[@]}"
+      fi
       # setsid -f forks and exits, so nsenter exits too and the command is reparented to the box's
       # PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
-      box_exec setsid -f "$@" </dev/null >"$log" 2>&1
+      settle_act box_exec setsid -f "$@" </dev/null >"$log" 2>&1
       say "started in box '$NAME' (log: $log)"
+      [ "$SETTLE_WAIT" = 0 ] || { settle_end settle "$SETTLE_JSON" "the command was started"; return; }
       return 0
     fi
     local rc=0
@@ -1359,10 +1379,14 @@ cmd_keys() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
-      *) toks+=("$1") ;;
+      # A value is the tool's, whatever it looks like (-t --wait types "--wait").
+      -t|-s|--delay) toks+=("$1"); [ $# -lt 2 ] || { toks+=("$2"); shift; } ;;
+      *) settle_opt "$@"
+         if [ "$SETTLE_TOOK" = 0 ]; then toks+=("$1"); else shift $((SETTLE_TOOK - 1)); fi ;;
     esac
     shift
   done
+  settle_opts_check
   set -- "${toks[@]}"
   select_box "$name"; need_box
   [ $# -gt 0 ] || die "keys: nothing to send"
@@ -1378,7 +1402,14 @@ cmd_keys() {
   variant=$(on_box hyprctl -j getoption input:kb_variant | jq -r '.str // ""' | cut -d, -f1)
   model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
   options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
-  on_box "$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@"
+  local kb=("$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@")
+  [ "$SETTLE_WAIT" = 1 ] || { on_box "${kb[@]}"; return; }
+  # --wait: the screen before the keys, then a change and quiet after them. The cursor hides on a key
+  # press: not a change.
+  local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+  settle_begin settle "${SETTLE_ARGS[@]}"
+  settle_act on_box "${kb[@]}"
+  settle_end settle "$SETTLE_JSON" "the keys were sent"
 }
 
 # X Y are screen pixels; with --window SEL the window's own (0,0 is its top left corner, as in its
@@ -1393,10 +1424,12 @@ cmd_click() {
       --no-raise) raise=0 ;;
       --double) double=1 ;;
       left|right|middle) btn=$1 ;;
+      --*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
       *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$((10#$1))") ;;
     esac
     shift
   done
+  settle_opts_check
   [ ${#xy[@]} -eq 2 ] || die "click: need X Y"
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "click: --in or --window, not both"
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "click: --no-raise goes with --window or --in"
@@ -1412,7 +1445,14 @@ cmd_click() {
   fi
   local seq=(move "$x" "$y" click "$btn")
   [ $double = 1 ] && seq+=(click "$btn")
-  on_box "$BOX_POINTER" --extent "$(extent)" "${seq[@]}"
+  local ext; ext=$(extent)
+  [ "$SETTLE_WAIT" = 1 ] || { on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; return; }
+  # --wait: the cursor where it is and where it goes is not the change looked for.
+  local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+  SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
+  settle_begin settle "${SETTLE_ARGS[@]}"
+  settle_act on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+  settle_end settle "$SETTLE_JSON" "the click was sent"
 }
 
 # -b NAME and --in SHOT before the arguments (and before `--`); everything else goes to the tool.
@@ -1445,6 +1485,291 @@ cmd_pointer() {
     set -- "${args[@]}"
   fi
   on_box "$BOX_POINTER" --extent "$(extent)" "$@"
+}
+
+# --- waiting ------------------------------------------------------------------------------------
+# `omabox wait COND` and `--wait` on keys, click and run -d (finding 82): until the screen holds still
+# or changes (tools/still, in the box), a window or layer is there or gone, or a command succeeds.
+# One line on stdout (or --json); exit 0 satisfied, 124 unsatisfied at the deadline (as timeout(1)),
+# 1 unknown (the box went down, its screen is not rendered): never 0 for what could not be seen.
+
+WAIT_MAX_MS=600000   # --timeout: 10 min at most
+
+# 300ms, 2s, 1.5s, 2m, or a bare number of seconds → milliseconds (at least 1).
+ms_duration() {
+  [[ $1 =~ ^([0-9]{1,6}(\.[0-9]{1,3})?)(ms|s|m)?$ ]] || return 1
+  awk -v n="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]:-s}" 'BEGIN {
+    ms = n * (u == "ms" ? 1 : u == "m" ? 60000 : 1000); ms = int(ms + 0.5); if (ms < 1) exit 1; print ms }'
+}
+# Milliseconds as seconds, 2 decimals: 430 → 0.43s.
+ms_s() { awk -v m="$1" 'BEGIN { printf "%.2fs", m / 1000 }'; }
+
+# Where the software cursor is drawn (it is in every frame: finding 82), as an omabox-still rectangle
+# around the point "X Y": the arrow is 16x27 from 1 px up and left of its hotspot; the busy cursor
+# shown while the box starts reaches ~40 px down.
+cursor_rect() { echo "$((${1% *} - 8)),$((${1#* } - 8)),56,56"; }
+cursor_now() { on_box hyprctl cursorpos | tr -d ' ' | awk -F, '/^[0-9]+,[0-9]+$/ { print $1, $2 }'; }
+
+# omabox-still in the box, waiting on its first frame (the baseline). Its stdin is a pipe held here:
+# when this process goes (an action failed, Ctrl-C), the tool sees it close and ends. Sets
+# SETTLE_IN/SETTLE_OUT (fds), SETTLE_PID; SETTLE_T0 is when the baseline was there (ms, for messages).
+# settle_begin MODE TOOL_ARGS...
+settle_begin() {
+  # (Before any input is sent: a box started by an omabox without the tool cannot watch.)
+  on_box test -x "$BOX_STILL" || die "box '$NAME' has no $BOX_STILL (started by an older omabox): omabox down $NAME, then up again"
+  local dir line; dir=$(mktemp -d)
+  mkfifo "$dir/in" "$dir/out"
+  on_box "$BOX_STILL" "$@" --tied < "$dir/in" > "$dir/out" 2>&1 &
+  SETTLE_PID=$!
+  exec {SETTLE_IN}>"$dir/in" {SETTLE_OUT}<"$dir/out"
+  rm -rf "$dir"
+  SETTLE_ERR=""
+  while :; do
+    if ! read -r -t 5 -u "$SETTLE_OUT" line; then line=""; break; fi
+    [[ $line == ready* ]] && break
+    [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
+    SETTLE_ERR+="${SETTLE_ERR:+; }$line"
+  done
+  SETTLE_LINE=$line
+  SETTLE_T0=$(date +%s%3N)
+}
+
+# Run an action (a function or command) without the settle pipes: nothing in the box gets them.
+settle_act() { if [ -n "${SETTLE_IN:-}" ]; then "$@" {SETTLE_IN}>&- {SETTLE_OUT}<&-; else "$@"; fi; }
+
+# The tool's answer: prints the line (or JSON), returns 0/124/1. COND names it in messages ("still",
+# "change", "settle"); SENT is what an action already did, said on stderr when the answer is not yes.
+# settle_end COND JSON SENT
+settle_end() {
+  local cond=$1 json=$2 sent=$3 line=$SETTLE_LINE rc used=$SECONDS
+  if [[ $line == ready* ]]; then
+    line=""
+    while :; do
+      if read -r -t 1 -u "$SETTLE_OUT" line; then
+        [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
+        SETTLE_ERR+="${SETTLE_ERR:+; }$line"; line=""; continue
+      else
+        rc=$?; [ $rc -gt 128 ] || { line=""; break; }   # EOF: the tool is gone without an answer
+      fi
+      # Waiting is using the box (idle expiry, finding 59).
+      if [ $((SECONDS - used)) -ge 30 ]; then touch "$D/used" 2>/dev/null || true; used=$SECONDS; fi
+    done
+  fi
+  exec {SETTLE_IN}>&- {SETTLE_OUT}<&-
+  SETTLE_IN="" SETTLE_OUT=""
+  wait "$SETTLE_PID" 2>/dev/null || true
+  local res reason kv; local -A f=()
+  read -r res reason kv <<<"$line"
+  for kv in $kv; do f[${kv%%=*}]=${kv#*=}; done
+  if [ -z "$res" ]; then
+    res=unknown reason=lost
+  fi
+  if [ "$res" = unknown ]; then
+    case $reason in
+      not-rendered)
+        if [ "$(meta mode)" = interactive ]; then reason="box '$NAME' not rendered (its window is hidden on $(ws_text "$(meta workspace)"))"
+        else reason="box '$NAME' sent no frame"; fi ;;
+      refused) reason="box '$NAME' refused a screen capture${SETTLE_ERR:+ ($SETTLE_ERR)}" ;;
+      *) # Its compositor gone: the box is (being) taken down.
+         local end gone; gone=$(($(date +%s%3N) - SETTLE_T0)) end=$((SECONDS + 2))
+         while box_alive && [ $SECONDS -lt $end ]; do sleep 0.2; done
+         if ! box_alive; then reason="box '$NAME' went down after $(ms_s "$gone")"
+         else reason="lost the box's screen${SETTLE_ERR:+ ($SETTLE_ERR)}"; fi ;;
+    esac
+  fi
+  local geo="" ign=""
+  [ "${f[change]:--}" = - ] || geo=$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${f[change]}")
+  [ "${f[ignored]:--}" = - ] || ign=$(awk -F, -v w="${f[why]}" '{ printf "%sx%s at %s,%s: %s", $3, $4, $1, $2, (w == "caret" ? "caret?" : w) }' <<<"${f[ignored]}")
+  local msg
+  case $res:$reason in
+    satisfied:changed) msg="changed after $(ms_s "${f[last]}") at $geo" ;;
+    satisfied:still|satisfied:settled)
+      msg="$([ "$reason" = still ] && echo still || echo settled) after $(ms_s "${f[t]}")"
+      if [ -n "$geo" ]; then msg+=" (last change $(ms_s "${f[last]}") at $geo${ign:+; ignored $ign})"
+      else msg+=" (no change${ign:+; ignored $ign})"; fi ;;
+    unsatisfied:nothing) msg="nothing changed in $(ms_s "${f[t]}")${ign:+ (ignored $ign)}" ;;
+    unsatisfied:changing) msg="still changing after $(ms_s "${f[t]}") (last change $(ms_s "${f[last]}") at $geo)" ;;
+    *) msg=$reason ;;
+  esac
+  if [ "$json" = 1 ]; then
+    jq -nc --arg res "$res" --arg cond "$cond" --arg msg "$msg" --arg t "${f[t]:-}" --arg first "${f[first]:-}" \
+      --arg last "${f[last]:-}" --arg ch "${f[change]:--}" --arg ig "${f[ignored]:--}" --arg why "${f[why]:--}" --arg frames "${f[frames]:-}" '
+      def secs: if . == "" or . == "-" then null else tonumber / 1000 end;
+      def box: if . == "-" then null else split(",") | map(tonumber) | {x: .[0], y: .[1], w: .[2], h: .[3]} end;
+      {result: $res, condition: $cond, message: $msg, elapsed: ($t | secs), first_change: ($first | secs),
+       last_change: ($last | secs), change: ($ch | box),
+       ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
+       frames: (if $frames == "" then null else $frames | tonumber end)}'
+  else
+    echo "$res: $msg"
+  fi
+  case $res in
+    satisfied) return 0 ;;
+    unsatisfied) [ -z "$sent" ] || say "$sent all the same (124 is about the screen): take a shot before sending anything again"; return 124 ;;
+    *) [ -z "$sent" ] || say "$sent before the screen could be watched to the end"; return 1 ;;
+  esac
+}
+
+# --wait on keys, click and run -d: its options, taken where the command parses its own. Sets
+# SETTLE_WAIT, SETTLE_ARGS (for omabox-still), SETTLE_JSON, and SETTLE_TOOK: how many words it took (0:
+# not one of these). Not in $(...): it sets globals. settle_opt OPT [VALUE]
+SETTLE_ARGS=() SETTLE_JSON=0 SETTLE_WAIT=0 SETTLE_TOOK=0
+settle_opt() {
+  local ms
+  SETTLE_TOOK=1
+  case $1 in
+    --wait) SETTLE_WAIT=1 ;;
+    --json) SETTLE_JSON=1 ;;
+    --start|--quiet|--timeout)
+      if [ $# -lt 2 ] || ! ms=$(ms_duration "$2"); then die "$1 takes a duration: 300ms, 2s, 1m"; fi
+      [ "$1" != --timeout ] || [ "$ms" -le $WAIT_MAX_MS ] || die "--timeout is at most 10m"
+      SETTLE_ARGS+=("$1" "$ms"); SETTLE_TOOK=2 ;;
+    --strict) SETTLE_ARGS+=(--strict) ;;
+    *) SETTLE_TOOK=0 ;;
+  esac
+}
+settle_opts_check() {
+  [ "$SETTLE_WAIT" = 1 ] || { [ ${#SETTLE_ARGS[@]} = 0 ] && [ "$SETTLE_JSON" = 0 ]; } ||
+    die "--start, --quiet, --timeout, --strict and --json go with --wait"
+}
+
+# The polled conditions (wait window, layer, cmd): a probe prints "yes DETAIL" or "no DETAIL"; exit 2
+# is a selector that can never be answered (several windows), anything else the box not answering.
+# shellcheck disable=SC2329 # called through poll_until
+win_probe() {
+  local want=$1 wins hits n w; shift
+  wins=$(box_windows 2>/dev/null) || return 1
+  hits=$(jq -c "$WIN_SEL_JQ" --args "$@" <<<"$wins" 2>&1) || { say "bad window selector ($*): ${hits#jq: error*: }"; return 2; }
+  n=$(jq length <<<"$hits")
+  if [ "$n" -gt 1 ] && [ "$want" != gone ]; then
+    say "$* matches $n windows: name one by its address (or add a selector):"; win_lines "$hits" >&2; return 2
+  fi
+  w=$(jq -c '.[0] // empty' <<<"$hits")
+  case $want in
+    gone) if [ "$n" = 0 ]; then echo yes; else echo "no $n matching"; fi ;;
+    *) if [ "$n" = 0 ]; then echo no
+       elif [ "$want" = focused ] && [ "$(jq -r .active <<<"$w")" != true ]; then echo "no $(win_desc "$w") is there"
+       else echo "yes $(jq -r '"\(.address) \(.class) \(.title | tojson) at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" + (if .active then ", focused" else "" end)' <<<"$w")"; fi ;;
+  esac
+}
+# shellcheck disable=SC2329 # called through poll_until
+layer_probe() {
+  local want=$1 ns=$2 layers l
+  layers=$(on_box hyprctl -j layers 2>/dev/null) || return 1
+  l=$(jq -r --arg n "$ns" 'first(.. | objects | select(.namespace? == $n) | "\(.x),\(.y) \(.w)x\(.h)") // empty' <<<"$layers")
+  if [ "$want" = gone ]; then if [ -z "$l" ]; then echo yes; else echo no; fi
+  elif [ -n "$l" ]; then echo "yes at $l"; else echo no; fi
+}
+# One try of `wait cmd`: the command in the box, cut off at the time left.
+# shellcheck disable=SC2329 # called through poll_until
+cmd_probe() {
+  local left=$((POLL_TMO - ($(date +%s%3N) - POLL_T0))) rc=0
+  box_alive || return 1
+  box_exec timeout -k 1 "$(awk -v m="$left" 'BEGIN { printf "%.3f", (m < 100 ? 100 : m) / 1000 }')" "$@" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then echo yes; else echo "no exit $rc"; fi
+}
+
+# Poll PROBE every 100 ms until it says yes NEED times in a row (2 for a window or layer: one caught
+# mid-map or mid-close is not an answer), or the deadline. YES and NO are the condition in words.
+# poll_until YES NO NEED TIMEOUT_MS JSON PROBE...
+poll_until() {
+  local yes_text=$1 no_text=$2 need=$3 json=$5 out="" rc yes=0 used=$SECONDS res msg now detail=""
+  POLL_TMO=$4 POLL_T0=$(date +%s%3N); shift 5
+  while :; do
+    rc=0; out=$("$@") || rc=$?
+    now=$(($(date +%s%3N) - POLL_T0))
+    [ $rc != 2 ] || exit 2
+    if [ $rc != 0 ]; then
+      box_alive && die "wait: could not ask box '$NAME'"
+      res=unknown msg="box '$NAME' went down after $(ms_s $now)"; break
+    fi
+    detail=${out#* }; [ "$detail" != "$out" ] || detail=""
+    if [[ $out == yes* ]]; then
+      yes=$((yes + 1)); [ $yes -lt "$need" ] || { res=satisfied msg="$yes_text after $(ms_s $now)${detail:+: $detail}"; break; }
+    else yes=0; fi
+    if [ $now -ge "$POLL_TMO" ]; then res=unsatisfied msg="$no_text after $(ms_s $now)${detail:+ ($detail)}"; break; fi
+    if [ $((SECONDS - used)) -ge 30 ]; then touch "$D/used" 2>/dev/null || true; used=$SECONDS; fi
+    sleep 0.1
+  done
+  if [ "$json" = 1 ]; then
+    jq -nc --arg res "$res" --arg cond "$1" --arg msg "$msg" --arg t "$now" --arg d "$detail" \
+      '{result: $res, condition: ($cond | sub("_probe$"; "") | sub("^win$"; "window")), message: $msg, elapsed: ($t | tonumber / 1000),
+        detail: (if $d == "" then null else $d end)}'
+  else
+    echo "$res: $msg"
+  fi
+  case $res in satisfied) return 0 ;; unsatisfied) return 124 ;; *) return 1 ;; esac
+}
+
+cmd_wait() {
+  local name="" json=0 tmo=10000 cond="" quiet="" strict=0 geom="" sels=() want="" ns="" run=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
+      --timeout) optarg "$@"; tmo=$(ms_duration "$2") || die "wait: --timeout takes a duration: 500ms, 10s, 2m"
+        [ "$tmo" -le $WAIT_MAX_MS ] || die "wait: --timeout is at most 10m (got $2)"; shift ;;
+      --quiet) optarg "$@"; quiet=$(ms_duration "$2") || die "wait: --quiet takes a duration: 300ms, 1s"; shift ;;
+      --strict) strict=1 ;;
+      -g) optarg "$@"; geom=$2; shift ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --gone) want=gone ;;
+      --focused) want=focused ;;
+      --) shift; [ "$cond" = cmd ] || die "wait: -- goes with cmd (omabox wait cmd -- CMD ...)"; run=("$@"); break ;;
+      -*) die "wait: unknown option $1" ;;
+      *) if [ -z "$cond" ]; then cond=$1
+         elif [ "$cond" = window ]; then sels+=("$1")
+         elif [ "$cond" = layer ] && [ -z "$ns" ]; then ns=$1
+         else die "wait: unexpected $1"; fi ;;
+    esac
+    shift
+  done
+  case $cond in
+    still|change)
+      [ -z "$want" ] || die "wait: --gone and --focused go with window or layer"
+      [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "wait: -g or --window, not both" ;;
+    window) [ ${#sels[@]} -gt 0 ] || die "wait window: which window? (a SEL, as for shot --window)"
+      [ -z "$geom$quiet" ] && [ $strict = 0 ] || die "wait window: -g, --quiet and --strict go with still and change" ;;
+    layer) [ -n "$ns" ] || die "wait layer: which layer? its namespace (omabox hyprctl layers): omarchy-menu, ..."
+      [ "$want" != focused ] || die "wait layer: --gone or nothing"
+      [ ${#sels[@]} = 0 ] && [ -z "$geom$quiet" ] && [ $strict = 0 ] || die "wait layer: only --gone" ;;
+    cmd) [ ${#run[@]} -gt 0 ] || die "wait cmd: nothing to run (omabox wait cmd -- CMD ...)" ;;
+    "") die "wait: for what? still, change, window SEL, layer NAMESPACE or cmd -- CMD (omabox help)" ;;
+    *) die "wait: unknown condition $cond (still, change, window, layer, cmd)" ;;
+  esac
+  [ "$cond" != change ] || [ -z "$quiet" ] || die "wait change: no --quiet (that is still's)"
+  select_box "$name"; need_box
+  case $cond in
+    window)
+      local w="window ${sels[*]}"
+      case $want in
+        gone) poll_until "$w gone" "$w still there" 2 "$tmo" "$json" win_probe gone "${sels[@]}" ;;
+        focused) poll_until "$w focused" "$w not focused" 2 "$tmo" "$json" win_probe focused "${sels[@]}" ;;
+        *) poll_until "$w" "no $w" 2 "$tmo" "$json" win_probe present "${sels[@]}" ;;
+      esac ;;
+    layer)
+      if [ "$want" = gone ]; then poll_until "layer $ns gone" "layer $ns still there" 2 "$tmo" "$json" layer_probe gone "$ns"
+      else poll_until "layer $ns" "no layer $ns" 2 "$tmo" "$json" layer_probe present "$ns"; fi ;;
+    cmd) poll_until "cmd" "cmd still failing" 1 "$tmo" "$json" cmd_probe "${run[@]}" ;;
+    still|change)
+      local args=(--timeout "$tmo") region="" p
+      [ -z "$quiet" ] || args+=(--quiet "$quiet")
+      [ $strict = 0 ] || args+=(--strict)
+      if [ -n "$geom" ]; then
+        [[ $geom =~ ^(-?[0-9]+),(-?[0-9]+)\ ([1-9][0-9]*)x([1-9][0-9]*)$ ]] || die "wait: -g is \"X,Y WxH\", got $geom"
+        region="${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]},${BASH_REMATCH[4]}"
+      elif [ ${#sels[@]} -gt 0 ]; then
+        # Its place on the screen: what is drawn there is what is watched.
+        local w; w=$(win_select "$(box_windows)" "${sels[@]}")
+        [ "$(jq -r .onscreen <<<"$w")" = true ] || die "wait: window $(win_desc "$w") is not on screen (workspace $(jq -r .workspace <<<"$w")): $cond watches its place on the screen"
+        region=$(jq -r '"\(.at[0]),\(.at[1]),\(.size[0]),\(.size[1])"' <<<"$w")
+      fi
+      [ -z "$region" ] || args+=(--region "$region")
+      p=$(cursor_now) && [ -n "$p" ] && args+=(--ignore "$(cursor_rect "$p")")
+      settle_begin "$cond" "${args[@]}"
+      local rc=0; settle_end "$cond" "$json" "" || rc=$?
+      return $rc ;;
+  esac
 }
 
 cmd_hyprctl() {
@@ -2022,6 +2347,7 @@ main() {
     keys) cmd_keys "$@" ;;
     click) cmd_click "$@" ;;
     pointer) cmd_pointer "$@" ;;
+    wait) cmd_wait "$@" ;;
     hyprctl) cmd_hyprctl "$@" ;;
     peek) cmd_peek "$@" ;;
     restart-shell) cmd_restart_shell "$@" ;;

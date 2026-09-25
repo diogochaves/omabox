@@ -13,6 +13,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `keys --window SEL` focuses it, then types. A selector never guesses: none or several is exit 2.
 - **`shot --fit N`** scales a shot down; `click --in SHOT X Y` and `pointer --in` take the pixels of
   a cropped or scaled shot, so nobody does the arithmetic.
+- **`omabox wait`** instead of `sleep`: until the screen holds still (`still`) or changes (`change`),
+  a window or a shell layer is there or gone, or a command in the box succeeds. `keys`, `click` and
+  `run -d` take `--wait`: they return once what they caused has settled, and say so when nothing
+  changed. Exit 0, 124 at the deadline, 1 when it cannot be seen (never 0). A blinking caret and the
+  cursor are not changes. Costs nothing while the screen is idle (`tools/still`).
 
 ### Changed
 

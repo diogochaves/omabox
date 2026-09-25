@@ -96,6 +96,8 @@ omabox windows                         # the box's windows, where they are, what
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
 omabox keys -t 'hello world' Return    # type text, then press a key
+omabox keys --wait super+space         # ...and return once the screen has settled (no sleeps)
+omabox wait window myapp               # or: still, change, layer NAMESPACE, cmd -- CMD (--gone too)
 omabox click 960 540 [right] [--double]
 omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
 omabox hyprctl -j clients              # the box's Hyprland, never yours
@@ -319,6 +321,7 @@ Wayland connection.
 | `tools/pointer`, `tools/keyboard` | virtual pointer and keyboard; `wtype` sends the wrong keys under Hyprland |
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |
 | `tools/peek` | the live view-only window (`omabox peek`) |
+| `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
 | `test/run.sh` | the regression suite: real boxes, never the real desktop (`test/run.sh unit` is fast) |
 | `NOTES.md` | design notes: architecture, findings (cited in the code as "finding N"), dead ends |

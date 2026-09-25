@@ -62,7 +62,7 @@ echo "Hyprland links $want: ok"
 
 step "Tools"
 # (Not `make && echo`: set -e ignores a failure on the left of &&, and install.sh would carry on.)
-for t in pointer keyboard wlfd peek; do
+for t in pointer keyboard wlfd peek still; do
   make -s -C "$ROOT/tools/$t" || die "building tools/$t failed"
   echo "tools/$t"
 done

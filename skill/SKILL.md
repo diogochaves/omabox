@@ -48,25 +48,33 @@ for more than one, or when another repo may have the same name.
 
 ```bash
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
-omabox run -d -- ./build/src/myapp         # launch inside the box (detached; log path printed)
+omabox run -d --wait -- ./build/src/myapp  # launch inside the box (detached; log path printed),
+                                           # return once its window has settled
 omabox shot                                # prints a PNG path: Read it to look
 omabox windows                             # the box's windows: address, workspace, on screen or covered
 omabox shot --window myapp                 # one window's own pixels, even covered or on another workspace
 omabox click --window myapp 40 12          # window coordinates (0,0 = its corner, as in its shot)
 omabox keys --window myapp -t hi           # focus that window, then type
-omabox keys super+space                    # Hyprland binds and the focused app get real key events
+omabox keys --wait super+space             # Hyprland binds and the focused app get real key events
                                            # (SUPER+W as written in binds = super+w; a bad token sends nothing)
 omabox keys -t 'hello wörld' Return        # type any Unicode text (layout-aware), then a key
-omabox click 960 540 [right] [--double]    # layout coordinates, as in the screenshot
+omabox click 960 540 [right] [--double]    # layout coordinates, as in the screenshot (--wait too)
+omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
 omabox hyprctl -j clients                  # the box's Hyprland, never yours
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
 omabox down                                # when done: kills everything in the box
 ```
 
-Look at the screenshot after every action that should change the screen; do not assume. Coordinates
-are screenshot pixels (scale 1). `--window SEL` (also `shot --active`) picks one window: `myapp` is
-its class or part of its title; `title:RE`, `class:RE`, `pid:N` or its address (`0x…`, from `omabox
-windows`) narrow it; it never guesses: several matches is exit 2 with the list. `click --window`
+Look at the screenshot after every action that should change the screen; do not assume. No `sleep`
+between actions: `--wait` (keys, click, run -d) returns once what it caused has settled, `omabox
+wait` waits for a window, a layer, a command or a still screen (exit 0; 124 = not in time; 1 = could
+not be seen, never success). 124 after `--wait` means the input WAS sent and nothing (more) changed:
+take a shot before trying again, never send the text twice. Still is not loaded: content that comes
+late passes `still`; wait for its window title (`wait window title:RE`) or `wait cmd -- …`.
+
+Coordinates are screenshot pixels (scale 1). `--window SEL` (also `shot --active`) picks one window:
+`myapp` is its class or part of its title; `title:RE`, `class:RE`, `pid:N` or its address (`0x…`,
+from `omabox windows`) narrow it; it never guesses: several matches is exit 2 with the list. `click --window`
 focuses the window first if it is hidden or covered there, and refuses naming what is still on top.
 A shot that is cropped (`--window`, `-g`) or scaled prints a note on stderr: click on it with `omabox
 click --in SHOT X Y`, X Y read from that image, never screen arithmetic of your own. Shots at 1920x1080

@@ -593,6 +593,11 @@ t_main() {
   # click lands where asked
   ob click -b "$B" 700 400 >/dev/null
   check_eq "click moves the pointer there" "700, 400" "$(ob hyprctl -b "$B" cursorpos)"
+  # --wait with the shell (finding 82): the menu's key settles, and its layer is there, then gone
+  check "keys --wait super+space settles (the menu)" ob keys -b "$B" --wait super+space
+  check "...and wait layer omarchy-menu" ob wait -b "$B" layer omarchy-menu
+  ob keys -b "$B" --wait Escape >/dev/null
+  check "wait layer omarchy-menu --gone" ob wait -b "$B" layer omarchy-menu --gone
   # mode and gpu (finding 56)
   check_eq "mode changes live" "$screen_name 1280x720@120" "$(ob mode -b "$B" 1280x720@120)"
   ob hyprctl -b "$B" reload >/dev/null; sleep 1
@@ -1189,6 +1194,10 @@ t_guard() {
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
+  # Its window hidden, nothing is rendered: wait cannot tell, and says so (finding 82)
+  local out rc=0; out=$("${in[@]}" "$CLI" wait -b inner still 2>&1) || rc=$?
+  check_eq "wait still on a hidden interactive box: unknown (1), never 0" 1 "$rc"
+  check_match "...not rendered" "^unknown: box 'inner' not rendered" "$out"
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
   # The workspace setting (finding 70): a number, the scratchpad; neither takes focus
   check "up --interactive --workspace 3" "${in[@]}" "$CLI" up ws3 --interactive --no-shell --workspace 3
@@ -1309,7 +1318,7 @@ t_window() {
   disp() { ob hyprctl -b "$B" dispatch "$1" >/dev/null; }
   pos() { ob hyprctl -b "$B" cursorpos; }
   term A 'sleep 600'; term B 'sleep 600'
-  sleep 1   # A shrinks as B opens: its buffer is the window's size once that settles
+  ob wait -b "$B" still >/dev/null   # A shrinks as B opens: its buffer is the window's size once that settles
   local o=$TMP/win
   mkdir -p "$o"
   check_eq "an ambiguous selector: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
@@ -1391,11 +1400,104 @@ t_window() {
   ob down "$B" >/dev/null
 }
 
+# omabox wait and --wait (finding 82): the pure parts, and the tool's refusal outside a box, checked
+# in a bare namespace with no /opt/omabox and no display (where a broken check could reach nothing).
+t_unit_wait() {
+  check_eq "300ms" 300 "$(lib ms_duration 300ms)"
+  check_eq "1.5s" 1500 "$(lib ms_duration 1.5s)"
+  check_eq "2m" 120000 "$(lib ms_duration 2m)"
+  check_eq "a bare number is seconds" 10000 "$(lib ms_duration 10)"
+  check_fails "0 refused" lib ms_duration 0
+  check_fails "junk refused" lib ms_duration 2h
+  check_eq "the cursor's rectangle" "952,532,56,56" "$(lib cursor_rect "960 540")"
+  check_match "wait --timeout over 10 min refused" "at most 10m" "$(ob wait -b "$P-x" --timeout 11m still 2>&1)"
+  check_match "keys --timeout over 10 min refused" "at most 10m" "$(ob keys -b "$P-x" --wait --timeout 601s a 2>&1)"
+  check_match "wait for nothing: says what it can wait for" "still, change, window" "$(ob wait -b "$P-x" 2>&1)"
+  check_match "an unknown condition refused" "unknown condition" "$(ob wait -b "$P-x" soon 2>&1)"
+  check_match "--gone is for window and layer" "go with window or layer" "$(ob wait -b "$P-x" still --gone 2>&1)"
+  check_match "cmd needs a command" "nothing to run" "$(ob wait -b "$P-x" cmd -- 2>&1)"
+  check_match "--quiet without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --quiet 1s a 2>&1)"
+  check_match "run --wait needs -d" "goes with -d" "$(ob run -b "$P-x" --wait -- true 2>&1)"
+  local out rc=0
+  out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --die-with-parent \
+        env -i "$ROOT/tools/still/omabox-still" still --timeout 100 2>&1) || rc=$?
+  check_eq "omabox-still refuses outside a box" 2 "$rc"
+  check_match "...and says so" "only runs inside an omabox box" "$out"
+}
+
+# omabox wait and --wait (finding 82) in a box of their own: two terminals side by side, one of them
+# repainting 20 times a second.
+t_wait() {
+  local B=$P-wait out rc
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  local D; D=$(ob path "$B")
+  out=$(ob wait -b "$B" still); rc=$?
+  check_eq "an idle screen is still: exit 0" 0 "$rc"
+  check_match "...said on one line" "^satisfied: still after 0\.[0-9]+s" "$out"
+  touch -d '-1 hour' "$D/used"
+  ob wait -b "$B" still --quiet 100ms >/dev/null
+  check "wait counts as use (idle expiry)" test "$(( $(date +%s) - $(stat -c %Y "$D/used") ))" -lt 60
+  out=$(ob run -b "$B" -d --wait -- foot -T A sh -c 'cat > /tmp/typed' 2>/dev/null); rc=$?
+  check_eq "run -d --wait: settled" 0 "$rc"
+  check_match "...once the window was drawn" "^satisfied: settled after .*last change" "$out"
+  check "wait window: it is there" ob wait -b "$B" window 'title:^A$' --focused
+  out=$(ob keys -b "$B" --wait -t hello); rc=$?
+  check_eq "keys --wait: typing settles" 0 "$rc"
+  check_match "...the cursor hidden by the key press is ignored, said" "ignored .*: cursor" "$out"
+  local err; out=$(ob keys -b "$B" --wait --start 1s shift 2>"$TMP/wait.err"); rc=$?; err=$(cat "$TMP/wait.err")
+  check_eq "keys --wait of a key that changes nothing: 124" 124 "$rc"
+  check_match "...nothing changed" "^unsatisfied: nothing changed in 1\.[0-9]+s" "$out"
+  check_match "...and the keys were sent all the same" "keys were sent" "$err"
+  out=$(ob keys -b "$B" --wait --json -t x)
+  check_eq "--json" "satisfied settle" "$(jq -r '"\(.result) \(.condition)"' <<<"$out")"
+  # A caret blinking (foot's beam) is not a change; --strict counts it
+  ob run -b "$B" -d --wait -- foot -T C -o cursor.blink=yes -o cursor.style=beam sh -c 'sleep 600' >/dev/null 2>&1
+  out=$(ob wait -b "$B" still --quiet 1500ms); rc=$?
+  check_eq "a blinking caret is still" 0 "$rc"
+  check_match "...said as a caret" "ignored 2x[0-9]+ at [0-9]+,[0-9]+: caret\?" "$out"
+  check_eq "...--strict: it is a change (124)" 124 "$(ob wait -b "$B" still --quiet 1500ms --strict --timeout 2500ms >/dev/null; echo $?)"
+  ob run -b "$B" -- pkill -f 'foot -T C' >/dev/null
+  check "wait window --gone" ob wait -b "$B" window 'title:^C$' --gone
+  ob wait -b "$B" still >/dev/null   # A takes the whole screen once C is gone
+  out=$(ob click -b "$B" --wait --start 1s --window 'title:^A$' 40 40 2>"$TMP/wait.err"); rc=$?
+  check_eq "click --wait on what does nothing: 124" 124 "$rc"
+  check_match "...said, and that the click was sent" "^unsatisfied: nothing changed.*click was sent" "$out $(cat "$TMP/wait.err")"
+  check_eq "...it was: the pointer is there" "$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "A") | "\(.at[0] + 40), \(.at[1] + 40)"')" "$(ob hyprctl -b "$B" cursorpos)"
+  # A repaint loop: never still (124, naming where); a window beside it is
+  ob run -b "$B" -d -- foot -T R sh -c 'while :; do printf "\033[4%sm\033[2J" $((RANDOM % 7)); sleep 0.05; done' >/dev/null 2>&1
+  ob wait -b "$B" window 'title:^R$' >/dev/null
+  local r; r=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "R") | "\(.at[0]) \(.at[0] + .size[0])"')
+  out=$(ob wait -b "$B" still --timeout 1500ms); rc=$?
+  check_eq "a repaint loop: 124 at the deadline" 124 "$rc"
+  check_match "...naming where it changes" "^unsatisfied: still changing after 1\.[0-9]+s \(last change .* at [0-9]+,[0-9]+ [0-9]+x[0-9]+\)$" "$out"
+  local x; x=$(sed -n 's/.* at \([0-9]*\),.*/\1/p' <<<"$out")
+  check "...inside that window ($x in ${r% *}..${r#* })" test "${x:-0}" -ge "${r% *}" -a "${x:-0}" -lt "${r#* }"
+  check "...a window beside it is still" ob wait -b "$B" still --window 'title:^A$'
+  check_eq "wait change: the loop changes" 0 "$(ob wait -b "$B" change --window 'title:^R$' >/dev/null; echo $?)"
+  # Absence and timeouts
+  local t0=$SECONDS
+  check_eq "a window that never comes: 124" 124 "$(ob wait -b "$B" --timeout 1s window 'title:^nope$' >/dev/null; echo $?)"
+  check "...at the deadline" test $((SECONDS - t0)) -le 4
+  check_eq "several windows match: exit 2" 2 "$(ob wait -b "$B" window foot >/dev/null 2>&1; echo $?)"
+  # cmd: a condition inside the box, here one that becomes true a second later
+  ob run -b "$B" -d -- sh -c 'sleep 1; touch /tmp/late' >/dev/null 2>&1
+  out=$(ob wait -b "$B" cmd -- test -e /tmp/late); rc=$?
+  check_eq "wait cmd: 0 once it succeeds" 0 "$rc"
+  check_match "...after it did" "^satisfied: cmd after (0\.[5-9]|[1-9])" "$out"
+  check_eq "wait cmd that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms cmd -- false >/dev/null; echo $?)"
+  # The box going down mid-wait is unknown (1), never satisfied
+  ob wait -b "$B" still --quiet 30s > "$TMP/wait.out" 2>&1 & local w=$!
+  sleep 1.5; ob down "$B" >/dev/null 2>&1
+  wait $w; rc=$?
+  check_eq "the box went down during wait: exit 1" 1 "$rc"
+  check_match "...said" "^unknown: box '$B' went down after" "$(cat "$TMP/wait.out")"
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_config t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
+UNIT=(t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
   t_unit_registry t_unit_leak_scan)
-BOX=(t_leak_control t_main t_window t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_leak_control t_main t_window t_wait t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
