@@ -349,10 +349,25 @@ wait_ready() {
     [ $SECONDS -lt $deadline ] || die "Hyprland not up after ${READY_TIMEOUT}s; logs: $D/home/*.log"
     sleep 0.1
   done
+  if [ "$(meta wayland_screen)" = true ]; then
+    # labwc's initial xdg configure can replace the requested mode with 1280x720. Reapply it
+    # after Hyprland starts, when the parent headless output already has the requested size.
+    local size; size=$(meta size)
+    on_box hyprctl eval "hl.monitor({ output = 'WAYLAND-1', mode = '$size', position = '0x0', scale = 1 })" >/dev/null ||
+      die "could not set the NVIDIA box screen to $size"
+    local screen
+    until screen=$(box_screen) && [ "${screen#* }" = "$size" ]; do
+      [ $SECONDS -lt $deadline ] || die "NVIDIA box screen stayed at ${screen#* }, asked for $size"
+      sleep 0.1
+    done
+  fi
   [ "$want_shell" = 1 ] || return 0
-  # The bar on screen and the tray watcher on the bus: what tray/notification tests need.
+  # The bar on screen; only wait for the tray watcher when the user's layout has a tray.
+  local tray_expected=0
+  jq -e '[.bar.layout[][]? | if type == "object" then .id else . end] | index("omarchy.tray") != null' \
+    "$D/home/.config/omarchy/shell.json" >/dev/null && tray_expected=1
   until on_box hyprctl -j layers 2>/dev/null | grep -q '"omarchy-bar"' &&
-        box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; do
+        { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
     box_alive || die "box '$NAME' died while starting; logs: $D/home/*.log"
     [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
     sleep 0.1
@@ -392,6 +407,18 @@ render_node() {
   [[ $n =~ ^/dev/dri/renderD[0-9]+$ ]] && [ -r "$n" ] && [ -w "$n" ] ||
     die "no usable GPU render node (/dev/dri/renderD*); set OMABOX_RENDER_NODE"
   echo "$n"
+}
+
+# Match the selected render node to NVIDIA's userspace device node. Never expose a DRM card.
+nvidia_device() {
+  local render=$1 slot info minor
+  slot=$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device")")
+  info=/proc/driver/nvidia/gpus/$slot/information
+  [ -r "$info" ] || die "NVIDIA GPU $slot has no $info"
+  minor=$(awk -F: '/^Device Minor:/ {gsub(/[[:space:]]/, "", $2); print $2}' "$info")
+  [[ $minor =~ ^[0-9]+$ ]] && [ -c "/dev/nvidia$minor" ] && [ -c /dev/nvidiactl ] ||
+    die "NVIDIA GPU $slot has no usable /dev/nvidia$minor or /dev/nvidiactl"
+  echo "/dev/nvidia$minor"
 }
 
 # Resolve --plugin PATH|ID to "id<TAB>realpath".
@@ -675,23 +702,27 @@ cmd_up() {
   # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
   # confirm_live sees the box.
   [ "$confirm_from" = flag ] || confirm=$(conf_get confirm-close)
+  local render nvidia_dev="" wayland_screen=0 run=/run/user/$UID
+  render=$(render_node)
+  if [ "$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device/driver")")" = nvidia ]; then
+    nvidia_dev=$(nvidia_device "$render") || die "cannot use NVIDIA render node $render"
+    [ $interactive = 1 ] || wayland_screen=1
+  fi
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
-    --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" \
+    --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
-      idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays}
+      idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1)}
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
 
   # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
   # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in.
-  local render run=/run/user/$UID
-  render=$(render_node)
   # The host's name in both network modes (finding 54): pasta's own UTS namespace would otherwise
   # name an isolated box pasta-HOST.
   local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
@@ -700,6 +731,7 @@ cmd_up() {
     --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
     --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$AQUAMARINE" /opt/omabox/lib
     --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER")
+  [ -z "$nvidia_dev" ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl --dev-bind "$nvidia_dev" "$nvidia_dev")
   args+=("${ro_args[@]}")
   # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,
   # below) writable as its whole /sys/fs/cgroup under a cgroup namespace, and the marker systemd
@@ -716,6 +748,7 @@ cmd_up() {
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "${PATH:-}"
+    --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
     --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell"
     "${envs[@]}" /opt/omabox/share/session.sh)
@@ -1167,6 +1200,14 @@ cmd_mode() {
   [ -n "$want" ] || { echo "$screen"; return; }
   [ "$(meta mode)" = headless ] || die "mode: box '$NAME' is interactive: its window's size is its mode"
   want=$(parse_mode "$want")
+  if [ "$(meta wayland_screen)" = true ]; then
+    local parent
+    parent=$(cat "$D/run/omabox-parent-display" 2>/dev/null) || die "mode: no parent Wayland display"
+    [[ $parent =~ ^wayland-[0-9]+$ ]] && [ -S "$D/run/$parent" ] && [ ! -L "$D/run/$parent" ] ||
+      die "mode: invalid parent Wayland display"
+    on_box env WAYLAND_DISPLAY="$parent" /usr/bin/wlr-randr --output HEADLESS-1 --custom-mode "${want}Hz" ||
+      die "mode: could not resize the private parent output to $want"
+  fi
   local out; out=$(on_box hyprctl eval "hl.monitor({ output = '${screen%% *}', mode = '$want', position = '0x0', scale = 1 })" 2>&1) || true
   [ "$out" = ok ] || die "mode: hyprctl eval failed: $out"
   local deadline=$((SECONDS + 5))

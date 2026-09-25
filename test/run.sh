@@ -290,6 +290,15 @@ t_main() {
   check_fails "real HOME invisible" ob run -b "$B" -- test -e "$HOME/.config"
   check_fails "no /dev/input" ob run -b "$B" -- test -e /dev/input
   check_fails "no DRM card node" ob run -b "$B" -- sh -c 'ls /dev/dri/card* >/dev/null 2>&1'
+  local screen_name; screen_name=$(ob mode -b "$B" | cut -d' ' -f1)
+  if [ "$(jq -r .wayland_screen "$D/box.json")" = true ]; then
+    check_eq "NVIDIA uses the private Wayland screen" WAYLAND-1 "$screen_name"
+    check "NVIDIA control node is present" ob run -b "$B" -- test -c /dev/nvidiactl
+    check_eq "parent output matches the box" "1920 1080" \
+      "$(ob run -b "$B" -- env WAYLAND_DISPLAY=wayland-0 wlr-randr --json | jq -r '.[0].modes[] | select(.current) | "\(.width) \(.height)"')"
+  else
+    check_eq "headless screen" HEADLESS-2 "$screen_name"
+  fi
   # shot
   local png=$TMP/main.png
   check "shot" ob shot -b "$B" -o "$png"
@@ -305,13 +314,20 @@ t_main() {
   ob click -b "$B" 700 400 >/dev/null
   check_eq "click moves the pointer there" "700, 400" "$(ob hyprctl -b "$B" cursorpos)"
   # mode and gpu (finding 56)
-  check_eq "mode changes live" "HEADLESS-2 1280x720@120" "$(ob mode -b "$B" 1280x720@120)"
+  check_eq "mode changes live" "$screen_name 1280x720@120" "$(ob mode -b "$B" 1280x720@120)"
   ob hyprctl -b "$B" reload >/dev/null; sleep 1
-  check_eq "mode survives a reload" "HEADLESS-2 1280x720@120" "$(ob mode -b "$B")"
+  check_eq "mode survives a reload" "$screen_name 1280x720@120" "$(ob mode -b "$B")"
   check_eq "box.json follows mode" "1280x720@120" "$(jq -r .size "$D/box.json")"
-  check "gpu --json lists Hyprland" bash -c "'$CLI' gpu -b '$B' 1 --json | jq -e '.percent | has(\"Hyprland\")'"
+  local gpu; gpu=$(ob gpu -b "$B" 1 --json)
+  check_eq "gpu --json names the box" "$B" "$(jq -r .box <<<"$gpu")"
+  if [ "$(jq -r .wayland_screen "$D/box.json")" != true ]; then
+    check "gpu --json lists Hyprland" jq -e '.percent | has("Hyprland")' <<<"$gpu"
+  else
+    # NVIDIA's driver may expose no drm-engine-* counters in /proc/*/fdinfo.
+    check "gpu --json handles missing driver counters" jq -e '.percent | type == "object"' <<<"$gpu"
+  fi
   check_match "gpu first line names the mode" "1280x720@120" "$(ob gpu -b "$B" 1 | head -1)"
-  check_eq "mode @60.0 is accepted and kept as @60" "HEADLESS-2 1280x720@60" "$(ob mode -b "$B" 1280x720@60.0)"
+  check_eq "mode @60.0 is accepted and kept as @60" "$screen_name 1280x720@60" "$(ob mode -b "$B" 1280x720@60.0)"
   check_eq "box.json keeps the normalised mode" "1280x720@60" "$(jq -r .size "$D/box.json")"
   check_match "shot into a missing dir says so" "no such directory" "$(ob shot -b "$B" -o "$TMP/nope/x.png" 2>&1)"
   check_match "keys takes -b after the tokens" "" "$(ob keys Escape -b "$B" 2>&1)"

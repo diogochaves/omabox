@@ -80,15 +80,11 @@ unset OMABOX_CALLER_PATH
 [ -r /usr/share/omarchy/default/uwsm/default ] && . /usr/share/omarchy/default/uwsm/default
 export TERMINAL=${TERMINAL:-xdg-terminal-exec} EDITOR=${EDITOR:-omarchy-launch-editor --inline}
 
-hypr=(env -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u DISPLAY
-  OMARCHY_PATH=/usr/share/omarchy LD_LIBRARY_PATH=/opt/omabox/lib HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1
-  /usr/bin/Hyprland --config /opt/omabox/share/hyprland.lua)
-
 if [ "${OMABOX_INTERACTIVE:-0}" = 1 ]; then
   # Nested straight into the host compositor through the one connection omabox-wlfd handed us
   # (WAYLAND_SOCKET). Aquamarine picks its Wayland backend when WAYLAND_DISPLAY is set; libwayland
   # prefers WAYLAND_SOCKET, so the name is never opened.
-  WAYLAND_SOCKET=$host_fd WAYLAND_DISPLAY=omabox-host "${hypr[@]}" > "$HOME/hyprland.log" 2>&1 &
+  WAYLAND_SOCKET=$host_fd WAYLAND_DISPLAY=omabox-host /opt/omabox/share/start-hyprland.sh > "$HOME/hyprland.log" 2>&1 &
   hypr_pid=$!
   exec {host_fd}>&-   # Hyprland has it now
   wait "$hypr_pid"    # Hyprland only: with --systemd the user manager is a child too, and never exits
@@ -104,7 +100,7 @@ fi
 # Xwayland. -S: labwc ends when Hyprland does, and then so does the box, as in the interactive branch;
 # otherwise a box whose Hyprland died reads `up` while nothing in it works (finding 63).
 export WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDER_DRM_DEVICE=$OMABOX_RENDER_NODE
-/usr/bin/labwc -S "${hypr[*]}" > "$HOME/labwc.log" 2>&1
+/usr/bin/labwc -S /opt/omabox/share/start-hyprland.sh > "$HOME/labwc.log" 2>&1
 kill -KILL -1
 exit 0
 }

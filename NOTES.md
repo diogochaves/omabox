@@ -28,7 +28,8 @@ $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home
 [pasta --splice-only]             --net isolated only: own netns, loopback, the --allow ports (44, 45)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
-│                        one render node only, share/ → /opt/omabox/share, patched aquamarine →
+│                        one render node (plus its NVIDIA render-side nodes on NVIDIA),
+│                        share/ → /opt/omabox/share, patched aquamarine →
 │                        /opt/omabox/lib, keyboard/pointer → /opt/omabox/bin, --plugin dirs ro →
 │                        ~/.config/omarchy/plugins/<id>, --overlay dirs (discarded writes); every source
 │                        and DEST checked (refuse_src/refuse_dest, finding 63)
@@ -37,7 +38,8 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
   ├ [systemd --user]     --systemd only
   └ labwc -S (headless)  invisible parent compositor (WLR_BACKENDS=headless, 1 output); ends with Hyprland
     └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine
-      ├ HEADLESS-2       the actual screen (--size); WAYLAND-1 bootstrap disabled
+      ├ HEADLESS-2       screen on AMD/Intel; WAYLAND-1 bootstrap disabled
+      │ WAYLAND-1        screen on NVIDIA; labwc's private headless output is resized to --size
       ├ quickshell       the Omarchy shell (bar, menu, tray host, notifications): share/shell.sh;
       │                  not with --no-shell
       ├ keyboard, pointer --hold: idle devices so focus changes work (41)
@@ -1021,6 +1023,19 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     clicks it, as a person would.
     The README links the video on GitHub Pages (`diogochaves.github.io/omabox/docs/media/demo.mp4`,
     as omaroll does), since a repo file does not play inline; Pages must be on (main, root) for it.
+77. **NVIDIA needs its userspace nodes and a Wayland screen** (2026-09-25, RTX 4070 SUPER, driver
+    615.71.09). With only `/dev/dri/renderD128`, nested Hyprland aborted in `CBackend::create()`.
+    Bind `/dev/nvidiactl` and the `/dev/nvidiaN` matching the render node's PCI slot and device
+    minor; never bind `/dev/dri/card*`, input or the host display. A GBM probe then allocated XR24
+    buffers, and aquamarine's `WAYLAND-1` swapchain worked, but its synthetic `HEADLESS-2` still
+    rejected buffers because NVIDIA cannot render to the linear layout that path requests. Keep the
+    private labwc Wayland output as the box screen on NVIDIA. Set the parent's mode with wlr-randr,
+    then reapply Hyprland's mode after its initial 1280x720 xdg configure; `omabox mode` changes both.
+    A custom bar without `omarchy.tray` does not start `org.kde.StatusNotifierWatcher`: readiness
+    waits for it only when that widget is present. This machine's driver exposes no `drm-engine-*`
+    counters in `/proc/*/fdinfo`, so `omabox gpu` reports no per-process figures. Default and
+    `--net isolated` boxes, 1920x1080 screenshots, input, live resize and host focus were checked;
+    broader NVIDIA hardware remains untested.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -1041,4 +1056,5 @@ Bugs and ideas live in the GitHub issues. Known gaps:
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
 - `omabox shot` of an interactive box while its window is visible is untested (it only fails fast
   when hidden).
-- Only two machines so far (an AMD and an Intel iGPU): not NVIDIA, multi-GPU or another user's setup.
+- AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
+  user setups remain open.
