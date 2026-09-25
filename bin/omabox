@@ -409,6 +409,9 @@ render_node() {
   echo "$n"
 }
 
+# The kernel driver behind a render node: amdgpu, i915, xe, nvidia, ...
+render_driver() { basename "$(readlink -f "/sys/class/drm/${1##*/}/device/driver")"; }
+
 # Match the selected render node to NVIDIA's userspace device node. Never expose a DRM card.
 nvidia_device() {
   local render=$1 slot info minor
@@ -704,7 +707,7 @@ cmd_up() {
   [ "$confirm_from" = flag ] || confirm=$(conf_get confirm-close)
   local render nvidia_dev="" wayland_screen=0 run=/run/user/$UID
   render=$(render_node)
-  if [ "$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device/driver")")" = nvidia ]; then
+  if [ "$(render_driver "$render")" = nvidia ]; then
     nvidia_dev=$(nvidia_device "$render") || die "cannot use NVIDIA render node $render"
     [ $interactive = 1 ] || wayland_screen=1
   fi
@@ -837,7 +840,9 @@ cmd_up() {
 # the unpatched system library).
 check_install() {
   [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] || die "missing $KEYBOARD or $POINTER: run install.sh"
-  [ -x /usr/bin/wlr-randr ] || die "missing /usr/bin/wlr-randr: run install.sh"
+  # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
+  [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$(render_node)")" != nvidia ] ||
+    die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
   local want
   want=$(ldd "$(command -v Hyprland || echo /usr/bin/Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}') || true
   [ -n "$want" ] || die "cannot tell which libaquamarine Hyprland links (ldd $(command -v Hyprland))"
