@@ -24,6 +24,7 @@ installed omabox to say where desktop work happens, not to change what the proje
 | `hyprctl …` | `omabox hyprctl …` |
 | `grim [-g …] out.png` | `omabox shot [-g …] [-o out.png]` |
 | `wtype …`, `ydotool …` | `omabox keys …`, `omabox click X Y` |
+| `grim -T ID`, `hyprctl -j clients` to find a window | `omabox windows`, `omabox shot --window SEL` |
 | `ctest …`, test scripts touching tray/notifications/D-Bus/keyring | `omabox run -- ctest …` |
 | `./build/tests/tst_x` (a test binary run directly) | `omabox run -- ./build/tests/tst_x` (it may open windows; only ctest may set offscreen for it) |
 | `omarchy-theme-set NAME`, `omarchy restart shell` | `omabox run -- omarchy-theme-set NAME`, `omabox restart-shell` |
@@ -49,7 +50,10 @@ for more than one, or when another repo may have the same name.
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
 omabox run -d -- ./build/src/myapp         # launch inside the box (detached; log path printed)
 omabox shot                                # prints a PNG path: Read it to look
-omabox shot --active                       # just the focused window
+omabox windows                             # the box's windows: address, workspace, on screen or covered
+omabox shot --window myapp                 # one window's own pixels, even covered or on another workspace
+omabox click --window myapp 40 12          # window coordinates (0,0 = its corner, as in its shot)
+omabox keys --window myapp -t hi           # focus that window, then type
 omabox keys super+space                    # Hyprland binds and the focused app get real key events
                                            # (SUPER+W as written in binds = super+w; a bad token sends nothing)
 omabox keys -t 'hello wörld' Return        # type any Unicode text (layout-aware), then a key
@@ -60,9 +64,16 @@ omabox down                                # when done: kills everything in the 
 ```
 
 Look at the screenshot after every action that should change the screen; do not assume. Coordinates
-are screenshot pixels (scale 1). `--size 3440x1440` for another screen size (@60), `--size
-3440x1440@144` for a refresh rate, `--size host` for the user's own monitor; `omabox mode` shows or
-changes it on a running box.
+are screenshot pixels (scale 1). `--window SEL` (also `shot --active`) picks one window: `myapp` is
+its class or part of its title; `title:RE`, `class:RE`, `pid:N` or its address (`0x…`, from `omabox
+windows`) narrow it; it never guesses: several matches is exit 2 with the list. `click --window`
+focuses the window first if it is hidden or covered there, and refuses naming what is still on top.
+A shot that is cropped (`--window`, `-g`) or scaled prints a note on stderr: click on it with `omabox
+click --in SHOT X Y`, X Y read from that image, never screen arithmetic of your own. Shots at 1920x1080
+are read 1:1; on a bigger screen (a "multiply by" note from your image reader, or over 2000 px) take
+`omabox shot --fit 2000` and `click --in` it (`--fit 1400` for older or smaller models).
+`--size 3440x1440` for another screen size (@60), `--size 3440x1440@144` for a refresh rate, `--size
+host` for the user's own monitor; `omabox mode` shows or changes it on a running box.
 
 **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
 put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box

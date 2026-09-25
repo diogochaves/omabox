@@ -91,10 +91,13 @@ it made. The packages `install.sh` added stay; it printed them as `missing:` if 
 ```bash
 omabox up                              # headless box, 1920x1080; returns when the bar is drawn
 omabox run -d -- ./build/src/myapp     # launch an app inside (detached; prints its log path)
-omabox shot                            # screenshot; prints the PNG path (--active: focused window)
+omabox shot                            # screenshot; prints the PNG path (--fit 2000: scaled down)
+omabox windows                         # the box's windows, where they are, what covers them
+omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
 omabox keys -t 'hello world' Return    # type text, then press a key
 omabox click 960 540 [right] [--double]
+omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
 omabox hyprctl -j clients              # the box's Hyprland, never yours
 omabox run -- busctl --user list       # any command inside the box; exit code passes through
 omabox down                            # kill everything in the box

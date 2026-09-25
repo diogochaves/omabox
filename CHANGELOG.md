@@ -3,6 +3,22 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- **Windows as targets**: `omabox windows` lists the box's windows (where, on screen or covered);
+  `shot --window SEL` captures one window's own pixels, covered or on another workspace too;
+  `click --window SEL X Y` takes window coordinates and focuses the window first when needed;
+  `keys --window SEL` focuses it, then types. A selector never guesses: none or several is exit 2.
+- **`shot --fit N`** scales a shot down; `click --in SHOT X Y` and `pointer --in` take the pixels of
+  a cropped or scaled shot, so nobody does the arithmetic.
+
+### Changed
+
+- `shot --active` is `shot --window active`: the window's own pixels, not a crop of the screen.
+- install.sh checks that grim can capture a window (`-T`, grim 1.5).
+
 ## 0.1.1 — 2026-09-25
 
 NVIDIA GPUs, thanks to [@btsouth](https://github.com/btsouth) ([#1](https://github.com/diogochaves/omabox/pull/1)).
