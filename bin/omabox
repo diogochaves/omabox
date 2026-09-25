@@ -34,7 +34,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                                                          UP OPTIONS: up's, for a throwaway box only
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active | -g "X,Y WxH"] [--fit N]
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
-  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | -s MS)...   e.g. super+space  -t hello  Return
+  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [left|right|middle] [--double]
   omabox pointer [-b NAME] [--in SHOT] -- ARGS...        raw omabox-pointer (move/click/scroll/down/up)
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
@@ -62,7 +62,8 @@ A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a th
 box up, \`run\` uses it and the repo is read-only there (tests that write into the tree: down first).
 --net isolated --allow PORTS on a throwaway \`run\` keeps tests off your real local services.
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
-variables (a password too: never on a command line). --env KEY=VAL is the box session's, on \`up\`.
+variables (a password too: never on a command line); \`keys --pass VAR\` types one (never \`-t\` for a
+secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class, or part of its title); repeat to narrow. None or
@@ -1373,15 +1374,21 @@ cmd_shot() {
 }
 
 # Keys through tools/keyboard (not wtype: finding 13). Tokens: COMBO (super+space, ctrl+shift+t,
-# Return, a), -t TEXT, -s MS. The layout is the box's, so keycodes mean what Hyprland thinks they mean.
+# Return, a), -t TEXT, -s MS, --pass VAR. The layout is the box's, so keycodes mean what Hyprland
+# thinks they mean. --pass types a variable of the caller's (finding 84): its value goes to the tool's
+# stdin (printf is a builtin: no argv), never on a command line; the tool reads one text per -T.
 cmd_keys() {
-  local name="" toks=() sels=()
+  local name="" toks=() sels=() pass=()
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
-      # A value is the tool's, whatever it looks like (-t --wait types "--wait").
-      -t|-s|--delay) toks+=("$1"); [ $# -lt 2 ] || { toks+=("$2"); shift; } ;;
+      # A value is the tool's, whatever it looks like (-t --wait types "--wait", -t --pass "--pass").
+      -t|-s|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
+      --pass) optarg "$@"
+        [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "keys: --pass takes a variable name, got $2"
+        caller_env "$2" >/dev/null || die "keys: --pass $2: not in this command's environment (export it first)"
+        pass+=("$2"); toks+=(-T); shift ;;
       *) settle_opt "$@"
          if [ "$SETTLE_TOOK" = 0 ]; then toks+=("$1"); else shift $((SETTLE_TOOK - 1)); fi ;;
     esac
@@ -1404,13 +1411,21 @@ cmd_keys() {
   model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
   options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
   local kb=("$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@")
-  [ "$SETTLE_WAIT" = 1 ] || { on_box "${kb[@]}"; return; }
-  # --wait: the screen before the keys, then a change and quiet after them. The cursor hides on a key
-  # press: not a change.
-  local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
-  settle_begin settle "${SETTLE_ARGS[@]}"
-  settle_act on_box "${kb[@]}"
-  settle_end settle "$SETTLE_JSON" "the keys were sent"
+  if [ "$SETTLE_WAIT" = 1 ]; then
+    # --wait: the screen before the keys, then a change and quiet after them. The cursor hides on a
+    # key press: not a change.
+    local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+    settle_begin settle "${SETTLE_ARGS[@]}"
+    settle_act keys_send
+    settle_end settle "$SETTLE_JSON" "the keys were sent"
+  else
+    keys_send
+  fi
+}
+# The keyboard tool (kb, pass: cmd_keys's), each --pass value on its stdin, NUL-terminated.
+keys_send() {
+  local v
+  for v in "${pass[@]}"; do caller_env "$v"; printf '\0'; done | on_box "${kb[@]}"
 }
 
 # X Y are screen pixels; with --window SEL the window's own (0,0 is its top left corner, as in its

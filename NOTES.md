@@ -1212,6 +1212,15 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     a terminal full of text (1920x1080, 5 shots each): grim's default level 124 ms and 739 KB a
     shot, `grim -l 1` 46 ms and 915 KB (+24%); `omabox shot` end to end 160 → 82 ms. The analysis
     box (another screen) had 621 → 100 ms and +13%. Pixels are the same (PNG is lossless).
+84. **`omabox keys --pass VAR`** (2026-09-25, from the study of trycua/cua). An agent typing a
+    password into a login form had only `keys -t "$PW"`, which puts it in `omabox`'s, `nsenter`'s and
+    the keyboard tool's argv: any user's `ps` shows it. `--pass VAR` (repeatable, in order with the
+    other tokens) takes the value from the caller's environment as `run --pass` does (finding 66,
+    `caller_env`) and hands it to `tools/keyboard` on stdin, NUL-terminated (bash's printf builtin, no
+    argv); the tool's new `-T` token reads one text per `-T` before it checks or types anything and
+    types it as `-t` would, from an argv copy in memory. Checked in a box (`t_keys`): the value (spaces,
+    `=`, Ü) lands in a terminal exactly, in order with `-t`, and no `/proc/*/cmdline` has it while the
+    tool is typing; `-t -T` is still text; an unset or malformed name fails before anything is sent.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

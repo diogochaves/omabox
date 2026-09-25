@@ -18,6 +18,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `run -d` take `--wait`: they return once what they caused has settled, and say so when nothing
   changed. Exit 0, 124 at the deadline, 1 when it cannot be seen (never 0). A blinking caret and the
   cursor are not changes. Costs nothing while the screen is idle (`tools/still`).
+- `omabox keys --pass VAR` types one of your variables (a password) without putting it on a command
+  line, where the process list would show it.
 
 ### Changed
 

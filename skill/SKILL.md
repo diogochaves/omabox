@@ -58,6 +58,7 @@ omabox keys --window myapp -t hi           # focus that window, then type
 omabox keys --wait super+space             # Hyprland binds and the focused app get real key events
                                            # (SUPER+W as written in binds = super+w; a bad token sends nothing)
 omabox keys -t 'hello wörld' Return        # type any Unicode text (layout-aware), then a key
+omabox keys --pass PASSWORD Return         # type a secret from your environment: never -t (ps shows it)
 omabox click 960 540 [right] [--double]    # layout coordinates, as in the screenshot (--wait too)
 omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
 omabox hyprctl -j clients                  # the box's Hyprland, never yours

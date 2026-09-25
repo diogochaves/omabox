@@ -882,6 +882,20 @@ t_keys() {
   ob keys -b "$B" + - / shift+a Return ctrl+d >/dev/null
   until_ok 5 ob run -b "$B" -- test -s /tmp/typed
   check_eq "+ - / typed, nothing from the refused runs" '+-/A' "$(ob run -b "$B" -- cat /tmp/typed)"
+  # keys --pass (finding 84): the caller's variable is typed, and no process's argv has it meanwhile.
+  ob run -b "$B" -d -- foot sh -c 'cat > /tmp/secret' >/dev/null
+  until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '[.[] | select(.class == \"foot\")] | length == 1'"
+  local seen=""
+  T_PW="pw-$P x=y Ü" "$CLI" keys -b "$B" -t a --pass T_PW -s 1500 -t -T --pass T_PW Return ctrl+d & local kp=$!
+  if until_ok 10 pgrep -f 'omabox-keyboard .* -T -s 1500'; then
+    seen=$(grep -l "pw-$P" /proc/[0-9]*/cmdline 2>/dev/null)
+    check_eq "keys --pass: the value is in no /proc/*/cmdline while typing" "" "$seen"
+  else no "keys --pass: the keyboard ran (to scan while typing)"; fi
+  wait $kp; check_eq "keys --pass exits 0" 0 $?
+  until_ok 5 ob run -b "$B" -- test -s /tmp/secret
+  check_eq "keys --pass types the value, in order with -t (and -t -T is text)" "apw-$P x=y Ü-Tpw-$P x=y Ü" "$(ob run -b "$B" -- cat /tmp/secret)"
+  check_match "keys --pass: an unset variable refused" "not in this command's environment" "$(env -u T_NONE "$CLI" keys -b "$B" --pass T_NONE 2>&1)"
+  check_match "keys --pass: a bad name refused" "takes a variable name" "$(ob keys -b "$B" --pass 'a b' 2>&1)"
   if command -v zenity >/dev/null; then
     ob run -b "$B" -d -- sh -c 'GDK_BACKEND=x11 zenity --entry --text t > /tmp/x11' >/dev/null
     until_ok 15 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"zenity\" and .xwayland'"
