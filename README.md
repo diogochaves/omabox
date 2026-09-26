@@ -360,8 +360,6 @@ project and moves on its own, so it may do more, or differently, by now: check i
   (driver 615.71.09). Other NVIDIA models and drivers remain untested.
 - Of the agents the skill is installed for, Claude Code and OpenCode were checked end to end; Codex,
   pi and Hermes find the skill, but no run of theirs reached a model here.
-- Two checks in `test/run.sh` fail now and then under load: `t_widget`'s "the viewer is started"
-  (2 of 11 runs on the day of the release) and `t_failed_up` (once).
 
 - Needs a patched aquamarine (PR #415, built into `build/prefix` by `install.sh`) until a release ships it.
   What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.

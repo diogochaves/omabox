@@ -711,7 +711,9 @@ t_widget() {
   sleep 3   # a poll (2 s while open) puts 0new above b
   ob keys -b "$B" s >/dev/null
   check "the selection follows its box (shot b, not a)" until_ok 3 grep -qx "shot -b b" "$H/actions"
-  check "the viewer is started" until_ok 3 grep -q "^xdg-open $H" <(sed "s|/home/sbx|$H|" "$H/actions")
+  # The file itself, not <(...): a process substitution is read once, so a retry of until_ok saw an
+  # empty pipe and the check failed whenever the viewer started after the first poll.
+  check "the viewer is started" until_ok 3 grep -qx "xdg-open /home/sbx/x.png" "$H/actions"
   ob run -b "$B" -- omarchy-shell chaves.omabox open; sleep 1
   ob keys -b "$B" Down p >/dev/null
   check "an action runs while the viewer is open" until_ok 3 grep -q "^peek -b " "$H/actions"
