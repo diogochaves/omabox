@@ -39,9 +39,11 @@ the host network, so it would be the user's real data. Use a test service or ask
 talks to local servers, prefer `omabox up --net isolated --allow 8081` (only the listed host ports,
 no internet): then the real service cannot be reached by mistake.
 
-`omabox help` has every flag. The box name defaults to the current git repo's directory name, so
-agents in different repos share a box only if the names match; pass `-b NAME` (or set `OMABOX=NAME`)
-for more than one, or when another repo may have the same name.
+`omabox help` has every flag. The box name defaults to the current git repo's directory name plus
+your session's id (`myrepo-5cc72cdc` in a Claude Code or Codex session), so other agents, in this repo
+or another, never share your box or take it down; `omabox ls` shows its name. It goes down by itself
+when your session ends. Pass `-b NAME` (or set `OMABOX=NAME`) for more than one box, or to share one
+with another agent on purpose.
 
 ## The loop
 

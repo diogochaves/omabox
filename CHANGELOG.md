@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 NVIDIA GPUs, thanks to [@btsouth](https://github.com/btsouth) ([#1](https://github.com/diogochaves/omabox/pull/1)).
 
+### Added
+
+- Each agent session gets its own box. In Claude Code, Codex, or an agent started with
+  `omabox guard exec`, the default box name ends with the session's id (`myrepo-5cc72cdc`), so two
+  agents in one repo no longer share a box or take each other's down. That box goes down when its
+  agent exits instead of after 2 hours idle. `-b NAME` and `OMABOX=NAME` work as before;
+  `OMABOX_SESSION=` (empty) turns this off.
+
 ### Fixed
 
 - Headless boxes now start and resize on NVIDIA GPUs with a render node, without exposing the host

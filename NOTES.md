@@ -1048,6 +1048,24 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     through its environment while `up` still waits for that shell, so readiness must fail and the
     cleanup path is exercised even when startup is fast. In a nested box, bwrap may take a fraction
     of a second to exit after `up` returns, so the cleanup checks poll for completion.
+80. **A box per agent session** (2026-09-25). The default name was the repo's, so two agents in one
+    checkout (two Claude Code windows, a Claude Code and a Codex) shared a box: one's `up` got the
+    other's box with its options ignored, its `run` saw the repo read-only, and its `down` ended the
+    other's work. Both agents already tell their shell commands who they are: Claude Code exports
+    `CLAUDE_CODE_SESSION_ID` (a UUIDv4), Codex `CODEX_THREAD_ID` (a UUIDv7, checked in its rollout
+    logs). The default name is now `<repo>-<last 8 of the id>`; the tail, because a UUIDv7 starts with
+    a timestamp two sessions opened in the same minute share. `guard exec` sets `OMABOX_SESSION` for
+    any other agent; set to empty, it turns the suffix off. `-b` and `OMABOX` are unchanged.
+    Per-session boxes would pile up (~500 MB each) until their 2h idle limit, so `up` also records the
+    agent's process, found without asking the agent: /proc/PID/environ is a process's environment as
+    it was exec'd, and Claude Code and Codex set the variable for their children only, so the agent is
+    the nearest ancestor whose environ lacks `VAR=value` (compared by value: a `claude` started from
+    another session's shell carries the outer id). Under `guard exec` the variable is exported and the
+    agent exec'd, so there it is the farthest ancestor with it. Its start time is recorded too, and
+    the reaper takes the box down once that pid no longer has it (a reused pid is not the agent). An
+    agent in a pid namespace of its own is not found and its box only expires when idle, as before.
+    Interactive boxes and names given with `-b`/`OMABOX` are never tied to an agent. The reaper polls
+    every idle/4 capped at 60 s, so a box can outlive its agent by up to a minute.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
