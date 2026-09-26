@@ -24,8 +24,11 @@ say so in the title.
 ./install.sh           # builds the tools and the patched aquamarine
 test/run.sh unit       # the fast tier, no box
 test/run.sh            # the whole suite in real, headless boxes (~5 min); run it before a pull request
-shellcheck bin/omabox install.sh test/run.sh docs/demo.sh
+shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/*
 ```
+
+CI runs that shellcheck (version 0.11.0) on every pull request. It cannot run the suite: that needs
+a Hyprland session, so run it yourself and say in the pull request what passed.
 
 Read [AGENTS.md](AGENTS.md) first, whether you are a person or an agent: it has the rules the code
 keeps. The ones that matter most:
