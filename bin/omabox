@@ -753,7 +753,7 @@ cmd_up() {
   for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
   # The XDG base dirs, as an Omarchy session has them: dbus-daemon reads the box HOME's D-Bus services
-  # only from $XDG_DATA_HOME, with no ~/.local/share fallback (finding 87).
+  # only from $XDG_DATA_HOME; without it, it looks in the passwd entry's home, not $HOME (finding 87).
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state

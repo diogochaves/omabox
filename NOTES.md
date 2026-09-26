@@ -1052,11 +1052,13 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     `agent-driving` branch's 80-86). A per-user install (a `.desktop` with `DBusActivatable=true` in
     `~/.local/share/applications`, its service in `~/.local/share/dbus-1/services`) did not start from
     the launcher in a box: `ServiceUnknown ... not provided by any .service files`. The box's bus is
-    dbus-daemon 1.16.2, which reads `$XDG_DATA_HOME/dbus-1/services` only when that variable is set (no
-    `~/.local/share` fallback), and a box had none of the XDG base dirs; the host has them from the
+    dbus-daemon 1.16.2, which reads `$XDG_DATA_HOME/dbus-1/services`, and without that variable falls back
+    to the passwd entry's home (`/home/USER`, not mounted in a box), not `$HOME`. A box had none of the
+    XDG base dirs; the host has them from the
     systemd user environment (and runs dbus-broker). bwrap now sets `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
     `XDG_CACHE_HOME` and `XDG_STATE_HOME` to the box HOME's defaults, so the bus, the `--systemd`
-    manager (it inherits them) and `omabox run` all have them; `--env` still overrides. Second part:
+    manager (it inherits them) and `omabox run` all have them; `--env` still overrides. A command that
+    sets another HOME in a box now keeps the XDG dirs under /home/sbx, as on the host. Second part:
     dbus-daemon watches only the service dirs that exist when it starts. A fresh box HOME had no
     `~/.local/share/dbus-1/services`, so a service installed there after `up` launched (a miss in an
     activation rescans every configured dir) but was not listed by `ListActivatableNames` / `busctl

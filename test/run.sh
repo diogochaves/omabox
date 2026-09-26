@@ -438,7 +438,8 @@ dbus_user_app() {
   local B=$1 d; d=$(ob path -b "$B")/home/.local/share
   mkdir -p "$d/applications" "$d/dbus-1/services"
   printf '[Desktop Entry]\nType=Application\nName=Probe\nExec=/bin/true\nDBusActivatable=true\n' > "$d/applications/org.omabox.Probe.desktop"
-  # It claims its name, so the activation completes, and leaves a mark.
+  # It leaves a mark, and its name appears for a moment (gdbus's own connection claims it, then exits),
+  # so the activation completes at once and gtk-launch returns.
   printf '[D-BUS Service]\nName=org.omabox.Probe\nExec=/usr/bin/bash -c "touch /tmp/probe-started; gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.RequestName org.omabox.Probe 0 >/dev/null; sleep 5"\n' \
     > "$d/dbus-1/services/org.omabox.Probe.service"
   check "an app installed after up is activatable" until_ok 5 bash -c "'$CLI' run -b '$B' -- busctl --user list --activatable | grep -q org.omabox.Probe"
