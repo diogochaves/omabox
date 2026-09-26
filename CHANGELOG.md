@@ -3,6 +3,17 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- Apps installed per user inside a box (a `DBusActivatable` desktop entry and its D-Bus service in
+  `~/.local/share`) now start from the launcher, as on the host. Boxes set `XDG_DATA_HOME`,
+  `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` like an Omarchy session
+  ([#4](https://github.com/diogochaves/omabox/issues/4)).
+- A flaky check in the test suite (`t_widget`, "the viewer is started"), thanks to
+  [@btsouth](https://github.com/btsouth) ([#3](https://github.com/diogochaves/omabox/pull/3)).
+
 ## 0.1.1 — 2026-09-25
 
 NVIDIA GPUs, thanks to [@btsouth](https://github.com/btsouth) ([#1](https://github.com/diogochaves/omabox/pull/1)).

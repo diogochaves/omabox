@@ -150,6 +150,10 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
 - The session's PATH is yours (mise's tools, as in `omabox run`) with the box HOME's `~/.local/bin`
   first: drop a stub CLI there to fake one a plugin calls. `--env KEY=VAL` on `up` sets a variable for
   the whole session (the bar included), e.g. a plugin's API base pointed at a stub.
+- The XDG base dirs are set as in a session (`XDG_DATA_HOME=/home/sbx/.local/share`, ...). An app
+  installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
+  `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.
+  To test with another HOME (`env HOME=$(mktemp -d) app`), set the `XDG_*_HOME` vars too.
 - `omabox up --systemd` gives the box a real systemd user manager: `systemctl --user`, units in the box
   HOME's `~/.config/systemd/user`, `systemd-run --user` timers (use it for plugins that manage their
   own service or schedule alarms). No journald (`journalctl --user` is empty) and no logind either way.
