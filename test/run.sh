@@ -724,6 +724,29 @@ t_stock_bar() {
   check "down" ob down "$B"
 }
 
+# finding 87: an app installed per user into a running box (a .desktop with DBusActivatable=true and
+# its D-Bus service in ~/.local/share) is listed by the bus and starts from the launcher, as on the host.
+dbus_user_app() {
+  local B=$1 d; d=$(ob path -b "$B")/home/.local/share
+  mkdir -p "$d/applications" "$d/dbus-1/services"
+  printf '[Desktop Entry]\nType=Application\nName=Probe\nExec=/bin/true\nDBusActivatable=true\n' > "$d/applications/org.omabox.Probe.desktop"
+  # It leaves a mark, and its name appears for a moment (gdbus's own connection claims it, then exits),
+  # so the activation completes at once and gtk-launch returns.
+  printf '[D-BUS Service]\nName=org.omabox.Probe\nExec=/usr/bin/bash -c "touch /tmp/probe-started; gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.RequestName org.omabox.Probe 0 >/dev/null; sleep 5"\n' \
+    > "$d/dbus-1/services/org.omabox.Probe.service"
+  check "an app installed after up is activatable" until_ok 5 bash -c "'$CLI' run -b '$B' -- busctl --user list --activatable | grep -q org.omabox.Probe"
+  ob run -b "$B" -- timeout 10 gtk-launch org.omabox.Probe >/dev/null 2>&1
+  check "it starts from the launcher" until_ok 5 ob run -b "$B" -- test -e /tmp/probe-started
+}
+
+t_dbus_user_app() {
+  local B=$P-dbusapp
+  check "up" ob up "$B" --no-shell
+  check_eq "XDG_DATA_HOME as in a session" /home/sbx/.local/share "$(ob run -b "$B" -- printenv XDG_DATA_HOME)"
+  dbus_user_app "$B"
+  check "down" ob down "$B"
+}
+
 t_systemd() {
   local B=$P-sd
   check "up --systemd --net isolated" ob up "$B" --systemd --net isolated
@@ -734,6 +757,7 @@ t_systemd() {
   ob run -b "$B" -- systemd-run --user --on-active=1 --timer-property=AccuracySec=100ms --unit t1 touch /tmp/fired >/dev/null 2>&1
   check "a timer fires" until_ok 10 ob run -b "$B" -- test -e /tmp/fired
   check "notify-send works" ob run -b "$B" -- notify-send omabox-test
+  dbus_user_app "$B"
   local scope; scope=$(systemctl --user list-units --no-legend "omabox-$B-*" | awk '{print $1}')
   check_match "host scope exists" "^omabox-$B-" "$scope"
   check "down" ob down "$B"
@@ -1094,7 +1118,9 @@ t_widget() {
   polled   # (every 2 s while open) 0new is above b now
   ob keys -b "$B" s >/dev/null
   check "the selection follows its box (shot b, not a)" until_ok 3 grep -qx "shot -b b" "$H/actions"
-  check "the viewer is started" until_ok 3 grep -q "^xdg-open $H" <(sed "s|/home/sbx|$H|" "$H/actions")
+  # The file itself, not <(...): a process substitution is read once, so a retry of until_ok saw an
+  # empty pipe and the check failed whenever the viewer started after the first poll.
+  check "the viewer is started" until_ok 3 grep -qx "xdg-open /home/sbx/x.png" "$H/actions"
   ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
   ob keys -b "$B" Down p >/dev/null
   check "an action runs while the viewer is open" until_ok 3 grep -q "^peek -b " "$H/actions"
@@ -1587,7 +1613,7 @@ t_wait() {
 
 UNIT=(t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
   t_unit_registry t_unit_leak_scan)
-BOX=(t_leak_control t_main t_window t_wait t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_leak_control t_main t_dbus_user_app t_window t_wait t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

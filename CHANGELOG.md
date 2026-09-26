@@ -33,6 +33,24 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   seen to land; set state directly) and a symptom → next step table; the details that are not about
   safety moved to `skill/reference.md`.
 
+## 0.1.2 — 2026-09-26
+
+Apps installed inside a box start from the launcher, and pull requests get a check.
+
+### Fixed
+
+- Apps installed per user inside a box (a `DBusActivatable` desktop entry and its D-Bus service in
+  `~/.local/share`) now start from the launcher, as on the host. Boxes set `XDG_DATA_HOME`,
+  `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` like an Omarchy session
+  ([#4](https://github.com/diogochaves/omabox/issues/4)).
+- A flaky check in the test suite (`t_widget`, "the viewer is started"), thanks to
+  [@btsouth](https://github.com/btsouth) ([#3](https://github.com/diogochaves/omabox/pull/3)).
+
+### Changed
+
+- Pull requests run shellcheck in CI ([#6](https://github.com/diogochaves/omabox/pull/6)). The
+  suite still needs a Hyprland session, so it stays a local step (CONTRIBUTING.md).
+
 ## 0.1.1 — 2026-09-25
 
 NVIDIA GPUs, thanks to [@btsouth](https://github.com/btsouth) ([#1](https://github.com/diogochaves/omabox/pull/1)).

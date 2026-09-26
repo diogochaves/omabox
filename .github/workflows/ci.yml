@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The version the scripts are kept clean with; Ubuntu's package is older.
+      - name: Install shellcheck 0.11.0
+        run: |
+          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ
+          sudo install shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+      # Every shell script but spike/ (the original record, superseded by the CLI).
+      - name: shellcheck
+        run: shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/*

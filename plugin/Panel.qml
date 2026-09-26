@@ -58,7 +58,7 @@ Panel {
   // The card's two faces, as omawin's: the box list, and Settings behind the gear at the top right,
   // which Back (or Esc) leaves.
   property string face: "list"
-  readonly property string pluginVersion: "0.1.1"   // manifest.json's and VERSION
+  readonly property string pluginVersion: "0.1.2"   // manifest.json's and VERSION
 
   readonly property var icons: ({
     gear: String.fromCodePoint(0xF013),     // fa-cog, omawin's

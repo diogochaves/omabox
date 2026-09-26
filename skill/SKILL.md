@@ -163,6 +163,10 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
 - `/sys` and system-wide `/proc` files are the host's (read-only): CPU, temperatures, memory, disks,
   USB devices and DRM connectors read as the real machine's. A widget reading those shows host
   hardware state, not box state.
+- The XDG base dirs are set as in a session (`XDG_DATA_HOME=/home/sbx/.local/share`, ...). An app
+  installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
+  `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.
+  To test with another HOME (`env HOME=$(mktemp -d) app`), set the `XDG_*_HOME` vars too.
 - Only the host's programs; no Xwayland unless `--xwayland`. Stub CLIs, `--env`, `--systemd`, logs,
   cores, `--no-shell`, screen size: `reference.md`.
 
