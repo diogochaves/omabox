@@ -450,6 +450,9 @@ seed_home() {
     tar -C /etc/skel --exclude=./.local/share/nvim --exclude=./.config/autostart -cf - . | tar -C "$h" -xf -
   fi
   mkdir -p "$h/.config/omarchy/plugins" "$h/.config/omabox" "$h/.local/state/omarchy/current" "$h/.local/state/omarchy/indicators"
+  # The bus watches only the service dirs that exist when it starts: one made later lists its services
+  # after their first activation (finding 87).
+  mkdir -p "$h/.local/share/dbus-1/services"
   local shell_json=$HOME/.config/omarchy/shell.json
   if [ "$STOCK_BAR" = 1 ]; then
     shell_json=/usr/share/omarchy/config/omarchy/shell.json
@@ -749,7 +752,11 @@ cmd_up() {
   for p in "${PLUGINS[@]}"; do args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}"); done
   for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
+  # The XDG base dirs, as an Omarchy session has them: dbus-daemon reads the box HOME's D-Bus services
+  # only from $XDG_DATA_HOME, with no ~/.local/share fallback (finding 87).
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
+    --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
+    --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
     --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "${PATH:-}"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"

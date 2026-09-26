@@ -432,6 +432,28 @@ t_stock_bar() {
   check "down" ob down "$B"
 }
 
+# finding 87: an app installed per user into a running box (a .desktop with DBusActivatable=true and
+# its D-Bus service in ~/.local/share) is listed by the bus and starts from the launcher, as on the host.
+dbus_user_app() {
+  local B=$1 d; d=$(ob path -b "$B")/home/.local/share
+  mkdir -p "$d/applications" "$d/dbus-1/services"
+  printf '[Desktop Entry]\nType=Application\nName=Probe\nExec=/bin/true\nDBusActivatable=true\n' > "$d/applications/org.omabox.Probe.desktop"
+  # It claims its name, so the activation completes, and leaves a mark.
+  printf '[D-BUS Service]\nName=org.omabox.Probe\nExec=/usr/bin/bash -c "touch /tmp/probe-started; gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.RequestName org.omabox.Probe 0 >/dev/null; sleep 5"\n' \
+    > "$d/dbus-1/services/org.omabox.Probe.service"
+  check "an app installed after up is activatable" until_ok 5 bash -c "'$CLI' run -b '$B' -- busctl --user list --activatable | grep -q org.omabox.Probe"
+  ob run -b "$B" -- timeout 10 gtk-launch org.omabox.Probe >/dev/null 2>&1
+  check "it starts from the launcher" until_ok 5 ob run -b "$B" -- test -e /tmp/probe-started
+}
+
+t_dbus_user_app() {
+  local B=$P-dbusapp
+  check "up" ob up "$B" --no-shell
+  check_eq "XDG_DATA_HOME as in a session" /home/sbx/.local/share "$(ob run -b "$B" -- printenv XDG_DATA_HOME)"
+  dbus_user_app "$B"
+  check "down" ob down "$B"
+}
+
 t_systemd() {
   local B=$P-sd
   check "up --systemd --net isolated" ob up "$B" --systemd --net isolated
@@ -442,6 +464,7 @@ t_systemd() {
   ob run -b "$B" -- systemd-run --user --on-active=1 --timer-property=AccuracySec=100ms --unit t1 touch /tmp/fired >/dev/null 2>&1
   check "a timer fires" until_ok 10 ob run -b "$B" -- test -e /tmp/fired
   check "notify-send works" ob run -b "$B" -- notify-send omabox-test
+  dbus_user_app "$B"
   local scope; scope=$(systemctl --user list-units --no-legend "omabox-$B-*" | awk '{print $1}')
   check_match "host scope exists" "^omabox-$B-" "$scope"
   check "down" ob down "$B"
@@ -944,7 +967,7 @@ t_guard() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
-BOX=(t_main t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_main t_dbus_user_app t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
