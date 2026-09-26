@@ -3,7 +3,9 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.1.2 — 2026-09-26
+
+Apps installed inside a box start from the launcher, and pull requests get a check.
 
 ### Fixed
 
@@ -13,6 +15,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#4](https://github.com/diogochaves/omabox/issues/4)).
 - A flaky check in the test suite (`t_widget`, "the viewer is started"), thanks to
   [@btsouth](https://github.com/btsouth) ([#3](https://github.com/diogochaves/omabox/pull/3)).
+
+### Changed
+
+- Pull requests run shellcheck in CI ([#6](https://github.com/diogochaves/omabox/pull/6)). The
+  suite still needs a Hyprland session, so it stays a local step (CONTRIBUTING.md).
 
 ## 0.1.1 — 2026-09-25
 

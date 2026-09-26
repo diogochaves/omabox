@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "chaves.omabox",
   "name": "omabox",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Diogo Chaves",
   "license": "MIT",
   "description": "The omabox boxes running on this machine: peek at one, screenshot it, or shut it down.",
