@@ -1345,6 +1345,17 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     `run -d` says no box is up, and with an `up` of the name that finds no agent also let in between
     the two, the command does not take over the box it started.
 
+94. **From another user namespace, a live box read dead and `up` orphaned it** (2026-09-28, found in
+    the review of PR #8). Under `unshare -Ur`, or in a sandbox that makes its own user namespace,
+    `readlink /proc/PID/ns/pid` of a box's PID 1 fails, and `box_pid` took that as a dead box:
+    `ls` listed it dead, and `up` cleared its dir and started another, leaving the first one
+    running where `down` could no longer find it (reproduced by `t_other_userns` on the old code:
+    its pasta and bwrap stayed up, the dir gone). `box_pid` now returns 3 when the pid is a process
+    of ours whose namespace it cannot read, and `box_alive` stops there ("cannot tell whether box
+    ... is up from this user namespace"); a process that is not ours (its pid reused) still reads
+    dead. Such a process could not enter or signal the box anyway. `t_other_userns`: `up` from
+    `unshare -Ur` fails with that message, and the box is the same one, still up.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

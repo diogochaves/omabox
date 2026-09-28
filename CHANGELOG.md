@@ -35,6 +35,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- `omabox up` run from another user namespace (some agent sandboxes, `unshare -Ur`) no longer
+  takes a box that is up for a dead one, clearing its dir and leaving it running out of reach. It
+  stops and says it cannot tell.
 - `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
 - The agent guard now refuses to open links and files on your desktop. `xdg-open URL` or
   `gh pr view --web` from a guarded agent handed the URL to a browser already running there, which
