@@ -70,12 +70,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and what reads `$BROWSER` are covered: a plain `xdg-open` there still uses the desktop's URL
   handler. After updating, `install.sh` offers to update the guard for the agents that have it
   (`omabox guard on` does it too). Thanks to [@btsouth](https://github.com/btsouth) ([#10](https://github.com/diogochaves/omabox/pull/10)).
-- `omabox shot`, `click` and `keys` work on an interactive box while its window is hidden on its
+- `omabox shot`, `wait`, `click` and `keys` work on an interactive box while its window is hidden on its
   workspace. The host now keeps drawing the window (at `misc.render_unfocused_fps`), and the error
   for a box started by an older version no longer suggests showing the window, which led an agent
   to switch the user's workspace before every screenshot. After you closed a box's window and kept
   the box running (`confirm-close`), its new window is only drawn while on screen: `click` and
-  `keys` still reach it, but `shot` gets no frame while it is hidden. Thanks to [@btsouth](https://github.com/btsouth) ([#9](https://github.com/diogochaves/omabox/pull/9)).
+  `keys` still reach it, but `shot` and `wait` get no frame while it is hidden. Thanks to [@btsouth](https://github.com/btsouth) ([#9](https://github.com/diogochaves/omabox/pull/9)).
 - A headless box no longer captures X11 apps started on the host. Its parent compositor's Xwayland
   claimed the host's abstract `:0` X11 socket (or the next free one), and a host app (Steam) then
   opened in the box. An X server run inside a box (Xvfb) could do the same. Thanks to
