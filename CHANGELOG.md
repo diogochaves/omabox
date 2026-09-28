@@ -3,7 +3,18 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.2.0 — 2026-09-29
+
+Agents drive apps by their windows and wait for the screen instead of sleeping; every box gets a
+network of its own, and each agent session its own box.
+
+Much of this release is Tyler South's ([@btsouth](https://github.com/btsouth)): the network of its
+own, the box per agent session, hidden interactive boxes that can still be shot, and the guard
+keeping links off your desktop. Thank you, Tyler
+([#2](https://github.com/diogochaves/omabox/pull/2), [#7](https://github.com/diogochaves/omabox/pull/7),
+[#8](https://github.com/diogochaves/omabox/pull/8), [#9](https://github.com/diogochaves/omabox/pull/9),
+[#10](https://github.com/diogochaves/omabox/pull/10), [#11](https://github.com/diogochaves/omabox/pull/11),
+[#12](https://github.com/diogochaves/omabox/pull/12)).
 
 ### Added
 
@@ -46,7 +57,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `::`): from a box, `localhost` is reset when the server listens on IPv4 only, and from one box to
   another it never works. A box's ports appear on your host's `127.0.0.1` only (never your LAN
   address), usually within a second of its server listening; a TCP port there also takes the UDP
-  port of the same number. A connected box started inside another box has no network.
+  port of the same number. A connected box started inside another box has no network. Thanks to
+  [@btsouth](https://github.com/btsouth) ([#8](https://github.com/diogochaves/omabox/pull/8)).
 - Every box needs `passt` (`./install.sh` installs it) and, unless it is `--net isolated`,
   `/dev/net/tun`; `omabox up` says so at once. Started from a process with no_new_privs (some agent
   sandboxes, a systemd unit with `NoNewPrivileges=`), a headless box has no network, only a loopback
@@ -85,6 +97,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   claimed the host's abstract `:0` X11 socket (or the next free one), and a host app (Steam) then
   opened in the box. An X server run inside a box (Xvfb) could do the same. Thanks to
   [@btsouth](https://github.com/btsouth) ([#8](https://github.com/diogochaves/omabox/pull/8)).
+- A check in the test suite (`t_throwaway`, "no box left") counted other boxes than its own, thanks
+  to [@btsouth](https://github.com/btsouth) ([#12](https://github.com/diogochaves/omabox/pull/12)).
 
 ## 0.1.2 — 2026-09-26
 
