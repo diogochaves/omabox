@@ -1144,10 +1144,15 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       top-level one too (an agent's sandbox, a systemd unit with `NoNewPrivileges=`): under
       `setpriv --no-new-privs`, `up` failed 10 s in with only "bwrap did not start" (box.log had the
       uid-map line), where a box in the host's network, before this change, came up. So `up` reads
-      NoNewPrivs from /proc/self/status and refuses a headless box behind pasta up front, with that
-      reason (an interactive one is started by the host's Hyprland); `t_unit_refusals` runs it
-      under `setpriv --no-new-privs`. A box that is up already still reads "already up" there,
-      without the per-name lock, so such a process can use a box the user started (`t_connected`).
+      NoNewPrivs from /proc/self/status up front (an interactive box is started by the host's
+      Hyprland, so it is not affected). A connected headless box falls back to `none`, as a nested
+      one does, and `up` says it has no network and why: plain bwrap with `--unshare-net` works
+      under no_new_privs, and on main a sandboxed agent could start a box there (Tyler's point on
+      PR #8; such sandboxes mostly block the network anyway). It still gets a namespace of its own,
+      so no host X11 capture (`t_no_new_privs`, which also checks `run` from such a process). An
+      isolated box is refused with the reason, since its `--allow` ports need pasta
+      (`t_unit_refusals`). A box that is up already still reads "already up" there, without the
+      per-name lock, so such a process can use a box the user started (`t_connected`).
     - *Pids*: pasta's pid namespace makes bwrap's child-pid 2. `pasta_pid` finds the host pid only
       through the box's own pasta (`box_pasta`, which `kill_box` uses too): a process whose comm is
       pasta's (passt.avx2 on this CPU; readable although pasta is non-dumpable) and whose command

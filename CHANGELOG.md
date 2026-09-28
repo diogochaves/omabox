@@ -25,9 +25,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   address), usually within a second of its server listening; a TCP port there also takes the UDP
   port of the same number. A connected box started inside another box has no network.
 - Every box needs `passt` (`./install.sh` installs it) and, unless it is `--net isolated`,
-  `/dev/net/tun`. A headless box can no longer start from a process with no_new_privs (some agent
-  sandboxes, a systemd unit with `NoNewPrivileges=`). `omabox up` says so at once in each case; a
-  box that is already up can still be used from such a process.
+  `/dev/net/tun`; `omabox up` says so at once. Started from a process with no_new_privs (some agent
+  sandboxes, a systemd unit with `NoNewPrivileges=`), a headless box has no network, only a loopback
+  of its own, and `up` says so; a `--net isolated` one is refused there. A box that is already up
+  can still be used from such a process.
 - Boxes that were up before you updated still share your network, and can still catch host X11
   apps, until `omabox down` (`omabox ls` shows them as `host`).
 - Take your boxes down before going back to an older omabox: it lists a box started by this one as
