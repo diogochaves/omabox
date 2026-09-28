@@ -282,10 +282,23 @@ and every other socket, omabox's included).
   keyrings or tokens).
 - Private session bus, private throwaway keyring (secrets are stored and read without prompts),
   no system bus, no real input devices, no audio, no Xwayland (unless you pass `--xwayland`).
-- The network is shared with the host, unless you start the box with `--net isolated`: then it has
-  only a loopback, no internet or LAN, and reaches just the host ports you list with `--allow`
-  (`omabox up --net isolated --allow 8081,8082`), so your real local services are out of reach.
-  Works for headless and interactive boxes (needs `passt`, which `install.sh` installs).
+- Every box has a network of its own, so what runs in it cannot reach or take your host's abstract
+  sockets (a box's X11 display used to catch X11 apps you started on the host). By default
+  (`--net connected`) a box reaches the internet, your LAN and the servers on your host, and you
+  reach its servers:
+  - Across the box boundary, use `127.0.0.1:PORT`, with a server that listens on IPv4 (`127.0.0.1`,
+    `0.0.0.0` or `::`). `localhost` works from your host into a box, but from a box it is reset when
+    the server listens on IPv4 only, as most dev servers do, and from one box to another it never
+    works. A server in a box that listens on `::1` only cannot be reached from outside it.
+  - A box's ports are forwarded to your host's `127.0.0.1` only (never your LAN address), usually
+    within a second of its server listening, the ephemeral range included; other boxes reach them
+    there too. A TCP port there also takes the UDP port of the same number.
+  - Inside a box, your machine's LAN address is the box itself.
+  - A connected box started inside another box has no network.
+- With `--net isolated`, the box has only a loopback, no internet or LAN, and reaches just the host
+  ports you list with `--allow` (`omabox up --net isolated --allow 8081,8082`), so your real local
+  services are out of reach. Works for headless and interactive boxes. Every box needs `passt`
+  (which `install.sh` installs), and a connected one `/dev/net/tun`.
 - Safety invariant: a box never gets `/dev/dri/card*`, `/dev/input`, seatd, the system bus or your
   real `$XDG_RUNTIME_DIR`. Those are what keep its Hyprland off your real seat.
 - `/usr`, `/etc` and `/sys` are read-only and there is no `sudo`, pacman or polkit: nothing in a box
@@ -296,9 +309,9 @@ and every other socket, omabox's included).
   way: while that window has focus (in passthrough, SUPER binds too), what runs in the box reads
   what you type.
 - `omabox down` deletes the box and its HOME, so what a plugin or app changed in there is gone. It
-  cannot undo what reached outside: with the default host network, a box reaches the internet, your
-  LAN, your `localhost` services and the host's abstract Unix sockets, so API calls, uploads or
-  changes to a server are real. Use `--net isolated` when that matters.
+  cannot undo what reached outside: with the default connected network, a box reaches the internet,
+  your LAN and the services on your `127.0.0.1`, so API calls, uploads or changes to a server are
+  real. Use `--net isolated` when that matters.
 - Commands you run on the host are not boxed: a project's `sudo ./setup ...`, or `omabox host --
   CMD`, change your real system.
 - A box keeps an app off your desktop and your config; it is not a security boundary. It shares
@@ -313,7 +326,7 @@ final release acceptance.
 ## How it works
 
 ```
-[pasta]                        --net isolated only: a loopback and the --allow ports, nothing else
+[pasta]                        boxes behind pasta: connected (default), or isolated (--allow ports)
 └ bwrap (pid/ipc/uts namespaces, fake HOME, private /run/user/$UID and /tmp)
   └ share/session.sh           the session: private bus (dbus-daemon), keyring, PATH, env
     ├ [systemd --user]         --systemd only (in its own delegated cgroup scope)
@@ -339,7 +352,7 @@ Wayland connection.
 | `spike/` | the original proof of concept |
 
 Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/`: `box.json` (its options), `info.json` (bwrap's
-pids; `pid` and `pasta.pid` for an isolated box), `run/` (the box's runtime dir), `used` (idle clock),
+pids; `pid` and `pasta.pid` for a box behind pasta), `run/` (the box's runtime dir), `used` (idle clock),
 `reap.log`, `box.log`. The
 box's HOME (`omabox path` → `home/`, on disk in `~/.cache/omabox/<name>/home`, removed on `down`) and
 logs are readable from the host.

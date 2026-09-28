@@ -22,10 +22,11 @@ say what replaced it.
 
 ```
 $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home/ (-> ~/.cache/omabox/<name>/home),
-                                  box.json (options, pidns), info.json (bwrap child-pid), pid + pasta.pid
-                                  (--net isolated), used (idle clock), launch.sh, box.log, reap.log
+                                  box.json (options, net, pidns), info.json (bwrap child-pid), pid + pasta.pid
+                                  (boxes behind pasta), used (idle clock), launch.sh, box.log, reap.log
 [systemd-run --user --scope]      --systemd only: a delegated cgroup the box's user manager owns (61)
-[pasta --splice-only]             --net isolated only: own netns, loopback, the --allow ports (44, 45)
+[pasta]                           top-level boxes: own netns, connected (default) or isolated (44, 45, 89);
+                                  a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
 │                        one render node (plus its NVIDIA render-side nodes on NVIDIA),
@@ -1086,6 +1087,95 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     and the old one waits out its idle limit; and a box the user started with `omabox up` in the repo
     (named `myrepo`) is no longer an agent's default: the agent passes `-b myrepo` to use it, and the
     user passes `-b` to `peek` or `shot` an agent's box.
+89. **A headless box captured host X11 apps (Steam)** (2026-09-26, PR #8). In the host's network
+    namespace, a box's labwc (lazy Xwayland) bound the abstract `@/tmp/.X11-unix/X0` about 2 s into
+    `up`, for the box's whole life (the next free X<n> when :0 was taken). The host's Xwayland
+    (Hyprland) has only the filesystem sockets, and libxcb tries the abstract one first, so a host
+    X11 app opened in the box: Steam logged the box's 1600x900 screen, the real Hyprland listed no
+    Steam window, and stopping the box gave host apps the real 4480x1440 display again. (1600x900
+    needs an NVIDIA box: only there is labwc's output sized to `--size`, finding 78; on AMD/Intel it
+    stays 1280x720.) An X server run in such a box (Xvfb, xvfb-run) did the same, box apps could
+    reach any host abstract socket, and host apps could squat the box's. Every top-level box now
+    runs behind pasta in a network namespace of its own, which closes that whole class;
+    `--net isolated` keeps its arguments. It replaces 44's isolated-only `nsenter -n` in `run`
+    (`run` joins a box's network namespace whenever it differs from its own), and 52's stub resolver
+    is now reached through pasta's `-T`, which mirrors the host's port 53 into the box (the splice
+    keeps the address, 127.0.0.53). `--net connected` (the default; `host` is its old name) runs
+    `pasta --config-net --no-map-gw -D none -S none --host-lo-to-ns-lo -t 127.0.0.1/1-65535,auto
+    -u 127.0.0.1/1-65535,auto -T 1-65535,auto -U 1-65535,auto`.
+    - *Flags*: a box's ports are bound on the host's 127.0.0.1 only; plain `-t auto` bound `*:P`,
+      which opened them to the LAN, and a host `localhost` client's ::1 attempt was accepted, then
+      reset. `1-65535,auto` includes the ephemeral range (32768-60999), which `auto` alone skips.
+      `--no-map-gw` makes the box's gateway the router again, not all of the host's loopback.
+      `-D none`: with `--no-map-gw`, pasta cannot hand the box the host's loopback nameserver, and
+      said "Couldn't get any nameserver address" on every start. `-S none`: no search domains either
+      (the box reads the host's resolv.conf).
+    - *Across the boundary* (curl and python in real boxes): use 127.0.0.1, with a server listening
+      on IPv4 (127.0.0.1, 0.0.0.0 or ::). From the host, `localhost` works too (::1 is refused, then
+      127.0.0.1). From a box, `localhost` to an IPv4-only host server is accepted and then reset
+      (`-T` listens on both families and takes no address), and from box to box it resets even for a
+      dual-stack server (the hop is the host's 127.0.0.1). A box server on ::1 only cannot be
+      reached from outside (reset); a host server on ::1 only is reached from a box as [::1] or
+      `localhost`, not 127.0.0.1. Inside a box the host's LAN address is the box itself. No
+      multicast (mDNS, SSDP). Forwards appear 0.2-1.0 s after a server starts listening (33 timed
+      runs; one untimed try took over 5 s and did not recur). pasta's UDP auto mode also forwards
+      the ports bound for TCP: while a box has a TCP server on P, a host program cannot bind
+      127.0.0.1:P, TCP or UDP (it can still bind [::1]:P, which host `localhost` clients try first).
+    - *Cost*: pasta takes about 28 MB and 0.4% of a core per box (its 1 s rescan), and every host
+      listener is mirrored into every box.
+    - *Requirements*: a connected box's tap device needs /dev/net/tun; `up` checks for it and for
+      pasta up front, before the built helpers (`check_install`, which a fresh checkout's first unit
+      run otherwise hit first). `--net isolated` needs no tun. A nested connected box (`net: none`)
+      gets bwrap's `--unshare-net` and no route out, because a box's /dev has no /dev/net/tun. A
+      nested `--net isolated` box still runs pasta `--splice-only`, but only a headless one, from
+      `omabox run`: everything a box's session starts has no_new_privs (bwrap sets it; `run` enters
+      from the host and has none). pasta runs under it too, but its command, uid 0 in pasta's
+      namespace, then keeps only the capabilities pasta held (CapPrm 0x201400: net_bind_service,
+      net_admin, sys_admin), not all of root's, and without CAP_SETFCAP the bwrap it starts cannot
+      map its uid onto pasta's root ("setting up uid map: Operation not permitted"). Checked in a
+      box: from a script the box's Hyprland started, `up --net isolated` and pasta + bwrap failed
+      so, while pasta alone and bwrap alone ran; through `omabox run` all four worked, and pasta +
+      bwrap failed again with CAP_SETFCAP alone dropped before bwrap. The bounding set is full in
+      both kinds of process (finding 45 blamed it). The same goes for any no_new_privs process, a
+      top-level one too (an agent's sandbox, a systemd unit with `NoNewPrivileges=`): under
+      `setpriv --no-new-privs`, `up` failed 10 s in with only "bwrap did not start" (box.log had the
+      uid-map line), where a box in the host's network, before this change, came up. So `up` reads
+      NoNewPrivs from /proc/self/status and refuses a headless box behind pasta up front, with that
+      reason (an interactive one is started by the host's Hyprland); `t_unit_refusals` runs it
+      under `setpriv --no-new-privs`. A box that is up already still reads "already up" there,
+      without the per-name lock, so such a process can use a box the user started (`t_connected`).
+    - *Pids*: pasta's pid namespace makes bwrap's child-pid 2. `pasta_pid` finds the host pid only
+      through the box's own pasta (`box_pasta`, which `kill_box` uses too): a process whose comm is
+      pasta's (passt.avx2 on this CPU; readable although pasta is non-dumpable) and whose command
+      line names the box's pasta.pid. pasta never removes that file: a stale one naming another
+      box's pasta led `down` to that box's PID 1 (reproduced with a fabricated box dir), and, with
+      only the command line checked, a process whose argv held the path was killed with its child.
+      bwrap gets `--die-with-parent` (its parent is pasta), so a box whose pasta dies (OOM, a
+      killall) ends with it instead of staying up with no network; isolated boxes too.
+    - *Older boxes and CLIs*: boxes started before this change keep the host's namespace until
+      `down` (`ls` shows them as `host`); entering the host's namespace from the box's user
+      namespace is EPERM ("reassociate to namespaces failed"; checked against a box started by
+      0.1.2). An older CLI reads a connected box's child-pid (2), so it lists the box dead, and its
+      `down` deletes the dir but, where pasta runs as passt.avx2, leaves the box and its pasta
+      running (its fallback checks `comm = pasta`): take boxes down before downgrading.
+    - *Tests*: `t_connected` diffs the host's abstract X11 sockets around `up` (a new one counts
+      unless `ss -xlp` places its owner in another pid namespace: another checkout's box may start
+      meanwhile), and checks the netns, DNS, `localhost` from host to box (bound on 127.0.0.1 only),
+      127.0.0.1 from box to host, a kernel-chosen port each way, that the box's gateway is not the
+      host's loopback (one connection to the router), and that box.log is empty. Reverting
+      `1-65535`, the 127.0.0.1 scoping, `--host-lo-to-ns-lo`, `--no-map-gw` or `-D none` fails one
+      of them. `t_pasta_dies` covers `--die-with-parent`; `t_stale_pid` a stale pasta.pid naming a
+      copy of sleep called pasta, or a process whose argv names the file; `t_race` counts one pasta
+      per box. `t_throwaway_dead` killed info.json's child-pid, 2, which on the host is kthreadd
+      (EPERM), so the box stayed up; it now kills the PID 1 `box_pid` finds.
+    - *Interactive*: pasta forks, so every top-level interactive box's window now reaches its
+      workspace through `HL_EXEC_RULE_TOKEN` only, as isolated ones have since 45. The suite cannot
+      cover it: its stand-in interactive boxes (`t_guard`) are nested connected ones (`net: none`,
+      no pasta), and a nested `--interactive --net isolated` box is started by the stand-in's
+      Hyprland (`hl.exec_cmd`), so it has no_new_privs and fails at bwrap's uid map (Requirements,
+      above). Still to check on the real desktop, with the user's go-ahead: in the default mode,
+      `up --interactive` lands on workspace 9 with the active workspace and window unchanged,
+      `peek --focus` focuses it, and `down` leaves no pasta.
 90. **A hidden interactive box is drawn, so no agent switches the user's workspace for a shot**
     (2026-09-26, seen by a user: a Codex agent testing an app in an interactive box on
     workspace 9 kept flipping their second monitor to 9 and taking focus). Finding 24's `shot`

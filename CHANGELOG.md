@@ -15,6 +15,24 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (`claude --continue`) takes over its box if it is still up. `-b NAME` and `OMABOX=NAME` work as
   before; `OMABOX_SESSION=` (empty) turns this off.
 
+### Changed
+
+- Every box has a network of its own (pasta). A default box (`--net connected`; `--net host` still
+  works) reaches the internet, your LAN and your host's servers, and you reach its servers. Across
+  the box boundary use `127.0.0.1` and a server that listens on IPv4 (`127.0.0.1`, `0.0.0.0` or
+  `::`): from a box, `localhost` is reset when the server listens on IPv4 only, and from one box to
+  another it never works. A box's ports appear on your host's `127.0.0.1` only (never your LAN
+  address), usually within a second of its server listening; a TCP port there also takes the UDP
+  port of the same number. A connected box started inside another box has no network.
+- Every box needs `passt` (`./install.sh` installs it) and, unless it is `--net isolated`,
+  `/dev/net/tun`. A headless box can no longer start from a process with no_new_privs (some agent
+  sandboxes, a systemd unit with `NoNewPrivileges=`). `omabox up` says so at once in each case; a
+  box that is already up can still be used from such a process.
+- Boxes that were up before you updated still share your network, and can still catch host X11
+  apps, until `omabox down` (`omabox ls` shows them as `host`).
+- Take your boxes down before going back to an older omabox: it lists a box started by this one as
+  dead (unless it is `--net isolated`), and its `down` can leave that box running.
+
 ### Fixed
 
 - `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
@@ -31,6 +49,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   to switch the user's workspace before every screenshot. After you closed a box's window and kept
   the box running (`confirm-close`), its new window is only drawn while on screen: `click` and
   `keys` still reach it, but `shot` gets no frame while it is hidden.
+- A headless box no longer captures X11 apps started on the host. Its parent compositor's Xwayland
+  claimed the host's abstract `:0` X11 socket (or the next free one), and a host app (Steam) then
+  opened in the box. An X server run inside a box (Xvfb) could do the same.
 
 ## 0.1.2 — 2026-09-26
 

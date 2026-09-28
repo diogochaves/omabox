@@ -34,10 +34,10 @@ check it against what a box cannot do (next section): a step that needs real har
 into a box, it goes to the user.
 
 A box is a fresh desktop with a fresh HOME: apps start as on first run. If a first-run screen offers
-to use a real local service (a server on 127.0.0.1, the user's account), do not pick it: boxes share
-the host network, so it would be the user's real data. Use a test service or ask. For an app that
-talks to local servers, prefer `omabox up --net isolated --allow 8081` (only the listed host ports,
-no internet): then the real service cannot be reached by mistake.
+to use a real local service (a server on 127.0.0.1, the user's account), do not pick it: a box reaches
+the user's services on the host's 127.0.0.1, so it would be the user's real data. Use a test service
+or ask. For an app that talks to local servers, prefer `omabox up --net isolated --allow 8081` (only
+the listed host ports, no internet): then the real service cannot be reached by mistake.
 
 `omabox help` has every flag. The box name defaults to the current git repo's directory name plus
 your session's id (`myrepo-5cc72cdc` in a Claude Code or Codex session), so other sessions, in this
@@ -149,8 +149,14 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
   is fake (`omabox path` → `<dir>/home`, readable and writable from the host): put outputs there or in
   `/tmp` inside, and seed a widget's data files (a usage record, a store) there while the box runs.
 - Private session bus, private keyring (store/lookup secrets freely, no prompts), no system bus, no
-  real input devices, no audio. Network is shared with the host (so the user's real local services
-  are reachable: leave them alone unless asked) unless the box was started with `--net isolated`.
+  real input devices, no audio. Each box has its own network: by default it reaches the internet,
+  the LAN and the user's servers on the host's 127.0.0.1 (leave those alone unless asked); `--net
+  isolated` reaches only the host ports you list. Across the box boundary use `127.0.0.1`, not
+  `localhost`, with a server listening on IPv4 (`127.0.0.1`, `0.0.0.0` or `::`): from a box,
+  `localhost` is reset on an IPv4-only server, and between boxes always. A box's server is reachable
+  from the host (and other boxes) on `127.0.0.1:PORT` within about a second of listening (poll for
+  it); one on `::1` only is not. Inside a box the host's LAN address is the box itself. A connected
+  box started inside a box has no network.
 - `/sys` and system-wide `/proc` files are the host's (read-only): CPU, temperatures, memory, disks,
   USB devices and DRM connectors read as the real machine's. Only processes and the screen are the
   box's. A widget reading those shows host hardware state, not box state.
