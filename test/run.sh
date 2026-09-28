@@ -6,8 +6,9 @@
 #   test/run.sh unit         only the fast ones (no box)
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd)
 #
-# Never touches the real desktop: every box is headless, and the last test checks that the host's
-# focused workspace and window are what they were before. Needs a Hyprland session (read-only hyprctl)
+# Never touches the real desktop: every box is headless, and a watch over the whole run fails the suite
+# if a window of its boxes shows up there or omabox's workspace comes up. The desktop stays yours to use
+# meanwhile (only omabox's workspace would count). Needs a Hyprland session (read-only hyprctl)
 # and the host ports 8093/8094 free (a throwaway HTTP server for the network tests; t_connected finds
 # free ports of its own, and makes one connection from a box to its gateway, the router).
 set -uo pipefail
@@ -26,8 +27,10 @@ SERVERS=()                 # host-side test servers, stopped on exit
 cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
+  cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
   [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
+  [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -51,6 +54,21 @@ tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$
 mkdir -p "$TMP/lib/bin"
 sed '/^main "\$@"; exit$/d' "$CLI" > "$TMP/lib/bin/omabox"
 lib() { bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
+
+# One look at a desktop for what the suite's boxes must never do there (never disturb the real
+# desktop): a window of theirs on it, focused or not, or omabox's workspace brought up. Anything else
+# on it is the user's. $1 runs hyprctl there, $2 prints a pid's command line there, $3 is what a
+# window of the suite's boxes has in its command line (its box dir), $4 omabox's workspace ("": skip).
+desk_look() {
+  local hc=$1 rd=$2 mark=$3 ws=$4 pid foc cls
+  [ -n "$ws" ] && [ "$("$hc" -j activeworkspace | jq -r '.name // empty')" = "$ws" ] &&
+    echo "workspace $ws came up (if you went there yourself, run the suite again)"
+  while read -r pid foc cls; do
+    "$rd" "$pid" 2>/dev/null | tr '\0' ' ' | grep -qF -- "$mark" || continue
+    echo "a window of the suite's boxes on the desktop: $cls (pid $pid)"
+    [ "$foc" = 0 ] && echo "...with focus: $cls"
+  done < <("$hc" -j clients | jq -r '.[] | "\(.pid) \(.focusHistoryID) \(.class)"')
+}
 
 # --- tests ---------------------------------------------------------------------------------------
 
@@ -210,7 +228,7 @@ t_unit_seed_copy() {
 # up --new (finding 73): a free box-N name, printed; two at once never get the same one. The names
 # are the user's namespace too (box-1 may be theirs): only the ones printed here are taken down.
 t_new() {
-  local a b; a=$(mktemp -p "$TMP") b=$(mktemp -p "$TMP")
+  local a=$TMP/new-a b=$TMP/new-b   # fixed names: cleanup takes these boxes down if the suite stops here
   "$CLI" up --new --no-shell --idle 0 > "$a" 2>/dev/null & local pa=$!
   "$CLI" up --new --no-shell --idle 0 > "$b" 2>/dev/null & local pb=$!
   wait $pa $pb
@@ -219,6 +237,7 @@ t_new() {
   check "...two at once, two different names ($na, $nb)" test -n "$nb" -a "$na" != "$nb"
   check "...both up" bash -c "'$CLI' ls --json | jq -e '[.[] | select(.name == \"$na\" or .name == \"$nb\") | select(.state == \"up\")] | length == 2'"
   [ -n "$na" ] && ob down "$na" >/dev/null 2>&1; [ -n "$nb" ] && ob down "$nb" >/dev/null 2>&1
+  rm -f "$a" "$b"   # down: a later box-N of someone else's may get these names
 }
 
 # One version for the CLI and the widget (CHANGELOG.md).
@@ -239,7 +258,9 @@ t_unit_cli() {
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
-  check_fails "down --all with a name refused" ob down "$P-x" --all
+  # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
+  mkdir -p "$TMP/rt"
+  check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
 }
 
@@ -566,12 +587,16 @@ t_main() {
   check_eq "--env reaches run" yes "$(ob run -b "$B" -- sh -c 'echo $OMABOX_TEST')"
   # --pass (finding 66): the caller's value, as it is, and never on a command line.
   check_eq "run does not pass the caller's variables" unset "$(OMABOX_T66=x ob run -b "$B" -- sh -c 'echo ${OMABOX_T66-unset}')"
-  local secret=$'omabox-t66 = with\nnewline'
+  # A token of this run's own, so only a process that got the value fails the check below, not one
+  # that merely mentions the test (an agent grepping the suite, another run of it).
+  local tag secret
+  tag=omabox-t66-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+  secret="$tag = with"$'\nnewline'
   check_eq "--pass hands one over, as it is" "$(printf %q "$secret")" \
     "$(OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- bash -c 'printf %q "$OMABOX_T66"')"
   (OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- sleep 2 >/dev/null 2>&1 &)
   sleep 1
-  check_fails "...never in any command line" grep -qs omabox-t66 /proc/[0-9]*/cmdline
+  check_fails "...never in any command line" grep -qsF -- "$tag" /proc/[0-9]*/cmdline
   check_fails "--pass of an unset variable fails (no silent skip)" env -u OMABOX_T66 "$CLI" run -b "$B" --pass OMABOX_T66 -- true
   check_fails "--pass takes a name only" ob run -b "$B" --pass 'A=1' -- true
   check_eq "--pass ROOT is the caller's, not omabox's own (finding 74)" "/x y" "$(ROOT="/x y" ob run -b "$B" --pass ROOT -- sh -c 'echo "$ROOT"')"
@@ -679,7 +704,8 @@ t_throwaway() {
   check_eq "throwaway: writes into the overlay work" x "$out"
   check_fails "throwaway: host checkout unchanged" test -e "$repo/.omabox-overlay-test"
   # Its own box only, as the other throwaway tests look for theirs: another agent's `omabox run` may
-  # have a throwaway box up on the same machine.
+  # have a throwaway box up on the same machine. The name first, or the count below tests nothing.
+  check_match "throwaway: named $P-tw-runN" "^$P-tw-run[0-9]+\$" "$(cd "$repo" && env -u OMABOX "$CLI" run -- sh -c 'echo "$OMABOX_NAME"' 2>&1)"
   check_eq "throwaway: no box left" 0 "$(ob ls --json | jq --arg p "$P-tw-run" '[.[] | select(.name | startswith($p))] | length')"
 }
 
@@ -813,7 +839,8 @@ t_reap_race() {
   local B=$P-rr lock
   ob up "$B" --idle 10s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
   exec {lock}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lock"   # what an `up` of the name holds
-  check "the idle reaper decides and waits for the lock" until_ok 30 pgrep -f "^flock -w 60 [0-9]+$"
+  # This box's reaper's flock (cmd_down runs in the reaper's own process), not any box's up or down.
+  check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
   local j=$XDG_RUNTIME_DIR/omabox/$B/box.json
   jq '.created = "a new box"' "$j" > "$j.t" && mv "$j.t" "$j"   # the new box, as `up` writes it
   exec {lock}>&-; sleep 3
@@ -1030,7 +1057,10 @@ t_run_idle() {
 t_throwaway_home() {
   # From ~ (no repo) the throwaway is named after "default": a box of the user's with that name
   # would take the run instead.
-  if [ -d "$XDG_RUNTIME_DIR/omabox/default" ]; then no "a box named 'default' is up: run it again after omabox down default"; return; fi
+  # An expiry note from a 'default' box that idled out makes `run` refuse the same way.
+  if [ -e "$XDG_RUNTIME_DIR/omabox/default" ] || [ -e "$XDG_RUNTIME_DIR/omabox/.expired-default" ]; then
+    no "a box named 'default' is up or idled out: run it again after omabox down default"; return
+  fi
   local out; out=$(cd "$HOME" && env -u OMABOX "$CLI" run -- sh -c "test -e '$HOME/.config' && echo LEAK || echo ok; pwd" 2>&1)
   check_match "HOME not visible in a throwaway run from ~" '^ok' "$out"
   check_match "it runs in the box HOME" '/home/sbx$' "$out"
@@ -1460,7 +1490,13 @@ t_guard() {
     "$("${in[@]}" QT_QPA_PLATFORM='wayland;xcb' bash -c "${qt//exec timeout/timeout}" 2>&1)"
   sleep 1
   check_eq "...and its abort is not a journaled crash" 0 "$(journalctl --since "$since" MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 -o json --no-pager 2>/dev/null | grep -c omarchy-crash-omabox)"
+  # shellcheck disable=SC2329 # called by name from desk_look
+  sb_hc() { ob hyprctl -b "$B" "$@"; }
+  # shellcheck disable=SC2329
+  sb_rd() { ob run -b "$B" -- cat "/proc/$1/cmdline"; }
+  check_eq "the suite's desktop watch: nothing on the stand-in yet" "" "$(desk_look sb_hc sb_rd /omabox/inner 9)"
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
+  check_match "...the watch sees its window" "a window of the suite's boxes on the desktop: aquamarine" "$(desk_look sb_hc sb_rd /omabox/inner 9)"
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
   # render_unfocused (finding 90): shots while its window is hidden; the stand-in's workspace and
@@ -1478,6 +1514,11 @@ t_guard() {
     "${in[@]}" sh -c '! cmp -s /tmp/hidden-inner.png /tmp/hidden-inner2.png && test -s /tmp/hidden-inner2.png'
   check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
   check_eq "...and its focused window" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
+  local ws1; ws1=$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)
+  ob hyprctl -b "$B" eval 'hl.dispatch(hl.dsp.focus({ workspace = "9" }))' >/dev/null
+  check_match "...and the watch sees workspace 9 come up, the window focused" "workspace 9 came up.*with focus: aquamarine" \
+    "$(desk_look sb_hc sb_rd /omabox/inner 9 | paste -sd ' ' -)"
+  ob hyprctl -b "$B" eval "hl.dispatch(hl.dsp.focus({ workspace = \"$ws1\" }))" >/dev/null
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
   # The workspace setting (finding 70): a number, the scratchpad; neither takes focus
   check "up --interactive --workspace 3" "${in[@]}" "$CLI" up ws3 --interactive --no-shell --workspace 3
@@ -1534,6 +1575,12 @@ BOX=(t_main t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_gu
 hostctl() { lib host_hyprctl "$@"; }
 hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
 ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
+# Watched for the whole run, not compared before and after: the user may go on using the desktop.
+host_rd() { cat "/proc/$1/cmdline"; }
+hws=$("$CLI" config workspace 2>/dev/null) || hws=9
+[ "$(hostctl -j activeworkspace | jq -r '.name // empty')" = "$hws" ] && hws=   # already there: can't tell
+(while :; do desk_look hostctl host_rd "/omabox/$P-" "$hws"; sleep 0.5; done) >> "$TMP/host-watch" 2>/dev/null &
+WATCH_PID=$!
 
 tests=("${UNIT[@]}" "${BOX[@]}")
 if [ "${1:-}" = unit ]; then tests=("${UNIT[@]}")
@@ -1549,8 +1596,11 @@ done
 
 echo "host"
 CUR=host
-check_eq "host workspace untouched" "$ws0" "$(hostctl -j activeworkspace | jq .id)"
-check_eq "host focused window untouched (fails if you switched windows meanwhile)" "$win0" "$(hostctl -j activewindow | jq -r '.address // ""')"
+kill "$WATCH_PID" 2>/dev/null; wait "$WATCH_PID" 2>/dev/null; WATCH_PID=
+if [ -s "$TMP/host-watch" ]; then no "the desktop was left alone" "$(sort -u "$TMP/host-watch" | paste -sd ';' -)"
+else ok "the desktop was left alone: no window of the suite's boxes, no workspace ${hws:-(skipped: you were on it)}"; fi
+[ "$ws0 $win0" = "$(hostctl -j activeworkspace | jq .id) $(hostctl -j activewindow | jq -r '.address // ""')" ] ||
+  echo "       (your workspace or focused window changed during the run: yours, not counted)"
 
 echo
 echo "$pass passed, $fail failed"
