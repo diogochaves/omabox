@@ -229,7 +229,9 @@ t_unit_cli() {
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
-  check_fails "down --all with a name refused" ob down "$P-x" --all
+  # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
+  mkdir -p "$TMP/rt"
+  check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
 }
 
