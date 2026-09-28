@@ -29,7 +29,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   its agent exits, `--idle 0` or not (unless it is in use then; a `run -d` job does not count),
   instead of waiting out the 2 hour idle limit. A session resumed in a new process
   (`claude --continue`) takes over its box if it is still up. `-b NAME` and `OMABOX=NAME` work as
-  before; `OMABOX_SESSION=` (empty) turns this off.
+  before; `OMABOX_SESSION=` (empty) turns this off. Thanks to [@btsouth](https://github.com/btsouth) ([#2](https://github.com/diogochaves/omabox/pull/2), [#11](https://github.com/diogochaves/omabox/pull/11)).
 
 ### Changed
 
@@ -47,9 +47,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   address), usually within a second of its server listening; a TCP port there also takes the UDP
   port of the same number. A connected box started inside another box has no network.
 - Every box needs `passt` (`./install.sh` installs it) and, unless it is `--net isolated`,
-  `/dev/net/tun`. A headless box can no longer start from a process with no_new_privs (some agent
-  sandboxes, a systemd unit with `NoNewPrivileges=`). `omabox up` says so at once in each case; a
-  box that is already up can still be used from such a process.
+  `/dev/net/tun`; `omabox up` says so at once. Started from a process with no_new_privs (some agent
+  sandboxes, a systemd unit with `NoNewPrivileges=`), a headless box has no network, only a loopback
+  of its own, and `up` says so; a `--net isolated` one is refused there. A box that is already up
+  can still be used from such a process.
 - Boxes that were up before you updated still share your network, and can still catch host X11
   apps, until `omabox down` (`omabox ls` shows them as `host`).
 - Take your boxes down before going back to an older omabox: it lists a box started by this one as
@@ -57,23 +58,28 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
-- `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
+- `omabox up` run from another user namespace (some agent sandboxes, `unshare -Ur`) no longer
+  takes a box that is up for a dead one, clearing its dir and leaving it running out of reach. It
+  stops and says it cannot tell.
+- `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine,
+  thanks to [@btsouth](https://github.com/btsouth) ([#7](https://github.com/diogochaves/omabox/pull/7)).
 - The agent guard now refuses to open links and files on your desktop. `xdg-open URL` or
   `gh pr view --web` from a guarded agent handed the URL to a browser already running there, which
   opened a tab and could take focus. `BROWSER` and `GH_BROWSER` point at a stand-in that fails with a
   note, and Claude Code and `guard exec` put it first on PATH as `xdg-open`. Under Codex only `gh`
   and what reads `$BROWSER` are covered: a plain `xdg-open` there still uses the desktop's URL
   handler. After updating, `install.sh` offers to update the guard for the agents that have it
-  (`omabox guard on` does it too).
+  (`omabox guard on` does it too). Thanks to [@btsouth](https://github.com/btsouth) ([#10](https://github.com/diogochaves/omabox/pull/10)).
 - `omabox shot`, `click` and `keys` work on an interactive box while its window is hidden on its
   workspace. The host now keeps drawing the window (at `misc.render_unfocused_fps`), and the error
   for a box started by an older version no longer suggests showing the window, which led an agent
   to switch the user's workspace before every screenshot. After you closed a box's window and kept
   the box running (`confirm-close`), its new window is only drawn while on screen: `click` and
-  `keys` still reach it, but `shot` gets no frame while it is hidden.
+  `keys` still reach it, but `shot` gets no frame while it is hidden. Thanks to [@btsouth](https://github.com/btsouth) ([#9](https://github.com/diogochaves/omabox/pull/9)).
 - A headless box no longer captures X11 apps started on the host. Its parent compositor's Xwayland
   claimed the host's abstract `:0` X11 socket (or the next free one), and a host app (Steam) then
-  opened in the box. An X server run inside a box (Xvfb) could do the same.
+  opened in the box. An X server run inside a box (Xvfb) could do the same. Thanks to
+  [@btsouth](https://github.com/btsouth) ([#8](https://github.com/diogochaves/omabox/pull/8)).
 
 ## 0.1.2 — 2026-09-26
 

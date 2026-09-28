@@ -265,7 +265,15 @@ box_pid() {
     pid=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) || true
   fi
   [ -n "$pid" ] || return 0
-  local ns want; ns=$(readlink "/proc/$pid/ns/pid" 2>/dev/null) || return 0
+  # From another user namespace (unshare -Ur, a sandbox that makes its own) a process of ours has an
+  # unreadable ns: that is not a dead box (`up` would clear the live box's dir and orphan it), so it
+  # is status 3, which box_alive stops on. A process that is not ours (its pid reused) is unreadable
+  # too, and is not the box.
+  local ns want
+  ns=$(readlink "/proc/$pid/ns/pid" 2>/dev/null) || {
+    [ "$(stat -c %u "/proc/$pid" 2>/dev/null)" != "$(id -u)" ] || return 3
+    return 0
+  }
   [ "$ns" != "$(readlink /proc/self/ns/pid)" ] || return 0
   want=$(meta pidns)
   [ -z "$want" ] || [ "$ns" = "$want" ] || return 0
@@ -294,7 +302,11 @@ box_pasta() {
   (tr '\0' ' ' < "/proc/$pasta/cmdline") 2>/dev/null | grep -Fq -- " -P $D/pasta.pid " || return 1
   echo "$pasta"
 }
-box_alive() { local pid; pid=$(box_pid) && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+box_alive() {
+  local pid rc=0; pid=$(box_pid) || rc=$?
+  [ $rc != 3 ] || die "cannot tell whether box '$NAME' is up from this user namespace (a sandbox's?): run omabox outside it"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
 meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
 
 need_box() {
@@ -788,21 +800,27 @@ cmd_up() {
   [ -z "$allow" ] || [ "$net" = isolated ] || die "up: --allow needs --net isolated"
   [ "$net" = connected ] && [ -f /opt/omabox/share/session.sh ] && net=none
   [[ -z $allow || $allow =~ ^[0-9]+(,[0-9]+)*$ ]] || die "up: --allow takes ports: 8081,8082"
+  # Nor does a box behind pasta start from a process with no_new_privs: bwrap cannot write its uid
+  # map there (finding 89). A connected box falls back to none, as a nested one does: an agent's
+  # sandbox that sets no_new_privs mostly has no network to give it anyway, and the box still gets a
+  # namespace of its own (no host X11 capture). An isolated one is refused: its --allow ports need
+  # pasta. An interactive box is started by the host's Hyprland, not this process. A box that is up
+  # already is still found up (without the lock below, so a refusal leaves no .lock): such a process,
+  # a sandboxed agent's, can use a box the user started.
+  if [ "$net" != none ] && [ $interactive = 0 ] && grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status; then
+    box_alive && { up_already; return 0; }
+    [ "$net" = connected ] || die "an isolated box cannot start from a no_new_privs process like this one" \
+      "(an agent's sandbox, a systemd unit with NoNewPrivileges=, a box's own session): its bwrap cannot write the uid map behind pasta"
+    net=none
+    say "box '$NAME' has no network: pasta's cannot start from a no_new_privs process like this one" \
+      "(an agent's sandbox, a systemd unit with NoNewPrivileges=); it has only a loopback of its own"
+  fi
   # Every top-level box's network is pasta's (finding 89); a connected one's is a tap device, which
   # pasta cannot make without /dev/net/tun (it would fail inside the box, where only box.log says why).
   # Before check_install: no box starts without them, whatever is built.
   command -v pasta >/dev/null || die "a box's network needs pasta: sudo pacman -S passt"
   [ "$net" != connected ] || [ -c /dev/net/tun ] ||
     die "a box's network needs /dev/net/tun (the tun kernel module); --net isolated does without, and has no internet"
-  # Nor does a box behind pasta start from a process with no_new_privs: bwrap cannot write its uid
-  # map there (finding 89). An interactive box is started by the host's Hyprland, not this process.
-  # A box that is up already is still found up (without the lock below, so a refusal leaves no .lock):
-  # such a process, a sandboxed agent's, can use a box the user started.
-  if [ "$net" != none ] && [ $interactive = 0 ] && grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status; then
-    box_alive && { up_already; return 0; }
-    die "a box behind pasta cannot start from a no_new_privs process like this one" \
-      "(an agent's sandbox, a systemd unit with NoNewPrivileges=, a box's own session): its bwrap cannot write the uid map"
-  fi
   check_install
   # One `up` or `down` per name at a time: two agents in one repo both running `omabox up` would
   # otherwise each start a box on the same dir, and one would be orphaned where `down` cannot see it.
@@ -933,7 +951,8 @@ cmd_up() {
   # to root, bwrap maps back to our uid. pasta closes inherited fds: bwrap's info fd is opened inside
   # it, and omabox-wlfd connects from inside (a unix socket).
   if [ "$net" = none ]; then
-    # A nested connected box: its pasta would need /dev/net/tun, which the outer box's /dev lacks.
+    # A nested connected box (its pasta would need /dev/net/tun, which the outer box's /dev lacks),
+    # or one started from a no_new_privs process (above).
     # It fails closed: a network namespace of its own with only a loopback. (A nested isolated box
     # still runs pasta --splice-only, below: that needs no tun. Only a headless one started from
     # omabox run, though: what the box's session starts (an interactive box's launch.sh included)

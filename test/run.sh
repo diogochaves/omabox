@@ -14,9 +14,9 @@
 # standing in for the host); the end checks that the host's focused workspace and window are what
 # they were, or changed by events that were not the suite's (you working meanwhile). omabox's
 # workspace coming up there fails it too (unless you were on it when the run started). Pointer motion
-# has no event: it is only seen when it moves focus. Needs a Hyprland session, python3, and the host
-# ports 8093/8094 free (a throwaway HTTP server for the network tests; t_connected finds free ports
-# of its own, and makes one connection from a box to its gateway, the router).
+# has no event: it is only seen when it moves focus. Needs a Hyprland session and python3. The
+# network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
+# connection from a box to its gateway, the router.
 # A test that runs no check fails, and so does a full run with fewer checks than MIN_CHECKS.
 # Each run keeps a folder (the last 5 runs are kept) in ~/.local/state/omabox/test/: its provenance
 # and, for a test's first failure, what its boxes showed then (screen, windows, focus, pointer,
@@ -44,7 +44,6 @@ cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
-  [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
@@ -352,9 +351,10 @@ t_unit_refusals() {
   # (/dev/net/tun hidden in a mount namespace of its own: pasta would fail inside the box, 10 s later)
   check_match "a connected box without /dev/net/tun is refused up front" "needs /dev/net/tun" \
     "$(unshare -Urm bash -c 'mount -t tmpfs none /dev/net && exec "$0" up "$1"' "$CLI" "$P-r19" 2>&1)"
-  # (bwrap would fail at its uid map behind pasta, and only box.log would say so, 10 s later)
-  check_match "a box behind pasta is refused up front from a no_new_privs process" \
-    "cannot start from a no_new_privs process" "$(setpriv --no-new-privs "$CLI" up "$P-r20" 2>&1)"
+  # (bwrap would fail at its uid map behind pasta, and only box.log would say so, 10 s later; a
+  # connected box falls back to none there instead, t_no_new_privs)
+  check_match "an isolated box is refused up front from a no_new_privs process" \
+    "cannot start from a no_new_privs process" "$(setpriv --no-new-privs "$CLI" up "$P-r20" --net isolated 2>&1)"
   check_fails "...before its box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r20"
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
   check_eq "refusals left no box behind" 0 "$left"
@@ -1000,19 +1000,22 @@ t_throwaway() {
   check_eq "throwaway: no box left" 0 "$(ob ls --json | jq --arg p "$P-tw-run" '[.[] | select(.name | startswith($p))] | length')"
 }
 
+# Two throwaway host servers on free ports, serving a token of this run's: a server someone else runs
+# on a fixed port would answer (or fail) for them.
 t_isolated() {
-  local B=$P-iso
-  mkdir -p "$TMP/www" && echo hello > "$TMP/www/index.html"
-  python3 -m http.server 8093 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & HTTP_PID=$!
-  python3 -m http.server 8094 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & local other=$!
-  until_ok 5 curl -sf --max-time 1 -o /dev/null http://127.0.0.1:8093/ && until_ok 5 curl -sf --max-time 1 -o /dev/null http://127.0.0.1:8094/
-  check "up --net isolated --allow 8093" ob up "$B" --net isolated --allow 8093
-  check_eq "allowed host port reachable" hello "$(ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8093/)"
-  check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8094/
+  local B=$P-iso tok=iso-$P-$RANDOM allowed other
+  mkdir -p "$TMP/www" && echo "$tok" > "$TMP/www/index.html"
+  allowed=$(free_port); until other=$(free_port); [ "$other" != "$allowed" ]; do :; done
+  python3 -m http.server "$allowed" --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & SERVERS+=($!)
+  python3 -m http.server "$other" --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & SERVERS+=($!)
+  check "the host reaches both servers" until_ok 5 bash -c \
+    "curl -fsS --max-time 2 http://127.0.0.1:$allowed/ | grep -qx '$tok' && curl -fsS --max-time 2 http://127.0.0.1:$other/ | grep -qx '$tok'"
+  check "up --net isolated --allow $allowed" ob up "$B" --net isolated --allow "$allowed"
+  check_eq "allowed host port reachable" "$tok" "$(ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$allowed/")"
+  check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$other/"
   check_fails "no internet" ob run -b "$B" -- curl -s --max-time 3 -o /dev/null https://archlinux.org
   check_eq "hostname is the host's (finding 54)" "$(uname -n)" "$(ob run -b "$B" -- uname -n)"
   check "down" ob down "$B"
-  kill "$other" 2>/dev/null
 }
 
 # A port below the ephemeral range that nothing on the host listens on, TCP or UDP (pasta forwards
@@ -1264,6 +1267,38 @@ t_pasta_dies() {
   check "up" ob up "$B" --no-shell
   kill -KILL "$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")"
   check "the box ends with its pasta" until_ok 10 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\" and .state == \"dead\")'"
+  check "down" ob down "$B"
+}
+
+# From another user namespace (a sandbox that makes its own) a live box's pid namespace is unreadable:
+# box_pid read that as dead, and `up` cleared the live box's dir, orphaning the box. It stops instead.
+t_other_userns() {
+  local B=$P-uns D=$XDG_RUNTIME_DIR/omabox/$P-uns out rc created
+  check "up" ob up "$B" --no-shell
+  created=$(jq -r .created "$D/box.json")
+  rc=0; out=$(unshare -Ur "$CLI" up "$B" 2>&1) || rc=$?
+  check_match "up from another user namespace stops: it cannot tell" "cannot tell whether box '$B' is up from this user namespace" "$out"
+  check_eq "...with an error" 1 "$rc"
+  check_eq "...and the box is the same one, still up" "$created up" "$(jq -r .created "$D/box.json" 2>&1) $(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
+  check "...which run still reaches" ob run -b "$B" -- true
+  check "down" ob down "$B"
+}
+
+# A no_new_privs process (an agent's sandbox) cannot start pasta's bwrap (finding 89): a connected box
+# started from one gets a network namespace with only a loopback, as a nested box does, and says so.
+t_no_new_privs() {
+  local B=$P-nnp D=$XDG_RUNTIME_DIR/omabox/$P-nnp before out rc ns
+  before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
+  rc=0; out=$(setpriv --no-new-privs "$CLI" up "$B" --no-shell 2>&1) || rc=$?
+  check_eq "up from a no_new_privs process" 0 "$rc"
+  check_match "...says the box has no network, and why" "box '$B' has no network: .*no_new_privs" "$out"
+  check_match "ls shows it with none" "$B +headless .* up +none " "$(ob ls)"
+  check_fails "...and it has no pasta" test -e "$D/pasta.pid"
+  ns=$(ob run -b "$B" -- readlink /proc/self/ns/net)
+  if [[ $ns == net:* ]] && [ "$ns" != "$(readlink /proc/self/ns/net)" ]; then ok "the box has a network namespace of its own"
+  else no "the box has a network namespace of its own" "box [$ns], host [$(readlink /proc/self/ns/net)]"; fi
+  check_eq "no abstract X11 socket of the box's on the host" "" "$(new_x11 "$before" "$(jq -r .pidns "$D/box.json")")"
+  check "run works in it from a no_new_privs process too" setpriv --no-new-privs "$CLI" run -b "$B" -- true
   check "down" ob down "$B"
 }
 
@@ -2204,7 +2239,7 @@ t_wait() {
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
   t_unit_registry t_unit_leak_scan)
 BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_no_shell t_no_git_identity t_stale_pid)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
