@@ -243,7 +243,15 @@ box_pid() {
     pid=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) || true
   fi
   [ -n "$pid" ] || return 0
-  local ns want; ns=$(readlink "/proc/$pid/ns/pid" 2>/dev/null) || return 0
+  # From another user namespace (unshare -Ur, a sandbox that makes its own) a process of ours has an
+  # unreadable ns: that is not a dead box (`up` would clear the live box's dir and orphan it), so it
+  # is status 3, which box_alive stops on. A process that is not ours (its pid reused) is unreadable
+  # too, and is not the box.
+  local ns want
+  ns=$(readlink "/proc/$pid/ns/pid" 2>/dev/null) || {
+    [ "$(stat -c %u "/proc/$pid" 2>/dev/null)" != "$(id -u)" ] || return 3
+    return 0
+  }
   [ "$ns" != "$(readlink /proc/self/ns/pid)" ] || return 0
   want=$(meta pidns)
   [ -z "$want" ] || [ "$ns" = "$want" ] || return 0
@@ -272,7 +280,11 @@ box_pasta() {
   (tr '\0' ' ' < "/proc/$pasta/cmdline") 2>/dev/null | grep -Fq -- " -P $D/pasta.pid " || return 1
   echo "$pasta"
 }
-box_alive() { local pid; pid=$(box_pid) && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+box_alive() {
+  local pid rc=0; pid=$(box_pid) || rc=$?
+  [ $rc != 3 ] || die "cannot tell whether box '$NAME' is up from this user namespace (a sandbox's?): run omabox outside it"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
 meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
 
 need_box() {

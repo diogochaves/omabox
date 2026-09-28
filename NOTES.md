@@ -417,7 +417,10 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     to 127.0.0.1 only, so the LAN route is not a way to them (the all-interfaces case could not be
     tested: this agent sandbox cannot listen on 0.0.0.0).
     Dead ends on the way: attaching pasta to bwrap's netns (`pasta PID`, `--userns/--netns`) fails
-    with "Couldn't switch to pasta namespaces: Operation not permitted" (the `setns` in `ns_check`);
+    with "Couldn't switch to pasta namespaces: Operation not permitted" (the `setns` in `ns_check`;
+    the cause, found in the review of PR #8: bwrap's `--dev` nests a second user namespace, and pasta
+    joins the inner one first. `nsenter --user-parent -U --preserve-credentials -- pasta … --netns …`
+    attaches; unused, since launching bwrap inside pasta works);
     wrapping without the uid map gives uid 0 in the box; the first build trusted `child-pid` and lost
     two boxes (killed by hand). Two mistakes touched the real desktop during this spike: a probe of
     pasta's default gateway mapping sent one unauthenticated API request to the real local
@@ -444,7 +447,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     plain interactive box still lands on workspace 9 without focus, the token does not reach the box's
     Hyprland; headless isolated boxes unchanged. Not verified: an interactive isolated box end to end,
     because a box cannot host one (bwrap inside a box cannot write pasta's uid map: "setting up uid
-    map: Operation not permitted", the outer bwrap's bounding set lacks what it needs). Checked once on the
+    map: Operation not permitted"; this blamed the outer bwrap's bounding set, but the cause is
+    no_new_privs on everything a box's session starts, finding 89). Checked once on the
     real desktop instead (the user's go-ahead): `up isoi --interactive --net isolated --allow 18081`
     opened on workspace 9, the active workspace and window unchanged; inside, uid 1000, only `lo`,
     :18081 200, :18080 refused; `down` left no pasta. The refusal is gone. (A stray `peek --focus` in
@@ -1341,12 +1345,27 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     `run -d` says no box is up, and with an `up` of the name that finds no agent also let in between
     the two, the command does not take over the box it started.
 
+94. **From another user namespace, a live box read dead and `up` orphaned it** (2026-09-28, found in
+    the review of PR #8). Under `unshare -Ur`, or in a sandbox that makes its own user namespace,
+    `readlink /proc/PID/ns/pid` of a box's PID 1 fails, and `box_pid` took that as a dead box:
+    `ls` listed it dead, and `up` cleared its dir and started another, leaving the first one
+    running where `down` could no longer find it (reproduced by `t_other_userns` on the old code:
+    its pasta and bwrap stayed up, the dir gone). `box_pid` now returns 3 when the pid is a process
+    of ours whose namespace it cannot read, and `box_alive` stops there ("cannot tell whether box
+    ... is up from this user namespace"); a process that is not ours (its pid reused) still reads
+    dead. Such a process could not enter or signal the box anyway. `t_other_userns`: `up` from
+    `unshare -Ur` fails with that message, and the box is the same one, still up.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
 - Docker: user not in `docker` group (= root); image drift vs host packages.
 - Qt offscreen: Qt-only, no shell/tray, clicks don't deliver.
 - sway / weston / cage as the parent compositor: protocol versions (finding 2).
+- Keeping labwc's lazy Xwayland off the host's abstract X11 sockets without a network namespace
+  (finding 89): `WLR_XWAYLAND=/bin/false` or a missing path still binds the sockets, and host X11
+  clients then hang or fail; copying the host's `/tmp/.X*-lock` files into the box does not hold
+  them, since their pids look stale from the box's pid namespace.
 
 The spike installed sway, weston and cage to try them as the parent compositor; omabox needs none
 of them, nor wayvnc (finding 34). It needs labwc.

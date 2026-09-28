@@ -8,9 +8,9 @@
 #
 # Never touches the real desktop: every box is headless, and a watch over the whole run fails the suite
 # if a window of its boxes shows up there or omabox's workspace comes up. The desktop stays yours to use
-# meanwhile (only omabox's workspace would count). Needs a Hyprland session (read-only hyprctl)
-# and the host ports 8093/8094 free (a throwaway HTTP server for the network tests; t_connected finds
-# free ports of its own, and makes one connection from a box to its gateway, the router).
+# meanwhile (only omabox's workspace would count). Needs a Hyprland session (read-only hyprctl). The
+# network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
+# connection from a box to its gateway, the router.
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
@@ -28,7 +28,6 @@ cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
-  [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
@@ -709,19 +708,22 @@ t_throwaway() {
   check_eq "throwaway: no box left" 0 "$(ob ls --json | jq --arg p "$P-tw-run" '[.[] | select(.name | startswith($p))] | length')"
 }
 
+# Two throwaway host servers on free ports, serving a token of this run's: a server someone else runs
+# on a fixed port would answer (or fail) for them.
 t_isolated() {
-  local B=$P-iso
-  mkdir -p "$TMP/www" && echo hello > "$TMP/www/index.html"
-  python3 -m http.server 8093 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & HTTP_PID=$!
-  python3 -m http.server 8094 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & local other=$!
-  sleep 0.5
-  check "up --net isolated --allow 8093" ob up "$B" --net isolated --allow 8093
-  check_eq "allowed host port reachable" hello "$(ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8093/)"
-  check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8094/
+  local B=$P-iso tok=iso-$P-$RANDOM allowed other
+  mkdir -p "$TMP/www" && echo "$tok" > "$TMP/www/index.html"
+  allowed=$(free_port); until other=$(free_port); [ "$other" != "$allowed" ]; do :; done
+  python3 -m http.server "$allowed" --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & SERVERS+=($!)
+  python3 -m http.server "$other" --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & SERVERS+=($!)
+  check "the host reaches both servers" until_ok 5 bash -c \
+    "curl -fsS --max-time 2 http://127.0.0.1:$allowed/ | grep -qx '$tok' && curl -fsS --max-time 2 http://127.0.0.1:$other/ | grep -qx '$tok'"
+  check "up --net isolated --allow $allowed" ob up "$B" --net isolated --allow "$allowed"
+  check_eq "allowed host port reachable" "$tok" "$(ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$allowed/")"
+  check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$other/"
   check_fails "no internet" ob run -b "$B" -- curl -s --max-time 3 -o /dev/null https://archlinux.org
   check_eq "hostname is the host's (finding 54)" "$(uname -n)" "$(ob run -b "$B" -- uname -n)"
   check "down" ob down "$B"
-  kill "$other" 2>/dev/null
 }
 
 # A port below the ephemeral range that nothing on the host listens on, TCP or UDP (pasta forwards
@@ -974,6 +976,20 @@ t_pasta_dies() {
   check "up" ob up "$B" --no-shell
   kill -KILL "$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")"
   check "the box ends with its pasta" until_ok 10 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\" and .state == \"dead\")'"
+  check "down" ob down "$B"
+}
+
+# From another user namespace (a sandbox that makes its own) a live box's pid namespace is unreadable:
+# box_pid read that as dead, and `up` cleared the live box's dir, orphaning the box. It stops instead.
+t_other_userns() {
+  local B=$P-uns D=$XDG_RUNTIME_DIR/omabox/$P-uns out rc created
+  check "up" ob up "$B" --no-shell
+  created=$(jq -r .created "$D/box.json")
+  rc=0; out=$(unshare -Ur "$CLI" up "$B" 2>&1) || rc=$?
+  check_match "up from another user namespace stops: it cannot tell" "cannot tell whether box '$B' is up from this user namespace" "$out"
+  check_eq "...with an error" 1 "$rc"
+  check_eq "...and the box is the same one, still up" "$created up" "$(jq -r .created "$D/box.json" 2>&1) $(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
+  check "...which run still reaches" ob run -b "$B" -- true
   check "down" ob down "$B"
 }
 
@@ -1569,7 +1585,7 @@ t_guard() {
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
 BOX=(t_main t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_no_shell t_no_git_identity t_stale_pid)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
