@@ -41,11 +41,13 @@ no internet): then the real service cannot be reached by mistake.
 
 `omabox help` has every flag. The box name defaults to the current git repo's directory name plus
 your session's id (`myrepo-5cc72cdc` in a Claude Code or Codex session), so other sessions, in this
-repo or another, never share your box or take it down; `omabox ls` shows its name. It goes down after
-30 minutes idle; `omabox down` when you are done, and before `/clear` (which starts a new session, so
-a new box). Subagents of one session share its box: give each its own with `-b NAME`. To use a box
-the user started, pass `-b NAME` (see `omabox ls`). Pass `-b NAME` (or set `OMABOX=NAME`) for more
-than one box, or to share one with another agent on purpose.
+repo or another, never share your box or take it down; `omabox ls` shows its name. It goes down by
+itself when your agent (Claude Code, Codex) exits, not on `/clear` or `/resume`: `omabox down` when
+you are done, and before `/clear` (which starts a new session, so a new box). A peek window or an
+`omabox run` still going when your agent exits keeps it until they end; a `run -d` job does not.
+Subagents of one session share its box: give each its own with `-b NAME`. To use a box the user
+started, pass `-b NAME` (see `omabox ls`). Pass `-b NAME` (or set `OMABOX=NAME`) for more than one
+box, or to share one with another agent on purpose.
 
 ## The loop
 
@@ -223,10 +225,11 @@ depends on any of those, a box cannot verify it; do not run it there and report 
 
 ## If something is off
 
-A headless box goes down by itself after 2h (your session's default box: 30m) with no omabox
-command against it (`omabox up --idle 0` keeps one; `--idle 30m` for another timeout); the next
-command then says so: `omabox up` again. A
-`run -d` job is not use: a server you only poll over HTTP needs `--idle 0`.
+A headless box goes down by itself after 2h with no omabox command against it (`omabox up --idle 0`
+keeps one; `--idle 30m` for another timeout); the next command then says so: `omabox up` again.
+Your session's box still goes when your agent exits, `--idle 0` or not (`omabox ls` says never); a
+box with another name (`-b NAME`) stays. A `run -d` job is not use: a server you only poll over HTTP
+needs `--idle 0`.
 `omabox ls` shows boxes and whether they are alive; `omabox down --all` clears them. A box that
 fails to start prints where its logs are. Details and known quirks: `NOTES.md` in the omabox repo
 (`readlink -f $(command -v omabox)` → `../NOTES.md`).

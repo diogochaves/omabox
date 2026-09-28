@@ -1078,7 +1078,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     Where one box used to be reused, each session now starts its own (~500 MB), so a session's
     default box goes down after 30 min idle instead of 2 h (`--idle` and `OMABOX_IDLE` still set it);
     agents are told to `omabox down` when done, and this catches the ones that forget. Taking the box
-    down when its agent exits is left for a follow-up. What follows from the id: Claude Code's
+    down when its agent exits is left for a follow-up (done in finding 93, which puts the limit back
+    to 2 h). What follows from the id: Claude Code's
     subagents run in its process with the same `CLAUDE_CODE_SESSION_ID`, so parallel subagents still
     share one box (each needs `-b NAME` for its own); `/clear` gives the session a new id, and
     `/resume` the resumed one's (`/compact` keeps it), so after `/clear` the agent starts a new box
@@ -1183,6 +1184,72 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     manager, as the guard's other gaps do. Per-browser wrappers were considered and left out: a fake
     `chromium` would break `chromium --headless`, which agents use on purpose, the list of names
     never ends, and Codex would not get them.
+93. **A session's box goes when its agent does** (2026-09-27, the follow-up finding 88 left). `up`
+    records the agent's process for a session's default box, as pid and start time in box.json, and
+    the reaper takes the box down once that pid no longer has that start time (a reused pid is not
+    the agent) or is a zombie (an agent that exited under a parent that never waits kept its start
+    time, and its box, until that parent went; found in review). A box.json that records no agent,
+    or no start time, has none alive: an empty pid read `/proc//stat`, the system-wide `/proc/stat`,
+    and an empty start time matched the empty one read for it (latent: every caller checked for an
+    agent first; found in review). `agent_proc` gives no agent when it cannot read the start time.
+    The agent: Claude Code exports its own pid as `CLAUDE_PID` to every command; `guard exec`
+    exports `OMABOX_AGENT_PID`, the pid it execs the agent as; Codex sets `CODEX_THREAD_ID` for its
+    children only, so it is the nearest ancestor whose /proc/PID/environ lacks `VAR=value` (compared
+    by value: a `codex` started from another session's shell carries the outer id). It reads each
+    environ with `grep -qz`: through `tr | grep -q` under pipefail, grep quitting at the match left
+    `tr` to die of SIGPIPE when much of the environment followed (~1.5 MB: every time, in review),
+    which read as no match, and the walk stopped at `omabox` itself. The pid must be one `up`
+    descends from. A first version walked /proc for every agent and, for `OMABOX_SESSION`, took the
+    farthest ancestor with it, assuming `guard exec` exported it: set by hand for one command
+    (`OMABOX_SESSION=x omabox up`), that recorded `omabox up` itself, and the reaper took the box
+    down about a minute later. Now `OMABOX_SESSION` without `guard exec` names no agent, and such a
+    box only idles out. A `guard exec` inside a guarded agent keeps its session, so it shares the
+    outer agent's box, but it exported its own pid: a box the inner agent started went when that one
+    exited, under the outer one (found in review). It now keeps an `OMABOX_AGENT_PID` it runs under
+    along with the session, and only then (a new session, or a pid it does not run under, gets its
+    own). A box in use when its agent goes (a peek window, an `omabox run` still running) is not
+    taken down: the agent check comes after the activity check, so the box stays while in use and
+    goes at the next check (within a minute) once nobody uses it, without waiting out its idle
+    limit. A `run -d` job is not use (its `nsenter` exits at once, finding 39), so it does not keep
+    the box. A box found dead keeps its logs until `down`, like any other dead box (findings 71,
+    74). A session's box has the 2 h idle limit again, whether or not its agent is found (finding 88
+    had cut it to 30 min). An agent in a pid namespace of its own (a sandbox) is not found; its box
+    only idles out. Interactive boxes, other names given with `-b`, and every box while `OMABOX` is
+    set are never tied to an agent (`-b` with the session's own name is that box, and is tied). The
+    reaper polls every idle/4 capped at 60 s, so a box can outlive its agent by up to a minute. With
+    `--idle 0` a session's box still goes with its agent (`ls` says never): the reaper runs for the
+    agent alone, every 60 s (it polled every 5 s, the floor for short limits, until review). Codex
+    is untested with a real Codex: only fake processes that set `CODEX_THREAD_ID` for their children
+    were checked. A session resumed in a new process (`claude --continue` or `--resume`, which keep
+    the id) found its box still up but recording the agent that had exited, and the reaper took it
+    down under the new one at its next check (11 s after the first quit, in review). Now a command
+    that reaches a session's box that is up (`up`, `run`, `path` and every one through `need_box`)
+    records its own agent there when the one recorded is gone; only then, not in a box that records
+    none or whose agent still runs. The write holds the box's lock, and the reaper's `down`, which
+    decided on the old agent, checks it again under that lock, so a takeover made while it waited
+    keeps the box. The takeover too checks again under that lock that the box records an agent and
+    that it is gone: an `up` of the name that found no agent may have come in between that `down`
+    and it, and the box that `up` started is not taken over (found in review). An agent whose first
+    command comes after that check finds the box gone, and so does one whose command waited for the
+    lock while that `down` had it: `run`, `path` and every command through `need_box` say no box is
+    up (`run -d` went on and failed with a bash error, its log's dir gone; found in review), and
+    `up` starts a new box, as it would for one that had died a moment earlier. `mode` writes
+    box.json's size under the box's lock too: its read and write around a takeover would put back
+    the agent that exited (found in review; `t_mode_lock` holds the lock and checks that `mode`
+    waits for it). `t_unit_agent_session` checks each way of finding the agent and the one-command
+    case; `t_agent_session` runs fake Claude Code sessions (a shell exporting its own pid as
+    `CLAUDE_PID`): the box knows its agent, keeps 2 h, stays while an `omabox run` is going after
+    the agent is killed, goes once that ends, and a box that died stays dead; a new agent of the
+    session whose first command is `run` or `up` keeps the box past two checks and takes it down
+    when it exits, a new agent's first `hyprctl` (through `need_box`) or `path` records it too, and
+    another session's command naming the box with `-b` does not (the reapers stopped across the
+    handover; each fails without its part of the takeover). A takeover made while the reaper's
+    `down` waits for the lock keeps the box, and the reaper then watches the new agent: the lock is
+    held by hand while both queue, and the reaper's `flock` stopped until the new agent's command is
+    done, so the order is fixed (it fails without `down`'s check under the lock, or with a reaper
+    that stops watching after it); with the new command's `flock` stopped instead, that command's
+    `run -d` says no box is up, and with an `up` of the name that finds no agent also let in between
+    the two, the command does not take over the box it started.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -13,7 +13,7 @@ set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
 # An agent running the suite would otherwise give every default-named box its session's suffix.
-unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID
+unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID CLAUDE_PID OMABOX_AGENT_PID
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLI=$ROOT/bin/omabox
@@ -250,30 +250,256 @@ t_unit_agent_session() {
   check_match "a long repo name keeps the session suffix" '^.{31}-5cc72cdc$' "$got"
   check_match "guard exec: a session of its own" '^g[0-9a-f]{12}$' "$(env -u OMABOX_SESSION "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
   check_eq "guard exec: an OMABOX_SESSION set is kept" mine12345 "$(OMABOX_SESSION=mine12345 "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
+  # finding 93: the agent is Claude Code's CLAUDE_PID, the process `guard exec` became, or (Codex) the
+  # nearest ancestor without its session variable; always one this command descends from.
+  # (`; true`: bash would otherwise exec its last command, and the "agent" would be gone)
+  local out lib=$TMP/lib/bin/omabox
+  out=$(bash -c 'echo "me=$$"; CLAUDE_CODE_SESSION_ID=$0 CLAUDE_PID=$$ bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-session" "$lib")
+  check_eq "Claude Code: the agent is CLAUDE_PID" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  sleep 30 & local other=$!
+  check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID=$other bash -c 'source "$1"; agent_proc' _ "$lib"
+  out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib")
+  check_eq "Codex: the nearest process without its session variable" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  # ...with 1.5 MB of environment after its variable too (a `tr | grep -q` pipe lost the match there).
+  local big=() pad i; printf -v pad '%01000d' 0
+  for i in $(seq 1500); do big+=("V$i=$pad"); done
+  out=$(bash -c 'echo "me=$$"; env -i PATH="$PATH" HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" CODEX_THREAD_ID="$0" "${@:2}" \
+    bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib" "${big[@]}")
+  check_eq "...with a large environment too" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; bash -c '\''source "$1"; agent_proc'\'' _ "$0"' "$lib")
+  check_eq "guard exec: the agent is what it ran" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  # A guard exec inside a guarded agent keeps its session, so its agent too (the box is the outer
+  # one's), unless it does not run under that agent; a session of its own starts with its own agent.
+  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; "$0" guard exec -- sh -c '\''echo "me=$OMABOX_AGENT_PID"'\''; true' "$CLI")
+  check_eq "guard exec in a guarded agent: the agent is still the outer one" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  out=$(OMABOX_SESSION=abcd1234 OMABOX_AGENT_PID=$other "$CLI" guard exec -- sh -c 'echo "me=$$"; echo "me=$OMABOX_AGENT_PID"')
+  check_eq "...not an OMABOX_AGENT_PID it does not run under" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  out=$(bash -c 'OMABOX_AGENT_PID=$$ "$0" guard exec -- sh -c '\''echo "me=$$"; echo "me=$OMABOX_AGENT_PID"'\''; true' "$CLI")
+  check_eq "...and not one from outside a session it starts" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  kill "$other" 2>/dev/null
+  check_fails "OMABOX_SESSION set for one command names no agent (it would go down a minute later)" \
+    env OMABOX_SESSION=abcd1234 bash -c 'source "$1"; agent_proc' _ "$lib"
+  # An agent that exited is gone even while it is a zombie: its parent (an exec'd sleep) never waits.
+  local zd=$TMP/zombie z; mkdir -p "$zd"
+  bash -c 'sleep 300 & echo $! > "$0"; exec sleep 300' "$zd/pid" & local zparent=$!
+  until_ok 5 test -s "$zd/pid"; z=$(cat "$zd/pid")
+  jq -n --argjson a "$z" --arg s "$(bash -c 'source "$1"; proc_start "$2"' _ "$lib" "$z")" '{agent: $a, agent_start: $s}' > "$zd/box.json"
+  check "an agent that runs is alive" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  kill "$z"; until_ok 5 grep -q '^[^)]*) Z' "/proc/$z/stat"
+  check_fails "...one that exited is not, though its parent has not reaped it" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  kill "$zparent" 2>/dev/null
+  # None recorded, or no start time, is none alive. An empty pid read /proc//stat (the system-wide
+  # /proc/stat: no state Z) and an empty start matched the empty one read for it, or for a pid gone.
+  # In a condition, as its callers call it (set -e would end it at a failed read otherwise).
+  # shellcheck disable=SC2329 # called through check_fails
+  alive() { env D="$zd" bash -c 'source "$1"; agent_alive || exit 1' _ "$lib"; }
+  local nopid=$(($(cat /proc/sys/kernel/pid_max) + 1))
+  echo '{"agent": null}' > "$zd/box.json"
+  check_fails "a box that records no agent has none alive" alive
+  rm -f "$zd/box.json"
+  check_fails "...nor one with no box.json" alive
+  jq -n --argjson a "$nopid" '{agent: $a, agent_start: ""}' > "$zd/box.json"
+  check_fails "...nor one that records a pid gone, with no start time" alive
+  check_fails "proc_stat takes no empty pid" bash -c 'source "$1"; proc_stat "" 0' _ "$lib"
+  check_fails "agent_proc fails when its agent's start time cannot be read (it exited meanwhile)" \
+    env CLAUDE_CODE_SESSION_ID="t-$P-session" bash -c 'source "$1"; proc_start() { :; }; CLAUDE_PID=$$; agent_proc' _ "$lib"
 }
 
-# finding 88: two agent sessions in one repo get a box each, and one's `down` leaves the other's up. A
-# session's default box idles out after 30 min; --idle, OMABOX_IDLE and a name given with -b keep theirs.
+# findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the
+# other's up. A session's box goes when its agent exits, but not while it is in use, and a dead one
+# keeps its logs. The "agent" here is a shell that exports its own pid as CLAUDE_PID, as Claude Code does.
 t_agent_session() {
   local repo; repo=$(tmp_repo ag)
   local s1=11111111-2222-4333-8444-5555aaaa0001 s2=11111111-2222-4333-8444-5555aaaa0002
+  local s3=11111111-2222-4333-8444-5555aaaa0003 s4=11111111-2222-4333-8444-5555aaaa0004
+  local s5=11111111-2222-4333-8444-5555aaaa0005 s6=11111111-2222-4333-8444-5555aaaa0006
   as() { local s=$1; shift; (cd "$repo" && env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" "$CLI" "$@"); }
+  # Run in the background: exec makes that process the agent, so $! is its pid. Its first command is
+  # `up --no-shell` with the options given, or the one after -- (agent S -- run -- true); then it
+  # touches $TMP/ag-PID (its output in $TMP/ag-PID.out) and waits.
+  agent() {
+    local s=$1; shift
+    if [ "${1:-}" = -- ]; then shift; else set -- up --no-shell "$@"; fi
+    cd "$repo" || exit 1
+    exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" bash -c 'export CLAUDE_PID=$$
+      "${@:2}" >"$1-$$.out" 2>&1; touch "$1-$$"; exec sleep 300' _ "$TMP/ag" "$CLI" "$@" >/dev/null 2>&1
+  }
   idle_of() { jq -r .idle "$XDG_RUNTIME_DIR/omabox/$1/box.json"; }
-  # shellcheck disable=SC2329 # called through check
-  up_as() { "$CLI" ls --json | jq -e --arg n "$1" '.[] | select(.name == $n and .state == "up")' >/dev/null; }
-  local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-named
-  check "session 1 starts its box" as $s1 up --no-shell
-  check "session 2 starts its own" as $s2 up --no-shell --idle 45m
-  check "session 1 has its box" up_as "$b1"
-  check "session 2 has its own" up_as "$b2"
-  check_eq "a session's box idles out after 30 min" 1800 "$(idle_of "$b1")"
+  agent_of() { jq -r .agent "$XDG_RUNTIME_DIR/omabox/$1/box.json" 2>/dev/null; }
+  state_of() { "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
+  # shellcheck disable=SC2329 # called through until_ok
+  gone() { [ "$(state_of "$1")" = gone ]; }
+  local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-aaaa0003 b4=$P-ag-aaaa0004 named=$P-ag-named
+  local b5=$P-ag-aaaa0005 b6=$P-ag-aaaa0006 s7=11111111-2222-4333-8444-5555aaaa0007 b7=$P-ag-aaaa0007
+  local s8=11111111-2222-4333-8444-5555aaaa0008 b8=$P-ag-aaaa0008 s9=11111111-2222-4333-8444-5555aaaa0009
+  local s10=11111111-2222-4333-8444-5555aaaa0010 b10=$P-ag-aaaa0010
+  # shellcheck disable=SC2329 # called through until_ok
+  polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null; }
+  agent $s1 & local a1=$!
+  agent $s2 --idle 45m & local a2=$!
+  agent $s7 --idle 0 & local a7=$!
+  check "the sessions' boxes start" until_ok 40 test -e "$TMP/ag-$a1" -a -e "$TMP/ag-$a2" -a -e "$TMP/ag-$a7"
+  check_eq "session 1 has its box" up "$(state_of "$b1")"
+  check_eq "session 2 has its own" up "$(state_of "$b2")"
+  check_eq "the box knows its agent" "$a1" "$(agent_of "$b1")"
+  check_eq "a session's box keeps the 2 h idle limit" 7200 "$(idle_of "$b1")"
   check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
+  check "--idle 0: a reaper still watches the agent, once a minute (not every 5 s)" until_ok 5 polls_every "$b7" 60
   check_eq "session 1's commands reach its box" "$b1" "$(as $s1 run -- sh -c 'echo $OMABOX_NAME')"
   as $s2 down >/dev/null 2>&1
-  check "session 2's down leaves session 1's box up" up_as "$b1"
-  check "a box named with -b" as $s1 up "$b3" --no-shell
-  check_eq "...keeps the 2 h limit" 7200 "$(idle_of "$b3")"
-  ob down "$b1" "$b3" >/dev/null 2>&1
+  check_eq "session 2's down leaves session 1's box up" up "$(state_of "$b1")"
+  as $s1 up "$named" --no-shell --idle 30s >/dev/null 2>&1
+  check_eq "a box named with -b is not tied to the agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$named/box.json")"
+  (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" up --no-shell --idle 30s >/dev/null 2>&1)
+  check_eq "OMABOX_SESSION set for one command: no agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
+  (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" guard exec -- "$CLI" run -- true >/dev/null 2>&1)
+  check_eq "...nor does an agent of that session take it over" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
+  ob down "$named" "$P-ag-abcd1234" "$b1" "$b7" >/dev/null 2>&1; kill "$a1" "$a2" "$a7" 2>/dev/null
+  # Short idle limits, so the reaper polls every few seconds.
+  agent $s3 --idle 30s & local a3=$!
+  agent $s4 --idle 30s & local a4=$!
+  until_ok 40 test -e "$TMP/ag-$a3" -a -e "$TMP/ag-$a4"
+  pid_of() { bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$1"; }
+  ob run -b "$b3" -- sleep 15 & local busy=$!
+  # The run is use once its nsenter is up; a check before that would find the box unused.
+  until_ok 10 pgrep -f "^nsenter -t $(pid_of "$b3") "; kill "$a3" 2>/dev/null
+  local pid4; pid4=$(pid_of "$b4")
+  kill -KILL "$pid4" 2>/dev/null; kill "$a4" 2>/dev/null
+  sleep 10
+  check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
+  check_eq "a box that died stays dead, logs and all, when its agent goes" dead "$(state_of "$b4")"
+  wait "$busy" 2>/dev/null
+  check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
+  ob down "$b3" "$b4" >/dev/null 2>&1
+  # A session resumed in a new process (`claude --continue`: the same id, another CLAUDE_PID) takes
+  # its box over once the agent it records is gone, whether its first command is `run`, `up`, one
+  # through need_box (`hyprctl`) or `path`; another session's command that names the box does not.
+  # The reapers are stopped meanwhile, so that no check falls between the old agent's exit and that
+  # command.
+  agent $s5 --idle 20s & local a5=$!
+  agent $s6 --idle 20s & local a6=$!
+  agent $s8 --idle 20s & local a8=$!
+  until_ok 40 test -e "$TMP/ag-$a5" -a -e "$TMP/ag-$a6" -a -e "$TMP/ag-$a8"
+  agent $s5 -- run -- true & local c5=$!
+  until_ok 20 test -e "$TMP/ag-$c5"
+  check_eq "a second agent of a session leaves its box to the first while that runs" "$a5" "$(agent_of "$b5")"
+  kill "$c5" 2>/dev/null
+  local reapers; mapfile -t reapers < <(pgrep -f "omabox _reap ($b5|$b6|$b8) ")
+  kill -STOP "${reapers[@]}"
+  kill "$a5" "$a6" "$a8" 2>/dev/null; wait "$a5" "$a6" "$a8" 2>/dev/null
+  agent $s5 -- run -- true & local r5=$!
+  agent $s6 & local r6=$!
+  agent $s9 -- hyprctl -b "$b8" -j version & local o8=$!
+  until_ok 20 test -e "$TMP/ag-$o8"
+  check_eq "another session's command naming the box (-b) does not take it over" "$a8" "$(agent_of "$b8")"
+  kill "$o8" 2>/dev/null; wait "$o8" 2>/dev/null   # (had it, the next checks still see their own part)
+  agent $s8 -- hyprctl -j version & local r8=$!
+  until_ok 20 test -e "$TMP/ag-$r8"
+  check_eq "a resumed session's first hyprctl takes its box over (need_box)" "$r8" "$(agent_of "$b8")"
+  kill "$r8" 2>/dev/null; wait "$r8" 2>/dev/null
+  agent $s8 -- path & local q8=$!
+  until_ok 20 test -e "$TMP/ag-$q8" -a -e "$TMP/ag-$r5" -a -e "$TMP/ag-$r6"
+  check_eq "...and so does its first path" "$q8" "$(agent_of "$b8")"
+  kill -CONT "${reapers[@]}"
+  sleep 11   # two checks
+  check_eq "a resumed session's first run takes its box over" "up $r5" "$(state_of "$b5") $(agent_of "$b5")"
+  check_eq "...and so does its first up" "up $r6" "$(state_of "$b6") $(agent_of "$b6")"
+  ob path "$b5" >/dev/null; ob path "$b6" >/dev/null   # idle clocks back to 0: what takes them down now is the agent
+  kill "$r5" "$r6" 2>/dev/null
+  check "...and the box goes with the new agent" until_ok 10 gone "$b5"
+  check "...(the one it took over with up too)" until_ok 10 gone "$b6"
+  ob down "$b5" "$b6" "$b8" >/dev/null 2>&1
+  # The reaper decided to take a box down for an agent that exited, and its `down` waits for the
+  # box's lock, which the session's new agent took first to take the box over: the down checks the
+  # agent again under the lock and leaves the box, and the reaper then watches the new agent. The
+  # order is fixed by hand: the lock is held while both queue, and the reaper's flock is stopped
+  # until the new agent's command is done.
+  local lk=$XDG_RUNTIME_DIR/omabox/.lock-$b10 reaper held rf
+  # shellcheck disable=SC2329 # called through until_ok
+  flock_of() { pgrep -x flock -P "$(pgrep -d, -P "$1")"; }   # the flock an agent's command waits in
+  agent $s10 --idle 20s & local a10=$!
+  until_ok 40 test -e "$TMP/ag-$a10"
+  reaper=$(pgrep -f "omabox _reap $b10 " | head -1)
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$a10" 2>/dev/null; wait "$a10" 2>/dev/null
+  agent $s10 -- run -- true & local r10=$!
+  until_ok 10 flock_of "$r10"                      # its take_over waits for the lock
+  until_ok 15 pgrep -x flock -P "$reaper"          # the reaper said "taking it down"; its down waits
+  rf=$(pgrep -x flock -P "$reaper")
+  [ -z "$rf" ] || kill -STOP "$rf"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  until_ok 20 test -e "$TMP/ag-$r10"
+  [ -z "$rf" ] || kill -CONT "$rf"
+  check "a takeover made while the reaper's down waited for the lock keeps the box" \
+    until_ok 10 grep -q ": kept$" "$XDG_RUNTIME_DIR/omabox/$b10/reap.log"
+  check_eq "...for the new agent" "up $r10" "$(state_of "$b10") $(agent_of "$b10")"
+  # The same with the reaper first (the new command's flock stopped): its down takes the box, and the
+  # command that waited says no box is up (`run -d` wrote its log into the box's dir, gone by then).
+  rm -f "$TMP/held" "$TMP/release"
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$r10" 2>/dev/null; wait "$r10" 2>/dev/null
+  agent $s10 -- run -d -- true & local d10=$!
+  until_ok 10 flock_of "$d10"
+  until_ok 15 pgrep -x flock -P "$reaper"          # the same reaper, now for r10's exit
+  local df; df=$(flock_of "$d10")
+  [ -z "$df" ] || kill -STOP "$df"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  check "...and the reaper goes on watching it: the box goes when it exits" until_ok 15 gone "$b10"
+  [ -z "$df" ] || kill -CONT "$df"
+  until_ok 20 test -e "$TMP/ag-$d10"
+  check_match "a first command that waited for the lock while the box went says no box is up" \
+    "no box '$b10' is up" "$(cat "$TMP/ag-$d10.out" 2>/dev/null)"
+  ob down "$b10" >/dev/null 2>&1
+  # And with an `up` of the name that finds no agent (no CLAUDE_PID) queued too, let in after the
+  # reaper's down and before the new agent's command: that command must not take over the new box,
+  # which records no agent. The up's flock and the command's are stopped until their turn.
+  local s11=11111111-2222-4333-8444-5555aaaa0011 b11=$P-ag-aaaa0011 uf tf
+  agent $s11 --idle 20s & local a11=$!
+  until_ok 40 test -e "$TMP/ag-$a11"
+  reaper=$(pgrep -f "omabox _reap $b11 " | head -1)
+  rm -f "$TMP/held" "$TMP/release"
+  lk=$XDG_RUNTIME_DIR/omabox/.lock-$b11
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$a11" 2>/dev/null; wait "$a11" 2>/dev/null
+  agent $s11 -- run -- true & local r11=$!
+  (cd "$repo" && exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID=$s11 "$CLI" up --no-shell \
+    --idle 20s) >/dev/null 2>&1 & local u11=$!
+  until_ok 10 flock_of "$r11"
+  until_ok 10 pgrep -x flock -P "$u11"
+  until_ok 15 pgrep -x flock -P "$reaper"
+  tf=$(flock_of "$r11"); uf=$(pgrep -x flock -P "$u11")
+  [ -z "$tf" ] || kill -STOP "$tf"
+  [ -z "$uf" ] || kill -STOP "$uf"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  until_ok 15 gone "$b11"                          # the reaper's down
+  [ -z "$uf" ] || kill -CONT "$uf"
+  wait "$u11" 2>/dev/null
+  [ -z "$tf" ] || kill -CONT "$tf"
+  until_ok 20 test -e "$TMP/ag-$r11"
+  check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
+    "up null" "$(state_of "$b11") $(agent_of "$b11")"
+  ob down "$b11" >/dev/null 2>&1
+  kill "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" "$a7" "$c5" "$r5" "$r6" "$a8" "$o8" "$r8" "$q8" "$a10" "$r10" "$d10" "$a11" "$r11" 2>/dev/null
+}
+
+# `mode` writes box.json's size under the box's lock, as a takeover writes its agent (finding 93): a
+# mode change made meanwhile would otherwise put back the agent that exited. The lock is held here.
+t_mode_lock() {
+  local B=$P-ml m rc=0 held lk=$XDG_RUNTIME_DIR/omabox/.lock-$P-ml
+  check "a box for mode" ob up "$B" --no-shell --idle 5m
+  local before; before=$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/ml-held" "$TMP/ml-release" & held=$!
+  until_ok 5 test -e "$TMP/ml-held"
+  "$CLI" mode -b "$B" 1280x720 > "$TMP/ml-out" 2>&1 & m=$!
+  check "mode waits for the box's lock to record the new size" until_ok 10 pgrep -x flock -P "$m"
+  check_eq "...box.json keeps the old one meanwhile" "$before" "$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")"
+  touch "$TMP/ml-release"; wait "$held" 2>/dev/null
+  wait "$m" || rc=$?
+  check_eq "...and records it once it has the lock" "0 1280x720@60" "$rc $(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")"
+  ob down "$B" >/dev/null 2>&1
 }
 
 # finding 90: when an interactive box gives no frame, `shot` never says to show its window but to ask
@@ -1156,7 +1382,7 @@ t_guard() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
-BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_main t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

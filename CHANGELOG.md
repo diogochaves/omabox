@@ -9,9 +9,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 - Each agent session gets its own box. In Claude Code, Codex, or an agent started with
   `omabox guard exec`, the default box name ends with the session's id (`myrepo-5cc72cdc`), so two
-  agents in one repo no longer share a box or take each other's down. A session's box goes down after
-  30 minutes idle instead of 2 hours. `-b NAME` and `OMABOX=NAME` work as before;
-  `OMABOX_SESSION=` (empty) turns this off.
+  agents in one repo no longer share a box or take each other's down. A session's box goes down when
+  its agent exits, `--idle 0` or not (unless it is in use then; a `run -d` job does not count),
+  instead of waiting out the 2 hour idle limit. A session resumed in a new process
+  (`claude --continue`) takes over its box if it is still up. `-b NAME` and `OMABOX=NAME` work as
+  before; `OMABOX_SESSION=` (empty) turns this off.
 
 ### Fixed
 
