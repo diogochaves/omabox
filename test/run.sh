@@ -460,7 +460,8 @@ t_reap_race() {
   local B=$P-rr lock
   ob up "$B" --idle 10s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
   exec {lock}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lock"   # what an `up` of the name holds
-  check "the idle reaper decides and waits for the lock" until_ok 30 pgrep -f "^flock -w 60 [0-9]+$"
+  # This box's reaper's flock (cmd_down runs in the reaper's own process), not any box's up or down.
+  check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
   local j=$XDG_RUNTIME_DIR/omabox/$B/box.json
   jq '.created = "a new box"' "$j" > "$j.t" && mv "$j.t" "$j"   # the new box, as `up` writes it
   exec {lock}>&-; sleep 3
