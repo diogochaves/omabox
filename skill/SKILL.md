@@ -72,7 +72,7 @@ omabox down                                # when done: kills everything in the 
 1. **Look, act once, look again.** Exit 0 from `keys`/`click` means sent, not landed: a shot (or
    the line `--wait` prints) says what happened.
 2. **Never resend input you have not seen land.** Every call is delivered; sending again types the
-   text twice or toggles back. 124 after `--wait` means it WAS sent and nothing changed: shot first.
+   text twice or toggles back. 124 after `--wait` means it WAS sent and the screen did not settle as expected: shot first.
 3. **Type only into a field you have seen focused** (a caret in the last shot), or `keys --window
    SEL`. Focus does not always come back (after a panel closes, say).
 4. **Set state directly; keys and clicks only when the gesture is under test.** A shell plugin's
@@ -94,6 +94,7 @@ then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own.
 | "could not connect to display", `omabox-guard` | The agent guard: do it in a box (below). |
 | Your own shell tool died after `pkill -f PATTERN` | The pattern matched its command line: kill by PID, or `omabox run -- pkill -x NAME`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
+| `click --wait` 124 on a checkbox or small toggle | A change under the cursor (the ~50 px below and right of the click) is ignored as the cursor: shot, do not click again. |
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |

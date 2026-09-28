@@ -1321,6 +1321,7 @@ cmd_run() {
       if [ "$SETTLE_WAIT" = 1 ]; then
         local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
         settle_begin settle --start 5000 "${SETTLE_ARGS[@]}"
+        settle_ready "$SETTLE_JSON"
       fi
       # setsid -f forks and exits, so nsenter exits too and the command is reparented to the box's
       # PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
@@ -1459,7 +1460,9 @@ win_raise() {
 # what covers it. win_point RAISE X Y SEL... → "SX SY"
 win_point() {
   local raise=$1 x=$2 y=$3 w desc why; shift 3
-  w=$(win_select "$(box_windows)" "$@")
+  # `|| exit`: win_point runs in its caller's $(...), where errexit is off (no inherit_errexit), so
+  # win_select's exit 2 (none or several) would otherwise fall through to a wrong message and exit 1.
+  w=$(win_select "$(box_windows)" "$@") || exit $?
   desc=$(win_desc "$w")
   jq -e --argjson x "$x" --argjson y "$y" '$x < .size[0] and $y < .size[1]' <<<"$w" >/dev/null ||
     die "$x,$y is outside window $desc ($(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w"); coordinates are the window's own)"
@@ -1467,7 +1470,7 @@ win_point() {
   if [ -n "$why" ]; then
     [ "$raise" = 1 ] || die "window $desc is $why (click --window raises it; --no-raise and pointer do not)"
     win_raise "$w"
-    w=$(win_select "$(box_windows)" "$(jq -r .address <<<"$w")")
+    w=$(win_select "$(box_windows)" "$(jq -r .address <<<"$w")") || exit $?
     why=$(win_blocked "$w" "$x" "$y")
     [ -z "$why" ] || die "window $desc is still $why after focusing it: move or close that window first"
   fi
@@ -1685,6 +1688,7 @@ cmd_keys() {
     # key press: not a change.
     local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
     settle_begin settle "${SETTLE_ARGS[@]}"
+    settle_ready "$SETTLE_JSON"
     settle_act keys_send
     mark "${lines[@]}"
     settle_end settle "$SETTLE_JSON" "the keys were sent"
@@ -1743,6 +1747,7 @@ cmd_click() {
   local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
   settle_begin settle "${SETTLE_ARGS[@]}"
+  settle_ready "$SETTLE_JSON"
   settle_act on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
   mark "ptr $ext ${seq[*]}"
   settle_end settle "$SETTLE_JSON" "the click was sent"
@@ -1830,6 +1835,16 @@ settle_begin() {
   SETTLE_T0=$(date +%s%3N)
 }
 
+# Before keys, click or run -d act: no `ready` (the tool refused its options, or cannot watch the
+# screen) means nothing is sent, and the answer is unknown (1), never the action done unwatched.
+# settle_ready JSON
+settle_ready() {
+  [[ $SETTLE_LINE == ready* ]] && return 0
+  settle_end settle "$1" "" || true
+  say "nothing was sent: the screen could not be watched"
+  exit 1
+}
+
 # Run an action (a function or command) without the settle pipes: nothing in the box gets them.
 settle_act() { if [ -n "${SETTLE_IN:-}" ]; then "$@" {SETTLE_IN}>&- {SETTLE_OUT}<&-; else "$@"; fi; }
 
@@ -1872,6 +1887,7 @@ settle_end() {
           reason="box '$NAME' not rendered: its window was replaced (confirm-close) and is not drawn while hidden (ask the user; never switch their workspace or focus)"
         else reason="box '$NAME' sent no frame ($(ws_text "$(meta workspace)"); ask the user; never switch their workspace or focus)"; fi ;;
       refused) reason="box '$NAME' refused a screen capture${SETTLE_ERR:+ ($SETTLE_ERR)}" ;;
+      off-screen) reason="the region watched is not on the screen of box '$NAME'" ;;
       *) # Its compositor gone: the box is (being) taken down.
          local end gone; gone=$(($(date +%s%3N) - SETTLE_T0)) end=$((SECONDS + 2))
          while box_alive && [ $SECONDS -lt $end ]; do sleep 0.2; done
@@ -1924,7 +1940,7 @@ settle_opt() {
     --json) SETTLE_JSON=1 ;;
     --start|--quiet|--timeout)
       if [ $# -lt 2 ] || ! ms=$(ms_duration "$2"); then die "$1 takes a duration: 300ms, 2s, 1m"; fi
-      [ "$1" != --timeout ] || [ "$ms" -le $WAIT_MAX_MS ] || die "--timeout is at most 10m"
+      [ "$ms" -le $WAIT_MAX_MS ] || die "$1 is at most 10m"
       SETTLE_ARGS+=("$1" "$ms"); SETTLE_TOOK=2 ;;
     --strict) SETTLE_ARGS+=(--strict) ;;
     *) SETTLE_TOOK=0 ;;
@@ -2011,7 +2027,8 @@ cmd_wait() {
       --json) json=1 ;;
       --timeout) optarg "$@"; tmo=$(ms_duration "$2") || die "wait: --timeout takes a duration: 500ms, 10s, 2m"
         [ "$tmo" -le $WAIT_MAX_MS ] || die "wait: --timeout is at most 10m (got $2)"; shift ;;
-      --quiet) optarg "$@"; quiet=$(ms_duration "$2") || die "wait: --quiet takes a duration: 300ms, 1s"; shift ;;
+      --quiet) optarg "$@"; quiet=$(ms_duration "$2") || die "wait: --quiet takes a duration: 300ms, 1s"
+        [ "$quiet" -le $WAIT_MAX_MS ] || die "wait: --quiet is at most 10m (got $2)"; shift ;;
       --strict) strict=1 ;;
       -g) optarg "$@"; geom=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;

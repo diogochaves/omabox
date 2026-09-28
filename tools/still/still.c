@@ -373,6 +373,9 @@ int main(int argc, char **argv) {
     frames = 1;
     have_prev = 1;
     prev = !prev;
+    // A region that misses the screen would watch nothing and read as still: unknown, never satisfied.
+    if (have_region && (region.x >= width || region.y >= height || region.x + region.w <= 0 || region.y + region.h <= 0))
+        finish("unknown", "off-screen", 1);
     printf("ready %dx%d\n", width, height);
     fflush(stdout);
     t0 = now_ms();

@@ -1173,6 +1173,10 @@ the designs here were measured in boxes and built for a contained desktop, and n
       rendering when hidden and ignores the export's frame callback would still come out stale (only
       foot checked). An interactive box whose window is hidden is drawn since finding 90, so `-T`
       gets frames too (assumed, as for a plain `shot`; not checked for `--window`).
+    - Review of PR #17 (2026-09-28): `click --window` and `pointer --in` with a selector matching
+      none or several exited 1 with "outside window  ()": `win_point` runs in its caller's `$(...)`,
+      where errexit is off (no `inherit_errexit`), so `win_select`'s exit 2 fell through. Now `||
+      exit $?` there; `t_window` checks exit 2 for both cases.
 82. **`omabox wait` and `--wait` on keys, click and run -d** (2026-09-25). Agents slept
     between actions and guessed how long. Measured in the analysis boxes (1920x1080@60, shell): a
     menu settles ~130 ms after its key, a notification ~240, typing in foot ~210, a terminal ~660;
@@ -1229,6 +1233,14 @@ the designs here were measured in boxes and built for a contained desktop, and n
       ignored like a caret (said, `--strict`); Qt's and Chromium's carets, GTK4's (1x18 in the
       analysis) and the busy cursor's exact size are not measured here; the cursor rectangle assumes
       Hyprland's default cursor size (24).
+    - Review of PR #17 (2026-09-28): `wait still -g` on a region off the screen answered satisfied,
+      having watched nothing: `omabox-still` now answers `unknown off-screen` (exit 1) before
+      `ready`. `--start`/`--quiet` over 10 min passed the CLI, the tool refused them, and keys, click
+      and `run -d` acted all the same, then said the screen was lost: the CLI caps all three now, and
+      `settle_ready` sends nothing when the tool gives no `ready` (unknown, exit 1). Checked in
+      `t_unit_wait` and `t_wait`; the no-`ready` path by reading only (nothing left in the CLI that
+      reaches it on purpose). `click --wait` on a small toggle still reads 124: its change sits under
+      the cursor's ignored rectangle (the skill's symptom table says so).
 83. **`shot` compresses less: PNG level 1** (2026-09-25, seen while measuring 82). Most of a shot's
     time was grim's PNG compression, for a file an agent reads once. Measured in a shell box with
     a terminal full of text (1920x1080, 5 shots each): grim's default level 124 ms and 739 KB a

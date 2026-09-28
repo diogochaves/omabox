@@ -2064,6 +2064,8 @@ t_window() {
   mkdir -p "$o"
   check_eq "an ambiguous selector: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
   check_eq "0xdead: exit 2" 2 "$(ob shot -b "$B" -w 0xdead >/dev/null 2>&1; echo $?)"
+  check_eq "click --window, ambiguous: exit 2 too" 2 "$(ob click -b "$B" --window foot 10 10 >/dev/null 2>&1; echo $?)"
+  check_eq "click --window, no match: exit 2" 2 "$(ob click -b "$B" --window 0xdead 10 10 >/dev/null 2>&1; echo $?)"
   check_match "...no window matches, the windows listed" "no window matches 0xdead.*\"A\"" "$(ob shot -b "$B" -w 0xdead 2>&1 | tr '\n' ' ')"
   ob shot -b "$B" -w 'title:^A$' -o "$o/a.png" >/dev/null 2>&1
   check_match "shot --window: the window's size" "$(size A)," "$(file "$o/a.png")"
@@ -2153,6 +2155,9 @@ t_unit_wait() {
   check_eq "the cursor's rectangle" "952,532,56,56" "$(lib cursor_rect "960 540")"
   check_match "wait --timeout over 10 min refused" "at most 10m" "$(ob wait -b "$P-x" --timeout 11m still 2>&1)"
   check_match "keys --timeout over 10 min refused" "at most 10m" "$(ob keys -b "$P-x" --wait --timeout 601s a 2>&1)"
+  check_match "keys --quiet over 10 min refused" "--quiet is at most 10m" "$(ob keys -b "$P-x" --wait --quiet 20m a 2>&1)"
+  check_match "click --start over 10 min refused" "--start is at most 10m" "$(ob click -b "$P-x" --wait --start 11m 1 1 2>&1)"
+  check_match "wait --quiet over 10 min refused" "--quiet is at most 10m" "$(ob wait -b "$P-x" still --quiet 11m 2>&1)"
   check_match "wait for nothing: says what it can wait for" "still, change, window" "$(ob wait -b "$P-x" 2>&1)"
   check_match "an unknown condition refused" "unknown condition" "$(ob wait -b "$P-x" soon 2>&1)"
   check_match "--gone is for window and layer" "go with window or layer" "$(ob wait -b "$P-x" still --gone 2>&1)"
@@ -2226,6 +2231,10 @@ t_wait() {
   check_eq "wait cmd: 0 once it succeeds" 0 "$rc"
   check_match "...after it did" "^satisfied: cmd after (0\.[5-9]|[1-9])" "$out"
   check_eq "wait cmd that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms cmd -- false >/dev/null; echo $?)"
+  # A region off the screen watches nothing: unknown (1), never still
+  out=$(ob wait -b "$B" still -g "5000,5000 10x10"); rc=$?
+  check_eq "wait still -g off the screen: exit 1" 1 "$rc"
+  check_match "...said" "^unknown: the region watched is not on the screen" "$out"
   # The box going down mid-wait is unknown (1), never satisfied
   ob wait -b "$B" still --quiet 30s > "$TMP/wait.out" 2>&1 & local w=$!
   sleep 1.5; ob down "$B" >/dev/null 2>&1
