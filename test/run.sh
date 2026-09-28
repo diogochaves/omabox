@@ -2152,7 +2152,7 @@ t_unit_wait() {
   check_eq "a bare number is seconds" 10000 "$(lib ms_duration 10)"
   check_fails "0 refused" lib ms_duration 0
   check_fails "junk refused" lib ms_duration 2h
-  check_eq "the cursor's rectangle" "952,532,56,56" "$(lib cursor_rect "960 540")"
+  check_eq "the cursor's rectangle" "944,524,64,64" "$(lib cursor_rect "960 540")"
   check_match "wait --timeout over 10 min refused" "at most 10m" "$(ob wait -b "$P-x" --timeout 11m still 2>&1)"
   check_match "keys --timeout over 10 min refused" "at most 10m" "$(ob keys -b "$P-x" --wait --timeout 601s a 2>&1)"
   check_match "keys --quiet over 10 min refused" "--quiet is at most 10m" "$(ob keys -b "$P-x" --wait --quiet 20m a 2>&1)"

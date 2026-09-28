@@ -1806,9 +1806,10 @@ ms_duration() {
 ms_s() { awk -v m="$1" 'BEGIN { printf "%.2fs", m / 1000 }'; }
 
 # Where the software cursor is drawn (it is in every frame: finding 82), as an omabox-still rectangle
-# around the point "X Y": the arrow is 16x27 from 1 px up and left of its hotspot; the busy cursor
-# shown while the box starts reaches ~40 px down.
-cursor_rect() { echo "$((${1% *} - 8)),$((${1#* } - 8)),56,56"; }
+# around the point "X Y": the arrow is 16x27 from 1 px up and left of its hotspot; the text I-beam
+# (over a terminal or a field) is centred on it, ~10 px above and 5 left; the busy cursor shown while
+# the box starts reaches ~40 px down.
+cursor_rect() { echo "$((${1% *} - 16)),$((${1#* } - 16)),64,64"; }
 cursor_now() { on_box hyprctl cursorpos | tr -d ' ' | awk -F, '/^[0-9]+,[0-9]+$/ { print $1, $2 }'; }
 
 # omabox-still in the box, waiting on its first frame (the baseline). Its stdin is a pipe held here:

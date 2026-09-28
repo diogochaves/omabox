@@ -94,7 +94,7 @@ then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own.
 | "could not connect to display", `omabox-guard` | The agent guard: do it in a box (below). |
 | Your own shell tool died after `pkill -f PATTERN` | The pattern matched its command line: kill by PID, or `omabox run -- pkill -x NAME`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
-| `click --wait` 124 on a checkbox or small toggle | A change under the cursor (the ~50 px below and right of the click) is ignored as the cursor: shot, do not click again. |
+| `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |

@@ -1202,8 +1202,12 @@ the designs here were measured in boxes and built for a contained desktop, and n
       direction (a caret: foot's beam blinks as 2x20, reported `caret?`) and the software cursor, which
       is in every frame (headless, `no_hardware_cursors`) and hides on a key press: seen as 16x27 from
       1 px up and left of its hotspot, and right after `up` a cursor change reaching ~38 px below it,
-      so the ignored rectangle is 56x56 from 8 px up and left of where the cursor is before the
-      action, and where a click sends it.
+      so the ignored rectangle is 64x64 from 16 px up and left of where the cursor is before the
+      action, and where a click sends it. (It was 56x56 from 8 px until the first NVIDIA run,
+      2026-09-28: over a terminal the cursor is foot's I-beam, centred on its hotspot and reaching
+      ~10 px above it; when a click moved it, the I-beam's top row at its old place fell one row
+      outside, and `click --wait` on a terminal read "settled" instead of 124. Deterministic there,
+      not seen on AMD; why the old place was redrawn only on NVIDIA is not known.)
     - `wait window SEL [--gone|--focused]` (the resolver of finding 81: several matches is exit 2,
       never a guess; `--gone` counts any), `wait layer NAMESPACE [--gone]` and `wait cmd -- CMD` (exit
       0 inside the box) poll every 100 ms; a window or layer must hold on 2 polls in a row. Absence can
@@ -1221,7 +1225,7 @@ the designs here were measured in boxes and built for a contained desktop, and n
       is not drawn while hidden, and says why as `shot` does: started by an older omabox, or its
       window replaced after a confirm-close keep; either way, ask the user, never show the window.
     - One line on stdout (`satisfied: settled after 0.40s (last change 0.08s at 0,12 1920x1068;
-      ignored 56x56 at 952,532: cursor)`) or `--json`. Waiting is use (idle expiry, finding 59):
+      ignored 64x64 at 944,524: cursor)`) or `--json`. Waiting is use (idle expiry, finding 59):
       `need_box` touches `used`, and a long wait again every 30 s. The tool's stdin is a pipe from
       the CLI (`--tied`): when the CLI goes (Ctrl-C, an action that failed) the tool ends with it
       instead of holding the box's socket until its timeout.
