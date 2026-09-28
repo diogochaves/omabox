@@ -424,7 +424,8 @@ t_throwaway() {
   check_eq "throwaway: writes into the overlay work" x "$out"
   check_fails "throwaway: host checkout unchanged" test -e "$repo/.omabox-overlay-test"
   # Its own box only, as the other throwaway tests look for theirs: another agent's `omabox run` may
-  # have a throwaway box up on the same machine.
+  # have a throwaway box up on the same machine. The name first, or the count below tests nothing.
+  check_match "throwaway: named $P-tw-runN" "^$P-tw-run[0-9]+\$" "$(cd "$repo" && env -u OMABOX "$CLI" run -- sh -c 'echo "$OMABOX_NAME"' 2>&1)"
   check_eq "throwaway: no box left" 0 "$(ob ls --json | jq --arg p "$P-tw-run" '[.[] | select(.name | startswith($p))] | length')"
 }
 
