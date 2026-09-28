@@ -16,6 +16,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ### Fixed
 
 - `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
+- `omabox shot`, `click` and `keys` work on an interactive box while its window is hidden on its
+  workspace. The host now keeps drawing the window (at `misc.render_unfocused_fps`), and the error
+  for a box started by an older version no longer suggests showing the window, which led an agent
+  to switch the user's workspace before every screenshot. After you closed a box's window and kept
+  the box running (`confirm-close`), its new window is only drawn while on screen: `click` and
+  `keys` still reach it, but `shot` gets no frame while it is hidden.
 
 ## 0.1.2 — 2026-09-26
 

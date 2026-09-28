@@ -12,6 +12,9 @@ keep() { rm -f "$XDG_RUNTIME_DIR/omabox.close-asking"; exit 0; }
 
 # A host that cannot give a new window (the session is ending): nothing to ask on, so end.
 hyprctl output create wayland >/dev/null 2>&1 || quit
+# The host's exec rule (render_unfocused) went with the old window: this one is not drawn while
+# hidden. omabox.reopened lets `shot` say so (finding 90).
+echo 1 > "$XDG_RUNTIME_DIR/omabox.reopened"
 for _ in $(seq 50); do
   [ "$(hyprctl -j monitors 2>/dev/null | jq length)" -gt 0 ] 2>/dev/null && break
   sleep 0.1

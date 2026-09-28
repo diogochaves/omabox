@@ -409,7 +409,8 @@ wait_ready() {
   done
   # The bar paints its widgets ~150 ms after it maps and animates in for ~500 ms more: wait until its
   # pixels hold still (3 identical captures), so the first screenshot shows a finished bar. Not for
-  # interactive boxes: a window the host is not showing is not rendered, so screencopy never returns.
+  # interactive boxes: they are for the user's eyes, and a hidden one draws only at the host's
+  # render_unfocused_fps (before drawn_hidden, not at all: screencopy never returned).
   [ "$(meta mode)" = interactive ] && return 0
   local geom last="" now same=0
   geom=$(on_box hyprctl -j layers | jq -r 'first(.. | objects | select(.namespace? == "omarchy-bar")) | "\(.x),\(.y) \(.w)x\(.h)"')
@@ -761,7 +762,8 @@ cmd_up() {
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1)}
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
-      + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from} else {} end)' > "$D/box.json"
+      + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
+          drawn_hidden: true} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
 
   # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
@@ -855,8 +857,9 @@ cmd_up() {
     install_passthrough
     # Launched by the host Hyprland so its exec rules apply to exactly this process's window: onto
     # the configured workspace (9 unless changed, finding 70) without focus. (Aquamarine names every nested window "aquamarine"; a class rule
-    # would also catch any other nested Hyprland the user runs.)
-    host_eval "hl.exec_cmd('bash $(lua_str "$D/launch.sh")', { workspace = '$ws silent', no_initial_focus = true })"
+    # would also catch any other nested Hyprland the user runs.) render_unfocused: the host sends the
+    # hidden window frame callbacks, so the box keeps drawing and `shot` works without it on screen.
+    host_eval "hl.exec_cmd('bash $(lua_str "$D/launch.sh")', { workspace = '$ws silent', no_initial_focus = true, render_unfocused = true })"
   else
     bash "$D/launch.sh" {LOCK}>&- &
   fi
@@ -1156,8 +1159,17 @@ cmd_shot() {
   # failed capture never leaves a half-written or empty PNG at $out.
   if ! on_box timeout 10 "${grim[@]}" - > "$out.part" || [ ! -s "$out.part" ]; then
     rm -f "$out.part"
-    [ "$(meta mode)" = interactive ] &&
-      die "shot: no frame from interactive box '$NAME': the host only renders it while its window is visible ($(ws_text "$(meta workspace)"))"
+    # Never tell an agent to show the window: switching the user's workspace for a frame is what the
+    # box exists to avoid. A restart is the user's to do: a box from before drawn_hidden needs one, and
+    # so does one whose window confirm-close replaced (the new window has no render_unfocused).
+    # confirm-close.sh leaves omabox.reopened for that; the box can write there, so only test for it.
+    if [ "$(meta mode)" = interactive ]; then
+      [ "$(meta drawn_hidden)" = true ] ||
+        die "shot: no frame from interactive box '$NAME': it was started by an older omabox, which does not draw its window while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
+      [ ! -f "$D/run/omabox.reopened" ] ||
+        die "shot: no frame from interactive box '$NAME': the user closed its window and kept the box running (confirm-close), and the new window is not drawn while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
+      die "shot: no frame from interactive box '$NAME' ($(ws_text "$(meta workspace)")) in 10 s: ask the user; never switch the user's workspace or focus to get one"
+    fi
     die "shot: grim failed"
   fi
   mv "$out.part" "$out"

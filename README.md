@@ -370,7 +370,9 @@ project and moves on its own, so it may do more, or differently, by now: check i
 
 - Needs a patched aquamarine (PR #415, built into `build/prefix` by `install.sh`) until a release ships it.
   What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
-- `omabox shot` of an interactive box only works while its window is on screen.
+- A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
+  `omabox shot` works with its window off screen, just at that rate. Not after you closed its window
+  and kept the box running (`confirm-close`): the new window is only drawn while it is on screen.
 - The file chooser portal was checked (xdg-desktop-portal-gtk); other portals are untested.
 - Apps that need system services over the system bus (GNOME Disks/udisks, NetworkManager, bluetooth,
   power) open with errors or not at all: a box has no system bus, by design.
