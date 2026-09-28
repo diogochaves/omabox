@@ -141,9 +141,10 @@ t_unit_refusals() {
   # (/dev/net/tun hidden in a mount namespace of its own: pasta would fail inside the box, 10 s later)
   check_match "a connected box without /dev/net/tun is refused up front" "needs /dev/net/tun" \
     "$(unshare -Urm bash -c 'mount -t tmpfs none /dev/net && exec "$0" up "$1"' "$CLI" "$P-r19" 2>&1)"
-  # (bwrap would fail at its uid map behind pasta, and only box.log would say so, 10 s later)
-  check_match "a box behind pasta is refused up front from a no_new_privs process" \
-    "cannot start from a no_new_privs process" "$(setpriv --no-new-privs "$CLI" up "$P-r20" 2>&1)"
+  # (bwrap would fail at its uid map behind pasta, and only box.log would say so, 10 s later; a
+  # connected box falls back to none there instead, t_no_new_privs)
+  check_match "an isolated box is refused up front from a no_new_privs process" \
+    "cannot start from a no_new_privs process" "$(setpriv --no-new-privs "$CLI" up "$P-r20" --net isolated 2>&1)"
   check_fails "...before its box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r20"
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
   check_eq "refusals left no box behind" 0 "$left"
@@ -993,6 +994,24 @@ t_other_userns() {
   check "down" ob down "$B"
 }
 
+# A no_new_privs process (an agent's sandbox) cannot start pasta's bwrap (finding 89): a connected box
+# started from one gets a network namespace with only a loopback, as a nested box does, and says so.
+t_no_new_privs() {
+  local B=$P-nnp D=$XDG_RUNTIME_DIR/omabox/$P-nnp before out rc ns
+  before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
+  rc=0; out=$(setpriv --no-new-privs "$CLI" up "$B" --no-shell 2>&1) || rc=$?
+  check_eq "up from a no_new_privs process" 0 "$rc"
+  check_match "...says the box has no network, and why" "box '$B' has no network: .*no_new_privs" "$out"
+  check_match "ls shows it with none" "$B +headless .* up +none " "$(ob ls)"
+  check_fails "...and it has no pasta" test -e "$D/pasta.pid"
+  ns=$(ob run -b "$B" -- readlink /proc/self/ns/net)
+  if [[ $ns == net:* ]] && [ "$ns" != "$(readlink /proc/self/ns/net)" ]; then ok "the box has a network namespace of its own"
+  else no "the box has a network namespace of its own" "box [$ns], host [$(readlink /proc/self/ns/net)]"; fi
+  check_eq "no abstract X11 socket of the box's on the host" "" "$(new_x11 "$before" "$(jq -r .pidns "$D/box.json")")"
+  check "run works in it from a no_new_privs process too" setpriv --no-new-privs "$CLI" run -b "$B" -- true
+  check "down" ob down "$B"
+}
+
 # --no-shell is a bare compositor.
 t_no_shell() {
   local B=$P-bare
@@ -1585,7 +1604,7 @@ t_guard() {
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version)
 BOX=(t_main t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_shell t_no_git_identity t_stale_pid)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
