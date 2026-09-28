@@ -24,6 +24,7 @@ pass=0 fail=0 failed=()
 cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
+  cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
   [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
   rm -rf "$TMP"
 }
@@ -200,7 +201,7 @@ t_unit_seed_copy() {
 # up --new (finding 73): a free box-N name, printed; two at once never get the same one. The names
 # are the user's namespace too (box-1 may be theirs): only the ones printed here are taken down.
 t_new() {
-  local a b; a=$(mktemp -p "$TMP") b=$(mktemp -p "$TMP")
+  local a=$TMP/new-a b=$TMP/new-b   # fixed names: cleanup takes these boxes down if the suite stops here
   "$CLI" up --new --no-shell --idle 0 > "$a" 2>/dev/null & local pa=$!
   "$CLI" up --new --no-shell --idle 0 > "$b" 2>/dev/null & local pb=$!
   wait $pa $pb
@@ -209,6 +210,7 @@ t_new() {
   check "...two at once, two different names ($na, $nb)" test -n "$nb" -a "$na" != "$nb"
   check "...both up" bash -c "'$CLI' ls --json | jq -e '[.[] | select(.name == \"$na\" or .name == \"$nb\") | select(.state == \"up\")] | length == 2'"
   [ -n "$na" ] && ob down "$na" >/dev/null 2>&1; [ -n "$nb" ] && ob down "$nb" >/dev/null 2>&1
+  rm -f "$a" "$b"   # down: a later box-N of someone else's may get these names
 }
 
 # One version for the CLI and the widget (CHANGELOG.md).
