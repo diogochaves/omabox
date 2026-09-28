@@ -107,8 +107,15 @@ omabox ls                              # boxes, mode, size, state, plugins
 ```
 
 Boxes are named after the current git repo, so agents in different repos never share one (unless
-two repos have the same directory name: pass `-b` then). Use
-`-b NAME` or `OMABOX=NAME` to run several, and `--size 3440x1440` for another screen size
+two repos have the same directory name: pass `-b` then). Inside a Claude Code or Codex session (or
+an agent started with `omabox guard exec`) the name also gets the session's id, `myrepo-5cc72cdc`, so
+two agents in one repo each get their own box, and that box goes down when its agent exits instead
+of waiting out the idle limit (not while you peek at it or an `omabox run` is still going; a
+`run -d` job does not count). `omabox ls` shows the names; to `peek` at or `shot` an agent's box
+from your terminal, pass `-b` with its name.
+An agent no longer picks up a box you started yourself (`myrepo`) by default; it needs `-b myrepo`.
+`OMABOX_SESSION=` (empty) turns this off.
+Use `-b NAME` or `OMABOX=NAME` to run several or to share one on purpose, and `--size 3440x1440` for another screen size
 (`3440x1440@144` for a refresh rate, `host` for your focused monitor; `omabox mode` changes it live).
 A headless box goes down by itself after 2 hours with no `omabox` command against it, no peek window
 and no `omabox run` in progress (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`).
@@ -227,7 +234,11 @@ What agents' shell commands get: a display that does not exist (`WAYLAND_DISPLAY
 with `QT_QPA_PLATFORM=offscreen` keeps working), and `QT_FORCE_STDERR_LOGGING=1` (a Qt program with
 no display aborts; this way the agent reads why). A window, `hyprctl`, `grim` or `omarchy-theme-set`
 outside a box then fails with an error naming `omabox-guard` or "could not connect to display", which
-the skill answers.
+the skill answers. Links and files are refused too: a browser already running on your desktop takes a
+URL over its own socket, not the display, so `xdg-open URL` or `gh pr view --web` from an agent would
+open a tab there (and with `misc:focus_on_activate`, take focus). `BROWSER` and `GH_BROWSER` name
+omabox's `share/guard/xdg-open`, which fails with a note to give you the link instead, and Claude
+Code and `guard exec` put it first on PATH as `xdg-open`. Inside a box, links open as usual.
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a
@@ -239,7 +250,8 @@ the skill answers.
   whose own `set` table would clash is refused, untouched, with the lines to add by hand). The
   variables only: no core limit, no note. Checked through `codex sandbox`, not in a logged-in session.
 - **Anything else**: `omabox guard exec -- AGENT` starts the agent itself under the guard. Its own
-  process loses the display too (clipboard, opening a browser to log in).
+  process loses the display too (clipboard, opening a browser to log in; `xdg-open` refuses). It also
+  gets a session of its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and Codex.
 
 omabox keeps working: boxes have their own display, and `up --interactive`, `peek` and `--size host`
 find your session by themselves. Work you ask for on your real desktop ("switch my theme", `hyprctl
@@ -250,8 +262,13 @@ reload` after editing your config) goes through `omabox host -- CMD`: your sessi
 What it does not do: stop an agent that sets the variables back or runs `omabox host` unasked on
 purpose, processes the agent starts itself rather than through its shell (MCP servers: a headed
 browser MCP opens on your desktop), or anything over the session bus or the user manager (notifications, the keyring, apps
-started over D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment, a
-browser already running, which opens the URL on your desktop). It stops accidents. For a fence, run
+started over D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment),
+and links opened by other routes: a browser started directly with a URL (it hands the URL to the one
+already running), `gio open` (it starts your URL handler itself), npm's `open` (it runs its own copy
+of xdg-open), or, under Codex, a plain `xdg-open` (Codex sets values, so it gets `BROWSER` and
+`GH_BROWSER` but not the PATH entry). Python's `webbrowser` stops at omabox's `xdg-open` (it counts
+one that has started as a success), except under `guard exec` from an omabox at a path with a space:
+there it tries the next browser when that one fails. It stops accidents. For a fence, run
 the agent in a sandbox that blocks Unix sockets (Claude Code's `sandbox`: it also blocks the network
 and every other socket, omabox's included).
 
@@ -273,10 +290,23 @@ and every other socket, omabox's included).
   keyrings or tokens).
 - Private session bus, private throwaway keyring (secrets are stored and read without prompts),
   no system bus, no real input devices, no audio, no Xwayland (unless you pass `--xwayland`).
-- The network is shared with the host, unless you start the box with `--net isolated`: then it has
-  only a loopback, no internet or LAN, and reaches just the host ports you list with `--allow`
-  (`omabox up --net isolated --allow 8081,8082`), so your real local services are out of reach.
-  Works for headless and interactive boxes (needs `passt`, which `install.sh` installs).
+- Every box has a network of its own, so what runs in it cannot reach or take your host's abstract
+  sockets (a box's X11 display used to catch X11 apps you started on the host). By default
+  (`--net connected`) a box reaches the internet, your LAN and the servers on your host, and you
+  reach its servers:
+  - Across the box boundary, use `127.0.0.1:PORT`, with a server that listens on IPv4 (`127.0.0.1`,
+    `0.0.0.0` or `::`). `localhost` works from your host into a box, but from a box it is reset when
+    the server listens on IPv4 only, as most dev servers do, and from one box to another it never
+    works. A server in a box that listens on `::1` only cannot be reached from outside it.
+  - A box's ports are forwarded to your host's `127.0.0.1` only (never your LAN address), usually
+    within a second of its server listening, the ephemeral range included; other boxes reach them
+    there too. A TCP port there also takes the UDP port of the same number.
+  - Inside a box, your machine's LAN address is the box itself.
+  - A connected box started inside another box has no network.
+- With `--net isolated`, the box has only a loopback, no internet or LAN, and reaches just the host
+  ports you list with `--allow` (`omabox up --net isolated --allow 8081,8082`), so your real local
+  services are out of reach. Works for headless and interactive boxes. Every box needs `passt`
+  (which `install.sh` installs), and a connected one `/dev/net/tun`.
 - Safety invariant: a box never gets `/dev/dri/card*`, `/dev/input`, seatd, the system bus or your
   real `$XDG_RUNTIME_DIR`. Those are what keep its Hyprland off your real seat.
 - `/usr`, `/etc` and `/sys` are read-only and there is no `sudo`, pacman or polkit: nothing in a box
@@ -287,9 +317,9 @@ and every other socket, omabox's included).
   way: while that window has focus (in passthrough, SUPER binds too), what runs in the box reads
   what you type.
 - `omabox down` deletes the box and its HOME, so what a plugin or app changed in there is gone. It
-  cannot undo what reached outside: with the default host network, a box reaches the internet, your
-  LAN, your `localhost` services and the host's abstract Unix sockets, so API calls, uploads or
-  changes to a server are real. Use `--net isolated` when that matters.
+  cannot undo what reached outside: with the default connected network, a box reaches the internet,
+  your LAN and the services on your `127.0.0.1`, so API calls, uploads or changes to a server are
+  real. Use `--net isolated` when that matters.
 - Commands you run on the host are not boxed: a project's `sudo ./setup ...`, or `omabox host --
   CMD`, change your real system.
 - A box keeps an app off your desktop and your config; it is not a security boundary. It shares
@@ -304,7 +334,7 @@ final release acceptance.
 ## How it works
 
 ```
-[pasta]                        --net isolated only: a loopback and the --allow ports, nothing else
+[pasta]                        boxes behind pasta: connected (default), or isolated (--allow ports)
 └ bwrap (pid/ipc/uts namespaces, fake HOME, private /run/user/$UID and /tmp)
   └ share/session.sh           the session: private bus (dbus-daemon), keyring, PATH, env
     ├ [systemd --user]         --systemd only (in its own delegated cgroup scope)
@@ -331,7 +361,7 @@ Wayland connection.
 | `spike/` | the original proof of concept |
 
 Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/`: `box.json` (its options), `info.json` (bwrap's
-pids; `pid` and `pasta.pid` for an isolated box), `run/` (the box's runtime dir), `used` (idle clock),
+pids; `pid` and `pasta.pid` for a box behind pasta), `run/` (the box's runtime dir), `used` (idle clock),
 `reap.log`, `box.log`. The
 box's HOME (`omabox path` → `home/`, on disk in `~/.cache/omabox/<name>/home`, removed on `down`) and
 logs are readable from the host.
@@ -372,7 +402,9 @@ project and moves on its own, so it may do more, or differently, by now: check i
 
 - Needs a patched aquamarine (PR #415, built into `build/prefix` by `install.sh`) until a release ships it.
   What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
-- `omabox shot` of an interactive box only works while its window is on screen.
+- A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
+  `omabox shot` works with its window off screen, just at that rate. Not after you closed its window
+  and kept the box running (`confirm-close`): the new window is only drawn while it is on screen.
 - The file chooser portal was checked (xdg-desktop-portal-gtk); other portals are untested.
 - Apps that need system services over the system bus (GNOME Disks/udisks, NetworkManager, bluetooth,
   power) open with errors or not at all: a box has no system bus, by design.
@@ -380,7 +412,7 @@ project and moves on its own, so it may do more, or differently, by now: check i
   (apps start as plain processes, not units); their output lands in the box's `home/apps.log`.
   Logging out of the box ends it.
 - A `run -d` job does not count as use for idle expiry: a server the agent only polls over HTTP needs
-  `--idle 0` (or a longer one).
+  `--idle 0` (or a longer one). Nor does it keep an agent session's box once the agent exits.
 
 ## Contributing
 

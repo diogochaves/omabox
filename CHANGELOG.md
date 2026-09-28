@@ -23,6 +23,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - The peek window shows what the agent does for a few seconds: a ring that follows its pointer and
   clicks, and captions of the keys it types (secrets as `*`). Drawn over the view only, never into the
   box's screen or its screenshots.
+- Each agent session gets its own box. In Claude Code, Codex, or an agent started with
+  `omabox guard exec`, the default box name ends with the session's id (`myrepo-5cc72cdc`), so two
+  agents in one repo no longer share a box or take each other's down. A session's box goes down when
+  its agent exits, `--idle 0` or not (unless it is in use then; a `run -d` job does not count),
+  instead of waiting out the 2 hour idle limit. A session resumed in a new process
+  (`claude --continue`) takes over its box if it is still up. `-b NAME` and `OMABOX=NAME` work as
+  before; `OMABOX_SESSION=` (empty) turns this off.
 
 ### Changed
 
@@ -32,6 +39,41 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - The agent skill has rules for driving an app (look, act once, look again; never resend input not
   seen to land; set state directly) and a symptom → next step table; the details that are not about
   safety moved to `skill/reference.md`.
+- Every box has a network of its own (pasta). A default box (`--net connected`; `--net host` still
+  works) reaches the internet, your LAN and your host's servers, and you reach its servers. Across
+  the box boundary use `127.0.0.1` and a server that listens on IPv4 (`127.0.0.1`, `0.0.0.0` or
+  `::`): from a box, `localhost` is reset when the server listens on IPv4 only, and from one box to
+  another it never works. A box's ports appear on your host's `127.0.0.1` only (never your LAN
+  address), usually within a second of its server listening; a TCP port there also takes the UDP
+  port of the same number. A connected box started inside another box has no network.
+- Every box needs `passt` (`./install.sh` installs it) and, unless it is `--net isolated`,
+  `/dev/net/tun`. A headless box can no longer start from a process with no_new_privs (some agent
+  sandboxes, a systemd unit with `NoNewPrivileges=`). `omabox up` says so at once in each case; a
+  box that is already up can still be used from such a process.
+- Boxes that were up before you updated still share your network, and can still catch host X11
+  apps, until `omabox down` (`omabox ls` shows them as `host`).
+- Take your boxes down before going back to an older omabox: it lists a box started by this one as
+  dead (unless it is `--net isolated`), and its `down` can leave that box running.
+
+### Fixed
+
+- `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
+- The agent guard now refuses to open links and files on your desktop. `xdg-open URL` or
+  `gh pr view --web` from a guarded agent handed the URL to a browser already running there, which
+  opened a tab and could take focus. `BROWSER` and `GH_BROWSER` point at a stand-in that fails with a
+  note, and Claude Code and `guard exec` put it first on PATH as `xdg-open`. Under Codex only `gh`
+  and what reads `$BROWSER` are covered: a plain `xdg-open` there still uses the desktop's URL
+  handler. After updating, `install.sh` offers to update the guard for the agents that have it
+  (`omabox guard on` does it too).
+- `omabox shot`, `click` and `keys` work on an interactive box while its window is hidden on its
+  workspace. The host now keeps drawing the window (at `misc.render_unfocused_fps`), and the error
+  for a box started by an older version no longer suggests showing the window, which led an agent
+  to switch the user's workspace before every screenshot. After you closed a box's window and kept
+  the box running (`confirm-close`), its new window is only drawn while on screen: `click` and
+  `keys` still reach it, but `shot` gets no frame while it is hidden.
+- A headless box no longer captures X11 apps started on the host. Its parent compositor's Xwayland
+  claimed the host's abstract `:0` X11 socket (or the next free one), and a host app (Steam) then
+  opened in the box. An X server run inside a box (Xvfb) could do the same.
 
 ## 0.1.2 — 2026-09-26
 

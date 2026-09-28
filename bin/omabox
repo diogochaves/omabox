@@ -55,12 +55,17 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
   omabox --version
 
-NAME defaults to \$OMABOX, else the current git repo's name, else "default".
+NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
+(Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
+session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off.
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
 box up, \`run\` uses it and the repo is read-only there (tests that write into the tree: down first).
 --net isolated --allow PORTS on a throwaway \`run\` keeps tests off your real local services.
+Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
+the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
+second after they listen. --net isolated: a loopback and the --allow ports only.
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
 variables (a password too: never on a command line); \`keys --pass VAR\` types one (never \`-t\` for a
 secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
@@ -89,6 +94,8 @@ $PASS_KEY toggles sending SUPER keys to an interactive box.
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
+At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
+(-b NAME) stays.
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
 The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
@@ -161,13 +168,78 @@ conf_set() {
 # --- box selection -------------------------------------------------------------------------------
 
 default_name() {
-  local top
+  local top base sid
   # Inside a box OMABOX=1 marks the box (with OMABOX_NAME), not a box named "1".
-  if [ -n "${OMABOX:-}" ] && [ -z "${OMABOX_NAME:-}" ]; then echo "$OMABOX"
-  elif top=$(git rev-parse --show-toplevel 2>/dev/null); then basename "$top"
-  else echo default
-  fi
+  if [ -n "${OMABOX:-}" ] && [ -z "${OMABOX_NAME:-}" ]; then echo "$OMABOX"; return; fi
+  if top=$(git rev-parse --show-toplevel 2>/dev/null); then base=$(basename "$top"); else base=default; fi
+  # An agent session gets a box of its own (finding 88): two agents in one repo would otherwise share
+  # one, and one's `down` would end the other's work. The suffix survives select_box's 40-char cut.
+  if sid=$(agent_session); then echo "$(printf '%s' "$base" | cut -c1-31)-$sid"; else echo "$base"; fi
 }
+
+# The agent session this command runs in, as 8 characters, or a failure outside one. Claude Code and
+# Codex export their session's id to every shell command; `omabox guard exec` sets OMABOX_SESSION for
+# other agents, and OMABOX_SESSION= (empty) opts out. The id's tail: Codex's is a UUIDv7, whose head is
+# a timestamp that two sessions started in the same minute share.
+AGENT_VARS=(OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID)
+agent_var() {
+  local v
+  for v in "${AGENT_VARS[@]}"; do
+    [ -n "${!v+x}" ] || continue
+    [ -n "${!v}" ] || return 1
+    echo "$v"; return 0
+  done
+  return 1
+}
+agent_session() {
+  local v id; v=$(agent_var) || return 1
+  id=$(printf '%s' "${!v}" | tr -cd 'A-Za-z0-9')
+  [ ${#id} -ge 8 ] || return 1
+  id=${id: -8}; echo "${id,,}"
+}
+
+# The agent's own process, as "PID START" (START: its start time, so a reused pid is not taken for it),
+# or a failure (finding 93). Claude Code exports its pid as CLAUDE_PID; `guard exec` exports the pid it
+# execs the agent as, OMABOX_AGENT_PID. Codex sets its session variable for its children only, so it is
+# the nearest ancestor without it (compared by value: a `codex` started from another session's shell
+# carries the outer id). OMABOX_SESSION set by hand, for a shell or one command, names no agent: that
+# box only idles out. Neither does an agent in a pid namespace of its own (a sandbox), nor a pid this
+# command does not descend from.
+agent_proc() {
+  local v pid=""
+  v=$(agent_var) || return 1
+  case $v in
+    CLAUDE_CODE_SESSION_ID) pid=${CLAUDE_PID:-} ;;
+    OMABOX_SESSION) pid=${OMABOX_AGENT_PID:-} ;;
+    CODEX_THREAD_ID)
+      # grep -z reads the NUL-separated file itself: `tr | grep -q` could lose a match under pipefail
+      # (grep quits at it, and tr, with a large environment left to write, dies of SIGPIPE).
+      pid=$$
+      while [ "$pid" -gt 1 ] && grep -qzxF "$v=${!v}" "/proc/$pid/environ" 2>/dev/null; do
+        pid=$(proc_ppid "$pid") || return 1
+      done ;;
+  esac
+  [[ $pid =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ -r "/proc/$pid/environ" ] && descends_from "$pid" || return 1
+  # Gone meanwhile: no start time to record (with none, agent_alive would never find it gone).
+  local start; start=$(proc_start "$pid") && [ -n "$start" ] || return 1
+  echo "$pid $start"
+}
+# Whether this process is PID or runs under it.
+descends_from() {
+  local p=$$
+  until [ "$p" = "$1" ]; do
+    [ "$p" -gt 1 ] || return 1
+    p=$(proc_ppid "$p") || return 1
+  done
+}
+# Fields of /proc/PID/stat after the command name (which may hold spaces and parentheses). A pid only:
+# an empty one would read /proc//stat, which is the system-wide /proc/stat.
+proc_stat() {
+  local s fields; [[ $1 =~ ^[0-9]+$ ]] && s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  read -ra fields <<<"${s##*) }"; echo "${fields[$2]}"
+}
+proc_ppid() { proc_stat "$1" 1; }
+proc_start() { proc_stat "$1" 19; }
 
 # Sets NAME and D (the box dir). Names end up in paths and window titles: keep them tame.
 select_box() {
@@ -176,17 +248,19 @@ select_box() {
   [[ $NAME =~ ^[A-Za-z0-9] ]] || die "bad box name: $NAME"
   D=$BOXES/$NAME
 }
+# Whether the box selected is the one this agent session's commands get by default (finding 88).
+session_box() { [ -z "${OMABOX:-}" ] && agent_session >/dev/null && [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; }
 
-# The box's PID 1 on the host, or nothing. An isolated box runs inside pasta's pid namespace (Arch's
-# pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: isolated_pid
+# The box's PID 1 on the host, or nothing. Top-level boxes run inside pasta's pid namespace (Arch's
+# pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: pasta_pid
 # records the host one (and is asked again if `up` never got to it). A recorded pid is only the box's
 # while it is still in the box's own pid namespace (box.json `pidns`, written by `up`): after the box
 # died and the pid was reused, it is some other process of the user's, which `down` must not SIGKILL
 # and `run` must not enter.
 box_pid() {
-  local pid
-  if [ "$(meta net)" = isolated ]; then
-    pid=$(cat "$D/pid" 2>/dev/null) || { isolated_pid && pid=$(cat "$D/pid" 2>/dev/null); } || true
+  local pid=""
+  if [ -f "$D/pasta.pid" ]; then
+    pasta_pid && pid=$(cat "$D/pid" 2>/dev/null) || true
   else
     pid=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) || true
   fi
@@ -197,20 +271,34 @@ box_pid() {
   [ -z "$want" ] || [ "$ns" = "$want" ] || return 0
   echo "$pid"
 }
-isolated_pid() {
+# Records the box's host pid in $D/pid, unless it is there already (box_pid then checks it is still the
+# box's). Only through this box's own pasta: pasta never removes its pid file, and every box's PID 1 is
+# pid 2 in its pasta's namespace, so a pasta.pid whose pid now belongs to another box's pasta would
+# lead to that box's PID 1, which `down` would then SIGKILL.
+pasta_pid() {
   local inner pasta bw p
+  [ -s "$D/pid" ] && return 0
   inner=$(jq -r '."child-pid" // empty' "$D/info.json" 2>/dev/null) && [ -n "$inner" ] || return 1
-  pasta=$(cat "$D/pasta.pid" 2>/dev/null) && bw=$(pgrep -P "$pasta" | head -1) || return 1
+  pasta=$(box_pasta) && bw=$(pgrep -P "$pasta" | head -1) || return 1
   for p in $(pgrep -P "$bw"); do   # pasta -> bwrap -> the box's PID 1, whose pid in pasta's ns is $inner
     [ "$(awk '/^NSpid:/ {print $3}' "/proc/$p/status" 2>/dev/null)" = "$inner" ] && { echo "$p" > "$D/pid"; return 0; }
   done
   return 1
 }
+# The pid in pasta.pid while it is still this box's pasta, or a failure: a pasta (its comm: pasta re-execs
+# itself as passt.avx2 on most CPUs, and is non-dumpable, but comm stays readable) whose command line
+# names this pid file. Neither alone: a copy of sleep can be called pasta, and any argv can hold a path.
+box_pasta() {
+  local pasta; pasta=$(cat "$D/pasta.pid" 2>/dev/null) && [ -n "$pasta" ] || return 1
+  case $(cat "/proc/$pasta/comm" 2>/dev/null) in pasta|pasta.*|passt|passt.*) ;; *) return 1 ;; esac
+  (tr '\0' ' ' < "/proc/$pasta/cmdline") 2>/dev/null | grep -Fq -- " -P $D/pasta.pid " || return 1
+  echo "$pasta"
+}
 box_alive() { local pid; pid=$(box_pid) && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
 meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
 
 need_box() {
-  if box_alive; then touch "$D/used" 2>/dev/null || true; return 0; fi
+  if box_alive; then touch "$D/used" 2>/dev/null || true; take_over && return 0; fi
   [ -f "$BOXES/.expired-$NAME" ] && die "box '$NAME' went down after $(cat "$BOXES/.expired-$NAME") idle (start it again with: omabox up $NAME; --idle 0 keeps it)"
   [ -f "$D/box.json" ] && die "box '$NAME' is dead (logs: $D/box.log $D/home/*.log; clear it with: omabox down $NAME)"
   local have; have=$(list_names | tr '\n' ' ')
@@ -259,6 +347,14 @@ caller_env() {
   return 1
 }
 
+# The caller's PATH without the guard's xdg-open (finding 92): in a box, and for `host`, links open.
+# Any checkout's: a hook written from another clone or worktree names its own. A PATH entry may end in /.
+caller_path() {
+  local d out=() dirs; IFS=: read -ra dirs <<<"${PATH:-}"
+  for d in "${dirs[@]}"; do case $d in */share/guard|*/share/guard/) ;; *) out+=("$d") ;; esac; done
+  local IFS=:; printf '%s' "${out[*]}"
+}
+
 # Run a command inside the box's namespaces (unprivileged: we own its user namespace) with the
 # session environment. Working directory: $PWD when it is the same directory in the box (a mount of
 # it: same device and inode, or an overlay of it), else the box HOME. Not just any dir of that name:
@@ -276,8 +372,10 @@ box_exec() {
   if [ -n "$here" ] && [ "$here" = "$there" ]; then cwd=$PWD
   elif [ -n "$there" ] && jq -e --arg p "$PWD/" 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' "$D/box.json" >/dev/null 2>&1; then cwd=$PWD
   fi
-  # An isolated box's network too; a host-network box shares the host's, which is not ours to join.
-  local ns=(-U -m -p -u -i); [ "$(meta net)" = isolated ] && ns+=(-n)
+  # The box's own network namespace (every box has one since finding 89), so its local services are
+  # reachable. A box started before that shares the host's, which is not ours to join (EPERM).
+  local ns=(-U -m -p -u -i)
+  [ "$(readlink "/proc/$pid/ns/net")" = "$(readlink /proc/self/ns/net)" ] || ns+=(-n)
   # `run --pass VAR` (finding 66): the caller's values go through a pipe (printf is a builtin: no
   # argv), never on a command line, where the process list would show a password to every user.
   local pass=() pfd
@@ -287,7 +385,7 @@ box_exec() {
   fi
   # shellcheck disable=SC2016 # $1/$@ belong to the inner bash
   nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
-    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="${PATH:-}" "${pass[@]}" bash -c '
+    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$(caller_path)" "${pass[@]}" bash -c '
       if [ -n "${OMABOX_PASS_FD:-}" ]; then
         while IFS= read -r -d "" kv <&"$OMABOX_PASS_FD"; do export "$kv"; done
         eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
@@ -360,9 +458,12 @@ parse_mode() {
 }
 
 # The layout's size, for mapping absolute pointer coordinates.
+# (Under set -e a caller's `x=$(extent)` would end omabox without a word when the box's Hyprland
+# does not answer: extent says so and fails.)
 extent() {
-  on_box hyprctl -j monitors | jq -r '[.[] | select(.disabled | not)] |
-    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"'
+  on_box hyprctl -j monitors 2>/dev/null | jq -er '[.[] | select(.disabled | not)] |
+    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"' 2>/dev/null ||
+    die "cannot read the screen size of box '$NAME' (its Hyprland did not answer)"
 }
 
 wait_ready() {
@@ -407,7 +508,8 @@ wait_ready() {
   done
   # The bar paints its widgets ~150 ms after it maps and animates in for ~500 ms more: wait until its
   # pixels hold still (3 identical captures), so the first screenshot shows a finished bar. Not for
-  # interactive boxes: a window the host is not showing is not rendered, so screencopy never returns.
+  # interactive boxes: they are for the user's eyes, and a hidden one draws only at the host's
+  # render_unfocused_fps (before drawn_hidden, not at all: screencopy never returned).
   [ "$(meta mode)" = interactive ] && return 0
   local geom last="" now same=0
   geom=$(on_box hyprctl -j layers | jq -r 'first(.. | objects | select(.namespace? == "omarchy-bar")) | "\(.x),\(.y) \(.w)x\(.h)"')
@@ -537,10 +639,12 @@ seed_home() {
     cp /usr/share/omarchy/applications/*.desktop "$h/.local/share/applications/" 2>/dev/null || true
   fi
   # Git's identity only (finding 48): commits and release dry-runs need one. Never the rest of the
-  # user's git config (credential helpers, tokens in URLs).
+  # user's git config (credential helpers, tokens in URLs). A value that is not set is skipped, not a
+  # failure that ends `up` under set -e (finding 91); from /, so a broken repo in $PWD cannot fail it.
   local key val
   for key in user.name user.email; do
-    val=$(git config --global "$key" 2>/dev/null) && git config --file "$h/.gitconfig" "$key" "$val"
+    val=$(git -C / config --global "$key" 2>/dev/null) || continue
+    git -C / config --file "$h/.gitconfig" "$key" "$val"
   done
 }
 
@@ -612,10 +716,16 @@ refuse_dest() {
   return 1
 }
 
+# What `up` says of a box that is up already, which counts as use.
+up_already() {
+  touch "$D/used" 2>/dev/null || true
+  say "box '$NAME' is already up (options ignored; omabox down $NAME to change them)"
+}
+
 cmd_up() {
   STOCK_BAR=0
   local systemd=0 owner=""
-  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=host allow="" idle=${OMABOX_IDLE:-2h}
+  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0
   while [ $# -gt 0 ]; do
     case $1 in
@@ -655,6 +765,13 @@ cmd_up() {
     name=box-$n
   fi
   select_box "$name"
+  # The box an agent session gets by default goes when the agent does (finding 93), or when idle; so
+  # does that name given with -b (it is the same box). Not an interactive box (the user's window), a
+  # throwaway, or any box while OMABOX is set (it names the box instead of the session).
+  local agent=""
+  if [ $interactive = 0 ] && [ -z "$owner" ] && session_box; then
+    agent=$(agent_proc) || agent=""
+  fi
   size=$(parse_mode "$size")
   local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
   [ $interactive = 0 ] || idle_s=0
@@ -664,23 +781,38 @@ cmd_up() {
   local confirm_from=flag
   [ -n "$ws" ] || ws=$(conf_get workspace)
   [ -n "$confirm" ] || { confirm=$(conf_get confirm-close); confirm_from=config; }
-  case $net in host|isolated) ;; *) die "up: --net is host (the default) or isolated" ;; esac
+  # host: connected's name from before every box had a network of its own (finding 89). A nested
+  # connected box (its host is a box) cannot have a connected pasta (a box has no /dev/net/tun), so
+  # its network is none: an empty namespace of its own.
+  case $net in host|connected) net=connected ;; isolated) ;; *) die "up: --net is connected (the default) or isolated" ;; esac
   [ -z "$allow" ] || [ "$net" = isolated ] || die "up: --allow needs --net isolated"
+  [ "$net" = connected ] && [ -f /opt/omabox/share/session.sh ] && net=none
   [[ -z $allow || $allow =~ ^[0-9]+(,[0-9]+)*$ ]] || die "up: --allow takes ports: 8081,8082"
+  # Every top-level box's network is pasta's (finding 89); a connected one's is a tap device, which
+  # pasta cannot make without /dev/net/tun (it would fail inside the box, where only box.log says why).
+  # Before check_install: no box starts without them, whatever is built.
+  command -v pasta >/dev/null || die "a box's network needs pasta: sudo pacman -S passt"
+  [ "$net" != connected ] || [ -c /dev/net/tun ] ||
+    die "a box's network needs /dev/net/tun (the tun kernel module); --net isolated does without, and has no internet"
+  # Nor does a box behind pasta start from a process with no_new_privs: bwrap cannot write its uid
+  # map there (finding 89). An interactive box is started by the host's Hyprland, not this process.
+  # A box that is up already is still found up (without the lock below, so a refusal leaves no .lock):
+  # such a process, a sandboxed agent's, can use a box the user started.
+  if [ "$net" != none ] && [ $interactive = 0 ] && grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status; then
+    box_alive && { up_already; return 0; }
+    die "a box behind pasta cannot start from a no_new_privs process like this one" \
+      "(an agent's sandbox, a systemd unit with NoNewPrivileges=, a box's own session): its bwrap cannot write the uid map"
+  fi
   check_install
   # One `up` or `down` per name at a time: two agents in one repo both running `omabox up` would
   # otherwise each start a box on the same dir, and one would be orphaned where `down` cannot see it.
   mkdir -p "$BOXES"
   exec {LOCK}>"$BOXES/.lock-$NAME"
   flock -w 60 "$LOCK" || die "box '$NAME' is busy (another up or down); try again"
-  if box_alive; then
-    touch "$D/used" 2>/dev/null || true
-    say "box '$NAME' is already up (options ignored; omabox down $NAME to change them)"
-    return 0
-  fi
+  # No down can come first here (this holds the lock): only a box that just died starts again.
+  if box_alive && take_over held; then up_already; return 0; fi
   [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
     die "--systemd needs your systemd user manager (systemctl --user) to delegate the box a cgroup"
-  [ "$net" = host ] || command -v pasta >/dev/null || die "--net isolated needs pasta: sudo pacman -S passt"
   PLUGINS=()
   local p; for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
   for p in "${PLUGINS[@]}"; do
@@ -740,14 +872,16 @@ cmd_up() {
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
-    --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" \
+    --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg agent "$agent" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1)}
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
-      + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from} else {} end)' > "$D/box.json"
+      + (if $agent != "" then ($agent | split(" ") | {agent: (.[0] | tonumber), agent_start: .[1]}) else {} end)
+      + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
+          drawn_hidden: true} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
 
   # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
@@ -767,11 +901,11 @@ cmd_up() {
   # checks for a systemd-booted system. @CGROUP@ is filled in inside the scope.
   [ $systemd = 0 ] || args+=(--unshare-cgroup --bind @CGROUP@ /sys/fs/cgroup --dir /run/systemd/system)
   # DNS (finding 52): /etc is the host's but /run is the box's, so a resolv.conf linking into /run
-  # (systemd-resolved's stub, NetworkManager's) points at nothing. A host-network box gets that one
-  # file; an isolated box has no network to resolve names for.
+  # (systemd-resolved's stub, NetworkManager's) points at nothing. A connected box gets that one
+  # file (pasta forwards the stub's port); an isolated box has no network to resolve names for.
   # (A link whose directory is missing makes readlink -f fail: no file to bind, not a silent exit.)
   local resolv; resolv=$(readlink -f /etc/resolv.conf) || resolv=""
-  if [ "$net" = host ] && [[ $resolv = /run/* ]] && [ -f "$resolv" ]; then args+=(--ro-bind "$resolv" "$resolv"); fi
+  if [ "$net" = connected ] && [[ $resolv = /run/* ]] && [ -f "$resolv" ]; then args+=(--ro-bind "$resolv" "$resolv"); fi
   for p in "${PLUGINS[@]}"; do args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}"); done
   for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
@@ -780,7 +914,7 @@ cmd_up() {
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
-    --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "${PATH:-}"
+    --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
     --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell"
@@ -792,19 +926,43 @@ cmd_up() {
     [ -x "$WLFD" ] || die "missing $WLFD: run install.sh"
     launch=("$WLFD" "$HOST_WL" bwrap)
   fi
-  if [ "$net" = isolated ]; then
-    # pasta gives the box its own network with only a loopback (--splice-only: no interface, no
-    # route, so no internet and no LAN) and splices just the allowed ports to the host's loopback;
-    # every other direction is off explicitly, since pasta's default is to forward whatever is
-    # bound. Its namespace maps us to root, so bwrap maps back to our uid. pasta closes inherited
-    # fds: bwrap's info fd is opened inside it, and omabox-wlfd connects from inside (a unix socket).
+  # Every box has its own network namespace (finding 89): in the host's, labwc's lazy Xwayland could
+  # claim the host's abstract X11 :0 socket and host X11 apps would open in the box. The default mode
+  # keeps the internet, the LAN and the host's loopback (ports bound on either side are forwarded,
+  # within about a second); an isolated box has only a loopback and the --allow ports. pasta maps us
+  # to root, bwrap maps back to our uid. pasta closes inherited fds: bwrap's info fd is opened inside
+  # it, and omabox-wlfd connects from inside (a unix socket).
+  if [ "$net" = none ]; then
+    # A nested connected box: its pasta would need /dev/net/tun, which the outer box's /dev lacks.
+    # It fails closed: a network namespace of its own with only a loopback. (A nested isolated box
+    # still runs pasta --splice-only, below: that needs no tun. Only a headless one started from
+    # omabox run, though: what the box's session starts (an interactive box's launch.sh included)
+    # has no_new_privs, and there bwrap cannot write its uid map, finding 89.)
+    launch+=(--unshare-net)
+  else
+    local pasta_args=(-q -P "$D/pasta.pid")
+    if [ "$net" = isolated ]; then
+      pasta_args+=(--splice-only -t none -u none -U none -T "${allow:-none}")
+    else
+      # Box ports reach the host on its 127.0.0.1 only: plain `-t auto` binds *:P, which opens them to
+      # the LAN, and a host client of `localhost` tries ::1 first, which pasta accepts, then resets,
+      # instead of refusing (no fallback to 127.0.0.1). 1-65535,auto: ephemeral ports too, which auto
+      # alone skips. --no-map-gw: the gateway is the router again, not all of the host's loopback.
+      # -D/-S none: DNS is the host's resolv.conf (its stub's port comes in through -T), so pasta
+      # has none to hand out and no warning to print about it.
+      local ports=1-65535,auto
+      pasta_args+=(--config-net --no-map-gw -D none -S none --host-lo-to-ns-lo
+        -t "127.0.0.1/$ports" -u "127.0.0.1/$ports" -T "$ports" -U "$ports")
+    fi
     # pasta adds its own pid namespace (no --no-pidns in Arch's yet), so it writes its pid for
-    # isolated_pid to find the box's.
+    # pasta_pid to find the box's. It is bwrap's parent: --die-with-parent ends the box with it (OOM, a
+    # killall), rather than leave it up with no network, DNS or forwards for the rest of its life.
     # shellcheck disable=SC2016 # $0 and $@ belong to the inner sh
-    launch=(pasta -q --splice-only -t none -u none -U none -T "${allow:-none}" -P "$D/pasta.pid" --
-      sh -c 'exec 3>"$0"; exec "$@"' "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)")
+    launch=(pasta "${pasta_args[@]}" --
+      sh -c 'exec 3>"$0"; exec "$@"' "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)"
+      --die-with-parent)
   fi
-  # --systemd: the whole box (pasta too) runs in a transient scope of the user's manager that delegates
+  # --systemd: the whole box (including pasta when used) runs in a transient scope that delegates
   # its cgroup, the only way an unprivileged sandbox gets a cgroup subtree of its own to manage. The
   # scope goes by itself once everything in it has died (`down` kills PID 1).
   local sdenv=()
@@ -814,11 +972,12 @@ cmd_up() {
       bash -c 'cg=/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup); exec "${@//@CGROUP@/$cg}"' omabox-cgroup "${launch[@]}")
     sdenv=(XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR")   # systemd-run finds the user manager through it
   fi
-  # No --die-with-parent: the box outlives this command; `omabox down` (or closing an
-  # interactive box's window) ends it.
+  # Without pasta, no --die-with-parent: bwrap's parent is then this command, which the box outlives;
+  # `omabox down` (or closing an interactive box's window) ends it.
   # env -i keeps Hyprland's exec-rule token (finding 45): the host matches a new window to its exec
-  # rule by the launched pid or by this token in the client's environment, and pasta forks, so an
-  # isolated box's window only lands on its workspace through the token. bwrap drops it inside.
+  # rule by the launched pid or by this token in the client's environment, and pasta forks, so a
+  # top-level box's window (every one is behind pasta, finding 89) only lands on its workspace through
+  # the token. bwrap drops it inside.
   { printf '#!/usr/bin/env bash\nexec'
     # USER/LOGNAME too (finding 49): widgets and scripts name the user from them. SHELL, which login
     # sets on the host (terminals and multiplexers open it), and every locale variable, not only LANG
@@ -841,8 +1000,9 @@ cmd_up() {
     install_passthrough
     # Launched by the host Hyprland so its exec rules apply to exactly this process's window: onto
     # the configured workspace (9 unless changed, finding 70) without focus. (Aquamarine names every nested window "aquamarine"; a class rule
-    # would also catch any other nested Hyprland the user runs.)
-    host_eval "hl.exec_cmd('bash $(lua_str "$D/launch.sh")', { workspace = '$ws silent', no_initial_focus = true })"
+    # would also catch any other nested Hyprland the user runs.) render_unfocused: the host sends the
+    # hidden window frame callbacks, so the box keeps drawing and `shot` works without it on screen.
+    host_eval "hl.exec_cmd('bash $(lua_str "$D/launch.sh")', { workspace = '$ws silent', no_initial_focus = true, render_unfocused = true })"
   else
     bash "$D/launch.sh" {LOCK}>&- &
   fi
@@ -858,7 +1018,7 @@ cmd_up() {
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop)"
   touch "$D/used"
-  if [ "$idle_s" != 0 ] || [ -n "$owner" ] || [ $interactive = 1 ]; then
+  if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
     setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
   fi
   local screen; screen=$(box_screen); say "box '$NAME' up (${screen#* }) in $D"
@@ -887,16 +1047,15 @@ lua_str() {
 }
 
 # SIGKILL the box's PID 1 (the kernel then kills everything in its pid namespace; SIGTERM is ignored,
-# finding 6) and pasta's, if it is isolated; wait for them, at most 10 s. The dir stays.
+# finding 6) and pasta's; wait for them, at most 10 s. The dir stays.
 kill_box() {
   local pid pasta
   pid=$(box_pid) || true
-  pasta=$(cat "$D/pasta.pid" 2>/dev/null) || true
   [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
   # A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does.
   [ -n "$pid" ] && pkill -CONT -f "^nsenter -t $pid " 2>/dev/null
-  # An isolated box whose pid was never found: pasta's own pid namespace holds it, end that instead.
-  if [ -n "$pasta" ] && [ "$(cat "/proc/$pasta/comm" 2>/dev/null)" = pasta ]; then
+  # A box whose pid was never found: pasta's own pid namespace holds it, end that instead.
+  if pasta=$(box_pasta); then
     kill -KILL "$pasta" "$(pgrep -P "$pasta" | head -1)" 2>/dev/null
   fi
   local end=$((SECONDS + 10))
@@ -928,12 +1087,18 @@ human_duration() {
 # (killed with SIGKILL, so its EXIT trap never ran), so is the box. Exits when the box goes, or when a
 # new box took the name (its creation time differs). A throwaway box found dead once its run is gone
 # is cleared too: its run's teardown gave up on it (PID 1 slow to exit under load) and nobody reads its
-# logs; other dead boxes stay for theirs.
+# logs; other dead boxes stay for theirs. An agent session's own box (finding 93) goes when the agent's
+# process does (the one `up` recorded, with its start time), with --idle 0 too. In use then (a peek
+# window, an `omabox run` still running), it stays while in use and goes at the next check once nobody
+# uses it, without waiting out its idle limit. A dead one keeps its logs, as others do.
 cmd__reap() {
-  select_box "$1"; local created=$2 idle owner mode; idle=$(meta idle); owner=$(meta owner); mode=$(meta mode)
+  select_box "$1"; local created=$2 idle owner mode agent; idle=$(meta idle); owner=$(meta owner); mode=$(meta mode)
+  agent=$(meta agent)
   [ -n "$idle" ] || idle=0
-  [ "$idle" -gt 0 ] || [ -n "$owner" ] || [ "$mode" = interactive ] || return 0
+  [ "$idle" -gt 0 ] || [ -n "$owner$agent" ] || [ "$mode" = interactive ] || return 0
   local every=$((idle / 4)); [ $every -le 60 ] || every=60; [ $every -ge 5 ] || every=5
+  # With no idle limit and only its agent to watch, as often as a 2 h box: not every 5 s all session.
+  [ "$idle" -gt 0 ] || [ -z "$agent" ] || every=60
   # An interactive box closed by its user goes from the widget and `ls` within a poll or so.
   [ "$mode" != interactive ] || every=2
   while sleep "$every"; do
@@ -953,11 +1118,19 @@ cmd__reap() {
       say "$(date -Is) box '$NAME': its omabox run ($owner) is gone: taking it down"
       DOWN_IF_CREATED=$created cmd_down "$NAME"; return 0
     fi
-    [ "$idle" -gt 0 ] || continue
+    [ "$idle" -gt 0 ] || [ -n "$agent" ] || continue
     local pid; pid=$(box_pid)
     if peek_pid >/dev/null || pgrep -f "^nsenter -t $pid " >/dev/null; then
       touch "$D/used"; continue
     fi
+    if [ -n "$agent" ] && ! agent_alive; then
+      say "$(date -Is) box '$NAME': its agent session ($(meta agent)) ended: taking it down"
+      DOWN_IF_CREATED=$created DOWN_IF_AGENT_GONE=1 cmd_down "$NAME"
+      # Still up, with an agent that runs: its session took it over meanwhile (take_over). Watch that.
+      [ -d "$D" ] && [ "$(meta created)" = "$created" ] && agent_alive || return 0
+      say "$(date -Is) box '$NAME': taken over by its session's new agent ($(meta agent)): kept"; continue
+    fi
+    [ "$idle" -gt 0 ] || continue
     [ $(($(date +%s) - $(stat -c %Y "$D/used"))) -ge "$idle" ] || continue
     local human; human=$(human_duration "$idle")
     say "$(date -Is) box '$NAME' idle for $human: taking it down"
@@ -965,6 +1138,42 @@ cmd__reap() {
     [ -d "$D" ] || echo "$human" > "$BOXES/.expired-$NAME"
     return 0
   done
+}
+
+# Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and not
+# a zombie (exited, but not reaped yet: a parent that never waits would keep it so for good). None
+# recorded, or no start time, is none alive.
+agent_alive() {
+  local pid start; pid=$(meta agent) && start=$(meta agent_start) || return 1
+  [ -n "$pid" ] && [ -n "$start" ] || return 1
+  [ "$(proc_stat "$pid" 0)" != Z ] && [ "$(proc_start "$pid")" = "$start" ]
+}
+
+# A session resumed in a new process (`claude --continue` and `--resume` keep its id) finds its box
+# still up and recording the agent that exited, and the reaper would take the box down under the new
+# one at its next check (finding 93). So the session's box goes over to this command's agent, but
+# only then: not a box that records no agent, nor one whose agent still runs. Every command that finds
+# a box up calls it: need_box does, and so do `up`, `run` and `path`, which do not go through it.
+# Under the box's lock, which the reaper's `down` takes too before it checks the agent again; `up`
+# holds it already (`take_over held`: a second flock on it would wait out the timeout). Fails when the
+# box is no longer up once it has the lock (that down came first): the caller then says so.
+take_over() {
+  [ -n "$(meta agent)" ] && ! agent_alive && session_box || return 0
+  local agent lock="" rc=0; agent=$(agent_proc) || return 0
+  if [ "${1:-}" != held ]; then
+    exec {lock}>"$BOXES/.lock-$NAME"
+    flock -w 60 "$lock" || { exec {lock}>&-; return 0; }
+  fi
+  # Both checked again under the lock: the reaper's down, then a new `up` of the name that found no
+  # agent, may have come first.
+  if ! box_alive; then rc=1
+  elif [ -n "$(meta agent)" ] && ! agent_alive &&
+    jq --argjson pid "${agent%% *}" --arg start "${agent#* }" '.agent = $pid | .agent_start = $start' \
+      "$D/box.json" > "$D/box.json.tmp"; then
+    mv "$D/box.json.tmp" "$D/box.json"
+  fi
+  [ -z "$lock" ] || exec {lock}>&-
+  return $rc
 }
 
 # Write VALUE to a file in a box's runtime dir (<box dir>/run/FILE). The box can write that dir too, so
@@ -1086,6 +1295,7 @@ cmd_run() {
   if box_alive; then
     [ ${#up_args[@]} -eq 0 ] || say "box '$NAME' is already up: ${up_args[*]} ignored"
     touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
+    take_over || need_box   # gone while it waited: says so
     if [ $detach = 1 ]; then
       local log; log=$D/home/run-$(date +%s%N).log
       # --wait: until what it opens has settled (a first frame within 5 s unless --start says).
@@ -1107,7 +1317,7 @@ cmd_run() {
   fi
   [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
   # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
-  # replaced by a throwaway: that would run the command on the host network without the box's mounts
+  # replaced by a throwaway: that would run the command in a new network namespace without the box's mounts
   # (its --net isolated included), and hide what happened to it.
   [ -z "$name" ] && [ -z "${OMABOX:-}" ] && [ ! -d "$D" ] && [ ! -f "$BOXES/.expired-$NAME" ] || need_box
   # Throwaway box for this one command. The repo is an overlay: the command can write build
@@ -1369,8 +1579,17 @@ cmd_shot() {
   grab() { on_box timeout 10 "${grim[@]}" -; }
   if ! { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } || ! grab > "$out.part" || [ ! -s "$out.part" ]; then
     rm -f "$out.part"
-    [ "$(meta mode)" = interactive ] &&
-      die "shot: no frame from interactive box '$NAME': the host only renders it while its window is visible ($(ws_text "$(meta workspace)"))"
+    # Never tell an agent to show the window: switching the user's workspace for a frame is what the
+    # box exists to avoid. A restart is the user's to do: a box from before drawn_hidden needs one, and
+    # so does one whose window confirm-close replaced (the new window has no render_unfocused).
+    # confirm-close.sh leaves omabox.reopened for that; the box can write there, so only test for it.
+    if [ "$(meta mode)" = interactive ]; then
+      [ "$(meta drawn_hidden)" = true ] ||
+        die "shot: no frame from interactive box '$NAME': it was started by an older omabox, which does not draw its window while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
+      [ ! -f "$D/run/omabox.reopened" ] ||
+        die "shot: no frame from interactive box '$NAME': the user closed its window and kept the box running (confirm-close), and the new window is not drawn while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
+      die "shot: no frame from interactive box '$NAME' ($(ws_text "$(meta workspace)")) in 10 s: ask the user; never switch the user's workspace or focus to get one"
+    fi
     die "shot: grim failed"
   fi
   mv "$out.part" "$out"
@@ -1625,8 +1844,14 @@ settle_end() {
   if [ "$res" = unknown ]; then
     case $reason in
       not-rendered)
-        if [ "$(meta mode)" = interactive ]; then reason="box '$NAME' not rendered (its window is hidden on $(ws_text "$(meta workspace)"))"
-        else reason="box '$NAME' sent no frame"; fi ;;
+        # A hidden interactive box is drawn (finding 90) unless it is older than that or confirm-close
+        # replaced its window: as shot says, a restart is the user's, and nobody shows the window.
+        if [ "$(meta mode)" != interactive ]; then reason="box '$NAME' sent no frame"
+        elif [ "$(meta drawn_hidden)" != true ]; then
+          reason="box '$NAME' not rendered: an older omabox started it, and it is not drawn while hidden (it needs a restart: ask the user; never switch their workspace or focus)"
+        elif [ -f "$D/run/omabox.reopened" ]; then
+          reason="box '$NAME' not rendered: its window was replaced (confirm-close) and is not drawn while hidden (ask the user; never switch their workspace or focus)"
+        else reason="box '$NAME' sent no frame ($(ws_text "$(meta workspace)"); ask the user; never switch their workspace or focus)"; fi ;;
       refused) reason="box '$NAME' refused a screen capture${SETTLE_ERR:+ ($SETTLE_ERR)}" ;;
       *) # Its compositor gone: the box is (being) taken down.
          local end gone; gone=$(($(date +%s%3N) - SETTLE_T0)) end=$((SECONDS + 2))
@@ -1875,9 +2100,15 @@ cmd_mode() {
     [ $SECONDS -lt $deadline ] || die "mode: asked for $want, box reports ${screen#* }"
     sleep 0.1
   done
-  # Kept only once the box has it: omabox.mode for a config reload, box.json for `ls`.
+  # Kept only once the box has it: omabox.mode for a config reload, box.json for `ls`. box.json under
+  # the box's lock, as take_over writes it: a takeover between this read and write would be undone
+  # (the agent that exited put back, and the box taken down under the new one; finding 93).
   box_file "$D/run/omabox.mode" "$want" || die "mode: could not record $want for the box's config reloads"
+  local lock; exec {lock}>"$BOXES/.lock-$NAME"
+  flock -w 60 "$lock" || die "mode: box '$NAME' is busy (an up or down); $want is set, but ls will not show it"
+  box_alive || die "mode: box '$NAME' went down meanwhile"
   jq --arg s "$want" '.size = $s' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  exec {lock}>&-
   echo "$screen"
 }
 
@@ -2044,17 +2275,24 @@ cmd_restart_shell() {
 #   which exits with "cannot open display" (finding 66);
 # - QT_FORCE_STDERR_LOGGING: a Qt program with no display aborts, and without a terminal its reason
 #   went to the journal: now the agent reads it;
-# - a core limit of 1 byte, so that abort does not reach omarchy-crash-watch's notification (see nocore).
-GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1)
+# - a core limit of 1 byte, so that abort does not reach omarchy-crash-watch's notification (see nocore);
+# - no opening links or files on the desktop (finding 92): xdg-open, gh --web and whatever reads $BROWSER
+#   reach a browser already running there over its own socket, not the display. BROWSER and GH_BROWSER
+#   name share/guard/xdg-open, which refuses; Claude Code's and `guard exec`'s PATH also put it first
+#   as xdg-open (Codex only sets values, so it gets the variables).
+GUARD_PATH=$ROOT/share/guard
+GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
+  BROWSER="$GUARD_PATH/xdg-open" GH_BROWSER="$GUARD_PATH/xdg-open")
 GUARD_NOTE="omabox guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). Anything that may open a \
 window (apps, test binaries run outside ctest), hyprctl, grim and keyring checks go through omabox (load the omabox \
-skill). Never point WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real session. Only when the \
+skill). Opening a link or file there (xdg-open, gh --web) is refused too: give the user the link. Never point \
+WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real session. Only when the \
 user asked for their real desktop in this task, run that command with: omabox host -- CMD"
 # Claude Code: a SessionStart hook writes the exports to $CLAUDE_ENV_FILE, which Claude Code sources
 # before every shell command of the session, subagents' included, and prints the note into the
 # context. Not the settings' `env` block: that also changes Claude Code's own process (clipboard
 # paste, opening the browser). The hook is ours if its command mentions $GUARD.
-GUARD_HOOK="if [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]}; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
+GUARD_HOOK="if [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]} PATH=\"$GUARD_PATH:\$PATH\"; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi"
 # shellcheck disable=SC2016 # jq, not shell
 GUARD_JQ='def ours: (.command? // "") | contains($g);
@@ -2096,9 +2334,19 @@ guard_claude() {
   fi
   local want
   case $1 in
-    state) jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
-      [.hooks.SessionStart[]?.hooks[]? | select(ours)]
-      | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur"
+    state)
+      local line dir
+      line=$(jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
+        [.hooks.SessionStart[]?.hooks[]? | select(ours)]
+        | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur")
+      # A hook written from a checkout that is gone (a removed worktree) no longer stops xdg-open.
+      if [[ $line == *": outdated" ]]; then
+        while IFS= read -r dir; do
+          [ -x "$dir/xdg-open" ] || line+=": its $dir is gone, so links open on the desktop again"
+        done < <(jq -r --arg g "$GUARD" "$GUARD_JQ"'.hooks.SessionStart[]?.hooks[]? | select(ours) | .command' <<<"$cur" |
+          grep -o 'PATH="[^"]*/share/guard:' | sed 's/^PATH="//; s/:$//')
+      fi
+      echo "$line"
       return ;;
     on) want=$(jq --arg g "$GUARD" --arg c "$GUARD_HOOK" "$GUARD_JQ"' strip | .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]' <<<"$cur") ;;
     off) want=$(jq --arg g "$GUARD" "$GUARD_JQ"' strip' <<<"$cur") ;;
@@ -2114,7 +2362,7 @@ guard_codex() {
   [ ! -L "$file" ] || file=$(readlink -f "$file")
   local out
   out=$(python3 - "$1" "$file" "$GUARD_CODEX" <<'PY'
-import sys, tomllib
+import os, sys, tomllib
 mode, path, block = sys.argv[1:]
 try:
     cur = open(path).read()
@@ -2163,6 +2411,12 @@ b = find(cur)
 on = bool(b) and b[2][:len(mine)] == mine
 if mode == "state":
     state = "off" if not b else ("on" if on else "outdated")
+    # A block written from a checkout that is gone (a removed worktree) no longer stops gh --web.
+    for l in (b[2] if b and not on else []):
+        if l.startswith("BROWSER = "):
+            stand_in = l.split(" = ", 1)[1].strip('"')
+            if not os.access(stand_in, os.X_OK):
+                state += f": its {os.path.dirname(stand_in)} is gone, so links open on the desktop again"
     print(f"STATE Codex ({path}): {state}")
     sys.exit()
 base = strip(cur)
@@ -2188,6 +2442,11 @@ PY
   esac
 }
 
+# The guard's paths go into agents' settings files unquoted: only a plain path for the omabox checkout.
+guard_root() {
+  [[ $ROOT =~ ^[A-Za-z0-9._/+-]+$ ]] || die "the guard needs omabox at a path of letters, digits and ._/+- only, not $ROOT"
+}
+
 guard_agent() {
   case $1 in claude) guard_claude "$2" ;; codex) guard_codex "$2" ;; esac
 }
@@ -2197,10 +2456,21 @@ cmd_guard() {
   case $act in
     exec)
       # Any other agent, whole: everything it runs inherits the guard (its own process loses the
-      # display too: clipboard, opening a browser).
+      # display too: clipboard, opening a browser). And a session of its own (finding 88), unless
+      # OMABOX_SESSION says otherwise.
       shift; [ "${1:-}" != -- ] || shift
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
-      export "${GUARD_ENV[@]}"; prlimit --pid $$ --core=1: 2>/dev/null || true
+      export "${GUARD_ENV[@]}" PATH="$GUARD_PATH:$PATH"; prlimit --pid $$ --core=1: 2>/dev/null || true
+      # The pid the agent runs as (exec keeps it), so its box can go with it (finding 93). A session
+      # it keeps keeps its agent too, while this runs under that one: a guard exec inside a guarded
+      # agent shares the outer one's box, which must not go when the inner one exits.
+      if [ -z "${OMABOX_SESSION+x}" ]; then
+        OMABOX_SESSION=g$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n'); export OMABOX_SESSION
+        OMABOX_AGENT_PID=$$
+      elif ! [[ ${OMABOX_AGENT_PID:-} =~ ^[0-9]+$ ]] || ! descends_from "$OMABOX_AGENT_PID"; then
+        OMABOX_AGENT_PID=$$
+      fi
+      export OMABOX_AGENT_PID
       exec "$@" ;;
     ""|on|off) ;;
     *) die "guard: on or off [claude|codex], exec -- CMD, or nothing to show it" ;;
@@ -2219,12 +2489,13 @@ cmd_guard() {
     if [ "${WAYLAND_DISPLAY:-}" = "$GUARD" ]; then echo "this shell: guarded"; else echo "this shell: reaches the desktop"; fi
     if printf '%s\n' "${states[@]}" | grep -qv ': on$'; then
       echo; echo "\`omabox guard on\` gives agents' shell commands:"
-      echo "  ${GUARD_ENV[*]}, and a core limit of 1 byte (Claude Code)"
+      echo "  ${GUARD_ENV[*]}, and (Claude Code) $GUARD_PATH first on PATH and a core limit of 1 byte"
       echo "and tells Claude Code's agents: $GUARD_NOTE"
     fi
     return
   fi
   ACT=$act
+  [ "$act" = off ] || guard_root
   for a in "${agents[@]}"; do guard_agent "$a" "$act"; done
 }
 
@@ -2241,8 +2512,17 @@ cmd_host() {
     val=$(sed -n "s/^$v=//p" <<<"$sysenv")
     if [[ $val =~ ^[A-Za-z0-9:._-]+$ ]]; then export "$v=$val"; else unset "$v"; fi
   done
-  export WAYLAND_DISPLAY="${HOST_WL##*/}" HYPRLAND_INSTANCE_SIGNATURE="$HOST_SIG"
+  local path; path=$(caller_path)
+  export WAYLAND_DISPLAY="${HOST_WL##*/}" HYPRLAND_INSTANCE_SIGNATURE="$HOST_SIG" PATH="$path"
   unset QT_FORCE_STDERR_LOGGING
+  # The guard's browser stand-in (finding 92, any checkout's) gives way to the user manager's value, or
+  # none. A BROWSER the guard did not set stays: Omarchy sets it in the shell, not the user manager.
+  # systemctl prints a value with spaces or shell characters quoted, as $'...': not taken as it is.
+  for v in BROWSER GH_BROWSER; do
+    case ${!v:-} in */share/guard/xdg-open) ;; *) continue ;; esac
+    val=$(sed -n "s/^$v=//p" <<<"$sysenv")
+    case $val in ""|*/share/guard/xdg-open|\$\'*) unset "$v" ;; *) export "$v=$val" ;; esac
+  done
   ulimit -Sc "$(ulimit -Hc)" 2>/dev/null || true
   say "on your real desktop: $*"
   exec "$@"
@@ -2261,7 +2541,8 @@ cmd_env() {
 cmd_path() {
   local name; name=$(name_arg path "$@") || exit 1
   select_box "$name"
-  box_alive && touch "$D/used" 2>/dev/null   # seeding a box's HOME through its path is using it
+  # Seeding a box's HOME through its path is using it.
+  if box_alive; then touch "$D/used" 2>/dev/null || true; take_over || need_box; fi
   echo "$D"
 }
 
@@ -2350,6 +2631,8 @@ cmd_down() {
     # The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
     # started a new box under the name (finding 74). Not that one.
     if [ -n "${DOWN_IF_CREATED:-}" ] && [ "$(meta created)" != "$DOWN_IF_CREATED" ]; then exec {lock}>&-; continue; fi
+    # Nor, when it decided on an agent that exited, a box its session took over meanwhile (take_over).
+    if [ -n "${DOWN_IF_AGENT_GONE:-}" ] && agent_alive; then exec {lock}>&-; continue; fi
     local p; p=$(peek_pid) && kill "$p" 2>/dev/null   # its peek window, if one is open
     if ! kill_box; then rc=1; exec {lock}>&-; continue; fi
     # Its reaper, unless that is us: nothing may be left running for a box that is gone.

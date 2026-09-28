@@ -13,7 +13,7 @@ AQ_PREFIX=$ROOT/build/prefix
 PKGS=(
   labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret   # run a box
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
-  passt                                                                  # up --net isolated (pasta)
+  passt                                                                  # every box's network (pasta)
   wayland libxkbcommon base-devel pkgconf                                               # tools/
   git cmake ninja hyprwayland-scanner hyprutils seatd libdisplay-info hwdata libinput   # aquamarine
   libdrm mesa pixman
@@ -104,22 +104,41 @@ if [ -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ] || [ -d "${CODEX_HOME:-$HOME/.co
   state=$("$ROOT/bin/omabox" guard) || true
   states=$(grep -E '^(Claude Code|Codex|claude|codex)' <<<"$state" || true)
   echo "$states"
-  if grep -qv ': on$' <<<"$states"; then
+  # The agents (as `omabox guard on` names them) whose guard is outdated, and those where it is off
+  # (or whose settings it cannot read). `guard on` for just those: for both, no name is needed.
+  agents() { sed -nE 's/^(Claude Code|claude)[ :].*/claude/p; s/^(Codex|codex)[ :].*/codex/p'; }
+  mapfile -t outdated < <(grep ': outdated' <<<"$states" | agents)
+  mapfile -t off < <(grep -v -e ': on$' -e ': outdated' <<<"$states" | agents)
+  which_on() { [ $# -gt 1 ] || echo "$1"; }
+  if [ ${#outdated[@]} -gt 0 ]; then
+    # An update of what the user already said yes to, whatever the other agents' guard: a "no" to
+    # turning it on does not hold it back, and a "no" here is not remembered.
+    w=$(which_on "${outdated[@]}")
+    echo "The guard there is outdated (omabox guard shows what it does)."
+    if [ -t 0 ] && [ -t 1 ]; then
+      read -r -p "Update it? [Y/n] " yn
+      [[ $yn = [nN]* ]] || "$ROOT/bin/omabox" guard on ${w:+"$w"} || echo "the guard is not (fully) updated, see above; the rest of the install is done"
+    else
+      echo "not asked (no terminal): omabox guard on${w:+ $w}"
+    fi
+  fi
+  if [ ${#off[@]} -gt 0 ]; then
+    w=$(which_on "${off[@]}")
     echo "It gives your agents' shell commands a display that does not exist, so a window, hyprctl or"
     echo "grim outside a box fails instead of reaching your desktop. omabox keeps working, and"
     echo "\`omabox host -- CMD\` runs what you ask for on the real desktop. See: omabox guard"
     declined=$HOME/.config/omabox/guard-declined
     if [ -e "$declined" ]; then
-      echo "not asked (you said no before; rm $declined to be asked again): omabox guard on"
+      echo "not asked (you said no before; rm $declined to be asked again): omabox guard on${w:+ $w}"
     elif [ -t 0 ] && [ -t 1 ]; then
       read -r -p "Turn it on? [Y/n] " yn
       if [[ $yn = [nN]* ]]; then
         mkdir -p "$(dirname "$declined")" && date -Is > "$declined"
       else
-        "$ROOT/bin/omabox" guard on || echo "the guard is not (fully) on, see above; the rest of the install is done"
+        "$ROOT/bin/omabox" guard on ${w:+"$w"} || echo "the guard is not (fully) on, see above; the rest of the install is done"
       fi
     else
-      echo "not asked (no terminal): omabox guard on"
+      echo "not asked (no terminal): omabox guard on${w:+ $w}"
     fi
   fi
 fi

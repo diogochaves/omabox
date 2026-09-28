@@ -1,0 +1,7 @@
+#!/bin/sh
+# The agent guard's xdg-open (finding 92): first on a guarded agent's PATH, and its $BROWSER and
+# $GH_BROWSER. A link or file opened from an agent's shell would land on the user's desktop: a browser
+# already running there takes the URL over its own socket, not the display the guard took away.
+# Exit 4, as xdg-open does when the action failed.
+echo "omabox guard: not opening ${*:-that} on the user's desktop. Give the user the link or path instead. To look at it yourself, open it in your box (omabox run -d -- xdg-open ARG, then omabox shot). Only when the user asked to see it on their desktop: omabox host -- xdg-open ARG" >&2
+exit 4

@@ -26,7 +26,10 @@ is in `~/.local/state/omabox/test/`).
   those binds are the only thing stopping it from grabbing the real seat.
 - Box HOME is fake and seeded without secrets (never copy `~/.config/omarchy/api-keys.env`,
   keyrings, tokens). Host code is mounted read-only.
-- Teardown = `kill -KILL` the namespace PID 1 (`bwrap --info-fd` → `child-pid`). SIGTERM does not work.
+- Teardown = `kill -KILL` the namespace PID 1 as `box_pid` finds it: `<box dir>/pid` behind pasta,
+  whose own pid namespace makes bwrap's `--info-fd` `child-pid` pasta's numbering (2); `child-pid`
+  only for a nested connected box (`net: none`), which has no pasta. `down` kills the box's pasta
+  too. SIGTERM does not work.
 - Never touch the user's real local services (servers on host ports they did not name as test
   servers). Test against throwaway servers on ports of your own, or `--net isolated --allow PORTS`.
 - Don't use `ydotool` or anything uinput-based: it would drive the real cursor. Don't use `wtype`

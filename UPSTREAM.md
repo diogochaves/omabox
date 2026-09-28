@@ -20,15 +20,20 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 
 ## passt: `pasta --no-pidns`
 
-- **Needed for:** simpler bookkeeping of `--net isolated` boxes (NOTES findings 44, 45). Not for
-  correctness: without it, pasta adds its own pid namespace, so bwrap's `child-pid` is in pasta's
-  numbering and omabox looks up the host pid itself.
+- **Needed for:** simpler bookkeeping of every top-level box, which runs behind pasta (NOTES findings
+  44, 45, 89). Not for correctness: without it, pasta adds its own pid namespace, so bwrap's
+  `child-pid` is in pasta's numbering and omabox looks up the host pid itself.
 - **Waiting for:** a release containing commit `588b545` ("pasta: Add --no-pidns to keep spawned
   command in caller's PID namespace", 2026-09-06). Arch has `passt 2026_07_28` (2026-09-23).
 - **Check:** `pasta --help | grep -- --no-pidns`.
-- **Then drop:** in `bin/omabox`, `isolated_pid`, the `net = isolated` branch of `box_pid`, the
-  `isolated_pid` call in `cmd_up`'s wait loop, and pasta's `-P "$D/pasta.pid"`; add `--no-pidns` to
-  the pasta command. Test a headless and (in a stand-in first) an interactive isolated box.
+- **Then drop:** in `bin/omabox`, `pasta_pid`, `box_pasta`, the `pasta.pid` branch of `box_pid`,
+  `kill_box`'s pasta fallback and pasta's `-P "$D/pasta.pid"`; add `--no-pidns` to the pasta
+  command. Also: the `pid` and `pasta.pid` mentions in README, NOTES' architecture and AGENTS.md's
+  teardown line, `t_isolated_no_pidfile`, and `t_stale_pid`'s pasta.pid checks. `t_race` and
+  `t_pasta_dies` find pasta by its `-P` file: match bwrap's arguments in its command line instead.
+  pasta stays bwrap's parent, so `--die-with-parent` stays. Test headless connected and isolated
+  boxes, and an interactive one on the real desktop (with the user's go-ahead): a stand-in cannot
+  run an interactive box behind pasta (NOTES finding 89).
 
 ## Hyprland: a nested Hyprland ignores its window being resized
 

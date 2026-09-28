@@ -24,7 +24,7 @@ say so in the title.
 ./install.sh           # builds the tools and the patched aquamarine
 test/run.sh unit       # the fast tier, no box
 test/run.sh            # the whole suite in real, headless boxes (~5 min); run it before a pull request
-shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/*
+shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/* share/guard/*
 ```
 
 CI runs that shellcheck (version 0.11.0) on every pull request. It cannot run the suite: that needs

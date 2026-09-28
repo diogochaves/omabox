@@ -25,8 +25,9 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - A caret (a change 4 px or thinner) and the software cursor (in every frame; it hides on a key
   press) are not changes; the line says what was ignored. `--strict` counts them (a thin progress bar
   or spinner is ignored like a caret otherwise).
-- Exit 0 satisfied, 124 not in time, 1 unknown (the box went down; an interactive box whose window is
-  hidden renders nothing). Waiting counts as use for the idle timeout.
+- Exit 0 satisfied, 124 not in time, 1 unknown (the box went down; an interactive box that is not
+  drawn while hidden: an older one, or one whose window confirm-close replaced). Waiting counts as use
+  for the idle timeout.
 
 ## Mounts, HOME and the session
 
@@ -48,11 +49,32 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - No Xwayland unless `omabox up --xwayland`. Omarchy's `uwsm-app` launching always goes through a
   stand-in, `--systemd` or not: apps start as plain processes, not units (output in
   `<box dir>/home/apps.log`).
+- The XDG base dirs are set as in a session (`XDG_DATA_HOME=/home/sbx/.local/share`, ...). An app
+  installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
+  `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.
+  To test with another HOME (`env HOME=$(mktemp -d) app`), set the `XDG_*_HOME` vars too.
 - `--no-shell` starts Hyprland only (no bar, tray or notifications): faster for plain app work.
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
 - Logs: `<box dir>/home/*.log` (shell, keyring, labwc, runs), Hyprland's in
   `<box dir>/run/hypr/*/hyprland.log`, bwrap's in `<box dir>/box.log`.
+
+## Network
+
+- Each box has its own network namespace. By default it reaches the internet, the LAN and the user's
+  servers on the host's 127.0.0.1; `--net isolated --allow PORTS` reaches only those host ports.
+- Across the box boundary use `127.0.0.1`, not `localhost`, with a server listening on IPv4
+  (`127.0.0.1`, `0.0.0.0` or `::`): from a box, `localhost` is reset on an IPv4-only server, and
+  between boxes always. A box's server is reachable from the host (and other boxes) on
+  `127.0.0.1:PORT` within about a second of listening (poll for it); one on `::1` only is not.
+  Inside a box the host's LAN address is the box itself. A connected box started inside a box has
+  no network.
+
+## Box lifetime
+
+- Your session's box goes down when your agent (Claude Code, Codex) exits. A peek window or an
+  `omabox run` still going then keeps it until they end; a `run -d` job does not. After `/clear` the
+  agent's process lives on and the old box only idles out.
 
 ## The Omarchy shell's IPC (direct routes)
 
@@ -73,5 +95,8 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   `click`, `pointer` and `keys` show on it for ~3 s (a ring, key captions; `--pass` values as `*`),
   never in your shots.
 - `omabox up --interactive` makes the box a real window on that workspace that the user drives
-  (SUPER+ALT+ESCAPE sends SUPER keys to it). `shot` and `wait still` do not work while that window is
-  hidden; agents use headless boxes.
+  (SUPER+ALT+ESCAPE sends SUPER keys to it). The host keeps drawing it while it is hidden, so `shot`,
+  `click`, `keys` and `wait` work on it. Once the user closed that window and kept the box running,
+  the new one is drawn only while shown: `click` and `keys` still reach it, but `shot` gets no frame,
+  and the new window can open on an empty workspace, where they reach no app. When the user has to
+  act in it (a login), tell them which workspace it is on and let them go there.

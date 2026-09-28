@@ -12,9 +12,11 @@
 # socket is listened to for the whole run, and a window, focus change or virtual keyboard of the
 # suite's showing up there fails the test that was running (t_leak_control first proves that on a box
 # standing in for the host); the end checks that the host's focused workspace and window are what
-# they were, or changed by events that were not the suite's (you working meanwhile). Pointer motion
+# they were, or changed by events that were not the suite's (you working meanwhile). omabox's
+# workspace coming up there fails it too (unless you were on it when the run started). Pointer motion
 # has no event: it is only seen when it moves focus. Needs a Hyprland session, python3, and the host
-# ports 8093/8094 free (a throwaway HTTP server for the network tests).
+# ports 8093/8094 free (a throwaway HTTP server for the network tests; t_connected finds free ports
+# of its own, and makes one connection from a box to its gateway, the router).
 # A test that runs no check fails, and so does a full run with fewer checks than MIN_CHECKS.
 # Each run keeps a folder (the last 5 runs are kept) in ~/.local/state/omabox/test/: its provenance
 # and, for a test's first failure, what its boxes showed then (screen, windows, focus, pointer,
@@ -22,6 +24,8 @@
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
+# An agent running the suite would otherwise give every default-named box its session's suffix.
+unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID CLAUDE_PID OMABOX_AGENT_PID
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLI=$ROOT/bin/omabox
@@ -34,11 +38,14 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # checking shows up here even when everything that did run passed.
 MIN_CHECKS=340 MIN_UNIT=170
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
+SERVERS=()                 # host-side test servers, stopped on exit
 
 cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
+  cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
   [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
+  [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
 }
@@ -192,9 +199,10 @@ while True:
 # unless it is your own box opened meanwhile) and peek (class omabox-peek, "omabox peek: NAME"; the
 # tool started by hand is "omabox peek"). A virtual keyboard's layout event is `omabox keys` reaching
 # that compositor (ours is anonymous there: hl-virtual-keyboard-unknown); Omarchy's input method,
-# fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names others (wayvnc).
+# fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names others (wayvnc). WS, when
+# given, is omabox's workspace: it coming up is a leak (the suite's boxes open nothing there).
 leak_scan() {
-  local pre=$1 line data cls title kb notes=()
+  local pre=$1 ws=${2:-} line data cls title kb notes=()
   while IFS= read -r line; do
     line=${line#* }
     case $line in
@@ -218,7 +226,11 @@ leak_scan() {
         if [ "$kb" = hl-virtual-keyboard-fcitx5 ] ||
            { [ -n "${OMABOX_TEST_HOST_KEYBOARDS:-}" ] && [[ $kb =~ $OMABOX_TEST_HOST_KEYBOARDS ]]; }; then notes+=("keyboard $kb")
         else echo "leak: keys from a virtual keyboard ($kb)"; fi ;;
-      workspacev2\>\>*) data=${line#*>>}; notes+=("workspace ${data#*,}") ;;
+      workspacev2\>\>*)
+        data=${line#*>>}
+        if [ -n "$ws" ] && [ "${data#*,}" = "$ws" ]; then
+          echo "leak: omabox's workspace $ws came up (if you went there yourself, run the suite again)"
+        else notes+=("workspace ${data#*,}"); fi ;;
     esac
   done
   [ ${#notes[@]} = 0 ] || echo "note: not the suite's: $(printf '%s\n' "${notes[@]}" | awk '!seen[$0]++ && n++ < 8' | paste -sd, - | sed 's/,/, /g')"
@@ -246,7 +258,7 @@ their_new_box() {
 slice() { awk -v a="== $2" -v b="== ${3:-}" '{m = substr($0, index($0, " ") + 1)} f && m == b {exit} f; m == a {f = 1}' "$1"; }
 # After each test: what of it reached the host's desktop fails it; what is not the suite's is shown.
 host_scan() {
-  local out; out=$(slice "$EVID/host-events.log" "$1" | leak_scan "$P-")
+  local out; out=$(slice "$EVID/host-events.log" "$1" | leak_scan "$P-" "$HWS")
   [[ $out != *leak:* ]] || no "nothing of it reached the host desktop" "$(grep '^leak:' <<<"$out")"
   [[ $out != *note:* ]] || printf '       (host, %s)\n' "$(grep '^note:' <<<"$out" | cut -c7-)"
 }
@@ -262,7 +274,7 @@ host_same() {
     last=$(grep -E '^[0-9.]* (~ |activewindowv2>>$)' "$log" | tail -n 1 | cut -d' ' -f2-)
     { [ -n "$3" ] && [[ $last == "~ $3 "* ]]; } || { [ -z "$3" ] && [ "$last" = "activewindowv2>>" ]; } && seen=1
   fi
-  if [ -n "$seen" ] && ! leak_scan "$P-" < "$log" | grep '^leak:' >/dev/null; then
+  if [ -n "$seen" ] && ! leak_scan "$P-" "$HWS" < "$log" | grep '^leak:' >/dev/null; then
     ok "$1 by the suite (it is $3 now: focus events that were not the suite's)"
   elif [ -n "$seen" ]; then no "$1" "want [$2] got [$3]"
   else no "$1" "want [$2] got [$3]; no event to it in the host's log"; fi
@@ -337,6 +349,13 @@ t_unit_refusals() {
   check_fails "--ro-bind onto //usr refused" ob up "$P-r15" --ro-bind "$ROOT://usr"
   check_fails "two names refused" ob up "$P-r16" "$P-r17"
   check_fails "--plugin HOME refused" bash -c "mkdir -p '$TMP/fakehome' && echo '{\"id\":\"x.y\"}' > '$TMP/fakehome/manifest.json' && HOME='$TMP/fakehome' '$CLI' up '$P-r18' --plugin '$TMP/fakehome'"
+  # (/dev/net/tun hidden in a mount namespace of its own: pasta would fail inside the box, 10 s later)
+  check_match "a connected box without /dev/net/tun is refused up front" "needs /dev/net/tun" \
+    "$(unshare -Urm bash -c 'mount -t tmpfs none /dev/net && exec "$0" up "$1"' "$CLI" "$P-r19" 2>&1)"
+  # (bwrap would fail at its uid map behind pasta, and only box.log would say so, 10 s later)
+  check_match "a box behind pasta is refused up front from a no_new_privs process" \
+    "cannot start from a no_new_privs process" "$(setpriv --no-new-privs "$CLI" up "$P-r20" 2>&1)"
+  check_fails "...before its box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r20"
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
@@ -419,7 +438,7 @@ t_unit_seed_copy() {
 # up --new (finding 73): a free box-N name, printed; two at once never get the same one. The names
 # are the user's namespace too (box-1 may be theirs): only the ones printed here are taken down.
 t_new() {
-  local a b; a=$(mktemp -p "$TMP") b=$(mktemp -p "$TMP")
+  local a=$TMP/new-a b=$TMP/new-b   # fixed names: cleanup takes these boxes down if the suite stops here
   "$CLI" up --new --no-shell --idle 0 > "$a" 2>/dev/null & local pa=$!
   "$CLI" up --new --no-shell --idle 0 > "$b" 2>/dev/null & local pb=$!
   wait $pa $pb
@@ -428,6 +447,7 @@ t_new() {
   check "...two at once, two different names ($na, $nb)" test -n "$nb" -a "$na" != "$nb"
   check "...both up" bash -c "'$CLI' ls --json | jq -e '[.[] | select(.name == \"$na\" or .name == \"$nb\") | select(.state == \"up\")] | length == 2'"
   [ -n "$na" ] && ob down "$na" >/dev/null 2>&1; [ -n "$nb" ] && ob down "$nb" >/dev/null 2>&1
+  rm -f "$a" "$b"   # down: a later box-N of someone else's may get these names
 }
 
 # One version for the CLI and the widget (CHANGELOG.md).
@@ -459,13 +479,16 @@ t_unit_leak_scan() {
   check_eq "...nor Omarchy's input method (fcitx5, on every focus change of yours)" "" "$(leaks 'activelayout>>hl-virtual-keyboard-fcitx5,English (US)')"
   check_eq "your own windows, focus and workspaces: one note, no leak" "note: not the suite's: window firefox, focus firefox, workspace 3" \
     "$(scan 'openwindow>>b,3,firefox,a, title' 'activewindowv2>>b' '~ 0xb pid=9 class=firefox' 'workspacev2>>3,3' '~ 0xb pid=9 class=firefox')"
+  check_match "omabox's workspace coming up (from #13's watch)" "^leak: omabox's workspace 9 came up" "$(printf '1.000 %s\n' 'workspacev2>>9,9' | leak_scan t1- 9)"
+  check_eq "...a note when the run does not watch it (you were on it)" "note: not the suite's: workspace 9" "$(scan 'workspacev2>>9,9')"
   check_eq "a log slice starts after its marker and ends before the next" "b" \
     "$(printf '1 a\n2 == x\n3 b\n4 == y\n5 c\n' > "$TMP/slice"; slice "$TMP/slice" x y | cut -d' ' -f2)"
 }
 
 # The leak detector, proven (finding 80): the watcher the host gets, on a box standing in for the
-# host. Quiet, it reports nothing; then a box's window taking focus, a workspace switch and back, and a
-# key from `omabox keys` are leaked into the stand-in on purpose, and each must be reported. A clean
+# host. Quiet, it reports nothing; then a box's window taking focus, a workspace switch and back,
+# omabox's workspace coming up, and a key from `omabox keys` are leaked into the stand-in on purpose,
+# and each must be reported. A clean
 # host log means something only then: when this test fails, so does the host's verdict.
 t_leak_control() {
   local S=$P-ctl f0=$fail log
@@ -475,7 +498,7 @@ t_leak_control() {
   check "the watcher listens to the stand-in's events" until_ok 10 grep -q ' == watching$' "$log"
   mark() { ob run -b "$S" -- sh -c 'printf "%s == %s\n" "$(date +%s.%3N)" "$1" >> "$XDG_RUNTIME_DIR/events.log"' sh "$1"; }
   # shellcheck disable=SC2329 # called through until_ok
-  reported() { slice "$log" leaks | leak_scan "$P-" | grep -- "$1" >/dev/null; }  # (not -q: its early exit would fail the pipe)
+  reported() { slice "$log" leaks | leak_scan "$P-" 9 | grep -- "$1" >/dev/null; }  # (not -q: its early exit would fail the pipe)
   mark quiet
   ob shot -b "$S" -o "$TMP/ctl.png" >/dev/null 2>&1; ob hyprctl -b "$S" -j clients >/dev/null
   mark leaks
@@ -483,11 +506,14 @@ t_leak_control() {
   until_ok 10 bash -c "'$CLI' hyprctl -b '$S' -j activewindow | jq -e '.class == \"foot\"'"
   ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '3' })" >/dev/null
   ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '9' })" >/dev/null
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null
   ob keys -b "$S" a >/dev/null
   check "a box's window taking focus is reported, with the box" until_ok 5 reported "^leak: focus went to a window of this run's: .*OMABOX_NAME=$S class=foot"
   check "a key from omabox keys is reported" until_ok 5 reported '^leak: keys from a virtual keyboard'
   check "a workspace switch and back is noted" until_ok 5 reported '^note: .*workspace 3, workspace 1'
-  check_eq "...and while quiet, nothing" "" "$(slice "$log" quiet leaks | leak_scan "$P-")"
+  check "omabox's workspace coming up is reported" until_ok 5 reported "^leak: omabox's workspace 9 came up"
+  check_eq "...and while quiet, nothing" "" "$(slice "$log" quiet leaks | leak_scan "$P-" 9)"
   ob down "$S" >/dev/null 2>&1
   [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }
@@ -503,13 +529,312 @@ t_unit_cli() {
   check_eq "inside a box OMABOX=1 is not a box name" "$(basename "$ROOT")" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
   check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
-  check_match "run: a throwaway's up error is shown" "--net is host" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
+  check_match "run: a throwaway's up error is shown" "--net is connected" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
   check_match "run --help is the usage" "omabox up" "$(ob run --help 2>&1)"
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
-  check_fails "down --all with a name refused" ob down "$P-x" --all
+  # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
+  mkdir -p "$TMP/rt"
+  check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
+}
+
+# finding 88: an agent session's default box is its own.
+t_unit_agent_session() {
+  local repo; repo=$(tmp_repo as)
+  dn() { (cd "$repo" && env -u OMABOX -u OMABOX_SESSION -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID "$@" bash -c 'source "$1"; default_name' _ "$TMP/lib/bin/omabox"); }
+  check_eq "no agent: the repo's name" "$P-as" "$(dn)"
+  check_eq "Claude Code: the session id's tail" "$P-as-5cc72cdc" "$(dn CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "Codex: the random tail of its UUIDv7, not the timestamp" "$P-as-c8d64254" "$(dn CODEX_THREAD_ID=01a0314c-9a07-72f1-8183-d09fc8d64254)"
+  check_eq "Codex sessions started together get different boxes" "$P-as-6ad3e01f" "$(dn CODEX_THREAD_ID=01a0314c-9a07-72f1-8183-d0a16ad3e01f)"
+  check_eq "OMABOX_SESSION wins" "$P-as-abcdef12" "$(dn OMABOX_SESSION=abcdef12 CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "OMABOX_SESSION= opts out" "$P-as" "$(dn OMABOX_SESSION= CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "OMABOX still names the box" shared "$(dn OMABOX=shared CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
+  check_eq "a short id is no session" "$P-as" "$(dn CLAUDE_CODE_SESSION_ID=abc)"
+  local long; long=$TMP/$P-a-repo-with-a-name-far-longer-than-forty; mkdir -p "$long" && git -C "$long" init -q
+  local got; got=$(cd "$long" && CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc bash -c 'source "$1"; select_box ""; echo "$NAME"' _ "$TMP/lib/bin/omabox")
+  check_match "a long repo name keeps the session suffix" '^.{31}-5cc72cdc$' "$got"
+  check_match "guard exec: a session of its own" '^g[0-9a-f]{12}$' "$(env -u OMABOX_SESSION "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
+  check_eq "guard exec: an OMABOX_SESSION set is kept" mine12345 "$(OMABOX_SESSION=mine12345 "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
+  # finding 93: the agent is Claude Code's CLAUDE_PID, the process `guard exec` became, or (Codex) the
+  # nearest ancestor without its session variable; always one this command descends from.
+  # (`; true`: bash would otherwise exec its last command, and the "agent" would be gone)
+  local out lib=$TMP/lib/bin/omabox
+  out=$(bash -c 'echo "me=$$"; CLAUDE_CODE_SESSION_ID=$0 CLAUDE_PID=$$ bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-session" "$lib")
+  check_eq "Claude Code: the agent is CLAUDE_PID" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  sleep 30 & local other=$!
+  check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID=$other bash -c 'source "$1"; agent_proc' _ "$lib"
+  out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib")
+  check_eq "Codex: the nearest process without its session variable" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  # ...with 1.5 MB of environment after its variable too (a `tr | grep -q` pipe lost the match there).
+  local big=() pad i; printf -v pad '%01000d' 0
+  for i in $(seq 1500); do big+=("V$i=$pad"); done
+  out=$(bash -c 'echo "me=$$"; env -i PATH="$PATH" HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" CODEX_THREAD_ID="$0" "${@:2}" \
+    bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib" "${big[@]}")
+  check_eq "...with a large environment too" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; bash -c '\''source "$1"; agent_proc'\'' _ "$0"' "$lib")
+  check_eq "guard exec: the agent is what it ran" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
+  # A guard exec inside a guarded agent keeps its session, so its agent too (the box is the outer
+  # one's), unless it does not run under that agent; a session of its own starts with its own agent.
+  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; "$0" guard exec -- sh -c '\''echo "me=$OMABOX_AGENT_PID"'\''; true' "$CLI")
+  check_eq "guard exec in a guarded agent: the agent is still the outer one" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  out=$(OMABOX_SESSION=abcd1234 OMABOX_AGENT_PID=$other "$CLI" guard exec -- sh -c 'echo "me=$$"; echo "me=$OMABOX_AGENT_PID"')
+  check_eq "...not an OMABOX_AGENT_PID it does not run under" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  out=$(bash -c 'OMABOX_AGENT_PID=$$ "$0" guard exec -- sh -c '\''echo "me=$$"; echo "me=$OMABOX_AGENT_PID"'\''; true' "$CLI")
+  check_eq "...and not one from outside a session it starts" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
+  kill "$other" 2>/dev/null
+  check_fails "OMABOX_SESSION set for one command names no agent (it would go down a minute later)" \
+    env OMABOX_SESSION=abcd1234 bash -c 'source "$1"; agent_proc' _ "$lib"
+  # An agent that exited is gone even while it is a zombie: its parent (an exec'd sleep) never waits.
+  local zd=$TMP/zombie z; mkdir -p "$zd"
+  bash -c 'sleep 300 & echo $! > "$0"; exec sleep 300' "$zd/pid" & local zparent=$!
+  until_ok 5 test -s "$zd/pid"; z=$(cat "$zd/pid")
+  jq -n --argjson a "$z" --arg s "$(bash -c 'source "$1"; proc_start "$2"' _ "$lib" "$z")" '{agent: $a, agent_start: $s}' > "$zd/box.json"
+  check "an agent that runs is alive" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  kill "$z"; until_ok 5 grep -q '^[^)]*) Z' "/proc/$z/stat"
+  check_fails "...one that exited is not, though its parent has not reaped it" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  kill "$zparent" 2>/dev/null
+  # None recorded, or no start time, is none alive. An empty pid read /proc//stat (the system-wide
+  # /proc/stat: no state Z) and an empty start matched the empty one read for it, or for a pid gone.
+  # In a condition, as its callers call it (set -e would end it at a failed read otherwise).
+  # shellcheck disable=SC2329 # called through check_fails
+  alive() { env D="$zd" bash -c 'source "$1"; agent_alive || exit 1' _ "$lib"; }
+  local nopid=$(($(cat /proc/sys/kernel/pid_max) + 1))
+  echo '{"agent": null}' > "$zd/box.json"
+  check_fails "a box that records no agent has none alive" alive
+  rm -f "$zd/box.json"
+  check_fails "...nor one with no box.json" alive
+  jq -n --argjson a "$nopid" '{agent: $a, agent_start: ""}' > "$zd/box.json"
+  check_fails "...nor one that records a pid gone, with no start time" alive
+  check_fails "proc_stat takes no empty pid" bash -c 'source "$1"; proc_stat "" 0' _ "$lib"
+  check_fails "agent_proc fails when its agent's start time cannot be read (it exited meanwhile)" \
+    env CLAUDE_CODE_SESSION_ID="t-$P-session" bash -c 'source "$1"; proc_start() { :; }; CLAUDE_PID=$$; agent_proc' _ "$lib"
+}
+
+# findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the
+# other's up. A session's box goes when its agent exits, but not while it is in use, and a dead one
+# keeps its logs. The "agent" here is a shell that exports its own pid as CLAUDE_PID, as Claude Code does.
+t_agent_session() {
+  local repo; repo=$(tmp_repo ag)
+  local s1=11111111-2222-4333-8444-5555aaaa0001 s2=11111111-2222-4333-8444-5555aaaa0002
+  local s3=11111111-2222-4333-8444-5555aaaa0003 s4=11111111-2222-4333-8444-5555aaaa0004
+  local s5=11111111-2222-4333-8444-5555aaaa0005 s6=11111111-2222-4333-8444-5555aaaa0006
+  as() { local s=$1; shift; (cd "$repo" && env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" "$CLI" "$@"); }
+  # Run in the background: exec makes that process the agent, so $! is its pid. Its first command is
+  # `up --no-shell` with the options given, or the one after -- (agent S -- run -- true); then it
+  # touches $TMP/ag-PID (its output in $TMP/ag-PID.out) and waits.
+  agent() {
+    local s=$1; shift
+    if [ "${1:-}" = -- ]; then shift; else set -- up --no-shell "$@"; fi
+    cd "$repo" || exit 1
+    exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" bash -c 'export CLAUDE_PID=$$
+      "${@:2}" >"$1-$$.out" 2>&1; touch "$1-$$"; exec sleep 300' _ "$TMP/ag" "$CLI" "$@" >/dev/null 2>&1
+  }
+  idle_of() { jq -r .idle "$XDG_RUNTIME_DIR/omabox/$1/box.json"; }
+  agent_of() { jq -r .agent "$XDG_RUNTIME_DIR/omabox/$1/box.json" 2>/dev/null; }
+  state_of() { "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
+  # shellcheck disable=SC2329 # called through until_ok
+  gone() { [ "$(state_of "$1")" = gone ]; }
+  local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-aaaa0003 b4=$P-ag-aaaa0004 named=$P-ag-named
+  local b5=$P-ag-aaaa0005 b6=$P-ag-aaaa0006 s7=11111111-2222-4333-8444-5555aaaa0007 b7=$P-ag-aaaa0007
+  local s8=11111111-2222-4333-8444-5555aaaa0008 b8=$P-ag-aaaa0008 s9=11111111-2222-4333-8444-5555aaaa0009
+  local s10=11111111-2222-4333-8444-5555aaaa0010 b10=$P-ag-aaaa0010
+  # shellcheck disable=SC2329 # called through until_ok
+  polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null; }
+  agent $s1 & local a1=$!
+  agent $s2 --idle 45m & local a2=$!
+  agent $s7 --idle 0 & local a7=$!
+  check "the sessions' boxes start" until_ok 40 test -e "$TMP/ag-$a1" -a -e "$TMP/ag-$a2" -a -e "$TMP/ag-$a7"
+  check_eq "session 1 has its box" up "$(state_of "$b1")"
+  check_eq "session 2 has its own" up "$(state_of "$b2")"
+  check_eq "the box knows its agent" "$a1" "$(agent_of "$b1")"
+  check_eq "a session's box keeps the 2 h idle limit" 7200 "$(idle_of "$b1")"
+  check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
+  check "--idle 0: a reaper still watches the agent, once a minute (not every 5 s)" until_ok 5 polls_every "$b7" 60
+  check_eq "session 1's commands reach its box" "$b1" "$(as $s1 run -- sh -c 'echo $OMABOX_NAME')"
+  as $s2 down >/dev/null 2>&1
+  check_eq "session 2's down leaves session 1's box up" up "$(state_of "$b1")"
+  as $s1 up "$named" --no-shell --idle 30s >/dev/null 2>&1
+  check_eq "a box named with -b is not tied to the agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$named/box.json")"
+  (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" up --no-shell --idle 30s >/dev/null 2>&1)
+  check_eq "OMABOX_SESSION set for one command: no agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
+  (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" guard exec -- "$CLI" run -- true >/dev/null 2>&1)
+  check_eq "...nor does an agent of that session take it over" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
+  ob down "$named" "$P-ag-abcd1234" "$b1" "$b7" >/dev/null 2>&1; kill "$a1" "$a2" "$a7" 2>/dev/null
+  # Short idle limits, so the reaper polls every few seconds.
+  agent $s3 --idle 30s & local a3=$!
+  agent $s4 --idle 30s & local a4=$!
+  until_ok 40 test -e "$TMP/ag-$a3" -a -e "$TMP/ag-$a4"
+  pid_of() { bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$1"; }
+  ob run -b "$b3" -- sleep 15 & local busy=$!
+  # The run is use once its nsenter is up; a check before that would find the box unused.
+  until_ok 10 pgrep -f "^nsenter -t $(pid_of "$b3") "; kill "$a3" 2>/dev/null
+  local pid4; pid4=$(pid_of "$b4")
+  kill -KILL "$pid4" 2>/dev/null; kill "$a4" 2>/dev/null
+  sleep 10
+  check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
+  check_eq "a box that died stays dead, logs and all, when its agent goes" dead "$(state_of "$b4")"
+  wait "$busy" 2>/dev/null
+  check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
+  ob down "$b3" "$b4" >/dev/null 2>&1
+  # A session resumed in a new process (`claude --continue`: the same id, another CLAUDE_PID) takes
+  # its box over once the agent it records is gone, whether its first command is `run`, `up`, one
+  # through need_box (`hyprctl`) or `path`; another session's command that names the box does not.
+  # The reapers are stopped meanwhile, so that no check falls between the old agent's exit and that
+  # command.
+  agent $s5 --idle 20s & local a5=$!
+  agent $s6 --idle 20s & local a6=$!
+  agent $s8 --idle 20s & local a8=$!
+  until_ok 40 test -e "$TMP/ag-$a5" -a -e "$TMP/ag-$a6" -a -e "$TMP/ag-$a8"
+  agent $s5 -- run -- true & local c5=$!
+  until_ok 20 test -e "$TMP/ag-$c5"
+  check_eq "a second agent of a session leaves its box to the first while that runs" "$a5" "$(agent_of "$b5")"
+  kill "$c5" 2>/dev/null
+  local reapers; mapfile -t reapers < <(pgrep -f "omabox _reap ($b5|$b6|$b8) ")
+  kill -STOP "${reapers[@]}"
+  kill "$a5" "$a6" "$a8" 2>/dev/null; wait "$a5" "$a6" "$a8" 2>/dev/null
+  agent $s5 -- run -- true & local r5=$!
+  agent $s6 & local r6=$!
+  agent $s9 -- hyprctl -b "$b8" -j version & local o8=$!
+  until_ok 20 test -e "$TMP/ag-$o8"
+  check_eq "another session's command naming the box (-b) does not take it over" "$a8" "$(agent_of "$b8")"
+  kill "$o8" 2>/dev/null; wait "$o8" 2>/dev/null   # (had it, the next checks still see their own part)
+  agent $s8 -- hyprctl -j version & local r8=$!
+  until_ok 20 test -e "$TMP/ag-$r8"
+  check_eq "a resumed session's first hyprctl takes its box over (need_box)" "$r8" "$(agent_of "$b8")"
+  kill "$r8" 2>/dev/null; wait "$r8" 2>/dev/null
+  agent $s8 -- path & local q8=$!
+  until_ok 20 test -e "$TMP/ag-$q8" -a -e "$TMP/ag-$r5" -a -e "$TMP/ag-$r6"
+  check_eq "...and so does its first path" "$q8" "$(agent_of "$b8")"
+  kill -CONT "${reapers[@]}"
+  sleep 11   # two checks
+  check_eq "a resumed session's first run takes its box over" "up $r5" "$(state_of "$b5") $(agent_of "$b5")"
+  check_eq "...and so does its first up" "up $r6" "$(state_of "$b6") $(agent_of "$b6")"
+  ob path "$b5" >/dev/null; ob path "$b6" >/dev/null   # idle clocks back to 0: what takes them down now is the agent
+  kill "$r5" "$r6" 2>/dev/null
+  check "...and the box goes with the new agent" until_ok 10 gone "$b5"
+  check "...(the one it took over with up too)" until_ok 10 gone "$b6"
+  ob down "$b5" "$b6" "$b8" >/dev/null 2>&1
+  # The reaper decided to take a box down for an agent that exited, and its `down` waits for the
+  # box's lock, which the session's new agent took first to take the box over: the down checks the
+  # agent again under the lock and leaves the box, and the reaper then watches the new agent. The
+  # order is fixed by hand: the lock is held while both queue, and the reaper's flock is stopped
+  # until the new agent's command is done.
+  local lk=$XDG_RUNTIME_DIR/omabox/.lock-$b10 reaper held rf
+  # shellcheck disable=SC2329 # called through until_ok
+  flock_of() { pgrep -x flock -P "$(pgrep -d, -P "$1")"; }   # the flock an agent's command waits in
+  agent $s10 --idle 20s & local a10=$!
+  until_ok 40 test -e "$TMP/ag-$a10"
+  reaper=$(pgrep -f "omabox _reap $b10 " | head -1)
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$a10" 2>/dev/null; wait "$a10" 2>/dev/null
+  agent $s10 -- run -- true & local r10=$!
+  until_ok 10 flock_of "$r10"                      # its take_over waits for the lock
+  until_ok 15 pgrep -x flock -P "$reaper"          # the reaper said "taking it down"; its down waits
+  rf=$(pgrep -x flock -P "$reaper")
+  [ -z "$rf" ] || kill -STOP "$rf"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  until_ok 20 test -e "$TMP/ag-$r10"
+  [ -z "$rf" ] || kill -CONT "$rf"
+  check "a takeover made while the reaper's down waited for the lock keeps the box" \
+    until_ok 10 grep -q ": kept$" "$XDG_RUNTIME_DIR/omabox/$b10/reap.log"
+  check_eq "...for the new agent" "up $r10" "$(state_of "$b10") $(agent_of "$b10")"
+  # The same with the reaper first (the new command's flock stopped): its down takes the box, and the
+  # command that waited says no box is up (`run -d` wrote its log into the box's dir, gone by then).
+  rm -f "$TMP/held" "$TMP/release"
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$r10" 2>/dev/null; wait "$r10" 2>/dev/null
+  agent $s10 -- run -d -- true & local d10=$!
+  until_ok 10 flock_of "$d10"
+  until_ok 15 pgrep -x flock -P "$reaper"          # the same reaper, now for r10's exit
+  local df; df=$(flock_of "$d10")
+  [ -z "$df" ] || kill -STOP "$df"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  check "...and the reaper goes on watching it: the box goes when it exits" until_ok 15 gone "$b10"
+  [ -z "$df" ] || kill -CONT "$df"
+  until_ok 20 test -e "$TMP/ag-$d10"
+  check_match "a first command that waited for the lock while the box went says no box is up" \
+    "no box '$b10' is up" "$(cat "$TMP/ag-$d10.out" 2>/dev/null)"
+  ob down "$b10" >/dev/null 2>&1
+  # And with an `up` of the name that finds no agent (no CLAUDE_PID) queued too, let in after the
+  # reaper's down and before the new agent's command: that command must not take over the new box,
+  # which records no agent. The up's flock and the command's are stopped until their turn.
+  local s11=11111111-2222-4333-8444-5555aaaa0011 b11=$P-ag-aaaa0011 uf tf
+  agent $s11 --idle 20s & local a11=$!
+  until_ok 40 test -e "$TMP/ag-$a11"
+  reaper=$(pgrep -f "omabox _reap $b11 " | head -1)
+  rm -f "$TMP/held" "$TMP/release"
+  lk=$XDG_RUNTIME_DIR/omabox/.lock-$b11
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  until_ok 5 test -e "$TMP/held"
+  kill "$a11" 2>/dev/null; wait "$a11" 2>/dev/null
+  agent $s11 -- run -- true & local r11=$!
+  (cd "$repo" && exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID=$s11 "$CLI" up --no-shell \
+    --idle 20s) >/dev/null 2>&1 & local u11=$!
+  until_ok 10 flock_of "$r11"
+  until_ok 10 pgrep -x flock -P "$u11"
+  until_ok 15 pgrep -x flock -P "$reaper"
+  tf=$(flock_of "$r11"); uf=$(pgrep -x flock -P "$u11")
+  [ -z "$tf" ] || kill -STOP "$tf"
+  [ -z "$uf" ] || kill -STOP "$uf"
+  touch "$TMP/release"; wait "$held" 2>/dev/null
+  until_ok 15 gone "$b11"                          # the reaper's down
+  [ -z "$uf" ] || kill -CONT "$uf"
+  wait "$u11" 2>/dev/null
+  [ -z "$tf" ] || kill -CONT "$tf"
+  until_ok 20 test -e "$TMP/ag-$r11"
+  check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
+    "up null" "$(state_of "$b11") $(agent_of "$b11")"
+  ob down "$b11" >/dev/null 2>&1
+  kill "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" "$a7" "$c5" "$r5" "$r6" "$a8" "$o8" "$r8" "$q8" "$a10" "$r10" "$d10" "$a11" "$r11" 2>/dev/null
+}
+
+# `mode` writes box.json's size under the box's lock, as a takeover writes its agent (finding 93): a
+# mode change made meanwhile would otherwise put back the agent that exited. The lock is held here.
+t_mode_lock() {
+  local B=$P-ml m rc=0 held lk=$XDG_RUNTIME_DIR/omabox/.lock-$P-ml
+  check "a box for mode" ob up "$B" --no-shell --idle 5m
+  local before; before=$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/ml-held" "$TMP/ml-release" & held=$!
+  until_ok 5 test -e "$TMP/ml-held"
+  "$CLI" mode -b "$B" 1280x720 > "$TMP/ml-out" 2>&1 & m=$!
+  check "mode waits for the box's lock to record the new size" until_ok 10 pgrep -x flock -P "$m"
+  check_eq "...box.json keeps the old one meanwhile" "$before" "$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")"
+  touch "$TMP/ml-release"; wait "$held" 2>/dev/null
+  wait "$m" || rc=$?
+  check_eq "...and records it once it has the lock" "0 1280x720@60" "$rc $(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# finding 90: when an interactive box gives no frame, `shot` never says to show its window but to ask
+# the user, and for a box started before drawn_hidden, or whose window confirm-close replaced, that it
+# needs a restart (which ends their session in it).
+t_unit_shot_hidden() {
+  local d=$TMP/boxes/oldbox out
+  mkdir -p "$d"
+  # (The box's Hyprland answers for its screen size, finding 81; only grim gets no frame.)
+  shot_msg() { bash -c 'source "$1"; BOXES=$2; need_box() { :; }
+    on_box() { [ "$*" = "hyprctl -j monitors" ] || return 1; echo "[{\"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]"; }
+    cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1; }
+  echo '{"mode": "interactive", "workspace": "9"}' > "$d/box.json"
+  out=$(shot_msg)
+  check_match "an old interactive box: it needs a restart, ask the user" "needs a restart.*ask the user" "$out"
+  check_fails "...not told to restart it" grep -q "omabox down" <<<"$out"
+  echo '{"mode": "interactive", "workspace": "9", "drawn_hidden": true}' > "$d/box.json"
+  out=$(shot_msg)
+  check_match "a new one: never switch the user's workspace for a frame" "never switch the user's workspace or focus" "$out"
+  check_match "...ask the user" "ask the user" "$out"
+  check_fails "...and no restart" grep -q restart <<<"$out"
+  check_fails "...and no partial PNG left" test -e "$TMP/boxes/x.png.part"
+  check_match "a box whose Hyprland does not answer: said, not a silent exit" "cannot read the screen size of box 'oldbox'" \
+    "$(bash -c 'source "$1"; BOXES=$2; need_box() { :; }; on_box() { return 1; }; cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1)"
+  mkdir -p "$d/run" && echo 1 > "$d/run/omabox.reopened"
+  out=$(shot_msg)
+  check_match "a window confirm-close reopened: not drawn while hidden, ask the user" "confirm-close.*not drawn while hidden.*ask the user" "$out"
+  check_match "...never switch the user's workspace for a frame" "Never switch the user's workspace or focus" "$out"
 }
 
 # The uwsm stand-in's logout kills every process it can see: never outside a box. Checked in a bare
@@ -522,7 +847,7 @@ t_unit_uwsm_guard() {
   check_match "and says why" "not in a box" "$out"
 }
 
-# One box for most checks: host network, default size.
+# One box for most checks: connected network, default size.
 t_main() {
   local B=$P-main s0=$SECONDS
   check "up" ob up "$B" --env OMABOX_TEST=yes
@@ -543,12 +868,16 @@ t_main() {
   check_eq "--env reaches run" yes "$(ob run -b "$B" -- sh -c 'echo $OMABOX_TEST')"
   # --pass (finding 66): the caller's value, as it is, and never on a command line.
   check_eq "run does not pass the caller's variables" unset "$(OMABOX_T66=x ob run -b "$B" -- sh -c 'echo ${OMABOX_T66-unset}')"
-  local secret=$'omabox-t66 = with\nnewline'
+  # A token of this run's own, so only a process that got the value fails the check below, not one
+  # that merely mentions the test (an agent grepping the suite, another run of it).
+  local tag secret
+  tag=omabox-t66-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+  secret="$tag = with"$'\nnewline'
   check_eq "--pass hands one over, as it is" "$(printf %q "$secret")" \
     "$(OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- bash -c 'printf %q "$OMABOX_T66"')"
   (OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- sleep 2.066 >/dev/null 2>&1 &)
   until_ok 5 pgrep -fx 'sleep 2.066'   # the run is under way
-  check_fails "...never in any command line" grep -qs omabox-t66 /proc/[0-9]*/cmdline
+  check_fails "...never in any command line" grep -qsF -- "$tag" /proc/[0-9]*/cmdline
   check_fails "--pass of an unset variable fails (no silent skip)" env -u OMABOX_T66 "$CLI" run -b "$B" --pass OMABOX_T66 -- true
   check_fails "--pass takes a name only" ob run -b "$B" --pass 'A=1' -- true
   check_eq "--pass ROOT is the caller's, not omabox's own (finding 74)" "/x y" "$(ROOT="/x y" ob run -b "$B" --pass ROOT -- sh -c 'echo "$ROOT"')"
@@ -665,7 +994,10 @@ t_throwaway() {
   out=$(cd "$repo" && env -u OMABOX "$CLI" run -- sh -c "echo x > '$repo/.omabox-overlay-test' && cat '$repo/.omabox-overlay-test'" 2>&1)
   check_eq "throwaway: writes into the overlay work" x "$out"
   check_fails "throwaway: host checkout unchanged" test -e "$repo/.omabox-overlay-test"
-  check_eq "throwaway: no box left" 0 "$(ob ls --json | jq '[.[] | select(.name | test("-run[0-9]+$"))] | length')"
+  # Its own box only, as the other throwaway tests look for theirs: another agent's `omabox run` may
+  # have a throwaway box up on the same machine. The name first, or the count below tests nothing.
+  check_match "throwaway: named $P-tw-runN" "^$P-tw-run[0-9]+\$" "$(cd "$repo" && env -u OMABOX "$CLI" run -- sh -c 'echo "$OMABOX_NAME"' 2>&1)"
+  check_eq "throwaway: no box left" 0 "$(ob ls --json | jq --arg p "$P-tw-run" '[.[] | select(.name | startswith($p))] | length')"
 }
 
 t_isolated() {
@@ -681,6 +1013,104 @@ t_isolated() {
   check_eq "hostname is the host's (finding 54)" "$(uname -n)" "$(ob run -b "$B" -- uname -n)"
   check "down" ob down "$B"
   kill "$other" 2>/dev/null
+}
+
+# A port below the ephemeral range that nothing on the host listens on, TCP or UDP (pasta forwards
+# both), so the server that answers is the test's own.
+free_port() {
+  local p
+  while p=$((20000 + RANDOM % 12000)); ss -Htuln "sport = :$p" | grep -q .; do :; done
+  echo "$p"
+}
+
+# An HTTP server on a port the kernel picks (bind port 0: the ephemeral range, which pasta's auto
+# alone does not forward), which writes that port to FILE once it listens. python3 -c "$PORT0" DIR FILE
+PORT0='import functools, http.server, os, sys
+d, f = sys.argv[1:3]
+s = http.server.HTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=d))
+open(f + ".tmp", "w").write(str(s.server_port)); os.rename(f + ".tmp", f)
+s.serve_forever()'
+
+# The host's abstract X11 sockets that are new since BEFORE and not known to belong to a process
+# outside pid namespace NS: a box another checkout starts meanwhile holds its own, but a socket
+# whose owner cannot be read counts. new_x11 BEFORE NS
+new_x11() {
+  local n pid ns
+  for n in $(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u | LC_ALL=C comm -13 <(echo "$1") -); do
+    pid=$(ss -xlpH | awk -v n="$n" '$5 == n' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+    ns=$(readlink "/proc/${pid:-0}/ns/pid" 2>/dev/null) && [ "$ns" != "$2" ] && continue
+    echo "$n"
+  done
+}
+
+# finding 89: a box's labwc binds the abstract @/tmp/.X11-unix/X0 (its lazy Xwayland) when it starts.
+# In the host's network namespace that was the host's :0 (or the next free one), and host X11 apps
+# opened in the box. A connected box still reaches the internet and host loopback, and the host its
+# servers, on any port. Read-only on the host: no X client, and ports nobody listens on; from the box,
+# one connection to its gateway (the router).
+t_connected() {
+  local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out rc ns port tok hport htok gw got
+  before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
+  # (No box, nothing to check; and no stray dir from writing into its HOME.)
+  if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up (--net host: connected's old name)"
+  else no "up (--net host: connected's old name)" "$out"; return; fi
+  check_match "ls shows it connected" "$B +headless .* up +connected " "$(ob ls)"
+  # A no_new_privs process (a sandboxed agent's) cannot start a box behind pasta, but can use this one.
+  rc=0; out=$(setpriv --no-new-privs "$CLI" up "$B" 2>&1) || rc=$?
+  check_match "up from a no_new_privs process finds it already up" "box '$B' is already up" "$out"
+  check_eq "...and succeeds" 0 "$rc"
+  # -D none: with --no-map-gw pasta cannot hand the box a loopback nameserver (the host's 127.0.0.53),
+  # and would say so on every start.
+  check_eq "pasta printed no warning (box.log is empty)" "" "$(cat "$D/box.log" 2>&1)"
+  check_eq "no abstract X11 socket of the box's on the host" "" "$(new_x11 "$before" "$(jq -r .pidns "$D/box.json")")"
+  # Not the fix itself (on main the box's /proc/net/unix is the host's, and this passes too): labwc
+  # did bind one, so the check above had something to find.
+  check "labwc's abstract X11 socket is there, seen from the box" ob run -b "$B" -- grep -qE '@/tmp/\.X11-unix/X0$' /proc/net/unix
+  ns=$(ob run -b "$B" -- readlink /proc/self/ns/net)
+  if [[ $ns == net:* ]] && [ "$ns" != "$(readlink /proc/self/ns/net)" ]; then ok "the box has a network namespace of its own"
+  else no "the box has a network namespace of its own" "box [$ns], host [$(readlink /proc/self/ns/net)]"; fi
+  if getent ahosts archlinux.org >/dev/null 2>&1; then
+    check "DNS resolves in the box" ob run -b "$B" -- getent ahosts archlinux.org
+  else echo "       (the host resolves no names: DNS not checked)"; fi
+  # host -> box as localhost: the host tries ::1 first, which must be refused, not reset (pasta
+  # binds the host side on 127.0.0.1 only); forwards take up to about a second to appear.
+  port=$(free_port) tok=box-$P-$RANDOM
+  mkdir -p "$D/home/www" && echo "$tok" > "$D/home/www/index.html"
+  ob run -b "$B" -d -- python3 -m http.server "$port" --bind 127.0.0.1 --directory /home/sbx/www >/dev/null
+  check "the host reaches a box server as localhost" until_ok 10 bash -c "curl -fsS --max-time 2 http://localhost:$port/ | grep -qx '$tok'"
+  check_eq "...which is bound on the host's 127.0.0.1 only" "127.0.0.1:$port" "$(ss -Htuln "sport = :$port" | awk '{print $5}' | sort -u)"
+  # ...and on a port the kernel chose (1-65535,auto: auto alone skips the ephemeral range)
+  tok=box0-$P-$RANDOM
+  mkdir -p "$D/home/www0" && echo "$tok" > "$D/home/www0/index.html"
+  ob run -b "$B" -d -- python3 -c "$PORT0" /home/sbx/www0 /home/sbx/port0 >/dev/null
+  if until_ok 10 test -s "$D/home/port0"; then port=$(cat "$D/home/port0")
+    check "the host reaches a box server on a port the kernel chose" until_ok 10 bash -c "curl -fsS --max-time 2 http://127.0.0.1:$port/ | grep -qx '$tok'"
+  else no "the host reaches a box server on a port the kernel chose" "the box server wrote no port"; fi
+  # box -> host as 127.0.0.1 (localhost from the box resets on an IPv4-only host server: NOTES 89)
+  hport=$(free_port) htok=host-$P-$RANDOM
+  mkdir -p "$TMP/conn" && echo "$htok" > "$TMP/conn/index.html"
+  python3 -m http.server "$hport" --bind 127.0.0.1 --directory "$TMP/conn" >/dev/null 2>&1 & SERVERS+=($!)
+  check_eq "the box reaches a host server on 127.0.0.1" "$htok" \
+    "$(ob run -b "$B" -- curl -fs --retry 10 --retry-connrefused --retry-delay 1 --max-time 2 "http://127.0.0.1:$hport/")"
+  tok=host0-$P-$RANDOM
+  mkdir -p "$TMP/conn0" && echo "$tok" > "$TMP/conn0/index.html"
+  python3 -c "$PORT0" "$TMP/conn0" "$TMP/conn0.port" >/dev/null 2>&1 & SERVERS+=($!)
+  if until_ok 10 test -s "$TMP/conn0.port"; then port=$(cat "$TMP/conn0.port")
+    check_eq "...and on a port the kernel chose" "$tok" \
+      "$(ob run -b "$B" -- curl -fs --retry 10 --retry-connrefused --retry-delay 1 --max-time 2 "http://127.0.0.1:$port/")"
+  else no "...and on a port the kernel chose" "the host server wrote no port"; fi
+  # --no-map-gw: the box's gateway is the router, not the host's loopback. One connection to it, on
+  # the host server's port: refused or timed out, but not that server.
+  gw=$(ob run -b "$B" -- ip -4 route show default | awk '$2 == "via" {print $3; exit}')
+  if [ -n "$gw" ]; then
+    got=$(ob run -b "$B" -- curl -s --max-time 2 "http://$gw:$hport/")
+    if [[ $got != *"$htok"* ]]; then ok "the box's gateway is not the host's loopback"
+    else no "the box's gateway is not the host's loopback" "$gw:$hport answered as the host server"; fi
+  else echo "       (the box has no default route: gateway not checked)"; fi
+  # Stopped now, and dropped from SERVERS (cleanup's, for a suite stopped midway): by the end of the
+  # suite their pids may be another process's.
+  kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
+  check "down" ob down "$B"
 }
 
 t_idle() {
@@ -700,7 +1130,8 @@ t_reap_race() {
   local B=$P-rr lock
   ob up "$B" --idle 10s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
   exec {lock}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lock"   # what an `up` of the name holds
-  check "the idle reaper decides and waits for the lock" until_ok 30 pgrep -f "^flock -w 60 [0-9]+$"
+  # This box's reaper's flock (cmd_down runs in the reaper's own process), not any box's up or down.
+  check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
   local j=$XDG_RUNTIME_DIR/omabox/$B/box.json
   jq '.created = "a new box"' "$j" > "$j.t" && mv "$j.t" "$j"   # the new box, as `up` writes it
   exec {lock}>&-
@@ -788,8 +1219,10 @@ t_race() {
   ob up "$B" --no-shell >/dev/null 2>&1 & local a=$!
   ob up "$B" --no-shell >/dev/null 2>&1 & local b=$!
   wait $a; wait $b
-  # bwrap is two processes per box (its monitor, and the box's PID 1)
-  check_eq "one box" 2 "$(pgrep -fc "bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
+  # One bwrap is two processes (its monitor, and the box's PID 1), under one pasta. Anchored: pasta's
+  # own command line holds bwrap's too.
+  check_eq "one box" 2 "$(pgrep -fc "^bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
+  check_eq "...behind one pasta" 1 "$(pgrep -fc "^pasta .* -P $XDG_RUNTIME_DIR/omabox/$B/pasta\.pid " || true)"
   check "down" ob down "$B"
   check "nothing of it left running" until_ok 5 none_running "$B"
 }
@@ -825,11 +1258,28 @@ t_hyprland_dies() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# A box whose pasta died (OOM, a killall) ends with it rather than stay up with no network (finding 89).
+t_pasta_dies() {
+  local B=$P-pdie
+  check "up" ob up "$B" --no-shell
+  kill -KILL "$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")"
+  check "the box ends with its pasta" until_ok 10 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\" and .state == \"dead\")'"
+  check "down" ob down "$B"
+}
+
 # --no-shell is a bare compositor.
 t_no_shell() {
   local B=$P-bare
   check "up --no-shell" ob up "$B" --no-shell
   check "no quickshell starts" holds 2 bash -c "! '$CLI' run -b '$B' -- pgrep -x quickshell"
+  check "down" ob down "$B"
+}
+
+# finding 91: no global git identity (a fresh machine) is no reason for `up` to fail.
+t_no_git_identity() {
+  local B=$P-nogit
+  check "up with no git identity" env GIT_CONFIG_GLOBAL=/dev/null "$CLI" up "$B" --no-shell
+  check_fails "...and the box has none" ob run -b "$B" -- git config --global user.email
   check "down" ob down "$B"
 }
 
@@ -845,6 +1295,29 @@ t_stale_pid() {
   ob down "$B" >/dev/null 2>&1
   check "down did not kill the process that has its pid now" kill -0 "$victim"
   kill "$victim" 2>/dev/null
+  # Nor a pasta.pid whose pid is now another process named pasta: pasta never removes its pid file,
+  # and a name alone proves nothing (finding 89): box_pasta also wants the command line to name the
+  # pid file.
+  cp /usr/bin/sleep "$TMP/pasta"
+  "$TMP/pasta" 300 & local fake=$!
+  mkdir -p "$D"
+  echo '{"child-pid": 2}' > "$D/info.json"
+  echo '{"name": "x", "mode": "headless", "net": "connected"}' > "$D/box.json"
+  echo "$fake" > "$D/pasta.pid"
+  check_eq "a stale pasta.pid reads dead" dead "$(ob ls --json | jq -r ".[] | select(.name == \"$B\") | .state")"
+  ob down "$B" >/dev/null 2>&1
+  check "down did not kill another process named pasta" kill -0 "$fake"
+  kill "$fake" 2>/dev/null
+  # Nor one whose command line names the pid file as pasta's does, but which is not pasta (its comm).
+  bash -c 'sleep 300 & wait' decoy -P "$D/pasta.pid" x & local decoy=$!
+  until_ok 5 grep -qF decoy "/proc/$decoy/cmdline"
+  mkdir -p "$D"
+  echo '{"child-pid": 2}' > "$D/info.json"
+  echo '{"name": "x", "mode": "headless", "net": "connected"}' > "$D/box.json"
+  echo "$decoy" > "$D/pasta.pid"
+  ob down "$B" >/dev/null 2>&1
+  check "down did not kill a process that only names the pid file" kill -0 "$decoy"
+  pkill -P "$decoy"; kill "$decoy" 2>/dev/null
 }
 
 # An isolated box whose host pid file is missing is still taken down (finding 63).
@@ -872,7 +1345,10 @@ t_run_idle() {
 t_throwaway_home() {
   # From ~ (no repo) the throwaway is named after "default": a box of the user's with that name
   # would take the run instead.
-  if [ -d "$XDG_RUNTIME_DIR/omabox/default" ]; then no "a box named 'default' is up: run it again after omabox down default"; return; fi
+  # An expiry note from a 'default' box that idled out makes `run` refuse the same way.
+  if [ -e "$XDG_RUNTIME_DIR/omabox/default" ] || [ -e "$XDG_RUNTIME_DIR/omabox/.expired-default" ]; then
+    no "a box named 'default' is up or idled out: run it again after omabox down default"; return
+  fi
   local out; out=$(cd "$HOME" && env -u OMABOX "$CLI" run -- sh -c "test -e '$HOME/.config' && echo LEAK || echo ok; pwd" 2>&1)
   check_match "HOME not visible in a throwaway run from ~" '^ok' "$out"
   check_match "it runs in the box HOME" '/home/sbx$' "$out"
@@ -1038,8 +1514,11 @@ t_throwaway_dead() {
   until_ok 30 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-td-run\")) | select(.state == \"up\")'"
   local n; n=$(ob ls --json | jq -r ".[] | select(.name | startswith(\"$P-td-run\")) | .name")
   until_ok 30 pgrep -f "omabox _reap $n "   # up has finished
-  local pid; pid=$(jq -r '."child-pid"' "$XDG_RUNTIME_DIR/omabox/$n/info.json")
-  kill -KILL "$r" "$pid"
+  # The box's PID 1 as the CLI finds it: behind pasta, info.json's child-pid is pasta's numbering (2,
+  # which on the host is kthreadd), and the box would stay up for the reaper's "run is gone" branch.
+  local pid; pid=$(D=$XDG_RUNTIME_DIR/omabox/$n lib box_pid)
+  kill -KILL "$r"
+  check "its box is killed before the reaper sees it" kill -KILL "$pid"
   check "the dead box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$n\")'"
 }
 
@@ -1067,6 +1546,41 @@ t_unit_install() {
   printf '#!/bin/sh\necho "  -g <geometry>   Set the region to capture."\n' > "$stub/grim"; chmod +x "$stub/grim"
   check_match "a grim with no -T (window capture, finding 81) stops it" "no -T" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
   rm "$stub/grim"
+  # finding 92: an older hook of ours is an update to offer, even after a "no" to turning it on.
+  jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]}}' > "$h/.claude/settings.json"
+  date -Is > "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "an outdated guard: install.sh offers to update it" "guard there is outdated.*not asked \(no terminal\)" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "...and changes nothing without a terminal" "echo old omabox-guard" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$h/.claude/settings.json")"
+  # One from a checkout that is gone reads outdated too, though no older omabox wrote it.
+  local old; old=$(cat "$h/.claude/settings.json")
+  jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[0].hooks[0].command = $c' \
+    <<<"$old" > "$h/.claude/settings.json"
+  check_match "...and one from a checkout that is gone, in words that fit it too" \
+    "/nonexistent/co/share/guard is gone.*The guard there is outdated.*not asked \(no terminal\): omabox guard on claude" \
+    "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1 | tr '\n' ' ')"
+  printf '%s\n' "$old" > "$h/.claude/settings.json"
+  # ...for the agents that have it, whatever the others' guard (Codex off here) and an earlier "no".
+  # "Turn it on?" is for the others, and only a "no" to that is remembered.
+  local guard=(env HOME="$h" "$CLI" guard) tty=(env SHELL=/bin/bash script -qec "$(printf %q "$ROOT/install.sh")" /dev/null)
+  mkdir -p "$h/.codex"; rm "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "Claude Code outdated, Codex off: an update for Claude Code, turning it on for Codex" \
+    "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*not asked \(no terminal\): omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
+  date -Is > "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "...the update even after a no to turning it on" \
+    "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*you said no before.*: omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
+  printf 'y\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
+  check_match "...in a terminal, yes updates Claude Code's and leaves Codex off" "Claude Code .*: on Codex .*: off" \
+    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+  rm "$h/.config/omabox/guard-declined"; printf '%s\n' "$old" > "$h/.claude/settings.json"
+  printf 'n\ny\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
+  check_match "...no to the update and yes to turning it on: only Codex's changes" "Claude Code .*: outdated Codex .*: on" \
+    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+  check_fails "...and the no to the update is not remembered" test -e "$h/.config/omabox/guard-declined"
+  rm -rf "$h/.codex"
+  rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
   check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
 }
@@ -1152,7 +1666,8 @@ t_widget() {
 
 # The agent guard (finding 65): the fake display agents' shells get, and omabox still finding the
 # user's session from such a shell. Sessions are faked in a runtime dir of our own where it matters.
-GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1)
+GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
+  BROWSER="$ROOT/share/guard/xdg-open" GH_BROWSER="$ROOT/share/guard/xdg-open" PATH="$ROOT/share/guard:$PATH")
 t_unit_host_session() {
   check_fails "hyprctl under the guard fails" "${GUARDED[@]}" hyprctl -j version
   local found; found=$("${GUARDED[@]}" bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
@@ -1203,6 +1718,8 @@ t_unit_guard_settings() {
   check_eq "off gives back the same file" "$orig" "$(cat "$s")"
   jq '.hooks.SessionStart += [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]' <<<"$orig" > "$s"
   check_match "an older hook of ours reads outdated" "outdated" "$(g | head -1)"
+  jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[-1].hooks[0].command = $c' "$s" > "$s.new" && mv "$s.new" "$s"
+  check_match "...and one from a checkout that is gone says so (finding 92)" "outdated: its /nonexistent/co/share/guard is gone" "$(g | head -1)"
   g on >/dev/null
   check_eq "on replaces it" 1 "$(jq '[.hooks.SessionStart[].hooks[] | select(.command | contains("omabox-guard"))] | length' "$s")"
   mv "$s" "$h/real.json"; ln -s "$h/real.json" "$s"
@@ -1221,6 +1738,9 @@ t_unit_guard_settings() {
   local hook; hook=$(lib eval 'printf %s "$GUARD_HOOK"')
   check_match "the hook says so when it cannot apply the guard (finding 74)" "NOT applied" "$(env -u CLAUDE_ENV_FILE sh -c "$hook")"
   check_eq "...and applies it when it can" 1 "$(f=$TMP/envfile; CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null; grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
+  # (the hook of the suite's copy of the CLI: its checkout is $TMP/lib)
+  check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$TMP/lib/share/guard" \
+    "$(bash -c '. "$1"; echo "${PATH%%:*}"' _ "$TMP/envfile")"
   check_fails "guard junk refused" g maybe
   check_fails "guard on for an unknown agent refused" g on vim
   # Codex (finding 67): a marked block in config.toml, checked as TOML; only when Codex is installed.
@@ -1256,6 +1776,9 @@ t_unit_guard_settings() {
   g on codex >/dev/null
   check_eq "Codex: its own [shell_environment_policy] is kept, the guard added" "core omabox-guard" \
     "$(python3 -c 'import tomllib, sys; p = tomllib.load(open(sys.argv[1], "rb"))["shell_environment_policy"]; print(p["inherit"], p["set"]["HYPRLAND_INSTANCE_SIGNATURE"])' "$c")"
+  printf '%s\n' "# >>> omabox guard (\`omabox guard off\` removes this block)" "[shell_environment_policy.set]" \
+    'WAYLAND_DISPLAY = "omabox-guard"' 'BROWSER = "/nonexistent/co/share/guard/xdg-open"' "# <<< omabox guard" > "$c"
+  check_match "Codex: a block from a checkout that is gone says so (finding 92)" "outdated: its /nonexistent/co/share/guard is gone" "$(g | grep '^Codex')"
   printf 'x = \n' > "$c"
   check_match "Codex: a file that is not TOML is refused" "not valid TOML" "$(g on codex)"
   check_eq "...untouched" 'x = ' "$(cat "$c")"
@@ -1265,12 +1788,50 @@ t_unit_guard_settings() {
 t_unit_guard_exec_host() {
   check_eq "guard exec: the guard's display" omabox-guard "$("$CLI" guard exec -- sh -c 'echo $WAYLAND_DISPLAY')"
   check_eq "guard exec: a core limit of 1 byte (no crash notification)" 1 "$("$CLI" guard exec -- sh -c 'prlimit --pid $$ --core -o SOFT --noheadings | tr -d " "')"
+  # finding 92: no links or files opened on the desktop, however they are asked for. xdg-open runs
+  # only when `command -v` under guard exec gives the guard's: were a dir with the real one put ahead
+  # of it, xdg-open would open a tab on the desktop. A stub right after the guard's on PATH is a
+  # second net, should the lookup that runs xdg-open ever differ from `command -v`'s: the checks
+  # then reach the stub and fail.
+  local gx=(env PATH="$TMP/fakeopen:$PATH" "$CLI" guard exec --) xo
+  mkdir -p "$TMP/fakeopen"
+  printf '#!/bin/sh\necho "real xdg-open reached"\n' > "$TMP/fakeopen/xdg-open"; chmod +x "$TMP/fakeopen/xdg-open"
+  xo=$("${gx[@]}" sh -c 'command -v xdg-open')
+  check_eq "guard exec: xdg-open is the guard's" "$ROOT/share/guard/xdg-open" "$xo"
+  if [ "$xo" = "$ROOT/share/guard/xdg-open" ]; then
+    check_match "...which refuses" "omabox guard: not opening https://example.invalid" \
+      "$("${gx[@]}" xdg-open https://example.invalid 2>&1)"
+    check_eq "...with exit 4, as xdg-open for a failed action" 4 "$("${gx[@]}" xdg-open https://example.invalid >/dev/null 2>&1; echo $?)"
+  else
+    no "...which refuses, with exit 4" "not run: xdg-open under guard exec is [$xo], not the guard's"
+  fi
+  check_eq "...and BROWSER, GH_BROWSER name it" "$ROOT/share/guard/xdg-open $ROOT/share/guard/xdg-open" \
+    "$("$CLI" guard exec -- sh -c 'echo $BROWSER $GH_BROWSER')"
   # The session omabox finds, not $HYPRLAND_INSTANCE_SIGNATURE: under the guard (an agent running the
   # suite) that is the guard's.
   local sig want; sig=$(bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
   want=$(hyprctl -j instances | jq -r --arg s "$sig" '.[] | select(.instance == $s) | .wl_socket')
   check_eq "host from a guarded shell: the real Wayland display" "$want" "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY' 2>/dev/null)"
   check "host: and hyprctl reaches it (read-only)" "${GUARDED[@]}" "$CLI" host -- hyprctl -j version
+  local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
+  check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
+  check_fails "...not the guard's" grep -q share/guard <<<"$open"
+  check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
+  check_eq "...nor one written with a trailing slash (up and run leave it out too)" "/usr/bin:/bin" \
+    "$(PATH=/x/share/guard/:/usr/bin:/y/share/guard:/bin lib caller_path)"
+  check_eq "host: a BROWSER the guard did not set stays (Omarchy sets it in the shell)" firefox \
+    "$("${GUARDED[@]}" BROWSER=firefox "$CLI" host -- sh -c 'echo "${BROWSER-unset}"' 2>/dev/null)"
+  # The user manager's, through a stand-in systemctl: a plain value is taken, one it quotes is not.
+  mkdir -p "$TMP/sysenv"
+  cat > "$TMP/sysenv/systemctl" <<'EOF'
+#!/bin/sh
+[ "$*" = "--user show-environment" ] || exit 1
+echo "BROWSER=\$'/opt/my browser'"
+echo GH_BROWSER=firefox
+EOF
+  chmod +x "$TMP/sysenv/systemctl"
+  check_eq "host: the stand-in gives way to the user manager's GH_BROWSER, not to a quoted BROWSER" "unset firefox" \
+    "$("${GUARDED[@]}" PATH="$TMP/sysenv:$ROOT/share/guard:$PATH" "$CLI" host -- sh -c 'echo "${BROWSER-unset} ${GH_BROWSER-unset}"' 2>/dev/null)"
   check_eq "host: Qt logging as usual" unset "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo ${QT_FORCE_STDERR_LOGGING-unset}' 2>/dev/null)"
   check_match "host says what it runs" "on your real desktop: true" "$("${GUARDED[@]}" "$CLI" host -- true 2>&1)"
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
@@ -1285,6 +1846,12 @@ t_guard() {
   check_match "run under the guard gets the box's display" '^wayland-' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'echo $WAYLAND_DISPLAY')"
   check "hyprctl under the guard" "${GUARDED[@]}" "$CLI" hyprctl -b "$B" -j version
   check "shot under the guard" "${GUARDED[@]}" "$CLI" shot -b "$B" -o "$TMP/guard.png"
+  # finding 92: the guard's xdg-open stays out of a box (this repo is mounted in it, so it could be seen).
+  check_match "a box's xdg-open is its own" '^/usr/' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'command -v xdg-open')"
+  # (Its PATH line first: a failed read would have no share/guard in it either.)
+  local spath; spath=$("$CLI" run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ | grep "^PATH="')
+  check_match "...and the box session's PATH" '^PATH=/' "$spath"
+  check_fails "...lacks the guard's" grep share/guard <<<"$spath"
   # Inside the stand-in host: the guard as an agent's shell there would have it.
   local in=("$CLI" run -b "$B" -- "${GUARDED[@]}")
   # A Wayland client says so too, and exits cleanly.
@@ -1310,16 +1877,37 @@ t_guard() {
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
-  # Its window hidden, nothing is rendered: wait cannot tell, and says so (finding 82)
-  local out rc=0; out=$("${in[@]}" "$CLI" wait -b inner still 2>&1) || rc=$?
-  check_eq "wait still on a hidden interactive box: unknown (1), never 0" 1 "$rc"
-  check_match "...not rendered" "^unknown: box 'inner' not rendered" "$out"
+  # render_unfocused (finding 90): shots while its window is hidden; the stand-in's workspace and
+  # focused window stay as they were. The first shot right after `up` gets a frame even from a box
+  # that is not drawn while hidden, so a window opened in the box must show in a second one.
+  local aw0; aw0=$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')
+  check "...shot while its window is hidden" "${in[@]}" "$CLI" shot -b inner -o /tmp/hidden-inner.png
+  local app=foot; command -v es2gears_wayland >/dev/null && app=es2gears_wayland
+  "${in[@]}" "$CLI" run -b inner -d -- "$app" >/dev/null 2>&1
+  # shellcheck disable=SC2329 # called through until_ok
+  mapped() { "${in[@]}" "$CLI" hyprctl -b inner -j clients | jq -e 'length > 0' >/dev/null; }
+  check "...a window opens in it" until_ok 10 mapped
+  check "...shot again, still hidden" "${in[@]}" "$CLI" shot -b inner -o /tmp/hidden-inner2.png
+  check "...which shows that window: the box is drawn while hidden" \
+    "${in[@]}" sh -c '! cmp -s /tmp/hidden-inner.png /tmp/hidden-inner2.png && test -s /tmp/hidden-inner2.png'
+  check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
+  check_eq "...and its focused window" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
+  # ...so wait sees it too (finding 82: it said "not rendered" before finding 90). Its answer depends
+  # on the app (animated gears never hold still: 124), but it is never "unknown".
+  local out rc=0; out=$("${in[@]}" "$CLI" wait -b inner still --timeout 3s 2>&1) || rc=$?
+  check_match "wait on a hidden interactive box sees it drawn (an answer, not unknown)" "^(satisfied|unsatisfied): " "$out"
+  check_match "...exit 0 or 124, never 1" "^(0|124)$" "$rc"
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
   # The workspace setting (finding 70): a number, the scratchpad; neither takes focus
   check "up --interactive --workspace 3" "${in[@]}" "$CLI" up ws3 --interactive --no-shell --workspace 3
   check "up --interactive on the scratchpad (config)" "${in[@]}" bash -c "'$CLI' config workspace special >/dev/null && '$CLI' up wsp --interactive --no-shell; '$CLI' config workspace default >/dev/null"
   check_eq "...on workspace 3 and the scratchpad" "3 special:scratchpad" "$(ob hyprctl -b "$B" -j clients | jq -r '[.[] | select(.class == "aquamarine") | .workspace.name] | sort | join(" ")')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
+  local b; for b in ws3 wsp; do
+    check "...shot of $b while hidden" "${in[@]}" "$CLI" shot -b "$b" -o "/tmp/hidden-$b.png"
+  done
+  check_eq "...the host's workspace unchanged" 1 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r '.name')"
+  check_eq "...and its focused window" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
   "${in[@]}" "$CLI" down ws3 >/dev/null 2>&1; "${in[@]}" "$CLI" down wsp >/dev/null 2>&1
   # confirm-close: the first close opens a new window and asks, a second one ends the box; off, one
   # close ends it; `omabox config` changes a running box that took it from the config
@@ -1333,6 +1921,8 @@ t_guard() {
   "${cl[@]}" >/dev/null
   check "confirm-close: the box stays after a close" holds 2 is cc up
   check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+  # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
+  check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
   "${cl[@]}" >/dev/null
   check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
   "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1
@@ -1611,10 +2201,10 @@ t_wait() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
+UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
   t_unit_registry t_unit_leak_scan)
-BOX=(t_leak_control t_main t_dbus_user_app t_window t_wait t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_no_shell t_stale_pid)
+BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_no_shell t_no_git_identity t_stale_pid)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
@@ -1657,6 +2247,9 @@ main() {
 
   hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
   ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
+  # omabox's workspace coming up is a leak (from #13's watch), unless you were on it already.
+  HWS=$("$CLI" config workspace 2>/dev/null) || HWS=9
+  [ "$(hostctl -j activeworkspace | jq -r '.name // empty')" != "$HWS" ] || HWS=
   # The run's folder, and the last 5 runs' (a run still going, another agent's, is never removed).
   (umask 077; mkdir -p "$EVID")
   local _d; for _d in $(find "${EVID%/*}" -mindepth 1 -maxdepth 1 -type d -name '*-t[0-9]*' | sort -r | tail -n +6); do

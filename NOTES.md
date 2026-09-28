@@ -22,11 +22,12 @@ say what replaced it.
 
 ```
 $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home/ (-> ~/.cache/omabox/<name>/home),
-                                  box.json (options, pidns), info.json (bwrap child-pid), pid + pasta.pid
-                                  (--net isolated), used (idle clock), launch.sh, box.log, reap.log,
+                                  box.json (options, net, pidns), info.json (bwrap child-pid), pid + pasta.pid
+                                  (boxes behind pasta), used (idle clock), launch.sh, box.log, reap.log,
                                   shots.tsv (what each shot is of, for click --in: 81)
 [systemd-run --user --scope]      --systemd only: a delegated cgroup the box's user manager owns (61)
-[pasta --splice-only]             --net isolated only: own netns, loopback, the --allow ports (44, 45)
+[pasta]                           top-level boxes: own netns, connected (default) or isolated (44, 45, 89);
+                                  a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
 │                        one render node (plus its NVIDIA render-side nodes on NVIDIA),
@@ -206,7 +207,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
 24. **The host does not render a hidden window**: with the box on workspace 9 out of sight, screencopy in
     the box never completes and `grim` blocks forever (it hung `up`'s bar-settle wait). Interactive boxes
     skip that wait; every grim call has a timeout and `shot` says why it failed. Screenshots are for
-    headless boxes; interactive ones are for the user's eyes.
+    headless boxes; interactive ones are for the user's eyes. (Replaced by finding 90: a hidden
+    interactive box is drawn now, at the host's `misc.render_unfocused_fps`.)
 25. **Closing an interactive box's window** only removes its output; Hyprland idled screenless. It now
     exits when its last monitor goes, and `session.sh` then `kill -KILL -1`s the namespace: bwrap's PID 1
     only exits once it has no children, and the shell's helpers (inotifywait, wl-paste) outlive
@@ -911,7 +913,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       `special` = `special:scratchpad` (Omarchy binds SUPER+S to it) or `special:NAME`. It goes into
       the host's Lua, so only those shapes pass; a bad value in the file is ignored with a warning.
       `up --interactive --workspace`, `peek --workspace` per window. An interactive box on the
-      scratchpad starts fine while hidden (the host does not render it; `shot` needs it shown).
+      scratchpad starts fine while hidden (the host does not render it; `shot` needs it shown; see
+      finding 90: it is drawn while hidden now).
     - `confirm-close`: closing an interactive box's window asked nothing and ended the box. With it
       on, the box's Hyprland (hyprland.lua, `monitor.removed` with no monitor left) runs
       `share/confirm-close.sh`: `hyprctl output create wayland` opens a new window (it lands on the
@@ -1109,6 +1112,13 @@ the designs here were measured in boxes and built for a contained desktop, and n
       end check on `activelayout>>hl-virtual-keyboard-fcitx5`: Omarchy's input method re-sends its
       layout on every focus change of the user's. `omabox keys` is anonymous there
       (`hl-virtual-keyboard-unknown`, seen in a stand-in box), so fcitx5 is always the user's now.
+      Merged with main on 2026-09-28, where PR #13 had meanwhile added a watch of its own: `hyprctl`
+      polled every 0.5 s for a window of the suite's boxes on the desktop and for omabox's workspace
+      coming up, one verdict at the end. This watcher stays (it sees reverted leaks and keys, and
+      names the test); #13's rule is taken into `leak_scan`: omabox's workspace (`omabox config
+      workspace`) coming up is a leak, not a note, unless the run started on it. `t_leak_control`
+      switches its stand-in to 9 and back and requires that leak. The suite already needed python3
+      (its throwaway servers), so the watcher adds no dependency.
 81. **Windows as targets: `omabox windows`, `shot/click/keys --window`, `shot --fit`, `click --in`**
     (2026-09-25). No new tool or protocol: the box's grim 1.5 has `-T ID` (ext-image-copy-capture of a
     foreign toplevel), and Hyprland's id for it is the `stableId` `hyprctl -j clients` reports (hex).
@@ -1157,8 +1167,8 @@ the designs here were measured in boxes and built for a contained desktop, and n
     - Not done: occlusion ignores layers that take input (an open panel), and pinned or
       override-redirect windows only approximately follow the stacking rule; an app that stops
       rendering when hidden and ignores the export's frame callback would still come out stale (only
-      foot checked). An interactive box whose window is hidden gets no frame for `-T` either (assumed:
-      it goes through the same timeout message as `shot`).
+      foot checked). An interactive box whose window is hidden is drawn since finding 90, so `-T`
+      gets frames too (assumed, as for a plain `shot`; not checked for `--window`).
 82. **`omabox wait` and `--wait` on keys, click and run -d** (2026-09-25). Agents slept
     between actions and guessed how long. Measured in the analysis boxes (1920x1080@60, shell): a
     menu settles ~130 ms after its key, a notification ~240, typing in foot ~210, a terminal ~660;
@@ -1197,6 +1207,11 @@ the designs here were measured in boxes and built for a contained desktop, and n
       before the window was hidden) and then nothing, and waited out the whole timeout; so the
       plain copy taken before an answer must come within `--first` (2 s) too. Now `unknown: box
       'inner' not rendered (its window is hidden on workspace 9)` in 2.05-2.6 s, every time.
+      Since finding 90 (merged here 2026-09-28) a hidden interactive box is drawn, so `wait` settles
+      on it (`t_guard` requires an answer there, never `unknown`: with animated gears in the box it is
+      124, still changing). `unknown ... not rendered` is left for a box that
+      is not drawn while hidden, and says why as `shot` does: started by an older omabox, or its
+      window replaced after a confirm-close keep; either way, ask the user, never show the window.
     - One line on stdout (`satisfied: settled after 0.40s (last change 0.08s at 0,12 1920x1068;
       ignored 56x56 at 952,532: cursor)`) or `--json`. Waiting is use (idle expiry, finding 59):
       `need_box` touches `used`, and a long wait again every 30 s. The tool's stdin is a pipe from
@@ -1290,6 +1305,278 @@ the designs here were measured in boxes and built for a contained desktop, and n
     --user list --activatable` until its first activation or a `ReloadConfig`. `seed_home` now creates
     the dir. Checked in plain and `--systemd` boxes before and after; `t_dbus_user_app` and `t_systemd`
     install an app after `up` and launch it with `gtk-launch` (all five checks fail without the fix).
+88. **A box per agent session** (2026-09-25). The default name was the repo's, so two agents in one
+    checkout (two Claude Code windows, a Claude Code and a Codex) shared a box: one's `up` got the
+    other's box with its options ignored, its `run` saw the repo read-only, and its `down` ended the
+    other's work. Both agents already tell their shell commands who they are: Claude Code exports
+    `CLAUDE_CODE_SESSION_ID` (a UUIDv4), Codex `CODEX_THREAD_ID` (a UUIDv7, checked in its rollout
+    logs). The default name is now `<repo>-<last 8 of the id>`; the tail, because a UUIDv7 starts with
+    a timestamp two sessions opened in the same minute share. `guard exec` sets `OMABOX_SESSION` for
+    any other agent; set to empty, it turns the suffix off. `-b` and `OMABOX` are unchanged.
+    Where one box used to be reused, each session now starts its own (~500 MB), so a session's
+    default box goes down after 30 min idle instead of 2 h (`--idle` and `OMABOX_IDLE` still set it);
+    agents are told to `omabox down` when done, and this catches the ones that forget. Taking the box
+    down when its agent exits is left for a follow-up (done in finding 93, which puts the limit back
+    to 2 h). What follows from the id: Claude Code's
+    subagents run in its process with the same `CLAUDE_CODE_SESSION_ID`, so parallel subagents still
+    share one box (each needs `-b NAME` for its own); `/clear` gives the session a new id, and
+    `/resume` the resumed one's (`/compact` keeps it), so after `/clear` the agent starts a new box
+    and the old one waits out its idle limit; and a box the user started with `omabox up` in the repo
+    (named `myrepo`) is no longer an agent's default: the agent passes `-b myrepo` to use it, and the
+    user passes `-b` to `peek` or `shot` an agent's box.
+89. **A headless box captured host X11 apps (Steam)** (2026-09-26, PR #8). In the host's network
+    namespace, a box's labwc (lazy Xwayland) bound the abstract `@/tmp/.X11-unix/X0` about 2 s into
+    `up`, for the box's whole life (the next free X<n> when :0 was taken). The host's Xwayland
+    (Hyprland) has only the filesystem sockets, and libxcb tries the abstract one first, so a host
+    X11 app opened in the box: Steam logged the box's 1600x900 screen, the real Hyprland listed no
+    Steam window, and stopping the box gave host apps the real 4480x1440 display again. (1600x900
+    needs an NVIDIA box: only there is labwc's output sized to `--size`, finding 78; on AMD/Intel it
+    stays 1280x720.) An X server run in such a box (Xvfb, xvfb-run) did the same, box apps could
+    reach any host abstract socket, and host apps could squat the box's. Every top-level box now
+    runs behind pasta in a network namespace of its own, which closes that whole class;
+    `--net isolated` keeps its arguments. It replaces 44's isolated-only `nsenter -n` in `run`
+    (`run` joins a box's network namespace whenever it differs from its own), and 52's stub resolver
+    is now reached through pasta's `-T`, which mirrors the host's port 53 into the box (the splice
+    keeps the address, 127.0.0.53). `--net connected` (the default; `host` is its old name) runs
+    `pasta --config-net --no-map-gw -D none -S none --host-lo-to-ns-lo -t 127.0.0.1/1-65535,auto
+    -u 127.0.0.1/1-65535,auto -T 1-65535,auto -U 1-65535,auto`.
+    - *Flags*: a box's ports are bound on the host's 127.0.0.1 only; plain `-t auto` bound `*:P`,
+      which opened them to the LAN, and a host `localhost` client's ::1 attempt was accepted, then
+      reset. `1-65535,auto` includes the ephemeral range (32768-60999), which `auto` alone skips.
+      `--no-map-gw` makes the box's gateway the router again, not all of the host's loopback.
+      `-D none`: with `--no-map-gw`, pasta cannot hand the box the host's loopback nameserver, and
+      said "Couldn't get any nameserver address" on every start. `-S none`: no search domains either
+      (the box reads the host's resolv.conf).
+    - *Across the boundary* (curl and python in real boxes): use 127.0.0.1, with a server listening
+      on IPv4 (127.0.0.1, 0.0.0.0 or ::). From the host, `localhost` works too (::1 is refused, then
+      127.0.0.1). From a box, `localhost` to an IPv4-only host server is accepted and then reset
+      (`-T` listens on both families and takes no address), and from box to box it resets even for a
+      dual-stack server (the hop is the host's 127.0.0.1). A box server on ::1 only cannot be
+      reached from outside (reset); a host server on ::1 only is reached from a box as [::1] or
+      `localhost`, not 127.0.0.1. Inside a box the host's LAN address is the box itself. No
+      multicast (mDNS, SSDP). Forwards appear 0.2-1.0 s after a server starts listening (33 timed
+      runs; one untimed try took over 5 s and did not recur). pasta's UDP auto mode also forwards
+      the ports bound for TCP: while a box has a TCP server on P, a host program cannot bind
+      127.0.0.1:P, TCP or UDP (it can still bind [::1]:P, which host `localhost` clients try first).
+    - *Cost*: pasta takes about 28 MB and 0.4% of a core per box (its 1 s rescan), and every host
+      listener is mirrored into every box.
+    - *Requirements*: a connected box's tap device needs /dev/net/tun; `up` checks for it and for
+      pasta up front, before the built helpers (`check_install`, which a fresh checkout's first unit
+      run otherwise hit first). `--net isolated` needs no tun. A nested connected box (`net: none`)
+      gets bwrap's `--unshare-net` and no route out, because a box's /dev has no /dev/net/tun. A
+      nested `--net isolated` box still runs pasta `--splice-only`, but only a headless one, from
+      `omabox run`: everything a box's session starts has no_new_privs (bwrap sets it; `run` enters
+      from the host and has none). pasta runs under it too, but its command, uid 0 in pasta's
+      namespace, then keeps only the capabilities pasta held (CapPrm 0x201400: net_bind_service,
+      net_admin, sys_admin), not all of root's, and without CAP_SETFCAP the bwrap it starts cannot
+      map its uid onto pasta's root ("setting up uid map: Operation not permitted"). Checked in a
+      box: from a script the box's Hyprland started, `up --net isolated` and pasta + bwrap failed
+      so, while pasta alone and bwrap alone ran; through `omabox run` all four worked, and pasta +
+      bwrap failed again with CAP_SETFCAP alone dropped before bwrap. The bounding set is full in
+      both kinds of process (finding 45 blamed it). The same goes for any no_new_privs process, a
+      top-level one too (an agent's sandbox, a systemd unit with `NoNewPrivileges=`): under
+      `setpriv --no-new-privs`, `up` failed 10 s in with only "bwrap did not start" (box.log had the
+      uid-map line), where a box in the host's network, before this change, came up. So `up` reads
+      NoNewPrivs from /proc/self/status and refuses a headless box behind pasta up front, with that
+      reason (an interactive one is started by the host's Hyprland); `t_unit_refusals` runs it
+      under `setpriv --no-new-privs`. A box that is up already still reads "already up" there,
+      without the per-name lock, so such a process can use a box the user started (`t_connected`).
+    - *Pids*: pasta's pid namespace makes bwrap's child-pid 2. `pasta_pid` finds the host pid only
+      through the box's own pasta (`box_pasta`, which `kill_box` uses too): a process whose comm is
+      pasta's (passt.avx2 on this CPU; readable although pasta is non-dumpable) and whose command
+      line names the box's pasta.pid. pasta never removes that file: a stale one naming another
+      box's pasta led `down` to that box's PID 1 (reproduced with a fabricated box dir), and, with
+      only the command line checked, a process whose argv held the path was killed with its child.
+      bwrap gets `--die-with-parent` (its parent is pasta), so a box whose pasta dies (OOM, a
+      killall) ends with it instead of staying up with no network; isolated boxes too.
+    - *Older boxes and CLIs*: boxes started before this change keep the host's namespace until
+      `down` (`ls` shows them as `host`); entering the host's namespace from the box's user
+      namespace is EPERM ("reassociate to namespaces failed"; checked against a box started by
+      0.1.2). An older CLI reads a connected box's child-pid (2), so it lists the box dead, and its
+      `down` deletes the dir but, where pasta runs as passt.avx2, leaves the box and its pasta
+      running (its fallback checks `comm = pasta`): take boxes down before downgrading.
+    - *Tests*: `t_connected` diffs the host's abstract X11 sockets around `up` (a new one counts
+      unless `ss -xlp` places its owner in another pid namespace: another checkout's box may start
+      meanwhile), and checks the netns, DNS, `localhost` from host to box (bound on 127.0.0.1 only),
+      127.0.0.1 from box to host, a kernel-chosen port each way, that the box's gateway is not the
+      host's loopback (one connection to the router), and that box.log is empty. Reverting
+      `1-65535`, the 127.0.0.1 scoping, `--host-lo-to-ns-lo`, `--no-map-gw` or `-D none` fails one
+      of them. `t_pasta_dies` covers `--die-with-parent`; `t_stale_pid` a stale pasta.pid naming a
+      copy of sleep called pasta, or a process whose argv names the file; `t_race` counts one pasta
+      per box. `t_throwaway_dead` killed info.json's child-pid, 2, which on the host is kthreadd
+      (EPERM), so the box stayed up; it now kills the PID 1 `box_pid` finds.
+    - *Interactive*: pasta forks, so every top-level interactive box's window now reaches its
+      workspace through `HL_EXEC_RULE_TOKEN` only, as isolated ones have since 45. The suite cannot
+      cover it: its stand-in interactive boxes (`t_guard`) are nested connected ones (`net: none`,
+      no pasta), and a nested `--interactive --net isolated` box is started by the stand-in's
+      Hyprland (`hl.exec_cmd`), so it has no_new_privs and fails at bwrap's uid map (Requirements,
+      above). Still to check on the real desktop, with the user's go-ahead: in the default mode,
+      `up --interactive` lands on workspace 9 with the active workspace and window unchanged,
+      `peek --focus` focuses it, and `down` leaves no pasta.
+90. **A hidden interactive box is drawn, so no agent switches the user's workspace for a shot**
+    (2026-09-26, seen by a user: a Codex agent testing an app in an interactive box on
+    workspace 9 kept flipping their second monitor to 9 and taking focus). Finding 24's `shot`
+    failure said the host only renders the window "while its window is visible (workspace 9)", and
+    the agent took that as the fix: `omabox host -- hyprctl eval 'hl.dispatch(hl.dsp.focus({
+    workspace = "9" }))'` before every click and shot, then focus back to workspace 1, dozens of
+    times. The exec rule now adds `render_unfocused = true`: the host sends the hidden window frame
+    callbacks (at `misc.render_unfocused_fps`, 15 by default), the box's Hyprland keeps drawing, and
+    `shot`, `click` and `keys` all work with the window out of sight. Hyprland keeps the exec
+    rule's `render_unfocused` with the window through every rule re-check (focus, a move to another
+    workspace, a reload). The renderer only starts drawing a hidden window when rules are
+    (re)applied (`window.updateRules`: at map and on each re-check), so `set_prop` on an existing
+    window reports true (getprop says so) but does nothing until the next re-check, and a re-check
+    never overwrites it. A box started before this has an exec rule without `render_unfocused`, so
+    no re-check makes it draw: it needs a restart, or `set_prop` followed by a re-check (a dispatch
+    on the user's session). Hyprland 0.56.2's source says so, and es2gears in a box agreed: 0 fps
+    after `set_prop` alone, 15 after a tag toggle; an old-style rule stayed at 0 through a tag
+    toggle, a workspace move and a reload. A restart ends the user's session in the box, so
+    `shot`'s message for such a box says to ask the user rather than to restart it. `up` records
+    `drawn_hidden` in box.json to tell those apart; no message suggests showing the window, each
+    says not to. The skill says the same under `omabox host`, and that a box the user started has
+    its own name (the repo's, finding 88, or box-N from the bar widget): an agent passes `-b NAME`
+    to reach it. The cost: a hidden interactive box running something animated now keeps drawing at
+    15 fps where it used to stop, and interactive boxes never idle out. The exception is a box kept
+    running after a close with confirm-close on (finding 70): the exec rule went with the first
+    window, so the new one is not drawn while hidden (Open). `click` and `keys` still reach it, as
+    input never waits for a frame, but `shot` gets no frame, so an agent cannot see what they did.
+    In a stand-in (`--no-shell`, a terminal in the box), with the new window hidden and `shot`
+    failing, `keys super+1` switched the box to the terminal's workspace, and a click and typed
+    keys then reached the terminal: it got the mouse report and ran the command. Right after the
+    keep, though, the box's new output showed a new, empty workspace (3; the terminal stayed on 1
+    and nothing had focus), hidden or shown, so a blind click or keys reached no app until the
+    box's workspace was switched. confirm-close.sh leaves `omabox.reopened` in the box's runtime
+    dir, and `shot`'s message then says the box needs a restart and to ask the user; for any other
+    interactive box with no frame it says to ask the user too.
+    Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
+    a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
+    with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
+    workspaces 9 and 3 and the scratchpad, and the one on 9 again once a window has opened in it,
+    which that second shot must show (the first shot right after `up` gets a frame even from a box
+    that is not drawn while hidden); the stand-in's workspace and focused window stay unchanged.
+    `t_unit_shot_hidden` checks the messages, for a box with and without `drawn_hidden` and with
+    `omabox.reopened`, and `t_guard` that a close with confirm-close on leaves that file. Not yet
+    checked on the real desktop.
+91. **`up` ended without a word when git had no identity** (2026-09-26). `seed_home` copies the
+    user's git `user.name` and `user.email` (finding 48) in a loop whose last command was
+    `val=$(git config --global user.email) && git config --file ...`. With no global `user.email`
+    (a fresh machine) that lookup fails, `seed_home` returns 1, and `set -e` ends `up` right after
+    the box dir is made: exit 1, no message. Found running the suite from a git worktree: in the
+    stand-in host the worktree's `.git` file points at a gitdir that is not mounted, so every git
+    command there fails with 128, `--global` lookups included, and `t_guard`'s inner `up` died.
+    A value that is not set is now skipped, and the lookups run from `/`. `t_no_git_identity`
+    starts a box with `GIT_CONFIG_GLOBAL=/dev/null` (exit 1 before the fix).
+92. **The guard let agents open links on the desktop** (2026-09-26). The guard takes the display away,
+    but a browser already running there takes a URL over its own socket. Checked in a box standing
+    in for the host (Chromium running in it, then from a shell with the guard's variables):
+    `xdg-open https://example.com` printed "Opening in existing browser session", exit 0, and the
+    running Chromium opened the tab, focused. xdg-open sees a non-empty `WAYLAND_DISPLAY`
+    (`omabox-guard`), so it uses the `x-scheme-handler` desktop entry (`chromium %U`), and Chromium's
+    process singleton hands the URL over before it needs a display. On a host with
+    `misc:focus_on_activate` that can also take focus. `gh ... --web` goes the same way through
+    `$GH_BROWSER`, `$BROWSER` or xdg-open. `share/guard/xdg-open` refuses
+    with a note (give the user the link; look at it in a box; `omabox host` when asked) and exit 4,
+    xdg-open's code for a failed action. `BROWSER` and
+    `GH_BROWSER` name it for every guarded agent; Claude Code's hook and `guard exec` also put
+    `share/guard` first on PATH. Codex's `shell_environment_policy.set` only sets values (no PATH
+    prefix), so a plain `xdg-open` from Codex is not covered (real xdg-open uses the desktop's URL
+    handler before `$BROWSER`). `omabox host` drops the PATH entry, and a `BROWSER`/`GH_BROWSER` that
+    is the stand-in gives way to the user manager's value or none (none too when `systemctl --user
+    show-environment` prints the value quoted, as `$'...'`, for spaces or shell characters); any
+    other value stays (Omarchy sets `BROWSER` in the shell, never in the user manager). Both match
+    any checkout's `*/share/guard` (a PATH entry also with a trailing slash), since a hook written
+    from another clone or worktree names its own. The caller's PATH that `up` gives a box session
+    and `run` gives a command leaves the entry out, so links open in a box as before (this repo is
+    mounted in boxes the suite starts, so the entry would be visible there).
+    The guard's settings now hold the checkout's path, so `guard on` refuses a path with characters
+    that would need quoting in a settings file (`guard exec` exports it, which takes any path). An
+    update that changes the guard makes it read "outdated", and `install.sh` then asks "Update it?"
+    for the agents that have it, whatever the others' state, and "Turn it on?" only for those where
+    it is off (a "no" to turning it on does not hold an update back, and a "no" to an update is not
+    remembered). If the checkout a hook names is gone (a removed worktree), its PATH entry quietly
+    stops working and `xdg-open` reaches the desktop again: `omabox guard` says so for that agent.
+    Python's `webbrowser` stops at the stand-in: `BROWSER` names an `xdg-open`, so Python runs it
+    in the background as it runs xdg-open and counts it as opened once it has started. Checked in a
+    box with only fake browsers after the guard's PATH entry (Python 3.14.7): 20 of 20 opens
+    returned True and reached none, and as many with Codex's variables (a fake `xdg-open` on PATH
+    instead of the guard's). Only when the stand-in's path has a space (`guard exec` from
+    such a checkout; `guard on` refuses one) does Python wait for it, and its exit 4 then sends
+    Python on to the next browser, the desktop's default first (with a fake `xdg-settings` naming
+    `chromium.desktop`, 3 of 3 reached the fake `chromium`). Not covered, and no variable reaches
+    them: `gio open`, which starts the desktop's URL handler itself (in a box under the guard's
+    variables and PATH, `xdg-open` refused while `gio open` started the `x-scheme-handler/https`
+    entry, exit 0); npm's `open` runs the copy of xdg-open it ships; a browser started directly
+    with a URL (Arch's `chromium` launcher takes flags from a file only); and
+    `omarchy-launch-browser` / `omarchy-launch-webapp`, which go through `uwsm-app` and the user
+    manager, as the guard's other gaps do. Per-browser wrappers were considered and left out: a fake
+    `chromium` would break `chromium --headless`, which agents use on purpose, the list of names
+    never ends, and Codex would not get them.
+93. **A session's box goes when its agent does** (2026-09-27, the follow-up finding 88 left). `up`
+    records the agent's process for a session's default box, as pid and start time in box.json, and
+    the reaper takes the box down once that pid no longer has that start time (a reused pid is not
+    the agent) or is a zombie (an agent that exited under a parent that never waits kept its start
+    time, and its box, until that parent went; found in review). A box.json that records no agent,
+    or no start time, has none alive: an empty pid read `/proc//stat`, the system-wide `/proc/stat`,
+    and an empty start time matched the empty one read for it (latent: every caller checked for an
+    agent first; found in review). `agent_proc` gives no agent when it cannot read the start time.
+    The agent: Claude Code exports its own pid as `CLAUDE_PID` to every command; `guard exec`
+    exports `OMABOX_AGENT_PID`, the pid it execs the agent as; Codex sets `CODEX_THREAD_ID` for its
+    children only, so it is the nearest ancestor whose /proc/PID/environ lacks `VAR=value` (compared
+    by value: a `codex` started from another session's shell carries the outer id). It reads each
+    environ with `grep -qz`: through `tr | grep -q` under pipefail, grep quitting at the match left
+    `tr` to die of SIGPIPE when much of the environment followed (~1.5 MB: every time, in review),
+    which read as no match, and the walk stopped at `omabox` itself. The pid must be one `up`
+    descends from. A first version walked /proc for every agent and, for `OMABOX_SESSION`, took the
+    farthest ancestor with it, assuming `guard exec` exported it: set by hand for one command
+    (`OMABOX_SESSION=x omabox up`), that recorded `omabox up` itself, and the reaper took the box
+    down about a minute later. Now `OMABOX_SESSION` without `guard exec` names no agent, and such a
+    box only idles out. A `guard exec` inside a guarded agent keeps its session, so it shares the
+    outer agent's box, but it exported its own pid: a box the inner agent started went when that one
+    exited, under the outer one (found in review). It now keeps an `OMABOX_AGENT_PID` it runs under
+    along with the session, and only then (a new session, or a pid it does not run under, gets its
+    own). A box in use when its agent goes (a peek window, an `omabox run` still running) is not
+    taken down: the agent check comes after the activity check, so the box stays while in use and
+    goes at the next check (within a minute) once nobody uses it, without waiting out its idle
+    limit. A `run -d` job is not use (its `nsenter` exits at once, finding 39), so it does not keep
+    the box. A box found dead keeps its logs until `down`, like any other dead box (findings 71,
+    74). A session's box has the 2 h idle limit again, whether or not its agent is found (finding 88
+    had cut it to 30 min). An agent in a pid namespace of its own (a sandbox) is not found; its box
+    only idles out. Interactive boxes, other names given with `-b`, and every box while `OMABOX` is
+    set are never tied to an agent (`-b` with the session's own name is that box, and is tied). The
+    reaper polls every idle/4 capped at 60 s, so a box can outlive its agent by up to a minute. With
+    `--idle 0` a session's box still goes with its agent (`ls` says never): the reaper runs for the
+    agent alone, every 60 s (it polled every 5 s, the floor for short limits, until review). Codex
+    is untested with a real Codex: only fake processes that set `CODEX_THREAD_ID` for their children
+    were checked. A session resumed in a new process (`claude --continue` or `--resume`, which keep
+    the id) found its box still up but recording the agent that had exited, and the reaper took it
+    down under the new one at its next check (11 s after the first quit, in review). Now a command
+    that reaches a session's box that is up (`up`, `run`, `path` and every one through `need_box`)
+    records its own agent there when the one recorded is gone; only then, not in a box that records
+    none or whose agent still runs. The write holds the box's lock, and the reaper's `down`, which
+    decided on the old agent, checks it again under that lock, so a takeover made while it waited
+    keeps the box. The takeover too checks again under that lock that the box records an agent and
+    that it is gone: an `up` of the name that found no agent may have come in between that `down`
+    and it, and the box that `up` started is not taken over (found in review). An agent whose first
+    command comes after that check finds the box gone, and so does one whose command waited for the
+    lock while that `down` had it: `run`, `path` and every command through `need_box` say no box is
+    up (`run -d` went on and failed with a bash error, its log's dir gone; found in review), and
+    `up` starts a new box, as it would for one that had died a moment earlier. `mode` writes
+    box.json's size under the box's lock too: its read and write around a takeover would put back
+    the agent that exited (found in review; `t_mode_lock` holds the lock and checks that `mode`
+    waits for it). `t_unit_agent_session` checks each way of finding the agent and the one-command
+    case; `t_agent_session` runs fake Claude Code sessions (a shell exporting its own pid as
+    `CLAUDE_PID`): the box knows its agent, keeps 2 h, stays while an `omabox run` is going after
+    the agent is killed, goes once that ends, and a box that died stays dead; a new agent of the
+    session whose first command is `run` or `up` keeps the box past two checks and takes it down
+    when it exits, a new agent's first `hyprctl` (through `need_box`) or `path` records it too, and
+    another session's command naming the box with `-b` does not (the reapers stopped across the
+    handover; each fails without its part of the takeover). A takeover made while the reaper's
+    `down` waits for the lock keeps the box, and the reaper then watches the new agent: the lock is
+    held by hand while both queue, and the reaper's `flock` stopped until the new agent's command is
+    done, so the order is fixed (it fails without `down`'s check under the lock, or with a reaper
+    that stops watching after it); with the new command's `flock` stopped instead, that command's
+    `run -d` says no box is up, and with an `up` of the name that finds no agent also let in between
+    the two, the command does not take over the box it started.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -1308,8 +1595,6 @@ Bugs and ideas live in the GitHub issues. Known gaps:
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`).
 - Portals (finding 12): the file chooser (xdg-desktop-portal-gtk) is checked; other portals, and
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
-- `omabox shot` of an interactive box while its window is visible is untested (it only fails fast
-  when hidden).
 - AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
   user setups remain open.
 - Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
@@ -1322,3 +1607,7 @@ Bugs and ideas live in the GitHub issues. Known gaps:
   `shot`. Assumed, not seen: that `grim -T` (ext-image-copy-capture) and screencopy with damage
   both work with NVIDIA's renderer, and that labwc's headless parent sends the frame callbacks that
   let `wait` see a change. `t_main` skips its NVIDIA checks here, saying why.
+- The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
+  `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
+  `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried.
+- After a confirm-close keep (finding 70), the new window shows a new, empty workspace (finding 90).

@@ -35,13 +35,17 @@ check it against what a box cannot do (next section): a step that needs real har
 into a box, it goes to the user.
 
 A box starts with a fresh HOME: apps start as on first run. If a first-run screen offers a real local
-service (a server on 127.0.0.1, the user's account), do not pick it: boxes share the host network, so
-it would be the user's real data. Use a test service or ask. For an app that talks to local servers,
-prefer `omabox up --net isolated --allow 8081` (only those host ports, no internet).
+service (a server on 127.0.0.1, the user's account), do not pick it: a box reaches the user's
+services on the host's 127.0.0.1, so it would be the user's real data. Use a test service or ask. For
+an app that talks to local servers, prefer `omabox up --net isolated --allow 8081` (only those host
+ports, no internet).
 
 `omabox help` has every flag; `reference.md` next to this file has the detail left out here. The box
-name defaults to the repo's directory name, so agents in one repo share a box: `-b NAME` (or
-`OMABOX=NAME`) for another.
+name defaults to the repo's directory name plus your session's id (`myrepo-5cc72cdc` in a Claude Code
+or Codex session), so other sessions never share your box or take it down; `omabox ls` shows its
+name. It goes down by itself when your agent exits, not on `/clear` or `/resume`: `omabox down` when
+you are done, and before `/clear`. Subagents of one session share its box: give each its own with
+`-b NAME`. To use a box the user started, pass `-b NAME` (see `omabox ls`).
 
 ## The loop
 
@@ -93,7 +97,7 @@ then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own.
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
-| `unknown: … not rendered` (exit 1) | A hidden interactive box renders nothing: use a headless one. |
+| `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
 | `box 'x' is already up (options ignored…)`, not yours | Another agent's: `B=$(omabox up --new)`, then `-b "$B"`. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
@@ -129,13 +133,18 @@ an empty `DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE=omabox-guard` (`QT_QPA_PLATF
 works), so anything that would have reached the real desktop fails instead (a Qt app aborts saying
 "could not connect to display", hyprctl cannot connect). That error means: do it in a box. Never set those variables back to the real session, and
 never take the display from elsewhere (`/proc/*/environ`, `hyprctl instances`,
-`$XDG_RUNTIME_DIR/wayland-*`). omabox itself keeps working.
+`$XDG_RUNTIME_DIR/wayland-*`). omabox itself keeps working. Opening a link or file on the user's
+desktop (`xdg-open`, `gh … --web`, anything using `$BROWSER`) fails too ("omabox guard: not opening"):
+give the user the link. To look at a page yourself, open it in your box (`omabox run -d -- xdg-open
+URL`, then `omabox shot`).
 
 When the user asked for their **real** desktop in this task ("switch my theme", reload my Hyprland
 config after an edit, see the change on my screen), run that one command with `omabox host -- CMD`
 (e.g. `omabox host -- hyprctl reload`, `omabox host -- omarchy-theme-set NAME`). Only then: it is
 the one way past the guard, and it is on the record. Testing, screenshots and anything the user did
-not ask to see on their desktop stay in a box.
+not ask to see on their desktop stay in a box. Never use it to switch the user's workspace or focus
+so you can see a box: `shot` works on a hidden interactive box, and when `shot` gets no frame, ask
+the user (see Showing the user).
 
 ## Omarchy shell plugins
 
@@ -158,24 +167,24 @@ instead (workspaces, clock, the stock right side), to see a plugin as most peopl
   data files there). `/home/sbx` does not exist on the host: a path under it passed to a service
   running on the host (a download dir sent to a local server) fails there. Use a path both can see.
 - Private session bus and keyring (store/lookup secrets freely), no system bus, no real input
-  devices, no audio. The network is the host's (the user's real local services are reachable: leave
-  them alone unless asked) unless the box was started with `--net isolated`.
+  devices, no audio. Each box has its own network: by default it reaches the internet, the LAN and
+  the user's servers on the host's 127.0.0.1 (leave those alone unless asked); `--net isolated`
+  reaches only the host ports you list. Across the box boundary use `127.0.0.1`, not `localhost`
+  (detail: `reference.md`).
 - `/sys` and system-wide `/proc` files are the host's (read-only): CPU, temperatures, memory, disks,
   USB devices and DRM connectors read as the real machine's. A widget reading those shows host
   hardware state, not box state.
-- The XDG base dirs are set as in a session (`XDG_DATA_HOME=/home/sbx/.local/share`, ...). An app
-  installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
-  `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.
-  To test with another HOME (`env HOME=$(mktemp -d) app`), set the `XDG_*_HOME` vars too.
-- Only the host's programs; no Xwayland unless `--xwayland`. Stub CLIs, `--env`, `--systemd`, logs,
-  cores, `--no-shell`, screen size: `reference.md`.
+- Only the host's programs; no Xwayland unless `--xwayland`. Stub CLIs, `--env`, `--systemd`, the XDG
+  dirs, logs, cores, `--no-shell`, screen size: `reference.md`.
 
 ## Showing the user
 
 Only when the user asks: `omabox peek` (a live, view-only window of your box on their workspace 9,
 without focus; your input shows on it for ~3 s, never in your shots) or `omabox up --interactive` (a
-box they drive). Agents use headless boxes. `omabox config` holds the user's settings: change them
-only when asked.
+box they drive). Agents use headless boxes. `shot`, `click` and `keys` work on an interactive box
+while its window is hidden: never bring that window forward yourself; when `shot` gets no frame, ask
+the user. A box the user started has its own name (the repo's, or box-N from the bar widget): pass
+`-b NAME`. `omabox config` holds the user's settings: change them only when asked.
 
 ## When a box cannot test it: real hardware and the real session
 
@@ -209,7 +218,8 @@ depends on any of those, a box cannot verify it; do not run it there and report 
 ## If something is off
 
 A headless box goes down after 2h with no omabox command against it (`up --idle 0` keeps one,
-`--idle 30m`); the next command says so: `omabox up` again. A `run -d` job is not use: a server you
-only poll over HTTP needs `--idle 0`. `omabox ls` shows boxes and whether they are alive (`down --all`
-takes other agents' and the user's too). A box that fails to start prints where its logs are. Details and known quirks: `NOTES.md` in the omabox repo
+`--idle 30m`); the next command says so: `omabox up` again. Your session's box still goes when your
+agent exits, `--idle 0` or not; a box with another name (`-b NAME`) stays. A `run -d` job is not use:
+a server you only poll over HTTP needs `--idle 0`. `omabox ls` shows boxes and whether they are alive
+(`down --all` takes other agents' and the user's too). A box that fails to start prints where its logs are. Details and known quirks: `NOTES.md` in the omabox repo
 (`readlink -f $(command -v omabox)` → `../NOTES.md`).
