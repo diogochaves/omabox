@@ -307,12 +307,16 @@ t_main() {
   check_eq "--env reaches run" yes "$(ob run -b "$B" -- sh -c 'echo $OMABOX_TEST')"
   # --pass (finding 66): the caller's value, as it is, and never on a command line.
   check_eq "run does not pass the caller's variables" unset "$(OMABOX_T66=x ob run -b "$B" -- sh -c 'echo ${OMABOX_T66-unset}')"
-  local secret=$'omabox-t66 = with\nnewline'
+  # A token of this run's own, so only a process that got the value fails the check below, not one
+  # that merely mentions the test (an agent grepping the suite, another run of it).
+  local tag secret
+  tag=omabox-t66-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+  secret="$tag = with"$'\nnewline'
   check_eq "--pass hands one over, as it is" "$(printf %q "$secret")" \
     "$(OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- bash -c 'printf %q "$OMABOX_T66"')"
   (OMABOX_T66=$secret ob run -b "$B" --pass OMABOX_T66 -- sleep 2 >/dev/null 2>&1 &)
   sleep 1
-  check_fails "...never in any command line" grep -qs omabox-t66 /proc/[0-9]*/cmdline
+  check_fails "...never in any command line" grep -qsF -- "$tag" /proc/[0-9]*/cmdline
   check_fails "--pass of an unset variable fails (no silent skip)" env -u OMABOX_T66 "$CLI" run -b "$B" --pass OMABOX_T66 -- true
   check_fails "--pass takes a name only" ob run -b "$B" --pass 'A=1' -- true
   check_eq "--pass ROOT is the caller's, not omabox's own (finding 74)" "/x y" "$(ROOT="/x y" ob run -b "$B" --pass ROOT -- sh -c 'echo "$ROOT"')"
