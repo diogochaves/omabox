@@ -8,9 +8,9 @@
 #
 # Never touches the real desktop: every box is headless, and a watch over the whole run fails the suite
 # if a window of its boxes shows up there or omabox's workspace comes up. The desktop stays yours to use
-# meanwhile (only omabox's workspace would count). Needs a Hyprland session (read-only hyprctl)
-# and the host ports 8093/8094 free (a throwaway HTTP server for the network tests; t_connected finds
-# free ports of its own, and makes one connection from a box to its gateway, the router).
+# meanwhile (only omabox's workspace would count). Needs a Hyprland session (read-only hyprctl). The
+# network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
+# connection from a box to its gateway, the router.
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
 unset CLAUDE_CONFIG_DIR CODEX_HOME
@@ -28,7 +28,6 @@ cleanup() {
   local b
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
-  [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
@@ -709,19 +708,22 @@ t_throwaway() {
   check_eq "throwaway: no box left" 0 "$(ob ls --json | jq --arg p "$P-tw-run" '[.[] | select(.name | startswith($p))] | length')"
 }
 
+# Two throwaway host servers on free ports, serving a token of this run's: a server someone else runs
+# on a fixed port would answer (or fail) for them.
 t_isolated() {
-  local B=$P-iso
-  mkdir -p "$TMP/www" && echo hello > "$TMP/www/index.html"
-  python3 -m http.server 8093 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & HTTP_PID=$!
-  python3 -m http.server 8094 --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & local other=$!
-  sleep 0.5
-  check "up --net isolated --allow 8093" ob up "$B" --net isolated --allow 8093
-  check_eq "allowed host port reachable" hello "$(ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8093/)"
-  check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 http://127.0.0.1:8094/
+  local B=$P-iso tok=iso-$P-$RANDOM allowed other
+  mkdir -p "$TMP/www" && echo "$tok" > "$TMP/www/index.html"
+  allowed=$(free_port); until other=$(free_port); [ "$other" != "$allowed" ]; do :; done
+  python3 -m http.server "$allowed" --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & SERVERS+=($!)
+  python3 -m http.server "$other" --bind 127.0.0.1 --directory "$TMP/www" >/dev/null 2>&1 & SERVERS+=($!)
+  check "the host reaches both servers" until_ok 5 bash -c \
+    "curl -fsS --max-time 2 http://127.0.0.1:$allowed/ | grep -qx '$tok' && curl -fsS --max-time 2 http://127.0.0.1:$other/ | grep -qx '$tok'"
+  check "up --net isolated --allow $allowed" ob up "$B" --net isolated --allow "$allowed"
+  check_eq "allowed host port reachable" "$tok" "$(ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$allowed/")"
+  check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$other/"
   check_fails "no internet" ob run -b "$B" -- curl -s --max-time 3 -o /dev/null https://archlinux.org
   check_eq "hostname is the host's (finding 54)" "$(uname -n)" "$(ob run -b "$B" -- uname -n)"
   check "down" ob down "$B"
-  kill "$other" 2>/dev/null
 }
 
 # A port below the ephemeral range that nothing on the host listens on, TCP or UDP (pasta forwards
