@@ -6,8 +6,9 @@
 #   test/run.sh unit         only the fast ones (no box)
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd)
 #
-# Never touches the real desktop: every box is headless, and the last test checks that the host's
-# focused workspace and window are what they were before. Needs a Hyprland session (read-only hyprctl)
+# Never touches the real desktop: every box is headless, and a watch over the whole run fails the suite
+# if a window of its boxes shows up there or omabox's workspace comes up. The desktop stays yours to use
+# meanwhile (only omabox's workspace would count). Needs a Hyprland session (read-only hyprctl)
 # and the host ports 8093/8094 free (a throwaway HTTP server for the network tests).
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
@@ -26,6 +27,7 @@ cleanup() {
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
   [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null
+  [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -49,6 +51,21 @@ tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$
 mkdir -p "$TMP/lib/bin"
 sed '/^main "\$@"; exit$/d' "$CLI" > "$TMP/lib/bin/omabox"
 lib() { bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
+
+# One look at a desktop for what the suite's boxes must never do there (never disturb the real
+# desktop): a window of theirs on it, focused or not, or omabox's workspace brought up. Anything else
+# on it is the user's. $1 runs hyprctl there, $2 prints a pid's command line there, $3 is what a
+# window of the suite's boxes has in its command line (its box dir), $4 omabox's workspace ("": skip).
+desk_look() {
+  local hc=$1 rd=$2 mark=$3 ws=$4 pid foc cls
+  [ -n "$ws" ] && [ "$("$hc" -j activeworkspace | jq -r '.name // empty')" = "$ws" ] &&
+    echo "workspace $ws came up (if you went there yourself, run the suite again)"
+  while read -r pid foc cls; do
+    "$rd" "$pid" 2>/dev/null | tr '\0' ' ' | grep -qF -- "$mark" || continue
+    echo "a window of the suite's boxes on the desktop: $cls (pid $pid)"
+    [ "$foc" = 0 ] && echo "...with focus: $cls"
+  done < <("$hc" -j clients | jq -r '.[] | "\(.pid) \(.focusHistoryID) \(.class)"')
+}
 
 # --- tests ---------------------------------------------------------------------------------------
 
@@ -991,9 +1008,20 @@ t_guard() {
     "$("${in[@]}" QT_QPA_PLATFORM='wayland;xcb' bash -c "${qt//exec timeout/timeout}" 2>&1)"
   sleep 1
   check_eq "...and its abort is not a journaled crash" 0 "$(journalctl --since "$since" MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 -o json --no-pager 2>/dev/null | grep -c omarchy-crash-omabox)"
+  # shellcheck disable=SC2329 # called by name from desk_look
+  sb_hc() { ob hyprctl -b "$B" "$@"; }
+  # shellcheck disable=SC2329
+  sb_rd() { ob run -b "$B" -- cat "/proc/$1/cmdline"; }
+  check_eq "the suite's desktop watch: nothing on the stand-in yet" "" "$(desk_look sb_hc sb_rd /omabox/inner 9)"
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
+  check_match "...the watch sees its window" "a window of the suite's boxes on the desktop: aquamarine" "$(desk_look sb_hc sb_rd /omabox/inner 9)"
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
+  local ws1; ws1=$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)
+  ob hyprctl -b "$B" eval 'hl.dispatch(hl.dsp.focus({ workspace = "9" }))' >/dev/null
+  check_match "...and the watch sees workspace 9 come up, the window focused" "workspace 9 came up.*with focus: aquamarine" \
+    "$(desk_look sb_hc sb_rd /omabox/inner 9 | paste -sd ' ' -)"
+  ob hyprctl -b "$B" eval "hl.dispatch(hl.dsp.focus({ workspace = \"$ws1\" }))" >/dev/null
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
   # The workspace setting (finding 70): a number, the scratchpad; neither takes focus
   check "up --interactive --workspace 3" "${in[@]}" "$CLI" up ws3 --interactive --no-shell --workspace 3
@@ -1043,6 +1071,12 @@ BOX=(t_main t_dbus_user_app t_agent_session t_new t_keys t_peek t_guard t_uwsm_a
 hostctl() { lib host_hyprctl "$@"; }
 hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
 ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
+# Watched for the whole run, not compared before and after: the user may go on using the desktop.
+host_rd() { cat "/proc/$1/cmdline"; }
+hws=$("$CLI" config workspace 2>/dev/null) || hws=9
+[ "$(hostctl -j activeworkspace | jq -r '.name // empty')" = "$hws" ] && hws=   # already there: can't tell
+(while :; do desk_look hostctl host_rd "/omabox/$P-" "$hws"; sleep 0.5; done) >> "$TMP/host-watch" 2>/dev/null &
+WATCH_PID=$!
 
 tests=("${UNIT[@]}" "${BOX[@]}")
 if [ "${1:-}" = unit ]; then tests=("${UNIT[@]}")
@@ -1058,8 +1092,11 @@ done
 
 echo "host"
 CUR=host
-check_eq "host workspace untouched" "$ws0" "$(hostctl -j activeworkspace | jq .id)"
-check_eq "host focused window untouched (fails if you switched windows meanwhile)" "$win0" "$(hostctl -j activewindow | jq -r '.address // ""')"
+kill "$WATCH_PID" 2>/dev/null; wait "$WATCH_PID" 2>/dev/null; WATCH_PID=
+if [ -s "$TMP/host-watch" ]; then no "the desktop was left alone" "$(sort -u "$TMP/host-watch" | paste -sd ';' -)"
+else ok "the desktop was left alone: no window of the suite's boxes, no workspace ${hws:-(skipped: you were on it)}"; fi
+[ "$ws0 $win0" = "$(hostctl -j activeworkspace | jq .id) $(hostctl -j activewindow | jq -r '.address // ""')" ] ||
+  echo "       (your workspace or focused window changed during the run: yours, not counted)"
 
 echo
 echo "$pass passed, $fail failed"
