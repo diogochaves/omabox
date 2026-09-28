@@ -645,7 +645,10 @@ t_run_idle() {
 t_throwaway_home() {
   # From ~ (no repo) the throwaway is named after "default": a box of the user's with that name
   # would take the run instead.
-  if [ -d "$XDG_RUNTIME_DIR/omabox/default" ]; then no "a box named 'default' is up: run it again after omabox down default"; return; fi
+  # An expiry note from a 'default' box that idled out makes `run` refuse the same way.
+  if [ -e "$XDG_RUNTIME_DIR/omabox/default" ] || [ -e "$XDG_RUNTIME_DIR/omabox/.expired-default" ]; then
+    no "a box named 'default' is up or idled out: run it again after omabox down default"; return
+  fi
   local out; out=$(cd "$HOME" && env -u OMABOX "$CLI" run -- sh -c "test -e '$HOME/.config' && echo LEAK || echo ok; pwd" 2>&1)
   check_match "HOME not visible in a throwaway run from ~" '^ok' "$out"
   check_match "it runs in the box HOME" '/home/sbx$' "$out"
