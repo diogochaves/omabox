@@ -16,6 +16,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ### Fixed
 
 - `omabox up` no longer exits silently when git has no global `user.email`, as on a fresh machine.
+- The agent guard now refuses to open links and files on your desktop. `xdg-open URL` or
+  `gh pr view --web` from a guarded agent handed the URL to a browser already running there, which
+  opened a tab and could take focus. `BROWSER` and `GH_BROWSER` point at a stand-in that fails with a
+  note, and Claude Code and `guard exec` put it first on PATH as `xdg-open`. Under Codex only `gh`
+  and what reads `$BROWSER` are covered: a plain `xdg-open` there still uses the desktop's URL
+  handler. After updating, `install.sh` offers to update the guard for the agents that have it
+  (`omabox guard on` does it too).
 - `omabox shot`, `click` and `keys` work on an interactive box while its window is hidden on its
   workspace. The host now keeps drawing the window (at `misc.render_unfocused_fps`), and the error
   for a box started by an older version no longer suggests showing the window, which led an agent

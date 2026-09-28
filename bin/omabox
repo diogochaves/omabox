@@ -261,6 +261,14 @@ caller_env() {
   return 1
 }
 
+# The caller's PATH without the guard's xdg-open (finding 92): in a box, and for `host`, links open.
+# Any checkout's: a hook written from another clone or worktree names its own. A PATH entry may end in /.
+caller_path() {
+  local d out=() dirs; IFS=: read -ra dirs <<<"${PATH:-}"
+  for d in "${dirs[@]}"; do case $d in */share/guard|*/share/guard/) ;; *) out+=("$d") ;; esac; done
+  local IFS=:; printf '%s' "${out[*]}"
+}
+
 # Run a command inside the box's namespaces (unprivileged: we own its user namespace) with the
 # session environment. Working directory: $PWD when it is the same directory in the box (a mount of
 # it: same device and inode, or an overlay of it), else the box HOME. Not just any dir of that name:
@@ -289,7 +297,7 @@ box_exec() {
   fi
   # shellcheck disable=SC2016 # $1/$@ belong to the inner bash
   nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
-    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="${PATH:-}" "${pass[@]}" bash -c '
+    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$(caller_path)" "${pass[@]}" bash -c '
       if [ -n "${OMABOX_PASS_FD:-}" ]; then
         while IFS= read -r -d "" kv <&"$OMABOX_PASS_FD"; do export "$kv"; done
         eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
@@ -796,7 +804,7 @@ cmd_up() {
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
-    --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "${PATH:-}"
+    --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
     --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell"
@@ -1444,17 +1452,24 @@ cmd_restart_shell() {
 #   which exits with "cannot open display" (finding 66);
 # - QT_FORCE_STDERR_LOGGING: a Qt program with no display aborts, and without a terminal its reason
 #   went to the journal: now the agent reads it;
-# - a core limit of 1 byte, so that abort does not reach omarchy-crash-watch's notification (see nocore).
-GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1)
+# - a core limit of 1 byte, so that abort does not reach omarchy-crash-watch's notification (see nocore);
+# - no opening links or files on the desktop (finding 92): xdg-open, gh --web and whatever reads $BROWSER
+#   reach a browser already running there over its own socket, not the display. BROWSER and GH_BROWSER
+#   name share/guard/xdg-open, which refuses; Claude Code's and `guard exec`'s PATH also put it first
+#   as xdg-open (Codex only sets values, so it gets the variables).
+GUARD_PATH=$ROOT/share/guard
+GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
+  BROWSER="$GUARD_PATH/xdg-open" GH_BROWSER="$GUARD_PATH/xdg-open")
 GUARD_NOTE="omabox guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). Anything that may open a \
 window (apps, test binaries run outside ctest), hyprctl, grim and keyring checks go through omabox (load the omabox \
-skill). Never point WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real session. Only when the \
+skill). Opening a link or file there (xdg-open, gh --web) is refused too: give the user the link. Never point \
+WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real session. Only when the \
 user asked for their real desktop in this task, run that command with: omabox host -- CMD"
 # Claude Code: a SessionStart hook writes the exports to $CLAUDE_ENV_FILE, which Claude Code sources
 # before every shell command of the session, subagents' included, and prints the note into the
 # context. Not the settings' `env` block: that also changes Claude Code's own process (clipboard
 # paste, opening the browser). The hook is ours if its command mentions $GUARD.
-GUARD_HOOK="if [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]}; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
+GUARD_HOOK="if [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]} PATH=\"$GUARD_PATH:\$PATH\"; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi"
 # shellcheck disable=SC2016 # jq, not shell
 GUARD_JQ='def ours: (.command? // "") | contains($g);
@@ -1496,9 +1511,19 @@ guard_claude() {
   fi
   local want
   case $1 in
-    state) jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
-      [.hooks.SessionStart[]?.hooks[]? | select(ours)]
-      | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur"
+    state)
+      local line dir
+      line=$(jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
+        [.hooks.SessionStart[]?.hooks[]? | select(ours)]
+        | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur")
+      # A hook written from a checkout that is gone (a removed worktree) no longer stops xdg-open.
+      if [[ $line == *": outdated" ]]; then
+        while IFS= read -r dir; do
+          [ -x "$dir/xdg-open" ] || line+=": its $dir is gone, so links open on the desktop again"
+        done < <(jq -r --arg g "$GUARD" "$GUARD_JQ"'.hooks.SessionStart[]?.hooks[]? | select(ours) | .command' <<<"$cur" |
+          grep -o 'PATH="[^"]*/share/guard:' | sed 's/^PATH="//; s/:$//')
+      fi
+      echo "$line"
       return ;;
     on) want=$(jq --arg g "$GUARD" --arg c "$GUARD_HOOK" "$GUARD_JQ"' strip | .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]' <<<"$cur") ;;
     off) want=$(jq --arg g "$GUARD" "$GUARD_JQ"' strip' <<<"$cur") ;;
@@ -1514,7 +1539,7 @@ guard_codex() {
   [ ! -L "$file" ] || file=$(readlink -f "$file")
   local out
   out=$(python3 - "$1" "$file" "$GUARD_CODEX" <<'PY'
-import sys, tomllib
+import os, sys, tomllib
 mode, path, block = sys.argv[1:]
 try:
     cur = open(path).read()
@@ -1563,6 +1588,12 @@ b = find(cur)
 on = bool(b) and b[2][:len(mine)] == mine
 if mode == "state":
     state = "off" if not b else ("on" if on else "outdated")
+    # A block written from a checkout that is gone (a removed worktree) no longer stops gh --web.
+    for l in (b[2] if b and not on else []):
+        if l.startswith("BROWSER = "):
+            stand_in = l.split(" = ", 1)[1].strip('"')
+            if not os.access(stand_in, os.X_OK):
+                state += f": its {os.path.dirname(stand_in)} is gone, so links open on the desktop again"
     print(f"STATE Codex ({path}): {state}")
     sys.exit()
 base = strip(cur)
@@ -1588,6 +1619,11 @@ PY
   esac
 }
 
+# The guard's paths go into agents' settings files unquoted: only a plain path for the omabox checkout.
+guard_root() {
+  [[ $ROOT =~ ^[A-Za-z0-9._/+-]+$ ]] || die "the guard needs omabox at a path of letters, digits and ._/+- only, not $ROOT"
+}
+
 guard_agent() {
   case $1 in claude) guard_claude "$2" ;; codex) guard_codex "$2" ;; esac
 }
@@ -1601,7 +1637,7 @@ cmd_guard() {
       # OMABOX_SESSION says otherwise.
       shift; [ "${1:-}" != -- ] || shift
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
-      export "${GUARD_ENV[@]}"; prlimit --pid $$ --core=1: 2>/dev/null || true
+      export "${GUARD_ENV[@]}" PATH="$GUARD_PATH:$PATH"; prlimit --pid $$ --core=1: 2>/dev/null || true
       if [ -z "${OMABOX_SESSION+x}" ]; then OMABOX_SESSION=g$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n'); export OMABOX_SESSION; fi
       exec "$@" ;;
     ""|on|off) ;;
@@ -1621,12 +1657,13 @@ cmd_guard() {
     if [ "${WAYLAND_DISPLAY:-}" = "$GUARD" ]; then echo "this shell: guarded"; else echo "this shell: reaches the desktop"; fi
     if printf '%s\n' "${states[@]}" | grep -qv ': on$'; then
       echo; echo "\`omabox guard on\` gives agents' shell commands:"
-      echo "  ${GUARD_ENV[*]}, and a core limit of 1 byte (Claude Code)"
+      echo "  ${GUARD_ENV[*]}, and (Claude Code) $GUARD_PATH first on PATH and a core limit of 1 byte"
       echo "and tells Claude Code's agents: $GUARD_NOTE"
     fi
     return
   fi
   ACT=$act
+  [ "$act" = off ] || guard_root
   for a in "${agents[@]}"; do guard_agent "$a" "$act"; done
 }
 
@@ -1643,8 +1680,17 @@ cmd_host() {
     val=$(sed -n "s/^$v=//p" <<<"$sysenv")
     if [[ $val =~ ^[A-Za-z0-9:._-]+$ ]]; then export "$v=$val"; else unset "$v"; fi
   done
-  export WAYLAND_DISPLAY="${HOST_WL##*/}" HYPRLAND_INSTANCE_SIGNATURE="$HOST_SIG"
+  local path; path=$(caller_path)
+  export WAYLAND_DISPLAY="${HOST_WL##*/}" HYPRLAND_INSTANCE_SIGNATURE="$HOST_SIG" PATH="$path"
   unset QT_FORCE_STDERR_LOGGING
+  # The guard's browser stand-in (finding 92, any checkout's) gives way to the user manager's value, or
+  # none. A BROWSER the guard did not set stays: Omarchy sets it in the shell, not the user manager.
+  # systemctl prints a value with spaces or shell characters quoted, as $'...': not taken as it is.
+  for v in BROWSER GH_BROWSER; do
+    case ${!v:-} in */share/guard/xdg-open) ;; *) continue ;; esac
+    val=$(sed -n "s/^$v=//p" <<<"$sysenv")
+    case $val in ""|*/share/guard/xdg-open|\$\'*) unset "$v" ;; *) export "$v=$val" ;; esac
+  done
   ulimit -Sc "$(ulimit -Hc)" 2>/dev/null || true
   say "on your real desktop: $*"
   exec "$@"

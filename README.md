@@ -225,7 +225,11 @@ What agents' shell commands get: a display that does not exist (`WAYLAND_DISPLAY
 with `QT_QPA_PLATFORM=offscreen` keeps working), and `QT_FORCE_STDERR_LOGGING=1` (a Qt program with
 no display aborts; this way the agent reads why). A window, `hyprctl`, `grim` or `omarchy-theme-set`
 outside a box then fails with an error naming `omabox-guard` or "could not connect to display", which
-the skill answers.
+the skill answers. Links and files are refused too: a browser already running on your desktop takes a
+URL over its own socket, not the display, so `xdg-open URL` or `gh pr view --web` from an agent would
+open a tab there (and with `misc:focus_on_activate`, take focus). `BROWSER` and `GH_BROWSER` name
+omabox's `share/guard/xdg-open`, which fails with a note to give you the link instead, and Claude
+Code and `guard exec` put it first on PATH as `xdg-open`. Inside a box, links open as usual.
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a
@@ -237,8 +241,8 @@ the skill answers.
   whose own `set` table would clash is refused, untouched, with the lines to add by hand). The
   variables only: no core limit, no note. Checked through `codex sandbox`, not in a logged-in session.
 - **Anything else**: `omabox guard exec -- AGENT` starts the agent itself under the guard. Its own
-  process loses the display too (clipboard, opening a browser to log in). It also gets a session of
-  its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and Codex.
+  process loses the display too (clipboard, opening a browser to log in; `xdg-open` refuses). It also
+  gets a session of its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and Codex.
 
 omabox keeps working: boxes have their own display, and `up --interactive`, `peek` and `--size host`
 find your session by themselves. Work you ask for on your real desktop ("switch my theme", `hyprctl
@@ -249,8 +253,13 @@ reload` after editing your config) goes through `omabox host -- CMD`: your sessi
 What it does not do: stop an agent that sets the variables back or runs `omabox host` unasked on
 purpose, processes the agent starts itself rather than through its shell (MCP servers: a headed
 browser MCP opens on your desktop), or anything over the session bus or the user manager (notifications, the keyring, apps
-started over D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment, a
-browser already running, which opens the URL on your desktop). It stops accidents. For a fence, run
+started over D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment),
+and links opened by other routes: a browser started directly with a URL (it hands the URL to the one
+already running), `gio open` (it starts your URL handler itself), npm's `open` (it runs its own copy
+of xdg-open), or, under Codex, a plain `xdg-open` (Codex sets values, so it gets `BROWSER` and
+`GH_BROWSER` but not the PATH entry). Python's `webbrowser` stops at omabox's `xdg-open` (it counts
+one that has started as a success), except under `guard exec` from an omabox at a path with a space:
+there it tries the next browser when that one fails. It stops accidents. For a fence, run
 the agent in a sandbox that blocks Unix sockets (Claude Code's `sandbox`: it also blocks the network
 and every other socket, omabox's included).
 

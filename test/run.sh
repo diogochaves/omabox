@@ -767,6 +767,41 @@ t_unit_install() {
   check_eq "the skill is a link" "$ROOT/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "no dir for an agent that is not installed" test -e "$h/.codex"
   check_fails "the agent guard is never turned on without asking" test -e "$h/.claude/settings.json"
+  # finding 92: an older hook of ours is an update to offer, even after a "no" to turning it on.
+  jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]}}' > "$h/.claude/settings.json"
+  date -Is > "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "an outdated guard: install.sh offers to update it" "guard there is outdated.*not asked \(no terminal\)" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "...and changes nothing without a terminal" "echo old omabox-guard" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$h/.claude/settings.json")"
+  # One from a checkout that is gone reads outdated too, though no older omabox wrote it.
+  local old; old=$(cat "$h/.claude/settings.json")
+  jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[0].hooks[0].command = $c' \
+    <<<"$old" > "$h/.claude/settings.json"
+  check_match "...and one from a checkout that is gone, in words that fit it too" \
+    "/nonexistent/co/share/guard is gone.*The guard there is outdated.*not asked \(no terminal\): omabox guard on claude" \
+    "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1 | tr '\n' ' ')"
+  printf '%s\n' "$old" > "$h/.claude/settings.json"
+  # ...for the agents that have it, whatever the others' guard (Codex off here) and an earlier "no".
+  # "Turn it on?" is for the others, and only a "no" to that is remembered.
+  local guard=(env HOME="$h" "$CLI" guard) tty=(env SHELL=/bin/bash script -qec "$(printf %q "$ROOT/install.sh")" /dev/null)
+  mkdir -p "$h/.codex"; rm "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "Claude Code outdated, Codex off: an update for Claude Code, turning it on for Codex" \
+    "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*not asked \(no terminal\): omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
+  date -Is > "$h/.config/omabox/guard-declined"
+  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  check_match "...the update even after a no to turning it on" \
+    "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*you said no before.*: omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
+  printf 'y\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
+  check_match "...in a terminal, yes updates Claude Code's and leaves Codex off" "Claude Code .*: on Codex .*: off" \
+    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+  rm "$h/.config/omabox/guard-declined"; printf '%s\n' "$old" > "$h/.claude/settings.json"
+  printf 'n\ny\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
+  check_match "...no to the update and yes to turning it on: only Codex's changes" "Claude Code .*: outdated Codex .*: on" \
+    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+  check_fails "...and the no to the update is not remembered" test -e "$h/.config/omabox/guard-declined"
+  rm -rf "$h/.codex"
+  rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
   check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
 }
@@ -846,7 +881,8 @@ t_widget() {
 
 # The agent guard (finding 65): the fake display agents' shells get, and omabox still finding the
 # user's session from such a shell. Sessions are faked in a runtime dir of our own where it matters.
-GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1)
+GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
+  BROWSER="$ROOT/share/guard/xdg-open" GH_BROWSER="$ROOT/share/guard/xdg-open" PATH="$ROOT/share/guard:$PATH")
 t_unit_host_session() {
   check_fails "hyprctl under the guard fails" "${GUARDED[@]}" hyprctl -j version
   local found; found=$("${GUARDED[@]}" bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
@@ -897,6 +933,8 @@ t_unit_guard_settings() {
   check_eq "off gives back the same file" "$orig" "$(cat "$s")"
   jq '.hooks.SessionStart += [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]' <<<"$orig" > "$s"
   check_match "an older hook of ours reads outdated" "outdated" "$(g | head -1)"
+  jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[-1].hooks[0].command = $c' "$s" > "$s.new" && mv "$s.new" "$s"
+  check_match "...and one from a checkout that is gone says so (finding 92)" "outdated: its /nonexistent/co/share/guard is gone" "$(g | head -1)"
   g on >/dev/null
   check_eq "on replaces it" 1 "$(jq '[.hooks.SessionStart[].hooks[] | select(.command | contains("omabox-guard"))] | length' "$s")"
   mv "$s" "$h/real.json"; ln -s "$h/real.json" "$s"
@@ -915,6 +953,9 @@ t_unit_guard_settings() {
   local hook; hook=$(lib eval 'printf %s "$GUARD_HOOK"')
   check_match "the hook says so when it cannot apply the guard (finding 74)" "NOT applied" "$(env -u CLAUDE_ENV_FILE sh -c "$hook")"
   check_eq "...and applies it when it can" 1 "$(f=$TMP/envfile; CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null; grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
+  # (the hook of the suite's copy of the CLI: its checkout is $TMP/lib)
+  check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$TMP/lib/share/guard" \
+    "$(bash -c '. "$1"; echo "${PATH%%:*}"' _ "$TMP/envfile")"
   check_fails "guard junk refused" g maybe
   check_fails "guard on for an unknown agent refused" g on vim
   # Codex (finding 67): a marked block in config.toml, checked as TOML; only when Codex is installed.
@@ -950,6 +991,9 @@ t_unit_guard_settings() {
   g on codex >/dev/null
   check_eq "Codex: its own [shell_environment_policy] is kept, the guard added" "core omabox-guard" \
     "$(python3 -c 'import tomllib, sys; p = tomllib.load(open(sys.argv[1], "rb"))["shell_environment_policy"]; print(p["inherit"], p["set"]["HYPRLAND_INSTANCE_SIGNATURE"])' "$c")"
+  printf '%s\n' "# >>> omabox guard (\`omabox guard off\` removes this block)" "[shell_environment_policy.set]" \
+    'WAYLAND_DISPLAY = "omabox-guard"' 'BROWSER = "/nonexistent/co/share/guard/xdg-open"' "# <<< omabox guard" > "$c"
+  check_match "Codex: a block from a checkout that is gone says so (finding 92)" "outdated: its /nonexistent/co/share/guard is gone" "$(g | grep '^Codex')"
   printf 'x = \n' > "$c"
   check_match "Codex: a file that is not TOML is refused" "not valid TOML" "$(g on codex)"
   check_eq "...untouched" 'x = ' "$(cat "$c")"
@@ -959,12 +1003,50 @@ t_unit_guard_settings() {
 t_unit_guard_exec_host() {
   check_eq "guard exec: the guard's display" omabox-guard "$("$CLI" guard exec -- sh -c 'echo $WAYLAND_DISPLAY')"
   check_eq "guard exec: a core limit of 1 byte (no crash notification)" 1 "$("$CLI" guard exec -- sh -c 'prlimit --pid $$ --core -o SOFT --noheadings | tr -d " "')"
+  # finding 92: no links or files opened on the desktop, however they are asked for. xdg-open runs
+  # only when `command -v` under guard exec gives the guard's: were a dir with the real one put ahead
+  # of it, xdg-open would open a tab on the desktop. A stub right after the guard's on PATH is a
+  # second net, should the lookup that runs xdg-open ever differ from `command -v`'s: the checks
+  # then reach the stub and fail.
+  local gx=(env PATH="$TMP/fakeopen:$PATH" "$CLI" guard exec --) xo
+  mkdir -p "$TMP/fakeopen"
+  printf '#!/bin/sh\necho "real xdg-open reached"\n' > "$TMP/fakeopen/xdg-open"; chmod +x "$TMP/fakeopen/xdg-open"
+  xo=$("${gx[@]}" sh -c 'command -v xdg-open')
+  check_eq "guard exec: xdg-open is the guard's" "$ROOT/share/guard/xdg-open" "$xo"
+  if [ "$xo" = "$ROOT/share/guard/xdg-open" ]; then
+    check_match "...which refuses" "omabox guard: not opening https://example.invalid" \
+      "$("${gx[@]}" xdg-open https://example.invalid 2>&1)"
+    check_eq "...with exit 4, as xdg-open for a failed action" 4 "$("${gx[@]}" xdg-open https://example.invalid >/dev/null 2>&1; echo $?)"
+  else
+    no "...which refuses, with exit 4" "not run: xdg-open under guard exec is [$xo], not the guard's"
+  fi
+  check_eq "...and BROWSER, GH_BROWSER name it" "$ROOT/share/guard/xdg-open $ROOT/share/guard/xdg-open" \
+    "$("$CLI" guard exec -- sh -c 'echo $BROWSER $GH_BROWSER')"
   # The session omabox finds, not $HYPRLAND_INSTANCE_SIGNATURE: under the guard (an agent running the
   # suite) that is the guard's.
   local sig want; sig=$(bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
   want=$(hyprctl -j instances | jq -r --arg s "$sig" '.[] | select(.instance == $s) | .wl_socket')
   check_eq "host from a guarded shell: the real Wayland display" "$want" "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY' 2>/dev/null)"
   check "host: and hyprctl reaches it (read-only)" "${GUARDED[@]}" "$CLI" host -- hyprctl -j version
+  local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
+  check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
+  check_fails "...not the guard's" grep -q share/guard <<<"$open"
+  check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
+  check_eq "...nor one written with a trailing slash (up and run leave it out too)" "/usr/bin:/bin" \
+    "$(PATH=/x/share/guard/:/usr/bin:/y/share/guard:/bin lib caller_path)"
+  check_eq "host: a BROWSER the guard did not set stays (Omarchy sets it in the shell)" firefox \
+    "$("${GUARDED[@]}" BROWSER=firefox "$CLI" host -- sh -c 'echo "${BROWSER-unset}"' 2>/dev/null)"
+  # The user manager's, through a stand-in systemctl: a plain value is taken, one it quotes is not.
+  mkdir -p "$TMP/sysenv"
+  cat > "$TMP/sysenv/systemctl" <<'EOF'
+#!/bin/sh
+[ "$*" = "--user show-environment" ] || exit 1
+echo "BROWSER=\$'/opt/my browser'"
+echo GH_BROWSER=firefox
+EOF
+  chmod +x "$TMP/sysenv/systemctl"
+  check_eq "host: the stand-in gives way to the user manager's GH_BROWSER, not to a quoted BROWSER" "unset firefox" \
+    "$("${GUARDED[@]}" PATH="$TMP/sysenv:$ROOT/share/guard:$PATH" "$CLI" host -- sh -c 'echo "${BROWSER-unset} ${GH_BROWSER-unset}"' 2>/dev/null)"
   check_eq "host: Qt logging as usual" unset "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo ${QT_FORCE_STDERR_LOGGING-unset}' 2>/dev/null)"
   check_match "host says what it runs" "on your real desktop: true" "$("${GUARDED[@]}" "$CLI" host -- true 2>&1)"
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
@@ -979,6 +1061,12 @@ t_guard() {
   check_match "run under the guard gets the box's display" '^wayland-' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'echo $WAYLAND_DISPLAY')"
   check "hyprctl under the guard" "${GUARDED[@]}" "$CLI" hyprctl -b "$B" -j version
   check "shot under the guard" "${GUARDED[@]}" "$CLI" shot -b "$B" -o "$TMP/guard.png"
+  # finding 92: the guard's xdg-open stays out of a box (this repo is mounted in it, so it could be seen).
+  check_match "a box's xdg-open is its own" '^/usr/' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'command -v xdg-open')"
+  # (Its PATH line first: a failed read would have no share/guard in it either.)
+  local spath; spath=$("$CLI" run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ | grep "^PATH="')
+  check_match "...and the box session's PATH" '^PATH=/' "$spath"
+  check_fails "...lacks the guard's" grep share/guard <<<"$spath"
   # Inside the stand-in host: the guard as an agent's shell there would have it.
   local in=("$CLI" run -b "$B" -- "${GUARDED[@]}")
   # A Wayland client says so too, and exits cleanly.

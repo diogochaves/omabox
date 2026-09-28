@@ -111,7 +111,10 @@ so `QT_QPA_PLATFORM=offscreen` still works, as under ctest), so anything that wo
 real desktop fails instead (a Qt app aborts saying "could not connect to display", hyprctl cannot
 connect). That error means: do it in a box. Never set those variables back to the real session, and
 never take the display from elsewhere (`/proc/*/environ`, `hyprctl instances`,
-`$XDG_RUNTIME_DIR/wayland-*`). omabox itself keeps working.
+`$XDG_RUNTIME_DIR/wayland-*`). omabox itself keeps working. Opening a link or file on the user's
+desktop (`xdg-open`, `gh … --web`, anything using `$BROWSER`) fails too ("omabox guard: not opening"):
+give the user the link. To look at a page yourself, open it in your box (`omabox run -d -- xdg-open
+URL`, then `omabox shot`).
 
 When the user asked for their **real** desktop in this task ("switch my theme", reload my Hyprland
 config after an edit, see the change on my screen), run that one command with `omabox host -- CMD`
