@@ -11,3 +11,4 @@ tools/still/*-protocol.[ch]
 
 # Private to this machine: working state and personal agent notes (never pushed)
 .local/
+tools/relay/omabox-relay

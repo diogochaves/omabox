@@ -518,6 +518,154 @@ t_leak_control() {
   [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }
 
+# The broker for ai-jail (finding 99): a jail's policy read from its bwrap's command line, and what a
+# jailed caller is refused, without a jail.
+t_unit_jail_policy() {
+  local d=$TMP/jp; mkdir -p "$d/proj/in" "$d/other" "$d/under/x"
+  pol() { printf '%s\0' /usr/bin/bwrap "$@" | lib jail_policy; }
+  local p
+  p=$(pol --tmpfs /tmp --bind "$d/proj" "$d/proj" --unshare-net --setenv A b -- sh)
+  check_eq "no network: --unshare-net" false "$(jq -r .net <<<"$p")"
+  check_eq "a folder at its own path is one of the jail's" "$d/proj false" "$(jq -r '.roots[] | "\(.path) \(.masked)"' <<<"$p")"
+  check_eq "network without --unshare-net" true "$(pol --bind "$d/proj" "$d/proj" -- sh | jq -r .net)"
+  check_eq "--unshare-all is no network" false "$(pol --unshare-all -- sh | jq -r .net)"
+  check_eq "...unless --share-net" true "$(pol --unshare-all --share-net -- sh | jq -r .net)"
+  check_eq "a mount inside a folder masks it" true "$(pol --bind "$d/proj" "$d/proj" --ro-bind /etc/hostname "$d/proj/in/h" -- sh | jq -r '.roots[0].masked')"
+  check_eq "...one before it does not (the folder covers it)" false "$(pol --tmpfs "$d/proj/in" --bind "$d/proj" "$d/proj" -- sh | jq -r '.roots[0].masked')"
+  check_eq "a later mount at or above a folder covers it" 0 "$(pol --bind "$d/proj" "$d/proj" --tmpfs "$d" -- sh | jq '.roots | length')"
+  check_eq "a folder mounted elsewhere is not one" 0 "$(pol --bind "$d/proj" /work -- sh | jq '.roots | length')"
+  check_match "an unknown option fails the read" "unknown bwrap option --args" "$(pol --args 3 -- sh 2>&1; echo " rc=$?")"
+  check_match "...rc 1" "rc=1" "$(pol --bogus -- sh 2>&1; echo " rc=$?")"
+  check_match "an option cut short fails" "cut short" "$(printf '%s\0' bwrap --bind a | lib jail_policy)"
+  check_match "no -- fails" "no --" "$(pol --tmpfs /x)"
+  # jail_root/jail_sees/repo_top with a policy like that one.
+  git -C "$d/proj" init -q
+  local J; J=$(jq -nc --arg p "$d/proj" --arg u "$d/under" --arg c "$d/proj/in" \
+    '{id: "1 2", net: false, cwd: $c, roots: [{path: $p, masked: false}, {path: $u, masked: true}]}')
+  check_eq "jail_root: the folder itself" "$d/proj" "$(OMABOX_JAIL=$J lib jail_root "$d/proj")"
+  check_fails "jail_root: not a folder below it (a link could replace it)" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_root "$2"' _ "$TMP/lib/bin/omabox" "$d/proj/in"
+  check_fails "jail_root: not a masked one" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_root "$2"' _ "$TMP/lib/bin/omabox" "$d/under"
+  check_fails "jail_root: not one the jail lacks" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_root "$2"' _ "$TMP/lib/bin/omabox" "$d/other"
+  check_eq "jail_sees: inside a folder" "$d/proj/in" "$(OMABOX_JAIL=$J lib jail_sees "$d/proj/in")"
+  ln -sfn "$d/other" "$d/proj/link"
+  check_fails "jail_sees: not through a link out of it" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_sees "$2"' _ "$TMP/lib/bin/omabox" "$d/proj/link"
+  # A repo's config is the jail's to write: repo_top must not run git on it.
+  git -C "$d/proj" config core.fsmonitor "touch $d/fsmonitor-ran"
+  check_eq "repo_top: the jail's folder with a .git, without git" "$d/proj" "$(OMABOX_JAIL=$J lib repo_top)"
+  check_fails "...its core.fsmonitor never ran" test -e "$d/fsmonitor-ran"
+  check_eq "the default box is the one the caller's omabox sent" mine "$(OMABOX_JAIL=$J OMABOX_RELAY_DEFAULT=mine lib default_name)"
+  check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_JAIL=$J OMABOX_RELAY_PASS_X=s3 X=host lib caller_env X)"
+  local c
+  for c in host peek guard broker _reap "config workspace 3"; do
+    # shellcheck disable=SC2086 # the command and its arguments
+    check_match "refused to a jailed agent: $c" "not for an agent inside ai-jail|does not change" "$(lib broker_check $c 2>&1)"
+  done
+  check "allowed: shot, keys, up, down, config --json" bash -c 'source "$1"; for c in shot keys up down; do broker_check $c; done; broker_check config --json' _ "$TMP/lib/bin/omabox"
+}
+
+# omabox broker on/off writes a socket and a service for the user manager (systemctl stubbed: the real
+# one is never touched) and prints the lines for ~/.ai-jail; it never edits that file.
+t_unit_broker_units() {
+  local h=$TMP/bh stub=$TMP/bstub out; mkdir -p "$h" "$stub"
+  printf '#!/bin/sh\necho "$*" >> %q\n' "$TMP/systemctl.log" > "$stub/systemctl"; chmod +x "$stub/systemctl"
+  echo 'ro_maps = ["/x"]' > "$h/.ai-jail"
+  out=$(HOME=$h PATH=$stub:$PATH "$CLI" broker on 2>&1)
+  local u=$h/.config/systemd/user
+  check_match "on: the socket" "ListenStream=%t/omabox/.broker/sock" "$(cat "$u/omabox-broker.socket" 2>&1)"
+  check_match "...private to the user" "SocketMode=0600" "$(cat "$u/omabox-broker.socket" 2>&1)"
+  check_match "on: the service runs the relay on this checkout's omabox" "ExecStart=$ROOT/tools/relay/omabox-relay listen -- $ROOT/bin/omabox" "$(cat "$u/omabox-broker.service" 2>&1)"
+  check_match "...and boxes outlive it" "KillMode=process" "$(cat "$u/omabox-broker.service" 2>&1)"
+  check_match "on: the socket enabled" "enable --now omabox-broker.socket" "$(cat "$TMP/systemctl.log")"
+  check_match "on: prints the ~/.ai-jail lines" "ro_maps = \[\"$ROOT/bin/omabox:.*/omabox-relay\", \"$ROOT/skill\", \"$XDG_RUNTIME_DIR/omabox/.broker\"\]" "$out"
+  check_eq "...and leaves ~/.ai-jail alone" 'ro_maps = ["/x"]' "$(cat "$h/.ai-jail")"
+  command -v systemd-analyze >/dev/null && check "the units are valid" systemd-analyze --user verify "$u/omabox-broker.socket" "$u/omabox-broker.service"
+  HOME=$h PATH=$stub:$PATH "$CLI" broker off >/dev/null 2>&1
+  check_fails "off: the units gone" test -e "$u/omabox-broker.service"
+}
+
+# The relay itself, host to host: what reaches the command, and what does not.
+t_unit_relay() {
+  local R=$ROOT/tools/relay/omabox-relay d=$TMP/relay
+  [ -x "$R" ] || { skip "the relay (tools/relay)" "not built: run install.sh"; return; }
+  mkdir -p "$d"
+  "$R" listen --socket "$d/sock" -- /usr/bin/bash -c '
+    printf "args=%s|" "$*"; env | grep -E "^(OMABOX_|PATH=|BASH_ENV)" | sort | tr "\n" "|"
+    [ -n "${OMABOX_BROKER_PIDFD:-}" ] && grep -q "^Pid:[[:space:]]*$OMABOX_BROKER_PEER$" "/proc/self/fdinfo/$OMABOX_BROKER_PIDFD" && printf "pidfd=ok|"
+    [ ! -e /dev/fd/3 ] || [ "$OMABOX_BROKER_PIDFD" = 3 ] || { printf "fd3=%s|" "$(cat /dev/fd/3)"; }
+    [ "$1" != sleep ] || { echo $$ > '"$d/cmd"'; exec sleep 30; }
+    exit 7' bash >/dev/null 2>&1 & SERVERS+=($!)
+  until_ok 5 test -S "$d/sock" >/dev/null
+  local out rc=0
+  out=$(cd "$d" && "$R" call "$d/sock" --env FOO=bar --env PATH=/evil -- one "two words" 2>&1) || rc=$?
+  check_eq "the command's exit status comes back" 7 "$rc"
+  check_match "arguments arrive as sent" "args=one two words\|" "$out"
+  check_match "an --env entry arrives renamed, PATH included" "OMABOX_RELAY_FOO=bar\|OMABOX_RELAY_PATH=/evil\|" "$out"
+  check_match "the command's own PATH is the broker's" "\|PATH=/usr/local/bin:/usr/bin\|" "$out"
+  check_match "the caller and its cwd are named" "OMABOX_BROKER_CWD=$d\|OMABOX_BROKER_PEER=[0-9]+\|" "$out"
+  check_match "a pidfd for the caller" "pidfd=ok" "$out"
+  # With a socket for stdin, bash would source ~/.bashrc (SHLVL below 2): not in the broker.
+  out=$(cd "$d" && python3 -c 'import socket, subprocess, sys
+a, b = socket.socketpair()
+sys.stdout.write(subprocess.run(sys.argv[1:], stdin=a, capture_output=True, text=True).stdout)' "$R" call "$d/sock" -- x)
+  check_match "...its PATH stays fixed with a socket for stdin (no ~/.bashrc)" "\|PATH=/usr/local/bin:/usr/bin\|" "$out"
+  check_match "a variable name that is not one is refused" "bad --env" "$("$R" call "$d/sock" --env 'BASH_FUNC_x%%=1' -- x 2>&1)"
+  echo passed > "$d/f"
+  check_match "an --fd file reaches the command as fd 3" "fd3=passed" "$("$R" call "$d/sock" --fd 5 -- x 5<"$d/f" 2>&1)"
+  timeout 1 "$R" call "$d/sock" -- sleep >/dev/null 2>&1
+  check "the command goes when its caller does" until_ok 5 bash -c "! kill -0 \$(cat '$d/cmd') 2>/dev/null"
+}
+
+# A jailed agent's omabox, through the broker, in a real ai-jail (finding 99): it drives a box of its
+# own, which has no more than the jail (no network, only the jail's project), and nothing else.
+t_jail() {
+  command -v ai-jail >/dev/null || { skip "an agent inside ai-jail drives its box through the broker" "ai-jail is not installed"; return; }
+  local R=$ROOT/tools/relay/omabox-relay br=$TMP/br repo out
+  [ -x "$R" ] || { skip "an agent inside ai-jail drives its box through the broker" "tools/relay not built"; return; }
+  mkdir -p "$br" "$TMP/lacks"; repo=$(tmp_repo jail); echo hi > "$repo/README"
+  # The broker as systemd starts it: a few variables, the socket handed over.
+  env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
+    systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$CLI" >"$br/log" 2>&1 & SERVERS+=($!)
+  until_ok 5 test -S "$br/sock" >/dev/null
+  ob up "$P-host" >/dev/null 2>&1   # the user's box: not the jail's to drive
+  cat > "$repo/t.sh" <<EOF
+O=$CLI
+r() { echo "== \$1"; shift; "\$@" 2>&1; echo "rc=\$?"; }
+r up \$O up
+r ls \$O ls
+r pwd \$O run -- sh -c 'pwd; cat README'
+r shot \$O shot
+r shotfile sh -c 'f=\$(ls /tmp/omabox-*.png); head -c 8 "\$f" | od -An -c | tr -d " \n"'
+r shot-o \$O shot -o ./out.png
+r relay-o $R call $br/sock -- shot -b $P-jail -o $br/pwned.png
+r host \$O host -- touch $br/pwned
+r ro-bind \$O up $P-other --ro-bind $TMP/lacks
+r net \$O up $P-other --net connected
+r other \$O shot -b $P-host
+r net-in-box \$O run -- sh -c 'curl -s --max-time 3 -o /dev/null https://archlinux.org || echo no-internet'
+r down \$O down
+EOF
+  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
+  printf '%s\n' "$out" > "$TMP/jail.out"
+  sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jail.out" | tr '\n' ' '; }
+  check_match "up from the jail" "box '$P-jail' up .*rc=0" "$(sect up)"
+  check_match "its box has no network (the jail has none)" "$P-jail .* isolated " "$(sect ls)"
+  check_match "...and only its own boxes are listed" "^NAME [^$]*$P-jail[^$]*rc=0 $" "$(sect ls | sed "s/$P-host//")"
+  check_eq "run starts in the jail's project, mounted" "$repo hi rc=0 " "$(sect pwd)"
+  check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
+  check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
+  check "...there, on the host too" test -s "$repo/out.png"
+  check_match "a path of the broker's never written" "never at a path here rc=1" "$(sect relay-o)"
+  check_match "host refused" "not for an agent inside ai-jail rc=1" "$(sect host)"
+  check_match "a folder the jail lacks does not go in" "not a folder this jail was given whole.* rc=1" "$(sect ro-bind)"
+  check_match "a network the jail lacks is refused" "has no network.* rc=1" "$(sect net)"
+  check_match "the user's own box is not the jail's" "not this jail's.* rc=1" "$(sect other)"
+  check_match "no internet in its box" "no-internet rc=0" "$(sect net-in-box)"
+  check_match "down" "box '$P-jail' down rc=0" "$(sect down)"
+  check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
+  check "the user's box still up" ob shot -b "$P-host" -o "$TMP/host.png"
+  ob down "$P-host" >/dev/null 2>&1
+}
+
 # Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
 t_unit_registry() {
   check_eq "every t_* function is in UNIT or BOX, once" "$(declare -F | awk '$3 ~ /^t_/ {print $3}' | sort)" \
@@ -2261,9 +2409,9 @@ t_wait() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
-  t_unit_registry t_unit_leak_scan)
+  t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
 BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid t_jail)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }

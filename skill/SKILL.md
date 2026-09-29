@@ -127,6 +127,14 @@ Check what a keyring or D-Bus test left behind **inside the box** (`omabox run -
 never with `secret-tool` on the host: that is the user's real keyring, and `search --all` prints the
 secrets themselves.
 
+## Inside ai-jail
+
+In an ai-jail sandbox omabox works through the user's broker: same commands, with a few limits (your
+boxes have no network if the jail has none; only the jail's project is mounted; no `host`, `peek` or
+`--interactive`). "cannot start a box here: this sandbox refuses new namespaces" means the broker is
+not set up: ask the user to run `omabox broker on` outside the jail and add the lines it prints to
+`~/.ai-jail`, then restart the jail. Never try to get around the jail.
+
 ## "could not connect to display" / `omabox-guard`
 
 The user may have turned on the agent guard: your shell commands get `WAYLAND_DISPLAY=omabox-guard`,
