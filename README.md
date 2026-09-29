@@ -6,7 +6,8 @@
 </h1>
 
 [![Built for Omarchy](https://raw.githubusercontent.com/tcballard/omarchy-badges/85f859029e236e784e7b05ada6dbe73506d07a91/badges/v1/built-for-omarchy.svg)](https://github.com/tcballard/omarchy-badges)\
-[omabox.app](https://omabox.app)
+[omabox.app](https://omabox.app) · an independent community project, not affiliated with or endorsed by
+Omarchy
 
 **Your agents get desktops of their own. Yours stays untouched.** omabox gives every AI agent a
 whole Omarchy desktop, invisible and in parallel, to launch, click, type and screenshot apps and
