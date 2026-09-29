@@ -77,7 +77,9 @@ omabox down                                # when done: kills everything in the 
    SEL`. Focus does not always come back (after a panel closes, say).
 4. **Set state directly; keys and clicks only when the gesture is under test.** A shell plugin's
    panel: `omabox run -- omarchy-shell shell summon PLUGIN_ID` (`hide`, `toggle`); data files seeded
-   in the box HOME; `omabox run -- omarchy-theme-set NAME`; `omabox hyprctl dispatch`.
+   in the box HOME; `omabox run -- omarchy-theme-set NAME`; `omabox hyprctl dispatch`. Setup that
+   took many steps (signed in, a PIN, a first-run wizard): `omabox save NAME` once, then start from
+   it with `omabox up --from NAME` or `omabox run --from NAME -- …` (`reference.md`).
 5. **Stop when a shot shows the goal.** Report what a box cannot show (below), then `omabox down`.
 
 No `sleep` between actions: `--wait` returns once what the action caused has settled; `omabox wait`

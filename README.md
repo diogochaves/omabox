@@ -108,7 +108,8 @@ omabox ls                              # boxes, mode, size, state, plugins
 - **Idle**: a headless box goes down after 2 hours with no `omabox` command, peek or `omabox run`
   against it (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`). A `run -d` job does not count.
 - **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours), `--systemd` (a real
-  systemd user manager, for plugins that manage a service or schedule alarms), `--env KEY=VAL` (for
+  systemd user manager, for plugins that manage a service or schedule alarms), `--from SAVE` (start
+  with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
   the whole box session), `--xwayland`, and `omabox gpu 10` (GPU time of one box's processes, where
   the driver reports per-process counters). `omabox help` lists every flag.
 

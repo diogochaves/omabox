@@ -46,6 +46,11 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - `omabox up --systemd` gives the box a real systemd user manager: `systemctl --user`, units in the box
   HOME's `~/.config/systemd/user`, `systemd-run --user` timers (for plugins that manage their own
   service or schedule alarms). No journald (`journalctl --user` is empty) and no logind either way.
+- Saves: `omabox save NAME [-b BOX]` keeps the box HOME (app data, keyring; not `.cache` or logs);
+  `omabox up --from NAME` / `run --from NAME -- CMD` start with it, the user's theme and bar seeded on
+  top. Quit the app first for a clean save (the box is paused for the copy, so it is at least what a
+  crash would leave). `omabox saves` lists them, `omabox saves rm NAME` deletes. Name saves after
+  what they hold (`myapp-signed-in`); they stay until removed, so remove the ones you no longer need.
 - No Xwayland unless `omabox up --xwayland`. Omarchy's `uwsm-app` launching always goes through a
   stand-in, `--systemd` or not: apps start as plain processes, not units (output in
   `<box dir>/home/apps.log`).
