@@ -1632,6 +1632,14 @@ the designs here were measured in boxes and built for a contained desktop, and n
     a bwrap that wrote nothing to `--info-fd`. `t_guard`: the interactive box nested in the stand-in
     sees the stand-in's GPU nodes (on AMD, and on the RTX with the stand-in on it). The stand-in has
     one GPU, so the suite cannot reproduce the mismatch itself: verified on the real desktop.
+96. **`OMABOX=NAME` was ignored under `omabox run`** (2026-09-29, issue #19, seen recording the 0.2.0
+    clip). `run` marks its commands with `OMABOX=1 OMABOX_NAME=NAME`, and every check read any
+    `OMABOX` there as that marker, so a script under `run` that exported `OMABOX=inner` got the
+    default box. `OMABOX` is now the marker only when it is `1` and `OMABOX_NAME` is set
+    (`env_names_box`), in `default_name`, `session_box` and `run`'s throwaway check. So a `run`
+    command with only the marker now gets a throwaway box from `omabox run` like a host shell,
+    instead of "box not up". Checked in a box with the issue's repro (`OMABOX=inner omabox path` is
+    `inner`, `OMABOX=1` still the default); `t_unit_cli`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

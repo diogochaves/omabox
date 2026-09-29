@@ -528,6 +528,7 @@ t_unit_registry() {
 t_unit_cli() {
   check_eq "inside a box OMABOX=1 is not a box name" "$(basename "$ROOT")" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
   check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
+  check_eq "under run, OMABOX=NAME names the box (#19)" inner "$(OMABOX=inner OMABOX_NAME=outer lib default_name)"
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
   check_match "run: a throwaway's up error is shown" "--net is connected" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
   check_match "run --help is the usage" "omabox up" "$(ob run --help 2>&1)"

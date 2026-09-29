@@ -3,6 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`OMABOX=NAME` works in commands `omabox run` started**: they got the default box instead
+  ([#19](https://github.com/diogochaves/omabox/issues/19)).
+
 ## 0.2.0 — 2026-09-29
 
 Agents drive apps by their windows and wait for the screen instead of sleeping; every box gets a
