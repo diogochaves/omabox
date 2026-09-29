@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 BOXES=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/omabox
+# The broker's socket: how omabox inside ai-jail reaches its boxes (issue #16, finding 99).
+BROKER_SOCK=${OMABOX_BROKER_SOCK:-$BOXES/.broker/sock}
 # Box HOMEs live on disk, not in the runtime dir: a box writing a lot there would otherwise fill the
 # tmpfs the real session's sockets live on (finding 50). <box dir>/home links to it.
 HOMES=${XDG_CACHE_HOME:-$HOME/.cache}/omabox
@@ -13,6 +15,7 @@ KEYBOARD=$ROOT/tools/keyboard/omabox-keyboard
 PEEK=$ROOT/tools/peek/omabox-peek
 STILL=$ROOT/tools/still/omabox-still
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
+RELAY=$ROOT/tools/relay/omabox-relay
 AQUAMARINE=$ROOT/build/prefix/lib
 PASS_KEY="SUPER + ALT + ESCAPE"
 READY_TIMEOUT=${OMABOX_READY_TIMEOUT:-30}
@@ -53,6 +56,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
   omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
+  omabox broker [on|off]                                 let agents inside ai-jail drive their own boxes
   omabox --version
 
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
@@ -102,6 +106,9 @@ Measure rendering cost with \`omabox gpu\` in a box whose mode matches your moni
 The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
 exist, so a window, hyprctl or grim outside a box fails instead of reaching your desktop; omabox
 still works, and \`omabox host\` runs a command you asked for on the real desktop.
+An agent inside ai-jail cannot enter a box: \`omabox broker on\` (a systemd user socket) lets its
+omabox hand commands to omabox outside, which keeps the jail's boxes to what the jail has (its
+project, its network or none) and to themselves. It prints the lines to add to ~/.ai-jail.
 Crashes in a box skip the desktop's crash notifications (core limit 1 byte; raise it inside for a core).
 EOF
 }
@@ -174,6 +181,8 @@ env_names_box() { [ -n "${OMABOX:-}" ] && { [ "$OMABOX" != 1 ] || [ -z "${OMABOX
 
 default_name() {
   local top base sid
+  # A jailed caller's omabox worked its default out where it runs, in the jail (relay_call).
+  if in_jail; then echo "${OMABOX_RELAY_DEFAULT:-default}"; return; fi
   if env_names_box; then echo "$OMABOX"; return; fi
   if top=$(git rev-parse --show-toplevel 2>/dev/null); then base=$(basename "$top"); else base=default; fi
   # An agent session gets a box of its own (finding 88): two agents in one repo would otherwise share
@@ -251,9 +260,15 @@ select_box() {
   NAME=$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40)
   [[ $NAME =~ ^[A-Za-z0-9] ]] || die "bad box name: $NAME"
   D=$BOXES/$NAME
+  # A jailed agent drives only the boxes its jail started (finding 99): not the user's, nor another
+  # jail's, which may see more than this one.
+  if in_jail && [ -f "$D/box.json" ] && [ "$(meta jail)" != "$(jail_get .id)" ]; then
+    die "box '$NAME' is not this jail's: an agent inside ai-jail drives only the boxes it started"
+  fi
 }
-# Whether the box selected is the one this agent session's commands get by default (finding 88).
-session_box() { ! env_names_box && agent_session >/dev/null && [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; }
+# Whether the box selected is the one this agent session's commands get by default (finding 88). A
+# jailed agent's boxes go with its jail instead.
+session_box() { ! in_jail && ! env_names_box && agent_session >/dev/null && [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; }
 
 # The box's PID 1 on the host, or nothing. Top-level boxes run inside pasta's pid namespace (Arch's
 # pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: pasta_pid
@@ -321,7 +336,14 @@ need_box() {
   die "no box '$NAME' is up (${have:+up: $have; }start one with: omabox up $NAME)"
 }
 
-list_names() { local d; for d in "$BOXES"/*/; do [ -f "$d/info.json" ] && basename "$d"; done 2>/dev/null; true; }
+list_names() {
+  local d id=""; ! in_jail || id=$(jail_get .id)
+  for d in "$BOXES"/*/; do
+    [ -f "$d/info.json" ] || continue
+    [ -z "$id" ] || [ "$(jq -r '.jail // empty' "$d/box.json" 2>/dev/null)" = "$id" ] || continue
+    basename "$d"
+  done 2>/dev/null; true
+}
 
 # --- talking to a box ----------------------------------------------------------------------------
 
@@ -356,9 +378,10 @@ on_box() {
 # A variable of the caller's as it was when omabox started (run --pass): from /proc, not ${!NAME},
 # which would give omabox's own ROOT, D or NAME instead of the caller's. Fails when it is not there.
 caller_env() {
-  local kv
+  local kv k=$1
+  in_jail && k=OMABOX_RELAY_PASS_$1   # a jailed caller's, sent by its omabox (relay_call)
   while IFS= read -r -d '' kv; do
-    [[ $kv == "$1="* ]] && { printf '%s' "${kv#*=}"; return 0; }
+    [[ $kv == "$k="* ]] && { printf '%s' "${kv#*=}"; return 0; }
   done < "/proc/$$/environ"
   return 1
 }
@@ -366,7 +389,9 @@ caller_env() {
 # The caller's PATH without the guard's xdg-open (finding 92): in a box, and for `host`, links open.
 # Any checkout's: a hook written from another clone or worktree names its own. A PATH entry may end in /.
 caller_path() {
-  local d out=() dirs; IFS=: read -ra dirs <<<"${PATH:-}"
+  local d out=() dirs p=${PATH:-}
+  ! in_jail || p=${OMABOX_RELAY_PATH:-}   # a jailed caller's, not the broker's own
+  IFS=: read -ra dirs <<<"$p"
   for d in "${dirs[@]}"; do case $d in */share/guard|*/share/guard/) ;; *) out+=("$d") ;; esac; done
   local IFS=:; printf '%s' "${out[*]}"
 }
@@ -382,11 +407,14 @@ box_exec() {
   local env=() cwd=/home/sbx pid
   pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
   mapfile -d '' env < "$D/run/omabox.env"
-  local here there
-  here=$(stat -c %d:%i -- "$PWD" 2>/dev/null) || here=""
-  there=$(nsenter -t "$pid" -U -m --preserve-credentials stat -c %d:%i -- "$PWD" 2>/dev/null) || there=""
-  if [ -n "$here" ] && [ "$here" = "$there" ]; then cwd=$PWD
-  elif [ -n "$there" ] && jq -e --arg p "$PWD/" 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' "$D/box.json" >/dev/null 2>&1; then cwd=$PWD
+  local here there wd=$PWD
+  ! in_jail || wd=$(jail_get '.cwd // empty')   # a jailed caller's, when its jail and the host agree on it
+  if [ -n "$wd" ]; then
+    here=$(stat -c %d:%i -- "$wd" 2>/dev/null) || here=""
+    there=$(nsenter -t "$pid" -U -m --preserve-credentials stat -c %d:%i -- "$wd" 2>/dev/null) || there=""
+    if [ -n "$here" ] && [ "$here" = "$there" ]; then cwd=$wd
+    elif [ -n "$there" ] && jq -e --arg p "$wd/" 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' "$D/box.json" >/dev/null 2>&1; then cwd=$wd
+    fi
   fi
   # The box's own network namespace (every box has one since finding 89), so its local services are
   # reachable. A box started before that shares the host's, which is not ours to join (EPERM).
@@ -758,7 +786,7 @@ cmd_up() {
   STOCK_BAR=0
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
-  local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0
+  local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0 net_set=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -771,7 +799,7 @@ cmd_up() {
       --plugin) optarg "$@"; plugin_args+=("$2"); shift ;;
       --overlay) optarg "$@"; [ -d "$2" ] || die "--overlay: no such directory: $2"; overlays+=("$(readlink -f -- "$2")"); shift ;;
       --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec"); shift ;;
-      --net) optarg "$@"; net=$2; shift ;;
+      --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"; envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
       --idle) optarg "$@"; idle=$2; shift ;;
@@ -803,6 +831,24 @@ cmd_up() {
   local agent=""
   if [ $interactive = 0 ] && [ -z "$owner" ] && session_box; then
     agent=$(agent_proc) || agent=""
+  fi
+  # A jailed agent's box goes with its jail (the jail's bwrap), and sees no more than the jail does
+  # (finding 99): driving a box is running code in it, so the box must not be a way out of the jail.
+  if in_jail; then
+    [ $interactive = 0 ] || die "up: a window on the user's desktop is not for an agent inside ai-jail (headless boxes only)"
+    [ -n "$owner" ] || agent=$(jail_get .id)
+    if [ "$(jail_get .net)" != true ]; then
+      [ $net_set = 0 ] || [ "$net" = isolated ] || die "up: this jail has no network, so its boxes have none either (--net isolated, the default here)"
+      [ -z "$allow" ] || die "up: this jail has no network, so its boxes reach no host port (no --allow)"
+      net=isolated
+    fi
+    local x
+    for x in "${overlays[@]}" "${plugin_args[@]}"; do
+      jail_root "$x" >/dev/null || die "up: $x is not a folder this jail was given whole (its project, or one of its maps), so it does not go into the box"
+    done
+    for x in "${robinds[@]}"; do
+      jail_root "${x%%$'\t'*}" >/dev/null || die "up: ${x%%$'\t'*} is not a folder this jail was given whole (its project, or one of its maps), so it does not go into the box"
+    done
   fi
   size=$(parse_mode "$size")
   local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
@@ -839,6 +885,9 @@ cmd_up() {
   # pasta cannot make without /dev/net/tun (it would fail inside the box, where only box.log says why).
   # Before check_install: no box starts without them, whatever is built.
   command -v pasta >/dev/null || die "a box's network needs pasta: sudo pacman -S passt"
+  # A sandbox that refuses new namespaces (ai-jail's seccomp filter) cannot start a box: say what does.
+  in_jail || unshare -U true 2>/dev/null ||
+    die "cannot start a box here: this sandbox refuses new namespaces. Inside ai-jail, omabox goes through the broker: run 'omabox broker on' outside the jail and add the lines it prints to ~/.ai-jail"
   [ "$net" != connected ] || [ -c /dev/net/tun ] ||
     die "a box's network needs /dev/net/tun (the tun kernel module); --net isolated does without, and has no internet"
   check_install
@@ -861,15 +910,16 @@ cmd_up() {
   # toolchains, ~/.config/omabox/ro-bind, --ro-bind. Checked before anything is created: a refusal
   # leaves no box dir. What the user named is refused loudly; what omabox adds by itself is skipped.
   local top
-  if top=$(git rev-parse --show-toplevel 2>/dev/null); then
+  if top=$(repo_top); then
     if why=$(refuse_src "$top"); then say "not mounting the repo $top: $why"
     else robinds=("$top"$'\t'"$top" "${robinds[@]}"); fi
   fi
   # Language toolchains mise installed (node, python, ...): interpreters and compilers, no secrets.
   # Mounted so `omabox run` finds the same ones as the host (finding 47); rustup's ~/.cargo is not.
+  # Not for a jailed agent whose jail has no mise, nor the user's own mounts (finding 99).
   local mise=${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs
-  [ -d "$mise" ] && robinds+=("$(readlink -f "$mise")"$'\t'"$(readlink -f "$mise")")
-  if [ -f "$HOME/.config/omabox/ro-bind" ]; then
+  [ -d "$mise" ] && { ! in_jail || jail_sees "$mise" >/dev/null; } && robinds+=("$(readlink -f "$mise")"$'\t'"$(readlink -f "$mise")")
+  if [ -f "$HOME/.config/omabox/ro-bind" ] && ! in_jail; then
     local line
     while IFS= read -r line || [ -n "$line" ]; do
       line=${line%%[[:space:]]#*}; [[ $line == \#* ]] && continue      # comments: whole line, or after a space
@@ -923,8 +973,10 @@ cmd_up() {
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
+    --arg jail "$(! in_jail || jail_get .id)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1)}
+      + (if $jail != "" then {jail: $jail} else {} end)
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
       + (if $agent != "" then ($agent | split(" ") | {agent: (.[0] | tonumber), agent_start: .[1]}) else {} end)
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
@@ -1384,7 +1436,7 @@ cmd_run() {
   # Only a repo that may go into a box, never the directory we happen to be in (from ~ that would be
   # all of HOME, finding 63); outside one the command runs in the box HOME.
   local top why overlay=()
-  if top=$(git rev-parse --show-toplevel 2>/dev/null); then
+  if top=$(repo_top); then
     if why=$(refuse_src "$top"); then say "not overlaying $top: $why"; else overlay=(--overlay "$top"); fi
   fi
   # The name keeps its -run<pid> whatever the base's length: two runs in one repo never share a box.
@@ -1553,10 +1605,12 @@ png_size() {
 # What every shot is of, for `click --in` / `pointer --in` (finding 81): $D/shots.tsv, which the box
 # cannot see. One line per shot: path, size and mtime, the box's mode, `window ADDRESS` or `screen X,Y`
 # (the image's origin), the size it covers on screen and the image's size (smaller with --fit).
+# The file itself may be another name for it (FILE: a jailed caller's, as /dev/fd/N). shot_record PATH
+# MODE WHERE GEOMETRY [FILE]
 shot_record() {
   local f=$D/shots.tsv
   [[ $1 != *[$'\t\n']* ]] || { say "shot: a path with a tab or newline: no --in for this one"; return 0; }
-  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$(stat -c '%s %.9Y' -- "$1")" "$2" "$3" "$4" >> "$f"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$(stat -L -c '%s %.9Y' -- "${5:-$1}")" "$2" "$3" "$4" >> "$f"
   if [ "$(wc -l < "$f")" -gt 500 ]; then tail -n 200 "$f" > "$f.new" && mv "$f.new" "$f"; fi
 }
 
@@ -1568,13 +1622,22 @@ img_px() { echo $(((2 * $1 + 1) * $3 / (2 * $2))); }
 # "screen SX SY". Refused: a file that is not a shot of this box, changed since, or taken in another
 # screen mode; a window that is gone or resized. shot_point FILE X Y
 shot_point() {
-  local f rec stamp mode kind ref geo x=$2 y=$3
-  f=$(readlink -f -- "$1" 2>/dev/null) && [ -f "$f" ] || die "--in: no such file: $1"
-  rec=$(P=$f awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" 2>/dev/null | tail -n 1)   # (-v would unescape \)
+  local f key rec stamp mode kind ref geo x=$2 y=$3
+  if in_jail; then
+    # A jailed caller's omabox opened the shot in the jail and passed it as /dev/fd/N, with its name
+    # there (relay_in): the broker opens no path of the caller's.
+    [[ $1 =~ ^/dev/fd/[3-9]$ ]] && [ -f "$1" ] && [ -n "${OMABOX_RELAY_IN_AS:-}" ] ||
+      die "--in: a jailed agent's shot is read by its own omabox, never at a path here"
+    f=$1 key=$OMABOX_RELAY_IN_AS
+  else
+    f=$(readlink -f -- "$1" 2>/dev/null) && [ -f "$f" ] || die "--in: no such file: $1"
+    key=$f
+  fi
+  rec=$(P=$key awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" 2>/dev/null | tail -n 1)   # (-v would unescape \)
   [ -n "$rec" ] || die "--in: $1 is not a shot of box '$NAME' (take one with omabox shot)"
   IFS=$'\t' read -r _ stamp mode kind geo <<<"$rec"
   ref=${kind#* } kind=${kind%% *}
-  [ "$(stat -c '%s %.9Y' -- "$f")" = "$stamp" ] || die "--in: $1 changed since the shot: take a new one"
+  [ "$(stat -L -c '%s %.9Y' -- "$f")" = "$stamp" ] || die "--in: $key changed since the shot: take a new one"
   local screen; screen=$(box_screen)
   [ "${screen#* }" = "$mode" ] || die "--in: the box's mode is ${screen#* }, the shot was taken at $mode: take a new one"
   local lw lh iw ih; IFS='x ' read -r lw lh iw ih <<<"$geo"
@@ -1592,11 +1655,15 @@ shot_point() {
 }
 
 cmd_shot() {
-  local name="" out="" geom="" sels=() fit=""
+  local name="" out="" geom="" sels=() fit="" tofd="" as=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
+      # A jailed caller's omabox (relay_shot): the image goes to its file, opened in the jail and
+      # passed as fd N, and is named AS in what shot says. The broker opens no path of the caller's.
+      --to-fd) optarg "$@"; [[ $2 =~ ^[3-9]$ ]] || die "shot: --to-fd takes 3-9, got $2"; tofd=$2; shift ;;
+      --as) optarg "$@"; as=$2; shift ;;
       -g) optarg "$@"; geom=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --active) sels+=(active) ;;
@@ -1608,9 +1675,18 @@ cmd_shot() {
   done
   [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "shot: -g or --window (--active), not both"
   select_box "$name"; need_box
-  [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
-  [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
-  out=$(readlink -f -- "$out")
+  # file: what is written and read back; out: its name, for the caller.
+  local file
+  if [ -n "$tofd" ]; then
+    [ -n "$as" ] && [ -z "$out" ] || die "shot: --to-fd goes with --as NAME, without -o"
+    [ -f "/dev/fd/$tofd" ] || die "shot: fd $tofd is not a file"
+    out=$as file=/dev/fd/$tofd
+  else
+    in_jail && die "shot: a jailed agent's shot is written by its own omabox (--to-fd), never at a path here"
+    [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
+    [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
+    out=$(readlink -f -- "$out") file=$out.part
+  fi
   # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
   # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
   local grim=(grim -l 1) win="" where lw lh
@@ -1639,8 +1715,11 @@ cmd_shot() {
   # a frame from long ago: one that is off screen gets no frame callbacks, so it stops rendering, and
   # the capture itself is what makes it draw again (finding 81). So a window is captured twice.
   grab() { on_box timeout 10 "${grim[@]}" -; }
-  if ! { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } || ! grab > "$out.part" || [ ! -s "$out.part" ]; then
-    rm -f "$out.part"
+  # A jailed caller's file through its own fd, never reopened by name: /dev/fd/N opened for writing
+  # would give the broker more than the caller passed (a read-only fd of a file it may not write).
+  put() { if [ -n "$tofd" ]; then grab >&"$tofd"; else grab > "$file"; fi; }
+  if ! { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } || ! put || [ ! -s "$file" ]; then
+    [ -n "$tofd" ] || rm -f "$file"
     # Never tell an agent to show the window: switching the user's workspace for a frame is what the
     # box exists to avoid. A restart is the user's to do: a box from before drawn_hidden needs one, and
     # so does one whose window confirm-close replaced (the new window has no render_unfocused).
@@ -1654,11 +1733,11 @@ cmd_shot() {
     fi
     die "shot: grim failed"
   fi
-  mv "$out.part" "$out"
+  [ -n "$tofd" ] || { mv "$file" "$out"; file=$out; }
   local iw ih screen
-  read -r iw ih < <(png_size "$out") || die "shot: $out is not a PNG"
+  read -r iw ih < <(png_size "$file") || die "shot: $out is not a PNG"
   screen=$(box_screen)
-  shot_record "$out" "${screen#* }" "$where" "${lw}x$lh ${iw}x$ih"
+  shot_record "$out" "${screen#* }" "$where" "${lw}x$lh ${iw}x$ih" "$file"
   # One line on stderr when image pixels are not screen pixels (cropped or scaled); stdout is the path.
   local k=""
   [ "$iw" = "$lw" ] || k=" (x$(awk -v a="$lw" -v b="$iw" 'BEGIN { s = sprintf("%.2f", a / b); sub(/\.?0+$/, "", s); print s }'))"
@@ -2753,12 +2832,291 @@ cmd_ls() {
   done
 }
 
+# --- ai-jail: the broker ---------------------------------------------------------------------------
+# An agent inside ai-jail cannot enter a box (the jail's seccomp filter refuses setns and unshare), so
+# its omabox hands each command to the broker outside, over a socket its ~/.ai-jail maps in
+# (tools/relay; issue #16, finding 99). The broker runs the command here, for that jail: it reads what
+# the jail may see and reach from the jail's own bwrap, and keeps the boxes it starts to that (driving
+# a box is running code in it). No change to ai-jail.
+
+in_jail() { [ -n "${OMABOX_JAIL:-}" ]; }
+jail_get() { jq -r "$1" <<<"$OMABOX_JAIL"; }
+# Host path P resolved, when the jail sees it (inside one of its folders); fails otherwise.
+jail_sees() {
+  local p; p=$(readlink -e -- "$1" 2>/dev/null) || return 1
+  jq -e --arg p "$p" 'any(.roots[]; .path as $r | $p == $r or ($p | startswith($r + "/")))' <<<"$OMABOX_JAIL" >/dev/null && echo "$p"
+}
+# Host path P resolved, when it is one of the jail's folders, whole: nothing of the jail's own mounted
+# inside (the box would see what the jail has hidden), and a mount the jail cannot swap for a link
+# between this check and the box's mount (a folder below it could be).
+jail_root() {
+  local p; p=$(readlink -e -- "$1" 2>/dev/null) || return 1
+  jq -e --arg p "$p" 'any(.roots[]; $p == .path and (.masked | not))' <<<"$OMABOX_JAIL" >/dev/null && echo "$p"
+}
+
+# The repo the caller works in (git's top level), or a failure. For a jailed caller not through git: its
+# .git/config is the jail's to write, and settings there (core.fsmonitor and others) run programs, here,
+# outside the jail. Its repo is the jail's folder the caller is in, when that has a .git (ai-jail's
+# project: the folder it was started in).
+repo_top() {
+  if ! in_jail; then git rev-parse --show-toplevel 2>/dev/null; return; fi
+  local cwd r; cwd=$(jail_get '.cwd // empty'); [ -n "$cwd" ] || return 1
+  r=$(jq -r --arg p "$cwd" '[.roots[] | select(.masked | not) | .path as $r | select($p == $r or ($p | startswith($r + "/"))) | $r]
+    | max_by(length) // empty' <<<"$OMABOX_JAIL")
+  [ -n "$r" ] && [ -e "$r/.git" ] && echo "$r"
+}
+
+# bwrap's options and how many arguments each takes: the jail's policy is read from its bwrap's command
+# line, and an option not known here would be misread, so it fails the read (never guessed).
+declare -A BWRAP_ARITY=()
+for o in unshare-user unshare-user-try unshare-ipc unshare-pid unshare-net unshare-uts unshare-cgroup \
+  unshare-cgroup-try unshare-all share-net die-with-parent as-pid-1 new-session clearenv disable-userns \
+  assert-userns-disabled level-prefix; do BWRAP_ARITY[--$o]=0; done
+for o in tmpfs dev proc mqueue dir remount-ro chdir hostname unsetenv perms size uid gid userns userns2 \
+  pidns seccomp add-seccomp-fd exec-label file-label block-fd userns-block-fd info-fd json-status-fd \
+  lock-file sync-fd cap-add cap-drop argv0 overlay-src tmp-overlay ro-overlay; do BWRAP_ARITY[--$o]=1; done
+for o in bind bind-try dev-bind dev-bind-try ro-bind ro-bind-try setenv symlink file bind-data \
+  ro-bind-data chmod bind-fd ro-bind-fd; do BWRAP_ARITY[--$o]=2; done
+BWRAP_ARITY[--overlay]=3
+unset o
+
+# A jail's policy from its bwrap's command line (NUL-separated, on stdin), as JSON: net (whether it has
+# the host's network) and roots (the host folders it sees at their own path, masked when something of
+# the jail's is mounted inside). A folder a later mount covers is not one. Prints why, and fails, on
+# anything it cannot read.
+jail_policy() {
+  local a=() i=1 op n net=true binds=() dests=() k
+  mapfile -d '' a
+  while [ $i -lt ${#a[@]} ]; do
+    op=${a[i]}
+    [ "$op" != -- ] || break
+    n=${BWRAP_ARITY[$op]:-}
+    [ -n "$n" ] || { echo "unknown bwrap option $op"; return 1; }
+    [ $((i + n)) -lt ${#a[@]} ] || { echo "bwrap option $op is cut short"; return 1; }
+    case $op in
+      --unshare-net|--unshare-all) net=false ;;
+      --share-net) net=true ;;
+      --bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try)
+        [ "${a[i+1]}" != "${a[i+2]}" ] || binds+=("${#dests[@]}")
+        dests+=("${a[i+2]}") ;;
+      --tmpfs|--dev|--proc|--mqueue|--dir|--tmp-overlay|--ro-overlay) dests+=("${a[i+1]}") ;;
+      --symlink|--file|--bind-data|--ro-bind-data|--bind-fd|--ro-bind-fd) dests+=("${a[i+2]}") ;;
+      --overlay) dests+=("${a[i+3]}") ;;
+    esac
+    i=$((i + n + 1))
+  done
+  [ $i -lt ${#a[@]} ] || { echo "no -- in the jail's bwrap command line"; return 1; }
+  local roots=() r d j masked hidden
+  for k in "${binds[@]}"; do
+    r=${dests[k]%/}; masked=false hidden=0
+    for ((j = k + 1; j < ${#dests[@]}; j++)); do
+      d=${dests[j]%/}
+      case "$r/" in "$d/"*) hidden=1 ;; esac      # at or above it: the folder is covered
+      case "$d" in "$r/"*) masked=true ;; esac   # inside it
+    done
+    [ $hidden = 0 ] || continue
+    r=$(readlink -e -- "$r") || continue
+    roots+=("$(jq -nc --arg p "$r" --argjson m $masked '{path: $p, masked: $m}')")
+  done
+  jq -nc --argjson net $net '{net: $net, roots: $ARGS.positional | map(fromjson)}' --args "${roots[@]}"
+}
+
+# In the broker (omabox-relay started this command for a caller): find the caller's jail and set
+# OMABOX_JAIL, which everything that matters here reads, and every omabox this one starts inherits
+# (run's throwaway `up`, a box's reaper). The caller is ai-jail's: a process in the pid namespace of a
+# bwrap whose parent is ai-jail itself; that bwrap's command line is the jail's whole policy, and
+# nothing in the jail can change it. The pidfd (from the socket) makes sure the pid read is the
+# caller's, not a reused one.
+broker_init() {
+  local peer=${OMABOX_BROKER_PEER:-} pfd=${OMABOX_BROKER_PIDFD:-} p pp jail="" cwd
+  unset OMABOX_BROKER_PEER OMABOX_BROKER_PIDFD
+  [[ $peer =~ ^[0-9]+$ && $pfd =~ ^[0-9]+$ ]] || die "broker: no caller"
+  peer_there() { [ "$(awk '/^Pid:/ {print $2}' "/proc/self/fdinfo/$pfd" 2>/dev/null)" = "$peer" ]; }
+  peer_there || die "broker: the caller is gone"
+  p=$peer
+  while [ "$p" -gt 1 ]; do
+    pp=$(proc_ppid "$p") || break
+    if [ "$(cat "/proc/$p/comm" 2>/dev/null)" = bwrap ] && [ "$(basename -- "$(readlink "/proc/$pp/exe" 2>/dev/null)")" = ai-jail ]; then
+      jail=$p; break
+    fi
+    p=$pp
+  done
+  [ -n "$jail" ] || die "the omabox broker serves agents inside ai-jail; this caller is not in one (run omabox without the broker)"
+  [ "$(readlink "/proc/$peer/ns/pid")" != "$(readlink "/proc/$jail/ns/pid")" ] || die "broker: the caller is not inside its jail"
+  local policy start
+  start=$(proc_start "$jail") && [ -n "$start" ] || die "broker: the jail is gone"
+  policy=$(jail_policy < "/proc/$jail/cmdline") || die "broker: cannot read the jail's policy: $policy"
+  peer_there || die "broker: the caller is gone"
+  eval "exec $pfd<&-"
+  OMABOX_JAIL=$(jq -c --arg id "$jail $start" '. + {id: $id}' <<<"$policy"); export OMABOX_JAIL
+  # The caller's working directory, when the jail sees it at the same path here (box_exec starts `run`
+  # there); the broker itself stays in /.
+  cwd=$(jail_sees "${OMABOX_BROKER_CWD:-/nonexistent}") || cwd=""
+  unset OMABOX_BROKER_CWD
+  OMABOX_JAIL=$(jq -c --arg c "$cwd" '. + {cwd: $c}' <<<"$OMABOX_JAIL")
+}
+
+# What a jailed agent may ask of the broker. Not the user's desktop (host, peek, interactive boxes),
+# nor omabox's own settings, the guard or the broker; the boxes' own commands, and `up`'s mounts and
+# network, are checked where they are used (cmd_up, cmd_shot, shot_point, select_box).
+broker_check() {
+  local cmd=$1; shift
+  case $cmd in
+    up|run|shot|screenshot|windows|keys|click|pointer|wait|hyprctl|restart-shell|mode|gpu|env|path|down|ls|list) ;;
+    help|-h|--help|version|-V|--version) ;;
+    config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
+    *) die "omabox $cmd is not for an agent inside ai-jail" ;;
+  esac
+}
+
+# The relay's binary, for a jailed caller's omabox: the checkout's, or the one the jail was given.
+relay_bin() {
+  if [ -x "$RELAY" ]; then echo "$RELAY"; else command -v omabox-relay; fi
+}
+
+# Whether this omabox should hand its command to the broker: it cannot enter a box here (a sandbox
+# refuses it new namespaces: ai-jail), and the broker's socket is in reach.
+relay_wanted() {
+  [ -z "${OMABOX_BROKER_PEER:-}${OMABOX_JAIL:-}" ] && [ -S "$BROKER_SOCK" ] && ! unshare -U true 2>/dev/null
+}
+
+# Hand the command to the broker (in a jail). What only the caller has goes along: the box it would
+# pick by default (the repo and session it is in, as seen here), its PATH (for `run`'s commands in the
+# box) and the variables it names with --pass. Paths the command takes become absolute (the broker is
+# not in this directory); files it writes or reads (shot, --in) are opened here and passed open.
+relay_call() {
+  local cmd=$1 relay; shift
+  relay=$(relay_bin) || die "omabox-relay is not in reach: map it into the jail (omabox broker on prints how)"
+  local env=(--env "DEFAULT=$(default_name)" --env "PATH=$(caller_path)") args=() a prev="" v
+  for a in "$@"; do
+    if [ "$prev" = --pass ] && [[ $a =~ ^[A-Za-z_][A-Za-z0-9_]{0,58}$ ]] && v=$(caller_env "$a"); then env+=(--env "PASS_$a=$v"); fi
+    case $prev in
+      --plugin|--overlay) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
+      --ro-bind) [[ $a != /* ]] && a=$(readlink -f -- "${a%%:/*}")${a#"${a%%:/*}"} ;;
+    esac
+    args+=("$a"); prev=$a
+  done
+  case $cmd in
+    shot|screenshot) relay_shot "$relay" "${env[@]}" -- "${args[@]}" ;;
+    click|pointer) relay_in "$relay" "$cmd" "${env[@]}" -- "${args[@]}" ;;
+    *) exec "$relay" call "$BROKER_SOCK" "${env[@]}" -- "$cmd" "${args[@]}" ;;
+  esac
+}
+
+# shot, from a jail: the file is made here (as `shot` names it) and filled by the broker through the
+# fd; renamed into place once it is whole. relay_shot RELAY ENV... -- ARGS
+relay_shot() {
+  local relay=$1 env=() args=() name="" out=""; shift
+  while [ "$1" != -- ]; do env+=("$1"); shift; done; shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; args+=("$1" "$2"); shift ;;
+      -g|-w|--window|--fit) optarg "$@"; args+=("$1" "$2"); shift ;;
+      -o|--output) optarg "$@"; out=$2; shift ;;
+      -*) args+=("$1") ;;
+      *) out=$1 ;;
+    esac
+    shift
+  done
+  select_box "$name"
+  [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
+  [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
+  out=$(readlink -f -- "$out")
+  local tmp fd rc=0
+  tmp=$(mktemp "$(dirname -- "$out")/.omabox-shot.XXXXXX") || die "shot: cannot write in $(dirname -- "$out")"
+  exec {fd}<>"$tmp"
+  "$relay" call "$BROKER_SOCK" --fd "$fd" "${env[@]}" -- shot "${args[@]}" --to-fd 3 --as "$out" || rc=$?
+  exec {fd}>&-
+  if [ $rc = 0 ]; then mv -f -- "$tmp" "$out"; else rm -f -- "$tmp"; fi
+  exit $rc
+}
+
+# click and pointer --in SHOT, from a jail: the shot is opened here and passed as fd 3, with its name.
+relay_in() {
+  local relay=$1 cmd=$2 env=() args=() in=""; shift 2
+  while [ "$1" != -- ]; do env+=("$1"); shift; done; shift
+  while [ $# -gt 0 ]; do
+    [ "$1" != -- ] || { args+=("$@"); break; }
+    if [ "$1" = --in ] && [ $# -ge 2 ]; then in=$2; args+=(--in /dev/fd/3); shift 2; continue; fi
+    args+=("$1"); shift
+  done
+  [ -n "$in" ] || exec "$relay" call "$BROKER_SOCK" "${env[@]}" -- "$cmd" "${args[@]}"
+  [ -f "$in" ] || die "--in: no such file: $in"
+  local fd; exec {fd}<"$in"
+  exec "$relay" call "$BROKER_SOCK" --fd "$fd" "${env[@]}" --env "IN_AS=$(readlink -f -- "$in")" -- "$cmd" "${args[@]}"
+}
+
+# omabox broker [on|off]: the broker as a systemd user socket (started on the first connection), and
+# what to add to ~/.ai-jail so a jail reaches it. omabox never edits ~/.ai-jail.
+BROKER_UNITS=$HOME/.config/systemd/user
+cmd_broker() {
+  local sock=$BROKER_UNITS/omabox-broker.socket svc=$BROKER_UNITS/omabox-broker.service
+  case ${1:-} in
+    on)
+      [ -x "$RELAY" ] || make -s -C "$ROOT/tools/relay" || die "building tools/relay failed"
+      mkdir -p "$BROKER_UNITS"
+      cat > "$sock" <<EOF
+# Written by omabox broker on ($ROOT): lets an agent inside ai-jail drive its own boxes.
+[Unit]
+Description=omabox broker socket (agents inside ai-jail)
+
+[Socket]
+ListenStream=%t/omabox/.broker/sock
+SocketMode=0600
+DirectoryMode=0700
+
+[Install]
+WantedBy=sockets.target
+EOF
+      # KillMode=process: the boxes it starts outlive the broker (their own reapers end them).
+      cat > "$svc" <<EOF
+# Written by omabox broker on ($ROOT).
+[Unit]
+Description=omabox broker (agents inside ai-jail)
+
+[Service]
+ExecStart=$(printf '%q' "$RELAY") listen -- $(printf '%q' "$ROOT/bin/omabox")
+KillMode=process
+EOF
+      systemctl --user daemon-reload
+      systemctl --user enable --now omabox-broker.socket >/dev/null 2>&1 || die "systemctl --user enable --now omabox-broker.socket failed"
+      systemctl --user try-restart omabox-broker.service
+      echo "broker on: $BROKER_SOCK"
+      broker_recipe ;;
+    off)
+      systemctl --user disable --now omabox-broker.socket >/dev/null 2>&1 || true
+      systemctl --user stop omabox-broker.service 2>/dev/null || true
+      rm -f "$sock" "$svc"; systemctl --user daemon-reload
+      echo "broker off (the lines in ~/.ai-jail, if you added them, can go)" ;;
+    "")
+      if systemctl --user is-active -q omabox-broker.socket 2>/dev/null; then echo "broker on: $BROKER_SOCK"; broker_recipe
+      else echo "broker off (omabox broker on turns it on)"; fi ;;
+    *) die "broker: on, off, or nothing to see it" ;;
+  esac
+}
+broker_recipe() {
+  local bin=~/.local/bin
+  cat <<EOF
+
+For ai-jail, add to ~/.ai-jail (merge into the ro_maps there, if it has some; or under
+[commands.claude] for one agent only):
+
+ro_maps = ["$ROOT/bin/omabox:$bin/omabox", "$RELAY:$bin/omabox-relay", "$ROOT/skill", "${BROKER_SOCK%/*}"]
+
+or for one run: ai-jail --map $ROOT/bin/omabox:$bin/omabox --map $RELAY:$bin/omabox-relay --map $ROOT/skill --map ${BROKER_SOCK%/*} claude
+
+(omabox itself and its relay, the agent skill your agents link to, and the broker's socket; all read-only.)
+EOF
+}
+
 # Everything runs from main, called on the file's last line: bash reads a script as it runs it, so
 # with ~/.local/bin/omabox linked to a working copy, an edit made while a command ran used to land in
 # the middle of what it was still reading ("line 1207: q: command not found"). By the time that line
 # is read, bash has the whole file (finding 66).
 main() {
   local cmd=${1:-help}; shift || true
+  if [ -n "${OMABOX_BROKER_PEER:-}" ]; then broker_init; broker_check "$cmd" "$@"
+  elif relay_wanted; then relay_call "$cmd" "$@"; fi
   case $cmd in
     up) cmd_up "$@" ;;
     run) cmd_run "$@" ;;
@@ -2780,6 +3138,7 @@ main() {
     config) cmd_config "$@" ;;
     guard) cmd_guard "$@" ;;
     host) cmd_host "$@" ;;
+    broker) cmd_broker "$@" ;;
     _reap) cmd__reap "$@" ;;
     help|-h|--help) usage ;;
     version|-V|--version) echo "omabox $(cat "$ROOT/VERSION")" ;;

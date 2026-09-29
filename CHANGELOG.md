@@ -3,6 +3,16 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- **Agents inside [ai-jail](https://github.com/akitaonrails/ai-jail) drive boxes of their own**:
+  `omabox broker on` (a systemd user socket) prints the lines to add to `~/.ai-jail`, and `omabox`
+  in the jail then works as outside. A jail's boxes get no more than the jail: no network when it
+  has none, only its project, only its own boxes, gone when it exits. No change to ai-jail
+  ([#16](https://github.com/diogochaves/omabox/issues/16)).
+
 ## 0.2.1 — 2026-09-29
 
 `OMABOX=NAME` works under `omabox run`, `--window` finds apps by name, and a Qt app's logging reaches

@@ -62,6 +62,7 @@ links against.
 ```bash
 omabox down --all                          # every box
 omabox guard off                           # if you turned the guard on
+omabox broker off                          # if you turned the ai-jail broker on (and its ~/.ai-jail lines)
 omarchy plugin disable chaves.omabox       # if you turned the widget on
 rm ~/.local/bin/omabox ~/.config/omarchy/plugins/chaves.omabox
 rm -f ~/.agents/skills/omabox ~/.claude/skills/omabox ~/.codex/skills/omabox \
@@ -334,9 +335,24 @@ These projects are good at what it does not do.
   ai-jail --gpu --rw-map "$WAYLAND_DISPLAY" --env WAYLAND_DISPLAY -- ./build/app
   ```
 
-  An agent inside ai-jail cannot drive omabox yet: the jail's own process namespace hides the box
-  ([#16](https://github.com/diogochaves/omabox/issues/16)). For now, keep the agent under omabox's
-  guard and put the apps it runs under ai-jail.
+  An agent inside ai-jail can drive boxes of its own through omabox's broker
+  ([#16](https://github.com/diogochaves/omabox/issues/16)), with no change to ai-jail. The jail
+  cannot enter a box itself (its seccomp filter refuses new namespaces), so its `omabox` hands each
+  command to the broker outside:
+
+  ```bash
+  omabox broker on   # a systemd user socket; prints the lines to add to ~/.ai-jail
+  ```
+
+  Add those lines (they map omabox, its relay, the skill and the broker's socket into the jail,
+  read-only), then run `ai-jail claude` as usual: `omabox up`, `shot`, `keys`, `click` and the rest
+  work inside the jail as outside. The broker keeps a jail's boxes to what the jail has: no network
+  when the jail has none (`--net isolated`), only the jail's own project mounted, and only the boxes
+  that jail started (never yours, nor another jail's), which go down when the jail exits. Driving a
+  box is running code in it, so that is what stops a box from being a way out of the jail. Not for a
+  jailed agent: `omabox host`, `peek`, interactive boxes, `guard`, `config` changes. A shot is
+  written into the jail by its own `omabox`; the broker never opens a path the jail names.
+  `omabox broker off` turns it off.
 - **[omarchy-in-omarchy](https://github.com/jankeesvw/omarchy-in-omarchy)** is a disposable Omarchy
   in QEMU/KVM (8 GB of RAM by default, minutes on its first start): for what needs a whole machine,
   an installer or an `omarchy-update` migration, system services, audio, suspend, a reboot, where a
@@ -371,6 +387,7 @@ Wayland connection.
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |
 | `tools/peek` | the live view-only window (`omabox peek`) |
 | `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
+| `tools/relay` | carries an omabox command from inside ai-jail to the broker outside (`omabox broker`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
 | `plugin/` | the bar widget |
 | `test/run.sh` | the regression suite: real boxes, never the real desktop (`test/run.sh unit` is fast) |

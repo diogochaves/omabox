@@ -81,7 +81,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    ```
    It must provide the soname the installed Hyprland links (`ldd $(command -v Hyprland)`); only the
    nested Hyprland loads it. `omabox up` checks this too.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still` (need `wayland-scanner`;
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay` (need `wayland-scanner`;
    protocol XML is vendored).
 4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
    `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when those exist); `plugin/` as
@@ -1652,6 +1652,52 @@ the designs here were measured in boxes and built for a contained desktop, and n
     everything in them, `run` included, logs to stderr, as the guard already does on the host (finding
     67); `--env QT_FORCE_STDERR_LOGGING=0` turns it off. Checked in a box with a QML `console.warn`:
     missing before, in the log after, for `run -d` and a foreground `run`; `t_main`.
+99. **An agent inside ai-jail drives boxes of its own, through a broker** (2026-09-29, issue #16;
+    ai-jail 2.2.1). ai-jail's seccomp filter refuses `setns` and `unshare` (EPERM), and the jail has
+    its own pid, user, ipc and uts namespaces, a tmpfs `/run` and `/tmp` and, by default, a tmpfs
+    HOME and no network: omabox inside could neither enter a box nor start one (`ls` read boxes as
+    dead). No change to ai-jail: its `ro_maps` (or `--map`) already pass a socket's folder in, and a
+    Unix socket connect through a read-only bind works. `omabox broker on` writes a systemd user
+    socket (`$XDG_RUNTIME_DIR/omabox/.broker/sock`, 0600) and service (`tools/relay/omabox-relay
+    listen -- bin/omabox`, KillMode=process so boxes outlive it) and prints the `~/.ai-jail` lines
+    (omabox and the relay at `~/.local/bin`, `skill/` so the agent's skill link resolves, the socket's
+    folder; all read-only); it never edits `~/.ai-jail`. In a jail, `omabox` sees the socket and that
+    `unshare -U` fails, and hands the command to `omabox-relay call`: cwd, arguments, the default box
+    name it computed there (repo and session as the jail sees them), its PATH and `--pass` values as
+    `--env` entries, and fds 0-2 (plus a shot's file) by SCM_RIGHTS. The relay's `listen` checks the
+    peer's uid, takes an SO_PEERPIDFD, and runs `bin/omabox` in a session of its own with those fds,
+    a fixed PATH and the caller's entries renamed `OMABOX_RELAY_*` (a `BASH_ENV` or `LD_PRELOAD` from
+    the jail never reaches the broker under its name); the caller going kills the command's session.
+    The broker (`broker_init`) walks up from the peer to the bwrap whose parent is ai-jail: that
+    bwrap's command line is the jail's whole policy (every mount, `--unshare-net`), which nothing in
+    the jail can change (other pid namespace, no ptrace); the pidfd is checked before and after, so a
+    reused pid is not read. `jail_policy` parses it with a table of bwrap's options (an unknown one,
+    `--args` included, fails the read) into `net` and `roots` (folders bound at their own path; masked
+    when a later mount lands inside, dropped when one lands at or above). Driving a box is running
+    code in it (keys into a terminal), so a jailed agent's boxes get no more than its jail: `--net
+    isolated` without `--allow` when the jail has no network; the repo mounted only when it is a jail
+    folder, whole and unmasked, found without git (its `.git/config` is the jail's to write, and
+    `core.fsmonitor` and friends would run on the host); `--plugin`, `--ro-bind`, `--overlay` only
+    for such folders (one below could be swapped for a link between the check and the mount); no
+    `~/.config/omabox/ro-bind`, mise's toolchains only if the jail sees them; no interactive box,
+    `host`, `peek`, `guard`, `broker` or `config` changes. Boxes carry `jail` ("PID START" of that
+    bwrap) in box.json: a jailed caller sees and drives only its jail's (`select_box`, `list_names`),
+    and its box's `agent` is the bwrap, so the box goes when the jail does (seen: within a reaper
+    poll). Files never go by path: `shot` is made in the jail and written by the broker through the
+    fd the jail passed (`--to-fd`, never reopened by name, so a read-only fd stays read-only: seen,
+    grim's write failed and the file kept its content), `--in` shots are passed open (`IN_AS` names
+    them for the shot record); the broker refuses `-o PATH` and `--in PATH` from a jail. Every
+    `omabox` the broker starts (run's throwaway `up`, a reaper) inherits `OMABOX_JAIL`, so the limits
+    hold there too; a box starts with `env -i`, so none of it reaches a box. Checked in a real jail:
+    up, run in the project, shot into the jail's /tmp and project, windows, keys into foot (seen),
+    click --in, run --pass, down; refused: -o/--in paths, --overlay/--ro-bind/--plugin outside,
+    --interactive, --allow, --net connected, host, guard, broker, peek, _reap, config changes, the
+    user's box, env injection (BASH_ENV did not run). `t_unit_jail_policy`, `t_unit_relay`,
+    `t_unit_broker_units` (systemctl stubbed), `t_jail` (a real ai-jail, skipped without one). Not
+    checked: a real `ai-jail claude` session; `--network` jails (connected boxes); `--lockdown`
+    (drops maps, so no broker: expected). Open: GPU (a box has a render node the jail may not), the
+    seeded box HOME (the user's non-secret Omarchy look, which a private-home jail does not see),
+    and how many boxes a jail may start.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
