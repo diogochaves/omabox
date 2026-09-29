@@ -8,46 +8,32 @@
 [![Built for Omarchy](https://raw.githubusercontent.com/tcballard/omarchy-badges/85f859029e236e784e7b05ada6dbe73506d07a91/badges/v1/built-for-omarchy.svg)](https://github.com/tcballard/omarchy-badges)\
 [omabox.app](https://omabox.app)
 
-**A desktop of their own, for your agents.** omabox gives an AI agent a whole Omarchy desktop to
-launch, drive and screenshot apps and shell plugins in, invisible and apart from yours: no windows
-on your screen, no stolen focus, no cursor jumps or workspace switches, no tray icons, notifications
-or keyring entries left in your session.
+**Your agents get desktops of their own. Yours stays untouched.** omabox gives every AI agent a
+whole Omarchy desktop, invisible and in parallel, to launch, click, type and screenshot apps and
+shell plugins in. No windows popping up on your screen, no cursor jumps, no stolen focus or
+workspace switches, no password or keyring prompts, no notifications or tray icons left behind.
 
-A box is the real thing, not a mock: Omarchy's own Hyprland config (its binds, look and window
-rules), the Omarchy shell (bar, menu, tray, notifications) and your current theme, bar layout,
-terminal settings and toggles, on a private screen and a private D-Bus session bus. Your own
-`~/.config/hypr` is not loaded. It starts in 3-4 s and uses about 500 MB. When you want to look,
-peek at a box live, or open one as a window and use it yourself.
+A box is the real thing, not a mock: Omarchy's own Hyprland config, the Omarchy shell (bar, menu,
+tray, notifications) and your theme, bar layout and terminal settings, on a private screen and a
+private session bus. It starts in 3-4 s and uses about 500 MB. Each agent session gets its own box,
+the way you give each agent a worktree. When you want to look, peek at a box live, or open one as a
+window and use it yourself.
+
+omabox keeps an agent's apps off your desktop; it is not a sandbox. To fence the agent itself in,
+pair it with [ai-jail](#related-projects).
 
 [![An agent's box, live in a peek window next to the terminal that drives it, and the omabox widget's panel open in the Omarchy bar](preview.png)](https://diogochaves.github.io/omabox/docs/media/demo.mp4)
 
-[Watch the 55 second demo](https://diogochaves.github.io/omabox/docs/media/demo.mp4)
-
-### Recorded in a box, in a box
-
-The demo was recorded inside omabox, with no screen recorder on a real desktop. `docs/demo.sh`
-starts one box to play the desktop (Omarchy's stock bar and theme, the omabox widget in its bar, a
-terminal) and drives omabox from that terminal the way an agent would. Every `omabox up` there
-starts a box inside the box:
-
-- `omabox up` in the terminal starts the agent's box within the stage box, and `omabox peek` shows it
-  live next to the terminal. The theme switch, Omarchy's menu, Files and the screenshot all happen
-  in the agent's box; the stage keeps its own theme.
-- **New interactive box** in the stage's widget starts a third desktop, as a window on the stage's
-  screen, with Omarchy's menu open inside it.
-- wf-recorder runs inside the stage and records its screen, so nothing of the real desktop is in
-  the frames, and the real desktop saw no window, focus change or workspace switch.
-
-It is the same trick the test suite uses to check interactive mode, peek and the agent guard
-without touching your desktop: a box can stand in for it. `docs/demo.sh --video` makes the video
-and the pictures here again (it needs wf-recorder).
+[Watch the 55 second demo](https://diogochaves.github.io/omabox/docs/media/demo.mp4). It was
+recorded inside omabox: a box played the desktop, with the agent's boxes inside it, so the real
+desktop saw no window at all (`docs/demo.sh --video` makes it again).
 
 ## What you need
 
-- **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config). Built and tested with Hyprland 0.56.2
-  on AMD and Intel iGPUs, and on an NVIDIA RTX 4070 SUPER with driver 615.71.09.
-- **A GPU render node** (`/dev/dri/renderD*`): a box renders on the GPU. A headless box takes the
-  first usable one; `OMABOX_RENDER_NODE` overrides. An interactive box renders on the GPU your
+- **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config).
+- **A GPU render node** (`/dev/dri/renderD*`). Tested on AMD and Intel iGPUs, an NVIDIA RTX 4070
+  SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
+  the first usable node (`OMABOX_RENDER_NODE` overrides); an interactive box renders on the GPU your
   desktop renders on.
 - A patched aquamarine (Hyprland's backend library), until a release ships
   [PR #415](https://github.com/hyprwm/aquamarine/pull/415). `install.sh` builds it privately into
@@ -57,23 +43,19 @@ and the pictures here again (it needs wf-recorder).
 
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox
-./install.sh           # packages (sudo only if some are missing), patched aquamarine, tools, links
-./install.sh --check   # the same, then start a box, screenshot it, tear it down
+./install.sh                            # packages (sudo only if some are missing), patched aquamarine, tools, links
+./install.sh --check                    # the same, then start a box, screenshot it, tear it down
+omarchy plugin enable chaves.omabox     # the bar widget
 ```
 
-It links `~/.local/bin/omabox`, the agent skill `omabox` wherever Omarchy puts its own skills
-(`~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`, each under `skills/`) and the bar
-widget into `~/.config/omarchy/plugins`. It asks whether to turn on the agent guard (below). Turn
-the widget on with:
+`install.sh` links `~/.local/bin/omabox`, the agent skill (wherever Omarchy puts its own skills:
+`~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and the bar widget, and asks
+whether to turn on the [agent guard](#the-agent-guard). **Update** with `git pull && ./install.sh`;
+run it after a Hyprland upgrade too: it checks the private aquamarine still matches what Hyprland
+links against.
 
-```bash
-omarchy plugin enable chaves.omabox
-```
-
-**Update**: `git pull && ./install.sh`. It is idempotent; run it after a Hyprland upgrade too: it
-checks that the private aquamarine build still matches what Hyprland links against.
-
-## Remove
+<details>
+<summary><b>Remove</b></summary>
 
 ```bash
 omabox down --all                          # every box
@@ -89,6 +71,8 @@ Then delete the clone (its `build/` holds the aquamarine build). `omabox guard o
 `.bak-<time>` of `~/.claude/settings.json` and `~/.codex/config.toml` next to each, from every change
 it made. The packages `install.sh` added stay; it printed them as `missing:` if there were any
 (`labwc`, `passt` and the build tools are the likely ones): `sudo pacman -Rns` those you do not use.
+
+</details>
 
 ## Using it
 
@@ -110,28 +94,20 @@ omabox down                            # kill everything in the box
 omabox ls                              # boxes, mode, size, state, plugins
 ```
 
-Boxes are named after the current git repo, so agents in different repos never share one (unless
-two repos have the same directory name: pass `-b` then). Inside a Claude Code or Codex session (or
-an agent started with `omabox guard exec`) the name also gets the session's id, `myrepo-5cc72cdc`, so
-two agents in one repo each get their own box, and that box goes down when its agent exits instead
-of waiting out the idle limit (not while you peek at it or an `omabox run` is still going; a
-`run -d` job does not count). `omabox ls` shows the names; to `peek` at or `shot` an agent's box
-from your terminal, pass `-b` with its name.
-An agent no longer picks up a box you started yourself (`myrepo`) by default; it needs `-b myrepo`.
-`OMABOX_SESSION=` (empty) turns this off.
-Use `-b NAME` or `OMABOX=NAME` to run several or to share one on purpose, and `--size 3440x1440` for another screen size
-(`3440x1440@144` for a refresh rate, `host` for your focused monitor; `omabox mode` changes it live).
-A headless box goes down by itself after 2 hours with no `omabox` command against it, no peek window
-and no `omabox run` in progress (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`).
-`--stock-bar` gives the box Omarchy's default bar instead of a copy of yours. `--systemd` gives it a
-real systemd user manager (`systemctl --user`, `systemd-run --user` timers) for plugins that manage a
-service or schedule alarms.
-`--env KEY=VAL` sets a variable for the whole box session (a plugin's API base pointed at a stub).
-`omabox gpu 10` measures the GPU time of one box's processes when the driver reports per-process DRM
-engine counters. NVIDIA 615.71.09 does not report them, so `gpu` shows no per-process figures there.
-Use `--size host` to see what an animation costs on drivers that provide counters, since tools that
-sum GPU time by process name add a box's Hyprland to yours.
-`omabox help` lists every flag.
+- **Names**: a box is named after the current git repo. Inside a Claude Code or Codex session (or
+  an agent started with `omabox guard exec`) the name also gets the session's id, `myrepo-5cc72cdc`,
+  so two agents in one repo each get their own box, and it goes down when its agent exits (not while
+  you peek at it or an `omabox run` is going). An agent does not pick up a box you started yourself
+  unless told `-b myrepo`. `-b NAME` or `OMABOX=NAME` picks a box; `OMABOX_SESSION=` (empty) turns
+  the per-session names off. Two repos with the same directory name need `-b`.
+- **Screen**: `--size 3440x1440`, `3440x1440@144`, or `host` for your focused monitor;
+  `omabox mode` changes it live.
+- **Idle**: a headless box goes down after 2 hours with no `omabox` command, peek or `omabox run`
+  against it (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`). A `run -d` job does not count.
+- **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours), `--systemd` (a real
+  systemd user manager, for plugins that manage a service or schedule alarms), `--env KEY=VAL` (for
+  the whole box session), `--xwayland`, and `omabox gpu 10` (GPU time of one box's processes, where
+  the driver reports per-process counters). `omabox help` lists every flag.
 
 ### Tests that touch the desktop
 
@@ -141,15 +117,13 @@ omabox run -- ctest --test-dir build --output-on-failure
 
 With no box up, `run` starts a throwaway box, mounts the current repo as a **discarded overlay**
 (the tests can write `build/Testing/`, your checkout never changes), runs the command and tears the
-box down. Notification tests register with the box's bar instead of piling up in yours. Tray tests
-need a tray in the box's bar; use `omabox run --stock-bar -- ctest ...` if your own bar omits it.
-`up`'s options apply to that throwaway box: `omabox run --net isolated --allow 8081 -- ctest ...`
-keeps tests that talk to 127.0.0.1 away from your real services.
-With `-b NAME` (or `OMABOX=NAME`) the box must be up: `run` fails rather than start a throwaway.
-With a box already up, `run` uses it, and there the repo is read-only: for tests that write into the
-tree, `omabox down` first.
-The command gets the box's environment, not your shell's. `--pass NAME` (repeatable) hands it one of
-your variables, a password too: the value goes through a pipe, never on a command line.
+box down. Notification tests register with the box's bar instead of piling up in yours; tray tests
+need a tray in it (`--stock-bar` if your bar omits one). `up`'s options apply:
+`omabox run --net isolated --allow 8081 -- ctest ...` keeps tests away from your real local services.
+With `-b NAME` the box must be up. With a box already up, `run` uses it, and the repo is read-only
+there: for tests that write into the tree, `omabox down` first. The command gets the box's
+environment, not your shell's; `--pass NAME` hands it one of your variables, a password too, through
+a pipe, never on a command line.
 
 ### Shell plugins
 
@@ -161,56 +135,55 @@ omabox restart-shell                          # after editing the plugin
 The plugin is mounted read-only and turned on in the box's `shell.json` where its manifest says.
 The box's bar has the built-in widgets plus the plugins you mount, nothing else.
 
-### Seeing a box yourself
+## Seeing a box yourself
 
 <p><img src="docs/media/interactive.png" alt="An interactive box: a whole Omarchy desktop as a window next to a terminal, with a terminal of its own open inside" width="800"></p>
 
-- `omabox peek -b NAME`: a live, view-only window of a headless box (an agent's included) on your
-  workspace 9 (or the one you set, below), opened without focus. It only copies frames out, so it never disturbs the agent;
-  it closes with SUPER+W or when the box goes down. `omabox shot -b NAME` for a single frame.
-  What the agent does shows on it for a few seconds: a ring where it points and clicks, and the keys
-  it types at the bottom (a password typed with `keys --pass` as `*`). Only in the peek window: the
-  box's own screen and screenshots never have them.
-- `omabox up --interactive`: the box is a real window on workspace 9 (or the one you set), and you use it directly with
-  your GPU, keyboard and mouse. **SUPER+ALT+ESCAPE** toggles sending SUPER keys to the box instead of
-  your desktop. Passthrough turns itself off when focus leaves the box, or on the first key you press
-  with the pointer outside it. The box follows the window's size. Closing the window ends the box.
-- **Settings** (`omabox config`, kept in `~/.config/omabox/config`; the bar widget's panel shows
-  and changes the same ones):
-  - `omabox config workspace WS`: where interactive and peek windows open, always without focus: a
-    workspace `1`-`99`, `special` (Omarchy's scratchpad: SUPER+S shows and hides it) or
-    `special:NAME` (bind a key to it yourself). Per box: `up --interactive --workspace WS`,
-    `peek --workspace WS`. The default is 9.
-  - `omabox config confirm-close on`: closing an interactive box's window asks first. The box opens
-    a new window where you are, with Omarchy's menu ("Shut down" / "Keep it running"); closing that
-    window too is a yes. It applies to running boxes as well. Per box: `--confirm-close` or
-    `--no-confirm-close` on `up`.
-  - `bar-icon`: `always` (the default) keeps the widget's icon in the bar with no box up, dimmed, so
-    its settings are a click away; `omabox config bar-icon auto` shows it only while boxes exist.
-  - `omabox config` lists them; `omabox config KEY default` puts one back.
+- **`omabox peek -b NAME`**: a live, view-only window of any box on workspace 9, opened without
+  focus. It only copies frames out, so the agent never notices, and closes with SUPER+W or when the
+  box goes down. For a few seconds it shows what the agent does: a ring where it points and clicks,
+  and the keys it types (a `--pass` password as `*`), never in the box's own screen or screenshots.
+- **`omabox up --interactive`**: the box is a real window on workspace 9 that you drive with your
+  own keyboard and mouse. **SUPER+ALT+ESCAPE** sends SUPER keys to the box instead of your desktop.
+  The box follows the window's size; closing the window ends it.
+- **The bar widget** (`chaves.omabox`): the omabox mark in your bar lists every box, with **Peek**
+  (or **Show**, for an interactive one), **Screenshot** and **Down**, and **New interactive box**.
+
 <p><img src="docs/media/widget.png" alt="The widget's panel with no boxes up and its New interactive box button, and its Settings face: where windows open, confirm before closing, always show in the bar" width="800"></p>
 
-- **Bar widget** (`plugin/`, id `chaves.omabox`): the omabox mark in the Omarchy bar (dimmed with no box up; `bar-icon auto` shows it only while boxes exist),
-  with a count when there are several. Its panel lists each box (mode, size, age, plugins, whether
-  it is being peeked at) and offers **Peek** (opens the peek window, or focuses it; for an
-  interactive box, **Show** focuses its window), **Screenshot** (opens the PNG) and **Down** (press
-  twice within 3 s; Enter on a dead box arms it). **New interactive box** (or `n`) starts one under
-  a free name (`omabox up --interactive --new`: box-1, box-2, ...) and brings its window forward.
-  Keys: arrows or j/k, Enter or `p` peek/show, `s` shot, `d` down, `n` new, `r` refresh. If `omabox ls` fails, the panel says so (and a notification, once the
-  list is dropped after three failures). `install.sh` links it
-  into `~/.config/omarchy/plugins/`; turn it on with `omarchy plugin enable chaves.omabox`.
-  The gear at the top right opens **Settings** (omawin's layout; Back or Esc returns): `workspace`,
-  `confirm-close` and `bar-icon`, changed through `omabox config`.
-  It only displays `omabox ls --json` and runs `omabox`; the CLI owns every rule.
+<details>
+<summary><b>Settings, and the widget's keys</b></summary>
+
+Settings live in `~/.config/omabox/config`: `omabox config` lists them, the widget's gear changes
+them, and `omabox config KEY default` puts one back.
+
+- `workspace WS`: where interactive and peek windows open, always without focus: `1`-`99`,
+  `special` (Omarchy's scratchpad: SUPER+S shows and hides it) or `special:NAME` (bind a key to it
+  yourself). Per box: `up --interactive --workspace WS`, `peek --workspace WS`. The default is 9.
+- `confirm-close on`: closing an interactive box's window asks first. The box opens a new window
+  where you are, with Omarchy's menu ("Shut down" / "Keep it running"); closing that window too is a
+  yes. It applies to running boxes as well. Per box: `--confirm-close` or `--no-confirm-close` on
+  `up`.
+- `bar-icon`: `always` (the default) keeps the widget's icon in the bar with no box up, dimmed, so
+  its settings are a click away; `auto` shows it only while boxes exist.
+
+Passthrough (SUPER+ALT+ESCAPE) turns itself off when focus leaves the box, or on the first key you
+press with the pointer outside it. The widget's panel shows each box's mode, size, age, plugins and
+whether it is being peeked at, and a count in the bar when there are several. Keys: arrows or j/k,
+Enter or `p` peek/show, `s` shot, `d` down (twice within 3 s; Enter on a dead box arms it), `n` new,
+`r` refresh. **New interactive box** starts one under a free name (`omabox up --interactive --new`:
+box-1, box-2, ...) and brings its window forward. If `omabox ls` fails, the panel says so. The
+widget only displays `omabox ls --json` and runs `omabox`; the CLI owns every rule.
+
+</details>
 
 ## Agents
 
 `install.sh` installs the `omabox` skill wherever Omarchy installs its own agent skills, so Claude
-Code, Codex, OpenCode (via `~/.agents/skills`), pi and Hermes see it in their skill list and load it
-when a task involves a GUI app, a screenshot, a shell plugin or desktop-touching tests.
-
-Projects need no changes: when a project's own instructions say "run the app", "screenshot with
-grim", "use hyprctl" or "run ctest", the skill tells the agent to do exactly that inside a box.
+Code, Codex, OpenCode, pi and Hermes load it when a task involves a GUI app, a screenshot, a shell
+plugin or desktop-touching tests. Projects need no changes: when a project's own instructions say
+"run the app", "screenshot with grim", "use hyprctl" or "run ctest", the skill has the agent do
+exactly that in a box.
 
 To make it a rule rather than the agent's judgement, add a line to your agent's global instructions
 (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`, ...):
@@ -218,31 +191,34 @@ To make it a rule rather than the agent's judgement, add a line to your agent's 
 > Never launch, screenshot or drive GUI apps on my desktop, and never run tests that touch the desktop
 > session there. Use omabox (see the omabox skill).
 
-### The agent guard (opt-in; Claude Code and Codex)
+### The agent guard
 
-The skill and that line are advice: an agent that does not think of `./build/tests/tst_x` as GUI work
-still opens its windows on your desktop, because its shell holds your real display. The guard makes
-that fail instead:
+The skill is advice: an agent that does not think of `./build/tests/tst_x` as GUI work still opens
+its windows on your desktop, because its shell holds your real display. The guard (opt-in; Claude
+Code and Codex, or any agent through `guard exec`) makes that fail instead: agents' shells get a
+display that does not exist, so a stray window, `hyprctl`, `grim` or `omarchy-theme-set` fails with
+an error the skill explains, and a link an agent opens is refused instead of landing in your
+browser. `install.sh` asks (yes by default); it never turns the guard on by itself.
 
 ```bash
-omabox guard                  # is it on, per agent; what it does
 omabox guard on               # every installed agent (or: on claude | on codex); a backup next to each file
 omabox guard off              # take it out again (each file as it was)
+omabox guard                  # is it on, per agent; what it does
 omabox host -- CMD            # from a guarded shell: one command on your real desktop, when you asked for it
 omabox guard exec -- AGENT    # any other agent: start it under the guard
 ```
 
-What agents' shell commands get: a display that does not exist (`WAYLAND_DISPLAY=omabox-guard`,
-`HYPRLAND_INSTANCE_SIGNATURE=omabox-guard`, an empty `DISPLAY`), an empty `QT_QPA_PLATFORMTHEME`
-(Omarchy's `gtk3` would make even an offscreen Qt test start GTK, which needs a display, so `ctest`
-with `QT_QPA_PLATFORM=offscreen` keeps working), and `QT_FORCE_STDERR_LOGGING=1` (a Qt program with
-no display aborts; this way the agent reads why). A window, `hyprctl`, `grim` or `omarchy-theme-set`
-outside a box then fails with an error naming `omabox-guard` or "could not connect to display", which
-the skill answers. Links and files are refused too: a browser already running on your desktop takes a
-URL over its own socket, not the display, so `xdg-open URL` or `gh pr view --web` from an agent would
-open a tab there (and with `misc:focus_on_activate`, take focus). `BROWSER` and `GH_BROWSER` name
-omabox's `share/guard/xdg-open`, which fails with a note to give you the link instead, and Claude
-Code and `guard exec` put it first on PATH as `xdg-open`. Inside a box, links open as usual.
+<details>
+<summary><b>What the guard sets, per agent, and what it does not stop</b></summary>
+
+Agents' shell commands get `WAYLAND_DISPLAY=omabox-guard`, `HYPRLAND_INSTANCE_SIGNATURE=omabox-guard`,
+an empty `DISPLAY`, an empty `QT_QPA_PLATFORMTHEME` (Omarchy's `gtk3` would make even an offscreen Qt
+test start GTK, which needs a display, so `ctest` with `QT_QPA_PLATFORM=offscreen` keeps working) and
+`QT_FORCE_STDERR_LOGGING=1` (a Qt program with no display aborts; this way the agent reads why).
+A browser already running on your desktop takes a URL over its own socket, not the display, and with
+`misc:focus_on_activate` takes focus too. So `BROWSER` and `GH_BROWSER` name omabox's
+`share/guard/xdg-open`, which fails with a note to give you the link instead, and Claude Code and
+`guard exec` also put it first on PATH as `xdg-open`. Inside a box, links open as usual.
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a
@@ -255,85 +231,119 @@ Code and `guard exec` put it first on PATH as `xdg-open`. Inside a box, links op
   variables only: no core limit, no note. Checked through `codex sandbox`, not in a logged-in session.
 - **Anything else**: `omabox guard exec -- AGENT` starts the agent itself under the guard. Its own
   process loses the display too (clipboard, opening a browser to log in; `xdg-open` refuses). It also
-  gets a session of its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and Codex.
+  gets a session of its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and
+  Codex.
 
-omabox keeps working: boxes have their own display, and `up --interactive`, `peek` and `--size host`
-find your session by themselves. Work you ask for on your real desktop ("switch my theme", `hyprctl
-reload` after editing your config) goes through `omabox host -- CMD`: your session's display,
-`DISPLAY` and Qt theme for that one command, which it names on stderr, so it stays on the record.
-`install.sh` asks (yes by default); it never turns the guard on by itself.
+omabox keeps working under the guard: boxes have their own display, and `up --interactive`, `peek`
+and `--size host` find your session by themselves. Work you ask for on your real desktop ("switch my
+theme", `hyprctl reload` after editing your config) goes through `omabox host -- CMD`: your session's
+display, `DISPLAY` and Qt theme for that one command, which it names on stderr, so it stays on the
+record.
 
-What it does not do: stop an agent that sets the variables back or runs `omabox host` unasked on
-purpose, processes the agent starts itself rather than through its shell (MCP servers: a headed
-browser MCP opens on your desktop), or anything over the session bus or the user manager (notifications, the keyring, apps
-started over D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment),
-and links opened by other routes: a browser started directly with a URL (it hands the URL to the one
-already running), `gio open` (it starts your URL handler itself), npm's `open` (it runs its own copy
-of xdg-open), or, under Codex, a plain `xdg-open` (Codex sets values, so it gets `BROWSER` and
-`GH_BROWSER` but not the PATH entry). Python's `webbrowser` stops at omabox's `xdg-open` (it counts
-one that has started as a success), except under `guard exec` from an omabox at a path with a space:
-there it tries the next browser when that one fails. It stops accidents. For a fence, run
-the agent in a sandbox that blocks Unix sockets (Claude Code's `sandbox`: it also blocks the network
-and every other socket, omabox's included).
+It stops accidents. It does not stop:
+
+- an agent that sets the variables back, or runs `omabox host` unasked, on purpose;
+- processes the agent starts itself rather than through its shell (MCP servers: a headed browser
+  MCP opens on your desktop);
+- anything over the session bus or the user manager (notifications, the keyring, apps started over
+  D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment);
+- links opened by other routes: a browser started directly with a URL (it hands the URL to the one
+  already running), `gio open` (it starts your URL handler itself), npm's `open` (it runs its own
+  copy of xdg-open), or, under Codex, a plain `xdg-open` (Codex gets `BROWSER` and `GH_BROWSER` but
+  not the PATH entry). Python's `webbrowser` stops at omabox's `xdg-open` (it counts one that has
+  started as a success), except under `guard exec` from an omabox at a path with a space: there it
+  tries the next browser when that one fails.
+
+For a fence, run the agent in a sandbox that blocks Unix sockets (Claude Code's `sandbox`: it also
+blocks the network and every other socket, omabox's included), or see
+[ai-jail](#related-projects).
+
+</details>
 
 ## What a box can and cannot touch
 
-- The repo you run `omabox up` from is visible **read-only** at the same path, plus the dirs you list in
-  `~/.config/omabox/ro-bind` (one per line) or pass with `--ro-bind`. `DIR:DEST` mounts a dir somewhere
-  else (`--ro-bind ~/nas:/mnt/nas`, to test path mapping); DEST cannot be `/`, a system dir, `/run`,
-  `/tmp` itself, `/opt/omabox`, the box HOME, or a dir above those.
-- Also from your HOME, read-only: mise's toolchains (`~/.local/share/mise/installs`, so `omabox run`
-  finds node, python, uv as on the host), the `--plugin` dirs you pass, and your git `user.name` and
-  `user.email` (copied into the box's git config). Nothing else of it.
-- Refused, whatever you pass: anything that is or contains HOME, `~/.config/omarchy` or `/tmp`
-  (a plugin dir inside `~/.config/omarchy/plugins` is fine), and anything inside or containing the
-  secret stores (`~/.ssh`, `~/.gnupg`, keyrings, `~/.password-store`,
-  `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys` or
-  /tmp's socket dirs. A throwaway `run` outside a repo mounts nothing of the current dir.
-- The box's HOME is fake, seeded with your theme and shell settings and nothing secret (no API keys,
-  keyrings or tokens).
-- Private session bus, private throwaway keyring (secrets are stored and read without prompts),
-  no system bus, no real input devices, no audio, no Xwayland (unless you pass `--xwayland`).
-- Every box has a network of its own, so what runs in it cannot reach or take your host's abstract
-  sockets (a box's X11 display used to catch X11 apps you started on the host). By default
-  (`--net connected`) a box reaches the internet, your LAN and the servers on your host, and you
-  reach its servers:
-  - Across the box boundary, use `127.0.0.1:PORT`, with a server that listens on IPv4 (`127.0.0.1`,
-    `0.0.0.0` or `::`). `localhost` works from your host into a box, but from a box it is reset when
-    the server listens on IPv4 only, as most dev servers do, and from one box to another it never
-    works. A server in a box that listens on `::1` only cannot be reached from outside it.
-  - A box's ports are forwarded to your host's `127.0.0.1` only (never your LAN address), usually
-    within a second of its server listening, the ephemeral range included; other boxes reach them
-    there too. A TCP port there also takes the UDP port of the same number.
-  - Inside a box, your machine's LAN address is the box itself.
-  - A connected box started inside another box has no network.
-- With `--net isolated`, the box has only a loopback, no internet or LAN, and reaches just the host
-  ports you list with `--allow` (`omabox up --net isolated --allow 8081,8082`), so your real local
-  services are out of reach. Works for headless and interactive boxes. Every box needs `passt`
-  (which `install.sh` installs), and a connected one `/dev/net/tun`.
-- Safety invariant: a box never gets `/dev/dri/card*`, `/dev/input`, seatd, the system bus or your
-  real `$XDG_RUNTIME_DIR`. Those are what keep its Hyprland off your real seat.
-- `/usr`, `/etc` and `/sys` are read-only and there is no `sudo`, pacman or polkit: nothing in a box
-  can install packages, system config or rules (a plugin whose setup writes `/etc/polkit-1/rules.d`
-  just fails there). Your host's processes are not visible from it (its own pid namespace).
-- An interactive box holds one already-open connection to your compositor, never its socket, so
-  nothing inside can open windows on your desktop: your Hyprland sees one window. Keys go the other
-  way: while that window has focus (in passthrough, SUPER binds too), what runs in the box reads
-  what you type.
-- `omabox down` deletes the box and its HOME, so what a plugin or app changed in there is gone. It
-  cannot undo what reached outside: with the default connected network, a box reaches the internet,
-  your LAN and the services on your `127.0.0.1`, so API calls, uploads or changes to a server are
-  real. Use `--net isolated` when that matters.
-- Commands you run on the host are not boxed: a project's `sudo ./setup ...`, or `omabox host --
-  CMD`, change your real system.
-- A box keeps an app off your desktop and your config; it is not a security boundary. It shares
-  your kernel and GPU (a runaway app can load or hang it). For code you do not trust, use
-  `--net isolated` at least, or a VM (below).
+- **Your files**: the repo you run `omabox up` from, **read-only** at the same path, plus the dirs
+  in `~/.config/omabox/ro-bind` (one per line) or `--ro-bind`; mise's toolchains (so `omabox run`
+  finds node, python, uv as on the host), the `--plugin` dirs, and your git `user.name` and
+  `user.email`. Nothing else of your HOME. Refused whatever you pass: anything that is or contains
+  HOME, `~/.config/omarchy` or `/tmp`, the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
+  `~/.password-store`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`), your runtime dir, `/run`,
+  `/dev`, `/proc`, `/sys`.
+- **Its HOME** is fake, seeded with your theme and shell settings and nothing secret (no API keys,
+  keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app changed there.
+- **Its session**: a private session bus and a throwaway keyring (secrets stored and read without
+  prompts), no system bus, no real input devices, no audio, no Xwayland unless `--xwayland`.
+  `/usr`, `/etc` and `/sys` are read-only, with no `sudo`, pacman or polkit, so nothing in a box can
+  install packages, system config or rules. Your host's processes are not visible from it.
+- **Your seat**: a box never gets `/dev/dri/card*`, `/dev/input`, seatd, the system bus or your real
+  `$XDG_RUNTIME_DIR`: that is what keeps its Hyprland off your real screens. An interactive box
+  holds one already-open connection to your compositor, never its socket, so nothing inside can open
+  windows on your desktop. Keys go the other way: what you type into its window, the box reads.
+- **The network**: every box has one of its own. By default (`--net connected`) it reaches the
+  internet, your LAN and your host's servers, and you reach its servers; with `--net isolated` it has
+  only a loopback and the host ports you `--allow` (`omabox up --net isolated --allow 8081,8082`).
+  What reaches outside (API calls, uploads, changes to a server) is real, and `down` does not undo it.
+- **Not a security boundary**: a box shares your kernel and GPU (a runaway app can load or hang it)
+  and, by default, your network. Commands you run on the host, a project's `sudo ./setup` or
+  `omabox host -- CMD`, are not boxed. For code you do not trust, use `--net isolated` at least,
+  [ai-jail](#related-projects), or a VM.
+
+<details>
+<summary><b>Networking and mount details</b></summary>
+
+- Across the box boundary, use `127.0.0.1:PORT`, with a server that listens on IPv4 (`127.0.0.1`,
+  `0.0.0.0` or `::`). `localhost` works from your host into a box, but from a box it is reset when
+  the server listens on IPv4 only, as most dev servers do, and from one box to another it never
+  works. A server in a box that listens on `::1` only cannot be reached from outside it.
+- A box's ports are forwarded to your host's `127.0.0.1` only (never your LAN address), usually
+  within a second of its server listening, the ephemeral range included; other boxes reach them
+  there too. A TCP port there also takes the UDP port of the same number.
+- Inside a box, your machine's LAN address is the box itself. A connected box started inside
+  another box has no network.
+- Every box needs `passt` (which `install.sh` installs), and a connected one `/dev/net/tun`. Its own
+  network also keeps what runs in it from reaching or taking your host's abstract sockets (a box's
+  X11 display used to catch X11 apps started on the host).
+- `--ro-bind DIR:DEST` mounts a dir somewhere else (`--ro-bind ~/nas:/mnt/nas`, to test path
+  mapping); DEST cannot be `/`, a system dir, `/run`, `/tmp` itself, `/opt/omabox`, the box HOME, or
+  a dir above those. A plugin dir inside `~/.config/omarchy/plugins` is fine. A throwaway `run`
+  outside a repo mounts nothing of the current dir.
+
+</details>
 
 Some things still need your real machine: your real data and services, desktop integration outside a
-session (.desktop files, URL handlers, autostart; systemd user units only work in a `--systemd` box,
-and never with journald or logind), real monitors (scaling, multi-monitor), lock/idle/suspend, and
-final release acceptance.
+session (.desktop files, URL handlers, autostart; systemd user units only in a `--systemd` box, and
+never with journald or logind), real monitors (scaling, multi-monitor), lock/idle/suspend, and final
+release acceptance.
+
+## Related projects
+
+omabox does one thing: keep agents off your desktop while they test on a desktop of their own.
+These projects are good at what it does not do.
+
+- **[ai-jail](https://github.com/akitaonrails/ai-jail)** ([aijail.io](https://aijail.io)), by Fabio
+  Akita, fences the agent in: bubblewrap, Landlock and seccomp on Linux, `sandbox-exec` on macOS, so
+  your home, keys and cloud credentials are out of reach. ai-jail answers what the agent can touch,
+  omabox where it draws, and they stack. To run a build you do not trust yet with the box's screen as
+  its only display (tested with ai-jail 2.2.0 and omabox 0.2.0):
+
+  ```bash
+  omabox up
+  eval "$(omabox env)"   # Wayland clients now draw in the box
+  ai-jail --gpu --rw-map "$WAYLAND_DISPLAY" --env WAYLAND_DISPLAY -- ./build/app
+  ```
+
+  An agent inside ai-jail cannot drive omabox yet: the jail's own process namespace hides the box
+  ([#16](https://github.com/diogochaves/omabox/issues/16)). For now, keep the agent under omabox's
+  guard and put the apps it runs under ai-jail.
+- **[omarchy-in-omarchy](https://github.com/jankeesvw/omarchy-in-omarchy)** is a disposable Omarchy
+  in QEMU/KVM (8 GB of RAM by default, minutes on its first start): for what needs a whole machine,
+  an installer or an `omarchy-update` migration, system services, audio, suspend, a reboot, where a
+  box has no system bus. Boxes while developing, a VM before a release.
+- **[Cua](https://github.com/trycua/cua)** ([cua.ai](https://cua.ai)) is for the opposite: agents
+  that use your own desktop and apps, across macOS, Windows, Linux and Android.
+
+Written in September 2026 from each project's own pages; they move on their own, so check theirs.
+The longer comparison is on [omabox.app](https://omabox.app/#compare).
 
 ## How it works
 
@@ -360,52 +370,23 @@ Wayland connection.
 | `tools/peek` | the live view-only window (`omabox peek`) |
 | `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
+| `plugin/` | the bar widget |
 | `test/run.sh` | the regression suite: real boxes, never the real desktop (`test/run.sh unit` is fast) |
 | `NOTES.md` | design notes: architecture, findings (cited in the code as "finding N"), dead ends |
 | `spike/` | the original proof of concept |
 
-Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/`: `box.json` (its options), `info.json` (bwrap's
-pids; `pid` and `pasta.pid` for a box behind pasta), `run/` (the box's runtime dir), `used` (idle clock),
-`reap.log`, `box.log`. The
-box's HOME (`omabox path` → `home/`, on disk in `~/.cache/omabox/<name>/home`, removed on `down`) and
-logs are readable from the host.
-
-## omabox or a VM
-
-[omarchy-in-omarchy](https://github.com/jankeesvw/omarchy-in-omarchy) (`omavm`) answers the same need
-with a disposable Omarchy machine in QEMU/KVM. They cover different ground:
-
-| | omabox | omavm |
-|---|---|---|
-| Start | ~3-4 s, nothing to install | minutes for an unattended install once, then seconds from a snapshot |
-| Cost | ~500 MB RAM, shares the host's `/usr` and GPU | 8 GB RAM, 8 cores, 40 GB disk by default |
-| Omarchy | the host's own, same version and config | a separate install, updated on its own |
-| System bus, systemd, logind, sudo, pacman | none (by design); a systemd user manager with `--systemd` | real: services, installs, `omarchy-update`, units, lock/suspend |
-| Devices | a virtual screen of any size and refresh rate, no audio or input devices | QEMU's virtual devices: audio, keyboard, mouse, disks, network |
-| Your code | read-only at the same path, live (edit, `restart-shell`) | pushed in (`omavm push`, `omavm plugin DIR`) |
-| Screens | several boxes at once, each headless | one VM with a QEMU window |
-| Driving it | `omabox keys/click/shot`, Hyprland IPC from the host | `omavm ssh/shot/sendkey` |
-
-They are complementary, not rivals. A box is for the inner loop: an agent trying a bar plugin after
-every edit, a Qt app's tray and notification tests, screenshots of a theme at three screen sizes,
-several agents each with a desktop of their own, all in seconds and without a second OS to keep up
-to date. A VM is for what needs a whole machine and its hardware integration: an installer or an
-`omarchy-update` migration, a package with a systemd system service, NetworkManager, bluetooth or
-audio, lock, suspend and login, polkit rules, anything that must survive a reboot. A project can use
-both: boxes while developing, a VM before a release.
-
-The table was written on September 24, 2026, from omarchy-in-omarchy as it was then. It is its own
-project and moves on its own, so it may do more, or differently, by now: check its README.
+Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/` (`omabox path`): `box.json` (its options),
+`info.json` (bwrap's pids; `pid` and `pasta.pid` for a box behind pasta), `run/` (the box's runtime
+dir), `used` (idle clock), `reap.log`, `box.log`. The box's HOME (`home/`, on disk in
+`~/.cache/omabox/<name>/home`, removed on `down`) and logs are readable from the host.
 
 ## Known limitations
 
-- Tested with Hyprland 0.56.2 on AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER
-  (driver 615.71.09). Other NVIDIA models and drivers remain untested.
-- Of the agents the skill is installed for, Claude Code and OpenCode were checked end to end; Codex,
-  pi and Hermes find the skill, but no run of theirs reached a model here.
-
-- Needs a patched aquamarine (PR #415, built into `build/prefix` by `install.sh`) until a release ships it.
-  What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
+- Other NVIDIA models and drivers are untested. Of the agents the skill is installed for, Claude
+  Code and OpenCode were checked end to end; Codex, pi and Hermes find the skill, but no run of
+  theirs reached a model here.
+- Needs a patched aquamarine (PR #415, built into `build/prefix` by `install.sh`) until a release
+  ships it. What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
 - A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
   `omabox shot` works with its window off screen, just at that rate. Not after you closed its window
   and kept the box running (`confirm-close`): the new window is only drawn while it is on screen.
@@ -417,12 +398,16 @@ project and moves on its own, so it may do more, or differently, by now: check i
   Logging out of the box ends it.
 - A `run -d` job does not count as use for idle expiry: a server the agent only polls over HTTP needs
   `--idle 0` (or a longer one). Nor does it keep an agent session's box once the agent exits.
+- `omabox gpu` shows no per-process figures on NVIDIA 615.71.09, which does not report them. Tools
+  that sum GPU time by process name add a box's Hyprland to yours: use `--size host` and `omabox gpu`
+  to see what an animation costs.
 
 ## Contributing
 
 Contributions are welcome, and so are people trying it on other NVIDIA models, other GPUs,
 multi-monitor desks, or a fresh Omarchy install. Bug reports, fixes, tests and ideas all help;
-[CONTRIBUTING.md](CONTRIBUTING.md) says how, and what a report needs.
+[CONTRIBUTING.md](CONTRIBUTING.md) says how, and what a report needs. What changed in each version:
+[CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
