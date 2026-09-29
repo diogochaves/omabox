@@ -30,7 +30,8 @@ $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home
                                   a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
-│                        one render node (plus its NVIDIA render-side nodes on NVIDIA),
+│                        one render node (plus its NVIDIA render-side nodes on NVIDIA);
+│                        an interactive box every render node (95),
 │                        share/ → /opt/omabox/share, patched aquamarine →
 │                        /opt/omabox/lib, keyboard/pointer → /opt/omabox/bin, --plugin dirs ro →
 │                        ~/.config/omarchy/plugins/<id>, --overlay dirs (discarded writes); every source
@@ -1613,6 +1614,24 @@ the designs here were measured in boxes and built for a contained desktop, and n
     ... is up from this user namespace"); a process that is not ours (its pid reused) still reads
     dead. Such a process could not enter or signal the box anyway. `t_other_userns`: `up` from
     `unshare -Ur` fails with that message, and the box is the same one, still up.
+95. **An interactive box renders on the desktop's GPU, not the one omabox picked** (2026-09-29,
+    Diogo's desktop with the RTX 5070 Ti on nvidia beside the AMD iGPU, monitors on both). With
+    `OMABOX_RENDER_NODE=/dev/dri/renderD129` (the RTX), `up --interactive` failed 10 s in with
+    "bwrap did not start"; the box's Hyprland had aborted with `CBackend::create() failed!` right
+    after the host's `zwp_linux_dmabuf_v1` format table (AMD modifiers only). Aquamarine's Wayland
+    backend opens the render node of the parent's dmabuf main device, here the host's AMD
+    `renderD128`, which the box did not have; the "Failed to open node" line never reached the log
+    (the abort). Not new: 0.1.0 picked the node the same way, and the default (the first usable
+    node) matches the desktop's GPU on this machine, so it only shows when the desktop renders on
+    another GPU than the first node or the variable points elsewhere. An interactive box now gets
+    every usable render node, plus `/dev/nvidiactl` and `/dev/nvidiaN` for each NVIDIA one whose
+    nodes are there (render nodes only: finding 5 holds), and its Hyprland opens the one the desktop
+    names; `OMABOX_RENDER_NODE` now chooses a headless box's GPU only. And a box that started and
+    ended before `up` saw it now says so ("died while starting", as `wait_ready` did already, with
+    Hyprland's last log line when there is one) instead of "bwrap did not start", which is kept for
+    a bwrap that wrote nothing to `--info-fd`. `t_guard`: the interactive box nested in the stand-in
+    sees the stand-in's GPU nodes (on AMD, and on the RTX with the stand-in on it). The stand-in has
+    one GPU, so the suite cannot reproduce the mismatch itself: verified on the real desktop.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

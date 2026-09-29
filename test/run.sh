@@ -1910,6 +1910,11 @@ t_guard() {
   sleep 1
   check_eq "...and its abort is not a journaled crash" 0 "$(journalctl --since "$since" MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 -o json --no-pager 2>/dev/null | grep -c omarchy-crash-omabox)"
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
+  # finding 95: it renders on the GPU its host names, so it gets every render node the host has (and
+  # an NVIDIA one's userspace nodes), not just the one a headless box would pick.
+  local gpu_nodes='ls /dev/dri/renderD* /dev/nvidiactl /dev/nvidia[0-9]* 2>/dev/null; true'
+  check_eq "...with every GPU node of its host" "$("$CLI" run -b "$B" -- sh -c "$gpu_nodes")" \
+    "$("${in[@]}" "$CLI" run -b inner -- sh -c "$gpu_nodes")"
   check_eq "...its window is on workspace 9" 9 "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
   check_eq "...without focus" null "$(ob hyprctl -b "$B" -j activewindow | jq -r '.class')"
   # render_unfocused (finding 90): shots while its window is hidden; the stand-in's workspace and

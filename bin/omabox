@@ -478,10 +478,17 @@ extent() {
     die "cannot read the screen size of box '$NAME' (its Hyprland did not answer)"
 }
 
+# A box that ended while `up` waited for it, with Hyprland's last line when it logged one (an interactive
+# box's: an abort such as finding 95's `CBackend::create() failed!`).
+died_starting() {
+  local last; last=$(grep -v '^[[:space:]]*$' "$D/home/hyprland.log" 2>/dev/null | tail -n 1 | sed 's/^[[:space:]]*//') || true
+  die "box '$NAME' died while starting${last:+ (Hyprland: $last)}; logs: $D/home/*.log $D/box.log"
+}
+
 wait_ready() {
   local want_shell=$1 deadline=$((SECONDS + READY_TIMEOUT))
   until [ -s "$D/run/omabox.env" ]; do
-    box_alive || die "box '$NAME' died while starting; logs: $D/home/*.log $D/box.log"
+    box_alive || died_starting
     [ $SECONDS -lt $deadline ] || die "Hyprland not up after ${READY_TIMEOUT}s; logs: $D/home/*.log"
     sleep 0.1
   done
@@ -504,7 +511,7 @@ wait_ready() {
     "$D/home/.config/omarchy/shell.json" >/dev/null && tray_expected=1
   until on_box hyprctl -j layers 2>/dev/null | grep -q '"omarchy-bar"' &&
         { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
-    box_alive || die "box '$NAME' died while starting; logs: $D/home/*.log"
+    box_alive || died_starting
     [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
     sleep 0.1
   done
@@ -544,6 +551,15 @@ render_node() {
   [[ $n =~ ^/dev/dri/renderD[0-9]+$ ]] && [ -r "$n" ] && [ -w "$n" ] ||
     die "no usable GPU render node (/dev/dri/renderD*); set OMABOX_RENDER_NODE"
   echo "$n"
+}
+
+# Every usable render node, for an interactive box: its Hyprland renders on the GPU the desktop's
+# compositor names (aquamarine's Wayland backend opens the parent's dmabuf main device), which is not
+# necessarily render_node's, so the box gets them all (finding 95). Still render nodes only.
+render_nodes() {
+  local n
+  for n in /dev/dri/renderD*; do [ -r "$n" ] && [ -w "$n" ] && echo "$n"; done
+  return 0
 }
 
 # The kernel driver behind a render node: amdgpu, i915, xe, nvidia, ...
@@ -881,11 +897,20 @@ cmd_up() {
   # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
   # confirm_live sees the box.
   [ "$confirm_from" = flag ] || confirm=$(conf_get confirm-close)
-  local render nvidia_dev="" wayland_screen=0 run=/run/user/$UID
+  local render renders nvidia_devs=() dev n wayland_screen=0 run=/run/user/$UID
   render=$(render_node)
-  if [ "$(render_driver "$render")" = nvidia ]; then
-    nvidia_dev=$(nvidia_device "$render") || die "cannot use NVIDIA render node $render"
-    [ $interactive = 1 ] || wayland_screen=1
+  if [ $interactive = 1 ]; then
+    mapfile -t renders < <(render_nodes)
+    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it.
+    for n in "${renders[@]}"; do
+      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 2>/dev/null) || nvidia_devs+=("$dev")
+    done
+  elif [ "$(render_driver "$render")" = nvidia ]; then
+    renders=("$render")
+    dev=$(nvidia_device "$render") || die "cannot use NVIDIA render node $render"
+    nvidia_devs=("$dev") wayland_screen=1
+  else
+    renders=("$render")
   fi
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
@@ -908,11 +933,13 @@ cmd_up() {
   # name an isolated box pasta-HOST.
   local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
     --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --ro-bind /etc /etc
-    --proc /proc --dev /dev --dev-bind "$render" "$render" --ro-bind /sys /sys
+    --proc /proc --dev /dev --ro-bind /sys /sys
     --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
     --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$AQUAMARINE" /opt/omabox/lib
     --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER" --ro-bind "$STILL" "$BOX_STILL")
-  [ -z "$nvidia_dev" ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl --dev-bind "$nvidia_dev" "$nvidia_dev")
+  for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
+  [ ${#nvidia_devs[@]} = 0 ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl)
+  for n in "${nvidia_devs[@]}"; do args+=(--dev-bind "$n" "$n"); done
   args+=("${ro_args[@]}")
   # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,
   # below) writable as its whole /sys/fs/cgroup under a cgroup namespace, and the marker systemd
@@ -1027,7 +1054,12 @@ cmd_up() {
   fi
   local deadline=$((SECONDS + 10))
   until [ -n "$(box_pid)" ]; do
-    [ $SECONDS -lt $deadline ] || die "bwrap did not start; see $D/box.log"
+    if [ $SECONDS -ge $deadline ]; then
+      # bwrap writes info.json as it starts: with it there, the box started and was already gone
+      # (finding 95: Hyprland aborted in it; "bwrap did not start" sent everyone looking elsewhere).
+      [ -s "$D/info.json" ] || die "bwrap did not start; see $D/box.log"
+      died_starting
+    fi
     sleep 0.05
   done
   # What box_pid checks from now on: this box's pid namespace, not a later owner of the pid.

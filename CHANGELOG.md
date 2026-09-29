@@ -59,6 +59,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- An interactive box now starts on a machine with two GPUs whatever GPU the desktop renders on. It
+  failed with "bwrap did not start" when the desktop's GPU was not the first render node, or when
+  `OMABOX_RENDER_NODE` named another GPU (which now applies to headless boxes only). A box that dies
+  while starting says so, with Hyprland's last words, instead of "bwrap did not start".
 - `omabox up` run from another user namespace (some agent sandboxes, `unshare -Ur`) no longer
   takes a box that is up for a dead one, clearing its dir and leaving it running out of reach. It
   stops and says it cannot tell.

@@ -43,8 +43,9 @@ and the pictures here again (it needs wf-recorder).
 
 - **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config). Built and tested with Hyprland 0.56.2
   on AMD and Intel iGPUs, and on an NVIDIA RTX 4070 SUPER with driver 615.71.09.
-- **A GPU render node** (`/dev/dri/renderD*`): a box renders on the GPU. The first usable one is
-  picked; `OMABOX_RENDER_NODE` overrides.
+- **A GPU render node** (`/dev/dri/renderD*`): a box renders on the GPU. A headless box takes the
+  first usable one; `OMABOX_RENDER_NODE` overrides. An interactive box renders on the GPU your
+  desktop renders on.
 - A patched aquamarine (Hyprland's backend library), until a release ships
   [PR #415](https://github.com/hyprwm/aquamarine/pull/415). `install.sh` builds it privately into
   `build/prefix`; your system's copy is not touched.
