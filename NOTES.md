@@ -1705,6 +1705,30 @@ the designs here were measured in boxes and built for a contained desktop, and n
     expected). Open: GPU (a box has a render node the jail may not), the
     seeded box HOME (the user's non-secret Omarchy look, which a private-home jail does not see),
     and how many boxes a jail may start.
+100. **Saves: `omabox save`, `up --from`, `run --from`** (2026-09-29, from omavm's idea; the stress
+    test's solari vault PIN and omaplex sign-in were never reached, the setup each needed was redone
+    or skipped in every box). `save SAVE [-b NAME]` copies a running box's HOME to
+    `~/.local/share/omabox/saves/SAVE/home` (with `save.json`: box, date, version), not under
+    `~/.cache/omabox`, which `up` sweeps (finding 50). Left out: `.cache` and the logs at the HOME's
+    top. Kept: the keyring (being signed in is most of what a save is for; a box's keyring only holds
+    what was stored in it there), and `saves` says which saves have secrets. The saves dir is 0700.
+    The box is paused for the copy (SIGSTOP to every process in its pid namespace, `box_pids`, which
+    `gpu` uses too; SIGCONT after, and on any exit): an app's database is copied as a power cut
+    would leave it, whole to a crash-safe app, never torn by a write during the copy. Seen: a save of
+    30 000 files caught the box's Hyprland in state T, S again after. A killed `save` can leave the
+    box stopped (a headless one still idles out). `up --from SAVE` copies the save into the new
+    HOME (`cp --reflink=auto`: free on btrfs), then `seed_home` as for any box, without `/etc/skel`
+    (the save's app configs stay) and with the theme dir replaced, not copied into: the Omarchy look,
+    the bar (`shell.json` with this box's plugins), terminals and git identity are today's, the
+    apps' data the save's. `box.json` records `from`. `--force` replaces a save (renamed aside, then
+    removed), one save per name at a time (a lock in the runtime dir). No saving a box that is down:
+    `down` is SIGKILL, nothing flushed. Verified in boxes: data, a `secret-tool` secret and a
+    changed btop config come back, `.cache` and logs do not, `shell.json` is regenerated, `run
+    --from` in a throwaway, a `--systemd` box's user unit starts from its save. `t_saves`,
+    `t_unit_saves` (saves in the suite's own data dir, never the user's). Not for an agent inside
+    ai-jail (finding 99): `save` and `saves` are not on the broker's list, and `up --from` is refused
+    there, since a save holds the user's keyring secrets and apps signed in as them, which the jail
+    never had (`t_unit_jail_policy`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

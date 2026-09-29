@@ -556,10 +556,12 @@ t_unit_jail_policy() {
   check_eq "the default box is the one the caller's omabox sent" mine "$(OMABOX_JAIL=$J OMABOX_RELAY_DEFAULT=mine lib default_name)"
   check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_JAIL=$J OMABOX_RELAY_PASS_X=s3 X=host lib caller_env X)"
   local c
-  for c in host peek guard broker _reap "config workspace 3"; do
+  for c in host peek guard broker _reap "config workspace 3" "save s" saves "saves rm s"; do
     # shellcheck disable=SC2086 # the command and its arguments
     check_match "refused to a jailed agent: $c" "not for an agent inside ai-jail|does not change" "$(lib broker_check $c 2>&1)"
   done
+  # A save that does not exist: were --from let through, up would stop at "no save", no box started.
+  check_match "up --from refused to a jailed agent (finding 100)" "saves are the user's" "$(OMABOX_JAIL=$J "$CLI" up "$P-jf" --from nosuch 2>&1)"
   check "allowed: shot, keys, up, down, config --json" bash -c 'source "$1"; for c in shot keys up down; do broker_check $c; done; broker_check config --json' _ "$TMP/lib/bin/omabox"
 }
 
@@ -1310,6 +1312,47 @@ t_stock_bar() {
   check_eq "default layout seeded" "omarchy.workspaces" \
     "$(jq -r '.bar.layout.left[1].id' "$(ob path -b "$B")/home/.config/omarchy/shell.json")"
   check "down" ob down "$B"
+}
+
+# Saves (finding 100): a box HOME kept for up/run --from. In the suite's own data dir, never the user's.
+sv() { XDG_DATA_HOME=$TMP/data "$CLI" "$@"; }
+t_unit_saves() {
+  check_eq "no saves: an empty list" "[]" "$(sv saves --json)"
+  check_match "a save needs a name" "name it" "$(sv save 2>&1)"
+  check_match "a bad save name is refused" "bad save name" "$(sv save ../x -b "$P-x" 2>&1)"
+  check_match "...before looking for the box" "bad save name" "$(sv save 'a b' 2>&1)"
+  check_match "up --from a save that does not exist is refused" "no save '$P-none'" "$(sv up "$P-nf" --from "$P-none" 2>&1)"
+  check_fails "...before the box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$P-nf"
+  check_match "saves rm of none says so" "no save" "$(sv saves rm "$P-none" 2>&1)"
+  check_match "saves: an unknown word refused" "rm SAVE" "$(sv saves junk 2>&1)"
+}
+t_saves() {
+  local B=$P-sv B2=$P-sv2 S=$P-s d=$TMP/data/omabox/saves/$P-s
+  check "up" ob up "$B" --no-shell
+  ob run -b "$B" -- sh -c 'mkdir -p ~/.local/share/app ~/.cache/app && echo hello > ~/.local/share/app/data &&
+    echo junk > ~/.cache/app/x && echo "# mine" >> ~/.config/btop/btop.conf && echo "{\"junk\": 1}" > ~/.config/omarchy/shell.json &&
+    printf pw | secret-tool store --label t service omabox-test' >/dev/null 2>&1
+  check_match "save" "saved box '$B' as '$S'.*keyring secrets included" "$(sv save "$S" -b "$B" 2>&1)"
+  check_eq "...nothing in the box left stopped" "" "$(ob run -b "$B" -- ps -eo stat= | grep '^T')"
+  check_match "a second save under the name is refused" "exists" "$(sv save "$S" -b "$B" 2>&1)"
+  check "...with --force it replaces it" sv save "$S" -b "$B" --force
+  check_eq "saves --json lists it, from its box, with its keyring" "$B true" "$(sv saves --json | jq -r --arg s "$S" '.[] | select(.name == $s) | "\(.box) \(.keyring)"')"
+  check_eq "the saves dir is private" 700 "$(stat -c %a "$TMP/data/omabox/saves")"
+  check_fails "...no .cache in the save" test -e "$d/home/.cache"
+  check_eq "...nor the box's logs" "" "$(cd "$d/home" && ls -- *.log 2>/dev/null)"
+  check "down" ob down "$B"
+  check "...starts" sv up "$B2" --from "$S" --no-shell
+  check_eq "...with the app's data" hello "$(ob run -b "$B2" -- cat /home/sbx/.local/share/app/data)"
+  check_eq "...and its keyring secret" pw "$(ob run -b "$B2" -- secret-tool lookup service omabox-test)"
+  check_eq "...an app config changed in the box kept (no /etc/skel over it)" "# mine" "$(ob run -b "$B2" -- tail -n 1 /home/sbx/.config/btop/btop.conf)"
+  check_eq "...the bar's config seeded again, not the save's" null "$(ob run -b "$B2" -- jq .junk /home/sbx/.config/omarchy/shell.json)"
+  check "...the theme seeded again (not copied into the save's)" ob run -b "$B2" -- sh -c 't=/home/sbx/.local/state/omarchy/current/theme; test -d $t && test ! -e $t/theme'
+  check_eq "...box.json says where it came from" "$S" "$(jq -r .from "$(ob path "$B2")/box.json")"
+  check "down" ob down "$B2"
+  check_eq "run --from: a throwaway box with the save" hello \
+    "$(cd "$(tmp_repo sv)" && env -u OMABOX XDG_DATA_HOME="$TMP/data" "$CLI" run --from "$S" --no-shell -- cat /home/sbx/.local/share/app/data 2>/dev/null)"
+  check "saves rm" sv saves rm "$S"
+  check_fails "...it is gone" test -e "$d"
 }
 
 # finding 87: an app installed per user into a running box (a .desktop with DBusActivatable=true and
@@ -2408,9 +2451,9 @@ t_wait() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version
+UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
-BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar
+BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid t_jail)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

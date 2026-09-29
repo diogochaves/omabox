@@ -12,6 +12,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   in the jail then works as outside. A jail's boxes get no more than the jail: no network when it
   has none, only its project, only its own boxes, gone when it exits. No change to ai-jail
   ([#16](https://github.com/diogochaves/omabox/issues/16)).
+- **Saves**: `omabox save SAVE` keeps a box's HOME (what its apps set up: signed in, a PIN, a
+  library), and `up --from SAVE` / `run --from SAVE` start a box with it. Your Omarchy look is
+  seeded on top as for any box. The box is paused for the copy, so a database is saved whole.
+  `omabox saves` lists them (and which hold keyring secrets), `saves rm SAVE` deletes one. They live
+  in `~/.local/share/omabox/saves`, private to you.
 
 ## 0.2.1 — 2026-09-29
 
