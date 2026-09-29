@@ -84,7 +84,7 @@ No `sleep` between actions: `--wait` returns once what the action caused has set
 waits for a window, a layer, a command or a still screen (0 yes, 124 not in time, 1 cannot tell).
 Late content passes `still`: wait for a title (`wait window title:RE`) or `wait cmd -- …`.
 
-`--window SEL`: `myapp` is a class or part of a title; `title:RE`, `class:RE`, `pid:N` or an address
+`--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a title; `title:RE`, `class:RE`, `pid:N` or an address
 (`0x…`) narrow it. Coordinates are screenshot pixels; a cropped or scaled shot says so on stderr:
 then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own. 1920x1080 is read
 1:1; on a bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and `click --in` it.

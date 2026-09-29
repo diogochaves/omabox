@@ -3,6 +3,21 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+
+- **`--window nautilus` finds `org.gnome.Nautilus`**: a bare word also matches the last part of a
+  reverse-DNS class, whole (`naut` does not)
+  ([#20](https://github.com/diogochaves/omabox/issues/20)).
+
+### Fixed
+
+- **`OMABOX=NAME` works in commands `omabox run` started**: they got the default box instead
+  ([#19](https://github.com/diogochaves/omabox/issues/19)).
+- **A Qt app's warnings and errors reach its `run -d` log**: Qt logged to the journal, which a box
+  has none of, so the log stayed empty ([#26](https://github.com/diogochaves/omabox/issues/26)).
+
 ## 0.2.0 — 2026-09-29
 
 Agents drive apps by their windows and wait for the screen instead of sleeping; every box gets a

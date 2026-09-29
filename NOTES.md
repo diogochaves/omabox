@@ -1632,6 +1632,26 @@ the designs here were measured in boxes and built for a contained desktop, and n
     a bwrap that wrote nothing to `--info-fd`. `t_guard`: the interactive box nested in the stand-in
     sees the stand-in's GPU nodes (on AMD, and on the RTX with the stand-in on it). The stand-in has
     one GPU, so the suite cannot reproduce the mismatch itself: verified on the real desktop.
+96. **`OMABOX=NAME` was ignored under `omabox run`** (2026-09-29, issue #19, seen recording the 0.2.0
+    clip). `run` marks its commands with `OMABOX=1 OMABOX_NAME=NAME`, and every check read any
+    `OMABOX` there as that marker, so a script under `run` that exported `OMABOX=inner` got the
+    default box. `OMABOX` is now the marker only when it is `1` and `OMABOX_NAME` is set
+    (`env_names_box`), in `default_name`, `session_box` and `run`'s throwaway check. So a `run`
+    command with only the marker now gets a throwaway box from `omabox run` like a host shell,
+    instead of "box not up". Checked in a box with the issue's repro (`OMABOX=inner omabox path` is
+    `inner`, `OMABOX=1` still the default); `t_unit_cli`.
+97. **A bare `--window` word matches a reverse-DNS class's last part** (2026-09-29, issue #20).
+    `nautilus` found nothing for `org.gnome.Nautilus`, and the app's name is what people and agents
+    type. The word now also matches the class's last dot-separated part, whole and in any case
+    (`naut` does not); none or several is still exit 2. Checked with Files in a box;
+    `t_unit_window_select`.
+98. **A Qt app's log reaches `run -d`'s log file** (2026-09-29, issue #26, found by an agent
+    debugging omaseed). Without a terminal Qt sends its logging to the journal, and a box has none, so
+    `qWarning`, QML errors and an abort's reason went nowhere: `run-*.log` stayed empty (a foreground
+    `run` printed nothing either). Boxes now set `QT_FORCE_STDERR_LOGGING=1` for the session, so
+    everything in them, `run` included, logs to stderr, as the guard already does on the host (finding
+    67); `--env QT_FORCE_STDERR_LOGGING=0` turns it off. Checked in a box with a QML `console.warn`:
+    missing before, in the log after, for `run -d` and a foreground `run`; `t_main`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

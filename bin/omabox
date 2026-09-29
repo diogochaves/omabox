@@ -71,7 +71,8 @@ variables (a password too: never on a command line); \`keys --pass VAR\` types o
 secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
-initialTitle:RE (any case), or a word (its class, or part of its title); repeat to narrow. None or
+initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
+org.gnome.Nautilus, or part of its title); repeat to narrow. None or
 several is exit 2, with the candidates. \`shot --window\` (-w; --active is --window active) is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
@@ -167,10 +168,13 @@ conf_set() {
 
 # --- box selection -------------------------------------------------------------------------------
 
+# Whether $OMABOX names a box. `omabox run` marks its commands with OMABOX=1 and OMABOX_NAME: that 1 is
+# not a box named "1". A command under it that sets OMABOX=NAME does name one (issue #19).
+env_names_box() { [ -n "${OMABOX:-}" ] && { [ "$OMABOX" != 1 ] || [ -z "${OMABOX_NAME:-}" ]; }; }
+
 default_name() {
   local top base sid
-  # Inside a box OMABOX=1 marks the box (with OMABOX_NAME), not a box named "1".
-  if [ -n "${OMABOX:-}" ] && [ -z "${OMABOX_NAME:-}" ]; then echo "$OMABOX"; return; fi
+  if env_names_box; then echo "$OMABOX"; return; fi
   if top=$(git rev-parse --show-toplevel 2>/dev/null); then base=$(basename "$top"); else base=default; fi
   # An agent session gets a box of its own (finding 88): two agents in one repo would otherwise share
   # one, and one's `down` would end the other's work. The suffix survives select_box's 40-char cut.
@@ -249,7 +253,7 @@ select_box() {
   D=$BOXES/$NAME
 }
 # Whether the box selected is the one this agent session's commands get by default (finding 88).
-session_box() { [ -z "${OMABOX:-}" ] && agent_session >/dev/null && [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; }
+session_box() { ! env_names_box && agent_session >/dev/null && [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; }
 
 # The box's PID 1 on the host, or nothing. Top-level boxes run inside pasta's pid namespace (Arch's
 # pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: pasta_pid
@@ -956,9 +960,12 @@ cmd_up() {
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
   # The XDG base dirs, as an Omarchy session has them: dbus-daemon reads the box HOME's D-Bus services
   # only from $XDG_DATA_HOME; without it, it looks in the passwd entry's home, not $HOME (finding 87).
+  # QT_FORCE_STDERR_LOGGING (finding 98): a Qt app without a terminal logs to the journal, which a box
+  # has none of, so a `run -d` log stayed empty; --env QT_FORCE_STDERR_LOGGING=0 turns it off.
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
+    --setenv QT_FORCE_STDERR_LOGGING 1
     --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
@@ -1371,7 +1378,7 @@ cmd_run() {
   # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
   # replaced by a throwaway: that would run the command in a new network namespace without the box's mounts
   # (its --net isolated included), and hide what happened to it.
-  [ -z "$name" ] && [ -z "${OMABOX:-}" ] && [ ! -d "$D" ] && [ ! -f "$BOXES/.expired-$NAME" ] || need_box
+  [ -z "$name" ] && ! env_names_box && [ ! -d "$D" ] && [ ! -f "$BOXES/.expired-$NAME" ] || need_box
   # Throwaway box for this one command. The repo is an overlay: the command can write build
   # output, logs and caches there, the host checkout never changes, and it all goes at teardown.
   # Only a repo that may go into a box, never the directory we happen to be in (from ~ that would be
@@ -1428,8 +1435,8 @@ box_windows() {
 }
 
 # A window selector (SEL): active, an address (0x..., address:0x...), pid:N, class:RE, title:RE,
-# initialClass:RE, initialTitle:RE (regular expressions, any case), or a word: the class, or part of
-# the title (any case). Several are all to match. Exactly one window or nothing: none or several is
+# initialClass:RE, initialTitle:RE (regular expressions, any case), or a word: the class or its last
+# dot-separated part, whole (nautilus for org.gnome.Nautilus, issue #20), or part of the title (any case). Several are all to match. Exactly one window or nothing: none or several is
 # exit 2 with the candidates, never the first match.
 # shellcheck disable=SC2016 # jq, not shell
 WIN_SEL_JQ='
@@ -1439,7 +1446,8 @@ WIN_SEL_JQ='
     elif ($s | test("^pid:[0-9]+$")) then .pid == ($s[4:] | tonumber)
     elif ($s | test("^(class|title|initialClass|initialTitle):")) then
       ($s | capture("^(?<k>[A-Za-z]+):(?<v>.*)$")) as $kv | (.[$kv.k] // "") | test($kv.v; "i")
-    else (.class | ascii_downcase) == ($s | ascii_downcase) or (.title | ascii_downcase | contains($s | ascii_downcase)) end;
+    else (.class | ascii_downcase) as $c | ($s | ascii_downcase) as $w
+      | $c == $w or ($c | split(".") | last) == $w or (.title | ascii_downcase | contains($w)) end;
   [.[] | select(. as $w | all($ARGS.positional[]; . as $s | $w | m($s)))]'
 # win_select WINDOWS SEL...: the one window (win_annotate's object), or exit 2.
 win_select() {

@@ -528,6 +528,7 @@ t_unit_registry() {
 t_unit_cli() {
   check_eq "inside a box OMABOX=1 is not a box name" "$(basename "$ROOT")" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
   check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
+  check_eq "under run, OMABOX=NAME names the box (#19)" inner "$(OMABOX=inner OMABOX_NAME=outer lib default_name)"
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
   check_match "run: a throwaway's up error is shown" "--net is connected" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
   check_match "run --help is the usage" "omabox up" "$(ob run --help 2>&1)"
@@ -886,6 +887,11 @@ t_main() {
   # become crash notifications on the real desktop.
   check_eq "run: core limit 1 byte" 1 "$(ob run -b "$B" -- sh -c 'prlimit --pid $$ --core -o SOFT --noheadings | tr -d " "')"
   check_eq "the session too (Hyprland)" 1 "$(ob run -b "$B" -- sh -c 'prlimit --pid "$(pgrep -x Hyprland)" --core -o SOFT --noheadings | tr -d " "')"
+  # finding 98: a Qt app with no terminal logs to the journal, which a box has none of; the box
+  # sends it to stderr, so a `run -d` log has what the app printed.
+  printf '%s\n' 'import QtQml' 'QtObject { Component.onCompleted: { console.warn("omabox-t98"); Qt.quit() } }' > "$D/home/t98.qml"
+  local qlog; qlog=$(ob run -b "$B" -d -- qml6 -platform offscreen /home/sbx/t98.qml 2>&1 >/dev/null | sed -n 's/.*(log: \(.*\))$/\1/p')
+  check "run -d: a Qt app's warning reaches its log" until_ok 10 grep -qs omabox-t98 "$qlog"
   # The session itself (what the bar and apps launched from binds get), through a Hyprland exec.
   ob hyprctl -b "$B" dispatch "hl.dsp.exec_cmd('sh -c \"{ echo \$SHELL; echo \$OMABOX_TEST; echo \$LC_TIME; echo \$PATH; } > /tmp/sess\"')" >/dev/null
   until_ok 5 ob run -b "$B" -- test -s /tmp/sess
@@ -2003,6 +2009,7 @@ t_unit_window_select() {
      w("0xg"; "foot"; "B tab"; 1; 1000; 0; 900; 1000; false) + {hidden: true},
      w("0x2"; "zenity"; "Other"; 1; 450; 350; 100; 100; true),
      w("0xc"; "Chromium"; "Docs - Chromium"; 5; 0; 0; 1900; 1000; false),
+     w("0xh"; "org.gnome.Nautilus"; "Home"; 3; 0; 0; 800; 600; false),
      w("0xd"; "foot"; "scratch"; -98; 500; 500; 200; 200; true),
      w("0xe"; "foot"; "gone"; 1; 0; 0; 10; 10; false) + {mapped: false}]')
   m='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":0}}]'
@@ -2012,6 +2019,9 @@ t_unit_window_select() {
   check_eq "title:RE" 0xa "$(sel 'title:^A$')"
   check_eq "a word: part of the title, any case" 0xc "$(sel docs)"
   check_eq "a word: the class, any case" 0xc "$(sel chromium)"
+  check_eq "a word: a reverse-DNS class's last part (#20)" 0xh "$(sel nautilus)"
+  check_eq "...whole, not a prefix of it" 2 "$(lib win_select "$W" naut >/dev/null 2>&1; echo $?)"
+  check_eq "...the whole class still works" 0xh "$(sel org.gnome.nautilus)"
   check_eq "pid:N and a word, ANDed" 0xa "$(sel pid:42 foot)"
   check_eq "an address, any case" 0xa "$(sel 0xA)"
   check_eq "address:0x..." 0xa "$(sel address:0xa)"
