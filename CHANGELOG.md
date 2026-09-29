@@ -3,7 +3,10 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.2.1 — 2026-09-29
+
+`OMABOX=NAME` works under `omabox run`, `--window` finds apps by name, and a Qt app's logging reaches
+its `run -d` log.
 
 ### Changed
 
