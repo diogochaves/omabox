@@ -2004,6 +2004,7 @@ t_unit_window_select() {
      w("0xg"; "foot"; "B tab"; 1; 1000; 0; 900; 1000; false) + {hidden: true},
      w("0x2"; "zenity"; "Other"; 1; 450; 350; 100; 100; true),
      w("0xc"; "Chromium"; "Docs - Chromium"; 5; 0; 0; 1900; 1000; false),
+     w("0xh"; "org.gnome.Nautilus"; "Home"; 3; 0; 0; 800; 600; false),
      w("0xd"; "foot"; "scratch"; -98; 500; 500; 200; 200; true),
      w("0xe"; "foot"; "gone"; 1; 0; 0; 10; 10; false) + {mapped: false}]')
   m='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":0}}]'
@@ -2013,6 +2014,9 @@ t_unit_window_select() {
   check_eq "title:RE" 0xa "$(sel 'title:^A$')"
   check_eq "a word: part of the title, any case" 0xc "$(sel docs)"
   check_eq "a word: the class, any case" 0xc "$(sel chromium)"
+  check_eq "a word: a reverse-DNS class's last part (#20)" 0xh "$(sel nautilus)"
+  check_eq "...whole, not a prefix of it" 2 "$(lib win_select "$W" naut >/dev/null 2>&1; echo $?)"
+  check_eq "...the whole class still works" 0xh "$(sel org.gnome.nautilus)"
   check_eq "pid:N and a word, ANDed" 0xa "$(sel pid:42 foot)"
   check_eq "an address, any case" 0xa "$(sel 0xA)"
   check_eq "address:0x..." 0xa "$(sel address:0xa)"

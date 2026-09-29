@@ -1640,6 +1640,11 @@ the designs here were measured in boxes and built for a contained desktop, and n
     command with only the marker now gets a throwaway box from `omabox run` like a host shell,
     instead of "box not up". Checked in a box with the issue's repro (`OMABOX=inner omabox path` is
     `inner`, `OMABOX=1` still the default); `t_unit_cli`.
+97. **A bare `--window` word matches a reverse-DNS class's last part** (2026-09-29, issue #20).
+    `nautilus` found nothing for `org.gnome.Nautilus`, and the app's name is what people and agents
+    type. The word now also matches the class's last dot-separated part, whole and in any case
+    (`naut` does not); none or several is still exit 2. Checked with Files in a box;
+    `t_unit_window_select`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

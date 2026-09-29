@@ -71,7 +71,8 @@ variables (a password too: never on a command line); \`keys --pass VAR\` types o
 secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
-initialTitle:RE (any case), or a word (its class, or part of its title); repeat to narrow. None or
+initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
+org.gnome.Nautilus, or part of its title); repeat to narrow. None or
 several is exit 2, with the candidates. \`shot --window\` (-w; --active is --window active) is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
@@ -1431,8 +1432,8 @@ box_windows() {
 }
 
 # A window selector (SEL): active, an address (0x..., address:0x...), pid:N, class:RE, title:RE,
-# initialClass:RE, initialTitle:RE (regular expressions, any case), or a word: the class, or part of
-# the title (any case). Several are all to match. Exactly one window or nothing: none or several is
+# initialClass:RE, initialTitle:RE (regular expressions, any case), or a word: the class or its last
+# dot-separated part, whole (nautilus for org.gnome.Nautilus, issue #20), or part of the title (any case). Several are all to match. Exactly one window or nothing: none or several is
 # exit 2 with the candidates, never the first match.
 # shellcheck disable=SC2016 # jq, not shell
 WIN_SEL_JQ='
@@ -1442,7 +1443,8 @@ WIN_SEL_JQ='
     elif ($s | test("^pid:[0-9]+$")) then .pid == ($s[4:] | tonumber)
     elif ($s | test("^(class|title|initialClass|initialTitle):")) then
       ($s | capture("^(?<k>[A-Za-z]+):(?<v>.*)$")) as $kv | (.[$kv.k] // "") | test($kv.v; "i")
-    else (.class | ascii_downcase) == ($s | ascii_downcase) or (.title | ascii_downcase | contains($s | ascii_downcase)) end;
+    else (.class | ascii_downcase) as $c | ($s | ascii_downcase) as $w
+      | $c == $w or ($c | split(".") | last) == $w or (.title | ascii_downcase | contains($w)) end;
   [.[] | select(. as $w | all($ARGS.positional[]; . as $s | $w | m($s)))]'
 # win_select WINDOWS SEL...: the one window (win_annotate's object), or exit 2.
 win_select() {

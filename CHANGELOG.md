@@ -5,6 +5,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Changed
+
+- **`--window nautilus` finds `org.gnome.Nautilus`**: a bare word also matches the last part of a
+  reverse-DNS class, whole (`naut` does not)
+  ([#20](https://github.com/diogochaves/omabox/issues/20)).
+
 ### Fixed
 
 - **`OMABOX=NAME` works in commands `omabox run` started**: they got the default box instead
