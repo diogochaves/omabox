@@ -1,13 +1,17 @@
 // omabox-pointer: drive a virtual pointer on the Wayland display in $WAYLAND_DISPLAY.
 //
-//   omabox-pointer --extent WxH  move X Y  click [left|right|middle]  scroll DY  down BTN  up BTN
+//   omabox-pointer --extent WxH  move X Y  click [BTN]  down [BTN]  up [BTN]  scroll DY  sleep MS  pause
 //   omabox-pointer --hold
+//
+// BTN is left (the default), right or middle. pause prints "paused" on stdout and waits for a line (or
+// the end) on stdin: `omabox drag --shot` takes its shot there, with the button still down.
 //
 // Commands run left to right in one connection, all checked before it connects. Coordinates are
 // absolute in the compositor's layout, scaled against --extent (the layout size; default 1920x1080).
 // It only ever talks to the socket in WAYLAND_DISPLAY (never an inherited WAYLAND_SOCKET), so aimed at
 // a sandbox it cannot move the real desktop's cursor. Exit 1 if the compositor goes away mid-run.
-// --hold keeps an idle pointer on the seat until the compositor goes away (NOTES finding 41).
+// --hold keeps an idle pointer on the seat until the compositor goes away (NOTES finding 41): omabox's
+// own, left out of the usage line (it never returns; agents took it for "hold the button").
 #include <linux/input-event-codes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,7 +48,7 @@ static uint32_t button_code(const char *name) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: omabox-pointer [--hold] [--extent WxH] (move X Y | click [BTN] | down BTN | up BTN | scroll DY | sleep MS)...\n");
+    fprintf(stderr, "usage: omabox-pointer [--extent WxH] (move X Y | click [BTN] | down [BTN] | up [BTN] | scroll DY | sleep MS | pause)...  BTN: left (default), right, middle\n");
     exit(2);
 }
 
@@ -99,10 +103,10 @@ static void commands(struct zwlr_virtual_pointer_v1 *ptr, int argc, char **argv,
             sleep_ms(30);
             zwlr_virtual_pointer_v1_button(ptr, now_ms(), code, WL_POINTER_BUTTON_STATE_RELEASED);
             zwlr_virtual_pointer_v1_frame(ptr);
-        } else if ((!strcmp(cmd, "down") || !strcmp(cmd, "up")) && i + 1 < argc) {
-            if (!is_button(argv[++i])) { fprintf(stderr, "omabox-pointer: unknown button '%s'\n", argv[i]); usage(); }
+        } else if (!strcmp(cmd, "down") || !strcmp(cmd, "up")) {
+            const char *b = is_button(i + 1 < argc ? argv[i + 1] : NULL) ? argv[++i] : NULL;
             if (!run) continue;
-            zwlr_virtual_pointer_v1_button(ptr, now_ms(), button_code(argv[i]), !strcmp(cmd, "down") ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
+            zwlr_virtual_pointer_v1_button(ptr, now_ms(), button_code(b), !strcmp(cmd, "down") ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
             zwlr_virtual_pointer_v1_frame(ptr);
         } else if (!strcmp(cmd, "scroll") && i + 1 < argc) {
             double dy = numd(argv[++i], -10000, 10000);
@@ -114,6 +118,13 @@ static void commands(struct zwlr_virtual_pointer_v1 *ptr, int argc, char **argv,
             if (!run) continue;
             sync_or_die();
             sleep_ms(ms);
+        } else if (!strcmp(cmd, "pause")) {
+            if (!run) continue;
+            sync_or_die();
+            printf("paused\n");
+            fflush(stdout);
+            int c;
+            while ((c = getchar()) != EOF && c != '\n') {}
         } else {
             usage();
         }

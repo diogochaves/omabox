@@ -1031,6 +1031,15 @@ t_main() {
   check_fails "...never in any command line" grep -qsF -- "$tag" /proc/[0-9]*/cmdline
   check_fails "--pass of an unset variable fails (no silent skip)" env -u OMABOX_T66 "$CLI" run -b "$B" --pass OMABOX_T66 -- true
   check_fails "--pass takes a name only" ob run -b "$B" --pass 'A=1' -- true
+  # --env-file (#30): data, not a script; --pass wins; a bad line is named, its text never shown.
+  printf '%s\n' '# a comment' '' 'T30A=plain value' 'export T30B="in # quotes"' "T30C='\$HOME'" 'T30D=file' > "$TMP/t30.env"
+  # shellcheck disable=SC2016 # expanded inside the box
+  check_eq "--env-file: plain, export, quotes, no expansion; --pass wins" "plain value|in # quotes|\$HOME|pass" \
+    "$(T30D=pass ob run -b "$B" --env-file "$TMP/t30.env" --pass T30D -- sh -c 'echo "$T30A|$T30B|$T30C|$T30D"')"
+  printf 'T30A=1\nno equals sign hunter2\n' > "$TMP/t30bad.env"
+  local e30; e30=$(ob run -b "$B" --env-file "$TMP/t30bad.env" -- true 2>&1)
+  check_match "--env-file: a bad line refused by its number" "line 2 is not KEY=VALUE" "$e30"
+  check_fails "...its text never shown" grep -q hunter2 <<<"$e30"
   check_eq "--pass ROOT is the caller's, not omabox's own (finding 74)" "/x y" "$(ROOT="/x y" ob run -b "$B" --pass ROOT -- sh -c 'echo "$ROOT"')"
   check_fails "--pass of a name only omabox has fails" env -u GUARD "$CLI" run -b "$B" --pass GUARD -- true
   # finding 67: crashes in a box skip systemd-coredump (a core limit of exactly 1 byte), so they never
@@ -1102,7 +1111,8 @@ t_main() {
   check_match "gpu first line names the mode" "1280x720@120" "$(ob gpu -b "$B" 1 | head -1)"
   check_eq "mode @60.0 is accepted and kept as @60" "$screen_name 1280x720@60" "$(ob mode -b "$B" 1280x720@60.0)"
   check_eq "box.json keeps the normalised mode" "1280x720@60" "$(jq -r .size "$D/box.json")"
-  check_match "shot into a missing dir says so" "no such directory" "$(ob shot -b "$B" -o "$TMP/nope/x.png" 2>&1)"
+  check_eq "shot into a missing dir makes it (#27)" "$TMP/nope/x.png" "$(ob shot -b "$B" -o "$TMP/nope/x.png" 2>/dev/null)"
+  check_match "...unless it cannot" "cannot make the directory" "$(ob shot -b "$B" -o "/proc/nope/x.png" 2>&1)"
   check_match "keys takes -b after the tokens" "" "$(ob keys Escape -b "$B" 2>&1)"
   check_match "ls shows idle against the limit" "$B .* [0-9]+m/2h" "$(ob ls)"
   check "ls --json has idle, allow, bar, systemd" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | has(\"idle\") and has(\"allow\") and has(\"bar\") and has(\"systemd\")'"
@@ -2344,6 +2354,30 @@ t_window() {
   until_ok 5 bash -c "'$CLI' windows -b '$B' --json | jq -e '.[] | select(.title == \"C\") | .at == [700, 300]'"
   ob click -b "$B" --in "$o/c.png" 5 6 >/dev/null 2>&1
   check_eq "click --in a window shot after the window moved: where it is now" "705, 306" "$(pos)"
+  # -g inside --window (#27): in the window's coordinates, and --in maps from the crop's origin.
+  err=$(ob shot -b "$B" -w 'title:^C$' -g "10,20,100,50" -o "$o/new/dir/cg.png" 2>&1 >/dev/null)
+  check_match "shot -w -g: the crop's size (X,Y,W,H taken too; -o's folder made)" "100 x 50," "$(file "$o/new/dir/cg.png")"
+  check_match "...stderr says where in the window" "100x50 of it at 10,20" "$err"
+  ob click -b "$B" --in "$o/new/dir/cg.png" 5 6 >/dev/null 2>&1
+  check_eq "click --in a window crop: from the crop's origin in the window" "715, 326" "$(pos)"
+  check_match "-g outside the window refused" "not inside window" "$(ob shot -b "$B" -w 'title:^C$' -g "390,10 20x20" 2>&1)"
+  # pointer --window (#25): moves in the window's coordinates; --hold is omabox's own.
+  ob pointer -b "$B" --window 'title:^C$' -- move 3 4 >/dev/null 2>&1
+  check_eq "pointer --window: window coordinates" "703, 304" "$(pos)"
+  check_match "pointer --hold refused" "omabox's own" "$(ob pointer -b "$B" -- --hold 2>&1)"
+  # drag (#25): foot selects the text it is dragged across, into the primary selection.
+  term T 'echo DRAGME-12345-67890; sleep 600'
+  disp "hl.dsp.window.float({ action = 'enable', window = 'address:$(addr T)' })"
+  disp "hl.dsp.window.move({ x = 50, y = 600, window = 'address:$(addr T)' })"
+  until_ok 5 bash -c "'$CLI' windows -b '$B' --json | jq -e '.[] | select(.title == \"T\") | .at == [50, 600] and .cover == []'"
+  ob wait -b "$B" still >/dev/null   # the move is animated: input goes where the window is drawn
+  ob drag -b "$B" --window 'title:^T$' 2 10 300 10 --shot "$o/mid.png" >/dev/null 2>&1
+  check_match "drag --window: the text dragged across is selected" "^DRAGME-12345" "$(ob run -b "$B" -- wl-paste -p -n 2>&1)"
+  check_match "...--shot while the button was down" "PNG image" "$(file "$o/mid.png")"
+  ob pointer -b "$B" --window 'title:^T$' -- move 2 10 down move 60 10 up >/dev/null 2>&1
+  check_match "pointer down/up with no button: left" "^DRAGME$|^DRAGME-" "$(ob run -b "$B" -- wl-paste -p -n 2>&1)"
+  check_match "drag --shot with --wait refused" "not both" "$(ob drag -b "$B" 1 1 5 5 --shot "$o/x.png" --wait 2>&1)"
+  check_match "drag needs two points" "need X1 Y1 X2 Y2" "$(ob drag -b "$B" 1 1 5 2>&1)"
   ob mode -b "$B" 1280x720 >/dev/null
   check_match "--in after a mode change: refused" "mode is 1280x720@60" "$(ob click -b "$B" --in "$o/full.png" 1 1 2>&1)"
   ob down "$B" >/dev/null
@@ -2352,6 +2386,11 @@ t_window() {
 # omabox wait and --wait (finding 82): the pure parts, and the tool's refusal outside a box, checked
 # in a bare namespace with no /opt/omabox and no display (where a broken check could reach nothing).
 t_unit_wait() {
+  # -g (#27): grim's form, and the ones agents type.
+  check_eq "-g X,Y WxH" "1 2 30 40" "$(lib geom_parse "1,2 30x40")"
+  check_eq "-g X,Y,W,H" "1 2 30 40" "$(lib geom_parse "1,2,30,40")"
+  check_eq "-g X,Y W,H" "-1 2 30 40" "$(lib geom_parse "-1,2 30,40")"
+  check_fails "-g junk refused" lib geom_parse "1,2 0x4"
   check_eq "300ms" 300 "$(lib ms_duration 300ms)"
   check_eq "1.5s" 1500 "$(lib ms_duration 1.5s)"
   check_eq "2m" 120000 "$(lib ms_duration 2m)"

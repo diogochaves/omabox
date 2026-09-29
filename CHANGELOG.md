@@ -17,6 +17,21 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   seeded on top as for any box. The box is paused for the copy, so a database is saved whole.
   `omabox saves` lists them (and which hold keyring secrets), `saves rm SAVE` deletes one. They live
   in `~/.local/share/omabox/saves`, private to you.
+- **`omabox drag`**: press, move, hold, release, with `--window`/`--in` like `click` and `--shot` to
+  see the drag while the button is down. `pointer --window` moves in a window's coordinates, and
+  `down`/`up` default to the left button
+  ([#25](https://github.com/diogochaves/omabox/issues/25)).
+- **`run --env-file FILE`** hands a `dev.env`'s variables to the command, off the command line
+  ([#30](https://github.com/diogochaves/omabox/issues/30)).
+- **`shot --window SEL -g "X,Y WxH"`** crops a window in its own coordinates
+  ([#27](https://github.com/diogochaves/omabox/issues/27)).
+
+### Changed
+
+- `shot -o DIR/FILE` makes DIR when it is missing, and `-g` also takes `X,Y,W,H`
+  ([#27](https://github.com/diogochaves/omabox/issues/27)).
+- `omabox pointer --hold` is refused: it never returned, and read like "hold the button"
+  ([#25](https://github.com/diogochaves/omabox/issues/25)).
 
 ## 0.2.1 — 2026-09-29
 

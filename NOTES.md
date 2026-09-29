@@ -1729,6 +1729,35 @@ the designs here were measured in boxes and built for a contained desktop, and n
     ai-jail (finding 99): `save` and `saves` are not on the broker's list, and `up --from` is refused
     there, since a save holds the user's keyring secrets and apps signed in as them, which the jail
     never had (`t_unit_jail_policy`).
+101. **Pointer: `drag`, `pointer --window`, a default button** (2026-09-29, issue #25, from agents
+    driving omaseed). `omabox drag X1 Y1 X2 Y2` presses, moves in `--steps` (10), holds `--hold`,
+    releases; `--window`/`--in` map both points as for `click`. `--shot FILE` shoots with the button
+    still down: the pointer tool's new `pause` step prints "paused" and waits for a line on stdin, and
+    `drag` runs it as a coproc and takes the shot there (a shot that fails still releases). Not with
+    `--wait`, and not from a jail (the shot's file is a path of the broker's there). `pointer --window
+    SEL` maps each `move` from the window's coordinates, raw like `--in` (on screen and uncovered, or
+    refused). `down`/`up` default to left. The tool's `--hold` (finding 41, an idle device that never
+    returns: two agents called it and hung) is out of its usage line and refused by `omabox pointer`.
+    Seen: a button pressed by `down` stays down after the tool exits, until an `up` from a later call
+    (the selection in foot completed only then), so a `down` without `up` turns the next clicks into
+    drags; reference.md says so. A drag right after a window was moved went where the window was still
+    being drawn (the move is animated): `wait still` first. peek parses a bare `down`/`up` and `pause`;
+    `drag` marks only its two ends (its steps would pass peek's 64 tokens). Checked in a box: foot
+    selects what is dragged across (primary selection), `--shot` shows the selection held;
+    `t_window`.
+102. **Shot: `-g` inside `--window`, `-o` makes its folder, looser `-g`** (2026-09-29, issue #27).
+    grim crops a toplevel capture (`-T`) with `-g` in the window's own coordinates (compared with a
+    crop of the whole window shot: identical); the shot records the crop's origin and the window's
+    size, so `--in` maps from it. `-g` takes `X,Y,W,H` and `X,Y W,H` too (`geom_parse`, also for
+    `wait -g`). `-o DIR/F` makes DIR. The pointer "drawn in some shots, missing in others": screen
+    shots (whole or `-g`) always have the box's software cursor, window shots never do; said in the
+    help and the skill rather than a `--pointer` flag. `t_window`, `t_main`, `t_unit_wait`.
+103. **`run --env-file FILE`** (2026-09-29, issue #30; BOX-5 in omaseed's review of 2026-09-24).
+    KEY=VAL lines (`export `, `#` lines, matching quotes) read as data, nothing expanded, handed to the
+    command through `--pass`'s pipe, never a command line; `--pass` of the same name wins. A bad line
+    fails with its number, not its text. From a jail the caller's omabox reads the file and sends its
+    entries as `--pass` values. Checked in a box (and that no value is in any command line while it
+    runs); `t_main`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
