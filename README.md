@@ -23,11 +23,12 @@ window and use it yourself.
 omabox keeps an agent's apps off your desktop; it is not a sandbox. To fence the agent itself in,
 pair it with [ai-jail](#related-projects).
 
-[![An agent's box, live in a peek window next to the terminal that drives it, and the omabox widget's panel open in the Omarchy bar](preview.png)](https://diogochaves.github.io/omabox/docs/media/demo.mp4)
+[![You keep coding while an agent starts its own box and tests an app in it: nothing pops up, nothing takes your focus](docs/media/clip-0.2.0.png)](https://diogochaves.github.io/omabox/docs/media/clip-0.2.0.mp4)
 
-[Watch the 55 second demo](https://diogochaves.github.io/omabox/docs/media/demo.mp4). It was
-recorded inside omabox: a box played the desktop, with the agent's boxes inside it, so the real
-desktop saw no window at all (`docs/demo.sh --video` makes it again).
+[Watch omabox 0.2.0 in 43 seconds](https://diogochaves.github.io/omabox/docs/media/clip-0.2.0.mp4),
+or the [55 second demo](https://diogochaves.github.io/omabox/docs/media/demo.mp4) of the whole
+workflow. Both were recorded inside omabox: a box played the desktop, with the agent's boxes inside
+it, so the real desktop saw no window at all (`docs/demo.sh --video` makes the demo again).
 
 ## What you need
 
