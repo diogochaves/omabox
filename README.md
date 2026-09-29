@@ -43,8 +43,9 @@ and the pictures here again (it needs wf-recorder).
 
 - **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config). Built and tested with Hyprland 0.56.2
   on AMD and Intel iGPUs, and on an NVIDIA RTX 4070 SUPER with driver 615.71.09.
-- **A GPU render node** (`/dev/dri/renderD*`): a box renders on the GPU. The first usable one is
-  picked; `OMABOX_RENDER_NODE` overrides.
+- **A GPU render node** (`/dev/dri/renderD*`): a box renders on the GPU. A headless box takes the
+  first usable one; `OMABOX_RENDER_NODE` overrides. An interactive box renders on the GPU your
+  desktop renders on.
 - A patched aquamarine (Hyprland's backend library), until a release ships
   [PR #415](https://github.com/hyprwm/aquamarine/pull/415). `install.sh` builds it privately into
   `build/prefix`; your system's copy is not touched.
@@ -91,10 +92,15 @@ it made. The packages `install.sh` added stay; it printed them as `missing:` if 
 ```bash
 omabox up                              # headless box, 1920x1080; returns when the bar is drawn
 omabox run -d -- ./build/src/myapp     # launch an app inside (detached; prints its log path)
-omabox shot                            # screenshot; prints the PNG path (--active: focused window)
+omabox shot                            # screenshot; prints the PNG path (--fit 2000: scaled down)
+omabox windows                         # the box's windows, where they are, what covers them
+omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
 omabox keys -t 'hello world' Return    # type text, then press a key
+omabox keys --wait super+space         # ...and return once the screen has settled (no sleeps)
+omabox wait window myapp               # or: still, change, layer NAMESPACE, cmd -- CMD (--gone too)
 omabox click 960 540 [right] [--double]
+omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
 omabox hyprctl -j clients              # the box's Hyprland, never yours
 omabox run -- busctl --user list       # any command inside the box; exit code passes through
 omabox down                            # kill everything in the box
@@ -159,6 +165,9 @@ The box's bar has the built-in widgets plus the plugins you mount, nothing else.
 - `omabox peek -b NAME`: a live, view-only window of a headless box (an agent's included) on your
   workspace 9 (or the one you set, below), opened without focus. It only copies frames out, so it never disturbs the agent;
   it closes with SUPER+W or when the box goes down. `omabox shot -b NAME` for a single frame.
+  What the agent does shows on it for a few seconds: a ring where it points and clicks, and the keys
+  it types at the bottom (a password typed with `keys --pass` as `*`). Only in the peek window: the
+  box's own screen and screenshots never have them.
 - `omabox up --interactive`: the box is a real window on workspace 9 (or the one you set), and you use it directly with
   your GPU, keyboard and mouse. **SUPER+ALT+ESCAPE** toggles sending SUPER keys to the box instead of
   your desktop. Passthrough turns itself off when focus leaves the box, or on the first key you press
@@ -346,6 +355,7 @@ Wayland connection.
 | `tools/pointer`, `tools/keyboard` | virtual pointer and keyboard; `wtype` sends the wrong keys under Hyprland |
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |
 | `tools/peek` | the live view-only window (`omabox peek`) |
+| `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
 | `test/run.sh` | the regression suite: real boxes, never the real desktop (`test/run.sh unit` is fast) |
 | `NOTES.md` | design notes: architecture, findings (cited in the code as "finding N"), dead ends |

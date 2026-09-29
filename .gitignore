@@ -6,6 +6,8 @@ tools/keyboard/omabox-keyboard
 tools/keyboard/*-protocol.[ch]
 tools/peek/omabox-peek
 tools/peek/*-protocol.[ch]
+tools/still/omabox-still
+tools/still/*-protocol.[ch]
 
 # Private to this machine: working state and personal agent notes (never pushed)
 .local/

@@ -1,12 +1,13 @@
 // omabox-keyboard: type on the Wayland display in $WAYLAND_DISPLAY through a virtual keyboard.
 //
-//   omabox-keyboard [--layout us] [--variant V] [--model M] [--options O] [--delay MS]  COMBO | -t TEXT | -s MS ...
+//   omabox-keyboard [--layout us] [--variant V] [--model M] [--options O] [--delay MS]  COMBO | -t TEXT | -T | -s MS ...
 //   omabox-keyboard [--layout ...] --hold
 //
 // COMBO is super+space, ctrl+shift+t, Return, a, F5, ctrl++, super+/ ... (modifiers: super ctrl shift
 // alt altgr; a key is a keysym name or a single character). With modifiers a letter is the key, not
 // the shifted symbol: SUPER+W is super+w, as in Hyprland's binds; shift+w for SUPER+SHIFT+W. On its own
-// an uppercase letter types it (A is shift+a). -t types TEXT; -s sleeps.
+// an uppercase letter types it (A is shift+a). -t types TEXT; -T types the next NUL-terminated text
+// read from stdin (a secret: never in argv, where the process list shows it); -s sleeps.
 // Tokens run left to right in one connection, all checked before it connects. Exit 1 if the
 // compositor goes away mid-run.
 // --hold keeps an idle keyboard on the seat until the compositor goes away (NOTES finding 41).
@@ -57,7 +58,7 @@ static void sleep_ms(long ms) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: omabox-keyboard [--layout L] [--variant V] [--model M] [--options O] [--delay MS] [--hold | (COMBO | -t TEXT | -s MS)...]\n");
+    fprintf(stderr, "usage: omabox-keyboard [--layout L] [--variant V] [--model M] [--options O] [--delay MS] [--hold | (COMBO | -t TEXT | -T | -s MS)...]\n");
     exit(2);
 }
 
@@ -311,6 +312,47 @@ static int tokens(int argc, char **argv, int i, int run) {
     return 1;
 }
 
+// Each -T becomes -t with the next NUL-terminated text from stdin (omabox keys --pass): a new argv in
+// memory, so /proc/PID/cmdline never shows it. All of stdin is read before anything is checked or typed.
+#define MAX_STDIN (1 << 20)
+static char **stdin_texts(int *argc, char **argv, int first) {
+    int want = 0;
+    for (int a = first; a < *argc; a++) {
+        if ((!strcmp(argv[a], "-t") || !strcmp(argv[a], "-s")) && a + 1 < *argc) a++;
+        else if (!strcmp(argv[a], "-T")) want++;
+    }
+    if (!want) return argv;
+    char *buf = malloc(MAX_STDIN + 1);
+    char **out = malloc(sizeof(char *) * (size_t)(*argc + want + 1));
+    if (!buf || !out) { perror("omabox-keyboard: malloc"); exit(1); }
+    size_t len = 0;
+    ssize_t n;
+    while (len < MAX_STDIN && (n = read(0, buf + len, MAX_STDIN - len)) != 0) {
+        if (n < 0) { perror("omabox-keyboard: stdin"); exit(1); }
+        len += (size_t)n;
+    }
+    if (len == MAX_STDIN) { fprintf(stderr, "omabox-keyboard: -T: more than %d bytes on stdin\n", MAX_STDIN); exit(2); }
+    buf[len] = 0;
+    size_t at = 0;
+    int o = 0;
+    for (int a = 0; a < *argc; a++) {
+        if (a >= first && (!strcmp(argv[a], "-t") || !strcmp(argv[a], "-s")) && a + 1 < *argc) {
+            out[o++] = argv[a++];
+        } else if (a >= first && !strcmp(argv[a], "-T")) {
+            char *nul = at < len ? memchr(buf + at, 0, len - at) : NULL;
+            if (!nul) { fprintf(stderr, "omabox-keyboard: -T: no NUL-terminated text left on stdin\n"); exit(2); }
+            out[o++] = "-t";
+            out[o++] = buf + at;
+            at = (size_t)(nul - buf) + 1;
+            continue;
+        }
+        out[o++] = argv[a];
+    }
+    out[o] = NULL;
+    *argc = o;
+    return out;
+}
+
 int main(int argc, char **argv) {
     // Only ever inside a box (omabox runs it there, in the box's mount namespace): run from a host
     // shell, WAYLAND_DISPLAY is the user's real desktop (it happened once: a parse check clicked it).
@@ -332,6 +374,7 @@ int main(int argc, char **argv) {
         else break;
     }
     if (hold ? i < argc : i >= argc) usage();
+    if (!hold) argv = stdin_texts(&argc, argv, i);
 
     struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_ENVIRONMENT_NAMES);
     keymap = ctx ? xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS) : NULL;

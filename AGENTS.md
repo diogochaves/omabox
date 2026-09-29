@@ -8,9 +8,10 @@ add to the ones here).
 
 Read first: `NOTES.md`: architecture, reproduce steps, what was verified, findings, dead ends,
 open gaps. `bin/omabox` is the CLI, `share/` runs inside the box, `tools/` holds the C helpers (pointer,
-keyboard, wlfd, peek), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
+keyboard, wlfd, peek, still), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
 Code, Codex, OpenCode, pi and Hermes), `plugin/` is the bar widget, `test/run.sh` is the regression
-suite (run it in full before each commit; `test/run.sh unit` is the fast tier).
+suite (run it in full before each commit; `test/run.sh unit` is the fast tier; a failure's evidence
+is in `~/.local/state/omabox/test/`).
 `spike/` is the original record; the CLI supersedes it.
 
 ## Non-negotiables
@@ -33,10 +34,11 @@ suite (run it in full before each commit; `test/run.sh unit` is the fast tier).
   servers). Test against throwaway servers on ports of your own, or `--net isolated --allow PORTS`.
 - Don't use `ydotool` or anything uinput-based: it would drive the real cursor. Don't use `wtype`
   either: Hyprland reads its keys as other keys (finding 13); `omabox keys` instead. Never run
-  `tools/keyboard` or `tools/pointer` from a host shell, not even to check how they parse arguments:
-  that drives the real desktop (it happened once). They refuse outside a box; test them through
-  `omabox keys/click/pointer` or the suite. `tools/peek` is a host window: only through `omabox peek`
-  when the user asks, or inside a box pointed at that box (as `t_peek` does).
+  `tools/keyboard`, `tools/pointer` or `tools/still` from a host shell, not even to check how they
+  parse arguments: that drives (or watches) the real desktop (it happened once). They refuse outside
+  a box; test them through `omabox keys/click/pointer/wait` or the suite. `tools/peek` is a host
+  window: only through `omabox peek` when the user asks, or inside a box pointed at that box (as
+  `t_peek` does).
 - Test input/UI changes in a box, or in a box standing in for the host (finding 26), never with
   real key presses on the user's desktop.
 - `sudo` only when the user has explicitly allowed it in the session.

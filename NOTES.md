@@ -23,13 +23,15 @@ say what replaced it.
 ```
 $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home/ (-> ~/.cache/omabox/<name>/home),
                                   box.json (options, net, pidns), info.json (bwrap child-pid), pid + pasta.pid
-                                  (boxes behind pasta), used (idle clock), launch.sh, box.log, reap.log
+                                  (boxes behind pasta), used (idle clock), launch.sh, box.log, reap.log,
+                                  shots.tsv (what each shot is of, for click --in: 81)
 [systemd-run --user --scope]      --systemd only: a delegated cgroup the box's user manager owns (61)
 [pasta]                           top-level boxes: own netns, connected (default) or isolated (44, 45, 89);
                                   a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
-│                        one render node (plus its NVIDIA render-side nodes on NVIDIA),
+│                        one render node (plus its NVIDIA render-side nodes on NVIDIA);
+│                        an interactive box every render node (95),
 │                        share/ → /opt/omabox/share, patched aquamarine →
 │                        /opt/omabox/lib, keyboard/pointer → /opt/omabox/bin, --plugin dirs ro →
 │                        ~/.config/omarchy/plugins/<id>, --overlay dirs (discarded writes); every source
@@ -49,8 +51,8 @@ interactive: no labwc; Hyprland nests in the host Hyprland through one fd (tools
              launched by the host's hl.exec_cmd with rules → workspace 9 silent; WAYLAND-1 is the screen
 ```
 
-Driving it from the host is `omabox` (`omabox help`): `hyprctl`, `grim` (shot), the keyboard and the
-pointer all run inside the box's mount namespace (`nsenter -U -m`), so they only ever see the box's
+Driving it from the host is `omabox` (`omabox help`): `hyprctl`, `grim` (shot), the keyboard, the
+pointer and `omabox-still` (`wait`, finding 82) all run inside the box's mount namespace (`nsenter -U -m`), so they only ever see the box's
 sockets (finding 63). The spike's manual way (a symlinked runtime dir, `wtype`, the pointer run from a
 host shell) is history and unsafe: `wtype` sends the wrong keys (13), and a tool run from a host shell
 drives the real desktop; both tools now refuse to run outside a box.
@@ -79,8 +81,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    ```
    It must provide the soname the installed Hyprland links (`ldd $(command -v Hyprland)`); only the
    nested Hyprland loads it. `omabox up` checks this too.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek` (need `wayland-scanner`; protocol XML is
-   vendored).
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still` (need `wayland-scanner`;
+   protocol XML is vendored).
 4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
    `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when those exist); `plugin/` as
    `~/.config/omarchy/plugins/chaves.omabox`. A real directory where a link goes stops the install.
@@ -1055,6 +1057,258 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     through its environment while `up` still waits for that shell, so readiness must fail and the
     cleanup path is exercised even when startup is fast. In a nested box, bwrap may take a fraction
     of a second to exit after `up` returns, so the cleanup checks poll for completion.
+Findings 80-86 started from reading Cua (github.com/trycua/cua, MIT), a computer-use agent platform;
+the designs here were measured in boxes and built for a contained desktop, and no code was taken from it.
+80. **The suite, hardened** (2026-09-25). A suite that passes must have checked:
+    - *No silent passes*: checks that depended on the machine (`[ -f … ] && check`, `command -v
+      zenity`) passed unseen when skipped; they are `skip`s now, counted and listed at the end, and
+      fail under `--strict` / `OMABOX_TEST_STRICT=1`. A test that runs no check fails, a PATTERN that
+      matches no test exits 2 (`test/run.sh zzznomatch` passed with 0 checks), `t_unit_registry`
+      fails for a `t_*` function missing from UNIT/BOX, and an unfiltered run needs 340 checks (175
+      of them unit; 360 ran). The runner is one function (an edit mid-run cannot change it).
+    - *Provenance*: the first line names the checkout (sha, dirty), the Hyprland boxes start and the
+      host's running one, aquamarine (the box's and the system's), quickshell, labwc, bwrap, the
+      render node and driver, and the kernel.
+    - *Evidence*: a failure's output was cut at 300 characters, `until_ok` threw its command's output
+      away, and nothing outlived the run. Each run has a folder,
+      `~/.local/state/omabox/test/<date>-t<pid>/` (0700; the last 5 runs, never one still going):
+      the provenance, every failure's whole output, and at a test's first failure, while its boxes
+      are up, each box's screen, clients, layers, focus, cursor, devices and log tails, and the
+      last wait that timed out. `until_ok` says what it last saw when it times out, and notes a wait
+      that took over half its deadline (the widget's "cannot run" notification took 13 of 20 s, the
+      killed throwaway's teardown 9 of 15: the next slower machine is where those fail).
+    - *Waits instead of sleeps*: 20 fixed sleeps became waits for what they stood for (the reaper
+      process gone once it has decided, the widget stub's log of each `ls` poll and settings read,
+      the panel's layer, the scope, the servers), and "stays so" checks use `holds T CMD` (true now
+      and all of T) instead of a sleep and one look. A full run: 237 s to 214 s on this machine.
+      The sleeps left are the scenario itself (`t_run_idle`'s use, a key sent mid-`down`), a reload
+      whose end has no signal, and an X11 window that takes keys a moment after it maps.
+    - *A leak detector, and its positive control*. The only host checks were two compares at the
+      end (focused workspace and window): a leak that was undone before the end passed, and you
+      switching windows during a run failed it (a run ended 359/1 on that, cause unknown). Hyprland's
+      event socket (`.socket2.sock`) reports `openwindow`, `activewindowv2`, `workspacev2` and
+      `activelayout>>hl-virtual-keyboard-…,…` (what `omabox keys` causes) live, reverted ones
+      included; the host log is no use (debug is off: no virtual keyboard lines). The suite listens
+      to it for the whole run (read-only, as a bar does; nothing is written to it), a python watcher
+      logging to the run's folder with a marker per test. On each focus change it asks for the
+      focused window (`hyprctl -j activewindow`, the read the end checks already did) and reads that
+      process's `/proc` environ for `OMABOX_SUITE` (exported by the suite) and `OMABOX_NAME` (what
+      `run` gives a box's processes); for an interactive box's window (class `aquamarine`, a title
+      naming no box) its bwrap's command line names the box dir. After each test, the test fails on
+      a window, or focus, that is this run's, an interactive or peek window (by title, `omabox peek:
+      NAME`), any box's process, or a virtual keyboard's layout event (`OMABOX_TEST_HOST_KEYBOARDS`
+      names your own: wayvnc, an input method); everything else is one "not the suite's" note. The
+      end compares stay, but a change the log shows was not the suite's passes, named.
+      `t_leak_control` runs first among the box tests: the same watcher, inside a box standing in for
+      the host, sees nothing while quiet, then a box's window taking focus, a workspace switch and
+      back, and a key from `omabox keys` are leaked into it on purpose, and each must be reported;
+      if it fails, the host verdict fails ("a clean host log proves nothing"). Proven by breaking
+      it: with the watcher no longer logging layout events or reading `OMABOX_NAME`, the control
+      failed both checks and the host verdict failed; restored, it passes. `t_unit_leak_scan` checks
+      the reading of each event, on lines as Hyprland 0.56 sends them.
+      What it cannot see: pointer motion and clicks have no event (seen only when they move focus),
+      a workspace switch has no owner (a switch alone that ends where the log shows passes), an
+      interactive box's `openwindow` has no pid (while an interactive box of yours started during
+      the run exists, such a window is taken as yours, so one of the suite's opening then would be
+      missed unless it also took focus), and a window of the suite's that closed before its focus
+      was looked up is unattributed. A run
+      under the guard or from a guarded shell finds the host session the CLI's way.
+      A full run of 80-86 together (while the maintainer worked) failed five tests and the
+      end check on `activelayout>>hl-virtual-keyboard-fcitx5`: Omarchy's input method re-sends its
+      layout on every focus change of the user's. `omabox keys` is anonymous there
+      (`hl-virtual-keyboard-unknown`, seen in a stand-in box), so fcitx5 is always the user's now.
+      Merged with main on 2026-09-28, where PR #13 had meanwhile added a watch of its own: `hyprctl`
+      polled every 0.5 s for a window of the suite's boxes on the desktop and for omabox's workspace
+      coming up, one verdict at the end. This watcher stays (it sees reverted leaks and keys, and
+      names the test); #13's rule is taken into `leak_scan`: omabox's workspace (`omabox config
+      workspace`) coming up is a leak, not a note, unless the run started on it. `t_leak_control`
+      switches its stand-in to 9 and back and requires that leak. The suite already needed python3
+      (its throwaway servers), so the watcher adds no dependency.
+81. **Windows as targets: `omabox windows`, `shot/click/keys --window`, `shot --fit`, `click --in`**
+    (2026-09-25). No new tool or protocol: the box's grim 1.5 has `-T ID` (ext-image-copy-capture of a
+    foreign toplevel), and Hyprland's id for it is the `stableId` `hyprctl -j clients` reports (hex).
+    Seen in boxes: the capture is the window's own pixels, its size exactly the client's `size`, with
+    no border, nothing that covers it and no trace of the cover; a window on another workspace, on
+    `special:scratch`, an inactive group tab and an XWayland window capture too (the last three in
+    the analysis boxes only), 21-36 ms each; a bad id exits 1 ("cannot find toplevel") and an idle
+    window does not hang it. **The first capture can be stale**: a window off screen that keeps
+    redrawing (a clock in foot) gets no frame callbacks, stops drawing, and its first capture was the
+    frame from 15 s earlier; one ~100 ms later was current (the export asks it to draw). So a window
+    shot is always primed: captured, 100 ms, captured again (`t_window` fails without it). A window
+    that draws once after being idle renders at once and was never stale. Other facts it rests on:
+    `at` excludes the border (border 2 + gaps 10 → at 12), the order of `hyprctl clients` is the
+    stacking order (later on top) except that floating windows stay above tiled ones even after
+    `alter_zorder top` on the tiled one, fullscreen above the rest and a shown special workspace
+    above its workspace; `visible` is true for windows on hidden workspaces (useless: on screen =
+    the workspace is shown and `hidden` is false). From the analysis boxes only: the shell's layers
+    (bar, menus, panels) are all full-screen surfaces, so they are not counted as covering anything
+    and there is no `--layer`; a popup or menu past its window's edge is clipped in a window shot
+    (whole in a full one).
+    Focusing a window (`hl.dsp.focus({ window = 'address:…' })`) shows its workspace, opens a special
+    one, brings an inactive tab to the front; a float also needs `hl.dsp.window.alter_zorder`. A
+    click right after that workspace switch (0.18 s, animations on) landed in the window (foot's
+    mouse reporting read the right cell).
+    - SEL (`bin/omabox`'s usage) picks exactly one mapped window: none or several is exit 2 with the
+      candidates, never the first match (the resolver is jq, `WIN_JQ`/`WIN_SEL_JQ`, unit-tested on
+      made-up JSON). `click --window SEL X Y` takes window coordinates, refuses a point outside the
+      window, focuses the window when it is off screen or something covers that point, checks again
+      and refuses naming the window still on top (a tiled window under a float stays under it);
+      `--no-raise` refuses at once. `keys --window` focuses, waits for it, then types.
+    - Screenshot scale (an agent loop could downscale every shot and rescale its clicks). Measured
+      with Opus 5.5 reading shots through Claude Code: 1920x1080 is seen 1:1 (max error 0.7 px);
+      2560x1440 and 3440x1440 are downscaled by Claude Code to 2000 px wide with a "multiply by
+      1.28/1.72" note: with the factor max 1.5 px off, without it 544/1364 px. So full resolution
+      stays the default; `--fit N` caps the longest side (grim `-s`, rounded up since grim truncates).
+      The likelier miss was cropped shots (`--active`, `-g`): the image starts at the crop's origin
+      but `click` takes screen pixels.
+    - So every shot is recorded in `$D/shots.tsv` (the box cannot see it): path, size and mtime, the
+      box's mode, the window's address or the region's origin, the size covered and the image's.
+      A cropped or scaled shot says so in one stderr line (stdout stays the path). `click --in SHOT X
+      Y` and `pointer --in` take that image's pixels: the screen pixel under the pixel's centre, from
+      the window's *current* position for a window shot (it may have moved; resized is refused), from
+      the fixed origin for `-g`. A file that is not a shot of this box, changed since, or a mode
+      change is refused. `--active` is now `--window active` (the window's own pixels instead of a
+      crop of the screen); install.sh checks that grim has `-T`.
+    - Not done: occlusion ignores layers that take input (an open panel), and pinned or
+      override-redirect windows only approximately follow the stacking rule; an app that stops
+      rendering when hidden and ignores the export's frame callback would still come out stale (only
+      foot checked). An interactive box whose window is hidden is drawn since finding 90, so `-T`
+      gets frames too (assumed, as for a plain `shot`; not checked for `--window`).
+    - Review of PR #17 (2026-09-28): `click --window` and `pointer --in` with a selector matching
+      none or several exited 1 with "outside window  ()": `win_point` runs in its caller's `$(...)`,
+      where errexit is off (no `inherit_errexit`), so `win_select`'s exit 2 fell through. Now `||
+      exit $?` there; `t_window` checks exit 2 for both cases.
+82. **`omabox wait` and `--wait` on keys, click and run -d** (2026-09-25). Agents slept
+    between actions and guessed how long. Measured in the analysis boxes (1920x1080@60, shell): a
+    menu settles ~130 ms after its key, a notification ~240, typing in foot ~210, a terminal ~660;
+    first to last frame of an app launch 300-850 ms (zenity) to 650-1200 (chromium); the largest gap
+    between two changed frames inside any animation 51 ms, so 300 ms of quiet is a 6x margin. An idle
+    box changes no pixel in 65 s.
+    - **How**: `tools/still` (`omabox-still`, bound at `/opt/omabox/bin` like the keyboard and pointer,
+      refusing to run outside a box) asks for frames with wlr-screencopy's `copy_with_damage`, which
+      Hyprland only completes when the output is drawn again: waiting on an idle screen costs
+      nothing (0 CPU ticks in 10 s; a 20 Hz repaint of a 909x1020 window: 26 ticks in 10 s, 2.6% of a
+      core). Its damage rectangles are always the whole output and some frames come with damage but
+      the same pixels, so every frame is compared with the one before, pixel by pixel. Before it
+      answers "nothing changed" or "still" it takes one plain copy (never waits) and compares that
+      too, so a change drawn between two requests cannot be missed.
+    - **Settle** (`--wait`) = the screen before the action (the tool prints `ready` on its first
+      frame, then the CLI acts), a change within `--start` (2 s; 5 s for `run -d`), then `--quiet`
+      (300 ms) without one, so it cannot pass before a slow reaction has begun, as a check for a few
+      stable samples in a row could. No change at all is `unsatisfied: nothing changed in 2.00s` (exit 124) and stderr says the input
+      was sent anyway: the agent should look, not resend. `wait still` is quiet from now, `wait
+      change` the first change; `-g` or `--window SEL` watch a region (a window's place on the screen:
+      one off screen is refused).
+    - **Not changes** (said in the line, `--strict` counts them): a change 4 px or thinner in either
+      direction (a caret: foot's beam blinks as 2x20, reported `caret?`) and the software cursor, which
+      is in every frame (headless, `no_hardware_cursors`) and hides on a key press: seen as 16x27 from
+      1 px up and left of its hotspot, and right after `up` a cursor change reaching ~38 px below it,
+      so the ignored rectangle is 64x64 from 16 px up and left of where the cursor is before the
+      action, and where a click sends it. (It was 56x56 from 8 px until the first NVIDIA run,
+      2026-09-28: over a terminal the cursor is foot's I-beam, centred on its hotspot and reaching
+      ~10 px above it; when a click moved it, the I-beam's top row at its old place fell one row
+      outside, and `click --wait` on a terminal read "settled" instead of 124. Deterministic there,
+      not seen on AMD; why the old place was redrawn only on NVIDIA is not known.)
+    - `wait window SEL [--gone|--focused]` (the resolver of finding 81: several matches is exit 2,
+      never a guess; `--gone` counts any), `wait layer NAMESPACE [--gone]` and `wait cmd -- CMD` (exit
+      0 inside the box) poll every 100 ms; a window or layer must hold on 2 polls in a row. Absence can
+      be asserted (`--gone`).
+    - **Exit 0 satisfied, 124 unsatisfied at `--timeout` (10 s; at most 10 min), 1 unknown**, never 0
+      for what could not be seen: the box went down mid-wait (`unknown: box 'x' went down after
+      1.50s`), or an interactive box whose window is hidden, which renders nothing (finding 24).
+      Found in a stand-in host: right after `up --interactive` the tool did get a first frame (drawn
+      before the window was hidden) and then nothing, and waited out the whole timeout; so the
+      plain copy taken before an answer must come within `--first` (2 s) too. Now `unknown: box
+      'inner' not rendered (its window is hidden on workspace 9)` in 2.05-2.6 s, every time.
+      Since finding 90 (merged here 2026-09-28) a hidden interactive box is drawn, so `wait` settles
+      on it (`t_guard` requires an answer there, never `unknown`: with animated gears in the box it is
+      124, still changing). `unknown ... not rendered` is left for a box that
+      is not drawn while hidden, and says why as `shot` does: started by an older omabox, or its
+      window replaced after a confirm-close keep; either way, ask the user, never show the window.
+    - One line on stdout (`satisfied: settled after 0.40s (last change 0.08s at 0,12 1920x1068;
+      ignored 64x64 at 944,524: cursor)`) or `--json`. Waiting is use (idle expiry, finding 59):
+      `need_box` touches `used`, and a long wait again every 30 s. The tool's stdin is a pipe from
+      the CLI (`--tied`): when the CLI goes (Ctrl-C, an action that failed) the tool ends with it
+      instead of holding the box's socket until its timeout.
+    - Seen in boxes: `wait still` on an idle box 0.31-0.36 s; `keys --wait -t hello` into foot settled
+      in 0.34-0.42 s; SUPER+SPACE (the menu) 0.40 s, Escape 0.37 s, then `wait layer omarchy-menu
+      [--gone]` 0.12 s; `run -d --wait -- foot` 0.85-1.23 s; `shift` alone: 124, nothing changed.
+    - Not done: late content passes `still` (a list filled from the network after a pause of more
+      than `--quiet`: wait for a title or a `cmd`); a thin progress bar or a spinner 4 px wide is
+      ignored like a caret (said, `--strict`); Qt's and Chromium's carets, GTK4's (1x18 in the
+      analysis) and the busy cursor's exact size are not measured here; the cursor rectangle assumes
+      Hyprland's default cursor size (24).
+    - Review of PR #17 (2026-09-28): `wait still -g` on a region off the screen answered satisfied,
+      having watched nothing: `omabox-still` now answers `unknown off-screen` (exit 1) before
+      `ready`. `--start`/`--quiet` over 10 min passed the CLI, the tool refused them, and keys, click
+      and `run -d` acted all the same, then said the screen was lost: the CLI caps all three now, and
+      `settle_ready` sends nothing when the tool gives no `ready` (unknown, exit 1). Checked in
+      `t_unit_wait` and `t_wait`; the no-`ready` path by reading only (nothing left in the CLI that
+      reaches it on purpose). `click --wait` on a small toggle still reads 124: its change sits under
+      the cursor's ignored rectangle (the skill's symptom table says so).
+83. **`shot` compresses less: PNG level 1** (2026-09-25, seen while measuring 82). Most of a shot's
+    time was grim's PNG compression, for a file an agent reads once. Measured in a shell box with
+    a terminal full of text (1920x1080, 5 shots each): grim's default level 124 ms and 739 KB a
+    shot, `grim -l 1` 46 ms and 915 KB (+24%); `omabox shot` end to end 160 → 82 ms. The analysis
+    box (another screen) had 621 → 100 ms and +13%. Pixels are the same (PNG is lossless).
+84. **`omabox keys --pass VAR`** (2026-09-25). An agent typing a
+    password into a login form had only `keys -t "$PW"`, which puts it in `omabox`'s, `nsenter`'s and
+    the keyboard tool's argv: any user's `ps` shows it. `--pass VAR` (repeatable, in order with the
+    other tokens) takes the value from the caller's environment as `run --pass` does (finding 66,
+    `caller_env`) and hands it to `tools/keyboard` on stdin, NUL-terminated (bash's printf builtin, no
+    argv); the tool's new `-T` token reads one text per `-T` before it checks or types anything and
+    types it as `-t` would, from an argv copy in memory. Checked in a box (`t_keys`): the value (spaces,
+    `=`, Ü) lands in a terminal exactly, in order with `-t`, and no `/proc/*/cmdline` has it while the
+    tool is typing; `-t -T` is still text; an unset or malformed name fails before anything is sent.
+85. **Marks in peek: what the agent does, over the view** (2026-09-25).
+    A box's cursor is already in every frame: headless Hyprland draws it in software
+    (`no_hardware_cursors`), so it is in every `omabox shot` and peek too (`grim -c` changes nothing),
+    it starts at the screen's centre, and it hides on any key press (`cursor:hide_on_key_press`). Tiny
+    at peek's scale, gone after keys, and it says nothing about clicks or keys. (Every agent screenshot
+    has that arrow in it: noise for anything that compares shots, and it can cover UI.)
+    Now `click`, `pointer` and `keys` append a line to `<box dir>/marks` (`ptr WxH <pointer commands>`,
+    `combo KEY`, `text TEXT` (≤200 characters, control characters as spaces), `secret N`: a `--pass`
+    value only as its length) once the tool has sent them, and only while a peek window of the box
+    is open; otherwise the file is removed. The box dir is out of the box's reach, so nothing in a box
+    can forge or read marks. Mode 0600, emptied past 64 KB, fresh for each `peek`, gone with `down`.
+    `tools/peek --marks FILE` reads it from its end on inotify in the same poll loop, validates each
+    line whole (anything else, or a line over 1 KB, is ignored) and draws, in a desynchronized
+    `wl_subsurface` over its window (empty input region): a ring that glides (120 ms) to where the
+    pointer went, a ripple per click (`right`/`middle` labelled), and key captions at the bottom
+    (keys within 1.5 s share one, at most 3, the last 40 characters; ASCII only, from the public-domain
+    font8x8, `tools/peek/font8x8.h`), all faded out 3 s after the last one. The subsurface has frame
+    callbacks of its own and is only drawn while something is on show, then unmapped: an idle or
+    hidden peek costs what it did. Only in the peek window: the box's own frames and every shot stay
+    clean. No new dependency (wayland-client; no libm). Checked in a box whose peek shows its own
+    screen, with a process named like a host peek relaying `<box dir>/marks` into it (`t_peek`): the
+    ring's centre within 8 px of the clicked point, a caption, a secret mark without its value, all gone
+    after 3.5 s, junk lines drawing nothing and not stopping a good line after them, the 64 KB reset,
+    no file without a peek window, CPU after the marks no higher than before them, still idle hidden.
+    And end to end in a box standing in for the host (finding 26): `omabox up` and `omabox peek` inside
+    it, `click`/`keys`/`keys --pass` against the inner box, the marks on the stand-in's screen, and
+    nothing left after 3.5 s. Not done (the design's trimmings): a pointer trail, scroll marks, a
+    setting to turn marks off.
+86. **The skill says how to drive an app, and what to do when it goes wrong** (2026-09-25, written
+    once 81-85 existed so it names real commands). Every
+    rule traces to something agents did here: input sent twice (every `keys` call is delivered,
+    finding 41), typing into a field that had lost focus (76), clicks where a direct route was there
+    (the shell's IPC, a seeded HOME), `pkill -f` killing the agent's own shell (a stress-test
+    report), `alacritty` missing in a box, two agents on one name. New: a "Driving an app" section
+    (look, act once, look again; never resend what you have not seen land; type only into a field
+    seen focused; set state directly; stop when a shot shows the goal), a symptom → next step table
+    ending in real commands (`--wait`, `click --in`, `shot --window`, `keys --window`, `up --new`),
+    `B=$(omabox up --new)` in the loop (its stdout is only the name: `t_new`). Instead of states such
+    as partial or unverifiable input, one fact: every call is delivered. The direct
+    route was read from Omarchy's source (`/usr/share/omarchy/bin/omarchy-shell`, `shell/shell.qml`),
+    not guessed: `omarchy-shell shell summon|toggle|hide ID` for any plugin, third-party ones included,
+    `shell call ID METHOD ARG` for a loaded panel's function; checked in a box (`shell summon
+    chaves.omabox` opened the widget's panel, `hide` closed it, an unknown method answered
+    `unknown`). What is not safety (screen size and GPU cost, waiting options, mounts, stubs,
+    `--systemd`, Xwayland, cores, logs, the IPC list, peek and interactive detail) moved to
+    `skill/reference.md`, one file (agents do not reliably follow a tree of links); the skill is linked
+    as a directory for every agent, so it ships with it (`t_unit_install`). SKILL.md: 2,458 words on
+    main, 2,818 with the lines 81-85 added, 2,487 now; the safety sections (the project table, the
+    guard, tests, what a box cannot test, `/sys`, network and HOME) are all still in it.
 87. **Apps installed in the box HOME are D-Bus-activated** (2026-09-26, issue #4; numbered after the
     `agent-driving` branch's 80-86). A per-user install (a `.desktop` with `DBusActivatable=true` in
     `~/.local/share/applications`, its service in `~/.local/share/dbus-1/services`) did not start from
@@ -1360,6 +1614,24 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     ... is up from this user namespace"); a process that is not ours (its pid reused) still reads
     dead. Such a process could not enter or signal the box anyway. `t_other_userns`: `up` from
     `unshare -Ur` fails with that message, and the box is the same one, still up.
+95. **An interactive box renders on the desktop's GPU, not the one omabox picked** (2026-09-29,
+    Diogo's desktop with the RTX 5070 Ti on nvidia beside the AMD iGPU, monitors on both). With
+    `OMABOX_RENDER_NODE=/dev/dri/renderD129` (the RTX), `up --interactive` failed 10 s in with
+    "bwrap did not start"; the box's Hyprland had aborted with `CBackend::create() failed!` right
+    after the host's `zwp_linux_dmabuf_v1` format table (AMD modifiers only). Aquamarine's Wayland
+    backend opens the render node of the parent's dmabuf main device, here the host's AMD
+    `renderD128`, which the box did not have; the "Failed to open node" line never reached the log
+    (the abort). Not new: 0.1.0 picked the node the same way, and the default (the first usable
+    node) matches the desktop's GPU on this machine, so it only shows when the desktop renders on
+    another GPU than the first node or the variable points elsewhere. An interactive box now gets
+    every usable render node, plus `/dev/nvidiactl` and `/dev/nvidiaN` for each NVIDIA one whose
+    nodes are there (render nodes only: finding 5 holds), and its Hyprland opens the one the desktop
+    names; `OMABOX_RENDER_NODE` now chooses a headless box's GPU only. And a box that started and
+    ended before `up` saw it now says so ("died while starting", as `wait_ready` did already, with
+    Hyprland's last log line when there is one) instead of "bwrap did not start", which is kept for
+    a bwrap that wrote nothing to `--info-fd`. `t_guard`: the interactive box nested in the stand-in
+    sees the stand-in's GPU nodes (on AMD, and on the RTX with the stand-in on it). The stand-in has
+    one GPU, so the suite cannot reproduce the mismatch itself: verified on the real desktop.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -1384,6 +1656,16 @@ Bugs and ideas live in the GitHub issues. Known gaps:
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
 - AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
   user setups remain open.
+- Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
+  in; a host overlay would touch the real desktop). A peek that starts while a `click` is deciding
+  whether to write can miss marks until the next peek (the file removed under it); not seen.
+- Findings 80-86 never ran on NVIDIA (the NVIDIA card here is bound to vfio). They should hold on the
+  NVIDIA screen (`WAYLAND-1`, finding 77): they read the screen from `hyprctl monitors` (the first one
+  that is enabled), not by name, so shots, `--in`, marks and `mode` do not care what it is called.
+  `tools/still` binds the one `wl_output` a box offers, and screencopy already works there for
+  `shot`. Assumed, not seen: that `grim -T` (ext-image-copy-capture) and screencopy with damage
+  both work with NVIDIA's renderer, and that labwc's headless parent sends the frame callbacks that
+  let `wait` see a change. `t_main` skips its NVIDIA checks here, saying why.
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
   `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried.

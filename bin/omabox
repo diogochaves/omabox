@@ -11,6 +11,7 @@ HOMES=${XDG_CACHE_HOME:-$HOME/.cache}/omabox
 POINTER=$ROOT/tools/pointer/omabox-pointer
 KEYBOARD=$ROOT/tools/keyboard/omabox-keyboard
 PEEK=$ROOT/tools/peek/omabox-peek
+STILL=$ROOT/tools/still/omabox-still
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 AQUAMARINE=$ROOT/build/prefix/lib
 PASS_KEY="SUPER + ALT + ESCAPE"
@@ -29,12 +30,16 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell]
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      a free name, box-1, box-2, ... (printed)
-  omabox run [-b NAME] [-d] [--pass VAR]... [UP OPTIONS] -- CMD [ARG...]
+  omabox run [-b NAME] [-d [--wait]] [--pass VAR]... [UP OPTIONS] -- CMD [ARG...]
                                                          UP OPTIONS: up's, for a throwaway box only
-  omabox shot [-b NAME] [-o FILE | FILE] [--active | -g "X,Y WxH"]
-  omabox keys [-b NAME] (COMBO | -t TEXT | -s MS)...     e.g. super+space  -t hello  Return
-  omabox click [-b NAME] X Y [left|right|middle] [--double]
-  omabox pointer [-b NAME] -- ARGS...                    raw omabox-pointer (move/click/scroll/down/up)
+  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active | -g "X,Y WxH"] [--fit N]
+  omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
+  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
+  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [left|right|middle] [--double]
+  omabox pointer [-b NAME] [--in SHOT] -- ARGS...        raw omabox-pointer (move/click/scroll/down/up)
+  omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
+         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--strict] | change [-g GEOM | --window SEL]
+               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | cmd -- CMD [ARG...]
   omabox hyprctl [-b NAME] ARGS...
   omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
@@ -62,12 +67,29 @@ Every box has its own network (pasta): by default the internet, the LAN and your
 the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
 second after they listen. --net isolated: a loopback and the --allow ports only.
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
-variables (a password too: never on a command line). --env KEY=VAL is the box session's, on \`up\`.
+variables (a password too: never on a command line); \`keys --pass VAR\` types one (never \`-t\` for a
+secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
+initialTitle:RE (any case), or a word (its class, or part of its title); repeat to narrow. None or
+several is exit 2, with the candidates. \`shot --window\` (-w; --active is --window active) is the
+window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
+coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
+\`keys --window\` focuses it, then types. --fit N scales a shot's longest side down to N pixels.
+A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`pointer --in\`) take that
+image's pixels (a window shot follows the window if it moved).
+\`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
+count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
+[--quiet 300ms] [--timeout 10s] [--json]: a change within --start (5s for run -d), then quiet.
+Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
+down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
+Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
-(1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. Closing an interactive
-box's window ends the box; \`omabox config confirm-close on\` asks first (a second close is a yes).
+(1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
+click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
+Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
+second close is a yes).
 $PASS_KEY toggles sending SUPER keys to an interactive box.
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
@@ -213,8 +235,8 @@ descends_from() {
 # Fields of /proc/PID/stat after the command name (which may hold spaces and parentheses). A pid only:
 # an empty one would read /proc//stat, which is the system-wide /proc/stat.
 proc_stat() {
-  local s f; [[ $1 =~ ^[0-9]+$ ]] && s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-  read -ra f <<<"${s##*) }"; echo "${f[$2]}"
+  local s fields; [[ $1 =~ ^[0-9]+$ ]] && s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  read -ra fields <<<"${s##*) }"; echo "${fields[$2]}"
 }
 proc_ppid() { proc_stat "$1" 1; }
 proc_start() { proc_stat "$1" 19; }
@@ -309,6 +331,7 @@ box_env() {
 # Tools the box has at /opt/omabox/bin (bound read-only by `up`).
 BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
 BOX_POINTER=/opt/omabox/bin/omabox-pointer
+BOX_STILL=/opt/omabox/bin/omabox-still
 
 # Run a tool against the box's compositor (grim, hyprctl, the keyboard and pointer), inside the box's
 # mount namespace with a clean environment (finding 63). Its sockets live in the box's runtime dir,
@@ -447,15 +470,25 @@ parse_mode() {
 }
 
 # The layout's size, for mapping absolute pointer coordinates.
+# (Under set -e a caller's `x=$(extent)` would end omabox without a word when the box's Hyprland
+# does not answer: extent says so and fails.)
 extent() {
-  on_box hyprctl -j monitors | jq -r '[.[] | select(.disabled | not)] |
-    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"'
+  on_box hyprctl -j monitors 2>/dev/null | jq -er '[.[] | select(.disabled | not)] |
+    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"' 2>/dev/null ||
+    die "cannot read the screen size of box '$NAME' (its Hyprland did not answer)"
+}
+
+# A box that ended while `up` waited for it, with Hyprland's last line when it logged one (an interactive
+# box's: an abort such as finding 95's `CBackend::create() failed!`).
+died_starting() {
+  local last; last=$(grep -v '^[[:space:]]*$' "$D/home/hyprland.log" 2>/dev/null | tail -n 1 | sed 's/^[[:space:]]*//') || true
+  die "box '$NAME' died while starting${last:+ (Hyprland: $last)}; logs: $D/home/*.log $D/box.log"
 }
 
 wait_ready() {
   local want_shell=$1 deadline=$((SECONDS + READY_TIMEOUT))
   until [ -s "$D/run/omabox.env" ]; do
-    box_alive || die "box '$NAME' died while starting; logs: $D/home/*.log $D/box.log"
+    box_alive || died_starting
     [ $SECONDS -lt $deadline ] || die "Hyprland not up after ${READY_TIMEOUT}s; logs: $D/home/*.log"
     sleep 0.1
   done
@@ -478,7 +511,7 @@ wait_ready() {
     "$D/home/.config/omarchy/shell.json" >/dev/null && tray_expected=1
   until on_box hyprctl -j layers 2>/dev/null | grep -q '"omarchy-bar"' &&
         { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
-    box_alive || die "box '$NAME' died while starting; logs: $D/home/*.log"
+    box_alive || died_starting
     [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
     sleep 0.1
   done
@@ -518,6 +551,15 @@ render_node() {
   [[ $n =~ ^/dev/dri/renderD[0-9]+$ ]] && [ -r "$n" ] && [ -w "$n" ] ||
     die "no usable GPU render node (/dev/dri/renderD*); set OMABOX_RENDER_NODE"
   echo "$n"
+}
+
+# Every usable render node, for an interactive box: its Hyprland renders on the GPU the desktop's
+# compositor names (aquamarine's Wayland backend opens the parent's dmabuf main device), which is not
+# necessarily render_node's, so the box gets them all (finding 95). Still render nodes only.
+render_nodes() {
+  local n
+  for n in /dev/dri/renderD*; do [ -r "$n" ] && [ -w "$n" ] && echo "$n"; done
+  return 0
 }
 
 # The kernel driver behind a render node: amdgpu, i915, xe, nvidia, ...
@@ -855,11 +897,20 @@ cmd_up() {
   # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
   # confirm_live sees the box.
   [ "$confirm_from" = flag ] || confirm=$(conf_get confirm-close)
-  local render nvidia_dev="" wayland_screen=0 run=/run/user/$UID
+  local render renders nvidia_devs=() dev n wayland_screen=0 run=/run/user/$UID
   render=$(render_node)
-  if [ "$(render_driver "$render")" = nvidia ]; then
-    nvidia_dev=$(nvidia_device "$render") || die "cannot use NVIDIA render node $render"
-    [ $interactive = 1 ] || wayland_screen=1
+  if [ $interactive = 1 ]; then
+    mapfile -t renders < <(render_nodes)
+    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it.
+    for n in "${renders[@]}"; do
+      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 2>/dev/null) || nvidia_devs+=("$dev")
+    done
+  elif [ "$(render_driver "$render")" = nvidia ]; then
+    renders=("$render")
+    dev=$(nvidia_device "$render") || die "cannot use NVIDIA render node $render"
+    nvidia_devs=("$dev") wayland_screen=1
+  else
+    renders=("$render")
   fi
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
@@ -882,11 +933,13 @@ cmd_up() {
   # name an isolated box pasta-HOST.
   local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
     --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --ro-bind /etc /etc
-    --proc /proc --dev /dev --dev-bind "$render" "$render" --ro-bind /sys /sys
+    --proc /proc --dev /dev --ro-bind /sys /sys
     --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
     --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$AQUAMARINE" /opt/omabox/lib
-    --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER")
-  [ -z "$nvidia_dev" ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl --dev-bind "$nvidia_dev" "$nvidia_dev")
+    --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER" --ro-bind "$STILL" "$BOX_STILL")
+  for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
+  [ ${#nvidia_devs[@]} = 0 ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl)
+  for n in "${nvidia_devs[@]}"; do args+=(--dev-bind "$n" "$n"); done
   args+=("${ro_args[@]}")
   # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,
   # below) writable as its whole /sys/fs/cgroup under a cgroup namespace, and the marker systemd
@@ -1001,7 +1054,12 @@ cmd_up() {
   fi
   local deadline=$((SECONDS + 10))
   until [ -n "$(box_pid)" ]; do
-    [ $SECONDS -lt $deadline ] || die "bwrap did not start; see $D/box.log"
+    if [ $SECONDS -ge $deadline ]; then
+      # bwrap writes info.json as it starts: with it there, the box started and was already gone
+      # (finding 95: Hyprland aborted in it; "bwrap did not start" sent everyone looking elsewhere).
+      [ -s "$D/info.json" ] || die "bwrap did not start; see $D/box.log"
+      died_starting
+    fi
     sleep 0.05
   done
   # What box_pid checks from now on: this box's pid namespace, not a later owner of the pid.
@@ -1022,7 +1080,7 @@ cmd_up() {
 # installed Hyprland links (after an Arch update to a new soname, the box would otherwise silently run
 # the unpatched system library).
 check_install() {
-  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] || die "missing $KEYBOARD or $POINTER: run install.sh"
+  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] || die "missing $KEYBOARD, $POINTER or $STILL: run install.sh"
   # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
   [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$(render_node)")" != nvidia ] ||
     die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
@@ -1184,6 +1242,17 @@ re_quote() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g'; }
 # The pid of this box's peek window, if one is open.
 peek_pid() { pgrep -f "^$(re_quote "$PEEK --box $D/run/")" | head -1 | grep .; }
 
+# What click/pointer/keys did, one line each, for the peek window to draw (finding 85; the formats are
+# in tools/peek). Only while a peek window is open. $D/marks is in the box dir, which the box cannot
+# see: nothing in it can forge marks or read them. Emptied past 64 KB (peek starts over), gone at down.
+mark() {
+  local f=$D/marks
+  [ $# -gt 0 ] || return 0
+  peek_pid >/dev/null || { rm -f "$f"; return 0; }
+  [ ! -f "$f" ] || [ "$(stat -c %s "$f")" -le 65536 ] || : > "$f"
+  (umask 077; printf '%s\n' "$@" >> "$f") 2>/dev/null || true
+}
+
 # The box dir and its HOME. A user manager (--systemd) leaves mode-000 entries in the runtime dir
 # (systemd/inaccessible): ours, but rm cannot enter them until they are made writable.
 rm_box() {
@@ -1256,6 +1325,7 @@ cmd_run() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -d|--detach) detach=1 ;;
+      --wait|--start|--quiet|--timeout|--strict|--json) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
       --pass) optarg "$@"
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "run: --pass takes a variable name, got $2"
         caller_env "$2" >/dev/null || die "run: --pass $2: not in this command's environment (export it first)"
@@ -1270,6 +1340,8 @@ cmd_run() {
     shift
   done
   [ $# -gt 0 ] || die "run: nothing to run (omabox run -- CMD ...)"
+  settle_opts_check
+  [ "$SETTLE_WAIT" = 0 ] || [ $detach = 1 ] || die "run: --wait goes with -d (a command run to its end has nothing to wait for)"
   select_box "$name"
   if box_alive; then
     [ ${#up_args[@]} -eq 0 ] || say "box '$NAME' is already up: ${up_args[*]} ignored"
@@ -1277,10 +1349,17 @@ cmd_run() {
     take_over || need_box   # gone while it waited: says so
     if [ $detach = 1 ]; then
       local log; log=$D/home/run-$(date +%s%N).log
+      # --wait: until what it opens has settled (a first frame within 5 s unless --start says).
+      if [ "$SETTLE_WAIT" = 1 ]; then
+        local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+        settle_begin settle --start 5000 "${SETTLE_ARGS[@]}"
+        settle_ready "$SETTLE_JSON"
+      fi
       # setsid -f forks and exits, so nsenter exits too and the command is reparented to the box's
       # PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
-      box_exec setsid -f "$@" </dev/null >"$log" 2>&1
+      settle_act box_exec setsid -f "$@" </dev/null >"$log" 2>&1
       say "started in box '$NAME' (log: $log)"
+      [ "$SETTLE_WAIT" = 0 ] || { settle_end settle "$SETTLE_JSON" "the command was started"; return; }
       return 0
     fi
     local rc=0
@@ -1317,33 +1396,242 @@ cmd_run() {
   return $rc
 }
 
+# --- windows -------------------------------------------------------------------------------------
+
+# The box's mapped windows (finding 81), in hyprctl's order, which is the stacking order: later on
+# top, except that floating windows are above tiled ones, fullscreen above the rest and a special
+# workspace above a normal one. Each with where it is (`at`/`size`: its own surface, no border), its
+# workspace, whether it is on screen (its workspace shown and not an inactive group tab) and `cover`:
+# the windows drawn over part of it, with their geometry for a point test. Shell layers (bar, menus,
+# panels) are not counted: they are full-screen surfaces. win_annotate CLIENTS MONITORS ACTIVEWINDOW
+# shellcheck disable=SC2016 # jq, not shell
+WIN_JQ='
+  def overlaps($o): .at[0] < $o.at[0] + $o.size[0] and $o.at[0] < .at[0] + .size[0]
+    and .at[1] < $o.at[1] + $o.size[1] and $o.at[1] < .at[1] + .size[1];
+  def above($o; $t):
+    if $o.workspace.id < 0 and $t.workspace.id > 0 then true
+    elif $o.workspace.id != $t.workspace.id then false
+    elif ($o.fullscreen > 0) != ($t.fullscreen > 0) then $o.fullscreen > 0
+    elif $o.floating != $t.floating then $o.floating
+    else $o.z > $t.z end;
+  ([$m[] | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0))) as $shown
+  | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
+     | .onscreen = (.workspace.id as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
+  | [$all[] | . as $t | {address, stableId, class, title, initialClass, initialTitle, pid,
+      workspace: .workspace.name, at, size, floating, fullscreen: (.fullscreen > 0), xwayland,
+      active: (.address == $a.address), onscreen,
+      cover: [$all[] | select(.address != $t.address and .onscreen and above(.; $t) and overlaps($t))
+              | {address, class, title, at, size}]}]'
+win_annotate() { jq -c -n --argjson c "$1" --argjson m "$2" --argjson a "$3" "$WIN_JQ"; }
+box_windows() {
+  win_annotate "$(on_box hyprctl -j clients)" "$(on_box hyprctl -j monitors)" "$(on_box hyprctl -j activewindow)"
+}
+
+# A window selector (SEL): active, an address (0x..., address:0x...), pid:N, class:RE, title:RE,
+# initialClass:RE, initialTitle:RE (regular expressions, any case), or a word: the class, or part of
+# the title (any case). Several are all to match. Exactly one window or nothing: none or several is
+# exit 2 with the candidates, never the first match.
+# shellcheck disable=SC2016 # jq, not shell
+WIN_SEL_JQ='
+  def m($s):
+    if $s == "active" then .active
+    elif ($s | test("^(address:)?0x[0-9a-fA-F]+$")) then .address == ($s | sub("^address:"; "") | ascii_downcase)
+    elif ($s | test("^pid:[0-9]+$")) then .pid == ($s[4:] | tonumber)
+    elif ($s | test("^(class|title|initialClass|initialTitle):")) then
+      ($s | capture("^(?<k>[A-Za-z]+):(?<v>.*)$")) as $kv | (.[$kv.k] // "") | test($kv.v; "i")
+    else (.class | ascii_downcase) == ($s | ascii_downcase) or (.title | ascii_downcase | contains($s | ascii_downcase)) end;
+  [.[] | select(. as $w | all($ARGS.positional[]; . as $s | $w | m($s)))]'
+# win_select WINDOWS SEL...: the one window (win_annotate's object), or exit 2.
+win_select() {
+  local wins=$1 hits; shift
+  [ $# -gt 0 ] || die "no window selector"
+  hits=$(jq -c "$WIN_SEL_JQ" --args "$@" <<<"$wins" 2>&1) || { say "bad window selector ($*): ${hits#jq: error*: }"; exit 2; }
+  case $(jq length <<<"$hits") in
+    1) jq -c '.[0]' <<<"$hits"; return ;;
+    0) say "no window matches $*; the box's windows:"; win_lines "$wins" >&2 ;;
+    *) say "$* matches $(jq length <<<"$hits") windows: name one by its address (or add a selector):"; win_lines "$hits" >&2 ;;
+  esac
+  exit 2
+}
+win_lines() {
+  jq -r 'if length == 0 then "  (none)" else .[] | "  \(.address)  \(.class)  \(.title | tojson)  workspace \(.workspace)" end' <<<"$1"
+}
+# 0x... class "title", for messages.
+win_desc() { jq -r '"\(.address) \(.class) \(.title | tojson)"' <<<"$1"; }
+
+# Why a point of a window (window coordinates) cannot be clicked, or nothing.
+# win_blocked WINDOW X Y
+win_blocked() {
+  jq -r --argjson x "$2" --argjson y "$3" '(.at[0] + $x) as $px | (.at[1] + $y) as $py
+    | if .onscreen | not then "not on screen (workspace \(.workspace))"
+      else first(.cover[] | select($px >= .at[0] and $px < .at[0] + .size[0] and $py >= .at[1] and $py < .at[1] + .size[1])
+        | "covered there by \(.address) \(.class) \(.title | tojson)") // empty end' <<<"$1"
+}
+
+# Focus a window as a user would: its workspace comes to the screen (a special one opens), an
+# inactive group tab comes to the front, and a floating window is raised; a tiled one stays under the
+# floats. Waits until it is the active window.
+win_raise() {
+  local addr out; addr=$(jq -r .address <<<"$1")
+  [[ $addr =~ ^0x[0-9a-f]+$ ]] || die "bad window address: $addr"
+  out=$(on_box hyprctl dispatch "hl.dsp.focus({ window = 'address:$addr' })" 2>&1) || true
+  [ "$out" = ok ] || die "could not focus window $addr: $out"
+  if [ "$(jq -r .floating <<<"$1")" = true ]; then
+    out=$(on_box hyprctl dispatch "hl.dsp.window.alter_zorder({ mode = 'top', window = 'address:$addr' })" 2>&1) || true
+    [ "$out" = ok ] || die "could not raise window $addr: $out"
+  fi
+  local deadline=$((SECONDS + 3))
+  until [ "$(on_box hyprctl -j activewindow | jq -r '.address // empty')" = "$addr" ]; do
+    [ $SECONDS -lt $deadline ] || die "window $addr did not take focus"
+    sleep 0.05
+  done
+}
+
+# The screen point for window coordinates X,Y of the window SEL picks, raised first when it is not on
+# screen or something covers that point (unless RAISE is 0); a point still covered is refused, naming
+# what covers it. win_point RAISE X Y SEL... → "SX SY"
+win_point() {
+  local raise=$1 x=$2 y=$3 w desc why; shift 3
+  # `|| exit`: win_point runs in its caller's $(...), where errexit is off (no inherit_errexit), so
+  # win_select's exit 2 (none or several) would otherwise fall through to a wrong message and exit 1.
+  w=$(win_select "$(box_windows)" "$@") || exit $?
+  desc=$(win_desc "$w")
+  jq -e --argjson x "$x" --argjson y "$y" '$x < .size[0] and $y < .size[1]' <<<"$w" >/dev/null ||
+    die "$x,$y is outside window $desc ($(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w"); coordinates are the window's own)"
+  why=$(win_blocked "$w" "$x" "$y")
+  if [ -n "$why" ]; then
+    [ "$raise" = 1 ] || die "window $desc is $why (click --window raises it; --no-raise and pointer do not)"
+    win_raise "$w"
+    w=$(win_select "$(box_windows)" "$(jq -r .address <<<"$w")") || exit $?
+    why=$(win_blocked "$w" "$x" "$y")
+    [ -z "$why" ] || die "window $desc is still $why after focusing it: move or close that window first"
+  fi
+  jq -r --argjson x "$x" --argjson y "$y" '"\(.at[0] + $x) \(.at[1] + $y)"' <<<"$w"
+}
+
+cmd_windows() {
+  local name="" json=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
+      -*) die "windows: unknown option $1" ;;
+      *) die "windows: unexpected $1" ;;
+    esac
+    shift
+  done
+  select_box "$name"; need_box
+  local wins; wins=$(box_windows)
+  if [ $json = 1 ]; then jq . <<<"$wins"; return; fi
+  # Bottom to top, as they stack.
+  printf '%-16s %-8s %-10s %-20s %-22s %-16s %s\n' ADDRESS PID WORKSPACE STATE GEOMETRY CLASS TITLE
+  jq -r '.[] | [.address, .pid, .workspace,
+      ((if .onscreen | not then "off-screen" elif .cover != [] then "covered" else "on-screen" end) + (if .active then ",active" else "" end)),
+      "\(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])", .class, (.title | tojson)] | @tsv' <<<"$wins" |
+    while IFS=$'\t' read -r a p ws st g c t; do
+      printf '%-16s %-8s %-10s %-20s %-22s %-16s %s\n' "$a" "$p" "$ws" "$st" "$g" "$c" "$t"
+    done
+}
+
 # --- driving ------------------------------------------------------------------------------------
 
+# Width and height of a PNG, from its header.
+png_size() {
+  local b; read -r -a b < <(od -An -tu1 -j16 -N8 -- "$1")
+  [ ${#b[@]} = 8 ] || return 1
+  echo "$(((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3])) $(((b[4] << 24) | (b[5] << 16) | (b[6] << 8) | b[7]))"
+}
+
+# What every shot is of, for `click --in` / `pointer --in` (finding 81): $D/shots.tsv, which the box
+# cannot see. One line per shot: path, size and mtime, the box's mode, `window ADDRESS` or `screen X,Y`
+# (the image's origin), the size it covers on screen and the image's size (smaller with --fit).
+shot_record() {
+  local f=$D/shots.tsv
+  [[ $1 != *[$'\t\n']* ]] || { say "shot: a path with a tab or newline: no --in for this one"; return 0; }
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$(stat -c '%s %.9Y' -- "$1")" "$2" "$3" "$4" >> "$f"
+  if [ "$(wc -l < "$f")" -gt 500 ]; then tail -n 200 "$f" > "$f.new" && mv "$f.new" "$f"; fi
+}
+
+# The screen pixel (from the image's origin) under the centre of image pixel P, for an image of
+# IMAGE pixels covering SCREEN pixels: P itself at scale 1. img_px P IMAGE SCREEN
+img_px() { echo $(((2 * $1 + 1) * $3 / (2 * $2))); }
+
+# Image pixel X,Y of a recorded shot → "window ADDRESS WX WY" (the window's own coordinates) or
+# "screen SX SY". Refused: a file that is not a shot of this box, changed since, or taken in another
+# screen mode; a window that is gone or resized. shot_point FILE X Y
+shot_point() {
+  local f rec stamp mode kind ref geo x=$2 y=$3
+  f=$(readlink -f -- "$1" 2>/dev/null) && [ -f "$f" ] || die "--in: no such file: $1"
+  rec=$(P=$f awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" 2>/dev/null | tail -n 1)   # (-v would unescape \)
+  [ -n "$rec" ] || die "--in: $1 is not a shot of box '$NAME' (take one with omabox shot)"
+  IFS=$'\t' read -r _ stamp mode kind geo <<<"$rec"
+  ref=${kind#* } kind=${kind%% *}
+  [ "$(stat -c '%s %.9Y' -- "$f")" = "$stamp" ] || die "--in: $1 changed since the shot: take a new one"
+  local screen; screen=$(box_screen)
+  [ "${screen#* }" = "$mode" ] || die "--in: the box's mode is ${screen#* }, the shot was taken at $mode: take a new one"
+  local lw lh iw ih; IFS='x ' read -r lw lh iw ih <<<"$geo"
+  [ "$x" -lt "$iw" ] && [ "$y" -lt "$ih" ] || die "--in: $x,$y is outside the image (${iw}x$ih)"
+  local rx ry; rx=$(img_px "$x" "$iw" "$lw") ry=$(img_px "$y" "$ih" "$lh")
+  if [ "$kind" = window ]; then
+    local w; w=$(jq -c --arg a "$ref" 'first(.[] | select(.address == $a)) // empty' <<<"$(box_windows)")
+    [ -n "$w" ] || die "--in: the window of that shot ($ref) is gone"
+    [ "$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")" = "${lw}x$lh" ] ||
+      die "--in: window $(win_desc "$w") is $(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w") now, ${lw}x$lh in the shot: take a new one"
+    echo "window $ref $rx $ry"
+  else
+    echo "screen $((${ref%,*} + rx)) $((${ref#*,} + ry))"
+  fi
+}
+
 cmd_shot() {
-  local name="" out="" geom="" active=0
+  local name="" out="" geom="" sels=() fit=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
       -g) optarg "$@"; geom=$2; shift ;;
-      --active) active=1 ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
+      --fit) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{1,4}$ ]] || die "shot: --fit takes the longest side in pixels (10-99999), got $2"; fit=$2; shift ;;
       -*) die "shot: unknown option $1" ;;
       *) out=$1 ;;
     esac
     shift
   done
+  [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "shot: -g or --window (--active), not both"
   select_box "$name"; need_box
   [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
   [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
   out=$(readlink -f -- "$out")
-  if [ $active = 1 ]; then
-    geom=$(on_box hyprctl -j activewindow | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else empty end')
-    [ -n "$geom" ] || die "shot --active: no focused window in box '$NAME'"
+  # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
+  # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
+  local grim=(grim -l 1) win="" where lw lh
+  if [ ${#sels[@]} -gt 0 ]; then
+    win=$(win_select "$(box_windows)" "${sels[@]}")
+    local id; id=$(jq -r .stableId <<<"$win")
+    [[ $id =~ ^[0-9a-fA-F]+$ ]] || die "shot: window $(win_desc "$win") has no stableId to capture it by ($id)"
+    grim+=(-T "$id")
+    where="window $(jq -r .address <<<"$win")"
+    read -r lw lh < <(jq -r '"\(.size[0]) \(.size[1])"' <<<"$win")
+  elif [ -n "$geom" ]; then
+    [[ $geom =~ ^(-?[0-9]+),(-?[0-9]+)\ ([1-9][0-9]*)x([1-9][0-9]*)$ ]] || die "shot: -g is \"X,Y WxH\", got $geom"
+    grim+=(-g "$geom")
+    where="screen ${BASH_REMATCH[1]},${BASH_REMATCH[2]}" lw=${BASH_REMATCH[3]} lh=${BASH_REMATCH[4]}
+  else
+    local ext; ext=$(extent)
+    where="screen 0,0" lw=${ext%x*} lh=${ext#*x}
   fi
-  local grim=(grim); [ -n "$geom" ] && grim+=(-g "$geom")
+  # --fit: grim scales the capture (-s); it truncates the size, so the factor is rounded up.
+  local long=$((lw > lh ? lw : lh))
+  if [ -n "$fit" ] && [ "$long" -gt "$fit" ]; then
+    grim+=(-s "$(awk -v n="$fit" -v l="$long" 'BEGIN { printf "%.6f", int(n / l * 1e6 + 1) / 1e6 }')")
+  fi
   # grim runs in the box (on_box) and writes to stdout; the file is ours. Renamed into place, so a
-  # failed capture never leaves a half-written or empty PNG at $out.
-  if ! on_box timeout 10 "${grim[@]}" - > "$out.part" || [ ! -s "$out.part" ]; then
+  # failed capture never leaves a half-written or empty PNG at $out. A window's first capture can be
+  # a frame from long ago: one that is off screen gets no frame callbacks, so it stops rendering, and
+  # the capture itself is what makes it draw again (finding 81). So a window is captured twice.
+  grab() { on_box timeout 10 "${grim[@]}" -; }
+  if ! { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } || ! grab > "$out.part" || [ ! -s "$out.part" ]; then
     rm -f "$out.part"
     # Never tell an agent to show the window: switching the user's workspace for a frame is what the
     # box exists to avoid. A restart is the user's to do: a box from before drawn_hidden needs one, and
@@ -1359,23 +1647,55 @@ cmd_shot() {
     die "shot: grim failed"
   fi
   mv "$out.part" "$out"
+  local iw ih screen
+  read -r iw ih < <(png_size "$out") || die "shot: $out is not a PNG"
+  screen=$(box_screen)
+  shot_record "$out" "${screen#* }" "$where" "${lw}x$lh ${iw}x$ih"
+  # One line on stderr when image pixels are not screen pixels (cropped or scaled); stdout is the path.
+  local k=""
+  [ "$iw" = "$lw" ] || k=" (x$(awk -v a="$lw" -v b="$iw" 'BEGIN { s = sprintf("%.2f", a / b); sub(/\.?0+$/, "", s); print s }'))"
+  if [ -n "$win" ]; then
+    local state; state=$(jq -r 'if .onscreen | not then ", not on screen"
+      elif .cover != [] then ", covered by \(.cover[0].address) \(.cover[0].class) \(.cover[0].title | tojson)"
+        + (if (.cover | length) > 1 then " and \(.cover | length - 1) more" else "" end)
+      else "" end' <<<"$win")
+    say "window $(win_desc "$win") ${lw}x$lh at $(jq -r '"\(.at[0]),\(.at[1])"' <<<"$win"), workspace $(jq -r .workspace <<<"$win")$state${k:+; image ${iw}x$ih$k}; click with --in $out"
+  elif [ "$where $lw $iw" != "screen 0,0 $lw $lw" ] || [ "$lh" != "$ih" ]; then
+    say "${iw}x$ih image of the screen's ${lw}x$lh at ${where#screen }$k; click with --in $out"
+  fi
   echo "$out"
 }
 
 # Keys through tools/keyboard (not wtype: finding 13). Tokens: COMBO (super+space, ctrl+shift+t,
-# Return, a), -t TEXT, -s MS. The layout is the box's, so keycodes mean what Hyprland thinks they mean.
+# Return, a), -t TEXT, -s MS, --pass VAR. The layout is the box's, so keycodes mean what Hyprland
+# thinks they mean. --pass types a variable of the caller's (finding 84): its value goes to the tool's
+# stdin (printf is a builtin: no argv), never on a command line; the tool reads one text per -T.
 cmd_keys() {
-  local name="" toks=()
+  local name="" toks=() sels=() pass=()
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
-      *) toks+=("$1") ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      # A value is the tool's, whatever it looks like (-t --wait types "--wait", -t --pass "--pass").
+      -t|-s|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
+      --pass) optarg "$@"
+        [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "keys: --pass takes a variable name, got $2"
+        caller_env "$2" >/dev/null || die "keys: --pass $2: not in this command's environment (export it first)"
+        pass+=("$2"); toks+=(-T); shift ;;
+      *) settle_opt "$@"
+         if [ "$SETTLE_TOOK" = 0 ]; then toks+=("$1"); else shift $((SETTLE_TOOK - 1)); fi ;;
     esac
     shift
   done
+  settle_opts_check
   set -- "${toks[@]}"
   select_box "$name"; need_box
   [ $# -gt 0 ] || die "keys: nothing to send"
+  # --window: that window focused first (finding 81), as a click on it would.
+  if [ ${#sels[@]} -gt 0 ]; then
+    local w; w=$(win_select "$(box_windows)" "${sels[@]}")
+    [ "$(jq -r .active <<<"$w")" = true ] || win_raise "$w"
+  fi
   # The box's own keyboard settings, so keycodes mean to the keymap what they mean to its binds
   # (kb_options like altwin:swap_lalt_lwin move Super).
   local layout variant model options
@@ -1383,39 +1703,425 @@ cmd_keys() {
   variant=$(on_box hyprctl -j getoption input:kb_variant | jq -r '.str // ""' | cut -d, -f1)
   model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
   options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
-  on_box "$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@"
-}
-
-cmd_click() {
-  local name="" btn=left double=0 xy=()
+  local kb=("$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@")
+  # Marks for a peek window, once sent: a secret only as its length.
+  local lines=() i=0 t
   while [ $# -gt 0 ]; do
     case $1 in
-      -b|--box) optarg "$@"; name=$2; shift ;;
-      --double) double=1 ;;
-      left|right|middle) btn=$1 ;;
-      *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$1") ;;
+      -s|--delay) shift ;;
+      -t) t=${2//[[:cntrl:]]/ }; [ -z "$t" ] || lines+=("text ${t:0:200}"); shift ;;
+      -T) t=$(caller_env "${pass[i]}"); [ -z "$t" ] || lines+=("secret ${#t}"); t=""; i=$((i + 1)) ;;
+      *) lines+=("combo $1") ;;
     esac
     shift
   done
-  [ ${#xy[@]} -eq 2 ] || die "click: need X Y"
-  select_box "$name"; need_box
-  local seq=(move "${xy[0]}" "${xy[1]}" click "$btn")
-  [ $double = 1 ] && seq+=(click "$btn")
-  on_box "$BOX_POINTER" --extent "$(extent)" "${seq[@]}"
+  if [ "$SETTLE_WAIT" = 1 ]; then
+    # --wait: the screen before the keys, then a change and quiet after them. The cursor hides on a
+    # key press: not a change.
+    local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+    settle_begin settle "${SETTLE_ARGS[@]}"
+    settle_ready "$SETTLE_JSON"
+    settle_act keys_send
+    mark "${lines[@]}"
+    settle_end settle "$SETTLE_JSON" "the keys were sent"
+  else
+    keys_send
+    mark "${lines[@]}"
+  fi
+}
+# The keyboard tool (kb, pass: cmd_keys's), each --pass value on its stdin, NUL-terminated.
+keys_send() {
+  local v
+  for v in "${pass[@]}"; do caller_env "$v"; printf '\0'; done | on_box "${kb[@]}"
 }
 
-# -b NAME before the arguments (and before `--` for pointer); everything else goes to the tool.
+# X Y are screen pixels; with --window SEL the window's own (0,0 is its top left corner, as in its
+# `shot --window`), with --in SHOT that image's pixels (finding 81).
+cmd_click() {
+  local name="" btn=left double=0 xy=() sels=() raise=1 in=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --in) optarg "$@"; in=$2; shift ;;
+      --no-raise) raise=0 ;;
+      --double) double=1 ;;
+      left|right|middle) btn=$1 ;;
+      --*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
+      *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$((10#$1))") ;;
+    esac
+    shift
+  done
+  settle_opts_check
+  [ ${#xy[@]} -eq 2 ] || die "click: need X Y"
+  [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "click: --in or --window, not both"
+  [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "click: --no-raise goes with --window or --in"
+  select_box "$name"; need_box
+  local x=${xy[0]} y=${xy[1]} p
+  if [ -n "$in" ]; then
+    p=$(shot_point "$in" "$x" "$y")
+    if [[ $p == window* ]]; then local a; read -r _ a x y <<<"$p"; sels=("$a"); else read -r _ x y <<<"$p"; fi
+  fi
+  if [ ${#sels[@]} -gt 0 ]; then
+    p=$(win_point "$raise" "$x" "$y" "${sels[@]}")
+    read -r x y <<<"$p"
+  fi
+  local seq=(move "$x" "$y" click "$btn")
+  [ $double = 1 ] && seq+=(click "$btn")
+  local ext; ext=$(extent)
+  # The mark (for a peek window) has the screen pixels the click went to, however they were given.
+  if [ "$SETTLE_WAIT" != 1 ]; then
+    on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+    mark "ptr $ext ${seq[*]}"
+    return
+  fi
+  # --wait: the cursor where it is and where it goes is not the change looked for.
+  local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+  SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
+  settle_begin settle "${SETTLE_ARGS[@]}"
+  settle_ready "$SETTLE_JSON"
+  settle_act on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+  mark "ptr $ext ${seq[*]}"
+  settle_end settle "$SETTLE_JSON" "the click was sent"
+}
+
+# -b NAME and --in SHOT before the arguments (and before `--`); everything else goes to the tool.
+# --in maps each `move X Y` from that shot's image to the screen (a window's must be on screen: this
+# is raw, it raises nothing).
 cmd_pointer() {
-  local name=""
+  local name="" in=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift 2 ;;
+      --in) optarg "$@"; in=$2; shift 2 ;;
       --) shift; break ;;
       *) break ;;
     esac
   done
   select_box "$name"; need_box
-  on_box "$BOX_POINTER" --extent "$(extent)" "$@"
+  if [ -n "$in" ]; then
+    local args=() p
+    while [ $# -gt 0 ]; do
+      if [ "$1" = move ] && [ $# -ge 3 ]; then
+        [[ $2 =~ ^[0-9]+$ && $3 =~ ^[0-9]+$ ]] || die "pointer --in: move takes image pixels, got $2 $3"
+        p=$(shot_point "$in" "$((10#$2))" "$((10#$3))")
+        if [[ $p == window* ]]; then
+          local a wx wy; read -r _ a wx wy <<<"$p"
+          p=$(win_point 0 "$wx" "$wy" "$a")
+        else p=${p#screen }; fi
+        args+=(move "${p% *}" "${p#* }"); shift 3
+      else args+=("$1"); shift; fi
+    done
+    set -- "${args[@]}"
+  fi
+  # The mark has screen pixels: --in's moves as mapped above.
+  local ext; ext=$(extent)
+  on_box "$BOX_POINTER" --extent "$ext" "$@"
+  mark "ptr $ext $*"
+}
+
+# --- waiting ------------------------------------------------------------------------------------
+# `omabox wait COND` and `--wait` on keys, click and run -d (finding 82): until the screen holds still
+# or changes (tools/still, in the box), a window or layer is there or gone, or a command succeeds.
+# One line on stdout (or --json); exit 0 satisfied, 124 unsatisfied at the deadline (as timeout(1)),
+# 1 unknown (the box went down, its screen is not rendered): never 0 for what could not be seen.
+
+WAIT_MAX_MS=600000   # --timeout: 10 min at most
+
+# 300ms, 2s, 1.5s, 2m, or a bare number of seconds → milliseconds (at least 1).
+ms_duration() {
+  [[ $1 =~ ^([0-9]{1,6}(\.[0-9]{1,3})?)(ms|s|m)?$ ]] || return 1
+  awk -v n="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]:-s}" 'BEGIN {
+    ms = n * (u == "ms" ? 1 : u == "m" ? 60000 : 1000); ms = int(ms + 0.5); if (ms < 1) exit 1; print ms }'
+}
+# Milliseconds as seconds, 2 decimals: 430 → 0.43s.
+ms_s() { awk -v m="$1" 'BEGIN { printf "%.2fs", m / 1000 }'; }
+
+# Where the software cursor is drawn (it is in every frame: finding 82), as an omabox-still rectangle
+# around the point "X Y": the arrow is 16x27 from 1 px up and left of its hotspot; the text I-beam
+# (over a terminal or a field) is centred on it, ~10 px above and 5 left; the busy cursor shown while
+# the box starts reaches ~40 px down.
+cursor_rect() { echo "$((${1% *} - 16)),$((${1#* } - 16)),64,64"; }
+cursor_now() { on_box hyprctl cursorpos | tr -d ' ' | awk -F, '/^[0-9]+,[0-9]+$/ { print $1, $2 }'; }
+
+# omabox-still in the box, waiting on its first frame (the baseline). Its stdin is a pipe held here:
+# when this process goes (an action failed, Ctrl-C), the tool sees it close and ends. Sets
+# SETTLE_IN/SETTLE_OUT (fds), SETTLE_PID; SETTLE_T0 is when the baseline was there (ms, for messages).
+# settle_begin MODE TOOL_ARGS...
+settle_begin() {
+  # (Before any input is sent: a box started by an omabox without the tool cannot watch.)
+  on_box test -x "$BOX_STILL" || die "box '$NAME' has no $BOX_STILL (started by an older omabox): omabox down $NAME, then up again"
+  local dir line; dir=$(mktemp -d)
+  mkfifo "$dir/in" "$dir/out"
+  on_box "$BOX_STILL" "$@" --tied < "$dir/in" > "$dir/out" 2>&1 &
+  SETTLE_PID=$!
+  exec {SETTLE_IN}>"$dir/in" {SETTLE_OUT}<"$dir/out"
+  rm -rf "$dir"
+  SETTLE_ERR=""
+  while :; do
+    if ! read -r -t 5 -u "$SETTLE_OUT" line; then line=""; break; fi
+    [[ $line == ready* ]] && break
+    [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
+    SETTLE_ERR+="${SETTLE_ERR:+; }$line"
+  done
+  SETTLE_LINE=$line
+  SETTLE_T0=$(date +%s%3N)
+}
+
+# Before keys, click or run -d act: no `ready` (the tool refused its options, or cannot watch the
+# screen) means nothing is sent, and the answer is unknown (1), never the action done unwatched.
+# settle_ready JSON
+settle_ready() {
+  [[ $SETTLE_LINE == ready* ]] && return 0
+  settle_end settle "$1" "" || true
+  say "nothing was sent: the screen could not be watched"
+  exit 1
+}
+
+# Run an action (a function or command) without the settle pipes: nothing in the box gets them.
+settle_act() { if [ -n "${SETTLE_IN:-}" ]; then "$@" {SETTLE_IN}>&- {SETTLE_OUT}<&-; else "$@"; fi; }
+
+# The tool's answer: prints the line (or JSON), returns 0/124/1. COND names it in messages ("still",
+# "change", "settle"); SENT is what an action already did, said on stderr when the answer is not yes.
+# settle_end COND JSON SENT
+settle_end() {
+  local cond=$1 json=$2 sent=$3 line=$SETTLE_LINE rc used=$SECONDS
+  if [[ $line == ready* ]]; then
+    line=""
+    while :; do
+      if read -r -t 1 -u "$SETTLE_OUT" line; then
+        [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
+        SETTLE_ERR+="${SETTLE_ERR:+; }$line"; line=""; continue
+      else
+        rc=$?; [ $rc -gt 128 ] || { line=""; break; }   # EOF: the tool is gone without an answer
+      fi
+      # Waiting is using the box (idle expiry, finding 59).
+      if [ $((SECONDS - used)) -ge 30 ]; then touch "$D/used" 2>/dev/null || true; used=$SECONDS; fi
+    done
+  fi
+  exec {SETTLE_IN}>&- {SETTLE_OUT}<&-
+  SETTLE_IN="" SETTLE_OUT=""
+  wait "$SETTLE_PID" 2>/dev/null || true
+  local res reason kv; local -A f=()
+  read -r res reason kv <<<"$line"
+  for kv in $kv; do f[${kv%%=*}]=${kv#*=}; done
+  if [ -z "$res" ]; then
+    res=unknown reason=lost
+  fi
+  if [ "$res" = unknown ]; then
+    case $reason in
+      not-rendered)
+        # A hidden interactive box is drawn (finding 90) unless it is older than that or confirm-close
+        # replaced its window: as shot says, a restart is the user's, and nobody shows the window.
+        if [ "$(meta mode)" != interactive ]; then reason="box '$NAME' sent no frame"
+        elif [ "$(meta drawn_hidden)" != true ]; then
+          reason="box '$NAME' not rendered: an older omabox started it, and it is not drawn while hidden (it needs a restart: ask the user; never switch their workspace or focus)"
+        elif [ -f "$D/run/omabox.reopened" ]; then
+          reason="box '$NAME' not rendered: its window was replaced (confirm-close) and is not drawn while hidden (ask the user; never switch their workspace or focus)"
+        else reason="box '$NAME' sent no frame ($(ws_text "$(meta workspace)"); ask the user; never switch their workspace or focus)"; fi ;;
+      refused) reason="box '$NAME' refused a screen capture${SETTLE_ERR:+ ($SETTLE_ERR)}" ;;
+      off-screen) reason="the region watched is not on the screen of box '$NAME'" ;;
+      *) # Its compositor gone: the box is (being) taken down.
+         local end gone; gone=$(($(date +%s%3N) - SETTLE_T0)) end=$((SECONDS + 2))
+         while box_alive && [ $SECONDS -lt $end ]; do sleep 0.2; done
+         if ! box_alive; then reason="box '$NAME' went down after $(ms_s "$gone")"
+         else reason="lost the box's screen${SETTLE_ERR:+ ($SETTLE_ERR)}"; fi ;;
+    esac
+  fi
+  local geo="" ign=""
+  [ "${f[change]:--}" = - ] || geo=$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${f[change]}")
+  [ "${f[ignored]:--}" = - ] || ign=$(awk -F, -v w="${f[why]}" '{ printf "%sx%s at %s,%s: %s", $3, $4, $1, $2, (w == "caret" ? "caret?" : w) }' <<<"${f[ignored]}")
+  local msg
+  case $res:$reason in
+    satisfied:changed) msg="changed after $(ms_s "${f[last]}") at $geo" ;;
+    satisfied:still|satisfied:settled)
+      msg="$([ "$reason" = still ] && echo still || echo settled) after $(ms_s "${f[t]}")"
+      if [ -n "$geo" ]; then msg+=" (last change $(ms_s "${f[last]}") at $geo${ign:+; ignored $ign})"
+      else msg+=" (no change${ign:+; ignored $ign})"; fi ;;
+    unsatisfied:nothing) msg="nothing changed in $(ms_s "${f[t]}")${ign:+ (ignored $ign)}" ;;
+    unsatisfied:changing) msg="still changing after $(ms_s "${f[t]}") (last change $(ms_s "${f[last]}") at $geo)" ;;
+    *) msg=$reason ;;
+  esac
+  if [ "$json" = 1 ]; then
+    jq -nc --arg res "$res" --arg cond "$cond" --arg msg "$msg" --arg t "${f[t]:-}" --arg first "${f[first]:-}" \
+      --arg last "${f[last]:-}" --arg ch "${f[change]:--}" --arg ig "${f[ignored]:--}" --arg why "${f[why]:--}" --arg frames "${f[frames]:-}" '
+      def secs: if . == "" or . == "-" then null else tonumber / 1000 end;
+      def box: if . == "-" then null else split(",") | map(tonumber) | {x: .[0], y: .[1], w: .[2], h: .[3]} end;
+      {result: $res, condition: $cond, message: $msg, elapsed: ($t | secs), first_change: ($first | secs),
+       last_change: ($last | secs), change: ($ch | box),
+       ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
+       frames: (if $frames == "" then null else $frames | tonumber end)}'
+  else
+    echo "$res: $msg"
+  fi
+  case $res in
+    satisfied) return 0 ;;
+    unsatisfied) [ -z "$sent" ] || say "$sent all the same (124 is about the screen): take a shot before sending anything again"; return 124 ;;
+    *) [ -z "$sent" ] || say "$sent before the screen could be watched to the end"; return 1 ;;
+  esac
+}
+
+# --wait on keys, click and run -d: its options, taken where the command parses its own. Sets
+# SETTLE_WAIT, SETTLE_ARGS (for omabox-still), SETTLE_JSON, and SETTLE_TOOK: how many words it took (0:
+# not one of these). Not in $(...): it sets globals. settle_opt OPT [VALUE]
+SETTLE_ARGS=() SETTLE_JSON=0 SETTLE_WAIT=0 SETTLE_TOOK=0
+settle_opt() {
+  local ms
+  SETTLE_TOOK=1
+  case $1 in
+    --wait) SETTLE_WAIT=1 ;;
+    --json) SETTLE_JSON=1 ;;
+    --start|--quiet|--timeout)
+      if [ $# -lt 2 ] || ! ms=$(ms_duration "$2"); then die "$1 takes a duration: 300ms, 2s, 1m"; fi
+      [ "$ms" -le $WAIT_MAX_MS ] || die "$1 is at most 10m"
+      SETTLE_ARGS+=("$1" "$ms"); SETTLE_TOOK=2 ;;
+    --strict) SETTLE_ARGS+=(--strict) ;;
+    *) SETTLE_TOOK=0 ;;
+  esac
+}
+settle_opts_check() {
+  [ "$SETTLE_WAIT" = 1 ] || { [ ${#SETTLE_ARGS[@]} = 0 ] && [ "$SETTLE_JSON" = 0 ]; } ||
+    die "--start, --quiet, --timeout, --strict and --json go with --wait"
+}
+
+# The polled conditions (wait window, layer, cmd): a probe prints "yes DETAIL" or "no DETAIL"; exit 2
+# is a selector that can never be answered (several windows), anything else the box not answering.
+# shellcheck disable=SC2329 # called through poll_until
+win_probe() {
+  local want=$1 wins hits n w; shift
+  wins=$(box_windows 2>/dev/null) || return 1
+  hits=$(jq -c "$WIN_SEL_JQ" --args "$@" <<<"$wins" 2>&1) || { say "bad window selector ($*): ${hits#jq: error*: }"; return 2; }
+  n=$(jq length <<<"$hits")
+  if [ "$n" -gt 1 ] && [ "$want" != gone ]; then
+    say "$* matches $n windows: name one by its address (or add a selector):"; win_lines "$hits" >&2; return 2
+  fi
+  w=$(jq -c '.[0] // empty' <<<"$hits")
+  case $want in
+    gone) if [ "$n" = 0 ]; then echo yes; else echo "no $n matching"; fi ;;
+    *) if [ "$n" = 0 ]; then echo no
+       elif [ "$want" = focused ] && [ "$(jq -r .active <<<"$w")" != true ]; then echo "no $(win_desc "$w") is there"
+       else echo "yes $(jq -r '"\(.address) \(.class) \(.title | tojson) at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" + (if .active then ", focused" else "" end)' <<<"$w")"; fi ;;
+  esac
+}
+# shellcheck disable=SC2329 # called through poll_until
+layer_probe() {
+  local want=$1 ns=$2 layers l
+  layers=$(on_box hyprctl -j layers 2>/dev/null) || return 1
+  l=$(jq -r --arg n "$ns" 'first(.. | objects | select(.namespace? == $n) | "\(.x),\(.y) \(.w)x\(.h)") // empty' <<<"$layers")
+  if [ "$want" = gone ]; then if [ -z "$l" ]; then echo yes; else echo no; fi
+  elif [ -n "$l" ]; then echo "yes at $l"; else echo no; fi
+}
+# One try of `wait cmd`: the command in the box, cut off at the time left.
+# shellcheck disable=SC2329 # called through poll_until
+cmd_probe() {
+  local left=$((POLL_TMO - ($(date +%s%3N) - POLL_T0))) rc=0
+  box_alive || return 1
+  box_exec timeout -k 1 "$(awk -v m="$left" 'BEGIN { printf "%.3f", (m < 100 ? 100 : m) / 1000 }')" "$@" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then echo yes; else echo "no exit $rc"; fi
+}
+
+# Poll PROBE every 100 ms until it says yes NEED times in a row (2 for a window or layer: one caught
+# mid-map or mid-close is not an answer), or the deadline. YES and NO are the condition in words.
+# poll_until YES NO NEED TIMEOUT_MS JSON PROBE...
+poll_until() {
+  local yes_text=$1 no_text=$2 need=$3 json=$5 out="" rc yes=0 used=$SECONDS res msg now detail=""
+  POLL_TMO=$4 POLL_T0=$(date +%s%3N); shift 5
+  while :; do
+    rc=0; out=$("$@") || rc=$?
+    now=$(($(date +%s%3N) - POLL_T0))
+    [ $rc != 2 ] || exit 2
+    if [ $rc != 0 ]; then
+      box_alive && die "wait: could not ask box '$NAME'"
+      res=unknown msg="box '$NAME' went down after $(ms_s $now)"; break
+    fi
+    detail=${out#* }; [ "$detail" != "$out" ] || detail=""
+    if [[ $out == yes* ]]; then
+      yes=$((yes + 1)); [ $yes -lt "$need" ] || { res=satisfied msg="$yes_text after $(ms_s $now)${detail:+: $detail}"; break; }
+    else yes=0; fi
+    if [ $now -ge "$POLL_TMO" ]; then res=unsatisfied msg="$no_text after $(ms_s $now)${detail:+ ($detail)}"; break; fi
+    if [ $((SECONDS - used)) -ge 30 ]; then touch "$D/used" 2>/dev/null || true; used=$SECONDS; fi
+    sleep 0.1
+  done
+  if [ "$json" = 1 ]; then
+    jq -nc --arg res "$res" --arg cond "$1" --arg msg "$msg" --arg t "$now" --arg d "$detail" \
+      '{result: $res, condition: ($cond | sub("_probe$"; "") | sub("^win$"; "window")), message: $msg, elapsed: ($t | tonumber / 1000),
+        detail: (if $d == "" then null else $d end)}'
+  else
+    echo "$res: $msg"
+  fi
+  case $res in satisfied) return 0 ;; unsatisfied) return 124 ;; *) return 1 ;; esac
+}
+
+cmd_wait() {
+  local name="" json=0 tmo=10000 cond="" quiet="" strict=0 geom="" sels=() want="" ns="" run=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
+      --timeout) optarg "$@"; tmo=$(ms_duration "$2") || die "wait: --timeout takes a duration: 500ms, 10s, 2m"
+        [ "$tmo" -le $WAIT_MAX_MS ] || die "wait: --timeout is at most 10m (got $2)"; shift ;;
+      --quiet) optarg "$@"; quiet=$(ms_duration "$2") || die "wait: --quiet takes a duration: 300ms, 1s"
+        [ "$quiet" -le $WAIT_MAX_MS ] || die "wait: --quiet is at most 10m (got $2)"; shift ;;
+      --strict) strict=1 ;;
+      -g) optarg "$@"; geom=$2; shift ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --gone) want=gone ;;
+      --focused) want=focused ;;
+      --) shift; [ "$cond" = cmd ] || die "wait: -- goes with cmd (omabox wait cmd -- CMD ...)"; run=("$@"); break ;;
+      -*) die "wait: unknown option $1" ;;
+      *) if [ -z "$cond" ]; then cond=$1
+         elif [ "$cond" = window ]; then sels+=("$1")
+         elif [ "$cond" = layer ] && [ -z "$ns" ]; then ns=$1
+         else die "wait: unexpected $1"; fi ;;
+    esac
+    shift
+  done
+  case $cond in
+    still|change)
+      [ -z "$want" ] || die "wait: --gone and --focused go with window or layer"
+      [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "wait: -g or --window, not both" ;;
+    window) [ ${#sels[@]} -gt 0 ] || die "wait window: which window? (a SEL, as for shot --window)"
+      [ -z "$geom$quiet" ] && [ $strict = 0 ] || die "wait window: -g, --quiet and --strict go with still and change" ;;
+    layer) [ -n "$ns" ] || die "wait layer: which layer? its namespace (omabox hyprctl layers): omarchy-menu, ..."
+      [ "$want" != focused ] || die "wait layer: --gone or nothing"
+      [ ${#sels[@]} = 0 ] && [ -z "$geom$quiet" ] && [ $strict = 0 ] || die "wait layer: only --gone" ;;
+    cmd) [ ${#run[@]} -gt 0 ] || die "wait cmd: nothing to run (omabox wait cmd -- CMD ...)" ;;
+    "") die "wait: for what? still, change, window SEL, layer NAMESPACE or cmd -- CMD (omabox help)" ;;
+    *) die "wait: unknown condition $cond (still, change, window, layer, cmd)" ;;
+  esac
+  [ "$cond" != change ] || [ -z "$quiet" ] || die "wait change: no --quiet (that is still's)"
+  select_box "$name"; need_box
+  case $cond in
+    window)
+      local w="window ${sels[*]}"
+      case $want in
+        gone) poll_until "$w gone" "$w still there" 2 "$tmo" "$json" win_probe gone "${sels[@]}" ;;
+        focused) poll_until "$w focused" "$w not focused" 2 "$tmo" "$json" win_probe focused "${sels[@]}" ;;
+        *) poll_until "$w" "no $w" 2 "$tmo" "$json" win_probe present "${sels[@]}" ;;
+      esac ;;
+    layer)
+      if [ "$want" = gone ]; then poll_until "layer $ns gone" "layer $ns still there" 2 "$tmo" "$json" layer_probe gone "$ns"
+      else poll_until "layer $ns" "no layer $ns" 2 "$tmo" "$json" layer_probe present "$ns"; fi ;;
+    cmd) poll_until "cmd" "cmd still failing" 1 "$tmo" "$json" cmd_probe "${run[@]}" ;;
+    still|change)
+      local args=(--timeout "$tmo") region="" p
+      [ -z "$quiet" ] || args+=(--quiet "$quiet")
+      [ $strict = 0 ] || args+=(--strict)
+      if [ -n "$geom" ]; then
+        [[ $geom =~ ^(-?[0-9]+),(-?[0-9]+)\ ([1-9][0-9]*)x([1-9][0-9]*)$ ]] || die "wait: -g is \"X,Y WxH\", got $geom"
+        region="${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]},${BASH_REMATCH[4]}"
+      elif [ ${#sels[@]} -gt 0 ]; then
+        # Its place on the screen: what is drawn there is what is watched.
+        local w; w=$(win_select "$(box_windows)" "${sels[@]}")
+        [ "$(jq -r .onscreen <<<"$w")" = true ] || die "wait: window $(win_desc "$w") is not on screen (workspace $(jq -r .workspace <<<"$w")): $cond watches its place on the screen"
+        region=$(jq -r '"\(.at[0]),\(.at[1]),\(.size[0]),\(.size[1])"' <<<"$w")
+      fi
+      [ -z "$region" ] || args+=(--region "$region")
+      p=$(cursor_now) && [ -n "$p" ] && args+=(--ignore "$(cursor_rect "$p")")
+      settle_begin "$cond" "${args[@]}"
+      local rc=0; settle_end "$cond" "$json" "" || rc=$?
+      return $rc ;;
+  esac
 }
 
 cmd_hyprctl() {
@@ -1579,8 +2285,10 @@ cmd_peek() {
   [ -S "$sock" ] && [ ! -L "$sock" ] || die "peek: $sock is not the box's Wayland socket"
   output=$(on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0].name // empty')
   [[ $output =~ ^[A-Za-z0-9_-]+$ ]] || die "peek: box '$NAME' reports no usable output ($output)"
+  # A fresh marks file (finding 85) that only we can read; peek reads what is added to it.
+  rm -f "$D/marks"; (umask 077; : > "$D/marks")
   # Launched by the host Hyprland: its exec rules put exactly this window on that workspace, unfocused.
-  host_eval "hl.exec_cmd('$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\"', { workspace = '$ws silent', no_initial_focus = true })"
+  host_eval "hl.exec_cmd('$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
   say "peek at box '$NAME' on $(ws_text "$ws") (view only; close it with SUPER+W, or it goes with the box)"
   [ $focus = 1 ] || return 0
   local deadline=$((SECONDS + 5))
@@ -2047,9 +2755,11 @@ main() {
     up) cmd_up "$@" ;;
     run) cmd_run "$@" ;;
     shot|screenshot) cmd_shot "$@" ;;
+    windows) cmd_windows "$@" ;;
     keys) cmd_keys "$@" ;;
     click) cmd_click "$@" ;;
     pointer) cmd_pointer "$@" ;;
+    wait) cmd_wait "$@" ;;
     hyprctl) cmd_hyprctl "$@" ;;
     peek) cmd_peek "$@" ;;
     restart-shell) cmd_restart_shell "$@" ;;

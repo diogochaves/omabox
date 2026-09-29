@@ -7,6 +7,22 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **Windows as targets**: `omabox windows` lists the box's windows (where, on screen or covered);
+  `shot --window SEL` captures one window's own pixels, covered or on another workspace too;
+  `click --window SEL X Y` takes window coordinates and focuses the window first when needed;
+  `keys --window SEL` focuses it, then types. A selector never guesses: none or several is exit 2.
+- **`shot --fit N`** scales a shot down; `click --in SHOT X Y` and `pointer --in` take the pixels of
+  a cropped or scaled shot, so nobody does the arithmetic.
+- **`omabox wait`** instead of `sleep`: until the screen holds still (`still`) or changes (`change`),
+  a window or a shell layer is there or gone, or a command in the box succeeds. `keys`, `click` and
+  `run -d` take `--wait`: they return once what they caused has settled, and say so when nothing
+  changed. Exit 0, 124 at the deadline, 1 when it cannot be seen (never 0). A blinking caret and the
+  cursor are not changes. Costs nothing while the screen is idle (`tools/still`).
+- `omabox keys --pass VAR` types one of your variables (a password) without putting it on a command
+  line, where the process list would show it.
+- The peek window shows what the agent does for a few seconds: a ring that follows its pointer and
+  clicks, and captions of the keys it types (secrets as `*`). Drawn over the view only, never into the
+  box's screen or its screenshots.
 - Each agent session gets its own box. In Claude Code, Codex, or an agent started with
   `omabox guard exec`, the default box name ends with the session's id (`myrepo-5cc72cdc`), so two
   agents in one repo no longer share a box or take each other's down. A session's box goes down when
@@ -17,6 +33,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- `shot --active` is `shot --window active`: the window's own pixels, not a crop of the screen. With
+  no focused window it exits 2, as a selector that matches nothing.
+- install.sh checks that grim can capture a window (`-T`, grim 1.5).
+- `shot` is about twice as fast (PNG compression level 1; files ~20% larger).
+- The agent skill has rules for driving an app (look, act once, look again; never resend input not
+  seen to land; set state directly) and a symptom → next step table; the details that are not about
+  safety moved to `skill/reference.md`.
 - Every box has a network of its own (pasta). A default box (`--net connected`; `--net host` still
   works) reaches the internet, your LAN and your host's servers, and you reach its servers. Across
   the box boundary use `127.0.0.1` and a server that listens on IPv4 (`127.0.0.1`, `0.0.0.0` or
@@ -36,6 +59,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- An interactive box now starts on a machine with two GPUs whatever GPU the desktop renders on. It
+  failed with "bwrap did not start" when the desktop's GPU was not the first render node, or when
+  `OMABOX_RENDER_NODE` named another GPU (which now applies to headless boxes only). A box that dies
+  while starting says so, with Hyprland's last words, instead of "bwrap did not start".
 - `omabox up` run from another user namespace (some agent sandboxes, `unshare -Ur`) no longer
   takes a box that is up for a dead one, clearing its dir and leaving it running out of reach. It
   stops and says it cannot tell.
@@ -48,12 +75,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and what reads `$BROWSER` are covered: a plain `xdg-open` there still uses the desktop's URL
   handler. After updating, `install.sh` offers to update the guard for the agents that have it
   (`omabox guard on` does it too). Thanks to [@btsouth](https://github.com/btsouth) ([#10](https://github.com/diogochaves/omabox/pull/10)).
-- `omabox shot`, `click` and `keys` work on an interactive box while its window is hidden on its
+- `omabox shot`, `wait`, `click` and `keys` work on an interactive box while its window is hidden on its
   workspace. The host now keeps drawing the window (at `misc.render_unfocused_fps`), and the error
   for a box started by an older version no longer suggests showing the window, which led an agent
   to switch the user's workspace before every screenshot. After you closed a box's window and kept
   the box running (`confirm-close`), its new window is only drawn while on screen: `click` and
-  `keys` still reach it, but `shot` gets no frame while it is hidden. Thanks to [@btsouth](https://github.com/btsouth) ([#9](https://github.com/diogochaves/omabox/pull/9)).
+  `keys` still reach it, but `shot` and `wait` get no frame while it is hidden. Thanks to [@btsouth](https://github.com/btsouth) ([#9](https://github.com/diogochaves/omabox/pull/9)).
 - A headless box no longer captures X11 apps started on the host. Its parent compositor's Xwayland
   claimed the host's abstract `:0` X11 socket (or the next free one), and a host app (Steam) then
   opened in the box. An X server run inside a box (Xvfb) could do the same. Thanks to

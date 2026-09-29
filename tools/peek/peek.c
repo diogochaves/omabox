@@ -1,6 +1,6 @@
 // omabox-peek: a live, view-only window of a box's screen on the host desktop.
 //
-//   omabox-peek --box /path/to/box/wayland-1 [--output NAME] [--fps N] [--title TEXT]
+//   omabox-peek --box /path/to/box/wayland-1 [--output NAME] [--fps N] [--title TEXT] [--marks FILE]
 //
 // Two Wayland connections: to the box's compositor, where it only ever captures the screen
 // (wlr-screencopy, the same way `omabox shot` does; no input, nothing in the box changes), and to the
@@ -10,18 +10,23 @@
 // next frame (frame callbacks), so a peek hidden on workspace 9 costs next to nothing.
 // The box is what is being contained, and it can answer on its own socket: every frame's size, stride
 // and format are checked before peek (a host process) reads from the buffer.
+// --marks FILE: what omabox click/pointer/keys did, drawn over the view (see "marks" below).
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/inotify.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
 
+#include "font8x8.h"
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -171,6 +176,7 @@ static void capture(void) {
 static struct {
     struct wl_display *display;
     struct wl_compositor *compositor;
+    struct wl_subcompositor *subcompositor;
     struct wl_shm *shm;
     struct xdg_wm_base *wm;
     struct wl_surface *surface;
@@ -189,6 +195,8 @@ static void host_global(void *data, struct wl_registry *reg, uint32_t name, cons
     (void)data; (void)version;
     if (!strcmp(iface, wl_compositor_interface.name))
         host.compositor = wl_registry_bind(reg, name, &wl_compositor_interface, 4);
+    else if (!strcmp(iface, wl_subcompositor_interface.name))
+        host.subcompositor = wl_registry_bind(reg, name, &wl_subcompositor_interface, 1);
     else if (!strcmp(iface, wl_shm_interface.name))
         host.shm = wl_registry_bind(reg, name, &wl_shm_interface, 1);
     else if (!strcmp(iface, xdg_wm_base_interface.name)) {
@@ -229,6 +237,13 @@ static void *xmalloc(size_t n) {
     return p;
 }
 
+// Where a sw x sh frame goes in a W x H window: the largest sw:sh rectangle inside, centred.
+static void fit(int W, int H, int sw, int sh, int *dw, int *dh, int *ox, int *oy) {
+    *dw = W; *dh = (int)((int64_t)W * sh / sw);
+    if (*dh > H) { *dh = H; *dw = (int)((int64_t)H * sw / sh); }
+    *ox = (W - *dw) / 2; *oy = (H - *dh) / 2;
+}
+
 // Scale the captured frame into the window, letterboxed, bilinear. Box pixels are XRGB/ARGB8888 or
 // XBGR/ABGR8888 (swapped to XRGB).
 static void draw(void) {
@@ -244,10 +259,8 @@ static void draw(void) {
     // The completed frame's own size and format: box.width etc. may already describe the next one.
     const int W = host.width, H = host.height, sw = box.buf.width, sh = box.buf.height;
     const int swap = box.buf_format == DRM_FORMAT_XBGR8888 || box.buf_format == DRM_FORMAT_ABGR8888;
-    // fit: the largest sw:sh rectangle inside W x H
-    int dw = W, dh = (int)((int64_t)W * sh / sw);
-    if (dh > H) { dh = H; dw = (int)((int64_t)H * sw / sh); }
-    const int ox = (W - dw) / 2, oy = (H - dh) / 2;
+    int dw, dh, ox, oy;
+    fit(W, H, sw, sh, &dw, &dh, &ox, &oy);
     const uint32_t bg = 0xff111111;
     const uint32_t *src = box.buf.data;
     const int sstride = box.buf.stride / 4;
@@ -308,11 +321,383 @@ static int64_t now_ms(void) {
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-// Dispatch whatever is readable on the two connections, waiting up to timeout ms.
+// ---- marks: what the agent does, drawn over the view ------------------------------------------------
+//
+// `omabox click/pointer/keys` append one line per command to <box dir>/marks while a peek window is
+// open (NOTES finding 85). The box cannot reach that file, so it can neither forge nor read marks.
+//   ptr WxH (move X Y | click [BTN] | down BTN | up BTN | scroll DY | sleep MS)...
+//   combo KEY  |  text TEXT  |  secret N
+// Any other line is ignored whole. Marks are drawn here only, never into the box's frames, in a
+// subsurface of the window with frame callbacks of its own, and only while one is on show: a ring
+// that glides to the pointer, a ripple per click, key captions at the bottom; all gone ~3 s after
+// the last action. With nothing on show, or the window hidden, they cost nothing.
+
+#define MARK_FADE 2500    // ms: fully shown until then,
+#define MARK_GONE 3000    // faded out by then
+#define GLIDE_MS 120
+#define RIPPLE_MS 600
+#define MERGE_MS 1500     // keys this close together share a caption
+#define PILL_CHARS 40     // shown at most (the end of it)
+#define PILL_BUF 200
+#define NPILLS 3
+#define NRIPPLES 8
+#define ACCENT 0xff3cc8   // rgb; the suite looks for it
+
+struct pill { char text[PILL_BUF + 1]; int len, apart; int64_t t; };
+struct area { int x, y, w, h; };
+struct areas { int n, whole; struct area a[32]; };   // what a buffer has drawn in it
+struct ripple { double x, y; int64_t t; const char *tag; };
+
+static struct {
+    int fd, ifd;
+    off_t off;
+    char line[1024];
+    size_t len;
+    int skip;                     // in a line too long to be one: dropped up to its newline
+    double fx, fy, tx, ty;        // the pointer glides from f to t (0..1 of the box's layout)
+    int64_t moved, active;        // when that glide started; the last pointer command
+    int have_ptr;
+    struct ripple ripples[NRIPPLES];
+    int next_ripple;
+    struct pill pills[NPILLS];
+    int npills;
+    struct wl_surface *surface;
+    struct shmbuf bufs[2];
+    struct areas drawn[2];
+    int last;                     // the buffer shown now
+    int waiting, mapped, dirty;
+} marks = {.fd = -1, .ifd = -1, .fx = 0.5, .fy = 0.5, .tx = 0.5, .ty = 0.5};  // a box's cursor starts centred
+
+// A whole decimal number in [lo, hi].
+static int mark_num(const char *s, long lo, long hi, long *out) {
+    char *end;
+    if (!s || !((*s >= '0' && *s <= '9') || *s == '-')) return 0;
+    errno = 0;
+    long v = strtol(s, &end, 10);
+    if (errno || *end || v < lo || v > hi) return 0;
+    *out = v;
+    return 1;
+}
+static int is_btn(const char *s) { return !strcmp(s, "left") || !strcmp(s, "right") || !strcmp(s, "middle"); }
+
+static void ptr_pos(int64_t now, double *x, double *y) {
+    double k = (double)(now - marks.moved) / GLIDE_MS;
+    k = k < 0 ? 1 : k > 1 ? 0 : 1 - k;
+    k = 1 - k * k * k;   // eased out
+    *x = marks.fx + (marks.tx - marks.fx) * k;
+    *y = marks.fy + (marks.ty - marks.fy) * k;
+}
+
+// ptr WxH COMMANDS (tools/pointer's), checked whole before any of it shows.
+static int mark_ptr(char *rest, int64_t now) {
+    char *save = NULL, *tok = strtok_r(rest, " ", &save), *x = tok ? strchr(tok, 'x') : NULL;
+    long w, h, v;
+    if (!x) return 0;
+    *x = 0;
+    if (!mark_num(tok, 1, 65536, &w) || !mark_num(x + 1, 1, 65536, &h)) return 0;
+    char *t[64];
+    int n = 0;
+    while ((tok = strtok_r(NULL, " ", &save)) && n < 64) t[n++] = tok;
+    if (!n || tok) return 0;
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(t[i], "move")) {
+            if (i + 2 >= n || !mark_num(t[i + 1], 0, w - 1, &v) || !mark_num(t[i + 2], 0, h - 1, &v)) return 0;
+            i += 2;
+        } else if (!strcmp(t[i], "click")) {
+            if (i + 1 < n && is_btn(t[i + 1])) i++;
+        } else if (!strcmp(t[i], "down") || !strcmp(t[i], "up")) {
+            if (i + 1 >= n || !is_btn(t[++i])) return 0;
+        } else if (!strcmp(t[i], "scroll")) {
+            char *end;
+            if (i + 1 >= n || !*t[i + 1]) return 0;
+            double dy = strtod(t[++i], &end);
+            if (*end || !(dy >= -10000 && dy <= 10000)) return 0;
+        } else if (!strcmp(t[i], "sleep")) {
+            if (i + 1 >= n || !mark_num(t[++i], 0, 600000, &v)) return 0;
+        } else return 0;
+    }
+    double px, py;
+    ptr_pos(now, &px, &py);
+    double cx = marks.tx, cy = marks.ty;   // where the box's pointer is, as far as we know
+    int moved = 0;
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(t[i], "move")) {
+            mark_num(t[i + 1], 0, w - 1, &v); cx = ((double)v + 0.5) / (double)w;
+            mark_num(t[i + 2], 0, h - 1, &v); cy = ((double)v + 0.5) / (double)h;
+            moved = 1;
+            i += 2;
+        } else if (!strcmp(t[i], "click") || !strcmp(t[i], "down")) {
+            const char *b = !strcmp(t[i], "down") || (i + 1 < n && is_btn(t[i + 1])) ? t[++i] : "left";
+            marks.ripples[marks.next_ripple] = (struct ripple){cx, cy, now, !strcmp(b, "left") ? NULL : !strcmp(b, "right") ? "right" : "middle"};
+            marks.next_ripple = (marks.next_ripple + 1) % NRIPPLES;
+        } else {
+            i++;   // up BTN, scroll DY, sleep MS: nothing to show
+        }
+    }
+    if (moved) { marks.fx = px; marks.fy = py; marks.tx = cx; marks.ty = cy; marks.moved = now; }
+    marks.have_ptr = 1;
+    marks.active = now;
+    return 1;
+}
+
+// Captions are ASCII (all the font has): any other character shows as one '?'.
+static void pill_add(struct pill *p, const char *s) {
+    for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
+        char out = *c >= 0x20 && *c < 0x7f ? (char)*c : *c >= 0xc0 ? '?' : 0;
+        if (!out) continue;
+        if (p->len == PILL_BUF) { memmove(p->text, p->text + 1, PILL_BUF - 1); p->len--; }
+        p->text[p->len++] = out;
+    }
+    p->text[p->len] = 0;
+}
+// Text runs on; a combo or a secret stands apart from what is next to it.
+static void caption(const char *s, int apart, int64_t now) {
+    struct pill *p = marks.npills ? &marks.pills[marks.npills - 1] : NULL;
+    if (!p || now - p->t >= MERGE_MS) {
+        if (marks.npills == NPILLS) memmove(marks.pills, marks.pills + 1, sizeof(marks.pills[0]) * --marks.npills);
+        p = &marks.pills[marks.npills++];
+        p->len = 0;
+        p->text[0] = 0;
+    } else if (apart || p->apart) {
+        pill_add(p, " ");
+    }
+    pill_add(p, s);
+    p->apart = apart;
+    p->t = now;
+}
+
+static void mark_line(char *l, size_t len) {
+    if (strlen(l) != len) return;   // a NUL in it
+    for (size_t i = 0; i < len; i++)
+        if ((unsigned char)l[i] < 0x20 || l[i] == 0x7f) return;
+    int64_t now = now_ms();
+    long v;
+    if (!strncmp(l, "ptr ", 4)) {
+        if (!mark_ptr(l + 4, now)) return;
+    } else if (!strncmp(l, "combo ", 6)) {
+        if (!l[6] || strchr(l + 6, ' ') || len - 6 > 64) return;
+        caption(l + 6, 1, now);
+    } else if (!strncmp(l, "text ", 5)) {
+        size_t chars = 0;
+        for (const unsigned char *c = (const unsigned char *)l + 5; *c; c++) chars += (*c & 0xc0) != 0x80;
+        if (!chars || chars > PILL_BUF) return;
+        caption(l + 5, 0, now);
+    } else if (!strncmp(l, "secret ", 7)) {
+        if (!mark_num(l + 7, 1, 100000, &v)) return;
+        char stars[17];
+        const size_t n = v < 16 ? (size_t)v : 16;   // what a password field shows, at most 16
+        memset(stars, '*', n);
+        stars[n] = 0;
+        caption(stars, 1, now);
+    } else return;
+    marks.dirty = 1;
+}
+
+static void read_marks(void) {
+    struct stat st;
+    if (fstat(marks.fd, &st) < 0) return;
+    if (st.st_size < marks.off) { marks.off = 0; marks.len = 0; marks.skip = 0; }   // emptied at its size cap
+    char chunk[4096];
+    ssize_t n;
+    while ((n = pread(marks.fd, chunk, sizeof(chunk), marks.off)) > 0) {
+        marks.off += n;
+        for (ssize_t i = 0; i < n; i++) {
+            if (chunk[i] == '\n') {
+                if (!marks.skip) { marks.line[marks.len] = 0; mark_line(marks.line, marks.len); }
+                marks.len = 0; marks.skip = 0;
+            } else if (!marks.skip) {
+                if (marks.len + 1 < sizeof(marks.line)) marks.line[marks.len++] = chunk[i];
+                else { marks.skip = 1; marks.len = 0; }
+            }
+        }
+    }
+}
+
+// Only what is written from now on: the file is read from its current end.
+static void open_marks(const char *path) {
+    marks.fd = open(path, O_RDONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    struct stat st;
+    if (marks.fd < 0 || fstat(marks.fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+        fprintf(stderr, "omabox-peek: no marks: %s is not a file\n", path);
+        if (marks.fd >= 0) close(marks.fd);
+        marks.fd = -1;
+        return;
+    }
+    marks.off = st.st_size;
+    char self[64];
+    snprintf(self, sizeof(self), "/proc/self/fd/%d", marks.fd);   // the file opened, whatever has its name later
+    marks.ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (marks.ifd < 0 || inotify_add_watch(marks.ifd, self, IN_MODIFY) < 0) {
+        fprintf(stderr, "omabox-peek: no marks: cannot watch %s\n", path);
+        close(marks.fd);
+        if (marks.ifd >= 0) close(marks.ifd);
+        marks.fd = marks.ifd = -1;
+    }
+}
+
+// Drawing, into a premultiplied ARGB buffer. Only the areas drawn are cleared and damaged, so a
+// large window does not cost a full-size upload a frame.
+static struct areas *drawing;
+static void touched(int x0, int y0, int x1, int y1) {
+    if (x1 <= x0 || y1 <= y0) return;
+    if (drawing->n == (int)(sizeof(drawing->a) / sizeof(drawing->a[0]))) { drawing->whole = 1; return; }
+    drawing->a[drawing->n++] = (struct area){x0, y0, x1 - x0, y1 - y0};
+}
+static float root_of(float x) {   // no libm
+    if (x <= 0) return 0;
+    union { float f; uint32_t i; } u = {x};
+    u.i = (u.i >> 1) + 0x1fc00000;   // a first guess, then Newton
+    for (int k = 0; k < 3; k++) u.f = 0.5f * (u.f + x / u.f);
+    return u.f;
+}
+static void blend(uint32_t *p, uint32_t rgb, int a) {
+    if (a <= 0) return;
+    if (a > 255) a = 255;
+    const uint32_t d = *p, inv = 255 - (uint32_t)a;
+    uint32_t out = ((uint32_t)a + (d >> 24) * inv / 255) << 24;
+    for (int s = 0; s < 24; s += 8) out |= (((rgb >> s & 255) * (uint32_t)a + (d >> s & 255) * inv) / 255) << s;
+    *p = out;
+}
+// A ring of radius r and half width hw around (cx, cy), antialiased; r = 0 is a disc.
+static void ring(struct shmbuf *b, float cx, float cy, float r, float hw, uint32_t rgb, int alpha) {
+    int x0 = (int)(cx - r - hw) - 1, x1 = (int)(cx + r + hw) + 2, y0 = (int)(cy - r - hw) - 1, y1 = (int)(cy + r + hw) + 2;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > b->width) x1 = b->width;
+    if (y1 > b->height) y1 = b->height;
+    touched(x0, y0, x1, y1);
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++) {
+            float dx = (float)x + 0.5f - cx, dy = (float)y + 0.5f - cy, d = root_of(dx * dx + dy * dy) - r;
+            float cov = hw + 0.5f - (d < 0 ? -d : d);
+            if (cov > 0) blend(&b->data[(size_t)y * (size_t)b->width + (size_t)x], rgb, (int)((float)alpha * (cov > 1 ? 1 : cov)));
+        }
+}
+static void rect(struct shmbuf *b, int x0, int y0, int w, int h, uint32_t rgb, int alpha) {
+    for (int y = y0 < 0 ? 0 : y0; y < y0 + h && y < b->height; y++)
+        for (int x = x0 < 0 ? 0 : x0; x < x0 + w && x < b->width; x++)
+            blend(&b->data[(size_t)y * (size_t)b->width + (size_t)x], rgb, alpha);
+}
+// n characters of s on a dark plate with an accent edge, font8x8 at scale.
+static void plate(struct shmbuf *b, int x, int y, const char *s, int n, int scale, int alpha) {
+    const int px = 5 * scale, py = 3 * scale, w = n * 8 * scale + 2 * px, h = 8 * scale + 2 * py;
+    touched(x < 0 ? 0 : x, y < 0 ? 0 : y, x + w < b->width ? x + w : b->width, y + h < b->height ? y + h : b->height);
+    rect(b, x, y, w, h, ACCENT, alpha);
+    rect(b, x + 2, y + 2, w - 4, h - 4, 0x16161e, alpha * 9 / 10);
+    for (int i = 0; i < n; i++) {
+        if (s[i] < 0x20 || s[i] > 0x7e) continue;
+        const unsigned char *g = font8x8[s[i] - 0x20];
+        for (int row = 0; row < 8; row++)
+            for (int col = 0; col < 8; col++)
+                if (g[row] >> col & 1) rect(b, x + px + (i * 8 + col) * scale, y + py + row * scale, scale, scale, 0xffffff, alpha);
+    }
+}
+static int fade(int64_t age) {
+    return age < MARK_FADE ? 255 : age < MARK_GONE ? (int)(255 * (MARK_GONE - age) / (MARK_GONE - MARK_FADE)) : 0;
+}
+
+static void marks_frame_done(void *data, struct wl_callback *cb, uint32_t t) { (void)data; (void)t; wl_callback_destroy(cb); marks.waiting = 0; }
+static const struct wl_callback_listener marks_frame_listener = {marks_frame_done};
+
+// Draw what is on show, or unmap the subsurface once nothing is. 0: no free buffer, try again soon.
+static int draw_marks(int64_t now) {
+    int on = marks.have_ptr && fade(now - marks.active) > 0;
+    for (int i = 0; i < NRIPPLES; i++)
+        if (marks.ripples[i].t && fade(now - marks.ripples[i].t) > 0) on = 1;
+    for (int i = 0; i < marks.npills; i++)
+        if (fade(now - marks.pills[i].t) > 0) on = 1;
+    if (!on) {
+        if (marks.mapped) { wl_surface_attach(marks.surface, NULL, 0, 0); wl_surface_commit(marks.surface); marks.mapped = 0; }
+        marks.npills = 0;
+        return 1;
+    }
+    int bi = !marks.bufs[0].busy ? 0 : !marks.bufs[1].busy ? 1 : -1;
+    if (bi < 0) return 0;
+    struct shmbuf *b = &marks.bufs[bi];
+    int whole = !marks.mapped;   // damage all of it: nothing of ours on screen to compare with
+    if (b->buffer && (b->width != host.width || b->height != host.height)) shmbuf_destroy(b);
+    if (!b->buffer) {
+        if (!shmbuf_create(b, host.shm, host.width, host.height, host.width * 4, WL_SHM_FORMAT_ARGB8888)) exit(1);
+        wl_buffer_add_listener(b->buffer, &buffer_listener, b);
+        marks.drawn[bi] = (struct areas){0};   // new memory is clear
+        whole = 1;
+    }
+    const struct areas shown = marks.drawn[marks.last];
+    drawing = &marks.drawn[bi];
+    if (drawing->whole) memset(b->data, 0, b->size);
+    else
+        for (int i = 0; i < drawing->n; i++)
+            for (int y = drawing->a[i].y; y < drawing->a[i].y + drawing->a[i].h; y++)
+                memset(b->data + (size_t)y * (size_t)b->width + (size_t)drawing->a[i].x, 0, (size_t)drawing->a[i].w * 4);
+    *drawing = (struct areas){0};
+    int dw, dh, ox, oy;
+    fit(host.width, host.height, box.buf.width, box.buf.height, &dw, &dh, &ox, &oy);
+    for (int i = 0; i < NRIPPLES; i++) {
+        const struct ripple *r = &marks.ripples[i];
+        const int64_t age = now - r->t;
+        if (!r->t || fade(age) <= 0) continue;
+        const float x = (float)(ox + r->x * dw), y = (float)(oy + r->y * dh);
+        if (age < RIPPLE_MS) ring(b, x, y, 12.0f + 26.0f * (float)age / RIPPLE_MS, 1.5f, ACCENT, (int)(255 * (RIPPLE_MS - age) / RIPPLE_MS));
+        if (r->tag) plate(b, (int)x + 16, (int)y + 14, r->tag, (int)strlen(r->tag), 1, fade(age));
+    }
+    if (marks.have_ptr && fade(now - marks.active) > 0) {
+        double px, py;
+        ptr_pos(now, &px, &py);
+        const float x = (float)(ox + px * dw), y = (float)(oy + py * dh);
+        const int a = fade(now - marks.active);
+        ring(b, x, y, 12, 3.5f, 0x000000, a / 2);   // a dark edge, for light screens
+        ring(b, x, y, 12, 2, ACCENT, a);
+        ring(b, x, y, 0, 2, ACCENT, a);
+    }
+    const int scale = host.width >= 640 ? 2 : 1, ph = 14 * scale;
+    int room = (host.width - 32 - 10 * scale) / (8 * scale);
+    if (room > PILL_CHARS) room = PILL_CHARS;
+    for (int i = marks.npills - 1, k = 0; i >= 0 && room > 0; i--, k++) {   // newest at the bottom
+        const struct pill *p = &marks.pills[i];
+        const int a = fade(now - p->t), n = p->len < room ? p->len : room;
+        if (a <= 0 || !n) continue;
+        const int w = n * 8 * scale + 10 * scale;
+        plate(b, (host.width - w) / 2, host.height - 20 - (k + 1) * ph - k * 6, p->text + p->len - n, n, scale, a);
+    }
+    wl_surface_attach(marks.surface, b->buffer, 0, 0);
+    if (whole || shown.whole || drawing->whole) wl_surface_damage_buffer(marks.surface, 0, 0, b->width, b->height);
+    else {
+        for (int i = 0; i < shown.n; i++) wl_surface_damage_buffer(marks.surface, shown.a[i].x, shown.a[i].y, shown.a[i].w, shown.a[i].h);
+        for (int i = 0; i < drawing->n; i++) wl_surface_damage_buffer(marks.surface, drawing->a[i].x, drawing->a[i].y, drawing->a[i].w, drawing->a[i].h);
+    }
+    marks.last = bi;
+    wl_callback_add_listener(wl_surface_frame(marks.surface), &marks_frame_listener, NULL);
+    marks.waiting = 1;
+    wl_surface_commit(marks.surface);
+    b->busy = 1;
+    marks.mapped = 1;
+    return 1;
+}
+
+// A subsurface over the whole window that takes no input (peek takes none anyway), desynchronized so
+// its frames never wait for the view's.
+static void marks_surface(void) {
+    if (marks.fd < 0) return;
+    if (!host.subcompositor) {
+        fprintf(stderr, "omabox-peek: no marks: the host has no wl_subcompositor\n");
+        return;
+    }
+    marks.surface = wl_compositor_create_surface(host.compositor);
+    struct wl_subsurface *sub = wl_subcompositor_get_subsurface(host.subcompositor, marks.surface, host.surface);
+    wl_subsurface_set_position(sub, 0, 0);
+    wl_subsurface_set_desync(sub);
+    struct wl_region *none = wl_compositor_create_region(host.compositor);
+    wl_surface_set_input_region(marks.surface, none);
+    wl_region_destroy(none);
+    wl_surface_commit(marks.surface);
+}
+
+// Dispatch whatever is readable on the two connections (and the marks file), waiting up to timeout ms.
 // Returns 0 when a connection is gone.
 static int pump(int timeout) {
     struct wl_display *d[2] = {box.display, host.display};
-    struct pollfd fds[2];
+    struct pollfd fds[3];
+    fds[2] = (struct pollfd){.fd = marks.ifd, .events = POLLIN};   // -1 (no marks): poll skips it
     for (int i = 0; i < 2; i++) {
         while (wl_display_prepare_read(d[i]) != 0)
             if (wl_display_dispatch_pending(d[i]) < 0) {
@@ -325,7 +710,12 @@ static int pump(int timeout) {
         }
         fds[i] = (struct pollfd){.fd = wl_display_get_fd(d[i]), .events = POLLIN};
     }
-    int n = poll(fds, 2, timeout);
+    int n = poll(fds, 3, timeout);
+    if (n > 0 && (fds[2].revents & POLLIN)) {
+        char ev[4096];
+        while (read(marks.ifd, ev, sizeof(ev)) > 0) {}
+        read_marks();
+    }
     for (int i = 0; i < 2; i++) {
         if (n > 0 && (fds[i].revents & POLLIN)) {
             if (wl_display_read_events(d[i]) < 0) return 0;
@@ -339,7 +729,7 @@ static int pump(int timeout) {
 }
 
 int main(int argc, char **argv) {
-    const char *box_socket = NULL, *title = "omabox peek";
+    const char *box_socket = NULL, *title = "omabox peek", *marks_path = NULL;
     int fps = 10;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--box") && i + 1 < argc) box_socket = argv[++i];
@@ -351,9 +741,11 @@ int main(int argc, char **argv) {
             fps = v > 60 ? 60 : (int)v;
         }
         else if (!strcmp(argv[i], "--title") && i + 1 < argc) title = argv[++i];
-        else { fprintf(stderr, "usage: omabox-peek --box SOCKET [--output NAME] [--fps N] [--title TEXT]\n"); return 2; }
+        else if (!strcmp(argv[i], "--marks") && i + 1 < argc) marks_path = argv[++i];
+        else { fprintf(stderr, "usage: omabox-peek --box SOCKET [--output NAME] [--fps N] [--title TEXT] [--marks FILE]\n"); return 2; }
     }
     if (!box_socket) { fprintf(stderr, "omabox-peek: --box is required\n"); return 2; }
+    if (marks_path) open_marks(marks_path);
     // libwayland prefers an inherited WAYLAND_SOCKET over both the box's socket and WAYLAND_DISPLAY.
     unsetenv("WAYLAND_SOCKET");
 
@@ -388,6 +780,7 @@ int main(int argc, char **argv) {
     xdg_toplevel_add_listener(host.toplevel, &toplevel_listener, NULL);
     xdg_toplevel_set_title(host.toplevel, title);
     xdg_toplevel_set_app_id(host.toplevel, "omabox-peek");
+    marks_surface();
     wl_surface_commit(host.surface);
 
     const int64_t interval = 1000 / fps;
@@ -397,6 +790,11 @@ int main(int argc, char **argv) {
         int64_t t = now_ms();
         if (!box.frame && !host.waiting && t >= next) { capture(); next = t + interval; }
         int timeout = box.frame || host.waiting ? 100 : (int)(next - t > 0 ? next - t : 0);
+        // Marks: a frame whenever the last one is shown, while any is on show; then nothing at all.
+        if (host.configured && marks.surface && !marks.waiting && (marks.dirty || marks.mapped)) {
+            marks.dirty = 0;
+            if (!draw_marks(t)) { marks.dirty = 1; if (timeout > 10) timeout = 10; }   // both buffers still shown
+        }
         if (!pump(timeout)) break;
     }
     return 0;
