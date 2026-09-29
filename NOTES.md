@@ -1645,6 +1645,13 @@ the designs here were measured in boxes and built for a contained desktop, and n
     type. The word now also matches the class's last dot-separated part, whole and in any case
     (`naut` does not); none or several is still exit 2. Checked with Files in a box;
     `t_unit_window_select`.
+98. **A Qt app's log reaches `run -d`'s log file** (2026-09-29, issue #26, found by an agent
+    debugging omaseed). Without a terminal Qt sends its logging to the journal, and a box has none, so
+    `qWarning`, QML errors and an abort's reason went nowhere: `run-*.log` stayed empty (a foreground
+    `run` printed nothing either). Boxes now set `QT_FORCE_STDERR_LOGGING=1` for the session, so
+    everything in them, `run` included, logs to stderr, as the guard already does on the host (finding
+    67); `--env QT_FORCE_STDERR_LOGGING=0` turns it off. Checked in a box with a QML `console.warn`:
+    missing before, in the log after, for `run -d` and a foreground `run`; `t_main`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

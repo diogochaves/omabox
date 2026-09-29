@@ -15,6 +15,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 - **`OMABOX=NAME` works in commands `omabox run` started**: they got the default box instead
   ([#19](https://github.com/diogochaves/omabox/issues/19)).
+- **A Qt app's warnings and errors reach its `run -d` log**: Qt logged to the journal, which a box
+  has none of, so the log stayed empty ([#26](https://github.com/diogochaves/omabox/issues/26)).
 
 ## 0.2.0 — 2026-09-29
 
