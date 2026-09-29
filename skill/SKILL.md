@@ -44,20 +44,24 @@ ports, no internet).
 name defaults to the repo's directory name plus your session's id (`myrepo-5cc72cdc` in a Claude Code
 or Codex session), so other sessions never share your box or take it down; `omabox ls` shows its
 name. It goes down by itself when your agent exits, not on `/clear` or `/resume`: `omabox down` when
-you are done, and before `/clear`. Subagents of one session share its box: give each its own with
-`-b NAME`. To use a box the user started, pass `-b NAME` (see `omabox ls`).
+you are done, and before `/clear`. In a git worktree the name is the worktree's folder, so a
+worktree agent has its own box with no `-b`. Subagents in one checkout share the session's box: for
+one of its own, `omabox up --new` prints a free name (`box-3`); pass it as `-b box-3` on every call,
+typed out (your shell does not keep a variable between commands). To use a box the user started,
+pass `-b NAME` (see `omabox ls`).
 
 ## The loop
 
 ```bash
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
-B=$(omabox up --new)                       # or one of your own (stdout: its name), then -b "$B" on each call
+omabox up --new                            # or one of your own: prints box-N, then -b box-N on each call
 omabox run -d --wait -- ./build/src/myapp  # launch, detached (log path printed); returns once drawn
 omabox shot                                # prints a PNG path: Read it to look
 omabox windows                             # address, workspace, on screen or covered
 omabox shot --window myapp                 # one window's own pixels, even covered or elsewhere
 omabox click --window myapp 40 12          # window coordinates (0,0 = its corner, as in its shot)
 omabox keys --window myapp --wait -t hi    # focus that window, type, return once it has settled
+omabox drag --window myapp 10 10 200 80    # press, move, release (--shot F: a shot while held)
 omabox keys --wait super+space             # real key events for binds and apps (SUPER+W in binds = super+w)
 omabox keys -t 'hello wörld' Return        # type any Unicode text (layout-aware), then a key
 omabox keys --pass PASSWORD Return         # type a secret from your environment: never -t (ps shows it)
@@ -84,12 +88,17 @@ omabox down                                # when done: kills everything in the 
 
 No `sleep` between actions: `--wait` returns once what the action caused has settled; `omabox wait`
 waits for a window, a layer, a command or a still screen (0 yes, 124 not in time, 1 cannot tell).
-Late content passes `still`: wait for a title (`wait window title:RE`) or `wait cmd -- …`.
+Late content passes `still`: wait for a title (`wait window title:RE`) or `wait cmd -- …`. A shot
+right after a `click` or `keys` without `--wait` can show the frame before the redraw: use `--wait`,
+or `omabox wait still`, before the shot.
 
 `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a title; `title:RE`, `class:RE`, `pid:N` or an address
 (`0x…`) narrow it. Coordinates are screenshot pixels; a cropped or scaled shot says so on stderr:
-then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own. 1920x1080 is read
-1:1; on a bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and `click --in` it.
+then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own. After any `-g` or
+`--fit` shot, click (or `drag`) with `--in THAT.png`, and never discard `shot`'s stderr: it says so.
+`shot --window SEL -g "X,Y WxH"` crops the window in its own coordinates. 1920x1080 is read 1:1; on a
+bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and `click --in` it. Screen
+shots show the pointer (hover evidence: a `-g` crop of the screen); window shots never do.
 
 | Symptom | Next step |
 |---|---|
@@ -101,7 +110,7 @@ then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own.
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
-| `box 'x' is already up (options ignored…)`, not yours | Another agent's: `B=$(omabox up --new)`, then `-b "$B"`. |
+| `box 'x' is already up (options ignored…)`, not yours | Another agent's: `omabox up --new`, then `-b box-N` as it printed. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
 
@@ -120,8 +129,9 @@ PORTS -- ctest ...` (`up`'s options work here). With a box already up, `run` use
 
 `run` gives the command the box's environment, not your shell's: a variable a test needs (a test
 server's password from `dev.env`, say; a test that skips is the sign) goes with `--pass NAME`, off
-the command line: `set -a; . ./dev.env; set +a; omabox run --pass TEST_PASSWORD -- ctest …`. Never
-`--env KEY=secret`: that is in the process list.
+the command line, or a whole file with `--env-file`: `omabox run --env-file ./dev.env -- ctest …`
+(KEY=VAL lines, read as data). Never `--env KEY=secret`: that is in the process list. A `run -d`
+command's output, a Qt app's warnings and QML errors too, is in the log file it prints.
 
 A test binary run directly (not through ctest) has none of ctest's environment: a Qt test with no
 `QT_QPA_PLATFORM=offscreen` opens real windows. Run it with `omabox run -- ./build/tests/tst_x`.

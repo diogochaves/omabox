@@ -406,7 +406,8 @@ static int mark_ptr(char *rest, int64_t now) {
         } else if (!strcmp(t[i], "click")) {
             if (i + 1 < n && is_btn(t[i + 1])) i++;
         } else if (!strcmp(t[i], "down") || !strcmp(t[i], "up")) {
-            if (i + 1 >= n || !is_btn(t[++i])) return 0;
+            if (i + 1 < n && is_btn(t[i + 1])) i++;   // the button is optional: left
+        } else if (!strcmp(t[i], "pause")) {
         } else if (!strcmp(t[i], "scroll")) {
             char *end;
             if (i + 1 >= n || !*t[i + 1]) return 0;
@@ -427,11 +428,13 @@ static int mark_ptr(char *rest, int64_t now) {
             moved = 1;
             i += 2;
         } else if (!strcmp(t[i], "click") || !strcmp(t[i], "down")) {
-            const char *b = !strcmp(t[i], "down") || (i + 1 < n && is_btn(t[i + 1])) ? t[++i] : "left";
+            const char *b = i + 1 < n && is_btn(t[i + 1]) ? t[++i] : "left";
             marks.ripples[marks.next_ripple] = (struct ripple){cx, cy, now, !strcmp(b, "left") ? NULL : !strcmp(b, "right") ? "right" : "middle"};
             marks.next_ripple = (marks.next_ripple + 1) % NRIPPLES;
-        } else {
-            i++;   // up BTN, scroll DY, sleep MS: nothing to show
+        } else if (!strcmp(t[i], "up")) {
+            if (i + 1 < n && is_btn(t[i + 1])) i++;   // nothing to show
+        } else if (strcmp(t[i], "pause")) {
+            i++;   // scroll DY, sleep MS: nothing to show
         }
     }
     if (moved) { marks.fx = px; marks.fy = py; marks.tx = cx; marks.ty = cy; marks.moved = now; }

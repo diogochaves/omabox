@@ -91,6 +91,7 @@ omabox keys --wait super+space         # ...and return once the screen has settl
 omabox wait window myapp               # or: still, change, layer NAMESPACE, cmd -- CMD (--gone too)
 omabox click 960 540 [right] [--double]
 omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
+omabox drag --window myapp 10 10 200 80   # press, move, release; --shot FILE while it is held
 omabox hyprctl -j clients              # the box's Hyprland, never yours
 omabox run -- busctl --user list       # any command inside the box; exit code passes through
 omabox down                            # kill everything in the box
@@ -127,7 +128,7 @@ need a tray in it (`--stock-bar` if your bar omits one). `up`'s options apply:
 With `-b NAME` the box must be up. With a box already up, `run` uses it, and the repo is read-only
 there: for tests that write into the tree, `omabox down` first. The command gets the box's
 environment, not your shell's; `--pass NAME` hands it one of your variables, a password too, through
-a pipe, never on a command line.
+a pipe, never on a command line, and `--env-file dev.env` a whole file of them.
 
 ### Shell plugins
 

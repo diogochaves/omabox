@@ -23,6 +23,7 @@ PASS_KEY="SUPER + ALT + ESCAPE"
 READY_TIMEOUT=${OMABOX_READY_TIMEOUT:-30}
 HOST_SIG="" HOST_WL=""   # host_session's, never the caller's
 PASS=()   # run --pass: the caller's variables for the command
+ENVKV=()  # run --env-file: KEY=VAL entries for the command, before --pass (which wins)
 # The fake display the agent guard (`omabox guard`) gives agents' shells (finding 65).
 GUARD=omabox-guard
 
@@ -35,13 +36,15 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell] [--from SAVE]
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      a free name, box-1, box-2, ... (printed)
-  omabox run [-b NAME] [-d [--wait]] [--pass VAR]... [UP OPTIONS] -- CMD [ARG...]
+  omabox run [-b NAME] [-d [--wait]] [--pass VAR]... [--env-file FILE]... [UP OPTIONS] -- CMD [ARG...]
                                                          UP OPTIONS: up's, for a throwaway box only
-  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active | -g "X,Y WxH"] [--fit N]
+  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N]
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [left|right|middle] [--double]
-  omabox pointer [-b NAME] [--in SHOT] -- ARGS...        raw omabox-pointer (move/click/scroll/down/up)
+  omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [left|right|middle]
+              [--steps 10] [--hold MS]                   press, move, hold, release
+  omabox pointer [-b NAME] [--window SEL | --in SHOT] -- ARGS...  raw: move X Y, click/down/up [BTN], scroll DY, sleep MS
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
          COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--strict] | change [-g GEOM | --window SEL]
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | cmd -- CMD [ARG...]
@@ -65,7 +68,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
 (Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
-session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off.
+session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off. A git worktree is named
+by its own folder, so each worktree has its own box.
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
@@ -75,8 +79,9 @@ Every box has its own network (pasta): by default the internet, the LAN and your
 the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
 second after they listen. --net isolated: a loopback and the --allow ports only.
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
-variables (a password too: never on a command line); \`keys --pass VAR\` types one (never \`-t\` for a
-secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
+variables (a password too: never on a command line); --env-file FILE hands it a file's KEY=VAL lines
+(a dev.env: read as data, nothing expanded; --pass wins); \`keys --pass VAR\` types one (never \`-t\`
+for a secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
@@ -85,8 +90,10 @@ several is exit 2, with the candidates. \`shot --window\` (-w; --active is --win
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
 \`keys --window\` focuses it, then types. --fit N scales a shot's longest side down to N pixels.
-A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`pointer --in\`) take that
-image's pixels (a window shot follows the window if it moved).
+-g "X,Y WxH" (or X,Y,W,H) crops: the screen's, or with --window the window's own coordinates.
+A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`drag\`, \`pointer --in\`)
+take that image's pixels (a window shot follows the window if it moved). Screen shots show the
+pointer; window shots never do. -o makes the file's folder if it is missing.
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
 count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
 [--quiet 300ms] [--timeout 10s] [--json]: a change within --start (5s for run -d), then quiet.
@@ -391,6 +398,22 @@ on_box() {
     WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" "$@"
 }
 
+# run --env-file FILE (#30): its KEY=VAL lines, NUL-separated. `export ` and # comment lines are
+# allowed, and a value in matching quotes loses them; nothing is expanded (the file is data, not a
+# script) and a # after a value is part of it. A bad line fails with its number, never its text.
+envfile_read() {
+  local f=$1 line n=0 k v
+  [ -f "$f" ] && [ -r "$f" ] || die "--env-file: cannot read $f"
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1)) line=${line%$'\r'}
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || die "--env-file $f: line $n is not KEY=VALUE"
+    k=${BASH_REMATCH[2]} v=${BASH_REMATCH[3]}
+    if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v=${BASH_REMATCH[1]}; fi
+    printf '%s=%s\0' "$k" "$v"
+  done < "$f"
+}
+
 # A variable of the caller's as it was when omabox started (run --pass): from /proc, not ${!NAME},
 # which would give omabox's own ROOT, D or NAME instead of the caller's. Fails when it is not there.
 caller_env() {
@@ -438,9 +461,11 @@ box_exec() {
   [ "$(readlink "/proc/$pid/ns/net")" = "$(readlink /proc/self/ns/net)" ] || ns+=(-n)
   # `run --pass VAR` (finding 66): the caller's values go through a pipe (printf is a builtin: no
   # argv), never on a command line, where the process list would show a password to every user.
+  # --env-file's entries first: a --pass of the same name comes later and wins.
   local pass=() pfd
-  if [ ${#PASS[@]} -gt 0 ]; then
-    exec {pfd}< <(for v in "${PASS[@]}"; do printf '%s=%s\0' "$v" "$(caller_env "$v")"; done)
+  if [ ${#PASS[@]} -gt 0 ] || [ ${#ENVKV[@]} -gt 0 ]; then
+    exec {pfd}< <(for kv in "${ENVKV[@]}"; do printf '%s\0' "$kv"; done
+      for v in "${PASS[@]}"; do printf '%s=%s\0' "$v" "$(caller_env "$v")"; done)
     pass=(OMABOX_PASS_FD="$pfd")
   fi
   # shellcheck disable=SC2016 # $1/$@ belong to the inner bash
@@ -1414,6 +1439,10 @@ cmd_run() {
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "run: --pass takes a variable name, got $2"
         caller_env "$2" >/dev/null || die "run: --pass $2: not in this command's environment (export it first)"
         PASS+=("$2"); shift ;;
+      --env-file) optarg "$@"
+        in_jail && die "run: --env-file is read by a jailed agent's own omabox, never at a path here"
+        envfile_read "$2" >/dev/null   # a bad line stops here, said
+        local kvs; mapfile -d '' kvs < <(envfile_read "$2"); ENVKV+=("${kvs[@]}"); shift ;;
       --size|--plugin|--ro-bind|--overlay|--net|--allow|--env|--idle|--from) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage; return ;;
@@ -1620,6 +1649,12 @@ cmd_windows() {
 
 # --- driving ------------------------------------------------------------------------------------
 
+# A -g value as "X Y W H": grim's "X,Y WxH", or X,Y,W,H and X,Y W,H as agents type it (#27).
+geom_parse() {
+  [[ $1 =~ ^(-?[0-9]+),(-?[0-9]+)[\ ,]([1-9][0-9]*)[x,]([1-9][0-9]*)$ ]] || return 1
+  echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+}
+
 # Width and height of a PNG, from its header.
 png_size() {
   local b; read -r -a b < <(od -An -tu1 -j16 -N8 -- "$1")
@@ -1669,11 +1704,14 @@ shot_point() {
   [ "$x" -lt "$iw" ] && [ "$y" -lt "$ih" ] || die "--in: $x,$y is outside the image (${iw}x$ih)"
   local rx ry; rx=$(img_px "$x" "$iw" "$lw") ry=$(img_px "$y" "$ih" "$lh")
   if [ "$kind" = window ]; then
-    local w; w=$(jq -c --arg a "$ref" 'first(.[] | select(.address == $a)) // empty' <<<"$(box_windows)")
-    [ -n "$w" ] || die "--in: the window of that shot ($ref) is gone"
-    [ "$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")" = "${lw}x$lh" ] ||
-      die "--in: window $(win_desc "$w") is $(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w") now, ${lw}x$lh in the shot: take a new one"
-    echo "window $ref $rx $ry"
+    # "ADDRESS", or "ADDRESS X,Y WxH" for a -g crop of it: where the crop starts, the window's size.
+    local addr org wsz; read -r addr org wsz <<<"$ref"
+    [ -n "$org" ] || org=0,0 wsz=${lw}x$lh
+    local w; w=$(jq -c --arg a "$addr" 'first(.[] | select(.address == $a)) // empty' <<<"$(box_windows)")
+    [ -n "$w" ] || die "--in: the window of that shot ($addr) is gone"
+    [ "$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")" = "$wsz" ] ||
+      die "--in: window $(win_desc "$w") is $(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w") now, $wsz in the shot: take a new one"
+    echo "window $addr $((${org%,*} + rx)) $((${org#*,} + ry))"
   else
     echo "screen $((${ref%,*} + rx)) $((${ref#*,} + ry))"
   fi
@@ -1698,7 +1736,7 @@ cmd_shot() {
     esac
     shift
   done
-  [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "shot: -g or --window (--active), not both"
+  local g=""; [ -z "$geom" ] || g=$(geom_parse "$geom") || die "shot: -g is \"X,Y WxH\" (or X,Y,W,H), got $geom"
   select_box "$name"; need_box
   # file: what is written and read back; out: its name, for the caller.
   local file
@@ -1709,23 +1747,31 @@ cmd_shot() {
   else
     in_jail && die "shot: a jailed agent's shot is written by its own omabox (--to-fd), never at a path here"
     [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
-    [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
+    mkdir -p -- "$(dirname -- "$out")" || die "shot: cannot make the directory $(dirname -- "$out")"
     out=$(readlink -f -- "$out") file=$out.part
   fi
   # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
   # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
-  local grim=(grim -l 1) win="" where lw lh
+  # With --window, -g is in the window's own coordinates (grim crops the window's capture), and the
+  # shot records where in the window it starts, for --in.
+  local grim=(grim -l 1) win="" where lw lh ww wh gx gy
+  [ -z "$g" ] || read -r gx gy lw lh <<<"$g"
   if [ ${#sels[@]} -gt 0 ]; then
     win=$(win_select "$(box_windows)" "${sels[@]}")
     local id; id=$(jq -r .stableId <<<"$win")
     [[ $id =~ ^[0-9a-fA-F]+$ ]] || die "shot: window $(win_desc "$win") has no stableId to capture it by ($id)"
     grim+=(-T "$id")
     where="window $(jq -r .address <<<"$win")"
-    read -r lw lh < <(jq -r '"\(.size[0]) \(.size[1])"' <<<"$win")
-  elif [ -n "$geom" ]; then
-    [[ $geom =~ ^(-?[0-9]+),(-?[0-9]+)\ ([1-9][0-9]*)x([1-9][0-9]*)$ ]] || die "shot: -g is \"X,Y WxH\", got $geom"
-    grim+=(-g "$geom")
-    where="screen ${BASH_REMATCH[1]},${BASH_REMATCH[2]}" lw=${BASH_REMATCH[3]} lh=${BASH_REMATCH[4]}
+    read -r ww wh < <(jq -r '"\(.size[0]) \(.size[1])"' <<<"$win")
+    if [ -n "$g" ]; then
+      [ "$gx" -ge 0 ] && [ "$gy" -ge 0 ] && [ $((gx + lw)) -le "$ww" ] && [ $((gy + lh)) -le "$wh" ] ||
+        die "shot: -g $gx,$gy ${lw}x$lh is not inside window $(win_desc "$win") (${ww}x$wh; -g is in the window's coordinates)"
+      grim+=(-g "$gx,$gy ${lw}x$lh")
+      where+=" $gx,$gy ${ww}x$wh"
+    else lw=$ww lh=$wh; fi
+  elif [ -n "$g" ]; then
+    grim+=(-g "$gx,$gy ${lw}x$lh")
+    where="screen $gx,$gy"
   else
     local ext; ext=$(extent)
     where="screen 0,0" lw=${ext%x*} lh=${ext#*x}
@@ -1771,7 +1817,8 @@ cmd_shot() {
       elif .cover != [] then ", covered by \(.cover[0].address) \(.cover[0].class) \(.cover[0].title | tojson)"
         + (if (.cover | length) > 1 then " and \(.cover | length - 1) more" else "" end)
       else "" end' <<<"$win")
-    say "window $(win_desc "$win") ${lw}x$lh at $(jq -r '"\(.at[0]),\(.at[1])"' <<<"$win"), workspace $(jq -r .workspace <<<"$win")$state${k:+; image ${iw}x$ih$k}; click with --in $out"
+    local crop=""; [ -z "$g" ] || crop="; ${lw}x$lh of it at $gx,$gy"
+    say "window $(win_desc "$win") ${ww}x$wh at $(jq -r '"\(.at[0]),\(.at[1])"' <<<"$win"), workspace $(jq -r .workspace <<<"$win")$state$crop${k:+; image ${iw}x$ih$k}; click with --in $out"
   elif [ "$where $lw $iw" != "screen 0,0 $lw $lw" ] || [ "$lh" != "$ih" ]; then
     say "${iw}x$ih image of the screen's ${lw}x$lh at ${where#screen }$k; click with --in $out"
   fi
@@ -1897,30 +1944,38 @@ cmd_click() {
   settle_end settle "$SETTLE_JSON" "the click was sent"
 }
 
-# -b NAME and --in SHOT before the arguments (and before `--`); everything else goes to the tool.
-# --in maps each `move X Y` from that shot's image to the screen (a window's must be on screen: this
-# is raw, it raises nothing).
+# -b NAME, --in SHOT and --window SEL before the arguments (and before `--`); everything else goes to
+# the tool. --in maps each `move X Y` from that shot's image to the screen, --window from that
+# window's coordinates (#25); either window must be on screen and uncovered there: this is raw, it
+# raises nothing. The tool's --hold is omabox's own (it never returns): refused here.
 cmd_pointer() {
-  local name="" in=""
+  local name="" in="" sels=()
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift 2 ;;
       --in) optarg "$@"; in=$2; shift 2 ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift 2 ;;
       --) shift; break ;;
       *) break ;;
     esac
   done
+  [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "pointer: --in or --window, not both"
+  local a; for a; do [ "$a" != --hold ] || die "pointer: --hold is omabox's own (it never returns); to keep a button down: down, move ..., up (or omabox drag)"; done
   select_box "$name"; need_box
-  if [ -n "$in" ]; then
+  if [ -n "$in" ] || [ ${#sels[@]} -gt 0 ]; then
     local args=() p
     while [ $# -gt 0 ]; do
       if [ "$1" = move ] && [ $# -ge 3 ]; then
-        [[ $2 =~ ^[0-9]+$ && $3 =~ ^[0-9]+$ ]] || die "pointer --in: move takes image pixels, got $2 $3"
-        p=$(shot_point "$in" "$((10#$2))" "$((10#$3))")
-        if [[ $p == window* ]]; then
-          local a wx wy; read -r _ a wx wy <<<"$p"
-          p=$(win_point 0 "$wx" "$wy" "$a")
-        else p=${p#screen }; fi
+        [[ $2 =~ ^[0-9]+$ && $3 =~ ^[0-9]+$ ]] || die "pointer: move takes whole pixels, got $2 $3"
+        if [ ${#sels[@]} -gt 0 ]; then
+          p=$(win_point 0 "$((10#$2))" "$((10#$3))" "${sels[@]}") || exit $?
+        else
+          p=$(shot_point "$in" "$((10#$2))" "$((10#$3))")
+          if [[ $p == window* ]]; then
+            local wa wx wy; read -r _ wa wx wy <<<"$p"
+            p=$(win_point 0 "$wx" "$wy" "$wa") || exit $?
+          else p=${p#screen }; fi
+        fi
         args+=(move "${p% *}" "${p#* }"); shift 3
       else args+=("$1"); shift; fi
     done
@@ -1930,6 +1985,81 @@ cmd_pointer() {
   local ext; ext=$(extent)
   on_box "$BOX_POINTER" --extent "$ext" "$@"
   mark "ptr $ext $*"
+}
+
+# omabox drag X1 Y1 X2 Y2 (#25): press at the first point, move to the second in --steps, hold there
+# --hold MS (a drop target reacting to the hover), release. --window and --in map both points as for
+# click; --shot FILE takes a shot while the button is still down (the pointer tool pauses for it).
+cmd_drag() {
+  local name="" btn=left xy=() sels=() raise=1 in="" steps=10 hold=0 shot=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --in) optarg "$@"; in=$2; shift ;;
+      --no-raise) raise=0 ;;
+      --steps) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,2}$ ]] || die "drag: --steps is 1-999, got $2"; steps=$2; shift ;;
+      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "drag: --hold is up to 60s (300ms, 2s), got $2"; shift ;;
+      --shot) optarg "$@"; shot=$2; shift ;;
+      left|right|middle) btn=$1 ;;
+      --*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "drag: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
+      *) [[ $1 =~ ^[0-9]+$ ]] || die "drag: bad argument $1"; xy+=("$((10#$1))") ;;
+    esac
+    shift
+  done
+  settle_opts_check
+  [ ${#xy[@]} -eq 4 ] || die "drag: need X1 Y1 X2 Y2"
+  [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "drag: --in or --window, not both"
+  [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "drag: --no-raise goes with --window or --in"
+  [ -z "$shot" ] || [ "$SETTLE_WAIT" = 0 ] || die "drag: --shot or --wait, not both (the shot is the look)"
+  [ -z "$shot" ] || ! in_jail || die "drag: --shot is not for an agent inside ai-jail yet: omabox shot after the drag, or --hold and a shot of its own"
+  select_box "$name"; need_box
+  # Both points to screen pixels: from a shot's image, then from a window's coordinates.
+  local pts=() i p a
+  for i in 0 2; do
+    local x=${xy[i]} y=${xy[i+1]} wsel=("${sels[@]}")
+    if [ -n "$in" ]; then
+      p=$(shot_point "$in" "$x" "$y")
+      if [[ $p == window* ]]; then read -r _ a x y <<<"$p"; wsel=("$a"); else read -r _ x y <<<"$p"; fi
+    fi
+    if [ ${#wsel[@]} -gt 0 ]; then p=$(win_point "$raise" "$x" "$y" "${wsel[@]}") || exit $?; read -r x y <<<"$p"; fi
+    pts+=("$x" "$y")
+  done
+  local x1=${pts[0]} y1=${pts[1]} x2=${pts[2]} y2=${pts[3]} seq n
+  seq=(move "$x1" "$y1" down "$btn")
+  for ((n = 1; n <= steps; n++)); do
+    seq+=(move "$((x1 + (x2 - x1) * n / steps))" "$((y1 + (y2 - y1) * n / steps))")
+  done
+  [ "$hold" = 0 ] || seq+=(sleep "$hold")
+  [ -z "$shot" ] || seq+=(pause)
+  seq+=(up "$btn")
+  local ext; ext=$(extent)
+  if [ "$SETTLE_WAIT" = 1 ]; then
+    p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+    SETTLE_ARGS+=(--ignore "$(cursor_rect "$x2 $y2")")
+    settle_begin settle "${SETTLE_ARGS[@]}"
+    settle_ready "$SETTLE_JSON"
+  fi
+  if [ -z "$shot" ]; then
+    if [ "$SETTLE_WAIT" = 1 ]; then settle_act on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+    else on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; fi
+  else
+    # The tool says "paused" once the button is down at the end; the shot is taken then, and a line on
+    # its stdin lets it release. A shot that fails still releases the button.
+    local rc=0 line
+    coproc DRAG { on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; }
+    local dout=${DRAG[0]} din=${DRAG[1]} dpid=$DRAG_PID
+    if read -r -t 120 line <&"$dout" && [ "$line" = paused ]; then
+      ( cmd_shot -b "$NAME" -o "$shot" ) || rc=$?
+    else rc=1; say "drag: the pointer did not get to the end of the drag"; fi
+    echo >&"$din" || true
+    exec {din}>&- || true
+    wait "$dpid" || rc=$?
+    [ $rc = 0 ] || exit $rc
+  fi
+  # For a peek window: where it started and ended (its steps would pass the mark's 64 tokens).
+  mark "ptr $ext move $x1 $y1 down $btn move $x2 $y2 up $btn"
+  [ "$SETTLE_WAIT" != 1 ] || settle_end settle "$SETTLE_JSON" "the drag was sent"
 }
 
 # --- waiting ------------------------------------------------------------------------------------
@@ -2220,8 +2350,8 @@ cmd_wait() {
       [ -z "$quiet" ] || args+=(--quiet "$quiet")
       [ $strict = 0 ] || args+=(--strict)
       if [ -n "$geom" ]; then
-        [[ $geom =~ ^(-?[0-9]+),(-?[0-9]+)\ ([1-9][0-9]*)x([1-9][0-9]*)$ ]] || die "wait: -g is \"X,Y WxH\", got $geom"
-        region="${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]},${BASH_REMATCH[4]}"
+        local g; g=$(geom_parse "$geom") || die "wait: -g is \"X,Y WxH\" (or X,Y,W,H), got $geom"
+        region=${g// /,}
       elif [ ${#sels[@]} -gt 0 ]; then
         # Its place on the screen: what is drawn there is what is watched.
         local w; w=$(win_select "$(box_windows)" "${sels[@]}")
@@ -2986,7 +3116,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|windows|keys|click|pointer|wait|hyprctl|restart-shell|mode|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|restart-shell|mode|gpu|env|path|down|ls|list) ;;
     help|-h|--help|version|-V|--version) ;;
     config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
     *) die "omabox $cmd is not for an agent inside ai-jail" ;;
@@ -3011,8 +3141,20 @@ relay_wanted() {
 relay_call() {
   local cmd=$1 relay; shift
   relay=$(relay_bin) || die "omabox-relay is not in reach: map it into the jail (omabox broker on prints how)"
-  local env=(--env "DEFAULT=$(default_name)" --env "PATH=$(caller_path)") args=() a prev="" v
+  local env=(--env "DEFAULT=$(default_name)" --env "PATH=$(caller_path)") args=() a prev="" v kv kvs
   for a in "$@"; do
+    # run --env-file: read here, in the jail, and sent as --pass entries (the broker reads no path of
+    # the caller's). Values go in the relay's environment entries, as --pass values do.
+    if [ "$prev" = --env-file ] && [ "$cmd" = run ]; then
+      envfile_read "$a" >/dev/null
+      mapfile -d '' kvs < <(envfile_read "$a")
+      for kv in "${kvs[@]}"; do
+        [[ ${kv%%=*} =~ ^[A-Za-z_][A-Za-z0-9_]{0,58}$ ]] || die "--env-file: ${kv%%=*}: a name up to 59 characters, from inside ai-jail"
+        env+=(--env "PASS_$kv"); args+=(--pass "${kv%%=*}")
+      done
+      prev=""; continue
+    fi
+    if [ "$a" = --env-file ] && [ "$cmd" = run ]; then prev=$a; continue; fi
     if [ "$prev" = --pass ] && [[ $a =~ ^[A-Za-z_][A-Za-z0-9_]{0,58}$ ]] && v=$(caller_env "$a"); then env+=(--env "PASS_$a=$v"); fi
     case $prev in
       --plugin|--overlay) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
@@ -3022,7 +3164,7 @@ relay_call() {
   done
   case $cmd in
     shot|screenshot) relay_shot "$relay" "${env[@]}" -- "${args[@]}" ;;
-    click|pointer) relay_in "$relay" "$cmd" "${env[@]}" -- "${args[@]}" ;;
+    click|pointer|drag) relay_in "$relay" "$cmd" "${env[@]}" -- "${args[@]}" ;;
     *) exec "$relay" call "$BROKER_SOCK" "${env[@]}" -- "$cmd" "${args[@]}" ;;
   esac
 }
@@ -3044,7 +3186,7 @@ relay_shot() {
   done
   select_box "$name"
   [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
-  [ -d "$(dirname -- "$out")" ] || die "shot: no such directory: $(dirname -- "$out")"
+  mkdir -p -- "$(dirname -- "$out")" || die "shot: cannot make the directory $(dirname -- "$out")"
   out=$(readlink -f -- "$out")
   local tmp fd rc=0
   tmp=$(mktemp "$(dirname -- "$out")/.omabox-shot.XXXXXX") || die "shot: cannot write in $(dirname -- "$out")"
@@ -3251,6 +3393,7 @@ main() {
     keys) cmd_keys "$@" ;;
     click) cmd_click "$@" ;;
     pointer) cmd_pointer "$@" ;;
+    drag) cmd_drag "$@" ;;
     wait) cmd_wait "$@" ;;
     hyprctl) cmd_hyprctl "$@" ;;
     peek) cmd_peek "$@" ;;

@@ -14,13 +14,25 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   615.71.09 does not expose the per-process DRM counters `gpu` needs; on that driver it reports no
   percentages.
 
+## Pointer, in detail
+
+- `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [left|right|middle] [--steps 10] [--hold MS]
+  [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold there `--hold`
+  (a drop target reacting to the hover), release. `--shot FILE` takes a shot while the button is still
+  down (a drag's own feedback). Both points are mapped as for `click`.
+- `omabox pointer [--window SEL | --in SHOT] -- move X Y, click [BTN], down [BTN], up [BTN], scroll
+  DY, sleep MS` in one run: raw, it raises nothing (a `--window` must be on screen and uncovered). The
+  button defaults to left. A button pressed with `down` stays down after the call, until an `up` (in
+  a later call too): end every `down` with an `up`, or the box's next clicks are drags.
+- Not yet: a click with a modifier held (ctrl-click, shift-click; issue #25).
+
 ## Waiting, in detail
 
 - `omabox wait [--timeout 10s] [--json] COND`, one condition per call (chain with `&&`): `still
   [--quiet 300ms] [-g GEOM | --window SEL] [--strict]`, `change [-g | --window]`, `window SEL [--gone
   | --focused]`, `layer NAMESPACE [--gone]` (`omarchy-menu`, `omarchy-notifications`, ...), `cmd --
   CMD` (exit 0 inside the box).
-- `keys`, `click` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [--json]`:
+- `keys`, `click`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [--json]`:
   the screen before the action, a change within `--start` (5 s for `run -d`), then `--quiet` with none.
 - A caret (a change 4 px or thinner) and the software cursor (in every frame; it hides on a key
   press) are not changes; the line says what was ignored. `--strict` counts them (a thin progress bar
