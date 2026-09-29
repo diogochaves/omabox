@@ -1667,7 +1667,9 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `--env` entries, and fds 0-2 (plus a shot's file) by SCM_RIGHTS. The relay's `listen` checks the
     peer's uid, takes an SO_PEERPIDFD, and runs `bin/omabox` in a session of its own with those fds,
     a fixed PATH and the caller's entries renamed `OMABOX_RELAY_*` (a `BASH_ENV` or `LD_PRELOAD` from
-    the jail never reaches the broker under its name); the caller going kills the command's session.
+    the jail never reaches the broker under its name) and SHLVL=1 (bash sources ~/.bashrc when its
+    stdin is a socket and SHLVL is below 2, as under rsh/ssh: seen, mise's PATH in the broker, when
+    the caller's stdin was one); the caller going kills the command's session.
     The broker (`broker_init`) walks up from the peer to the bwrap whose parent is ai-jail: that
     bwrap's command line is the jail's whole policy (every mount, `--unshare-net`), which nothing in
     the jail can change (other pid namespace, no ptrace); the pidfd is checked before and after, so a
@@ -1693,9 +1695,14 @@ the designs here were measured in boxes and built for a contained desktop, and n
     click --in, run --pass, down; refused: -o/--in paths, --overlay/--ro-bind/--plugin outside,
     --interactive, --allow, --net connected, host, guard, broker, peek, _reap, config changes, the
     user's box, env injection (BASH_ENV did not run). `t_unit_jail_policy`, `t_unit_relay`,
-    `t_unit_broker_units` (systemctl stubbed), `t_jail` (a real ai-jail, skipped without one). Not
-    checked: a real `ai-jail claude` session; `--network` jails (connected boxes); `--lockdown`
-    (drops maps, so no broker: expected). Open: GPU (a box has a render node the jail may not), the
+    `t_unit_broker_units` (systemctl stubbed), `t_jail` (a real ai-jail, skipped without one). Then
+    on the real session: `omabox broker on`, its line in `~/.ai-jail`, and a real Claude Code in
+    `ai-jail --network --agent-state claude -p` (plus `--map ~/.config/mise --map
+    ~/.local/share/mise`, which ai-jail's README asks for when mise installed the agent) loaded the
+    omabox skill by itself and ran up, run -d --wait foot, keys --window foot, shot --window foot
+    and down, each exit 0, reading the shot right; its box took the session's name and was
+    connected (the jail had --network). Not checked: `--lockdown` (drops maps, so no broker:
+    expected). Open: GPU (a box has a render node the jail may not), the
     seeded box HOME (the user's non-secret Omarchy look, which a private-home jail does not see),
     and how many boxes a jail may start.
 

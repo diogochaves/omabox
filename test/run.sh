@@ -603,6 +603,11 @@ t_unit_relay() {
   check_match "the command's own PATH is the broker's" "\|PATH=/usr/local/bin:/usr/bin\|" "$out"
   check_match "the caller and its cwd are named" "OMABOX_BROKER_CWD=$d\|OMABOX_BROKER_PEER=[0-9]+\|" "$out"
   check_match "a pidfd for the caller" "pidfd=ok" "$out"
+  # With a socket for stdin, bash would source ~/.bashrc (SHLVL below 2): not in the broker.
+  out=$(cd "$d" && python3 -c 'import socket, subprocess, sys
+a, b = socket.socketpair()
+sys.stdout.write(subprocess.run(sys.argv[1:], stdin=a, capture_output=True, text=True).stdout)' "$R" call "$d/sock" -- x)
+  check_match "...its PATH stays fixed with a socket for stdin (no ~/.bashrc)" "\|PATH=/usr/local/bin:/usr/bin\|" "$out"
   check_match "a variable name that is not one is refused" "bad --env" "$("$R" call "$d/sock" --env 'BASH_FUNC_x%%=1' -- x 2>&1)"
   echo passed > "$d/f"
   check_match "an --fd file reaches the command as fd 3" "fd3=passed" "$("$R" call "$d/sock" --fd 5 -- x 5<"$d/f" 2>&1)"

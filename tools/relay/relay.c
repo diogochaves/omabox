@@ -210,6 +210,9 @@ static void serve(int conn) {
         if (v && asprintf(&env[ne], "%s=%s", keep[k], v) > 0) ne++;
     }
     env[ne++] = "PATH=/usr/local/bin:/usr/bin";
+    // bash sources ~/.bashrc when its stdin is a socket (as under rsh/ssh) and SHLVL is below 2,
+    // and the caller's stdin may be one: omabox would run with whatever that sets.
+    env[ne++] = "SHLVL=1";
     if (asprintf(&env[ne++], "OMABOX_BROKER_PEER=%d", (int)cred.pid) < 0) _exit(1);
     for (char **a = g_cmd; *a; a++) args[na++] = *a;
     int nuser = 0, have_cwd = 0;
