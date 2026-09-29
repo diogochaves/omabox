@@ -5,6 +5,8 @@
   </picture>
 </h1>
 
+[![Built for Omarchy](https://raw.githubusercontent.com/tcballard/omarchy-badges/85f859029e236e784e7b05ada6dbe73506d07a91/badges/v1/built-for-omarchy.svg)](https://github.com/tcballard/omarchy-badges) · [omabox.app](https://omabox.app)
+
 **A desktop of their own, for your agents.** omabox gives an AI agent a whole Omarchy desktop to
 launch, drive and screenshot apps and shell plugins in, invisible and apart from yours: no windows
 on your screen, no stolen focus, no cursor jumps or workspace switches, no tray icons, notifications
