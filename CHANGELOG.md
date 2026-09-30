@@ -45,6 +45,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#25](https://github.com/diogochaves/omabox/issues/25)).
 - The skill says the pointer's position is part of what a test sets up: where it starts, that
   `click` jumps, how to travel ([#43](https://github.com/diogochaves/omabox/issues/43)).
+- **`omabox lua EXPR`** evaluates Lua in the box's Hyprland and prints what it returns (tables and
+  Hyprland's objects as JSON), where `hyprctl eval` says only `ok`
+  ([#40](https://github.com/diogochaves/omabox/issues/40)).
+- **`omabox log`** prints or follows (`-f`) a box's logs: Hyprland's by default, the shell's, the
+  apps', the latest `run -d`'s and more, `--grep RE`, `-n N`, a box that died too. `omabox path
+  --logs` says where each one is ([#41](https://github.com/diogochaves/omabox/issues/41)).
+- **`omabox events`**: every box records its Hyprland events (`activewindow`, `urgent`,
+  `openlayer`, ...) from its start, timestamped. `--mark` says "from here" without clearing anything,
+  `--since MARK` (or `30s`) reads from there, `--grep`, `--json`, `-f`, and `--until RE` waits for an
+  event like `omabox wait` does ([#39](https://github.com/diogochaves/omabox/issues/39)).
 
 ### Changed
 

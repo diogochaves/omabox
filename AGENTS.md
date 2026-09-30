@@ -8,7 +8,7 @@ add to the ones here).
 
 Read first: `NOTES.md`: architecture, reproduce steps, what was verified, findings, dead ends,
 open gaps. `bin/omabox` is the CLI, `share/` runs inside the box, `tools/` holds the C helpers (pointer,
-keyboard, wlfd, peek, still, relay), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
+keyboard, wlfd, peek, still, relay, events), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
 Code, Codex, OpenCode, pi and Hermes), `plugin/` is the bar widget, `test/run.sh` is the regression
 suite (run it in full before each commit; `test/run.sh unit` is the fast tier; a failure's evidence
 is in `~/.local/state/omabox/test/`).

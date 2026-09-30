@@ -22,6 +22,7 @@ installed omabox to say where desktop work happens, not to change what the proje
 |---|---|
 | `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
 | `hyprctl …` | `omabox hyprctl …` |
+| `hyprctl eval EXPR` to read a value (it prints only `ok`) | `omabox lua EXPR` (prints the value; tables as JSON) |
 | `grim [-g …] out.png` | `omabox shot [-g …] [-o out.png]` |
 | `wtype …`, `ydotool …` | `omabox keys …`, `omabox click X Y` |
 | `grim -T ID`, `hyprctl -j clients` to find a window | `omabox windows`, `omabox shot --window SEL` |
@@ -70,6 +71,8 @@ omabox click 960 540 [right] [--double]    # layout coordinates, as in the scree
 omabox click --steps 20 --mod ctrl 960 540 # travel there (hovering what it crosses), then ctrl-click
 omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
+omabox log [shell|apps|run|…] [--grep RE]  # the box's logs, Hyprland's by default (-f follows)
+omabox events --mark m1                    # then act, then: events --since m1 [--grep RE | --until RE]
 omabox down                                # when done: kills everything in the box
 ```
 

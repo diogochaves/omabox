@@ -57,6 +57,36 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   drawn while hidden: an older one, or one whose window confirm-close replaced). Waiting counts as use
   for the idle timeout.
 
+## Hyprland's Lua, logs and events
+
+- `omabox lua EXPR` evaluates Lua in the box's Hyprland and prints what it returns, where `omabox
+  hyprctl eval` prints only `ok`: `omabox lua 'hl.get_cursor_pos()'`, `omabox lua
+  'hl.get_active_window().class'`, `omabox lua 'local w = hl.get_active_window(); return w.title,
+  w.pid'` (statements need `return`). One line per value: strings and numbers as they are, `nil`,
+  tables and Hyprland's objects (a window, a monitor, a layer) as JSON, objects inside them by name
+  (`HL.Workspace(1:1)`); `--json` quotes strings too. A long script: `omabox lua - < script.lua`. A Lua
+  error is exit 1 with its message. Globals you set stay for the next call (until a config reload).
+- An error inside a callback (`hl.on`, `hl.timer`) is not in `lua`'s answer, and when the callback
+  runs later (a timer, an app's event) it is logged nowhere, not even in the Hyprland log: seen
+  nothing, check with `pcall` inside the callback and keep the error in a global to read with
+  `omabox lua`. (An `hl.on` callback that a `hyprctl dispatch` sets off errors in that dispatch's
+  answer.)
+- `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
+  of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
+  launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
+  `--systemd`), `box` (bwrap). A box that died keeps its logs until `down`: read them to see why.
+  `-f` follows until the box goes down (exit 0). Hyprland writes its log in pieces: a line about
+  what just happened can come a moment (or many lines) later; `-f` shows it when it does.
+- `omabox events`: Hyprland's event stream (`activewindow>>`, `urgent>>`, `openlayer>>`,
+  `workspace>>`, ...) as the box recorded it from its start, one stamped line each (`--json`:
+  `{time, event, data}`). Never hand-roll a socat on `.socket2.sock`, and never truncate a log
+  something is writing (NUL-padded files, "no events" when there were some). To look at what one
+  step caused: `omabox events --mark m1` (a byte offset, kept by name; nothing is cleared), act, then
+  `omabox events --since m1 [--grep '^urgent>>']`. `--since 30s` also works. `--until RE [--timeout
+  10s]` waits for the first matching event from the mark (one that came already counts) or from
+  now: 0 with the event printed, 124 none in time, 1 the box went down. `-f` follows. E.g. "did the
+  app ask for activation when relaunched?": mark, relaunch, `events --since m1 --until '^urgent>>'`.
+
 ## Mounts, HOME and the session
 
 - The repo you ran `omabox up` from is visible **read-only** at the same path, plus any dirs listed in
@@ -89,8 +119,7 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - `--no-shell` starts Hyprland only (no bar, tray or notifications): faster for plain app work.
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
-- Logs: `<box dir>/home/*.log` (shell, keyring, labwc, runs), Hyprland's in
-  `<box dir>/run/hypr/*/hyprland.log`, bwrap's in `<box dir>/box.log`.
+- Logs: `omabox log` prints them (below); `omabox path --logs` says where each file is.
 - `run -d` jobs: each is its own session, with a log (`run-*.log`) named on stderr; `-q` drops that
   line, `--print-log` prints only the path on stdout (first, before a `--wait` line). `run -d
   --replace -- CMD` stops the jobs `run -d` started in the box with the same command and arguments

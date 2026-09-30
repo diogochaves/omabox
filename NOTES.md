@@ -83,8 +83,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    ```
    It must provide the soname the installed Hyprland links (`ldd $(command -v Hyprland)`); only the
    nested Hyprland loads it. `omabox up` checks this too.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay` (need `wayland-scanner`;
-   protocol XML is vendored).
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay`, `events`
+   (need `wayland-scanner`; protocol XML is vendored).
 4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
    `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when those exist); `plugin/` as
    `~/.config/omarchy/plugins/chaves.omabox`. A real directory where a link goes stops the install.
@@ -1782,6 +1782,71 @@ the designs here were measured in boxes and built for a contained desktop, and n
     bad regex is still exit 2. What acts on one window keeps refusing several (`--window` on `shot`,
     `click`, `keys`, `pointer`, `drag`, and `wait still/change --window`, which watches one window's
     place). `win_answer` is the probe without the box; `t_unit_window_select`, `t_wait`.
+106. **`omabox lua`: Lua in the box's Hyprland, and its value** (2026-09-30, issue #40, from an agent
+    that wrote files from Lua to read them back). `hyprctl eval` answers `ok` or `error: MESSAGE`,
+    with the message whole (100 000 bytes came through; a NUL ends it: a C string) and no overlay or
+    log line in the box. So `share/lua.lua`, sent as the body of a function with the source in a Lua
+    long string whose brackets the source does not contain (`[==[`: nothing is quoting), compiles
+    `return SRC` or else `SRC` (an expression or statements, as eval itself does), runs it under
+    `pcall` and raises its answer as an error on purpose: `omabox-lua-ok:` and the values as a JSON
+    array, or `omabox-lua-error:` and the Lua error. No file in the box, so calls at once never meet
+    (six in parallel checked). JSON escapes control characters, NUL included; floats print as Lua
+    does (`960.0`), inf and nan as strings. Hyprland's objects are userdata with an `__index`
+    function, whose fields Lua cannot list: they come from Hyprland's own stubs
+    (`/usr/share/hypr/stubs/hl.meta.lua`, `---@class`/`---@field`, read once per Hyprland into a
+    global), and an object inside one prints by name (`HL.Workspace(1:1)`), as `hyprctl -j clients`
+    names them; without the stubs an object is its tostring. Seen in a box (Hyprland 0.56.2, Lua
+    5.5): an error in an `hl.on` callback that a `hyprctl dispatch` sets off comes back in that
+    dispatch's answer; one in a timer, or in a callback an app's event sets off later, is logged
+    nowhere (not the Hyprland log, not `configerrors`, nothing on screen). reference.md says to
+    `pcall` inside callbacks. Allowed to a jailed agent, as `hyprctl` is. `t_unit_inspect`,
+    `t_inspect`.
+107. **`omabox log`: a box's logs by name** (2026-09-30, issue #41, from an agent that grepped the
+    Hyprland log through `run -- bash -c` twice in one session). `log [LOG...|all]` with `hyprland`
+    (the default: `run/hypr/SIG/hyprland.log`), `shell`, `apps` (the uwsm-app stand-in's), `run`
+    (the latest `run -d` log), `keyring`, `labwc`, `systemd`, and the box dir's `box` (bwrap's)
+    and `reap`; `-n N` (100, or `all`), `--grep RE` (grep -E, `-i`), `-f`. `path --logs` lists the
+    files. The box HOME and runtime dir are the box's to write, so a log swapped for a link to a host
+    file would have `log` print that file into an agent's context: a live box's logs are read inside
+    its mount namespace (`on_box`, where the path resolves as the box sees it), a dead box's from the
+    host only as regular files that resolve inside its own dirs (checked both ways with a link to a
+    file in the suite's host /tmp). A dead box's logs are read too, since they say why it died
+    (`need_box` now points at `omabox log -b NAME all`). `-f` runs `tail -F --pid=<box PID 1>`, in
+    the box's mount namespace but the host's pid namespace, so it ends within a second of the box
+    going down (seen: 1.1 s after its Hyprland was killed), says so and exits 0; the box dir's logs
+    are followed by a second tail into the same stream, tail's headers renamed to the logs' names
+    and, with `--grep`, printed only before a match. A follower is not use for idle expiry (its
+    command line is tail's, not nsenter's). Seen: Hyprland writes its log in pieces (the file often
+    ends mid-line, and a burst of lines landed only as Hyprland exited), so a line about an action
+    can come late; `log` ends every line it prints. `t_unit_inspect`, `t_inspect`.
+108. **`omabox events`: the box's Hyprland events, recorded from its start** (2026-09-30, issue #39,
+    from an agent that hand-rolled `socat` on `.socket2.sock` and twice truncated the log under it
+    (`: > ev.log`): socat's fd without O_APPEND went on writing at its old offset, the file came back
+    NUL-padded, grep skipped it as binary, and "no events" was reported when there were some; this
+    finding's own test did it once as it was written: two followers on one file).
+    `tools/events` (`omabox-events FILE`, bound at `/opt/omabox/bin`, started by the box's
+    Hyprland at `hyprland.start`, before the shell) connects to the socket from its directory (the
+    path can pass 108 bytes), and writes each event as `SECONDS.MILLIS EVENT>>DATA`, one `write()` to
+    a file opened `O_APPEND`, to the box HOME's `events.log` (on disk, like the HOME: finding 50;
+    among the logs a save leaves out). Its own lines are `omabox>>listening` and `omabox>>stopped:
+    ...`; it stops writing at 256 MB (an app retitling its window every frame) and refuses outside a
+    box (it would record the real session). A blocked read the rest of the time: no cost to speak
+    of; it dies with the box. Nothing is ever truncated, so "from here" is a byte offset:
+    `events --mark [NAME]` prints the log's size (read in the box) and keeps NAME in
+    `<box dir>/events.marks`, which the box cannot see; `--since` takes a name, an offset or a time
+    ago (`30s`), and reads whole lines from there (a mark taken mid-burst is checked to fall at a line
+    end: eight during forty workspace switches). `--grep` and `--until` match `EVENT>>DATA`
+    (ERE); text shows local `HH:MM:SS.mmm`, `--json` `{time, event, data}`. `--until RE` waits like
+    `wait` (0 with the event, 124 at `--timeout`, 1 when the box goes down; use for idle expiry),
+    from the mark when one is given, so an event that came between the action and the call counts.
+    `-f` and `--until` read `tail -F --pid=<box PID 1>` in the box's mount namespace (as `log -f`
+    does), in the background, and end it on any exit of omabox (a trap; the reader is waited for
+    with `wait`, which a signal interrupts where a foreground pipeline would not): seen, a TERM
+    left no tail behind, where the first version (`pkill -P` failing under `set -e` in the EXIT trap
+    before its `kill`) left one per call until the box went down. `log events` shows the file as it
+    is. A box started before this has no listener: `events` says to start it again. The leak
+    detector's watcher (finding 80) keeps its own `run/events.log` in its stand-in box: it asks who
+    has focus on every change, which this does not. `t_unit_inspect`, `t_inspect`.
 109. **`run -d -q` and `--print-log`** (2026-09-30, issue #42, from an agent session that started a
     dozen windows and filtered `grep -v '^omabox: started'` in almost every command; omaseed's
     `scripts/dev/app-box.sh` parsed `(log: PATH)` out of stderr). `-q` drops `run -d`'s own lines
