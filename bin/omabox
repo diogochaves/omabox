@@ -36,8 +36,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell] [--from SAVE]
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      a free name, box-1, box-2, ... (printed)
-  omabox run [-b NAME] [-d [--wait]] [--pass VAR]... [--env-file FILE]... [UP OPTIONS] -- CMD [ARG...]
-                                                         UP OPTIONS: up's, for a throwaway box only
+  omabox run [-b NAME] [-d [--wait] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
+             [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N]
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
@@ -109,6 +109,8 @@ second close is a yes).
 $PASS_KEY toggles sending SUPER keys to an interactive box.
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
+\`run -d\` says where the command's output goes (its log) on stderr: -q says nothing (errors still),
+--print-log prints the log's path on stdout (first, before --wait's line).
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
 (-b NAME) stays.
@@ -1429,12 +1431,16 @@ host_eval() {
 # --- run -----------------------------------------------------------------------------------------
 
 cmd_run() {
-  local name="" detach=0 up_args=()
+  local name="" detach=0 up_args=() quiet=0 print_log=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -d|--detach) detach=1 ;;
-      --wait|--start|--quiet|--timeout|--strict|--json) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
+      -q) quiet=1 ;;
+      --print-log) print_log=1 ;;
+      --quiet) { [ $# -ge 2 ] && ms_duration "$2" >/dev/null; } || die "run: --quiet takes a duration (--wait's quiet period); -q is the flag that silences run -d"
+        settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
+      --wait|--start|--timeout|--strict|--json) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
       --pass) optarg "$@"
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "run: --pass takes a variable name, got $2"
         caller_env "$2" >/dev/null || die "run: --pass $2: not in this command's environment (export it first)"
@@ -1455,6 +1461,7 @@ cmd_run() {
   [ $# -gt 0 ] || die "run: nothing to run (omabox run -- CMD ...)"
   settle_opts_check
   [ "$SETTLE_WAIT" = 0 ] || [ $detach = 1 ] || die "run: --wait goes with -d (a command run to its end has nothing to wait for)"
+  [ $((quiet + print_log)) = 0 ] || [ $detach = 1 ] || die "run: -q and --print-log go with -d"
   select_box "$name"
   if box_alive; then
     [ ${#up_args[@]} -eq 0 ] || say "box '$NAME' is already up: ${up_args[*]} ignored"
@@ -1471,7 +1478,8 @@ cmd_run() {
       # setsid -f forks and exits, so nsenter exits too and the command is reparented to the box's
       # PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
       settle_act box_exec setsid -f "$@" </dev/null >"$log" 2>&1
-      say "started in box '$NAME' (log: $log)"
+      [ $print_log = 0 ] || echo "$log"
+      [ $quiet = 1 ] || say "started in box '$NAME' (log: $log)"
       [ "$SETTLE_WAIT" = 0 ] || { settle_end settle "$SETTLE_JSON" "the command was started"; return; }
       return 0
     fi

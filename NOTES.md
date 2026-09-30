@@ -1758,6 +1758,16 @@ the designs here were measured in boxes and built for a contained desktop, and n
     fails with its number, not its text. From a jail the caller's omabox reads the file and sends its
     entries as `--pass` values. Checked in a box (and that no value is in any command line while it
     runs); `t_main`.
+109. **`run -d -q` and `--print-log`** (2026-09-30, issue #42, from an agent session that started a
+    dozen windows and filtered `grep -v '^omabox: started'` in almost every command; omaseed's
+    `scripts/dev/app-box.sh` parsed `(log: PATH)` out of stderr). `-q` drops `run -d`'s "started"
+    line; errors and `--wait`'s answer stay. `--print-log` prints the log's path on stdout, the first
+    line (before `--wait`'s), so a script takes it without parsing a message; the stderr line is
+    worded as before. The long `--quiet` stays `--wait`'s quiet period (a duration): `run --quiet`
+    without one says to use `-q`. No `OMABOX_QUIET`: a variable set once in a profile would also hide
+    the log path from an agent that needs it, and a script can pass `-q`. No `--log FILE` either: from
+    ai-jail the broker writes no path of the caller's (finding 99), and `--print-log` covers the
+    script. Both go with `-d` only (refused otherwise). `t_unit_cli`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

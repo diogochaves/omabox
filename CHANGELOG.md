@@ -25,6 +25,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#30](https://github.com/diogochaves/omabox/issues/30)).
 - **`shot --window SEL -g "X,Y WxH"`** crops a window in its own coordinates
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
+- **`run -d -q`** drops the "started in box" line, and **`run -d --print-log`** prints only the
+  log's path, on stdout, for scripts ([#42](https://github.com/diogochaves/omabox/issues/42)).
 
 ### Changed
 
