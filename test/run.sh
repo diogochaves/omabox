@@ -2783,6 +2783,13 @@ t_keys_to_box() {
   box_ws() { [ "$("${in[@]}" hyprctl -b "$1" -j activeworkspace | jq -r .name)" = "$2" ]; }
   # shellcheck disable=SC2329
   host_ws() { [ "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)" = "$1" ]; }
+  # The stand-in's pointer to the middle of its window pid:N.
+  # shellcheck disable=SC2329
+  to_mid() {
+    local xy; xy=$(ob hyprctl -b "$B" -j clients | jq -r --arg s "$1" '[.[] | select("pid:\(.pid)" == $s)][0]
+      | "\(.at[0] + (.size[0] / 2 | floor)) \(.at[1] + (.size[1] / 2 | floor))"')
+    ob pointer -b "$B" -- move "${xy% *}" "${xy#* }" >/dev/null
+  }
   local red; red=$(sed -n 's/^red *= *"#\([0-9a-fA-F]\{6\}\)".*/\1/p' "$(ob path "$B")/home/.local/state/omarchy/current/theme/colors.toml" | tr 'A-F' 'a-f')
   red=ff${red:-ff5555}
   check_eq "keys-to-box is off by default" off "$("${in[@]}" keys-to-box -b ka)"
@@ -2802,6 +2809,8 @@ t_keys_to_box() {
   check_eq "...not to the host" 9 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)"
   ob keys -b "$B" super+alt+Escape >/dev/null
   check "SUPER+ALT+ESCAPE gets the keys back, the box still focused" until_ok 5 kis "|aquamarine|plain|"
+  ob pointer -b "$B" -- move 2 2 >/dev/null; to_mid "pid:$pa"
+  check "...the pointer leaving the box and coming back does not undo that" holds 1 kis "|aquamarine|plain|"
   ob keys -b "$B" super+1 >/dev/null
   check "...SUPER+1 is the host's then" until_ok 5 host_ws 1
   focus "pid:$pa"
@@ -2814,15 +2823,47 @@ t_keys_to_box() {
   ob pointer -b "$B" -- move 2 2 >/dev/null   # the stand-in's corner: off every box window
   ob keys -b "$B" a >/dev/null
   check "...a key with the pointer off the box ends it (finding 29)" until_ok 5 kis "|aquamarine|plain|"
-  focus "pid:$pa"
-  until_ok 5 kis "omabox|aquamarine|border|ka" >/dev/null
+  # issue #55: in keys-to-box the pointer decides too. The box alone on a workspace of the stand-in's
+  # (5): the pointer on an empty corner (where a bar would be) gives the keys back, keys-to-box on.
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ workspace = '5', window = 'pid:$pa' })" >/dev/null
+  focus "pid:$pa"; to_mid "pid:$pa"
+  check "keys-to-box, the box alone on its workspace, the pointer over it: the submap" until_ok 5 kis "omabox|aquamarine|border|ka"
   ob pointer -b "$B" -- move 2 2 >/dev/null
-  ob keys -b "$B" a >/dev/null
-  check "keys-to-box: focus decides, not that rule" holds 1 kis "omabox|aquamarine|border|ka"
+  check "...the pointer off it: submap, border and file off, the box still focused" until_ok 5 kis "|aquamarine|plain|"
+  check_eq "...keys-to-box still on" on "$("${in[@]}" keys-to-box -b ka)"
+  ob keys -b "$B" super+1 >/dev/null
+  check "...SUPER+1 switches the stand-in's workspace, on the first press" until_ok 5 host_ws 1
+  check "...not the box's" box_ws ka 2
+  focus "pid:$pa"; ob pointer -b "$B" -- move 2 2 >/dev/null
+  until_ok 5 kis "|aquamarine|plain|" >/dev/null
+  to_mid "pid:$pa"
+  check "...the pointer back over the box: the submap, border and file again" until_ok 5 kis "omabox|aquamarine|border|ka"
+  ob keys -b "$B" super+3 >/dev/null
+  check "...SUPER+3 goes to the box" until_ok 5 box_ws ka 3
+  check_eq "...not to the stand-in" 5 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)"
+  # The key pressed right after the pointer moved, before the timer has looked: the key hook runs
+  # before Hyprland looks the key up in the binds, so it decides for that very key (the timer off here).
+  ob lua -b "$B" 'omabox_pass_timer:set_enabled(false)' >/dev/null
+  ob pointer -b "$B" -- move 2 2 >/dev/null
+  check "...with no timer the submap is still on" holds 0.5 kis "omabox|aquamarine|border|ka"
+  ob keys -b "$B" super+1 >/dev/null
+  check "...and SUPER+1 still switches the stand-in's workspace, on the first press" until_ok 5 host_ws 1
+  focus "pid:$pa"; ob pointer -b "$B" -- move 2 2 >/dev/null
+  until_ok 5 kis "|aquamarine|plain|" >/dev/null
+  ob lua -b "$B" 'omabox_pass_timer:set_enabled(false)' >/dev/null
+  to_mid "pid:$pa"
+  ob keys -b "$B" super+4 >/dev/null
+  check "...the other way: SUPER+4 goes to the box" until_ok 5 box_ws ka 4
+  check_eq "...not to the stand-in" 5 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)"
+  focus class:foot; focus "pid:$pa"   # the timer back (focus starts it again)
+  check "...focus starts the timer again" until_ok 3 test "$(ob lua -b "$B" 'return omabox_pass_timer:is_enabled()')" = true
+  focus class:foot
+  check "focus off the box stops it" until_ok 3 test "$(ob lua -b "$B" 'return omabox_pass_timer:is_enabled()')" = false
+  focus "pid:$pa"; to_mid "pid:$pa"
   # A config reload drops the hooks, the binds and the rule; the box's reaper puts them back.
   ob hyprctl -b "$B" reload >/dev/null
   # shellcheck disable=SC2329
-  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 3 ]; }
+  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 4 ]; }
   check "after a host reload the hooks come back (the reaper)" until_ok 6 reinstalled
   check "...with the submap, border and file as focus says" until_ok 3 kis "omabox|aquamarine|border|ka"
   check_eq "...one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
