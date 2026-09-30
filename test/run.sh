@@ -13,7 +13,9 @@
 # suite's showing up there fails the test that was running (t_leak_control first proves that on a box
 # standing in for the host); the end checks that the host's focused workspace and window are what
 # they were, or changed by events that were not the suite's (you working meanwhile). omabox's
-# workspace coming up there fails it too (unless you were on it when the run started). Pointer motion
+# workspace coming up there fails it too (unless you were on it when the run started). Don't peek at
+# the run's t<pid>-* boxes (bar widget, omabox peek) while it runs: a peek window is a window of
+# omabox's on the host. Pointer motion
 # has no event: it is only seen when it moves focus. Needs a Hyprland session and python3. The
 # network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
 # connection from a box to its gateway, the router.
@@ -241,7 +243,7 @@ omabox_window() {
     aquamarine) echo "an interactive box's window ($2${3:+ \"$3\"})" ;;
     omabox-peek)
       case $3 in
-        "omabox peek: $1"*|"omabox peek"|"") echo "a peek window${3:+ \"$3\"}" ;;
+        "omabox peek: $1"*|"omabox peek"|"") echo "a peek window${3:+ \"$3\"} of this run's box: if you opened it (bar widget, omabox peek), that is the cause; run again without peeking" ;;
         *) return 1 ;;
       esac ;;
     *) return 1 ;;
