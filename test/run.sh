@@ -2047,7 +2047,7 @@ t_widget() {
   local B=$P-wg
   ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
   local H; H=$(ob path "$B")/home
-  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
+  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  clip) echo "$*" >> "$HOME/actions"; echo "omabox: handed text (text/plain;charset=utf-8, 3 bytes) from your clipboard to box ia" >&2 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   printf '#!/bin/sh\necho "xdg-open $*" >> "$HOME/actions"; exec sleep 300\n' > "$H/.local/bin/xdg-open"
   printf '#!/bin/sh\necho "notify-send $*" >> "$HOME/actions"\n' > "$H/.local/bin/notify-send"
   chmod +x "$H/.local/bin/omabox" "$H/.local/bin/xdg-open" "$H/.local/bin/notify-send"
@@ -2096,6 +2096,21 @@ t_widget() {
   check "bar-icon auto: opened with no boxes, it stays shut" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
   jq -n "[$row + {name: \"a\"}]" > "$H/list.json"; polled
   check "...and does not pop up when one comes" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
+  # clip (issue #23, finding 119): v pastes in, c copies out, on an interactive box's row only
+  local irow='{"mode":"interactive","size":"window","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"connected","state":"up","peeking":false}'
+  jq -n "[$irow + {name: \"ia\"}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v >/dev/null
+  check "v on an interactive box: clip -b NAME" until_ok 3 grep -qx "clip -b ia" "$H/actions"
+  check "...what it handed over is notified (type and size)" until_ok 3 grep -q "^notify-send -a omabox omabox clip ia handed text (text/plain" "$H/actions"
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down c >/dev/null
+  check "c: clip --from-box" until_ok 3 grep -qx "clip -b ia --from-box" "$H/actions"
+  jq -n "[$row + {name: \"hb\"}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v c >/dev/null
+  check "...neither on a headless box's" holds 1 bash -c "! grep -q 'clip -b hb' '$H/actions'"
+  ob keys -b "$B" Escape >/dev/null
   mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
   check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
   ob down "$B" >/dev/null
@@ -2465,6 +2480,23 @@ t_clip() {
   check_eq "...no process holds the item's file (wl-copy's stderr file: its own)" 0 "$("${in[@]}" sh -c 'ls -l /proc/[0-9]*/fd 2>/dev/null | grep -c omabox-clip-item')"
   check_eq "...the host's windows" "$wins0" "$(ob hyprctl -b "$B" -j clients | jq length)"
   check_eq "...and its focus unchanged" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
+  # The bar widget's rows (Paste in, Copy out) run the real CLI in the stand-in
+  printf '#!/bin/sh\nexec %q "$@"\n' "$CLI" > "$H/.local/bin/omabox"; chmod +x "$H/.local/bin/omabox"
+  "${in[@]}" sh -c 'printf "via the widget" | wl-copy'
+  # shellcheck disable=SC2329 # called through until_ok
+  panel() { ob hyprctl -b "$B" -j layers | grep -q omarchy-keyboard-panel; }
+  # shellcheck disable=SC2329 # called through until_ok
+  has() { [ "$("${inb[@]}" wl-paste -n 2>/dev/null)" = "$1" ]; }
+  # shellcheck disable=SC2329 # called through until_ok
+  listed() { ob run -b "$B" -- omarchy-shell chaves.omabox open >/dev/null 2>&1; until_ok 3 panel >/dev/null && ob keys -b "$B" Escape >/dev/null && sleep 2.5; }
+  listed   # (the panel polls every 2 s while open: ib is in its list after that)
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v >/dev/null
+  check "the widget's v pastes your clipboard into the box" until_ok 10 has "via the widget"
+  "${inb[@]}" sh -c 'printf "out via the widget" | wl-copy'
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down c >/dev/null
+  check "...its c copies the box's out" until_ok 10 bash -c "[ \"\$('$CLI' run -b '$B' -- wl-paste -n)\" = 'out via the widget' ]"
   # Refused: a headless box (an agent's); several interactive ones and none focused; an agent
   "${in[@]}" "$CLI" up hb --no-shell >/dev/null 2>&1
   check_match "clip: a headless box refused" "box 'hb' is headless: clip is for interactive boxes only" "$("${in[@]}" "$CLI" clip -b hb 2>&1)"

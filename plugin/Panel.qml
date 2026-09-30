@@ -33,7 +33,7 @@ Panel {
   property string lastError: ""        // kept until the next action succeeds
   property string listError: ""        // `omabox ls` itself failing: the list shown may be stale
   property int listFailures: 0
-  property string action: ""           // what actionProc is doing: peek, shot, down
+  property string action: ""           // what actionProc is doing: peek, shot, clip, clip out, down
   property real now: Date.now()
   // `omabox config --json`; the defaults until it answers.
   property var settings: ({ "workspace": "9", "confirm-close": "off", "bar-icon": "always" })
@@ -67,6 +67,8 @@ Panel {
     peek: String.fromCodePoint(0xF0208),    // md-eye
     show: String.fromCodePoint(0xF0379),    // md-monitor
     shot: String.fromCodePoint(0xF0100),    // md-camera
+    clipIn: String.fromCodePoint(0xF014A),  // md-clipboard_arrow_down
+    clipOut: String.fromCodePoint(0xF0C57), // md-clipboard_arrow_up
     down: String.fromCodePoint(0xF0159),    // md-close_circle
     alert: String.fromCodePoint(0xF0026),   // md-alert
     dismiss: String.fromCodePoint(0xF0156)  // md-close
@@ -209,6 +211,15 @@ Panel {
     if (run(b.name, "shot", [command, "shot", "-b", b.name])) close()
   }
 
+  // Your clipboard into an interactive box, or the box's out (omabox clip, issue #23): one item, once.
+  // Headless boxes are agents': the CLI refuses them, and the panel offers them nothing.
+  function clip(b, out) {
+    if (!b || b.state !== "up" || b.mode !== "interactive") return
+    var args = [command, "clip", "-b", b.name]
+    if (out) args.push("--from-box")
+    if (run(b.name, out ? "clip out" : "clip", args)) close()
+  }
+
   function down(b) {
     if (!b) return
     if (armedDown !== b.name) {
@@ -245,18 +256,21 @@ Panel {
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onExited: function(code) {
       exited = true
-      root.actionDone(code === 0 ? "" : (actionErr.text.trim().split("\n").pop() || ("exit " + code)), actionOut.text.trim())
+      root.actionDone(code === 0 ? "" : (actionErr.text.trim().split("\n").pop() || ("exit " + code)), actionOut.text.trim(),
+        actionErr.text.trim().split("\n").pop().replace(/^omabox: /, ""))
     }
     onRunningChanged: if (!running) Qt.callLater(function() {
-      if (!actionProc.exited && !actionProc.running && root.busy !== "") root.actionDone("cannot run " + root.command, "")
+      if (!actionProc.exited && !actionProc.running && root.busy !== "") root.actionDone("cannot run " + root.command, "", "")
     })
   }
 
-  // Peek and shot close the panel, so a failure also goes out as a notification.
-  function actionDone(error, out) {
+  // Peek, shot and clip close the panel, so a failure also goes out as a notification; so does what a
+  // clip handed over (its type and size, never the content).
+  function actionDone(error, out, said) {
     lastError = error
     if (error !== "") Quickshell.execDetached(["notify-send", "-a", "omabox", "omabox " + (action === "new" ? "new box" : action + " " + busy), error])
     else if (action === "shot" && out !== "") Quickshell.execDetached(["xdg-open", out])
+    else if ((action === "clip" || action === "clip out") && said) Quickshell.execDetached(["notify-send", "-a", "omabox", "omabox " + action + " " + busy, said])
     else if (action === "new" && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(out)) {
       // Brought forward only while the panel is still open: once it is closed the user has moved on,
       // and focusing the box would switch their workspace under them.
@@ -395,6 +409,8 @@ Panel {
         if (!root.cursorActive) return
         if (t === "p") root.peek(root.selected())
         else if (t === "s") root.shot(root.selected())
+        else if (t === "v") root.clip(root.selected(), false)
+        else if (t === "c") root.clip(root.selected(), true)
         else if (t === "d") root.down(root.selected())
       }
 
@@ -565,7 +581,9 @@ Panel {
           Text {
             width: parent.width
             textFormat: Text.PlainText
-            text: "↑↓ move · p peek/show · s shot · d down · n new · r refresh"
+            // No-break spaces keep each key with its action when the line wraps.
+            text: ["↑↓ move", "p peek/show", "s shot", "v paste in", "c copy out", "d down", "n new", "r refresh"]
+              .map(function(h) { return h.replace(/ /g, "\u00a0") }).join("\u00a0· ")
             color: root.bar.foreground
             opacity: 0.5
             font.family: root.bar.fontFamily
@@ -775,6 +793,22 @@ Panel {
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
           onClicked: root.shot(row.box)
+        }
+        PanelActionButton {
+          visible: row.up && row.box.mode === "interactive"
+          iconText: root.icons.clipIn
+          tooltipText: "Paste your clipboard into the box"
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+          onClicked: root.clip(row.box, false)
+        }
+        PanelActionButton {
+          visible: row.up && row.box.mode === "interactive"
+          iconText: root.icons.clipOut
+          tooltipText: "Copy the box's clipboard out"
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+          onClicked: root.clip(row.box, true)
         }
         PanelActionButton {
           iconText: root.icons.down
