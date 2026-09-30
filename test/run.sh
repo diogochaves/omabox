@@ -435,6 +435,49 @@ t_unit_seed_copy() {
   check_fails "...with nothing of its target in the box HOME" grep -rqs secret "$s/out"
 }
 
+# The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left
+# with no omarchy.workspaces gets one where a left-out plugin's workspace widget was, else after the
+# menu; never a second one, nor next to a mounted plugin that shows workspaces.
+t_unit_bar_filter() {
+  # shellcheck disable=SC2329 # called below
+  bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
+  local user='{"bar":{"centerAnchor":"x.solari","layout":{"left":[{"id":"omarchy.menu"},{"id":"omarchy.system-update"},{"id":"x.gauge"}],
+    "center":[{"id":"x.indicators"},{"id":"x.solari"},{"id":"njpatel.omapager"}],"right":[{"id":"omarchy.tray"},{"id":"x.clock"}]}}}'
+  check_eq "no workspace widget at all: after the menu, the rest filtered" \
+    '{"left":[{"id":"omarchy.menu"},{"id":"omarchy.workspaces"},{"id":"omarchy.system-update"}],"center":[],"right":[{"id":"omarchy.tray"}]}' \
+    "$(bar '[]' '[]' "$user")"
+  check_eq "...the dropped centre anchor gone" null "$(bar '[]' '[]' "$user" .bar.centerAnchor)"
+  local pager='{"bar":{"layout":{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"x.pager","n":1},"y.pager",{"id":"x.other"}]}}}'
+  check_eq "a left-out plugin's workspace widget: omarchy.workspaces in its place, once" \
+    '{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"omarchy.workspaces"}]}' \
+    "$(bar '[]' '["x.pager","y.pager"]' "$pager")"
+  check_eq "...one given as a bare id too" '["omarchy.clock","omarchy.workspaces"]' \
+    "$(bar '[]' '["y.pager"]' "$pager" '[.bar.layout.center[] | if type == "object" then .id else . end]')"
+  check_eq "a mounted one stays, and no omarchy.workspaces" '{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"x.pager","n":1}]}' \
+    "$(bar '["x.pager"]' '["x.pager"]' "$pager")"
+  check_eq "...nor for one mounted that the user's bar does not have (it is added where its manifest says)" \
+    '{"left":[{"id":"omarchy.menu"},{"id":"omarchy.system-update"}],"center":[],"right":[{"id":"omarchy.tray"}]}' \
+    "$(bar '["z.pager"]' '["z.pager"]' "$user")"
+  check_eq "the user's own omarchy.workspaces: left as it is" '{"right":[{"id":"omarchy.workspaces"}],"center":[]}' \
+    "$(bar '[]' '["x.pager"]' '{"bar":{"layout":{"right":[{"id":"omarchy.workspaces"}],"center":[{"id":"x.pager"}]}}}')"
+  check_eq "no menu: at the start of left" '{"left":[{"id":"omarchy.workspaces"},{"id":"omarchy.clock"}]}' \
+    "$(bar '[]' '[]' '{"bar":{"layout":{"left":[{"id":"omarchy.clock"}]}}}')"
+  check_eq "no left: one made" '{"right":[{"id":"omarchy.tray"}],"left":[{"id":"omarchy.workspaces"}]}' \
+    "$(bar '[]' '[]' '{"bar":{"layout":{"right":[{"id":"omarchy.tray"}]}}}')"
+  check_eq "no layout of the user's (the shell's default has workspaces): none made" null \
+    "$(bar '[]' '[]' '{"bar":{"position":"top"}}')"
+  # Which plugins show workspaces: their manifests, the user's and the mounted ones'.
+  local h=$TMP/pagers; mkdir -p "$h/.config/omarchy/plugins/"{ws,notif,bad,svc} "$h/mnt"
+  echo '{"id":"a.ws","barWidget":{"displayName":"Pills","description":"Workspace pills per monitor"}}' > "$h/.config/omarchy/plugins/ws/manifest.json"
+  echo '{"id":"njpatel.omapager","barWidget":{"displayName":"Notification state","aliases":["notifications","pager"]}}' > "$h/.config/omarchy/plugins/notif/manifest.json"
+  echo '{"id":"x.svc","description":"moves workspaces around","barWidget":null}' > "$h/.config/omarchy/plugins/svc/manifest.json"
+  echo '{not json' > "$h/.config/omarchy/plugins/bad/manifest.json"
+  echo '{"id":"b.mine","barWidget":{"displayName":"Mine","aliases":["workspaces"]}}' > "$h/mnt/manifest.json"
+  check_eq "workspace widgets: by name, description or alias; not a notifications pager, a service or a broken manifest" \
+    '["a.ws","b.mine"]' "$(printf 'b.mine\t%s\n' "$h/mnt" | HOME=$h lib workspace_widgets | jq -c .)"
+  check_eq "...none: an empty list" '[]' "$(HOME=$TMP/nohome lib workspace_widgets < /dev/null | jq -c .)"
+}
+
 # up --new (finding 73): a free box-N name, printed; two at once never get the same one. The names
 # are the user's namespace too (box-1 may be theirs): only the ones printed here are taken down.
 t_new() {
@@ -2252,9 +2295,22 @@ t_guard() {
   # shellcheck disable=SC2329
   is() { [ "$(state "$1")" = "$2" ]; }
   "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
+  # issue #24: a window on 1 and one on 2, 2 shown: the new window must show 2 again, not a new one
+  local cch=("${in[@]}" "$CLI" hyprctl -b cc)
+  # shellcheck disable=SC2329 # called through until_ok
+  ccwins() { "${cch[@]}" -j clients | jq -e --argjson n "$1" 'length == $n' >/dev/null; }
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 1
+  "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 2
   "${cl[@]}" >/dev/null
   check "confirm-close: the box stays after a close" holds 2 is cc up
   check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+  check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
+  check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
+  check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
+    "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
   # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
   check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
   "${cl[@]}" >/dev/null
@@ -2594,7 +2650,7 @@ t_wait() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
+UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
 BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail)

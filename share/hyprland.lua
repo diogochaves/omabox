@@ -29,8 +29,36 @@ if interactive then
     f:close()
     return v
   end
+  -- A new output after the last one went (the window confirm-close opens) shows a new, empty
+  -- workspace, not the one the box showed (issue #24): Hyprland parks the workspaces on its FALLBACK
+  -- monitor meanwhile, and gives the new output the first free one. By the time the output is gone
+  -- no workspace is active any more, so follow the one shown here, write it down when the last output
+  -- goes (a file: the resize watch reloads, twice, before the new output is complete), and focus it
+  -- again once the new output holds the workspaces (FALLBACK gone), windows on the others kept.
+  local shown
+  local function track(w)
+    if w and not w.special and w.monitor and w.monitor.name ~= "FALLBACK" then
+      shown = w.id > 0 and tostring(w.id) or ("name:" .. w.name)
+    end
+  end
+  track(hl.get_active_workspace())
+  hl.on("workspace.active", function(w) if gen == omabox_close_gen then track(w) end end)
+  local function restore()
+    local ws = read(run .. "/omabox.workspace")
+    local mons = hl.get_monitors()
+    if not ws or #mons == 0 then return end
+    for _, m in ipairs(mons) do if m.name == "FALLBACK" then return end end
+    os.remove(run .. "/omabox.workspace")
+    hl.dispatch(hl.dsp.focus({ workspace = ws }))
+  end
+  hl.on("monitor.added", function() if gen == omabox_close_gen then restore() end end)
   hl.on("monitor.removed", function()
-    if gen ~= omabox_close_gen or #hl.get_monitors() > 0 then return end
+    if gen ~= omabox_close_gen then return end
+    if #hl.get_monitors() > 0 then restore(); return end
+    if shown then
+      local f = io.open(run .. "/omabox.workspace", "w")
+      if f then f:write(shown .. "\n"); f:close() end
+    end
     if read(run .. "/omabox.confirm-close") == "on" and not read(run .. "/omabox.close-asking") then
       local f = io.open(run .. "/omabox.close-asking", "w")
       if f then f:write("1\n"); f:close() end

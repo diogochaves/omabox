@@ -138,7 +138,8 @@ omabox restart-shell                          # after editing the plugin
 ```
 
 The plugin is mounted read-only and turned on in the box's `shell.json` where its manifest says.
-The box's bar has the built-in widgets plus the plugins you mount, nothing else.
+The box's bar has the built-in widgets plus the plugins you mount, nothing else. When that leaves it
+with no workspace numbers, it gets Omarchy's: where your plugin's were, or after the menu.
 
 ### A Hyprland change
 

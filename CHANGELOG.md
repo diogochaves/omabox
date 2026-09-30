@@ -50,6 +50,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   document): it failed with exit 2. Any match answers it and the line names them all; `--focused`
   when one of them has focus. `--window` on `shot`, `click`, `keys`, `pointer` and `drag` still
   wants exactly one ([#37](https://github.com/diogochaves/omabox/issues/37)).
+- An interactive box kept running after a close (confirm-close) comes back on the workspace it
+  showed, with its windows, instead of a new, empty one
+  ([#24](https://github.com/diogochaves/omabox/issues/24)).
+- A box's bar shows workspace numbers when yours come from a plugin left out of the box: Omarchy's
+  go where that plugin was, or after the menu when your bar has none
+  ([#21](https://github.com/diogochaves/omabox/issues/21)).
 
 ## 0.2.1 — 2026-09-29
 
