@@ -172,8 +172,19 @@ session/suspend/lock paths never run in one.
 - **`omabox up --interactive`**: the box is a real window on workspace 9 that you drive with your
   own keyboard and mouse. **SUPER+ALT+ESCAPE** sends SUPER keys to the box instead of your desktop.
   The box follows the window's size; closing the window ends it.
+- **`omabox clip`**: your clipboard's item (text, or an image by its type) into an interactive box,
+  once; `clip --from-box` hands the box's back. With no `-b` it is the box whose window has focus
+  (else the only interactive one), so a key binding pastes into the box you are in. None is
+  installed; for SUPER+ALT+V, add to `~/.config/hypr/bindings.lua`:
+  `o.bind("SUPER + ALT + V", "Clipboard into the box", "omabox clip")` (not while
+  SUPER+ALT+ESCAPE sends SUPER keys to the box). Nothing keeps watching either clipboard. It is
+  never for agents: refused in their sessions, under the agent guard and in ai-jail (headless boxes
+  are refused too). A password manager's "sensitive" mark goes along, so clipboard histories leave
+  the secret out; what you hand to a box can still be read there by whatever runs in it, an agent
+  driving that box included.
 - **The bar widget** (`chaves.omabox`): the omabox mark in your bar lists every box, with **Peek**
-  (or **Show**, for an interactive one), **Screenshot** and **Down**, and **New interactive box**.
+  (or **Show**, for an interactive one), **Screenshot** and **Down**, **Paste your clipboard into the
+  box** and **Copy the box's clipboard out** on an interactive one, and **New interactive box**.
 
 <p><img src="docs/media/widget.png" alt="The widget's panel with no boxes up and its New interactive box button, and its Settings face: where windows open, confirm before closing, always show in the bar" width="800"></p>
 
@@ -196,8 +207,8 @@ them, and `omabox config KEY default` puts one back.
 Passthrough (SUPER+ALT+ESCAPE) turns itself off when focus leaves the box, or on the first key you
 press with the pointer outside it. The widget's panel shows each box's mode, size, age, plugins and
 whether it is being peeked at, and a count in the bar when there are several. Keys: arrows or j/k,
-Enter or `p` peek/show, `s` shot, `d` down (twice within 3 s; Enter on a dead box arms it), `n` new,
-`r` refresh. **New interactive box** starts one under a free name (`omabox up --interactive --new`:
+Enter or `p` peek/show, `s` shot, `v` paste your clipboard in and `c` copy the box's out (an
+interactive box), `d` down (twice within 3 s; Enter on a dead box arms it), `n` new, `r` refresh. **New interactive box** starts one under a free name (`omabox up --interactive --new`:
 box-1, box-2, ...) and brings its window forward. If `omabox ls` fails, the panel says so. The
 widget only displays `omabox ls --json` and runs `omabox`; the CLI owns every rule.
 

@@ -880,8 +880,8 @@ t_unit_cli() {
   check_match "...reaches the command's own -b (windows)" "no box '$P-x' is up" "$(ob -b "$P-x" windows 2>&1)"
   check_match "...hyprctl, which takes -b only first" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl clients 2>&1)"
   local c out=""
-  for c in lua log events; do out+="$c: $(ob -b "$P-x" "$c" </dev/null 2>&1 | head -1)"$'\n'; done
-  check_fails "...lua, log and events too (none unknown)" grep -q 'unknown command' <<<"$out"
+  for c in lua log events clip; do out+="$c: $(ob -b "$P-x" "$c" </dev/null 2>&1 | head -1)"$'\n'; done
+  check_fails "...lua, log, events and clip too (none unknown)" grep -qE 'unknown command|takes no -b' <<<"$out"
   check_match "...up NAME as well is two names" "up: one box name, got $P-x and $P-y" "$(ob -b "$P-x" up "$P-y" 2>&1)"
   check_eq "...a command that takes no -b: one line" "omabox: ls takes no -b: it is not about one box" "$(ob -b "$P-x" ls 2>&1)"
   check_eq "...exit 2" 2 "$(ob -b "$P-x" ls >/dev/null 2>&1; echo $?)"
@@ -904,6 +904,48 @@ t_unit_cli() {
   check_eq "job_procs: the leader restarted under the pid: none" "" "$(lib job_procs 7 499 <<<"$ps")"
   check_eq "job_procs: the leader gone, its session left" "101 8" "$(lib job_procs 7 - <<<$'101 8 7 510')"
   check_eq "job_procs: - with a leader there: none" "" "$(lib job_procs 7 - <<<"$ps")"
+}
+
+# `omabox clip` (issue #23, finding 119): never for an agent, and what it hands over. Only refusals and
+# pure functions here: whoever runs the suite may be an agent, which clip refuses whatever else holds
+# (t_clip runs the rest in a box standing in for the host, where no agent is).
+t_unit_clip() {
+  # A clean environment but for the mark tested (the caller's own PATH may be the guard's). Should a
+  # refusal ever break, clip must still reach no clipboard: an empty runtime dir (no Hyprland session
+  # to find) and a box that does not exist.
+  mkdir -p "$TMP/rt-clip"
+  cl() { env -i PATH=/usr/bin:/bin HOME="$HOME" XDG_RUNTIME_DIR="$TMP/rt-clip" "$@" 2>&1; }
+  local m
+  for m in CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=70178a3a CLAUDE_PID=1 CODEX_THREAD_ID=01a0314c OPENCODE=1 AI_AGENT=x \
+      OMABOX_AGENT_PID=1 OMABOX_SESSION=abcd1234 WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard; do
+    check_match "clip refused: $m" "clip is not for agents \(${m%%=*} set for " "$(cl "$m" "$CLI" clip -b "$P-x")"
+  done
+  check_match "clip refused: the guard's PATH" "clip is not for agents \(PATH set" "$(cl PATH="$ROOT/share/guard:/usr/bin:/bin" "$CLI" clip -b "$P-x")"
+  check_eq "...in one line" 1 "$(cl CLAUDECODE=1 "$CLI" clip -b "$P-x" | wc -l)"
+  check_match "...before anything else (an argument it does not know)" "not for agents" "$(cl CLAUDECODE=1 "$CLI" clip --bogus)"
+  # Dropped from the environment, still in a process it runs under (`; true`: bash would exec its last
+  # command otherwise, and the process with the variable would be gone).
+  check_match "clip refused: a variable dropped with env -u, still in its shell's" "not for agents \(CLAUDECODE set for bash" \
+    "$(cl CLAUDECODE=1 bash -c 'env -u CLAUDECODE "$0" clip -b "$1"; true' "$CLI" "$P-x")"
+  cp /usr/bin/bash "$TMP/claude"; cp /usr/bin/bash "$TMP/node"
+  check_match "clip refused: under a program named claude, with no variable at all (exec env -i)" "not for agents \(claude, pid" \
+    "$(cl "$TMP/claude" -c '"$0" clip -b "$1"; true' "$CLI" "$P-x")"
+  check_match "clip refused: under node running Claude Code" "not for agents \(an agent in node" \
+    "$(cl "$TMP/node" -c '"$1" clip -b "$2"; true' /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js "$CLI" "$P-x")"
+  check_match "clip refused: guard exec" "not for agents" "$(cl "$CLI" guard exec -- "$CLI" clip -b "$P-x")"
+  check_eq "clip refused: inside ai-jail (the broker's command)" "inside ai-jail" "$(OMABOX_JAIL='{}' lib agent_caller)"
+  check_match "...and the broker never takes it" "clip is not for agents" "$(lib broker_check clip 2>&1)"
+  check_match "clip is in the usage" "omabox clip \[-b NAME\] \[--from-box\]" "$(ob help)"
+  # The type handed over: text first, then an image, PNG first; nothing else.
+  check_eq "clip_pick: text over an image" "text/plain;charset=utf-8" "$(lib clip_pick $'image/png\ntext/html\ntext/plain\ntext/plain;charset=utf-8')"
+  check_eq "clip_pick: UTF8_STRING over text/plain" UTF8_STRING "$(lib clip_pick $'STRING\ntext/plain\nUTF8_STRING')"
+  check_eq "clip_pick: PNG over another image" image/png "$(lib clip_pick $'image/jpeg\nimage/png\ntext/html')"
+  check_eq "clip_pick: an image by its own type" image/webp "$(lib clip_pick $'text/html\nimage/webp')"
+  check_fails "clip_pick: neither text nor an image" lib clip_pick $'text/html\ntext/uri-list\nx-special/gnome-copied-files'
+  check_fails "clip_pick: no types (an empty clipboard)" lib clip_pick ""
+  check_fails "clip_pick: an image type that is not a tame name" lib clip_pick $'image/png;x=\e[31m\nimage/../x'
+  check_eq "clip_types: a box's type list, tame and short" "image/png;x=31m text/html " "$(lib clip_types $'image/png;x=\e[31m\ntext/html')"
+  check_eq "clip_size" "1 byte|12 bytes|1.5 KiB|64.0 MiB" "$(lib clip_size 1)|$(lib clip_size 12)|$(lib clip_size 1536)|$(lib clip_size $((64 << 20)))"
 }
 
 # finding 88: an agent session's default box is its own.
@@ -2175,7 +2217,7 @@ t_widget() {
   local B=$P-wg
   ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
   local H; H=$(ob path "$B")/home
-  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
+  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  clip) echo "$*" >> "$HOME/actions"; echo "omabox: handed text (text/plain;charset=utf-8, 3 bytes) from your clipboard to box ia" >&2 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   printf '#!/bin/sh\necho "xdg-open $*" >> "$HOME/actions"; exec sleep 300\n' > "$H/.local/bin/xdg-open"
   printf '#!/bin/sh\necho "notify-send $*" >> "$HOME/actions"\n' > "$H/.local/bin/notify-send"
   chmod +x "$H/.local/bin/omabox" "$H/.local/bin/xdg-open" "$H/.local/bin/notify-send"
@@ -2224,6 +2266,21 @@ t_widget() {
   check "bar-icon auto: opened with no boxes, it stays shut" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
   jq -n "[$row + {name: \"a\"}]" > "$H/list.json"; polled
   check "...and does not pop up when one comes" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
+  # clip (issue #23, finding 119): v pastes in, c copies out, on an interactive box's row only
+  local irow='{"mode":"interactive","size":"window","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"connected","state":"up","peeking":false}'
+  jq -n "[$irow + {name: \"ia\"}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v >/dev/null
+  check "v on an interactive box: clip -b NAME" until_ok 3 grep -qx "clip -b ia" "$H/actions"
+  check "...what it handed over is notified (type and size)" until_ok 3 grep -q "^notify-send -a omabox omabox clip ia handed text (text/plain" "$H/actions"
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down c >/dev/null
+  check "c: clip --from-box" until_ok 3 grep -qx "clip -b ia --from-box" "$H/actions"
+  jq -n "[$row + {name: \"hb\"}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v c >/dev/null
+  check "...neither on a headless box's" holds 1 bash -c "! grep -q 'clip -b hb' '$H/actions'"
+  ob keys -b "$B" Escape >/dev/null
   mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
   check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
   ob down "$B" >/dev/null
@@ -2527,6 +2584,113 @@ t_guard() {
   check_eq "...the stand-in's monitor" "$(ob mode -b "$B")" "$("${in[@]}" "$CLI" mode -b inner2)"
   check "peek under the guard" "${in[@]}" "$CLI" peek inner2
   check "...its window appears" until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\") | select(.workspace.name == \"9\")'"
+  "${in[@]}" "$CLI" down --all >/dev/null 2>&1
+  ob down "$B" >/dev/null
+}
+
+# `omabox clip` (issue #23, finding 119) with a box standing in for the host (finding 26) and interactive
+# boxes nested in it: the clipboard is the stand-in's, never the user's. No agent runs in the box, so
+# what clip refuses there is what it refuses, not the suite's own caller.
+t_clip() {
+  local B=$P-cl
+  ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  local in=("$CLI" run -b "$B" --) H; H=$(ob path "$B")/home
+  "${in[@]}" "$CLI" up ib --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  local inb=("${in[@]}" "$CLI" run -b ib --) out rc
+  local wins0 aw0; wins0=$(ob hyprctl -b "$B" -j clients | jq length); aw0=$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')
+  "${in[@]}" sh -c 'printf "p4ss w\303\266rd\n" | wl-copy'
+  out=$("${in[@]}" "$CLI" clip -b ib 2>&1)
+  check_eq "clip: text into an interactive box, said by type and size" "omabox: handed text (text/plain;charset=utf-8, 11 bytes) from your clipboard to box 'ib'" "$out"
+  check_eq "...on its clipboard byte for byte (the newline too)" "$(printf 'p4ss w\303\266rd\n' | od -An -c)" "$("${inb[@]}" sh -c 'wl-paste -n | od -An -c')"
+  check_eq "...offered as text by its usual names" "STRING TEXT UTF8_STRING text/plain text/plain;charset=utf-8" "$("${inb[@]}" wl-paste --list-types | LC_ALL=C sort -u | xargs)"
+  "${in[@]}" sh -c 'printf "pw" | wl-copy --sensitive'
+  check_match "clip: a password manager's secret stays marked" "\(text/plain;charset=utf-8, 2 bytes, marked sensitive\)" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  check "...for the box's clipboard history to leave out" "${inb[@]}" sh -c 'wl-paste --list-types | grep -qx x-kde-passwordManagerHint'
+  "${in[@]}" sh -c 'printf "second" | wl-copy'
+  check_match "with no -b: the only interactive box" "to box 'ib'$" "$("${in[@]}" "$CLI" clip 2>&1)"
+  check_eq "...which has it" second "$("${inb[@]}" wl-paste -n)"
+  # An image, by its type; a PNG of the stand-in's screen
+  "${in[@]}" sh -c 'grim /tmp/clip.png && wl-copy --type image/png < /tmp/clip.png'
+  check_match "clip: an image" "handed an image \(image/png, [0-9.]+ [KM]iB\)" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  check_eq "...the same bytes, as image/png" "image/png $("${in[@]}" sh -c 'md5sum < /tmp/clip.png' | xargs)" "$("${inb[@]}" sh -c 'wl-paste --list-types | xargs; wl-paste -n | md5sum' | xargs)"
+  "${in[@]}" sh -c 'wl-copy --type image/jpeg < /tmp/clip.png'
+  "${in[@]}" "$CLI" clip -b ib >/dev/null 2>&1
+  check_eq "...a JPEG as image/jpeg" image/jpeg "$("${inb[@]}" wl-paste --list-types)"
+  # What is refused: nothing to hand over, a type that is neither text nor an image
+  "${in[@]}" sh -c 'printf x | wl-copy --type application/x-omabox-test'
+  out=$("${in[@]}" "$CLI" clip -b ib 2>&1); rc=$?
+  check_match "clip: another type refused" "holds application/x-omabox-test : only text and images go into a box" "$out"
+  check_eq "...exit 1, the box's clipboard as it was" "1 image/jpeg" "$rc $("${inb[@]}" wl-paste --list-types)"
+  "${in[@]}" wl-copy --clear
+  check_match "clip: an empty clipboard" "your clipboard is empty: nothing handed over" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  "${in[@]}" sh -c 'printf "" | wl-copy'
+  check_match "clip: an empty item" "the item is empty: nothing handed over" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  # --from-box: the mirror
+  "${inb[@]}" sh -c 'printf "from the box" | wl-copy'
+  check_eq "clip --from-box: text" "omabox: handed text (text/plain;charset=utf-8, 12 bytes) from box 'ib' to your clipboard" "$("${in[@]}" "$CLI" clip --from-box -b ib 2>&1)"
+  check_eq "...on the host's clipboard" "from the box" "$("${in[@]}" wl-paste -n)"
+  "${inb[@]}" sh -c 'printf "box secret" | wl-copy --sensitive'
+  "${in[@]}" "$CLI" clip --from-box -b ib >/dev/null 2>&1
+  check "clip --from-box: a secret stays marked on the host" "${in[@]}" sh -c 'wl-paste --list-types | grep -qx x-kde-passwordManagerHint'
+  local hist=$H/.local/state/omarchy/clipboard-history.json
+  check "...the host's clipboard history (Omarchy's) has the box's text" until_ok 5 grep -q "from the box" "$hist"
+  check_fails "...not its secret" grep -q "box secret" "$hist"
+  "${inb[@]}" sh -c 'grim /tmp/b.png && wl-copy --type image/png < /tmp/b.png'
+  "${in[@]}" "$CLI" clip --from-box -b ib >/dev/null 2>&1
+  check_eq "clip --from-box: an image, the same bytes" "image/png $("${inb[@]}" sh -c 'md5sum < /tmp/b.png' | xargs)" "$("${in[@]}" sh -c 'wl-paste --list-types | xargs; wl-paste -n | md5sum' | xargs)"
+  "${inb[@]}" wl-copy --clear
+  check_match "clip --from-box: an empty clipboard" "box 'ib''s clipboard is empty" "$("${in[@]}" "$CLI" clip --from-box -b ib 2>&1)"
+  # One shot: on the host only the wl-copy serving the item (its own session, the fds of no file of
+  # clip's), no wl-paste or omabox left; the host's windows and focus as they were.
+  # shellcheck disable=SC2329 # called through until_ok
+  one_server() { [ "$("${in[@]}" sh -c 'for p in $(pgrep -x wl-copy); do [ "$(readlink /proc/$p/ns/pid)" != "$(readlink /proc/self/ns/pid)" ] || echo $p; done' | wc -l)" = 1 ]; }
+  check "clip left one wl-copy on the host: the one serving the item" until_ok 5 one_server
+  # (the stand-in's shell watches its clipboard for Omarchy's history: wl-paste --watch)
+  check_eq "...no wl-paste and no clip running, in the stand-in or its boxes" "" "$("${in[@]}" sh -c 'pgrep -a wl-paste | grep -v -- " --watch "; pgrep -af "omabox cli[p]"; true')"
+  check_eq "...no process holds the item's file (wl-copy's stderr file: its own)" 0 "$("${in[@]}" sh -c 'ls -l /proc/[0-9]*/fd 2>/dev/null | grep -c omabox-clip-item')"
+  check_eq "...the host's windows" "$wins0" "$(ob hyprctl -b "$B" -j clients | jq length)"
+  check_eq "...and its focus unchanged" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
+  # The bar widget's rows (Paste in, Copy out) run the real CLI in the stand-in
+  printf '#!/bin/sh\nexec %q "$@"\n' "$CLI" > "$H/.local/bin/omabox"; chmod +x "$H/.local/bin/omabox"
+  "${in[@]}" sh -c 'printf "via the widget" | wl-copy'
+  # shellcheck disable=SC2329 # called through until_ok
+  panel() { ob hyprctl -b "$B" -j layers | grep -q omarchy-keyboard-panel; }
+  # shellcheck disable=SC2329 # called through until_ok
+  has() { [ "$("${inb[@]}" wl-paste -n 2>/dev/null)" = "$1" ]; }
+  # shellcheck disable=SC2329 # called through until_ok
+  listed() { ob run -b "$B" -- omarchy-shell chaves.omabox open >/dev/null 2>&1; until_ok 3 panel >/dev/null && ob keys -b "$B" Escape >/dev/null && sleep 2.5; }
+  listed   # (the panel polls every 2 s while open: ib is in its list after that)
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v >/dev/null
+  check "the widget's v pastes your clipboard into the box" until_ok 10 has "via the widget"
+  "${inb[@]}" sh -c 'printf "out via the widget" | wl-copy'
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down c >/dev/null
+  check "...its c copies the box's out" until_ok 10 bash -c "[ \"\$('$CLI' run -b '$B' -- wl-paste -n)\" = 'out via the widget' ]"
+  # Refused: a headless box (an agent's); several interactive ones and none focused; an agent
+  "${in[@]}" "$CLI" up hb --no-shell >/dev/null 2>&1
+  check_match "clip: a headless box refused" "box 'hb' is headless: clip is for interactive boxes only" "$("${in[@]}" "$CLI" clip -b hb 2>&1)"
+  "${in[@]}" "$CLI" down hb >/dev/null 2>&1
+  local pids0 pid2
+  pids0=$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine") | .pid]')
+  "${in[@]}" "$CLI" up ib2 --interactive --no-shell >/dev/null 2>&1
+  pid2=$(ob hyprctl -b "$B" -j clients | jq --argjson o "$pids0" '[.[] | select(.class == "aquamarine") | .pid] - $o | .[0]')
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = 'class:^foot\$' })" >/dev/null 2>&1   # nothing there: no focus change
+  check_match "with no -b, several interactive boxes and none focused: which one?" "interactive boxes ib ib2 are up and none has focus" "$("${in[@]}" "$CLI" clip 2>&1)"
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = 'pid:$pid2' })" >/dev/null
+  "${in[@]}" sh -c 'printf "to the focused one" | wl-copy'
+  check_match "...the one whose window has focus" "to box 'ib2'$" "$("${in[@]}" "$CLI" clip 2>&1)"
+  check_eq "...which has it" "to the focused one" "$("${in[@]}" "$CLI" run -b ib2 -- wl-paste -n)"
+  "${in[@]}" sh -c 'printf "secret" | wl-copy'; "${inb[@]}" wl-copy --clear
+  check_match "clip refused to an agent's shell" "not for agents \(CLAUDECODE set for " "$("${in[@]}" env CLAUDECODE=1 "$CLI" clip -b ib 2>&1)"
+  check_match "...with the variable dropped (env -u) under that shell" "not for agents \(CLAUDECODE set for bash" \
+    "$("${in[@]}" env CLAUDECODE=1 bash -c 'env -u CLAUDECODE "$0" clip -b ib; true' "$CLI" 2>&1)"
+  check_match "...under a program named claude, whatever the environment" "not for agents \(claude, pid" \
+    "$("${in[@]}" sh -c 'cp /usr/bin/bash /tmp/claude && /tmp/claude -c "env -i PATH=/usr/bin HOME=\$HOME XDG_RUNTIME_DIR=\$XDG_RUNTIME_DIR \$0 clip -b ib; true" "$0"' "$CLI" 2>&1)"
+  check_match "...under the guard" "not for agents" "$("${in[@]}" "${GUARDED[@]}" "$CLI" clip -b ib 2>&1)"
+  check_match "...under guard exec" "not for agents" "$("${in[@]}" "$CLI" guard exec -- "$CLI" clip -b ib 2>&1)"
+  check_match "...through omabox host" "not for agents" "$("${in[@]}" "${GUARDED[@]}" CLAUDECODE=1 "$CLI" host -- "$CLI" clip -b ib 2>&1)"
+  check_eq "...and the box's clipboard got nothing" "" "$("${inb[@]}" wl-paste -n 2>/dev/null)"
   "${in[@]}" "$CLI" down --all >/dev/null 2>&1
   ob down "$B" >/dev/null
 }
@@ -3111,10 +3275,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
+UNIT=(t_unit_agent_session t_unit_clip t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_nvidia t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
 BOX=(t_leak_control t_main t_window t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
