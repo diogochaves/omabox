@@ -1758,6 +1758,17 @@ the designs here were measured in boxes and built for a contained desktop, and n
     fails with its number, not its text. From a jail the caller's omabox reads the file and sends its
     entries as `--pass` values. Checked in a box (and that no value is in any command line while it
     runs); `t_main`.
+104. **`-b NAME` before the command** (2026-09-30, issue #36). An agent's helper `ob() { omabox -b
+    "$BOX" "$@"; }` got "unknown command: -b" and the whole help (97 lines) on every call. `main`
+    now moves a leading `-b NAME`/`--box NAME` to right after the command (`global_box`), where every
+    command that takes `-b` parses it, before anything reads the command: the relay in a jail and the
+    broker's `broker_check` see `windows -b NAME` as if typed so, and a jailed `-b` still names only
+    the jail's boxes (`select_box`). For `up`, `down`, `env` and `path`, which also take a positional
+    NAME, it is the same as `-b` after the command (`omabox -b a up b` is "one box name, got a and b";
+    `down` takes both). Commands that are not about one box (`ls`, `saves`, `config`, `guard`,
+    `host`, `broker`) say "ls takes no -b" in one line (exit 2); `help` and `--version` ignore it;
+    given twice, the last wins. An unknown command is now one line pointing at `omabox help`, not
+    the help (exit 2 still). `t_unit_cli`, `t_jail`.
 105. **`wait window SEL` is satisfied by any of several matches** (2026-09-30, issue #37). It used
     the one-window resolver (finding 81) and failed with exit 2 when a second window matched: an
     app that opens one window per vault (Obsidian) broke `wait window class:obsidian` as soon as the

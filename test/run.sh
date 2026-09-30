@@ -643,6 +643,8 @@ r host \$O host -- touch $br/pwned
 r ro-bind \$O up $P-other --ro-bind $TMP/lacks
 r net \$O up $P-other --net connected
 r other \$O shot -b $P-host
+r pre-b \$O -b $P-jail windows
+r pre-b-other \$O -b $P-host windows
 r net-in-box \$O run -- sh -c 'curl -s --max-time 3 -o /dev/null https://archlinux.org || echo no-internet'
 r down \$O down
 EOF
@@ -661,6 +663,8 @@ EOF
   check_match "a folder the jail lacks does not go in" "not a folder this jail was given whole.* rc=1" "$(sect ro-bind)"
   check_match "a network the jail lacks is refused" "has no network.* rc=1" "$(sect net)"
   check_match "the user's own box is not the jail's" "not this jail's.* rc=1" "$(sect other)"
+  check_match "-b NAME before the command, through the broker (#36)" "rc=0 $" "$(sect pre-b)"
+  check_match "...the user's box still not the jail's" "not this jail's.* rc=1" "$(sect pre-b-other)"
   check_match "no internet in its box" "no-internet rc=0" "$(sect net-in-box)"
   check_match "down" "box '$P-jail' down rc=0" "$(sect down)"
   check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
@@ -685,6 +689,19 @@ t_unit_cli() {
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
+  check_eq "...in one line, not the help (#36)" "1 2" "$(ob shoot 2>&1 | wc -l) $(ob shoot >/dev/null 2>&1; echo $?)"
+  # -b NAME before the command (#36): the same as after it.
+  check_eq "-b NAME before the command" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob -b "$P-x" path)"
+  check_eq "...--box NAME too" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob --box "$P-x" path)"
+  check_match "...reaches the command's own -b (windows)" "no box '$P-x' is up" "$(ob -b "$P-x" windows 2>&1)"
+  check_match "...hyprctl, which takes -b only first" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl clients 2>&1)"
+  check_match "...up NAME as well is two names" "up: one box name, got $P-x and $P-y" "$(ob -b "$P-x" up "$P-y" 2>&1)"
+  check_eq "...a command that takes no -b: one line" "omabox: ls takes no -b: it is not about one box" "$(ob -b "$P-x" ls 2>&1)"
+  check_eq "...exit 2" 2 "$(ob -b "$P-x" ls >/dev/null 2>&1; echo $?)"
+  check_eq "...an unknown one: one line" 1 "$(ob -b "$P-x" shoot 2>&1 | wc -l)"
+  check_match "...no command: said" "goes with a command" "$(ob -b "$P-x" 2>&1)"
+  check_match "...help still helps" "omabox up" "$(ob -b "$P-x" help 2>&1)"
+  check_match "...no value: said" "-b needs a value" "$(ob -b 2>&1)"
   # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
   mkdir -p "$TMP/rt"
   check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"

@@ -32,9 +32,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
 - `omabox pointer --hold` is refused: it never returned, and read like "hold the button"
   ([#25](https://github.com/diogochaves/omabox/issues/25)).
+- An unknown command is one line pointing at `omabox help`, not the whole help
+  ([#36](https://github.com/diogochaves/omabox/issues/36)).
 
 ### Fixed
 
+- **`-b NAME` goes before the command too**: `omabox -b NAME windows` failed with "unknown command:
+  -b" and the whole help. It now means the same as after the command, for every command that takes
+  `-b`; the others (`ls`, `config`, ...) say in one line that they take none
+  ([#36](https://github.com/diogochaves/omabox/issues/36)).
 - **`wait window SEL` is satisfied when several windows match** (an app with one window per vault or
   document): it failed with exit 2. Any match answers it and the line names them all; `--focused`
   when one of them has focus. `--window` on `shot`, `click`, `keys`, `pointer` and `drag` still

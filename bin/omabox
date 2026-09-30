@@ -69,7 +69,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
 (Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
 session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off. A git worktree is named
-by its own folder, so each worktree has its own box.
+by its own folder, so each worktree has its own box. -b NAME also goes before the command
+(omabox -b NAME windows), for every command that takes it.
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
@@ -3393,11 +3394,37 @@ cmd_saves() {
   esac
 }
 
+# -b NAME before the command (issue #36): `omabox -b NAME windows` is `omabox windows -b NAME`, for
+# every command that takes -b; the rest (ls, config, ...) are not about one box, and say so in a line.
+# Done before anything reads the command, the broker's policy and the relay included: they see the
+# command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
+# Sets ARGS.
+BOX_CMDS=" up run shot screenshot windows keys click pointer drag wait hyprctl peek restart-shell mode gpu env path down save "
+global_box() {
+  ARGS=("$@")
+  case ${1:-} in -b|--box) ;; *) return 0 ;; esac
+  local name="" flag=$1
+  while [ "${1:-}" = -b ] || [ "${1:-}" = --box ]; do optarg "$@"; name=$2; flag=$1; shift 2; done
+  case ${1:-} in
+    "") say "$flag NAME goes with a command: omabox $flag NAME COMMAND ... (omabox help)"; exit 2 ;;
+    help|-h|--help|version|-V|--version) ARGS=("$@"); return 0 ;;
+  esac
+  if [[ $BOX_CMDS != *" $1 "* ]]; then
+    case $1 in
+      ls|list|saves|config|guard|host|broker) say "$1 takes no -b: it is not about one box" ;;
+      *) say "unknown command: $1 (omabox help lists the commands and their options)" ;;
+    esac
+    exit 2
+  fi
+  ARGS=("$1" "$flag" "$name" "${@:2}")
+}
+
 # Everything runs from main, called on the file's last line: bash reads a script as it runs it, so
 # with ~/.local/bin/omabox linked to a working copy, an edit made while a command ran used to land in
 # the middle of what it was still reading ("line 1207: q: command not found"). By the time that line
 # is read, bash has the whole file (finding 66).
 main() {
+  global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
   if [ -n "${OMABOX_BROKER_PEER:-}" ]; then broker_init; broker_check "$cmd" "$@"
   elif relay_wanted; then relay_call "$cmd" "$@"; fi
@@ -3429,7 +3456,7 @@ main() {
     _reap) cmd__reap "$@" ;;
     help|-h|--help) usage ;;
     version|-V|--version) echo "omabox $(cat "$ROOT/VERSION")" ;;
-    *) say "unknown command: $cmd"; usage >&2; exit 2 ;;
+    *) say "unknown command: $cmd (omabox help lists the commands and their options)"; exit 2 ;;
   esac
 }
 

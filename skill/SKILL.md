@@ -48,7 +48,7 @@ you are done, and before `/clear`. In a git worktree the name is the worktree's 
 worktree agent has its own box with no `-b`. Subagents in one checkout share the session's box: for
 one of its own, `omabox up --new` prints a free name (`box-3`); pass it as `-b box-3` on every call,
 typed out (your shell does not keep a variable between commands). To use a box the user started,
-pass `-b NAME` (see `omabox ls`).
+pass `-b NAME` (see `omabox ls`); it goes before the command too (`omabox -b box-3 shot`).
 
 ## The loop
 
