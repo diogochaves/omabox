@@ -93,6 +93,7 @@ omabox click 960 540 [right] [--double]
 omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
 omabox drag --window myapp 10 10 200 80   # press, move, release; --shot FILE while it is held
 omabox hyprctl -j clients              # the box's Hyprland, never yours
+omabox lua 'hl.get_active_window()'    # Lua in the box's Hyprland, and what it returns (JSON)
 omabox run -- busctl --user list       # any command inside the box; exit code passes through
 omabox down                            # kill everything in the box
 omabox ls                              # boxes, mode, size, state, plugins

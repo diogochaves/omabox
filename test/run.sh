@@ -2488,12 +2488,48 @@ t_wait() {
   check_match "...said" "^unknown: box '$B' went down after" "$(cat "$TMP/wait.out")"
 }
 
+# lua, log and events (issues #40, #41, #39): what needs no box.
+t_unit_inspect() {
+  check_match "lua: nothing to evaluate" "nothing to evaluate" "$(ob lua -b "$P-x" ' ' 2>&1)"
+  check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
+  check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
+}
+
+# lua, log and events (issues #40, #41, #39) in a box of their own.
+t_inspect() {
+  local B=$P-insp out rc
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  # lua (finding 106): the value, not hyprctl's "ok".
+  check_eq "lua: an expression's value" 2 "$(ob lua -b "$B" '1 + 1')"
+  check_eq "lua: statements, what they return, one line each" $'3\nb' "$(ob lua -b "$B" 'local a = 3; return a, "b"')"
+  check_eq "lua: a table as JSON" '{"a":[1,2],"b":true}' "$(ob lua -b "$B" '{a = {1, 2}, b = true}')"
+  check_eq "lua: nil" nil "$(ob lua -b "$B" 'nil')"
+  check_eq "lua: a statement returning nothing prints nothing" "" "$(ob lua -b "$B" 'omabox_t = 1')"
+  check_eq "...the global is there for the next call" 1 "$(ob lua -b "$B" 'omabox_t')"
+  check_eq "lua: brackets, quotes and a newline in the source are not quoting" $'x]]\n]=]"\'' "$(ob lua -b "$B" '"x]]\n]=]\"'"'"'"')"
+  check_eq "lua: a source that ends in ]" 5 "$(ob lua -b "$B" '({5})[1]')"
+  check_eq "lua --json: strings quoted" $'"s"\n1' "$(ob lua -b "$B" --json '"s", 1')"
+  check_eq "lua: a NUL survives the trip (JSON)" '"a\u0000b"' "$(ob lua -b "$B" --json '"a\0b"')"
+  check_eq "lua: a Hyprland object's fields (from its stubs)" 1920 "$(ob lua -b "$B" 'hl.get_monitors()[1]' | jq .width)"
+  check_match "...an object inside one is its name" '^"HL\.Workspace' "$(ob lua -b "$B" 'hl.get_monitors()[1]' | jq .active_workspace)"
+  check_eq "lua: the source on stdin" 42 "$(echo 'return 40 + 2' | ob lua -b "$B" -)"
+  out=$(ob lua -b "$B" 'error("boom")' 2>&1); rc=$?
+  check_eq "lua: a Lua error is exit 1" 1 "$rc"
+  check_eq "...with its message" "lua: lua:1: boom" "$out"
+  check_match "lua: a syntax error too" "^lua: lua:1: .*near" "$(ob lua -b "$B" '1 +' 2>&1)"
+  # Calls at once share nothing (no file between them).
+  local i pids=(); for i in 1 2 3 4 5 6; do ob lua -b "$B" "$i * 11" > "$TMP/lua.$i" 2>&1 & pids+=($!); done
+  wait "${pids[@]}"   # (not a bare wait: the suite's host watcher is a job too)
+  check_eq "lua: six calls at once each get their own answer" "11 22 33 44 55 66" "$(cat "$TMP"/lua.[1-6] | paste -sd' ')"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
+  t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
 BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid t_jail)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }

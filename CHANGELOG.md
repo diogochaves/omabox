@@ -25,6 +25,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#30](https://github.com/diogochaves/omabox/issues/30)).
 - **`shot --window SEL -g "X,Y WxH"`** crops a window in its own coordinates
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
+- **`omabox lua EXPR`** evaluates Lua in the box's Hyprland and prints what it returns (tables and
+  Hyprland's objects as JSON), where `hyprctl eval` says only `ok`
+  ([#40](https://github.com/diogochaves/omabox/issues/40)).
 
 ### Changed
 

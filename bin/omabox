@@ -49,6 +49,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
          COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--strict] | change [-g GEOM | --window SEL]
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | cmd -- CMD [ARG...]
   omabox hyprctl [-b NAME] ARGS...
+  omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
@@ -101,6 +102,10 @@ Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unk
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
+\`lua\` takes an expression or statements (\`return\` what to print); one line per value: strings and
+numbers as they are, nil as nil, tables and Hyprland's objects (a window, a monitor) as JSON (--json:
+strings quoted too). A Lua error is exit 1 with its message. An error inside a callback (hl.on,
+hl.timer) that runs later is logged nowhere: catch it with pcall.
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
 click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
@@ -2373,6 +2378,48 @@ cmd_hyprctl() {
   on_box hyprctl "$@"
 }
 
+# Lua in the box's Hyprland, and what it returns (issue #40, finding 106): `hyprctl eval` answers only
+# ok. share/lua.lua runs the source and raises its answer as an error on purpose, the one thing eval
+# hands back: the values as JSON, or the Lua error. The source goes in a long string whose brackets it
+# does not contain, so nothing in it is quoting. One line per value: strings and numbers as they are,
+# nil as nil, tables (and Hyprland's objects) as JSON; --json prints strings quoted too.
+cmd_lua() {
+  local name="" json=0 src=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
+      -h|--help) usage; return ;;
+      --) shift; src+=("$@"); break ;;
+      -) src+=("$1") ;;
+      -*) die "lua: unknown option $1 (a Lua source starting with - goes after --)" ;;
+      *) src+=("$1") ;;
+    esac
+    shift
+  done
+  local code
+  if [ ${#src[@]} = 0 ] || [ "${src[*]}" = - ]; then code=$(cat) || die "lua: cannot read the source from stdin"
+  else code=${src[*]}; fi
+  [ -n "${code//[[:space:]]/}" ] || die "lua: nothing to evaluate (omabox lua EXPR, or the source on stdin)"
+  select_box "$name"; need_box
+  local lvl="" out vals
+  while [[ $code == *"]$lvl]"* ]]; do lvl+="="; done
+  # Lua drops the newline after the opening bracket (the source starts as given); the one before the
+  # closing bracket keeps a source that ends in ] from closing it early.
+  out=$(on_box hyprctl eval "(function(...)
+$(cat "$ROOT/share/lua.lua")
+end)([${lvl}[
+$code
+]$lvl])" 2>&1) || true
+  case $out in
+    "error: omabox-lua-ok:"*) vals=${out#"error: omabox-lua-ok:"} ;;
+    "error: omabox-lua-error:"*) echo "lua: ${out#"error: omabox-lua-error:"}" >&2; return 1 ;;
+    *) box_alive || die "box '$NAME' went down"; die "lua: the box's Hyprland did not answer as expected: $out" ;;
+  esac
+  if [ $json = 1 ]; then jq -c '.[]' <<<"$vals"
+  else jq -r '.[] | if type == "string" then . elif type == "null" then "nil" else tojson end' <<<"$vals"; fi
+}
+
 # The box's screen: output name and mode (WxH@HZ as Hyprland reports it).
 box_screen() {
   on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0] // empty |
@@ -3116,7 +3163,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|restart-shell|mode|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|restart-shell|mode|gpu|env|path|down|ls|list) ;;
     help|-h|--help|version|-V|--version) ;;
     config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
     *) die "omabox $cmd is not for an agent inside ai-jail" ;;
@@ -3396,6 +3443,7 @@ main() {
     drag) cmd_drag "$@" ;;
     wait) cmd_wait "$@" ;;
     hyprctl) cmd_hyprctl "$@" ;;
+    lua) cmd_lua "$@" ;;
     peek) cmd_peek "$@" ;;
     restart-shell) cmd_restart_shell "$@" ;;
     mode) cmd_mode "$@" ;;

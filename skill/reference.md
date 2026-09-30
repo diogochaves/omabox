@@ -41,6 +41,21 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   drawn while hidden: an older one, or one whose window confirm-close replaced). Waiting counts as use
   for the idle timeout.
 
+## Hyprland's Lua, logs and events
+
+- `omabox lua EXPR` evaluates Lua in the box's Hyprland and prints what it returns, where `omabox
+  hyprctl eval` prints only `ok`: `omabox lua 'hl.get_cursor_pos()'`, `omabox lua
+  'hl.get_active_window().class'`, `omabox lua 'local w = hl.get_active_window(); return w.title,
+  w.pid'` (statements need `return`). One line per value: strings and numbers as they are, `nil`,
+  tables and Hyprland's objects (a window, a monitor, a layer) as JSON, objects inside them by name
+  (`HL.Workspace(1:1)`); `--json` quotes strings too. A long script: `omabox lua - < script.lua`. A Lua
+  error is exit 1 with its message. Globals you set stay for the next call (until a config reload).
+- An error inside a callback (`hl.on`, `hl.timer`) is not in `lua`'s answer, and when the callback
+  runs later (a timer, an app's event) it is logged nowhere, not even in the Hyprland log: seen
+  nothing, check with `pcall` inside the callback and keep the error in a global to read with
+  `omabox lua`. (An `hl.on` callback that a `hyprctl dispatch` sets off errors in that dispatch's
+  answer.)
+
 ## Mounts, HOME and the session
 
 - The repo you ran `omabox up` from is visible **read-only** at the same path, plus any dirs listed in

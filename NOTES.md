@@ -1758,6 +1758,25 @@ the designs here were measured in boxes and built for a contained desktop, and n
     fails with its number, not its text. From a jail the caller's omabox reads the file and sends its
     entries as `--pass` values. Checked in a box (and that no value is in any command line while it
     runs); `t_main`.
+106. **`omabox lua`: Lua in the box's Hyprland, and its value** (2026-09-30, issue #40, from an agent
+    that wrote files from Lua to read them back). `hyprctl eval` answers `ok` or `error: MESSAGE`,
+    with the message whole (100 000 bytes came through; a NUL ends it: a C string) and no overlay or
+    log line in the box. So `share/lua.lua`, sent as the body of a function with the source in a Lua
+    long string whose brackets the source does not contain (`[==[`: nothing is quoting), compiles
+    `return SRC` or else `SRC` (an expression or statements, as eval itself does), runs it under
+    `pcall` and raises its answer as an error on purpose: `omabox-lua-ok:` and the values as a JSON
+    array, or `omabox-lua-error:` and the Lua error. No file in the box, so calls at once never meet
+    (six in parallel checked). JSON escapes control characters, NUL included; floats print as Lua
+    does (`960.0`), inf and nan as strings. Hyprland's objects are userdata with an `__index`
+    function, whose fields Lua cannot list: they come from Hyprland's own stubs
+    (`/usr/share/hypr/stubs/hl.meta.lua`, `---@class`/`---@field`, read once per Hyprland into a
+    global), and an object inside one prints by name (`HL.Workspace(1:1)`), as `hyprctl -j clients`
+    names them; without the stubs an object is its tostring. Seen in a box (Hyprland 0.56.2, Lua
+    5.5): an error in an `hl.on` callback that a `hyprctl dispatch` sets off comes back in that
+    dispatch's answer; one in a timer, or in a callback an app's event sets off later, is logged
+    nowhere (not the Hyprland log, not `configerrors`, nothing on screen). reference.md says to
+    `pcall` inside callbacks. Allowed to a jailed agent, as `hyprctl` is. `t_unit_inspect`,
+    `t_inspect`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

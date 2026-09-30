@@ -22,6 +22,7 @@ installed omabox to say where desktop work happens, not to change what the proje
 |---|---|
 | `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
 | `hyprctl …` | `omabox hyprctl …` |
+| `hyprctl eval EXPR` to read a value (it prints only `ok`) | `omabox lua EXPR` (prints the value; tables as JSON) |
 | `grim [-g …] out.png` | `omabox shot [-g …] [-o out.png]` |
 | `wtype …`, `ydotool …` | `omabox keys …`, `omabox click X Y` |
 | `grim -T ID`, `hyprctl -j clients` to find a window | `omabox windows`, `omabox shot --window SEL` |
