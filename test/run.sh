@@ -2075,6 +2075,33 @@ t_widget() {
   check "bar-icon auto: opened with no boxes, it stays shut" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
   jq -n "[$row + {name: \"a\"}]" > "$H/list.json"; polled
   check "...and does not pop up when one comes" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
+  # keys-to-box (finding 117): f turns it on or off for the selected interactive box; the icon is lit
+  # while the host's Lua names a box in $XDG_RUNTIME_DIR/omabox/.keys (renamed into place, as it does).
+  local irow='{"mode":"interactive","size":"window","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"host","state":"up","peeking":false}'
+  jq -n "[$irow + {name: \"i\", keys_to_box: false}, $irow + {name: \"j\", keys_to_box: true}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down f >/dev/null
+  check "f turns keys-to-box on for an interactive box" until_ok 3 grep -qx "keys-to-box -b i on" "$H/actions"
+  ob keys -b "$B" Down f >/dev/null
+  check "...and off for one that has it" until_ok 3 grep -qx "keys-to-box -b j off" "$H/actions"
+  ob keys -b "$B" Escape >/dev/null
+  # The bar's right side (the widget's section) as it is now, the same as FILE or not.
+  # shellcheck disable=SC2329 # called through until_ok
+  bar_is() { ob shot -b "$B" -g "1420,0 500x30" -o "$TMP/keys-now.png" >/dev/null 2>&1 && if [ "$1" = same ]; then cmp -s "$2" "$TMP/keys-now.png"; else ! cmp -s "$2" "$TMP/keys-now.png"; fi; }
+  local run; run=$(ob path "$B")/run
+  # No omabox dir when the shell started: the file is not watched then, and each poll reads it.
+  mkdir -p "$run/omabox"
+  ob wait -b "$B" still >/dev/null 2>&1
+  ob shot -b "$B" -g "1420,0 500x30" -o "$TMP/keys-off.png" >/dev/null 2>&1
+  echo i > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "the icon is lit while keys go to a box (read at a poll)" until_ok 8 bar_is other "$TMP/keys-off.png"
+  cp "$TMP/keys-now.png" "$TMP/keys-on.png"
+  echo > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...and not once they are the desktop's again (watched)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
+  echo i > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...lit again at once (the file watched)" until_ok 1.5 bar_is same "$TMP/keys-on.png"
+  echo gone > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...not for a box that is not up (a file a Hyprland left)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
   mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
   check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
   ob down "$B" >/dev/null

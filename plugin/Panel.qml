@@ -33,8 +33,14 @@ Panel {
   property string lastError: ""        // kept until the next action succeeds
   property string listError: ""        // `omabox ls` itself failing: the list shown may be stale
   property int listFailures: 0
-  property string action: ""           // what actionProc is doing: peek, shot, down
+  property string action: ""           // what actionProc is doing: peek, shot, down, keys-to-box
   property real now: Date.now()
+  // The box SUPER keys go to right now (the host's "omabox" submap, one-shot or keys-to-box), or "":
+  // what the CLI's Lua in your Hyprland writes to $XDG_RUNTIME_DIR/omabox/.keys on each change.
+  property string keysFileBox: ""
+  // ...when that box is up in the list: a file left by a Hyprland that went away never lights the icon.
+  readonly property string keysBox:
+    boxes.some(function(b) { return b.name === keysFileBox && b.state === "up" }) ? keysFileBox : ""
   // `omabox config --json`; the defaults until it answers.
   property var settings: ({ "workspace": "9", "confirm-close": "off", "bar-icon": "always" })
   // bar-icon: always (the default) keeps the icon, and the panel's settings, in the bar with no box
@@ -67,6 +73,7 @@ Panel {
     peek: String.fromCodePoint(0xF0208),    // md-eye
     show: String.fromCodePoint(0xF0379),    // md-monitor
     shot: String.fromCodePoint(0xF0100),    // md-camera
+    keys: String.fromCodePoint(0xF030C),    // md-keyboard
     down: String.fromCodePoint(0xF0159),    // md-close_circle
     alert: String.fromCodePoint(0xF0026),   // md-alert
     dismiss: String.fromCodePoint(0xF0156)  // md-close
@@ -176,7 +183,15 @@ Panel {
     if (b.plugins && b.plugins.length) parts.push(b.plugins.join(", "))
     if (b.net === "isolated") parts.push("isolated")
     if (b.peeking) parts.push("peeking")
+    if (keysBox === b.name) parts.push("SUPER keys here")
+    else if (b.keys_to_box) parts.push("keys follow focus")
     return parts.join(" · ")
+  }
+
+  // keys-to-box (finding 117): an interactive box's SUPER keys follow focus into its window, or not.
+  function keysToBox(b) {
+    if (!b || b.state !== "up" || b.mode !== "interactive") return
+    run(b.name, "keys-to-box", [command, "keys-to-box", "-b", b.name, b.keys_to_box ? "off" : "on"])
   }
 
   // One action at a time; a second one while it runs says so rather than vanish.
@@ -311,12 +326,25 @@ Panel {
     onFileChanged: if (!configProc.running) configProc.running = true
   }
 
+  // Where SUPER keys go: watched, so the icon lights the moment the host enters the submap (the file is
+  // renamed into place: text() is stale in the change signal, so through reload → onLoaded), and
+  // read again at each poll too, in case a change was missed. Missing (no interactive box yet): none.
+  FileView {
+    id: keysFile
+    path: Quickshell.env("XDG_RUNTIME_DIR") + "/omabox/.keys"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.keysFileBox = text().trim()
+    onLoadFailed: root.keysFileBox = ""
+  }
+
   Timer {
     interval: root.opened ? 2000 : root.refreshSec * 1000
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: { root.now = Date.now(); root.refresh() }
+    onTriggered: { root.now = Date.now(); root.refresh(); keysFile.reload() }
   }
 
   Timer { id: disarm; interval: 3000; onTriggered: { root.armedDown = ""; root.armedNew = false } }
@@ -354,7 +382,10 @@ Panel {
       }
     }
     opacity: root.hasBoxes ? 1 : 0.5
-    tooltipText: root.opened ? "" : (root.hasBoxes ? root.countText : "No boxes")
+    // Lit (the bar's attention colour, as the box window's border) while SUPER keys go to a box.
+    active: root.keysBox !== ""
+    tooltipText: root.opened ? "" : root.keysBox !== "" ? "SUPER keys go to " + root.keysBox
+      : (root.hasBoxes ? root.countText : "No boxes")
     onPressed: function(b) { root.toggle() }
   }
 
@@ -396,6 +427,7 @@ Panel {
         if (t === "p") root.peek(root.selected())
         else if (t === "s") root.shot(root.selected())
         else if (t === "d") root.down(root.selected())
+        else if (t === "f") root.keysToBox(root.selected())
       }
 
       Column {
@@ -565,7 +597,7 @@ Panel {
           Text {
             width: parent.width
             textFormat: Text.PlainText
-            text: "↑↓ move · p peek/show · s shot · d down · n new · r refresh"
+            text: "↑↓ move · p peek/show · s shot · f keys · d down · n new · r refresh"
             color: root.bar.foreground
             opacity: 0.5
             font.family: root.bar.fontFamily
@@ -767,6 +799,15 @@ Panel {
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
           onClicked: root.peek(row.box)
+        }
+        PanelActionButton {   // keys-to-box: lit while on
+          visible: row.up && row.box.mode === "interactive"
+          iconText: root.icons.keys
+          tooltipText: row.box.keys_to_box ? "SUPER keys follow focus into it: on (f)" : "SUPER keys to the box whenever it has focus: off (f)"
+          foreground: row.box.keys_to_box ? root.bar.urgent : root.bar.foreground
+          hoverColor: root.bar.urgent
+          fontFamily: root.bar.fontFamily
+          onClicked: root.keysToBox(row.box)
         }
         PanelActionButton {
           visible: row.up
