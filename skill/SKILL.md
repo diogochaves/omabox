@@ -101,6 +101,15 @@ then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own.
 bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and `click --in` it. Screen
 shots show the pointer (hover evidence: a `-g` crop of the screen); window shots never do.
 
+**The pointer is test state.** Under Omarchy's focus-follows-mouse the window the pointer rests on,
+or last passed over, takes focus, and gets it back when a menu or panel closes. A box's pointer starts
+at the screen's centre and stays wherever the last command left it (`omabox hyprctl cursorpos`).
+`click` and `pointer -- move` jump: they cross nothing on the way. Before a test whose result depends
+on focus, put the pointer where a user's would be (`omabox pointer -- move X Y`), and when the way
+there matters (to the bar, across other windows) travel: `click --steps 20 X Y`, `pointer --steps 20
+-- move X Y`. `--mod ctrl` (shift, alt; `ctrl+shift`) holds modifiers across a click or drag; SUPER
+with a button is Hyprland's own (move, resize), never the app's.
+
 | Symptom | Next step |
 |---|---|
 | "could not connect to display", `omabox-guard` | The agent guard: do it in a box (below). |

@@ -32,6 +32,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **Modifier clicks**: `click --mod ctrl` (shift, alt, super, altgr; `ctrl+shift`), and `--mod` on
   `drag` and `pointer`, hold modifiers down across the click, then let go, however omabox ends
   ([#25](https://github.com/diogochaves/omabox/issues/25)).
+- The skill says the pointer's position is part of what a test sets up: where it starts, that
+  `click` jumps, how to travel ([#43](https://github.com/diogochaves/omabox/issues/43)).
 
 ### Changed
 

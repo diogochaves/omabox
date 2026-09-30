@@ -1799,6 +1799,12 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `drag --mod ctrl`, nothing for `--mod super`, then 0; a pause with nothing on stdin lets go after its
     time; the tool SIGKILLed mid-run: that click had ctrl, omabox exits 1 saying so, the next click has
     none. Not seen: an Xwayland app's view of the modifiers (they are the seat's, as for keys).
+113. **The pointer's position is test state** (2026-09-30, issue #43). Under focus-follows-mouse the
+    window the pointer rests on, or last passed over, takes focus, and gets it back when a menu or
+    panel closes. A box's pointer starts at the screen's centre (finding 85) and stays where the last
+    command left it; a test whose result depends on focus is only as good as where it put the pointer.
+    The skill's "Driving an app" says so: move it deliberately first, travel (finding 111) when the
+    way matters, `omabox hyprctl cursorpos` for where it is. `omabox help` says `click`/`move` jump.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
