@@ -2298,6 +2298,39 @@ the designs here were measured in boxes and built for a contained desktop, and n
     (no login here), so that Codex adds its stdout to the context, as Claude Code does, is from the
     shape of its hooks, not seen.
 
+124. **The suite runs box tests in parallel** (2026-09-30, issue #60). A full run took ~9 min (537 s):
+    39 s of unit tests (30 of them a `sleep 30 |` in `t_unit_inspect`, fixed first) and 498 s of box
+    tests one after another, mostly waiting (idle limits running out, reapers polling, timeouts that
+    prove something does not happen) on a machine left idle. Now `test/run.sh` runs the unit tests
+    and `SERIAL` (empty: no test needed it) one at a time, then the box tests `-j N` at a time (default
+    half the CPUs, at most one per 2 GB available and 8; `OMABOX_TEST_JOBS`; `-j 1` is the old run).
+    Each runs in a subshell (`par_test`) with its own notes and last-wait files, stops the servers it
+    started, and hands its counts back in a file from an EXIT trap, so a test that exits midway (an
+    unset variable) keeps its counts and fails "ran to its end"; the runner (`par_done`) prints its
+    output whole when it ends, with its time. t_leak_control and the slowest start first. Leaks: the
+    runner marks `== TEST` and `== /TEST` in the host's event log and scans each test's window when it
+    ends; tests beside it share that window, so a leak there fails each, naming the others (`beside`);
+    `slice` leaves other tests' markers out (one between an event and the line that decides it would
+    read as a leak); what came while no test ran (`gap_events`, between `== parallel` markers) is
+    scanned once at the end. Audit before: no two box tests share a box name, a `$TMP` path or a temp
+    repo; the ones that read every box (`ls`) or the user's settings do it by name, or inside a
+    stand-in box with its own HOME and runtime dir; background subshells do not run the suite's EXIT
+    trap (checked). Ctrl-C: bash leaves background jobs ignoring SIGINT and the runner sat in `wait
+    -n`, so a run went on; INT and TERM are trapped now, and `cleanup` kills everything under the run
+    (`descendants`, deepest first) before taking its boxes down. A test's flock holder left looping on
+    a file in the deleted `$TMP` kept a box "busy" once: those loops now also end when `$TMP` is gone.
+    Found on the way: `omabox ls` stopped partway when a box went down while it listed them (`meta`
+    failed on the gone box.json, under errexit; the list ended there): a box going down is now left
+    out, the rest shown (`t_unit_cli`, which failed on the old code). Verified on this machine: AMD
+    iGPU, -j 4 three times (1221/0/1, 141 s each), -j 6 (101 s), -j 8 (88 s), -j 1 (509 s); the same
+    three slow waits (half their limit) in every run, and no test more than 2 s slower beside 7 others
+    than alone. RTX 5070 Ti (`rtx nvidia`, renderD129, parked with `rtx vfio` after): default (8)
+    twice, 76 and 75 s (one run hit the `ls` bug, 1222/1; the other 1223/0/0), -j 1 411 s 1223/0/0.
+    With the `ls` fix, at the default: NVIDIA twice 1224/0/0 in 75 s, AMD twice 1222/0/1 in 94 and
+    90 s. Ctrl-C checked on both -j 4 and -j 1 runs: gone within 2 s, no box, process or
+    runtime file left. `t_unit_parallel` covers the windows, `beside`, the gaps and what a test hands
+    back (made-up log and tests).
+
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -2316,6 +2349,12 @@ of them, nor wayvnc (finding 34). It needs labwc.
 ## Open
 
 Bugs and ideas live in the GitHub issues. Known gaps:
+
+- `test/run.sh` ends with a bare `main "$@"`: after main returns, bash reads the file on from where
+  it was, so an edit that grew the file during a run could run what now sits there (the call again).
+  `bin/omabox` ends `main "$@"; exit`; here any `exit` at the end makes shellcheck 0.11 take every
+  test function for dead code (SC2329, and the SC2086 it then no longer rules out), so it is left
+  as it was (finding 124). Until then, do not edit the suite while it runs.
 
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44):

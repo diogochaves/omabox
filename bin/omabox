@@ -3996,12 +3996,15 @@ cmd_ls() {
   fi
   # IDLE: minutes since the box was last used, of its limit (it goes down when they meet).
   printf '%-24s %-11s %-16s %-6s %-9s %-9s %s\n' NAME MODE SIZE STATE NET IDLE PLUGINS
+  local used
   for n in $(list_names); do
     select_box "$n"
+    # A box going down while this lists them has no box.json any more: left out, not the end of the
+    # list (under errexit a failed lookup here ended `ls` there; seen with the suite's boxes in parallel).
     local state=dead idle; box_alive && state=up
-    idle=$(meta idle)
-    if [ "${idle:-0}" -gt 0 ] && [ -f "$D/used" ]; then
-      idle="$((($(date +%s) - $(stat -c %Y "$D/used")) / 60))m/$(human_duration "$idle")"
+    idle=$(meta idle) || continue
+    if [ "${idle:-0}" -gt 0 ] && used=$(stat -c %Y "$D/used" 2>/dev/null); then
+      idle="$((($(date +%s) - used) / 60))m/$(human_duration "$idle")"
     else idle=never; fi
     printf '%-24s %-11s %-16s %-6s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$(meta size)" "$state" "$(meta net)" "$idle" \
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"

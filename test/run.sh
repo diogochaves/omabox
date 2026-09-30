@@ -2,7 +2,10 @@
 # shellcheck disable=SC2016 # single-quoted $VARS are expanded inside the box
 # omabox's regression suite: what NOTES' findings verified, as checks that run in real boxes.
 #
-#   test/run.sh              every test (~8.5 min on one iGPU; boxes are named t<pid>-*, all torn down)
+#   test/run.sh              every test, box tests in parallel (~1.5 min on 16 CPUs; boxes are named
+#                            t<pid>-*, all torn down)
+#   -j N (or OMABOX_TEST_JOBS=N): N box tests at a time (default: half the CPUs, at most 8); -j 1 runs
+#                            them one at a time (~8.5 min), so a leak is pinned to one test
 #   test/run.sh unit         only the fast ones (no box)
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd); a PATTERN
 #                            that matches no test exits 2
@@ -46,7 +49,11 @@ EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
 cleanup() {
-  local b
+  local b p
+  # A run stopped midway (Ctrl-C): whatever it still runs goes first (parallel tests' subshells and
+  # what they started, which ignore SIGINT: bash leaves background jobs so), then every box of its.
+  descendants $$ > "$TMP/descendants" 2>/dev/null
+  while read -r p; do [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null; done < "$TMP/descendants"
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
@@ -54,11 +61,17 @@ cleanup() {
   rm -rf "$TMP"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# descendants PID: every process under it, deepest first.
+descendants() { local c; for c in $(pgrep -P "$1"); do descendants "$c"; echo "$c"; done; }
 
 ob() { "$CLI" "$@"; }
 # Notes from inside checks (a slow wait), whose output is captured: shown before the next result.
-note() { printf '       (%s)\n' "$*" >> "$TMP/notes"; }
-notes() { [ ! -s "$TMP/notes" ] || { cat "$TMP/notes"; : > "$TMP/notes"; }; }
+# (NOTES and UNTIL are per test when tests run in parallel.)
+NOTES=$TMP/notes UNTIL=$TMP/until.last
+note() { printf '       (%s)\n' "$*" >> "$NOTES"; }
+notes() { [ ! -s "$NOTES" ] || { cat "$NOTES"; : > "$NOTES"; }; }
 ok() { notes; pass=$((pass + 1)); printf '  \e[32mok\e[0m   %s\n' "$1"; }
 no() {
   if [ -n "${HELD:-}" ] && your_peek "$HELD"; then
@@ -77,7 +90,7 @@ evidence() {
   printf '%s\n%s\n\n' "$1" "$2" >> "$e/failures.txt"
   [ ! -e "$e/boxes" ] || return 0
   mkdir -p "$e/boxes"
-  [ ! -s "$TMP/until.last" ] || cp "$TMP/until.last" "$e/last-wait.txt"
+  [ ! -s "$UNTIL" ] || cp "$UNTIL" "$e/last-wait.txt"
   slice "$EVID/host-events.log" "$CUR" > "$e/host-events.log" 2>/dev/null
   for b in $("$CLI" ls --json 2>/dev/null | jq -r --arg p "$P-" '.[] | select((.name | startswith($p)) and .state == "up") | .name'); do
     d=$e/boxes/$b; mkdir -p "$d"; bd=$("$CLI" path "$b")
@@ -121,7 +134,7 @@ until_ok() {
   until out=$("$@" 2>&1); do
     now=$(now_ms)
     if [ $((now - t0)) -ge "$lim" ]; then
-      printf 'until_ok %s %s\nlast output: %s\n' "$t" "$*" "$out" > "$TMP/until.last"
+      printf 'until_ok %s %s\nlast output: %s\n' "$t" "$*" "$out" > "$UNTIL"
       echo "timed out after ${t}s: $*; last output: ${out:0:200}"
       return 1
     fi
@@ -319,13 +332,31 @@ their_new_box() {
   find "$XDG_RUNTIME_DIR/omabox" -mindepth 2 -maxdepth 2 -name box.json -newer "$EVID/provenance" \
     -exec jq -r --arg p "$1" 'select(.mode == "interactive" and (.name | startswith($p) | not)) | .name' {} + 2>/dev/null | sed -n 1p | grep .
 }
-# slice FILE FROM [TO]: a watcher log's lines after the marker "== FROM" (up to "== TO", or the end).
-slice() { awk -v a="== $2" -v b="== ${3:-}" '{m = substr($0, index($0, " ") + 1)} f && m == b {exit} f; m == a {f = 1}' "$1"; }
+# slice FILE FROM [TO]: a watcher log's lines after the marker "== FROM" (up to "== TO", or the end),
+# without other markers (tests running in parallel mark their starts and ends in between: a marker
+# between an event and the line that decides it would read as a leak).
+slice() { awk -v a="== $2" -v b="== ${3:-}" '{m = substr($0, index($0, " ") + 1)} f && m == b {exit} f && m !~ /^== / {print} m == a {f = 1}' "$1"; }
 # After each test: what of it reached the host's desktop fails it; what is not the suite's is shown.
+# host_scan TEST [END]: from its marker to END's (a test run in parallel: "/TEST"), or to now. A test
+# run in parallel shares its window with the tests beside it: a leak there fails each, naming them.
 host_scan() {
-  local out; out=$(slice "$EVID/host-events.log" "$1" | leak_scan "$P-" "$HWS")
-  [[ $out != *leak:* ]] || no "nothing of it reached the host desktop" "$(grep '^leak:' <<<"$out")"
+  local out beside=""; out=$(slice "$EVID/host-events.log" "$1" "${2:-}" | leak_scan "$P-" "$HWS")
+  [ -z "${2:-}" ] || beside=$(beside "$1")
+  [[ $out != *leak:* ]] || no "nothing of it${beside:+, or of the tests beside it,} reached the host desktop" "$(grep '^leak:' <<<"$out")${beside:+ (beside it: $beside)}"
   [[ $out != *note:* ]] || printf '       (host, %s)\n' "$(grep '^note:' <<<"$out" | cut -c7-)"
+}
+# beside TEST: the tests that ran in parallel with TEST at any time (from the log's markers).
+beside() {
+  awk -v t="$1" '$2 == "==" && $3 ~ /^\/?t_/ { n = $3; e = sub(/^\//, "", n)
+      if (n == t) { if (e) exit; mine = 1; for (k in run) seen[k] = 1; next }
+      if (!e) { run[n] = 1; if (mine) seen[n] = 1 } else delete run[n] }
+    END { for (n in seen) printf "%s ", n }' "$EVID/host-events.log" | sed 's/ $//'
+}
+# gap_events: the events of a parallel phase while none of its tests ran (between one's end and the
+# next one's start), which no test's window holds.
+gap_events() {
+  awk '$2 == "==" && $3 == "parallel" {on = 1; next} $2 == "==" && $3 == "/parallel" {exit} !on {next}
+    $2 == "==" && $3 ~ /^\/t_/ {r--; next} $2 == "==" && $3 ~ /^t_/ {r++; next} $2 == "==" {next} r == 0' "$EVID/host-events.log"
 }
 # host_same NAME WANT GOT workspace|window: the host's focus at the end is what it was, or it changed
 # through events that were not the suite's (you working meanwhile): the watcher saw the change, and
@@ -672,6 +703,48 @@ t_unit_leak_scan() {
     "$(printf '1 a\n2 == x\n3 b\n4 == y\n5 c\n' > "$TMP/slice"; slice "$TMP/slice" x y | cut -d' ' -f2)"
 }
 
+# par_fake DIR scan|run: the runner's own functions against DIR, with counts of its own (locals: the
+# run's are untouched): host_scan of t_b, or par_test/par_done on made-up tests. Prints what failed.
+par_fake() {
+  local EVID=$1 TMP=$1 HWS=9 pass=0 fail=0 failed=() skips=() LEAK_PROVEN="" t
+  if [ "$2" = scan ]; then host_scan t_b /t_b >/dev/null 2>&1; printf '%s\n' "${failed[@]}"; return; fi
+  # shellcheck disable=SC2329 # run by par_test
+  t_fake_ok() { check_eq "made up" 1 1; LEAK_PROVEN=1; }
+  # shellcheck disable=SC2329
+  t_fake_dies() { check_eq "made up too" 1 1; exit 3; }
+  # shellcheck disable=SC2329
+  t_fake_none() { :; }
+  mkdir -p "$1/par"
+  for t in t_fake_ok t_fake_dies t_fake_none; do
+    printf '%s == %s\n' 20 "$t" >> "$1/host-events.log"; (par_test "$t") > "$1/par/$t.out" 2>&1
+    printf '%s == /%s\n' 21 "$t" >> "$1/host-events.log"; par_done "$t" >/dev/null 2>&1
+  done
+  echo "pass=$pass fail=$fail proven=$LEAK_PROVEN"; printf '%s\n' "${failed[@]}"
+}
+# The parallel runner (issue #60), on a made-up log and made-up tests, in a subshell of its own (its
+# counts and EVID are not the run's): windows, the tests beside, the gaps, and what a test hands back.
+t_unit_parallel() {
+  local d=$TMP/par-unit out; mkdir -p "$d"
+  printf '%s\n' '1 == watching' '2 == parallel' '3 == t_a' '4 == t_b' '5 activelayout>>hl-virtual-keyboard-unknown,x' \
+    '5.5 openwindow>>c,1,foot,foot' '6 == /t_a' '7 == t_c' '8 == /t_b' '9 == /t_c' '9.5 activelayout>>hl-virtual-keyboard-unknown,x' \
+    '10 == t_d' '11 == /t_d' '12 == /parallel' > "$d/host-events.log"
+  ev() { EVID=$d "$@"; }
+  check_eq "beside: the tests running during a test's time" "t_b" "$(ev beside t_a)"
+  check_eq "...every one it met" "t_a t_c" "$(ev beside t_b | tr ' ' '\n' | sort | paste -sd' ')"
+  check_eq "...none" "" "$(ev beside t_d)"
+  check_eq "a test's window, markers of the others left out" "5 activelayout>>hl-virtual-keyboard-unknown,x|5.5 openwindow>>c,1,foot,foot" \
+    "$(slice "$d/host-events.log" t_a /t_a | paste -sd'|')"
+  check_eq "gap_events: only what no test's time holds" "9.5 activelayout>>hl-virtual-keyboard-unknown,x" "$(ev gap_events)"
+  out=$(par_fake "$d" scan)
+  check_match "a leak in a test's window fails it, naming the tests beside it" "nothing of it, or of the tests beside it, reached.*" "$out"
+  # par_test (in its subshell, as the runner starts it) and par_done on made-up tests: one that passes
+  # and proves the leak detector, one that dies midway, one that checks nothing.
+  out=$(par_fake "$d" run)
+  check_match "par_done adds a test's counts and LEAK_PROVEN (one that stopped midway's too)" "^pass=2 fail=2 proven=1" "$out"
+  check_match "...a test that stops midway fails, said so" "t_fake_dies: the test ran to its end" "$out"
+  check_match "...one that ran no check too" "t_fake_none: the test ran checks" "$out"
+}
+
 # The leak detector, proven (finding 80): the watcher the host gets, on a box standing in for the
 # host. Quiet, it reports nothing; then a box's window taking focus, a workspace switch and back,
 # omabox's workspace coming up, and a key from `omabox keys` are leaked into the stand-in on purpose,
@@ -952,6 +1025,12 @@ t_unit_cli() {
   mkdir -p "$TMP/rt"
   check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
+  # ls while a box goes down (seen with the suite's boxes in parallel, issue #60): its box.json gone,
+  # the rest of the list still shown. Three boxes in a runtime dir of its own; the middle one half gone.
+  local lb; for lb in a b c; do mkdir -p "$TMP/rt-ls/omabox/$P-ls$lb"; echo '{}' > "$TMP/rt-ls/omabox/$P-ls$lb/info.json"; done
+  for lb in a c; do echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls/omabox/$P-ls$lb/box.json"; done
+  check_eq "ls: a box going down meanwhile is left out, not the end of the list" "$P-lsa $P-lsc 0" \
+    "$(XDG_RUNTIME_DIR=$TMP/rt-ls "$CLI" ls 2>&1 | awk 'NR > 1 {printf "%s ", $1}'; echo "${PIPESTATUS[0]}")"
   # run -d's -q, --print-log and --replace (issues #42, #29; findings 109, 110)
   check_match "run -q without -d refused" "go with -d" "$(ob run -b "$P-x" -q -- true 2>&1)"
   check_match "run --replace without -d refused" "go with -d" "$(ob run -b "$P-x" --replace -- true 2>&1)"
@@ -1215,7 +1294,7 @@ t_agent_session() {
   agent $s10 --idle 20s & local a10=$!
   until_ok 40 test -e "$TMP/ag-$a10"
   reaper=$(pgrep -f "omabox _reap $b10 " | head -1)
-  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
   until_ok 5 test -e "$TMP/held"
   kill "$a10" 2>/dev/null; wait "$a10" 2>/dev/null
   agent $s10 -- run -- true & local r10=$!
@@ -1232,7 +1311,7 @@ t_agent_session() {
   # The same with the reaper first (the new command's flock stopped): its down takes the box, and the
   # command that waited says no box is up (`run -d` wrote its log into the box's dir, gone by then).
   rm -f "$TMP/held" "$TMP/release"
-  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
   until_ok 5 test -e "$TMP/held"
   kill "$r10" 2>/dev/null; wait "$r10" 2>/dev/null
   agent $s10 -- run -d -- true & local d10=$!
@@ -1256,7 +1335,7 @@ t_agent_session() {
   reaper=$(pgrep -f "omabox _reap $b11 " | head -1)
   rm -f "$TMP/held" "$TMP/release"
   lk=$XDG_RUNTIME_DIR/omabox/.lock-$b11
-  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
   until_ok 5 test -e "$TMP/held"
   kill "$a11" 2>/dev/null; wait "$a11" 2>/dev/null
   agent $s11 -- run -- true & local r11=$!
@@ -1286,7 +1365,7 @@ t_mode_lock() {
   local B=$P-ml m rc=0 held lk=$XDG_RUNTIME_DIR/omabox/.lock-$P-ml
   check "a box for mode" ob up "$B" --no-shell --idle 5m
   local before; before=$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")
-  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ]; do sleep 0.1; done' "$TMP/ml-held" "$TMP/ml-release" & held=$!
+  flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/ml-held" "$TMP/ml-release" & held=$!
   until_ok 5 test -e "$TMP/ml-held"
   "$CLI" mode -b "$B" 1280x720 > "$TMP/ml-out" 2>&1 & m=$!
   check "mode waits for the box's lock to record the new size" until_ok 10 pgrep -x flock -P "$m"
@@ -3557,9 +3636,20 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_nvidia t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
+  t_unit_nvidia t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+
+# Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
+# when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
+# run in ~1.5 min; -j 1: ~8.5 min). No test ran slower beside 7 others than alone. These run alone first: none so far (a test that cannot share the machine,
+# with a reason, goes here). In parallel, the slowest start first, so the run ends with short ones.
+SERIAL=()
+default_jobs() {
+  local n m; n=$(($(nproc) / 2)) m=$(awk '/^MemAvailable:/ {print int($2 / 2097152)}' /proc/meminfo)
+  [ "$m" -ge "$n" ] || n=$m; [ "$n" -le 8 ] || n=8; [ "$n" -ge 1 ] || n=1; echo "$n"
+}
+SLOW=(t_agent_session t_widget t_run_idle t_guard t_peek t_reap_race t_wait t_pointer t_clip t_replace t_idle)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
@@ -3581,13 +3671,79 @@ provenance() {
     "$(bwrap --version | awk '{print $2}')" "${rn:-no render node}" "${drv##*/}" "$(uname -r)"
 }
 
+# par_run JOBS TEST...: the tests, JOBS at a time, t_leak_control and the SLOW ones first. Each runs
+# in a subshell (par_test) with counts of its own, which it hands back in a file; the runner shows its
+# output whole when it ends, adds its counts and scans the host's events of its time (host_scan: the
+# tests beside it share them). Then the events no test's time holds (gap_events).
+par_run() {
+  local jobs=$1 left=() t pid; shift
+  local -A run=()
+  for t in t_leak_control "${SLOW[@]}"; do [[ " $* " != *" $t "* ]] || left+=("$t"); done
+  for t; do [[ " ${left[*]} " == *" $t "* ]] || left+=("$t"); done
+  mkdir -p "$TMP/par"
+  printf '%s == parallel\n' "$(date +%s.%3N)" >> "$EVID/host-events.log"
+  while [ ${#left[@]} -gt 0 ] || [ ${#run[@]} -gt 0 ]; do
+    while [ ${#left[@]} -gt 0 ] && [ ${#run[@]} -lt "$jobs" ]; do
+      t=${left[0]} left=("${left[@]:1}")
+      printf '%s == %s\n' "$(date +%s.%3N)" "$t" >> "$EVID/host-events.log"
+      par_test "$t" > "$TMP/par/$t.out" 2>&1 &
+      run[$!]=$t
+    done
+    wait -n -p pid "${!run[@]}"
+    t=${run[$pid]}; unset "run[$pid]"
+    printf '%s == /%s\n' "$(date +%s.%3N)" "$t" >> "$EVID/host-events.log"
+    par_done "$t"
+  done
+  printf '%s == /parallel\n' "$(date +%s.%3N)" >> "$EVID/host-events.log"
+  CUR=between
+  local out; out=$(gap_events | leak_scan "$P-" "$HWS")
+  [[ $out != *leak:* ]] || no "nothing reached the host desktop between the parallel tests" "$(grep '^leak:' <<<"$out")"
+}
+# par_test TEST (in its subshell): runs it with counts, notes and waits of its own; stops the servers
+# it started (cleanup, in the runner, never sees them); hands back its counts, also when it stops
+# midway (an exit, an unset variable), saying whether it reached its end.
+par_test() {
+  CUR=$1 pass=0 fail=0 failed=() skips=() SERVERS=() HELD="" LEAK_PROVEN="" PAR_T0=$SECONDS PAR_END=0
+  NOTES=$TMP/par/$1.notes UNTIL=$TMP/par/$1.until
+  trap par_handback EXIT
+  "$CUR"; notes
+  [ $((pass + fail + ${#skips[@]})) -gt 0 ] || no "the test ran checks" "none: it returned before its first"
+  PAR_END=1
+}
+par_handback() {
+  local _f=("${failed[@]}") _s=("${skips[@]}")
+  [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
+  { echo "_rp=$pass _rf=$fail _rl=${LEAK_PROVEN:-} _rt=$((SECONDS - PAR_T0)) _re=$PAR_END"; declare -p _f _s; } > "$TMP/par/$CUR.res"
+}
+# par_done TEST (in the runner): its output, its counts, its host scan.
+par_done() {
+  local _rp=0 _rf=0 _rl="" _rt="?" _re=0 _f=() _s=()
+  CUR=$1
+  if [ -f "$TMP/par/$1.res" ]; then
+    # shellcheck disable=SC1090 # written by par_test
+    source "$TMP/par/$1.res"
+  fi
+  echo "${1#t_}"
+  cat "$TMP/par/$1.out"
+  echo "       (${1#t_}: ${_rt}s)"
+  pass=$((pass + _rp)) fail=$((fail + _rf))
+  failed+=("${_f[@]}") skips+=("${_s[@]}")
+  [ -z "$_rl" ] || LEAK_PROVEN=$_rl
+  [ "$_re" = 1 ] || no "the test ran to its end" "it stopped midway (an exit, an unset variable?): its output is above"
+  host_scan "$1" "/$1"
+}
+
 # The runner as one function, read whole before it starts: an edit to this file during a run (another
 # agent's, in the same checkout) cannot change what the rest of the run does (as finding 66 did for
 # bin/omabox).
 main() {
   # (Underscored: the tests run inside this function and see its locals.)
-  local _a _pats=() _filtered=0 _t _p _sel=() _n _unit_n=0
-  for _a; do case $_a in --strict) STRICT=1 ;; *) _pats+=("$_a") ;; esac; done
+  local _a _pats=() _filtered=0 _t _p _sel=() _n _unit_n=0 _jobs=${OMABOX_TEST_JOBS:-$(default_jobs)} _next=""
+  for _a; do
+    if [ -n "$_next" ]; then _jobs=$_a _next=""; continue; fi
+    case $_a in --strict) STRICT=1 ;; -j|--jobs) _next=1 ;; -j*) _jobs=${_a#-j} ;; *) _pats+=("$_a") ;; esac
+  done
+  [[ $_jobs =~ ^[1-9][0-9]?$ ]] || { echo "-j: a number of parallel tests, 1-99 (1: one at a time), got '$_jobs'"; exit 2; }
   tests=("${UNIT[@]}" "${BOX[@]}")
   if [ "${_pats[*]}" = unit ]; then tests=("${UNIT[@]}")
   elif [ ${#_pats[@]} -gt 0 ]; then
@@ -3619,16 +3775,23 @@ main() {
   WATCH_PID=$!
   until_ok 5 grep -q ' == watching$' "$EVID/host-events.log" || { echo "cannot listen to the host's events: $(cat "$EVID/host-events.log")"; exit 2; }
 
-  for CUR in "${tests[@]}"; do
-    echo "${CUR#t_}"
-    _n=$((pass + fail + ${#skips[@]}))
-    rm -f "$TMP/until.last"
+  # One at a time: the unit tests, SERIAL, and everything with -j 1. The rest in parallel after them.
+  local _one=() _par=()
+  for _t in "${tests[@]}"; do
+    if [ "$_jobs" = 1 ] || [[ $_t == t_unit_* ]] || [[ " ${SERIAL[*]} " == *" $_t "* ]]; then _one+=("$_t"); else _par+=("$_t"); fi
+  done
+  local _t0
+  for CUR in "${_one[@]}"; do
+    _n=$((pass + fail + ${#skips[@]})) _t0=$SECONDS
+    rm -f "$UNTIL"
     printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
-    HELD=""; "$CUR"; notes
+    echo "${CUR#t_}"; HELD=""; "$CUR"; notes
+    [[ $CUR == t_unit_* ]] || echo "       (${CUR#t_}: $((SECONDS - _t0))s)"
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))
     host_scan "$CUR"
   done
+  [ ${#_par[@]} = 0 ] || par_run "$_jobs" "${_par[@]}"
 
   echo "host"
   CUR=host

@@ -5,7 +5,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Changed
+
+- **The test suite takes about 1.5 minutes instead of 9**: `test/run.sh` runs box tests side by
+  side, as many as half your CPUs (at most 8); `-j N` picks the number and `-j 1` runs them one at a
+  time, as before ([#60](https://github.com/diogochaves/omabox/issues/60)).
+
 ### Fixed
+
+- `omabox ls` no longer stops partway through the list when a box goes down while it lists them.
 
 - **The agent guard no longer outlives omabox**: deleting omabox without `omabox guard off` left
   every Claude Code session without a display, and nothing to turn that off with. The guard's hook
