@@ -55,6 +55,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
+  omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys go to the box whenever it has focus
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
@@ -144,7 +145,13 @@ Interactive boxes and peek windows open on workspace 9, without focus: \`omabox 
 click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
 Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
 second close is a yes).
-$PASS_KEY toggles sending SUPER keys to an interactive box.
+$PASS_KEY toggles sending SUPER keys to an interactive box, once:
+until focus leaves it, or a key is pressed with the pointer off it. \`keys-to-box on\` makes them
+follow focus, for the box's lifetime: its window takes focus, SUPER is the box's; focus goes
+elsewhere, it is yours. Then your SUPER binds do nothing while the box has focus: move the pointer
+off it, or press $PASS_KEY (the keys are yours until the box loses focus and gets
+it back). No argument prints on or off. While keys go to a box, its window's border takes the
+theme's red and the bar widget's icon is lit.
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
 \`run -d\` says where the command's output goes (its log) on stderr: -q says nothing (errors still),
@@ -1288,7 +1295,8 @@ cmd_up() {
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
   trap - EXIT
-  [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop)"
+  [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
+    "omabox keys-to-box -b $NAME on: whenever its window has focus)"
   touch "$D/used"
   if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
     setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
@@ -1420,6 +1428,9 @@ cmd__reap() {
   [ "$idle" -gt 0 ] || [ -z "$agent" ] || every=60
   # An interactive box closed by its user goes from the widget and `ls` within a poll or so.
   [ "$mode" != interactive ] || every=2
+  # Its host session, found once (keys_ensure asks it every poll); in a subshell first, as it dies
+  # when it finds none.
+  [ "$mode" != interactive ] || { (host_session) >/dev/null 2>&1 && host_session; } || true
   while sleep "$every"; do
     [ "$(meta created)" = "$created" ] || return 0
     if ! box_alive; then
@@ -1437,6 +1448,9 @@ cmd__reap() {
       say "$(date -Is) box '$NAME': its omabox run ($owner) is gone: taking it down"
       DOWN_IF_CREATED=$created cmd_down "$NAME"; return 0
     fi
+    # The host's passthrough hooks, back after a config reload there (finding 118). A subshell: a host
+    # that does not answer (its session ending) must not end the reaper.
+    [ "$mode" != interactive ] || (keys_ensure) >/dev/null 2>&1 || true
     [ "$idle" -gt 0 ] || [ -n "$agent" ] || continue
     local pid; pid=$(box_pid)
     if peek_pid >/dev/null || pgrep -f "^nsenter -t $pid " >/dev/null; then
@@ -1539,44 +1553,30 @@ sweep_homes() {
   true
 }
 
-# Host side of interactive mode. Runtime-only (hyprctl eval): gone at the next host config reload,
-# never written to the user's config. Adds the "omabox" submap in which only the toggle key is bound,
-# so every other key (SUPER binds included) reaches the focused box. Passthrough ends by itself, so
-# nobody gets stuck with SUPER swallowed: when focus goes to another window, or on the first key
-# pressed while the pointer is off the box (clicking the host bar leaves the box focused, so focus
-# alone does not tell; that first key, usually SUPER, still reaches the box, the rest are the host's).
-# Versioned: a newer omabox replaces the hooks of an older one in a running Hyprland.
+# Host side of interactive mode (share/passthrough.lua: the "omabox" submap, one-shot and keys-to-box,
+# the border and the widget's indicator). Runtime-only (hyprctl eval): gone at the next host config
+# reload, never written to the user's config; keys_ensure puts it back. The theme's colours are read
+# at each install: a theme change reloads the config, so it is installed again with the new ones.
+PASS_VERSION=3   # passthrough.lua's VERSION
 install_passthrough() {
-  host_eval "if (omabox_pass_version or 0) < 2 then
-    for _, sub in ipairs(omabox_pass_subs or {}) do sub:remove() end
-    if not omabox_passthrough then
-      omabox_passthrough = true
-      hl.define_submap('omabox', function()
-        hl.bind('$PASS_KEY', hl.dsp.submap('reset'), { description = 'omabox: stop passing keys to the box' })
-      end)
-      hl.bind('$PASS_KEY', hl.dsp.submap('omabox'), { description = 'omabox: pass keys to the box' })
-    end
-    omabox_pass_version = 2
-    local function over_box()
-      local c = hl.get_cursor_pos()
-      if not c then return false end
-      for _, w in ipairs(hl.get_windows({ class = 'aquamarine' })) do
-        local a, s = w.at, w.size
-        if w.mapped and not w.hidden and w.workspace and w.workspace.visible
-          and c.x >= a.x and c.x < a.x + s.x and c.y >= a.y and c.y < a.y + s.y then return true end
-      end
-      return false
-    end
-    local function leave()
-      if hl.get_current_submap() == 'omabox' then hl.dispatch(hl.dsp.submap('reset')) end
-    end
-    omabox_pass_subs = {
-      hl.on('window.active', function(w) if not (w and w.class == 'aquamarine') then leave() end end),
-      hl.on('input.keyboard.key', function(_, _, state)
-        if state == 1 and hl.get_current_submap() == 'omabox' and not over_box() then leave() end
-      end),
-    }
-  end"
+  local colors=$HOME/.local/state/omarchy/current/theme/colors.toml
+  [ -f "$colors" ] || colors=$HOME/.config/omarchy/current/theme/colors.toml
+  host_eval "(function(...)
+$(cat "$ROOT/share/passthrough.lua")
+end)('$(lua_str "$BOXES")', '$PASS_KEY', '$(lua_str "$colors")')"
+}
+
+# After a host config reload (finding 118) the hooks and binds are gone, and a submap entered before
+# stays on with nothing bound in it: no SUPER bind would work, and no toggle key would get out. An
+# interactive box's reaper asks every 2 s whether this version's hooks are there (one Lua comparison)
+# and installs them when they are not. Fails when the host does not answer as expected.
+keys_ensure() {
+  local out; out=$(host_hyprctl eval "if (omabox_pass_version or 0) < $PASS_VERSION then error('omabox-missing', 0) end" 2>&1) || true
+  case $out in
+    ok) ;;
+    "error: omabox-missing") install_passthrough ;;
+    *) return 1 ;;
+  esac
 }
 
 # Lua on the host Hyprland; its errors are ours to report.
@@ -3245,6 +3245,41 @@ cmd_gpu() {
   grep -qv '^engine ' "$tmp/r" || echo "  (no GPU time)"
 }
 
+# keys-to-box (issue #22, finding 117): an interactive box's SUPER keys follow focus. On, the host
+# enters the "omabox" submap whenever this box's window takes focus and leaves it when focus goes
+# anywhere else (share/passthrough.lua). The state is $D/keys-to-box, which the host's Lua reads on
+# each focus change: in the box dir, which the box cannot see (a file in its runtime dir would let the
+# box turn it on), gone with `down`, so it lasts the box's lifetime. Off by default.
+cmd_keys_to_box() {
+  local name="" want=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      on|off) [ -z "$want" ] || die "keys-to-box: on or off, once"; want=$1 ;;
+      -h|--help) usage; return ;;
+      *) die "keys-to-box: on, off, or nothing to see which it is (a box is -b NAME), got $1" ;;
+    esac
+    shift
+  done
+  select_box "$name"; need_box
+  [ "$(meta mode)" = interactive ] ||
+    die "keys-to-box: box '$NAME' is headless: it has no window on your desktop to type into (omabox keys sends it keys)"
+  if [ -z "$want" ]; then
+    if [ -f "$D/keys-to-box" ]; then echo on; else echo off; fi
+    return
+  fi
+  if [ "$want" = on ]; then echo on > "$D/keys-to-box"; else rm -f "$D/keys-to-box"; fi
+  # Installed again if a reload dropped it (keys_ensure would, within 2 s), then applied to the window
+  # focused now: turned on with the box focused, its keys are the box's at once.
+  install_passthrough
+  host_eval "omabox_keys_changed()"
+  if [ "$want" = on ]; then
+    say "box '$NAME': SUPER keys go to it whenever its window has focus ($PASS_KEY: back to your desktop until it loses focus)"
+  else
+    say "box '$NAME': SUPER keys are your desktop's again ($PASS_KEY still passes them to it, once)"
+  fi
+}
+
 # A live, view-only window of a headless box on the user's workspace 9 (or the configured one,
 # finding 70), opened without focus: frames
 # copied out of the box (tools/peek), nothing sent in, so it never disturbs what an agent is doing.
@@ -3734,14 +3769,15 @@ cmd_ls() {
   if [ "${1:-}" = --json ]; then
     for n in $(list_names); do
       select_box "$n"
-      local state=dead peeking=false
+      local state=dead peeking=false keys=false
       box_alive && state=up
       peek_pid >/dev/null && peeking=true
-      jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking \
+      [ ! -f "$D/keys-to-box" ] || keys=true
+      jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys \
         '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
           bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null),
-          hyprland_version: (.hyprland_version // null)} + {state: $state, peeking: $peeking}' "$D/box.json" 2>/dev/null ||
-        jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false}'
+          hyprland_version: (.hyprland_version // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
+        jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
     done | jq -s -c .
     return
   fi
@@ -3758,6 +3794,8 @@ cmd_ls() {
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
+    # keys-to-box (finding 117), when on: SUPER keys follow focus into it.
+    [ ! -f "$D/keys-to-box" ] || echo "  keys-to-box: on (SUPER keys go to it whenever its window has focus)"
   done
 }
 
@@ -4159,7 +4197,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot windows keys click pointer drag wait hyprctl lua log logs events peek restart-shell mode gpu env path down save "
+BOX_CMDS=" up run shot screenshot windows keys keys-to-box click pointer drag wait hyprctl lua log logs events peek restart-shell mode gpu env path down save "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -4194,6 +4232,7 @@ main() {
     shot|screenshot) cmd_shot "$@" ;;
     windows) cmd_windows "$@" ;;
     keys) cmd_keys "$@" ;;
+    keys-to-box) cmd_keys_to_box "$@" ;;
     click) cmd_click "$@" ;;
     pointer) cmd_pointer "$@" ;;
     drag) cmd_drag "$@" ;;

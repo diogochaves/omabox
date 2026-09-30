@@ -2016,6 +2016,72 @@ the designs here were measured in boxes and built for a contained desktop, and n
     of the right soname plus a missing library, a script, `/usr/bin/true`, a non-executable file.
     Not checked: a real patched build (the issue's run was one), and the version warning against a
     real other version (a stubbed `on_box` in `t_unit_hyprland`). `t_unit_hyprland`, `t_hyprland`.
+117. **keys-to-box: SUPER keys that follow focus, and where keys go shown** (2026-09-30, issue #22,
+    from the maintainer: with focus-follows-mouse, moving the pointer across the desktop dropped
+    passthrough, and a SUPER+W meant for a box hit the host and started #24). `omabox keys-to-box [-b
+    NAME] [on|off]` (no argument prints on or off; interactive boxes only, a headless one is refused;
+    `-b` in `BOX_CMDS`; refused to a jailed agent by `broker_check`, like every interactive thing):
+    while on, the host enters the `omabox` submap whenever that box's window takes focus and leaves it
+    when focus goes anywhere else, with no key to press. Off by default, for the box's lifetime: the
+    state is `$D/keys-to-box`, in the box dir (the box cannot see or write it), gone at `down`. `ls`
+    prints `keys-to-box: on` under the box, `ls --json` has `keys_to_box`. The widget has a keyboard
+    button on interactive rows (lit when on) and `f` (h/j/k/l and x are the key catcher's), which run
+    the CLI. The host side moved from an inline string to `share/passthrough.lua` (version 3; it
+    replaces version 2's hooks and unbinds its toggle key, which binding again would have doubled),
+    sent as a function body with the boxes dir, the key and the theme's `colors.toml`. **Which box a
+    window is:** every box window has class and title `aquamarine`; its client pid is the box's outer
+    bwrap (omabox-wlfd connects, then execs it), whose command line binds `<boxes>/NAME/run`, so the
+    Lua reads `/proc/PID/cmdline` on a focus change to an `aquamarine` window and checks
+    `<boxes>/NAME/keys-to-box`. No registry to keep: the pid stays when confirm-close recreates the
+    output (the same connection), and state lives in files, so a reload loses nothing. **Rules:**
+    focus on a keys-to-box box enters (`how = sticky`); focus off every box leaves (both modes);
+    focus from a sticky box to another box leaves, a one-shot one stays box to box as before. In
+    sticky mode finding 29's "a key with the pointer off the box ends it" does not apply: focus
+    decides (so after clicking the host bar, SUPER+1 still goes to the box: the documented catch).
+    SUPER+ALT+ESCAPE in the submap now remembers the focused window: sticky mode stays out until
+    focus leaves that window and comes back; in the default submap it clears that and enters.
+    `keys-to-box on|off` applies at once to the focused window (`omabox_keys_changed()`). **The
+    indicator, both modes:** on `keybinds.submap` (its argument is the submap's name, "" for reset)
+    and each check, the focused box window gets the tag `omabox-keys`, which a window rule of ours
+    colours (`border_color`): a tag change re-applies rules at once, and `getprop active_border_color`
+    shows it. The colour is the theme's `red` from `colors.toml` (the colour Omarchy's `shell.toml`
+    gives the bar's `active` modules, which the widget's `active` icon uses too; the theme's accent is
+    already the normal active border, so it would not stand out), `rgb(ff5555)` when the theme names
+    none. And `<boxes>/.keys` (the runtime dir's omabox folder, not a box's) is renamed into place
+    with the box's name, or an empty line: the widget watches it with a FileView and lights its icon
+    (WidgetButton's `active`, the bar's urgent colour) and says "SUPER keys here" on that row, only for
+    a box `ls` has up (a file left by a Hyprland that went away lights nothing). The file is also read
+    at each list poll: a FileView does not watch a file whose folder was missing when the shell
+    started. Hyprland quirk found on the way: while the focused window closes, `window.active` passes
+    nil but `hl.get_active_window()` still returns the closing window, so the submap stayed on after a
+    sticky box went down; the hook now tells "no window" (false) from "ask Hyprland" (nil). Checked in
+    a stand-in host (finding 26) with two interactive boxes and a foot: focus on the sticky box
+    enters, border red (the stand-in theme's), file names it; foot leaves, border back; SUPER+2
+    switched the box's workspace and not the stand-in's; SUPER+ALT+ESCAPE got the keys back with the
+    box still focused (SUPER+1 then switched the stand-in), and focus away and back entered again; the
+    other box did not enter; one-shot on it lit the indicator and ended on a key with the pointer off
+    it; sticky ignored that key; `off` with the box focused left at once; after a confirm-close keep
+    the new window was still the sticky box; `down` with it focused left no submap on. The widget in a
+    box with a stub CLI: `f` ran `keys-to-box -b NAME on`/`off`, the icon lit from the file (first at
+    a poll, then within a watch). `t_keys_to_box`, `t_unit_keys_to_box`, `t_widget`. Not checked on
+    the real desktop: the border on a real theme, focus-follows-mouse with a real pointer, the widget
+    in the user's bar.
+118. **A host config reload left passthrough on with nothing bound** (2026-09-30, found while doing
+    117). `hyprctl reload` on the stand-in drops every Lua global, hook, `hl.bind` and window rule
+    that `hyprctl eval` added, but keeps the current submap (and tags on windows): with the `omabox`
+    submap on at a reload, it stayed on with nothing defined in it, so no SUPER bind of the host
+    worked and the toggle key did nothing, until something reset it by hand. It was so since finding
+    26 (the host side was "gone at the next config reload"), and Omarchy reloads on every theme change.
+    An interactive box's reaper (every 2 s already) now asks the host whether version 3 is there (one
+    `hyprctl eval` of a comparison that errors on purpose) and sends `passthrough.lua` again when it
+    is not (`keys_ensure`, its host session found once, in a subshell so a host that does not answer
+    never ends the reaper). The install strips the tag from every box window and starts over from
+    what focus says: a submap left on stays on only for a focused box that should have it. The theme's
+    colour is read at each install, so a theme change (a reload) brings the new one. Checked in the
+    stand-in: reload with the sticky box focused, the hooks back within 2 s, one toggle bind in each
+    submap, border and file as before, focus still drives it (`t_keys_to_box`). A box started by an
+    older omabox has an older reaper: its hooks come back at the next `up --interactive` or
+    `keys-to-box`. The brief gap (up to 2 s after a reload) is still there.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
