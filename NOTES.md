@@ -2069,6 +2069,43 @@ the designs here were measured in boxes and built for a contained desktop, and n
     a poll, then within a watch). `t_keys_to_box`, `t_unit_keys_to_box`, `t_widget`. Not checked on
     the real desktop: the border on a real theme, focus-follows-mouse with a real pointer, the widget
     in the user's bar.
+
+    **2026-09-30, issue #55: the pointer decides too** (the maintainer, on the real desktop with 0.3.0:
+    the box alone on its workspace, pointer on the bar, SUPER+1 went to the box: the bar is a layer,
+    so focus never left it; "focus alone decides" was not what a user expects). Sticky mode now needs
+    the box's window focused AND the pointer over it (inside `at`/`size`: the border and gaps are
+    off it); the pointer anywhere else (the bar, an empty part of the workspace, another monitor)
+    leaves the submap with keys-to-box still on, and back over the box enters it again. The catch
+    above is gone. `passthrough.lua` version 4 (`PASS_VERSION` with it, so a running host's version 3
+    is replaced at the next `up --interactive`, `keys-to-box`, or reaper tick of a box this version
+    started). **How:** Hyprland 0.56.2 gives Lua no pointer event (`hl.meta.lua`'s event list has no motion, enter or hover; only
+    `input.keyboard.key`), so two things look at `hl.get_cursor_pos()` against the focused box
+    window: an `hl.timer` every 100 ms, enabled only while a keys-to-box box is focused and not
+    paused by the toggle key (focus on anything else, or the toggle, disables it: no cost otherwise;
+    a tick is the focused window, the cursor and the submap looked up, a dispatch only on a change),
+    which moves the indicator (border, `.keys`) with the pointer; and the key hook, which does the same
+    on every key press. **Ordering, found in a stand-in:** the `input.keyboard.key` hook runs before
+    Hyprland looks the key up in the binds, and a submap change made in it applies to that very key
+    (a hook that reset a submap on the `1` press let SUPER+1 hit the default submap's workspace bind).
+    So the key pressed right after the pointer moved goes where the pointer says, even before the
+    timer has looked: SUPER+1 with the pointer off the box switches the host's workspace on the first
+    press, never eaten by the box. (Finding 29's "that first key still reaches the box" was about
+    modifiers: an unbound key goes to the focused window in any submap, and SUPER alone is unbound.)
+    Timers, like hooks, are gone at a config reload (checked: one stopped firing); a newer version
+    disables an older one's (`omabox_pass_timer`). The toggle key in sticky mode: over the box it
+    gives the keys back until focus leaves and returns, as before, and the pointer leaving and coming
+    back does not undo that; with the pointer off the box it only clears that pause (the pointer
+    decides). Focus moved by keyboard onto the box: Omarchy warps the cursor to the focused window
+    (`cursor.no_warps` off; `hl.dsp.focus` warps it to the window's middle in the stand-in), so the
+    keys are the box's there too. One-shot mode unchanged. Checked in the stand-in (`t_keys_to_box`):
+    the box alone on a stand-in workspace, keys-to-box on, pointer over it: submap, border, file; the
+    pointer on an empty corner (where the bar would be; the stand-in runs `--no-shell`): all three off,
+    the box still focused, keys-to-box still on, SUPER+1 switched the stand-in's workspace on the
+    first press; the pointer back: all on, SUPER+3 went to the box; with the timer disabled by hand,
+    both directions still routed on the first press (the key hook alone); focus starts the timer and
+    focus elsewhere stops it; every older check (one-shot, reload re-install, confirm-close keep, down
+    while focused) as before. Not checked on the real desktop: a real pointer on the real bar and
+    across monitors, and whether 100 ms of indicator lag is noticed.
 118. **A host config reload left passthrough on with nothing bound** (2026-09-30, found while doing
     117). `hyprctl reload` on the stand-in drops every Lua global, hook, `hl.bind` and window rule
     that `hyprctl eval` added, but keeps the current submap (and tags on windows): with the `omabox`

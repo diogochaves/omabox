@@ -55,7 +55,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
-  omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys go to the box whenever it has focus
+  omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
@@ -148,10 +148,10 @@ Closing an interactive box's window ends the box; \`omabox config confirm-close 
 second close is a yes).
 $PASS_KEY toggles sending SUPER keys to an interactive box, once:
 until focus leaves it, or a key is pressed with the pointer off it. \`keys-to-box on\` makes them
-follow focus, for the box's lifetime: its window takes focus, SUPER is the box's; focus goes
-elsewhere, it is yours. Then your SUPER binds do nothing while the box has focus: move the pointer
-off it, or press $PASS_KEY (the keys are yours until the box loses focus and gets
-it back). No argument prints on or off. While keys go to a box, its window's border takes the
+follow focus and the pointer, for the box's lifetime: its window has focus and the pointer is over
+it, SUPER is the box's; focus goes elsewhere or the pointer leaves it (your bar, another monitor),
+it is yours, and the pointer back over it gives it to the box again. $PASS_KEY over the box
+gives the keys back until the box loses focus and gets it again. No argument prints on or off. While keys go to a box, its window's border takes the
 theme's red and the bar widget's icon is lit.
 \`clip\` hands your clipboard's item (text, else an image by its type) to an interactive box, once;
 --from-box hands the box's back. With no -b: the interactive box whose window has focus, else the only
@@ -1314,7 +1314,7 @@ cmd_up() {
   wait_ready "$shell"
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
-    "omabox keys-to-box -b $NAME on: whenever its window has focus)"
+    "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
   touch "$D/used"
   if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
     setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
@@ -1575,7 +1575,7 @@ sweep_homes() {
 # the border and the widget's indicator). Runtime-only (hyprctl eval): gone at the next host config
 # reload, never written to the user's config; keys_ensure puts it back. The theme's colours are read
 # at each install: a theme change reloads the config, so it is installed again with the new ones.
-PASS_VERSION=3   # passthrough.lua's VERSION
+PASS_VERSION=4   # passthrough.lua's VERSION
 install_passthrough() {
   local colors=$HOME/.local/state/omarchy/current/theme/colors.toml
   [ -f "$colors" ] || colors=$HOME/.config/omarchy/current/theme/colors.toml
@@ -3266,9 +3266,9 @@ cmd_gpu() {
   grep -qv '^engine ' "$tmp/r" || echo "  (no GPU time)"
 }
 
-# keys-to-box (issue #22, finding 117): an interactive box's SUPER keys follow focus. On, the host
-# enters the "omabox" submap whenever this box's window takes focus and leaves it when focus goes
-# anywhere else (share/passthrough.lua). The state is $D/keys-to-box, which the host's Lua reads on
+# keys-to-box (issues #22 and #55, finding 117): an interactive box's SUPER keys follow focus and the
+# pointer. On, the host is in the "omabox" submap while this box's window has focus and the pointer is
+# over it, and leaves it when focus goes anywhere else or the pointer leaves it (share/passthrough.lua). The state is $D/keys-to-box, which the host's Lua reads on
 # each focus change: in the box dir, which the box cannot see (a file in its runtime dir would let the
 # box turn it on), gone with `down`, so it lasts the box's lifetime. Off by default.
 cmd_keys_to_box() {
@@ -3295,7 +3295,7 @@ cmd_keys_to_box() {
   install_passthrough
   host_eval "omabox_keys_changed()"
   if [ "$want" = on ]; then
-    say "box '$NAME': SUPER keys go to it whenever its window has focus ($PASS_KEY: back to your desktop until it loses focus)"
+    say "box '$NAME': SUPER keys go to it while its window has focus and the pointer is over it ($PASS_KEY: back to your desktop until it loses focus)"
   else
     say "box '$NAME': SUPER keys are your desktop's again ($PASS_KEY still passes them to it, once)"
   fi
@@ -3978,7 +3978,7 @@ cmd_ls() {
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
     # keys-to-box (finding 117), when on: SUPER keys follow focus into it.
-    [ ! -f "$D/keys-to-box" ] || echo "  keys-to-box: on (SUPER keys go to it whenever its window has focus)"
+    [ ! -f "$D/keys-to-box" ] || echo "  keys-to-box: on (SUPER keys go to it while its window has focus and the pointer)"
   done
 }
 
