@@ -36,7 +36,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell] [--from SAVE]
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      a free name, box-1, box-2, ... (printed)
-  omabox run [-b NAME] [-d [--wait] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
+  omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N]
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
@@ -110,7 +110,10 @@ $PASS_KEY toggles sending SUPER keys to an interactive box.
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
 \`run -d\` says where the command's output goes (its log) on stderr: -q says nothing (errors still),
---print-log prints the log's path on stdout (first, before --wait's line).
+--print-log prints the log's path on stdout (first, before --wait's line). \`run -d --replace\`
+first stops what \`run -d\` started in that box with the same command and arguments (SIGTERM to its
+session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt app in one step. Nothing
+else in the box is touched: an app started some other way stays.
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
 (-b NAME) stays.
@@ -1430,14 +1433,105 @@ host_eval() {
 
 # --- run -----------------------------------------------------------------------------------------
 
+# What `run -d` started, kept for `run -d --replace` (finding 110): $D/jobs/PID, one JSON per job
+# ({pid, start, log, argv}), PID the job's pid in the box. A job is a session (run -d starts it with
+# setsid), so what it forked and left running is part of it. In $D, which only the host writes: a
+# record the box could forge would have the host signal a pid of its choosing.
+
+# The box's live processes (zombies left out) as "HOST_PID BOX_PID BOX_SID START" lines.
+box_procs() {
+  local p ids
+  for p in $(box_pids); do
+    ids=$(awk '/^State:/ {s = $2} /^NSpid:/ {pid = $NF} /^NSsid:/ {sid = $NF} END {print s, pid, sid}' "/proc/$p/status" 2>/dev/null) || continue
+    [[ $ids =~ ^[A-Za-z]\ ([0-9]+)\ ([0-9]+)$ ]] && [ "${ids%% *}" != Z ] || continue
+    echo "$p ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} $(proc_start "$p")"
+  done
+}
+
+# Of box_procs' lines (stdin), job PID's, as "HOST_PID BOX_PID": its session's. START is its leader's
+# start time, - when the leader had exited before the job was recorded: a leader that started at
+# another time (or at all, for -) has the pid after the job ended, and the job has none. The pid is
+# not reused while any process of the session is left. job_procs PID START
+job_procs() {
+  awk -v pid="$1" -v start="$2" '
+    $3 == pid { if ($2 == pid && $4 != start) reused = 1; out = out $1 " " $2 "\n" }
+    END { if (!reused) printf "%s", out }'
+}
+
+# After a launch: the record of job PID (in the box), unless it is gone already. job_record PID LOG ARGV...
+job_record() {
+  local pid=$1 log=$2 procs start; shift 2
+  procs=$(box_procs | awk -v pid="$pid" '$3 == pid') || true
+  [ -n "$procs" ] || return 0
+  start=$(awk -v pid="$pid" '$2 == pid { print $4 }' <<<"$procs")
+  mkdir -p "$D/jobs"
+  jq -nc --arg pid "$pid" --arg start "${start:--}" --arg log "$log" \
+    '{pid: $pid, start: $start, log: $log, argv: $ARGS.positional}' --args -- "$@" > "$D/jobs/$pid" || true
+}
+
+# The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines; a record whose job has
+# ended is removed. job_live FILE...
+job_live() {
+  local f procs pid start; procs=$(box_procs)
+  for f in "$@"; do
+    { read -r pid; read -r start; } < <(jq -r '.pid, .start' "$f" 2>/dev/null) || { rm -f "$f"; continue; }
+    local p; p=$(job_procs "$pid" "$start" <<<"$procs")
+    if [ -n "$p" ]; then echo "$p"; else rm -f "$f"; fi
+  done
+}
+
+# run -d --replace (issue #29): stop the jobs `run -d` started in this box with this command (the same
+# words), never any other process, and wait until they and their windows are gone: SIGTERM to each
+# job's session, SIGKILL to what is left after 5 s. Fails, before anything is started, when one cannot
+# be stopped or a window of it stays. job_replace QUIET ARGV...
+job_replace() {
+  local quiet=$1 want f recs=() procs; shift
+  want=$(jq -nc '$ARGS.positional' --args -- "$@")
+  for f in "$D"/jobs/*; do
+    [ -f "$f" ] && jq -e --argjson a "$want" '.argv == $a' "$f" >/dev/null 2>&1 && recs+=("$f")
+  done
+  procs=""; [ ${#recs[@]} = 0 ] || procs=$(job_live "${recs[@]}")
+  if [ -z "$procs" ]; then
+    [ "$quiet" = 1 ] || say "--replace: no earlier job of this command in box '$NAME'"
+    return 0
+  fi
+  # Its windows, to see them go (Hyprland's pids are the box's).
+  local wins bpids hpids
+  bpids=$(awk '{ print $2 }' <<<"$procs" | jq -sc .)
+  wins=$(on_box hyprctl -j clients | jq -r --argjson p "$bpids" '.[] | select(.pid as $x | any($p[]; . == $x)) | .address') || wins=""
+  local sig=TERM t0 end
+  t0=$(date +%s%3N) end=$((t0 + 5000))
+  mapfile -t hpids < <(awk '{ print $1 }' <<<"$procs")
+  kill -TERM "${hpids[@]}" 2>/dev/null || true
+  while sleep 0.1; procs=$(job_live "${recs[@]}"); [ -n "$procs" ]; do
+    [ "$(date +%s%3N)" -ge $end ] || continue
+    [ $sig = TERM ] || die "--replace: the earlier job still runs after SIGKILL (pids in the box: $(awk '{ print $2 }' <<<"$procs" | xargs)); nothing started"
+    sig=KILL end=$(($(date +%s%3N) + 3000))
+    mapfile -t hpids < <(awk '{ print $1 }' <<<"$procs")
+    kill -KILL "${hpids[@]}" 2>/dev/null || true
+  done
+  # A client's windows go when it does; a window still there after 3 s is not what --replace is for.
+  local still="" n=0
+  if [ -n "$wins" ]; then
+    end=$((SECONDS + 3))
+    while still=$(on_box hyprctl -j clients | jq -r '.[].address' | grep -Fx -f <(printf '%s\n' "$wins") | xargs); [ -n "$still" ]; do
+      [ $SECONDS -lt $end ] || die "--replace: the earlier job ended, but its window $still is still there; nothing started"
+      sleep 0.1
+    done
+    n=$(grep -c . <<<"$wins")
+  fi
+  [ "$quiet" = 1 ] || say "--replace: stopped the earlier job ($n window$([ "$n" = 1 ] || echo s)) in $(ms_s $(($(date +%s%3N) - t0)))$([ $sig = TERM ] || echo "; it ignored SIGTERM for 5 s: killed")"
+}
+
 cmd_run() {
-  local name="" detach=0 up_args=() quiet=0 print_log=0
+  local name="" detach=0 up_args=() quiet=0 print_log=0 replace=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -d|--detach) detach=1 ;;
       -q) quiet=1 ;;
       --print-log) print_log=1 ;;
+      --replace) replace=1 ;;
       --quiet) { [ $# -ge 2 ] && ms_duration "$2" >/dev/null; } || die "run: --quiet takes a duration (--wait's quiet period); -q is the flag that silences run -d"
         settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
       --wait|--start|--timeout|--strict|--json) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
@@ -1461,13 +1555,16 @@ cmd_run() {
   [ $# -gt 0 ] || die "run: nothing to run (omabox run -- CMD ...)"
   settle_opts_check
   [ "$SETTLE_WAIT" = 0 ] || [ $detach = 1 ] || die "run: --wait goes with -d (a command run to its end has nothing to wait for)"
-  [ $((quiet + print_log)) = 0 ] || [ $detach = 1 ] || die "run: -q and --print-log go with -d"
+  [ $((quiet + print_log + replace)) = 0 ] || [ $detach = 1 ] || die "run: -q, --print-log and --replace go with -d"
   select_box "$name"
   if box_alive; then
     [ ${#up_args[@]} -eq 0 ] || say "box '$NAME' is already up: ${up_args[*]} ignored"
     touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
     take_over || need_box   # gone while it waited: says so
     if [ $detach = 1 ]; then
+      # --replace: the earlier job of this command stopped and its windows gone before the screen is
+      # watched (their closing is not what --wait waits for) and before it starts again (finding 110).
+      [ $replace = 0 ] || job_replace "$quiet" "$@"
       local log; log=$D/home/run-$(date +%s%N).log
       # --wait: until what it opens has settled (a first frame within 5 s unless --start says).
       if [ "$SETTLE_WAIT" = 1 ]; then
@@ -1475,9 +1572,15 @@ cmd_run() {
         settle_begin settle --start 5000 "${SETTLE_ARGS[@]}"
         settle_ready "$SETTLE_JSON"
       fi
-      # setsid -f forks and exits, so nsenter exits too and the command is reparented to the box's
-      # PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
-      settle_act box_exec setsid -f "$@" </dev/null >"$log" 2>&1
+      # The job is a session of its own (setsid), started in the background of a shell that says its
+      # pid (in the box) on fd 3 and exits: nsenter exits with it and the job is reparented to the
+      # box's PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
+      # Not `setsid -f`, which forks and never says the pid. A background job of a shell without job
+      # control ignores SIGINT and SIGQUIT: the job gets them back.
+      local jpid
+      # shellcheck disable=SC2016 # $@ and $! belong to the inner bash
+      jpid=$(settle_act box_exec bash -c '(trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "$@" 3>&1 </dev/null >"$log" 2>&1)
+      [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@"
       [ $print_log = 0 ] || echo "$log"
       [ $quiet = 1 ] || say "started in box '$NAME' (log: $log)"
       [ "$SETTLE_WAIT" = 0 ] || { settle_end settle "$SETTLE_JSON" "the command was started"; return; }

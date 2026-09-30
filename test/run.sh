@@ -644,6 +644,9 @@ r ro-bind \$O up $P-other --ro-bind $TMP/lacks
 r net \$O up $P-other --net connected
 r other \$O shot -b $P-host
 r net-in-box \$O run -- sh -c 'curl -s --max-time 3 -o /dev/null https://archlinux.org || echo no-internet'
+r run-d \$O run -d -q --print-log -- sleep 604
+r replace \$O run -d -q --replace -- sleep 604
+r sleeps \$O run -- pgrep -cxf 'sleep 604'
 r down \$O down
 EOF
   out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
@@ -662,6 +665,8 @@ EOF
   check_match "a network the jail lacks is refused" "has no network.* rc=1" "$(sect net)"
   check_match "the user's own box is not the jail's" "not this jail's.* rc=1" "$(sect other)"
   check_match "no internet in its box" "no-internet rc=0" "$(sect net-in-box)"
+  check_match "run -d -q --print-log through the broker: only the log path" "^/[^ ]*/run-[0-9]+\.log rc=0 $" "$(sect run-d)"
+  check_eq "run -d --replace through the broker: one job left" "1 rc=0 " "$(sect sleeps)"
   check_match "down" "box '$P-jail' down rc=0" "$(sect down)"
   check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
   check "the user's box still up" ob shot -b "$P-host" -o "$TMP/host.png"
@@ -689,9 +694,17 @@ t_unit_cli() {
   mkdir -p "$TMP/rt"
   check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
-  # run -d's -q and --print-log (issue #42, finding 109)
+  # run -d's -q, --print-log and --replace (issues #42, #29; findings 109, 110)
   check_match "run -q without -d refused" "go with -d" "$(ob run -b "$P-x" -q -- true 2>&1)"
+  check_match "run --replace without -d refused" "go with -d" "$(ob run -b "$P-x" --replace -- true 2>&1)"
   check_match "run --quiet without a duration: -q named" "-q is the flag" "$(ob run -b "$P-x" -d --quiet -- true 2>&1)"
+  # job_procs: a job's processes are its session's; its pid leading a session that started at another
+  # time (or at all, when the leader had exited before the record) is a reused pid, not the job.
+  local ps=$'100 7 7 500\n101 8 7 510\n102 9 9 520'
+  check_eq "job_procs: the session's processes" $'100 7\n101 8' "$(lib job_procs 7 500 <<<"$ps")"
+  check_eq "job_procs: the leader restarted under the pid: none" "" "$(lib job_procs 7 499 <<<"$ps")"
+  check_eq "job_procs: the leader gone, its session left" "101 8" "$(lib job_procs 7 - <<<$'101 8 7 510')"
+  check_eq "job_procs: - with a leader there: none" "" "$(lib job_procs 7 - <<<"$ps")"
 }
 
 # finding 88: an agent session's default box is its own.
@@ -2491,11 +2504,68 @@ t_wait() {
   check_match "...said" "^unknown: box '$B' went down after" "$(cat "$TMP/wait.out")"
 }
 
+# run -d -q / --print-log (issue #42, finding 109) and run -d --replace (issue #29, finding 110).
+t_replace() {
+  local B=$P-rep out err rc D old new
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$(ob path "$B")
+  out=$(ob run -b "$B" -d -q --print-log --wait -- foot -T R sh -c 'sleep 600' 2>"$TMP/rep.err"); rc=$?
+  check_eq "run -d -q --print-log --wait: settled" 0 "$rc"
+  check_eq "...-q: nothing on stderr" "" "$(cat "$TMP/rep.err")"
+  check_match "...the log path first on stdout, then the wait's line" "^$D/home/run-[0-9]+\.log"$'\n'"satisfied: " "$out"
+  check "...that log exists" test -f "$(head -1 <<<"$out")"
+  old=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "R") | .pid')
+  check "...its job is recorded" test -s "$D/jobs/$old"
+  out=$(ob run -b "$B" -d --replace --wait -- foot -T R sh -c 'sleep 600' 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
+  check_eq "--replace --wait: settled" 0 "$rc"
+  check_match "...said: the earlier job stopped, its window gone" "stopped the earlier job \(1 window\)" "$err"
+  check_match "...and the new one's log" "started in box '$B' \(log: " "$err"
+  new=$(ob windows -b "$B" --json | jq -r '[.[] | select(.title == "R") | .pid] | join(" ")')
+  check "...one window R, a new process ($old -> $new)" test -n "$new" -a "$new" != "$old" -a "${new// /}" = "$new"
+  check_fails "...the old record is gone" test -e "$D/jobs/$old"
+  # The issue's race: the old window still starting when the new launch comes
+  ob run -b "$B" -d -q -- foot -T S sh -c 'sleep 600'
+  ob run -b "$B" -d -q --replace --wait -- foot -T S sh -c 'sleep 600' >/dev/null
+  check_eq "replaced while still starting: one window S" 1 "$(ob windows -b "$B" --json | jq '[.[] | select(.title == "S")] | length')"
+  # A launcher that exits and leaves its app: the app is the job's (its session)
+  ob run -b "$B" -d -q -- sh -c 'foot -T L sh -c "sleep 600" & exit'
+  ob wait -b "$B" window 'title:^L$' >/dev/null
+  old=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | .pid')
+  ob run -b "$B" -d -q --replace --wait -- sh -c 'foot -T L sh -c "sleep 600" & exit' >/dev/null
+  new=$(ob windows -b "$B" --json | jq -r '[.[] | select(.title == "L") | .pid] | join(" ")')
+  check "a launcher's app replaced ($old -> $new)" test -n "$new" -a "$new" != "$old" -a "${new// /}" = "$new"
+  # Only what run -d started: the same command started otherwise is left alone
+  ob run -b "$B" -- setsid -f sleep 601
+  ob run -b "$B" -d -q -- sleep 601
+  ob run -b "$B" -d -q --replace -- sleep 601
+  check_eq "...one sleep 601 not run -d's, one new: both there" 2 "$(ob run -b "$B" -- pgrep -cxf 'sleep 601')"
+  # Nothing to replace: said; a job that ended: its record dropped
+  err=$(ob run -b "$B" -d --replace -- sleep 602 2>&1 >/dev/null)
+  check_match "no earlier job: said" "no earlier job of this command" "$err"
+  ob run -b "$B" -d -q -- sh -c 'sleep 0.3'; sleep 0.6
+  old=$(grep -l '"sleep 0.3"' "$D"/jobs/*)
+  err=$(ob run -b "$B" -d --replace -- sh -c 'sleep 0.3' 2>&1 >/dev/null)
+  check_match "a job that exited: nothing to replace" "no earlier job of this command" "$err"
+  check "...its record dropped (${old##*/})" test -n "$old" -a ! -e "$old"
+  # A job that ignores SIGTERM: killed after 5 s
+  ob run -b "$B" -d -q -- sh -c 'trap "" TERM; sleep 603'
+  local t0=$SECONDS
+  err=$(ob run -b "$B" -d --replace -- sh -c 'trap "" TERM; sleep 603' 2>&1 >/dev/null); rc=$?
+  check_eq "SIGTERM ignored: replaced all the same" 0 "$rc"
+  check_match "...killed, said" "ignored SIGTERM for 5 s: killed" "$err"
+  check "...after about 5 s ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -ge 4 -a $((SECONDS - t0)) -le 9
+  check_eq "...one sleep 603 left" 1 "$(ob run -b "$B" -- pgrep -cxf 'sleep 603')"
+  # A missing command still says so in its log
+  out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
+  check "a missing command: said in its log" until_ok 5 grep -q 'setsid: failed to execute omabox-no-such-command' "$out"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
-BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_main t_window t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid t_jail)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

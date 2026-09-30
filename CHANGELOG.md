@@ -25,6 +25,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#30](https://github.com/diogochaves/omabox/issues/30)).
 - **`shot --window SEL -g "X,Y WxH"`** crops a window in its own coordinates
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
+- **`run -d --replace -- CMD`** restarts an app after a rebuild in one step: it stops what `run -d`
+  started in the box with the same command (SIGKILL if it ignores SIGTERM for 5 s), waits until its
+  windows are gone, then starts it again. Nothing else in the box is touched
+  ([#29](https://github.com/diogochaves/omabox/issues/29)).
 - **`run -d -q`** drops the "started in box" line, and **`run -d --print-log`** prints only the
   log's path, on stdout, for scripts ([#42](https://github.com/diogochaves/omabox/issues/42)).
 

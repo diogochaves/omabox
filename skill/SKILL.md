@@ -56,6 +56,7 @@ pass `-b NAME` (see `omabox ls`).
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
 omabox up --new                            # or one of your own: prints box-N, then -b box-N on each call
 omabox run -d --wait -- ./build/src/myapp  # launch, detached (log path printed); returns once drawn
+omabox run -d --replace --wait -- ./myapp  # after a rebuild: stops the one run -d started, then as above
 omabox shot                                # prints a PNG path: Read it to look
 omabox windows                             # address, workspace, on screen or covered
 omabox shot --window myapp                 # one window's own pixels, even covered or elsewhere
@@ -104,6 +105,7 @@ shots show the pointer (hover evidence: a `-g` crop of the screen); window shots
 |---|---|
 | "could not connect to display", `omabox-guard` | The agent guard: do it in a box (below). |
 | Your own shell tool died after `pkill -f PATTERN` | The pattern matched its command line: kill by PID, or `omabox run -- pkill -x NAME`. |
+| After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |

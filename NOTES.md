@@ -1760,14 +1760,43 @@ the designs here were measured in boxes and built for a contained desktop, and n
     runs); `t_main`.
 109. **`run -d -q` and `--print-log`** (2026-09-30, issue #42, from an agent session that started a
     dozen windows and filtered `grep -v '^omabox: started'` in almost every command; omaseed's
-    `scripts/dev/app-box.sh` parsed `(log: PATH)` out of stderr). `-q` drops `run -d`'s "started"
-    line; errors and `--wait`'s answer stay. `--print-log` prints the log's path on stdout, the first
-    line (before `--wait`'s), so a script takes it without parsing a message; the stderr line is
-    worded as before. The long `--quiet` stays `--wait`'s quiet period (a duration): `run --quiet`
-    without one says to use `-q`. No `OMABOX_QUIET`: a variable set once in a profile would also hide
-    the log path from an agent that needs it, and a script can pass `-q`. No `--log FILE` either: from
-    ai-jail the broker writes no path of the caller's (finding 99), and `--print-log` covers the
-    script. Both go with `-d` only (refused otherwise). `t_unit_cli`.
+    `scripts/dev/app-box.sh` parsed `(log: PATH)` out of stderr). `-q` drops `run -d`'s own lines
+    (started, `--replace`'s); errors and `--wait`'s answer stay. `--print-log` prints the log's path
+    on stdout, the first line (before `--wait`'s), so a script takes it without parsing a message;
+    the stderr line is worded as before. The long `--quiet` stays `--wait`'s quiet period (a
+    duration): `run --quiet` without one says to use `-q`. No `OMABOX_QUIET`: a variable set once in
+    a profile would also hide the log path from an agent that needs it, and a script can pass `-q`.
+    No `--log FILE` either: from ai-jail the broker writes no path of the caller's (finding 99), and
+    `--print-log` covers the script. All three go with `-d` only (refused otherwise). `t_unit_cli`,
+    `t_replace`, `t_jail` (through the broker).
+110. **`run -d --replace`: jobs are recorded** (2026-09-30, issue #29; agents restarting omaseed
+    after a rebuild did kill, `run -d`, wait ~10 times a session, and once the old window was still
+    starting, so the single-instance app only raised it and the agent looked at the old build).
+    `run -d` no longer launches with `setsid -f` (it forks and never says the pid): a shell in the
+    box starts `setsid -- CMD` in the background (`trap - INT QUIT` first: a background job of a
+    shell without job control ignores them, and the job would too), prints its pid on fd 3 and
+    exits, so nsenter still exits at once (finding 39; checked: no host `nsenter` left, the job's
+    parent is the box's PID 1). `setsid` runs in a process that leads no group, so it does not fork:
+    the pid printed is the job's, and a missing command still logs `setsid: failed to execute`.
+    The record is `$D/jobs/PID` (its pid in the box, its leader's start time, the log, argv), in the
+    box dir, which only the host writes (a record the box could forge would have the host signal
+    any pid). A job is its session: a launcher that forks the app and exits leaves the app in the
+    session (`NSsid` in `/proc/PID/status`, read over `box_pids`), and the app is the job's. A pid is
+    not reused while any process of its session is left; after that, a leader with that pid and
+    another start time is not the job. `--replace` takes the records whose argv is the same, word for
+    word, and finds their windows (Hyprland's pids are the box's), sends SIGTERM to every process of
+    the sessions, SIGKILL to what is left after 5 s, waits until the processes and those windows are
+    gone, drops the records, and only then watches the screen for `--wait` and launches. It fails,
+    starting nothing, when a job survives SIGKILL or a window stays. Nothing else is signalled: an
+    app started another way, or one that `setsid`s itself out of the session (a terminal's shell goes
+    with its terminal's pty all the same), or a single-instance app's first instance that the job
+    only handed its arguments to. `--replace` needs a box that is up, as any `run -d` does: with no
+    box, nothing to replace. Two `--replace` of one command at the same moment can both start it
+    (no lock). Checked in a box: foot replaced (one window, a new pid), replaced while still
+    starting (one window), a launcher's app replaced, a `sleep` started by a foreground `run` left
+    alone, a job that exited (nothing to replace, its record dropped), one ignoring SIGTERM killed
+    after 5.2 s, the job's SigIgn without INT/QUIT; `t_replace`, `t_unit_cli` (`job_procs`),
+    `t_jail` (through the broker).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
