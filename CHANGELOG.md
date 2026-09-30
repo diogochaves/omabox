@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **SUPER keys that follow focus into an interactive box**: `omabox keys-to-box -b NAME on` (or the
+  keyboard button, or `f`, in the widget) sends SUPER keys to the box whenever its window has focus,
+  and gives them back to your desktop when focus goes elsewhere, with no key to press. Per box, off
+  by default, until the box goes down; SUPER+ALT+ESCAPE still passes them once, and in this mode is
+  the way out until the box loses focus. While keys go to a box, its window's border turns the
+  theme's red and the widget's icon lights up. `ls` shows the mode. A config reload of your Hyprland
+  no longer leaves passthrough stuck on with nothing bound: the box puts it back within 2 s
+  ([#22](https://github.com/diogochaves/omabox/issues/22)).
 - **Agents inside [ai-jail](https://github.com/akitaonrails/ai-jail) drive boxes of their own**:
   `omabox broker on` (a systemd user socket) prints the lines to add to `~/.ai-jail`, and `omabox`
   in the jail then works as outside. A jail's boxes get no more than the jail: no network when it

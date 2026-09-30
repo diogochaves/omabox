@@ -731,7 +731,7 @@ t_unit_jail_policy() {
   check_eq "the default box is the one the caller's omabox sent" mine "$(OMABOX_JAIL=$J OMABOX_RELAY_DEFAULT=mine lib default_name)"
   check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_JAIL=$J OMABOX_RELAY_PASS_X=s3 X=host lib caller_env X)"
   local c
-  for c in host peek guard broker _reap "config workspace 3" "save s" saves "saves rm s"; do
+  for c in host peek keys-to-box guard broker _reap "config workspace 3" "save s" saves "saves rm s"; do
     # shellcheck disable=SC2086 # the command and its arguments
     check_match "refused to a jailed agent: $c" "not for an agent inside ai-jail|does not change" "$(lib broker_check $c 2>&1)"
   done
@@ -946,6 +946,27 @@ t_unit_clip() {
   check_fails "clip_pick: an image type that is not a tame name" lib clip_pick $'image/png;x=\e[31m\nimage/../x'
   check_eq "clip_types: a box's type list, tame and short" "image/png;x=31m text/html " "$(lib clip_types $'image/png;x=\e[31m\ntext/html')"
   check_eq "clip_size" "1 byte|12 bytes|1.5 KiB|64.0 MiB" "$(lib clip_size 1)|$(lib clip_size 12)|$(lib clip_size 1536)|$(lib clip_size $((64 << 20)))"
+}
+
+# keys-to-box (issue #22, finding 117): its arguments, its state in ls, and the host's Lua.
+t_unit_keys_to_box() {
+  check_match "keys-to-box: a box that is not up" "no box '$P-x' is up" "$(ob keys-to-box -b "$P-x" 2>&1)"
+  check_match "...-b before the command reaches it" "no box '$P-x' is up" "$(ob -b "$P-x" keys-to-box on 2>&1)"
+  check_match "...anything but on or off refused" "on, off, or nothing" "$(ob keys-to-box -b "$P-x" yes 2>&1)"
+  check_match "...on and off at once refused" "on or off, once" "$(ob keys-to-box -b "$P-x" on off 2>&1)"
+  # ls shows it from the box dir's file: a dead box in a runtime dir of our own.
+  local rt=$TMP/rt-keys d; d=$rt/omabox/$P-k; mkdir -p "$d"
+  echo '{"mode":"interactive","size":"window","created":"2026-09-30T12:00:00Z","plugins":[]}' > "$d/box.json"
+  echo '{}' > "$d/info.json"
+  check_eq "ls --json: keys_to_box off by default" false "$(XDG_RUNTIME_DIR=$rt "$CLI" ls --json | jq -r '.[0].keys_to_box')"
+  check_fails "...and ls says nothing" grep -q keys-to-box <<<"$(XDG_RUNTIME_DIR=$rt "$CLI" ls)"
+  echo on > "$d/keys-to-box"
+  check_eq "...on while its file is there" true "$(XDG_RUNTIME_DIR=$rt "$CLI" ls --json | jq -r '.[0].keys_to_box')"
+  check_match "...and ls says so under the box" "^  keys-to-box: on" "$(XDG_RUNTIME_DIR=$rt "$CLI" ls | sed -n 3p)"
+  if command -v luac >/dev/null; then check "passthrough.lua compiles" luac -p "$ROOT/share/passthrough.lua"
+  else skip "passthrough.lua compiles" "no luac"; fi
+  check_eq "PASS_VERSION is passthrough.lua's VERSION" "$(sed -n 's/^local VERSION = \([0-9]*\)$/\1/p' "$ROOT/share/passthrough.lua")" \
+    "$(sed -n 's/^PASS_VERSION=\([0-9]*\) .*/\1/p' "$CLI")"
 }
 
 # finding 88: an agent session's default box is its own.
@@ -2281,6 +2302,33 @@ t_widget() {
   ob keys -b "$B" Down v c >/dev/null
   check "...neither on a headless box's" holds 1 bash -c "! grep -q 'clip -b hb' '$H/actions'"
   ob keys -b "$B" Escape >/dev/null
+  # keys-to-box (finding 117): f turns it on or off for the selected interactive box; the icon is lit
+  # while the host's Lua names a box in $XDG_RUNTIME_DIR/omabox/.keys (renamed into place, as it does).
+  local irow='{"mode":"interactive","size":"window","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"host","state":"up","peeking":false}'
+  jq -n "[$irow + {name: \"i\", keys_to_box: false}, $irow + {name: \"j\", keys_to_box: true}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down f >/dev/null
+  check "f turns keys-to-box on for an interactive box" until_ok 3 grep -qx "keys-to-box -b i on" "$H/actions"
+  ob keys -b "$B" Down f >/dev/null
+  check "...and off for one that has it" until_ok 3 grep -qx "keys-to-box -b j off" "$H/actions"
+  ob keys -b "$B" Escape >/dev/null
+  # The bar's right side (the widget's section) as it is now, the same as FILE or not.
+  # shellcheck disable=SC2329 # called through until_ok
+  bar_is() { ob shot -b "$B" -g "1420,0 500x30" -o "$TMP/keys-now.png" >/dev/null 2>&1 && if [ "$1" = same ]; then cmp -s "$2" "$TMP/keys-now.png"; else ! cmp -s "$2" "$TMP/keys-now.png"; fi; }
+  local run; run=$(ob path "$B")/run
+  # No omabox dir when the shell started: the file is not watched then, and each poll reads it.
+  mkdir -p "$run/omabox"
+  ob wait -b "$B" still >/dev/null 2>&1
+  ob shot -b "$B" -g "1420,0 500x30" -o "$TMP/keys-off.png" >/dev/null 2>&1
+  echo i > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "the icon is lit while keys go to a box (read at a poll)" until_ok 8 bar_is other "$TMP/keys-off.png"
+  cp "$TMP/keys-now.png" "$TMP/keys-on.png"
+  echo > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...and not once they are the desktop's again (watched)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
+  echo i > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...lit again at once (the file watched)" until_ok 1.5 bar_is same "$TMP/keys-on.png"
+  echo gone > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...not for a box that is not up (a file a Hyprland left)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
   mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
   check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
   ob down "$B" >/dev/null
@@ -2692,6 +2740,110 @@ t_clip() {
   check_match "...through omabox host" "not for agents" "$("${in[@]}" "${GUARDED[@]}" CLAUDECODE=1 "$CLI" host -- "$CLI" clip -b ib 2>&1)"
   check_eq "...and the box's clipboard got nothing" "" "$("${inb[@]}" wl-paste -n 2>/dev/null)"
   "${in[@]}" "$CLI" down --all >/dev/null 2>&1
+  ob down "$B" >/dev/null
+}
+
+# keys-to-box and the passthrough indicator (issue #22, finding 117), in a stand-in host (finding 26):
+# its Hyprland runs the host side (share/passthrough.lua), two interactive boxes are windows in it, and
+# the stand-in's own keyboard presses the keys. Nothing reaches the real desktop.
+t_keys_to_box() {
+  local B=$P-kb
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  local in=("$CLI" run -b "$B" -- "$CLI")
+  check_match "keys-to-box refuses a headless box" "is headless" "$(ob keys-to-box -b "$B" on 2>&1)"
+  if ! "${in[@]}" up ka --interactive --no-shell >/dev/null 2>&1 || ! "${in[@]}" up kb --interactive --no-shell >/dev/null 2>&1; then
+    no "up --interactive twice in the stand-in" "failed"; ob down "$B" >/dev/null; return
+  fi
+  ob run -b "$B" -d -q -- foot
+  # shellcheck disable=SC2329 # called through until_ok
+  has_foot() { ob hyprctl -b "$B" -j clients | jq -e 'any(.class == "foot")' >/dev/null; }
+  until_ok 10 has_foot
+  # Each box's window by its client's pid: the box's outer bwrap, whose command line binds its run dir
+  # (the first such bwrap; the one it forks has the same command line).
+  local pa pb
+  pa=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/$1/run " && { echo "$p"; break; }; done' _ ka)
+  pb=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/$1/run " && { echo "$p"; break; }; done' _ kb)
+  check_eq "...each box's window found by its pid" "aquamarine aquamarine" \
+    "$(ob hyprctl -b "$B" -j clients | jq -r --argjson a "${pa:-0}" --argjson b "${pb:-0}" '[.[] | select(.pid == $a or .pid == $b) | .class] | join(" ")')"
+  # shellcheck disable=SC2329 # called through check
+  focus() { ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = '$1' })" >/dev/null; }
+  # The stand-in's state: submap|focused class|border (our tag on it)|the box .keys names.
+  # shellcheck disable=SC2329
+  kstate() {
+    printf '%s|%s' "$(ob lua -b "$B" 'local w = hl.get_active_window()
+      local t = w and table.concat(w.tags, ",") or ""
+      return hl.get_current_submap() .. "|" .. (w and w.class or "none") .. "|" .. (t:find("omabox%-keys") and "border" or "plain")')" \
+      "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox/.keys" 2>/dev/null')"
+  }
+  # shellcheck disable=SC2329
+  kis() { local s; s=$(kstate); [ "$s" = "$1" ] || { echo "$s"; return 1; }; }
+  # shellcheck disable=SC2329
+  kre() { local s; s=$(kstate); [[ $s =~ $1 ]] || { echo "$s"; return 1; }; }
+  # shellcheck disable=SC2329
+  box_ws() { [ "$("${in[@]}" hyprctl -b "$1" -j activeworkspace | jq -r .name)" = "$2" ]; }
+  # shellcheck disable=SC2329
+  host_ws() { [ "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)" = "$1" ]; }
+  local red; red=$(sed -n 's/^red *= *"#\([0-9a-fA-F]\{6\}\)".*/\1/p' "$(ob path "$B")/home/.local/state/omarchy/current/theme/colors.toml" | tr 'A-F' 'a-f')
+  red=ff${red:-ff5555}
+  check_eq "keys-to-box is off by default" off "$("${in[@]}" keys-to-box -b ka)"
+  check "keys-to-box -b ka on" "${in[@]}" keys-to-box -b ka on
+  check_eq "...ls --json says so, for that box only" "ka:true kb:false" \
+    "$("${in[@]}" ls --json | jq -r '[.[] | "\(.name):\(.keys_to_box)"] | join(" ")')"
+  focus "pid:$pa"
+  check "focusing its window enters the submap, border and widget file on" until_ok 5 kis "omabox|aquamarine|border|ka"
+  check_eq "...its border the theme's red" "$red 0deg" "$(ob hyprctl -b "$B" getprop "pid:$pa" active_border_color)"
+  focus class:foot
+  check "focus elsewhere leaves it, border and file back" until_ok 5 kis "|foot|plain|"
+  check_fails "...its border no longer red" grep -q "^$red" <<<"$(ob hyprctl -b "$B" getprop "pid:$pa" active_border_color)"
+  focus "pid:$pa"
+  check "...focused again: the submap again" until_ok 5 kis "omabox|aquamarine|border|ka"
+  ob keys -b "$B" super+2 >/dev/null
+  check "SUPER+2 goes to the box" until_ok 5 box_ws ka 2
+  check_eq "...not to the host" 9 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)"
+  ob keys -b "$B" super+alt+Escape >/dev/null
+  check "SUPER+ALT+ESCAPE gets the keys back, the box still focused" until_ok 5 kis "|aquamarine|plain|"
+  ob keys -b "$B" super+1 >/dev/null
+  check "...SUPER+1 is the host's then" until_ok 5 host_ws 1
+  focus "pid:$pa"
+  check "...until the box loses focus and gets it back" until_ok 5 kis "omabox|aquamarine|border|ka"
+  focus "pid:$pb"
+  check "a box without keys-to-box: focus does not enter it" until_ok 5 kis "|aquamarine|plain|"
+  # One-shot, as before, with the indicator too.
+  ob keys -b "$B" super+alt+Escape >/dev/null
+  check "one-shot (SUPER+ALT+ESCAPE on kb): submap, border and file" until_ok 5 kis "omabox|aquamarine|border|kb"
+  ob pointer -b "$B" -- move 2 2 >/dev/null   # the stand-in's corner: off every box window
+  ob keys -b "$B" a >/dev/null
+  check "...a key with the pointer off the box ends it (finding 29)" until_ok 5 kis "|aquamarine|plain|"
+  focus "pid:$pa"
+  until_ok 5 kis "omabox|aquamarine|border|ka" >/dev/null
+  ob pointer -b "$B" -- move 2 2 >/dev/null
+  ob keys -b "$B" a >/dev/null
+  check "keys-to-box: focus decides, not that rule" holds 1 kis "omabox|aquamarine|border|ka"
+  # A config reload drops the hooks, the binds and the rule; the box's reaper puts them back.
+  ob hyprctl -b "$B" reload >/dev/null
+  # shellcheck disable=SC2329
+  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 3 ]; }
+  check "after a host reload the hooks come back (the reaper)" until_ok 6 reinstalled
+  check "...with the submap, border and file as focus says" until_ok 3 kis "omabox|aquamarine|border|ka"
+  check_eq "...one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
+    jq -r '[.[] | select(.description | startswith("omabox:"))] | group_by(.submap) | map("\(.[0].submap):\(length)") | reverse | join(" ")')"
+  focus class:foot; focus "pid:$pa"
+  check "...and focus still drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
+  check "keys-to-box off with the box focused: the keys are the host's at once" "${in[@]}" keys-to-box -b ka off
+  check "...submap, border and file off" until_ok 5 kis "|aquamarine|plain|"
+  # issue #24: a confirm-close keep recreates the box's output (a new window, the same client).
+  "${in[@]}" keys-to-box -b ka on >/dev/null 2>&1
+  "${in[@]}" config confirm-close on >/dev/null
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'pid:$pa' })" >/dev/null
+  # shellcheck disable=SC2329
+  reopened() { "${in[@]}" path ka >/dev/null && ob run -b "$B" -- test -f "$("${in[@]}" path ka)/run/omabox.reopened"; }
+  check "confirm-close keeps the box, with a new window (issue #24)" until_ok 8 reopened
+  "${in[@]}" config confirm-close off >/dev/null
+  focus class:foot; focus "pid:$pa"
+  check "after a confirm-close keep, its new window is still the keys-to-box box" until_ok 5 kis "omabox|aquamarine|border|ka"
+  "${in[@]}" down ka >/dev/null 2>&1
+  check "down with the box focused: nobody is left in the submap" until_ok 5 kre '^\|[a-z]*\|plain\|$'
+  "${in[@]}" down --all >/dev/null 2>&1
   ob down "$B" >/dev/null
 }
 
@@ -3275,9 +3427,9 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_clip t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
+UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_nvidia t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
-BOX=(t_leak_control t_main t_window t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
