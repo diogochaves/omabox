@@ -81,6 +81,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - A box's bar shows workspace numbers when yours come from a plugin left out of the box: Omarchy's
   go where that plugin was, or after the menu when your bar has none
   ([#21](https://github.com/diogochaves/omabox/issues/21)).
+- **Peeking at the test suite's boxes no longer fails it**: a peek you open from the bar widget (or
+  `omabox peek`) while `test/run.sh` runs is noted as watched by you, and the checks it holds up
+  (a box you watch is not reaped) are skipped, saying why. A peek the suite's own commands open, or
+  one opened any other way, still fails it, and the message now names a peek of yours as a possible
+  cause ([#45](https://github.com/diogochaves/omabox/issues/45)).
+- **A box starts on an NVIDIA GPU just switched to its driver** (from `vfio-pci`, say): its
+  `/dev/nvidiaN` did not exist yet and `up` stopped. omabox now creates it with NVIDIA's
+  `nvidia-modprobe -c N` (no root needed), and says to run that when it cannot.
 
 ## 0.2.1 — 2026-09-29
 

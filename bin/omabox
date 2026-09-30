@@ -689,15 +689,27 @@ render_nodes() {
 render_driver() { basename "$(readlink -f "/sys/class/drm/${1##*/}/device/driver")"; }
 
 # Match the selected render node to NVIDIA's userspace device node. Never expose a DRM card.
+# nvidia_device RENDER [CREATE]: CREATE 0 leaves a missing node missing (see nvidia_node).
 nvidia_device() {
-  local render=$1 slot info minor
-  slot=$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device")")
-  info=/proc/driver/nvidia/gpus/$slot/information
+  nvidia_node "$(basename "$(readlink -f "/sys/class/drm/${1##*/}/device")")" "${2:-1}"
+}
+
+# nvidia_node SLOT [CREATE [PROC DEV]]: the /dev/nvidiaN of the GPU at PCI SLOT (PROC and DEV stand in
+# for /proc/driver/nvidia and /dev in t_unit_nvidia). A GPU switched to the nvidia driver at runtime
+# (from vfio-pci) can lack its node until something creates it (finding 122): NVIDIA's own setuid
+# helper, nvidia-modprobe, does that for an unprivileged user, so it is asked once, unless CREATE is 0.
+nvidia_node() {
+  local slot=$1 create=${2:-1} proc=${3:-/proc/driver/nvidia} dev=${4:-/dev} info minor
+  info=$proc/gpus/$slot/information
   [ -r "$info" ] || die "NVIDIA GPU $slot has no $info"
   minor=$(awk -F: '/^Device Minor:/ {gsub(/[[:space:]]/, "", $2); print $2}' "$info")
-  [[ $minor =~ ^[0-9]+$ ]] && [ -c "/dev/nvidia$minor" ] && [ -c /dev/nvidiactl ] ||
-    die "NVIDIA GPU $slot has no usable /dev/nvidia$minor or /dev/nvidiactl"
-  echo "/dev/nvidia$minor"
+  [[ $minor =~ ^[0-9]+$ ]] || die "NVIDIA GPU $slot: no device minor in $info"
+  if [ "$create" = 1 ] && { [ ! -c "$dev/nvidia$minor" ] || [ ! -c "$dev/nvidiactl" ]; } && command -v nvidia-modprobe >/dev/null; then
+    nvidia-modprobe -c "$minor" >/dev/null 2>&1 || true
+  fi
+  [ -c "$dev/nvidia$minor" ] && [ -c "$dev/nvidiactl" ] ||
+    die "NVIDIA GPU $slot has no usable $dev/nvidia$minor or $dev/nvidiactl: run \`nvidia-modprobe -c $minor\` (NVIDIA's helper, from nvidia-utils; no root needed), then try again"
+  echo "$dev/nvidia$minor"
 }
 
 # Resolve --plugin PATH|ID to "id<TAB>realpath".
@@ -1111,9 +1123,10 @@ cmd_up() {
   render=$(render_node)
   if [ $interactive = 1 ]; then
     mapfile -t renders < <(render_nodes)
-    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it.
+    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it
+    # (so nothing is created for it either).
     for n in "${renders[@]}"; do
-      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 2>/dev/null) || nvidia_devs+=("$dev")
+      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 0 2>/dev/null) || nvidia_devs+=("$dev")
     done
   elif [ "$(render_driver "$render")" = nvidia ]; then
     renders=("$render")
@@ -3290,8 +3303,9 @@ cmd_peek() {
   [[ $output =~ ^[A-Za-z0-9_-]+$ ]] || die "peek: box '$NAME' reports no usable output ($output)"
   # A fresh marks file (finding 85) that only we can read; peek reads what is added to it.
   rm -f "$D/marks"; (umask 077; : > "$D/marks")
+  local marker; marker=$(peek_marker)
   # Launched by the host Hyprland: its exec rules put exactly this window on that workspace, unfocused.
-  host_eval "hl.exec_cmd('$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
+  host_eval "hl.exec_cmd('${marker:+env $marker }$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
   say "peek at box '$NAME' on $(ws_text "$ws") (view only; close it with SUPER+W, or it goes with the box)"
   [ $focus = 1 ] || return 0
   local deadline=$((SECONDS + 5))
@@ -3300,6 +3314,19 @@ cmd_peek() {
     sleep 0.05
   done
   focus_pid "$pid"
+}
+
+# Who asked for a peek window, for its process's environment (finding 121), where the suite's leak
+# detector reads it: a command the suite ran carries OMABOX_SUITE, and a peek it opens is a leak;
+# `omabox peek` run by you (the bar widget, a terminal) marks it OMABOX_PEEK_BY=you, which the suite
+# only notes. Anything else opening a peek (another command, a peek started without this) has neither
+# and fails the suite as before.
+peek_marker() {
+  if [ -n "${OMABOX_SUITE:-}" ]; then
+    [[ $OMABOX_SUITE =~ ^[A-Za-z0-9_-]{1,32}$ ]] && echo "OMABOX_SUITE=$OMABOX_SUITE"
+  elif [ "${MAIN_CMD:-}" = peek ]; then echo OMABOX_PEEK_BY=you
+  fi
+  return 0
 }
 
 # Focus a host window by its pid; Hyprland switches to its workspace.
@@ -4186,6 +4213,7 @@ global_box() {
 main() {
   global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
+  MAIN_CMD=$cmd   # the command asked for, whatever runs it (peek_marker)
   if [ -n "${OMABOX_BROKER_PEER:-}" ]; then broker_init; broker_check "$cmd" "$@"
   elif relay_wanted; then relay_call "$cmd" "$@"; fi
   case $cmd in
