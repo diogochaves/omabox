@@ -1,0 +1,4 @@
+# What a release tarball (release.sh, git archive) leaves out: demo media, the original spike, CI.
+docs/media/ export-ignore
+spike/ export-ignore
+.github/ export-ignore

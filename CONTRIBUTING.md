@@ -48,5 +48,17 @@ Then:
   user-visible ones a line under Unreleased in [CHANGELOG.md](CHANGELOG.md).
 - Say what you verified in a real box and what you only reasoned about.
 
+## Releasing
+
+For the maintainer. After the last pull request of the release is merged and the full suite has passed
+on `main`:
+
+1. One commit, `omabox X.Y.Z`: `VERSION`, `plugin/manifest.json`'s `version` and
+   `plugin/Panel.qml`'s `pluginVersion` all to X.Y.Z; in `CHANGELOG.md`, `## Unreleased` becomes
+   `## X.Y.Z — DATE` with a short summary under it.
+2. `git tag -a vX.Y.Z -m "omabox X.Y.Z"`, then push `main` and the tag.
+3. `gh release create vX.Y.Z --title "omabox X.Y.Z"` with that CHANGELOG section as the notes.
+4. `./release.sh --upload`: attaches `omabox-X.Y.Z.tar.gz` and `SHA256SUMS` to the release.
+
 If you want to work on something bigger, open an issue first so we can talk it over. NOTES.md's
 "Open" list and [UPSTREAM.md](UPSTREAM.md) are good places to start.

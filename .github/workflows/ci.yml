@@ -21,4 +21,4 @@ jobs:
           shellcheck --version
       # Every shell script but spike/ (the original record, superseded by the CLI).
       - name: shellcheck
-        run: shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/* share/guard/*
+        run: shellcheck bin/omabox install.sh release.sh docs/demo.sh test/run.sh share/*.sh share/bin/* share/guard/*

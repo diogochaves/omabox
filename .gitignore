@@ -13,3 +13,6 @@ tools/still/*-protocol.[ch]
 .local/
 tools/relay/omabox-relay
 tools/events/omabox-events
+
+# release.sh output
+dist/
