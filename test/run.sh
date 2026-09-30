@@ -435,6 +435,49 @@ t_unit_seed_copy() {
   check_fails "...with nothing of its target in the box HOME" grep -rqs secret "$s/out"
 }
 
+# The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left
+# with no omarchy.workspaces gets one where a left-out plugin's workspace widget was, else after the
+# menu; never a second one, nor next to a mounted plugin that shows workspaces.
+t_unit_bar_filter() {
+  # shellcheck disable=SC2329 # called below
+  bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
+  local user='{"bar":{"centerAnchor":"x.solari","layout":{"left":[{"id":"omarchy.menu"},{"id":"omarchy.system-update"},{"id":"x.gauge"}],
+    "center":[{"id":"x.indicators"},{"id":"x.solari"},{"id":"njpatel.omapager"}],"right":[{"id":"omarchy.tray"},{"id":"x.clock"}]}}}'
+  check_eq "no workspace widget at all: after the menu, the rest filtered" \
+    '{"left":[{"id":"omarchy.menu"},{"id":"omarchy.workspaces"},{"id":"omarchy.system-update"}],"center":[],"right":[{"id":"omarchy.tray"}]}' \
+    "$(bar '[]' '[]' "$user")"
+  check_eq "...the dropped centre anchor gone" null "$(bar '[]' '[]' "$user" .bar.centerAnchor)"
+  local pager='{"bar":{"layout":{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"x.pager","n":1},"y.pager",{"id":"x.other"}]}}}'
+  check_eq "a left-out plugin's workspace widget: omarchy.workspaces in its place, once" \
+    '{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"omarchy.workspaces"}]}' \
+    "$(bar '[]' '["x.pager","y.pager"]' "$pager")"
+  check_eq "...one given as a bare id too" '["omarchy.clock","omarchy.workspaces"]' \
+    "$(bar '[]' '["y.pager"]' "$pager" '[.bar.layout.center[] | if type == "object" then .id else . end]')"
+  check_eq "a mounted one stays, and no omarchy.workspaces" '{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"x.pager","n":1}]}' \
+    "$(bar '["x.pager"]' '["x.pager"]' "$pager")"
+  check_eq "...nor for one mounted that the user's bar does not have (it is added where its manifest says)" \
+    '{"left":[{"id":"omarchy.menu"},{"id":"omarchy.system-update"}],"center":[],"right":[{"id":"omarchy.tray"}]}' \
+    "$(bar '["z.pager"]' '["z.pager"]' "$user")"
+  check_eq "the user's own omarchy.workspaces: left as it is" '{"right":[{"id":"omarchy.workspaces"}],"center":[]}' \
+    "$(bar '[]' '["x.pager"]' '{"bar":{"layout":{"right":[{"id":"omarchy.workspaces"}],"center":[{"id":"x.pager"}]}}}')"
+  check_eq "no menu: at the start of left" '{"left":[{"id":"omarchy.workspaces"},{"id":"omarchy.clock"}]}' \
+    "$(bar '[]' '[]' '{"bar":{"layout":{"left":[{"id":"omarchy.clock"}]}}}')"
+  check_eq "no left: one made" '{"right":[{"id":"omarchy.tray"}],"left":[{"id":"omarchy.workspaces"}]}' \
+    "$(bar '[]' '[]' '{"bar":{"layout":{"right":[{"id":"omarchy.tray"}]}}}')"
+  check_eq "no layout of the user's (the shell's default has workspaces): none made" null \
+    "$(bar '[]' '[]' '{"bar":{"position":"top"}}')"
+  # Which plugins show workspaces: their manifests, the user's and the mounted ones'.
+  local h=$TMP/pagers; mkdir -p "$h/.config/omarchy/plugins/"{ws,notif,bad,svc} "$h/mnt"
+  echo '{"id":"a.ws","barWidget":{"displayName":"Pills","description":"Workspace pills per monitor"}}' > "$h/.config/omarchy/plugins/ws/manifest.json"
+  echo '{"id":"njpatel.omapager","barWidget":{"displayName":"Notification state","aliases":["notifications","pager"]}}' > "$h/.config/omarchy/plugins/notif/manifest.json"
+  echo '{"id":"x.svc","description":"moves workspaces around","barWidget":null}' > "$h/.config/omarchy/plugins/svc/manifest.json"
+  echo '{not json' > "$h/.config/omarchy/plugins/bad/manifest.json"
+  echo '{"id":"b.mine","barWidget":{"displayName":"Mine","aliases":["workspaces"]}}' > "$h/mnt/manifest.json"
+  check_eq "workspace widgets: by name, description or alias; not a notifications pager, a service or a broken manifest" \
+    '["a.ws","b.mine"]' "$(printf 'b.mine\t%s\n' "$h/mnt" | HOME=$h lib workspace_widgets | jq -c .)"
+  check_eq "...none: an empty list" '[]' "$(HOME=$TMP/nohome lib workspace_widgets < /dev/null | jq -c .)"
+}
+
 # up --new (finding 73): a free box-N name, printed; two at once never get the same one. The names
 # are the user's namespace too (box-1 may be theirs): only the ones printed here are taken down.
 t_new() {
@@ -638,12 +681,19 @@ r pwd \$O run -- sh -c 'pwd; cat README'
 r shot \$O shot
 r shotfile sh -c 'f=\$(ls /tmp/omabox-*.png); head -c 8 "\$f" | od -An -c | tr -d " \n"'
 r shot-o \$O shot -o ./out.png
+r travel-mod \$O click --steps 3 --mod ctrl 960 600
+r pointer-mod \$O pointer --steps 2 --mod shift -- move 900 500 move 960 540 --steps 3
 r relay-o $R call $br/sock -- shot -b $P-jail -o $br/pwned.png
 r host \$O host -- touch $br/pwned
 r ro-bind \$O up $P-other --ro-bind $TMP/lacks
 r net \$O up $P-other --net connected
 r other \$O shot -b $P-host
+r pre-b \$O -b $P-jail windows
+r pre-b-other \$O -b $P-host windows
 r net-in-box \$O run -- sh -c 'curl -s --max-time 3 -o /dev/null https://archlinux.org || echo no-internet'
+r run-d \$O run -d -q --print-log -- sleep 604
+r replace \$O run -d -q --replace -- sleep 604
+r sleeps \$O run -- pgrep -cxf 'sleep 604'
 r down \$O down
 EOF
   out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
@@ -656,12 +706,18 @@ EOF
   check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
   check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
   check "...there, on the host too" test -s "$repo/out.png"
+  check_match "click --steps --mod through the broker (#38, #25)" "^rc=0 $" "$(sect travel-mod)"
+  check_match "...pointer --steps --mod, and move's own --steps" "^rc=0 $" "$(sect pointer-mod)"
   check_match "a path of the broker's never written" "never at a path here rc=1" "$(sect relay-o)"
   check_match "host refused" "not for an agent inside ai-jail rc=1" "$(sect host)"
   check_match "a folder the jail lacks does not go in" "not a folder this jail was given whole.* rc=1" "$(sect ro-bind)"
   check_match "a network the jail lacks is refused" "has no network.* rc=1" "$(sect net)"
   check_match "the user's own box is not the jail's" "not this jail's.* rc=1" "$(sect other)"
+  check_match "-b NAME before the command, through the broker (#36)" "rc=0 $" "$(sect pre-b)"
+  check_match "...the user's box still not the jail's" "not this jail's.* rc=1" "$(sect pre-b-other)"
   check_match "no internet in its box" "no-internet rc=0" "$(sect net-in-box)"
+  check_match "run -d -q --print-log through the broker: only the log path" "^/[^ ]*/run-[0-9]+\.log rc=0 $" "$(sect run-d)"
+  check_eq "run -d --replace through the broker: one job left" "1 rc=0 " "$(sect sleeps)"
   check_match "down" "box '$P-jail' down rc=0" "$(sect down)"
   check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
   check "the user's box still up" ob shot -b "$P-host" -o "$TMP/host.png"
@@ -685,10 +741,37 @@ t_unit_cli() {
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
+  check_eq "...in one line, not the help (#36)" "1 2" "$(ob shoot 2>&1 | wc -l) $(ob shoot >/dev/null 2>&1; echo $?)"
+  # -b NAME before the command (#36): the same as after it.
+  check_eq "-b NAME before the command" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob -b "$P-x" path)"
+  check_eq "...--box NAME too" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob --box "$P-x" path)"
+  check_match "...reaches the command's own -b (windows)" "no box '$P-x' is up" "$(ob -b "$P-x" windows 2>&1)"
+  check_match "...hyprctl, which takes -b only first" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl clients 2>&1)"
+  local c out=""
+  for c in lua log events; do out+="$c: $(ob -b "$P-x" "$c" 2>&1 | head -1)"$'\n'; done
+  check_fails "...lua, log and events too (none unknown)" grep -q 'unknown command' <<<"$out"
+  check_match "...up NAME as well is two names" "up: one box name, got $P-x and $P-y" "$(ob -b "$P-x" up "$P-y" 2>&1)"
+  check_eq "...a command that takes no -b: one line" "omabox: ls takes no -b: it is not about one box" "$(ob -b "$P-x" ls 2>&1)"
+  check_eq "...exit 2" 2 "$(ob -b "$P-x" ls >/dev/null 2>&1; echo $?)"
+  check_eq "...an unknown one: one line" 1 "$(ob -b "$P-x" shoot 2>&1 | wc -l)"
+  check_match "...no command: said" "goes with a command" "$(ob -b "$P-x" 2>&1)"
+  check_match "...help still helps" "omabox up" "$(ob -b "$P-x" help 2>&1)"
+  check_match "...no value: said" "-b needs a value" "$(ob -b 2>&1)"
   # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
   mkdir -p "$TMP/rt"
   check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
+  # run -d's -q, --print-log and --replace (issues #42, #29; findings 109, 110)
+  check_match "run -q without -d refused" "go with -d" "$(ob run -b "$P-x" -q -- true 2>&1)"
+  check_match "run --replace without -d refused" "go with -d" "$(ob run -b "$P-x" --replace -- true 2>&1)"
+  check_match "run --quiet without a duration: -q named" "-q is the flag" "$(ob run -b "$P-x" -d --quiet -- true 2>&1)"
+  # job_procs: a job's processes are its session's; its pid leading a session that started at another
+  # time (or at all, when the leader had exited before the record) is a reused pid, not the job.
+  local ps=$'100 7 7 500\n101 8 7 510\n102 9 9 520'
+  check_eq "job_procs: the session's processes" $'100 7\n101 8' "$(lib job_procs 7 500 <<<"$ps")"
+  check_eq "job_procs: the leader restarted under the pid: none" "" "$(lib job_procs 7 499 <<<"$ps")"
+  check_eq "job_procs: the leader gone, its session left" "101 8" "$(lib job_procs 7 - <<<$'101 8 7 510')"
+  check_eq "job_procs: - with a leader there: none" "" "$(lib job_procs 7 - <<<"$ps")"
 }
 
 # finding 88: an agent session's default box is its own.
@@ -1517,6 +1600,76 @@ t_no_shell() {
   check "down" ob down "$B"
 }
 
+# finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
+t_unit_hyprland() {
+  local d=$TMP/$P-hyp out
+  mkdir -p "$d/fh" "$d/proj/build" "$d/other"
+  printf '#!/bin/sh\nexec /usr/bin/Hyprland "$@"\n' > "$d/wrapper"; chmod +x "$d/wrapper"
+  cp /usr/bin/true "$d/noaq"; cp /usr/bin/true "$d/fh/Hyprland"; : > "$d/plain"
+  check_match "a missing file" "no such file" "$(ob up "$P-h1" --hyprland "$d/nosuch" 2>&1)"
+  check_match "a file that is not executable" "is not executable" "$(ob up "$P-h1" --hyprland "$d/plain" 2>&1)"
+  check_match "a script is not an ELF binary" "is not an ELF binary" "$(ob up "$P-h1" --hyprland "$d/wrapper" 2>&1)"
+  check_match "an ELF with no libaquamarine" "links no libaquamarine" "$(ob up "$P-h1" --hyprland "$d/noaq" 2>&1)"
+  check_match "its folder is refused as --ro-bind's are (here: all of HOME)" "refusing to mount $d/fh \(the binary's folder\).*it contains" \
+    "$(HOME=$d/fh "$CLI" up "$P-h1" --hyprland "$d/fh/Hyprland" 2>&1)"
+  check_match "run takes it for a throwaway (and refuses the same)" "is not an ELF binary" "$(ob run --hyprland "$d/wrapper" -- true 2>&1)"
+  if command -v cc >/dev/null; then
+    # A build against another aquamarine: a stub library with another soname, and a program linking it.
+    echo 'int aq(void) { return 0; }' > "$d/aq.c"; echo 'int aq(void); int main(void) { return aq(); }' > "$d/m.c"
+    mkdir -p "$d/aq99" "$d/aq14" "$d/b99" "$d/b14"
+    local so; so=$(readelf -d "$ROOT/build/prefix/lib/libaquamarine.so" | sed -n 's/.*(SONAME).*\[\(.*\)\]$/\1/p')
+    cc -shared -fPIC -Wl,-soname,libaquamarine.so.99 -o "$d/aq99/libaquamarine.so" "$d/aq.c" &&
+      cc -o "$d/b99/Hyprland" "$d/m.c" -L"$d/aq99" -laquamarine
+    check_match "a build against another libaquamarine soname is refused, saying which" \
+      "links libaquamarine.so.99, but the patched aquamarine a box runs with is $so" "$(ob up "$P-h1" --hyprland "$d/b99/Hyprland" 2>&1)"
+    # The right soname, but a library the box does not have.
+    cc -shared -fPIC -Wl,-soname,"$so" -o "$d/aq14/libaquamarine.so" "$d/aq.c" &&
+      cc -shared -fPIC -Wl,-soname,libomaboxmissing.so.1 -o "$d/aq14/libomaboxmissing.so" "$d/aq.c" &&
+      cc -o "$d/b14/Hyprland" "$d/m.c" -L"$d/aq14" -laquamarine -lomaboxmissing -Wl,--no-as-needed
+    check_match "...and one needing a library the box lacks" "needs libomaboxmissing.so.1, which the box lacks" \
+      "$(ob up "$P-h1" --hyprland "$d/b14/Hyprland" 2>&1)"
+  else
+    skip "builds against another aquamarine are refused" "no C compiler"
+  fi
+  # A jailed agent (finding 99): the binary's folder is one of the jail's, whole, or the binary is in its
+  # project (in the box already). Past that, --size junk stops `up` before anything starts.
+  git -C "$d/proj" init -q
+  cp /usr/bin/true "$d/proj/build/Hyprland"; cp /usr/bin/true "$d/proj/Hyprland"; cp /usr/bin/true "$d/other/Hyprland"
+  local J; J=$(jq -nc --arg p "$d/proj" --arg c "$d/proj" '{id: "1 2", net: false, cwd: $c, roots: [{path: $p, masked: false}]}')
+  check_match "jail: a build outside the jail's folders is refused" "not in this jail's project nor in a folder it was given whole" \
+    "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/other/Hyprland" --size huge 2>&1)"
+  check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/proj/build/Hyprland" --size huge 2>&1)"
+  check_match "jail: one in a folder of its, whole, passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/proj/Hyprland" --size huge 2>&1)"
+  # The jailed caller's omabox sends the path absolute (the broker is not in its directory).
+  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$d/relay"; chmod +x "$d/relay"
+  out=$(cd "$d/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --hyprland build/Hyprland' _ "$TMP/lib/bin/omabox" "$d/relay")
+  check_match "relay: --hyprland goes absolute" "\|up\|--hyprland\|$d/proj/build/Hyprland\|" "$out"
+  # Another version than the installed hyprctl's: a warning (the box's answers stubbed).
+  mkdir -p "$d/box"; echo '{}' > "$d/box/box.json"
+  out=$(bash -c 'source "$1"; D=$2 NAME=x
+    on_box() { if [ "${3:-}" = -j ]; then echo "{\"version\": \"0.0.1\"}"; else echo "Hyprland 0.0.1 built from branch x"; fi; }
+    hypr_version' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1)
+  check_match "another Hyprland version than hyprctl's: a warning" "warning: box 'x' runs Hyprland 0.0.1, but hyprctl and hyprpm are the installed" "$out"
+  check_eq "...and box.json has its version line" "Hyprland 0.0.1 built from branch x" "$(jq -r .hyprland_version "$d/box/box.json")"
+  local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-h[12]$" || true)
+  check_eq "refusals left no box behind" 0 "$left"
+}
+
+# finding 116: a box on a Hyprland build of its own (a copy of the installed one stands in for it).
+t_hyprland() {
+  local B=$P-hyp h=$TMP/$P-hbuild/Hyprland D=$XDG_RUNTIME_DIR/omabox/$P-hyp
+  mkdir -p "${h%/*}"; cp /usr/bin/Hyprland "$h"
+  check "up --hyprland (a copy of the installed one), shell and bar up" ob up "$B" --hyprland "$h"
+  check_eq "the box's Hyprland runs it" "$h" "$(ob run -b "$B" -- sh -c 'readlink /proc/$(pgrep -x Hyprland)/exe')"
+  check_match "ls says so, under its line" "^  Hyprland: $h \(Hyprland [0-9.]+ built from" "$(ob ls | grep -A1 "^$B " | tail -n 1)"
+  check_eq "ls --json has the binary" "$h" "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .hyprland')"
+  check_match "windows says so first" "^box $B runs Hyprland $h \(Hyprland " "$(ob windows -b "$B" | head -n 1)"
+  check "box.log has hyprctl version's first line, from inside" until_ok 10 grep -qF "session.sh: Hyprland $h: Hyprland " "$D/box.log"
+  check "its folder is read-only in the box" bash -c "! '$CLI' run -b '$B' -- touch '${h%/*}/x' 2>/dev/null"
+  check "restart-shell" ob restart-shell -b "$B"
+  check "down" ob down "$B"
+}
+
 # finding 91: no global git identity (a fresh machine) is no reason for `up` to fail.
 t_no_git_identity() {
   local B=$P-nogit
@@ -2165,9 +2318,22 @@ t_guard() {
   # shellcheck disable=SC2329
   is() { [ "$(state "$1")" = "$2" ]; }
   "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
+  # issue #24: a window on 1 and one on 2, 2 shown: the new window must show 2 again, not a new one
+  local cch=("${in[@]}" "$CLI" hyprctl -b cc)
+  # shellcheck disable=SC2329 # called through until_ok
+  ccwins() { "${cch[@]}" -j clients | jq -e --argjson n "$1" 'length == $n' >/dev/null; }
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 1
+  "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 2
   "${cl[@]}" >/dev/null
   check "confirm-close: the box stays after a close" holds 2 is cc up
   check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+  check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
+  check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
+  check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
+    "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
   # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
   check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
   "${cl[@]}" >/dev/null
@@ -2236,6 +2402,15 @@ t_unit_window_select() {
   check_eq "an unmapped window is not a window" 2 "$(lib win_select "$W" 'title:^gone$' >/dev/null 2>&1; echo $?)"
   check_match "a bad regex: exit 2, said" "bad window selector" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
   check_match "...rc 2" "rc=2" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  # wait window (#37): any of several matching windows is an answer, and all are named.
+  check_match "wait window: several match, satisfied, each named" '^yes 4 windows: 0xa foot "A" at 0,0 1000x1000; 0xb foot "B" at 1000,0 900x1000, focused; 0xg .*; 0xd ' "$(lib win_answer present "$W" foot)"
+  check_match "...one: as before" '^yes 0xh org.gnome.Nautilus "Home" at 0,0 800x600$' "$(lib win_answer present "$W" nautilus)"
+  check_eq "...none" no "$(lib win_answer present "$W" nope)"
+  check_eq "--focused: the focused one of several" 'yes 0xb foot "B" at 1000,0 900x1000, focused (1 of 4 matching)' "$(lib win_answer focused "$W" foot)"
+  check_eq "...several, none focused" "no 2 matching, none focused" "$(lib win_answer focused "$W" zenity)"
+  check_eq "...one, not focused" 'no 0xa foot "A" is there' "$(lib win_answer focused "$W" 'title:^A$')"
+  check_eq "--gone: several still there" "no 4 matching" "$(lib win_answer gone "$W" foot)"
+  check_eq "a bad regex: exit 2 (never answerable)" 2 "$(lib win_answer present "$W" 'title:(' >/dev/null 2>&1; echo $?)"
   cov() { jq -r --arg a "$2" '.[] | select(.address == $a) | [.cover[].address] | join(" ")' <<<"$1"; }
   on() { jq -r --arg a "$2" '.[] | select(.address == $a) | .onscreen' <<<"$1"; }
   check_eq "floats cover the tiled window under them, though one is earlier in the list" "0xf 0x2" "$(cov "$W" 0xa)"
@@ -2383,6 +2558,103 @@ t_window() {
   ob down "$B" >/dev/null
 }
 
+# Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before
+# any box is asked.
+t_unit_pointer() {
+  check_eq "steps_to: N moves, the last on the target" "move 3 7 move 6 14 move 10 21" "$(lib eval 'SEQ=(); steps_to 0 0 10 21 3; echo "${SEQ[*]}"')"
+  check_eq "...leftwards and up too" "move 5 5 move 0 0" "$(lib eval 'SEQ=(); steps_to 10 10 0 0 2; echo "${SEQ[*]}"')"
+  check_eq "--mod: names, any case, each once, in order given" "ctrl+shift+super" "$(lib mods_add "" Control,shift+CTRL+win)"
+  check_eq "...added to earlier ones" "alt+ctrl" "$(lib mods_add alt ctrl+alt)"
+  check_match "...not a modifier: refused" "'hyper' is not a modifier" "$(lib mods_add "" ctrl+hyper 2>&1)"
+  check_match "click --steps 0 refused" "--steps is 1-999" "$(ob click -b "$P-x" --steps 0 1 1 2>&1)"
+  check_match "pointer --steps 1000 refused" "--steps is 1-999" "$(ob pointer -b "$P-x" --steps 1000 -- move 1 1 2>&1)"
+  check_match "click --mod junk refused" "not a modifier" "$(ob click -b "$P-x" --mod meta 1 1 2>&1)"
+  check_match "drag --mod junk refused" "not a modifier" "$(ob drag -b "$P-x" --mod ctrl,x 1 1 2 2 2>&1)"
+  check_match "keys -m is omabox's own" "click, drag or pointer --mod" "$(ob keys -b "$P-x" -m ctrl a 2>&1)"
+}
+
+# Travel and modifier clicks in a box (findings 111, 112): two floating terminals side by side on an
+# empty desktop, the pointer resting on the left one (L). A jump past the right one (R) leaves focus
+# on L; travel in steps passes over R, and focus follows the mouse (Omarchy's input:follow_mouse = 1)
+# on the way. R reports what its pointer does (foot's SGR mouse mode 1003: ESC[<CODE;X;YM for a
+# motion, CODE 32 and up, or a press, below that, with ctrl 16 and alt 8 added; a release ends in m;
+# shift is foot's own, never reported).
+t_pointer() {
+  local B=$P-ptr
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  term() { ob run -b "$B" -d -- foot -T "$1" sh -c "$2" >/dev/null; until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.title == \"$1\")'" >/dev/null; }
+  addr() { ob hyprctl -b "$B" -j clients | jq -r --arg t "$1" '.[] | select(.title == $t) | .address'; }
+  place() {   # place TITLE X Y: floating, 500x400 at X,Y
+    local a; a=$(addr "$1")
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.float({ action = 'enable', window = 'address:$a' })" >/dev/null
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.resize({ x = 500, y = 400, window = 'address:$a' })" >/dev/null
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ x = $2, y = $3, window = 'address:$a' })" >/dev/null
+    until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.address == \"$a\") | .at == [$2, $3] and .size == [500, 400]'" >/dev/null
+  }
+  active() { ob hyprctl -b "$B" -j activewindow | jq -r '.title // ""'; }
+  pos() { ob hyprctl -b "$B" cursorpos; }
+  reports() { ob run -b "$B" -- cat /tmp/mouse | grep -ao '<[0-9;]*M' | sed 's/^<\([0-9]*\);.*/\1/'; }   # (M: not releases)
+  motions() { reports | awk '$1 >= 32' | wc -l; }
+  presses() { reports | awk '$1 < 32' | tr '\n' ' '; }
+  term L 'sleep 600'
+  term R 'printf "\033[?1003h\033[?1006h"; stty raw -echo; exec cat > /tmp/mouse'
+  place L 100 300; place R 700 300
+  ob wait -b "$B" still >/dev/null   # the moves are animated: input goes where the windows are drawn
+  check_eq "follow_mouse is on (what travel is for)" 1 "$(ob hyprctl -b "$B" -j getoption input:follow_mouse | jq .int)"
+  ob pointer -b "$B" -- move 350 500 >/dev/null
+  check_eq "resting on L focuses it" L "$(active)"
+  local m0; m0=$(motions)
+  ob pointer -b "$B" -- move 1500 500 >/dev/null
+  check_eq "a jump past R to the empty desktop: the focus stays on L" L "$(active)"
+  check_eq "...and R saw no motion" "$m0" "$(motions)"
+  ob pointer -b "$B" -- move 350 500 >/dev/null
+  ob pointer -b "$B" --steps 20 -- move 1500 500 >/dev/null
+  check_eq "pointer --steps: the way passes over R, which takes the focus" R "$(active)"
+  check "...and R saw the pointer cross it (hover)" test "$(motions)" -gt "$m0"
+  check_eq "...ending on the target" "1500, 500" "$(pos)"
+  ob pointer -b "$B" -- move 350 500 move 350 900 move 1500 900 --steps 10 >/dev/null
+  check_eq "a path around R (move A move B --steps N): the focus stays on L" L "$(active)"
+  ob pointer -b "$B" -- move 350 500 move 1500 500 --steps 20 >/dev/null
+  check_eq "one move's own --steps crosses R" R "$(active)"
+  ob pointer -b "$B" -- move 350 500 >/dev/null
+  ob click -b "$B" --steps 20 1500 500 >/dev/null
+  check_eq "click --steps travels there too" R "$(active)"
+  # Modifiers held across the click (#25).
+  ob click -b "$B" --window R 50 50 >/dev/null
+  ob click -b "$B" --window R 50 50 --mod ctrl >/dev/null
+  ob click -b "$B" --window R 50 50 --mod alt --mod ctrl >/dev/null
+  ob pointer -b "$B" --window R --mod ctrl -- move 60 60 click >/dev/null
+  ob drag -b "$B" --window R 50 50 150 50 --mod ctrl >/dev/null
+  ob click -b "$B" --window R 50 50 --mod super >/dev/null
+  ob click -b "$B" --window R 50 50 >/dev/null
+  check_eq "click, --mod ctrl, alt+ctrl, pointer and drag --mod ctrl, --mod super (Hyprland's move bind: not for the app), then none held" \
+    "0 16 24 16 16 0 " "$(presses)"
+  check_eq "...SUPER+click moved nothing (no motion)" "700 300" "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.title == "R") | "\(.at[0]) \(.at[1])"')"
+  # Never left down: a pause that times out lets go; the tool killed outright leaves them down until
+  # the next keyboard event, which omabox then sends.
+  local out
+  out=$(ob run -b "$B" -- sh -c 'sleep 2 | /opt/omabox/bin/omabox-keyboard -m ctrl -p 300; echo "rc=$?"' 2>&1)
+  check_match "a pause with nothing on stdin times out, letting go" "letting go.*rc=1" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "-p and -T together refused" 2 "$(ob run -b "$B" -- /opt/omabox/bin/omabox-keyboard -m ctrl -p 300 -T </dev/null >/dev/null 2>&1; echo $?)"
+  ob click -b "$B" --window R 50 50 >/dev/null
+  check_match "...after it, a click has no modifier" " 0 $" "$(presses)"
+  tree() { local c; for c in $(pgrep -P "$1"); do echo "$c"; tree "$c"; done; }
+  ob pointer -b "$B" --window R --mod ctrl -- move 50 50 sleep 3000 click >/dev/null 2>"$TMP/ptr.err" & local cp=$! kp="" i
+  for i in $(seq 50); do
+    for kp in $(tree $cp); do [ "$(cat "/proc/$kp/comm" 2>/dev/null)" = omabox-keyboard ] && break; kp=""; done
+    [ -z "$kp" ] || break; sleep 0.2
+  done
+  if [ -n "$kp" ]; then
+    kill -KILL "$kp"
+    wait $cp; check_eq "the keyboard killed mid-click: omabox exits 1" 1 $?
+    check_match "...saying it let go early" "let go of ctrl before the end" "$(cat "$TMP/ptr.err")"
+    check_match "...the click in that run still had ctrl (SIGKILL cannot be caught)" " 16 $" "$(presses)"
+    ob click -b "$B" --window R 50 50 >/dev/null
+    check_match "...and the next click has none: omabox cleared it" " 0 $" "$(presses)"
+  else wait $cp; no "pointer --mod: its keyboard tool found (to kill it)"; fi
+  ob down "$B" >/dev/null
+}
+
 # omabox wait and --wait (finding 82): the pure parts, and the tool's refusal outside a box, checked
 # in a bare namespace with no /opt/omabox and no display (where a broken check could reach nothing).
 t_unit_wait() {
@@ -2469,7 +2741,15 @@ t_wait() {
   local t0=$SECONDS
   check_eq "a window that never comes: 124" 124 "$(ob wait -b "$B" --timeout 1s window 'title:^nope$' >/dev/null; echo $?)"
   check "...at the deadline" test $((SECONDS - t0)) -le 4
-  check_eq "several windows match: exit 2" 2 "$(ob wait -b "$B" window foot >/dev/null 2>&1; echo $?)"
+  # Several windows match (A and R): any is an answer, each named (#37).
+  out=$(ob wait -b "$B" window foot); rc=$?
+  check_eq "several windows match: satisfied (#37)" 0 "$rc"
+  check_match "...each named" '^satisfied: window foot after [0-9.]+s: 2 windows: 0x[0-9a-f]+ foot "[AR]" at .*; 0x[0-9a-f]+ foot "[AR]" at ' "$out"
+  out=$(ob wait -b "$B" window foot --focused --json); rc=$?
+  check_eq "...--focused: the focused one of them" "0 satisfied" "$rc $(jq -r .result <<<"$out")"
+  check_match "...named, with how many match" 'foot "[AR]" .*, focused \(1 of 2 matching\)$' "$(jq -r .detail <<<"$out")"
+  check_eq "...--gone: 124 while they are there" 124 "$(ob wait -b "$B" --timeout 500ms window foot --gone >/dev/null; echo $?)"
+  check_eq "...an action on one window still refuses several: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
   # cmd: a condition inside the box, here one that becomes true a second later
   ob run -b "$B" -d -- sh -c 'sleep 1; touch /tmp/late' >/dev/null 2>&1
   out=$(ob wait -b "$B" cmd -- test -e /tmp/late); rc=$?
@@ -2488,12 +2768,181 @@ t_wait() {
   check_match "...said" "^unknown: box '$B' went down after" "$(cat "$TMP/wait.out")"
 }
 
+# run -d -q / --print-log (issue #42, finding 109) and run -d --replace (issue #29, finding 110).
+t_replace() {
+  local B=$P-rep out err rc D old new
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$(ob path "$B")
+  out=$(ob run -b "$B" -d -q --print-log --wait -- foot -T R sh -c 'sleep 600' 2>"$TMP/rep.err"); rc=$?
+  check_eq "run -d -q --print-log --wait: settled" 0 "$rc"
+  check_eq "...-q: nothing on stderr" "" "$(cat "$TMP/rep.err")"
+  check_match "...the log path first on stdout, then the wait's line" "^$D/home/run-[0-9]+\.log"$'\n'"satisfied: " "$out"
+  check "...that log exists" test -f "$(head -1 <<<"$out")"
+  old=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "R") | .pid')
+  check "...its job is recorded" test -s "$D/jobs/$old"
+  out=$(ob run -b "$B" -d --replace --wait -- foot -T R sh -c 'sleep 600' 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
+  check_eq "--replace --wait: settled" 0 "$rc"
+  check_match "...said: the earlier job stopped, its window gone" "stopped the earlier job \(1 window\)" "$err"
+  check_match "...and the new one's log" "started in box '$B' \(log: " "$err"
+  new=$(ob windows -b "$B" --json | jq -r '[.[] | select(.title == "R") | .pid] | join(" ")')
+  check "...one window R, a new process ($old -> $new)" test -n "$new" -a "$new" != "$old" -a "${new// /}" = "$new"
+  check_fails "...the old record is gone" test -e "$D/jobs/$old"
+  # The issue's race: the old window still starting when the new launch comes
+  ob run -b "$B" -d -q -- foot -T S sh -c 'sleep 600'
+  ob run -b "$B" -d -q --replace --wait -- foot -T S sh -c 'sleep 600' >/dev/null
+  check_eq "replaced while still starting: one window S" 1 "$(ob windows -b "$B" --json | jq '[.[] | select(.title == "S")] | length')"
+  # A launcher that exits and leaves its app: the app is the job's (its session)
+  ob run -b "$B" -d -q -- sh -c 'foot -T L sh -c "sleep 600" & exit'
+  ob wait -b "$B" window 'title:^L$' >/dev/null
+  old=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | .pid')
+  ob run -b "$B" -d -q --replace --wait -- sh -c 'foot -T L sh -c "sleep 600" & exit' >/dev/null
+  new=$(ob windows -b "$B" --json | jq -r '[.[] | select(.title == "L") | .pid] | join(" ")')
+  check "a launcher's app replaced ($old -> $new)" test -n "$new" -a "$new" != "$old" -a "${new// /}" = "$new"
+  # Only what run -d started: the same command started otherwise is left alone
+  ob run -b "$B" -- setsid -f sleep 601
+  ob run -b "$B" -d -q -- sleep 601
+  ob run -b "$B" -d -q --replace -- sleep 601
+  check_eq "...one sleep 601 not run -d's, one new: both there" 2 "$(ob run -b "$B" -- pgrep -cxf 'sleep 601')"
+  # Nothing to replace: said; a job that ended: its record dropped
+  err=$(ob run -b "$B" -d --replace -- sleep 602 2>&1 >/dev/null)
+  check_match "no earlier job: said" "no earlier job of this command" "$err"
+  ob run -b "$B" -d -q -- sh -c 'sleep 0.3'; sleep 0.6
+  old=$(grep -l '"sleep 0.3"' "$D"/jobs/*)
+  err=$(ob run -b "$B" -d --replace -- sh -c 'sleep 0.3' 2>&1 >/dev/null)
+  check_match "a job that exited: nothing to replace" "no earlier job of this command" "$err"
+  check "...its record dropped (${old##*/})" test -n "$old" -a ! -e "$old"
+  # A job that ignores SIGTERM: killed after 5 s
+  ob run -b "$B" -d -q -- sh -c 'trap "" TERM; sleep 603'
+  local t0=$SECONDS
+  err=$(ob run -b "$B" -d --replace -- sh -c 'trap "" TERM; sleep 603' 2>&1 >/dev/null); rc=$?
+  check_eq "SIGTERM ignored: replaced all the same" 0 "$rc"
+  check_match "...killed, said" "ignored SIGTERM for 5 s: killed" "$err"
+  check "...after about 5 s ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -ge 4 -a $((SECONDS - t0)) -le 9
+  check_eq "...one sleep 603 left" 1 "$(ob run -b "$B" -- pgrep -cxf 'sleep 603')"
+  # A missing command still says so in its log
+  out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
+  check "a missing command: said in its log" until_ok 5 grep -q 'setsid: failed to execute omabox-no-such-command' "$out"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# lua, log and events (issues #40, #41, #39): what needs no box.
+t_unit_inspect() {
+  check_match "lua: nothing to evaluate" "nothing to evaluate" "$(ob lua -b "$P-x" ' ' 2>&1)"
+  check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
+  check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
+  check_match "log: an unknown log named, with the ones there are" "no log called nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
+  check_match "log -n takes a number or all" "-n takes a number" "$(ob log -b "$P-x" -n 5x 2>&1)"
+  check_match "log --grep: a bad expression said" "takes a regular expression" "$(ob log -b "$P-x" --grep '(' 2>&1)"
+  check "log is a jailed agent's (its own boxes only: select_box)" lib broker_check log
+  check_eq "events --since OFFSET" "123 0" "$(lib events_since 123)"
+  check_match "events --since 30s: from then on" "^0 [0-9]{13}$" "$(lib events_since 30s)"
+  mkdir -p "$TMP/ev"; printf 'm1 10\nm2 20\nm1 30\n' > "$TMP/ev/events.marks"
+  check_eq "events --since MARK: its latest offset" "30 0" "$(D=$TMP/ev NAME=x lib events_since m1)"
+  check_match "...one there is not, said" "no mark 'm9'" "$(D=$TMP/ev NAME=x lib events_since m9 2>&1)"
+  check_match "events --since junk refused" "takes a mark's name" "$(lib events_since '-x' 2>&1)"
+  check_match "events --mark: a tame name" "starts with a letter" "$(ob events -b "$P-x" --mark '9;x' 2>&1)"
+  check_match "events --mark goes alone" "goes alone" "$(ob events -b "$P-x" --mark m --grep x 2>&1)"
+  check_match "events --until or -f" "not both" "$(ob events -b "$P-x" --until x -f 2>&1)"
+  check_match "events: a bad expression said" "not a regular expression" "$(ob events -b "$P-x" --until '(' 2>&1)"
+  check "events is a jailed agent's (its own boxes only)" lib broker_check events
+  local out rc=0
+  out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp --die-with-parent \
+        env -i "$ROOT/tools/events/omabox-events" /tmp/ev.log 2>&1) || rc=$?
+  check_eq "omabox-events refuses outside a box" 2 "$rc"
+  check_match "...and says so" "only runs inside an omabox box" "$out"
+}
+
+# lua, log and events (issues #40, #41, #39) in a box of their own.
+t_inspect() {
+  local B=$P-insp out rc
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  # lua (finding 106): the value, not hyprctl's "ok".
+  check_eq "lua: an expression's value" 2 "$(ob lua -b "$B" '1 + 1')"
+  check_eq "lua: statements, what they return, one line each" $'3\nb' "$(ob lua -b "$B" 'local a = 3; return a, "b"')"
+  check_eq "lua: a table as JSON" '{"a":[1,2],"b":true}' "$(ob lua -b "$B" '{a = {1, 2}, b = true}')"
+  check_eq "lua: nil" nil "$(ob lua -b "$B" 'nil')"
+  check_eq "lua: a statement returning nothing prints nothing" "" "$(ob lua -b "$B" 'omabox_t = 1')"
+  check_eq "...the global is there for the next call" 1 "$(ob lua -b "$B" 'omabox_t')"
+  check_eq "lua: brackets, quotes and a newline in the source are not quoting" $'x]]\n]=]"\'' "$(ob lua -b "$B" '"x]]\n]=]\"'"'"'"')"
+  check_eq "lua: a source that ends in ]" 5 "$(ob lua -b "$B" '({5})[1]')"
+  check_eq "lua --json: strings quoted" $'"s"\n1' "$(ob lua -b "$B" --json '"s", 1')"
+  check_eq "lua: a NUL survives the trip (JSON)" '"a\u0000b"' "$(ob lua -b "$B" --json '"a\0b"')"
+  check_eq "lua: a Hyprland object's fields (from its stubs)" 1920 "$(ob lua -b "$B" 'hl.get_monitors()[1]' | jq .width)"
+  check_match "...an object inside one is its name" '^"HL\.Workspace' "$(ob lua -b "$B" 'hl.get_monitors()[1]' | jq .active_workspace)"
+  check_eq "lua: the source on stdin" 42 "$(echo 'return 40 + 2' | ob lua -b "$B" -)"
+  out=$(ob lua -b "$B" 'error("boom")' 2>&1); rc=$?
+  check_eq "lua: a Lua error is exit 1" 1 "$rc"
+  check_eq "...with its message" "lua: lua:1: boom" "$out"
+  check_match "lua: a syntax error too" "^lua: lua:1: .*near" "$(ob lua -b "$B" '1 +' 2>&1)"
+  # Calls at once share nothing (no file between them).
+  local i pids=(); for i in 1 2 3 4 5 6; do ob lua -b "$B" "$i * 11" > "$TMP/lua.$i" 2>&1 & pids+=($!); done
+  wait "${pids[@]}"   # (not a bare wait: the suite's host watcher is a job too)
+  check_eq "lua: six calls at once each get their own answer" "11 22 33 44 55 66" "$(cat "$TMP"/lua.[1-6] | paste -sd' ')"
+  # events (finding 108): recorded from the box's start, stamped, marks as byte offsets.
+  local E; E=$(ob path -b "$B")/home/events.log
+  check_match "events: recorded from the start" '^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} omabox>>listening$' "$(ob events -b "$B" | head -1)"
+  check "...each line stamped in the file" bash -c "! grep -qvE '^[0-9]+\.[0-9]{3} [^ ]' '$E'"
+  local m1; m1=$(ob events -b "$B" --mark m1 2>/dev/null)
+  check_match "events --mark prints the offset" '^[0-9]+$' "$m1"
+  ob run -b "$B" -d --wait -- foot -T evt sleep 600 >/dev/null 2>&1
+  check_match "events --since MARK --grep --json" ',evt$' "$(ob events -b "$B" --since m1 --grep '^openwindow>>' --json | jq -r .data)"
+  check_eq "...--since OFFSET is the same" "$(ob events -b "$B" --since m1)" "$(ob events -b "$B" --since "$m1")"
+  check_fails "...nothing from before the mark" bash -c "'$CLI' events -b '$B' --since m1 | grep -q 'omabox>>listening'"
+  ob events -b "$B" --mark m2 >/dev/null 2>&1
+  (sleep 1; ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '4' })" >/dev/null) & local d=$!
+  out=$(ob events -b "$B" --until '^workspace>>4$' --timeout 5s); rc=$?
+  wait $d
+  check_eq "events --until: an event to come, exit 0" 0 "$rc"
+  check_match "...printed" ' workspace>>4$' "$out"
+  check_match "events --since MARK --until: one that came already" ' workspacev2>>4,4$' "$(ob events -b "$B" --since m2 --until '^workspacev2>>' --timeout 1s)"
+  check_eq "events --until none in time: 124" 124 "$(ob events -b "$B" --until '^nothing' --timeout 500ms >/dev/null 2>&1; echo $?)"
+  check_match "events --since 1m" 'workspace>>4' "$(ob events -b "$B" --since 1m)"
+  # Marks taken while events are written fall between lines (each is one append, never padded).
+  ob run -b "$B" -d -- sh -c 'for i in $(seq 40); do hyprctl dispatch "hl.dsp.focus({ workspace = \"$((i % 3 + 1))\" })"; done' >/dev/null 2>&1
+  local marks=() k; for k in 1 2 3 4 5 6 7 8; do marks+=("$(ob events -b "$B" --mark 2>/dev/null)"); done
+  sleep 1
+  check_eq "marks taken during a burst are at line ends" "" "$(for k in "${marks[@]}"; do [ "$k" = 0 ] || [ "$(head -c "$k" "$E" | tail -c 1 | od -An -tx1 | tr -d ' ')" = 0a ] || echo "$k"; done)"
+  check_eq "...and the file has no NUL" "$(wc -c < "$E")" "$(tr -d '\0' < "$E" | wc -c)"
+  "$CLI" events -b "$B" -f > "$TMP/ev.f" 2>&1 & local ef=$!   # ($CLI: $! is omabox itself, not a subshell running ob)
+  sleep 1; kill -TERM $ef; wait $ef 2>/dev/null
+  local bpid; bpid=$(cat "$(ob path -b "$B")/pid")
+  check "events -f stopped: its tail goes too" until_ok 3 bash -c "! pgrep -f '^tail -c [+][0-9]+ -F --pid=$bpid '"
+  check_match "log events: the file as it is" '^[0-9]+\.[0-9]{3} ' "$(ob log -b "$B" events -n 1)"
+  "$CLI" events -b "$B" -f > "$TMP/ev2.f" 2>&1 & ef=$!
+  until_ok 5 pgrep -f "^tail -c [+][0-9]+ -F --pid=$bpid " >/dev/null
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '5' })" >/dev/null
+  # log (finding 107): Hyprland's by default, the others by name, followed until the box goes.
+  check_eq "log: Hyprland's, -n lines" 5 "$(ob log -b "$B" -n 5 | wc -l)"
+  check_match "log --grep" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep 'creating the' -i -n 1)"
+  check_match "path --logs: where each is" "^hyprland +$(ob path -b "$B")/run/hypr/[^/]+/hyprland\.log$" "$(ob path -b "$B" --logs | grep '^hyprland')"
+  ob run -b "$B" -d -- sh -c 'echo omabox-log-1; sleep 1.5; echo omabox-log-2; sleep 600' >/dev/null 2>&1
+  check "log run: the latest run -d's" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-log-1"
+  ob log -b "$B" -f -n all run keyring > "$TMP/log.f" 2>&1 & local lf=$!
+  check "log -f: a line that comes later" until_ok 5 grep -qx omabox-log-2 "$TMP/log.f"
+  check_match "...under the log's name (several followed)" "^==> run <==" "$(head -1 "$TMP/log.f")"
+  # A log the box swapped for a link to a host file: read as the box sees it, or not at all.
+  echo omabox-host-secret > "$TMP/log.secret"
+  ob run -b "$B" -- ln -sf "$TMP/log.secret" /home/sbx/labwc.log
+  check_fails "log: a link out of the box is not followed (box up)" bash -c "'$CLI' log -b '$B' labwc 2>&1 | grep -q omabox-host-secret"
+  local t0=$SECONDS
+  ob run -b "$B" -- pkill -x Hyprland >/dev/null 2>&1
+  wait $lf; rc=$?
+  check_eq "log -f ends when the box goes down: exit 0" 0 "$rc"
+  check "...within seconds, said" test $((SECONDS - t0)) -le 5 -a -n "$(grep "box '$B' went down" "$TMP/log.f")"
+  wait $ef; rc=$?
+  check_eq "events -f too" 0 "$rc"
+  check_match "...having seen the box's events" ' workspace>>5' "$(cat "$TMP/ev2.f")"
+  check_eq "log: a dead box's logs are still read" omabox-log-1 "$(ob log -b "$B" run -n 2 | head -1)"
+  check_fails "...a link out of it is not followed (box down)" bash -c "'$CLI' log -b '$B' labwc 2>&1 | grep -q omabox-host-secret"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
-BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid t_jail)
+UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
+  t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
+BOX=(t_leak_control t_main t_window t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }

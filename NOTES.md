@@ -30,6 +30,7 @@ $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home
                                   a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
+│                        --hyprland's folder ro (116),
 │                        one render node (plus its NVIDIA render-side nodes on NVIDIA);
 │                        an interactive box every render node (95),
 │                        share/ → /opt/omabox/share, patched aquamarine →
@@ -40,7 +41,8 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
   │                      systemd's dbus.service with --systemd), gnome-keyring, PATH, env, then:
   ├ [systemd --user]     --systemd only
   └ labwc -S (headless)  invisible parent compositor (WLR_BACKENDS=headless, 1 output); ends with Hyprland
-    └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine
+    └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine;
+      │                  /usr/bin/Hyprland, or --hyprland's build (116)
       ├ HEADLESS-2       screen on AMD/Intel; WAYLAND-1 bootstrap disabled
       │ WAYLAND-1        screen on NVIDIA; labwc's private headless output is resized to --size
       ├ quickshell       the Omarchy shell (bar, menu, tray host, notifications): share/shell.sh;
@@ -81,8 +83,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    ```
    It must provide the soname the installed Hyprland links (`ldd $(command -v Hyprland)`); only the
    nested Hyprland loads it. `omabox up` checks this too.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay` (need `wayland-scanner`;
-   protocol XML is vendored).
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay`, `events`
+   (need `wayland-scanner`; protocol XML is vendored).
 4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
    `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when those exist); `plugin/` as
    `~/.config/omarchy/plugins/chaves.omabox`. A real directory where a link goes stops the install.
@@ -1209,10 +1211,10 @@ the designs here were measured in boxes and built for a contained desktop, and n
       ~10 px above it; when a click moved it, the I-beam's top row at its old place fell one row
       outside, and `click --wait` on a terminal read "settled" instead of 124. Deterministic there,
       not seen on AMD; why the old place was redrawn only on NVIDIA is not known.)
-    - `wait window SEL [--gone|--focused]` (the resolver of finding 81: several matches is exit 2,
-      never a guess; `--gone` counts any), `wait layer NAMESPACE [--gone]` and `wait cmd -- CMD` (exit
-      0 inside the box) poll every 100 ms; a window or layer must hold on 2 polls in a row. Absence can
-      be asserted (`--gone`).
+    - `wait window SEL [--gone|--focused]` (the resolver of finding 81; several matches were exit 2
+      until finding 105, now any of them answers it; `--gone` counts any), `wait layer NAMESPACE
+      [--gone]` and `wait cmd -- CMD` (exit 0 inside the box) poll every 100 ms; a window or layer
+      must hold on 2 polls in a row. Absence can be asserted (`--gone`).
     - **Exit 0 satisfied, 124 unsatisfied at `--timeout` (10 s; at most 10 min), 1 unknown**, never 0
       for what could not be seen: the box went down mid-wait (`unknown: box 'x' went down after
       1.50s`), or an interactive box whose window is hidden, which renders nothing (finding 24).
@@ -1471,9 +1473,10 @@ the designs here were measured in boxes and built for a contained desktop, and n
     keys then reached the terminal: it got the mouse report and ran the command. Right after the
     keep, though, the box's new output showed a new, empty workspace (3; the terminal stayed on 1
     and nothing had focus), hidden or shown, so a blind click or keys reached no app until the
-    box's workspace was switched. confirm-close.sh leaves `omabox.reopened` in the box's runtime
-    dir, and `shot`'s message then says the box needs a restart and to ask the user; for any other
-    interactive box with no frame it says to ask the user too.
+    box's workspace was switched (fixed since: finding 114). confirm-close.sh leaves
+    `omabox.reopened` in the box's runtime dir, and `shot`'s message then says the box needs a
+    restart and to ask the user; for any other interactive box with no frame it says to ask the
+    user too.
     Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
     a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
     with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
@@ -1758,6 +1761,261 @@ the designs here were measured in boxes and built for a contained desktop, and n
     fails with its number, not its text. From a jail the caller's omabox reads the file and sends its
     entries as `--pass` values. Checked in a box (and that no value is in any command line while it
     runs); `t_main`.
+104. **`-b NAME` before the command** (2026-09-30, issue #36). An agent's helper `ob() { omabox -b
+    "$BOX" "$@"; }` got "unknown command: -b" and the whole help (97 lines) on every call. `main`
+    now moves a leading `-b NAME`/`--box NAME` to right after the command (`global_box`), where every
+    command that takes `-b` parses it, before anything reads the command: the relay in a jail and the
+    broker's `broker_check` see `windows -b NAME` as if typed so, and a jailed `-b` still names only
+    the jail's boxes (`select_box`). For `up`, `down`, `env` and `path`, which also take a positional
+    NAME, it is the same as `-b` after the command (`omabox -b a up b` is "one box name, got a and b";
+    `down` takes both). Commands that are not about one box (`ls`, `saves`, `config`, `guard`,
+    `host`, `broker`) say "ls takes no -b" in one line (exit 2); `help` and `--version` ignore it;
+    given twice, the last wins. An unknown command is now one line pointing at `omabox help`, not
+    the help (exit 2 still). `t_unit_cli`, `t_jail`.
+105. **`wait window SEL` is satisfied by any of several matches** (2026-09-30, issue #37). It used
+    the one-window resolver (finding 81) and failed with exit 2 when a second window matched: an
+    app that opens one window per vault (Obsidian) broke `wait window class:obsidian` as soon as the
+    second came up, while `--gone` already counted them. "Until a window like this exists" is
+    answered by any: `satisfied: window foot after 0.20s: 2 windows: 0x... foot "A" at ...; 0x...`,
+    every match named (`--json`'s `detail`). `--focused` is satisfied when the focused window is one
+    of them, named with "(1 of N matching)"; none focused says "no N matching, none focused". Only a
+    bad regex is still exit 2. What acts on one window keeps refusing several (`--window` on `shot`,
+    `click`, `keys`, `pointer`, `drag`, and `wait still/change --window`, which watches one window's
+    place). `win_answer` is the probe without the box; `t_unit_window_select`, `t_wait`.
+106. **`omabox lua`: Lua in the box's Hyprland, and its value** (2026-09-30, issue #40, from an agent
+    that wrote files from Lua to read them back). `hyprctl eval` answers `ok` or `error: MESSAGE`,
+    with the message whole (100 000 bytes came through; a NUL ends it: a C string) and no overlay or
+    log line in the box. So `share/lua.lua`, sent as the body of a function with the source in a Lua
+    long string whose brackets the source does not contain (`[==[`: nothing is quoting), compiles
+    `return SRC` or else `SRC` (an expression or statements, as eval itself does), runs it under
+    `pcall` and raises its answer as an error on purpose: `omabox-lua-ok:` and the values as a JSON
+    array, or `omabox-lua-error:` and the Lua error. No file in the box, so calls at once never meet
+    (six in parallel checked). JSON escapes control characters, NUL included; floats print as Lua
+    does (`960.0`), inf and nan as strings. Hyprland's objects are userdata with an `__index`
+    function, whose fields Lua cannot list: they come from Hyprland's own stubs
+    (`/usr/share/hypr/stubs/hl.meta.lua`, `---@class`/`---@field`, read once per Hyprland into a
+    global), and an object inside one prints by name (`HL.Workspace(1:1)`), as `hyprctl -j clients`
+    names them; without the stubs an object is its tostring. Seen in a box (Hyprland 0.56.2, Lua
+    5.5): an error in an `hl.on` callback that a `hyprctl dispatch` sets off comes back in that
+    dispatch's answer; one in a timer, or in a callback an app's event sets off later, is logged
+    nowhere (not the Hyprland log, not `configerrors`, nothing on screen). reference.md says to
+    `pcall` inside callbacks. Allowed to a jailed agent, as `hyprctl` is. `t_unit_inspect`,
+    `t_inspect`.
+107. **`omabox log`: a box's logs by name** (2026-09-30, issue #41, from an agent that grepped the
+    Hyprland log through `run -- bash -c` twice in one session). `log [LOG...|all]` with `hyprland`
+    (the default: `run/hypr/SIG/hyprland.log`), `shell`, `apps` (the uwsm-app stand-in's), `run`
+    (the latest `run -d` log), `keyring`, `labwc`, `systemd`, and the box dir's `box` (bwrap's)
+    and `reap`; `-n N` (100, or `all`), `--grep RE` (grep -E, `-i`), `-f`. `path --logs` lists the
+    files. The box HOME and runtime dir are the box's to write, so a log swapped for a link to a host
+    file would have `log` print that file into an agent's context: a live box's logs are read inside
+    its mount namespace (`on_box`, where the path resolves as the box sees it), a dead box's from the
+    host only as regular files that resolve inside its own dirs (checked both ways with a link to a
+    file in the suite's host /tmp). A dead box's logs are read too, since they say why it died
+    (`need_box` now points at `omabox log -b NAME all`). `-f` runs `tail -F --pid=<box PID 1>`, in
+    the box's mount namespace but the host's pid namespace, so it ends within a second of the box
+    going down (seen: 1.1 s after its Hyprland was killed), says so and exits 0; the box dir's logs
+    are followed by a second tail into the same stream, tail's headers renamed to the logs' names
+    and, with `--grep`, printed only before a match. A follower is not use for idle expiry (its
+    command line is tail's, not nsenter's). Seen: Hyprland writes its log in pieces (the file often
+    ends mid-line, and a burst of lines landed only as Hyprland exited), so a line about an action
+    can come late; `log` ends every line it prints. `t_unit_inspect`, `t_inspect`.
+108. **`omabox events`: the box's Hyprland events, recorded from its start** (2026-09-30, issue #39,
+    from an agent that hand-rolled `socat` on `.socket2.sock` and twice truncated the log under it
+    (`: > ev.log`): socat's fd without O_APPEND went on writing at its old offset, the file came back
+    NUL-padded, grep skipped it as binary, and "no events" was reported when there were some; this
+    finding's own test did it once as it was written: two followers on one file).
+    `tools/events` (`omabox-events FILE`, bound at `/opt/omabox/bin`, started by the box's
+    Hyprland at `hyprland.start`, before the shell) connects to the socket from its directory (the
+    path can pass 108 bytes), and writes each event as `SECONDS.MILLIS EVENT>>DATA`, one `write()` to
+    a file opened `O_APPEND`, to the box HOME's `events.log` (on disk, like the HOME: finding 50;
+    among the logs a save leaves out). Its own lines are `omabox>>listening` and `omabox>>stopped:
+    ...`; it stops writing at 256 MB (an app retitling its window every frame) and refuses outside a
+    box (it would record the real session). A blocked read the rest of the time: no cost to speak
+    of; it dies with the box. Nothing is ever truncated, so "from here" is a byte offset:
+    `events --mark [NAME]` prints the log's size (read in the box) and keeps NAME in
+    `<box dir>/events.marks`, which the box cannot see; `--since` takes a name, an offset or a time
+    ago (`30s`), and reads whole lines from there (a mark taken mid-burst is checked to fall at a line
+    end: eight during forty workspace switches). `--grep` and `--until` match `EVENT>>DATA`
+    (ERE); text shows local `HH:MM:SS.mmm`, `--json` `{time, event, data}`. `--until RE` waits like
+    `wait` (0 with the event, 124 at `--timeout`, 1 when the box goes down; use for idle expiry),
+    from the mark when one is given, so an event that came between the action and the call counts.
+    `-f` and `--until` read `tail -F --pid=<box PID 1>` in the box's mount namespace (as `log -f`
+    does), in the background, and end it on any exit of omabox (a trap; the reader is waited for
+    with `wait`, which a signal interrupts where a foreground pipeline would not): seen, a TERM
+    left no tail behind, where the first version (`pkill -P` failing under `set -e` in the EXIT trap
+    before its `kill`) left one per call until the box went down. `log events` shows the file as it
+    is. A box started before this has no listener: `events` says to start it again. The leak
+    detector's watcher (finding 80) keeps its own `run/events.log` in its stand-in box: it asks who
+    has focus on every change, which this does not. `t_unit_inspect`, `t_inspect`.
+109. **`run -d -q` and `--print-log`** (2026-09-30, issue #42, from an agent session that started a
+    dozen windows and filtered `grep -v '^omabox: started'` in almost every command; omaseed's
+    `scripts/dev/app-box.sh` parsed `(log: PATH)` out of stderr). `-q` drops `run -d`'s own lines
+    (started, `--replace`'s); errors and `--wait`'s answer stay. `--print-log` prints the log's path
+    on stdout, the first line (before `--wait`'s), so a script takes it without parsing a message;
+    the stderr line is worded as before. The long `--quiet` stays `--wait`'s quiet period (a
+    duration): `run --quiet` without one says to use `-q`. No `OMABOX_QUIET`: a variable set once in
+    a profile would also hide the log path from an agent that needs it, and a script can pass `-q`.
+    No `--log FILE` either: from ai-jail the broker writes no path of the caller's (finding 99), and
+    `--print-log` covers the script. All three go with `-d` only (refused otherwise). `t_unit_cli`,
+    `t_replace`, `t_jail` (through the broker).
+110. **`run -d --replace`: jobs are recorded** (2026-09-30, issue #29; agents restarting omaseed
+    after a rebuild did kill, `run -d`, wait ~10 times a session, and once the old window was still
+    starting, so the single-instance app only raised it and the agent looked at the old build).
+    `run -d` no longer launches with `setsid -f` (it forks and never says the pid): a shell in the
+    box starts `setsid -- CMD` in the background (`trap - INT QUIT` first: a background job of a
+    shell without job control ignores them, and the job would too), prints its pid on fd 3 and
+    exits, so nsenter still exits at once (finding 39; checked: no host `nsenter` left, the job's
+    parent is the box's PID 1). `setsid` runs in a process that leads no group, so it does not fork:
+    the pid printed is the job's, and a missing command still logs `setsid: failed to execute`.
+    The record is `$D/jobs/PID` (its pid in the box, its leader's start time, the log, argv), in the
+    box dir, which only the host writes (a record the box could forge would have the host signal
+    any pid). A job is its session: a launcher that forks the app and exits leaves the app in the
+    session (`NSsid` in `/proc/PID/status`, read over `box_pids`), and the app is the job's. A pid is
+    not reused while any process of its session is left; after that, a leader with that pid and
+    another start time is not the job. `--replace` takes the records whose argv is the same, word for
+    word, and finds their windows (Hyprland's pids are the box's), sends SIGTERM to every process of
+    the sessions, SIGKILL to what is left after 5 s, waits until the processes and those windows are
+    gone, drops the records, and only then watches the screen for `--wait` and launches. It fails,
+    starting nothing, when a job survives SIGKILL or a window stays. Nothing else is signalled: an
+    app started another way, or one that `setsid`s itself out of the session (a terminal's shell goes
+    with its terminal's pty all the same), or a single-instance app's first instance that the job
+    only handed its arguments to. `--replace` needs a box that is up, as any `run -d` does: with no
+    box, nothing to replace. Two `--replace` of one command at the same moment can both start it
+    (no lock). Checked in a box: foot replaced (one window, a new pid), replaced while still
+    starting (one window), a launcher's app replaced, a `sleep` started by a foreground `run` left
+    alone, a job that exited (nothing to replace, its record dropped), one ignoring SIGTERM killed
+    after 5.2 s, the job's SigIgn without INT/QUIT; `t_replace`, `t_unit_cli` (`job_procs`),
+    `t_jail` (through the broker).
+111. **A pointer that travels: `--steps N` on `click` and `pointer`** (2026-09-30, issue #38, found by
+    an agent whose box test passed while the desktop failed: a scrolling layout's centred column lost
+    its place because the pointer, on its way to the bar, crossed the next column and Omarchy's
+    `input:follow_mouse = 1` focused it). `click` and `pointer move` put the pointer at the target in
+    one motion event, so a test never saw what a hand on a mouse passes over. The stepping is the
+    CLI's (`steps_to`, which `drag` now uses too): N moves in a straight line from where the pointer is
+    (`hyprctl cursorpos`), the last on the target; the tool round-trips and waits 40 ms after each
+    (finding 15), so Hyprland has run its focus-follows-mouse on it and the client has had the motion
+    and a frame before the next. `pointer --steps N -- move A move B` goes through A (a waypoint: a way
+    around something), `move X Y --steps N` sets one move's. `click --steps` travels in a pointer run
+    of its own, then clicks: `--wait` watches the click, not the cursor crossing the screen (the still
+    tool ignores 8 rectangles at most), and `--mod` holds its keys for the click alone. The default
+    stays a jump: a click that now focused every window between would change what existing tests and
+    agents rely on. Checked in a box (`t_pointer`): two floating foots, the pointer resting on the
+    left one; a jump past the right one to the empty desktop leaves the focus on the left and the
+    right one gets no motion (foot's mouse mode 1003 reports every motion); `--steps 20` to the same
+    point focuses the right one and it reports motions; a path around it (a waypoint below) does not;
+    `click --steps` does as `pointer --steps`. Also from inside ai-jail through the broker (`t_jail`).
+112. **Modifier clicks: `--mod MODS` on `click`, `drag` and `pointer`** (2026-09-30, issue #25's
+    last item). The keyboard tool holds the modifiers while the pointer tool clicks: `-m MODS` presses
+    them and keeps them down to the end of the run (under any keys after it), `-p MS` prints "paused"
+    and waits for a line or the end of stdin, MS at most. `with_mods` starts it on a fifo, runs the
+    pointer once "paused" came, then closes the fifo, the tool's "let go". The fifo is held by that
+    omabox alone, so however omabox ends (an error, Ctrl-C, SIGKILL) the tool reads its end and
+    releases; it also releases on SIGTERM, SIGINT and SIGHUP, ignores SIGPIPE (a closed stdout must not
+    end it with keys down), and after the pause's 3 min cap. `-p` and `-T` both read stdin: refused
+    together; `keys` refuses `-m`/`-p`. Seen: a tool killed outright (SIGKILL, which nothing catches)
+    leaves the modifier down for the seat; the next event of any new keyboard sets the modifiers to
+    none again (a keyboard's first event, finding 14), so after a hold that did not end well
+    `with_mods` runs an empty keyboard (`-s 0`), and until then a click still carries it. Modifiers
+    pressed while another window has focus reach the one the pointer then moves onto and clicks
+    (ctrl down with a foot focused; the jump onto the GTK window focused it; its click had ctrl).
+    SUPER with the left button is Omarchy's move window and with the right its resize (`hyprctl
+    binds`: `mouse:272`/`mouse:273`, "Move window"/"Resize window"), with virtual devices too: the app
+    gets no click, and `drag --mod super` moved a tiled window into the other's place. A click
+    without motion moves nothing. Checked in a box: a GTK 4 window logging `GestureClick` state saw
+    ctrl, shift+alt, ctrl+shift on the right button, and nothing held on the next plain click and key;
+    in `t_pointer`, foot's SGR mouse reports give 0, 16 (ctrl), 24 (alt+ctrl), 16 for `pointer` and
+    `drag --mod ctrl`, nothing for `--mod super`, then 0; a pause with nothing on stdin lets go after its
+    time; the tool SIGKILLed mid-run: that click had ctrl, omabox exits 1 saying so, the next click has
+    none. Not seen: an Xwayland app's view of the modifiers (they are the seat's, as for keys).
+113. **The pointer's position is test state** (2026-09-30, issue #43). Under focus-follows-mouse the
+    window the pointer rests on, or last passed over, takes focus, and gets it back when a menu or
+    panel closes. A box's pointer starts at the screen's centre (finding 85) and stays where the last
+    command left it; a test whose result depends on focus is only as good as where it put the pointer.
+    The skill's "Driving an app" says so: move it deliberately first, travel (finding 111) when the
+    way matters, `omabox hyprctl cursorpos` for where it is. `omabox help` says `click`/`move` jump.
+114. **After a confirm-close keep the box came back on another workspace** (2026-09-30, issue #24,
+    seen by the maintainer: WAYLAND-3 became WAYLAND-4 and showed workspace 3, empty, the windows
+    still on 1; finding 90 had seen the same). Reproduced in a stand-in host (finding 26): windows on
+    1 and 2 of an interactive box, a close, and the new window showed 4. The box's Hyprland log of
+    events (a debug handler) says why: when the last output goes, no workspace is active any more
+    (not even on the removed monitor's object), Hyprland adds its FALLBACK monitor and gives it the
+    first free workspace (3), the new output gets the next free one (4), and only then are 1 and 2
+    moved over from FALLBACK and FALLBACK removed. hyprland.lua now follows the workspace shown
+    (`workspace.active`, and the active one at each load, never FALLBACK's or a special one), writes
+    it to `omabox.workspace` in the box's runtime dir when the last output goes (a file: the resize
+    watch reloads the config when the output's name changes to FALLBACK and again to the new one, and
+    a reload starts a fresh Lua state), and focuses it once a monitor is there and FALLBACK is gone
+    (checked on `monitor.added` and `monitor.removed`: in practice FALLBACK's removal). The empty
+    workspace the new output got goes by itself. Hiding the window (moving it to another host
+    workspace and back) and resizing it do not recreate the output: the box's workspace stayed, before
+    and after the fix. Checked in the stand-in: active 2 with windows on 1 and 2 (back on 2, its
+    window focused, `SUPER+1` shows 1's window and takes typed text), active 1 after two resizes
+    (reloads), a box that never switched workspace, and the second close still ends the box.
+    `t_guard` checks the workspace, the focused window and the windows per workspace after a keep
+    (they fail without the fix). A shown special workspace (the scratchpad) is not restored: the one
+    under it is. Not yet checked on the real desktop.
+
+115. **No workspace numbers in a box when the user's come from a plugin** (2026-09-30, issue #21, seen
+    by the maintainer after finding 114's bug: the box came up on an empty workspace and nothing said
+    so). The filter of finding 21 keeps only `omarchy.*` widgets and the mounted plugins, so a bar
+    whose workspaces widget is a plugin's has none in a box. The issue named `njpatel.omapager` (in
+    the centre), but that is a notification daemon; the maintainer's workspace switcher is
+    `chaves.solari` ("named, coloured workspaces"), the centre anchor. There is no manifest kind for a
+    workspaces widget, so omabox recognises one by its manifest: a bar widget whose name or
+    description, or its bar widget's display name, description or aliases, say "workspace" (as
+    `omarchy.workspaces`' do), read from `~/.config/omarchy/plugins/*/manifest.json` and the mounted plugins (`workspace_widgets`); a
+    broken manifest counts as none. When the user's layout has no `omarchy.workspaces` and no mounted
+    plugin is such a widget, `omarchy.workspaces` goes where the first one left out was, else after
+    `omarchy.menu` at the start of `left` (as Omarchy's default bar has it; `left` made if missing),
+    so a box always shows its workspaces. A user's own `omarchy.workspaces` stays where it is, and a
+    mounted workspace widget stays instead (added where its manifest says when the user's bar lacks
+    it). A layout that is not there (the shell's default has workspaces) is left alone. The jq moved
+    into `shell_json_filter`. Checked in a box with this machine's bar: `omarchy.workspaces` in the
+    centre where Solari was, drawn (1-5); with `--plugin chaves.solari`, Solari and no
+    `omarchy.workspaces`. `t_unit_bar_filter` covers the placements and the manifest reading.
+116. **`up --hyprland PATH`: a Hyprland build of the user's in a box** (2026-09-30, issue #44: an agent
+    confirmed a community fix for a scrolling-layout bug by hacking a copy of `share/start-hyprland.sh`
+    to exec its build, `--ro-bind`ing the build dir; it worked first time). Now a flag, on `up` and a
+    throwaway `run`. `hypr_bin` resolves PATH and refuses a missing, non-executable or non-ELF file (a
+    wrapper script: the box must exec the ELF itself). The binary's folder is mounted read-only at its
+    own path, checked by `refuse_src`/`refuse_dest` as `--ro-bind`'s are (finding 43): a binary right
+    in HOME or `/tmp` is refused, not its whole folder mounted; one under `/usr` needs no mount.
+    `session.sh` → `start-hyprland.sh` execs `$OMABOX_HYPRLAND` (bwrap's `--setenv`, unset for
+    Hyprland's children) instead of `/usr/bin/Hyprland`; everything else stays the box's: the patched
+    aquamarine by `LD_LIBRARY_PATH`, `/usr/bin/hyprctl` in `hyprland.lua` and the tools, the shell.
+    `check_install PATH` checks the build's aquamarine: its `DT_NEEDED` libaquamarine soname, read with
+    `readelf -d` (never run or loaded), must be `build/prefix`'s `SONAME`, or `up` stops before the
+    box dir is made, naming both (a build against the system's newer aquamarine would otherwise load
+    the unpatched library, or none, and die inside the box, where only labwc.log says why). Then `ldd`
+    with the box's `LD_LIBRARY_PATH`: any other library it needs and the box lacks (a newer hyprutils)
+    is refused the same way. Not `ldd` for a jailed agent's file: the broker loads nothing the jail
+    hands it. The stock check keeps `ldd` on `command -v Hyprland`. `box.json` has `hyprland` (the
+    resolved path) and, once it answers, `hyprland_version` (`hyprctl version`'s first line from inside
+    the box, `hypr_version` right after Hyprland is up, before the shell wait). `ls` prints it under
+    the box's line, `ls --json` has `hyprland` (null for the installed one) and `hyprland_version`,
+    `windows` starts with a `box NAME runs Hyprland PATH (...)` line. `session.sh` writes the same
+    line into `box.log` itself (a background wait for `omabox.env`, then `hyprctl version`): box.log is
+    bwrap's stdout without `O_APPEND`, so a line appended from the host could be overwritten. hyprctl
+    and hyprpm stay the installed ones (the issue's run: IPC matched across the same version); `up`
+    warns when the box's `.version` differs from `/usr/bin/Hyprland --version-json`'s, and a throwaway
+    `run` now passes `up`'s `warning:`/`note:` lines through (it printed nothing of `up`'s on success).
+    `restart-shell` restarts the shell only, so nothing changes there; `save` records `hyprland` in
+    `save.json` and `up --from` notes when the new box runs another one. ai-jail (finding 99): the
+    folder must be one of the jail's, whole (`jail_root`, as `--ro-bind`), or the binary inside the
+    jail's project, which the box mounts anyway: then nothing extra is mounted and the path resolves
+    in the box's view, so swapping a link in there reaches nothing the box did not have;
+    `relay_call` sends the path absolute. What a box proves: compositor logic on a virtual output with
+    virtual input devices (layouts, focus, input routing, the Lua config, IPC, protocols); never the
+    DRM/KMS backend (modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices, or
+    the session/suspend/lock paths: those stay the real desktop's, or a VM's with passthrough.
+    Verified in a box with a copy of `/usr/bin/Hyprland` in a scratch dir: the box's Hyprland process
+    runs it (`readlink /proc/PID/exe`, its pid namespace the box's), shell and bar up (shot),
+    `ls`/`ls --json`/`windows` name it with the version line, box.log has the line, the folder is
+    read-only in the box, `restart-shell`, `save` then `run --from` (the note) and a throwaway `run
+    --hyprland`. Refusals checked with a stub `libaquamarine.so.99` and a program linking it, a stub
+    of the right soname plus a missing library, a script, `/usr/bin/true`, a non-executable file.
+    Not checked: a real patched build (the issue's run was one), and the version warning against a
+    real other version (a stubbed `on_box` in `t_unit_hyprland`). `t_unit_hyprland`, `t_hyprland`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -1778,6 +2036,13 @@ of them, nor wayvnc (finding 34). It needs labwc.
 Bugs and ideas live in the GitHub issues. Known gaps:
 
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`).
+- More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44):
+  `--quickshell PATH` (a shell or Quickshell change); `--omarchy PATH` (a local Omarchy tree instead
+  of `/usr/share/omarchy`, `OMARCHY_PATH`, as `omarchy dev link` does on the host; `session.sh` and
+  `hyprland.lua` read the packaged one today); `--lib DIR` (library dirs ahead of the system's, for
+  hyprutils/aquamarine/hyprlang work; `/opt/omabox/lib` comes first now). A `--hyprland` build whose
+  RUNPATH points outside its own folder finds those libraries on the host (`ldd` passes) but not in
+  the box.
 - Portals (finding 12): the file chooser (xdg-desktop-portal-gtk) is checked; other portals, and
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
 - AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
@@ -1795,4 +2060,3 @@ Bugs and ideas live in the GitHub issues. Known gaps:
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
   `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried.
-- After a confirm-close keep (finding 70), the new window shows a new, empty workspace (finding 90).

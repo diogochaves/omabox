@@ -22,6 +22,7 @@ installed omabox to say where desktop work happens, not to change what the proje
 |---|---|
 | `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
 | `hyprctl …` | `omabox hyprctl …` |
+| `hyprctl eval EXPR` to read a value (it prints only `ok`) | `omabox lua EXPR` (prints the value; tables as JSON) |
 | `grim [-g …] out.png` | `omabox shot [-g …] [-o out.png]` |
 | `wtype …`, `ydotool …` | `omabox keys …`, `omabox click X Y` |
 | `grim -T ID`, `hyprctl -j clients` to find a window | `omabox windows`, `omabox shot --window SEL` |
@@ -48,7 +49,7 @@ you are done, and before `/clear`. In a git worktree the name is the worktree's 
 worktree agent has its own box with no `-b`. Subagents in one checkout share the session's box: for
 one of its own, `omabox up --new` prints a free name (`box-3`); pass it as `-b box-3` on every call,
 typed out (your shell does not keep a variable between commands). To use a box the user started,
-pass `-b NAME` (see `omabox ls`).
+pass `-b NAME` (see `omabox ls`); it goes before the command too (`omabox -b box-3 shot`).
 
 ## The loop
 
@@ -56,6 +57,7 @@ pass `-b NAME` (see `omabox ls`).
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
 omabox up --new                            # or one of your own: prints box-N, then -b box-N on each call
 omabox run -d --wait -- ./build/src/myapp  # launch, detached (log path printed); returns once drawn
+omabox run -d --replace --wait -- ./myapp  # after a rebuild: stops the one run -d started, then as above
 omabox shot                                # prints a PNG path: Read it to look
 omabox windows                             # address, workspace, on screen or covered
 omabox shot --window myapp                 # one window's own pixels, even covered or elsewhere
@@ -66,8 +68,11 @@ omabox keys --wait super+space             # real key events for binds and apps 
 omabox keys -t 'hello wörld' Return        # type any Unicode text (layout-aware), then a key
 omabox keys --pass PASSWORD Return         # type a secret from your environment: never -t (ps shows it)
 omabox click 960 540 [right] [--double]    # layout coordinates, as in the screenshot (--wait too)
+omabox click --steps 20 --mod ctrl 960 540 # travel there (hovering what it crosses), then ctrl-click
 omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
+omabox log [shell|apps|run|…] [--grep RE]  # the box's logs, Hyprland's by default (-f follows)
+omabox events --mark m1                    # then act, then: events --since m1 [--grep RE | --until RE]
 omabox down                                # when done: kills everything in the box
 ```
 
@@ -93,17 +98,27 @@ right after a `click` or `keys` without `--wait` can show the frame before the r
 or `omabox wait still`, before the shot.
 
 `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a title; `title:RE`, `class:RE`, `pid:N` or an address
-(`0x…`) narrow it. Coordinates are screenshot pixels; a cropped or scaled shot says so on stderr:
+(`0x…`) narrow it; `wait window SEL` is satisfied by any window it matches. Coordinates are screenshot pixels; a cropped or scaled shot says so on stderr:
 then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own. After any `-g` or
 `--fit` shot, click (or `drag`) with `--in THAT.png`, and never discard `shot`'s stderr: it says so.
 `shot --window SEL -g "X,Y WxH"` crops the window in its own coordinates. 1920x1080 is read 1:1; on a
 bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and `click --in` it. Screen
 shots show the pointer (hover evidence: a `-g` crop of the screen); window shots never do.
 
+**The pointer is test state.** Under Omarchy's focus-follows-mouse the window the pointer rests on,
+or last passed over, takes focus, and gets it back when a menu or panel closes. A box's pointer starts
+at the screen's centre and stays wherever the last command left it (`omabox hyprctl cursorpos`).
+`click` and `pointer -- move` jump: they cross nothing on the way. Before a test whose result depends
+on focus, put the pointer where a user's would be (`omabox pointer -- move X Y`), and when the way
+there matters (to the bar, across other windows) travel: `click --steps 20 X Y`, `pointer --steps 20
+-- move X Y`. `--mod ctrl` (shift, alt; `ctrl+shift`) holds modifiers across a click or drag; SUPER
+with a button is Hyprland's own (move, resize), never the app's.
+
 | Symptom | Next step |
 |---|---|
 | "could not connect to display", `omabox-guard` | The agent guard: do it in a box (below). |
 | Your own shell tool died after `pkill -f PATTERN` | The pattern matched its command line: kill by PID, or `omabox run -- pkill -x NAME`. |
+| After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
@@ -131,7 +146,8 @@ PORTS -- ctest ...` (`up`'s options work here). With a box already up, `run` use
 server's password from `dev.env`, say; a test that skips is the sign) goes with `--pass NAME`, off
 the command line, or a whole file with `--env-file`: `omabox run --env-file ./dev.env -- ctest …`
 (KEY=VAL lines, read as data). Never `--env KEY=secret`: that is in the process list. A `run -d`
-command's output, a Qt app's warnings and QML errors too, is in the log file it prints.
+command's output, a Qt app's warnings and QML errors too, is in the log file it prints (`-q`: no
+line; `--print-log`: only the path, on stdout, for a script).
 
 A test binary run directly (not through ctest) has none of ctest's environment: a Qt test with no
 `QT_QPA_PLATFORM=offscreen` opens real windows. Run it with `omabox run -- ./build/tests/tst_x`.
@@ -175,8 +191,19 @@ omabox restart-shell                           # after editing the plugin (the m
 ```
 
 The box's `shell.json` has only built-in widgets plus the plugins you mount, each enabled where its
-manifest says. It copies the user's bar layout; `omabox up --stock-bar` uses Omarchy's default bar
+manifest says. It copies the user's bar layout (Omarchy's workspace numbers in place of a plugin's
+that is left out); `omabox up --stock-bar` uses Omarchy's default bar
 instead (workspaces, clock, the stock right side), to see a plugin as most people will. Do not mount plugins you were not asked to test (some talk to real services).
+
+## A Hyprland change
+
+`omabox up --hyprland ~/code/Hyprland/build/Hyprland` runs that build in the box instead of the
+installed Hyprland (never install it, never run it on the host): before/after of a compositor fix in
+two boxes. It must link the libaquamarine soname omabox provides (`up` refuses it otherwise, saying
+which); hyprctl stays the installed one (`up` warns when the versions differ). `omabox ls` and
+`windows` name the build. A box proves layouts, focus, input routing, the Lua config, IPC and
+protocols; not DRM/KMS, real monitors, HDR/VRR, multi-GPU, real input devices, suspend or lock
+(`reference.md`).
 
 ## What is and is not in a box
 

@@ -25,6 +25,36 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#30](https://github.com/diogochaves/omabox/issues/30)).
 - **`shot --window SEL -g "X,Y WxH"`** crops a window in its own coordinates
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
+- **`up --hyprland PATH`** (and `run --hyprland PATH`) runs a Hyprland build of yours in the box
+  instead of the installed one, to check a compositor change without installing it. A build linked
+  against another aquamarine soname, or a file that is not an executable ELF, is refused before the
+  box starts; `ls` and `windows` name the build, the box log has its version, and `up` warns when
+  your `hyprctl` is another version ([#44](https://github.com/diogochaves/omabox/issues/44)).
+- **`run -d --replace -- CMD`** restarts an app after a rebuild in one step: it stops what `run -d`
+  started in the box with the same command (SIGKILL if it ignores SIGTERM for 5 s), waits until its
+  windows are gone, then starts it again. Nothing else in the box is touched
+  ([#29](https://github.com/diogochaves/omabox/issues/29)).
+- **`run -d -q`** drops the "started in box" line, and **`run -d --print-log`** prints only the
+  log's path, on stdout, for scripts ([#42](https://github.com/diogochaves/omabox/issues/42)).
+- **A pointer that travels**: `click --steps N` and `pointer --steps N -- move X Y` (or `move X Y
+  --steps N`) move there in N steps from where the pointer is, so what lies on the way is hovered
+  and, under Omarchy's focus-follows-mouse, takes focus, as with a real mouse. `click` and `move`
+  still jump by default ([#38](https://github.com/diogochaves/omabox/issues/38)).
+- **Modifier clicks**: `click --mod ctrl` (shift, alt, super, altgr; `ctrl+shift`), and `--mod` on
+  `drag` and `pointer`, hold modifiers down across the click, then let go, however omabox ends
+  ([#25](https://github.com/diogochaves/omabox/issues/25)).
+- The skill says the pointer's position is part of what a test sets up: where it starts, that
+  `click` jumps, how to travel ([#43](https://github.com/diogochaves/omabox/issues/43)).
+- **`omabox lua EXPR`** evaluates Lua in the box's Hyprland and prints what it returns (tables and
+  Hyprland's objects as JSON), where `hyprctl eval` says only `ok`
+  ([#40](https://github.com/diogochaves/omabox/issues/40)).
+- **`omabox log`** prints or follows (`-f`) a box's logs: Hyprland's by default, the shell's, the
+  apps', the latest `run -d`'s and more, `--grep RE`, `-n N`, a box that died too. `omabox path
+  --logs` says where each one is ([#41](https://github.com/diogochaves/omabox/issues/41)).
+- **`omabox events`**: every box records its Hyprland events (`activewindow`, `urgent`,
+  `openlayer`, ...) from its start, timestamped. `--mark` says "from here" without clearing anything,
+  `--since MARK` (or `30s`) reads from there, `--grep`, `--json`, `-f`, and `--until RE` waits for an
+  event like `omabox wait` does ([#39](https://github.com/diogochaves/omabox/issues/39)).
 
 ### Changed
 
@@ -32,6 +62,25 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
 - `omabox pointer --hold` is refused: it never returned, and read like "hold the button"
   ([#25](https://github.com/diogochaves/omabox/issues/25)).
+- An unknown command is one line pointing at `omabox help`, not the whole help
+  ([#36](https://github.com/diogochaves/omabox/issues/36)).
+
+### Fixed
+
+- **`-b NAME` goes before the command too**: `omabox -b NAME windows` failed with "unknown command:
+  -b" and the whole help. It now means the same as after the command, for every command that takes
+  `-b`; the others (`ls`, `config`, ...) say in one line that they take none
+  ([#36](https://github.com/diogochaves/omabox/issues/36)).
+- **`wait window SEL` is satisfied when several windows match** (an app with one window per vault or
+  document): it failed with exit 2. Any match answers it and the line names them all; `--focused`
+  when one of them has focus. `--window` on `shot`, `click`, `keys`, `pointer` and `drag` still
+  wants exactly one ([#37](https://github.com/diogochaves/omabox/issues/37)).
+- An interactive box kept running after a close (confirm-close) comes back on the workspace it
+  showed, with its windows, instead of a new, empty one
+  ([#24](https://github.com/diogochaves/omabox/issues/24)).
+- A box's bar shows workspace numbers when yours come from a plugin left out of the box: Omarchy's
+  go where that plugin was, or after the menu when your bar has none
+  ([#21](https://github.com/diogochaves/omabox/issues/21)).
 
 ## 0.2.1 — 2026-09-29
 
