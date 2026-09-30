@@ -17,14 +17,28 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 ## Pointer, in detail
 
 - `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [left|right|middle] [--steps 10] [--hold MS]
-  [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold there `--hold`
-  (a drop target reacting to the hover), release. `--shot FILE` takes a shot while the button is still
-  down (a drag's own feedback). Both points are mapped as for `click`.
-- `omabox pointer [--window SEL | --in SHOT] -- move X Y, click [BTN], down [BTN], up [BTN], scroll
-  DY, sleep MS` in one run: raw, it raises nothing (a `--window` must be on screen and uncovered). The
-  button defaults to left. A button pressed with `down` stays down after the call, until an `up` (in
-  a later call too): end every `down` with an `up`, or the box's next clicks are drags.
-- Not yet: a click with a modifier held (ctrl-click, shift-click; issue #25).
+  [--mod MODS] [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold
+  there `--hold` (a drop target reacting to the hover), release. `--shot FILE` takes a shot while the
+  button is still down (a drag's own feedback). Both points are mapped as for `click`. It jumps to the
+  first point: to get there on foot, `pointer --steps N -- move X1 Y1` first.
+- `omabox pointer [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- move X Y [--steps N], click
+  [BTN], down [BTN], up [BTN], scroll DY, sleep MS` in one run: raw, it raises nothing (a `--window`
+  must be on screen and uncovered). The button defaults to left. A button pressed with `down` stays
+  down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
+  box's next clicks are drags.
+- **Travel** (`--steps N` on `click` and `pointer`; 1-999, 1 is a jump): N moves in a straight line
+  from where the pointer is, each seen by Hyprland and drawn before the next (~40 ms apart), so
+  focus-follows-mouse and hover happen on the way. Pick N so a step (the distance over N) is narrower
+  than the narrowest window to cross. `pointer --steps N -- move A move B` goes through A (a path
+  around something: a waypoint beside it); `move X Y --steps N` sets one move's. `click --steps` travels
+  first, then clicks: `--wait` watches the click, not the way.
+- **Modifiers** (`--mod MODS` on `click`, `drag` and `pointer`: ctrl, shift, alt, super, altgr, or
+  several as `ctrl+shift` or `--mod` again): held down on the box's keyboard from just before the
+  press (for `pointer`, the whole run) to just after the release, then let go, however omabox ends.
+  The app sees them as a real keyboard's (a table's ctrl-click and shift-click selection). SUPER with
+  the left button is Hyprland's move window and with the right its resize (Omarchy's binds): the app
+  gets no click, and `drag --mod super` moves the window. Shift-click in foot is its own selection,
+  not reported to the program in it.
 
 ## Waiting, in detail
 

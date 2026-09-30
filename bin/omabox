@@ -42,9 +42,11 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [left|right|middle] [--double]
+               [--steps N] [--mod MODS]                  --steps: travel there; --mod ctrl: ctrl-click
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [left|right|middle]
-              [--steps 10] [--hold MS]                   press, move, hold, release
-  omabox pointer [-b NAME] [--window SEL | --in SHOT] -- ARGS...  raw: move X Y, click/down/up [BTN], scroll DY, sleep MS
+              [--steps 10] [--hold MS] [--mod MODS]      press, move, hold, release
+  omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- ARGS...
+                 raw: move X Y [--steps N], click/down/up [BTN], scroll DY, sleep MS
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
          COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--strict] | change [-g GEOM | --window SEL]
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | cmd -- CMD [ARG...]
@@ -94,6 +96,12 @@ coordinates and focuses it first when it is off screen or covered there (--no-ra
 A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`drag\`, \`pointer --in\`)
 take that image's pixels (a window shot follows the window if it moved). Screen shots show the
 pointer; window shots never do. -o makes the file's folder if it is missing.
+The pointer starts at the screen's centre and stays where it was left; \`click\` and \`pointer move\`
+jump there. --steps N travels in N steps from where it is, over what lies between: under Omarchy's
+focus-follows-mouse the windows on the way take focus, as with a real mouse (\`pointer --steps N --
+move A move B\` passes through A). --mod MODS (ctrl, shift, alt, super, altgr; ctrl+shift, or --mod
+again) holds modifiers down across a click, drag or pointer run, released after it, whatever happens
+to omabox. SUPER with the left or right button is Hyprland's move or resize window, not the app's.
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
 count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
 [--quiet 300ms] [--timeout 10s] [--json]: a change within --start (5s for run -d), then quiet.
@@ -1837,6 +1845,7 @@ cmd_keys() {
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       # A value is the tool's, whatever it looks like (-t --wait types "--wait", -t --pass "--pass").
       -t|-s|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
+      -m|-p) die "keys: $1 is omabox's own (to hold a modifier across a click: click, drag or pointer --mod)" ;;
       --pass) optarg "$@"
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "keys: --pass takes a variable name, got $2"
         caller_env "$2" >/dev/null || die "keys: --pass $2: not in this command's environment (export it first)"
@@ -1855,14 +1864,8 @@ cmd_keys() {
     local w; w=$(win_select "$(box_windows)" "${sels[@]}")
     [ "$(jq -r .active <<<"$w")" = true ] || win_raise "$w"
   fi
-  # The box's own keyboard settings, so keycodes mean to the keymap what they mean to its binds
-  # (kb_options like altwin:swap_lalt_lwin move Super).
-  local layout variant model options
-  layout=$(on_box hyprctl -j getoption input:kb_layout | jq -r '.str // "us"' | cut -d, -f1)
-  variant=$(on_box hyprctl -j getoption input:kb_variant | jq -r '.str // ""' | cut -d, -f1)
-  model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
-  options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
-  local kb=("$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options" "$@")
+  kb_tool
+  local kb=("${KB[@]}" "$@")
   # Marks for a peek window, once sent: a secret only as its length.
   local lines=() i=0 t
   while [ $# -gt 0 ]; do
@@ -1888,16 +1891,105 @@ cmd_keys() {
     mark "${lines[@]}"
   fi
 }
+# The keyboard tool with the box's own keyboard settings, in KB, so keycodes mean to the keymap what
+# they mean to its binds (kb_options like altwin:swap_lalt_lwin move Super). Not in $(...): it sets KB.
+KB=()
+kb_tool() {
+  local layout variant model options
+  layout=$(on_box hyprctl -j getoption input:kb_layout | jq -r '.str // "us"' | cut -d, -f1)
+  variant=$(on_box hyprctl -j getoption input:kb_variant | jq -r '.str // ""' | cut -d, -f1)
+  model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
+  options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
+  KB=("$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options")
+}
+
 # The keyboard tool (kb, pass: cmd_keys's), each --pass value on its stdin, NUL-terminated.
 keys_send() {
   local v
   for v in "${pass[@]}"; do caller_env "$v"; printf '\0'; done | on_box "${kb[@]}"
 }
 
+# --mod MODS (click, drag, pointer; #25): modifiers as the keyboard tool names them, ctrl+shift, from
+# one or more --mod (ctrl, ctrl+shift, ctrl,shift). mods_add SO_FAR MODS → the two, each once.
+mods_add() {
+  local out=$1 m
+  local IFS='+,'
+  for m in $2; do
+    m=${m,,}
+    case $m in
+      super|ctrl|shift|alt|altgr) ;;
+      control) m=ctrl ;;
+      logo|win|mod) m=super ;;
+      *) die "--mod: '$m' is not a modifier (super, ctrl, shift, alt, altgr)" ;;
+    esac
+    [[ +$out+ == *"+$m+"* ]] || out=${out:+$out+}$m
+  done
+  [ -n "$out" ] || die "--mod: no modifier given"
+  echo "$out"
+}
+
+# Hold MODS down on the box's keyboard while CMD runs (click/drag/pointer --mod, #25): the keyboard
+# tool presses them, says "paused", and lets go when its stdin closes: after CMD, or when this omabox
+# ends however it ends (the fd is ours alone). It also lets go on a signal, and after MODS_MAX_MS at
+# most. CMD runs only once they are down. A tool killed outright (SIGKILL) leaves them down until the
+# next keyboard event: after one that failed, an empty `keys` run clears them (finding 112).
+# with_mods MODS CMD...
+MODS_MAX_MS=180000
+with_mods() {
+  local mods=$1 dir line kin kout kpid rc=0; shift
+  [ -n "$mods" ] || { "$@"; return; }
+  kb_tool
+  dir=$(mktemp -d)
+  mkfifo "$dir/in" "$dir/out"
+  on_box "${KB[@]}" -m "$mods" -p "$MODS_MAX_MS" < "$dir/in" > "$dir/out" &
+  kpid=$!
+  exec {kin}>"$dir/in" {kout}<"$dir/out"
+  rm -rf "$dir"
+  if read -r -t 10 -u "$kout" line && [ "$line" = paused ]; then
+    "$@" {kin}>&- {kout}<&- || rc=$?
+  else
+    rc=1; say "could not hold $mods down: nothing was sent"
+  fi
+  # Closing its stdin is the tool's "let go" (a write could meet a tool already gone: SIGPIPE).
+  exec {kin}>&- {kout}<&-
+  if ! wait "$kpid"; then
+    # A tool that did not end well may have left them down (killed): a new keyboard's first event
+    # sets the seat's modifiers again, to none.
+    on_box "${KB[@]}" -s 0 >/dev/null 2>&1 || true
+    [ "$rc" != 0 ] || { rc=1; say "the keyboard let go of $mods before the end: see above"; }
+  fi
+  return "$rc"
+}
+
+# From where the pointer is, "X Y" inside the layout: where a move that travels (--steps) starts.
+pointer_at() {
+  local p ext
+  p=$(cursor_now) && [ -n "$p" ] || die "cannot tell where the pointer of box '$NAME' is (hyprctl cursorpos)"
+  ext=$(extent)
+  local x=${p% *} y=${p#* } w=${ext%x*} h=${ext#*x}
+  echo "$((x < w ? x : w - 1)) $((y < h ? y : h - 1))"
+}
+
+# --steps N: 1-999 (1 is a jump). steps_arg CMD N
+steps_arg() { [[ $2 =~ ^[1-9][0-9]{0,2}$ ]] || die "$1: --steps is 1-999, got $2"; echo "$2"; }
+
+# The moves from X0,Y0 to X1,Y1 in N steps, the last one at X1,Y1, appended to SEQ: the pointer passes
+# over what lies between, as a hand-moved one does, so hover and focus-follows-mouse happen on the way
+# (#38). The tool round-trips and waits 40 ms after each move: each step is seen, and drawn, before
+# the next. steps_to X0 Y0 X1 Y1 N
+SEQ=()
+steps_to() {
+  local n
+  for ((n = 1; n <= $5; n++)); do
+    SEQ+=(move "$(($1 + ($3 - $1) * n / $5))" "$(($2 + ($4 - $2) * n / $5))")
+  done
+}
+
 # X Y are screen pixels; with --window SEL the window's own (0,0 is its top left corner, as in its
-# `shot --window`), with --in SHOT that image's pixels (finding 81).
+# `shot --window`), with --in SHOT that image's pixels (finding 81). --steps N travels there from
+# where the pointer is (#38); --mod MODS holds modifiers down across the click (#25).
 cmd_click() {
-  local name="" btn=left double=0 xy=() sels=() raise=1 in=""
+  local name="" btn=left double=0 xy=() sels=() raise=1 in="" steps=1 mods=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -1905,6 +1997,8 @@ cmd_click() {
       --in) optarg "$@"; in=$2; shift ;;
       --no-raise) raise=0 ;;
       --double) double=1 ;;
+      --steps) optarg "$@"; steps=$(steps_arg click "$2"); shift ;;
+      --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle) btn=$1 ;;
       --*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
       *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$((10#$1))") ;;
@@ -1928,10 +2022,19 @@ cmd_click() {
   local seq=(move "$x" "$y" click "$btn")
   [ $double = 1 ] && seq+=(click "$btn")
   local ext; ext=$(extent)
+  # --steps: the way there first, on its own, so --wait watches what the click does, not the pointer
+  # crossing the screen, and --mod holds its modifiers for the click alone.
+  if [ "$steps" -gt 1 ]; then
+    local from; from=$(pointer_at)
+    SEQ=(); steps_to "${from% *}" "${from#* }" "$x" "$y" "$steps"
+    on_box "$BOX_POINTER" --extent "$ext" "${SEQ[@]}"
+  fi
   # The mark (for a peek window) has the screen pixels the click went to, however they were given.
+  local marks=("ptr $ext ${seq[*]}")
+  [ -z "$mods" ] || marks+=("combo $mods+click")
   if [ "$SETTLE_WAIT" != 1 ]; then
-    on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
-    mark "ptr $ext ${seq[*]}"
+    with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+    mark "${marks[@]}"
     return
   fi
   # --wait: the cursor where it is and where it goes is not the change looked for.
@@ -1939,22 +2042,27 @@ cmd_click() {
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
   settle_begin settle "${SETTLE_ARGS[@]}"
   settle_ready "$SETTLE_JSON"
-  settle_act on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
-  mark "ptr $ext ${seq[*]}"
+  settle_act with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+  mark "${marks[@]}"
   settle_end settle "$SETTLE_JSON" "the click was sent"
 }
 
-# -b NAME, --in SHOT and --window SEL before the arguments (and before `--`); everything else goes to
-# the tool. --in maps each `move X Y` from that shot's image to the screen, --window from that
-# window's coordinates (#25); either window must be on screen and uncovered there: this is raw, it
-# raises nothing. The tool's --hold is omabox's own (it never returns): refused here.
+# -b NAME, --in SHOT, --window SEL, --steps N and --mod MODS before the arguments (and before `--`);
+# everything else goes to the tool. --in maps each `move X Y` from that shot's image to the screen,
+# --window from that window's coordinates (#25); either window must be on screen and uncovered there:
+# this is raw, it raises nothing. --steps N makes every move travel there in N steps from where the
+# pointer is (#38), `move X Y --steps N` one move (so `move A move B` is a path through A); --mod
+# holds modifiers down for the whole sequence. The tool's --hold is omabox's own (it never returns):
+# refused here.
 cmd_pointer() {
-  local name="" in="" sels=()
+  local name="" in="" sels=() steps=1 mods=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift 2 ;;
       --in) optarg "$@"; in=$2; shift 2 ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift 2 ;;
+      --steps) optarg "$@"; steps=$(steps_arg pointer "$2"); shift 2 ;;
+      --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift 2 ;;
       --) shift; break ;;
       *) break ;;
     esac
@@ -1962,45 +2070,61 @@ cmd_pointer() {
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "pointer: --in or --window, not both"
   local a; for a; do [ "$a" != --hold ] || die "pointer: --hold is omabox's own (it never returns); to keep a button down: down, move ..., up (or omabox drag)"; done
   select_box "$name"; need_box
-  if [ -n "$in" ] || [ ${#sels[@]} -gt 0 ]; then
-    local args=() p
-    while [ $# -gt 0 ]; do
-      if [ "$1" = move ] && [ $# -ge 3 ]; then
-        [[ $2 =~ ^[0-9]+$ && $3 =~ ^[0-9]+$ ]] || die "pointer: move takes whole pixels, got $2 $3"
-        if [ ${#sels[@]} -gt 0 ]; then
-          p=$(win_point 0 "$((10#$2))" "$((10#$3))" "${sels[@]}") || exit $?
-        else
-          p=$(shot_point "$in" "$((10#$2))" "$((10#$3))")
-          if [[ $p == window* ]]; then
-            local wa wx wy; read -r _ wa wx wy <<<"$p"
-            p=$(win_point 0 "$wx" "$wy" "$wa") || exit $?
-          else p=${p#screen }; fi
-        fi
-        args+=(move "${p% *}" "${p#* }"); shift 3
-      else args+=("$1"); shift; fi
-    done
-    set -- "${args[@]}"
-  fi
-  # The mark has screen pixels: --in's moves as mapped above.
+  # Moves to screen pixels (--in, --window), in steps from where the pointer was (--steps). The mark
+  # has the moves as asked, in screen pixels: a step each would pass peek's 64 tokens.
+  local args=() marks=() p n cur="" mapped=0
+  [ -z "$in" ] && [ ${#sels[@]} = 0 ] || mapped=1
+  while [ $# -gt 0 ]; do
+    if [ "$1" = move ] && [ $# -ge 3 ]; then
+      n=$steps
+      if [ "${4:-}" = --steps ]; then [ $# -ge 5 ] || die "pointer: --steps needs a value"; n=$(steps_arg pointer "$5"); fi
+      if ! [[ $2 =~ ^[0-9]+$ && $3 =~ ^[0-9]+$ ]]; then
+        # Left to the tool, which refuses it, when nothing here needs the numbers.
+        [ $mapped = 0 ] && [ "$n" = 1 ] || die "pointer: move takes whole pixels, got $2 $3"
+        args+=("$1" "$2" "$3"); marks+=("$1" "$2" "$3"); shift 3; continue
+      fi
+      p="$((10#$2)) $((10#$3))"
+      if [ ${#sels[@]} -gt 0 ]; then
+        p=$(win_point 0 "${p% *}" "${p#* }" "${sels[@]}") || exit $?
+      elif [ -n "$in" ]; then
+        p=$(shot_point "$in" "${p% *}" "${p#* }")
+        if [[ $p == window* ]]; then
+          local wa wx wy; read -r _ wa wx wy <<<"$p"
+          p=$(win_point 0 "$wx" "$wy" "$wa") || exit $?
+        else p=${p#screen }; fi
+      fi
+      if [ "$n" -gt 1 ]; then
+        [ -n "$cur" ] || cur=$(pointer_at)
+        SEQ=(); steps_to "${cur% *}" "${cur#* }" "${p% *}" "${p#* }" "$n"
+        args+=("${SEQ[@]}")
+      else args+=(move "${p% *}" "${p#* }"); fi
+      marks+=(move "${p% *}" "${p#* }")
+      cur=$p
+      if [ "${4:-}" = --steps ]; then shift 5; else shift 3; fi
+    else args+=("$1"); marks+=("$1"); shift; fi
+  done
   local ext; ext=$(extent)
-  on_box "$BOX_POINTER" --extent "$ext" "$@"
-  mark "ptr $ext $*"
+  with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${args[@]}"
+  [ -z "$mods" ] || mark "combo $mods"
+  mark "ptr $ext ${marks[*]}"
 }
 
 # omabox drag X1 Y1 X2 Y2 (#25): press at the first point, move to the second in --steps, hold there
 # --hold MS (a drop target reacting to the hover), release. --window and --in map both points as for
-# click; --shot FILE takes a shot while the button is still down (the pointer tool pauses for it).
+# click; --shot FILE takes a shot while the button is still down (the pointer tool pauses for it);
+# --mod MODS holds modifiers down from the press to the release.
 cmd_drag() {
-  local name="" btn=left xy=() sels=() raise=1 in="" steps=10 hold=0 shot=""
+  local name="" btn=left xy=() sels=() raise=1 in="" steps=10 hold=0 shot="" mods=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --in) optarg "$@"; in=$2; shift ;;
       --no-raise) raise=0 ;;
-      --steps) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,2}$ ]] || die "drag: --steps is 1-999, got $2"; steps=$2; shift ;;
+      --steps) optarg "$@"; steps=$(steps_arg drag "$2"); shift ;;
       --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "drag: --hold is up to 60s (300ms, 2s), got $2"; shift ;;
       --shot) optarg "$@"; shot=$2; shift ;;
+      --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle) btn=$1 ;;
       --*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "drag: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
       *) [[ $1 =~ ^[0-9]+$ ]] || die "drag: bad argument $1"; xy+=("$((10#$1))") ;;
@@ -2025,11 +2149,9 @@ cmd_drag() {
     if [ ${#wsel[@]} -gt 0 ]; then p=$(win_point "$raise" "$x" "$y" "${wsel[@]}") || exit $?; read -r x y <<<"$p"; fi
     pts+=("$x" "$y")
   done
-  local x1=${pts[0]} y1=${pts[1]} x2=${pts[2]} y2=${pts[3]} seq n
-  seq=(move "$x1" "$y1" down "$btn")
-  for ((n = 1; n <= steps; n++)); do
-    seq+=(move "$((x1 + (x2 - x1) * n / steps))" "$((y1 + (y2 - y1) * n / steps))")
-  done
+  local x1=${pts[0]} y1=${pts[1]} x2=${pts[2]} y2=${pts[3]} seq
+  SEQ=(); steps_to "$x1" "$y1" "$x2" "$y2" "$steps"
+  seq=(move "$x1" "$y1" down "$btn" "${SEQ[@]}")
   [ "$hold" = 0 ] || seq+=(sleep "$hold")
   [ -z "$shot" ] || seq+=(pause)
   seq+=(up "$btn")
@@ -2041,25 +2163,33 @@ cmd_drag() {
     settle_ready "$SETTLE_JSON"
   fi
   if [ -z "$shot" ]; then
-    if [ "$SETTLE_WAIT" = 1 ]; then settle_act on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
-    else on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; fi
+    if [ "$SETTLE_WAIT" = 1 ]; then settle_act with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
+    else with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; fi
   else
-    # The tool says "paused" once the button is down at the end; the shot is taken then, and a line on
-    # its stdin lets it release. A shot that fails still releases the button.
-    local rc=0 line
-    coproc DRAG { on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; }
-    local dout=${DRAG[0]} din=${DRAG[1]} dpid=$DRAG_PID
-    if read -r -t 120 line <&"$dout" && [ "$line" = paused ]; then
-      ( cmd_shot -b "$NAME" -o "$shot" ) || rc=$?
-    else rc=1; say "drag: the pointer did not get to the end of the drag"; fi
-    echo >&"$din" || true
-    exec {din}>&- || true
-    wait "$dpid" || rc=$?
+    local rc=0
+    with_mods "$mods" drag_shot || rc=$?
     [ $rc = 0 ] || exit $rc
   fi
   # For a peek window: where it started and ended (its steps would pass the mark's 64 tokens).
+  [ -z "$mods" ] || mark "combo $mods+drag"
   mark "ptr $ext move $x1 $y1 down $btn move $x2 $y2 up $btn"
   [ "$SETTLE_WAIT" != 1 ] || settle_end settle "$SETTLE_JSON" "the drag was sent"
+}
+# drag --shot (cmd_drag's ext, seq, shot): the tool says "paused" once the button is down at the end;
+# the shot is taken then, and a line on its stdin lets it release. A shot that fails still releases
+# the button.
+# shellcheck disable=SC2329 # called through with_mods
+drag_shot() {
+  local rc=0 line
+  coproc DRAG { on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; }
+  local dout=${DRAG[0]} din=${DRAG[1]} dpid=$DRAG_PID
+  if read -r -t 120 line <&"$dout" && [ "$line" = paused ]; then
+    ( cmd_shot -b "$NAME" -o "$shot" ) || rc=$?
+  else rc=1; say "drag: the pointer did not get to the end of the drag"; fi
+  echo >&"$din" || true
+  exec {din}>&- || true
+  wait "$dpid" || rc=$?
+  return "$rc"
 }
 
 # --- waiting ------------------------------------------------------------------------------------

@@ -66,6 +66,7 @@ omabox keys --wait super+space             # real key events for binds and apps 
 omabox keys -t 'hello wörld' Return        # type any Unicode text (layout-aware), then a key
 omabox keys --pass PASSWORD Return         # type a secret from your environment: never -t (ps shows it)
 omabox click 960 540 [right] [--double]    # layout coordinates, as in the screenshot (--wait too)
+omabox click --steps 20 --mod ctrl 960 540 # travel there (hovering what it crosses), then ctrl-click
 omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
 omabox down                                # when done: kills everything in the box

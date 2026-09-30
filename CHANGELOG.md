@@ -25,6 +25,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#30](https://github.com/diogochaves/omabox/issues/30)).
 - **`shot --window SEL -g "X,Y WxH"`** crops a window in its own coordinates
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
+- **A pointer that travels**: `click --steps N` and `pointer --steps N -- move X Y` (or `move X Y
+  --steps N`) move there in N steps from where the pointer is, so what lies on the way is hovered
+  and, under Omarchy's focus-follows-mouse, takes focus, as with a real mouse. `click` and `move`
+  still jump by default ([#38](https://github.com/diogochaves/omabox/issues/38)).
+- **Modifier clicks**: `click --mod ctrl` (shift, alt, super, altgr; `ctrl+shift`), and `--mod` on
+  `drag` and `pointer`, hold modifiers down across the click, then let go, however omabox ends
+  ([#25](https://github.com/diogochaves/omabox/issues/25)).
 
 ### Changed
 
