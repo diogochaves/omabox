@@ -1821,6 +1821,53 @@ the designs here were measured in boxes and built for a contained desktop, and n
     alone, a job that exited (nothing to replace, its record dropped), one ignoring SIGTERM killed
     after 5.2 s, the job's SigIgn without INT/QUIT; `t_replace`, `t_unit_cli` (`job_procs`),
     `t_jail` (through the broker).
+111. **A pointer that travels: `--steps N` on `click` and `pointer`** (2026-09-30, issue #38, found by
+    an agent whose box test passed while the desktop failed: a scrolling layout's centred column lost
+    its place because the pointer, on its way to the bar, crossed the next column and Omarchy's
+    `input:follow_mouse = 1` focused it). `click` and `pointer move` put the pointer at the target in
+    one motion event, so a test never saw what a hand on a mouse passes over. The stepping is the
+    CLI's (`steps_to`, which `drag` now uses too): N moves in a straight line from where the pointer is
+    (`hyprctl cursorpos`), the last on the target; the tool round-trips and waits 40 ms after each
+    (finding 15), so Hyprland has run its focus-follows-mouse on it and the client has had the motion
+    and a frame before the next. `pointer --steps N -- move A move B` goes through A (a waypoint: a way
+    around something), `move X Y --steps N` sets one move's. `click --steps` travels in a pointer run
+    of its own, then clicks: `--wait` watches the click, not the cursor crossing the screen (the still
+    tool ignores 8 rectangles at most), and `--mod` holds its keys for the click alone. The default
+    stays a jump: a click that now focused every window between would change what existing tests and
+    agents rely on. Checked in a box (`t_pointer`): two floating foots, the pointer resting on the
+    left one; a jump past the right one to the empty desktop leaves the focus on the left and the
+    right one gets no motion (foot's mouse mode 1003 reports every motion); `--steps 20` to the same
+    point focuses the right one and it reports motions; a path around it (a waypoint below) does not;
+    `click --steps` does as `pointer --steps`. Also from inside ai-jail through the broker (`t_jail`).
+112. **Modifier clicks: `--mod MODS` on `click`, `drag` and `pointer`** (2026-09-30, issue #25's
+    last item). The keyboard tool holds the modifiers while the pointer tool clicks: `-m MODS` presses
+    them and keeps them down to the end of the run (under any keys after it), `-p MS` prints "paused"
+    and waits for a line or the end of stdin, MS at most. `with_mods` starts it on a fifo, runs the
+    pointer once "paused" came, then closes the fifo, the tool's "let go". The fifo is held by that
+    omabox alone, so however omabox ends (an error, Ctrl-C, SIGKILL) the tool reads its end and
+    releases; it also releases on SIGTERM, SIGINT and SIGHUP, ignores SIGPIPE (a closed stdout must not
+    end it with keys down), and after the pause's 3 min cap. `-p` and `-T` both read stdin: refused
+    together; `keys` refuses `-m`/`-p`. Seen: a tool killed outright (SIGKILL, which nothing catches)
+    leaves the modifier down for the seat; the next event of any new keyboard sets the modifiers to
+    none again (a keyboard's first event, finding 14), so after a hold that did not end well
+    `with_mods` runs an empty keyboard (`-s 0`), and until then a click still carries it. Modifiers
+    pressed while another window has focus reach the one the pointer then moves onto and clicks
+    (ctrl down with a foot focused; the jump onto the GTK window focused it; its click had ctrl).
+    SUPER with the left button is Omarchy's move window and with the right its resize (`hyprctl
+    binds`: `mouse:272`/`mouse:273`, "Move window"/"Resize window"), with virtual devices too: the app
+    gets no click, and `drag --mod super` moved a tiled window into the other's place. A click
+    without motion moves nothing. Checked in a box: a GTK 4 window logging `GestureClick` state saw
+    ctrl, shift+alt, ctrl+shift on the right button, and nothing held on the next plain click and key;
+    in `t_pointer`, foot's SGR mouse reports give 0, 16 (ctrl), 24 (alt+ctrl), 16 for `pointer` and
+    `drag --mod ctrl`, nothing for `--mod super`, then 0; a pause with nothing on stdin lets go after its
+    time; the tool SIGKILLed mid-run: that click had ctrl, omabox exits 1 saying so, the next click has
+    none. Not seen: an Xwayland app's view of the modifiers (they are the seat's, as for keys).
+113. **The pointer's position is test state** (2026-09-30, issue #43). Under focus-follows-mouse the
+    window the pointer rests on, or last passed over, takes focus, and gets it back when a menu or
+    panel closes. A box's pointer starts at the screen's centre (finding 85) and stays where the last
+    command left it; a test whose result depends on focus is only as good as where it put the pointer.
+    The skill's "Driving an app" says so: move it deliberately first, travel (finding 111) when the
+    way matters, `omabox hyprctl cursorpos` for where it is. `omabox help` says `click`/`move` jump.
 114. **After a confirm-close keep the box came back on another workspace** (2026-09-30, issue #24,
     seen by the maintainer: WAYLAND-3 became WAYLAND-4 and showed workspace 3, empty, the windows
     still on 1; finding 90 had seen the same). Reproduced in a stand-in host (finding 26): windows on

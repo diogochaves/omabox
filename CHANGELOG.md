@@ -36,6 +36,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#29](https://github.com/diogochaves/omabox/issues/29)).
 - **`run -d -q`** drops the "started in box" line, and **`run -d --print-log`** prints only the
   log's path, on stdout, for scripts ([#42](https://github.com/diogochaves/omabox/issues/42)).
+- **A pointer that travels**: `click --steps N` and `pointer --steps N -- move X Y` (or `move X Y
+  --steps N`) move there in N steps from where the pointer is, so what lies on the way is hovered
+  and, under Omarchy's focus-follows-mouse, takes focus, as with a real mouse. `click` and `move`
+  still jump by default ([#38](https://github.com/diogochaves/omabox/issues/38)).
+- **Modifier clicks**: `click --mod ctrl` (shift, alt, super, altgr; `ctrl+shift`), and `--mod` on
+  `drag` and `pointer`, hold modifiers down across the click, then let go, however omabox ends
+  ([#25](https://github.com/diogochaves/omabox/issues/25)).
+- The skill says the pointer's position is part of what a test sets up: where it starts, that
+  `click` jumps, how to travel ([#43](https://github.com/diogochaves/omabox/issues/43)).
 
 ### Changed
 

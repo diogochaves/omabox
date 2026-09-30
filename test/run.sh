@@ -681,6 +681,8 @@ r pwd \$O run -- sh -c 'pwd; cat README'
 r shot \$O shot
 r shotfile sh -c 'f=\$(ls /tmp/omabox-*.png); head -c 8 "\$f" | od -An -c | tr -d " \n"'
 r shot-o \$O shot -o ./out.png
+r travel-mod \$O click --steps 3 --mod ctrl 960 600
+r pointer-mod \$O pointer --steps 2 --mod shift -- move 900 500 move 960 540 --steps 3
 r relay-o $R call $br/sock -- shot -b $P-jail -o $br/pwned.png
 r host \$O host -- touch $br/pwned
 r ro-bind \$O up $P-other --ro-bind $TMP/lacks
@@ -704,6 +706,8 @@ EOF
   check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
   check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
   check "...there, on the host too" test -s "$repo/out.png"
+  check_match "click --steps --mod through the broker (#38, #25)" "^rc=0 $" "$(sect travel-mod)"
+  check_match "...pointer --steps --mod, and move's own --steps" "^rc=0 $" "$(sect pointer-mod)"
   check_match "a path of the broker's never written" "never at a path here rc=1" "$(sect relay-o)"
   check_match "host refused" "not for an agent inside ai-jail rc=1" "$(sect host)"
   check_match "a folder the jail lacks does not go in" "not a folder this jail was given whole.* rc=1" "$(sect ro-bind)"
@@ -2551,6 +2555,103 @@ t_window() {
   ob down "$B" >/dev/null
 }
 
+# Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before
+# any box is asked.
+t_unit_pointer() {
+  check_eq "steps_to: N moves, the last on the target" "move 3 7 move 6 14 move 10 21" "$(lib eval 'SEQ=(); steps_to 0 0 10 21 3; echo "${SEQ[*]}"')"
+  check_eq "...leftwards and up too" "move 5 5 move 0 0" "$(lib eval 'SEQ=(); steps_to 10 10 0 0 2; echo "${SEQ[*]}"')"
+  check_eq "--mod: names, any case, each once, in order given" "ctrl+shift+super" "$(lib mods_add "" Control,shift+CTRL+win)"
+  check_eq "...added to earlier ones" "alt+ctrl" "$(lib mods_add alt ctrl+alt)"
+  check_match "...not a modifier: refused" "'hyper' is not a modifier" "$(lib mods_add "" ctrl+hyper 2>&1)"
+  check_match "click --steps 0 refused" "--steps is 1-999" "$(ob click -b "$P-x" --steps 0 1 1 2>&1)"
+  check_match "pointer --steps 1000 refused" "--steps is 1-999" "$(ob pointer -b "$P-x" --steps 1000 -- move 1 1 2>&1)"
+  check_match "click --mod junk refused" "not a modifier" "$(ob click -b "$P-x" --mod meta 1 1 2>&1)"
+  check_match "drag --mod junk refused" "not a modifier" "$(ob drag -b "$P-x" --mod ctrl,x 1 1 2 2 2>&1)"
+  check_match "keys -m is omabox's own" "click, drag or pointer --mod" "$(ob keys -b "$P-x" -m ctrl a 2>&1)"
+}
+
+# Travel and modifier clicks in a box (findings 111, 112): two floating terminals side by side on an
+# empty desktop, the pointer resting on the left one (L). A jump past the right one (R) leaves focus
+# on L; travel in steps passes over R, and focus follows the mouse (Omarchy's input:follow_mouse = 1)
+# on the way. R reports what its pointer does (foot's SGR mouse mode 1003: ESC[<CODE;X;YM for a
+# motion, CODE 32 and up, or a press, below that, with ctrl 16 and alt 8 added; a release ends in m;
+# shift is foot's own, never reported).
+t_pointer() {
+  local B=$P-ptr
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  term() { ob run -b "$B" -d -- foot -T "$1" sh -c "$2" >/dev/null; until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.title == \"$1\")'" >/dev/null; }
+  addr() { ob hyprctl -b "$B" -j clients | jq -r --arg t "$1" '.[] | select(.title == $t) | .address'; }
+  place() {   # place TITLE X Y: floating, 500x400 at X,Y
+    local a; a=$(addr "$1")
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.float({ action = 'enable', window = 'address:$a' })" >/dev/null
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.resize({ x = 500, y = 400, window = 'address:$a' })" >/dev/null
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ x = $2, y = $3, window = 'address:$a' })" >/dev/null
+    until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.address == \"$a\") | .at == [$2, $3] and .size == [500, 400]'" >/dev/null
+  }
+  active() { ob hyprctl -b "$B" -j activewindow | jq -r '.title // ""'; }
+  pos() { ob hyprctl -b "$B" cursorpos; }
+  reports() { ob run -b "$B" -- cat /tmp/mouse | grep -ao '<[0-9;]*M' | sed 's/^<\([0-9]*\);.*/\1/'; }   # (M: not releases)
+  motions() { reports | awk '$1 >= 32' | wc -l; }
+  presses() { reports | awk '$1 < 32' | tr '\n' ' '; }
+  term L 'sleep 600'
+  term R 'printf "\033[?1003h\033[?1006h"; stty raw -echo; exec cat > /tmp/mouse'
+  place L 100 300; place R 700 300
+  ob wait -b "$B" still >/dev/null   # the moves are animated: input goes where the windows are drawn
+  check_eq "follow_mouse is on (what travel is for)" 1 "$(ob hyprctl -b "$B" -j getoption input:follow_mouse | jq .int)"
+  ob pointer -b "$B" -- move 350 500 >/dev/null
+  check_eq "resting on L focuses it" L "$(active)"
+  local m0; m0=$(motions)
+  ob pointer -b "$B" -- move 1500 500 >/dev/null
+  check_eq "a jump past R to the empty desktop: the focus stays on L" L "$(active)"
+  check_eq "...and R saw no motion" "$m0" "$(motions)"
+  ob pointer -b "$B" -- move 350 500 >/dev/null
+  ob pointer -b "$B" --steps 20 -- move 1500 500 >/dev/null
+  check_eq "pointer --steps: the way passes over R, which takes the focus" R "$(active)"
+  check "...and R saw the pointer cross it (hover)" test "$(motions)" -gt "$m0"
+  check_eq "...ending on the target" "1500, 500" "$(pos)"
+  ob pointer -b "$B" -- move 350 500 move 350 900 move 1500 900 --steps 10 >/dev/null
+  check_eq "a path around R (move A move B --steps N): the focus stays on L" L "$(active)"
+  ob pointer -b "$B" -- move 350 500 move 1500 500 --steps 20 >/dev/null
+  check_eq "one move's own --steps crosses R" R "$(active)"
+  ob pointer -b "$B" -- move 350 500 >/dev/null
+  ob click -b "$B" --steps 20 1500 500 >/dev/null
+  check_eq "click --steps travels there too" R "$(active)"
+  # Modifiers held across the click (#25).
+  ob click -b "$B" --window R 50 50 >/dev/null
+  ob click -b "$B" --window R 50 50 --mod ctrl >/dev/null
+  ob click -b "$B" --window R 50 50 --mod alt --mod ctrl >/dev/null
+  ob pointer -b "$B" --window R --mod ctrl -- move 60 60 click >/dev/null
+  ob drag -b "$B" --window R 50 50 150 50 --mod ctrl >/dev/null
+  ob click -b "$B" --window R 50 50 --mod super >/dev/null
+  ob click -b "$B" --window R 50 50 >/dev/null
+  check_eq "click, --mod ctrl, alt+ctrl, pointer and drag --mod ctrl, --mod super (Hyprland's move bind: not for the app), then none held" \
+    "0 16 24 16 16 0 " "$(presses)"
+  check_eq "...SUPER+click moved nothing (no motion)" "700 300" "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.title == "R") | "\(.at[0]) \(.at[1])"')"
+  # Never left down: a pause that times out lets go; the tool killed outright leaves them down until
+  # the next keyboard event, which omabox then sends.
+  local out
+  out=$(ob run -b "$B" -- sh -c 'sleep 2 | /opt/omabox/bin/omabox-keyboard -m ctrl -p 300; echo "rc=$?"' 2>&1)
+  check_match "a pause with nothing on stdin times out, letting go" "letting go.*rc=1" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "-p and -T together refused" 2 "$(ob run -b "$B" -- /opt/omabox/bin/omabox-keyboard -m ctrl -p 300 -T </dev/null >/dev/null 2>&1; echo $?)"
+  ob click -b "$B" --window R 50 50 >/dev/null
+  check_match "...after it, a click has no modifier" " 0 $" "$(presses)"
+  tree() { local c; for c in $(pgrep -P "$1"); do echo "$c"; tree "$c"; done; }
+  ob pointer -b "$B" --window R --mod ctrl -- move 50 50 sleep 3000 click >/dev/null 2>"$TMP/ptr.err" & local cp=$! kp="" i
+  for i in $(seq 50); do
+    for kp in $(tree $cp); do [ "$(cat "/proc/$kp/comm" 2>/dev/null)" = omabox-keyboard ] && break; kp=""; done
+    [ -z "$kp" ] || break; sleep 0.2
+  done
+  if [ -n "$kp" ]; then
+    kill -KILL "$kp"
+    wait $cp; check_eq "the keyboard killed mid-click: omabox exits 1" 1 $?
+    check_match "...saying it let go early" "let go of ctrl before the end" "$(cat "$TMP/ptr.err")"
+    check_match "...the click in that run still had ctrl (SIGKILL cannot be caught)" " 16 $" "$(presses)"
+    ob click -b "$B" --window R 50 50 >/dev/null
+    check_match "...and the next click has none: omabox cleared it" " 0 $" "$(presses)"
+  else wait $cp; no "pointer --mod: its keyboard tool found (to kill it)"; fi
+  ob down "$B" >/dev/null
+}
+
 # omabox wait and --wait (finding 82): the pure parts, and the tool's refusal outside a box, checked
 # in a bare namespace with no /opt/omabox and no display (where a broken check could reach nothing).
 t_unit_wait() {
@@ -2723,9 +2824,9 @@ t_replace() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
+UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
-BOX=(t_leak_control t_main t_window t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_main t_window t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.

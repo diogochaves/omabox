@@ -67,6 +67,7 @@ omabox keys --wait super+space             # real key events for binds and apps 
 omabox keys -t 'hello wörld' Return        # type any Unicode text (layout-aware), then a key
 omabox keys --pass PASSWORD Return         # type a secret from your environment: never -t (ps shows it)
 omabox click 960 540 [right] [--double]    # layout coordinates, as in the screenshot (--wait too)
+omabox click --steps 20 --mod ctrl 960 540 # travel there (hovering what it crosses), then ctrl-click
 omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
 omabox down                                # when done: kills everything in the box
@@ -100,6 +101,15 @@ then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own.
 `shot --window SEL -g "X,Y WxH"` crops the window in its own coordinates. 1920x1080 is read 1:1; on a
 bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and `click --in` it. Screen
 shots show the pointer (hover evidence: a `-g` crop of the screen); window shots never do.
+
+**The pointer is test state.** Under Omarchy's focus-follows-mouse the window the pointer rests on,
+or last passed over, takes focus, and gets it back when a menu or panel closes. A box's pointer starts
+at the screen's centre and stays wherever the last command left it (`omabox hyprctl cursorpos`).
+`click` and `pointer -- move` jump: they cross nothing on the way. Before a test whose result depends
+on focus, put the pointer where a user's would be (`omabox pointer -- move X Y`), and when the way
+there matters (to the bar, across other windows) travel: `click --steps 20 X Y`, `pointer --steps 20
+-- move X Y`. `--mod ctrl` (shift, alt; `ctrl+shift`) holds modifiers across a click or drag; SUPER
+with a button is Hyprland's own (move, resize), never the app's.
 
 | Symptom | Next step |
 |---|---|
