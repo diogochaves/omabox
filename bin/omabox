@@ -3433,8 +3433,11 @@ user asked for their real desktop in this task, run that command with: omabox ho
 # Claude Code: a SessionStart hook writes the exports to $CLAUDE_ENV_FILE, which Claude Code sources
 # before every shell command of the session, subagents' included, and prints the note into the
 # context. Not the settings' `env` block: that also changes Claude Code's own process (clipboard
-# paste, opening the browser). The hook is ours if its command mentions $GUARD.
-GUARD_HOOK="if [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]} PATH=\"$GUARD_PATH:\$PATH\"; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
+# paste, opening the browser). The hook is ours if its command mentions $GUARD. It does nothing but
+# say so once omabox is gone (issue #51: deleted without `guard off`, nothing is left to undo it).
+GUARD_GONE="omabox guard: omabox is gone ($ROOT/bin/omabox)"
+GUARD_HOOK="if [ ! -x '$ROOT/bin/omabox' ]; then echo '$GUARD_GONE, so the guard is not applied: shell commands here reach the real desktop. Its SessionStart hook (the one naming $GUARD) can go from settings.json'; \
+elif [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]} PATH=\"$GUARD_PATH:\$PATH\"; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi"
 # shellcheck disable=SC2016 # jq, not shell
 GUARD_JQ='def ours: (.command? // "") | contains($g);
@@ -3443,8 +3446,12 @@ GUARD_JQ='def ours: (.command? // "") | contains($g);
       | if .hooks.SessionStart == [] then del(.hooks.SessionStart) else . end
       | if .hooks == {} then del(.hooks) else . end
     else . end;'
-# Codex: its shell_environment_policy.set, in a marked block of config.toml (no note: nothing checked
-# yet makes a Codex hook add to the context). No core limit there: Codex sets variables, not limits.
+# Codex: its shell_environment_policy.set, in a marked block of config.toml. No core limit there:
+# Codex sets variables, not limits. Those are fixed values, so they stay when omabox is gone: a
+# SessionStart hook in its hooks.json (issue #51; the same format as Claude Code's settings) gives the
+# note while omabox is there, and says how to take the guard out once it is not.
+GUARD_CODEX_HOOK="if [ -x '$ROOT/bin/omabox' ]; then echo '$GUARD_NOTE'; \
+else echo '$GUARD_GONE, but Codex still applies its guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). To end it, delete the lines from # >>> omabox guard to # <<< omabox guard in Codex config.toml, and this hook from its hooks.json'; fi"
 GUARD_CODEX="# >>> omabox guard (\`omabox guard off\` removes this block)
 [shell_environment_policy.set]
 $(for kv in "${GUARD_ENV[@]}"; do printf '%s = "%s"\n' "${kv%%=*}" "${kv#*=}"; done)
@@ -3465,43 +3472,53 @@ guard_write() {
   say "guard $ACT in $file${bak:+ (was: $bak)}; new sessions pick it up"
 }
 
-# guard_claude state|on|off: prints the state, or applies.
-guard_claude() {
-  local file; file=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+# guard_hooks FILE COMMAND state|check|on|off: our SessionStart hook in a JSON hooks file (Claude
+# Code's settings, Codex's hooks.json). state prints off, on or outdated; check only reads the file
+# (so a broken one stops `on` before anything else is written); on and off apply.
+guard_hooks() {
+  local file=$1 hook=$2 cur='{}' want
   [ ! -L "$file" ] || file=$(readlink -f "$file")   # a settings file linked from a dotfiles repo
-  local cur='{}'
   if [ -e "$file" ]; then
     cur=$(cat "$file") || die "cannot read $file"
     jq -e 'type == "object"' <<<"$cur" >/dev/null 2>&1 || die "$file is not a JSON object: not touched"
   fi
-  local want
-  case $1 in
+  case $3 in
+    check) return ;;
     state)
-      local line dir
-      line=$(jq -r --arg g "$GUARD" --arg c "$GUARD_HOOK" --arg f "$file" "$GUARD_JQ"'
-        [.hooks.SessionStart[]?.hooks[]? | select(ours)]
-        | "Claude Code (\($f)): " + if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur")
-      # A hook written from a checkout that is gone (a removed worktree) no longer stops xdg-open.
-      if [[ $line == *": outdated" ]]; then
-        while IFS= read -r dir; do
-          [ -x "$dir/xdg-open" ] || line+=": its $dir is gone, so links open on the desktop again"
-        done < <(jq -r --arg g "$GUARD" "$GUARD_JQ"'.hooks.SessionStart[]?.hooks[]? | select(ours) | .command' <<<"$cur" |
-          grep -o 'PATH="[^"]*/share/guard:' | sed 's/^PATH="//; s/:$//')
-      fi
-      echo "$line"
+      jq -r --arg g "$GUARD" --arg c "$hook" "$GUARD_JQ"'
+        [.hooks.SessionStart[]?.hooks[]? | select(ours)] | if . == [] then "off" elif all(.command == $c) then "on" else "outdated" end' <<<"$cur"
       return ;;
-    on) want=$(jq --arg g "$GUARD" --arg c "$GUARD_HOOK" "$GUARD_JQ"' strip | .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]' <<<"$cur") ;;
+    on) want=$(jq --arg g "$GUARD" --arg c "$hook" "$GUARD_JQ"' strip | .hooks.SessionStart += [{hooks: [{type: "command", command: $c}]}]' <<<"$cur") ;;
     off) want=$(jq --arg g "$GUARD" "$GUARD_JQ"' strip' <<<"$cur") ;;
   esac
-  if [ "$(jq -S . <<<"$want")" = "$(jq -S . <<<"$cur")" ]; then say "guard already $1 in $file"; return; fi
+  if [ "$(jq -S . <<<"$want")" = "$(jq -S . <<<"$cur")" ]; then say "guard already $3 in $file"; return; fi
   guard_write "$file" "$want"$'\n'
+}
+
+# guard_claude state|on|off: prints the state, or applies.
+guard_claude() {
+  local file; file=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+  [ ! -L "$file" ] || file=$(readlink -f "$file")
+  if [ "$1" != state ]; then guard_hooks "$file" "$GUARD_HOOK" "$1"; return; fi
+  local line dir
+  line="Claude Code ($file): $(guard_hooks "$file" "$GUARD_HOOK" state)" || exit
+  # A hook written from a checkout that is gone (a removed worktree) no longer stops xdg-open.
+  if [[ $line == *": outdated" ]]; then
+    while IFS= read -r dir; do
+      [ -x "$dir/xdg-open" ] || line+=": its $dir is gone, so links open on the desktop again"
+    done < <(jq -r --arg g "$GUARD" "$GUARD_JQ"'.hooks.SessionStart[]?.hooks[]? | select(ours) | .command' "$file" |
+      grep -o 'PATH="[^"]*/share/guard:' | sed 's/^PATH="//; s/:$//')
+  fi
+  echo "$line"
 }
 
 # guard_codex state|on|off. TOML is edited as text (our block only) and the result checked with
 # python's tomllib: a config whose own shell_environment_policy.set would clash is refused, untouched.
+# Then its hook in hooks.json; on only when both are there and current.
 guard_codex() {
-  local file; file=${CODEX_HOME:-$HOME/.codex}/config.toml
+  local file hooks; file=${CODEX_HOME:-$HOME/.codex}/config.toml hooks=${CODEX_HOME:-$HOME/.codex}/hooks.json
   [ ! -L "$file" ] || file=$(readlink -f "$file")
+  [ "$1" != on ] || guard_hooks "$hooks" "$GUARD_CODEX_HOOK" check
   local out
   out=$(python3 - "$1" "$file" "$GUARD_CODEX" <<'PY'
 import os, sys, tomllib
@@ -3577,11 +3594,24 @@ else:
     print("WANT"); sys.stdout.write(want + ".")   # the dot keeps $(...) from eating trailing newlines
 PY
 ) || die "${out#ERR }"
+  local h
   case $out in
-    STATE*) echo "${out#STATE }" ;;
+    STATE*)
+      out=${out#STATE }; h=$(guard_hooks "$hooks" "$GUARD_CODEX_HOOK" state) || exit
+      # The block and the hook: either one alone, or an old one, is an outdated guard.
+      case ${out##*: }:$h in
+        on:on|off:off) echo "$out" ;;
+        on:*|off:*) echo "${out%: *}: outdated (its hook in $hooks: $h)" ;;
+        *) echo "$out" ;;
+      esac
+      return ;;
     SAME) say "guard already $1 in $file" ;;
     WANT*) out=${out#WANT$'\n'}; guard_write "$file" "${out%.}" ;;
   esac
+  h=$(guard_hooks "$hooks" "$GUARD_CODEX_HOOK" state)
+  guard_hooks "$hooks" "$GUARD_CODEX_HOOK" "$1"
+  # Codex runs a new or changed hook only once you trust it; that is yours to do, not ours.
+  [ "$1:$h" = on:on ] || [ "$1" != on ] || say "Codex asks you to trust its new hook once: /hooks in Codex (until then Codex has the guard but not its note)"
 }
 
 # The guard's paths go into agents' settings files unquoted: only a plain path for the omabox checkout.

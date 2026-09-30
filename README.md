@@ -70,9 +70,13 @@ rm -f ~/.agents/skills/omabox ~/.claude/skills/omabox ~/.codex/skills/omabox \
 rm -rf ~/.config/omabox ~/.cache/omabox    # settings, and box HOMEs a crash left behind
 ```
 
+Run `omabox guard off` before you delete omabox: once it is gone there is no `guard off` left to
+run. A guard left behind applies nothing in Claude Code and says so; in Codex its values stay, and
+its hook says which lines of `~/.codex/config.toml` to delete.
+
 Then delete the clone (its `build/` holds the aquamarine build). `omabox guard off` leaves a
-`.bak-<time>` of `~/.claude/settings.json` and `~/.codex/config.toml` next to each, from every change
-it made. The packages `install.sh` added stay; it printed them as `missing:` if there were any
+`.bak-<time>` of `~/.claude/settings.json`, `~/.codex/config.toml` and `~/.codex/hooks.json` next to
+each, from every change it made. The packages `install.sh` added stay; it printed them as `missing:` if there were any
 (`labwc`, `passt` and the build tools are the likely ones): `sudo pacman -Rns` those you do not use.
 
 </details>
@@ -276,10 +280,15 @@ A browser already running on your desktop takes a URL over its own socket, not t
   Qt program's abort never becomes a "Process crashed" notification on your desktop. It also tells
   the agent in one line what the error means and when `omabox host` is allowed. Claude Code's own
   process is not changed (clipboard paste, opening the browser); your `!` commands most likely are
-  not either (not checked).
+  not either (not checked). If omabox is gone (deleted without `guard off`), the hook applies nothing
+  and says so in one line.
 - **Codex**: `[shell_environment_policy.set]` in a marked block of `~/.codex/config.toml` (a config
-  whose own `set` table would clash is refused, untouched, with the lines to add by hand). The
-  variables only: no core limit, no note. Checked through `codex sandbox`, not in a logged-in session.
+  whose own `set` table would clash is refused, untouched, with the lines to add by hand), and a
+  `SessionStart` hook in `~/.codex/hooks.json` that gives the agent the same note. Codex runs that
+  hook only after you trust it once (`/hooks` in Codex). No core limit. The block's values are fixed,
+  so they stay if omabox is gone: the hook then tells the agent how to take them out. The variables
+  were checked through `codex sandbox`, the hook only by what Codex's hooks.json takes, not in a
+  logged-in session.
 - **Anything else**: `omabox guard exec -- AGENT` starts the agent itself under the guard. Its own
   process loses the display too (clipboard, opening a browser to log in; `xdg-open` refuses). It also
   gets a session of its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and
