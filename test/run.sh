@@ -2464,27 +2464,52 @@ t_unit_guard_settings() {
   mkdir -p "$h/alt"
   CLAUDE_CONFIG_DIR=$h/alt HOME=$h "$CLI" guard on >/dev/null 2>&1
   check "CLAUDE_CONFIG_DIR is honoured" jq -e '.hooks.SessionStart' "$h/alt/settings.json"
-  local hook; hook=$(lib eval 'printf %s "$GUARD_HOOK"')
+  # The hooks of an omabox at $co (a copy of the CLI, as a checkout or package would have it).
+  local co=$TMP/guard-co hook chook f=$TMP/envfile
+  mkdir -p "$co/bin"; cp "$TMP/lib/bin/omabox" "$co/bin/omabox"; chmod +x "$co/bin/omabox"
+  hook=$(bash -c 'source "$1"; printf %s "$GUARD_HOOK"' _ "$co/bin/omabox")
+  chook=$(bash -c 'source "$1"; printf %s "$GUARD_CODEX_HOOK"' _ "$co/bin/omabox")
   check_match "the hook says so when it cannot apply the guard (finding 74)" "NOT applied" "$(env -u CLAUDE_ENV_FILE sh -c "$hook")"
-  check_eq "...and applies it when it can" 1 "$(f=$TMP/envfile; CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null; grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
-  # (the hook of the suite's copy of the CLI: its checkout is $TMP/lib)
-  check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$TMP/lib/share/guard" \
-    "$(bash -c '. "$1"; echo "${PATH%%:*}"' _ "$TMP/envfile")"
+  check_eq "...and applies it when it can" 1 "$(CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null; grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
+  check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$co/share/guard" \
+    "$(bash -c '. "$1"; echo "${PATH%%:*}"' _ "$f")"
+  check_match "Codex's hook gives the note" "^omabox guard: shell commands here have no display" "$(sh -c "$chook")"
+  # Issue #51: omabox deleted without `guard off` (a checkout removed, a package uninstalled).
+  rm -rf "$co" "$f"
+  check_match "omabox gone: the hook says so, in one line" "^omabox guard: omabox is gone \($co/bin/omabox\), so the guard is not applied" "$(CLAUDE_ENV_FILE=$f sh -c "$hook")"
+  check_eq "...one line" 1 "$(CLAUDE_ENV_FILE=$f sh -c "$hook" | wc -l)"
+  check_fails "...and leaves the session's environment untouched" test -e "$f"
+  check_match "...Codex's says how to take its guard out" "omabox is gone .*Codex still applies its guard.*# >>> omabox guard" "$(sh -c "$chook")"
   check_fails "guard junk refused" g maybe
   check_fails "guard on for an unknown agent refused" g on vim
   # Codex (finding 67): a marked block in config.toml, checked as TOML; only when Codex is installed.
   local c=$h/.codex/config.toml
   check_fails "no Codex dir: Codex not listed" grep -q Codex <<<"$(g)"
   mkdir -p "$h/.codex"; printf 'model = "x"\n\n[features]\nhooks = true\n' > "$c"; orig=$(cat "$c"; echo .)
-  g on codex >/dev/null
+  local hj=$h/.codex/hooks.json
+  jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "herdr.sh session", timeout: 10}]}]}}' > "$hj"
+  out=$(g on codex)
   check_eq "Codex: on sets the variables for its commands" omabox-guard \
     "$(python3 -c 'import tomllib, sys; print(tomllib.load(open(sys.argv[1], "rb"))["shell_environment_policy"]["set"]["WAYLAND_DISPLAY"])' "$c")"
+  check_eq "...adds its hook (issue #51), keeping the others" "herdr.sh session|omabox" \
+    "$(jq -r '[.hooks.SessionStart[].hooks[].command | if contains("omabox-guard") then "omabox" else . end] | join("|")' "$hj")"
+  check_match "...says Codex asks you to trust it" "trust its new hook once: /hooks" "$out"
   check_match "...and reads on" "Codex .*: on$" "$(g | grep '^Codex')"
+  check_fails "...on again: no trust to ask for" grep -q trust <<<"$(g on codex)"
+  jq '.hooks.SessionStart |= map(select(any(.hooks[]; .command | contains("omabox-guard")) | not))' "$hj" > "$hj.new" && mv "$hj.new" "$hj"
+  check_match "Codex: the block without its hook (an install from before #51) reads outdated" "Codex .*: outdated \(its hook in .*hooks.json: off\)" "$(g | grep '^Codex')"
+  g on codex >/dev/null
+  check_match "...and on adds it" "Codex .*: on$" "$(g | grep '^Codex')"
+  echo '{"hooks":' > "$hj"
+  check_match "Codex: a hooks.json that is not JSON is refused" "hooks.json is not a JSON object" "$(g off codex >/dev/null; g on codex)"
+  check_fails "...before anything is written" grep -q omabox "$c"
+  echo '{}' > "$hj"; g on codex >/dev/null
   check_match "a broken Claude Code file is reported, not fatal for the rest" "claude: .*not a JSON object" "$(g | grep claude)"
   rm "$s"
   check_match "on codex leaves Claude Code alone" "Claude Code .*: off$" "$(g | grep '^Claude')"
   g off codex >/dev/null
-  check_eq "Codex: off gives back the same file (trailing newline too)" "$orig" "$(cat "$c"; echo .)"
+  check_eq "Codex: off gives back the same file (trailing newline too)" "$(printf 'model = "x"\n\n[features]\nhooks = true\n.')" "$(cat "$c"; echo .)"
+  check_eq "...and takes its hook out" '{}' "$(jq -c . "$hj")"
   # Codex keeps its file's last comment, our end marker, last: a table it adds lands inside the block
   # (finding 74: off deleted MCP servers).
   g on codex >/dev/null

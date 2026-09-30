@@ -7,6 +7,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **The agent guard no longer outlives omabox**: deleting omabox without `omabox guard off` left
+  every Claude Code session without a display, and nothing to turn that off with. The guard's hook
+  now applies nothing when omabox is gone, and says so. Codex's guard gains a hook of its own
+  (Codex asks you to trust it once, `/hooks`): it gives Codex's agents the guard's note, and once
+  omabox is gone it tells them which lines of `~/.codex/config.toml` to delete. `install.sh` offers
+  the update ([#51](https://github.com/diogochaves/omabox/issues/51)).
 - **Going to your own box during a test run no longer fails it**: `test/run.sh` failed with
   "omabox's workspace 9 came up" when you switched to workspace 9 for your interactive box (or an
   app of yours there). omabox's workspace coming up is now a note when the focus it brings is on a

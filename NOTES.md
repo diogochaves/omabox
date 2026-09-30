@@ -2275,6 +2275,29 @@ the designs here were measured in boxes and built for a contained desktop, and n
     node's driver is nvidia, not nvidia" when `up` had failed there: it now fails saying the box did
     not get the private Wayland screen.
 
+123. **The guard outlived omabox** (2026-09-30, issue #51, for packaging, #53). The Claude Code hook
+    is a standalone snippet that never calls omabox, so after omabox was deleted without `guard off`
+    every session still got the guard's display and `PATH` entry, with no `guard off` or `omabox
+    host` left to get out. The hook now starts with `[ ! -x '$ROOT/bin/omabox' ]`: omabox gone, it
+    writes nothing to `$CLAUDE_ENV_FILE` and prints one line (omabox is gone, the guard is not
+    applied, the hook naming `omabox-guard` can go from settings.json). Codex's guard is fixed values
+    in config.toml, which nothing there can make conditional, so Codex also gets a `SessionStart` hook
+    in `~/.codex/hooks.json` (Codex 0.159: hooks are a stable feature, the file has Claude Code's
+    format, so `guard_hooks` now does both with the same jq): with omabox there it prints the guard's
+    note, which Codex's agents never had; gone, it says the guard still applies and which lines to
+    delete from config.toml. Codex runs a new or changed hook only after the user trusts it (`/hooks`;
+    it keeps a `trusted_hash`), so `guard on` says so when it adds one; omabox never writes that
+    trust itself. Codex's state is on only with both the block and the hook current; either alone
+    reads outdated, so an install from before this is updated by `install.sh`, which already offers
+    `guard on` for an outdated guard. `guard on` reads hooks.json before writing config.toml, so a
+    broken hooks.json leaves both untouched. README's Remove section now says to run `guard off`
+    before deleting omabox. Verified: `t_unit_guard_settings` (both hooks from a copy of the CLI:
+    applied, then with the copy deleted, one line and no env file; Codex's hook added next to
+    another, trust asked once, a block without it outdated, a broken hooks.json refused before
+    anything is written, `off` takes it out). Not verified: the hook in a logged-in Codex session
+    (no login here), so that Codex adds its stdout to the context, as Claude Code does, is from the
+    shape of its hooks, not seen.
+
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
