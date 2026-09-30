@@ -2493,6 +2493,10 @@ t_unit_inspect() {
   check_match "lua: nothing to evaluate" "nothing to evaluate" "$(ob lua -b "$P-x" ' ' 2>&1)"
   check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
   check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
+  check_match "log: an unknown log named, with the ones there are" "no log called nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
+  check_match "log -n takes a number or all" "-n takes a number" "$(ob log -b "$P-x" -n 5x 2>&1)"
+  check_match "log --grep: a bad expression said" "takes a regular expression" "$(ob log -b "$P-x" --grep '(' 2>&1)"
+  check "log is a jailed agent's (its own boxes only: select_box)" lib broker_check log
 }
 
 # lua, log and events (issues #40, #41, #39) in a box of their own.
@@ -2521,6 +2525,26 @@ t_inspect() {
   local i pids=(); for i in 1 2 3 4 5 6; do ob lua -b "$B" "$i * 11" > "$TMP/lua.$i" 2>&1 & pids+=($!); done
   wait "${pids[@]}"   # (not a bare wait: the suite's host watcher is a job too)
   check_eq "lua: six calls at once each get their own answer" "11 22 33 44 55 66" "$(cat "$TMP"/lua.[1-6] | paste -sd' ')"
+  # log (finding 107): Hyprland's by default, the others by name, followed until the box goes.
+  check_eq "log: Hyprland's, -n lines" 5 "$(ob log -b "$B" -n 5 | wc -l)"
+  check_match "log --grep" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep 'creating the' -i -n 1)"
+  check_match "path --logs: where each is" "^hyprland +$(ob path -b "$B")/run/hypr/[^/]+/hyprland\.log$" "$(ob path -b "$B" --logs | grep '^hyprland')"
+  ob run -b "$B" -d -- sh -c 'echo omabox-log-1; sleep 1.5; echo omabox-log-2; sleep 600' >/dev/null 2>&1
+  check "log run: the latest run -d's" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-log-1"
+  ob log -b "$B" -f -n all run keyring > "$TMP/log.f" 2>&1 & local lf=$!
+  check "log -f: a line that comes later" until_ok 5 grep -qx omabox-log-2 "$TMP/log.f"
+  check_match "...under the log's name (several followed)" "^==> run <==" "$(head -1 "$TMP/log.f")"
+  # A log the box swapped for a link to a host file: read as the box sees it, or not at all.
+  echo omabox-host-secret > "$TMP/log.secret"
+  ob run -b "$B" -- ln -sf "$TMP/log.secret" /home/sbx/labwc.log
+  check_fails "log: a link out of the box is not followed (box up)" bash -c "'$CLI' log -b '$B' labwc 2>&1 | grep -q omabox-host-secret"
+  local t0=$SECONDS
+  ob run -b "$B" -- pkill -x Hyprland >/dev/null 2>&1
+  wait $lf; rc=$?
+  check_eq "log -f ends when the box goes down: exit 0" 0 "$rc"
+  check "...within seconds, said" test $((SECONDS - t0)) -le 5 -a -n "$(grep "box '$B' went down" "$TMP/log.f")"
+  check_eq "log: a dead box's logs are still read" omabox-log-1 "$(ob log -b "$B" run -n 2 | head -1)"
+  check_fails "...a link out of it is not followed (box down)" bash -c "'$CLI' log -b '$B' labwc 2>&1 | grep -q omabox-host-secret"
   ob down "$B" >/dev/null 2>&1
 }
 

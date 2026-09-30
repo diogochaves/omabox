@@ -55,6 +55,12 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   nothing, check with `pcall` inside the callback and keep the error in a global to read with
   `omabox lua`. (An `hl.on` callback that a `hyprctl dispatch` sets off errors in that dispatch's
   answer.)
+- `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
+  of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
+  launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
+  `--systemd`), `box` (bwrap). A box that died keeps its logs until `down`: read them to see why.
+  `-f` follows until the box goes down (exit 0). Hyprland writes its log in pieces: a line about
+  what just happened can come a moment (or many lines) later; `-f` shows it when it does.
 
 ## Mounts, HOME and the session
 
@@ -88,8 +94,7 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - `--no-shell` starts Hyprland only (no bar, tray or notifications): faster for plain app work.
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
-- Logs: `<box dir>/home/*.log` (shell, keyring, labwc, runs), Hyprland's in
-  `<box dir>/run/hypr/*/hyprland.log`, bwrap's in `<box dir>/box.log`.
+- Logs: `omabox log` prints them (below); `omabox path --logs` says where each file is.
 
 ## Network
 

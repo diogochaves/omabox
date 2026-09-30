@@ -1777,6 +1777,24 @@ the designs here were measured in boxes and built for a contained desktop, and n
     nowhere (not the Hyprland log, not `configerrors`, nothing on screen). reference.md says to
     `pcall` inside callbacks. Allowed to a jailed agent, as `hyprctl` is. `t_unit_inspect`,
     `t_inspect`.
+107. **`omabox log`: a box's logs by name** (2026-09-30, issue #41, from an agent that grepped the
+    Hyprland log through `run -- bash -c` twice in one session). `log [LOG...|all]` with `hyprland`
+    (the default: `run/hypr/SIG/hyprland.log`), `shell`, `apps` (the uwsm-app stand-in's), `run`
+    (the latest `run -d` log), `keyring`, `labwc`, `systemd`, and the box dir's `box` (bwrap's)
+    and `reap`; `-n N` (100, or `all`), `--grep RE` (grep -E, `-i`), `-f`. `path --logs` lists the
+    files. The box HOME and runtime dir are the box's to write, so a log swapped for a link to a host
+    file would have `log` print that file into an agent's context: a live box's logs are read inside
+    its mount namespace (`on_box`, where the path resolves as the box sees it), a dead box's from the
+    host only as regular files that resolve inside its own dirs (checked both ways with a link to a
+    file in the suite's host /tmp). A dead box's logs are read too, since they say why it died
+    (`need_box` now points at `omabox log -b NAME all`). `-f` runs `tail -F --pid=<box PID 1>`, in
+    the box's mount namespace but the host's pid namespace, so it ends within a second of the box
+    going down (seen: 1.1 s after its Hyprland was killed), says so and exits 0; the box dir's logs
+    are followed by a second tail into the same stream, tail's headers renamed to the logs' names
+    and, with `--grep`, printed only before a match. A follower is not use for idle expiry (its
+    command line is tail's, not nsenter's). Seen: Hyprland writes its log in pieces (the file often
+    ends mid-line, and a burst of lines landed only as Hyprland exited), so a line about an action
+    can come late; `log` ends every line it prints. `t_unit_inspect`, `t_inspect`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

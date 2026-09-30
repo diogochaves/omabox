@@ -55,7 +55,10 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
-  omabox path [NAME | -b NAME]                           the box dir (HOME is <dir>/home)
+  omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
+                                                         a box's logs: hyprland (the default), shell, apps, run,
+                                                         keyring, labwc, systemd, box, reap
+  omabox path [NAME | -b NAME] [--logs]                  the box dir (HOME is <dir>/home); --logs: each log's file
   omabox down [NAME | -b NAME | --all]
   omabox ls [--json]
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
@@ -106,6 +109,10 @@ Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box
 numbers as they are, nil as nil, tables and Hyprland's objects (a window, a monitor) as JSON (--json:
 strings quoted too). A Lua error is exit 1 with its message. An error inside a callback (hl.on,
 hl.timer) that runs later is logged nowhere: catch it with pcall.
+\`log\` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
+\`run -d\`'s, apps what Omarchy's launcher started, box bwrap's. -f follows them until the box goes
+down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
+come late.
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
 click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
@@ -351,7 +358,7 @@ meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
 need_box() {
   if box_alive; then touch "$D/used" 2>/dev/null || true; take_over && return 0; fi
   [ -f "$BOXES/.expired-$NAME" ] && die "box '$NAME' went down after $(cat "$BOXES/.expired-$NAME") idle (start it again with: omabox up $NAME; --idle 0 keeps it)"
-  [ -f "$D/box.json" ] && die "box '$NAME' is dead (logs: $D/box.log $D/home/*.log; clear it with: omabox down $NAME)"
+  [ -f "$D/box.json" ] && die "box '$NAME' is dead (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
   local have; have=$(list_names | tr '\n' ' ')
   die "no box '$NAME' is up (${have:+up: $have; }start one with: omabox up $NAME)"
 }
@@ -2420,6 +2427,137 @@ $code
   else jq -r '.[] | if type == "string" then . elif type == "null" then "nil" else tojson end' <<<"$vals"; fi
 }
 
+# --- logs ----------------------------------------------------------------------------------------
+
+# A box's logs (issue #41, finding 107), by name. Most are in the box HOME and its runtime dir, which
+# the box can write: a log swapped for a link would have `log` print a host file. So a live box's are
+# read inside its mount namespace (on_box), where a path resolves as the box sees it and only the
+# box's own files are; a dead box's from the host, only as regular files inside its own dirs. box.log
+# and reap.log are the box dir's, which the box never sees.
+LOG_NAMES=(hyprland shell apps run keyring labwc systemd box reap)
+# Where log NAME of the selected box is: "box PATH" (as the box sees it) or "host PATH"; 1 when the
+# box has none, 2 for a name that is no log.
+log_where() {
+  local sig r
+  case $1 in
+    hyprland) sig=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || return 1; echo "box /run/user/$UID/hypr/$sig/hyprland.log" ;;
+    shell|keyring|apps|labwc|systemd) echo "box /home/sbx/$1.log" ;;
+    # The latest `run -d` (their names are run-<ns since 1970>.log: in order as text).
+    run) r=$(cd "$D/home" 2>/dev/null && printf '%s\n' run-*.log | grep -E '^run-[0-9]+\.log$' | sort | tail -n 1) &&
+      [ -n "$r" ] || return 1; echo "box /home/sbx/$r" ;;
+    box|reap) echo "host $D/$1.log" ;;
+    *) return 2 ;;
+  esac
+}
+# A path as the box sees it, from the host (the box dir's HOME and runtime dir).
+log_host_path() {
+  case $1 in
+    /home/sbx/*) echo "$D/home/${1#/home/sbx/}" ;;
+    "/run/user/$UID/"*) echo "$D/run/${1#"/run/user/$UID/"}" ;;
+    *) echo "$1" ;;
+  esac
+}
+# Whether log KIND PATH is there to read (LOG_LIVE: the box is up).
+log_there() {
+  if [ "$1" = host ]; then [ -f "$2" ]
+  elif [ "$LOG_LIVE" = 1 ]; then on_box test -f "$2"
+  else log_dead_path "$2" >/dev/null; fi
+}
+# A dead box's log on the host: the file, when it is a regular one inside the box's own dirs.
+log_dead_path() {
+  local p; p=$(readlink -e -- "$(log_host_path "$1")") && [ -f "$p" ] || return 1
+  case $p in "$(readlink -f "$D/run")"/*|"$(readlink -f "$D/home")"/*) echo "$p" ;; *) return 1 ;; esac
+}
+# Print log KIND PATH whole.
+log_cat() {
+  if [ "$1" = host ]; then cat -- "$2"
+  elif [ "$LOG_LIVE" = 1 ]; then on_box cat -- "$2"
+  else cat -- "$(log_dead_path "$2")"; fi
+}
+# Lines matching --grep (all without one), as they come, each ending in a newline (Hyprland writes its
+# log in pieces: the last line is often cut, for now).
+log_grep() {
+  if [ -z "$LOG_RE" ]; then awk '{ print; fflush() }'; else grep --line-buffered -E "${LOG_I[@]}" -- "$LOG_RE" || true; fi
+}
+
+cmd_log() {
+  local name="" follow=0 n=100 srcs=() s
+  LOG_RE="" LOG_I=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -f|--follow) follow=1 ;;
+      --grep) optarg "$@"; LOG_RE=$2; shift ;;
+      -i) LOG_I=(-i) ;;
+      -n) optarg "$@"; [[ $2 =~ ^([0-9]{1,7}|all)$ ]] || die "log: -n takes a number of lines, or all"; n=$2; shift ;;
+      -h|--help) usage; return ;;
+      -*) die "log: unknown option $1" ;;
+      *) srcs+=("$1") ;;
+    esac
+    shift
+  done
+  [ -z "$LOG_RE" ] || { grep -E "${LOG_I[@]}" -- "$LOG_RE" </dev/null; [ $? != 2 ]; } || die "log: --grep takes a regular expression (grep -E), got $LOG_RE"
+  for s in "${srcs[@]}"; do
+    [ "$s" = all ] || [[ " ${LOG_NAMES[*]} " == *" $s "* ]] || die "log: no log called $s (${LOG_NAMES[*]}, all)"
+  done
+  [ ${#srcs[@]} -gt 0 ] || srcs=(hyprland)
+  [[ " ${srcs[*]} " != *" all "* ]] || srcs=("${LOG_NAMES[@]}")
+  select_box "$name"
+  # A dead box's logs are what tells why: read them too (need_box says why there are none).
+  [ -f "$D/box.json" ] || need_box
+  LOG_LIVE=0
+  if box_alive; then LOG_LIVE=1; touch "$D/used" 2>/dev/null || true; take_over || need_box; fi
+  if [ $follow = 1 ] && [ $LOG_LIVE = 0 ]; then say "box '$NAME' is down: its logs as they were"; follow=0; fi
+  local kinds=() paths=() names=() w kind path
+  for s in "${srcs[@]}"; do
+    w=$(log_where "$s") || { [ ${#srcs[@]} -gt 1 ] || die "box '$NAME' has no $s log yet"; continue; }
+    kind=${w%% *} path=${w#* }
+    # A log still to come is followed from its first line (tail -F waits for it); printed, it is not there.
+    if ! log_there "$kind" "$path"; then
+      [ ${#srcs[@]} -gt 1 ] && continue
+      [ $follow = 1 ] || die "box '$NAME' has no $s log yet ($(log_host_path "$path"))"
+    fi
+    kinds+=("$kind") paths+=("$path") names+=("$s")
+  done
+  [ ${#names[@]} -gt 0 ] || die "box '$NAME' has none of these logs yet: ${srcs[*]}"
+  local i
+  if [ $follow = 0 ]; then
+    local out sep=""
+    for i in "${!names[@]}"; do
+      if [ "$n" = all ]; then out=$(log_cat "${kinds[i]}" "${paths[i]}" | log_grep)
+      else out=$(log_cat "${kinds[i]}" "${paths[i]}" | log_grep | tail -n "$n"); fi
+      # Several: each under its name, as tail does; an empty one (or none matching) not at all.
+      if [ ${#names[@]} -gt 1 ]; then [ -n "$out" ] || continue; printf '%s==> %s <==\n' "$sep" "${names[i]}"; sep=$'\n'; fi
+      [ -z "$out" ] || printf '%s\n' "$out"
+    done
+    return 0
+  fi
+  # Followed with tail -F, which ends within a second of the box's PID 1 (--pid): the box going down
+  # ends it cleanly. The box's own logs are followed inside it, the box dir's here, both into one
+  # stream; tail's "==> PATH <==" headers get the logs' names, and with --grep only before a match.
+  # -n counts lines before --grep here.
+  local pid host=() inbox=() map="" from=$n v=()
+  pid=$(box_pid)
+  [ "$n" != all ] || from=+1
+  for i in "${!names[@]}"; do
+    if [ "${kinds[i]}" = host ]; then host+=("${paths[i]}"); else inbox+=("${paths[i]}"); fi
+    map+="${paths[i]}"$'\t'"${names[i]}"$'\n'
+  done
+  [ ${#names[@]} = 1 ] || v=(-v)
+  [ -z "$LOG_RE" ] || LOG_RE="$LOG_RE|^==> .* <==\$"
+  local rc=0
+  {
+    [ ${#host[@]} = 0 ] || tail -n "$from" -F --pid="$pid" "${v[@]}" -- "${host[@]}" 2>/dev/null &
+    [ ${#inbox[@]} = 0 ] || on_box tail -n "$from" -F --pid="$pid" "${v[@]}" -- "${inbox[@]}" 2>/dev/null
+    wait
+  } | log_grep | awk -v map="$map" 'BEGIN { n = split(map, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], kv, "\t"); name[kv[1]] = kv[2] } }
+      /^==> .* <==$/ { f = substr($0, 5, length($0) - 8); h = "==> " ((f in name) ? name[f] : f) " <=="; blank = 0; next }
+      /^$/ { blank++; next }   # (tail puts one before each header: held until a line comes)
+      { if (h != "") { print h; h = "" } for (; blank > 0; blank--) print ""; print; fflush() }' || rc=$?
+  box_alive || { say "box '$NAME' went down"; return 0; }
+  return $rc
+}
+
 # The box's screen: output name and mode (WxH@HZ as Hyprland reports it).
 box_screen() {
   on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0] // empty |
@@ -2896,11 +3034,21 @@ cmd_env() {
 }
 
 cmd_path() {
-  local name; name=$(name_arg path "$@") || exit 1
+  local name="" logs=0 a args=()
+  for a; do if [ "$a" = --logs ]; then logs=1; else args+=("$a"); fi; done
+  name=$(name_arg path "${args[@]}") || exit 1
   select_box "$name"
   # Seeding a box's HOME through its path is using it.
   if box_alive; then touch "$D/used" 2>/dev/null || true; take_over || need_box; fi
-  echo "$D"
+  [ $logs = 1 ] || { echo "$D"; return 0; }
+  # --logs (issue #41): each log the box has, where it is on the host (`omabox log NAME` reads it).
+  [ -d "$D" ] || need_box
+  local s w
+  for s in "${LOG_NAMES[@]}"; do
+    w=$(log_where "$s") || continue
+    w=$(log_host_path "${w#* }")
+    [ ! -e "$w" ] || printf '%-9s %s\n' "$s" "$w"
+  done
 }
 
 # --- lifecycle -----------------------------------------------------------------------------------
@@ -3163,7 +3311,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|restart-shell|mode|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|restart-shell|mode|gpu|env|path|down|ls|list) ;;
     help|-h|--help|version|-V|--version) ;;
     config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
     *) die "omabox $cmd is not for an agent inside ai-jail" ;;
@@ -3444,6 +3592,7 @@ main() {
     wait) cmd_wait "$@" ;;
     hyprctl) cmd_hyprctl "$@" ;;
     lua) cmd_lua "$@" ;;
+    log|logs) cmd_log "$@" ;;
     peek) cmd_peek "$@" ;;
     restart-shell) cmd_restart_shell "$@" ;;
     mode) cmd_mode "$@" ;;
