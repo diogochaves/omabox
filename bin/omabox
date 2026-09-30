@@ -662,6 +662,49 @@ resolve_plugin() {
   printf '%s\t%s\n' "$id" "$dir"
 }
 
+# The ids of the workspace widgets among the user's plugins and the mounted ones ("id<TAB>dir" lines
+# on stdin), as a JSON array: a bar widget whose manifest says "workspace" (name, description or
+# aliases), as omarchy.workspaces' does. There is no kind for it, and a plugin left out of the box is
+# only known by its manifest.
+workspace_widgets() {
+  local m
+  { cut -f2 | sed 's|$|/manifest.json|'; printf '%s\n' "$HOME"/.config/omarchy/plugins/*/manifest.json; } |
+    while IFS= read -r m; do
+      [ -f "$m" ] || continue
+      jq -c 'select(.barWidget and ([.name, .description, .barWidget.displayName?, .barWidget.description?,
+          (.barWidget.aliases? // [])[]?] | map(strings) | any(test("workspace"; "i")))) | .id | strings' "$m" 2>/dev/null || true
+    done | jq -s 'unique'
+}
+
+# The user's shell.json made fit for a box (stdin to stdout): only built-in widgets and the mounted
+# plugins (ids in $1), the built-in notifications back on unless a mounted plugin serves them ($2),
+# idle held off. A bar left with no workspace numbers gets omarchy.workspaces (issue #21): where a
+# workspace widget of a plugin left out of the box was, else after the menu at the start of `left`,
+# as Omarchy's default bar has it. Not when a mounted plugin is one ($3: workspace_widgets).
+shell_json_filter() {
+  jq --argjson keep "$1" --argjson notify "$2" --argjson pagers "$3" '
+      def wid: if type == "object" then .id else . end;
+      def keep: wid as $i | ($i | startswith("omarchy.")) or ($keep | index($i));
+      def pager: wid as $i | $pagers | index($i);
+      def ws: {id: "omarchy.workspaces"};
+      if $notify and .disabledPlugins then .disabledPlugins -= ["omarchy.notifications"] else . end
+      | .idle = {screensaver: 1000000, lock: 1000000}
+      | if (.bar.layout? | type) == "object"
+          and ([.bar.layout[]?[]? | wid] | index("omarchy.workspaces") | not)
+          and ([$keep[] | select(. as $k | $pagers | index($k))] | length == 0)
+        then (first(.bar.layout | to_entries[] | .key as $s | .value | arrays | to_entries[]
+                | select(.value | pager) | [$s, .key]) // null) as $at
+          | if $at then .bar.layout[$at[0]][$at[1]] = ws
+            else .bar.layout.left = ((.bar.layout.left // []) as $l | ($l | map(wid) | index("omarchy.menu")) as $m
+              | if $m then $l[:$m + 1] + [ws] + $l[$m + 1:] else [ws] + $l end) end
+        else . end
+      | if (.bar.layout? | type) == "object" then .bar.layout |= map_values(map(select(keep))) else . end
+      | if .plugins then .plugins |= map(select(keep)) else . end
+      | (.bar.centerAnchor? // "") as $a
+      | if $a != "" and (($a | startswith("omarchy.")) or ($keep | index($a)) | not)
+        then del(.bar.centerAnchor) else . end'
+}
+
 # The box's fake HOME: the user's Omarchy look, no secrets (never api-keys.env, keyrings, tokens).
 # shell.json keeps the user's bar settings but only the built-in widgets plus the plugins mounted
 # into this box, each enabled where its manifest says it belongs. --stock-bar starts from Omarchy's
@@ -692,16 +735,8 @@ seed_home() {
   # plugin is not in the box: turn the built-in back on unless a mounted plugin serves them itself.
   local notify=true p
   for p in "${PLUGINS[@]}"; do grep -rqs --include='*.qml' NotificationServer "${p#*$'\t'}" && notify=false; done
-  jq --argjson keep "$ids" --argjson notify $notify '
-      def keep: (if type == "object" then .id else . end) as $i | ($i | startswith("omarchy.")) or ($keep | index($i));
-      if $notify and .disabledPlugins then .disabledPlugins -= ["omarchy.notifications"] else . end
-      | .idle = {screensaver: 1000000, lock: 1000000}
-      | if (.bar.layout? | type) == "object" then .bar.layout |= map_values(map(select(keep))) else . end
-      | if .plugins then .plugins |= map(select(keep)) else . end
-      | (.bar.centerAnchor? // "") as $a
-      | if $a != "" and (($a | startswith("omarchy.")) or ($keep | index($a)) | not)
-        then del(.bar.centerAnchor) else . end' \
-    "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
+  local pagers; pagers=$(printf '%s\n' "${PLUGINS[@]}" | workspace_widgets) || pagers='[]'
+  shell_json_filter "$ids" $notify "$pagers" < "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
     echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"
   for p in "${PLUGINS[@]}"; do
     id=${p%%$'\t'*}; dir=${p#*$'\t'}

@@ -1782,6 +1782,25 @@ the designs here were measured in boxes and built for a contained desktop, and n
     (they fail without the fix). A shown special workspace (the scratchpad) is not restored: the one
     under it is. Not yet checked on the real desktop.
 
+115. **No workspace numbers in a box when the user's come from a plugin** (2026-09-30, issue #21, seen
+    by the maintainer after finding 114's bug: the box came up on an empty workspace and nothing said
+    so). The filter of finding 21 keeps only `omarchy.*` widgets and the mounted plugins, so a bar
+    whose workspaces widget is a plugin's has none in a box. The issue named `njpatel.omapager` (in
+    the centre), but that is a notification daemon; the maintainer's workspace switcher is
+    `chaves.solari` ("named, coloured workspaces"), the centre anchor. There is no manifest kind for a
+    workspaces widget, so omabox recognises one by its manifest: a bar widget whose name or
+    description, or its bar widget's display name, description or aliases, say "workspace" (as
+    `omarchy.workspaces`' do), read from `~/.config/omarchy/plugins/*/manifest.json` and the mounted plugins (`workspace_widgets`); a
+    broken manifest counts as none. When the user's layout has no `omarchy.workspaces` and no mounted
+    plugin is such a widget, `omarchy.workspaces` goes where the first one left out was, else after
+    `omarchy.menu` at the start of `left` (as Omarchy's default bar has it; `left` made if missing),
+    so a box always shows its workspaces. A user's own `omarchy.workspaces` stays where it is, and a
+    mounted workspace widget stays instead (added where its manifest says when the user's bar lacks
+    it). A layout that is not there (the shell's default has workspaces) is left alone. The jq moved
+    into `shell_json_filter`. Checked in a box with this machine's bar: `omarchy.workspaces` in the
+    centre where Solari was, drawn (1-5); with `--plugin chaves.solari`, Solari and no
+    `omarchy.workspaces`. `t_unit_bar_filter` covers the placements and the manifest reading.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

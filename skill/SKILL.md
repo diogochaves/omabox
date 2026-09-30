@@ -175,7 +175,8 @@ omabox restart-shell                           # after editing the plugin (the m
 ```
 
 The box's `shell.json` has only built-in widgets plus the plugins you mount, each enabled where its
-manifest says. It copies the user's bar layout; `omabox up --stock-bar` uses Omarchy's default bar
+manifest says. It copies the user's bar layout (Omarchy's workspace numbers in place of a plugin's
+that is left out); `omabox up --stock-bar` uses Omarchy's default bar
 instead (workspaces, clock, the stock right side), to see a plugin as most people will. Do not mount plugins you were not asked to test (some talk to real services).
 
 ## What is and is not in a box
