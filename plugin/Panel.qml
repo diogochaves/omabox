@@ -33,8 +33,14 @@ Panel {
   property string lastError: ""        // kept until the next action succeeds
   property string listError: ""        // `omabox ls` itself failing: the list shown may be stale
   property int listFailures: 0
-  property string action: ""           // what actionProc is doing: peek, shot, down
+  property string action: ""           // what actionProc is doing: peek, shot, clip, clip out, down, keys-to-box
   property real now: Date.now()
+  // The box SUPER keys go to right now (the host's "omabox" submap, one-shot or keys-to-box), or "":
+  // what the CLI's Lua in your Hyprland writes to $XDG_RUNTIME_DIR/omabox/.keys on each change.
+  property string keysFileBox: ""
+  // ...when that box is up in the list: a file left by a Hyprland that went away never lights the icon.
+  readonly property string keysBox:
+    boxes.some(function(b) { return b.name === keysFileBox && b.state === "up" }) ? keysFileBox : ""
   // `omabox config --json`; the defaults until it answers.
   property var settings: ({ "workspace": "9", "confirm-close": "off", "bar-icon": "always" })
   // bar-icon: always (the default) keeps the icon, and the panel's settings, in the bar with no box
@@ -67,6 +73,9 @@ Panel {
     peek: String.fromCodePoint(0xF0208),    // md-eye
     show: String.fromCodePoint(0xF0379),    // md-monitor
     shot: String.fromCodePoint(0xF0100),    // md-camera
+    clipIn: String.fromCodePoint(0xF014A),  // md-clipboard_arrow_down
+    clipOut: String.fromCodePoint(0xF0C57), // md-clipboard_arrow_up
+    keys: String.fromCodePoint(0xF030C),    // md-keyboard
     down: String.fromCodePoint(0xF0159),    // md-close_circle
     alert: String.fromCodePoint(0xF0026),   // md-alert
     dismiss: String.fromCodePoint(0xF0156)  // md-close
@@ -176,7 +185,15 @@ Panel {
     if (b.plugins && b.plugins.length) parts.push(b.plugins.join(", "))
     if (b.net === "isolated") parts.push("isolated")
     if (b.peeking) parts.push("peeking")
+    if (keysBox === b.name) parts.push("SUPER keys here")
+    else if (b.keys_to_box) parts.push("keys follow focus")
     return parts.join(" · ")
+  }
+
+  // keys-to-box (finding 117): an interactive box's SUPER keys follow focus into its window, or not.
+  function keysToBox(b) {
+    if (!b || b.state !== "up" || b.mode !== "interactive") return
+    run(b.name, "keys-to-box", [command, "keys-to-box", "-b", b.name, b.keys_to_box ? "off" : "on"])
   }
 
   // One action at a time; a second one while it runs says so rather than vanish.
@@ -207,6 +224,15 @@ Panel {
     if (!b) return
     if (b.state !== "up") { down(b); return }
     if (run(b.name, "shot", [command, "shot", "-b", b.name])) close()
+  }
+
+  // Your clipboard into an interactive box, or the box's out (omabox clip, issue #23): one item, once.
+  // Headless boxes are agents': the CLI refuses them, and the panel offers them nothing.
+  function clip(b, out) {
+    if (!b || b.state !== "up" || b.mode !== "interactive") return
+    var args = [command, "clip", "-b", b.name]
+    if (out) args.push("--from-box")
+    if (run(b.name, out ? "clip out" : "clip", args)) close()
   }
 
   function down(b) {
@@ -245,18 +271,21 @@ Panel {
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onExited: function(code) {
       exited = true
-      root.actionDone(code === 0 ? "" : (actionErr.text.trim().split("\n").pop() || ("exit " + code)), actionOut.text.trim())
+      root.actionDone(code === 0 ? "" : (actionErr.text.trim().split("\n").pop() || ("exit " + code)), actionOut.text.trim(),
+        actionErr.text.trim().split("\n").pop().replace(/^omabox: /, ""))
     }
     onRunningChanged: if (!running) Qt.callLater(function() {
-      if (!actionProc.exited && !actionProc.running && root.busy !== "") root.actionDone("cannot run " + root.command, "")
+      if (!actionProc.exited && !actionProc.running && root.busy !== "") root.actionDone("cannot run " + root.command, "", "")
     })
   }
 
-  // Peek and shot close the panel, so a failure also goes out as a notification.
-  function actionDone(error, out) {
+  // Peek, shot and clip close the panel, so a failure also goes out as a notification; so does what a
+  // clip handed over (its type and size, never the content).
+  function actionDone(error, out, said) {
     lastError = error
     if (error !== "") Quickshell.execDetached(["notify-send", "-a", "omabox", "omabox " + (action === "new" ? "new box" : action + " " + busy), error])
     else if (action === "shot" && out !== "") Quickshell.execDetached(["xdg-open", out])
+    else if ((action === "clip" || action === "clip out") && said) Quickshell.execDetached(["notify-send", "-a", "omabox", "omabox " + action + " " + busy, said])
     else if (action === "new" && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(out)) {
       // Brought forward only while the panel is still open: once it is closed the user has moved on,
       // and focusing the box would switch their workspace under them.
@@ -311,12 +340,25 @@ Panel {
     onFileChanged: if (!configProc.running) configProc.running = true
   }
 
+  // Where SUPER keys go: watched, so the icon lights the moment the host enters the submap (the file is
+  // renamed into place: text() is stale in the change signal, so through reload → onLoaded), and
+  // read again at each poll too, in case a change was missed. Missing (no interactive box yet): none.
+  FileView {
+    id: keysFile
+    path: Quickshell.env("XDG_RUNTIME_DIR") + "/omabox/.keys"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.keysFileBox = text().trim()
+    onLoadFailed: root.keysFileBox = ""
+  }
+
   Timer {
     interval: root.opened ? 2000 : root.refreshSec * 1000
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: { root.now = Date.now(); root.refresh() }
+    onTriggered: { root.now = Date.now(); root.refresh(); keysFile.reload() }
   }
 
   Timer { id: disarm; interval: 3000; onTriggered: { root.armedDown = ""; root.armedNew = false } }
@@ -354,7 +396,10 @@ Panel {
       }
     }
     opacity: root.hasBoxes ? 1 : 0.5
-    tooltipText: root.opened ? "" : (root.hasBoxes ? root.countText : "No boxes")
+    // Lit (the bar's attention colour, as the box window's border) while SUPER keys go to a box.
+    active: root.keysBox !== ""
+    tooltipText: root.opened ? "" : root.keysBox !== "" ? "SUPER keys go to " + root.keysBox
+      : (root.hasBoxes ? root.countText : "No boxes")
     onPressed: function(b) { root.toggle() }
   }
 
@@ -395,7 +440,10 @@ Panel {
         if (!root.cursorActive) return
         if (t === "p") root.peek(root.selected())
         else if (t === "s") root.shot(root.selected())
+        else if (t === "v") root.clip(root.selected(), false)
+        else if (t === "c") root.clip(root.selected(), true)
         else if (t === "d") root.down(root.selected())
+        else if (t === "f") root.keysToBox(root.selected())
       }
 
       Column {
@@ -565,7 +613,9 @@ Panel {
           Text {
             width: parent.width
             textFormat: Text.PlainText
-            text: "↑↓ move · p peek/show · s shot · d down · n new · r refresh"
+            // No-break spaces keep each key with its action when the line wraps.
+            text: ["↑↓ move", "p peek/show", "s shot", "f keys", "v paste in", "c copy out", "d down", "n new", "r refresh"]
+              .map(function(h) { return h.replace(/ /g, "\u00a0") }).join("\u00a0· ")
             color: root.bar.foreground
             opacity: 0.5
             font.family: root.bar.fontFamily
@@ -768,6 +818,15 @@ Panel {
           fontFamily: root.bar.fontFamily
           onClicked: root.peek(row.box)
         }
+        PanelActionButton {   // keys-to-box: lit while on
+          visible: row.up && row.box.mode === "interactive"
+          iconText: root.icons.keys
+          tooltipText: row.box.keys_to_box ? "SUPER keys follow focus into it: on (f)" : "SUPER keys to the box whenever it has focus: off (f)"
+          foreground: row.box.keys_to_box ? root.bar.urgent : root.bar.foreground
+          hoverColor: root.bar.urgent
+          fontFamily: root.bar.fontFamily
+          onClicked: root.keysToBox(row.box)
+        }
         PanelActionButton {
           visible: row.up
           iconText: root.icons.shot
@@ -775,6 +834,22 @@ Panel {
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
           onClicked: root.shot(row.box)
+        }
+        PanelActionButton {
+          visible: row.up && row.box.mode === "interactive"
+          iconText: root.icons.clipIn
+          tooltipText: "Paste your clipboard into the box"
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+          onClicked: root.clip(row.box, false)
+        }
+        PanelActionButton {
+          visible: row.up && row.box.mode === "interactive"
+          iconText: root.icons.clipOut
+          tooltipText: "Copy the box's clipboard out"
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+          onClicked: root.clip(row.box, true)
         }
         PanelActionButton {
           iconText: root.icons.down

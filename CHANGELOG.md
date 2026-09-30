@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **SUPER keys that follow focus into an interactive box**: `omabox keys-to-box -b NAME on` (or the
+  keyboard button, or `f`, in the widget) sends SUPER keys to the box whenever its window has focus,
+  and gives them back to your desktop when focus goes elsewhere, with no key to press. Per box, off
+  by default, until the box goes down; SUPER+ALT+ESCAPE still passes them once, and in this mode is
+  the way out until the box loses focus. While keys go to a box, its window's border turns the
+  theme's red and the widget's icon lights up. `ls` shows the mode. A config reload of your Hyprland
+  no longer leaves passthrough stuck on with nothing bound: the box puts it back within 2 s
+  ([#22](https://github.com/diogochaves/omabox/issues/22)).
 - **Agents inside [ai-jail](https://github.com/akitaonrails/ai-jail) drive boxes of their own**:
   `omabox broker on` (a systemd user socket) prints the lines to add to `~/.ai-jail`, and `omabox`
   in the jail then works as outside. A jail's boxes get no more than the jail: no network when it
@@ -55,6 +63,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `openlayer`, ...) from its start, timestamped. `--mark` says "from here" without clearing anything,
   `--since MARK` (or `30s`) reads from there, `--grep`, `--json`, `-f`, and `--until RE` waits for an
   event like `omabox wait` does ([#39](https://github.com/diogochaves/omabox/issues/39)).
+- **`omabox clip`** hands your clipboard's item (text, or an image by its type) to an interactive
+  box, once, and `clip --from-box` hands the box's back: for a password or a URL while you drive a
+  box. With no `-b` it takes the box whose window has focus, so a key binding of yours pastes into
+  the box you are in; the widget has **Paste your clipboard into the box** and **Copy the box's
+  clipboard out** on an interactive box's row (`v`, `c`). Nothing keeps watching either clipboard; a
+  password manager's "sensitive" mark goes along. Never for agents: refused in their sessions, under
+  the guard, in ai-jail, and for headless boxes ([#23](https://github.com/diogochaves/omabox/issues/23)).
 
 ### Changed
 
@@ -81,6 +96,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - A box's bar shows workspace numbers when yours come from a plugin left out of the box: Omarchy's
   go where that plugin was, or after the menu when your bar has none
   ([#21](https://github.com/diogochaves/omabox/issues/21)).
+- **Peeking at the test suite's boxes no longer fails it**: a peek you open from the bar widget (or
+  `omabox peek`) while `test/run.sh` runs is noted as watched by you, and the checks it holds up
+  (a box you watch is not reaped) are skipped, saying why. A peek the suite's own commands open, or
+  one opened any other way, still fails it, and the message now names a peek of yours as a possible
+  cause ([#45](https://github.com/diogochaves/omabox/issues/45)).
+- **A box starts on an NVIDIA GPU just switched to its driver** (from `vfio-pci`, say): its
+  `/dev/nvidiaN` did not exist yet and `up` stopped. omabox now creates it with NVIDIA's
+  `nvidia-modprobe -c N` (no root needed), and says to run that when it cannot.
 
 ## 0.2.1 — 2026-09-29
 

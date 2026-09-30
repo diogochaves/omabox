@@ -1801,6 +1801,9 @@ the designs here were measured in boxes and built for a contained desktop, and n
     nowhere (not the Hyprland log, not `configerrors`, nothing on screen). reference.md says to
     `pcall` inside callbacks. Allowed to a jailed agent, as `hyprctl` is. `t_unit_inspect`,
     `t_inspect`.
+    Later the same day: with no EXPR at all it read the source from stdin, undocumented (the usage
+    says `EXPR | -`), and a suite check that ran `omabox -b NAME lua` with an open stdin hung on it.
+    Now no EXPR is refused ("nothing to evaluate") and only `-` reads stdin; `t_unit_inspect`.
 107. **`omabox log`: a box's logs by name** (2026-09-30, issue #41, from an agent that grepped the
     Hyprland log through `run -- bash -c` twice in one session). `log [LOG...|all]` with `hyprland`
     (the default: `run/hypr/SIG/hyprland.log`), `shell`, `apps` (the uwsm-app stand-in's), `run`
@@ -2016,6 +2019,202 @@ the designs here were measured in boxes and built for a contained desktop, and n
     of the right soname plus a missing library, a script, `/usr/bin/true`, a non-executable file.
     Not checked: a real patched build (the issue's run was one), and the version warning against a
     real other version (a stubbed `on_box` in `t_unit_hyprland`). `t_unit_hyprland`, `t_hyprland`.
+117. **keys-to-box: SUPER keys that follow focus, and where keys go shown** (2026-09-30, issue #22,
+    from the maintainer: with focus-follows-mouse, moving the pointer across the desktop dropped
+    passthrough, and a SUPER+W meant for a box hit the host and started #24). `omabox keys-to-box [-b
+    NAME] [on|off]` (no argument prints on or off; interactive boxes only, a headless one is refused;
+    `-b` in `BOX_CMDS`; refused to a jailed agent by `broker_check`, like every interactive thing):
+    while on, the host enters the `omabox` submap whenever that box's window takes focus and leaves it
+    when focus goes anywhere else, with no key to press. Off by default, for the box's lifetime: the
+    state is `$D/keys-to-box`, in the box dir (the box cannot see or write it), gone at `down`. `ls`
+    prints `keys-to-box: on` under the box, `ls --json` has `keys_to_box`. The widget has a keyboard
+    button on interactive rows (lit when on) and `f` (h/j/k/l and x are the key catcher's), which run
+    the CLI. The host side moved from an inline string to `share/passthrough.lua` (version 3; it
+    replaces version 2's hooks and unbinds its toggle key, which binding again would have doubled),
+    sent as a function body with the boxes dir, the key and the theme's `colors.toml`. **Which box a
+    window is:** every box window has class and title `aquamarine`; its client pid is the box's outer
+    bwrap (omabox-wlfd connects, then execs it), whose command line binds `<boxes>/NAME/run`, so the
+    Lua reads `/proc/PID/cmdline` on a focus change to an `aquamarine` window and checks
+    `<boxes>/NAME/keys-to-box`. No registry to keep: the pid stays when confirm-close recreates the
+    output (the same connection), and state lives in files, so a reload loses nothing. **Rules:**
+    focus on a keys-to-box box enters (`how = sticky`); focus off every box leaves (both modes);
+    focus from a sticky box to another box leaves, a one-shot one stays box to box as before. In
+    sticky mode finding 29's "a key with the pointer off the box ends it" does not apply: focus
+    decides (so after clicking the host bar, SUPER+1 still goes to the box: the documented catch).
+    SUPER+ALT+ESCAPE in the submap now remembers the focused window: sticky mode stays out until
+    focus leaves that window and comes back; in the default submap it clears that and enters.
+    `keys-to-box on|off` applies at once to the focused window (`omabox_keys_changed()`). **The
+    indicator, both modes:** on `keybinds.submap` (its argument is the submap's name, "" for reset)
+    and each check, the focused box window gets the tag `omabox-keys`, which a window rule of ours
+    colours (`border_color`): a tag change re-applies rules at once, and `getprop active_border_color`
+    shows it. The colour is the theme's `red` from `colors.toml` (the colour Omarchy's `shell.toml`
+    gives the bar's `active` modules, which the widget's `active` icon uses too; the theme's accent is
+    already the normal active border, so it would not stand out), `rgb(ff5555)` when the theme names
+    none. And `<boxes>/.keys` (the runtime dir's omabox folder, not a box's) is renamed into place
+    with the box's name, or an empty line: the widget watches it with a FileView and lights its icon
+    (WidgetButton's `active`, the bar's urgent colour) and says "SUPER keys here" on that row, only for
+    a box `ls` has up (a file left by a Hyprland that went away lights nothing). The file is also read
+    at each list poll: a FileView does not watch a file whose folder was missing when the shell
+    started. Hyprland quirk found on the way: while the focused window closes, `window.active` passes
+    nil but `hl.get_active_window()` still returns the closing window, so the submap stayed on after a
+    sticky box went down; the hook now tells "no window" (false) from "ask Hyprland" (nil). Checked in
+    a stand-in host (finding 26) with two interactive boxes and a foot: focus on the sticky box
+    enters, border red (the stand-in theme's), file names it; foot leaves, border back; SUPER+2
+    switched the box's workspace and not the stand-in's; SUPER+ALT+ESCAPE got the keys back with the
+    box still focused (SUPER+1 then switched the stand-in), and focus away and back entered again; the
+    other box did not enter; one-shot on it lit the indicator and ended on a key with the pointer off
+    it; sticky ignored that key; `off` with the box focused left at once; after a confirm-close keep
+    the new window was still the sticky box; `down` with it focused left no submap on. The widget in a
+    box with a stub CLI: `f` ran `keys-to-box -b NAME on`/`off`, the icon lit from the file (first at
+    a poll, then within a watch). `t_keys_to_box`, `t_unit_keys_to_box`, `t_widget`. Not checked on
+    the real desktop: the border on a real theme, focus-follows-mouse with a real pointer, the widget
+    in the user's bar.
+118. **A host config reload left passthrough on with nothing bound** (2026-09-30, found while doing
+    117). `hyprctl reload` on the stand-in drops every Lua global, hook, `hl.bind` and window rule
+    that `hyprctl eval` added, but keeps the current submap (and tags on windows): with the `omabox`
+    submap on at a reload, it stayed on with nothing defined in it, so no SUPER bind of the host
+    worked and the toggle key did nothing, until something reset it by hand. It was so since finding
+    26 (the host side was "gone at the next config reload"), and Omarchy reloads on every theme change.
+    An interactive box's reaper (every 2 s already) now asks the host whether version 3 is there (one
+    `hyprctl eval` of a comparison that errors on purpose) and sends `passthrough.lua` again when it
+    is not (`keys_ensure`, its host session found once, in a subshell so a host that does not answer
+    never ends the reaper). The install strips the tag from every box window and starts over from
+    what focus says: a submap left on stays on only for a focused box that should have it. The theme's
+    colour is read at each install, so a theme change (a reload) brings the new one. Checked in the
+    stand-in: reload with the sticky box focused, the hooks back within 2 s, one toggle bind in each
+    submap, border and file as before, focus still drives it (`t_keys_to_box`). A box started by an
+    older omabox has an older reaper: its hooks come back at the next `up --interactive` or
+    `keys-to-box`. The brief gap (up to 2 s after a reload) is still there.
+119. **`omabox clip`: the user's clipboard into an interactive box, and back** (2026-09-30, issue
+    #23: driving an interactive box, a password or URL had to go in by hand, `wl-paste -n | omabox
+    run -b BOX -- wl-copy`). `clip [-b NAME]` reads the host's clipboard item (`wl-paste` on the
+    session `host_session` finds, whatever this shell's display is) and puts it on the box's;
+    `--from-box` the mirror. One shot, decided with the maintainer: no watcher, no live sync, no
+    toggle (the issue's "share clipboard" is left out). Nothing stays running but what a Wayland
+    copy always leaves: `wl-copy` forks to serve the item until the next copy replaces it, in the
+    box (dies with it) or on the host. Both run in a session of their own (`setsid -w`, so a
+    closing terminal or the widget's process group does not take the item with it), with no fd of
+    omabox's: stdout /dev/null, stderr a file (the box's own `mktemp` for the box's, an unlinked
+    one of omabox's for the host's; a pipe held by the fork kept `$(...)` and the widget's
+    collector waiting). The item passes through an unlinked file in `$XDG_RUNTIME_DIR` (tmpfs,
+    0600, gone however omabox ends; `/dev/fd/N` reopens it), capped at 64 MiB, each read under 10 s
+    (`timeout`); the fds are closed for every child, or the box's wl-copy fork would hold the host
+    file read-write. The box side runs by absolute paths (`/usr/bin/wl-copy`: the box's
+    `~/.local/bin` comes first on its PATH and is the box's to write), and what a box says back
+    (its type list, an error) is printed tame and short. *Types*: text first
+    (`text/plain;charset=utf-8`, `text/plain;charset=UTF-8`, `UTF8_STRING`, `text/plain`, `STRING`,
+    `TEXT`), handed over as `text/plain;charset=utf-8` (wl-copy offers the other names along with
+    it); else an image by its own type (`image/png` first, any `image/NAME`), bytes unchanged, which
+    was as simple as text; anything else (a file list, `text/html` alone) is refused naming the
+    types. Empty clipboard, empty item, over the cap: refused, nothing handed over. It says what it
+    handed over (text or an image, the type, the size), never the content. A password manager's
+    `x-kde-passwordManagerHint` goes along (`wl-copy --sensitive`): Omarchy's clipboard history
+    (the shell's `wl-paste --watch` into `~/.local/state/omarchy`) skips such items, in the box and,
+    for `--from-box`, on the host; anything else from `--from-box` lands in the user's history like
+    any copy (both seen on a stand-in with the shell). *Which box*: `-b NAME`, else the interactive box whose window has the host's focus
+    (the window is the outer bwrap's, as for `peek --focus`), else the only one; several and none
+    focused: refused, naming them. So a key binding of the user's (none installed; README has
+    `o.bind("SUPER + ALT + V", ..., "omabox clip")`) pastes into the box being worked in, except
+    while SUPER+ALT+ESCAPE sends SUPER keys to the box. Headless boxes are refused (agents'). The
+    widget: Paste in / Copy out buttons (`v`, `c`) on an interactive box's row only, closing the
+    panel; the CLI's line comes back as a notification. `clip` is in `BOX_CMDS` (`-b` first works).
+    Verified with a box standing in for the host (finding 26) and interactive boxes nested in it,
+    the clipboards the stand-in's and theirs (`t_clip`): text with a non-ASCII word and a trailing
+    newline byte for byte, the text names offered in the box, no `-b` with one box, a PNG of the
+    screen both ways (same md5, `image/png`), a JPEG as `image/jpeg`, `--sensitive` carried, the
+    refusals (another type, an empty clipboard or item, both sides, a headless box, two boxes and
+    none focused), the focused one of two picked, after it all one wl-copy on the stand-in, no
+    wl-paste or clip process, no process holding the item's file, the stand-in's windows and focus
+    unchanged (data-control: no window of wl-paste's), and the widget's `v` and `c` running the real
+    CLI there (a stub CLI in `t_widget` for the rows: none on a headless box, the notification).
+    Not checked: the real desktop (the user's clipboard is never read by an agent, not to test):
+    real apps' offers (a browser's copied image, KeePassXC's secret), the bind, the widget in the
+    user's bar. Same Hyprland and wl-clipboard as the stand-in, so expected the same. Not handled:
+    the primary selection; an item's other types (one type goes across); a box that stops its own
+    `wl-paste` on purpose (ptrace) can hang `--from-box` past its `timeout` (Ctrl-C; the widget
+    stays busy). `t_unit_clip`, `t_clip`, `t_widget`.
+120. **`clip` is never an agent's** (2026-09-30, issue #23). The guard keeps agents' shells off the
+    user's display, and so off their clipboard (finding 65); an omabox command that read it for them
+    would undo that. `clip` refuses before anything else when `agent_caller` finds an agent: in
+    ai-jail (the broker's `OMABOX_JAIL`; `broker_check` also refuses `clip` by name, so it never
+    joins the allowed list), or a mark in the environment of this process or any it runs under, up
+    to PID 1 or its pid namespace's edge (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+    `CODEX_THREAD_ID`, `CODEX_SANDBOX`, `OPENCODE`, `AI_AGENT`, `guard exec`'s `OMABOX_AGENT_PID` and
+    `OMABOX_SESSION`, the guard's display, signature and PATH entry), or such a process named
+    `claude`, `codex*`, `opencode`, `pi`, `hermes*` (or node, bun, deno, python running one).
+    `/proc/PID/environ` is a process's environment at its start: `env -u`/`env -i` in front of
+    omabox leaves the shell it came from marked, and `exec env -i` leaves the agent's own process
+    above it (`t_unit_clip`, `t_clip`: each mark, an ancestor's, a program named claude, node with
+    Claude Code's path, guard exec, `omabox host`). One line says why and that the user runs it
+    (a terminal of theirs, a key binding, the widget); the skill tells agents not to try. *What
+    still gets past* (a seatbelt, not a fence, like the guard): a process that does not descend
+    from the agent (`setsid -f` or a double fork, reparented to the user manager; `systemd-run
+    --user`; `hyprctl dispatch exec` with the real signature), a new pid namespace (`unshare -p`
+    cuts the walk as a box's does), an agent run under a program name and without variables of the
+    ones above, and above all a bare `wl-paste` on the real socket, which the guard never stopped.
+    Only ai-jail fences (display hidden, broker refusing). Also refused, rightly: `!omabox clip` in
+    Claude Code's prompt (the agent's shell) and a terminal an agent opened (`omabox host -- foot`).
+    What the user hands to a box is the box's: anything running there (an agent driving that box
+    with `run -- wl-paste`) can read it, and a box with the shell keeps an item not marked sensitive
+    in its clipboard history (`~/.local/state/omarchy/clipboard-history.json` in its HOME, images
+    beside it) until the box goes; a `save` of the box keeps it.
+121. **A peek the user opens at the suite's boxes is theirs, not a leak** (2026-09-30, issue #45: during
+    the 0.3.0 merge runs Diogo peeked at two `t<pid>-ag-*` boxes from the bar widget and the run
+    failed three checks: the leak detector saw a peek window of the run's box opened, focused, and
+    workspace 9 come up; `t_agent_session` waited for a box that a peek holds in use, by design
+    (`_reap`'s `peek_pid`); and the end's focus check found focus on the peek). Nothing said why: it
+    took the host event log. Now `omabox peek` says who asked, in the peek process's environment,
+    through the host Hyprland's exec (`env MARKER omabox-peek ...`; env execs peek, so `peek_pid`'s
+    command-line match holds): `OMABOX_SUITE=t<pid>` when the caller has it (every omabox the suite
+    runs), else `OMABOX_PEEK_BY=you` when the command run was `peek` (the widget's click, a
+    terminal), else nothing (`peek_marker`). The watcher already read focused windows' environ; it now
+    reads `OMABOX_PEEK_BY` too, and after a peek's `openwindow` looks the window up in `clients` and
+    logs a `+` line with its tags (a failed lookup logs `+ 0xADDR ? ERROR`). `leak_scan` decides a
+    this-run peek on that line: `OMABOX_SUITE` of this run: a leak "by this run's commands";
+    `OMABOX_PEEK_BY=you`: a note, "watched by you"; anything else, or no `+` line: a leak whose
+    message says a command other than `omabox peek` opened it, or the user did with an omabox older
+    than the suite (then run again without peeking). Focus on a peek marked yours is a note, and
+    omabox's workspace coming up is decided by the focus right after it (a stand-in showed `peek
+    --focus` gives activewindow, workspace 9, activewindow again): on a peek of yours, a note, else a
+    leak as before. So `host_same` at the end, which needs a clean scan, passes too. Why a mark of
+    the user's and not just the suite's, and why in the process rather than a record in the box dir:
+    an unmarked peek must stay a leak, since that is what a regression looks like (`up` or another
+    command opening one through its own exec: no `peek_marker`), and the suite's own `omabox peek`
+    carries its `OMABOX_SUITE`, so neither can read as the user's. Only `omabox peek`, run as the
+    command, marks a window yours: a suite process that lost `OMABOX_SUITE` (none does: the reaper
+    inherits it through `setsid`) and reached `cmd_peek` some other way would give no mark, a leak.
+    The environment is set by the exec and read by the detector from `/proc`, where the box cannot
+    write; a box-dir record would be one more file to keep in step with a window that the user can
+    close any time. What is still excused wrongly: a real leak that brings up workspace 9 while a peek
+    of yours sits there and takes the focus; and, below, the checks a peek holds up. `test/run.sh`:
+    `your_peek BOX` (a peek process at that box with `OMABOX_PEEK_BY=you`), `held BOX CHECK...`, and
+    `no` skipping ("held by your peek at BOX") a held check that fails while such a peek is open:
+    `t_agent_session`'s reaping checks, `t_idle`, `t_reap_race`, `t_run_idle`, and `t_peek`'s marks
+    (the CLI writes marks for any peek of the box). Verified: `t_unit_leak_scan` (the widget's event
+    sequence with each marker, a missing or failed `+` line, workspace 9 with other focus, `host_same`,
+    `your_peek`/`held` with a stand-in process, `peek_marker`), and `t_leak_control` live on a stand-in
+    host with a box inside it: `omabox peek --focus` run there (the box's environment has no
+    `OMABOX_SUITE`, as the widget's) is noted, the same with `OMABOX_SUITE` is reported, and a peek
+    its Hyprland starts with no marker is reported. Not verified: a real bar-widget click on the
+    host during a run (never on the real desktop; the widget runs the same `omabox peek --focus`).
+122. **An NVIDIA GPU switched to its driver at runtime has no `/dev/nvidiaN` yet** (2026-09-30, this
+    machine: the RTX 5070 Ti moved from `vfio-pci` to `nvidia` while the session ran). The driver
+    listed it (`/proc/driver/nvidia/gpus/0000:01:00.0/information`, Device Minor 0) and
+    `/dev/nvidiactl` existed, but not `/dev/nvidia0`. The nodes are made by `nvidia-modprobe`, which
+    nvidia-utils' udev rule (`60-nvidia.rules`) runs on bind only while `/dev/nvidia-uvm` does not
+    exist; here the uvm nodes were already there, so no `/dev/nvidia0`. `up` with `OMABOX_RENDER_NODE` on its render
+    node stopped: "NVIDIA GPU 0000:01:00.0 has no usable /dev/nvidia0 or /dev/nvidiactl".
+    `nvidia-modprobe -c 0` (nvidia-utils' setuid helper, made for unprivileged users) created it and
+    the box then started and passed. `nvidia_device` now does that itself: when the minor's node or
+    `nvidiactl` is missing it runs `nvidia-modprobe -c MINOR` once (if installed) and looks again;
+    still missing, the error names the command to run. Not for an interactive box's other GPUs
+    (`nvidia_device N 0`): a missing node there means the desktop does not render on it, and it is
+    left out as before. The body is `nvidia_node SLOT CREATE PROC DEV`, so `t_unit_nvidia` runs it
+    on a fake `/proc/driver/nvidia` and `/dev` with a stub helper. Not reproduced live since: the
+    node now exists, and making it disappear needs root. `t_main`'s NVIDIA branch said "the render
+    node's driver is nvidia, not nvidia" when `up` had failed there: it now fails saying the box did
+    not get the private Wayland screen.
+
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

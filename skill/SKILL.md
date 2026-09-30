@@ -232,7 +232,10 @@ without focus; your input shows on it for ~3 s, never in your shots) or `omabox 
 box they drive). Agents use headless boxes. `shot`, `click` and `keys` work on an interactive box
 while its window is hidden: never bring that window forward yourself; when `shot` gets no frame, ask
 the user. A box the user started has its own name (the repo's, or box-N from the bar widget): pass
-`-b NAME`. `omabox config` holds the user's settings: change them only when asked.
+`-b NAME`. `omabox config` holds the user's settings: change them only when asked. `omabox clip`
+(the user's clipboard into or out of a box) refuses agents, `omabox host` included: never try it or
+work around it; the user runs it themselves (a key binding, the bar widget), or you put the text
+into the box yourself (`keys -t`, `run -- wl-copy`).
 
 ## When a box cannot test it: real hardware and the real session
 

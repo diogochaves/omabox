@@ -13,7 +13,11 @@
 # suite's showing up there fails the test that was running (t_leak_control first proves that on a box
 # standing in for the host); the end checks that the host's focused workspace and window are what
 # they were, or changed by events that were not the suite's (you working meanwhile). omabox's
-# workspace coming up there fails it too (unless you were on it when the run started). Pointer motion
+# workspace coming up there fails it too (unless you were on it when the run started). A peek you
+# open at the run's t<pid>-* boxes (bar widget, omabox peek) is noted, not a leak: `omabox peek`
+# marks its window as yours (finding 121), and a check it holds up (a box you watch is not reaped) is
+# skipped, saying so. A peek from an omabox older than this suite has no mark and fails the run, as
+# does one any command of the suite's opens. Pointer motion
 # has no event: it is only seen when it moves focus. Needs a Hyprland session and python3. The
 # network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
 # connection from a box to its gateway, the router.
@@ -56,6 +60,9 @@ note() { printf '       (%s)\n' "$*" >> "$TMP/notes"; }
 notes() { [ ! -s "$TMP/notes" ] || { cat "$TMP/notes"; : > "$TMP/notes"; }; }
 ok() { notes; pass=$((pass + 1)); printf '  \e[32mok\e[0m   %s\n' "$1"; }
 no() {
+  if [ -n "${HELD:-}" ] && your_peek "$HELD"; then
+    local h=$HELD; HELD=""; skip "$1" "held by your peek at $h: a box you watch is in use (not reaped, it gets marks)"; HELD=$h; return
+  fi
   notes; fail=$((fail + 1)); failed+=("$CUR: $1"); printf '  \e[31mFAIL\e[0m %s\n' "$1"
   [ -n "${2:-}" ] && printf '       %s\n' "${2:0:300}"
   evidence "$1" "${2:-}"
@@ -91,6 +98,18 @@ skip() {
   skips+=("$CUR: $1 ($2)"); printf '  \e[33mskip\e[0m %s (%s)\n' "$1" "$2"
   [ "$STRICT" = 0 ] || no "$1" "skipped under --strict: $2"
 }
+# Issue #45 (finding 121): a peek window you opened on one of the run's boxes (bar widget, omabox
+# peek; its process marked OMABOX_PEEK_BY=you) makes that box in use, by design: it is not reaped for
+# idling or for its agent's exit, and click/keys write marks for it. `held BOX CHECK...` runs a check
+# that such a peek would fail; failing while one is open on BOX, it is skipped, saying so (`no`).
+your_peek() {
+  local p
+  for p in $(pgrep -f "omabox-peek --box $XDG_RUNTIME_DIR/omabox/$1/run/"); do
+    tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -x OMABOX_PEEK_BY=you >/dev/null && return 0
+  done
+  return 1
+}
+held() { HELD=$1; shift; "$@"; HELD=""; }
 now_ms() { local u=${EPOCHREALTIME//[!0-9]/}; echo $((u / 1000)); }
 to_ms() { local s=${1%.*} f=0; [[ $1 != *.* ]] || f=${1#*.}000; echo $((10#$s * 1000 + 10#${f:0:3})); }
 # until_ok T CMD...: poll the command until it succeeds, T seconds at most. Timing out, it says so with
@@ -153,17 +172,25 @@ try:
 except OSError as e:
     say("== watcher failed: %s" % e); sys.exit(1)
 KEEP = ("openwindow>>", "closewindow>>", "activewindowv2>>", "workspacev2>>", "activelayout>>")
+def hypr(what):
+    return json.loads(subprocess.run(["hyprctl", "-j", what], capture_output=True, text=True, timeout=5).stdout)
 def focused():
     try:
-        w = json.loads(subprocess.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True, timeout=5).stdout)
+        return describe(hypr("activewindow"))
     except Exception as e:
         return "? %s" % e
+def opened(addr):   # a peek window just opened: whose (its process environment says who asked)
+    try:
+        return describe(next(w for w in hypr("clients") if w.get("address") == "0x" + addr))
+    except Exception as e:
+        return "0x%s ? %s" % (addr, e)
+def describe(w):
     pid, cls, tags = w.get("pid", -1), w.get("class"), []
     try:
         with open("/proc/%d/environ" % pid, "rb") as f:
             for kv in f.read().split(b"\0"):
                 k, _, v = kv.decode(errors="replace").partition("=")
-                if k in ("OMABOX_SUITE", "OMABOX_NAME"): tags.append("%s=%s" % (k, v))
+                if k in ("OMABOX_SUITE", "OMABOX_NAME", "OMABOX_PEEK_BY"): tags.append("%s=%s" % (k, v))
     except Exception:
         tags.append("environ=unreadable")
     if cls == "aquamarine":   # an interactive box: its bwrap binds <box dir>/run; no title names it
@@ -189,6 +216,7 @@ while True:
         if not l.startswith(KEEP): continue
         say(l)
         if l.startswith("activewindowv2>>") and l != "activewindowv2>>": say("~ " + focused())
+        if l.startswith("openwindow>>") and l[12:].split(",", 3)[2:3] == ["omabox-peek"]: say("+ " + opened(l[12:].split(",")[0]))
 '
 
 # leak_scan PREFIX < LOG: what in a watcher's log is the suite's (a box's name starts with PREFIX, the
@@ -196,28 +224,51 @@ while True:
 # `note: ...` line for the rest (the user's own windows and workspace switches while the suite runs).
 # Windows of omabox's own: an interactive box (class aquamarine; its title names no box, so any counts,
 # unless it is your own box opened meanwhile) and peek (class omabox-peek, "omabox peek: NAME"; the
-# tool started by hand is "omabox peek"). A virtual keyboard's layout event is `omabox keys` reaching
-# that compositor (ours is anonymous there: hl-virtual-keyboard-unknown); Omarchy's input method,
-# fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names others (wayvnc). WS, when
-# given, is omabox's workspace: it coming up is a leak (the suite's boxes open nothing there).
+# tool started by hand is "omabox peek"). A peek window's process says who asked for it (finding
+# 121), on the `+` line the watcher logs after it opens and on its focus lines: OMABOX_SUITE is this
+# run's commands, a leak; OMABOX_PEEK_BY=you is `omabox peek` run by you (the bar widget), noted as
+# watched by you; neither is a peek something else opened, a leak. A virtual keyboard's layout event
+# is `omabox keys` reaching that compositor (ours is anonymous there: hl-virtual-keyboard-unknown);
+# Omarchy's input method, fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names
+# others (wayvnc). WS, when given, is omabox's workspace: it coming up is a leak (the suite's boxes
+# open nothing there), unless the focus it brings is on a peek of yours (the widget's click focuses
+# one, and Hyprland shows its workspace).
 leak_scan() {
-  local pre=$1 ws=${2:-} line data cls title kb notes=()
+  local pre=$1 ws=${2:-} line data cls title kb notes=() peek="" wsup=""
+  local wsleak="leak: omabox's workspace $ws came up (if you went there yourself, run the suite again)"
   while IFS= read -r line; do
     line=${line#* }
+    # What the next line decides: a peek window's `+` line; the focus omabox's workspace brought.
+    if [ -n "$peek" ] && [[ $line != '+ '* ]]; then echo "leak: a window opened: $peek"; peek=""; fi
+    if [ -n "$wsup" ] && [[ $line != '~ '* && $line != activewindowv2\>\>?* ]]; then echo "$wsleak"; wsup=""; fi
     case $line in
       openwindow\>\>*)
         IFS=, read -r _ _ cls title <<<"${line#*>>}"
         if [ "$cls" = aquamarine ] && data=$(their_new_box "$pre"); then notes+=("window of your box $data")
-        elif data=$(omabox_window "$pre" "$cls" "$title"); then echo "leak: a window opened: $data"
+        elif data=$(omabox_window "$pre" "$cls" "$title"); then
+          if [ "$cls" = omabox-peek ]; then peek=$data; else echo "leak: a window opened: $data"; fi
         else notes+=("window $cls"); fi ;;
+      '+ '*)
+        [ -n "$peek" ] || continue
+        title=${line#* title=}
+        if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* ]]; then echo "leak: a window opened: a peek window, by this run's commands: ${line#+ }"
+        elif [[ " $line " == *" OMABOX_PEEK_BY=you "* ]]; then notes+=("a peek at ${title#omabox peek: } watched by you")
+        else echo "leak: a window opened: $peek"; fi
+        peek="" ;;
       '~ '*)
         cls=${line#* class=} title=""
         [[ $cls != *' title='* ]] || { title=${cls#* title=}; cls=${cls%% title=*}; }
+        data=""; [[ $cls != omabox-peek || " $line " != *" OMABOX_PEEK_BY=you "* ]] || data=yours
+        if [ -n "$wsup" ]; then
+          if [ -n "$data" ]; then notes+=("workspace $ws for your peek"); else echo "$wsleak"; fi
+          wsup=""
+        fi
         if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* || $line == *" OMABOX_NAME=$pre"* || $line == *" box=$pre"* ]]; then
           echo "leak: focus went to a window of this run's: ${line#\~ }"
         elif [[ $line == *" OMABOX_NAME="* ]]; then
           echo "leak: focus went to a box's process (another run's, or yours): ${line#\~ }"
         elif [[ $line == *" box="* ]]; then data=${line#* box=}; notes+=("focus on your box ${data%% *}")
+        elif [ -n "$data" ]; then notes+=("focus on your peek at ${title#omabox peek: }")
         elif data=$(omabox_window "$pre" "$cls" "$title"); then echo "leak: focus went to $data"
         else notes+=("focus $cls"); fi ;;
       activelayout\>\>*virtual-keyboard*)
@@ -227,21 +278,22 @@ leak_scan() {
         else echo "leak: keys from a virtual keyboard ($kb)"; fi ;;
       workspacev2\>\>*)
         data=${line#*>>}
-        if [ -n "$ws" ] && [ "${data#*,}" = "$ws" ]; then
-          echo "leak: omabox's workspace $ws came up (if you went there yourself, run the suite again)"
+        if [ -n "$ws" ] && [ "${data#*,}" = "$ws" ]; then wsup=1
         else notes+=("workspace ${data#*,}"); fi ;;
     esac
   done
+  [ -z "$peek" ] || echo "leak: a window opened: $peek"
+  [ -z "$wsup" ] || echo "$wsleak"
   [ ${#notes[@]} = 0 ] || echo "note: not the suite's: $(printf '%s\n' "${notes[@]}" | awk '!seen[$0]++ && n++ < 8' | paste -sd, - | sed 's/,/, /g')"
 }
 # omabox_window PREFIX CLASS TITLE: says what the window is when it is one of omabox's that is not the
-# user's (TITLE empty: unknown).
+# user's (TITLE empty: unknown). A peek window here is one not marked as yours (leak_scan).
 omabox_window() {
   case $2 in
     aquamarine) echo "an interactive box's window ($2${3:+ \"$3\"})" ;;
     omabox-peek)
       case $3 in
-        "omabox peek: $1"*|"omabox peek"|"") echo "a peek window${3:+ \"$3\"}" ;;
+        "omabox peek: $1"*|"omabox peek"|"") echo "a peek window${3:+ \"$3\"} of this run's box, not marked as yours: a command other than \`omabox peek\` opened it, or you did with an omabox older than this suite (bar widget, omabox peek): if you opened it, that is the cause; run again without peeking" ;;
         *) return 1 ;;
       esac ;;
     *) return 1 ;;
@@ -517,6 +569,58 @@ t_unit_leak_scan() {
   check_match "a peek of this run's box" "^leak: a window opened: a peek window" "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b')"
   check_match "...the peek tool started on its own" "^leak: focus went to a peek window" "$(scan '~ 0xa pid=5 class=omabox-peek title=omabox peek')"
   check_eq "...a peek of yours is not a leak" "" "$(leaks 'openwindow>>a,9,omabox-peek,omabox peek: mine' '~ 0xa pid=5 class=omabox-peek title=omabox peek: mine')"
+  # Issue #45 (finding 121): a peek at this run's box, as the bar widget opens it (`omabox peek
+  # --focus`: the window, its `+` line, focus, workspace 9, focus again; seen in a stand-in), with each
+  # marker its process can have.
+  widget() {   # MARKER: the lines, the tags on the peek's lines
+    local t="pid=7${1:+ $1} class=omabox-peek title=omabox peek: t1-b"
+    printf '1.000 %s\n' 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' "+ 0xa $t" 'activewindowv2>>a' "~ 0xa $t" \
+      'workspacev2>>9,9' 'activewindowv2>>a' "~ 0xa $t" | leak_scan t1- 9
+  }
+  check_eq "a peek you opened (OMABOX_PEEK_BY=you): no leak, workspace 9 and focus too" \
+    "note: not the suite's: a peek at t1-b watched by you, focus on your peek at t1-b, workspace 9 for your peek" "$(widget OMABOX_PEEK_BY=you)"
+  local out; out=$(widget OMABOX_SUITE=t1)
+  check_match "one this run's commands opened (OMABOX_SUITE): a leak, said so" "^leak: a window opened: a peek window, by this run's commands: 0xa pid=7 OMABOX_SUITE=t1" "$out"
+  check_match "...its focus a leak" "leak: focus went to a window of this run's: 0xa pid=7 OMABOX_SUITE=t1" "$out"
+  check_match "...and workspace 9 coming up for it" "leak: omabox's workspace 9 came up" "$out"
+  out=$(widget)
+  check_match "one with no marker (a command other than peek opened it): a leak" "^leak: a window opened: a peek window \"omabox peek: t1-b\" of this run's box, not marked as yours: a command other than \`omabox peek\` opened it" "$out"
+  check_match "...naming your old omabox as the other cause" "if you opened it, that is the cause; run again without peeking" "$out"
+  check_eq "...its two focus changes and workspace 9 leaks too" "4" "$(grep -c '^leak:' <<<"$out")"
+  check_match "...another run's marker is not yours" "^leak: a window opened: a peek window .*not marked as yours" "$(widget OMABOX_SUITE=t12)"
+  check_match "a peek whose process the watcher could not find: a leak" "^leak: a window opened: a peek window" \
+    "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' '+ 0xa ? StopIteration()' '~ 0xb pid=9 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-c')"
+  check_match "...nor one whose + line is missing" "^leak: a window opened: a peek window" \
+    "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' 'closewindow>>a' '+ 0xa pid=7 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-b')"
+  check_match "workspace 9 up with focus on a window that is not your peek: a leak" "^leak: omabox's workspace 9" \
+    "$(printf '1.000 %s\n' 'workspacev2>>9,9' 'activewindowv2>>b' '~ 0xb pid=9 class=firefox' | leak_scan t1- 9)"
+  check_match "...or on nothing" "^leak: omabox's workspace 9" "$(printf '1.000 %s\n' 'workspacev2>>9,9' 'activewindowv2>>' 'workspacev2>>1,1' | leak_scan t1- 9)"
+  check_eq "...on your peek at a box of yours: not a leak either" "" \
+    "$(printf '1.000 %s\n' 'workspacev2>>9,9' '~ 0xb pid=9 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: mine' | leak_scan t1- 9 | grep '^leak:')"
+  # The end's focus checks: focus left on a peek of yours (and workspace 9 with it) is not the suite's.
+  mkdir -p "$TMP/hs"
+  printf '1.000 %s\n' 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' '+ 0xa pid=7 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-b' \
+    'workspacev2>>9,9' 'activewindowv2>>a' '~ 0xa pid=7 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-b' > "$TMP/hs/host-events.log"
+  check_match "host focus on your peek at the end: not the suite's" "ok.*by the suite" "$(EVID=$TMP/hs HWS=9 P=t1 host_same f 0xz 0xa window)"
+  check_match "...nor workspace 9" "ok.*by the suite" "$(EVID=$TMP/hs HWS=9 P=t1 host_same w 1 9 workspace)"
+  sed -i 's/ OMABOX_PEEK_BY=you//' "$TMP/hs/host-events.log"
+  check_match "...on an unmarked one: a failure" "FAIL.* f" "$(EVID=$TMP/hs HWS=9 P=t1 CUR=hs host_same f 0xz 0xa window)"
+  # A check a peek of yours holds up is skipped (a stand-in process, named and marked as that peek).
+  local fake="omabox-peek --box $XDG_RUNTIME_DIR/omabox/$P-held/run/wayland-1"
+  env OMABOX_PEEK_BY=you bash -c 'exec -a "$0" sleep 30' "$fake" & local fp=$!
+  env OMABOX_PEEK_BY=x bash -c 'exec -a "$0" sleep 30' "${fake/held/other}" & local fo=$!
+  until_ok 5 pgrep -f "$fake"; until_ok 5 pgrep -f "${fake/held/other}"
+  check "your_peek: a peek marked yours at that box" your_peek "$P-held"
+  check_fails "...not one marked otherwise" your_peek "$P-other"
+  check_match "a held check that fails while your peek is open: skipped, saying why" "skip.* x \(held by your peek at $P-held" "$(EVID=$TMP/hs held "$P-held" no x y)"
+  check_match "...another box's: a failure" "FAIL.* x" "$(EVID=$TMP/hs held "$P-other" no x y 2>&1 | head -1)"
+  kill "$fp" "$fo" 2>/dev/null; wait "$fp" "$fo" 2>/dev/null
+  check_match "...once it is closed: a failure" "FAIL.* x" "$(EVID=$TMP/hs held "$P-held" no x y 2>&1 | head -1)"
+  # Who asked, as `omabox peek` hands it to the peek process.
+  check_eq "peek_marker: a command the suite ran" "OMABOX_SUITE=t9" "$(OMABOX_SUITE=t9 MAIN_CMD=peek lib peek_marker)"
+  check_eq "...omabox peek run by you (no OMABOX_SUITE)" "OMABOX_PEEK_BY=you" "$(env -u OMABOX_SUITE MAIN_CMD=peek bash -c 'source "$1"; peek_marker' _ "$TMP/lib/bin/omabox")"
+  check_eq "...any other command: none (the suite fails on its peek)" "" "$(env -u OMABOX_SUITE MAIN_CMD=up bash -c 'source "$1"; peek_marker' _ "$TMP/lib/bin/omabox")"
+  check_eq "...an OMABOX_SUITE that is not a tame word: none" "" "$(OMABOX_SUITE="t1' x" MAIN_CMD=peek lib peek_marker)"
   check_match "a virtual keyboard's keys" "^leak: keys from a virtual keyboard \(hl-virtual-keyboard-unknown\)" "$(scan 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
   check_eq "...not one named as yours (OMABOX_TEST_HOST_KEYBOARDS)" "" "$(OMABOX_TEST_HOST_KEYBOARDS='^hl-virtual-keyboard-unknown$' leaks 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
   check_eq "...nor Omarchy's input method (fcitx5, on every focus change of yours)" "" "$(leaks 'activelayout>>hl-virtual-keyboard-fcitx5,English (US)')"
@@ -557,6 +661,34 @@ t_leak_control() {
   check "a workspace switch and back is noted" until_ok 5 reported '^note: .*workspace 3, workspace 1'
   check "omabox's workspace coming up is reported" until_ok 5 reported "^leak: omabox's workspace 9 came up"
   check_eq "...and while quiet, nothing" "" "$(slice "$log" quiet leaks | leak_scan "$P-" 9)"
+  # Peeks at a box of this run's (finding 121), one in the stand-in: `omabox peek --focus` run there as
+  # the bar widget runs it (the box's environment has no OMABOX_SUITE) is yours, a note; the same with
+  # the suite's OMABOX_SUITE is a leak; and a peek the stand-in's Hyprland starts with no marker (what
+  # a command other than `omabox peek` opening one would look like) is a leak.
+  local in=("$CLI" run -b "$S" --) C=$P-cin wd
+  ob run -b "$S" -- pkill -x foot   # (focus coming back to it would be a leak of its own)
+  "${in[@]}" "$CLI" up "$C" --no-shell --idle 0 >/dev/null 2>&1 || no "up a box in the stand-in" "failed"
+  # shellcheck disable=SC2329 # called through until_ok
+  seen() { slice "$log" "$1" "$2" | grep -- "$3" >/dev/null; }
+  # shellcheck disable=SC2329
+  scanned() { slice "$log" "$1" "$2" | leak_scan "$P-" 9 | grep -- "$3" >/dev/null; }
+  unpeek() { ob run -b "$S" -- pkill -x omabox-peek; ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null; }
+  mark yours
+  "${in[@]}" "$CLI" peek "$C" --focus >/dev/null 2>&1
+  until_ok 5 seen yours "" "workspacev2>>9,9"; until_ok 5 seen yours "" "~ .*class=omabox-peek"
+  unpeek; mark suites
+  "${in[@]}" env OMABOX_SUITE="$P" "$CLI" peek "$C" --focus >/dev/null 2>&1
+  until_ok 5 seen suites "" "workspacev2>>9,9"; until_ok 5 seen suites "" "~ .*class=omabox-peek"
+  unpeek; mark raw
+  wd=$("${in[@]}" "$CLI" run -b "$C" -- sh -c 'echo $WAYLAND_DISPLAY')
+  ob hyprctl -b "$S" eval "hl.exec_cmd('$ROOT/tools/peek/omabox-peek --box $("${in[@]}" "$CLI" path "$C")/run/$wd --title \"omabox peek: $C\"', { workspace = '9 silent', no_initial_focus = true })" >/dev/null
+  until_ok 5 seen raw "" "^[0-9.]* + "
+  unpeek; mark end
+  check_eq "a peek you opened (omabox peek --focus): no leak" "" "$(slice "$log" yours suites | leak_scan "$P-" 9 | grep '^leak:')"
+  check "...noted as watched by you, with its workspace and focus" scanned yours suites "^note: .*a peek at $C watched by you, .*workspace 9 for your peek"
+  check "one opened by the suite's command is reported" scanned suites raw "^leak: a window opened: a peek window, by this run's commands: .*OMABOX_SUITE=$P "
+  check "...its workspace too" scanned suites raw "^leak: omabox's workspace 9 came up"
+  check "one started with no marker is reported" scanned raw end "^leak: a window opened: a peek window \"omabox peek: $C\" of this run's box, not marked as yours"
   ob down "$S" >/dev/null 2>&1
   [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }
@@ -599,7 +731,7 @@ t_unit_jail_policy() {
   check_eq "the default box is the one the caller's omabox sent" mine "$(OMABOX_JAIL=$J OMABOX_RELAY_DEFAULT=mine lib default_name)"
   check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_JAIL=$J OMABOX_RELAY_PASS_X=s3 X=host lib caller_env X)"
   local c
-  for c in host peek guard broker _reap "config workspace 3" "save s" saves "saves rm s"; do
+  for c in host peek keys-to-box guard broker _reap "config workspace 3" "save s" saves "saves rm s"; do
     # shellcheck disable=SC2086 # the command and its arguments
     check_match "refused to a jailed agent: $c" "not for an agent inside ai-jail|does not change" "$(lib broker_check $c 2>&1)"
   done
@@ -748,8 +880,8 @@ t_unit_cli() {
   check_match "...reaches the command's own -b (windows)" "no box '$P-x' is up" "$(ob -b "$P-x" windows 2>&1)"
   check_match "...hyprctl, which takes -b only first" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl clients 2>&1)"
   local c out=""
-  for c in lua log events; do out+="$c: $(ob -b "$P-x" "$c" 2>&1 | head -1)"$'\n'; done
-  check_fails "...lua, log and events too (none unknown)" grep -q 'unknown command' <<<"$out"
+  for c in lua log events clip; do out+="$c: $(ob -b "$P-x" "$c" </dev/null 2>&1 | head -1)"$'\n'; done
+  check_fails "...lua, log, events and clip too (none unknown)" grep -qE 'unknown command|takes no -b' <<<"$out"
   check_match "...up NAME as well is two names" "up: one box name, got $P-x and $P-y" "$(ob -b "$P-x" up "$P-y" 2>&1)"
   check_eq "...a command that takes no -b: one line" "omabox: ls takes no -b: it is not about one box" "$(ob -b "$P-x" ls 2>&1)"
   check_eq "...exit 2" 2 "$(ob -b "$P-x" ls >/dev/null 2>&1; echo $?)"
@@ -772,6 +904,69 @@ t_unit_cli() {
   check_eq "job_procs: the leader restarted under the pid: none" "" "$(lib job_procs 7 499 <<<"$ps")"
   check_eq "job_procs: the leader gone, its session left" "101 8" "$(lib job_procs 7 - <<<$'101 8 7 510')"
   check_eq "job_procs: - with a leader there: none" "" "$(lib job_procs 7 - <<<"$ps")"
+}
+
+# `omabox clip` (issue #23, finding 119): never for an agent, and what it hands over. Only refusals and
+# pure functions here: whoever runs the suite may be an agent, which clip refuses whatever else holds
+# (t_clip runs the rest in a box standing in for the host, where no agent is).
+t_unit_clip() {
+  # A clean environment but for the mark tested (the caller's own PATH may be the guard's). Should a
+  # refusal ever break, clip must still reach no clipboard: an empty runtime dir (no Hyprland session
+  # to find) and a box that does not exist.
+  mkdir -p "$TMP/rt-clip"
+  cl() { env -i PATH=/usr/bin:/bin HOME="$HOME" XDG_RUNTIME_DIR="$TMP/rt-clip" "$@" 2>&1; }
+  local m
+  for m in CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=70178a3a CLAUDE_PID=1 CODEX_THREAD_ID=01a0314c OPENCODE=1 AI_AGENT=x \
+      OMABOX_AGENT_PID=1 OMABOX_SESSION=abcd1234 WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard; do
+    check_match "clip refused: $m" "clip is not for agents \(${m%%=*} set for " "$(cl "$m" "$CLI" clip -b "$P-x")"
+  done
+  check_match "clip refused: the guard's PATH" "clip is not for agents \(PATH set" "$(cl PATH="$ROOT/share/guard:/usr/bin:/bin" "$CLI" clip -b "$P-x")"
+  check_eq "...in one line" 1 "$(cl CLAUDECODE=1 "$CLI" clip -b "$P-x" | wc -l)"
+  check_match "...before anything else (an argument it does not know)" "not for agents" "$(cl CLAUDECODE=1 "$CLI" clip --bogus)"
+  # Dropped from the environment, still in a process it runs under (`; true`: bash would exec its last
+  # command otherwise, and the process with the variable would be gone).
+  check_match "clip refused: a variable dropped with env -u, still in its shell's" "not for agents \(CLAUDECODE set for bash" \
+    "$(cl CLAUDECODE=1 bash -c 'env -u CLAUDECODE "$0" clip -b "$1"; true' "$CLI" "$P-x")"
+  cp /usr/bin/bash "$TMP/claude"; cp /usr/bin/bash "$TMP/node"
+  check_match "clip refused: under a program named claude, with no variable at all (exec env -i)" "not for agents \(claude, pid" \
+    "$(cl "$TMP/claude" -c '"$0" clip -b "$1"; true' "$CLI" "$P-x")"
+  check_match "clip refused: under node running Claude Code" "not for agents \(an agent in node" \
+    "$(cl "$TMP/node" -c '"$1" clip -b "$2"; true' /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js "$CLI" "$P-x")"
+  check_match "clip refused: guard exec" "not for agents" "$(cl "$CLI" guard exec -- "$CLI" clip -b "$P-x")"
+  check_eq "clip refused: inside ai-jail (the broker's command)" "inside ai-jail" "$(OMABOX_JAIL='{}' lib agent_caller)"
+  check_match "...and the broker never takes it" "clip is not for agents" "$(lib broker_check clip 2>&1)"
+  check_match "clip is in the usage" "omabox clip \[-b NAME\] \[--from-box\]" "$(ob help)"
+  # The type handed over: text first, then an image, PNG first; nothing else.
+  check_eq "clip_pick: text over an image" "text/plain;charset=utf-8" "$(lib clip_pick $'image/png\ntext/html\ntext/plain\ntext/plain;charset=utf-8')"
+  check_eq "clip_pick: UTF8_STRING over text/plain" UTF8_STRING "$(lib clip_pick $'STRING\ntext/plain\nUTF8_STRING')"
+  check_eq "clip_pick: PNG over another image" image/png "$(lib clip_pick $'image/jpeg\nimage/png\ntext/html')"
+  check_eq "clip_pick: an image by its own type" image/webp "$(lib clip_pick $'text/html\nimage/webp')"
+  check_fails "clip_pick: neither text nor an image" lib clip_pick $'text/html\ntext/uri-list\nx-special/gnome-copied-files'
+  check_fails "clip_pick: no types (an empty clipboard)" lib clip_pick ""
+  check_fails "clip_pick: an image type that is not a tame name" lib clip_pick $'image/png;x=\e[31m\nimage/../x'
+  check_eq "clip_types: a box's type list, tame and short" "image/png;x=31m text/html " "$(lib clip_types $'image/png;x=\e[31m\ntext/html')"
+  check_eq "clip_size" "1 byte|12 bytes|1.5 KiB|64.0 MiB" "$(lib clip_size 1)|$(lib clip_size 12)|$(lib clip_size 1536)|$(lib clip_size $((64 << 20)))"
+}
+
+# keys-to-box (issue #22, finding 117): its arguments, its state in ls, and the host's Lua.
+t_unit_keys_to_box() {
+  check_match "keys-to-box: a box that is not up" "no box '$P-x' is up" "$(ob keys-to-box -b "$P-x" 2>&1)"
+  check_match "...-b before the command reaches it" "no box '$P-x' is up" "$(ob -b "$P-x" keys-to-box on 2>&1)"
+  check_match "...anything but on or off refused" "on, off, or nothing" "$(ob keys-to-box -b "$P-x" yes 2>&1)"
+  check_match "...on and off at once refused" "on or off, once" "$(ob keys-to-box -b "$P-x" on off 2>&1)"
+  # ls shows it from the box dir's file: a dead box in a runtime dir of our own.
+  local rt=$TMP/rt-keys d; d=$rt/omabox/$P-k; mkdir -p "$d"
+  echo '{"mode":"interactive","size":"window","created":"2026-09-30T12:00:00Z","plugins":[]}' > "$d/box.json"
+  echo '{}' > "$d/info.json"
+  check_eq "ls --json: keys_to_box off by default" false "$(XDG_RUNTIME_DIR=$rt "$CLI" ls --json | jq -r '.[0].keys_to_box')"
+  check_fails "...and ls says nothing" grep -q keys-to-box <<<"$(XDG_RUNTIME_DIR=$rt "$CLI" ls)"
+  echo on > "$d/keys-to-box"
+  check_eq "...on while its file is there" true "$(XDG_RUNTIME_DIR=$rt "$CLI" ls --json | jq -r '.[0].keys_to_box')"
+  check_match "...and ls says so under the box" "^  keys-to-box: on" "$(XDG_RUNTIME_DIR=$rt "$CLI" ls | sed -n 3p)"
+  if command -v luac >/dev/null; then check "passthrough.lua compiles" luac -p "$ROOT/share/passthrough.lua"
+  else skip "passthrough.lua compiles" "no luac"; fi
+  check_eq "PASS_VERSION is passthrough.lua's VERSION" "$(sed -n 's/^local VERSION = \([0-9]*\)$/\1/p' "$ROOT/share/passthrough.lua")" \
+    "$(sed -n 's/^PASS_VERSION=\([0-9]*\) .*/\1/p' "$CLI")"
 }
 
 # finding 88: an agent session's default box is its own.
@@ -910,7 +1105,7 @@ t_agent_session() {
   check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
   check_eq "a box that died stays dead, logs and all, when its agent goes" dead "$(state_of "$b4")"
   wait "$busy" 2>/dev/null
-  check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
+  held "$b3" check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
   ob down "$b3" "$b4" >/dev/null 2>&1
   # A session resumed in a new process (`claude --continue`: the same id, another CLAUDE_PID) takes
   # its box over once the agent it records is gone, whether its first command is `run`, `up`, one
@@ -947,8 +1142,8 @@ t_agent_session() {
   check_eq "...and so does its first up" "up $r6" "$(state_of "$b6") $(agent_of "$b6")"
   ob path "$b5" >/dev/null; ob path "$b6" >/dev/null   # idle clocks back to 0: what takes them down now is the agent
   kill "$r5" "$r6" 2>/dev/null
-  check "...and the box goes with the new agent" until_ok 10 gone "$b5"
-  check "...(the one it took over with up too)" until_ok 10 gone "$b6"
+  held "$b5" check "...and the box goes with the new agent" until_ok 10 gone "$b5"
+  held "$b6" check "...(the one it took over with up too)" until_ok 10 gone "$b6"
   ob down "$b5" "$b6" "$b8" >/dev/null 2>&1
   # The reaper decided to take a box down for an agent that exited, and its `down` waits for the
   # box's lock, which the session's new agent took first to take the box over: the down checks the
@@ -972,7 +1167,7 @@ t_agent_session() {
   touch "$TMP/release"; wait "$held" 2>/dev/null
   until_ok 20 test -e "$TMP/ag-$r10"
   [ -z "$rf" ] || kill -CONT "$rf"
-  check "a takeover made while the reaper's down waited for the lock keeps the box" \
+  held "$b10" check "a takeover made while the reaper's down waited for the lock keeps the box" \
     until_ok 10 grep -q ": kept$" "$XDG_RUNTIME_DIR/omabox/$b10/reap.log"
   check_eq "...for the new agent" "up $r10" "$(state_of "$b10") $(agent_of "$b10")"
   # The same with the reaper first (the new command's flock stopped): its down takes the box, and the
@@ -987,10 +1182,10 @@ t_agent_session() {
   local df; df=$(flock_of "$d10")
   [ -z "$df" ] || kill -STOP "$df"
   touch "$TMP/release"; wait "$held" 2>/dev/null
-  check "...and the reaper goes on watching it: the box goes when it exits" until_ok 15 gone "$b10"
+  held "$b10" check "...and the reaper goes on watching it: the box goes when it exits" until_ok 15 gone "$b10"
   [ -z "$df" ] || kill -CONT "$df"
   until_ok 20 test -e "$TMP/ag-$d10"
-  check_match "a first command that waited for the lock while the box went says no box is up" \
+  held "$b10" check_match "a first command that waited for the lock while the box went says no box is up" \
     "no box '$b10' is up" "$(cat "$TMP/ag-$d10.out" 2>/dev/null)"
   ob down "$b10" >/dev/null 2>&1
   # And with an `up` of the name that finds no agent (no CLAUDE_PID) queued too, let in after the
@@ -1020,7 +1215,7 @@ t_agent_session() {
   wait "$u11" 2>/dev/null
   [ -z "$tf" ] || kill -CONT "$tf"
   until_ok 20 test -e "$TMP/ag-$r11"
-  check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
+  held "$b11" check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
     "up null" "$(state_of "$b11") $(agent_of "$b11")"
   ob down "$b11" >/dev/null 2>&1
   kill "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" "$a7" "$c5" "$r5" "$r6" "$a8" "$o8" "$r8" "$q8" "$a10" "$r10" "$d10" "$a11" "$r11" 2>/dev/null
@@ -1154,6 +1349,9 @@ t_main() {
     check "NVIDIA control node is present" ob run -b "$B" -- test -c /dev/nvidiactl
     check_eq "parent output matches the box" "1920 1080" \
       "$(ob run -b "$B" -- env WAYLAND_DISPLAY=wayland-0 wlr-randr --json | jq -r '.[0].modes[] | select(.current) | "\(.width) \(.height)"')"
+  elif [ "$(lib render_driver "$(lib render_node)")" = nvidia ]; then
+    # (Before, this said "the render node's driver is nvidia, not nvidia": up had failed on NVIDIA.)
+    no "NVIDIA uses the private Wayland screen" "the render node ($(lib render_node)) is NVIDIA's, but the box did not get the private Wayland screen (box.json wayland_screen: $(jq -r .wayland_screen "$D/box.json" 2>&1)); did up fail?"
   else
     check_eq "headless screen" HEADLESS-2 "$screen_name"
     skip "NVIDIA's private Wayland screen, nodes and parent output" \
@@ -1369,8 +1567,8 @@ t_idle() {
   local B=$P-idle
   check "up --idle 10s" ob up "$B" --idle 10s --no-shell
   until_ok 30 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
-  check_fails "box went down by itself" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
-  check_match "next command says why" "went down after 10s idle" "$(ob shot -b "$B" 2>&1)"
+  held "$B" check_fails "box went down by itself" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
+  held "$B" check_match "next command says why" "went down after 10s idle" "$(ob shot -b "$B" 2>&1)"
   ob down "$B" >/dev/null 2>&1
   check_fails "down clears the note" test -e "$XDG_RUNTIME_DIR/omabox/.expired-$B"
 }
@@ -1383,7 +1581,7 @@ t_reap_race() {
   ob up "$B" --idle 10s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
   exec {lock}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lock"   # what an `up` of the name holds
   # This box's reaper's flock (cmd_down runs in the reaper's own process), not any box's up or down.
-  check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
+  held "$B" check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
   local j=$XDG_RUNTIME_DIR/omabox/$B/box.json
   jq '.created = "a new box"' "$j" > "$j.t" && mv "$j.t" "$j"   # the new box, as `up` writes it
   exec {lock}>&-
@@ -1600,6 +1798,39 @@ t_no_shell() {
   check "down" ob down "$B"
 }
 
+# finding 122: an NVIDIA GPU whose /dev/nvidiaN is missing (switched to the driver at runtime) gets it
+# from nvidia-modprobe -c MINOR; still missing, the error says what to run. A fake /proc/driver/nvidia
+# and /dev (a link to /dev/null is a character device to `test -c`), and a stub nvidia-modprobe.
+t_unit_nvidia() {
+  local d=$TMP/$P-nv slot=0000:01:00.0 out
+  mkdir -p "$d/proc/gpus/$slot" "$d/dev" "$d/stub" "$d/none"
+  printf 'Model: \t\t NVIDIA GeForce RTX 5070 Ti\nIRQ:   \t\t 180\nDevice Minor: \t 3\n' > "$d/proc/gpus/$slot/information"
+  ln -s /dev/null "$d/dev/nvidiactl"
+  printf '#!/bin/sh\necho "$*" >> "%s/calls"\n[ "$NV_STUB" = fail ] || ln -sf /dev/null "%s/dev/nvidia$2"\n' "$d" "$d" > "$d/stub/nvidia-modprobe"
+  chmod +x "$d/stub/nvidia-modprobe"
+  # (Always with the stub first in PATH: the real nvidia-modprobe is setuid root and makes /dev nodes.)
+  nv() { PATH=$1:$PATH lib nvidia_node "$slot" "$2" "$d/proc" "$d/dev" 2>&1; }
+  export NV_STUB=fail
+  out=$(nv "$d/stub" 1)
+  check_match "a missing node the helper does not create: what to run" "no usable $d/dev/nvidia3 .*run \`nvidia-modprobe -c 3\`" "$out"
+  check_eq "...after asking it once, for that minor" "-c 3" "$(cat "$d/calls" 2>&1)"
+  rm -f "$d/calls"
+  check_match "CREATE 0 (an interactive box's other GPUs): not asked" "no usable" "$(nv "$d/stub" 0)"
+  check_fails "...no call" test -e "$d/calls"
+  NV_STUB=ok
+  check_eq "a missing node: nvidia-modprobe -c MINOR creates it" "$d/dev/nvidia3" "$(nv "$d/stub" 1)"
+  check_eq "...one call" "-c 3" "$(cat "$d/calls" 2>&1)"
+  check_eq "a node there: used, the helper not asked" "$d/dev/nvidia3|-c 3" "$(nv "$d/stub" 1)|$(cat "$d/calls")"
+  rm "$d/dev/nvidiactl" "$d/calls"
+  check_match "a missing control node asks too" "no usable .*nvidiactl" "$(NV_STUB=fail nv "$d/stub" 1)"
+  check_eq "...(for the GPU's minor)" "-c 3" "$(cat "$d/calls" 2>&1)"
+  unset NV_STUB
+  check_match "no device minor in the driver's file" "no device minor" \
+    "$(printf 'Model: x\n' > "$d/proc/gpus/$slot/information"; nv "$d/none" 1)"
+  check_match "a GPU the driver does not list" "has no $d/proc/gpus/0000:02:00.0/information" \
+    "$(PATH=$d/none:$PATH lib nvidia_node 0000:02:00.0 1 "$d/proc" "$d/dev" 2>&1)"
+}
+
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
 t_unit_hyprland() {
   local d=$TMP/$P-hyp out
@@ -1732,7 +1963,7 @@ t_run_idle() {
   for _ in 1 2 3 4 5; do (cd "$repo" && "$CLI" run -- true); sleep 3; done
   check "a box used only through run stays up" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$P-exp\" and .state == \"up\")'"
   until_ok 40 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$P-exp\")'"
-  check_match "after expiry run reports it (no throwaway)" "went down after 10s idle" "$(cd "$repo" && "$CLI" run -- true 2>&1)"
+  held "$P-exp" check_match "after expiry run reports it (no throwaway)" "went down after 10s idle" "$(cd "$repo" && "$CLI" run -- true 2>&1)"
   ob down "$P-exp" >/dev/null 2>&1
 }
 
@@ -1859,6 +2090,7 @@ PY
   }
   # shellcheck disable=SC2329
   no_accent() { local a; read -ra a <<< "$(accent "$@")"; echo "${a[*]}"; [ "${a[0]}" = 0 ]; }
+  HELD=$B   # (a peek of yours at this box would get these marks too: held)
   ob click -b "$B" 100 100 >/dev/null
   check "no marks file without a peek window" test ! -e "$D/marks"
   # The stand-in: a process named as `omabox peek` runs it, relaying $D/marks into the box.
@@ -1890,6 +2122,7 @@ PY
   kill "$relay" 2>/dev/null; wait "$relay" 2>/dev/null
   ob click -b "$B" 10 10 >/dev/null
   check "the marks file goes with the peek window" test ! -e "$D/marks"
+  HELD=""
   sleep 3.2
   local after; after=$(ticks)
   check "marks cost nothing once gone (CPU ticks: $after, before any: $base)" test "$after" -le $((base + base / 2 + 3))
@@ -2005,7 +2238,7 @@ t_widget() {
   local B=$P-wg
   ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
   local H; H=$(ob path "$B")/home
-  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
+  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  clip) echo "$*" >> "$HOME/actions"; echo "omabox: handed text (text/plain;charset=utf-8, 3 bytes) from your clipboard to box ia" >&2 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   printf '#!/bin/sh\necho "xdg-open $*" >> "$HOME/actions"; exec sleep 300\n' > "$H/.local/bin/xdg-open"
   printf '#!/bin/sh\necho "notify-send $*" >> "$HOME/actions"\n' > "$H/.local/bin/notify-send"
   chmod +x "$H/.local/bin/omabox" "$H/.local/bin/xdg-open" "$H/.local/bin/notify-send"
@@ -2054,6 +2287,48 @@ t_widget() {
   check "bar-icon auto: opened with no boxes, it stays shut" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
   jq -n "[$row + {name: \"a\"}]" > "$H/list.json"; polled
   check "...and does not pop up when one comes" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
+  # clip (issue #23, finding 119): v pastes in, c copies out, on an interactive box's row only
+  local irow='{"mode":"interactive","size":"window","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"connected","state":"up","peeking":false}'
+  jq -n "[$irow + {name: \"ia\"}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v >/dev/null
+  check "v on an interactive box: clip -b NAME" until_ok 3 grep -qx "clip -b ia" "$H/actions"
+  check "...what it handed over is notified (type and size)" until_ok 3 grep -q "^notify-send -a omabox omabox clip ia handed text (text/plain" "$H/actions"
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down c >/dev/null
+  check "c: clip --from-box" until_ok 3 grep -qx "clip -b ia --from-box" "$H/actions"
+  jq -n "[$row + {name: \"hb\"}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v c >/dev/null
+  check "...neither on a headless box's" holds 1 bash -c "! grep -q 'clip -b hb' '$H/actions'"
+  ob keys -b "$B" Escape >/dev/null
+  # keys-to-box (finding 117): f turns it on or off for the selected interactive box; the icon is lit
+  # while the host's Lua names a box in $XDG_RUNTIME_DIR/omabox/.keys (renamed into place, as it does).
+  local irow='{"mode":"interactive","size":"window","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"host","state":"up","peeking":false}'
+  jq -n "[$irow + {name: \"i\", keys_to_box: false}, $irow + {name: \"j\", keys_to_box: true}]" > "$H/list.json"; polled
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down f >/dev/null
+  check "f turns keys-to-box on for an interactive box" until_ok 3 grep -qx "keys-to-box -b i on" "$H/actions"
+  ob keys -b "$B" Down f >/dev/null
+  check "...and off for one that has it" until_ok 3 grep -qx "keys-to-box -b j off" "$H/actions"
+  ob keys -b "$B" Escape >/dev/null
+  # The bar's right side (the widget's section) as it is now, the same as FILE or not.
+  # shellcheck disable=SC2329 # called through until_ok
+  bar_is() { ob shot -b "$B" -g "1420,0 500x30" -o "$TMP/keys-now.png" >/dev/null 2>&1 && if [ "$1" = same ]; then cmp -s "$2" "$TMP/keys-now.png"; else ! cmp -s "$2" "$TMP/keys-now.png"; fi; }
+  local run; run=$(ob path "$B")/run
+  # No omabox dir when the shell started: the file is not watched then, and each poll reads it.
+  mkdir -p "$run/omabox"
+  ob wait -b "$B" still >/dev/null 2>&1
+  ob shot -b "$B" -g "1420,0 500x30" -o "$TMP/keys-off.png" >/dev/null 2>&1
+  echo i > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "the icon is lit while keys go to a box (read at a poll)" until_ok 8 bar_is other "$TMP/keys-off.png"
+  cp "$TMP/keys-now.png" "$TMP/keys-on.png"
+  echo > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...and not once they are the desktop's again (watched)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
+  echo i > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...lit again at once (the file watched)" until_ok 1.5 bar_is same "$TMP/keys-on.png"
+  echo gone > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
+  check "...not for a box that is not up (a file a Hyprland left)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
   mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
   check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
   ob down "$B" >/dev/null
@@ -2358,6 +2633,217 @@ t_guard() {
   check "peek under the guard" "${in[@]}" "$CLI" peek inner2
   check "...its window appears" until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\") | select(.workspace.name == \"9\")'"
   "${in[@]}" "$CLI" down --all >/dev/null 2>&1
+  ob down "$B" >/dev/null
+}
+
+# `omabox clip` (issue #23, finding 119) with a box standing in for the host (finding 26) and interactive
+# boxes nested in it: the clipboard is the stand-in's, never the user's. No agent runs in the box, so
+# what clip refuses there is what it refuses, not the suite's own caller.
+t_clip() {
+  local B=$P-cl
+  ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  local in=("$CLI" run -b "$B" --) H; H=$(ob path "$B")/home
+  "${in[@]}" "$CLI" up ib --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  local inb=("${in[@]}" "$CLI" run -b ib --) out rc
+  local wins0 aw0; wins0=$(ob hyprctl -b "$B" -j clients | jq length); aw0=$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')
+  "${in[@]}" sh -c 'printf "p4ss w\303\266rd\n" | wl-copy'
+  out=$("${in[@]}" "$CLI" clip -b ib 2>&1)
+  check_eq "clip: text into an interactive box, said by type and size" "omabox: handed text (text/plain;charset=utf-8, 11 bytes) from your clipboard to box 'ib'" "$out"
+  check_eq "...on its clipboard byte for byte (the newline too)" "$(printf 'p4ss w\303\266rd\n' | od -An -c)" "$("${inb[@]}" sh -c 'wl-paste -n | od -An -c')"
+  check_eq "...offered as text by its usual names" "STRING TEXT UTF8_STRING text/plain text/plain;charset=utf-8" "$("${inb[@]}" wl-paste --list-types | LC_ALL=C sort -u | xargs)"
+  "${in[@]}" sh -c 'printf "pw" | wl-copy --sensitive'
+  check_match "clip: a password manager's secret stays marked" "\(text/plain;charset=utf-8, 2 bytes, marked sensitive\)" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  check "...for the box's clipboard history to leave out" "${inb[@]}" sh -c 'wl-paste --list-types | grep -qx x-kde-passwordManagerHint'
+  "${in[@]}" sh -c 'printf "second" | wl-copy'
+  check_match "with no -b: the only interactive box" "to box 'ib'$" "$("${in[@]}" "$CLI" clip 2>&1)"
+  check_eq "...which has it" second "$("${inb[@]}" wl-paste -n)"
+  # An image, by its type; a PNG of the stand-in's screen
+  "${in[@]}" sh -c 'grim /tmp/clip.png && wl-copy --type image/png < /tmp/clip.png'
+  check_match "clip: an image" "handed an image \(image/png, [0-9.]+ [KM]iB\)" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  check_eq "...the same bytes, as image/png" "image/png $("${in[@]}" sh -c 'md5sum < /tmp/clip.png' | xargs)" "$("${inb[@]}" sh -c 'wl-paste --list-types | xargs; wl-paste -n | md5sum' | xargs)"
+  "${in[@]}" sh -c 'wl-copy --type image/jpeg < /tmp/clip.png'
+  "${in[@]}" "$CLI" clip -b ib >/dev/null 2>&1
+  check_eq "...a JPEG as image/jpeg" image/jpeg "$("${inb[@]}" wl-paste --list-types)"
+  # What is refused: nothing to hand over, a type that is neither text nor an image
+  "${in[@]}" sh -c 'printf x | wl-copy --type application/x-omabox-test'
+  out=$("${in[@]}" "$CLI" clip -b ib 2>&1); rc=$?
+  check_match "clip: another type refused" "holds application/x-omabox-test : only text and images go into a box" "$out"
+  check_eq "...exit 1, the box's clipboard as it was" "1 image/jpeg" "$rc $("${inb[@]}" wl-paste --list-types)"
+  "${in[@]}" wl-copy --clear
+  check_match "clip: an empty clipboard" "your clipboard is empty: nothing handed over" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  "${in[@]}" sh -c 'printf "" | wl-copy'
+  check_match "clip: an empty item" "the item is empty: nothing handed over" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
+  # --from-box: the mirror
+  "${inb[@]}" sh -c 'printf "from the box" | wl-copy'
+  check_eq "clip --from-box: text" "omabox: handed text (text/plain;charset=utf-8, 12 bytes) from box 'ib' to your clipboard" "$("${in[@]}" "$CLI" clip --from-box -b ib 2>&1)"
+  check_eq "...on the host's clipboard" "from the box" "$("${in[@]}" wl-paste -n)"
+  "${inb[@]}" sh -c 'printf "box secret" | wl-copy --sensitive'
+  "${in[@]}" "$CLI" clip --from-box -b ib >/dev/null 2>&1
+  check "clip --from-box: a secret stays marked on the host" "${in[@]}" sh -c 'wl-paste --list-types | grep -qx x-kde-passwordManagerHint'
+  local hist=$H/.local/state/omarchy/clipboard-history.json
+  check "...the host's clipboard history (Omarchy's) has the box's text" until_ok 5 grep -q "from the box" "$hist"
+  check_fails "...not its secret" grep -q "box secret" "$hist"
+  "${inb[@]}" sh -c 'grim /tmp/b.png && wl-copy --type image/png < /tmp/b.png'
+  "${in[@]}" "$CLI" clip --from-box -b ib >/dev/null 2>&1
+  check_eq "clip --from-box: an image, the same bytes" "image/png $("${inb[@]}" sh -c 'md5sum < /tmp/b.png' | xargs)" "$("${in[@]}" sh -c 'wl-paste --list-types | xargs; wl-paste -n | md5sum' | xargs)"
+  "${inb[@]}" wl-copy --clear
+  check_match "clip --from-box: an empty clipboard" "box 'ib''s clipboard is empty" "$("${in[@]}" "$CLI" clip --from-box -b ib 2>&1)"
+  # One shot: on the host only the wl-copy serving the item (its own session, the fds of no file of
+  # clip's), no wl-paste or omabox left; the host's windows and focus as they were.
+  # shellcheck disable=SC2329 # called through until_ok
+  one_server() { [ "$("${in[@]}" sh -c 'for p in $(pgrep -x wl-copy); do [ "$(readlink /proc/$p/ns/pid)" != "$(readlink /proc/self/ns/pid)" ] || echo $p; done' | wc -l)" = 1 ]; }
+  check "clip left one wl-copy on the host: the one serving the item" until_ok 5 one_server
+  # (the stand-in's shell watches its clipboard for Omarchy's history: wl-paste --watch)
+  check_eq "...no wl-paste and no clip running, in the stand-in or its boxes" "" "$("${in[@]}" sh -c 'pgrep -a wl-paste | grep -v -- " --watch "; pgrep -af "omabox cli[p]"; true')"
+  check_eq "...no process holds the item's file (wl-copy's stderr file: its own)" 0 "$("${in[@]}" sh -c 'ls -l /proc/[0-9]*/fd 2>/dev/null | grep -c omabox-clip-item')"
+  check_eq "...the host's windows" "$wins0" "$(ob hyprctl -b "$B" -j clients | jq length)"
+  check_eq "...and its focus unchanged" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
+  # The bar widget's rows (Paste in, Copy out) run the real CLI in the stand-in
+  printf '#!/bin/sh\nexec %q "$@"\n' "$CLI" > "$H/.local/bin/omabox"; chmod +x "$H/.local/bin/omabox"
+  "${in[@]}" sh -c 'printf "via the widget" | wl-copy'
+  # shellcheck disable=SC2329 # called through until_ok
+  panel() { ob hyprctl -b "$B" -j layers | grep -q omarchy-keyboard-panel; }
+  # shellcheck disable=SC2329 # called through until_ok
+  has() { [ "$("${inb[@]}" wl-paste -n 2>/dev/null)" = "$1" ]; }
+  # shellcheck disable=SC2329 # called through until_ok
+  listed() { ob run -b "$B" -- omarchy-shell chaves.omabox open >/dev/null 2>&1; until_ok 3 panel >/dev/null && ob keys -b "$B" Escape >/dev/null && sleep 2.5; }
+  listed   # (the panel polls every 2 s while open: ib is in its list after that)
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down v >/dev/null
+  check "the widget's v pastes your clipboard into the box" until_ok 10 has "via the widget"
+  "${inb[@]}" sh -c 'printf "out via the widget" | wl-copy'
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down c >/dev/null
+  check "...its c copies the box's out" until_ok 10 bash -c "[ \"\$('$CLI' run -b '$B' -- wl-paste -n)\" = 'out via the widget' ]"
+  # Refused: a headless box (an agent's); several interactive ones and none focused; an agent
+  "${in[@]}" "$CLI" up hb --no-shell >/dev/null 2>&1
+  check_match "clip: a headless box refused" "box 'hb' is headless: clip is for interactive boxes only" "$("${in[@]}" "$CLI" clip -b hb 2>&1)"
+  "${in[@]}" "$CLI" down hb >/dev/null 2>&1
+  local pids0 pid2
+  pids0=$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine") | .pid]')
+  "${in[@]}" "$CLI" up ib2 --interactive --no-shell >/dev/null 2>&1
+  pid2=$(ob hyprctl -b "$B" -j clients | jq --argjson o "$pids0" '[.[] | select(.class == "aquamarine") | .pid] - $o | .[0]')
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = 'class:^foot\$' })" >/dev/null 2>&1   # nothing there: no focus change
+  check_match "with no -b, several interactive boxes and none focused: which one?" "interactive boxes ib ib2 are up and none has focus" "$("${in[@]}" "$CLI" clip 2>&1)"
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = 'pid:$pid2' })" >/dev/null
+  "${in[@]}" sh -c 'printf "to the focused one" | wl-copy'
+  check_match "...the one whose window has focus" "to box 'ib2'$" "$("${in[@]}" "$CLI" clip 2>&1)"
+  check_eq "...which has it" "to the focused one" "$("${in[@]}" "$CLI" run -b ib2 -- wl-paste -n)"
+  "${in[@]}" sh -c 'printf "secret" | wl-copy'; "${inb[@]}" wl-copy --clear
+  check_match "clip refused to an agent's shell" "not for agents \(CLAUDECODE set for " "$("${in[@]}" env CLAUDECODE=1 "$CLI" clip -b ib 2>&1)"
+  check_match "...with the variable dropped (env -u) under that shell" "not for agents \(CLAUDECODE set for bash" \
+    "$("${in[@]}" env CLAUDECODE=1 bash -c 'env -u CLAUDECODE "$0" clip -b ib; true' "$CLI" 2>&1)"
+  check_match "...under a program named claude, whatever the environment" "not for agents \(claude, pid" \
+    "$("${in[@]}" sh -c 'cp /usr/bin/bash /tmp/claude && /tmp/claude -c "env -i PATH=/usr/bin HOME=\$HOME XDG_RUNTIME_DIR=\$XDG_RUNTIME_DIR \$0 clip -b ib; true" "$0"' "$CLI" 2>&1)"
+  check_match "...under the guard" "not for agents" "$("${in[@]}" "${GUARDED[@]}" "$CLI" clip -b ib 2>&1)"
+  check_match "...under guard exec" "not for agents" "$("${in[@]}" "$CLI" guard exec -- "$CLI" clip -b ib 2>&1)"
+  check_match "...through omabox host" "not for agents" "$("${in[@]}" "${GUARDED[@]}" CLAUDECODE=1 "$CLI" host -- "$CLI" clip -b ib 2>&1)"
+  check_eq "...and the box's clipboard got nothing" "" "$("${inb[@]}" wl-paste -n 2>/dev/null)"
+  "${in[@]}" "$CLI" down --all >/dev/null 2>&1
+  ob down "$B" >/dev/null
+}
+
+# keys-to-box and the passthrough indicator (issue #22, finding 117), in a stand-in host (finding 26):
+# its Hyprland runs the host side (share/passthrough.lua), two interactive boxes are windows in it, and
+# the stand-in's own keyboard presses the keys. Nothing reaches the real desktop.
+t_keys_to_box() {
+  local B=$P-kb
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  local in=("$CLI" run -b "$B" -- "$CLI")
+  check_match "keys-to-box refuses a headless box" "is headless" "$(ob keys-to-box -b "$B" on 2>&1)"
+  if ! "${in[@]}" up ka --interactive --no-shell >/dev/null 2>&1 || ! "${in[@]}" up kb --interactive --no-shell >/dev/null 2>&1; then
+    no "up --interactive twice in the stand-in" "failed"; ob down "$B" >/dev/null; return
+  fi
+  ob run -b "$B" -d -q -- foot
+  # shellcheck disable=SC2329 # called through until_ok
+  has_foot() { ob hyprctl -b "$B" -j clients | jq -e 'any(.class == "foot")' >/dev/null; }
+  until_ok 10 has_foot
+  # Each box's window by its client's pid: the box's outer bwrap, whose command line binds its run dir
+  # (the first such bwrap; the one it forks has the same command line).
+  local pa pb
+  pa=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/$1/run " && { echo "$p"; break; }; done' _ ka)
+  pb=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/$1/run " && { echo "$p"; break; }; done' _ kb)
+  check_eq "...each box's window found by its pid" "aquamarine aquamarine" \
+    "$(ob hyprctl -b "$B" -j clients | jq -r --argjson a "${pa:-0}" --argjson b "${pb:-0}" '[.[] | select(.pid == $a or .pid == $b) | .class] | join(" ")')"
+  # shellcheck disable=SC2329 # called through check
+  focus() { ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = '$1' })" >/dev/null; }
+  # The stand-in's state: submap|focused class|border (our tag on it)|the box .keys names.
+  # shellcheck disable=SC2329
+  kstate() {
+    printf '%s|%s' "$(ob lua -b "$B" 'local w = hl.get_active_window()
+      local t = w and table.concat(w.tags, ",") or ""
+      return hl.get_current_submap() .. "|" .. (w and w.class or "none") .. "|" .. (t:find("omabox%-keys") and "border" or "plain")')" \
+      "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox/.keys" 2>/dev/null')"
+  }
+  # shellcheck disable=SC2329
+  kis() { local s; s=$(kstate); [ "$s" = "$1" ] || { echo "$s"; return 1; }; }
+  # shellcheck disable=SC2329
+  kre() { local s; s=$(kstate); [[ $s =~ $1 ]] || { echo "$s"; return 1; }; }
+  # shellcheck disable=SC2329
+  box_ws() { [ "$("${in[@]}" hyprctl -b "$1" -j activeworkspace | jq -r .name)" = "$2" ]; }
+  # shellcheck disable=SC2329
+  host_ws() { [ "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)" = "$1" ]; }
+  local red; red=$(sed -n 's/^red *= *"#\([0-9a-fA-F]\{6\}\)".*/\1/p' "$(ob path "$B")/home/.local/state/omarchy/current/theme/colors.toml" | tr 'A-F' 'a-f')
+  red=ff${red:-ff5555}
+  check_eq "keys-to-box is off by default" off "$("${in[@]}" keys-to-box -b ka)"
+  check "keys-to-box -b ka on" "${in[@]}" keys-to-box -b ka on
+  check_eq "...ls --json says so, for that box only" "ka:true kb:false" \
+    "$("${in[@]}" ls --json | jq -r '[.[] | "\(.name):\(.keys_to_box)"] | join(" ")')"
+  focus "pid:$pa"
+  check "focusing its window enters the submap, border and widget file on" until_ok 5 kis "omabox|aquamarine|border|ka"
+  check_eq "...its border the theme's red" "$red 0deg" "$(ob hyprctl -b "$B" getprop "pid:$pa" active_border_color)"
+  focus class:foot
+  check "focus elsewhere leaves it, border and file back" until_ok 5 kis "|foot|plain|"
+  check_fails "...its border no longer red" grep -q "^$red" <<<"$(ob hyprctl -b "$B" getprop "pid:$pa" active_border_color)"
+  focus "pid:$pa"
+  check "...focused again: the submap again" until_ok 5 kis "omabox|aquamarine|border|ka"
+  ob keys -b "$B" super+2 >/dev/null
+  check "SUPER+2 goes to the box" until_ok 5 box_ws ka 2
+  check_eq "...not to the host" 9 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)"
+  ob keys -b "$B" super+alt+Escape >/dev/null
+  check "SUPER+ALT+ESCAPE gets the keys back, the box still focused" until_ok 5 kis "|aquamarine|plain|"
+  ob keys -b "$B" super+1 >/dev/null
+  check "...SUPER+1 is the host's then" until_ok 5 host_ws 1
+  focus "pid:$pa"
+  check "...until the box loses focus and gets it back" until_ok 5 kis "omabox|aquamarine|border|ka"
+  focus "pid:$pb"
+  check "a box without keys-to-box: focus does not enter it" until_ok 5 kis "|aquamarine|plain|"
+  # One-shot, as before, with the indicator too.
+  ob keys -b "$B" super+alt+Escape >/dev/null
+  check "one-shot (SUPER+ALT+ESCAPE on kb): submap, border and file" until_ok 5 kis "omabox|aquamarine|border|kb"
+  ob pointer -b "$B" -- move 2 2 >/dev/null   # the stand-in's corner: off every box window
+  ob keys -b "$B" a >/dev/null
+  check "...a key with the pointer off the box ends it (finding 29)" until_ok 5 kis "|aquamarine|plain|"
+  focus "pid:$pa"
+  until_ok 5 kis "omabox|aquamarine|border|ka" >/dev/null
+  ob pointer -b "$B" -- move 2 2 >/dev/null
+  ob keys -b "$B" a >/dev/null
+  check "keys-to-box: focus decides, not that rule" holds 1 kis "omabox|aquamarine|border|ka"
+  # A config reload drops the hooks, the binds and the rule; the box's reaper puts them back.
+  ob hyprctl -b "$B" reload >/dev/null
+  # shellcheck disable=SC2329
+  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 3 ]; }
+  check "after a host reload the hooks come back (the reaper)" until_ok 6 reinstalled
+  check "...with the submap, border and file as focus says" until_ok 3 kis "omabox|aquamarine|border|ka"
+  check_eq "...one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
+    jq -r '[.[] | select(.description | startswith("omabox:"))] | group_by(.submap) | map("\(.[0].submap):\(length)") | reverse | join(" ")')"
+  focus class:foot; focus "pid:$pa"
+  check "...and focus still drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
+  check "keys-to-box off with the box focused: the keys are the host's at once" "${in[@]}" keys-to-box -b ka off
+  check "...submap, border and file off" until_ok 5 kis "|aquamarine|plain|"
+  # issue #24: a confirm-close keep recreates the box's output (a new window, the same client).
+  "${in[@]}" keys-to-box -b ka on >/dev/null 2>&1
+  "${in[@]}" config confirm-close on >/dev/null
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'pid:$pa' })" >/dev/null
+  # shellcheck disable=SC2329
+  reopened() { "${in[@]}" path ka >/dev/null && ob run -b "$B" -- test -f "$("${in[@]}" path ka)/run/omabox.reopened"; }
+  check "confirm-close keeps the box, with a new window (issue #24)" until_ok 8 reopened
+  "${in[@]}" config confirm-close off >/dev/null
+  focus class:foot; focus "pid:$pa"
+  check "after a confirm-close keep, its new window is still the keys-to-box box" until_ok 5 kis "omabox|aquamarine|border|ka"
+  "${in[@]}" down ka >/dev/null 2>&1
+  check "down with the box focused: nobody is left in the submap" until_ok 5 kre '^\|[a-z]*\|plain\|$'
+  "${in[@]}" down --all >/dev/null 2>&1
   ob down "$B" >/dev/null
 }
 
@@ -2828,6 +3314,8 @@ t_replace() {
 # lua, log and events (issues #40, #41, #39): what needs no box.
 t_unit_inspect() {
   check_match "lua: nothing to evaluate" "nothing to evaluate" "$(ob lua -b "$P-x" ' ' 2>&1)"
+  # No EXPR is refused, not read from stdin: an open stdin would otherwise hang it (and this suite did).
+  check_match "lua: no EXPR is refused, stdin left alone" "nothing to evaluate" "$(sleep 30 | timeout 10 "$CLI" lua -b "$P-x" 2>&1)"
   check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
   check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
   check_match "log: an unknown log named, with the ones there are" "no log called nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
@@ -2939,10 +3427,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
-BOX=(t_leak_control t_main t_window t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
+  t_unit_nvidia t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
+BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
+  t_clip t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
@@ -3006,7 +3494,7 @@ main() {
     _n=$((pass + fail + ${#skips[@]}))
     rm -f "$TMP/until.last"
     printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
-    "$CUR"; notes
+    HELD=""; "$CUR"; notes
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))
     host_scan "$CUR"

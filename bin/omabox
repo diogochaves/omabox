@@ -55,6 +55,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
+  omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys go to the box whenever it has focus
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
@@ -74,6 +75,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
   omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
+  omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back
   omabox broker [on|off]                                 let agents inside ai-jail drive their own boxes
   omabox --version
 
@@ -144,7 +146,17 @@ Interactive boxes and peek windows open on workspace 9, without focus: \`omabox 
 click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
 Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
 second close is a yes).
-$PASS_KEY toggles sending SUPER keys to an interactive box.
+$PASS_KEY toggles sending SUPER keys to an interactive box, once:
+until focus leaves it, or a key is pressed with the pointer off it. \`keys-to-box on\` makes them
+follow focus, for the box's lifetime: its window takes focus, SUPER is the box's; focus goes
+elsewhere, it is yours. Then your SUPER binds do nothing while the box has focus: move the pointer
+off it, or press $PASS_KEY (the keys are yours until the box loses focus and gets
+it back). No argument prints on or off. While keys go to a box, its window's border takes the
+theme's red and the bar widget's icon is lit.
+\`clip\` hands your clipboard's item (text, else an image by its type) to an interactive box, once;
+--from-box hands the box's back. With no -b: the interactive box whose window has focus, else the only
+one. Never for agents (refused in their sessions, under the guard, in ai-jail). Nothing keeps
+watching either clipboard. Bind it to a key in your Hyprland config to paste into the box you are in.
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
 \`run -d\` says where the command's output goes (its log) on stderr: -q says nothing (errors still),
@@ -689,15 +701,27 @@ render_nodes() {
 render_driver() { basename "$(readlink -f "/sys/class/drm/${1##*/}/device/driver")"; }
 
 # Match the selected render node to NVIDIA's userspace device node. Never expose a DRM card.
+# nvidia_device RENDER [CREATE]: CREATE 0 leaves a missing node missing (see nvidia_node).
 nvidia_device() {
-  local render=$1 slot info minor
-  slot=$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device")")
-  info=/proc/driver/nvidia/gpus/$slot/information
+  nvidia_node "$(basename "$(readlink -f "/sys/class/drm/${1##*/}/device")")" "${2:-1}"
+}
+
+# nvidia_node SLOT [CREATE [PROC DEV]]: the /dev/nvidiaN of the GPU at PCI SLOT (PROC and DEV stand in
+# for /proc/driver/nvidia and /dev in t_unit_nvidia). A GPU switched to the nvidia driver at runtime
+# (from vfio-pci) can lack its node until something creates it (finding 122): NVIDIA's own setuid
+# helper, nvidia-modprobe, does that for an unprivileged user, so it is asked once, unless CREATE is 0.
+nvidia_node() {
+  local slot=$1 create=${2:-1} proc=${3:-/proc/driver/nvidia} dev=${4:-/dev} info minor
+  info=$proc/gpus/$slot/information
   [ -r "$info" ] || die "NVIDIA GPU $slot has no $info"
   minor=$(awk -F: '/^Device Minor:/ {gsub(/[[:space:]]/, "", $2); print $2}' "$info")
-  [[ $minor =~ ^[0-9]+$ ]] && [ -c "/dev/nvidia$minor" ] && [ -c /dev/nvidiactl ] ||
-    die "NVIDIA GPU $slot has no usable /dev/nvidia$minor or /dev/nvidiactl"
-  echo "/dev/nvidia$minor"
+  [[ $minor =~ ^[0-9]+$ ]] || die "NVIDIA GPU $slot: no device minor in $info"
+  if [ "$create" = 1 ] && { [ ! -c "$dev/nvidia$minor" ] || [ ! -c "$dev/nvidiactl" ]; } && command -v nvidia-modprobe >/dev/null; then
+    nvidia-modprobe -c "$minor" >/dev/null 2>&1 || true
+  fi
+  [ -c "$dev/nvidia$minor" ] && [ -c "$dev/nvidiactl" ] ||
+    die "NVIDIA GPU $slot has no usable $dev/nvidia$minor or $dev/nvidiactl: run \`nvidia-modprobe -c $minor\` (NVIDIA's helper, from nvidia-utils; no root needed), then try again"
+  echo "$dev/nvidia$minor"
 }
 
 # Resolve --plugin PATH|ID to "id<TAB>realpath".
@@ -1111,9 +1135,10 @@ cmd_up() {
   render=$(render_node)
   if [ $interactive = 1 ]; then
     mapfile -t renders < <(render_nodes)
-    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it.
+    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it
+    # (so nothing is created for it either).
     for n in "${renders[@]}"; do
-      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 2>/dev/null) || nvidia_devs+=("$dev")
+      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 0 2>/dev/null) || nvidia_devs+=("$dev")
     done
   elif [ "$(render_driver "$render")" = nvidia ]; then
     renders=("$render")
@@ -1288,7 +1313,8 @@ cmd_up() {
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
   trap - EXIT
-  [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop)"
+  [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
+    "omabox keys-to-box -b $NAME on: whenever its window has focus)"
   touch "$D/used"
   if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
     setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
@@ -1420,6 +1446,9 @@ cmd__reap() {
   [ "$idle" -gt 0 ] || [ -z "$agent" ] || every=60
   # An interactive box closed by its user goes from the widget and `ls` within a poll or so.
   [ "$mode" != interactive ] || every=2
+  # Its host session, found once (keys_ensure asks it every poll); in a subshell first, as it dies
+  # when it finds none.
+  [ "$mode" != interactive ] || { (host_session) >/dev/null 2>&1 && host_session; } || true
   while sleep "$every"; do
     [ "$(meta created)" = "$created" ] || return 0
     if ! box_alive; then
@@ -1437,6 +1466,9 @@ cmd__reap() {
       say "$(date -Is) box '$NAME': its omabox run ($owner) is gone: taking it down"
       DOWN_IF_CREATED=$created cmd_down "$NAME"; return 0
     fi
+    # The host's passthrough hooks, back after a config reload there (finding 118). A subshell: a host
+    # that does not answer (its session ending) must not end the reaper.
+    [ "$mode" != interactive ] || (keys_ensure) >/dev/null 2>&1 || true
     [ "$idle" -gt 0 ] || [ -n "$agent" ] || continue
     local pid; pid=$(box_pid)
     if peek_pid >/dev/null || pgrep -f "^nsenter -t $pid " >/dev/null; then
@@ -1539,44 +1571,30 @@ sweep_homes() {
   true
 }
 
-# Host side of interactive mode. Runtime-only (hyprctl eval): gone at the next host config reload,
-# never written to the user's config. Adds the "omabox" submap in which only the toggle key is bound,
-# so every other key (SUPER binds included) reaches the focused box. Passthrough ends by itself, so
-# nobody gets stuck with SUPER swallowed: when focus goes to another window, or on the first key
-# pressed while the pointer is off the box (clicking the host bar leaves the box focused, so focus
-# alone does not tell; that first key, usually SUPER, still reaches the box, the rest are the host's).
-# Versioned: a newer omabox replaces the hooks of an older one in a running Hyprland.
+# Host side of interactive mode (share/passthrough.lua: the "omabox" submap, one-shot and keys-to-box,
+# the border and the widget's indicator). Runtime-only (hyprctl eval): gone at the next host config
+# reload, never written to the user's config; keys_ensure puts it back. The theme's colours are read
+# at each install: a theme change reloads the config, so it is installed again with the new ones.
+PASS_VERSION=3   # passthrough.lua's VERSION
 install_passthrough() {
-  host_eval "if (omabox_pass_version or 0) < 2 then
-    for _, sub in ipairs(omabox_pass_subs or {}) do sub:remove() end
-    if not omabox_passthrough then
-      omabox_passthrough = true
-      hl.define_submap('omabox', function()
-        hl.bind('$PASS_KEY', hl.dsp.submap('reset'), { description = 'omabox: stop passing keys to the box' })
-      end)
-      hl.bind('$PASS_KEY', hl.dsp.submap('omabox'), { description = 'omabox: pass keys to the box' })
-    end
-    omabox_pass_version = 2
-    local function over_box()
-      local c = hl.get_cursor_pos()
-      if not c then return false end
-      for _, w in ipairs(hl.get_windows({ class = 'aquamarine' })) do
-        local a, s = w.at, w.size
-        if w.mapped and not w.hidden and w.workspace and w.workspace.visible
-          and c.x >= a.x and c.x < a.x + s.x and c.y >= a.y and c.y < a.y + s.y then return true end
-      end
-      return false
-    end
-    local function leave()
-      if hl.get_current_submap() == 'omabox' then hl.dispatch(hl.dsp.submap('reset')) end
-    end
-    omabox_pass_subs = {
-      hl.on('window.active', function(w) if not (w and w.class == 'aquamarine') then leave() end end),
-      hl.on('input.keyboard.key', function(_, _, state)
-        if state == 1 and hl.get_current_submap() == 'omabox' and not over_box() then leave() end
-      end),
-    }
-  end"
+  local colors=$HOME/.local/state/omarchy/current/theme/colors.toml
+  [ -f "$colors" ] || colors=$HOME/.config/omarchy/current/theme/colors.toml
+  host_eval "(function(...)
+$(cat "$ROOT/share/passthrough.lua")
+end)('$(lua_str "$BOXES")', '$PASS_KEY', '$(lua_str "$colors")')"
+}
+
+# After a host config reload (finding 118) the hooks and binds are gone, and a submap entered before
+# stays on with nothing bound in it: no SUPER bind would work, and no toggle key would get out. An
+# interactive box's reaper asks every 2 s whether this version's hooks are there (one Lua comparison)
+# and installs them when they are not. Fails when the host does not answer as expected.
+keys_ensure() {
+  local out; out=$(host_hyprctl eval "if (omabox_pass_version or 0) < $PASS_VERSION then error('omabox-missing', 0) end" 2>&1) || true
+  case $out in
+    ok) ;;
+    "error: omabox-missing") install_passthrough ;;
+    *) return 1 ;;
+  esac
 }
 
 # Lua on the host Hyprland; its errors are ours to report.
@@ -2799,9 +2817,12 @@ cmd_lua() {
     shift
   done
   local code
-  if [ ${#src[@]} = 0 ] || [ "${src[*]}" = - ]; then code=$(cat) || die "lua: cannot read the source from stdin"
+  # Stdin only when asked for with -: with no EXPR at all, an agent's `omabox lua` would otherwise wait
+  # on an inherited stdin forever (a test did, finding 106).
+  [ ${#src[@]} -gt 0 ] || die "lua: nothing to evaluate (omabox lua EXPR, or omabox lua - with the source on stdin)"
+  if [ "${src[*]}" = - ]; then code=$(cat) || die "lua: cannot read the source from stdin"
   else code=${src[*]}; fi
-  [ -n "${code//[[:space:]]/}" ] || die "lua: nothing to evaluate (omabox lua EXPR, or the source on stdin)"
+  [ -n "${code//[[:space:]]/}" ] || die "lua: nothing to evaluate (omabox lua EXPR, or omabox lua - with the source on stdin)"
   select_box "$name"; need_box
   local lvl="" out vals
   while [[ $code == *"]$lvl]"* ]]; do lvl+="="; done
@@ -3245,6 +3266,41 @@ cmd_gpu() {
   grep -qv '^engine ' "$tmp/r" || echo "  (no GPU time)"
 }
 
+# keys-to-box (issue #22, finding 117): an interactive box's SUPER keys follow focus. On, the host
+# enters the "omabox" submap whenever this box's window takes focus and leaves it when focus goes
+# anywhere else (share/passthrough.lua). The state is $D/keys-to-box, which the host's Lua reads on
+# each focus change: in the box dir, which the box cannot see (a file in its runtime dir would let the
+# box turn it on), gone with `down`, so it lasts the box's lifetime. Off by default.
+cmd_keys_to_box() {
+  local name="" want=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      on|off) [ -z "$want" ] || die "keys-to-box: on or off, once"; want=$1 ;;
+      -h|--help) usage; return ;;
+      *) die "keys-to-box: on, off, or nothing to see which it is (a box is -b NAME), got $1" ;;
+    esac
+    shift
+  done
+  select_box "$name"; need_box
+  [ "$(meta mode)" = interactive ] ||
+    die "keys-to-box: box '$NAME' is headless: it has no window on your desktop to type into (omabox keys sends it keys)"
+  if [ -z "$want" ]; then
+    if [ -f "$D/keys-to-box" ]; then echo on; else echo off; fi
+    return
+  fi
+  if [ "$want" = on ]; then echo on > "$D/keys-to-box"; else rm -f "$D/keys-to-box"; fi
+  # Installed again if a reload dropped it (keys_ensure would, within 2 s), then applied to the window
+  # focused now: turned on with the box focused, its keys are the box's at once.
+  install_passthrough
+  host_eval "omabox_keys_changed()"
+  if [ "$want" = on ]; then
+    say "box '$NAME': SUPER keys go to it whenever its window has focus ($PASS_KEY: back to your desktop until it loses focus)"
+  else
+    say "box '$NAME': SUPER keys are your desktop's again ($PASS_KEY still passes them to it, once)"
+  fi
+}
+
 # A live, view-only window of a headless box on the user's workspace 9 (or the configured one,
 # finding 70), opened without focus: frames
 # copied out of the box (tools/peek), nothing sent in, so it never disturbs what an agent is doing.
@@ -3290,8 +3346,9 @@ cmd_peek() {
   [[ $output =~ ^[A-Za-z0-9_-]+$ ]] || die "peek: box '$NAME' reports no usable output ($output)"
   # A fresh marks file (finding 85) that only we can read; peek reads what is added to it.
   rm -f "$D/marks"; (umask 077; : > "$D/marks")
+  local marker; marker=$(peek_marker)
   # Launched by the host Hyprland: its exec rules put exactly this window on that workspace, unfocused.
-  host_eval "hl.exec_cmd('$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
+  host_eval "hl.exec_cmd('${marker:+env $marker }$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
   say "peek at box '$NAME' on $(ws_text "$ws") (view only; close it with SUPER+W, or it goes with the box)"
   [ $focus = 1 ] || return 0
   local deadline=$((SECONDS + 5))
@@ -3300,6 +3357,19 @@ cmd_peek() {
     sleep 0.05
   done
   focus_pid "$pid"
+}
+
+# Who asked for a peek window, for its process's environment (finding 121), where the suite's leak
+# detector reads it: a command the suite ran carries OMABOX_SUITE, and a peek it opens is a leak;
+# `omabox peek` run by you (the bar widget, a terminal) marks it OMABOX_PEEK_BY=you, which the suite
+# only notes. Anything else opening a peek (another command, a peek started without this) has neither
+# and fails the suite as before.
+peek_marker() {
+  if [ -n "${OMABOX_SUITE:-}" ]; then
+    [[ $OMABOX_SUITE =~ ^[A-Za-z0-9_-]{1,32}$ ]] && echo "OMABOX_SUITE=$OMABOX_SUITE"
+  elif [ "${MAIN_CMD:-}" = peek ]; then echo OMABOX_PEEK_BY=you
+  fi
+  return 0
 }
 
 # Focus a host window by its pid; Hyprland switches to its workspace.
@@ -3628,6 +3698,154 @@ cmd_path() {
   done
 }
 
+# --- clipboard -----------------------------------------------------------------------------------
+
+# `omabox clip` (issue #23, finding 119): the host's clipboard item into an interactive box, or back
+# with --from-box. One shot: nothing is left watching either clipboard, only wl-copy serving the item
+# it was given, as every Wayland copy is served. Never for an agent: the guard keeps agents' shells
+# off the user's clipboard (finding 65), and clip must not be the way around it.
+CLIP_MAX=$((64 * 1024 * 1024))   # bytes; a 4K screenshot as PNG is ~10 MB
+# The text types an item may offer, best first. Text goes across as UTF-8 text under its usual name;
+# wl-copy offers text/plain, UTF8_STRING, STRING and TEXT along with it.
+CLIP_TEXT=("text/plain;charset=utf-8" "text/plain;charset=UTF-8" UTF8_STRING text/plain STRING TEXT)
+CLIP_TEXT_TYPE="text/plain;charset=utf-8"
+# What gives an agent's process away, in its environment: Claude Code's and Codex's variables,
+# OpenCode's, the generic AI_AGENT, `guard exec`'s, and the guard's display and PATH entry.
+AGENT_MARKS="^(CLAUDECODE|CLAUDE_CODE_SESSION_ID|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX|OPENCODE|AI_AGENT|OMABOX_AGENT_PID)=|^OMABOX_SESSION=.|^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE)=$GUARD\$|^PATH=([^:]*:)*[^:]*/share/guard/?(:|\$)"
+
+# Whether an agent runs this command: prints what gives it away (a variable's name, a program), or
+# fails. agent_session's variables are easily dropped (`env -i`), so every process this one runs under
+# is looked at too, up to PID 1 or the edge of its pid namespace: an agent's shells carry its variables
+# from their start, and the agent's own process is named for it. A seatbelt, not a fence (finding 119).
+agent_caller() {
+  if in_jail || [ -n "${OMABOX_BROKER_PEER:-}" ]; then echo "inside ai-jail"; return 0; fi
+  local p=$$ kv comm
+  while [[ $p =~ ^[0-9]+$ ]] && [ "$p" -gt 1 ]; do
+    kv=$(grep -m1 -zE "$AGENT_MARKS" "/proc/$p/environ" 2>/dev/null | tr -d '\0') || kv=""
+    comm=$(cat "/proc/$p/comm" 2>/dev/null) || comm=""
+    [ -z "$kv" ] || { echo "${kv%%=*} set for $comm, pid $p"; return 0; }
+    case $comm in
+      claude|codex|codex-*|opencode|pi|hermes|hermes-agent) echo "$comm, pid $p"; return 0 ;;
+      node|bun|deno|python*) ! grep -qzE 'claude-code|@openai/codex|opencode|pi-coding-agent|hermes' "/proc/$p/cmdline" 2>/dev/null ||
+        { echo "an agent in $comm, pid $p"; return 0; } ;;
+    esac
+    p=$(proc_ppid "$p") || break
+  done
+  return 1
+}
+
+# The type to hand over, from an item's offered types (one per line): text first, else an image (PNG
+# first), by its own type. Fails when there is neither.
+clip_pick() {
+  local t
+  for t in "${CLIP_TEXT[@]}"; do grep -qxF -- "$t" <<<"$1" && { echo "$t"; return 0; }; done
+  grep -qxF image/png <<<"$1" && { echo image/png; return 0; }
+  grep -m1 -xE 'image/[a-z0-9.+-]{1,64}' <<<"$1"
+}
+clip_is_text() { local t; for t in "${CLIP_TEXT[@]}"; do [ "$1" != "$t" ] || return 0; done; return 1; }
+# Offered types for a message: a box's list is the box's to write, so only a tame, short version.
+clip_types() { head -n 6 <<<"$1" | tr '\n' ' ' | tr -cd '[:alnum:] ;=/._+-' | cut -c1-120; }
+clip_size() {
+  if [ "$1" -lt 1024 ]; then echo "$1 byte$([ "$1" = 1 ] || echo s)"
+  else awk -v b="$1" 'BEGIN { if (b < 1048576) printf "%.1f KiB", b / 1024; else printf "%.1f MiB", b / 1048576 }'; fi
+}
+# The last line of what a clipboard tool said (CLIP_EFD), tame.
+clip_err() { tail -n 1 "/dev/fd/$CLIP_EFD" | tr -cd '[:print:]' | cut -c1-200; }
+# A Wayland client on the user's session (host_session), wherever this shell's display points.
+host_wl() { env -u WAYLAND_SOCKET -u DISPLAY WAYLAND_DISPLAY="$HOST_WL" "$@"; }
+
+# In the box, by absolute paths (its ~/.local/bin comes first on its PATH, and is the box's to write).
+# wl-copy forks to serve the item; its own session, and its stderr in a file of the box's, so the fork
+# holds nothing of ours open.
+# shellcheck disable=SC2016 # expanded in the box
+CLIP_BOX_COPY='e=$(/usr/bin/mktemp) || exit 1
+/usr/bin/timeout 10 /usr/bin/setsid -w /usr/bin/wl-copy --type "$1" ${2:+"$2"} >/dev/null 2>"$e"; rc=$?
+/usr/bin/tail -n 1 "$e" >&2; /usr/bin/rm -f "$e"; exit $rc'
+# shellcheck disable=SC2016 # expanded in the box
+CLIP_BOX_TYPES='o=$(/usr/bin/timeout 10 /usr/bin/wl-paste --list-types 2>&1) && { printf "%s\n" "$o"; exit 0; }
+case $o in *"Nothing is copied"*) exit 3 ;; esac; exit 1'
+
+# The box clip works with: -b NAME's; else the interactive box whose window has the host's focus (the
+# one a key binding is pressed in); else the only interactive box up.
+clip_select() {
+  if [ -n "$1" ]; then select_box "$1"; need_box; return; fi
+  local n boxes=() win pid
+  win=$(host_hyprctl -j activewindow 2>/dev/null | jq -r '.pid // empty' 2>/dev/null) || win=""
+  for n in $(list_names); do
+    select_box "$n"
+    box_alive && [ "$(meta mode)" = interactive ] || continue
+    boxes+=("$n")
+    # Its window is the outer bwrap's (omabox-wlfd execs it), as peek --focus finds it.
+    pid=$(box_pid) && [ -n "$pid" ] && pid=$(ps -o ppid= -p "$pid" | tr -d ' ') || pid=""
+    if [ -n "$win" ] && [ "$pid" = "$win" ]; then need_box; return; fi
+  done
+  case ${#boxes[@]} in
+    0) die "clip: no interactive box is up (clip is for interactive boxes only)" ;;
+    1) select_box "${boxes[0]}"; need_box ;;
+    *) die "clip: interactive boxes ${boxes[*]} are up and none has focus: which one? -b NAME" ;;
+  esac
+}
+
+cmd_clip() {
+  local why
+  why=$(agent_caller) && die "clip is not for agents ($why): the user hands their clipboard over themselves, from a terminal of theirs, a key binding or the bar widget"
+  local name="" from=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --from-box) from=1 ;;
+      -h|--help) usage; return ;;
+      *) die "clip: unknown argument $1 (omabox clip [--from-box] [-b NAME])" ;;
+    esac
+    shift
+  done
+  host_session
+  clip_select "$name"
+  [ "$(meta mode)" = interactive ] || die "clip: box '$NAME' is headless: clip is for interactive boxes only (headless ones are agents')"
+  # The item, and what the tools say, in files unlinked at once: on the runtime dir's tmpfs, never on
+  # disk, gone with this process whatever ends it. /dev/fd/N opens them again from the start. Never
+  # passed on as they are (read-write): a box, or wl-copy's fork, would keep them.
+  local f e
+  f=$(mktemp -p "$XDG_RUNTIME_DIR" omabox-clip-item.XXXXXX) || die "clip: no temporary file"
+  e=$(mktemp -p "$XDG_RUNTIME_DIR" omabox-clip-err.XXXXXX) || { rm -f "$f"; die "clip: no temporary file"; }
+  exec {CLIP_FD}<>"$f" {CLIP_EFD}<>"$e"; rm -f "$f" "$e"
+  local types rc=0 t size hand
+  if [ $from = 0 ]; then
+    types=$(host_wl timeout 10 wl-paste --list-types 2>"/dev/fd/$CLIP_EFD") || rc=$?
+    if [ $rc != 0 ]; then
+      grep -q 'Nothing is copied' "/dev/fd/$CLIP_EFD" && die "clip: your clipboard is empty: nothing handed over"
+      die "clip: cannot read your clipboard: $(clip_err)"
+    fi
+    t=$(clip_pick "$types") || die "clip: your clipboard holds $(clip_types "$types"): only text and images go into a box"
+    host_wl timeout 10 wl-paste -n --type "$t" 2>"/dev/fd/$CLIP_EFD" | head -c $((CLIP_MAX + 1)) >"/dev/fd/$CLIP_FD" || rc=$?
+  else
+    types=$(box_exec /usr/bin/bash -c "$CLIP_BOX_TYPES" 2>/dev/null {CLIP_FD}>&- {CLIP_EFD}>&- | head -c 65536) || rc=$?
+    [ $rc != 3 ] || die "clip: box '$NAME''s clipboard is empty: nothing handed over"
+    [ $rc = 0 ] || die "clip: cannot read box '$NAME''s clipboard (exit $rc)"
+    t=$(clip_pick "$types") || die "clip: box '$NAME''s clipboard holds $(clip_types "$types"): only text and images come out"
+    box_exec /usr/bin/timeout 10 /usr/bin/wl-paste -n --type "$t" 2>/dev/null {CLIP_FD}>&- {CLIP_EFD}>&- | head -c $((CLIP_MAX + 1)) >"/dev/fd/$CLIP_FD" || rc=$?
+  fi
+  size=$(stat -L -c %s "/dev/fd/$CLIP_FD")
+  [ "$size" -le $CLIP_MAX ] || die "clip: the item is over $(clip_size $CLIP_MAX): nothing handed over"
+  [ $rc = 0 ] || die "clip: cannot read the item ($t): $([ $rc = 124 ] && echo "no answer in 10 s" || echo "exit $rc")"
+  [ "$size" -gt 0 ] || die "clip: the item is empty: nothing handed over"
+  hand=$t; ! clip_is_text "$t" || hand=$CLIP_TEXT_TYPE
+  # A password manager's hint that the item is a secret goes along (wl-copy --sensitive offers it
+  # again): clipboard histories, Omarchy's among them, then leave it out.
+  local sens=()
+  ! grep -qx x-kde-passwordManagerHint <<<"$types" || sens=(--sensitive)
+  local what; what="$(clip_is_text "$t" && echo text || echo "an image") ($hand, $(clip_size "$size")${sens:+, marked sensitive})"
+  if [ $from = 0 ]; then
+    local err; err=$(box_exec /usr/bin/bash -c "$CLIP_BOX_COPY" clip "$hand" "${sens[@]}" <"/dev/fd/$CLIP_FD" 2>&1 >/dev/null {CLIP_FD}>&- {CLIP_EFD}>&-) ||
+      die "clip: could not put it on box '$NAME''s clipboard: $(tail -n 1 <<<"$err" | tr -cd '[:print:]' | cut -c1-200)"
+    say "handed $what from your clipboard to box '$NAME'"
+  else
+    host_wl timeout 10 setsid -w wl-copy --type "$hand" "${sens[@]}" <"/dev/fd/$CLIP_FD" >/dev/null 2>"/dev/fd/$CLIP_EFD" {CLIP_FD}>&- {CLIP_EFD}>&- ||
+      die "clip: could not put it on your clipboard: $(clip_err)"
+    say "handed $what from box '$NAME' to your clipboard"
+  fi
+}
+
 # --- lifecycle -----------------------------------------------------------------------------------
 
 # PID 1 of a pid namespace ignores SIGTERM from outside (finding 6): kill_box SIGKILLs it and the
@@ -3734,14 +3952,15 @@ cmd_ls() {
   if [ "${1:-}" = --json ]; then
     for n in $(list_names); do
       select_box "$n"
-      local state=dead peeking=false
+      local state=dead peeking=false keys=false
       box_alive && state=up
       peek_pid >/dev/null && peeking=true
-      jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking \
+      [ ! -f "$D/keys-to-box" ] || keys=true
+      jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys \
         '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
           bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null),
-          hyprland_version: (.hyprland_version // null)} + {state: $state, peeking: $peeking}' "$D/box.json" 2>/dev/null ||
-        jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false}'
+          hyprland_version: (.hyprland_version // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
+        jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
     done | jq -s -c .
     return
   fi
@@ -3758,6 +3977,8 @@ cmd_ls() {
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
+    # keys-to-box (finding 117), when on: SUPER keys follow focus into it.
+    [ ! -f "$D/keys-to-box" ] || echo "  keys-to-box: on (SUPER keys go to it whenever its window has focus)"
   done
 }
 
@@ -3894,6 +4115,8 @@ broker_check() {
     up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|mode|gpu|env|path|down|ls|list) ;;
     help|-h|--help|version|-V|--version) ;;
     config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
+    # Never on the allowed list: it hands the user's clipboard over (finding 119).
+    clip) die "omabox clip is not for agents: the user hands their clipboard over themselves" ;;
     *) die "omabox $cmd is not for an agent inside ai-jail" ;;
   esac
 }
@@ -4159,7 +4382,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot windows keys click pointer drag wait hyprctl lua log logs events peek restart-shell mode gpu env path down save "
+BOX_CMDS=" up run shot screenshot windows keys keys-to-box click pointer drag wait hyprctl lua log logs events peek restart-shell mode gpu env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -4186,6 +4409,7 @@ global_box() {
 main() {
   global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
+  MAIN_CMD=$cmd   # the command asked for, whatever runs it (peek_marker)
   if [ -n "${OMABOX_BROKER_PEER:-}" ]; then broker_init; broker_check "$cmd" "$@"
   elif relay_wanted; then relay_call "$cmd" "$@"; fi
   case $cmd in
@@ -4194,6 +4418,7 @@ main() {
     shot|screenshot) cmd_shot "$@" ;;
     windows) cmd_windows "$@" ;;
     keys) cmd_keys "$@" ;;
+    keys-to-box) cmd_keys_to_box "$@" ;;
     click) cmd_click "$@" ;;
     pointer) cmd_pointer "$@" ;;
     drag) cmd_drag "$@" ;;
@@ -4215,6 +4440,7 @@ main() {
     config) cmd_config "$@" ;;
     guard) cmd_guard "$@" ;;
     host) cmd_host "$@" ;;
+    clip) cmd_clip "$@" ;;
     broker) cmd_broker "$@" ;;
     _reap) cmd__reap "$@" ;;
     help|-h|--help) usage ;;
