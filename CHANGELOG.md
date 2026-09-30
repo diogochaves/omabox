@@ -3,7 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.3.0 — 2026-09-30
+
+Agents see inside a box (`omabox lua`, `log`, `events`), restart an app in one step
+(`run -d --replace`), move the pointer the way a hand does (`--steps`) and click with modifiers held
+(`--mod`). Interactive boxes get SUPER keys that follow focus and your clipboard on demand, and
+`--hyprland` runs a Hyprland build of yours in a box. Releases now carry a source tarball and its
+checksum.
 
 ### Added
 
@@ -70,6 +76,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   clipboard out** on an interactive box's row (`v`, `c`). Nothing keeps watching either clipboard; a
   password manager's "sensitive" mark goes along. Never for agents: refused in their sessions, under
   the guard, in ai-jail, and for headless boxes ([#23](https://github.com/diogochaves/omabox/issues/23)).
+- **Release files**: each GitHub release carries `omabox-X.Y.Z.tar.gz` (the tag, without the demo
+  media) and `SHA256SUMS`, made by `release.sh`, so a package can track omabox by them
+  ([#52](https://github.com/diogochaves/omabox/issues/52)).
 
 ### Changed
 
