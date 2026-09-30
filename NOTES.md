@@ -2234,6 +2234,29 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `OMABOX_SUITE`, as the widget's) is noted, the same with `OMABOX_SUITE` is reported, and a peek
     its Hyprland starts with no marker is reported. Not verified: a real bar-widget click on the
     host during a run (never on the real desktop; the widget runs the same `omabox peek --focus`).
+    **2026-09-30, issue #56: the focus comes before the workspace.** A full run failed `t_unit_inspect`
+    on "omabox's workspace 9 came up" while Diogo went to workspace 9 for his own interactive box
+    `box-1`: focus on `box=box-1` was already a note, but only a peek of his excused the workspace.
+    Looking at the events in a box showed the rule above read the wrong line: in Hyprland 0.56 a
+    workspace switch (a `focus` dispatch or SUPER+9 alike) sends `activewindowv2` (and the watcher's
+    `~` line) *before* `workspacev2`; `peek --focus` only passed because it focuses a second time
+    after. Now `leak_scan` judges omabox's workspace by the focus line right before it, or, when
+    there is none (another line in between, or focus on nothing), the one right after: focus on a
+    window that is not the suite's (the user's box, their peek, any app with no omabox marks) is a
+    note, "workspace 9 for WHO"; the suite's, another box's process, an unmarked interactive box or
+    peek, a window the watcher could not ask about (`~ ? ERROR`), or no focus at all is a leak, as
+    before. What this excuses wrongly: a real leak that shows workspace 9 while a window of the
+    user's sits there and takes the focus (the suite's boxes open nothing on the host, so a leak there
+    would be a workspace dispatch reaching it). A **special** workspace configured (`omabox config
+    workspace special[:NAME]`, `HWS=special:NAME`) was never seen: it shows with
+    `activespecial>>special:NAME,MONITOR` (hidden: `activespecial>>,MONITOR`; seen in a box, the
+    focus line again first), which the watcher did not keep. The watcher keeps `activespecial>>` now
+    and `leak_scan` treats it as a workspace line (another special one is a note, a closing one
+    nothing); the run's start leaves it unwatched when the focused monitor already shows it, as for a
+    numbered one. Verified: `t_unit_leak_scan` (#56's own lines, focus before and after, each kind of
+    leak, stale focus, special workspaces) and `t_leak_control` live on the stand-in: workspace 9
+    brought up with focus on an unmarked `foot` (an app of the user's) is noted "workspace 9 for
+    foot", and `special:omabox` shown empty is reported.
 122. **An NVIDIA GPU switched to its driver at runtime has no `/dev/nvidiaN` yet** (2026-09-30, this
     machine: the RTX 5070 Ti moved from `vfio-pci` to `nvidia` while the session ran). The driver
     listed it (`/proc/driver/nvidia/gpus/0000:01:00.0/information`, Device Minor 0) and

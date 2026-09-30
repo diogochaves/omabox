@@ -3,6 +3,17 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **Going to your own box during a test run no longer fails it**: `test/run.sh` failed with
+  "omabox's workspace 9 came up" when you switched to workspace 9 for your interactive box (or an
+  app of yours there). omabox's workspace coming up is now a note when the focus it brings is on a
+  window that is not the suite's, and still a failure otherwise. With a special workspace in
+  `omabox config workspace`, the suite now watches that one too
+  ([#56](https://github.com/diogochaves/omabox/issues/56)).
+
 ## 0.3.1 — 2026-09-30
 
 With keys-to-box on, pointing away from the box (your bar, another monitor) gives SUPER keys back to
