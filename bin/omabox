@@ -16,6 +16,7 @@ POINTER=$ROOT/tools/pointer/omabox-pointer
 KEYBOARD=$ROOT/tools/keyboard/omabox-keyboard
 PEEK=$ROOT/tools/peek/omabox-peek
 STILL=$ROOT/tools/still/omabox-still
+EVENTS=$ROOT/tools/events/omabox-events
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
 AQUAMARINE=$ROOT/build/prefix/lib
@@ -57,7 +58,10 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
                                                          a box's logs: hyprland (the default), shell, apps, run,
-                                                         keyring, labwc, systemd, box, reap
+                                                         events, keyring, labwc, systemd, box, reap
+  omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
+  omabox events [-b NAME] --mark [MARK]                  from here: prints the offset, keeps MARK for --since
+  omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
   omabox path [NAME | -b NAME] [--logs]                  the box dir (HOME is <dir>/home); --logs: each log's file
   omabox down [NAME | -b NAME | --all]
   omabox ls [--json]
@@ -113,6 +117,11 @@ hl.timer) that runs later is logged nowhere: catch it with pcall.
 \`run -d\`'s, apps what Omarchy's launcher started, box bwrap's. -f follows them until the box goes
 down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
 come late.
+\`events\`: what the box's Hyprland reported on its event socket (activewindow>>, urgent>>, ...) from
+its start, never cleared. --mark MARK takes "from here" (a byte offset: safe while events come);
+--since MARK (a mark, an offset, or 30s/2m/1h ago) reads from there. --grep and --until match the
+EVENT>>DATA part (grep -E). --until: the first matching event from --since (or from now), printed:
+exit 0, 124 none by --timeout, 1 the box went down; -f follows until the box goes down.
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
 click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
@@ -393,6 +402,7 @@ box_env() {
 BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
 BOX_POINTER=/opt/omabox/bin/omabox-pointer
 BOX_STILL=/opt/omabox/bin/omabox-still
+BOX_EVENTS=/opt/omabox/bin/omabox-events
 
 # Run a tool against the box's compositor (grim, hyprctl, the keyboard and pointer), inside the box's
 # mount namespace with a clean environment (finding 63). Its sockets live in the box's runtime dir,
@@ -1054,7 +1064,8 @@ cmd_up() {
     --proc /proc --dev /dev --ro-bind /sys /sys
     --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
     --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$AQUAMARINE" /opt/omabox/lib
-    --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER" --ro-bind "$STILL" "$BOX_STILL")
+    --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER" --ro-bind "$STILL" "$BOX_STILL"
+    --ro-bind "$EVENTS" "$BOX_EVENTS")
   for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
   [ ${#nvidia_devs[@]} = 0 ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl)
   for n in "${nvidia_devs[@]}"; do args+=(--dev-bind "$n" "$n"); done
@@ -1201,7 +1212,7 @@ cmd_up() {
 # installed Hyprland links (after an Arch update to a new soname, the box would otherwise silently run
 # the unpatched system library).
 check_install() {
-  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] || die "missing $KEYBOARD, $POINTER or $STILL: run install.sh"
+  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] && [ -x "$EVENTS" ] || die "missing $KEYBOARD, $POINTER, $STILL or $EVENTS: run install.sh"
   # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
   [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$(render_node)")" != nvidia ] ||
     die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
@@ -2434,14 +2445,14 @@ $code
 # read inside its mount namespace (on_box), where a path resolves as the box sees it and only the
 # box's own files are; a dead box's from the host, only as regular files inside its own dirs. box.log
 # and reap.log are the box dir's, which the box never sees.
-LOG_NAMES=(hyprland shell apps run keyring labwc systemd box reap)
+LOG_NAMES=(hyprland shell apps run events keyring labwc systemd box reap)
 # Where log NAME of the selected box is: "box PATH" (as the box sees it) or "host PATH"; 1 when the
 # box has none, 2 for a name that is no log.
 log_where() {
   local sig r
   case $1 in
     hyprland) sig=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || return 1; echo "box /run/user/$UID/hypr/$sig/hyprland.log" ;;
-    shell|keyring|apps|labwc|systemd) echo "box /home/sbx/$1.log" ;;
+    shell|keyring|apps|labwc|systemd|events) echo "box /home/sbx/$1.log" ;;
     # The latest `run -d` (their names are run-<ns since 1970>.log: in order as text).
     run) r=$(cd "$D/home" 2>/dev/null && printf '%s\n' run-*.log | grep -E '^run-[0-9]+\.log$' | sort | tail -n 1) &&
       [ -n "$r" ] || return 1; echo "box /home/sbx/$r" ;;
@@ -2536,26 +2547,209 @@ cmd_log() {
   # ends it cleanly. The box's own logs are followed inside it, the box dir's here, both into one
   # stream; tail's "==> PATH <==" headers get the logs' names, and with --grep only before a match.
   # -n counts lines before --grep here.
-  local pid host=() inbox=() map="" from=$n v=()
-  pid=$(box_pid)
+  local map="" from=$n v=() rc=0
+  LOG_HOST=() LOG_INBOX=() LOG_TAIL=(tail -F --pid="$(box_pid)")
   [ "$n" != all ] || from=+1
   for i in "${!names[@]}"; do
-    if [ "${kinds[i]}" = host ]; then host+=("${paths[i]}"); else inbox+=("${paths[i]}"); fi
+    if [ "${kinds[i]}" = host ]; then LOG_HOST+=("${paths[i]}"); else LOG_INBOX+=("${paths[i]}"); fi
     map+="${paths[i]}"$'\t'"${names[i]}"$'\n'
   done
   [ ${#names[@]} = 1 ] || v=(-v)
+  LOG_TAIL+=(-n "$from" "${v[@]}")
   [ -z "$LOG_RE" ] || LOG_RE="$LOG_RE|^==> .* <==\$"
-  local rc=0
-  {
-    [ ${#host[@]} = 0 ] || tail -n "$from" -F --pid="$pid" "${v[@]}" -- "${host[@]}" 2>/dev/null &
-    [ ${#inbox[@]} = 0 ] || on_box tail -n "$from" -F --pid="$pid" "${v[@]}" -- "${inbox[@]}" 2>/dev/null
-    wait
-  } | log_grep | awk -v map="$map" 'BEGIN { n = split(map, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], kv, "\t"); name[kv[1]] = kv[2] } }
+  follow_start log_tails
+  { log_grep | awk -v map="$map" 'BEGIN { n = split(map, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], kv, "\t"); name[kv[1]] = kv[2] } }
       /^==> .* <==$/ { f = substr($0, 5, length($0) - 8); h = "==> " ((f in name) ? name[f] : f) " <=="; blank = 0; next }
       /^$/ { blank++; next }   # (tail puts one before each header: held until a line comes)
-      { if (h != "") { print h; h = "" } for (; blank > 0; blank--) print ""; print; fflush() }' || rc=$?
+      { if (h != "") { print h; h = "" } for (; blank > 0; blank--) print ""; print; fflush() }'; } <&"$FOLLOW_FD" &
+  follow_wait || rc=$?
   box_alive || { say "box '$NAME' went down"; return 0; }
   return $rc
+}
+# shellcheck disable=SC2329 # run by follow_start
+log_tails() {
+  [ ${#LOG_HOST[@]} = 0 ] || "${LOG_TAIL[@]}" -- "${LOG_HOST[@]}" 2>/dev/null &
+  [ ${#LOG_INBOX[@]} = 0 ] || on_box "${LOG_TAIL[@]}" -- "${LOG_INBOX[@]}" 2>/dev/null
+  wait
+}
+
+# Run a follower (tail -F --pid=<box PID 1>, which ends when the box goes down) in the background, its
+# output on FOLLOW_FD. It is ended when this omabox ends, however it does (Ctrl-C, an agent's tool
+# stopped at its timeout): a tail left behind would run until the box goes down. The command runs in
+# a subshell, so its own children are what to end: tail, and nsenter exec'd as tail. What reads it
+# runs in the background, waited for with follow_wait: a signal ends `wait` at once, where a foreground
+# pipeline would hold it until the pipeline ended, which here is never.
+follow_start() {
+  exec {FOLLOW_FD}< <("$@")
+  FOLLOW_PID=$!
+  trap 'pkill -P "$FOLLOW_PID" 2>/dev/null || true; kill "$FOLLOW_PID" 2>/dev/null || true' EXIT   # (set -e holds in a trap)
+  trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+}
+follow_wait() { local p=$!; exec {FOLLOW_FD}<&-; wait "$p"; }
+
+# --- events --------------------------------------------------------------------------------------
+
+# The box's Hyprland events (issue #39, finding 108): tools/events records its event socket from the
+# box's start in the box HOME's events.log, "SECONDS.MILLIS EVENT>>DATA" a line, appended whole and
+# never truncated. "From here" is a byte offset into it (`--mark`, kept in the box dir, which the box
+# cannot see); nothing is ever cleared. Read as `log` reads (inside the box, or a dead box's from the
+# host).
+EVENTS_LOG=/home/sbx/events.log
+
+# The log's size now: where a mark taken now points.
+events_size() { on_box stat -L -c %s -- "$EVENTS_LOG" 2>/dev/null; }
+
+# --since MARK as "OFFSET MIN_MS": a mark's name or a byte offset (MIN_MS 0), or a time ago such as
+# 30s, 2m or 1h (offset 0, the events from then on).
+events_since() {
+  local o
+  if [[ $1 =~ ^[0-9]{1,15}$ ]]; then echo "$((10#$1)) 0"
+  elif [[ $1 =~ ^([0-9]{1,6})(ms|s|m|h)$ ]]; then
+    local n=$((10#${BASH_REMATCH[1]})) ms
+    case ${BASH_REMATCH[2]} in ms) ms=$n ;; s) ms=$((n * 1000)) ;; m) ms=$((n * 60000)) ;; h) ms=$((n * 3600000)) ;; esac
+    echo "0 $(($(date +%s%3N) - ms))"
+  elif [[ $1 =~ ^[A-Za-z][A-Za-z0-9_.-]{0,39}$ ]]; then
+    o=$(awk -v n="$1" '$1 == n { o = $2 } END { if (o == "") exit 1; print o }' "$D/events.marks" 2>/dev/null) ||
+      die "events: no mark '$1' in box '$NAME' (omabox events --mark $1 makes one)"
+    echo "$o 0"
+  else
+    die "events: --since takes a mark's name, a byte offset or a time ago (30s, 2m, 1h), got $1"
+  fi
+}
+
+# The log from byte OFFSET on, whole lines only: a mark falls between lines (each is one write), but a
+# mark from before a box that is no longer this one's could fall inside one.
+events_from() {
+  local from=$1 size
+  if [ "$LOG_LIVE" = 1 ]; then size=$(events_size) || size=0
+  else size=$(stat -c %s -- "$(log_dead_path "$EVENTS_LOG")" 2>/dev/null) || size=0; fi
+  [ "$from" -le "$size" ] || { say "events: the mark is past the end of the log (it is $size bytes): reading it all"; from=0; }
+  if [ "$from" = 0 ]; then log_cat box "$EVENTS_LOG"
+  elif [ "$LOG_LIVE" = 1 ]; then on_box tail -c +"$from" -- "$EVENTS_LOG" | tail -n +2
+  else tail -c +"$from" -- "$(log_dead_path "$EVENTS_LOG")" | tail -n +2; fi
+}
+
+# Events on stdin kept (--since's time, --grep) and printed: HH:MM:SS.mmm EVENT>>DATA, or with --json
+# {"time": SECONDS, "event": ..., "data": ...}. The expression comes through the environment: awk -v
+# would take the backslashes out of it.
+events_show() {
+  EV_RE=$EV_RE EV_MIN=$EV_MIN EV_I=$EV_I awk '
+    { sp = index($0, " "); ts = substr($0, 1, sp - 1); ev = substr($0, sp + 1) }
+    ts !~ /^[0-9]+\.[0-9]+$/ { next }
+    ENVIRON["EV_MIN"] > 0 && ts * 1000 < ENVIRON["EV_MIN"] { next }
+    ENVIRON["EV_RE"] != "" { IGNORECASE = ENVIRON["EV_I"] == 1; if (ev !~ ENVIRON["EV_RE"]) next }
+    { print; fflush() }' |
+  if [ "$EV_JSON" = 1 ]; then
+    jq -R -c --unbuffered 'capture("^(?<t>[0-9]+\\.[0-9]+) (?<e>[^>]*)>>(?<d>.*)$") | {time: (.t | tonumber), event: .e, data: .d}'
+  else
+    awk '{ sp = index($0, " "); ts = substr($0, 1, sp - 1)
+           printf "%s.%s %s\n", strftime("%H:%M:%S", int(ts)), substr(ts, index(ts, ".") + 1), substr($0, sp + 1); fflush() }'
+  fi
+}
+
+cmd_events() {
+  local name="" since="" mark="" domark=0 follow=0 until="" tmo=10000 n=all
+  EV_RE="" EV_I=0 EV_JSON=0 EV_MIN=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --since) optarg "$@"; since=$2; shift ;;
+      --mark) domark=1
+        if [ $# -ge 2 ] && [[ $2 != -* ]]; then
+          [[ $2 =~ ^[A-Za-z][A-Za-z0-9_.-]{0,39}$ ]] || die "events: a mark's name starts with a letter (letters, digits, . _ -; 40 at most), got $2"
+          mark=$2; shift
+        fi ;;
+      --grep) optarg "$@"; EV_RE=$2; shift ;;
+      -i) EV_I=1 ;;
+      --json) EV_JSON=1 ;;
+      -f|--follow) follow=1 ;;
+      --until) optarg "$@"; until=$2; shift ;;
+      --timeout) optarg "$@"; tmo=$(ms_duration "$2") || die "events: --timeout takes a duration: 500ms, 10s, 2m"
+        [ "$tmo" -le $WAIT_MAX_MS ] || die "events: --timeout is at most 10m (got $2)"; shift ;;
+      -n) optarg "$@"; [[ $2 =~ ^([0-9]{1,7}|all)$ ]] || die "events: -n takes a number of events, or all"; n=$2; shift ;;
+      -h|--help) usage; return ;;
+      *) die "events: unknown argument $1" ;;
+    esac
+    shift
+  done
+  local re
+  for re in "$EV_RE" "$until"; do
+    [ -z "$re" ] || { [[ x =~ $re ]]; [ $? != 2 ]; } || die "events: not a regular expression (as grep -E): $re"
+  done
+  if [ $domark = 1 ]; then
+    [ -z "$since$EV_RE$until" ] && [ $follow = 0 ] || die "events: --mark goes alone (then --since ${mark:-OFFSET} in the next call)"
+  fi
+  [ -z "$until" ] || [ $follow = 0 ] || die "events: --until or -f, not both"
+  select_box "$name"
+  [ -f "$D/box.json" ] || need_box
+  LOG_LIVE=0
+  if box_alive; then LOG_LIVE=1; touch "$D/used" 2>/dev/null || true; take_over || need_box; fi
+  log_there box "$EVENTS_LOG" ||
+    die "box '$NAME' records no events (it was started by an omabox that did not record them yet: omabox down $NAME, then up)"
+  if [ $domark = 1 ]; then
+    [ $LOG_LIVE = 1 ] || need_box
+    local size; size=$(events_size) || die "events: cannot read the size of box '$NAME''s events.log"
+    if [ -n "$mark" ]; then
+      { grep -v "^$mark " "$D/events.marks" 2>/dev/null || true; echo "$mark $size"; } > "$D/events.marks.new"
+      mv -f "$D/events.marks.new" "$D/events.marks"
+      say "events: mark '$mark' at byte $size (--since $mark)"
+    else
+      say "events: from byte $size (--since $size)"
+    fi
+    echo "$size"
+    return 0
+  fi
+  local off=0
+  if [ -n "$since" ]; then read -r off EV_MIN < <(events_since "$since"); [ -n "$off" ] || exit 1; fi
+  if [ $follow = 1 ] || [ -n "$until" ]; then
+    [ $LOG_LIVE = 1 ] || { [ -n "$until" ] && { say "box '$NAME' is down"; return 1; }; say "box '$NAME' is down: its events as they were"; follow=0; }
+  fi
+  if [ $follow = 0 ] && [ -z "$until" ]; then
+    if [ "$n" = all ]; then events_from "$off" | events_show
+    else events_from "$off" | events_show | tail -n "$n"; fi
+    return 0
+  fi
+  # Follow from the mark, or from now: tail -F in the box's mount namespace, ending with its PID 1
+  # (follow_start).
+  local pid start
+  pid=$(box_pid)
+  [ -n "$since" ] || off=$(events_size) || off=0
+  start=$((off > 0 ? off : 1))   # tail -c +1 is the whole file; from a mark, one byte early (below)
+  follow_start on_box tail -c +"$start" -F --pid="$pid" -- "$EVENTS_LOG"
+  # From a mark, tail starts a byte early: the rest of the line before it (its newline) goes first.
+  [ "$off" = 0 ] || IFS= read -r -t 5 _ <&"$FOLLOW_FD" || true
+  if [ $follow = 1 ]; then
+    local rc=0
+    events_show <&"$FOLLOW_FD" &
+    follow_wait || rc=$?
+    box_alive || { say "box '$NAME' went down"; return 0; }
+    return $rc
+  fi
+  # --until RE: the first event from there on that matches (and --grep, --since's time), or 124 at
+  # --timeout, 1 when the box goes down first. Waiting counts as use, as `wait` does.
+  local line="" part="" t0 left ts ev used=$SECONDS
+  [ "$EV_I" = 0 ] || shopt -s nocasematch
+  t0=$(date +%s%3N)
+  while :; do
+    left=$((tmo - ($(date +%s%3N) - t0)))
+    [ $left -gt 0 ] || { say "events: no event matching $until in $(ms_s "$tmo")"; return 124; }
+    [ $left -le 1000 ] || left=1000
+    if IFS= read -r -t "$(awk -v m="$left" 'BEGIN { printf "%.3f", m / 1000 }')" line <&"$FOLLOW_FD"; then
+      line=$part$line part=""
+      ts=${line%% *} ev=${line#* }
+      [[ $ts =~ ^[0-9]+\.[0-9]{3}$ ]] || continue
+      [ "$EV_MIN" = 0 ] || [ "$(( ${ts%.*} * 1000 + 10#${ts#*.} ))" -ge "$EV_MIN" ] || continue
+      [ -z "$EV_RE" ] || [[ $ev =~ $EV_RE ]] || continue
+      [[ $ev =~ $until ]] || continue
+      printf '%s\n' "$line" | events_show
+      return 0
+    elif [ $? -gt 128 ]; then
+      part+=$line   # a line cut by the timeout: the rest comes with the next read
+      if [ $((SECONDS - used)) -ge 30 ]; then touch "$D/used" 2>/dev/null || true; used=$SECONDS; fi
+    else
+      say "box '$NAME' went down"; return 1
+    fi
+  done
 }
 
 # The box's screen: output name and mode (WxH@HZ as Hyprland reports it).
@@ -3311,7 +3505,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|restart-shell|mode|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|mode|gpu|env|path|down|ls|list) ;;
     help|-h|--help|version|-V|--version) ;;
     config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
     *) die "omabox $cmd is not for an agent inside ai-jail" ;;
@@ -3593,6 +3787,7 @@ main() {
     hyprctl) cmd_hyprctl "$@" ;;
     lua) cmd_lua "$@" ;;
     log|logs) cmd_log "$@" ;;
+    events) cmd_events "$@" ;;
     peek) cmd_peek "$@" ;;
     restart-shell) cmd_restart_shell "$@" ;;
     mode) cmd_mode "$@" ;;

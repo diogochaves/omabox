@@ -76,6 +76,8 @@ hl.config({
 })
 
 hl.on("hyprland.start", function()
+  -- The box's events, from the start, for `omabox events` (NOTES finding 108): a line each, stamped.
+  hl.exec_cmd('/opt/omabox/bin/omabox-events "$HOME/events.log"')
   if not interactive then
     if os.getenv("OMABOX_WAYLAND_SCREEN") ~= "1" then
       hl.exec_cmd("/usr/bin/hyprctl output create headless HEADLESS-2")

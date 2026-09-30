@@ -2497,6 +2497,22 @@ t_unit_inspect() {
   check_match "log -n takes a number or all" "-n takes a number" "$(ob log -b "$P-x" -n 5x 2>&1)"
   check_match "log --grep: a bad expression said" "takes a regular expression" "$(ob log -b "$P-x" --grep '(' 2>&1)"
   check "log is a jailed agent's (its own boxes only: select_box)" lib broker_check log
+  check_eq "events --since OFFSET" "123 0" "$(lib events_since 123)"
+  check_match "events --since 30s: from then on" "^0 [0-9]{13}$" "$(lib events_since 30s)"
+  mkdir -p "$TMP/ev"; printf 'm1 10\nm2 20\nm1 30\n' > "$TMP/ev/events.marks"
+  check_eq "events --since MARK: its latest offset" "30 0" "$(D=$TMP/ev NAME=x lib events_since m1)"
+  check_match "...one there is not, said" "no mark 'm9'" "$(D=$TMP/ev NAME=x lib events_since m9 2>&1)"
+  check_match "events --since junk refused" "takes a mark's name" "$(lib events_since '-x' 2>&1)"
+  check_match "events --mark: a tame name" "starts with a letter" "$(ob events -b "$P-x" --mark '9;x' 2>&1)"
+  check_match "events --mark goes alone" "goes alone" "$(ob events -b "$P-x" --mark m --grep x 2>&1)"
+  check_match "events --until or -f" "not both" "$(ob events -b "$P-x" --until x -f 2>&1)"
+  check_match "events: a bad expression said" "not a regular expression" "$(ob events -b "$P-x" --until '(' 2>&1)"
+  check "events is a jailed agent's (its own boxes only)" lib broker_check events
+  local out rc=0
+  out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp --die-with-parent \
+        env -i "$ROOT/tools/events/omabox-events" /tmp/ev.log 2>&1) || rc=$?
+  check_eq "omabox-events refuses outside a box" 2 "$rc"
+  check_match "...and says so" "only runs inside an omabox box" "$out"
 }
 
 # lua, log and events (issues #40, #41, #39) in a box of their own.
@@ -2525,6 +2541,39 @@ t_inspect() {
   local i pids=(); for i in 1 2 3 4 5 6; do ob lua -b "$B" "$i * 11" > "$TMP/lua.$i" 2>&1 & pids+=($!); done
   wait "${pids[@]}"   # (not a bare wait: the suite's host watcher is a job too)
   check_eq "lua: six calls at once each get their own answer" "11 22 33 44 55 66" "$(cat "$TMP"/lua.[1-6] | paste -sd' ')"
+  # events (finding 108): recorded from the box's start, stamped, marks as byte offsets.
+  local E; E=$(ob path -b "$B")/home/events.log
+  check_match "events: recorded from the start" '^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} omabox>>listening$' "$(ob events -b "$B" | head -1)"
+  check "...each line stamped in the file" bash -c "! grep -qvE '^[0-9]+\.[0-9]{3} [^ ]' '$E'"
+  local m1; m1=$(ob events -b "$B" --mark m1 2>/dev/null)
+  check_match "events --mark prints the offset" '^[0-9]+$' "$m1"
+  ob run -b "$B" -d --wait -- foot -T evt sleep 600 >/dev/null 2>&1
+  check_match "events --since MARK --grep --json" ',evt$' "$(ob events -b "$B" --since m1 --grep '^openwindow>>' --json | jq -r .data)"
+  check_eq "...--since OFFSET is the same" "$(ob events -b "$B" --since m1)" "$(ob events -b "$B" --since "$m1")"
+  check_fails "...nothing from before the mark" bash -c "'$CLI' events -b '$B' --since m1 | grep -q 'omabox>>listening'"
+  ob events -b "$B" --mark m2 >/dev/null 2>&1
+  (sleep 1; ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '4' })" >/dev/null) & local d=$!
+  out=$(ob events -b "$B" --until '^workspace>>4$' --timeout 5s); rc=$?
+  wait $d
+  check_eq "events --until: an event to come, exit 0" 0 "$rc"
+  check_match "...printed" ' workspace>>4$' "$out"
+  check_match "events --since MARK --until: one that came already" ' workspacev2>>4,4$' "$(ob events -b "$B" --since m2 --until '^workspacev2>>' --timeout 1s)"
+  check_eq "events --until none in time: 124" 124 "$(ob events -b "$B" --until '^nothing' --timeout 500ms >/dev/null 2>&1; echo $?)"
+  check_match "events --since 1m" 'workspace>>4' "$(ob events -b "$B" --since 1m)"
+  # Marks taken while events are written fall between lines (each is one append, never padded).
+  ob run -b "$B" -d -- sh -c 'for i in $(seq 40); do hyprctl dispatch "hl.dsp.focus({ workspace = \"$((i % 3 + 1))\" })"; done' >/dev/null 2>&1
+  local marks=() k; for k in 1 2 3 4 5 6 7 8; do marks+=("$(ob events -b "$B" --mark 2>/dev/null)"); done
+  sleep 1
+  check_eq "marks taken during a burst are at line ends" "" "$(for k in "${marks[@]}"; do [ "$k" = 0 ] || [ "$(head -c "$k" "$E" | tail -c 1 | od -An -tx1 | tr -d ' ')" = 0a ] || echo "$k"; done)"
+  check_eq "...and the file has no NUL" "$(wc -c < "$E")" "$(tr -d '\0' < "$E" | wc -c)"
+  "$CLI" events -b "$B" -f > "$TMP/ev.f" 2>&1 & local ef=$!   # ($CLI: $! is omabox itself, not a subshell running ob)
+  sleep 1; kill -TERM $ef; wait $ef 2>/dev/null
+  local bpid; bpid=$(cat "$(ob path -b "$B")/pid")
+  check "events -f stopped: its tail goes too" until_ok 3 bash -c "! pgrep -f '^tail -c [+][0-9]+ -F --pid=$bpid '"
+  check_match "log events: the file as it is" '^[0-9]+\.[0-9]{3} ' "$(ob log -b "$B" events -n 1)"
+  "$CLI" events -b "$B" -f > "$TMP/ev2.f" 2>&1 & ef=$!
+  until_ok 5 pgrep -f "^tail -c [+][0-9]+ -F --pid=$bpid " >/dev/null
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '5' })" >/dev/null
   # log (finding 107): Hyprland's by default, the others by name, followed until the box goes.
   check_eq "log: Hyprland's, -n lines" 5 "$(ob log -b "$B" -n 5 | wc -l)"
   check_match "log --grep" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep 'creating the' -i -n 1)"
@@ -2543,6 +2592,9 @@ t_inspect() {
   wait $lf; rc=$?
   check_eq "log -f ends when the box goes down: exit 0" 0 "$rc"
   check "...within seconds, said" test $((SECONDS - t0)) -le 5 -a -n "$(grep "box '$B' went down" "$TMP/log.f")"
+  wait $ef; rc=$?
+  check_eq "events -f too" 0 "$rc"
+  check_match "...having seen the box's events" ' workspace>>5' "$(cat "$TMP/ev2.f")"
   check_eq "log: a dead box's logs are still read" omabox-log-1 "$(ob log -b "$B" run -n 2 | head -1)"
   check_fails "...a link out of it is not followed (box down)" bash -c "'$CLI' log -b '$B' labwc 2>&1 | grep -q omabox-host-secret"
   ob down "$B" >/dev/null 2>&1

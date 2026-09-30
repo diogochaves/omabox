@@ -70,6 +70,7 @@ omabox click 960 540 [right] [--double]    # layout coordinates, as in the scree
 omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
 omabox log [shell|apps|run|…] [--grep RE]  # the box's logs, Hyprland's by default (-f follows)
+omabox events --mark m1                    # then act, then: events --since m1 [--grep RE | --until RE]
 omabox down                                # when done: kills everything in the box
 ```
 

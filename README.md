@@ -96,6 +96,7 @@ omabox hyprctl -j clients              # the box's Hyprland, never yours
 omabox lua 'hl.get_active_window()'    # Lua in the box's Hyprland, and what it returns (JSON)
 omabox run -- busctl --user list       # any command inside the box; exit code passes through
 omabox log shell --grep qml -n 20      # the box's logs (Hyprland's by default; -f follows)
+omabox events --since 30s --grep urgent   # Hyprland's events, stamped; --mark, --until RE, -f
 omabox down                            # kill everything in the box
 omabox ls                              # boxes, mode, size, state, plugins
 ```
@@ -391,6 +392,7 @@ Wayland connection.
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |
 | `tools/peek` | the live view-only window (`omabox peek`) |
 | `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
+| `tools/events` | records a box's Hyprland events, stamped, from its start (`omabox events`) |
 | `tools/relay` | carries an omabox command from inside ai-jail to the broker outside (`omabox broker`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
 | `plugin/` | the bar widget |
@@ -400,7 +402,7 @@ Wayland connection.
 
 Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/` (`omabox path`): `box.json` (its options),
 `info.json` (bwrap's pids; `pid` and `pasta.pid` for a box behind pasta), `run/` (the box's runtime
-dir), `used` (idle clock), `reap.log`, `box.log`. The box's HOME (`home/`, on disk in
+dir), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, `box.log`. The box's HOME (`home/`, on disk in
 `~/.cache/omabox/<name>/home`, removed on `down`) and logs are readable from the host.
 
 ## Known limitations

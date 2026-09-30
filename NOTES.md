@@ -81,8 +81,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    ```
    It must provide the soname the installed Hyprland links (`ldd $(command -v Hyprland)`); only the
    nested Hyprland loads it. `omabox up` checks this too.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay` (need `wayland-scanner`;
-   protocol XML is vendored).
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay`, `events`
+   (need `wayland-scanner`; protocol XML is vendored).
 4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
    `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when those exist); `plugin/` as
    `~/.config/omarchy/plugins/chaves.omabox`. A real directory where a link goes stops the install.
@@ -1795,6 +1795,34 @@ the designs here were measured in boxes and built for a contained desktop, and n
     command line is tail's, not nsenter's). Seen: Hyprland writes its log in pieces (the file often
     ends mid-line, and a burst of lines landed only as Hyprland exited), so a line about an action
     can come late; `log` ends every line it prints. `t_unit_inspect`, `t_inspect`.
+108. **`omabox events`: the box's Hyprland events, recorded from its start** (2026-09-30, issue #39,
+    from an agent that hand-rolled `socat` on `.socket2.sock` and twice truncated the log under it
+    (`: > ev.log`): socat's fd without O_APPEND went on writing at its old offset, the file came back
+    NUL-padded, grep skipped it as binary, and "no events" was reported when there were some; this
+    finding's own test did it once as it was written: two followers on one file).
+    `tools/events` (`omabox-events FILE`, bound at `/opt/omabox/bin`, started by the box's
+    Hyprland at `hyprland.start`, before the shell) connects to the socket from its directory (the
+    path can pass 108 bytes), and writes each event as `SECONDS.MILLIS EVENT>>DATA`, one `write()` to
+    a file opened `O_APPEND`, to the box HOME's `events.log` (on disk, like the HOME: finding 50;
+    among the logs a save leaves out). Its own lines are `omabox>>listening` and `omabox>>stopped:
+    ...`; it stops writing at 256 MB (an app retitling its window every frame) and refuses outside a
+    box (it would record the real session). A blocked read the rest of the time: no cost to speak
+    of; it dies with the box. Nothing is ever truncated, so "from here" is a byte offset:
+    `events --mark [NAME]` prints the log's size (read in the box) and keeps NAME in
+    `<box dir>/events.marks`, which the box cannot see; `--since` takes a name, an offset or a time
+    ago (`30s`), and reads whole lines from there (a mark taken mid-burst is checked to fall at a line
+    end: eight during forty workspace switches). `--grep` and `--until` match `EVENT>>DATA`
+    (ERE); text shows local `HH:MM:SS.mmm`, `--json` `{time, event, data}`. `--until RE` waits like
+    `wait` (0 with the event, 124 at `--timeout`, 1 when the box goes down; use for idle expiry),
+    from the mark when one is given, so an event that came between the action and the call counts.
+    `-f` and `--until` read `tail -F --pid=<box PID 1>` in the box's mount namespace (as `log -f`
+    does), in the background, and end it on any exit of omabox (a trap; the reader is waited for
+    with `wait`, which a signal interrupts where a foreground pipeline would not): seen, a TERM
+    left no tail behind, where the first version (`pkill -P` failing under `set -e` in the EXIT trap
+    before its `kill`) left one per call until the box went down. `log events` shows the file as it
+    is. A box started before this has no listener: `events` says to start it again. The leak
+    detector's watcher (finding 80) keeps its own `run/events.log` in its stand-in box: it asks who
+    has focus on every change, which this does not. `t_unit_inspect`, `t_inspect`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

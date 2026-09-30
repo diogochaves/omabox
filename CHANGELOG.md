@@ -31,6 +31,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox log`** prints or follows (`-f`) a box's logs: Hyprland's by default, the shell's, the
   apps', the latest `run -d`'s and more, `--grep RE`, `-n N`, a box that died too. `omabox path
   --logs` says where each one is ([#41](https://github.com/diogochaves/omabox/issues/41)).
+- **`omabox events`**: every box records its Hyprland events (`activewindow`, `urgent`,
+  `openlayer`, ...) from its start, timestamped. `--mark` says "from here" without clearing anything,
+  `--since MARK` (or `30s`) reads from there, `--grep`, `--json`, `-f`, and `--until RE` waits for an
+  event like `omabox wait` does ([#39](https://github.com/diogochaves/omabox/issues/39)).
 
 ### Changed
 

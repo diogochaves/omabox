@@ -61,6 +61,15 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   `--systemd`), `box` (bwrap). A box that died keeps its logs until `down`: read them to see why.
   `-f` follows until the box goes down (exit 0). Hyprland writes its log in pieces: a line about
   what just happened can come a moment (or many lines) later; `-f` shows it when it does.
+- `omabox events`: Hyprland's event stream (`activewindow>>`, `urgent>>`, `openlayer>>`,
+  `workspace>>`, ...) as the box recorded it from its start, one stamped line each (`--json`:
+  `{time, event, data}`). Never hand-roll a socat on `.socket2.sock`, and never truncate a log
+  something is writing (NUL-padded files, "no events" when there were some). To look at what one
+  step caused: `omabox events --mark m1` (a byte offset, kept by name; nothing is cleared), act, then
+  `omabox events --since m1 [--grep '^urgent>>']`. `--since 30s` also works. `--until RE [--timeout
+  10s]` waits for the first matching event from the mark (one that came already counts) or from
+  now: 0 with the event printed, 124 none in time, 1 the box went down. `-f` follows. E.g. "did the
+  app ask for activation when relaunched?": mark, relaunch, `events --since m1 --until '^urgent>>'`.
 
 ## Mounts, HOME and the session
 
