@@ -880,7 +880,7 @@ t_unit_cli() {
   check_match "...reaches the command's own -b (windows)" "no box '$P-x' is up" "$(ob -b "$P-x" windows 2>&1)"
   check_match "...hyprctl, which takes -b only first" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl clients 2>&1)"
   local c out=""
-  for c in lua log events; do out+="$c: $(ob -b "$P-x" "$c" 2>&1 | head -1)"$'\n'; done
+  for c in lua log events; do out+="$c: $(ob -b "$P-x" "$c" </dev/null 2>&1 | head -1)"$'\n'; done
   check_fails "...lua, log and events too (none unknown)" grep -q 'unknown command' <<<"$out"
   check_match "...up NAME as well is two names" "up: one box name, got $P-x and $P-y" "$(ob -b "$P-x" up "$P-y" 2>&1)"
   check_eq "...a command that takes no -b: one line" "omabox: ls takes no -b: it is not about one box" "$(ob -b "$P-x" ls 2>&1)"
@@ -2998,6 +2998,8 @@ t_replace() {
 # lua, log and events (issues #40, #41, #39): what needs no box.
 t_unit_inspect() {
   check_match "lua: nothing to evaluate" "nothing to evaluate" "$(ob lua -b "$P-x" ' ' 2>&1)"
+  # No EXPR is refused, not read from stdin: an open stdin would otherwise hang it (and this suite did).
+  check_match "lua: no EXPR is refused, stdin left alone" "nothing to evaluate" "$(sleep 30 | timeout 10 "$CLI" lua -b "$P-x" 2>&1)"
   check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
   check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
   check_match "log: an unknown log named, with the ones there are" "no log called nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"

@@ -2812,9 +2812,12 @@ cmd_lua() {
     shift
   done
   local code
-  if [ ${#src[@]} = 0 ] || [ "${src[*]}" = - ]; then code=$(cat) || die "lua: cannot read the source from stdin"
+  # Stdin only when asked for with -: with no EXPR at all, an agent's `omabox lua` would otherwise wait
+  # on an inherited stdin forever (a test did, finding 106).
+  [ ${#src[@]} -gt 0 ] || die "lua: nothing to evaluate (omabox lua EXPR, or omabox lua - with the source on stdin)"
+  if [ "${src[*]}" = - ]; then code=$(cat) || die "lua: cannot read the source from stdin"
   else code=${src[*]}; fi
-  [ -n "${code//[[:space:]]/}" ] || die "lua: nothing to evaluate (omabox lua EXPR, or the source on stdin)"
+  [ -n "${code//[[:space:]]/}" ] || die "lua: nothing to evaluate (omabox lua EXPR, or omabox lua - with the source on stdin)"
   select_box "$name"; need_box
   local lvl="" out vals
   while [[ $code == *"]$lvl]"* ]]; do lvl+="="; done

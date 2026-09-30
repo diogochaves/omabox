@@ -1801,6 +1801,9 @@ the designs here were measured in boxes and built for a contained desktop, and n
     nowhere (not the Hyprland log, not `configerrors`, nothing on screen). reference.md says to
     `pcall` inside callbacks. Allowed to a jailed agent, as `hyprctl` is. `t_unit_inspect`,
     `t_inspect`.
+    Later the same day: with no EXPR at all it read the source from stdin, undocumented (the usage
+    says `EXPR | -`), and a suite check that ran `omabox -b NAME lua` with an open stdin hung on it.
+    Now no EXPR is refused ("nothing to evaluate") and only `-` reads stdin; `t_unit_inspect`.
 107. **`omabox log`: a box's logs by name** (2026-09-30, issue #41, from an agent that grepped the
     Hyprland log through `run -- bash -c` twice in one session). `log [LOG...|all]` with `hyprland`
     (the default: `run/hypr/SIG/hyprland.log`), `shell`, `apps` (the uwsm-app stand-in's), `run`
