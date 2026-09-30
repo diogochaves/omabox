@@ -1,6 +1,6 @@
 // omabox-keyboard: type on the Wayland display in $WAYLAND_DISPLAY through a virtual keyboard.
 //
-//   omabox-keyboard [--layout us] [--variant V] [--model M] [--options O] [--delay MS]  COMBO | -t TEXT | -T | -s MS ...
+//   omabox-keyboard [--layout us] [--variant V] [--model M] [--options O] [--delay MS]  COMBO | -t TEXT | -T | -s MS | -m MODS | -p MS ...
 //   omabox-keyboard [--layout ...] --hold
 //
 // COMBO is super+space, ctrl+shift+t, Return, a, F5, ctrl++, super+/ ... (modifiers: super ctrl shift
@@ -8,6 +8,10 @@
 // the shifted symbol: SUPER+W is super+w, as in Hyprland's binds; shift+w for SUPER+SHIFT+W. On its own
 // an uppercase letter types it (A is shift+a). -t types TEXT; -T types the next NUL-terminated text
 // read from stdin (a secret: never in argv, where the process list shows it); -s sleeps.
+// -m MODS (ctrl, shift+alt, ...) presses those modifiers and keeps them down to the end of the run,
+// under whatever comes after; -p MS prints "paused" and waits for a line (or the end) on stdin, MS at
+// most: `omabox click --mod` clicks there with the pointer tool (#25). Held modifiers are released
+// at the end of the run, on a timed-out pause, and on SIGTERM, SIGINT or SIGHUP: never left down.
 // Tokens run left to right in one connection, all checked before it connects. Exit 1 if the
 // compositor goes away mid-run.
 // --hold keeps an idle keyboard on the seat until the compositor goes away (NOTES finding 41).
@@ -18,6 +22,9 @@
 // compositor applies, so binds and clients see what a physical keyboard would send. A character the
 // layout lacks (Ü on us) is bound to a spare keycode in the keymap this keyboard uploads (finding 55).
 #define _GNU_SOURCE
+#include <errno.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,7 +65,7 @@ static void sleep_ms(long ms) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: omabox-keyboard [--layout L] [--variant V] [--model M] [--options O] [--delay MS] [--hold | (COMBO | -t TEXT | -T | -s MS)...]\n");
+    fprintf(stderr, "usage: omabox-keyboard [--layout L] [--variant V] [--model M] [--options O] [--delay MS] [--hold | (COMBO | -t TEXT | -T | -s MS | -m MODS | -p MS)...]\n");
     exit(2);
 }
 
@@ -136,20 +143,36 @@ static void key(xkb_keycode_t code, int down) {
 }
 static void set_mods(uint32_t depressed) { zwp_virtual_keyboard_v1_modifiers(kbd, depressed, 0, 0, 0); }
 
-// Press the modifiers in `held` (bitmask over mods[]), tap `code`, release in reverse. With run = 0 it
-// only checks that every modifier has a key in the layout.
-static int chord(unsigned held, xkb_keycode_t code, int run) {
-    uint32_t mask = 0;
-    struct hit mk[NMODS] = {0};
-    for (size_t m = 0; m < NMODS; m++)
-        if ((held & (1u << m)) && !find_keysym(xkb_keysym_from_name(mods[m].keysym, 0), &mk[m])) {
+// The modifiers -m holds down (bitmask over mods[]), their keys, and the modifier mask they make.
+static unsigned kept;
+static xkb_keycode_t kept_code[NMODS];
+static uint32_t kept_mask;
+
+// Each modifier in `held` has a key in the layout (its keycode in codes[]), or 0, said.
+static int mod_keys(unsigned held, xkb_keycode_t *codes) {
+    for (size_t m = 0; m < NMODS; m++) {
+        struct hit h;
+        if (!(held & (1u << m))) continue;
+        if (!find_keysym(xkb_keysym_from_name(mods[m].keysym, 0), &h)) {
             fprintf(stderr, "omabox-keyboard: no key for modifier %s in this layout\n", mods[m].names[0]);
             return 0;
         }
+        codes[m] = h.code;
+    }
+    return 1;
+}
+
+// Press the modifiers in `held` (bitmask over mods[]), tap `code`, release in reverse. With run = 0 it
+// only checks that every modifier has a key in the layout. Modifiers -m holds stay down throughout.
+static int chord(unsigned held, xkb_keycode_t code, int run) {
+    uint32_t mask = kept_mask;
+    xkb_keycode_t mk[NMODS] = {0};
+    held &= ~kept;
+    if (!mod_keys(held, mk)) return 0;
     if (!run) return 1;
     for (size_t m = 0; m < NMODS; m++) {
         if (!(held & (1u << m))) continue;
-        key(mk[m].code, 1);
+        key(mk[m], 1);
         set_mods(mask |= mod_mask((int)m));
     }
     key(code, 1);
@@ -157,12 +180,62 @@ static int chord(unsigned held, xkb_keycode_t code, int run) {
     key(code, 0);
     for (int m = (int)NMODS - 1; m >= 0; m--) {
         if (!(held & (1u << m))) continue;
-        key(mk[m].code, 0);
+        key(mk[m], 0);
         set_mods(mask &= ~mod_mask(m));
     }
     sync_or_die();
     sleep_ms(delay_ms);
     return 1;
+}
+
+// -m: press these modifiers and keep them down. release_held lets go of all of them, once.
+static void hold_mods(unsigned held) {
+    held &= ~kept;
+    for (size_t m = 0; m < NMODS; m++) {
+        if (!(held & (1u << m))) continue;
+        key(kept_code[m], 1);
+        set_mods(kept_mask |= mod_mask((int)m));
+        kept |= 1u << m;
+    }
+    sync_or_die();
+}
+static void release_held(void) {
+    if (!kept) return;
+    for (int m = (int)NMODS - 1; m >= 0; m--) {
+        if (!(kept & (1u << m))) continue;
+        key(kept_code[m], 0);
+        set_mods(kept_mask &= ~mod_mask(m));
+    }
+    kept = 0;
+    sync_or_die();
+}
+
+// A run that holds modifiers ends by releasing them on these signals too (SIGKILL cannot be caught).
+static volatile sig_atomic_t stop;
+static void on_signal(int sig) { stop = sig; }
+
+// -p MS: "paused" on stdout, then a line or the end of stdin, MS at most. 0 when it timed out or a
+// signal came.
+static int pause_for(long ms) {
+    printf("paused\n");
+    fflush(stdout);
+    struct timespec t0, t;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        if (stop) return 0;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        long left = ms - ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
+        if (left <= 0) { fprintf(stderr, "omabox-keyboard: nothing on stdin after %ld ms: letting go\n", ms); return 0; }
+        struct pollfd p = {0, POLLIN, 0};
+        int r = poll(&p, 1, (int)left);
+        if (r < 0 && errno == EINTR) continue;
+        if (r < 0) return 0;
+        if (r == 0) continue;
+        char c;
+        ssize_t n = read(0, &c, 1);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0 || c == '\n') return 1;   // the end of stdin is "go on" too: whoever held it is gone
+    }
 }
 
 static const struct { const char *alias, *name; } aliases[] = {
@@ -191,6 +264,20 @@ static int decode(const unsigned char **pp, uint32_t *cp) {
     if (*cp < min || *cp > 0x10FFFF || (*cp >= 0xD800 && *cp <= 0xDFFF)) return 0;
     *pp = p + len;
     return 1;
+}
+
+// -m's MODS: ctrl, shift+alt, ... (the modifier names of a COMBO, nothing else) as a bitmask, 0 if bad.
+static unsigned parse_mods(const char *tok) {
+    char buf[256], *save = NULL;
+    unsigned held = 0;
+    if (snprintf(buf, sizeof(buf), "%s", tok) >= (int)sizeof(buf)) return 0;
+    for (char *name = strtok_r(buf, "+", &save); name; name = strtok_r(NULL, "+", &save)) {
+        int m = mod_index(name);
+        if (m < 0) { fprintf(stderr, "omabox-keyboard: -m: '%s' is not a modifier (super ctrl shift alt altgr)\n", name); return 0; }
+        held |= 1u << m;
+    }
+    if (!held) fprintf(stderr, "omabox-keyboard: -m: no modifier in '%s'\n", tok);
+    return held;
 }
 
 static int do_combo(const char *tok, int run) {
@@ -307,7 +394,17 @@ static int tokens(int argc, char **argv, int i, int run) {
             if (i + 1 >= argc) usage();
             long ms = num(argv[++i], 0, 600000);
             if (run) { sync_or_die(); sleep_ms(ms); }
+        } else if (!strcmp(argv[i], "-m")) {
+            if (i + 1 >= argc) usage();
+            unsigned held = parse_mods(argv[++i]);
+            if (!held || !mod_keys(held, kept_code)) return 0;
+            if (run) hold_mods(held);
+        } else if (!strcmp(argv[i], "-p")) {
+            if (i + 1 >= argc) usage();
+            long ms = num(argv[++i], 1, 600000);
+            if (run) { sync_or_die(); if (!pause_for(ms)) return 0; }
         } else if (!do_combo(argv[i], run)) return 0;
+        if (run && stop) return 0;
     }
     return 1;
 }
@@ -315,10 +412,11 @@ static int tokens(int argc, char **argv, int i, int run) {
 // Each -T becomes -t with the next NUL-terminated text from stdin (omabox keys --pass): a new argv in
 // memory, so /proc/PID/cmdline never shows it. All of stdin is read before anything is checked or typed.
 #define MAX_STDIN (1 << 20)
+static int takes_value(const char *t) { return !strcmp(t, "-t") || !strcmp(t, "-s") || !strcmp(t, "-m") || !strcmp(t, "-p"); }
 static char **stdin_texts(int *argc, char **argv, int first) {
     int want = 0;
     for (int a = first; a < *argc; a++) {
-        if ((!strcmp(argv[a], "-t") || !strcmp(argv[a], "-s")) && a + 1 < *argc) a++;
+        if (takes_value(argv[a]) && a + 1 < *argc) a++;
         else if (!strcmp(argv[a], "-T")) want++;
     }
     if (!want) return argv;
@@ -336,7 +434,7 @@ static char **stdin_texts(int *argc, char **argv, int first) {
     size_t at = 0;
     int o = 0;
     for (int a = 0; a < *argc; a++) {
-        if (a >= first && (!strcmp(argv[a], "-t") || !strcmp(argv[a], "-s")) && a + 1 < *argc) {
+        if (a >= first && takes_value(argv[a]) && a + 1 < *argc) {
             out[o++] = argv[a++];
         } else if (a >= first && !strcmp(argv[a], "-T")) {
             char *nul = at < len ? memchr(buf + at, 0, len - at) : NULL;
@@ -374,6 +472,22 @@ int main(int argc, char **argv) {
         else break;
     }
     if (hold ? i < argc : i >= argc) usage();
+    // -p waits on stdin and -T reads secrets from it: not both. A run that holds modifiers (-m) lets go
+    // of them on a signal too, and a closed stdout (SIGPIPE) must not end it with them down.
+    int holds = 0, pauses = 0, secrets = 0;
+    for (int a = i; a < argc; a++) {
+        if (takes_value(argv[a])) { holds |= !strcmp(argv[a], "-m"); pauses |= !strcmp(argv[a], "-p"); a++; }
+        else secrets |= !strcmp(argv[a], "-T");
+    }
+    if (pauses && secrets) { fprintf(stderr, "omabox-keyboard: -p and -T both read stdin: not both\n"); return 2; }
+    if (holds) {
+        struct sigaction sa = {0};
+        sa.sa_handler = on_signal;   // no SA_RESTART: a pause's poll or a sleep ends early
+        sigaction(SIGTERM, &sa, NULL);
+        sigaction(SIGINT, &sa, NULL);
+        sigaction(SIGHUP, &sa, NULL);
+        signal(SIGPIPE, SIG_IGN);
+    }
     if (!hold) argv = stdin_texts(&argc, argv, i);
 
     struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_ENVIRONMENT_NAMES);
@@ -417,6 +531,8 @@ int main(int argc, char **argv) {
     sleep_ms(20);
 
     int ok = tokens(argc, argv, i, 1);
+    release_held();
+    if (stop) { fprintf(stderr, "omabox-keyboard: stopped by signal %d; modifiers released\n", (int)stop); ok = 0; }
     sync_or_die();
     sleep_ms(30); // let the compositor handle the last release before the device goes away
     zwp_virtual_keyboard_v1_destroy(kbd);
