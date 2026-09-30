@@ -77,6 +77,14 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
 - Logs: `<box dir>/home/*.log` (shell, keyring, labwc, runs), Hyprland's in
   `<box dir>/run/hypr/*/hyprland.log`, bwrap's in `<box dir>/box.log`.
+- `run -d` jobs: each is its own session, with a log (`run-*.log`) named on stderr; `-q` drops that
+  line, `--print-log` prints only the path on stdout (first, before a `--wait` line). `run -d
+  --replace -- CMD` stops the jobs `run -d` started in the box with the same command and arguments
+  (SIGTERM to the session, what it forked included; SIGKILL after 5 s), waits until their windows are
+  gone, then starts CMD (`--wait` as usual). Only those: an app started another way (a bind, `run --
+  setsid ...`, D-Bus activation) is not touched, even when the job only handed it its arguments (a
+  single-instance app already running): stop that one yourself. No earlier job (or one that
+  exited): it just starts, and says so.
 
 ## Network
 

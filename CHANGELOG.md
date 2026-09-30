@@ -30,6 +30,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   against another aquamarine soname, or a file that is not an executable ELF, is refused before the
   box starts; `ls` and `windows` name the build, the box log has its version, and `up` warns when
   your `hyprctl` is another version ([#44](https://github.com/diogochaves/omabox/issues/44)).
+- **`run -d --replace -- CMD`** restarts an app after a rebuild in one step: it stops what `run -d`
+  started in the box with the same command (SIGKILL if it ignores SIGTERM for 5 s), waits until its
+  windows are gone, then starts it again. Nothing else in the box is touched
+  ([#29](https://github.com/diogochaves/omabox/issues/29)).
+- **`run -d -q`** drops the "started in box" line, and **`run -d --print-log`** prints only the
+  log's path, on stdout, for scripts ([#42](https://github.com/diogochaves/omabox/issues/42)).
 
 ### Changed
 
