@@ -2017,6 +2017,80 @@ the designs here were measured in boxes and built for a contained desktop, and n
     Not checked: a real patched build (the issue's run was one), and the version warning against a
     real other version (a stubbed `on_box` in `t_unit_hyprland`). `t_unit_hyprland`, `t_hyprland`.
 
+119. **`omabox clip`: the user's clipboard into an interactive box, and back** (2026-09-30, issue
+    #23: driving an interactive box, a password or URL had to go in by hand, `wl-paste -n | omabox
+    run -b BOX -- wl-copy`). `clip [-b NAME]` reads the host's clipboard item (`wl-paste` on the
+    session `host_session` finds, whatever this shell's display is) and puts it on the box's;
+    `--from-box` the mirror. One shot, decided with the maintainer: no watcher, no live sync, no
+    toggle (the issue's "share clipboard" is left out). Nothing stays running but what a Wayland
+    copy always leaves: `wl-copy` forks to serve the item until the next copy replaces it, in the
+    box (dies with it) or on the host. Both run in a session of their own (`setsid -w`, so a
+    closing terminal or the widget's process group does not take the item with it), with no fd of
+    omabox's: stdout /dev/null, stderr a file (the box's own `mktemp` for the box's, an unlinked
+    one of omabox's for the host's; a pipe held by the fork kept `$(...)` and the widget's
+    collector waiting). The item passes through an unlinked file in `$XDG_RUNTIME_DIR` (tmpfs,
+    0600, gone however omabox ends; `/dev/fd/N` reopens it), capped at 64 MiB, each read under 10 s
+    (`timeout`); the fds are closed for every child, or the box's wl-copy fork would hold the host
+    file read-write. The box side runs by absolute paths (`/usr/bin/wl-copy`: the box's
+    `~/.local/bin` comes first on its PATH and is the box's to write), and what a box says back
+    (its type list, an error) is printed tame and short. *Types*: text first
+    (`text/plain;charset=utf-8`, `text/plain;charset=UTF-8`, `UTF8_STRING`, `text/plain`, `STRING`,
+    `TEXT`), handed over as `text/plain;charset=utf-8` (wl-copy offers the other names along with
+    it); else an image by its own type (`image/png` first, any `image/NAME`), bytes unchanged, which
+    was as simple as text; anything else (a file list, `text/html` alone) is refused naming the
+    types. Empty clipboard, empty item, over the cap: refused, nothing handed over. It says what it
+    handed over (text or an image, the type, the size), never the content. A password manager's
+    `x-kde-passwordManagerHint` goes along (`wl-copy --sensitive`): Omarchy's clipboard history
+    (the shell's `wl-paste --watch` into `~/.local/state/omarchy`) skips such items, in the box and,
+    for `--from-box`, on the host; anything else from `--from-box` lands in the user's history like
+    any copy (both seen on a stand-in with the shell). *Which box*: `-b NAME`, else the interactive box whose window has the host's focus
+    (the window is the outer bwrap's, as for `peek --focus`), else the only one; several and none
+    focused: refused, naming them. So a key binding of the user's (none installed; README has
+    `o.bind("SUPER + ALT + V", ..., "omabox clip")`) pastes into the box being worked in, except
+    while SUPER+ALT+ESCAPE sends SUPER keys to the box. Headless boxes are refused (agents'). The
+    widget: Paste in / Copy out buttons (`v`, `c`) on an interactive box's row only, closing the
+    panel; the CLI's line comes back as a notification. `clip` is in `BOX_CMDS` (`-b` first works).
+    Verified with a box standing in for the host (finding 26) and interactive boxes nested in it,
+    the clipboards the stand-in's and theirs (`t_clip`): text with a non-ASCII word and a trailing
+    newline byte for byte, the text names offered in the box, no `-b` with one box, a PNG of the
+    screen both ways (same md5, `image/png`), a JPEG as `image/jpeg`, `--sensitive` carried, the
+    refusals (another type, an empty clipboard or item, both sides, a headless box, two boxes and
+    none focused), the focused one of two picked, after it all one wl-copy on the stand-in, no
+    wl-paste or clip process, no process holding the item's file, the stand-in's windows and focus
+    unchanged (data-control: no window of wl-paste's), and the widget's `v` and `c` running the real
+    CLI there (a stub CLI in `t_widget` for the rows: none on a headless box, the notification).
+    Not checked: the real desktop (the user's clipboard is never read by an agent, not to test):
+    real apps' offers (a browser's copied image, KeePassXC's secret), the bind, the widget in the
+    user's bar. Same Hyprland and wl-clipboard as the stand-in, so expected the same. Not handled:
+    the primary selection; an item's other types (one type goes across); a box that stops its own
+    `wl-paste` on purpose (ptrace) can hang `--from-box` past its `timeout` (Ctrl-C; the widget
+    stays busy). `t_unit_clip`, `t_clip`, `t_widget`.
+120. **`clip` is never an agent's** (2026-09-30, issue #23). The guard keeps agents' shells off the
+    user's display, and so off their clipboard (finding 65); an omabox command that read it for them
+    would undo that. `clip` refuses before anything else when `agent_caller` finds an agent: in
+    ai-jail (the broker's `OMABOX_JAIL`; `broker_check` also refuses `clip` by name, so it never
+    joins the allowed list), or a mark in the environment of this process or any it runs under, up
+    to PID 1 or its pid namespace's edge (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+    `CODEX_THREAD_ID`, `CODEX_SANDBOX`, `OPENCODE`, `AI_AGENT`, `guard exec`'s `OMABOX_AGENT_PID` and
+    `OMABOX_SESSION`, the guard's display, signature and PATH entry), or such a process named
+    `claude`, `codex*`, `opencode`, `pi`, `hermes*` (or node, bun, deno, python running one).
+    `/proc/PID/environ` is a process's environment at its start: `env -u`/`env -i` in front of
+    omabox leaves the shell it came from marked, and `exec env -i` leaves the agent's own process
+    above it (`t_unit_clip`, `t_clip`: each mark, an ancestor's, a program named claude, node with
+    Claude Code's path, guard exec, `omabox host`). One line says why and that the user runs it
+    (a terminal of theirs, a key binding, the widget); the skill tells agents not to try. *What
+    still gets past* (a seatbelt, not a fence, like the guard): a process that does not descend
+    from the agent (`setsid -f` or a double fork, reparented to the user manager; `systemd-run
+    --user`; `hyprctl dispatch exec` with the real signature), a new pid namespace (`unshare -p`
+    cuts the walk as a box's does), an agent run under a program name and without variables of the
+    ones above, and above all a bare `wl-paste` on the real socket, which the guard never stopped.
+    Only ai-jail fences (display hidden, broker refusing). Also refused, rightly: `!omabox clip` in
+    Claude Code's prompt (the agent's shell) and a terminal an agent opened (`omabox host -- foot`).
+    What the user hands to a box is the box's: anything running there (an agent driving that box
+    with `run -- wl-paste`) can read it, and a box with the shell keeps an item not marked sensitive
+    in its clipboard history (`~/.local/state/omarchy/clipboard-history.json` in its HOME, images
+    beside it) until the box goes; a `save` of the box keeps it.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

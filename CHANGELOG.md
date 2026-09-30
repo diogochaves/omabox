@@ -55,6 +55,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `openlayer`, ...) from its start, timestamped. `--mark` says "from here" without clearing anything,
   `--since MARK` (or `30s`) reads from there, `--grep`, `--json`, `-f`, and `--until RE` waits for an
   event like `omabox wait` does ([#39](https://github.com/diogochaves/omabox/issues/39)).
+- **`omabox clip`** hands your clipboard's item (text, or an image by its type) to an interactive
+  box, once, and `clip --from-box` hands the box's back: for a password or a URL while you drive a
+  box. With no `-b` it takes the box whose window has focus, so a key binding of yours pastes into
+  the box you are in; the widget has **Paste your clipboard into the box** and **Copy the box's
+  clipboard out** on an interactive box's row (`v`, `c`). Nothing keeps watching either clipboard; a
+  password manager's "sensitive" mark goes along. Never for agents: refused in their sessions, under
+  the guard, in ai-jail, and for headless boxes ([#23](https://github.com/diogochaves/omabox/issues/23)).
 
 ### Changed
 
