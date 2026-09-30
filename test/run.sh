@@ -13,8 +13,9 @@
 # suite's showing up there fails the test that was running (t_leak_control first proves that on a box
 # standing in for the host); the end checks that the host's focused workspace and window are what
 # they were, or changed by events that were not the suite's (you working meanwhile). omabox's
-# workspace coming up there fails it too (unless you were on it when the run started). A peek you
-# open at the run's t<pid>-* boxes (bar widget, omabox peek) is noted, not a leak: `omabox peek`
+# workspace coming up there fails it too, unless it brings focus to a window that is not the suite's
+# (your box, your peek, your own app: you went there) or you were on it when the run started. A peek
+# you open at the run's t<pid>-* boxes (bar widget, omabox peek) is noted, not a leak: `omabox peek`
 # marks its window as yours (finding 121), and a check it holds up (a box you watch is not reaped) is
 # skipped, saying so. A peek from an omabox older than this suite has no mark and fails the run, as
 # does one any command of the suite's opens. Pointer motion
@@ -171,7 +172,7 @@ try:
     s = socket.socket(socket.AF_UNIX); s.connect(os.path.basename(path))
 except OSError as e:
     say("== watcher failed: %s" % e); sys.exit(1)
-KEEP = ("openwindow>>", "closewindow>>", "activewindowv2>>", "workspacev2>>", "activelayout>>")
+KEEP = ("openwindow>>", "closewindow>>", "activewindowv2>>", "workspacev2>>", "activespecial>>", "activelayout>>")
 def hypr(what):
     return json.loads(subprocess.run(["hyprctl", "-j", what], capture_output=True, text=True, timeout=5).stdout)
 def focused():
@@ -230,17 +231,22 @@ while True:
 # watched by you; neither is a peek something else opened, a leak. A virtual keyboard's layout event
 # is `omabox keys` reaching that compositor (ours is anonymous there: hl-virtual-keyboard-unknown);
 # Omarchy's input method, fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names
-# others (wayvnc). WS, when given, is omabox's workspace: it coming up is a leak (the suite's boxes
-# open nothing there), unless the focus it brings is on a peek of yours (the widget's click focuses
-# one, and Hyprland shows its workspace).
+# others (wayvnc). WS, when given, is omabox's workspace (1-99 or special:NAME, which shows with
+# activespecial, not workspacev2): it coming up is judged by the focus it brings, which Hyprland sends
+# just before it (a peek's --focus also once after; issue #56). Focus on a window that is not the
+# suite's (your box, your peek, your own app) is a note: you went there. Focus on the suite's, on
+# something omabox's that is not marked yours, or on nothing (the suite's boxes open nothing there)
+# is a leak.
 leak_scan() {
-  local pre=$1 ws=${2:-} line data cls title kb notes=() peek="" wsup=""
+  local pre=$1 ws=${2:-} line data cls title kb notes=() peek="" wsup="" prev="" who
   local wsleak="leak: omabox's workspace $ws came up (if you went there yourself, run the suite again)"
   while IFS= read -r line; do
     line=${line#* }
     # What the next line decides: a peek window's `+` line; the focus omabox's workspace brought.
     if [ -n "$peek" ] && [[ $line != '+ '* ]]; then echo "leak: a window opened: $peek"; peek=""; fi
     if [ -n "$wsup" ] && [[ $line != '~ '* && $line != activewindowv2\>\>?* ]]; then echo "$wsleak"; wsup=""; fi
+    # What the focus line just before says, for a workspace line (whose, or `leak`); gone after any other.
+    [[ $line == '~ '* || $line == workspacev2\>\>* || $line == activespecial\>\>* ]] || prev=""
     case $line in
       openwindow\>\>*)
         IFS=, read -r _ _ cls title <<<"${line#*>>}"
@@ -259,27 +265,35 @@ leak_scan() {
         cls=${line#* class=} title=""
         [[ $cls != *' title='* ]] || { title=${cls#* title=}; cls=${cls%% title=*}; }
         data=""; [[ $cls != omabox-peek || " $line " != *" OMABOX_PEEK_BY=you "* ]] || data=yours
-        if [ -n "$wsup" ]; then
-          if [ -n "$data" ]; then notes+=("workspace $ws for your peek"); else echo "$wsleak"; fi
-          wsup=""
-        fi
+        who=""   # whose the focus is, when not the suite's
         if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* || $line == *" OMABOX_NAME=$pre"* || $line == *" box=$pre"* ]]; then
           echo "leak: focus went to a window of this run's: ${line#\~ }"
         elif [[ $line == *" OMABOX_NAME="* ]]; then
           echo "leak: focus went to a box's process (another run's, or yours): ${line#\~ }"
-        elif [[ $line == *" box="* ]]; then data=${line#* box=}; notes+=("focus on your box ${data%% *}")
-        elif [ -n "$data" ]; then notes+=("focus on your peek at ${title#omabox peek: }")
+        elif [[ $line == *" box="* ]]; then data=${line#* box=}; who="your box ${data%% *}"; notes+=("focus on $who")
+        elif [ -n "$data" ]; then who="your peek"; notes+=("focus on your peek at ${title#omabox peek: }")
         elif data=$(omabox_window "$pre" "$cls" "$title"); then echo "leak: focus went to $data"
-        else notes+=("focus $cls"); fi ;;
+        elif [[ $line == '~ ? '* ]]; then notes+=("focus unknown (${line#\~ ? })")   # the watcher could not ask
+        else who=$cls; notes+=("focus $cls"); fi
+        if [ -n "$wsup" ]; then
+          if [ -n "$who" ]; then notes+=("workspace $ws for $who"); else echo "$wsleak"; fi
+          wsup=""
+        fi
+        prev=${who:-leak} ;;
       activelayout\>\>*virtual-keyboard*)
         kb=${line#*>>}; kb=${kb%%,*}
         if [ "$kb" = hl-virtual-keyboard-fcitx5 ] ||
            { [ -n "${OMABOX_TEST_HOST_KEYBOARDS:-}" ] && [[ $kb =~ $OMABOX_TEST_HOST_KEYBOARDS ]]; }; then notes+=("keyboard $kb")
         else echo "leak: keys from a virtual keyboard ($kb)"; fi ;;
-      workspacev2\>\>*)
+      workspacev2\>\>*|activespecial\>\>*)
+        # workspacev2>>ID,NAME; activespecial>>NAME,MONITOR (NAME empty: the special one closed).
         data=${line#*>>}
-        if [ -n "$ws" ] && [ "${data#*,}" = "$ws" ]; then wsup=1
-        else notes+=("workspace ${data#*,}"); fi ;;
+        if [[ $line == workspacev2* ]]; then data=${data#*,}; else data=${data%,*}; fi
+        if [ -z "$data" ]; then :
+        elif [ -z "$ws" ] || [ "$data" != "$ws" ]; then notes+=("workspace $data")
+        elif [ "$prev" = leak ]; then echo "$wsleak"
+        elif [ -n "$prev" ]; then notes+=("workspace $ws for $prev")
+        else wsup=1; fi ;;
     esac
   done
   [ -z "$peek" ] || echo "leak: a window opened: $peek"
@@ -592,9 +606,35 @@ t_unit_leak_scan() {
     "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' '+ 0xa ? StopIteration()' '~ 0xb pid=9 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-c')"
   check_match "...nor one whose + line is missing" "^leak: a window opened: a peek window" \
     "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' 'closewindow>>a' '+ 0xa pid=7 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-b')"
-  check_match "workspace 9 up with focus on a window that is not your peek: a leak" "^leak: omabox's workspace 9" \
-    "$(printf '1.000 %s\n' 'workspacev2>>9,9' 'activewindowv2>>b' '~ 0xb pid=9 class=firefox' | leak_scan t1- 9)"
-  check_match "...or on nothing" "^leak: omabox's workspace 9" "$(printf '1.000 %s\n' 'workspacev2>>9,9' 'activewindowv2>>' 'workspacev2>>1,1' | leak_scan t1- 9)"
+  # Issue #56: workspace 9 is judged by the focus it brings, which Hyprland 0.56 sends just before it
+  # (a dispatch and SUPER+9 alike, seen in a box): not the suite's, a note; the suite's or none, a leak.
+  ws9() { local w=$1; shift; printf '1.000 %s\n' "$@" | leak_scan t1- "$w"; }
+  check_eq "workspace 9 up with focus on your own box (the lines from #56): a note" \
+    "note: not the suite's: focus on your box box-1, workspace 9 for your box box-1, keyboard hl-virtual-keyboard-fcitx5" \
+    "$(ws9 9 'activewindowv2>>5f2b' '~ 0x5f2b pid=9 box=box-1 class=aquamarine' 'workspacev2>>9,9' 'activelayout>>hl-virtual-keyboard-fcitx5,English (US)')"
+  check_eq "...on an app of yours: a note" "note: not the suite's: focus firefox, workspace 9 for firefox" \
+    "$(ws9 9 'activewindowv2>>b' '~ 0xb pid=9 class=firefox' 'workspacev2>>9,9')"
+  check_eq "...on one of yours right after it (a peek's --focus): a note too" "note: not the suite's: focus firefox, workspace 9 for firefox" \
+    "$(ws9 9 'workspacev2>>9,9' 'activewindowv2>>b' '~ 0xb pid=9 class=firefox')"
+  check_match "...on a box of this run's: a leak" "leak: omabox's workspace 9" \
+    "$(ws9 9 'activewindowv2>>a' '~ 0xa pid=5 OMABOX_NAME=t1-main class=foot' 'workspacev2>>9,9')"
+  check_match "...on a process the suite started" "leak: omabox's workspace 9" \
+    "$(ws9 9 'activewindowv2>>a' '~ 0xa pid=5 OMABOX_SUITE=t1 class=foot' 'workspacev2>>9,9')"
+  check_match "...on an interactive box not yours" "leak: omabox's workspace 9" \
+    "$(ws9 9 'activewindowv2>>a' '~ 0xa pid=5 class=aquamarine' 'workspacev2>>9,9')"
+  check_match "...on a window the watcher could not ask about" "^leak: omabox's workspace 9" \
+    "$(ws9 9 'activewindowv2>>a' '~ ? TimeoutExpired()' 'workspacev2>>9,9')"
+  check_match "...on nothing" "^leak: omabox's workspace 9" "$(ws9 9 'activewindowv2>>' 'workspacev2>>9,9' 'activelayout>>hl-virtual-keyboard-fcitx5,English (US)')"
+  check_match "...on nothing, then another workspace" "^leak: omabox's workspace 9" "$(ws9 9 'workspacev2>>9,9' 'activewindowv2>>' 'workspacev2>>1,1')"
+  check_match "...your focus long before it does not count" "^leak: omabox's workspace 9" \
+    "$(ws9 9 '~ 0xb pid=9 class=firefox' 'openwindow>>c,1,foot,foot' 'workspacev2>>9,9')"
+  # A special workspace (the config's special:NAME) shows with activespecial>>NAME,MONITOR (seen in a box).
+  check_match "a special one: coming up with nothing in it, a leak" "^leak: omabox's workspace special:omabox came up" \
+    "$(ws9 special:omabox 'activespecial>>special:omabox,DP-1' 'activespecial>>,DP-1')"
+  check_eq "...with your own window in it: a note" "note: not the suite's: focus foot, workspace special:omabox for foot" \
+    "$(ws9 special:omabox 'activewindowv2>>a' '~ 0xa pid=9 class=foot' 'activespecial>>special:omabox,DP-1' 'activespecial>>,DP-1')"
+  check_eq "...another special one: a note" "note: not the suite's: workspace special:magic" "$(ws9 special:omabox 'activespecial>>special:magic,DP-1')"
+  check_eq "...workspace 9 is nothing special then" "note: not the suite's: workspace 9" "$(ws9 special:omabox 'workspacev2>>9,9')"
   check_eq "...on your peek at a box of yours: not a leak either" "" \
     "$(printf '1.000 %s\n' 'workspacev2>>9,9' '~ 0xb pid=9 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: mine' | leak_scan t1- 9 | grep '^leak:')"
   # The end's focus checks: focus left on a peek of yours (and workspace 9 with it) is not the suite's.
@@ -671,7 +711,7 @@ t_leak_control() {
   # shellcheck disable=SC2329 # called through until_ok
   seen() { slice "$log" "$1" "$2" | grep -- "$3" >/dev/null; }
   # shellcheck disable=SC2329
-  scanned() { slice "$log" "$1" "$2" | leak_scan "$P-" 9 | grep -- "$3" >/dev/null; }
+  scanned() { slice "$log" "$1" "$2" | leak_scan "$P-" "${4:-9}" | grep -- "$3" >/dev/null; }   # FROM TO RE [WS]
   unpeek() { ob run -b "$S" -- pkill -x omabox-peek; ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null; }
   mark yours
   "${in[@]}" "$CLI" peek "$C" --focus >/dev/null 2>&1
@@ -689,6 +729,25 @@ t_leak_control() {
   check "one opened by the suite's command is reported" scanned suites raw "^leak: a window opened: a peek window, by this run's commands: .*OMABOX_SUITE=$P "
   check "...its workspace too" scanned suites raw "^leak: omabox's workspace 9 came up"
   check "one started with no marker is reported" scanned raw end "^leak: a window opened: a peek window \"omabox peek: $C\" of this run's box, not marked as yours"
+  # Issue #56: workspace 9 brought up by you (focus on a window that is not the suite's: here one with
+  # no omabox marks, as your own app's) is a note; a special workspace of omabox's (special:NAME in
+  # the config) coming up empty is a leak.
+  ob run -b "$S" -d -- env -u OMABOX_NAME foot sleep 60 >/dev/null 2>&1
+  until_ok 10 bash -c "'$CLI' hyprctl -b '$S' -j activewindow | jq -e '.class == \"foot\"'"
+  ob hyprctl -b "$S" dispatch "hl.dsp.window.move({ workspace = '9', window = 'class:foot' })" >/dev/null
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null
+  mark mine
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '9' })" >/dev/null
+  until_ok 5 seen mine "" "workspacev2>>9,9"
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null
+  mark special
+  ob hyprctl -b "$S" dispatch 'hl.dsp.workspace.toggle_special("omabox")' >/dev/null
+  ob hyprctl -b "$S" dispatch 'hl.dsp.workspace.toggle_special("omabox")' >/dev/null
+  until_ok 5 seen special "" "activespecial>>,"
+  mark end2
+  check_eq "omabox's workspace brought up by you (focus on your app there): no leak" "" "$(slice "$log" mine special | leak_scan "$P-" 9 | grep '^leak:')"
+  check "...noted, with the focus it brought" scanned mine special "^note: .*workspace 9 for foot"
+  check "a special workspace of omabox's coming up empty is reported" scanned special end2 "^leak: omabox's workspace special:omabox came up" special:omabox
   ob down "$S" >/dev/null 2>&1
   [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }
@@ -3515,8 +3574,9 @@ main() {
   hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
   ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
   # omabox's workspace coming up is a leak (from #13's watch), unless you were on it already.
+  # (A special one, special:NAME, is shown over the focused monitor's workspace.)
   HWS=$("$CLI" config workspace 2>/dev/null) || HWS=9
-  [ "$(hostctl -j activeworkspace | jq -r '.name // empty')" != "$HWS" ] || HWS=
+  ! hostctl -j monitors | jq -e --arg w "$HWS" '.[] | select(.focused) | select(.activeWorkspace.name == $w or .specialWorkspace.name == $w)' >/dev/null || HWS=
   # The run's folder, and the last 5 runs' (a run still going, another agent's, is never removed).
   (umask 077; mkdir -p "$EVID")
   local _d; for _d in $(find "${EVID%/*}" -mindepth 1 -maxdepth 1 -type d -name '*-t[0-9]*' | sort -r | tail -n +6); do
