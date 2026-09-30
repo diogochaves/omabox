@@ -86,7 +86,8 @@ for a secret: the process list shows it). --env KEY=VAL is the box session's, on
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
 org.gnome.Nautilus, or part of its title); repeat to narrow. None or
-several is exit 2, with the candidates. \`shot --window\` (-w; --active is --window active) is the
+several is exit 2, with the candidates (\`wait window SEL\` asks for a window like it: any of several
+does, each named). \`shot --window\` (-w; --active is --window active) is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
 \`keys --window\` focuses it, then types. --fit N scales a shot's longest side down to N pixels.
@@ -2226,23 +2227,38 @@ settle_opts_check() {
     die "--start, --quiet, --timeout, --strict and --json go with --wait"
 }
 
+# A window for wait's messages: d is where it is too, n only what it is.
+# shellcheck disable=SC2016 # jq, not shell
+WIN_DESC_JQ='def n: "\(.address) \(.class) \(.title | tojson)";
+  def d: "\(.address) \(.class) \(.title | tojson) at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" + (if .active then ", focused" else "" end);'
 # The polled conditions (wait window, layer, cmd): a probe prints "yes DETAIL" or "no DETAIL"; exit 2
-# is a selector that can never be answered (several windows), anything else the box not answering.
+# is a selector that can never be answered (a bad regex), anything else the box not answering.
+# `wait window SEL` asks whether a window like that is there (or focused): any of several matching
+# windows answers it, and all of them are named (issue #37). Only commands that act on one window
+# (--window on shot, click, keys, pointer, drag) refuse several.
 # shellcheck disable=SC2329 # called through poll_until
 win_probe() {
-  local want=$1 wins hits n w; shift
+  local want=$1 wins; shift
   wins=$(box_windows 2>/dev/null) || return 1
+  win_answer "$want" "$wins" "$@"
+}
+# win_answer WANT WINDOWS SEL...: win_probe's answer for these windows (win_annotate's list).
+# shellcheck disable=SC2329 # called through win_probe
+win_answer() {
+  local want=$1 wins=$2 hits n; shift 2
   hits=$(jq -c "$WIN_SEL_JQ" --args "$@" <<<"$wins" 2>&1) || { say "bad window selector ($*): ${hits#jq: error*: }"; return 2; }
   n=$(jq length <<<"$hits")
-  if [ "$n" -gt 1 ] && [ "$want" != gone ]; then
-    say "$* matches $n windows: name one by its address (or add a selector):"; win_lines "$hits" >&2; return 2
-  fi
-  w=$(jq -c '.[0] // empty' <<<"$hits")
   case $want in
     gone) if [ "$n" = 0 ]; then echo yes; else echo "no $n matching"; fi ;;
-    *) if [ "$n" = 0 ]; then echo no
-       elif [ "$want" = focused ] && [ "$(jq -r .active <<<"$w")" != true ]; then echo "no $(win_desc "$w") is there"
-       else echo "yes $(jq -r '"\(.address) \(.class) \(.title | tojson) at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" + (if .active then ", focused" else "" end)' <<<"$w")"; fi ;;
+    # Focused: the focused one among them, named, with how many match.
+    focused) jq -r "$WIN_DESC_JQ"'
+        (first(.[] | select(.active)) // null) as $f
+        | if length == 0 then "no"
+          elif $f == null then if length == 1 then "no \(.[0] | n) is there" else "no \(length) matching, none focused" end
+          else "yes \($f | d)" + (if length > 1 then " (1 of \(length) matching)" else "" end) end' <<<"$hits" ;;
+    *) jq -r "$WIN_DESC_JQ"'
+        if length == 0 then "no" elif length == 1 then "yes \(.[0] | d)"
+        else "yes \(length) windows: \(map(d) | join("; "))" end' <<<"$hits" ;;
   esac
 }
 # shellcheck disable=SC2329 # called through poll_until

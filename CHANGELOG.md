@@ -33,6 +33,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - `omabox pointer --hold` is refused: it never returned, and read like "hold the button"
   ([#25](https://github.com/diogochaves/omabox/issues/25)).
 
+### Fixed
+
+- **`wait window SEL` is satisfied when several windows match** (an app with one window per vault or
+  document): it failed with exit 2. Any match answers it and the line names them all; `--focused`
+  when one of them has focus. `--window` on `shot`, `click`, `keys`, `pointer` and `drag` still
+  wants exactly one ([#37](https://github.com/diogochaves/omabox/issues/37)).
+
 ## 0.2.1 — 2026-09-29
 
 `OMABOX=NAME` works under `omabox run`, `--window` finds apps by name, and a Qt app's logging reaches

@@ -2236,6 +2236,15 @@ t_unit_window_select() {
   check_eq "an unmapped window is not a window" 2 "$(lib win_select "$W" 'title:^gone$' >/dev/null 2>&1; echo $?)"
   check_match "a bad regex: exit 2, said" "bad window selector" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
   check_match "...rc 2" "rc=2" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  # wait window (#37): any of several matching windows is an answer, and all are named.
+  check_match "wait window: several match, satisfied, each named" '^yes 4 windows: 0xa foot "A" at 0,0 1000x1000; 0xb foot "B" at 1000,0 900x1000, focused; 0xg .*; 0xd ' "$(lib win_answer present "$W" foot)"
+  check_match "...one: as before" '^yes 0xh org.gnome.Nautilus "Home" at 0,0 800x600$' "$(lib win_answer present "$W" nautilus)"
+  check_eq "...none" no "$(lib win_answer present "$W" nope)"
+  check_eq "--focused: the focused one of several" 'yes 0xb foot "B" at 1000,0 900x1000, focused (1 of 4 matching)' "$(lib win_answer focused "$W" foot)"
+  check_eq "...several, none focused" "no 2 matching, none focused" "$(lib win_answer focused "$W" zenity)"
+  check_eq "...one, not focused" 'no 0xa foot "A" is there' "$(lib win_answer focused "$W" 'title:^A$')"
+  check_eq "--gone: several still there" "no 4 matching" "$(lib win_answer gone "$W" foot)"
+  check_eq "a bad regex: exit 2 (never answerable)" 2 "$(lib win_answer present "$W" 'title:(' >/dev/null 2>&1; echo $?)"
   cov() { jq -r --arg a "$2" '.[] | select(.address == $a) | [.cover[].address] | join(" ")' <<<"$1"; }
   on() { jq -r --arg a "$2" '.[] | select(.address == $a) | .onscreen' <<<"$1"; }
   check_eq "floats cover the tiled window under them, though one is earlier in the list" "0xf 0x2" "$(cov "$W" 0xa)"
@@ -2469,7 +2478,15 @@ t_wait() {
   local t0=$SECONDS
   check_eq "a window that never comes: 124" 124 "$(ob wait -b "$B" --timeout 1s window 'title:^nope$' >/dev/null; echo $?)"
   check "...at the deadline" test $((SECONDS - t0)) -le 4
-  check_eq "several windows match: exit 2" 2 "$(ob wait -b "$B" window foot >/dev/null 2>&1; echo $?)"
+  # Several windows match (A and R): any is an answer, each named (#37).
+  out=$(ob wait -b "$B" window foot); rc=$?
+  check_eq "several windows match: satisfied (#37)" 0 "$rc"
+  check_match "...each named" '^satisfied: window foot after [0-9.]+s: 2 windows: 0x[0-9a-f]+ foot "[AR]" at .*; 0x[0-9a-f]+ foot "[AR]" at ' "$out"
+  out=$(ob wait -b "$B" window foot --focused --json); rc=$?
+  check_eq "...--focused: the focused one of them" "0 satisfied" "$rc $(jq -r .result <<<"$out")"
+  check_match "...named, with how many match" 'foot "[AR]" .*, focused \(1 of 2 matching\)$' "$(jq -r .detail <<<"$out")"
+  check_eq "...--gone: 124 while they are there" 124 "$(ob wait -b "$B" --timeout 500ms window foot --gone >/dev/null; echo $?)"
+  check_eq "...an action on one window still refuses several: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
   # cmd: a condition inside the box, here one that becomes true a second later
   ob run -b "$B" -d -- sh -c 'sleep 1; touch /tmp/late' >/dev/null 2>&1
   out=$(ob wait -b "$B" cmd -- test -e /tmp/late); rc=$?

@@ -31,7 +31,9 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - `omabox wait [--timeout 10s] [--json] COND`, one condition per call (chain with `&&`): `still
   [--quiet 300ms] [-g GEOM | --window SEL] [--strict]`, `change [-g | --window]`, `window SEL [--gone
   | --focused]`, `layer NAMESPACE [--gone]` (`omarchy-menu`, `omarchy-notifications`, ...), `cmd --
-  CMD` (exit 0 inside the box).
+  CMD` (exit 0 inside the box). `window SEL` is satisfied by any window SEL matches, and the line
+  names them all (`--focused`: when one of them has focus); only commands acting on one window
+  refuse a SEL that matches several.
 - `keys`, `click`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [--json]`:
   the screen before the action, a change within `--start` (5 s for `run -d`), then `--quiet` with none.
 - A caret (a change 4 px or thinner) and the software cursor (in every frame; it hides on a key

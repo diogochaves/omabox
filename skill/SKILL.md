@@ -93,7 +93,7 @@ right after a `click` or `keys` without `--wait` can show the frame before the r
 or `omabox wait still`, before the shot.
 
 `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a title; `title:RE`, `class:RE`, `pid:N` or an address
-(`0x…`) narrow it. Coordinates are screenshot pixels; a cropped or scaled shot says so on stderr:
+(`0x…`) narrow it; `wait window SEL` is satisfied by any window it matches. Coordinates are screenshot pixels; a cropped or scaled shot says so on stderr:
 then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own. After any `-g` or
 `--fit` shot, click (or `drag`) with `--in THAT.png`, and never discard `shot`'s stderr: it says so.
 `shot --window SEL -g "X,Y WxH"` crops the window in its own coordinates. 1920x1080 is read 1:1; on a
