@@ -1209,10 +1209,10 @@ the designs here were measured in boxes and built for a contained desktop, and n
       ~10 px above it; when a click moved it, the I-beam's top row at its old place fell one row
       outside, and `click --wait` on a terminal read "settled" instead of 124. Deterministic there,
       not seen on AMD; why the old place was redrawn only on NVIDIA is not known.)
-    - `wait window SEL [--gone|--focused]` (the resolver of finding 81: several matches is exit 2,
-      never a guess; `--gone` counts any), `wait layer NAMESPACE [--gone]` and `wait cmd -- CMD` (exit
-      0 inside the box) poll every 100 ms; a window or layer must hold on 2 polls in a row. Absence can
-      be asserted (`--gone`).
+    - `wait window SEL [--gone|--focused]` (the resolver of finding 81; several matches were exit 2
+      until finding 105, now any of them answers it; `--gone` counts any), `wait layer NAMESPACE
+      [--gone]` and `wait cmd -- CMD` (exit 0 inside the box) poll every 100 ms; a window or layer
+      must hold on 2 polls in a row. Absence can be asserted (`--gone`).
     - **Exit 0 satisfied, 124 unsatisfied at `--timeout` (10 s; at most 10 min), 1 unknown**, never 0
       for what could not be seen: the box went down mid-wait (`unknown: box 'x' went down after
       1.50s`), or an interactive box whose window is hidden, which renders nothing (finding 24).
@@ -1758,6 +1758,27 @@ the designs here were measured in boxes and built for a contained desktop, and n
     fails with its number, not its text. From a jail the caller's omabox reads the file and sends its
     entries as `--pass` values. Checked in a box (and that no value is in any command line while it
     runs); `t_main`.
+104. **`-b NAME` before the command** (2026-09-30, issue #36). An agent's helper `ob() { omabox -b
+    "$BOX" "$@"; }` got "unknown command: -b" and the whole help (97 lines) on every call. `main`
+    now moves a leading `-b NAME`/`--box NAME` to right after the command (`global_box`), where every
+    command that takes `-b` parses it, before anything reads the command: the relay in a jail and the
+    broker's `broker_check` see `windows -b NAME` as if typed so, and a jailed `-b` still names only
+    the jail's boxes (`select_box`). For `up`, `down`, `env` and `path`, which also take a positional
+    NAME, it is the same as `-b` after the command (`omabox -b a up b` is "one box name, got a and b";
+    `down` takes both). Commands that are not about one box (`ls`, `saves`, `config`, `guard`,
+    `host`, `broker`) say "ls takes no -b" in one line (exit 2); `help` and `--version` ignore it;
+    given twice, the last wins. An unknown command is now one line pointing at `omabox help`, not
+    the help (exit 2 still). `t_unit_cli`, `t_jail`.
+105. **`wait window SEL` is satisfied by any of several matches** (2026-09-30, issue #37). It used
+    the one-window resolver (finding 81) and failed with exit 2 when a second window matched: an
+    app that opens one window per vault (Obsidian) broke `wait window class:obsidian` as soon as the
+    second came up, while `--gone` already counted them. "Until a window like this exists" is
+    answered by any: `satisfied: window foot after 0.20s: 2 windows: 0x... foot "A" at ...; 0x...`,
+    every match named (`--json`'s `detail`). `--focused` is satisfied when the focused window is one
+    of them, named with "(1 of N matching)"; none focused says "no N matching, none focused". Only a
+    bad regex is still exit 2. What acts on one window keeps refusing several (`--window` on `shot`,
+    `click`, `keys`, `pointer`, `drag`, and `wait still/change --window`, which watches one window's
+    place). `win_answer` is the probe without the box; `t_unit_window_select`, `t_wait`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

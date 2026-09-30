@@ -643,6 +643,8 @@ r host \$O host -- touch $br/pwned
 r ro-bind \$O up $P-other --ro-bind $TMP/lacks
 r net \$O up $P-other --net connected
 r other \$O shot -b $P-host
+r pre-b \$O -b $P-jail windows
+r pre-b-other \$O -b $P-host windows
 r net-in-box \$O run -- sh -c 'curl -s --max-time 3 -o /dev/null https://archlinux.org || echo no-internet'
 r down \$O down
 EOF
@@ -661,6 +663,8 @@ EOF
   check_match "a folder the jail lacks does not go in" "not a folder this jail was given whole.* rc=1" "$(sect ro-bind)"
   check_match "a network the jail lacks is refused" "has no network.* rc=1" "$(sect net)"
   check_match "the user's own box is not the jail's" "not this jail's.* rc=1" "$(sect other)"
+  check_match "-b NAME before the command, through the broker (#36)" "rc=0 $" "$(sect pre-b)"
+  check_match "...the user's box still not the jail's" "not this jail's.* rc=1" "$(sect pre-b-other)"
   check_match "no internet in its box" "no-internet rc=0" "$(sect net-in-box)"
   check_match "down" "box '$P-jail' down rc=0" "$(sect down)"
   check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
@@ -685,6 +689,19 @@ t_unit_cli() {
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
+  check_eq "...in one line, not the help (#36)" "1 2" "$(ob shoot 2>&1 | wc -l) $(ob shoot >/dev/null 2>&1; echo $?)"
+  # -b NAME before the command (#36): the same as after it.
+  check_eq "-b NAME before the command" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob -b "$P-x" path)"
+  check_eq "...--box NAME too" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob --box "$P-x" path)"
+  check_match "...reaches the command's own -b (windows)" "no box '$P-x' is up" "$(ob -b "$P-x" windows 2>&1)"
+  check_match "...hyprctl, which takes -b only first" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl clients 2>&1)"
+  check_match "...up NAME as well is two names" "up: one box name, got $P-x and $P-y" "$(ob -b "$P-x" up "$P-y" 2>&1)"
+  check_eq "...a command that takes no -b: one line" "omabox: ls takes no -b: it is not about one box" "$(ob -b "$P-x" ls 2>&1)"
+  check_eq "...exit 2" 2 "$(ob -b "$P-x" ls >/dev/null 2>&1; echo $?)"
+  check_eq "...an unknown one: one line" 1 "$(ob -b "$P-x" shoot 2>&1 | wc -l)"
+  check_match "...no command: said" "goes with a command" "$(ob -b "$P-x" 2>&1)"
+  check_match "...help still helps" "omabox up" "$(ob -b "$P-x" help 2>&1)"
+  check_match "...no value: said" "-b needs a value" "$(ob -b 2>&1)"
   # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
   mkdir -p "$TMP/rt"
   check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
@@ -2236,6 +2253,15 @@ t_unit_window_select() {
   check_eq "an unmapped window is not a window" 2 "$(lib win_select "$W" 'title:^gone$' >/dev/null 2>&1; echo $?)"
   check_match "a bad regex: exit 2, said" "bad window selector" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
   check_match "...rc 2" "rc=2" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  # wait window (#37): any of several matching windows is an answer, and all are named.
+  check_match "wait window: several match, satisfied, each named" '^yes 4 windows: 0xa foot "A" at 0,0 1000x1000; 0xb foot "B" at 1000,0 900x1000, focused; 0xg .*; 0xd ' "$(lib win_answer present "$W" foot)"
+  check_match "...one: as before" '^yes 0xh org.gnome.Nautilus "Home" at 0,0 800x600$' "$(lib win_answer present "$W" nautilus)"
+  check_eq "...none" no "$(lib win_answer present "$W" nope)"
+  check_eq "--focused: the focused one of several" 'yes 0xb foot "B" at 1000,0 900x1000, focused (1 of 4 matching)' "$(lib win_answer focused "$W" foot)"
+  check_eq "...several, none focused" "no 2 matching, none focused" "$(lib win_answer focused "$W" zenity)"
+  check_eq "...one, not focused" 'no 0xa foot "A" is there' "$(lib win_answer focused "$W" 'title:^A$')"
+  check_eq "--gone: several still there" "no 4 matching" "$(lib win_answer gone "$W" foot)"
+  check_eq "a bad regex: exit 2 (never answerable)" 2 "$(lib win_answer present "$W" 'title:(' >/dev/null 2>&1; echo $?)"
   cov() { jq -r --arg a "$2" '.[] | select(.address == $a) | [.cover[].address] | join(" ")' <<<"$1"; }
   on() { jq -r --arg a "$2" '.[] | select(.address == $a) | .onscreen' <<<"$1"; }
   check_eq "floats cover the tiled window under them, though one is earlier in the list" "0xf 0x2" "$(cov "$W" 0xa)"
@@ -2469,7 +2495,15 @@ t_wait() {
   local t0=$SECONDS
   check_eq "a window that never comes: 124" 124 "$(ob wait -b "$B" --timeout 1s window 'title:^nope$' >/dev/null; echo $?)"
   check "...at the deadline" test $((SECONDS - t0)) -le 4
-  check_eq "several windows match: exit 2" 2 "$(ob wait -b "$B" window foot >/dev/null 2>&1; echo $?)"
+  # Several windows match (A and R): any is an answer, each named (#37).
+  out=$(ob wait -b "$B" window foot); rc=$?
+  check_eq "several windows match: satisfied (#37)" 0 "$rc"
+  check_match "...each named" '^satisfied: window foot after [0-9.]+s: 2 windows: 0x[0-9a-f]+ foot "[AR]" at .*; 0x[0-9a-f]+ foot "[AR]" at ' "$out"
+  out=$(ob wait -b "$B" window foot --focused --json); rc=$?
+  check_eq "...--focused: the focused one of them" "0 satisfied" "$rc $(jq -r .result <<<"$out")"
+  check_match "...named, with how many match" 'foot "[AR]" .*, focused \(1 of 2 matching\)$' "$(jq -r .detail <<<"$out")"
+  check_eq "...--gone: 124 while they are there" 124 "$(ob wait -b "$B" --timeout 500ms window foot --gone >/dev/null; echo $?)"
+  check_eq "...an action on one window still refuses several: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
   # cmd: a condition inside the box, here one that becomes true a second later
   ob run -b "$B" -d -- sh -c 'sleep 1; touch /tmp/late' >/dev/null 2>&1
   out=$(ob wait -b "$B" cmd -- test -e /tmp/late); rc=$?
