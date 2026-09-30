@@ -3,7 +3,10 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.3.1 — 2026-09-30
+
+With keys-to-box on, pointing away from the box (your bar, another monitor) gives SUPER keys back to
+your desktop.
 
 ### Changed
 

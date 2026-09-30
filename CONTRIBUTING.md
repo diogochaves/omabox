@@ -57,7 +57,8 @@ on `main`:
    `plugin/Panel.qml`'s `pluginVersion` all to X.Y.Z; in `CHANGELOG.md`, `## Unreleased` becomes
    `## X.Y.Z — DATE` with a short summary under it.
 2. `git tag -a vX.Y.Z -m "omabox X.Y.Z"`, then push `main` and the tag.
-3. `gh release create vX.Y.Z --title "omabox X.Y.Z"` with that CHANGELOG section as the notes.
+3. `gh release create vX.Y.Z --title "omabox X.Y.Z"` with that CHANGELOG section as the notes, each
+   paragraph and list item joined onto one line (GitHub shows every newline in release notes).
 4. `./release.sh --upload`: attaches `omabox-X.Y.Z.tar.gz` and `SHA256SUMS` to the release.
 
 If you want to work on something bigger, open an issue first so we can talk it over. NOTES.md's
