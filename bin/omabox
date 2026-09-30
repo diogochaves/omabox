@@ -689,15 +689,27 @@ render_nodes() {
 render_driver() { basename "$(readlink -f "/sys/class/drm/${1##*/}/device/driver")"; }
 
 # Match the selected render node to NVIDIA's userspace device node. Never expose a DRM card.
+# nvidia_device RENDER [CREATE]: CREATE 0 leaves a missing node missing (see nvidia_node).
 nvidia_device() {
-  local render=$1 slot info minor
-  slot=$(basename "$(readlink -f "/sys/class/drm/${render##*/}/device")")
-  info=/proc/driver/nvidia/gpus/$slot/information
+  nvidia_node "$(basename "$(readlink -f "/sys/class/drm/${1##*/}/device")")" "${2:-1}"
+}
+
+# nvidia_node SLOT [CREATE [PROC DEV]]: the /dev/nvidiaN of the GPU at PCI SLOT (PROC and DEV stand in
+# for /proc/driver/nvidia and /dev in t_unit_nvidia). A GPU switched to the nvidia driver at runtime
+# (from vfio-pci) can lack its node until something creates it (finding 122): NVIDIA's own setuid
+# helper, nvidia-modprobe, does that for an unprivileged user, so it is asked once, unless CREATE is 0.
+nvidia_node() {
+  local slot=$1 create=${2:-1} proc=${3:-/proc/driver/nvidia} dev=${4:-/dev} info minor
+  info=$proc/gpus/$slot/information
   [ -r "$info" ] || die "NVIDIA GPU $slot has no $info"
   minor=$(awk -F: '/^Device Minor:/ {gsub(/[[:space:]]/, "", $2); print $2}' "$info")
-  [[ $minor =~ ^[0-9]+$ ]] && [ -c "/dev/nvidia$minor" ] && [ -c /dev/nvidiactl ] ||
-    die "NVIDIA GPU $slot has no usable /dev/nvidia$minor or /dev/nvidiactl"
-  echo "/dev/nvidia$minor"
+  [[ $minor =~ ^[0-9]+$ ]] || die "NVIDIA GPU $slot: no device minor in $info"
+  if [ "$create" = 1 ] && { [ ! -c "$dev/nvidia$minor" ] || [ ! -c "$dev/nvidiactl" ]; } && command -v nvidia-modprobe >/dev/null; then
+    nvidia-modprobe -c "$minor" >/dev/null 2>&1 || true
+  fi
+  [ -c "$dev/nvidia$minor" ] && [ -c "$dev/nvidiactl" ] ||
+    die "NVIDIA GPU $slot has no usable $dev/nvidia$minor or $dev/nvidiactl: run \`nvidia-modprobe -c $minor\` (NVIDIA's helper, from nvidia-utils; no root needed), then try again"
+  echo "$dev/nvidia$minor"
 }
 
 # Resolve --plugin PATH|ID to "id<TAB>realpath".
@@ -1111,9 +1123,10 @@ cmd_up() {
   render=$(render_node)
   if [ $interactive = 1 ]; then
     mapfile -t renders < <(render_nodes)
-    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it.
+    # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it
+    # (so nothing is created for it either).
     for n in "${renders[@]}"; do
-      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 2>/dev/null) || nvidia_devs+=("$dev")
+      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 0 2>/dev/null) || nvidia_devs+=("$dev")
     done
   elif [ "$(render_driver "$render")" = nvidia ]; then
     renders=("$render")

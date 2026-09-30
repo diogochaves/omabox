@@ -2016,6 +2016,23 @@ the designs here were measured in boxes and built for a contained desktop, and n
     of the right soname plus a missing library, a script, `/usr/bin/true`, a non-executable file.
     Not checked: a real patched build (the issue's run was one), and the version warning against a
     real other version (a stubbed `on_box` in `t_unit_hyprland`). `t_unit_hyprland`, `t_hyprland`.
+122. **An NVIDIA GPU switched to its driver at runtime has no `/dev/nvidiaN` yet** (2026-09-30, this
+    machine: the RTX 5070 Ti moved from `vfio-pci` to `nvidia` while the session ran). The driver
+    listed it (`/proc/driver/nvidia/gpus/0000:01:00.0/information`, Device Minor 0) and
+    `/dev/nvidiactl` existed, but not `/dev/nvidia0`. The nodes are made by `nvidia-modprobe`, which
+    nvidia-utils' udev rule (`60-nvidia.rules`) runs on bind only while `/dev/nvidia-uvm` does not
+    exist; here the uvm nodes were already there, so no `/dev/nvidia0`. `up` with `OMABOX_RENDER_NODE` on its render
+    node stopped: "NVIDIA GPU 0000:01:00.0 has no usable /dev/nvidia0 or /dev/nvidiactl".
+    `nvidia-modprobe -c 0` (nvidia-utils' setuid helper, made for unprivileged users) created it and
+    the box then started and passed. `nvidia_device` now does that itself: when the minor's node or
+    `nvidiactl` is missing it runs `nvidia-modprobe -c MINOR` once (if installed) and looks again;
+    still missing, the error names the command to run. Not for an interactive box's other GPUs
+    (`nvidia_device N 0`): a missing node there means the desktop does not render on it, and it is
+    left out as before. The body is `nvidia_node SLOT CREATE PROC DEV`, so `t_unit_nvidia` runs it
+    on a fake `/proc/driver/nvidia` and `/dev` with a stub helper. Not reproduced live since: the
+    node now exists, and making it disappear needs root. `t_main`'s NVIDIA branch said "the render
+    node's driver is nvidia, not nvidia" when `up` had failed there: it now fails saying the box did
+    not get the private Wayland screen.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

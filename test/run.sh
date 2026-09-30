@@ -1154,6 +1154,9 @@ t_main() {
     check "NVIDIA control node is present" ob run -b "$B" -- test -c /dev/nvidiactl
     check_eq "parent output matches the box" "1920 1080" \
       "$(ob run -b "$B" -- env WAYLAND_DISPLAY=wayland-0 wlr-randr --json | jq -r '.[0].modes[] | select(.current) | "\(.width) \(.height)"')"
+  elif [ "$(lib render_driver "$(lib render_node)")" = nvidia ]; then
+    # (Before, this said "the render node's driver is nvidia, not nvidia": up had failed on NVIDIA.)
+    no "NVIDIA uses the private Wayland screen" "the render node ($(lib render_node)) is NVIDIA's, but the box did not get the private Wayland screen (box.json wayland_screen: $(jq -r .wayland_screen "$D/box.json" 2>&1)); did up fail?"
   else
     check_eq "headless screen" HEADLESS-2 "$screen_name"
     skip "NVIDIA's private Wayland screen, nodes and parent output" \
@@ -1598,6 +1601,39 @@ t_no_shell() {
   check "up --no-shell" ob up "$B" --no-shell
   check "no quickshell starts" holds 2 bash -c "! '$CLI' run -b '$B' -- pgrep -x quickshell"
   check "down" ob down "$B"
+}
+
+# finding 122: an NVIDIA GPU whose /dev/nvidiaN is missing (switched to the driver at runtime) gets it
+# from nvidia-modprobe -c MINOR; still missing, the error says what to run. A fake /proc/driver/nvidia
+# and /dev (a link to /dev/null is a character device to `test -c`), and a stub nvidia-modprobe.
+t_unit_nvidia() {
+  local d=$TMP/$P-nv slot=0000:01:00.0 out
+  mkdir -p "$d/proc/gpus/$slot" "$d/dev" "$d/stub" "$d/none"
+  printf 'Model: \t\t NVIDIA GeForce RTX 5070 Ti\nIRQ:   \t\t 180\nDevice Minor: \t 3\n' > "$d/proc/gpus/$slot/information"
+  ln -s /dev/null "$d/dev/nvidiactl"
+  printf '#!/bin/sh\necho "$*" >> "%s/calls"\n[ "$NV_STUB" = fail ] || ln -sf /dev/null "%s/dev/nvidia$2"\n' "$d" "$d" > "$d/stub/nvidia-modprobe"
+  chmod +x "$d/stub/nvidia-modprobe"
+  # (Always with the stub first in PATH: the real nvidia-modprobe is setuid root and makes /dev nodes.)
+  nv() { PATH=$1:$PATH lib nvidia_node "$slot" "$2" "$d/proc" "$d/dev" 2>&1; }
+  export NV_STUB=fail
+  out=$(nv "$d/stub" 1)
+  check_match "a missing node the helper does not create: what to run" "no usable $d/dev/nvidia3 .*run \`nvidia-modprobe -c 3\`" "$out"
+  check_eq "...after asking it once, for that minor" "-c 3" "$(cat "$d/calls" 2>&1)"
+  rm -f "$d/calls"
+  check_match "CREATE 0 (an interactive box's other GPUs): not asked" "no usable" "$(nv "$d/stub" 0)"
+  check_fails "...no call" test -e "$d/calls"
+  NV_STUB=ok
+  check_eq "a missing node: nvidia-modprobe -c MINOR creates it" "$d/dev/nvidia3" "$(nv "$d/stub" 1)"
+  check_eq "...one call" "-c 3" "$(cat "$d/calls" 2>&1)"
+  check_eq "a node there: used, the helper not asked" "$d/dev/nvidia3|-c 3" "$(nv "$d/stub" 1)|$(cat "$d/calls")"
+  rm "$d/dev/nvidiactl" "$d/calls"
+  check_match "a missing control node asks too" "no usable .*nvidiactl" "$(NV_STUB=fail nv "$d/stub" 1)"
+  check_eq "...(for the GPU's minor)" "-c 3" "$(cat "$d/calls" 2>&1)"
+  unset NV_STUB
+  check_match "no device minor in the driver's file" "no device minor" \
+    "$(printf 'Model: x\n' > "$d/proc/gpus/$slot/information"; nv "$d/none" 1)"
+  check_match "a GPU the driver does not list" "has no $d/proc/gpus/0000:02:00.0/information" \
+    "$(PATH=$d/none:$PATH lib nvidia_node 0000:02:00.0 1 "$d/proc" "$d/dev" 2>&1)"
 }
 
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
@@ -2940,7 +2976,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
+  t_unit_nvidia t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect)
 BOX=(t_leak_control t_main t_window t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 

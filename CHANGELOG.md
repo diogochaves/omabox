@@ -81,6 +81,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - A box's bar shows workspace numbers when yours come from a plugin left out of the box: Omarchy's
   go where that plugin was, or after the menu when your bar has none
   ([#21](https://github.com/diogochaves/omabox/issues/21)).
+- **A box starts on an NVIDIA GPU just switched to its driver** (from `vfio-pci`, say): its
+  `/dev/nvidiaN` did not exist yet and `up` stopped. omabox now creates it with NVIDIA's
+  `nvidia-modprobe -c N` (no root needed), and says to run that when it cannot.
 
 ## 0.2.1 — 2026-09-29
 
