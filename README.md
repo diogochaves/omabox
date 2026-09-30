@@ -172,7 +172,7 @@ session/suspend/lock paths never run in one.
 - **`omabox up --interactive`**: the box is a real window on workspace 9 that you drive with your
   own keyboard and mouse. **SUPER+ALT+ESCAPE** sends SUPER keys to the box instead of your desktop,
   once; **`omabox keys-to-box -b NAME on`** (or the keyboard button in the widget) sends them
-  whenever the box's window has focus. While they go to a box, its border turns the theme's red and
+  whenever the box's window has focus and the pointer is over it. While they go to a box, its border turns the theme's red and
   the widget's icon lights up. The box follows the window's size; closing the window ends it.
 - **`omabox clip`**: your clipboard's item (text, or an image by its type) into an interactive box,
   once; `clip --from-box` hands the box's back. With no `-b` it is the box whose window has focus
@@ -208,14 +208,15 @@ them, and `omabox config KEY default` puts one back.
 
 Passthrough (SUPER+ALT+ESCAPE) turns itself off when focus leaves the box, or on the first key you
 press with the pointer outside it. With **keys-to-box** on (per box, off by default, until the box
-goes down) focus alone decides: the box's window takes focus, SUPER is the box's; focus goes
-anywhere else, SUPER is yours again, with no key to press. `omabox keys-to-box -b NAME` says
-whether it is on, `on`/`off` changes it, and `omabox ls` shows it. The catch: while the box has
-focus, your own SUPER binds (SUPER+1…9, SUPER+SPACE) reach the box, not your desktop, even with the
-pointer on your bar; move the pointer (or focus) off the box first, or press SUPER+ALT+ESCAPE, which
-gives the keys back until the box loses focus and gets it again. Either way, while keys go to a box
-its window's border takes the theme's red (the colour the bar uses for what calls for attention) and
-the widget's icon is lit in it.
+goes down) focus and the pointer decide, with no key to press: while the box's window has focus and
+the pointer is over it, SUPER is the box's; move the pointer off it (onto your bar, an empty part of
+the workspace, another monitor) or focus elsewhere, and SUPER is yours again, keys-to-box still on;
+the pointer back over the box, SUPER is the box's again. The first key you press with the pointer
+off the box is already yours (SUPER+1 switches your workspace at once). `omabox keys-to-box -b NAME`
+says whether it is on, `on`/`off` changes it, and `omabox ls` shows it. SUPER+ALT+ESCAPE over the
+box gives the keys back until the box loses focus and gets it again. Either way, while keys go to a
+box its window's border takes the theme's red (the colour the bar uses for what calls for
+attention) and the widget's icon is lit in it.
 
 The widget's panel shows each box's mode, size, age, plugins, whether it is being peeked at and
 where its keys go, and a count in the bar when there are several. Keys: arrows or j/k, Enter or `p`

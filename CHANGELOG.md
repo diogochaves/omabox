@@ -3,6 +3,18 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+
+- **keys-to-box: the pointer decides too** ([#55](https://github.com/diogochaves/omabox/issues/55)).
+  SUPER keys go to the box while its window has focus and the pointer is over it. Move the pointer
+  off it (onto your bar, an empty part of the workspace, another monitor) and they are your
+  desktop's again, keys-to-box still on; back over the box, they are the box's. The first key you
+  press with the pointer off the box is already yours: SUPER+1 switches your workspace at once. The
+  red border and the widget's icon follow. A running desktop picks the new rule up at the next
+  `omabox up --interactive` or `omabox keys-to-box`.
+
 ## 0.3.0 — 2026-09-30
 
 Agents see inside a box (`omabox lua`, `log`, `events`), restart an app in one step

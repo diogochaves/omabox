@@ -821,7 +821,7 @@ Panel {
         PanelActionButton {   // keys-to-box: lit while on
           visible: row.up && row.box.mode === "interactive"
           iconText: root.icons.keys
-          tooltipText: row.box.keys_to_box ? "SUPER keys follow focus into it: on (f)" : "SUPER keys to the box whenever it has focus: off (f)"
+          tooltipText: row.box.keys_to_box ? "SUPER keys follow focus and the pointer into it: on (f)" : "SUPER keys to the box while it has focus and the pointer: off (f)"
           foreground: row.box.keys_to_box ? root.bar.urgent : root.bar.foreground
           hoverColor: root.bar.urgent
           fontFamily: root.bar.fontFamily
