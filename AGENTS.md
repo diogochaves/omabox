@@ -11,7 +11,8 @@ open gaps. `bin/omabox` is the CLI, `share/` runs inside the box, `tools/` holds
 keyboard, wlfd, peek, still, relay, events), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
 Code, Codex, OpenCode, pi and Hermes), `plugin/` is the bar widget, `test/run.sh` is the regression
 suite (run it in full before each commit; `test/run.sh unit` is the fast tier; a failure's evidence
-is in `~/.local/state/omabox/test/`; peeking at its `t<pid>-*` boxes while it runs fails it).
+is in `~/.local/state/omabox/test/`; a peek the user opens at its `t<pid>-*` boxes is noted and
+skips the checks it holds up, but one opened by an omabox older than the suite fails it).
 `spike/` is the original record; the CLI supersedes it.
 
 ## Non-negotiables

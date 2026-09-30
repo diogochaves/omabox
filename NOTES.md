@@ -2016,6 +2016,45 @@ the designs here were measured in boxes and built for a contained desktop, and n
     of the right soname plus a missing library, a script, `/usr/bin/true`, a non-executable file.
     Not checked: a real patched build (the issue's run was one), and the version warning against a
     real other version (a stubbed `on_box` in `t_unit_hyprland`). `t_unit_hyprland`, `t_hyprland`.
+121. **A peek the user opens at the suite's boxes is theirs, not a leak** (2026-09-30, issue #45: during
+    the 0.3.0 merge runs Diogo peeked at two `t<pid>-ag-*` boxes from the bar widget and the run
+    failed three checks: the leak detector saw a peek window of the run's box opened, focused, and
+    workspace 9 come up; `t_agent_session` waited for a box that a peek holds in use, by design
+    (`_reap`'s `peek_pid`); and the end's focus check found focus on the peek). Nothing said why: it
+    took the host event log. Now `omabox peek` says who asked, in the peek process's environment,
+    through the host Hyprland's exec (`env MARKER omabox-peek ...`; env execs peek, so `peek_pid`'s
+    command-line match holds): `OMABOX_SUITE=t<pid>` when the caller has it (every omabox the suite
+    runs), else `OMABOX_PEEK_BY=you` when the command run was `peek` (the widget's click, a
+    terminal), else nothing (`peek_marker`). The watcher already read focused windows' environ; it now
+    reads `OMABOX_PEEK_BY` too, and after a peek's `openwindow` looks the window up in `clients` and
+    logs a `+` line with its tags (a failed lookup logs `+ 0xADDR ? ERROR`). `leak_scan` decides a
+    this-run peek on that line: `OMABOX_SUITE` of this run: a leak "by this run's commands";
+    `OMABOX_PEEK_BY=you`: a note, "watched by you"; anything else, or no `+` line: a leak whose
+    message says a command other than `omabox peek` opened it, or the user did with an omabox older
+    than the suite (then run again without peeking). Focus on a peek marked yours is a note, and
+    omabox's workspace coming up is decided by the focus right after it (a stand-in showed `peek
+    --focus` gives activewindow, workspace 9, activewindow again): on a peek of yours, a note, else a
+    leak as before. So `host_same` at the end, which needs a clean scan, passes too. Why a mark of
+    the user's and not just the suite's, and why in the process rather than a record in the box dir:
+    an unmarked peek must stay a leak, since that is what a regression looks like (`up` or another
+    command opening one through its own exec: no `peek_marker`), and the suite's own `omabox peek`
+    carries its `OMABOX_SUITE`, so neither can read as the user's. Only `omabox peek`, run as the
+    command, marks a window yours: a suite process that lost `OMABOX_SUITE` (none does: the reaper
+    inherits it through `setsid`) and reached `cmd_peek` some other way would give no mark, a leak.
+    The environment is set by the exec and read by the detector from `/proc`, where the box cannot
+    write; a box-dir record would be one more file to keep in step with a window that the user can
+    close any time. What is still excused wrongly: a real leak that brings up workspace 9 while a peek
+    of yours sits there and takes the focus; and, below, the checks a peek holds up. `test/run.sh`:
+    `your_peek BOX` (a peek process at that box with `OMABOX_PEEK_BY=you`), `held BOX CHECK...`, and
+    `no` skipping ("held by your peek at BOX") a held check that fails while such a peek is open:
+    `t_agent_session`'s reaping checks, `t_idle`, `t_reap_race`, `t_run_idle`, and `t_peek`'s marks
+    (the CLI writes marks for any peek of the box). Verified: `t_unit_leak_scan` (the widget's event
+    sequence with each marker, a missing or failed `+` line, workspace 9 with other focus, `host_same`,
+    `your_peek`/`held` with a stand-in process, `peek_marker`), and `t_leak_control` live on a stand-in
+    host with a box inside it: `omabox peek --focus` run there (the box's environment has no
+    `OMABOX_SUITE`, as the widget's) is noted, the same with `OMABOX_SUITE` is reported, and a peek
+    its Hyprland starts with no marker is reported. Not verified: a real bar-widget click on the
+    host during a run (never on the real desktop; the widget runs the same `omabox peek --focus`).
 122. **An NVIDIA GPU switched to its driver at runtime has no `/dev/nvidiaN` yet** (2026-09-30, this
     machine: the RTX 5070 Ti moved from `vfio-pci` to `nvidia` while the session ran). The driver
     listed it (`/proc/driver/nvidia/gpus/0000:01:00.0/information`, Device Minor 0) and

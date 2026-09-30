@@ -13,9 +13,11 @@
 # suite's showing up there fails the test that was running (t_leak_control first proves that on a box
 # standing in for the host); the end checks that the host's focused workspace and window are what
 # they were, or changed by events that were not the suite's (you working meanwhile). omabox's
-# workspace coming up there fails it too (unless you were on it when the run started). Don't peek at
-# the run's t<pid>-* boxes (bar widget, omabox peek) while it runs: a peek window is a window of
-# omabox's on the host. Pointer motion
+# workspace coming up there fails it too (unless you were on it when the run started). A peek you
+# open at the run's t<pid>-* boxes (bar widget, omabox peek) is noted, not a leak: `omabox peek`
+# marks its window as yours (finding 121), and a check it holds up (a box you watch is not reaped) is
+# skipped, saying so. A peek from an omabox older than this suite has no mark and fails the run, as
+# does one any command of the suite's opens. Pointer motion
 # has no event: it is only seen when it moves focus. Needs a Hyprland session and python3. The
 # network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
 # connection from a box to its gateway, the router.
@@ -58,6 +60,9 @@ note() { printf '       (%s)\n' "$*" >> "$TMP/notes"; }
 notes() { [ ! -s "$TMP/notes" ] || { cat "$TMP/notes"; : > "$TMP/notes"; }; }
 ok() { notes; pass=$((pass + 1)); printf '  \e[32mok\e[0m   %s\n' "$1"; }
 no() {
+  if [ -n "${HELD:-}" ] && your_peek "$HELD"; then
+    local h=$HELD; HELD=""; skip "$1" "held by your peek at $h: a box you watch is in use (not reaped, it gets marks)"; HELD=$h; return
+  fi
   notes; fail=$((fail + 1)); failed+=("$CUR: $1"); printf '  \e[31mFAIL\e[0m %s\n' "$1"
   [ -n "${2:-}" ] && printf '       %s\n' "${2:0:300}"
   evidence "$1" "${2:-}"
@@ -93,6 +98,18 @@ skip() {
   skips+=("$CUR: $1 ($2)"); printf '  \e[33mskip\e[0m %s (%s)\n' "$1" "$2"
   [ "$STRICT" = 0 ] || no "$1" "skipped under --strict: $2"
 }
+# Issue #45 (finding 121): a peek window you opened on one of the run's boxes (bar widget, omabox
+# peek; its process marked OMABOX_PEEK_BY=you) makes that box in use, by design: it is not reaped for
+# idling or for its agent's exit, and click/keys write marks for it. `held BOX CHECK...` runs a check
+# that such a peek would fail; failing while one is open on BOX, it is skipped, saying so (`no`).
+your_peek() {
+  local p
+  for p in $(pgrep -f "omabox-peek --box $XDG_RUNTIME_DIR/omabox/$1/run/"); do
+    tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -x OMABOX_PEEK_BY=you >/dev/null && return 0
+  done
+  return 1
+}
+held() { HELD=$1; shift; "$@"; HELD=""; }
 now_ms() { local u=${EPOCHREALTIME//[!0-9]/}; echo $((u / 1000)); }
 to_ms() { local s=${1%.*} f=0; [[ $1 != *.* ]] || f=${1#*.}000; echo $((10#$s * 1000 + 10#${f:0:3})); }
 # until_ok T CMD...: poll the command until it succeeds, T seconds at most. Timing out, it says so with
@@ -155,17 +172,25 @@ try:
 except OSError as e:
     say("== watcher failed: %s" % e); sys.exit(1)
 KEEP = ("openwindow>>", "closewindow>>", "activewindowv2>>", "workspacev2>>", "activelayout>>")
+def hypr(what):
+    return json.loads(subprocess.run(["hyprctl", "-j", what], capture_output=True, text=True, timeout=5).stdout)
 def focused():
     try:
-        w = json.loads(subprocess.run(["hyprctl", "-j", "activewindow"], capture_output=True, text=True, timeout=5).stdout)
+        return describe(hypr("activewindow"))
     except Exception as e:
         return "? %s" % e
+def opened(addr):   # a peek window just opened: whose (its process environment says who asked)
+    try:
+        return describe(next(w for w in hypr("clients") if w.get("address") == "0x" + addr))
+    except Exception as e:
+        return "0x%s ? %s" % (addr, e)
+def describe(w):
     pid, cls, tags = w.get("pid", -1), w.get("class"), []
     try:
         with open("/proc/%d/environ" % pid, "rb") as f:
             for kv in f.read().split(b"\0"):
                 k, _, v = kv.decode(errors="replace").partition("=")
-                if k in ("OMABOX_SUITE", "OMABOX_NAME"): tags.append("%s=%s" % (k, v))
+                if k in ("OMABOX_SUITE", "OMABOX_NAME", "OMABOX_PEEK_BY"): tags.append("%s=%s" % (k, v))
     except Exception:
         tags.append("environ=unreadable")
     if cls == "aquamarine":   # an interactive box: its bwrap binds <box dir>/run; no title names it
@@ -191,6 +216,7 @@ while True:
         if not l.startswith(KEEP): continue
         say(l)
         if l.startswith("activewindowv2>>") and l != "activewindowv2>>": say("~ " + focused())
+        if l.startswith("openwindow>>") and l[12:].split(",", 3)[2:3] == ["omabox-peek"]: say("+ " + opened(l[12:].split(",")[0]))
 '
 
 # leak_scan PREFIX < LOG: what in a watcher's log is the suite's (a box's name starts with PREFIX, the
@@ -198,28 +224,51 @@ while True:
 # `note: ...` line for the rest (the user's own windows and workspace switches while the suite runs).
 # Windows of omabox's own: an interactive box (class aquamarine; its title names no box, so any counts,
 # unless it is your own box opened meanwhile) and peek (class omabox-peek, "omabox peek: NAME"; the
-# tool started by hand is "omabox peek"). A virtual keyboard's layout event is `omabox keys` reaching
-# that compositor (ours is anonymous there: hl-virtual-keyboard-unknown); Omarchy's input method,
-# fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names others (wayvnc). WS, when
-# given, is omabox's workspace: it coming up is a leak (the suite's boxes open nothing there).
+# tool started by hand is "omabox peek"). A peek window's process says who asked for it (finding
+# 121), on the `+` line the watcher logs after it opens and on its focus lines: OMABOX_SUITE is this
+# run's commands, a leak; OMABOX_PEEK_BY=you is `omabox peek` run by you (the bar widget), noted as
+# watched by you; neither is a peek something else opened, a leak. A virtual keyboard's layout event
+# is `omabox keys` reaching that compositor (ours is anonymous there: hl-virtual-keyboard-unknown);
+# Omarchy's input method, fcitx5, is one of yours, and OMABOX_TEST_HOST_KEYBOARDS (a regex) names
+# others (wayvnc). WS, when given, is omabox's workspace: it coming up is a leak (the suite's boxes
+# open nothing there), unless the focus it brings is on a peek of yours (the widget's click focuses
+# one, and Hyprland shows its workspace).
 leak_scan() {
-  local pre=$1 ws=${2:-} line data cls title kb notes=()
+  local pre=$1 ws=${2:-} line data cls title kb notes=() peek="" wsup=""
+  local wsleak="leak: omabox's workspace $ws came up (if you went there yourself, run the suite again)"
   while IFS= read -r line; do
     line=${line#* }
+    # What the next line decides: a peek window's `+` line; the focus omabox's workspace brought.
+    if [ -n "$peek" ] && [[ $line != '+ '* ]]; then echo "leak: a window opened: $peek"; peek=""; fi
+    if [ -n "$wsup" ] && [[ $line != '~ '* && $line != activewindowv2\>\>?* ]]; then echo "$wsleak"; wsup=""; fi
     case $line in
       openwindow\>\>*)
         IFS=, read -r _ _ cls title <<<"${line#*>>}"
         if [ "$cls" = aquamarine ] && data=$(their_new_box "$pre"); then notes+=("window of your box $data")
-        elif data=$(omabox_window "$pre" "$cls" "$title"); then echo "leak: a window opened: $data"
+        elif data=$(omabox_window "$pre" "$cls" "$title"); then
+          if [ "$cls" = omabox-peek ]; then peek=$data; else echo "leak: a window opened: $data"; fi
         else notes+=("window $cls"); fi ;;
+      '+ '*)
+        [ -n "$peek" ] || continue
+        title=${line#* title=}
+        if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* ]]; then echo "leak: a window opened: a peek window, by this run's commands: ${line#+ }"
+        elif [[ " $line " == *" OMABOX_PEEK_BY=you "* ]]; then notes+=("a peek at ${title#omabox peek: } watched by you")
+        else echo "leak: a window opened: $peek"; fi
+        peek="" ;;
       '~ '*)
         cls=${line#* class=} title=""
         [[ $cls != *' title='* ]] || { title=${cls#* title=}; cls=${cls%% title=*}; }
+        data=""; [[ $cls != omabox-peek || " $line " != *" OMABOX_PEEK_BY=you "* ]] || data=yours
+        if [ -n "$wsup" ]; then
+          if [ -n "$data" ]; then notes+=("workspace $ws for your peek"); else echo "$wsleak"; fi
+          wsup=""
+        fi
         if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* || $line == *" OMABOX_NAME=$pre"* || $line == *" box=$pre"* ]]; then
           echo "leak: focus went to a window of this run's: ${line#\~ }"
         elif [[ $line == *" OMABOX_NAME="* ]]; then
           echo "leak: focus went to a box's process (another run's, or yours): ${line#\~ }"
         elif [[ $line == *" box="* ]]; then data=${line#* box=}; notes+=("focus on your box ${data%% *}")
+        elif [ -n "$data" ]; then notes+=("focus on your peek at ${title#omabox peek: }")
         elif data=$(omabox_window "$pre" "$cls" "$title"); then echo "leak: focus went to $data"
         else notes+=("focus $cls"); fi ;;
       activelayout\>\>*virtual-keyboard*)
@@ -229,21 +278,22 @@ leak_scan() {
         else echo "leak: keys from a virtual keyboard ($kb)"; fi ;;
       workspacev2\>\>*)
         data=${line#*>>}
-        if [ -n "$ws" ] && [ "${data#*,}" = "$ws" ]; then
-          echo "leak: omabox's workspace $ws came up (if you went there yourself, run the suite again)"
+        if [ -n "$ws" ] && [ "${data#*,}" = "$ws" ]; then wsup=1
         else notes+=("workspace ${data#*,}"); fi ;;
     esac
   done
+  [ -z "$peek" ] || echo "leak: a window opened: $peek"
+  [ -z "$wsup" ] || echo "$wsleak"
   [ ${#notes[@]} = 0 ] || echo "note: not the suite's: $(printf '%s\n' "${notes[@]}" | awk '!seen[$0]++ && n++ < 8' | paste -sd, - | sed 's/,/, /g')"
 }
 # omabox_window PREFIX CLASS TITLE: says what the window is when it is one of omabox's that is not the
-# user's (TITLE empty: unknown).
+# user's (TITLE empty: unknown). A peek window here is one not marked as yours (leak_scan).
 omabox_window() {
   case $2 in
     aquamarine) echo "an interactive box's window ($2${3:+ \"$3\"})" ;;
     omabox-peek)
       case $3 in
-        "omabox peek: $1"*|"omabox peek"|"") echo "a peek window${3:+ \"$3\"} of this run's box: if you opened it (bar widget, omabox peek), that is the cause; run again without peeking" ;;
+        "omabox peek: $1"*|"omabox peek"|"") echo "a peek window${3:+ \"$3\"} of this run's box, not marked as yours: a command other than \`omabox peek\` opened it, or you did with an omabox older than this suite (bar widget, omabox peek): if you opened it, that is the cause; run again without peeking" ;;
         *) return 1 ;;
       esac ;;
     *) return 1 ;;
@@ -519,6 +569,58 @@ t_unit_leak_scan() {
   check_match "a peek of this run's box" "^leak: a window opened: a peek window" "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b')"
   check_match "...the peek tool started on its own" "^leak: focus went to a peek window" "$(scan '~ 0xa pid=5 class=omabox-peek title=omabox peek')"
   check_eq "...a peek of yours is not a leak" "" "$(leaks 'openwindow>>a,9,omabox-peek,omabox peek: mine' '~ 0xa pid=5 class=omabox-peek title=omabox peek: mine')"
+  # Issue #45 (finding 121): a peek at this run's box, as the bar widget opens it (`omabox peek
+  # --focus`: the window, its `+` line, focus, workspace 9, focus again; seen in a stand-in), with each
+  # marker its process can have.
+  widget() {   # MARKER: the lines, the tags on the peek's lines
+    local t="pid=7${1:+ $1} class=omabox-peek title=omabox peek: t1-b"
+    printf '1.000 %s\n' 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' "+ 0xa $t" 'activewindowv2>>a' "~ 0xa $t" \
+      'workspacev2>>9,9' 'activewindowv2>>a' "~ 0xa $t" | leak_scan t1- 9
+  }
+  check_eq "a peek you opened (OMABOX_PEEK_BY=you): no leak, workspace 9 and focus too" \
+    "note: not the suite's: a peek at t1-b watched by you, focus on your peek at t1-b, workspace 9 for your peek" "$(widget OMABOX_PEEK_BY=you)"
+  local out; out=$(widget OMABOX_SUITE=t1)
+  check_match "one this run's commands opened (OMABOX_SUITE): a leak, said so" "^leak: a window opened: a peek window, by this run's commands: 0xa pid=7 OMABOX_SUITE=t1" "$out"
+  check_match "...its focus a leak" "leak: focus went to a window of this run's: 0xa pid=7 OMABOX_SUITE=t1" "$out"
+  check_match "...and workspace 9 coming up for it" "leak: omabox's workspace 9 came up" "$out"
+  out=$(widget)
+  check_match "one with no marker (a command other than peek opened it): a leak" "^leak: a window opened: a peek window \"omabox peek: t1-b\" of this run's box, not marked as yours: a command other than \`omabox peek\` opened it" "$out"
+  check_match "...naming your old omabox as the other cause" "if you opened it, that is the cause; run again without peeking" "$out"
+  check_eq "...its two focus changes and workspace 9 leaks too" "4" "$(grep -c '^leak:' <<<"$out")"
+  check_match "...another run's marker is not yours" "^leak: a window opened: a peek window .*not marked as yours" "$(widget OMABOX_SUITE=t12)"
+  check_match "a peek whose process the watcher could not find: a leak" "^leak: a window opened: a peek window" \
+    "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' '+ 0xa ? StopIteration()' '~ 0xb pid=9 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-c')"
+  check_match "...nor one whose + line is missing" "^leak: a window opened: a peek window" \
+    "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' 'closewindow>>a' '+ 0xa pid=7 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-b')"
+  check_match "workspace 9 up with focus on a window that is not your peek: a leak" "^leak: omabox's workspace 9" \
+    "$(printf '1.000 %s\n' 'workspacev2>>9,9' 'activewindowv2>>b' '~ 0xb pid=9 class=firefox' | leak_scan t1- 9)"
+  check_match "...or on nothing" "^leak: omabox's workspace 9" "$(printf '1.000 %s\n' 'workspacev2>>9,9' 'activewindowv2>>' 'workspacev2>>1,1' | leak_scan t1- 9)"
+  check_eq "...on your peek at a box of yours: not a leak either" "" \
+    "$(printf '1.000 %s\n' 'workspacev2>>9,9' '~ 0xb pid=9 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: mine' | leak_scan t1- 9 | grep '^leak:')"
+  # The end's focus checks: focus left on a peek of yours (and workspace 9 with it) is not the suite's.
+  mkdir -p "$TMP/hs"
+  printf '1.000 %s\n' 'openwindow>>a,9,omabox-peek,omabox peek: t1-b' '+ 0xa pid=7 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-b' \
+    'workspacev2>>9,9' 'activewindowv2>>a' '~ 0xa pid=7 OMABOX_PEEK_BY=you class=omabox-peek title=omabox peek: t1-b' > "$TMP/hs/host-events.log"
+  check_match "host focus on your peek at the end: not the suite's" "ok.*by the suite" "$(EVID=$TMP/hs HWS=9 P=t1 host_same f 0xz 0xa window)"
+  check_match "...nor workspace 9" "ok.*by the suite" "$(EVID=$TMP/hs HWS=9 P=t1 host_same w 1 9 workspace)"
+  sed -i 's/ OMABOX_PEEK_BY=you//' "$TMP/hs/host-events.log"
+  check_match "...on an unmarked one: a failure" "FAIL.* f" "$(EVID=$TMP/hs HWS=9 P=t1 CUR=hs host_same f 0xz 0xa window)"
+  # A check a peek of yours holds up is skipped (a stand-in process, named and marked as that peek).
+  local fake="omabox-peek --box $XDG_RUNTIME_DIR/omabox/$P-held/run/wayland-1"
+  env OMABOX_PEEK_BY=you bash -c 'exec -a "$0" sleep 30' "$fake" & local fp=$!
+  env OMABOX_PEEK_BY=x bash -c 'exec -a "$0" sleep 30' "${fake/held/other}" & local fo=$!
+  until_ok 5 pgrep -f "$fake"; until_ok 5 pgrep -f "${fake/held/other}"
+  check "your_peek: a peek marked yours at that box" your_peek "$P-held"
+  check_fails "...not one marked otherwise" your_peek "$P-other"
+  check_match "a held check that fails while your peek is open: skipped, saying why" "skip.* x \(held by your peek at $P-held" "$(EVID=$TMP/hs held "$P-held" no x y)"
+  check_match "...another box's: a failure" "FAIL.* x" "$(EVID=$TMP/hs held "$P-other" no x y 2>&1 | head -1)"
+  kill "$fp" "$fo" 2>/dev/null; wait "$fp" "$fo" 2>/dev/null
+  check_match "...once it is closed: a failure" "FAIL.* x" "$(EVID=$TMP/hs held "$P-held" no x y 2>&1 | head -1)"
+  # Who asked, as `omabox peek` hands it to the peek process.
+  check_eq "peek_marker: a command the suite ran" "OMABOX_SUITE=t9" "$(OMABOX_SUITE=t9 MAIN_CMD=peek lib peek_marker)"
+  check_eq "...omabox peek run by you (no OMABOX_SUITE)" "OMABOX_PEEK_BY=you" "$(env -u OMABOX_SUITE MAIN_CMD=peek bash -c 'source "$1"; peek_marker' _ "$TMP/lib/bin/omabox")"
+  check_eq "...any other command: none (the suite fails on its peek)" "" "$(env -u OMABOX_SUITE MAIN_CMD=up bash -c 'source "$1"; peek_marker' _ "$TMP/lib/bin/omabox")"
+  check_eq "...an OMABOX_SUITE that is not a tame word: none" "" "$(OMABOX_SUITE="t1' x" MAIN_CMD=peek lib peek_marker)"
   check_match "a virtual keyboard's keys" "^leak: keys from a virtual keyboard \(hl-virtual-keyboard-unknown\)" "$(scan 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
   check_eq "...not one named as yours (OMABOX_TEST_HOST_KEYBOARDS)" "" "$(OMABOX_TEST_HOST_KEYBOARDS='^hl-virtual-keyboard-unknown$' leaks 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
   check_eq "...nor Omarchy's input method (fcitx5, on every focus change of yours)" "" "$(leaks 'activelayout>>hl-virtual-keyboard-fcitx5,English (US)')"
@@ -559,6 +661,34 @@ t_leak_control() {
   check "a workspace switch and back is noted" until_ok 5 reported '^note: .*workspace 3, workspace 1'
   check "omabox's workspace coming up is reported" until_ok 5 reported "^leak: omabox's workspace 9 came up"
   check_eq "...and while quiet, nothing" "" "$(slice "$log" quiet leaks | leak_scan "$P-" 9)"
+  # Peeks at a box of this run's (finding 121), one in the stand-in: `omabox peek --focus` run there as
+  # the bar widget runs it (the box's environment has no OMABOX_SUITE) is yours, a note; the same with
+  # the suite's OMABOX_SUITE is a leak; and a peek the stand-in's Hyprland starts with no marker (what
+  # a command other than `omabox peek` opening one would look like) is a leak.
+  local in=("$CLI" run -b "$S" --) C=$P-cin wd
+  ob run -b "$S" -- pkill -x foot   # (focus coming back to it would be a leak of its own)
+  "${in[@]}" "$CLI" up "$C" --no-shell --idle 0 >/dev/null 2>&1 || no "up a box in the stand-in" "failed"
+  # shellcheck disable=SC2329 # called through until_ok
+  seen() { slice "$log" "$1" "$2" | grep -- "$3" >/dev/null; }
+  # shellcheck disable=SC2329
+  scanned() { slice "$log" "$1" "$2" | leak_scan "$P-" 9 | grep -- "$3" >/dev/null; }
+  unpeek() { ob run -b "$S" -- pkill -x omabox-peek; ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null; }
+  mark yours
+  "${in[@]}" "$CLI" peek "$C" --focus >/dev/null 2>&1
+  until_ok 5 seen yours "" "workspacev2>>9,9"; until_ok 5 seen yours "" "~ .*class=omabox-peek"
+  unpeek; mark suites
+  "${in[@]}" env OMABOX_SUITE="$P" "$CLI" peek "$C" --focus >/dev/null 2>&1
+  until_ok 5 seen suites "" "workspacev2>>9,9"; until_ok 5 seen suites "" "~ .*class=omabox-peek"
+  unpeek; mark raw
+  wd=$("${in[@]}" "$CLI" run -b "$C" -- sh -c 'echo $WAYLAND_DISPLAY')
+  ob hyprctl -b "$S" eval "hl.exec_cmd('$ROOT/tools/peek/omabox-peek --box $("${in[@]}" "$CLI" path "$C")/run/$wd --title \"omabox peek: $C\"', { workspace = '9 silent', no_initial_focus = true })" >/dev/null
+  until_ok 5 seen raw "" "^[0-9.]* + "
+  unpeek; mark end
+  check_eq "a peek you opened (omabox peek --focus): no leak" "" "$(slice "$log" yours suites | leak_scan "$P-" 9 | grep '^leak:')"
+  check "...noted as watched by you, with its workspace and focus" scanned yours suites "^note: .*a peek at $C watched by you, .*workspace 9 for your peek"
+  check "one opened by the suite's command is reported" scanned suites raw "^leak: a window opened: a peek window, by this run's commands: .*OMABOX_SUITE=$P "
+  check "...its workspace too" scanned suites raw "^leak: omabox's workspace 9 came up"
+  check "one started with no marker is reported" scanned raw end "^leak: a window opened: a peek window \"omabox peek: $C\" of this run's box, not marked as yours"
   ob down "$S" >/dev/null 2>&1
   [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }
@@ -912,7 +1042,7 @@ t_agent_session() {
   check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
   check_eq "a box that died stays dead, logs and all, when its agent goes" dead "$(state_of "$b4")"
   wait "$busy" 2>/dev/null
-  check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
+  held "$b3" check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
   ob down "$b3" "$b4" >/dev/null 2>&1
   # A session resumed in a new process (`claude --continue`: the same id, another CLAUDE_PID) takes
   # its box over once the agent it records is gone, whether its first command is `run`, `up`, one
@@ -949,8 +1079,8 @@ t_agent_session() {
   check_eq "...and so does its first up" "up $r6" "$(state_of "$b6") $(agent_of "$b6")"
   ob path "$b5" >/dev/null; ob path "$b6" >/dev/null   # idle clocks back to 0: what takes them down now is the agent
   kill "$r5" "$r6" 2>/dev/null
-  check "...and the box goes with the new agent" until_ok 10 gone "$b5"
-  check "...(the one it took over with up too)" until_ok 10 gone "$b6"
+  held "$b5" check "...and the box goes with the new agent" until_ok 10 gone "$b5"
+  held "$b6" check "...(the one it took over with up too)" until_ok 10 gone "$b6"
   ob down "$b5" "$b6" "$b8" >/dev/null 2>&1
   # The reaper decided to take a box down for an agent that exited, and its `down` waits for the
   # box's lock, which the session's new agent took first to take the box over: the down checks the
@@ -974,7 +1104,7 @@ t_agent_session() {
   touch "$TMP/release"; wait "$held" 2>/dev/null
   until_ok 20 test -e "$TMP/ag-$r10"
   [ -z "$rf" ] || kill -CONT "$rf"
-  check "a takeover made while the reaper's down waited for the lock keeps the box" \
+  held "$b10" check "a takeover made while the reaper's down waited for the lock keeps the box" \
     until_ok 10 grep -q ": kept$" "$XDG_RUNTIME_DIR/omabox/$b10/reap.log"
   check_eq "...for the new agent" "up $r10" "$(state_of "$b10") $(agent_of "$b10")"
   # The same with the reaper first (the new command's flock stopped): its down takes the box, and the
@@ -989,10 +1119,10 @@ t_agent_session() {
   local df; df=$(flock_of "$d10")
   [ -z "$df" ] || kill -STOP "$df"
   touch "$TMP/release"; wait "$held" 2>/dev/null
-  check "...and the reaper goes on watching it: the box goes when it exits" until_ok 15 gone "$b10"
+  held "$b10" check "...and the reaper goes on watching it: the box goes when it exits" until_ok 15 gone "$b10"
   [ -z "$df" ] || kill -CONT "$df"
   until_ok 20 test -e "$TMP/ag-$d10"
-  check_match "a first command that waited for the lock while the box went says no box is up" \
+  held "$b10" check_match "a first command that waited for the lock while the box went says no box is up" \
     "no box '$b10' is up" "$(cat "$TMP/ag-$d10.out" 2>/dev/null)"
   ob down "$b10" >/dev/null 2>&1
   # And with an `up` of the name that finds no agent (no CLAUDE_PID) queued too, let in after the
@@ -1022,7 +1152,7 @@ t_agent_session() {
   wait "$u11" 2>/dev/null
   [ -z "$tf" ] || kill -CONT "$tf"
   until_ok 20 test -e "$TMP/ag-$r11"
-  check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
+  held "$b11" check_eq "...nor does it take over the box an up of the name started meanwhile, with no agent" \
     "up null" "$(state_of "$b11") $(agent_of "$b11")"
   ob down "$b11" >/dev/null 2>&1
   kill "$a1" "$a2" "$a3" "$a4" "$a5" "$a6" "$a7" "$c5" "$r5" "$r6" "$a8" "$o8" "$r8" "$q8" "$a10" "$r10" "$d10" "$a11" "$r11" 2>/dev/null
@@ -1374,8 +1504,8 @@ t_idle() {
   local B=$P-idle
   check "up --idle 10s" ob up "$B" --idle 10s --no-shell
   until_ok 30 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
-  check_fails "box went down by itself" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
-  check_match "next command says why" "went down after 10s idle" "$(ob shot -b "$B" 2>&1)"
+  held "$B" check_fails "box went down by itself" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
+  held "$B" check_match "next command says why" "went down after 10s idle" "$(ob shot -b "$B" 2>&1)"
   ob down "$B" >/dev/null 2>&1
   check_fails "down clears the note" test -e "$XDG_RUNTIME_DIR/omabox/.expired-$B"
 }
@@ -1388,7 +1518,7 @@ t_reap_race() {
   ob up "$B" --idle 10s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
   exec {lock}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lock"   # what an `up` of the name holds
   # This box's reaper's flock (cmd_down runs in the reaper's own process), not any box's up or down.
-  check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
+  held "$B" check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
   local j=$XDG_RUNTIME_DIR/omabox/$B/box.json
   jq '.created = "a new box"' "$j" > "$j.t" && mv "$j.t" "$j"   # the new box, as `up` writes it
   exec {lock}>&-
@@ -1770,7 +1900,7 @@ t_run_idle() {
   for _ in 1 2 3 4 5; do (cd "$repo" && "$CLI" run -- true); sleep 3; done
   check "a box used only through run stays up" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$P-exp\" and .state == \"up\")'"
   until_ok 40 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$P-exp\")'"
-  check_match "after expiry run reports it (no throwaway)" "went down after 10s idle" "$(cd "$repo" && "$CLI" run -- true 2>&1)"
+  held "$P-exp" check_match "after expiry run reports it (no throwaway)" "went down after 10s idle" "$(cd "$repo" && "$CLI" run -- true 2>&1)"
   ob down "$P-exp" >/dev/null 2>&1
 }
 
@@ -1897,6 +2027,7 @@ PY
   }
   # shellcheck disable=SC2329
   no_accent() { local a; read -ra a <<< "$(accent "$@")"; echo "${a[*]}"; [ "${a[0]}" = 0 ]; }
+  HELD=$B   # (a peek of yours at this box would get these marks too: held)
   ob click -b "$B" 100 100 >/dev/null
   check "no marks file without a peek window" test ! -e "$D/marks"
   # The stand-in: a process named as `omabox peek` runs it, relaying $D/marks into the box.
@@ -1928,6 +2059,7 @@ PY
   kill "$relay" 2>/dev/null; wait "$relay" 2>/dev/null
   ob click -b "$B" 10 10 >/dev/null
   check "the marks file goes with the peek window" test ! -e "$D/marks"
+  HELD=""
   sleep 3.2
   local after; after=$(ticks)
   check "marks cost nothing once gone (CPU ticks: $after, before any: $base)" test "$after" -le $((base + base / 2 + 3))
@@ -3044,7 +3176,7 @@ main() {
     _n=$((pass + fail + ${#skips[@]}))
     rm -f "$TMP/until.last"
     printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
-    "$CUR"; notes
+    HELD=""; "$CUR"; notes
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))
     host_scan "$CUR"
