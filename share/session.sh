@@ -80,6 +80,18 @@ unset OMABOX_CALLER_PATH
 [ -r /usr/share/omarchy/default/uwsm/default ] && . /usr/share/omarchy/default/uwsm/default
 export TERMINAL=${TERMINAL:-xdg-terminal-exec} EDITOR=${EDITOR:-omarchy-launch-editor --inline}
 
+# `up --hyprland PATH` (finding 116): which build runs, in box.log (this script's stderr), as that
+# build says once it is up: the first line of `hyprctl version` (version, commit, dirty or clean).
+if [ -n "${OMABOX_HYPRLAND:-}" ]; then
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  without_host_fd bash -c '
+    env=$XDG_RUNTIME_DIR/omabox.env
+    for _ in $(seq 600); do [ -s "$env" ] && break; sleep 0.1; done
+    sig=$(tr "\0" "\n" < "$env" 2>/dev/null | sed -n "s/^HYPRLAND_INSTANCE_SIGNATURE=//p" | head -n 1)
+    v=$(HYPRLAND_INSTANCE_SIGNATURE=$sig /usr/bin/hyprctl version 2>&1 | head -n 1)
+    echo "session.sh: Hyprland $OMABOX_HYPRLAND: ${v:-no answer to hyprctl version}" >&2' &
+fi
+
 if [ "${OMABOX_INTERACTIVE:-0}" = 1 ]; then
   # Nested straight into the host compositor through the one connection omabox-wlfd handed us
   # (WAYLAND_SOCKET). Aquamarine picks its Wayland backend when WAYLAND_DISPLAY is set; libwayland

@@ -30,6 +30,7 @@ $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home
                                   a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
+│                        --hyprland's folder ro (116),
 │                        one render node (plus its NVIDIA render-side nodes on NVIDIA);
 │                        an interactive box every render node (95),
 │                        share/ → /opt/omabox/share, patched aquamarine →
@@ -40,7 +41,8 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
   │                      systemd's dbus.service with --systemd), gnome-keyring, PATH, env, then:
   ├ [systemd --user]     --systemd only
   └ labwc -S (headless)  invisible parent compositor (WLR_BACKENDS=headless, 1 output); ends with Hyprland
-    └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine
+    └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine;
+      │                  /usr/bin/Hyprland, or --hyprland's build (116)
       ├ HEADLESS-2       screen on AMD/Intel; WAYLAND-1 bootstrap disabled
       │ WAYLAND-1        screen on NVIDIA; labwc's private headless output is resized to --size
       ├ quickshell       the Omarchy shell (bar, menu, tray host, notifications): share/shell.sh;
@@ -1779,6 +1781,49 @@ the designs here were measured in boxes and built for a contained desktop, and n
     bad regex is still exit 2. What acts on one window keeps refusing several (`--window` on `shot`,
     `click`, `keys`, `pointer`, `drag`, and `wait still/change --window`, which watches one window's
     place). `win_answer` is the probe without the box; `t_unit_window_select`, `t_wait`.
+116. **`up --hyprland PATH`: a Hyprland build of the user's in a box** (2026-09-30, issue #44: an agent
+    confirmed a community fix for a scrolling-layout bug by hacking a copy of `share/start-hyprland.sh`
+    to exec its build, `--ro-bind`ing the build dir; it worked first time). Now a flag, on `up` and a
+    throwaway `run`. `hypr_bin` resolves PATH and refuses a missing, non-executable or non-ELF file (a
+    wrapper script: the box must exec the ELF itself). The binary's folder is mounted read-only at its
+    own path, checked by `refuse_src`/`refuse_dest` as `--ro-bind`'s are (finding 43): a binary right
+    in HOME or `/tmp` is refused, not its whole folder mounted; one under `/usr` needs no mount.
+    `session.sh` → `start-hyprland.sh` execs `$OMABOX_HYPRLAND` (bwrap's `--setenv`, unset for
+    Hyprland's children) instead of `/usr/bin/Hyprland`; everything else stays the box's: the patched
+    aquamarine by `LD_LIBRARY_PATH`, `/usr/bin/hyprctl` in `hyprland.lua` and the tools, the shell.
+    `check_install PATH` checks the build's aquamarine: its `DT_NEEDED` libaquamarine soname, read with
+    `readelf -d` (never run or loaded), must be `build/prefix`'s `SONAME`, or `up` stops before the
+    box dir is made, naming both (a build against the system's newer aquamarine would otherwise load
+    the unpatched library, or none, and die inside the box, where only labwc.log says why). Then `ldd`
+    with the box's `LD_LIBRARY_PATH`: any other library it needs and the box lacks (a newer hyprutils)
+    is refused the same way. Not `ldd` for a jailed agent's file: the broker loads nothing the jail
+    hands it. The stock check keeps `ldd` on `command -v Hyprland`. `box.json` has `hyprland` (the
+    resolved path) and, once it answers, `hyprland_version` (`hyprctl version`'s first line from inside
+    the box, `hypr_version` right after Hyprland is up, before the shell wait). `ls` prints it under
+    the box's line, `ls --json` has `hyprland` (null for the installed one) and `hyprland_version`,
+    `windows` starts with a `box NAME runs Hyprland PATH (...)` line. `session.sh` writes the same
+    line into `box.log` itself (a background wait for `omabox.env`, then `hyprctl version`): box.log is
+    bwrap's stdout without `O_APPEND`, so a line appended from the host could be overwritten. hyprctl
+    and hyprpm stay the installed ones (the issue's run: IPC matched across the same version); `up`
+    warns when the box's `.version` differs from `/usr/bin/Hyprland --version-json`'s, and a throwaway
+    `run` now passes `up`'s `warning:`/`note:` lines through (it printed nothing of `up`'s on success).
+    `restart-shell` restarts the shell only, so nothing changes there; `save` records `hyprland` in
+    `save.json` and `up --from` notes when the new box runs another one. ai-jail (finding 99): the
+    folder must be one of the jail's, whole (`jail_root`, as `--ro-bind`), or the binary inside the
+    jail's project, which the box mounts anyway: then nothing extra is mounted and the path resolves
+    in the box's view, so swapping a link in there reaches nothing the box did not have;
+    `relay_call` sends the path absolute. What a box proves: compositor logic on a virtual output with
+    virtual input devices (layouts, focus, input routing, the Lua config, IPC, protocols); never the
+    DRM/KMS backend (modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices, or
+    the session/suspend/lock paths: those stay the real desktop's, or a VM's with passthrough.
+    Verified in a box with a copy of `/usr/bin/Hyprland` in a scratch dir: the box's Hyprland process
+    runs it (`readlink /proc/PID/exe`, its pid namespace the box's), shell and bar up (shot),
+    `ls`/`ls --json`/`windows` name it with the version line, box.log has the line, the folder is
+    read-only in the box, `restart-shell`, `save` then `run --from` (the note) and a throwaway `run
+    --hyprland`. Refusals checked with a stub `libaquamarine.so.99` and a program linking it, a stub
+    of the right soname plus a missing library, a script, `/usr/bin/true`, a non-executable file.
+    Not checked: a real patched build (the issue's run was one), and the version warning against a
+    real other version (a stubbed `on_box` in `t_unit_hyprland`). `t_unit_hyprland`, `t_hyprland`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -1799,6 +1844,13 @@ of them, nor wayvnc (finding 34). It needs labwc.
 Bugs and ideas live in the GitHub issues. Known gaps:
 
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`).
+- More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44):
+  `--quickshell PATH` (a shell or Quickshell change); `--omarchy PATH` (a local Omarchy tree instead
+  of `/usr/share/omarchy`, `OMARCHY_PATH`, as `omarchy dev link` does on the host; `session.sh` and
+  `hyprland.lua` read the packaged one today); `--lib DIR` (library dirs ahead of the system's, for
+  hyprutils/aquamarine/hyprlang work; `/opt/omabox/lib` comes first now). A `--hyprland` build whose
+  RUNPATH points outside its own folder finds those libraries on the host (`ldd` passes) but not in
+  the box.
 - Portals (finding 12): the file chooser (xdg-desktop-portal-gtk) is checked; other portals, and
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
 - AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other

@@ -178,6 +178,16 @@ The box's `shell.json` has only built-in widgets plus the plugins you mount, eac
 manifest says. It copies the user's bar layout; `omabox up --stock-bar` uses Omarchy's default bar
 instead (workspaces, clock, the stock right side), to see a plugin as most people will. Do not mount plugins you were not asked to test (some talk to real services).
 
+## A Hyprland change
+
+`omabox up --hyprland ~/code/Hyprland/build/Hyprland` runs that build in the box instead of the
+installed Hyprland (never install it, never run it on the host): before/after of a compositor fix in
+two boxes. It must link the libaquamarine soname omabox provides (`up` refuses it otherwise, saying
+which); hyprctl stays the installed one (`up` warns when the versions differ). `omabox ls` and
+`windows` name the build. A box proves layouts, focus, input routing, the Lua config, IPC and
+protocols; not DRM/KMS, real monitors, HDR/VRR, multi-GPU, real input devices, suspend or lock
+(`reference.md`).
+
 ## What is and is not in a box
 
 - Read-only in the box: the repo you ran `omabox up` from (same path), `--ro-bind` and `--plugin` dirs,

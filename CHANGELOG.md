@@ -25,6 +25,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#30](https://github.com/diogochaves/omabox/issues/30)).
 - **`shot --window SEL -g "X,Y WxH"`** crops a window in its own coordinates
   ([#27](https://github.com/diogochaves/omabox/issues/27)).
+- **`up --hyprland PATH`** (and `run --hyprland PATH`) runs a Hyprland build of yours in the box
+  instead of the installed one, to check a compositor change without installing it. A build linked
+  against another aquamarine soname, or a file that is not an executable ELF, is refused before the
+  box starts; `ls` and `windows` name the build, the box log has its version, and `up` warns when
+  your `hyprctl` is another version ([#44](https://github.com/diogochaves/omabox/issues/44)).
 
 ### Changed
 

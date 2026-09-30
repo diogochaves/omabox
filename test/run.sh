@@ -1534,6 +1534,76 @@ t_no_shell() {
   check "down" ob down "$B"
 }
 
+# finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
+t_unit_hyprland() {
+  local d=$TMP/$P-hyp out
+  mkdir -p "$d/fh" "$d/proj/build" "$d/other"
+  printf '#!/bin/sh\nexec /usr/bin/Hyprland "$@"\n' > "$d/wrapper"; chmod +x "$d/wrapper"
+  cp /usr/bin/true "$d/noaq"; cp /usr/bin/true "$d/fh/Hyprland"; : > "$d/plain"
+  check_match "a missing file" "no such file" "$(ob up "$P-h1" --hyprland "$d/nosuch" 2>&1)"
+  check_match "a file that is not executable" "is not executable" "$(ob up "$P-h1" --hyprland "$d/plain" 2>&1)"
+  check_match "a script is not an ELF binary" "is not an ELF binary" "$(ob up "$P-h1" --hyprland "$d/wrapper" 2>&1)"
+  check_match "an ELF with no libaquamarine" "links no libaquamarine" "$(ob up "$P-h1" --hyprland "$d/noaq" 2>&1)"
+  check_match "its folder is refused as --ro-bind's are (here: all of HOME)" "refusing to mount $d/fh \(the binary's folder\).*it contains" \
+    "$(HOME=$d/fh "$CLI" up "$P-h1" --hyprland "$d/fh/Hyprland" 2>&1)"
+  check_match "run takes it for a throwaway (and refuses the same)" "is not an ELF binary" "$(ob run --hyprland "$d/wrapper" -- true 2>&1)"
+  if command -v cc >/dev/null; then
+    # A build against another aquamarine: a stub library with another soname, and a program linking it.
+    echo 'int aq(void) { return 0; }' > "$d/aq.c"; echo 'int aq(void); int main(void) { return aq(); }' > "$d/m.c"
+    mkdir -p "$d/aq99" "$d/aq14" "$d/b99" "$d/b14"
+    local so; so=$(readelf -d "$ROOT/build/prefix/lib/libaquamarine.so" | sed -n 's/.*(SONAME).*\[\(.*\)\]$/\1/p')
+    cc -shared -fPIC -Wl,-soname,libaquamarine.so.99 -o "$d/aq99/libaquamarine.so" "$d/aq.c" &&
+      cc -o "$d/b99/Hyprland" "$d/m.c" -L"$d/aq99" -laquamarine
+    check_match "a build against another libaquamarine soname is refused, saying which" \
+      "links libaquamarine.so.99, but the patched aquamarine a box runs with is $so" "$(ob up "$P-h1" --hyprland "$d/b99/Hyprland" 2>&1)"
+    # The right soname, but a library the box does not have.
+    cc -shared -fPIC -Wl,-soname,"$so" -o "$d/aq14/libaquamarine.so" "$d/aq.c" &&
+      cc -shared -fPIC -Wl,-soname,libomaboxmissing.so.1 -o "$d/aq14/libomaboxmissing.so" "$d/aq.c" &&
+      cc -o "$d/b14/Hyprland" "$d/m.c" -L"$d/aq14" -laquamarine -lomaboxmissing -Wl,--no-as-needed
+    check_match "...and one needing a library the box lacks" "needs libomaboxmissing.so.1, which the box lacks" \
+      "$(ob up "$P-h1" --hyprland "$d/b14/Hyprland" 2>&1)"
+  else
+    skip "builds against another aquamarine are refused" "no C compiler"
+  fi
+  # A jailed agent (finding 99): the binary's folder is one of the jail's, whole, or the binary is in its
+  # project (in the box already). Past that, --size junk stops `up` before anything starts.
+  git -C "$d/proj" init -q
+  cp /usr/bin/true "$d/proj/build/Hyprland"; cp /usr/bin/true "$d/proj/Hyprland"; cp /usr/bin/true "$d/other/Hyprland"
+  local J; J=$(jq -nc --arg p "$d/proj" --arg c "$d/proj" '{id: "1 2", net: false, cwd: $c, roots: [{path: $p, masked: false}]}')
+  check_match "jail: a build outside the jail's folders is refused" "not in this jail's project nor in a folder it was given whole" \
+    "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/other/Hyprland" --size huge 2>&1)"
+  check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/proj/build/Hyprland" --size huge 2>&1)"
+  check_match "jail: one in a folder of its, whole, passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/proj/Hyprland" --size huge 2>&1)"
+  # The jailed caller's omabox sends the path absolute (the broker is not in its directory).
+  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$d/relay"; chmod +x "$d/relay"
+  out=$(cd "$d/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --hyprland build/Hyprland' _ "$TMP/lib/bin/omabox" "$d/relay")
+  check_match "relay: --hyprland goes absolute" "\|up\|--hyprland\|$d/proj/build/Hyprland\|" "$out"
+  # Another version than the installed hyprctl's: a warning (the box's answers stubbed).
+  mkdir -p "$d/box"; echo '{}' > "$d/box/box.json"
+  out=$(bash -c 'source "$1"; D=$2 NAME=x
+    on_box() { if [ "${3:-}" = -j ]; then echo "{\"version\": \"0.0.1\"}"; else echo "Hyprland 0.0.1 built from branch x"; fi; }
+    hypr_version' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1)
+  check_match "another Hyprland version than hyprctl's: a warning" "warning: box 'x' runs Hyprland 0.0.1, but hyprctl and hyprpm are the installed" "$out"
+  check_eq "...and box.json has its version line" "Hyprland 0.0.1 built from branch x" "$(jq -r .hyprland_version "$d/box/box.json")"
+  local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-h[12]$" || true)
+  check_eq "refusals left no box behind" 0 "$left"
+}
+
+# finding 116: a box on a Hyprland build of its own (a copy of the installed one stands in for it).
+t_hyprland() {
+  local B=$P-hyp h=$TMP/$P-hbuild/Hyprland D=$XDG_RUNTIME_DIR/omabox/$P-hyp
+  mkdir -p "${h%/*}"; cp /usr/bin/Hyprland "$h"
+  check "up --hyprland (a copy of the installed one), shell and bar up" ob up "$B" --hyprland "$h"
+  check_eq "the box's Hyprland runs it" "$h" "$(ob run -b "$B" -- sh -c 'readlink /proc/$(pgrep -x Hyprland)/exe')"
+  check_match "ls says so, under its line" "^  Hyprland: $h \(Hyprland [0-9.]+ built from" "$(ob ls | grep -A1 "^$B " | tail -n 1)"
+  check_eq "ls --json has the binary" "$h" "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .hyprland')"
+  check_match "windows says so first" "^box $B runs Hyprland $h \(Hyprland " "$(ob windows -b "$B" | head -n 1)"
+  check "box.log has hyprctl version's first line, from inside" until_ok 10 grep -qF "session.sh: Hyprland $h: Hyprland " "$D/box.log"
+  check "its folder is read-only in the box" bash -c "! '$CLI' run -b '$B' -- touch '${h%/*}/x' 2>/dev/null"
+  check "restart-shell" ob restart-shell -b "$B"
+  check "down" ob down "$B"
+}
+
 # finding 91: no global git identity (a fresh machine) is no reason for `up` to fail.
 t_no_git_identity() {
   local B=$P-nogit
@@ -2525,9 +2595,9 @@ t_wait() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_shot_hidden t_unit_config t_unit_wait t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
+  t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units)
 BOX=(t_leak_control t_main t_window t_wait t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_no_git_identity t_stale_pid t_jail)
+  t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }
