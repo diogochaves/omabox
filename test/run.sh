@@ -2,7 +2,7 @@
 # shellcheck disable=SC2016 # single-quoted $VARS are expanded inside the box
 # omabox's regression suite: what NOTES' findings verified, as checks that run in real boxes.
 #
-#   test/run.sh              every test (~4 min; boxes are named t<pid>-*, all torn down)
+#   test/run.sh              every test (~8.5 min on one iGPU; boxes are named t<pid>-*, all torn down)
 #   test/run.sh unit         only the fast ones (no box)
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd); a PATTERN
 #                            that matches no test exits 2
@@ -3440,7 +3440,11 @@ t_replace() {
 t_unit_inspect() {
   check_match "lua: nothing to evaluate" "nothing to evaluate" "$(ob lua -b "$P-x" ' ' 2>&1)"
   # No EXPR is refused, not read from stdin: an open stdin would otherwise hang it (and this suite did).
-  check_match "lua: no EXPR is refused, stdin left alone" "nothing to evaluate" "$(sleep 30 | timeout 10 "$CLI" lua -b "$P-x" 2>&1)"
+  # The stdin is held open by a sleep killed right after: with `sleep 30 |` the capture (and with a
+  # bare process substitution the suite's end) waited out the sleep, 30 s every run.
+  local in sl; exec {in}< <(exec sleep 30); sl=$!
+  check_match "lua: no EXPR is refused, stdin left alone" "nothing to evaluate" "$(timeout 10 "$CLI" lua -b "$P-x" <&"$in" 2>&1)"
+  exec {in}<&-; kill "$sl" 2>/dev/null
   check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
   check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
   check_match "log: an unknown log named, with the ones there are" "no log called nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
