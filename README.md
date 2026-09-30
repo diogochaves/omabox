@@ -140,6 +140,23 @@ omabox restart-shell                          # after editing the plugin
 The plugin is mounted read-only and turned on in the box's `shell.json` where its manifest says.
 The box's bar has the built-in widgets plus the plugins you mount, nothing else.
 
+### A Hyprland change
+
+```bash
+omabox up patched --hyprland ~/code/Hyprland/build/Hyprland   # your build, never installed
+omabox up stock                                               # the installed one, to compare
+```
+
+The box runs your build instead of `/usr/bin/Hyprland` (its folder mounted read-only), with the
+rest of the box as usual: the Omarchy shell, your bar, `hyprctl` and `hyprpm` from your system (a
+warning when their version is not the build's). The build must link the same `libaquamarine` soname
+as omabox's patched aquamarine; `up` refuses one that does not, or a file that is not an executable
+ELF, before the box starts. `omabox ls` and `omabox windows` name the build, so a box on it is never
+taken for a stock one. A box runs the compositor's logic for real (layouts, focus, input routing, the
+Lua config, IPC, protocols) on a virtual output with virtual input devices; the DRM/KMS backend
+(modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices and the
+session/suspend/lock paths never run in one.
+
 ## Seeing a box yourself
 
 <p><img src="docs/media/interactive.png" alt="An interactive box: a whole Omarchy desktop as a window next to a terminal, with a terminal of its own open inside" width="800"></p>

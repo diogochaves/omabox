@@ -93,6 +93,32 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   `omabox run` still going then keeps it until they end; a `run -d` job does not. After `/clear` the
   agent's process lives on and the old box only idles out.
 
+## A Hyprland build of your own
+
+- `omabox up [NAME] --hyprland PATH` (and `run --hyprland PATH -- CMD` for a throwaway) starts PATH
+  instead of `/usr/bin/Hyprland`. PATH's folder is mounted read-only at its own path, refused as
+  `--ro-bind`'s are (a binary right in HOME or `/tmp`: build into a folder of its own). Build, never
+  install (e.g. `cmake -B build && cmake --build build`, then `--hyprland build/Hyprland`: wherever
+  the build put the binary; a wrapper script is refused, it must be the ELF itself).
+- The box loads the patched aquamarine from `/opt/omabox/lib` (omabox's `build/prefix/lib`), so the
+  build must link the same `libaquamarine.so.N` soname; `up` reads it (`readelf -d`) and refuses
+  another one before the box starts, naming both, and refuses a build that needs any other library
+  the box lacks (`ldd`). Build against the installed aquamarine of the same version, or
+  `PKG_CONFIG_PATH=<omabox>/build/prefix/lib/pkgconfig`.
+- `hyprctl`, `hyprpm` and the rest stay the installed ones; `up` warns when the box's Hyprland
+  version (as it says over IPC) differs from theirs: the IPC may not match then. A patched build of
+  the installed version is fine.
+- `omabox ls` shows the build under the box's line with `hyprctl version`'s first line (commit,
+  dirty or clean), `ls --json` has `hyprland` (null for the installed one) and `hyprland_version`,
+  `omabox windows` starts with it, and `<box dir>/box.log` has that line as the box's Hyprland said
+  it. A save records it, and `up --from` notes a different one. Check which binary runs:
+  `omabox run -- sh -c 'readlink /proc/$(pgrep -x Hyprland)/exe'`.
+- What a box proves: compositor logic runs for real on a virtual output with virtual input devices
+  (layouts, focus, input routing, the Lua config, IPC, protocols). What it never runs: the DRM/KMS
+  backend (modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices, and the
+  session/suspend/lock paths. Those stay the real desktop's (or a VM's with passthrough): say so.
+- Inside ai-jail the build must be in the jail's project (or a folder the jail was given whole).
+
 ## The Omarchy shell's IPC (direct routes)
 
 `omabox run -- omarchy-shell TARGET METHOD [ARGS]` talks to the box's shell (never the user's):
