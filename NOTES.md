@@ -1471,9 +1471,10 @@ the designs here were measured in boxes and built for a contained desktop, and n
     keys then reached the terminal: it got the mouse report and ran the command. Right after the
     keep, though, the box's new output showed a new, empty workspace (3; the terminal stayed on 1
     and nothing had focus), hidden or shown, so a blind click or keys reached no app until the
-    box's workspace was switched. confirm-close.sh leaves `omabox.reopened` in the box's runtime
-    dir, and `shot`'s message then says the box needs a restart and to ask the user; for any other
-    interactive box with no frame it says to ask the user too.
+    box's workspace was switched (fixed since: finding 114). confirm-close.sh leaves
+    `omabox.reopened` in the box's runtime dir, and `shot`'s message then says the box needs a
+    restart and to ask the user; for any other interactive box with no frame it says to ask the
+    user too.
     Checked in a stand-in host (finding 26): an old-style box timed out after 10 s; a new one gave
     a frame at once, drew a terminal opened while hidden, took a click on its bar and typed text,
     with the stand-in's workspace and focus unchanged throughout. `t_guard` shoots hidden boxes on
@@ -1759,6 +1760,28 @@ the designs here were measured in boxes and built for a contained desktop, and n
     entries as `--pass` values. Checked in a box (and that no value is in any command line while it
     runs); `t_main`.
 
+114. **After a confirm-close keep the box came back on another workspace** (2026-09-30, issue #24,
+    seen by the maintainer: WAYLAND-3 became WAYLAND-4 and showed workspace 3, empty, the windows
+    still on 1; finding 90 had seen the same). Reproduced in a stand-in host (finding 26): windows on
+    1 and 2 of an interactive box, a close, and the new window showed 4. The box's Hyprland log of
+    events (a debug handler) says why: when the last output goes, no workspace is active any more
+    (not even on the removed monitor's object), Hyprland adds its FALLBACK monitor and gives it the
+    first free workspace (3), the new output gets the next free one (4), and only then are 1 and 2
+    moved over from FALLBACK and FALLBACK removed. hyprland.lua now follows the workspace shown
+    (`workspace.active`, and the active one at each load, never FALLBACK's or a special one), writes
+    it to `omabox.workspace` in the box's runtime dir when the last output goes (a file: the resize
+    watch reloads the config when the output's name changes to FALLBACK and again to the new one, and
+    a reload starts a fresh Lua state), and focuses it once a monitor is there and FALLBACK is gone
+    (checked on `monitor.added` and `monitor.removed`: in practice FALLBACK's removal). The empty
+    workspace the new output got goes by itself. Hiding the window (moving it to another host
+    workspace and back) and resizing it do not recreate the output: the box's workspace stayed, before
+    and after the fix. Checked in the stand-in: active 2 with windows on 1 and 2 (back on 2, its
+    window focused, `SUPER+1` shows 1's window and takes typed text), active 1 after two resizes
+    (reloads), a box that never switched workspace, and the second close still ends the box.
+    `t_guard` checks the workspace, the focused window and the windows per workspace after a keep
+    (they fail without the fix). A shown special workspace (the scratchpad) is not restored: the one
+    under it is. Not yet checked on the real desktop.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -1795,4 +1818,3 @@ Bugs and ideas live in the GitHub issues. Known gaps:
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
   `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried.
-- After a confirm-close keep (finding 70), the new window shows a new, empty workspace (finding 90).

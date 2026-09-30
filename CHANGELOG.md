@@ -33,6 +33,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - `omabox pointer --hold` is refused: it never returned, and read like "hold the button"
   ([#25](https://github.com/diogochaves/omabox/issues/25)).
 
+### Fixed
+
+- An interactive box kept running after a close (confirm-close) comes back on the workspace it
+  showed, with its windows, instead of a new, empty one
+  ([#24](https://github.com/diogochaves/omabox/issues/24)).
+
 ## 0.2.1 — 2026-09-29
 
 `OMABOX=NAME` works under `omabox run`, `--window` finds apps by name, and a Qt app's logging reaches

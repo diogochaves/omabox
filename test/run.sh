@@ -2165,9 +2165,22 @@ t_guard() {
   # shellcheck disable=SC2329
   is() { [ "$(state "$1")" = "$2" ]; }
   "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
+  # issue #24: a window on 1 and one on 2, 2 shown: the new window must show 2 again, not a new one
+  local cch=("${in[@]}" "$CLI" hyprctl -b cc)
+  # shellcheck disable=SC2329 # called through until_ok
+  ccwins() { "${cch[@]}" -j clients | jq -e --argjson n "$1" 'length == $n' >/dev/null; }
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 1
+  "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 2
   "${cl[@]}" >/dev/null
   check "confirm-close: the box stays after a close" holds 2 is cc up
   check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+  check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
+  check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
+  check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
+    "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
   # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
   check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
   "${cl[@]}" >/dev/null
