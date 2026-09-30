@@ -952,6 +952,12 @@ t_unit_cli() {
   mkdir -p "$TMP/rt"
   check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
+  # ls while a box goes down (seen with the suite's boxes in parallel, issue #60): its box.json gone,
+  # the rest of the list still shown. Three boxes in a runtime dir of its own; the middle one half gone.
+  local lb; for lb in a b c; do mkdir -p "$TMP/rt-ls/omabox/$P-ls$lb"; echo '{}' > "$TMP/rt-ls/omabox/$P-ls$lb/info.json"; done
+  for lb in a c; do echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls/omabox/$P-ls$lb/box.json"; done
+  check_eq "ls: a box going down meanwhile is left out, not the end of the list" "$P-lsa $P-lsc 0" \
+    "$(XDG_RUNTIME_DIR=$TMP/rt-ls "$CLI" ls 2>&1 | awk 'NR > 1 {printf "%s ", $1}'; echo "${PIPESTATUS[0]}")"
   # run -d's -q, --print-log and --replace (issues #42, #29; findings 109, 110)
   check_match "run -q without -d refused" "go with -d" "$(ob run -b "$P-x" -q -- true 2>&1)"
   check_match "run --replace without -d refused" "go with -d" "$(ob run -b "$P-x" --replace -- true 2>&1)"

@@ -7,6 +7,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- `omabox ls` no longer stops partway through the list when a box goes down while it lists them.
+
 - **The agent guard no longer outlives omabox**: deleting omabox without `omabox guard off` left
   every Claude Code session without a display, and nothing to turn that off with. The guard's hook
   now applies nothing when omabox is gone, and says so. Codex's guard gains a hook of its own
