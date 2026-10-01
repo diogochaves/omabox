@@ -15,8 +15,10 @@ fi
 # The Omarchy shell only, by the pid this script recorded (exec keeps it): a quickshell a project runs
 # in the box is not ours to kill. Waited for 5 s at most, then SIGKILLed.
 pidfile=$XDG_RUNTIME_DIR/omabox-shell.pid
+# Asked to quit first: a shell Omarchy's own restart started runs under omarchy-launch-shell, which
+# starts it again when it dies of a signal, not when it quits (finding 131).
 if old=$(cat "$pidfile" 2>/dev/null) && [ "$(cat "/proc/$old/comm" 2>/dev/null)" = quickshell ]; then
-  kill "$old"
+  timeout 5 /usr/bin/quickshell kill --pid "$old" >/dev/null 2>&1 || kill "$old"
   for _ in $(seq 100); do kill -0 "$old" 2>/dev/null || break; sleep 0.05; done
   kill -KILL "$old" 2>/dev/null
 fi
