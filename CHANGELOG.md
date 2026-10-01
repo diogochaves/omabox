@@ -10,6 +10,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **Omarchy's browser bind (SUPER+SHIFT+B) opens the browser in a box**, and so do the other things
   Omarchy starts with `systemd-run --user` (LocalSend from the share menu). Without `--systemd`
   nothing opened; with it, the browser closed again at once.
+- **A key held when an interactive box loses focus no longer stays down in it** (SUPER held while
+  SUPER+1 switched your workspace made a later W in the box SUPER+W), with omabox's aquamarine build:
+  `omabox setup --aquamarine` builds it, or rebuilds an older one (`omabox setup` says when).
 - **`omarchy restart shell` in a box brings the bar back.** It left the box with no bar (no journald
   for `systemd-cat`); it and `omabox restart-shell` now take turns cleanly.
 

@@ -21,8 +21,10 @@ WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
-# and where: a checkout's build/prefix, else the user's data dir (aq_resolve).
+# and where: a checkout's build/prefix, else the user's data dir (aq_resolve). With omabox's own patches
+# on top (patches/aquamarine, finding 132): AQ_BUILD names the lot, as a build records it.
 AQ_COMMIT=7bb8bdf4
+AQ_BUILD=$AQ_COMMIT+keys
 AQ_FIXED_AFTER=0.15.1
 AQ_USER=${XDG_DATA_HOME:-$HOME/.local/share}/omabox/aquamarine
 PASS_KEY="SUPER + ALT + ESCAPE"
@@ -1517,8 +1519,13 @@ setup_user() {
   case $ROOT in /usr/*) ;; *) case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "note: add ~/.local/bin to PATH" ;; esac ;; esac
   setup_guard
   local want
-  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null && [ "$AQ_FIXED" = 0 ]; then
-    echo "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs: omabox setup --aquamarine"
+  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then
+    if [ "$AQ_FIXED" = 0 ]; then
+      echo "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs: omabox setup --aquamarine"
+    elif [ "$AQ_KIND" = private ] && [ "${AQ_VER#*@}" != "$AQ_BUILD" ]; then
+      # Built by an older omabox (finding 132): it lacks a patch omabox carries now.
+      echo "note: the aquamarine build in ${AQ_LIB%/lib} is older than this omabox's (it lets interactive boxes keep keys held when focus leaves): omabox setup --aquamarine"
+    fi
   fi
 }
 
@@ -1600,13 +1607,13 @@ setup_remove() {
 }
 
 # `omabox setup --aquamarine` (issues #47, #49): build the fix where aq_resolve looks for it. A no-op
-# while the box's aquamarine has it (a private build at AQ_COMMIT, or a system release after
+# while the box's aquamarine has it (a private build of AQ_BUILD, or a system release after
 # AQ_FIXED_AFTER) unless --force. Its tools are the package's optional dependencies.
 setup_aquamarine() {
   local force=$1
   local want; want=$(hypr_aq_soname)
   OMABOX_AQUAMARINE="" aq_resolve "$want" || exit 1
-  if [ "$force" = 0 ] && [ "$AQ_FIXED" = 1 ] && { [ "$AQ_KIND" = system ] || [ "${AQ_VER#*@}" = "$AQ_COMMIT" ]; }; then
+  if [ "$force" = 0 ] && [ "$AQ_FIXED" = 1 ] && { [ "$AQ_KIND" = system ] || [ "${AQ_VER#*@}" = "$AQ_BUILD" ]; }; then
     say "boxes use $(aq_desc), which has the fix: nothing to build"
     return 0
   fi
@@ -1617,10 +1624,14 @@ setup_aquamarine() {
   # data dir, its source in the cache (not in HOMES: sweep_homes would take it for a box's).
   local prefix=$AQ_USER src=${XDG_CACHE_HOME:-$HOME/.cache}/omabox-aquamarine
   if [ -e "$ROOT/.git" ]; then prefix=$ROOT/build/prefix src=$ROOT/build/aquamarine; fi
-  say "building aquamarine $AQ_COMMIT (hyprwm/aquamarine#415) into $prefix"
+  say "building aquamarine $AQ_BUILD (hyprwm/aquamarine#415, and keys held when focus leaves) into $prefix"
   [ -d "$src/.git" ] || git clone -q https://github.com/hyprwm/aquamarine "$src" || die "could not clone aquamarine into $src"
   git -C "$src" cat-file -e "$AQ_COMMIT^{commit}" 2>/dev/null || git -C "$src" fetch -q origin || die "could not fetch aquamarine in $src"
-  git -C "$src" checkout -q "$AQ_COMMIT" || die "could not check out aquamarine $AQ_COMMIT in $src"
+  git -C "$src" checkout -q -f "$AQ_COMMIT" || die "could not check out aquamarine $AQ_COMMIT in $src"
+  local patch
+  for patch in "$ROOT"/patches/aquamarine/*.patch; do
+    git -C "$src" apply "$patch" || die "could not apply $patch to aquamarine $AQ_COMMIT in $src"
+  done
   # Installed next to the old one, then swapped: a failed build leaves the old one in use. (A running
   # box keeps the files it loaded.)
   rm -rf "$prefix.new"
@@ -1631,7 +1642,7 @@ setup_aquamarine() {
   [ -e "$prefix.new$prefix/lib/$want" ] ||
     die "aquamarine $AQ_COMMIT builds $(elf_needed "$prefix.new$prefix/lib/libaquamarine.so" SONAME || echo "no libaquamarine"), but Hyprland links $want:" \
       "omabox needs a newer AQ_COMMIT (left in $prefix.new)"
-  echo "$AQ_COMMIT" > "$prefix.new$prefix/.omabox-commit"
+  echo "$AQ_BUILD" > "$prefix.new$prefix/.omabox-commit"
   rm -rf "$prefix.old"; [ ! -e "$prefix" ] || mv "$prefix" "$prefix.old"
   mv "$prefix.new$prefix" "$prefix" && rm -rf "$prefix.new" "$prefix.old"
   aq_resolve "$want" || exit 1

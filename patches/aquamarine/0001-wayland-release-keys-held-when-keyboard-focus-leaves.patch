@@ -1,0 +1,67 @@
+diff --git i/src/backend/Wayland.cpp w/src/backend/Wayland.cpp
+index 6af7b93..ee1d1c9 100644
+--- i/src/backend/Wayland.cpp
++++ w/src/backend/Wayland.cpp
+@@ -250,15 +250,30 @@ Aquamarine::CWaylandKeyboard::CWaylandKeyboard(SP<CCWlKeyboard> keyboard_, Hypru
+ 
+     backend->backend->log(AQ_LOG_DEBUG, "New wayland keyboard wl_keyboard");
+ 
+-    keyboard->setKey([this](CCWlKeyboard* r, uint32_t serial, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state) {
++    // The keys the parent compositor reported pressed while our surface had keyboard focus, and its
++    // last locked modifiers and group. When focus leaves with keys still down (SUPER+1 switching the
++    // parent's workspace, focus-follows-mouse), their releases go to whatever has focus then, so they
++    // are released here on leave: otherwise a held modifier or letter stays down in the nested
++    // session (a held SUPER turns a later W into SUPER+W). Keys already down on enter are not
++    // pressed: they were pressed for something else.
++    auto pressed = makeShared<std::vector<uint32_t>>();
++    auto locks   = makeShared<std::pair<uint32_t, uint32_t>>(0, 0);
++
++    keyboard->setKey([this, pressed](CCWlKeyboard* r, uint32_t serial, uint32_t timeMs, uint32_t key, wl_keyboard_key_state state) {
++        const bool down = state == WL_KEYBOARD_KEY_STATE_PRESSED;
++        std::erase(*pressed, key);
++        if (down)
++            pressed->emplace_back(key);
++
+         events.key.emit(SKeyEvent{
+             .timeMs  = timeMs,
+             .key     = key,
+-            .pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED,
++            .pressed = down,
+         });
+     });
+ 
+-    keyboard->setModifiers([this](CCWlKeyboard* r, uint32_t serial, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
++    keyboard->setModifiers([this, locks](CCWlKeyboard* r, uint32_t serial, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
++        *locks = {locked, group};
+         events.modifiers.emit(SModifiersEvent{
+             .depressed = depressed,
+             .latched   = latched,
+@@ -266,6 +281,28 @@ Aquamarine::CWaylandKeyboard::CWaylandKeyboard(SP<CCWlKeyboard> keyboard_, Hypru
+             .group     = group,
+         });
+     });
++
++    keyboard->setLeave([this, pressed, locks](CCWlKeyboard* r, uint32_t serial, wl_proxy* surface) {
++        if (pressed->empty())
++            return;
++
++        const auto timeMs = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++        for (auto const& key : *pressed) {
++            events.key.emit(SKeyEvent{
++                .timeMs  = timeMs,
++                .key     = key,
++                .pressed = false,
++            });
++        }
++        pressed->clear();
++
++        events.modifiers.emit(SModifiersEvent{
++            .depressed = 0,
++            .latched   = 0,
++            .locked    = locks->first,
++            .group     = locks->second,
++        });
++    });
+ }
+ 
+ Aquamarine::CWaylandKeyboard::~CWaylandKeyboard() {

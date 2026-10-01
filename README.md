@@ -40,7 +40,8 @@ it, so the real desktop saw no window at all (`docs/demo.sh --video` makes the d
 - For headless boxes on NVIDIA and for confirm-close: aquamarine's fix (Hyprland's backend library),
   until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415). Everything else
   runs on your system's aquamarine. `install.sh` builds it privately into `build/prefix`
-  (`omabox setup --aquamarine`); your system's copy is not touched.
+  (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries a fix
+  of omabox's for interactive boxes: a key held when the box's window loses focus is released.
 
 ## Install
 
