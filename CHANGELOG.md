@@ -12,6 +12,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   will run it themselves. **`omabox setup --remove`** undoes it before you delete omabox: guard and
   broker off, widget disabled, links removed; your settings and saves stay
   ([#49](https://github.com/diogochaves/omabox/issues/49)).
+- **omabox runs from a system install**, read-only at `/usr/lib/omabox` with `/usr/bin/omabox`, as a
+  package installs it ([#50](https://github.com/diogochaves/omabox/issues/50)). Checked in a fresh
+  Omarchy VM: built in a clean chroot, installed, a box driven, removed with nothing left behind.
+  `test/run.sh --installed` checks it on a checkout, and the suite run from an install skips by
+  itself what only a checkout has.
 
 ### Changed
 
