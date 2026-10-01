@@ -82,6 +82,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
   omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back
   omabox broker [on|off]                                 let agents inside ai-jail drive their own boxes
+  omabox setup [--remove]                                your links (skill, bar widget), settings dir, agent guard
   omabox setup --aquamarine [--force]                    build aquamarine's fix (headless NVIDIA boxes, confirm-close)
   omabox --version                                       and which aquamarine new boxes use
 
@@ -1444,24 +1445,156 @@ aq_desc() {
 aq_lacks() { echo "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415), which the system's aquamarine $AQ_VER lacks"; }
 AQ_HOWTO="omabox setup --aquamarine builds it for you (a minute or two)"
 
-# `omabox setup --aquamarine` (issues #47, #49): build the fix where aq_resolve looks for it. A no-op
-# while the box's aquamarine has it (a private build at AQ_COMMIT, or a system release after
-# AQ_FIXED_AFTER) unless --force. Its tools are the package's optional dependencies.
+# `omabox setup` (issue #49, finding 126): what each user of this omabox needs, apart from what a
+# package or install.sh puts on the system. Idempotent; --remove undoes it; --aquamarine is the
+# optional build (finding 125).
 cmd_setup() {
-  local aq=0 force=0
+  local aq=0 force=0 remove=0
   while [ $# -gt 0 ]; do
     case $1 in
       --aquamarine) aq=1 ;;
       --force) force=1 ;;
-      -h|--help) echo "usage: omabox setup --aquamarine [--force]   build aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"; return ;;
+      --remove) remove=1 ;;
+      -h|--help) echo "usage: omabox setup [--remove]                 your links (skill, bar widget, omabox), settings dir, agent guard"
+                 echo "       omabox setup --aquamarine [--force]    build aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"; return ;;
       *) die "setup: unknown option $1" ;;
     esac
     shift
   done
-  [ $aq = 1 ] || die "setup: only --aquamarine so far (the rest is install.sh's)"
+  [ $((aq + remove)) -le 1 ] || die "setup: --aquamarine or --remove, not both"
+  [ $force = 0 ] || [ $aq = 1 ] || die "setup: --force is for --aquamarine"
+  if [ $aq = 1 ]; then setup_aquamarine "$force"
+  elif [ $remove = 1 ]; then setup_remove
+  else setup_user; fi
+}
+
+# A link of ours: made where nothing is or a link was (ln -sfn onto a real directory would put the
+# link inside it and leave the old copy in use), removed only while it still points here.
+setup_link() {
+  [ -L "$2" ] || [ ! -e "$2" ] || die "$2 exists and is not a link: move it away, then re-run"
+  mkdir -p "$(dirname "$2")"
+  ln -sfn "$1" "$2"
+}
+setup_unlink() {
+  if [ -L "$1" ] && [ "$(readlink "$1")" = "$2" ]; then rm -- "$1"; echo "removed $1"; fi
+  return 0
+}
+# Where the skill goes: everywhere Omarchy puts its own agent skills (omarchy-provision-user): the
+# shared ~/.agents/skills (OpenCode and other Agent Skills readers) and Claude Code always; Codex, pi
+# and Hermes when they are installed (their dir exists).
+SKILL_DIRS=(.agents .claude .codex .pi/agent .hermes)
+
+setup_user() {
+  # A system install (a package: /usr/bin/omabox is the command) needs no link of its own.
+  case $ROOT in
+    /usr/*) ;;
+    *) setup_link "$ROOT/bin/omabox" "$HOME/.local/bin/omabox"; echo "$HOME/.local/bin/omabox -> bin/omabox" ;;
+  esac
+  local dir linked=()
+  for dir in "${SKILL_DIRS[@]}"; do
+    case $dir in .agents|.claude) ;; *) [ -d "$HOME/$dir" ] || continue ;; esac
+    setup_link "$ROOT/skill" "$HOME/$dir/skills/omabox"
+    # shellcheck disable=SC2088 # display text, not a path
+    linked+=("~/$dir")
+  done
+  echo "agent skill 'omabox' -> ${linked[*]} (skills/)"
+  # The bar widget: only ~/.config/omarchy/plugins holds third-party plugins (Omarchy's shell, finding
+  # 126), so a link per user; it stays off until `omarchy plugin enable chaves.omabox`.
+  setup_link "$ROOT/plugin" "$HOME/.config/omarchy/plugins/chaves.omabox"
+  echo "bar widget chaves.omabox -> ~/.config/omarchy/plugins (enable: omarchy plugin enable chaves.omabox)"
+  # Where `omabox config` keeps the settings. The widget watches the file, and a watch only sees the
+  # file appear if its directory already exists (finding 72).
+  mkdir -p "$HOME/.config/omabox"
+  case $ROOT in /usr/*) ;; *) case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "note: add ~/.local/bin to PATH" ;; esac ;; esac
+  setup_guard
+  local want
+  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null && [ "$AQ_FIXED" = 0 ]; then
+    echo "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs: omabox setup --aquamarine"
+  fi
+}
+
+# The agent guard (findings 65-67) changes the agents' own settings (Claude Code, Codex), so it is
+# only ever asked for, in a terminal, yes by default; `omabox guard` shows it, `omabox guard off`
+# takes it out again. A "no" is remembered: a re-run after a pull does not ask again, where an Enter
+# out of habit would turn it on (finding 74).
+setup_guard() {
+  [ -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ] || [ -d "${CODEX_HOME:-$HOME/.codex}" ] || return 0
+  printf '\n==> %s\n' "Agent guard"
+  local state states w yn declined need_update need_on
+  state=$("$ROOT/bin/omabox" guard) || true
+  states=$(grep -E '^(Claude Code|Codex|claude|codex)' <<<"$state" || true)
+  echo "$states"
+  # The agents (as `omabox guard on` names them) whose guard is outdated, and those where it is off
+  # (or whose settings it cannot read). `guard on` for just those: for both, no name is needed.
+  agents() { sed -nE 's/^(Claude Code|claude)[ :].*/claude/p; s/^(Codex|codex)[ :].*/codex/p'; }
+  mapfile -t need_update < <(grep ': outdated' <<<"$states" | agents)
+  mapfile -t need_on < <(grep -v -e ': on$' -e ': outdated' <<<"$states" | agents)
+  which_on() { [ $# -gt 1 ] || echo "$1"; }
+  if [ ${#need_update[@]} -gt 0 ]; then
+    # An update of what the user already said yes to, whatever the other agents' guard: a "no" to
+    # turning it on does not hold it back, and a "no" here is not remembered.
+    w=$(which_on "${need_update[@]}")
+    echo "The guard there is outdated (omabox guard shows what it does)."
+    if [ -t 0 ] && [ -t 1 ]; then
+      read -r -p "Update it? [Y/n] " yn
+      [[ $yn = [nN]* ]] || "$ROOT/bin/omabox" guard on ${w:+"$w"} || echo "the guard is not (fully) updated, see above; the rest of the setup is done"
+    else
+      echo "not asked (no terminal): omabox guard on${w:+ $w}"
+    fi
+  fi
+  if [ ${#need_on[@]} -gt 0 ]; then
+    w=$(which_on "${need_on[@]}")
+    echo "It gives your agents' shell commands a display that does not exist, so a window, hyprctl or"
+    echo "grim outside a box fails instead of reaching your desktop. omabox keeps working, and"
+    echo "\`omabox host -- CMD\` runs what you ask for on the real desktop. See: omabox guard"
+    declined=$HOME/.config/omabox/guard-declined
+    if [ -e "$declined" ]; then
+      echo "not asked (you said no before; rm $declined to be asked again): omabox guard on${w:+ $w}"
+    elif [ -t 0 ] && [ -t 1 ]; then
+      read -r -p "Turn it on? [Y/n] " yn
+      if [[ $yn = [nN]* ]]; then
+        mkdir -p "$(dirname "$declined")" && date -Is > "$declined"
+      else
+        "$ROOT/bin/omabox" guard on ${w:+"$w"} || echo "the guard is not (fully) on, see above; the rest of the setup is done"
+      fi
+    else
+      echo "not asked (no terminal): omabox guard on${w:+ $w}"
+    fi
+  fi
+}
+
+# What setup_user and setup --aquamarine made, undone: before a package is removed, or a checkout
+# deleted. Only links that still point here; the guard and the broker turned off when this HOME has
+# them; the widget disabled when this HOME's shell.json has it (the running shell is asked, as
+# `omarchy plugin disable` does). Settings and saves are the user's: kept, said so.
+setup_remove() {
+  local dir state
+  state=$("$ROOT/bin/omabox" guard 2>/dev/null) || true
+  if grep -qE '^(Claude Code|Codex|claude|codex).*: (on|outdated)' <<<"$state"; then
+    "$ROOT/bin/omabox" guard off || say "the guard is not (fully) off, see above"
+  fi
+  [ ! -e "$BROKER_UNITS/omabox-broker.socket" ] || "$ROOT/bin/omabox" broker off || say "the broker is not off, see above"
+  if grep -qs '"chaves.omabox"' "$HOME/.config/omarchy/shell.json"; then
+    omarchy plugin disable chaves.omabox || say "could not disable the bar widget: omarchy plugin disable chaves.omabox"
+  fi
+  setup_unlink "$HOME/.config/omarchy/plugins/chaves.omabox" "$ROOT/plugin"
+  for dir in "${SKILL_DIRS[@]}"; do setup_unlink "$HOME/$dir/skills/omabox" "$ROOT/skill"; done
+  setup_unlink "$HOME/.local/bin/omabox" "$ROOT/bin/omabox"
+  local cache=${XDG_CACHE_HOME:-$HOME/.cache}/omabox-aquamarine
+  if [ -e "$AQ_USER" ] || [ -e "$cache" ]; then rm -rf "$AQ_USER" "$cache"; echo "removed the aquamarine build in $AQ_USER"; fi
+  [ ! -e "$ROOT/.git" ] || echo "kept: this checkout's build/ (the aquamarine build, if any) goes with the checkout"
+  [ -z "$(list_names)" ] || echo "boxes are still up (omabox ls): omabox down --all"
+  echo "kept: your settings (~/.config/omabox) and saves (~/.local/share/omabox/saves); delete them yourself if you want them gone"
+}
+
+# `omabox setup --aquamarine` (issues #47, #49): build the fix where aq_resolve looks for it. A no-op
+# while the box's aquamarine has it (a private build at AQ_COMMIT, or a system release after
+# AQ_FIXED_AFTER) unless --force. Its tools are the package's optional dependencies.
+setup_aquamarine() {
+  local force=$1
   local want; want=$(hypr_aq_soname)
   OMABOX_AQUAMARINE="" aq_resolve "$want" || exit 1
-  if [ $force = 0 ] && [ "$AQ_FIXED" = 1 ] && { [ "$AQ_KIND" = system ] || [ "${AQ_VER#*@}" = "$AQ_COMMIT" ]; }; then
+  if [ "$force" = 0 ] && [ "$AQ_FIXED" = 1 ] && { [ "$AQ_KIND" = system ] || [ "${AQ_VER#*@}" = "$AQ_COMMIT" ]; }; then
     say "boxes use $(aq_desc), which has the fix: nothing to build"
     return 0
   fi

@@ -51,9 +51,9 @@ git clone https://github.com/diogochaves/omabox && cd omabox
 omarchy plugin enable chaves.omabox     # the bar widget
 ```
 
-`install.sh` links `~/.local/bin/omabox`, the agent skill (wherever Omarchy puts its own skills:
-`~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and the bar widget, and asks
-whether to turn on the [agent guard](#the-agent-guard). **Update** with `git pull && ./install.sh`;
+`install.sh` then runs `omabox setup`, which links `~/.local/bin/omabox`, the agent skill (wherever
+Omarchy puts its own skills: `~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and
+the bar widget, and asks whether to turn on the [agent guard](#the-agent-guard). **Update** with `git pull && ./install.sh`;
 run it after a Hyprland upgrade too: a private aquamarine whose soname Hyprland no longer links is
 skipped for the system's (`omabox --version` says which one boxes use).
 
@@ -62,16 +62,15 @@ skipped for the system's (`omabox --version` says which one boxes use).
 
 ```bash
 omabox down --all                          # every box
-omabox guard off                           # if you turned the guard on
-omabox broker off                          # if you turned the ai-jail broker on (and its ~/.ai-jail lines)
-omarchy plugin disable chaves.omabox       # if you turned the widget on
-rm ~/.local/bin/omabox ~/.config/omarchy/plugins/chaves.omabox
-rm -f ~/.agents/skills/omabox ~/.claude/skills/omabox ~/.codex/skills/omabox \
-  ~/.pi/agent/skills/omabox ~/.hermes/skills/omabox
+omabox setup --remove                      # guard and broker off, widget disabled, links removed
 rm -rf ~/.config/omabox ~/.cache/omabox    # settings, and box HOMEs a crash left behind
+rm -rf ~/.local/share/omabox               # saves, if you made any
 ```
 
-Run `omabox guard off` before you delete omabox: once it is gone there is no `guard off` left to
+`omabox setup --remove` turns the guard off (if on), the ai-jail broker off (its `~/.ai-jail` lines
+are yours to delete), disables the bar widget if it is on, and removes the links `setup` made (only
+those that still point at this omabox) and a per-user aquamarine build; it keeps your settings and
+saves. Run it before you delete omabox: once it is gone there is no `guard off` left to
 run. A guard left behind applies nothing in Claude Code and says so; in Codex its values stay, and
 its hook says which lines of `~/.codex/config.toml` to delete.
 

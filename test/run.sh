@@ -1974,6 +1974,46 @@ t_unit_nvidia() {
     "$(PATH=$d/none:$PATH lib nvidia_node 0000:02:00.0 1 "$d/proc" "$d/dev" 2>&1)"
 }
 
+# finding 126 (issue #49): omabox setup makes a user's links, settings dir and guard; --remove undoes
+# them, only links that still point here. In a temp HOME and XDG dirs: never the user's.
+t_unit_setup() {
+  local h=$TMP/$P-setup out
+  mkdir -p "$h/.codex" "$h/.config/omarchy"
+  echo '{"bar": {"layout": {"right": [{"id": "x.y"}]}}}' > "$h/.config/omarchy/shell.json"
+  # (The XDG dirs too: the user's session sets them, and --remove deletes the aquamarine build there.)
+  in_h() { HOME=$h XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state "$CLI" "$@" 2>&1; }
+  out=$(in_h setup); local rc=$?
+  check_eq "setup in a clean HOME" 0 "$rc"
+  check_eq "...omabox, the skill (Claude Code, the shared dir, Codex: it is there) and the widget linked" \
+    "$ROOT/bin/omabox $ROOT/skill $ROOT/skill $ROOT/skill $ROOT/plugin" \
+    "$(readlink "$h/.local/bin/omabox" "$h/.claude/skills/omabox" "$h/.agents/skills/omabox" "$h/.codex/skills/omabox" "$h/.config/omarchy/plugins/chaves.omabox" | tr '\n' ' ' | sed 's/ $//')"
+  check_fails "...not for an agent that is not installed" test -e "$h/.hermes"
+  check "...the settings dir" test -d "$h/.config/omabox"
+  check_match "...the guard not turned on without a terminal" "not asked \(no terminal\): omabox guard on" "$out"
+  check_eq "setup again: the same (idempotent)" 0 "$(in_h setup >/dev/null; echo $?)"
+  check_match "setup --force alone is refused" "--force is for --aquamarine" "$(in_h setup --force)"
+  check_match "...and --aquamarine with --remove" "--aquamarine or --remove, not both" "$(in_h setup --aquamarine --remove)"
+  # What --remove takes away, and what it leaves: a link moved elsewhere, a real dir, the settings.
+  in_h guard on claude >/dev/null
+  ln -sfn /elsewhere "$h/.codex/skills/omabox"
+  mkdir -p "$h/.pi/agent/skills/omabox" "$h/.local/share/omabox/aquamarine/lib" "$h/.cache/omabox-aquamarine" "$h/.local/share/omabox/saves/s1"
+  echo bar-icon=auto > "$h/.config/omabox/config"
+  out=$(in_h setup --remove); rc=$?
+  check_eq "setup --remove" 0 "$rc"
+  local f gone=""
+  for f in .local/bin/omabox .claude/skills/omabox .agents/skills/omabox .config/omarchy/plugins/chaves.omabox .local/share/omabox/aquamarine .cache/omabox-aquamarine; do
+    [ -e "$h/$f" ] || [ -L "$h/$f" ] || gone+="$f "
+  done
+  check_eq "...removes the links and the user's aquamarine build" ".local/bin/omabox .claude/skills/omabox .agents/skills/omabox .config/omarchy/plugins/chaves.omabox .local/share/omabox/aquamarine .cache/omabox-aquamarine " "$gone"
+  check_eq "...not a link that points elsewhere now" /elsewhere "$(readlink "$h/.codex/skills/omabox")"
+  check "...nor a real dir" test -d "$h/.pi/agent/skills/omabox"
+  check_eq "...keeps the settings and saves, saying so" "bar-icon=auto|yes" \
+    "$(cat "$h/.config/omabox/config")|$([ -d "$h/.local/share/omabox/saves/s1" ] && grep -q "kept: your settings" <<<"$out" && echo yes)"
+  check_fails "...turns the guard off" grep -q omabox-guard "$h/.claude/settings.json"
+  check_fails "...and leaves a widget this HOME has not enabled alone (no omarchy call)" grep -q "plugin disable" <<<"$out"
+  check_eq "--remove again: nothing left to do" 0 "$(in_h setup --remove >/dev/null; echo $?)"
+}
+
 # finding 125 (issue #47): which aquamarine a box runs (aq_pick), and what is refused without the fix.
 t_unit_aquamarine() {
   local d=$TMP/$P-aq so=libaquamarine.so.14
@@ -2035,8 +2075,7 @@ t_unit_aquamarine() {
   else
     check_eq "config --json: confirm-close available with the fix" true "$(HOME=$d/home "$CLI" config --json | jq '."confirm-close-available"')"
   fi
-  check_match "setup with no part" "only --aquamarine so far" "$("$CLI" setup 2>&1)"
-  check_match "...an unknown option" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
+  check_match "setup: an unknown option, refused before anything is done" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
 }
 
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
@@ -3730,7 +3769,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
+  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
