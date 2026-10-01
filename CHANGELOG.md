@@ -5,6 +5,19 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **`omabox setup` offers to put the bar widget in your bar** (yes by default, a "no" remembered).
+- **The widget says when it is older than the omabox installed** (after an upgrade, until the shell
+  restarts), and `omabox config --json` names the version.
+- **`omabox up --json`** prints the box as `omabox ls --json` lists it.
+
+### Changed
+
+- **`omabox up` on a box that is already up refuses options the box lacks** (exit 1, naming each),
+  where it ignored them: an agent asking for a plugin, isolation or a size no longer goes on without.
+  A bare `omabox up`, or one asking for what the box has, is fine as before.
+
 ### Fixed
 
 - **Omarchy's browser bind (SUPER+SHIFT+B) opens the browser in a box**, and so do the other things
@@ -13,6 +26,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A key held when an interactive box loses focus no longer stays down in it** (SUPER held while
   SUPER+1 switched your workspace made a later W in the box SUPER+W), with omabox's aquamarine build:
   `omabox setup --aquamarine` builds it, or rebuilds an older one (`omabox setup` says when).
+- **`omabox setup` from a package notices an `omabox` link left in `~/.local/bin` by a checkout**,
+  says whether it takes over, and offers to remove it.
+- **Your Hyprland binds are never left dead** by an interactive box going down right after a config
+  reload (the host could stay in omabox's key-passing mode with no way out).
 - **`omarchy restart shell` in a box brings the bar back.** It left the box with no bar (no journald
   for `systemd-cat`); it and `omabox restart-shell` now take turns cleanly.
 

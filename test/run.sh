@@ -528,7 +528,7 @@ t_unit_config() {
   check_eq "bar-icon auto" bar-icon=auto "$(cfg bar-icon auto)"
   check_fails "bar-icon takes auto or always" env HOME="$h" "$CLI" config bar-icon sometimes
   check_eq "--json for the widget" '{"workspace":"special:omabox","confirm-close":"on","bar-icon":"auto"}' \
-    "$(HOME=$h "$CLI" config --json | jq -c 'del(.["confirm-close-available"])')"
+    "$(HOME=$h "$CLI" config --json | jq -c 'del(.["confirm-close-available"], .version)')"
   local bad; for bad in 0 100 "3 silent" "special:a'b" "special:" "1;x" "special:$(printf 'x%.0s' {1..33})"; do
     check_fails "workspace '$bad' refused" env HOME="$h" "$CLI" config workspace "$bad"
   done
@@ -639,6 +639,12 @@ t_unit_version() {
   check_eq "the widget's manifest has it" "$v" "$(jq -r .version "$ROOT/plugin/manifest.json")"
   check_match "...and its Settings face" "pluginVersion: \"$v\"" "$(grep pluginVersion "$ROOT/plugin/Panel.qml")"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
+  check_eq "config --json names it, for a widget left from before an upgrade (finding 133)" "$v" "$("$CLI" config --json | jq -r .version)"
+  if command -v omarchy-plugin-validate >/dev/null; then
+    check "the widget passes omarchy-plugin-validate" omarchy-plugin-validate "$ROOT/plugin"
+  else
+    skip "the widget passes omarchy-plugin-validate" "no omarchy-plugin-validate here"
+  fi
 }
 
 # The leak detector's reading of events (finding 80), on lines as the watcher logs them (the
@@ -2503,7 +2509,12 @@ t_unit_install() {
   mkdir -p "$h" "$stub"
   printf '#!/bin/sh\nexit 1\n' > "$stub/sudo"
   printf '#!/bin/sh\ncase "$*" in *tools/keyboard*) exit 1 ;; esac\nexec /usr/bin/make "$@"\n' > "$stub/make"
-  chmod +x "$stub/sudo" "$stub/make"
+  # Never the user's shell: setup's widget question (finding 133) would reach the running one, which
+  # is the real desktop's whatever HOME says. Answered no up front, and these fail if called.
+  printf '#!/bin/sh\necho "$0 $*" >> "%s/shell-called"; exit 1\n' "$stub" > "$stub/omarchy"
+  cp "$stub/omarchy" "$stub/omarchy-shell"
+  mkdir -p "$h/.config/omabox"; date -Is > "$h/.config/omabox/widget-declined"
+  chmod +x "$stub/sudo" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell"
   out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1); local rc=$?
   check_match "a failed tool build stops install.sh" "building tools/keyboard failed" "$out"
   check_eq "...with a failure" 1 "$rc"
@@ -2557,6 +2568,7 @@ t_unit_install() {
   rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
   check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
+  check_fails "...and none of it reached a shell (omarchy, omarchy-shell)" test -e "$stub/shell-called"
 }
 
 # The session's Omarchy defaults, and the uwsm-app stand-in's terminal options and desktop files
@@ -2703,6 +2715,28 @@ t_widget() {
   check "...lit again at once (the file watched)" until_ok 1.5 bar_is same "$TMP/keys-on.png"
   echo gone > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
   check "...not for a box that is not up (a file a Hyprland left)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
+  # A widget older than the CLI (finding 133: the shell does not reload it after an upgrade) says to
+  # restart the shell; one of the CLI's version, or a CLI that names none, says nothing.
+  echo '[]' > "$H/list.json"; polled
+  reads=$(grep -c "^config --json$" "$H/actions")
+  echo '{}' > "$H/config.json"; : > "$H/.config/omabox/config"   # bar-icon always again: it opens with none
+  until_ok 5 lines_over "$H/actions" "$reads" "^config --json$"; sleep 0.3
+  local pv; pv=$(sed -n 's/.*pluginVersion: "\([^"]*\)".*/\1/p' "$ROOT/plugin/Panel.qml")
+  # shellcheck disable=SC2329 # called through check
+  panel_shot() {
+    echo "$1" > "$H/config.json"
+    local n; n=$(grep -c "^config --json$" "$H/actions")
+    ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+    until_ok 3 lines_over "$H/actions" "$n" "^config --json$"; sleep 0.3   # read when opened, taken in
+    ob pointer -b "$B" -- move 10 1000 >/dev/null; ob wait -b "$B" still >/dev/null 2>&1
+    ob shot -b "$B" -g "1220,0 700x400" -o "$2" >/dev/null 2>&1
+    ob keys -b "$B" Escape >/dev/null; until_ok 3 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
+  }
+  panel_shot '{}' "$TMP/wg-nover.png"
+  panel_shot "{\"version\":\"$pv\"}" "$TMP/wg-same.png"
+  panel_shot '{"version":"9.9.9"}' "$TMP/wg-newer.png"
+  check "a widget of the CLI's version says nothing more than one told no version" cmp -s "$TMP/wg-nover.png" "$TMP/wg-same.png"
+  check_fails "...an older one says to restart the shell (finding 133)" cmp -s "$TMP/wg-same.png" "$TMP/wg-newer.png"
   # (Not with omabox installed on the host: the box sees its /usr/bin/omabox, so there is always one.)
   if [ ! -e /usr/bin/omabox ]; then
     mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
@@ -3357,6 +3391,82 @@ t_held_keys() {
   ob down "$B" >/dev/null
 }
 
+# `up` on a box that is up (finding 134): the options given that it lacks are refused, saying which;
+# a bare up, or one with what it has, is fine. --json prints it as ls --json lists it.
+t_up_again() {
+  local B=$P-ua out
+  ob up "$B" --net isolated --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
+  check "up again, no options: fine" ob up "$B"
+  check "...with the options it has" ob up "$B" --net isolated --no-shell
+  out=$(ob up "$B" --size 1280x720 --systemd 2>&1); local rc=$?
+  check_eq "...with others: refused" 1 "$rc"
+  check_match "...saying what it lacks" "--size 1280x720@60 \(it is 1920x1080@60\); --systemd \(it has no user manager\)" "$out"
+  check_match "...and what to do" "omabox down $B first, or omabox up --new" "$out"
+  check_match "--net connected on an isolated box: refused" "--net connected \(it is isolated\)" "$(ob up "$B" --net connected 2>&1)"
+  check_match "--plugin it has not: refused" "--plugin $ROOT/plugin \(not mounted\)" "$(ob up "$B" --plugin "$ROOT/plugin" 2>&1)"
+  check_eq "up --json: the box as ls --json has it" "$B up isolated" "$(ob up "$B" --json 2>/dev/null | jq -r '"\(.name) \(.state) \(.net)"')"
+  check_eq "...the same object" "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n)')" "$(ob up "$B" --json 2>/dev/null)"
+  ob down "$B" >/dev/null
+}
+
+# The host's submap after the last interactive box goes (finding 134), in a stand-in host (finding
+# 26): a config reload there drops passthrough's hooks and keeps the submap, and only a box's reaper
+# puts the hooks back. With that reaper gone too, `down` resets the submap, or the host's binds
+# would stay dead.
+t_submap_release() {
+  local B=$P-sr
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  local in=("$CLI" run -b "$B" -- "$CLI")
+  "${in[@]}" up sa --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  local pa
+  pa=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/sa/run " && { echo "$p"; break; }; done')
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = 'pid:$pa' })" >/dev/null
+  # shellcheck disable=SC2329 # called through until_ok
+  submap_is() { [ "$(ob lua -b "$B" 'return hl.get_current_submap()')" = "$1" ]; }
+  ob keys -b "$B" super+alt+Escape >/dev/null
+  check "SUPER+ALT+ESCAPE: the stand-in in the omabox submap" until_ok 5 submap_is omabox
+  ob run -b "$B" -- sh -c 'pkill -f "_reap sa "'
+  ob hyprctl -b "$B" reload >/dev/null
+  check "a reload with the box's reaper gone: still in it, the hooks gone" holds 2.5 bash -c \
+    "[ \"\$('$CLI' lua -b '$B' 'return hl.get_current_submap() .. \",\" .. tostring(omabox_pass_version)')\" = omabox,nil ]"
+  "${in[@]}" down sa >/dev/null 2>&1
+  check "down of the last interactive box resets it" until_ok 3 submap_is ""
+  ob keys -b "$B" super+1 >/dev/null
+  check "...and the stand-in's SUPER+1 works again" until_ok 3 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j activeworkspace | jq -r .name)\" = 1 ]"
+  ob down "$B" >/dev/null
+}
+
+# setup's questions answered through a terminal (script(1)), in a box with the shell (finding 133):
+# the widget put in the box's bar, a "no" remembered; under a system install, a ~/.local/bin/omabox
+# left from a checkout offered to go.
+t_setup_prompts() {
+  local B=$P-sp
+  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  local H; H=$(ob path "$B")/home
+  # shellcheck disable=SC2329
+  in_tty() { printf '%s' "$1" | ob run -b "$B" -- script -qec "$CLI setup" /dev/null 2>&1; }
+  local answers=$'y\n' sys=0
+  if [[ $ROOT == /usr/* ]]; then
+    sys=1; answers=$'y\ny\n'; mkdir -p "$H/.local/bin"; ln -sfn /nowhere/omabox/bin/omabox "$H/.local/bin/omabox"
+  fi
+  local out; out=$(in_tty "$answers")
+  check_match "setup in a terminal asks to show the widget" "Show the omabox widget in your bar\? \[Y/n\]" "$out"
+  check "...yes: it is in the box's bar" until_ok 5 grep -q '"chaves.omabox"' "$H/.config/omarchy/shell.json"
+  if [ $sys = 1 ]; then
+    check_match "...a checkout's ~/.local/bin/omabox: said" "links to /nowhere/omabox/bin/omabox, which is gone" "$out"
+    check_fails "...yes: removed" test -L "$H/.local/bin/omabox"
+  else
+    skip "a checkout's ~/.local/bin/omabox under a system install: said and removed" "a checkout run (--installed checks it)"
+  fi
+  check_match "setup again: on, not asked" "bar widget: on in your bar" "$(in_tty "")"
+  ob run -b "$B" -- omarchy plugin disable chaves.omabox >/dev/null 2>&1
+  until_ok 5 bash -c "! grep -q '\"chaves.omabox\"' '$H/.config/omarchy/shell.json'"
+  out=$(in_tty $'n\n')
+  check "...no: not in the bar, and remembered" bash -c "! grep -q '\"chaves.omabox\"' '$H/.config/omarchy/shell.json' && test -e '$H/.config/omabox/widget-declined'"
+  check_match "...then not asked again" "bar widget: not asked \(you said no before" "$(in_tty "")"
+  ob down "$B" >/dev/null
+}
+
 # Window selectors and what covers what (finding 81), on hyprctl JSON made up for it: floats above
 # tiled windows whatever their order, later above earlier otherwise, fullscreen and a shown special
 # workspace above the rest; off-screen workspaces, inactive group tabs and unmapped windows.
@@ -3944,7 +4054,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_submap_release t_setup_prompts t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

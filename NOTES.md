@@ -2502,6 +2502,36 @@ the designs here were measured in boxes and built for a contained desktop, and n
     records `AQ_BUILD` (`7bb8bdf4+keys`); `setup` says when the private build is older, and
     `setup --aquamarine` rebuilds it. Boxes on the system's aquamarine keep the bug until a release has
     the fix (UPSTREAM.md; the PR text is prepared). Test: `t_held_keys` (fails on the old build).
+133. **setup and the widget across installs and upgrades** (2026-10-01, from a comparison with
+    omadev). Three gaps a package makes likely. (1) A `~/.local/bin/omabox` linked by a checkout's
+    setup stays when the user moves to the package; setup under `/usr` never looked at it. Omarchy's
+    `env-bootstrap` appends `~/.local/bin` after `/usr/bin`, so the package's runs, but a PATH with it
+    first (the user's own rc) runs the checkout, the widget's `omabox` too. A system install's setup
+    now says what the file is (a link to where, gone, or a file of its own) and whether PATH finds it
+    first, and offers to remove a link (Y/n, in a terminal; "not asked" otherwise). (2) The widget was
+    linked but left off; setup now asks whether to put it in the bar, as `omarchy plugin add` does:
+    `omarchy-shell shell rescanPlugins`, then `omarchy plugin enable` until the shell knows it (the
+    rescan returns before it is done). A "no" is remembered in `~/.config/omabox/widget-declined`, as
+    the guard's is. (3) A shell does not reload a plugin when its files change (finding 41), so after
+    an upgrade the bar runs the old widget against the new CLI. `config --json` now names the CLI's
+    version; the widget compares it with its own `pluginVersion` and says, in its alert strip, to
+    restart the shell (dismissable, once per version). Only widgets from this version on can say it.
+    Tests: `t_setup_prompts` answers through `script(1)` in a box (the widget in the box's bar, a
+    "no" remembered; under `--installed`, the old link removed), `t_widget` (the note), and
+    `omarchy-plugin-validate` on the widget in `t_unit_version`.
+134. **`up` on a running box refuses options it lacks; `down` frees the host's submap** (2026-10-01,
+    from a comparison with omadev). (1) `up NAME --plugin X` on a box without X said "options
+    ignored" and exited 0, so an agent went on without what it asked for. Now the options given are
+    compared with `box.json` (mode, size, net, allow, systemd, stock bar, Xwayland, no-shell,
+    Hyprland build, save, plugins mounted) and any it lacks are refused, exit 1, naming each and what
+    to do; a bare `up`, or one asking for what the box has, is fine. Mounts, `--env` and `--idle` are
+    not compared. `box.json` records `xwayland` and `shell` for that. `up --json` prints the box as
+    `ls --json` lists it. (2) A host config reload drops passthrough's hooks and the submap's binds
+    but keeps the submap (seen in a stand-in host: "omabox" with `omabox_pass_version` nil, SUPER+1
+    dead); a box's reaper puts the hooks back within 2 s, but with the last interactive box going at
+    that moment nothing would, and every bind of the user's would stay dead. `down` of an interactive
+    box now resets the host's submap when it is "omabox" and no interactive box is left
+    (`t_submap_release`: reaper killed, reload, down, SUPER+1 works again).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
