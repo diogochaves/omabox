@@ -65,6 +65,16 @@ Panel {
   // which Back (or Esc) leaves.
   property string face: "list"
   readonly property string pluginVersion: "0.4.1"   // manifest.json's and VERSION
+  // A shell does not reload a plugin when its files change (NOTES finding 41): after an upgrade the
+  // bar runs this widget as it was, against the new CLI, until the shell restarts (finding 133).
+  // `config --json` names the CLI's version; a difference is said once per version, dismissable.
+  property string staleDismissed: ""
+  readonly property string staleNote: {
+    var v = settings.version
+    return v && v !== pluginVersion && v !== staleDismissed
+      ? "omabox " + v + " is installed; this widget is " + pluginVersion + ". Restart the shell to load the new one: omarchy restart shell"
+      : ""
+  }
 
   readonly property var icons: ({
     gear: String.fromCodePoint(0xF013),     // fa-cog, omawin's
@@ -511,7 +521,7 @@ Panel {
         // The last failure, full width in the urgent colour: a pill in the hero was too small to read.
         // A failing list comes first: everything below it may be stale.
         Rectangle {
-          visible: root.lastError !== "" || root.listError !== ""
+          visible: root.lastError !== "" || root.listError !== "" || root.staleNote !== ""
           width: parent.width
           implicitHeight: alertRow.implicitHeight + Style.space(12)
           radius: Style.cornerRadius
@@ -541,7 +551,7 @@ Panel {
               width: parent.width - alertIcon.width - alertDismiss.width - parent.spacing * 2
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              text: root.listError !== "" ? "list: " + root.listError : root.lastError
+              text: root.listError !== "" ? "list: " + root.listError : root.lastError !== "" ? root.lastError : root.staleNote
               color: root.bar.urgent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -555,7 +565,10 @@ Panel {
               foreground: root.bar.urgent
               hoverColor: root.bar.urgent
               fontFamily: root.bar.fontFamily
-              onClicked: { root.lastError = ""; root.listError = "" }
+              onClicked: {
+                if (root.lastError === "" && root.listError === "") root.staleDismissed = root.settings.version || ""
+                root.lastError = ""; root.listError = ""
+              }
             }
           }
         }

@@ -125,7 +125,7 @@ with a button is Hyprland's own (move, resize), never the app's.
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
-| `box 'x' is already up (options ignored…)`, not yours | Another agent's: `omabox up --new`, then `-b box-N` as it printed. |
+| `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new`, then `-b box-N` as it printed. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
 

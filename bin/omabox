@@ -45,6 +45,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      a free name, box-1, box-2, ... (printed)
+            [--json]                                     the box as ls --json lists it, on stdout
   omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N]
@@ -941,10 +942,37 @@ refuse_dest() {
   return 1
 }
 
-# What `up` says of a box that is up already, which counts as use.
+# What `up` says of a box that is up already, which counts as use. The options given that the box
+# does not have are refused (finding 134): an agent asking for a plugin, isolation or a size would
+# otherwise go on without it. Only those given: a bare `up` takes the box as it is. Mounts, --env and
+# --idle are not compared. Reads cmd_up's locals (`given` names the options on the command line).
 up_already() {
   touch "$D/used" 2>/dev/null || true
-  say "box '$NAME' is already up (options ignored; omabox down $NAME to change them)"
+  local diff=() p id ids
+  case " $given " in *" interactive "*) [ "$(meta mode)" = interactive ] || diff+=("--interactive (it is $(meta mode))") ;; esac
+  case " $given " in *" size "*)
+    [ $interactive = 1 ] || [ "$(meta size)" = "$size" ] || diff+=("--size $size (it is $(meta size))") ;; esac
+  case " $given " in *" net "*)
+    if [ "$net" = isolated ]; then [ "$(meta net)" = isolated ] || diff+=("--net isolated (it is $(meta net))")
+    elif [ "$(meta net)" = isolated ]; then diff+=("--net connected (it is isolated)"); fi ;; esac
+  case " $given " in *" allow "*) [ "$(meta allow)" = "$allow" ] || diff+=("--allow $allow (it allows $(meta allow | grep . || echo none))") ;; esac
+  case " $given " in *" systemd "*) [ "$(meta systemd)" = true ] || diff+=("--systemd (it has no user manager)") ;; esac
+  case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
+  case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
+  case " $given " in *" no-shell "*) [ "$(jq -r '.shell | tostring' "$D/box.json" 2>/dev/null)" = false ] || diff+=("--no-shell (it has the shell)") ;; esac
+  case " $given " in *" hyprland "*) [ "$(meta hyprland)" = "$hyprland" ] || diff+=("--hyprland $hyprland (it runs $(meta hyprland | grep . || echo "the installed one"))") ;; esac
+  case " $given " in *" from "*) [ "$(meta from)" = "$FROM" ] || diff+=("--from $FROM (it started from $(meta from | grep . || echo "no save"))") ;; esac
+  ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null)
+  for p in "${plugin_args[@]}"; do
+    id=$(resolve_plugin "$p" | cut -f1)
+    grep -qxF -- "$id" <<<"$ids" || diff+=("--plugin $p (not mounted)")
+  done
+  if [ ${#diff[@]} -gt 0 ]; then
+    local IFS=';'
+    die "box '$NAME' is already up, without what you asked for:${diff[*]/#/ }. omabox down $NAME first, or omabox up --new for a box of your own"
+  fi
+  say "box '$NAME' is already up"
+  [ "$json" = 0 ] || box_json
 }
 
 cmd_up() {
@@ -952,10 +980,14 @@ cmd_up() {
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
+  local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--stock-bar|--systemd|--xwayland|--no-shell)
+        given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
       --size) optarg "$@"; size=$2; shift ;;
       --workspace) optarg "$@"; ws=$(ws_check "$2") || die "--workspace: 1-99, special (the scratchpad, SUPER+S) or special:NAME, got $2"; shift ;;
       --new) new=1 ;;
@@ -1188,9 +1220,11 @@ cmd_up() {
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" \
+    --argjson xwayland "$xwayland" --argjson shell "$shell" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
+      xwayland: ($xwayland == 1), shell: ($shell == 1),
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
@@ -1359,7 +1393,8 @@ cmd_up() {
     setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
   fi
   local screen; screen=$(box_screen); say "box '$NAME' up (${screen#* }) in $D"
-  [ $new = 0 ] || echo "$NAME"
+  if [ $json = 1 ]; then box_json
+  elif [ $new = 1 ]; then echo "$NAME"; fi
 }
 
 # What `up` needs from install.sh: the helpers, and an aquamarine with the soname the box's Hyprland
@@ -1496,9 +1531,10 @@ setup_unlink() {
 SKILL_DIRS=(.agents .claude .codex .pi/agent .hermes)
 
 setup_user() {
-  # A system install (a package: /usr/bin/omabox is the command) needs no link of its own.
+  # A system install (a package: /usr/bin/omabox is the command) needs no link of its own; one left
+  # from a checkout is said, and offered to go (finding 133).
   case $ROOT in
-    /usr/*) ;;
+    /usr/*) setup_old_link ;;
     *) setup_link "$ROOT/bin/omabox" "$HOME/.local/bin/omabox"; echo "$HOME/.local/bin/omabox -> bin/omabox" ;;
   esac
   local dir linked=()
@@ -1510,13 +1546,14 @@ setup_user() {
   done
   echo "agent skill 'omabox' -> ${linked[*]} (skills/)"
   # The bar widget: only ~/.config/omarchy/plugins holds third-party plugins (Omarchy's shell, finding
-  # 126), so a link per user; it stays off until `omarchy plugin enable chaves.omabox`.
+  # 126), so a link per user; setup_widget offers to put it in the bar.
   setup_link "$ROOT/plugin" "$HOME/.config/omarchy/plugins/chaves.omabox"
-  echo "bar widget chaves.omabox -> ~/.config/omarchy/plugins (enable: omarchy plugin enable chaves.omabox)"
+  echo "bar widget chaves.omabox -> ~/.config/omarchy/plugins"
   # Where `omabox config` keeps the settings. The widget watches the file, and a watch only sees the
   # file appear if its directory already exists (finding 72).
   mkdir -p "$HOME/.config/omabox"
   case $ROOT in /usr/*) ;; *) case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "note: add ~/.local/bin to PATH" ;; esac ;; esac
+  setup_widget
   setup_guard
   local want
   if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then
@@ -1524,8 +1561,65 @@ setup_user() {
       echo "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs: omabox setup --aquamarine"
     elif [ "$AQ_KIND" = private ] && [ "${AQ_VER#*@}" != "$AQ_BUILD" ]; then
       # Built by an older omabox (finding 132): it lacks a patch omabox carries now.
-      echo "note: the aquamarine build in ${AQ_LIB%/lib} is older than this omabox's (it lets interactive boxes keep keys held when focus leaves): omabox setup --aquamarine"
+      echo "note: the aquamarine build in ${AQ_LIB%/lib} is older than this omabox's (it lacks the fix for keys held when an interactive box loses focus): omabox setup --aquamarine"
     fi
+  fi
+}
+
+# The bar widget in the user's bar (finding 133): asked in a terminal, yes by default, a "no"
+# remembered as the guard's is. As `omarchy plugin add` does: the shell rescans its plugins dir
+# first, and enabling waits for it to know the widget (the rescan is not done when it returns).
+setup_widget() {
+  grep -qs '"chaves.omabox"' "$HOME/.config/omarchy/shell.json" && { echo "bar widget: on in your bar"; return 0; }
+  command -v omarchy >/dev/null || return 0
+  local declined=$HOME/.config/omabox/widget-declined yn out i
+  if [ -e "$declined" ]; then
+    echo "bar widget: not asked (you said no before; rm $declined to be asked again): omarchy plugin enable chaves.omabox"
+  elif [ -t 0 ] && [ -t 1 ]; then
+    read -r -p "Show the omabox widget in your bar? [Y/n] " yn
+    if [[ $yn = [nN]* ]]; then
+      mkdir -p "$(dirname "$declined")" && date -Is > "$declined"
+      return 0
+    fi
+    omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+    for i in $(seq 20); do
+      out=$(omarchy plugin enable chaves.omabox 2>&1) && { echo "$out"; return 0; }
+      [[ $out == *"is not known"* ]] || break
+      sleep 0.2
+    done
+    echo "${out:-omarchy plugin enable failed}"
+    echo "the widget is not on (see above): omarchy plugin enable chaves.omabox; the rest of the setup goes on"
+  else
+    echo "bar widget: not asked (no terminal): omarchy plugin enable chaves.omabox"
+  fi
+}
+
+# ~/.local/bin/omabox from a checkout, met by a system install's setup (finding 133). Omarchy puts
+# ~/.local/bin after /usr/bin, so the package's runs, but a PATH with it first (the user's own rc)
+# keeps running the checkout, the bar widget's `omabox` included. A link is offered to go, in a
+# terminal, yes by default; anything else there is only said.
+setup_old_link() {
+  local l=$HOME/.local/bin/omabox to yn
+  [ -L "$l" ] || [ -e "$l" ] || return 0
+  if [ -L "$l" ]; then
+    to=$(readlink -f -- "$l") || to=$(readlink -- "$l")
+    [ "$to" != "$(readlink -f -- "$ROOT/bin/omabox")" ] || return 0
+  fi
+  printf '\n==> %s\n' "An omabox in ~/.local/bin"
+  if [ ! -L "$l" ]; then echo "$l is a file of its own, not this omabox ($ROOT)."
+  elif [ ! -e "$l" ]; then echo "$l links to $(readlink -- "$l"), which is gone."
+  else echo "$l links to $to, not this omabox ($ROOT)."; fi
+  if [ "$(command -v omabox)" = "$l" ]; then
+    echo "It comes first on your PATH: \`omabox\` (the bar widget's too) runs it, not this one."
+  else
+    echo "Your PATH finds this one first, but a PATH with ~/.local/bin first would run that one."
+  fi
+  [ -L "$l" ] || return 0
+  if [ -t 0 ] && [ -t 1 ]; then
+    read -r -p "Remove the link? [Y/n] " yn
+    if [[ $yn = [nN]* ]]; then echo "kept $l"; else rm -- "$l"; echo "removed $l"; fi
+  else
+    echo "not asked (no terminal): rm $l"
   fi
 }
 
@@ -4202,11 +4296,13 @@ cmd_config() {
   case ${#args[@]} in
     0)
       if [ $json = 1 ]; then
-        # Plus, read-only, whether boxes can confirm a close (finding 125): the widget's switch says so.
+        # Plus, read-only, whether boxes can confirm a close (finding 125): the widget's switch says so;
+        # and this omabox's version, which a widget left running from before an upgrade compares with
+        # its own (finding 133).
         local avail=true want
         if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null && [ "$AQ_FIXED" = 0 ]; then avail=false; fi
         for k in "${CONF_KEYS[@]}"; do printf '%s\t%s\n' "$k" "$(conf_get "$k")"; done |
-          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s --argjson a "$avail" 'add + {"confirm-close-available": $a}'
+          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s --argjson a "$avail" --arg v "$(cat "$ROOT/VERSION")" 'add + {"confirm-close-available": $a, version: $v}'
       else
         for k in "${CONF_KEYS[@]}"; do echo "$k=$(conf_get "$k")"; done
       fi ;;
@@ -4277,6 +4373,7 @@ cmd_down() {
     # Nor, when it decided on an agent that exited, a box its session took over meanwhile (take_over).
     if [ -n "${DOWN_IF_AGENT_GONE:-}" ] && agent_alive; then exec {lock}>&-; continue; fi
     local p; p=$(peek_pid) && kill "$p" 2>/dev/null   # its peek window, if one is open
+    local was_interactive=0; [ "$(meta mode)" != interactive ] || was_interactive=1
     if ! kill_box; then rc=1; exec {lock}>&-; continue; fi
     # Its reaper, unless that is us: nothing may be left running for a box that is gone.
     for p in $(pgrep -f "^(/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox") _reap $(re_quote "$NAME") "); do
@@ -4284,9 +4381,36 @@ cmd_down() {
     done
     rm_box
     exec {lock}>&-
+    # (A subshell: a host that does not answer must not fail the down.)
+    [ $was_interactive = 0 ] || (submap_release) >/dev/null 2>&1 || true
     say "box '$NAME' down"
   done
   return $rc
+}
+
+# The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it).
+box_json() {
+  local state=dead peeking=false keys=false
+  box_alive && state=up
+  peek_pid >/dev/null && peeking=true
+  [ ! -f "$D/keys-to-box" ] || keys=true
+  jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys \
+    '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
+      bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null),
+      hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
+    jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
+}
+
+# After an interactive box went (finding 134): the host out of the "omabox" submap once no interactive
+# box is left. The host's hooks end it when focus leaves a box window, but a config reload there
+# drops them and the submap's binds while keeping the submap (finding 118), and only a box's reaper
+# puts them back: with the last box gone, nothing would, and every bind of the user's would stay dead.
+submap_release() {
+  local n
+  for n in $(list_names); do
+    select_box "$n"; [ "$(meta mode)" != interactive ] || ! box_alive || return 0
+  done
+  host_hyprctl eval 'if hl.get_current_submap() == "omabox" then hl.dispatch(hl.dsp.submap("reset")) end' >/dev/null
 }
 
 # --json is for the bar widget (plugin/): one array, a single pass, with peek state.
@@ -4295,15 +4419,7 @@ cmd_ls() {
   if [ "${1:-}" = --json ]; then
     for n in $(list_names); do
       select_box "$n"
-      local state=dead peeking=false keys=false
-      box_alive && state=up
-      peek_pid >/dev/null && peeking=true
-      [ ! -f "$D/keys-to-box" ] || keys=true
-      jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys \
-        '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
-          bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null),
-          hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
-        jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
+      box_json
     done | jq -s -c .
     return
   fi

@@ -49,14 +49,17 @@ it, so the real desktop saw no window at all (`docs/demo.sh --video` makes the d
 git clone https://github.com/diogochaves/omabox && cd omabox
 ./install.sh                            # packages (sudo only if some are missing), aquamarine's fix, tools, links
 ./install.sh --check                    # the same, then start a box, screenshot it, tear it down
-omarchy plugin enable chaves.omabox     # the bar widget
 ```
 
 `install.sh` then runs `omabox setup`, which links `~/.local/bin/omabox`, the agent skill (wherever
 Omarchy puts its own skills: `~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and
-the bar widget, and asks whether to turn on the [agent guard](#the-agent-guard). **Update** with `git pull && ./install.sh`;
+the bar widget, and asks whether to put the widget in your bar and to turn on the
+[agent guard](#the-agent-guard) (or: `omarchy plugin enable chaves.omabox`, `omabox guard on`). **Update** with `git pull && ./install.sh`;
 run it after a Hyprland upgrade too: a private aquamarine whose soname Hyprland no longer links is
-skipped for the system's (`omabox --version` says which one boxes use).
+skipped for the system's (`omabox --version` says which one boxes use). **From a checkout to the
+package** (once Omarchy's repository has it): `omabox setup --remove` in the checkout first; if you
+forget, the package's `omabox setup` finds the checkout's `~/.local/bin/omabox` and offers to remove
+it. After an upgrade the bar runs the old widget until the shell restarts; its panel says so.
 
 <details>
 <summary><b>Remove</b></summary>
