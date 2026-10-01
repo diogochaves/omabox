@@ -183,8 +183,98 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - `shell call ID METHOD ARG`: a function of a loaded panel/overlay/menu plugin (`unknown` when there
   is none).
 - `shell listPlugins` (JSON: id, kinds, enabled), `shell listShellConfig`, `shell ping`.
+- Bar widgets: `shell moveBarWidget ID PLACEMENT`, `shell putBarWidget ID PLACEMENT` (enable and place,
+  unless it is on the bar already), `shell setBarWidget ID KEY VALUE_JSON SELECTOR`, where PLACEMENT is
+  `'{"section":"left","after":"omarchy.clock"}'` (`before`, `index`) and SELECTOR `'{}'` or
+  `'{"section":"right","index":2}'`. Plugins: `shell enablePlugin ID PLACEMENT`, `shell
+  setPluginEnabled ID true|false`, `shell rescanPlugins`. Also `shell reloadConfig`, `shell
+  debugBarGeometry`, `shell togglePanelAt SECTION INDEX`.
 - A plugin's own `IpcHandler` answers to its `target` (a panel's `ipcTarget`, e.g. `omarchy.audio
   toggle`: open, close, show, hide, toggle). An unknown target or method prints `Target not found.` / `Function not found.`.
+
+## Testing a shell plugin
+
+The checks a plugin's own checklist asks for "on a live desktop", in a box. `omabox up --plugin
+PATH` (add `--stock-bar` for Omarchy's default bar, `--net isolated` when it starts or probes local
+servers), then:
+
+- **Loaded?** `up` and `restart-shell` print a warning for a plugin the shell did not load (its
+  validator's message, or the shell's QML error); `omabox ls --json` has its `plugin_status`. A panel,
+  menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`.
+- **Edits**: `omabox restart-shell` (the mount is live; the shell's own file watcher is off in a
+  box, so nothing reloads by itself). A `keepLoaded` plugin or a service needs a restart on any
+  desktop: Omarchy keeps the loaded instance across its hot reload.
+- **Open and close**: `omabox run -- omarchy-shell shell summon ID ['{"payload":1}']` (a bar widget
+  takes no payload), `shell hide ID`, `shell toggle ID`; the user's ways to close it are keys and
+  clicks: `keys --wait Escape`, a click outside, a click on the widget again. `omabox wait layer NS
+  --gone`, then which window has focus: `omabox lua 'hl.get_active_window()'`.
+- **Settings and placement**, through the box's shell (the IPC list above): `omarchy-shell shell
+  setBarWidget ID KEY VALUE_JSON '{}'` (kept in the widget's entry in the bar layout),
+  `moveBarWidget ID '{"section":"left","after":"omarchy.clock"}'`, `setPluginEnabled ID false`. Or
+  edit the box's `$(omabox path)/home/.config/omarchy/shell.json`: its shell applies it at once.
+- **A vertical or bottom bar**: `"bar": {"position": "left"}` (`right`, `bottom`) in that file.
+- **Data states** (missing tool, signed out, empty, malformed output, slow, failing): a stub CLI
+  in `$(omabox path)/home/.local/bin` (first on the box's PATH, the bar's included), offline with
+  `--net isolated`.
+- **Theme**: `omabox run -- omarchy-theme-set NAME` (names: `omabox run -- omarchy-theme-list`),
+  `omabox wait still`, `omabox shot`.
+- **Under a replacement bar**: Omarchy gives a widget hosted by a third-party bar no service; check it
+  under the built-in bar too.
+- **Processes it starts** (servers, helpers): look before `omabox down`, which kills everything in
+  the box and so hides a leak. After stopping them, after `restart-shell` and after
+  `omabox run -- omarchy plugin disable ID`: `omabox run -- ps -eo pid,pgid,stat,args --forest`.
+  A server it starts is up when `omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/` exits 0.
+- **The install path** (how users get it): from the checkout (mounted: the repo you ran `up` from,
+  or `--ro-bind DIR`), `omabox run -- omarchy plugin add /abs/checkout --yes --enable`. It clones the
+  committed HEAD (not your uncommitted edits) into the box HOME, validates it and places the widget
+  in the box's bar. Not in a box that mounts it with `--plugin`: there its id is taken. Then
+  `omabox run -- omarchy plugin remove ID --yes`, and nothing of it should be left in the box's
+  `shell.json` or plugins dir.
+- **Not in a box**: several monitors, a scale other than 1, the lock screen, real devices.
+
+## Testing an app as a desktop app
+
+- **From the launcher** (desktop entry, icon, app id): put `myapp.desktop` in
+  `$(omabox path)/home/.local/share/applications/`, its icon in
+  `.../home/.local/share/icons/hicolor/SIZE/apps/`, and, when `Exec` names a command, a wrapper of
+  that name in `.../home/.local/bin` that runs your build. The launcher sees new entries without a
+  restart. `omabox keys --wait super+alt+space`, `omabox keys --wait -t myapp`, a shot, `omabox keys
+  Return`, `omabox wait window myapp`; `omabox windows --json` has the class to compare with the
+  entry's name (`StartupWMClass`), and `omabox log apps` what the launcher ran. A launcher start goes
+  through omabox's `uwsm-app` stand-in: a plain process, without the user's uwsm environment.
+- **Theme switch while it is open**: `omabox run -- omarchy-theme-set NAME`, `omabox wait still`,
+  `omabox shot --window myapp`. The colours are in the box's
+  `~/.local/state/omarchy/current/theme/colors.toml`; `omarchy-theme-set` replaces that whole
+  directory (`rm -rf`, then `mv`), so an app watching a file or the directory itself loses track:
+  watch `current/`. A malformed theme: edit the box's copy of that file.
+- **Fresh profile, first run**: every new box. A state you reach once and test from often: `omabox
+  save NAME`, then `up --from NAME`.
+- **Focus loss**: open another window (`omabox run -d -- foot`) or the Omarchy menu (`keys
+  super+space`) while the app holds a drag (`pointer -- down`, ..., `up`), then come back.
+- **A demo or README capture**: shots of a box are clean (a fresh HOME, no notifications of the
+  user's). Video: `omabox run -- sh -c 'setsid wf-recorder -y -f ~/demo.mp4 >~/wf.log 2>&1 &'`, act,
+  then `omabox run -- pkill -INT -x wf-recorder`. It finishes on its next frame, and a still screen
+  sends none: `omabox pointer -- move X Y`, then `omabox wait cmd -- sh -c '! pgrep -x wf-recorder'`.
+  The file is `$(omabox path)/home/demo.mp4`; frames come only when the screen changes, so `ffmpeg -i
+  demo.mp4 -vf fps=30 out.mp4` for a steady rate.
+- **The package itself** (install, upgrade, removal, pacman hooks): not in a box (a read-only `/usr`,
+  no pacman). A VM, or ask the user.
+
+## Reviewing an Omarchy change
+
+- Two boxes side by side: the change and the release it changes. Check the change out in a worktree
+  (`git fetch origin pull/123/head:pr-123`, `git worktree add ../omarchy-pr-123 pr-123`), never by
+  switching the user's checkout. Then `omabox up pr --omarchy ../omarchy-pr-123` and `omabox up
+  base`, and run every step in both (`-b pr`, `-b base`).
+- A change you did not write runs as the user in the box: the box keeps it off the desktop and away
+  from the user's HOME, but it is not a sandbox. `--net isolated` keeps it off the network too.
+- Hardware-driven UI (volume, brightness, battery) has no hardware in a box: drive the shell part
+  through its own command or IPC, e.g. the OSD with `omabox run -- omarchy-osd -i volume-high -p 40`,
+  then `omabox shot`. When the changed script itself calls `wpctl` or `brightnessctl`, a stub of that
+  name in `$(omabox path)/home/.local/bin` answers it.
+- Edits to the tree: `omabox restart-shell` (the shell; `keepLoaded` plugins, such as the OSD,
+  notifications, the menu and the lock, keep their old code until then) or `omabox hyprctl reload`
+  (the config).
 
 ## Showing the user
 

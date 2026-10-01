@@ -640,6 +640,9 @@ t_unit_version() {
   check_match "...and its Settings face" "pluginVersion: \"$v\"" "$(grep pluginVersion "$ROOT/plugin/Panel.qml")"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
   check_eq "config --json names it, for a widget left from before an upgrade (finding 133)" "$v" "$("$CLI" config --json | jq -r .version)"
+  # Agent Skills hosts cap a skill's description at 1024 characters (it grows with each trigger).
+  check "the skill's description is at most 1024 characters" \
+    test "$(sed -n 's/^description: //p' "$ROOT/skill/SKILL.md" | head -n 1 | tr -d '\n' | wc -c)" -le 1024
   if command -v omarchy-plugin-validate >/dev/null; then
     check "the widget passes omarchy-plugin-validate" omarchy-plugin-validate "$ROOT/plugin"
   else
