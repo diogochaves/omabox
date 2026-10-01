@@ -2488,6 +2488,20 @@ the designs here were measured in boxes and built for a contained desktop, and n
     launcher started is started again when it dies of a signal, not when it quits. Either restart
     after the other leaves one shell (`t_omarchy_restart`).
 
+132. **Keys held when an interactive box loses focus stayed down in it** (2026-10-01, from a
+    comparison with omadev). aquamarine's Wayland backend listens only to `wl_keyboard.key` and
+    `modifiers`, not `leave`, so a key down when the host moves focus off the box window (SUPER+1 on
+    the host, focus-follows-mouse) is released where focus is by then, and the box never hears it.
+    Seen in a stand-in host (finding 26): SUPER held in the box while focus went to the stand-in's
+    foot, released there; back in the box, `w` closed the box's foot (SUPER+W) instead of typing. A
+    control with no focus change typed `w`. A held letter would repeat in the box's app the same way.
+    `patches/aquamarine/` carries the fix, which `setup --aquamarine` applies to `AQ_COMMIT`: the
+    keys reported pressed are tracked and released on `leave`, with a `modifiers` event that keeps
+    only the locks; keys down on `enter` are not pressed (they were pressed for something else). It
+    keeps the public header as it is, so the build stays a drop-in for the system's soname. A build
+    records `AQ_BUILD` (`7bb8bdf4+keys`); `setup` says when the private build is older, and
+    `setup --aquamarine` rebuilds it. Boxes on the system's aquamarine keep the bug until a release has
+    the fix (UPSTREAM.md; the PR text is prepared). Test: `t_held_keys` (fails on the old build).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

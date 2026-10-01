@@ -3315,6 +3315,48 @@ t_keys_to_box() {
   ob down "$B" >/dev/null
 }
 
+# Keys held when focus leaves an interactive box (finding 132), in a stand-in host (finding 26): SUPER
+# held down in the box while the stand-in's focus moves to its foot, released there. aquamarine never
+# heard the release, so the box's Hyprland kept SUPER down and a later W was SUPER+W (closed the window).
+# omabox's aquamarine build releases what is held when the keyboard leaves.
+t_held_keys() {
+  local B=$P-hk
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  local in=("$CLI" run -b "$B" -- "$CLI")
+  # (Asked of this omabox: the stand-in's own sees the build it binds at /opt/omabox/lib, not its name.)
+  if ! ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+keys'; then
+    skip "a key held when focus leaves an interactive box is released there" "not omabox's aquamarine build (omabox setup --aquamarine)"
+    ob down "$B" >/dev/null; return
+  fi
+  "${in[@]}" up hk --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  ob run -b "$B" -d -q -- foot
+  # What the box's foot is given, byte by byte, in its /tmp.
+  "${in[@]}" run -b hk -d -q -- foot --app-id=omabox.typed sh -c 'stty raw -echo; dd bs=1 of=/tmp/typed 2>/dev/null'
+  # shellcheck disable=SC2329 # called through until_ok
+  ready() { ob hyprctl -b "$B" -j clients | jq -e 'any(.class == "foot")' >/dev/null &&
+    "${in[@]}" hyprctl -b hk -j clients | jq -e 'any(.class == "omabox.typed")' >/dev/null; }
+  until_ok 10 ready
+  local pa
+  pa=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/hk/run " && { echo "$p"; break; }; done')
+  # shellcheck disable=SC2329
+  focus() { ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = '$1' })" >/dev/null; }
+  # shellcheck disable=SC2329
+  typed() { [ "$("${in[@]}" run -b hk -- cat /tmp/typed 2>/dev/null)" = "$1" ]; }
+  focus "pid:$pa"
+  ob keys -b "$B" -t a >/dev/null
+  check "the box's foot gets a key typed in its window" until_ok 5 typed a
+  # SUPER down in the box (-m), the stand-in's focus moved off it while held (-p waits), released there.
+  ob run -b "$B" -- sh -c 'sleep 3 | /opt/omabox/bin/omabox-keyboard -m super -p 2000' >/dev/null 2>&1 &
+  local kb=$!
+  sleep 0.5; focus class:foot; wait "$kb"
+  focus "pid:$pa"
+  ob keys -b "$B" -t w >/dev/null
+  check "...after SUPER was held while focus left: W is a W, not SUPER+W" until_ok 5 typed aw
+  check "...and the window is still there" bash -c "'$CLI' run -b '$B' -- '$CLI' hyprctl -b hk -j clients | jq -e 'any(.class == \"omabox.typed\")' >/dev/null"
+  "${in[@]}" down --all >/dev/null 2>&1
+  ob down "$B" >/dev/null
+}
+
 # Window selectors and what covers what (finding 81), on hyprctl JSON made up for it: floats above
 # tiled windows whatever their order, later above earlier otherwise, fullscreen and a shown special
 # workspace above the rest; off-screen workspaces, inactive group tabs and unmapped windows.
@@ -3902,7 +3944,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
