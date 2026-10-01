@@ -25,10 +25,9 @@ pair it with [ai-jail](#related-projects).
 
 [![You keep coding while an agent starts its own box and tests an app in it: nothing pops up, nothing takes your focus](docs/media/clip-0.2.0.png)](https://diogochaves.github.io/omabox/docs/media/clip-0.2.0.mp4)
 
-[Watch omabox 0.2.0 in 43 seconds](https://diogochaves.github.io/omabox/docs/media/clip-0.2.0.mp4),
-or the [55 second demo](https://diogochaves.github.io/omabox/docs/media/demo.mp4) of the whole
-workflow. Both were recorded inside omabox: a box played the desktop, with the agent's boxes inside
-it, so the real desktop saw no window at all (`docs/demo.sh --video` makes the demo again).
+[Watch omabox 0.2.0 in 43 seconds](https://diogochaves.github.io/omabox/docs/media/clip-0.2.0.mp4).
+It was recorded inside omabox: a box played the desktop, with the agent's boxes inside it, so the
+real desktop saw no window at all.
 
 ## What you need
 
