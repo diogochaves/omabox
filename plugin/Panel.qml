@@ -652,11 +652,16 @@ Panel {
             }
           }
 
+          // Off and greyed while boxes cannot open their window again (an aquamarine without the fix,
+          // NOTES finding 125): `config --json` says so, read again each time Settings opens.
           SettingSwitch {
+            readonly property bool available: root.settings["confirm-close-available"] !== false
             title: "Confirm before closing"
-            caption: "Closing an interactive box's window asks first; closing it again shuts the box down."
-            checked: root.settings["confirm-close"] === "on"
-            onToggled: root.setSetting("confirm-close", checked ? "off" : "on")
+            caption: available ? "Closing an interactive box's window asks first; closing it again shuts the box down."
+              : "Needs aquamarine's fix for nested Wayland outputs: run omabox setup --aquamarine, then open Settings again."
+            checked: available && root.settings["confirm-close"] === "on"
+            enabled: available
+            onToggled: if (available) root.setSetting("confirm-close", checked ? "off" : "on")
           }
 
           SettingSwitch {
@@ -713,6 +718,8 @@ Panel {
       id: swSwitch
       anchors.verticalCenter: parent.verticalCenter
       checked: sw.checked
+      interactive: sw.enabled
+      opacity: sw.enabled ? 1 : 0.4
       busy: setProc.running
       foreground: root.bar.foreground
       onToggled: sw.toggled()

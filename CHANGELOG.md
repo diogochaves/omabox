@@ -20,6 +20,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 - **Closing an interactive box whose window could not come back now ends it**: with confirm-close
   on, a box that could not open its new window ran on with no window at all. It now ends after 5 s.
+- **The bar widget's "Confirm before closing" switch says when it cannot work**: on an aquamarine
+  without the fix, it read on while no box asked. It is now off and greyed, its caption saying to run
+  `omabox setup --aquamarine`.
 
 ## 0.3.2 — 2026-09-30
 

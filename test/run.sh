@@ -490,7 +490,8 @@ t_unit_config() {
   check_eq "confirm-close yes reads on" confirm-close=on "$(cfg confirm-close yes | tail -1)"
   check_eq "bar-icon auto" bar-icon=auto "$(cfg bar-icon auto)"
   check_fails "bar-icon takes auto or always" env HOME="$h" "$CLI" config bar-icon sometimes
-  check_eq "--json for the widget" '{"workspace":"special:omabox","confirm-close":"on","bar-icon":"auto"}' "$(HOME=$h "$CLI" config --json | jq -c .)"
+  check_eq "--json for the widget" '{"workspace":"special:omabox","confirm-close":"on","bar-icon":"auto"}' \
+    "$(HOME=$h "$CLI" config --json | jq -c 'del(.["confirm-close-available"])')"
   local bad; for bad in 0 100 "3 silent" "special:a'b" "special:" "1;x" "special:$(printf 'x%.0s' {1..33})"; do
     check_fails "workspace '$bad' refused" env HOME="$h" "$CLI" config workspace "$bad"
   done
@@ -2023,6 +2024,16 @@ t_unit_aquamarine() {
     fi
   else
     skip "what needs aquamarine's fix is refused without it" "the system's aquamarine has it"
+  fi
+  # The widget's confirm-close switch reads this (greyed while false).
+  if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
+    check_eq "config --json: confirm-close unavailable without the fix" false \
+      "$(HOME=$d/home OMABOX_AQUAMARINE=system "$CLI" config --json | jq '."confirm-close-available"')"
+  fi
+  if aq_unfixed "$CLI"; then
+    skip "config --json: confirm-close available with the fix" "boxes use an aquamarine without it"
+  else
+    check_eq "config --json: confirm-close available with the fix" true "$(HOME=$d/home "$CLI" config --json | jq '."confirm-close-available"')"
   fi
   check_match "setup with no part" "only --aquamarine so far" "$("$CLI" setup 2>&1)"
   check_match "...an unknown option" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
