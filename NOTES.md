@@ -2503,7 +2503,7 @@ sessions as windows; each was checked in boxes first, and no code was taken from
     (they were pressed for something else). It keeps the public header as it is, so the build stays a
     drop-in for the system's soname. A build records `AQ_BUILD` (`7bb8bdf4+keys`); `setup` says when
     the private build is older, and `setup --aquamarine` rebuilds it. Boxes on the system's aquamarine
-    keep the bug until a release has the fix (UPSTREAM.md; the PR text is prepared). Test:
+    keep the bug until a release has the fix (UPSTREAM.md; not submitted upstream). Test:
     `t_held_keys` (fails on the old build).
 133. **setup and the widget across installs and upgrades** (2026-10-01). Three gaps a package makes
     likely. (1) A `~/.local/bin/omabox` linked by a checkout's setup stays when the user moves to the

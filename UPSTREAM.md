@@ -25,11 +25,12 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   and `aq_unfixed` in the suite, and the mentions in README.md, CONTRIBUTING.md, NOTES "Reproduce",
   the skill's `reference.md` and AGENTS.md's "Developed against". Keep `confirm-close.sh`'s fallback.
 
-## aquamarine: keys held when keyboard focus leaves (not yet submitted)
+## aquamarine: keys held when keyboard focus leaves (not submitted)
 
 - **Needed for:** interactive boxes: a key held when the box's window loses focus stays down in the
   box (NOTES finding 132).
-- **Waiting for:** a PR to hyprwm/aquamarine (text prepared, not posted), then a release with it.
+- **Waiting for:** an aquamarine release that releases held keys on `leave`. omabox does not plan to
+  submit the patch itself; if someone fixes it upstream, check the fix with `t_held_keys`.
 - **Until then:** `patches/aquamarine/0001-*.patch`, applied by `setup --aquamarine` on top of
   `AQ_COMMIT` (`AQ_BUILD` names the result). Boxes on the system's aquamarine keep the bug.
 - **Then drop:** the patch, the `git apply` loop in `setup_aquamarine`, `AQ_BUILD` (back to
