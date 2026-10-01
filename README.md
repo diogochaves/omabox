@@ -207,7 +207,8 @@ them, and `omabox config KEY default` puts one back.
 - `confirm-close on`: closing an interactive box's window asks first. The box opens a new window
   where you are, with Omarchy's menu ("Shut down" / "Keep it running"); closing that window too is a
   yes. It applies to running boxes as well. Per box: `--confirm-close` or `--no-confirm-close` on
-  `up`.
+  `up`. It needs aquamarine's fix (`omabox setup --aquamarine`): without it, boxes leave it off and
+  the bar widget greys its switch out.
 - `bar-icon`: `always` (the default) keeps the widget's icon in the bar with no box up, dimmed, so
   its settings are a click away; `auto` shows it only while boxes exist.
 
@@ -465,7 +466,8 @@ dir), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, 
   theirs reached a model here.
 - Headless boxes on NVIDIA and confirm-close need aquamarine's fix (PR #415, built into
   `build/prefix` by `install.sh`, `omabox setup --aquamarine`) until a release ships it; without it
-  `up` refuses them, saying what to run. What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
+  `up` refuses them, saying what to run. What omabox carries until upstream releases land, and what
+  to drop then: `UPSTREAM.md`.
 - A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
   `omabox shot` works with its window off screen, just at that rate. Not after you closed its window
   and kept the box running (`confirm-close`): the new window is only drawn while it is on screen.

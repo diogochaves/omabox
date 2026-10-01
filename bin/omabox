@@ -4035,8 +4035,11 @@ cmd_config() {
   case ${#args[@]} in
     0)
       if [ $json = 1 ]; then
+        # Plus, read-only, whether boxes can confirm a close (finding 125): the widget's switch says so.
+        local avail=true want
+        if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null && [ "$AQ_FIXED" = 0 ]; then avail=false; fi
         for k in "${CONF_KEYS[@]}"; do printf '%s\t%s\n' "$k" "$(conf_get "$k")"; done |
-          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s 'add'
+          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s --argjson a "$avail" 'add + {"confirm-close-available": $a}'
       else
         for k in "${CONF_KEYS[@]}"; do echo "$k=$(conf_get "$k")"; done
       fi ;;

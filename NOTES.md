@@ -2374,6 +2374,14 @@ the designs here were measured in boxes and built for a contained desktop, and n
     second run built nothing. On stock: the NVIDIA refusal, `--confirm-close` refused, the settings'
     confirm-close turned off (one close ended the box, cleared), a box with the flag forced on ended
     6 s after its close. `t_unit_aquamarine` covers the choice and the refusals.
+    The bar widget's "Confirm before closing" switch ran `config confirm-close on`, which succeeds (the
+    note is on stderr, which the widget shows only for a failure), so it read on while no box asked.
+    `config --json` now has a read-only `confirm-close-available`; the widget, which reads it each
+    time the panel or Settings opens, shows the switch off and greyed, not clickable, with "Needs
+    aquamarine's fix ...: run omabox setup --aquamarine" as its caption. Checked by hand in a box (stub
+    `omabox`, as `t_widget` has it): unavailable, a click on the switch sent nothing; available after
+    reopening Settings, on, and a click sent `config confirm-close off`. The suite checks the CLI's
+    field only: no key opens Settings, and the gear's place depends on the bar layout a box copies.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
