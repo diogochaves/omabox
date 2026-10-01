@@ -2276,6 +2276,16 @@ shot_point() {
   fi
 }
 
+# shot_path OUT: OUT's directory made, OUT and FILE (OUT.part, renamed into place) set, and FILE
+# written once and removed, so a path that cannot be written stops here, saying why.
+shot_path() {
+  local err
+  mkdir -p -- "$(dirname -- "$1")" || die "shot: cannot make the directory $(dirname -- "$1")"
+  out=$(readlink -f -- "$1") file=$out.part
+  err=$( { : > "$file"; } 2>&1 ) || die "shot: cannot write $out: ${err##*: }"
+  rm -f -- "$file"
+}
+
 cmd_shot() {
   local name="" out="" geom="" sels=() fit="" tofd="" as=""
   while [ $# -gt 0 ]; do
@@ -2296,8 +2306,9 @@ cmd_shot() {
     shift
   done
   local g=""; [ -z "$geom" ] || g=$(geom_parse "$geom") || die "shot: -g is \"X,Y WxH\" (or X,Y,W,H), got $geom"
-  select_box "$name"; need_box
-  # file: what is written and read back; out: its name, for the caller.
+  # file: what is written and read back; out: its name, for the caller. A path that cannot be written
+  # is said so before anything is captured (issue #63): a failed write read as a failed capture, and
+  # an interactive box's "no frame" sent the agent to the user for it.
   local file
   if [ -n "$tofd" ]; then
     [ -n "$as" ] && [ -z "$out" ] || die "shot: --to-fd goes with --as NAME, without -o"
@@ -2305,10 +2316,10 @@ cmd_shot() {
     out=$as file=/dev/fd/$tofd
   else
     in_jail && die "shot: a jailed agent's shot is written by its own omabox (--to-fd), never at a path here"
-    [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png
-    mkdir -p -- "$(dirname -- "$out")" || die "shot: cannot make the directory $(dirname -- "$out")"
-    out=$(readlink -f -- "$out") file=$out.part
+    [ -z "$out" ] || shot_path "$out"
   fi
+  select_box "$name"; need_box
+  if [ -z "$tofd" ] && [ -z "$out" ]; then shot_path "${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png"; fi
   # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
   # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
   # With --window, -g is in the window's own coordinates (grim crops the window's capture), and the

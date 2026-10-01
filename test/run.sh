@@ -1407,6 +1407,19 @@ t_unit_shot_hidden() {
   out=$(shot_msg)
   check_match "a window confirm-close reopened: not drawn while hidden, ask the user" "confirm-close.*not drawn while hidden.*ask the user" "$out"
   check_match "...never switch the user's workspace for a frame" "Never switch the user's workspace or focus" "$out"
+  # Issue #63: an -o that cannot be written is said so before anything is captured, in either mode
+  # (an interactive box said "no frame ... ask the user", a headless one "grim failed").
+  local ro=$TMP/ro m; mkdir -p "$ro"; chmod 555 "$ro"
+  for m in interactive headless; do
+    echo "{\"mode\": \"$m\", \"workspace\": \"9\", \"drawn_hidden\": true}" > "$d/box.json"
+    out=$(bash -c 'source "$1"; BOXES=$2; need_box() { :; }; on_box() { echo "on_box $*"; return 1; }; cmd_shot -b oldbox -o "$3/x.png"' \
+      _ "$TMP/lib/bin/omabox" "$TMP/boxes" "$ro" 2>&1)
+    check_match "-o in a dir that cannot be written ($m box): said so" "^omabox: shot: cannot write $ro/x.png: Permission denied$" "$out"
+    check_fails "...before the box is asked for anything" grep -q on_box <<<"$out"
+  done
+  check_fails "...and no partial PNG left" test -e "$ro/x.png.part"
+  check_match "-o where no directory can be made" "cannot make the directory /proc/self/omabox-x" "$("$CLI" shot -o /proc/self/omabox-x/y.png 2>&1)"
+  chmod 755 "$ro"
 }
 
 # The uwsm stand-in's logout kills every process it can see: never outside a box. Checked in a bare
