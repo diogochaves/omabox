@@ -3,6 +3,20 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`omabox up` for someone Omarchy has not set a theme for yet** (an account that never logged in)
+  now says so and what to do, before making anything. It died on a bare `cp: cannot stat` and left
+  the box's directories behind.
+- **`omabox setup --remove` leaves no empty directories** of omabox's behind.
+- **The tools link only what they use** when built with a distribution's flags (`libm` stayed
+  linked, unused, in three of them).
+- **The test suite says once when no box can start here** (a headless box on NVIDIA without
+  aquamarine's fix), instead of failing every box test, and finds your aquamarine build from an
+  installed omabox in the tests that start a box inside a box or from a save.
+
 ## 0.4.0 — 2026-10-01
 
 omabox is ready to be packaged: it runs read-only from `/usr/lib/omabox`, `omabox setup` does what
