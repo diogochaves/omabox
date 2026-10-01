@@ -3,6 +3,25 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## 0.4.4 — 2026-10-01
+
+An agent inside ai-jail 2.6.2 drives boxes again, and each command has its own help.
+
+### Added
+
+- **`omabox help CMD` and `omabox CMD --help`** print one command's options and the notes about it,
+  not the whole help (`omabox help shot` is about a twelfth of `omabox help`). The agent skill sends
+  agents there, and tells them to check with text (`windows`, `wait`, `events`, `log --grep`) before
+  taking a screenshot, and to take the smallest one that shows what they need.
+
+### Fixed
+
+- **The ai-jail broker works with ai-jail 2.6.2.** ai-jail 2.6.2 passes bwrap's options through a
+  memfd (`bwrap --args`) to keep `--env` values off the process list, and the broker, which reads a
+  jail's limits from bwrap's command line, refused every command from such a jail ("cannot read the
+  jail's policy: unknown bwrap option --args"). It now reads them from ai-jail's memfd. Older
+  ai-jail versions work as before.
+
 ## 0.4.3 — 2026-10-01
 
 Plugin and app work in a box: `up --plugin` and `restart-shell` say why a plugin is not in the bar,

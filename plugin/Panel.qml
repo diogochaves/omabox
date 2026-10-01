@@ -64,7 +64,7 @@ Panel {
   // The card's two faces, as omawin's: the box list, and Settings behind the gear at the top right,
   // which Back (or Esc) leaves.
   property string face: "list"
-  readonly property string pluginVersion: "0.4.3"   // manifest.json's and VERSION
+  readonly property string pluginVersion: "0.4.4"   // manifest.json's and VERSION
   // A shell does not reload a plugin when its files change (NOTES finding 41): after an upgrade the
   // bar runs this widget as it was, against the new CLI, until the shell restarts (finding 133).
   // `config --json` names the CLI's version; a difference is said once per version, dismissable.

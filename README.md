@@ -411,7 +411,7 @@ These projects are good at what it does not do.
   Akita, fences the agent in: bubblewrap, Landlock and seccomp on Linux, `sandbox-exec` on macOS, so
   your home, keys and cloud credentials are out of reach. ai-jail answers what the agent can touch,
   omabox where it draws, and they stack. To run a build you do not trust yet with the box's screen as
-  its only display (tested with ai-jail 2.2.0 and omabox 0.2.0):
+  its only display (tested with ai-jail 2.6.2 and omabox 0.4.4):
 
   ```bash
   omabox up
@@ -436,7 +436,7 @@ These projects are good at what it does not do.
   box is running code in it, so that is what stops a box from being a way out of the jail. Not for a
   jailed agent: `omabox host`, `peek`, interactive boxes, `guard`, `config` changes. A shot is
   written into the jail by its own `omabox`; the broker never opens a path the jail names.
-  `omabox broker off` turns it off.
+  `omabox broker off` turns it off. Checked with ai-jail 2.2.1 and 2.6.2.
 - **[omarchy-in-omarchy](https://github.com/jankeesvw/omarchy-in-omarchy)** is a disposable Omarchy
   in QEMU/KVM (8 GB of RAM by default, minutes on its first start): for what needs a whole machine,
   an installer or an `omarchy-update` migration, system services, audio, suspend, a reboot, where a
@@ -444,8 +444,8 @@ These projects are good at what it does not do.
 - **[Cua](https://github.com/trycua/cua)** ([cua.ai](https://cua.ai)) is for the opposite: agents
   that use your own desktop and apps, across macOS, Windows, Linux and Android.
 
-Written in September 2026 from each project's own pages; they move on their own, so check theirs.
-The longer comparison is on [omabox.app](https://omabox.app/#compare).
+Checked on 2026-10-01 against each project's own pages; they move on their own, so check theirs.
+The longer comparison is on [omabox.app](https://omabox.app/compare).
 
 ## How it works
 
