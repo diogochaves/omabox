@@ -2561,6 +2561,15 @@ sessions as windows; each was checked in boxes first, and no code was taken from
     Tried in a stand-in host: our exec rule's workspace (9) and no-focus won, but the window
     floated. The exec rule now says `float = false` too: tiled on its workspace whatever such a rule
     says (`t_submap_release` checks it under such a rule).
+Findings 137 on started from reading Tom Ballard's Omarchy plugin and app projects
+(github.com/tcballard, MIT and Apache-2.0); each was checked in boxes first, and no code was taken
+from them.
+137. **`omarchy-version` in a box** (2026-10-01). Omarchy's asks pacman (`pacman -Q omarchy-dev`, then
+    `omarchy`), and a box binds no `/var`, so it printed nothing and exited 1 (checked in a box: what an
+    agent quoting the tested version hits first). A stand-in in `share/bin` (first on every box PATH,
+    a terminal's bash included) prints `OMABOX_OMARCHY_VERSION`, which `up` reads on the host the same
+    way (inside a box, the box's own); with `--omarchy`, the tree's own script (its git commit). The
+    pacman database stays out of boxes. `t_uwsm_app` (run and a terminal's bash).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

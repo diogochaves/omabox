@@ -2596,6 +2596,10 @@ t_uwsm_app() {
     "$(ob run -b "$B" -- sh -c 'o=$(systemd-run --user --wait -E V=out sh -c "echo \$V; exit 3"); echo "$o $?"')"
   check_match "...a timer says it needs --systemd" "omabox up --systemd" "$(ob run -b "$B" -- systemd-run --user --on-active=1m true 2>&1)"
   check_eq "systemd-cat -t ID writes to ~/ID.log" "hi" "$(ob run -b "$B" -- sh -c 'echo hi | systemd-cat -t omabox-t; cat ~/omabox-t.log')"
+  # omarchy-version (finding 137): Omarchy's asks pacman, which a box has no database for (exit 1).
+  local ov; ov=$(pacman -Q omarchy-dev 2>/dev/null || pacman -Q omarchy 2>/dev/null) || ov=${OMABOX_OMARCHY_VERSION:-}
+  check_eq "omarchy-version says the installed Omarchy's version" "${ov#* }" "$(ob run -b "$B" -- omarchy-version)"
+  check_eq "...in a terminal's bash too (Omarchy's bin is on its PATH)" "${ov#* }" "$(ob run -b "$B" -- bash -ic omarchy-version 2>/dev/null)"
   ob down "$B" >/dev/null
 }
 

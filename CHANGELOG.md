@@ -3,6 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`omarchy-version` works in a box**: it says the installed Omarchy's version (or, with `up
+  --omarchy`, the tree's commit), where it printed nothing and exited 1.
+
 ## 0.4.2 — 2026-10-01
 
 Omarchy's browser bind and its own shell restart work in a box, a box can run an Omarchy checkout

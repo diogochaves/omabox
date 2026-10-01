@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# omabox stand-in for omarchy-version, first on the box's PATH: Omarchy's asks pacman which package is
+# installed, and a box has no /var/lib/pacman, so it printed nothing and exited 1. `up` read it on the
+# host (the same packages, omarchy-dev first) into OMABOX_OMARCHY_VERSION. Another tree (`up
+# --omarchy`): that tree's own, which names its git commit.
+path=${OMARCHY_PATH:-/usr/share/omarchy}
+path=${path%/}
+if [ "$path" != /usr/share/omarchy ] && [ -x "$path/bin/omarchy-version" ]; then exec "$path/bin/omarchy-version" "$@"; fi
+[ -n "${OMABOX_OMARCHY_VERSION:-}" ] || exit 1
+echo "$OMABOX_OMARCHY_VERSION"
