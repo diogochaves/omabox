@@ -2561,7 +2561,7 @@ sessions as windows; each was checked in boxes first, and no code was taken from
     Tried in a stand-in host: our exec rule's workspace (9) and no-focus won, but the window
     floated. The exec rule now says `float = false` too: tiled on its workspace whatever such a rule
     says (`t_submap_release` checks it under such a rule).
-Findings 137 on started from reading Tom Ballard's Omarchy plugin and app projects
+Findings 137-140 started from reading Tom Ballard's Omarchy plugin and app projects
 (github.com/tcballard, MIT and Apache-2.0); each was checked in boxes first, and no code was taken
 from them.
 137. **`omarchy-version` in a box** (2026-10-01). Omarchy's asks pacman (`pacman -Q omarchy-dev`, then

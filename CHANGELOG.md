@@ -3,7 +3,12 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.4.3 — 2026-10-01
+
+Plugin and app work in a box: `up --plugin` and `restart-shell` say why a plugin is not in the bar,
+`omabox ls --json` says what a box tested (Omarchy version, theme, each plugin's commit),
+`omarchy-version` works in a box, and the agent skill maps plugin and app steps written for the real
+desktop to boxes, with recipes.
 
 ### Added
 
