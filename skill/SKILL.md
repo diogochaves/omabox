@@ -205,6 +205,13 @@ which); hyprctl stays the installed one (`up` warns when the versions differ). `
 protocols; not DRM/KMS, real monitors, HDR/VRR, multi-GPU, real input devices, suspend or lock
 (`reference.md`).
 
+## An Omarchy change
+
+`omabox up --omarchy ~/code/omarchy` runs that Omarchy checkout in the box instead of
+`/usr/share/omarchy` (as `omarchy dev link` does on a host, without touching the user's): its
+Hyprland config, shell, `bin/` and `OMARCHY_PATH`. Never `omarchy dev link` on the host to test a
+change. Edits show after `omabox restart-shell` or `omabox hyprctl reload`.
+
 ## What is and is not in a box
 
 - Read-only in the box: the repo you ran `omabox up` from (same path), `--ro-bind` and `--plugin` dirs,

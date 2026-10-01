@@ -43,6 +43,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--ro-bind DIR[:DEST]]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell] [--from SAVE]
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
+            [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      a free name, box-1, box-2, ... (printed)
             [--json]                                     the box as ls --json lists it, on stdout
@@ -546,7 +547,10 @@ box_exec() {
         eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
       fi
       cd "$1" && shift
-      p=/opt/omabox/share/bin:/home/sbx/.local/bin; set -f; IFS=:
+      p=/opt/omabox/share/bin:/home/sbx/.local/bin
+      # `up --omarchy`: its bin before the caller'"'"'s dirs, as in the session (finding 135).
+      [ "${OMARCHY_PATH:-/usr/share/omarchy}" = /usr/share/omarchy ] || p=$p:${OMARCHY_PATH%/}/bin
+      set -f; IFS=:
       for d in $OMABOX_CALLER_PATH $PATH; do
         case $d in /*) ;; *) continue ;; esac
         case ":$p:" in *":$d:"*) ;; *) [ -d "$d" ] && p=$p:$d ;; esac
@@ -813,7 +817,7 @@ seed_home() {
   mkdir -p "$h/.local/share/dbus-1/services"
   local shell_json=$HOME/.config/omarchy/shell.json
   if [ "$STOCK_BAR" = 1 ]; then
-    shell_json=/usr/share/omarchy/config/omarchy/shell.json
+    shell_json=${omarchy:-/usr/share/omarchy}/config/omarchy/shell.json
     [ -f "$shell_json" ] || die "--stock-bar: no $shell_json in this Omarchy"
   else
     cp "$HOME/.config/omarchy/shell.toml" "$h/.config/omarchy/" 2>/dev/null || true
@@ -860,9 +864,9 @@ seed_home() {
   seed_copy "$HOME/.local/state/omarchy/toggles/hypr" "$h/.local/state/omarchy/toggles/hypr"
   # Without /etc/skel (an older Omarchy), at least the desktop entries: foot's X-TerminalArgAppId is
   # what makes xdg-terminal-exec pass --app-id, which Omarchy's window rules match (About's float).
-  if [ ! -d "$h/.local/share/applications" ] && [ -d /usr/share/omarchy/applications ]; then
+  if [ ! -d "$h/.local/share/applications" ] && [ -d "${omarchy:-/usr/share/omarchy}/applications" ]; then
     mkdir -p "$h/.local/share/applications"
-    cp /usr/share/omarchy/applications/*.desktop "$h/.local/share/applications/" 2>/dev/null || true
+    cp "${omarchy:-/usr/share/omarchy}"/applications/*.desktop "$h/.local/share/applications/" 2>/dev/null || true
   fi
   # Git's identity only (finding 48): commits and release dry-runs need one. Never the rest of the
   # user's git config (credential helpers, tokens in URLs). A value that is not set is skipped, not a
@@ -960,6 +964,7 @@ up_already() {
   case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
   case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
   case " $given " in *" no-shell "*) [ "$(jq -r '.shell | tostring' "$D/box.json" 2>/dev/null)" = false ] || diff+=("--no-shell (it has the shell)") ;; esac
+  case " $given " in *" omarchy "*) [ "$(meta omarchy)" = "$omarchy" ] || diff+=("--omarchy ${omarchy:-/usr/share/omarchy} (it runs $(meta omarchy | grep . || echo /usr/share/omarchy))") ;; esac
   case " $given " in *" hyprland "*) [ "$(meta hyprland)" = "$hyprland" ] || diff+=("--hyprland $hyprland (it runs $(meta hyprland | grep . || echo "the installed one"))") ;; esac
   case " $given " in *" from "*) [ "$(meta from)" = "$FROM" ] || diff+=("--from $FROM (it started from $(meta from | grep . || echo "no save"))") ;; esac
   ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null)
@@ -981,10 +986,11 @@ cmd_up() {
   local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
+  local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--stock-bar|--systemd|--xwayland|--no-shell)
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--no-shell)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -1003,6 +1009,7 @@ cmd_up() {
       --idle) optarg "$@"; idle=$2; shift ;;
       --from) optarg "$@"; FROM=$2; shift ;;
       --hyprland) optarg "$@"; hyprland=$(hypr_bin "$2") || exit 1; shift ;;
+      --omarchy) optarg "$@"; omarchy=$(omarchy_tree "$2") || exit 1; shift ;;
       --owner) optarg "$@"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
       --stock-bar) STOCK_BAR=1 ;;
       --systemd) systemd=1 ;;
@@ -1060,6 +1067,13 @@ cmd_up() {
         die "up: --hyprland $hyprland is not in this jail's project nor in a folder it was given whole, so it does not go into the box"
       hypr_bind=0
     fi
+    # --omarchy's tree likewise.
+    if [ -n "$omarchy" ] && ! jail_root "$omarchy" >/dev/null; then
+      local top
+      top=$(repo_top) && jail_sees "$omarchy" >/dev/null && [[ $omarchy == "$top"/* ]] ||
+        die "up: --omarchy $omarchy is not in this jail's project nor a folder it was given whole, so it does not go into the box"
+      omarchy_bind=0
+    fi
   fi
   # --hyprland (finding 116): the build's folder, read-only at its own path, refused as --ro-bind's are
   # (a binary right in HOME or /tmp would take all of it along). Not one under /usr: the box has it.
@@ -1068,6 +1082,8 @@ cmd_up() {
     why=$(refuse_dest "${hyprland%/*}") && die "--hyprland: refusing to mount ${hyprland%/*} (the binary's folder) at its own path in a box: $why"
     robinds+=("${hyprland%/*}"$'\t'"${hyprland%/*}")
   fi
+  # --omarchy (finding 135): the tree, read-only at its own path, refused as --ro-bind's are.
+  [ -z "$omarchy" ] || [ "$omarchy_bind" = 0 ] || robinds+=("$omarchy"$'\t'"$omarchy")
   size=$(parse_mode "$size")
   local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
   [ $interactive = 0 ] || idle_s=0
@@ -1219,7 +1235,7 @@ cmd_up() {
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
-    --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" \
+    --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg omarchy "$omarchy" \
     --argjson xwayland "$xwayland" --argjson shell "$shell" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
@@ -1229,18 +1245,32 @@ cmd_up() {
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
+      + (if $omarchy != "" then {omarchy: $omarchy} else {} end)
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
       + (if $agent != "" then ($agent | split(" ") | {agent: (.[0] | tonumber), agent_start: .[1]}) else {} end)
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
           drawn_hidden: true} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
 
+  # /etc/omarchy.conf, which Omarchy's env-bootstrap sources in every bash (the box HOME's .bashrc
+  # included) to set OMARCHY_PATH and put its bin first (finding 135): the host's `omarchy dev link`
+  # wrote it, and box terminals followed it to the host's checkout. A box's own instead: the packaged
+  # Omarchy, or --omarchy's tree. Over the host's file when there is one; else, only for --omarchy, in
+  # a read-only overlay of /etc with the file on top (bwrap cannot add a file to a read-only bind).
+  local etc_args=(--ro-bind /etc /etc)
+  { printf 'export OMARCHY_PATH='; printf '%q\n' "${omarchy:-/usr/share/omarchy}"; } > "$D/omarchy.conf"
+  if [ -e /etc/omarchy.conf ]; then
+    etc_args+=(--ro-bind "$D/omarchy.conf" /etc/omarchy.conf)
+  elif [ -n "$omarchy" ]; then
+    mkdir -p "$D/etc" && cp "$D/omarchy.conf" "$D/etc/omarchy.conf"
+    etc_args=(--overlay-src /etc --overlay-src "$D/etc" --ro-overlay /etc)
+  fi
   # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
   # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in.
   # The host's name in both network modes (finding 54): pasta's own UTS namespace would otherwise
   # name an isolated box pasta-HOST.
   local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
-    --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --ro-bind /etc /etc
+    --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 "${etc_args[@]}"
     --proc /proc --dev /dev --ro-bind /sys /sys
     --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
     --ro-bind "$ROOT/share" /opt/omabox/share
@@ -1271,6 +1301,8 @@ cmd_up() {
   # has none of, so a `run -d` log stayed empty; --env QT_FORCE_STDERR_LOGGING=0 turns it off.
   # OMABOX_HYPRLAND: the build share/start-hyprland.sh starts instead of /usr/bin/Hyprland (finding 116).
   local hypr_env=(); [ -z "$hyprland" ] || hypr_env=(--setenv OMABOX_HYPRLAND "$hyprland")
+  # OMABOX_OMARCHY: the tree share/start-hyprland.sh and session.sh run instead of /usr/share/omarchy.
+  [ -z "$omarchy" ] || hypr_env+=(--setenv OMABOX_OMARCHY "$omarchy")
   # OMABOX_AQUAMARINE=system (finding 125) holds for the boxes a box starts too (the suite's stand-in hosts).
   [ -z "${OMABOX_AQUAMARINE:-}" ] || hypr_env+=(--setenv OMABOX_AQUAMARINE "$OMABOX_AQUAMARINE")
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
@@ -1366,7 +1398,8 @@ cmd_up() {
     # the configured workspace (9 unless changed, finding 70) without focus. (Aquamarine names every nested window "aquamarine"; a class rule
     # would also catch any other nested Hyprland the user runs.) render_unfocused: the host sends the
     # hidden window frame callbacks, so the box keeps drawing and `shot` works without it on screen.
-    host_eval "hl.exec_cmd('bash $(lua_str "$D/launch.sh")', { workspace = '$ws silent', no_initial_focus = true, render_unfocused = true })"
+    # float = false: tiled, whatever another tool's rule for every aquamarine window says (finding 136).
+    host_eval "hl.exec_cmd('bash $(lua_str "$D/launch.sh")', { workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = false })"
   else
     bash "$D/launch.sh" {LOCK}>&- &
   fi
@@ -1751,6 +1784,15 @@ elf_needed() {
 
 # `up --hyprland PATH` (finding 116): PATH resolved, when it is an executable ELF file. What it links
 # is check_install's.
+# `up --omarchy DIR` (finding 135): an Omarchy tree, as `omarchy dev link` takes one: what a box
+# runs from it must be there. /usr/share/omarchy itself is the default: none.
+omarchy_tree() {
+  local p f; p=$(readlink -f -- "$1" 2>/dev/null) && [ -d "$p" ] || die "--omarchy: no such directory: $1"
+  for f in bin default/hypr/bootstrap.lua shell/shell.qml; do
+    [ -e "$p/$f" ] || die "--omarchy: $p is not an Omarchy tree (no $f)"
+  done
+  [ "$p" = /usr/share/omarchy ] || printf '%s\n' "$p"
+}
 hypr_bin() {
   local p; p=$(readlink -f -- "$1" 2>/dev/null) && [ -f "$p" ] || die "--hyprland: no such file: $1"
   [ -x "$p" ] || die "--hyprland: $p is not executable"
@@ -2104,7 +2146,7 @@ cmd_run() {
         in_jail && die "run: --env-file is read by a jailed agent's own omabox, never at a path here"
         envfile_read "$2" >/dev/null   # a bad line stops here, said
         local kvs; mapfile -d '' kvs < <(envfile_read "$2"); ENVKV+=("${kvs[@]}"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--net|--allow|--env|--idle|--from|--hyprland) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--net|--allow|--env|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage; return ;;
       --) shift; break ;;
@@ -4396,7 +4438,7 @@ box_json() {
   [ ! -f "$D/keys-to-box" ] || keys=true
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
-      bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null),
+      bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
 }

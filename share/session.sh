@@ -66,6 +66,8 @@ without_host_fd gnome-keyring-daemon --daemonize --components=secrets > "$HOME/k
 # hyprctl) are called by absolute path, so no stub or project build on this PATH replaces them.
 mkdir -p "$HOME/.local/bin"
 p=/opt/omabox/share/bin:$HOME/.local/bin
+# `up --omarchy DIR` (finding 135): its bin next, as Omarchy's env-bootstrap puts a dev link's first.
+[ -z "${OMABOX_OMARCHY:-}" ] || p=$p:$OMABOX_OMARCHY/bin
 IFS=: read -ra dirs <<< "${OMABOX_CALLER_PATH:-}:$PATH"
 for d in "${dirs[@]}"; do
   case $d in /*) ;; *) continue ;; esac
@@ -74,10 +76,11 @@ done
 export PATH=$p
 unset OMABOX_CALLER_PATH
 
-# Omarchy's session defaults (TERMINAL, EDITOR), as its uwsm env.d does on the host. Always the
-# packaged Omarchy: a dev link (/etc/omarchy.conf, OMARCHY_PATH) is not followed into the box.
+# Omarchy's session defaults (TERMINAL, EDITOR), as its uwsm env.d does on the host: the packaged
+# Omarchy's, or `up --omarchy`'s tree's. The host's dev link is not followed (finding 135).
+o=${OMABOX_OMARCHY:-/usr/share/omarchy}
 # shellcheck source=/dev/null
-[ -r /usr/share/omarchy/default/uwsm/default ] && . /usr/share/omarchy/default/uwsm/default
+[ -r "$o/default/uwsm/default" ] && . "$o/default/uwsm/default"
 export TERMINAL=${TERMINAL:-xdg-terminal-exec} EDITOR=${EDITOR:-omarchy-launch-editor --inline}
 
 # `up --hyprland PATH` (finding 116): which build runs, in box.log (this script's stderr), as that
