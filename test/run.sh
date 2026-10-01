@@ -70,6 +70,10 @@ if [ "${1:-}" = --installed ]; then
   exit $?
 fi
 CLI=$ROOT/bin/omabox
+# An installed omabox: a package's /usr/lib/omabox, or --installed's stand-in. Both are read-only, a
+# checkout never is, so the suite tells them apart by itself (it once failed 13 checks run from a real
+# install, which sets no OMABOX_TEST_INSTALLED: that marks --installed's user namespace only).
+INSTALLED=0; [ -w "$ROOT" ] || INSTALLED=1
 P=t$$                      # box name prefix
 export OMABOX_SUITE=$P     # marks what the suite starts on the host, for the leak detector
 TMP=$(mktemp -d)
@@ -1577,7 +1581,15 @@ t_main() {
   local gpu; gpu=$(ob gpu -b "$B" 1 --json)
   check_eq "gpu --json names the box" "$B" "$(jq -r .box <<<"$gpu")"
   if [ "$(jq -r .wayland_screen "$D/box.json")" != true ]; then
-    check "gpu --json lists Hyprland" jq -e '.percent | has("Hyprland")' <<<"$gpu"
+    # gpu reads DRM fdinfo, which some drivers do not keep at all (virtio_gpu, a VM's): there a
+    # client of the render node has no drm-driver line, and nothing is there to list.
+    local rn fd fdinfo=0; rn=$(lib render_node)
+    exec {fd}<"$rn" && { ! grep -q '^drm-driver:' "/proc/$BASHPID/fdinfo/$fd" || fdinfo=1; exec {fd}<&-; }
+    if [ $fdinfo = 1 ]; then
+      check "gpu --json lists Hyprland" jq -e '.percent | has("Hyprland")' <<<"$gpu"
+    else
+      skip "gpu --json lists Hyprland" "the render node's driver keeps no DRM fdinfo ($rn)"
+    fi
   else
     # NVIDIA's driver may expose no drm-engine-* counters in /proc/*/fdinfo.
     check "gpu --json handles missing driver counters" jq -e '.percent | type == "object"' <<<"$gpu"
@@ -2455,7 +2467,7 @@ t_throwaway_dead() {
 # package): failures stop it with a message (finding 64), and it links, never nests.
 t_unit_install() {
   # install.sh is a checkout's (it builds the tools into ROOT): a package builds them itself.
-  [ "${OMABOX_TEST_INSTALLED:-0}" = 0 ] || { skip "install.sh" "an installed omabox has no install.sh to run (--installed)"; return; }
+  [ $INSTALLED = 0 ] || { skip "install.sh" "an installed omabox has no install.sh to run"; return; }
   local h=$TMP/ih stub=$TMP/ih-stub out
   # The XDG dirs too: the session sets them, and install.sh's `setup --aquamarine` builds under the
   # data dir when ROOT is no checkout (it once did so in the user's own, from an --installed run).
@@ -2635,12 +2647,12 @@ t_widget() {
   check "...lit again at once (the file watched)" until_ok 1.5 bar_is same "$TMP/keys-on.png"
   echo gone > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
   check "...not for a box that is not up (a file a Hyprland left)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
-  # (Not for an installed omabox: the box sees the host's /usr/bin/omabox, so there is always one.)
-  if [ "${OMABOX_TEST_INSTALLED:-0}" = 0 ]; then
+  # (Not with omabox installed on the host: the box sees its /usr/bin/omabox, so there is always one.)
+  if [ ! -e /usr/bin/omabox ]; then
     mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
     check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
   else
-    skip "a list command that cannot run is notified" "--installed: the box has /usr/bin/omabox"
+    skip "a list command that cannot run is notified" "the box has the host's /usr/bin/omabox"
   fi
   ob down "$B" >/dev/null
 }

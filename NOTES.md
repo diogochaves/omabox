@@ -2430,6 +2430,21 @@ the designs here were measured in boxes and built for a contained desktop, and n
     runs only a root-owned bwrap, and the user namespace shows root's files as nobody's) and
     `t_widget`'s missing command (a box sees the host's `/usr/bin/omabox`). The files are the user's,
     read-only, not root's. Run on this machine: checkout 1268/0/1, installed 1221/0/6.
+129. **The package, tested on a fresh Omarchy in a VM; the suite knows an install by itself**
+    (2026-10-01). A PKGBUILD for omarchy-pkgs (tree at `/usr/lib/omabox`, tools built in `build()`,
+    `xdg-terminal-exec` from `[omarchy]`), on a fresh Omarchy 4.0.4 in QEMU/KVM (omarchy-in-omarchy,
+    run headless: `egl-headless` on a host render node, the guest a virgl one): built with
+    `makechrootpkg -c` from Omarchy's `pacman.conf`, namcap clean but for what it cannot see (the
+    commands omabox runs, the shell's own QML modules); `pacman -U`, `omabox setup`, a box up in ~4 s
+    on virgl, keys, shots, the widget listing it; `setup --remove` and `pacman -R` left nothing
+    under `/usr` and no dangling link. The suite run from that install failed 14 checks, none the
+    package's: it knew an install only by `OMABOX_TEST_INSTALLED`, which `--installed` sets and a
+    package does not (13: `t_unit_install` ran install.sh, `t_widget` expected no
+    `/usr/bin/omabox`), and `gpu --json lists Hyprland` wants DRM fdinfo, which virtio_gpu keeps
+    none of. Now an install is a read-only ROOT (a checkout never is), the widget check skips
+    whenever the host has `/usr/bin/omabox`, and the gpu check skips when a client of the render
+    node gets no `drm-driver` fdinfo line (amdgpu writes one on a fresh fd, before any engine
+    time). `OMABOX_TEST_INSTALLED` stays for `--installed`'s user namespace (`t_jail`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
