@@ -53,9 +53,10 @@ ports, no internet). One that starts or probes local servers (a dev server, a pl
 own dev server on it then fails to start), and a probe there can reach theirs; an isolated box's
 ports stay its own, and two of them can use the same one.
 
-`omabox help` has every flag; `reference.md` next to this file has the detail left out here. The box
-name defaults to the repo's directory name plus your session's id (`myrepo-5cc72cdc` in a Claude Code
-or Codex session), so other sessions never share your box or take it down; `omabox ls` shows its
+`omabox help CMD` (or `omabox CMD --help`) has one command's flags and notes, `omabox help` every
+command's (long: read it only for an overview); `reference.md` next to this file has the detail left
+out here. The box name defaults to the repo's directory name plus your session's id
+(`myrepo-5cc72cdc` in a Claude Code or Codex session), so other sessions never share your box or take it down; `omabox ls` shows its
 name. It goes down by itself when your agent exits, not on `/clear` or `/resume`: `omabox down` when
 you are done, and before `/clear`. In a git worktree the name is the worktree's folder, so a
 worktree agent has its own box with no `-b`. Subagents in one checkout share the session's box: for

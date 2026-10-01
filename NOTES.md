@@ -2611,6 +2611,15 @@ from them.
     `wf-recorder` stopped with SIGINT finishes only on its next frame: a still screen keeps it
     running until something moves. The skill's description now has a unit check against the 1024
     characters agent hosts allow.
+141. **One command's help** (2026-10-01). `omabox help` is ~14.7 KB (~4k tokens), and the skill sent
+    agents there for any flag, while `omabox shot --help` was an unknown option. `omabox help CMD` and
+    `omabox CMD --help` (after `-b NAME` too; not `hyprctl`, whose arguments are hyprctl's) now print
+    that command's lines and the paragraphs of notes about it: each paragraph has an `@ CMD...` line
+    above it in the help text, dropped from `omabox help`, which is otherwise unchanged (one line
+    rewrapped where two paragraphs met). `help shot` is ~1.2 KB, `help run` (with up's options) ~4.5
+    KB. Measured cost of the skill for an agent: the description ~250 tokens per session, SKILL.md
+    ~7k when it loads, reference.md by section. `t_unit_cli` checks every command has its own help and
+    every paragraph a valid `@` line.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

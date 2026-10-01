@@ -35,7 +35,30 @@ ENVKV=()  # run --env-file: KEY=VAL entries for the command, before --pass (whic
 # The fake display the agent guard (`omabox guard`) gives agents' shells (finding 65).
 GUARD=omabox-guard
 
+# The help: every command, or one (`omabox help CMD`, `CMD --help`): its lines above the blank line
+# and the paragraphs below it whose `@` line names it. An agent after one command's flags reads a few
+# lines, not the whole text. `@` lines never show.
 usage() {
+  if [ $# = 0 ]; then usage_text | grep -v '^@'; return; fi
+  local c=$1 out
+  case $c in
+    help|-h|--help) usage; return ;;
+    screenshot) c="shot" ;; logs) c="log" ;; list) c="ls" ;; version|-V) c="--version" ;;
+  esac
+  # run takes up's options (a throwaway box): its help has up's lines too, after its own.
+  out=$(usage_text | awk -v c="$c" '
+    NR <= 2 { next }
+    !prose && $0 == "" { prose = 1; printf "%s", up; next }
+    !prose { if ($1 == "omabox") { on = $2 == c; mine = on || (c == "run" && $2 == "up") }
+             if (on) print; else if (mine) up = up $0 "\n"; next }
+    /^@/ { on = 0; for (i = 2; i <= NF; i++) if ($i == c) on = 1
+           if (on && !gap++) print ""; next }
+    on')
+  [ -n "$out" ] || { say "unknown command: $1 (omabox help lists the commands and their options)"; exit 2; }
+  printf '%s\n\n%s\n' "$out" "omabox help: every command."
+}
+
+usage_text() {
   cat <<EOF
 omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
@@ -90,32 +113,40 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox setup --aquamarine [--force]                    build aquamarine's fix (headless NVIDIA boxes, confirm-close)
   omabox --version                                       and which aquamarine new boxes use
 
+@ up run ls down path
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
 (Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
 session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off. A git worktree is named
 by its own folder, so each worktree has its own box. -b NAME also goes before the command
 (omabox -b NAME windows), for every command that takes it.
+@ run
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
 box up, \`run\` uses it and the repo is read-only there (tests that write into the tree: down first).
 --net isolated --allow PORTS on a throwaway \`run\` keeps tests off your real local services.
+@ up run
 Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
 the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
 second after they listen. --net isolated: a loopback and the --allow ports only.
+@ run keys up
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
 variables (a password too: never on a command line); --env-file FILE hands it a file's KEY=VAL lines
 (a dev.env: read as data, nothing expanded; --pass wins); \`keys --pass VAR\` types one (never \`-t\`
 for a secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
+@ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+@ up run restart-shell
 --plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; \`up\` and
 \`restart-shell\` warn when Omarchy's validator or the shell refuses it (\`ls --json\`: plugin_status).
+@ up run
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
 box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
 starts); hyprctl and hyprpm stay the installed ones (a warning when the versions differ). \`ls\` and
 \`windows\` name it. Compositor logic runs for real (layouts, focus, input routing, the Lua config,
 IPC, protocols); DRM/KMS, real monitors, HDR/VRR, multi-GPU, libinput with real devices and the
 session/suspend/lock paths never run in a box.
+@ shot windows keys click drag pointer wait
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
 org.gnome.Nautilus, or part of its title); repeat to narrow. None or
@@ -123,46 +154,58 @@ several is exit 2, with the candidates (\`wait window SEL\` asks for a window li
 does, each named). \`shot --window\` (-w; --active is --window active) is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
-\`keys --window\` focuses it, then types. --fit N scales a shot's longest side down to N pixels.
+\`keys --window\` focuses it, then types.
+@ shot click drag pointer
+--fit N scales a shot's longest side down to N pixels.
 -g "X,Y WxH" (or X,Y,W,H) crops: the screen's, or with --window the window's own coordinates.
 A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`drag\`, \`pointer --in\`)
 take that image's pixels (a window shot follows the window if it moved). Screen shots show the
 pointer; window shots never do. -o makes the file's folder if it is missing.
+@ click drag pointer
 The pointer starts at the screen's centre and stays where it was left; \`click\` and \`pointer move\`
 jump there. --steps N travels in N steps from where it is, over what lies between: under Omarchy's
 focus-follows-mouse the windows on the way take focus, as with a real mouse (\`pointer --steps N --
 move A move B\` passes through A). --mod MODS (ctrl, shift, alt, super, altgr; ctrl+shift, or --mod
 again) holds modifiers down across a click, drag or pointer run, released after it, whatever happens
 to omabox. SUPER with the left or right button is Hyprland's move or resize window, not the app's.
+@ wait keys click run
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
 count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
 [--quiet 300ms] [--timeout 10s] [--json]: a change within --start (5s for run -d), then quiet.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
+@ up run
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
+@ lua
 \`lua\` takes an expression or statements (\`return\` what to print); one line per value: strings and
 numbers as they are, nil as nil, tables and Hyprland's objects (a window, a monitor) as JSON (--json:
 strings quoted too). A Lua error is exit 1 with its message. An error inside a callback (hl.on,
 hl.timer) that runs later is logged nowhere: catch it with pcall.
+@ log
 \`log\` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
 \`run -d\`'s, apps what Omarchy's launcher started, box bwrap's. -f follows them until the box goes
 down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
 come late.
+@ events
 \`events\`: what the box's Hyprland reported on its event socket (activewindow>>, urgent>>, ...) from
 its start, never cleared. --mark MARK takes "from here" (a byte offset: safe while events come);
 --since MARK (a mark, an offset, or 30s/2m/1h ago) reads from there. --grep and --until match the
 EVENT>>DATA part (grep -E). --until: the first matching event from --since (or from now), printed:
 exit 0, 124 none by --timeout, 1 the box went down; -f follows until the box goes down.
+@ up peek config
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
 click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
+@ up config
 Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
 second close is a yes).
+@ up setup --version
 aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until a release has it): a
 headless box on an NVIDIA render node and confirm-close need it, and \`up\` refuses them without it;
 \`omabox setup --aquamarine\` builds it (a checkout's build/prefix, else ~/.local/share/omabox).
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
+@ up keys-to-box
 $PASS_KEY toggles sending SUPER keys to an interactive box, once:
 until focus leaves it, or a key is pressed with the pointer off it. \`keys-to-box on\` makes them
 follow focus and the pointer, for the box's lifetime: its window has focus and the pointer is over
@@ -170,29 +213,38 @@ it, SUPER is the box's; focus goes elsewhere or the pointer leaves it (your bar,
 it is yours, and the pointer back over it gives it to the box again. $PASS_KEY over the box
 gives the keys back until the box loses focus and gets it again. No argument prints on or off. While keys go to a box, its window's border takes the
 theme's red and the bar widget's icon is lit.
+@ clip
 \`clip\` hands your clipboard's item (text, else an image by its type) to an interactive box, once;
 --from-box hands the box's back. With no -b: the interactive box whose window has focus, else the only
 one. Never for agents (refused in their sessions, under the guard, in ai-jail). Nothing keeps
 watching either clipboard. Bind it to a key in your Hyprland config to paste into the box you are in.
+@ up run
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
+@ run
 \`run -d\` says where the command's output goes (its log) on stderr: -q says nothing (errors still),
 --print-log prints the log's path on stdout (first, before --wait's line). \`run -d --replace\`
 first stops what \`run -d\` started in that box with the same command and arguments (SIGTERM to its
 session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt app in one step. Nothing
 else in the box is touched: an app started some other way stays.
+@ up run
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
 (-b NAME) stays.
+@ up mode gpu run
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
+@ guard host
 The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
 exist, so a window, hyprctl or grim outside a box fails instead of reaching your desktop; omabox
 still works, and \`omabox host\` runs a command you asked for on the real desktop.
+@ broker
 An agent inside ai-jail cannot enter a box: \`omabox broker on\` (a systemd user socket) lets its
 omabox hand commands to omabox outside, which keeps the jail's boxes to what the jail has (its
 project, its network or none) and to themselves. It prints the lines to add to ~/.ai-jail.
+@ up run
 Crashes in a box skip the desktop's crash notifications (core limit 1 byte; raise it inside for a core).
+@ save saves up run
 A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOME without .cache and
 its logs, keyring included, paused for the copy. \`up --from\` starts with it, then seeds your Omarchy
 look on top as for any box (theme, bar, terminals: today's, not the save's). Close an app first for a
@@ -1067,7 +1119,7 @@ cmd_up() {
       --systemd) systemd=1 ;;
       --xwayland) xwayland=1 ;;
       --no-shell) shell=0 ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage up; return ;;
       -*) die "up: unknown option $1" ;;
       *) [ -z "$name" ] || die "up: one box name, got $name and $1"; name=$1 ;;
     esac
@@ -1589,8 +1641,7 @@ cmd_setup() {
       --aquamarine) aq=1 ;;
       --force) force=1 ;;
       --remove) remove=1 ;;
-      -h|--help) echo "usage: omabox setup [--remove]                 your links (skill, bar widget, omabox), settings dir, agent guard"
-                 echo "       omabox setup --aquamarine [--force]    build aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"; return ;;
+      -h|--help) usage setup; return ;;
       *) die "setup: unknown option $1" ;;
     esac
     shift
@@ -2220,7 +2271,7 @@ cmd_run() {
         local kvs; mapfile -d '' kvs < <(envfile_read "$2"); ENVKV+=("${kvs[@]}"); shift ;;
       --size|--plugin|--ro-bind|--overlay|--net|--allow|--env|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage run; return ;;
       --) shift; break ;;
       -*) die "run: unknown option $1 (the command goes after --; --interactive is up's only)" ;;
       *) break ;;
@@ -3322,7 +3373,7 @@ cmd_lua() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage lua; return ;;
       --) shift; src+=("$@"); break ;;
       -) src+=("$1") ;;
       -*) die "lua: unknown option $1 (a Lua source starting with - goes after --)" ;;
@@ -3419,7 +3470,7 @@ cmd_log() {
       --grep) optarg "$@"; LOG_RE=$2; shift ;;
       -i) LOG_I=(-i) ;;
       -n) optarg "$@"; [[ $2 =~ ^([0-9]{1,7}|all)$ ]] || die "log: -n takes a number of lines, or all"; n=$2; shift ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage log; return ;;
       -*) die "log: unknown option $1" ;;
       *) srcs+=("$1") ;;
     esac
@@ -3585,7 +3636,7 @@ cmd_events() {
       --timeout) optarg "$@"; tmo=$(ms_duration "$2") || die "events: --timeout takes a duration: 500ms, 10s, 2m"
         [ "$tmo" -le $WAIT_MAX_MS ] || die "events: --timeout is at most 10m (got $2)"; shift ;;
       -n) optarg "$@"; [[ $2 =~ ^([0-9]{1,7}|all)$ ]] || die "events: -n takes a number of events, or all"; n=$2; shift ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage events; return ;;
       *) die "events: unknown argument $1" ;;
     esac
     shift
@@ -3791,7 +3842,7 @@ cmd_keys_to_box() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       on|off) [ -z "$want" ] || die "keys-to-box: on or off, once"; want=$1 ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage keys-to-box; return ;;
       *) die "keys-to-box: on, off, or nothing to see which it is (a box is -b NAME), got $1" ;;
     esac
     shift
@@ -4339,7 +4390,7 @@ cmd_clip() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --from-box) from=1 ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage clip; return ;;
       *) die "clip: unknown argument $1 (omabox clip [--from-box] [-b NAME])" ;;
     esac
     shift
@@ -4401,7 +4452,7 @@ cmd_config() {
   while [ $# -gt 0 ]; do
     case $1 in
       --json) json=1 ;;
-      -h|--help) echo "usage: omabox config [--json] | KEY | KEY VALUE | KEY default   (keys: ${CONF_KEYS[*]})"; return ;;
+      -h|--help) usage config; return ;;
       -*) die "config: unknown option $1" ;;
       *) args+=("$1") ;;
     esac
@@ -4877,7 +4928,7 @@ cmd_save() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -f|--force) force=1 ;;
-      -h|--help) usage; return ;;
+      -h|--help) usage save; return ;;
       -*) die "save: unknown option $1" ;;
       *) [ -z "$save" ] || die "save: one save name, got $save and $1 (the box goes with -b)"; save=$1 ;;
     esac
@@ -4951,7 +5002,7 @@ cmd_saves() {
           "$(jq -r '.saved // "?" | sub("T"; " ") | .[0:16]' "$d/save.json" 2>/dev/null)" \
           "$(jq -r '.box // "?"' "$d/save.json" 2>/dev/null)" "$k"
       done ;;
-    -h|--help) usage ;;
+    -h|--help) usage saves ;;
     *) die "saves: rm SAVE... or --json, got $1" ;;
   esac
 }
@@ -4996,6 +5047,11 @@ main() {
   global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
   MAIN_CMD=$cmd   # the command asked for, whatever runs it (peek_marker)
+  # CMD --help (after any -b NAME): that command's help, here, before a broker or relay would take it.
+  # Not hyprctl's: its arguments are hyprctl's own.
+  local a=("$@")
+  while [ "${a[0]:-}" = -b ] || [ "${a[0]:-}" = --box ]; do a=("${a[@]:2}"); done
+  case ${a[0]:-} in -h|--help) [ "$cmd" = hyprctl ] || [ "$cmd" = _reap ] || { usage "$cmd"; exit; } ;; esac
   if [ -n "${OMABOX_BROKER_PEER:-}" ]; then broker_init; broker_check "$cmd" "$@"
   elif relay_wanted; then relay_call "$cmd" "$@"; fi
   case $cmd in
@@ -5030,7 +5086,7 @@ main() {
     broker) cmd_broker "$@" ;;
     setup) cmd_setup "$@" ;;
     _reap) cmd__reap "$@" ;;
-    help|-h|--help) usage ;;
+    help|-h|--help) usage "$@" ;;
     version|-V|--version) cmd_version ;;
     *) say "unknown command: $cmd (omabox help lists the commands and their options)"; exit 2 ;;
   esac

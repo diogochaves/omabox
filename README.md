@@ -123,7 +123,8 @@ omabox ls                              # boxes, mode, size, state, plugins
   systemd user manager, for plugins that manage a service or schedule alarms), `--from SAVE` (start
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
   the whole box session), `--xwayland`, and `omabox gpu 10` (GPU time of one box's processes, where
-  the driver reports per-process counters). `omabox help` lists every flag.
+  the driver reports per-process counters). `omabox help` lists every flag, `omabox help CMD` (or
+  `omabox CMD --help`) one command's.
 
 ### Tests that touch the desktop
 

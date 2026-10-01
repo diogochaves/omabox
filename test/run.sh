@@ -1057,6 +1057,26 @@ t_unit_cli() {
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
   check_match "run: a throwaway's up error is shown" "--net is connected" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
   check_match "run --help is the usage" "omabox up" "$(ob run --help 2>&1)"
+  # One command's help (`help CMD`, `CMD --help`): its lines and paragraphs, not the whole text.
+  local full cmds c bad=""
+  full=$(ob help)
+  cmds=$(awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' <<<"$full" | sort -u)
+  for c in $cmds; do [[ $(ob help "$c" | head -1) == "  omabox $c "* ]] || bad+=" $c"; done
+  check_eq "help CMD starts with CMD's line, for each command" "" "$bad"
+  bad=""
+  for c in $(lib usage_text | awk '/^@/ {for (i = 2; i <= NF; i++) print $i}' | sort -u); do
+    grep -qx -- "$c" <<<"$cmds" || bad+=" $c"
+  done
+  check_eq "...every paragraph's @ names a command" "" "$bad"
+  check_match "...the first paragraph has one (so every line has one)" "^@ " "$(lib usage_text | awk 'NR > 2 && p {print; exit} NR > 2 && $0 == "" {p = 1}')"
+  check_fails "...the @ lines never in the full help" grep -q '^@' <<<"$full"
+  check_eq "shot --help is help shot" "$(ob help shot)" "$(ob shot --help)"
+  check_eq "...after -b NAME too" "$(ob help shot)" "$(ob -b "$P-x" shot --help)"
+  check_eq "...an alias's (screenshot)" "$(ob help shot)" "$(ob screenshot -h)"
+  check_match "...a fraction of the full help" "^yes$" "$( (( $(ob help shot | wc -c) * 5 < ${#full} )) && echo yes)"
+  check_match "...run's has up's options" "omabox up .*--net isolated" "$(ob help run | tr '\n' ' ')"
+  check_eq "...an unknown one: one line, exit 2" "1 2" "$(ob help shoot 2>&1 | wc -l) $(ob help shoot >/dev/null 2>&1; echo $?)"
+  check_match "...hyprctl's --help is hyprctl's" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl --help 2>&1)"
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
   check_fails "path: two names refused" ob path a b
   check_match "unknown command named" "unknown command: shoot" "$(ob shoot 2>&1)"
