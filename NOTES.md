@@ -2410,6 +2410,26 @@ the designs here were measured in boxes and built for a contained desktop, and n
     denied` (or the directory that cannot be made), exit 1, nothing left behind. The default path in
     `$TMPDIR` goes through it too, once the box's name is known. Checked in a real box and by
     `t_unit_shot_hidden` (both modes, the box never asked).
+128. **omabox runs from a read-only system install** (2026-10-01, issue #50). A package would put the
+    tree at `/usr/lib/omabox` (not `/opt/omabox`: the tools' path inside a box) with `/usr/bin/omabox`
+    linking to it. `bin/omabox` finds `ROOT` through `readlink -f`, and nothing writes under it at run
+    time: the aquamarine build goes to the user's data dir outside a checkout (finding 125), `setup`
+    makes no `~/.local/bin` link under `/usr` (finding 126), and `broker on` builds the relay only when
+    it is missing (a package ships it built). The guard's `GUARD_PATH`, the broker's units and
+    `~/.ai-jail` lines, the skill links and the box mounts (`/opt/omabox/share`, the tools) all take
+    `/usr/lib/omabox` as they took a checkout. `test/run.sh --installed` checks it: the checkout's
+    tracked files and built tools, read-only at `/usr/lib/omabox` with `/usr/bin/omabox`, in a
+    throwaway mount namespace (overlays on `/usr/lib` and `/usr/bin` made as root of a user namespace,
+    then the user's own uid in one below it, with no `no_new_privs`, which boxes behind pasta need,
+    finding 89), running the install's own copy of the suite. Boxes there run on the system's
+    aquamarine (no private build in reach), as a package's would. What the suite assumed of a checkout
+    now tells the two apart: `t_unit_install` skips (install.sh builds the tools into ROOT; a package
+    builds them itself) and has its own XDG dirs in a checkout too (from the installed tree it had
+    built aquamarine into the user's real data dir, removed at once); the default box name and
+    setup's link are checked against what ROOT gives. Two checks cannot run there: `t_jail` (ai-jail
+    runs only a root-owned bwrap, and the user namespace shows root's files as nobody's) and
+    `t_widget`'s missing command (a box sees the host's `/usr/bin/omabox`). The files are the user's,
+    read-only, not root's. Run on this machine: checkout 1268/0/1, installed 1221/0/6.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

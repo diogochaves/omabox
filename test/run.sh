@@ -10,6 +10,8 @@
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd); a PATTERN
 #                            that matches no test exits 2
 #   --strict (or OMABOX_TEST_STRICT=1): a skipped check (a tool this machine lacks) fails
+#   test/run.sh --installed [ARGS...]   the same against omabox installed as a package would be:
+#                            read-only at /usr/lib/omabox, /usr/bin/omabox (a throwaway namespace)
 #
 # Never touches the real desktop: every box is headless. The host's Hyprland is only read: its event
 # socket is listened to for the whole run, and a window, focus change or virtual keyboard of the
@@ -36,6 +38,37 @@ unset CLAUDE_CONFIG_DIR CODEX_HOME
 unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID CLAUDE_PID OMABOX_AGENT_PID
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+# --installed (issue #50, finding 128): the suite against omabox as a package installs it. This
+# checkout's tracked files and built tools, read-only at /usr/lib/omabox with /usr/bin/omabox linking
+# to it, in a throwaway mount namespace: overlays on /usr/lib and /usr/bin made as root of a user
+# namespace, then back to your own uid in one below it (unshare sets no no_new_privs, which boxes
+# behind pasta need: finding 89). The suite run there is the install's own copy, its ROOT
+# /usr/lib/omabox; nothing on the host changes. (The files stay yours, not root's: read-only, not
+# root-owned.)
+if [ "${1:-}" = --installed ]; then
+  shift
+  [ ! -e /usr/lib/omabox ] || { echo "--installed: /usr/lib/omabox exists here already (a real install?): run its own test/run.sh"; exit 2; }
+  inst=$(mktemp -d) || exit 2
+  trap 'chmod -R u+w "$inst" 2>/dev/null; rm -rf "$inst"' EXIT
+  mkdir -p "$inst/tree" "$inst/up/lib" "$inst/up/bin" "$inst/work/lib" "$inst/work/bin"
+  git -C "$ROOT" ls-files -z | (cd "$ROOT" && tar --null -cf - -T -) | tar -xf - -C "$inst/tree" || exit 2
+  for t in "$ROOT"/tools/*/omabox-*; do
+    [ -x "$t" ] && [ -f "$t" ] || continue
+    cp "$t" "$inst/tree/${t#"$ROOT"/}"
+  done
+  chmod -R a-w "$inst/tree"
+  # shellcheck disable=SC2016 # expanded by the namespace's shell
+  unshare -r -m bash -c '
+    set -e; i=$1; shift
+    mount -t overlay overlay -o "lowerdir=/usr/lib,upperdir=$i/up/lib,workdir=$i/work/lib" /usr/lib
+    mkdir /usr/lib/omabox; mount --bind "$i/tree" /usr/lib/omabox; mount -o remount,bind,ro /usr/lib/omabox
+    mount -t overlay overlay -o "lowerdir=/usr/bin,upperdir=$i/up/bin,workdir=$i/work/bin" /usr/bin
+    ln -s ../lib/omabox/bin/omabox /usr/bin/omabox
+    exec unshare -U --map-user="$1" --map-group="$2" env OMABOX_TEST_INSTALLED=1 /usr/lib/omabox/test/run.sh "${@:3}"
+  ' _ "$inst" "$(id -u)" "$(id -g)" "$@"
+  exit $?
+fi
 CLI=$ROOT/bin/omabox
 P=t$$                      # box name prefix
 export OMABOX_SUITE=$P     # marks what the suite starts on the host, for the leak detector
@@ -933,6 +966,10 @@ sys.stdout.write(subprocess.run(sys.argv[1:], stdin=a, capture_output=True, text
 # own, which has no more than the jail (no network, only the jail's project), and nothing else.
 t_jail() {
   command -v ai-jail >/dev/null || { skip "an agent inside ai-jail drives its box through the broker" "ai-jail is not installed"; return; }
+  # ai-jail runs only a root-owned bwrap, and --installed's user namespace shows root's files as
+  # nobody's (the broker's units and lines from /usr/lib/omabox: t_unit_broker_units).
+  [ "${OMABOX_TEST_INSTALLED:-0}" = 0 ] ||
+    { skip "an agent inside ai-jail drives its box through the broker" "--installed: ai-jail trusts no bwrap in a user namespace"; return; }
   local R=$ROOT/tools/relay/omabox-relay br=$TMP/br repo out
   [ -x "$R" ] || { skip "an agent inside ai-jail drives its box through the broker" "tools/relay not built"; return; }
   mkdir -p "$br" "$TMP/lacks"; repo=$(tmp_repo jail); echo hi > "$repo/README"
@@ -1001,7 +1038,7 @@ t_unit_registry() {
 }
 
 t_unit_cli() {
-  check_eq "inside a box OMABOX=1 is not a box name" "$(basename "$ROOT")" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
+  check_eq "inside a box OMABOX=1 is not a box name" "$(cd "$ROOT" && lib default_name)" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
   check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
   check_eq "under run, OMABOX=NAME names the box (#19)" inner "$(OMABOX=inner OMABOX_NAME=outer lib default_name)"
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
@@ -1997,9 +2034,12 @@ t_unit_setup() {
   in_h() { HOME=$h XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state "$CLI" "$@" 2>&1; }
   out=$(in_h setup); local rc=$?
   check_eq "setup in a clean HOME" 0 "$rc"
+  # (No ~/.local/bin/omabox for a system install: its command is /usr/bin/omabox.)
+  local bin="$ROOT/bin/omabox "; [[ $ROOT != /usr/* ]] || bin=""
   check_eq "...omabox, the skill (Claude Code, the shared dir, Codex: it is there) and the widget linked" \
-    "$ROOT/bin/omabox $ROOT/skill $ROOT/skill $ROOT/skill $ROOT/plugin" \
+    "$bin$ROOT/skill $ROOT/skill $ROOT/skill $ROOT/plugin" \
     "$(readlink "$h/.local/bin/omabox" "$h/.claude/skills/omabox" "$h/.agents/skills/omabox" "$h/.codex/skills/omabox" "$h/.config/omarchy/plugins/chaves.omabox" | tr '\n' ' ' | sed 's/ $//')"
+  [[ $ROOT != /usr/* ]] || check_fails "...no ~/.local/bin/omabox for a system install" test -e "$h/.local/bin/omabox"
   check_fails "...not for an agent that is not installed" test -e "$h/.hermes"
   check "...the settings dir" test -d "$h/.config/omabox"
   check_match "...the guard not turned on without a terminal" "not asked \(no terminal\): omabox guard on" "$out"
@@ -2414,7 +2454,12 @@ t_throwaway_dead() {
 # install.sh with a temporary HOME and stubs first on PATH (sudo refuses, so it never installs a
 # package): failures stop it with a message (finding 64), and it links, never nests.
 t_unit_install() {
+  # install.sh is a checkout's (it builds the tools into ROOT): a package builds them itself.
+  [ "${OMABOX_TEST_INSTALLED:-0}" = 0 ] || { skip "install.sh" "an installed omabox has no install.sh to run (--installed)"; return; }
   local h=$TMP/ih stub=$TMP/ih-stub out
+  # The XDG dirs too: the session sets them, and install.sh's `setup --aquamarine` builds under the
+  # data dir when ROOT is no checkout (it once did so in the user's own, from an --installed run).
+  local -x XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state
   mkdir -p "$h" "$stub"
   printf '#!/bin/sh\nexit 1\n' > "$stub/sudo"
   printf '#!/bin/sh\ncase "$*" in *tools/keyboard*) exit 1 ;; esac\nexec /usr/bin/make "$@"\n' > "$stub/make"
@@ -2590,8 +2635,13 @@ t_widget() {
   check "...lit again at once (the file watched)" until_ok 1.5 bar_is same "$TMP/keys-on.png"
   echo gone > "$run/omabox/.keys.tmp" && mv "$run/omabox/.keys.tmp" "$run/omabox/.keys"
   check "...not for a box that is not up (a file a Hyprland left)" until_ok 1.5 bar_is same "$TMP/keys-off.png"
-  mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
-  check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
+  # (Not for an installed omabox: the box sees the host's /usr/bin/omabox, so there is always one.)
+  if [ "${OMABOX_TEST_INSTALLED:-0}" = 0 ]; then
+    mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
+    check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
+  else
+    skip "a list command that cannot run is notified" "--installed: the box has /usr/bin/omabox"
+  fi
   ob down "$B" >/dev/null
 }
 
