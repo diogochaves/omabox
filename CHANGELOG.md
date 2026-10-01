@@ -3,7 +3,11 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.4.0 — 2026-10-01
+
+omabox is ready to be packaged: it runs read-only from `/usr/lib/omabox`, `omabox setup` does what
+each user needs (and `--remove` undoes it), and boxes run on your system's aquamarine unless a box
+needs the fix.
 
 ### Added
 
