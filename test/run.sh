@@ -3417,8 +3417,8 @@ t_submap_release() {
   local B=$P-sr
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
   local in=("$CLI" run -b "$B" -- "$CLI")
-  # A host rule like omadev's (finding 136): every aquamarine window floating, on its own workspace.
-  ob hyprctl -b "$B" eval 'hl.window_rule({ name = "omadev-like", match = { class = "aquamarine" }, float = true, workspace = "name:omadev silent" })' >/dev/null
+  # Another tool's host rule (finding 136): every aquamarine window floating, on a workspace of its own.
+  ob hyprctl -b "$B" eval 'hl.window_rule({ name = "nested-float", match = { class = "aquamarine" }, float = true, workspace = "name:nested silent" })' >/dev/null
   "${in[@]}" up sa --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
   check_eq "under a host rule for every aquamarine window, the box's is still tiled on workspace 9" "9 false" \
     "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | "\(.workspace.name) \(.floating)"')"

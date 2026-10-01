@@ -5,10 +5,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## 0.4.2 — 2026-10-01
 
-Ideas from comparing omabox with omadev: Omarchy's browser bind and its own shell restart work in a
-box, a box can run an Omarchy checkout (`up --omarchy`), keys held when an interactive box loses
-focus are released (with omabox's aquamarine build), `setup` offers the bar widget and tidies up after
-a checkout, and `up` refuses options a running box lacks.
+Omarchy's browser bind and its own shell restart work in a box, a box can run an Omarchy checkout
+(`up --omarchy`), keys held when an interactive box loses focus are released (with omabox's aquamarine
+build), `setup` offers the bar widget and tidies up after a checkout, and `up` refuses options a
+running box lacks.
 
 ### Added
 
@@ -41,7 +41,7 @@ a checkout, and `up` refuses options a running box lacks.
 - **A box no longer follows your own `omarchy dev link`** in its terminals (they took the host's
   checkout while the rest of the box ran the installed Omarchy).
 - **An interactive box's window stays tiled on its workspace** when another tool's rule floats
-  every nested Hyprland window (omadev's does).
+  every nested Hyprland window.
 - **`omarchy restart shell` in a box brings the bar back.** It left the box with no bar (no journald
   for `systemd-cat`); it and `omabox restart-shell` now take turns cleanly.
 
