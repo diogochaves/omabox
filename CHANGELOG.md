@@ -3,6 +3,16 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **Omarchy's browser bind (SUPER+SHIFT+B) opens the browser in a box**, and so do the other things
+  Omarchy starts with `systemd-run --user` (LocalSend from the share menu). Without `--systemd`
+  nothing opened; with it, the browser closed again at once.
+- **`omarchy restart shell` in a box brings the bar back.** It left the box with no bar (no journald
+  for `systemd-cat`); it and `omabox restart-shell` now take turns cleanly.
+
 ## 0.4.1 — 2026-10-01
 
 Fixes from more testing of the package for Omarchy's repository: a clear message instead of a bare

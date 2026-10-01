@@ -475,7 +475,9 @@ dir), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, 
   power) open with errors or not at all: a box has no system bus, by design.
 - Omarchy's app launching goes through a stand-in for `uwsm-app` in every box, `--systemd` or not
   (apps start as plain processes, not units); their output lands in the box's `home/apps.log`.
-  Logging out of the box ends it.
+  Logging out of the box ends it. Without `--systemd`, `systemd-run --user` (the browser bind) runs
+  its command directly too, timers excepted, and `systemd-cat` writes to `~/IDENTIFIER.log`, so
+  `omarchy restart shell` works in a box.
 - A `run -d` job does not count as use for idle expiry: a server the agent only polls over HTTP needs
   `--idle 0` (or a longer one). Nor does it keep an agent session's box once the agent exits.
 - `omabox gpu` shows no per-process figures on NVIDIA 615.71.09, which does not report them. Tools

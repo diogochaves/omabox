@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# omabox stand-in for systemd-run, first on the box's PATH (finding 131). Omarchy starts some things
+# as transient user units: the browser (SUPER+SHIFT+B, omarchy-launch-browser), LocalSend (menu
+# share), the Hermes theme. A box has no user manager unless `up --systemd` ("Failed to connect to
+# user scope bus"), and the launcher still exited 0: the browser bind opened nothing.
+# Without one, `systemd-run --user CMD` runs CMD directly: detached, output to ~/apps.log (as uwsm-app),
+# or in the foreground with --wait, --pipe or --scope (its exit code passes through). Timers (--on-*)
+# need the real manager (the units are listed and stopped with systemctl): say so. With `up --systemd`,
+# or without --user, the real systemd-run; but never for omabox's uwsm-app, in any box: it detaches
+# the app and returns, and the unit's end then killed the app with the unit's cgroup.
+args=("$@") user=0 fg=0 timer="" dir="" envs=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --) shift; break ;;
+    --user) user=1 ;;
+    --wait|-W|--pipe|-P|--scope|--pty|-t|--pty-late) fg=1 ;;
+    --on-active|--on-boot|--on-startup|--on-unit-active|--on-unit-inactive|--on-calendar) timer=$1; shift ;;
+    --on-*) timer=${1%%=*} ;;
+    -E|--setenv) envs+=("$2"); shift ;;
+    --setenv=*) envs+=("${1#*=}") ;;
+    --working-directory) dir=$2; shift ;;
+    --working-directory=*) dir=${1#*=} ;;
+    -d|--same-dir) dir=$PWD ;;
+    # Options with a value of their own (unit name, properties, ...): meaningless here.
+    -u|--unit|-p|--property|--description|--slice|--timer-property|--path-property|--socket-property|\
+    -H|--host|-M|--machine|-C|--capsule|--uid|--gid|--nice|--service-type|--background) shift ;;
+    -h|--help) echo "systemd-run (omabox stand-in): systemd-run --user [--wait|--pipe|--scope] [-E K=V] [OPTIONS] [--] CMD [ARG...]"; exit 0 ;;
+    -*) ;;
+    *) break ;;
+  esac
+  shift
+done
+if [ $user = 0 ] || { [ "${OMABOX_SYSTEMD:-0}" = 1 ] && [ "${1:-}" != uwsm-app ]; }; then
+  exec /usr/bin/systemd-run "${args[@]}"
+fi
+if [ -n "$timer" ]; then
+  echo "systemd-run (omabox): $timer timers need a user manager: start the box with omabox up --systemd" >&2
+  exit 1
+fi
+[ $# -gt 0 ] || { echo "systemd-run (omabox): nothing to run" >&2; exit 1; }
+command -v "$1" >/dev/null || { echo "systemd-run (omabox): $1: command not found" >&2; exit 1; }
+[ -z "$dir" ] || cd "$dir" || exit 1
+[ ${#envs[@]} = 0 ] || set -- env "${envs[@]}" "$@"
+[ $fg = 0 ] || exec "$@"
+echo "$(date +%T) systemd-run: $*" >> "$HOME/apps.log"
+setsid -f "$@" </dev/null >>"$HOME/apps.log" 2>&1

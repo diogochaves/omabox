@@ -111,7 +111,9 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   what they hold (`myapp-signed-in`); they stay until removed, so remove the ones you no longer need.
 - No Xwayland unless `omabox up --xwayland`. Omarchy's `uwsm-app` launching always goes through a
   stand-in, `--systemd` or not: apps start as plain processes, not units (output in
-  `<box dir>/home/apps.log`).
+  `<box dir>/home/apps.log`). Without `--systemd`, `systemd-run --user CMD` runs CMD the same way
+  (`--wait`/`--pipe`/`--scope` in the foreground), but timers (`--on-active=...`) need `--systemd`;
+  `systemd-cat -t ID` writes to `~/ID.log` (no journald in any box).
 - The XDG base dirs are set as in a session (`XDG_DATA_HOME=/home/sbx/.local/share`, ...). An app
   installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
   `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.

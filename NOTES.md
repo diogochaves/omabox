@@ -2468,6 +2468,25 @@ the designs here were measured in boxes and built for a contained desktop, and n
     Removing a lock file another `up` may be waiting on is the classic flock race (two holders of
     "the same" lock); they are empty and on a tmpfs gone at logout. The recipe gained `base-devel` in
     its optdepends (omabox's own `setup --aquamarine` hint names it).
+131. **`systemd-run` and `systemd-cat` stand-ins** (2026-10-01, from a comparison with omadev). Both
+    checked in a box before the fix. Omarchy 4 starts the browser (SUPER+SHIFT+B,
+    `omarchy-launch-browser`), LocalSend (menu share) and the Hermes theme with `systemd-run --user`;
+    a box without `--systemd` has no user manager, so it said "Failed to connect to user scope bus"
+    and the launcher still exited 0: the bind opened nothing. `omarchy restart shell` (Omarchy's own,
+    not `omabox restart-shell`) killed the bar and asked `omarchy-launch-shell` for a new one, which
+    runs it under `systemd-cat -t omarchy-shell`; with no journald that failed, its supervisor
+    retried, and the box was left with no bar. `share/bin/systemd-run` (first on the box's PATH) runs a
+    `--user` command directly: detached, output in `apps.log`, or in the foreground with `--wait`,
+    `--pipe` or `--scope` (exit code passed on); `-E`, `--working-directory`, `--same-dir` are kept, the
+    unit options dropped. Timers (`--on-*`) are refused, naming `--systemd`: reminders also list and
+    stop their timers with `systemctl`. With `--systemd` (or without `--user`) it is the real one,
+    except for omabox's `uwsm-app`: that detaches the app and returns, so the transient unit ended at
+    once and took the app with its cgroup: in `--systemd` boxes the browser bind had never worked
+    either. `share/bin/systemd-cat` appends to `~/IDENTIFIER.log`; the shell's tag goes to
+    `~/shell.log` and records the shell's pid where `omabox restart-shell` looks. `share/shell.sh`
+    now asks the old shell to quit (`quickshell kill --pid`) before a signal: a shell Omarchy's
+    launcher started is started again when it dies of a signal, not when it quits. Either restart
+    after the other leaves one shell (`t_omarchy_restart`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

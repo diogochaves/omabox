@@ -1891,6 +1891,11 @@ t_systemd() {
   ob run -b "$B" -- systemd-run --user --on-active=1 --timer-property=AccuracySec=100ms --unit t1 touch /tmp/fired >/dev/null 2>&1
   check "a timer fires" until_ok 10 ob run -b "$B" -- test -e /tmp/fired
   check "notify-send works" ob run -b "$B" -- notify-send omabox-test
+  # The browser bind's shape with a real user manager: omabox's uwsm-app detaches the app, and a unit
+  # around it ended with the app inside (finding 131).
+  ob run -b "$B" -- systemd-run --user --quiet --collect --unit=omarchy-browser-1 uwsm-app -- foot --app-id=omabox.sdrun sleep 60 >/dev/null
+  check "systemd-run --user uwsm-app -- APP: the app stays" until_ok 10 \
+    bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox.sdrun\")'"
   dbus_user_app "$B"
   local scope; scope=$(systemctl --user list-units --no-legend "omabox-$B-*" | awk '{print $1}')
   check_match "host scope exists" "^omabox-$B-" "$scope"
@@ -2570,6 +2575,34 @@ t_uwsm_app() {
   check "uwsm-app launches a desktop file by path" until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox.desk\")'"
   check_fails "uwsm-app fails on a missing command" ob run -b "$B" -- uwsm-app -- no-such-command-omabox
   check_eq "the theme's browser policy step is a quiet no-op (finding 75: pkexec)" "" "$(ob run -b "$B" -- omarchy-theme-set-browser-policy 1a1b26 2>&1)"
+  # systemd-run and systemd-cat stand-ins (finding 131): the browser bind's shape, with foot for the browser.
+  ob run -b "$B" -- systemd-run --user --quiet --collect --unit=omarchy-browser-1 --property=StandardOutput=null \
+    uwsm-app -- foot --app-id=omabox.sdrun sleep 60 >/dev/null
+  check "systemd-run --user without a user manager starts the app (the browser bind)" until_ok 10 \
+    bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox.sdrun\")'"
+  check_eq "...--wait runs it in the foreground, its exit code passed on" "out 3" \
+    "$(ob run -b "$B" -- sh -c 'o=$(systemd-run --user --wait -E V=out sh -c "echo \$V; exit 3"); echo "$o $?"')"
+  check_match "...a timer says it needs --systemd" "omabox up --systemd" "$(ob run -b "$B" -- systemd-run --user --on-active=1m true 2>&1)"
+  check_eq "systemd-cat -t ID writes to ~/ID.log" "hi" "$(ob run -b "$B" -- sh -c 'echo hi | systemd-cat -t omabox-t; cat ~/omabox-t.log')"
+  ob down "$B" >/dev/null
+}
+
+# `omarchy restart shell` (Omarchy's own, finding 131) in a box: its launcher runs the bar under
+# systemd-cat, which a box lacked, and the bar was gone. It and `omabox restart-shell`, in turns, leave
+# one shell each time.
+t_omarchy_restart() {
+  local B=$P-or
+  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  # shellcheck disable=SC2329 # called through check
+  one_shell() { [ "$(ob run -b "$B" -- pgrep -cx quickshell)" = 1 ] && ob run -b "$B" -- omarchy-shell shell ping >/dev/null 2>&1; }
+  check "omarchy-restart-shell succeeds in a box" timeout 30 "$CLI" run -b "$B" -- omarchy-restart-shell
+  check "...one shell, answering" until_ok 5 one_shell
+  check_eq "...its pid where omabox restart-shell looks" "$(ob run -b "$B" -- pgrep -x quickshell)" "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-shell.pid"')"
+  check "omabox restart-shell after it" timeout 30 "$CLI" restart-shell -b "$B"
+  check "...one shell, answering, Omarchy's launcher gone" until_ok 5 one_shell
+  check_fails "...no omarchy-launch-shell left to start another" ob run -b "$B" -- pgrep -f '[o]marchy-launch-shell'
+  check "omarchy-restart-shell again" timeout 30 "$CLI" run -b "$B" -- omarchy-restart-shell
+  check "...one shell" until_ok 5 one_shell
   ob down "$B" >/dev/null
 }
 
@@ -3869,7 +3902,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
