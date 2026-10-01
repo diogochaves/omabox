@@ -1830,6 +1830,7 @@ t_plugin_check() {
   pfix good "$P.good" .; pfix schema "$P.schema" '.schemaVersion = "1"'
   pfix entry "$P.entry" '.entryPoints.barWidget = "Missing.qml"'; pfix qml "$P.qml" .
   cp "$F/qml/W.qml" "$F/W.qml.fixed"; echo 'BarWidget {' >> "$F/qml/W.qml"
+  git -C "$F/good" init -q && git -C "$F/good" add . && git -C "$F/good" -c user.name=t -c user.email=t@t commit -qm t && touch "$F/good/new"
   pfix inst "$P.inst" .; git -C "$F/inst" init -q && git -C "$F/inst" add . && git -C "$F/inst" -c user.name=t -c user.email=t@t commit -qm t
   out=$(ob up "$B" --net isolated --ro-bind "$F" --plugin "$F/good" --plugin "$F/schema" --plugin "$F/entry" --plugin "$F/qml" 2>&1) ||
     { no "up with plugins the shell refuses still comes up (warnings, not a refusal)" "$out"; return; }
@@ -1843,6 +1844,11 @@ t_plugin_check() {
   check_fails "a plugin that loads: no line" grep -q "$P.good" <<<"$out"
   check_eq "ls --json: each plugin's state" "loaded failed failed not loaded" \
     "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".good", $p + ".qml", $p + ".entry", $p + ".schema"] | .state] | join(" ")')"
+  check_match "...a checkout's commit, +dirty with uncommitted files (finding 139)" "^[0-9a-f]{7,}\+dirty$" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.good" '.[] | select(.name == $n) | .plugin_status[$i].commit')"
+  check_eq "...none for a plugin outside git" null "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.qml" '.[] | select(.name == $n) | .plugin_status[$i].commit')"
+  check_eq "ls --json: the box's theme" "$(cat "$(ob path "$B")/home/.local/state/omarchy/current/theme.name")" \
+    "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .theme')"
   cp "$F/W.qml.fixed" "$F/qml/W.qml"
   out=$(ob restart-shell -b "$B" 2>&1)
   check_fails "fixed, restart-shell: no line for it" grep -q "$P.qml failed" <<<"$out"
@@ -2644,6 +2650,7 @@ t_uwsm_app() {
   local ov; ov=$(pacman -Q omarchy-dev 2>/dev/null || pacman -Q omarchy 2>/dev/null) || ov=${OMABOX_OMARCHY_VERSION:-}
   check_eq "omarchy-version says the installed Omarchy's version" "${ov#* }" "$(ob run -b "$B" -- omarchy-version)"
   check_eq "...in a terminal's bash too (Omarchy's bin is on its PATH)" "${ov#* }" "$(ob run -b "$B" -- bash -ic omarchy-version 2>/dev/null)"
+  check_eq "...and ls --json has it (finding 139)" "${ov#* }" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
   ob down "$B" >/dev/null
 }
 
@@ -3541,6 +3548,7 @@ t_omarchy_tree() {
   check_match "...the bar runs from it" "quickshell -n -p $T/shell" "$(ob run -b "$B" -- pgrep -a quickshell)"
   check_eq "...a terminal's bash too (the box's /etc/omarchy.conf)" "$T omabox-tree" "$(ob run -b "$B" -- bash -ic 'echo "$OMARCHY_PATH $(omarchy-version)"' 2>/dev/null)"
   check_eq "ls --json names it" "$T" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy')"
+  check_eq "...and its version as dev (no git: no commit)" dev "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
   check_match "up again with another tree: refused" "--omarchy /usr/share/omarchy" "$(ob up "$B" --omarchy /usr/share/omarchy 2>&1)"
   # A box in that box, on the installed Omarchy: the outer /etc/omarchy.conf names the tree.
   local in=("$CLI" run -b "$B" -- "$CLI")
