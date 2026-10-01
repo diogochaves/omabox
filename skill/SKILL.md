@@ -91,8 +91,10 @@ omabox down                                # when done: kills everything in the 
 
 ## Driving an app
 
-1. **Look, act once, look again.** Exit 0 from `keys`/`click` means sent, not landed: a shot (or
-   the line `--wait` prints) says what happened.
+1. **Look, act once, look again; with text when text can tell.** Exit 0 from `keys`/`click` means
+   sent, not landed. The line `--wait` prints, `omabox windows` (up, focused, covered), `wait window`
+   or `layer`, `events`, `log --grep` and `run -- CMD` answer in a line what needs no pixels; a shot
+   for what does (how it looks, what a field shows).
 2. **Never resend input you have not seen land.** Every call is delivered; sending again types the
    text twice or toggles back. 124 after `--wait` means it WAS sent and the screen did not settle as expected: shot first.
 3. **Type only into a field you have seen focused** (a caret in the last shot), or `keys --window
@@ -118,6 +120,12 @@ then `click --in SHOT X Y`, X Y read from that image, no arithmetic of your own.
 bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and `click --in` it. Screen
 shots show the pointer (hover evidence: a `-g` crop of the screen); window shots never do.
 
+**Shots are most of what a session costs in context**: one image outweighs anything omabox prints as
+text. Take the smallest that shows it: `shot --window SEL` for one app, `-g "X,Y WxH"` for the part
+under test (a menu, a field, a bar widget), `--fit 1280` to check a whole screen's layout (full size
+to read small text); click on those with `--in`. `--wait`'s `at X,Y WxH` is the last change only:
+where to look, not everything that changed.
+
 **The pointer is test state.** Under Omarchy's focus-follows-mouse the window the pointer rests on,
 or last passed over, takes focus, and gets it back when a menu or panel closes. A box's pointer starts
 at the screen's centre and stays wherever the last command left it (`omabox hyprctl cursorpos`).
@@ -134,6 +142,7 @@ with a button is Hyprland's own (move, resize), never the app's.
 | After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
+| Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |

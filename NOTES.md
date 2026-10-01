@@ -2620,6 +2620,13 @@ from them.
     KB. Measured cost of the skill for an agent: the description ~250 tokens per session, SKILL.md
     ~7k when it loads, reference.md by section. `t_unit_cli` checks every command has its own help and
     every paragraph a valid `@` line.
+142. **Text before pixels** (2026-10-01). Screenshots, not the skill or the help, are most of what an
+    agent's box session costs in context (each a full image; a session takes tens). The skill now
+    says to check with text when text can tell (`windows`, `wait`, `events`, `log --grep`, `run --
+    CMD`) and to take the smallest shot that shows it (`--window`, `-g`, `--fit 1280` for layout).
+    Checked in a box: `--wait`'s `at X,Y WxH` is in screen coordinates but is the last change only
+    (`keys -t 'echo hello' Return` in foot: 45x40 at the new prompt, not the output line), so the
+    skill gives it as where to look, not as the crop.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
