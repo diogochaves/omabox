@@ -153,11 +153,11 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   `--ro-bind`'s are (a binary right in HOME or `/tmp`: build into a folder of its own). Build, never
   install (e.g. `cmake -B build && cmake --build build`, then `--hyprland build/Hyprland`: wherever
   the build put the binary; a wrapper script is refused, it must be the ELF itself).
-- The box loads the patched aquamarine from `/opt/omabox/lib` (omabox's `build/prefix/lib`), so the
-  build must link the same `libaquamarine.so.N` soname; `up` reads it (`readelf -d`) and refuses
-  another one before the box starts, naming both, and refuses a build that needs any other library
-  the box lacks (`ldd`). Build against the installed aquamarine of the same version, or
-  `PKG_CONFIG_PATH=<omabox>/build/prefix/lib/pkgconfig`.
+- The box loads a private aquamarine from `/opt/omabox/lib` when omabox has one with the build's
+  soname (`omabox --version` names it), else the system's; so the build must link a
+  `libaquamarine.so.N` soname one of them has. `up` reads it (`readelf -d`) and refuses another one
+  before the box starts, and refuses a build that needs any other library the box lacks (`ldd`).
+  Build against the installed aquamarine, or `PKG_CONFIG_PATH=<private prefix>/lib/pkgconfig`.
 - `hyprctl`, `hyprpm` and the rest stay the installed ones; `up` warns when the box's Hyprland
   version (as it says over IPC) differs from theirs: the IPC may not match then. A patched build of
   the installed version is fine.

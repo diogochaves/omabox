@@ -8,6 +8,9 @@ fi
 
 # OMABOX_HYPRLAND: `omabox up --hyprland PATH`, a build of the user's (NOTES finding 116), mounted
 # read-only at its own path; hyprctl and the rest stay the installed ones.
+# /opt/omabox/lib: a private aquamarine with the fix for nested Wayland outputs, when omabox mounted
+# one (finding 125); without it, the system's.
+lib=(); [ ! -d /opt/omabox/lib ] || lib=(LD_LIBRARY_PATH=/opt/omabox/lib)
 exec env -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u DISPLAY -u OMABOX_HYPRLAND \
-  OMARCHY_PATH=/usr/share/omarchy LD_LIBRARY_PATH=/opt/omabox/lib HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
+  OMARCHY_PATH=/usr/share/omarchy "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
   "${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --config /opt/omabox/share/hyprland.lua

@@ -15,10 +15,16 @@ hyprctl output create wayland >/dev/null 2>&1 || quit
 # The host's exec rule (render_unfocused) went with the old window: this one is not drawn while
 # hidden. omabox.reopened lets `shot` say so (finding 90).
 echo 1 > "$XDG_RUNTIME_DIR/omabox.reopened"
+# Hyprland's FALLBACK stands in while it has no output: not a window.
+monitors() { [ "$(hyprctl -j monitors 2>/dev/null | jq '[.[] | select(.name != "FALLBACK")] | length')" -gt 0 ] 2>/dev/null; }
 for _ in $(seq 50); do
-  [ "$(hyprctl -j monitors 2>/dev/null | jq length)" -gt 0 ] 2>/dev/null && break
+  monitors && break
   sleep 0.1
 done
+# No window came (an aquamarine without the fix for nested Wayland outputs, finding 125; omabox
+# refuses confirm-close there, but the library can change under a running box): the user closed the
+# only window, so end the box rather than leave it running with none.
+monitors || quit
 
 msg="Close the window again to shut this box down"
 hyprctl notify 1 8000 0 "$msg" >/dev/null 2>&1 || true

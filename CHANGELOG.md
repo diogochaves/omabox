@@ -3,6 +3,24 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+
+- **omabox runs on your system's aquamarine unless a box needs the fix** (Hyprland's backend
+  library; [#47](https://github.com/diogochaves/omabox/issues/47)). Only headless boxes on an NVIDIA
+  GPU and confirm-close need [aquamarine PR #415](https://github.com/hyprwm/aquamarine/pull/415)
+  until a release ships it. `omabox setup --aquamarine` builds it (`install.sh` runs it, into the
+  checkout's `build/prefix` as before); without it, `up` refuses those two and says what to run, and
+  confirm-close from your settings stays off for the box. A private build whose soname Hyprland no
+  longer links (after an aquamarine upgrade) is skipped for the system's instead of stopping `up`.
+  `omabox --version` says which aquamarine new boxes use, `omabox ls --json` each box's.
+
+### Fixed
+
+- **Closing an interactive box whose window could not come back now ends it**: with confirm-close
+  on, a box that could not open its new window ran on with no window at all. It now ends after 5 s.
+
 ## 0.3.2 — 2026-09-30
 
 The agent guard steps aside once omabox is gone, and Codex's agents now get its note too.

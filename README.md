@@ -37,15 +37,16 @@ it, so the real desktop saw no window at all (`docs/demo.sh --video` makes the d
   SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
   the first usable node (`OMABOX_RENDER_NODE` overrides); an interactive box renders on the GPU your
   desktop renders on.
-- A patched aquamarine (Hyprland's backend library), until a release ships
-  [PR #415](https://github.com/hyprwm/aquamarine/pull/415). `install.sh` builds it privately into
-  `build/prefix`; your system's copy is not touched.
+- For headless boxes on NVIDIA and for confirm-close: aquamarine's fix (Hyprland's backend library),
+  until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415). Everything else
+  runs on your system's aquamarine. `install.sh` builds it privately into `build/prefix`
+  (`omabox setup --aquamarine`); your system's copy is not touched.
 
 ## Install
 
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox
-./install.sh                            # packages (sudo only if some are missing), patched aquamarine, tools, links
+./install.sh                            # packages (sudo only if some are missing), aquamarine's fix, tools, links
 ./install.sh --check                    # the same, then start a box, screenshot it, tear it down
 omarchy plugin enable chaves.omabox     # the bar widget
 ```
@@ -53,8 +54,8 @@ omarchy plugin enable chaves.omabox     # the bar widget
 `install.sh` links `~/.local/bin/omabox`, the agent skill (wherever Omarchy puts its own skills:
 `~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and the bar widget, and asks
 whether to turn on the [agent guard](#the-agent-guard). **Update** with `git pull && ./install.sh`;
-run it after a Hyprland upgrade too: it checks the private aquamarine still matches what Hyprland
-links against.
+run it after a Hyprland upgrade too: a private aquamarine whose soname Hyprland no longer links is
+skipped for the system's (`omabox --version` says which one boxes use).
 
 <details>
 <summary><b>Remove</b></summary>
@@ -157,8 +158,8 @@ omabox up stock                                               # the installed on
 
 The box runs your build instead of `/usr/bin/Hyprland` (its folder mounted read-only), with the
 rest of the box as usual: the Omarchy shell, your bar, `hyprctl` and `hyprpm` from your system (a
-warning when their version is not the build's). The build must link the same `libaquamarine` soname
-as omabox's patched aquamarine; `up` refuses one that does not, or a file that is not an executable
+warning when their version is not the build's). The build must link a `libaquamarine` soname the
+box has (your system's, or omabox's private build); `up` refuses one that does not, or a file that is not an executable
 ELF, before the box starts. `omabox ls` and `omabox windows` name the build, so a box on it is never
 taken for a stock one. A box runs the compositor's logic for real (layouts, focus, input routing, the
 Lua config, IPC, protocols) on a virtual output with virtual input devices; the DRM/KMS backend
@@ -462,8 +463,9 @@ dir), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, 
 - Other NVIDIA models and drivers are untested. Of the agents the skill is installed for, Claude
   Code and OpenCode were checked end to end; Codex, pi and Hermes find the skill, but no run of
   theirs reached a model here.
-- Needs a patched aquamarine (PR #415, built into `build/prefix` by `install.sh`) until a release
-  ships it. What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
+- Headless boxes on NVIDIA and confirm-close need aquamarine's fix (PR #415, built into
+  `build/prefix` by `install.sh`, `omabox setup --aquamarine`) until a release ships it; without it
+  `up` refuses them, saying what to run. What omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
 - A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
   `omabox shot` works with its window off screen, just at that rate. Not after you closed its window
   and kept the box running (`confirm-close`): the new window is only drawn while it is on screen.

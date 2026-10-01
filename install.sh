@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # install.sh: set up omabox on an Omarchy machine. Idempotent: re-run after pulling.
 #
-#   ./install.sh           packages (sudo only if some are missing), patched aquamarine, tools, links
+#   ./install.sh           packages (sudo only if some are missing), aquamarine's fix, tools, links
 #   ./install.sh --check   the same, then start a box, screenshot it and tear it down
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-# "wayland: fix configure not applying sometimes (#415)": needed until a release has it (NOTES finding 4).
-AQ_COMMIT=7bb8bdf4
-AQ_SRC=$ROOT/build/aquamarine
-AQ_PREFIX=$ROOT/build/prefix
 PKGS=(
   labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret   # run a box
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
@@ -41,24 +37,10 @@ fi
 # `omabox shot --window` captures a window by its toplevel id (grim -T, 1.5+; NOTES finding 81).
 grim -h 2>&1 | grep -q -- '^ *-T ' || die "this grim cannot capture a window (no -T): omabox needs grim 1.5 or later"
 
-step "Patched aquamarine ($AQ_COMMIT) in build/prefix"
-if [ "$(cat "$AQ_PREFIX/.omabox-commit" 2>/dev/null)" = "$AQ_COMMIT" ]; then
-  echo "already built"
-else
-  [ -d "$AQ_SRC/.git" ] || git clone -q https://github.com/hyprwm/aquamarine "$AQ_SRC"
-  git -C "$AQ_SRC" cat-file -e "$AQ_COMMIT^{commit}" 2>/dev/null || git -C "$AQ_SRC" fetch -q origin
-  git -C "$AQ_SRC" checkout -q "$AQ_COMMIT"
-  cmake -S "$AQ_SRC" -B "$AQ_SRC/out" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$AQ_PREFIX" >/dev/null
-  cmake --build "$AQ_SRC/out"
-  cmake --install "$AQ_SRC/out" >/dev/null
-  echo "$AQ_COMMIT" > "$AQ_PREFIX/.omabox-commit"
-fi
-# The nested Hyprland picks the private build up through LD_LIBRARY_PATH, which only works while it
-# has the soname Hyprland links against. After a Hyprland/aquamarine upgrade this is what breaks.
-want=$(ldd "$(command -v Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}' || true)
-[ -n "$want" ] || die "cannot tell which libaquamarine Hyprland links (ldd $(command -v Hyprland))"
-[ -e "$AQ_PREFIX/lib/$want" ] || die "Hyprland links $want but build/prefix has $(cd "$AQ_PREFIX/lib" && ls libaquamarine.so.*): bump AQ_COMMIT"
-echo "Hyprland links $want: ok"
+# A checkout builds it into build/prefix, for every box this checkout starts (the suite needs it for
+# NVIDIA and confirm-close): nothing to do while the system's aquamarine has the fix (finding 125).
+step "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"
+"$ROOT/bin/omabox" setup --aquamarine || die "omabox setup --aquamarine failed"
 
 step "Tools"
 # (Not `make && echo`: set -e ignores a failure on the left of &&, and install.sh would carry on.)

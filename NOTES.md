@@ -33,7 +33,7 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
 │                        --hyprland's folder ro (116),
 │                        one render node (plus its NVIDIA render-side nodes on NVIDIA);
 │                        an interactive box every render node (95),
-│                        share/ → /opt/omabox/share, patched aquamarine →
+│                        share/ → /opt/omabox/share, a private aquamarine (125) →
 │                        /opt/omabox/lib, keyboard/pointer → /opt/omabox/bin, --plugin dirs ro →
 │                        ~/.config/omarchy/plugins/<id>, --overlay dirs (discarded writes); every source
 │                        and DEST checked (refuse_src/refuse_dest, finding 63)
@@ -41,7 +41,8 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
   │                      systemd's dbus.service with --systemd), gnome-keyring, PATH, env, then:
   ├ [systemd --user]     --systemd only
   └ labwc -S (headless)  invisible parent compositor (WLR_BACKENDS=headless, 1 output); ends with Hyprland
-    └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine;
+    └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine
+                         when one is used (finding 125);
       │                  /usr/bin/Hyprland, or --hyprland's build (116)
       ├ HEADLESS-2       screen on AMD/Intel; WAYLAND-1 bootstrap disabled
       │ WAYLAND-1        screen on NVIDIA; labwc's private headless output is resized to --size
@@ -74,15 +75,17 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    build deps (wayland, libxkbcommon, base-devel), aquamarine's build deps, and what the box runs
    that Omarchy already has (quickshell, gtk3, xdg-terminal-exec, dbus). `sudo pacman -S --needed`
    only for the missing ones.
-2. Patched aquamarine into a private prefix (drop once Arch ships a release containing #415):
+2. aquamarine's fix into a private prefix, `omabox setup --aquamarine` (only headless NVIDIA boxes
+   and confirm-close need it, finding 125; a no-op once the system's aquamarine is past 0.15.1):
    ```
    git clone https://github.com/hyprwm/aquamarine build/aquamarine
    git -C build/aquamarine checkout 7bb8bdf4      # "wayland: fix configure not applying sometimes (#415)"
    cmake -S build/aquamarine -B build/aquamarine/out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PWD/build/prefix
    cmake --build build/aquamarine/out && cmake --install build/aquamarine/out
    ```
-   It must provide the soname the installed Hyprland links (`ldd $(command -v Hyprland)`); only the
-   nested Hyprland loads it. `omabox up` checks this too.
+   (installed beside the old one, then swapped in). It must provide the soname the installed Hyprland
+   links (`ldd $(command -v Hyprland)`), or `up` skips it for the system's; only the nested Hyprland
+   loads it. Outside a checkout it goes to `~/.local/share/omabox/aquamarine`.
 3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay`, `events`
    (need `wayland-scanner`; protocol XML is vendored).
 4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
@@ -2331,6 +2334,46 @@ the designs here were measured in boxes and built for a contained desktop, and n
     runtime file left. `t_unit_parallel` covers the windows, `beside`, the gaps and what a test hands
     back (made-up log and tests).
 
+125. **Only headless NVIDIA boxes and confirm-close need aquamarine's fix; the private build is
+    optional** (2026-09-30, issues #47, #53). Every box ran a private libaquamarine (`build/prefix`,
+    0.15.1@7bb8bdf4, finding 4) since the spike; a package cannot ship that. Checked on the system's
+    0.15.0 in real boxes (the box Hyprland's maps and fds read each time), on the AMD iGPU and on the
+    RTX 5070 Ti, the desktop itself on each in turn: headless AMD/Intel boxes work (their screen is a
+    headless output, `HEADLESS-2`; the Wayland output stock never flushes is disabled there);
+    interactive boxes start, take input, follow their window's resizes (a second box tiling beside it
+    on workspace 9 and going again, on the real NVIDIA desktop). Two things fail: a headless box on an
+    NVIDIA render node (its screen is the private labwc's Wayland output, finding 77: `Output WAYLAND-1:
+    initialized`, then only `FALLBACK`, `Hyprland not up after 30s`), and confirm-close (finding 70),
+    whose new window is `hyprctl output create wayland`, a Wayland output made after the backend
+    started: stock never sends its first commit, so `WAYLAND-2` never comes and the box ran on with no
+    window at all and nothing left to close (the suite on stock: the 7 confirm-close checks of
+    `t_guard` and `t_keys_to_box`; reproduced on the real desktop). An interactive box's first window
+    works because the backend's start flushes it. A headless box with no `OMABOX_RENDER_NODE` takes the
+    first render node, so on a hybrid machine it renders on the iGPU and needs nothing, whichever GPU
+    the desktop is on.
+    So: `aq_pick` chooses the box's aquamarine: a checkout's `build/prefix`, then the user's build
+    (`~/.local/share/omabox/aquamarine`), each only while it has the soname the box's Hyprland links
+    (an older one is stale: skipped, said so), else the system's (nothing mounted at `/opt/omabox/lib`,
+    no `LD_LIBRARY_PATH`: `share/start-hyprland.sh` sets it only when the dir is there). A private build
+    has the fix; the system's has it after 0.15.1 (`AQ_FIXED_AFTER`; the release after that one comes
+    from a main that has #415). Without it `up` refuses a headless box on an NVIDIA render node (naming
+    other GPUs for `OMABOX_RENDER_NODE`) and `--confirm-close`, before anything is made, saying to run
+    `omabox setup --aquamarine`; confirm-close from the settings is turned off for that box with a
+    note, and `config confirm-close on` notes it, and `confirm_live` leaves such boxes alone (box.json
+    `aquamarine.fixed`). `confirm-close.sh` ends the box when no window comes within 5 s, whatever the
+    library: its wait had counted Hyprland's `FALLBACK` as a monitor, so it never waited. `omabox setup
+    --aquamarine` builds `AQ_COMMIT` (into `build/prefix` in a checkout, which `install.sh` now calls,
+    else into the user's data dir, its source in `~/.cache/omabox-aquamarine`, not under the box HOMEs
+    `sweep_homes` clears), installed beside the old one and swapped in; a no-op while the box's
+    aquamarine has the fix. Its tools (git, cmake, ninja, hyprwayland-scanner, base-devel) are what a
+    package lists as optional. `--version` says which aquamarine new boxes use, `ls --json` each
+    box's. `OMABOX_AQUAMARINE=system` skips the private builds, for this box and the boxes it starts
+    (the suite's stand-in hosts): `OMABOX_AQUAMARINE=system test/run.sh` is the suite on stock.
+    Verified: from a copy of the tree without `.git` (as a package), `setup --aquamarine` cloned and
+    built into a scratch data dir in 12 s, and a headless box on the RTX ran on it (`WAYLAND-1`); a
+    second run built nothing. On stock: the NVIDIA refusal, `--confirm-close` refused, the settings'
+    confirm-close turned off (one close ended the box, cleared), a box with the flag forced on ended
+    6 s after its close. `t_unit_aquamarine` covers the choice and the refusals.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -2356,7 +2399,9 @@ Bugs and ideas live in the GitHub issues. Known gaps:
   test function for dead code (SC2329, and the SC2086 it then no longer rules out), so it is left
   as it was (finding 124). Until then, do not edit the suite while it runs.
 
-- The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`).
+- The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`). A system
+  aquamarine patched downstream (#48) cannot be told from its version: it would still be refused for
+  headless NVIDIA boxes and confirm-close until omabox learns how to recognise it (finding 125).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44):
   `--quickshell PATH` (a shell or Quickshell change); `--omarchy PATH` (a local Omarchy tree instead
   of `/usr/share/omarchy`, `OMARCHY_PATH`, as `omarchy dev link` does on the host; `session.sh` and
