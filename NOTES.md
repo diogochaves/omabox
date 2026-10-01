@@ -2627,6 +2627,20 @@ from them.
     Checked in a box: `--wait`'s `at X,Y WxH` is in screen coordinates but is the last change only
     (`keys -t 'echo hello' Return` in foot: 45x40 at the new prompt, not the output line), so the
     skill gives it as where to look, not as the crop.
+143. **The broker and ai-jail 2.6.2's `--args`** (2026-10-01). ai-jail 2.6.2 (its #147: `--env`
+    values off `/proc/PID/cmdline`) hands bwrap every option through `--args FD`, a memfd named
+    `ai-jail-bwrap-args`; only `--` and the command stay on bwrap's command line. The broker read the
+    jail's policy from that line, met `--args`, an option it does not know, and refused every
+    command from a 2.6.2 jail ("cannot read the jail's policy: unknown bwrap option --args"): safe,
+    but jailed agents could drive no box. bwrap 0.12 closes its copy of the fd once read; ai-jail
+    keeps its own open (unsealed, but no process in the jail holds it) for as long as the jail runs.
+    `jail_policy FDS` now reads `--args N` from ai-jail's `/proc/PID/fd/N` (the bwrap's parent, as
+    `broker_init` already finds it), in place of the option as bwrap does, only when that fd is a
+    memfd of that name, and only once; anything else still fails the read. Checked with ai-jail
+    2.6.2: a jailed agent ran `up` (`isolated`: the jail had no network), `run -d`, `windows`, `shot`,
+    `lua`, `ls`, `down`, and was refused `host`, `peek`, `--interactive`, `guard`, `clip`; 2.2.1 (the
+    options on the command line) works as before. `t_unit_jail_policy` holds a memfd of each name as
+    ai-jail does.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

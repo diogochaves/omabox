@@ -4647,7 +4647,8 @@ repo_top() {
 }
 
 # bwrap's options and how many arguments each takes: the jail's policy is read from its bwrap's command
-# line, and an option not known here would be misread, so it fails the read (never guessed).
+# line, and an option not known here would be misread, so it fails the read (never guessed). --args is
+# read apart (jail_policy).
 declare -A BWRAP_ARITY=()
 for o in unshare-user unshare-user-try unshare-ipc unshare-pid unshare-net unshare-uts unshare-cgroup \
   unshare-cgroup-try unshare-all share-net die-with-parent as-pid-1 new-session clearenv disable-userns \
@@ -4664,12 +4665,29 @@ unset o
 # the host's network) and roots (the host folders it sees at their own path, masked when something of
 # the jail's is mounted inside). A folder a later mount covers is not one. Prints why, and fails, on
 # anything it cannot read.
+# Since ai-jail 2.6.2 (its #147) the options are not on the command line: `--args FD` names a memfd of
+# ai-jail's, "ai-jail-bwrap-args", that bwrap read them from (bwrap reads its options there in place
+# of --args). FDS is ai-jail's /proc/PID/fd: ai-jail keeps that memfd open while the jail runs, and
+# bwrap closed its own copy once read, so nothing in the jail holds it. Only that memfd, and once.
 jail_policy() {
-  local a=() i=1 op n net=true binds=() dests=() k
+  local fds=${1:-} a=() b=() i=1 op n net=true binds=() dests=() k expanded=0
   mapfile -d '' a
   while [ $i -lt ${#a[@]} ]; do
     op=${a[i]}
     [ "$op" != -- ] || break
+    if [ "$op" = --args ]; then
+      [ $expanded = 0 ] || { echo "bwrap --args more than once"; return 1; }
+      [[ $((i + 1)) -lt ${#a[@]} && ${a[i+1]} =~ ^[0-9]+$ ]] || { echo "bwrap option --args is cut short"; return 1; }
+      [ -n "$fds" ] || { echo "bwrap --args with no ai-jail to read it from"; return 1; }
+      case $(readlink "$fds/${a[i+1]}" 2>/dev/null) in
+        "/memfd:ai-jail-bwrap-args"|"/memfd:ai-jail-bwrap-args (deleted)") ;;
+        *) echo "bwrap --args ${a[i+1]} is not ai-jail's options memfd"; return 1 ;;
+      esac
+      mapfile -d '' b < "$fds/${a[i+1]}" || { echo "cannot read the jail's bwrap options (--args ${a[i+1]})"; return 1; }
+      a=("${a[@]:0:i}" "${b[@]}" "${a[@]:i+2}")
+      expanded=1
+      continue
+    fi
     n=${BWRAP_ARITY[$op]:-}
     [ -n "$n" ] || { echo "unknown bwrap option $op"; return 1; }
     [ $((i + n)) -lt ${#a[@]} ] || { echo "bwrap option $op is cut short"; return 1; }
@@ -4725,7 +4743,7 @@ broker_init() {
   [ "$(readlink "/proc/$peer/ns/pid")" != "$(readlink "/proc/$jail/ns/pid")" ] || die "broker: the caller is not inside its jail"
   local policy start
   start=$(proc_start "$jail") && [ -n "$start" ] || die "broker: the jail is gone"
-  policy=$(jail_policy < "/proc/$jail/cmdline") || die "broker: cannot read the jail's policy: $policy"
+  policy=$(jail_policy "/proc/$pp/fd" < "/proc/$jail/cmdline") || die "broker: cannot read the jail's policy: $policy"
   peer_there || die "broker: the caller is gone"
   eval "exec $pfd<&-"
   OMABOX_JAIL=$(jq -c --arg id "$jail $start" '. + {id: $id}' <<<"$policy"); export OMABOX_JAIL

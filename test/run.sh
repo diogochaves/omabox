@@ -892,7 +892,29 @@ t_unit_jail_policy() {
   check_eq "...one before it does not (the folder covers it)" false "$(pol --tmpfs "$d/proj/in" --bind "$d/proj" "$d/proj" -- sh | jq -r '.roots[0].masked')"
   check_eq "a later mount at or above a folder covers it" 0 "$(pol --bind "$d/proj" "$d/proj" --tmpfs "$d" -- sh | jq '.roots | length')"
   check_eq "a folder mounted elsewhere is not one" 0 "$(pol --bind "$d/proj" /work -- sh | jq '.roots | length')"
-  check_match "an unknown option fails the read" "unknown bwrap option --args" "$(pol --args 3 -- sh 2>&1; echo " rc=$?")"
+  check_match "an unknown option fails the read" "unknown bwrap option --bogus" "$(pol --bogus -- sh 2>&1; echo " rc=$?")"
+  # ai-jail 2.6.2 (its #147): the options in a memfd of ai-jail's, named on the command line by --args.
+  # A process holds one here as ai-jail does; the policy reads it through that process's fd dir.
+  local mf=$TMP/jp-memfd pid fd
+  python3 -c 'import os, sys, time
+def hold(name, args):
+    fd = os.memfd_create(name, 0); os.write(fd, b"".join(a.encode() + b"\0" for a in args)); return fd
+good = hold("ai-jail-bwrap-args", ["--tmpfs", "/tmp", "--bind", sys.argv[1], sys.argv[1], "--unshare-net"])
+other = hold("something-else", ["--share-net"])
+print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
+  pid=$!
+  until_ok 5 test -s "$mf"
+  read -r fd ofd < "$mf"
+  polfd() { printf '%s\0' /usr/bin/bwrap "$@" | lib jail_policy "/proc/$pid/fd"; }
+  p=$(polfd --args "$fd" -- sh)
+  check_eq "--args: the options read from ai-jail's memfd (no network)" false "$(jq -r .net <<<"$p")"
+  check_eq "...and its folder" "$d/proj false" "$(jq -r '.roots[] | "\(.path) \(.masked)"' <<<"$p")"
+  check_eq "...options after it still count" true "$(polfd --args "$fd" --share-net -- sh | jq -r .net)"
+  check_match "--args: a fd that is not ai-jail's options memfd fails" "not ai-jail's options memfd" "$(polfd --args "$ofd" -- sh 2>&1; echo " rc=$?")"
+  check_match "--args: one that isn't open fails" "not ai-jail's options memfd" "$(polfd --args 999 -- sh 2>&1)"
+  check_match "--args: only once" "more than once" "$(polfd --args "$fd" --args "$fd" -- sh 2>&1)"
+  check_match "--args: not without ai-jail's fds" "no ai-jail" "$(pol --args "$fd" -- sh 2>&1; echo " rc=$?")"
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
   check_match "...rc 1" "rc=1" "$(pol --bogus -- sh 2>&1; echo " rc=$?")"
   check_match "an option cut short fails" "cut short" "$(printf '%s\0' bwrap --bind a | lib jail_policy)"
   check_match "no -- fails" "no --" "$(pol --tmpfs /x)"
