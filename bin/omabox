@@ -19,7 +19,12 @@ STILL=$ROOT/tools/still/omabox-still
 EVENTS=$ROOT/tools/events/omabox-events
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
-AQUAMARINE=$ROOT/build/prefix/lib
+# aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
+# the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
+# and where: a checkout's build/prefix, else the user's data dir (aq_resolve).
+AQ_COMMIT=7bb8bdf4
+AQ_FIXED_AFTER=0.15.1
+AQ_USER=${XDG_DATA_HOME:-$HOME/.local/share}/omabox/aquamarine
 PASS_KEY="SUPER + ALT + ESCAPE"
 READY_TIMEOUT=${OMABOX_READY_TIMEOUT:-30}
 HOST_SIG="" HOST_WL=""   # host_session's, never the caller's
@@ -77,7 +82,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
   omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back
   omabox broker [on|off]                                 let agents inside ai-jail drive their own boxes
-  omabox --version
+  omabox setup --aquamarine [--force]                    build aquamarine's fix (headless NVIDIA boxes, confirm-close)
+  omabox --version                                       and which aquamarine new boxes use
 
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
 (Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
@@ -98,7 +104,7 @@ variables (a password too: never on a command line); --env-file FILE hands it a 
 for a secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
-patched aquamarine, so a build must link the same libaquamarine soname (checked before the box
+box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
 starts); hyprctl and hyprpm stay the installed ones (a warning when the versions differ). \`ls\` and
 \`windows\` name it. Compositor logic runs for real (layouts, focus, input routing, the Lua config,
 IPC, protocols); DRM/KMS, real monitors, HDR/VRR, multi-GPU, libinput with real devices and the
@@ -146,6 +152,10 @@ Interactive boxes and peek windows open on workspace 9, without focus: \`omabox 
 click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
 Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
 second close is a yes).
+aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until a release has it): a
+headless box on an NVIDIA render node and confirm-close need it, and \`up\` refuses them without it;
+\`omabox setup --aquamarine\` builds it (a checkout's build/prefix, else ~/.local/share/omabox).
+OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
 $PASS_KEY toggles sending SUPER keys to an interactive box, once:
 until focus leaves it, or a key is pressed with the pointer off it. \`keys-to-box on\` makes them
 follow focus and the pointer, for the box's lifetime: its window has focus and the pointer is over
@@ -1070,6 +1080,17 @@ cmd_up() {
   [ "$net" != connected ] || [ -c /dev/net/tun ] ||
     die "a box's network needs /dev/net/tun (the tun kernel module); --net isolated does without, and has no internet"
   check_install "$hyprland"
+  # What needs aquamarine's fix (finding 125), refused before anything is made: a headless box on an
+  # NVIDIA render node (its screen is labwc's Wayland output) and confirm-close asked for on `up`.
+  # confirm-close from the settings is turned off for the box instead, below.
+  if [ "$AQ_FIXED" = 0 ]; then
+    if [ $interactive = 0 ] && [ "$(render_driver "$(render_node)")" = nvidia ]; then
+      local others; others=$(render_nodes | while read -r n; do [ "$(render_driver "$n")" = nvidia ] || printf ' %s (%s)' "$n" "$(render_driver "$n")"; done)
+      die "a headless box on NVIDIA ($(render_node)) needs $(aq_lacks): $AQ_HOWTO${others:+; or render on another GPU with OMABOX_RENDER_NODE:$others}"
+    fi
+    [ "$confirm_from" = config ] || [ "$confirm" != on ] ||
+      die "--confirm-close (the window it opens again) needs $(aq_lacks): $AQ_HOWTO"
+  fi
   # One `up` or `down` per name at a time: two agents in one repo both running `omabox up` would
   # otherwise each start a box on the same dir, and one would be orphaned where `down` cannot see it.
   mkdir -p "$BOXES"
@@ -1131,6 +1152,10 @@ cmd_up() {
   # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
   # confirm_live sees the box.
   [ "$confirm_from" = flag ] || confirm=$(conf_get confirm-close)
+  if [ $interactive = 1 ] && [ "$AQ_FIXED" = 0 ] && [ "$confirm" = on ]; then
+    confirm=off
+    say "confirm-close is on in your settings, but it needs $(aq_lacks): off for this box (closing its window ends it). $AQ_HOWTO"
+  fi
   local render renders nvidia_devs=() dev n wayland_screen=0 run=/run/user/$UID
   render=$(render_node)
   if [ $interactive = 1 ]; then
@@ -1155,8 +1180,10 @@ cmd_up() {
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" \
+    --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
-      idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1)}
+      idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
+      aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
@@ -1174,9 +1201,11 @@ cmd_up() {
     --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --ro-bind /etc /etc
     --proc /proc --dev /dev --ro-bind /sys /sys
     --tmpfs /tmp --bind "$D/run" "$run" --bind "$HOMES/$NAME/home" /home/sbx
-    --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$AQUAMARINE" /opt/omabox/lib
+    --ro-bind "$ROOT/share" /opt/omabox/share
     --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER" --ro-bind "$STILL" "$BOX_STILL"
     --ro-bind "$EVENTS" "$BOX_EVENTS")
+  # A private aquamarine (finding 125), which share/start-hyprland.sh puts first; none: the system's.
+  [ -z "$AQ_LIB" ] || args+=(--ro-bind "$AQ_LIB" /opt/omabox/lib)
   for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
   [ ${#nvidia_devs[@]} = 0 ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl)
   for n in "${nvidia_devs[@]}"; do args+=(--dev-bind "$n" "$n"); done
@@ -1200,6 +1229,8 @@ cmd_up() {
   # has none of, so a `run -d` log stayed empty; --env QT_FORCE_STDERR_LOGGING=0 turns it off.
   # OMABOX_HYPRLAND: the build share/start-hyprland.sh starts instead of /usr/bin/Hyprland (finding 116).
   local hypr_env=(); [ -z "$hyprland" ] || hypr_env=(--setenv OMABOX_HYPRLAND "$hyprland")
+  # OMABOX_AQUAMARINE=system (finding 125) holds for the boxes a box starts too (the suite's stand-in hosts).
+  [ -z "${OMABOX_AQUAMARINE:-}" ] || hypr_env+=(--setenv OMABOX_AQUAMARINE "$OMABOX_AQUAMARINE")
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
@@ -1323,35 +1354,143 @@ cmd_up() {
   [ $new = 0 ] || echo "$NAME"
 }
 
-# What `up` needs from install.sh: the helpers, and the patched aquamarine under the soname the
-# box's Hyprland links (after an Arch update to a new soname, the box would otherwise silently run
-# the unpatched system library). check_install [HYPRLAND]: the installed one, or `up --hyprland`'s
-# build (finding 116), which is refused here rather than left to crash in the box.
+# What `up` needs from install.sh: the helpers, and an aquamarine with the soname the box's Hyprland
+# links (aq_resolve). check_install [HYPRLAND]: the installed one, or `up --hyprland`'s build (finding
+# 116), which is refused here rather than left to crash in the box.
 check_install() {
   [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] && [ -x "$EVENTS" ] || die "missing $KEYBOARD, $POINTER, $STILL or $EVENTS: run install.sh"
   # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
   [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$(render_node)")" != nvidia ] ||
     die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
-  local want have
   if [ -z "${1:-}" ]; then
-    want=$(ldd "$(command -v Hyprland || echo /usr/bin/Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}') || true
-    [ -n "$want" ] || die "cannot tell which libaquamarine Hyprland links (ldd $(command -v Hyprland))"
-    [ -e "$AQUAMARINE/$want" ] || die "Hyprland links $want but $AQUAMARINE lacks it: run install.sh"
+    aq_resolve "$(hypr_aq_soname)" || exit 1
     return 0
   fi
   # A build's own libraries: its ELF dynamic section, read (readelf), never run. Its libaquamarine
-  # soname must be the patched build's: the box finds that one first (LD_LIBRARY_PATH), and a build
-  # against another soname would load the system's unpatched one, or none.
+  # soname picks the box's aquamarine as the installed Hyprland's does: a private build with that
+  # soname, else the system's; neither has it, and the box's Hyprland would not start.
+  local want
   want=$(elf_needed "$1" | grep -m1 '^libaquamarine\.so') || die "--hyprland $1 links no libaquamarine (readelf -d): not a Hyprland build?"
-  have=$(elf_needed "$AQUAMARINE/libaquamarine.so" SONAME) || have="nothing ($AQUAMARINE: run install.sh)"
-  [ "$want" = "$have" ] && [ -e "$AQUAMARINE/$want" ] ||
-    die "--hyprland $1 links $want, but the patched aquamarine a box runs with is $have: build Hyprland against it" \
-      "(PKG_CONFIG_PATH=$ROOT/build/prefix/lib/pkgconfig) or against an aquamarine with the same soname"
+  aq_resolve "$want" 2>/dev/null ||
+    die "--hyprland $1 links $want, which neither the system nor a private build of omabox's has" \
+      "(the system has $(hypr_aq_soname 2>/dev/null || echo "no libaquamarine")): build Hyprland against the installed aquamarine," \
+      "or against omabox's private build (PKG_CONFIG_PATH=<its prefix>/lib/pkgconfig, omabox setup --aquamarine)"
   # Any other library it needs and the box lacks (a newer hyprutils, say): ldd, as the box's loader sees
   # them. Not for a jailed agent's file: the broker does not load what the jail hands it.
   in_jail && return 0
-  local missing; missing=$(LD_LIBRARY_PATH=$AQUAMARINE ldd -- "$1" 2>/dev/null | awk '/=> not found/ {print $1}' | paste -sd ' ') || true
-  [ -z "$missing" ] || die "--hyprland $1 needs $missing, which the box lacks (it has the system's libraries and $AQUAMARINE)"
+  local missing; missing=$(LD_LIBRARY_PATH=$AQ_LIB ldd -- "$1" 2>/dev/null | awk '/=> not found/ {print $1}' | paste -sd ' ') || true
+  [ -z "$missing" ] || die "--hyprland $1 needs $missing, which the box lacks (it has the system's libraries${AQ_LIB:+ and $AQ_LIB})"
+}
+
+# --- aquamarine (issue #47, finding 125) ---------------------------------------------------------
+# Stock aquamarine (0.15.0 and 0.15.1) never sends Hyprland's first commit of a Wayland output that is
+# created after the backend started, and draws before the parent's configure is acked (finding 4):
+# such an output never becomes a monitor. A box meets that twice: a headless NVIDIA box, whose screen
+# is the private labwc's Wayland output (finding 77), and an interactive box's second window, which
+# confirm-close opens with `hyprctl output create wayland` (finding 70). Everything else runs on stock:
+# a headless AMD/Intel box's screen is a headless output, and an interactive box's first window is
+# flushed with the backend's start. So a private build is only needed for those two, until a release
+# has the fix.
+
+# The libaquamarine soname the installed Hyprland links.
+hypr_aq_soname() {
+  local h want; h=$(command -v Hyprland || echo /usr/bin/Hyprland)
+  want=$(ldd "$h" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}') || true
+  [ -n "$want" ] || die "cannot tell which libaquamarine Hyprland links (ldd $h)"
+  echo "$want"
+}
+
+# aq_pick SONAME SYSDIR [PRIVATE_LIBDIR...]: which aquamarine a box runs, as KIND|LIBDIR|VERSION|FIXED.
+# The first private build (a checkout's build/prefix, then the user's) that has SONAME, else the
+# system's in SYSDIR; one with another soname is stale (built before an aquamarine upgrade): skipped,
+# said so. FIXED is 1 when it has the fix: every private build (only omabox makes them, at AQ_COMMIT
+# or before), a system one after AQ_FIXED_AFTER. OMABOX_AQUAMARINE=system skips the private builds
+# (the suite on stock, finding 125). LIBDIR is empty for the system's: the box's loader finds it.
+aq_pick() {
+  local want=$1 sys=$2 d f v commit; shift 2
+  [ -n "$want" ] || return 1
+  [ "${OMABOX_AQUAMARINE:-}" != system ] || set --
+  [ -z "${OMABOX_AQUAMARINE:-}" ] || [ "$OMABOX_AQUAMARINE" = system ] || die "OMABOX_AQUAMARINE is system or unset, got $OMABOX_AQUAMARINE"
+  for d in "$@"; do
+    if [ -e "$d/$want" ]; then
+      f=$(readlink -f "$d/$want"); v=${f##*.so.}
+      commit=$(cat "$d/../.omabox-commit" 2>/dev/null) || commit=""
+      printf 'private|%s|%s|1\n' "$d" "$v${commit:+@$commit}"
+      return 0
+    fi
+    f=$(compgen -G "$d/libaquamarine.so.*" | head -1) || continue
+    say "skipping the aquamarine in $d: Hyprland links $want, it has $(elf_needed "$f" SONAME || echo "another")" \
+      "(built before an aquamarine upgrade; omabox setup --aquamarine makes a new one when one is needed)"
+  done
+  [ -e "$sys/$want" ] || die "Hyprland links $want, which is not in $sys"
+  f=$(readlink -f "$sys/$want"); v=${f##*.so.}
+  [[ $v =~ ^[0-9]+(\.[0-9]+)*$ ]] || v=unknown
+  local fixed=0
+  [ "$v" = unknown ] || [ "$(printf '%s\n%s\n' "$AQ_FIXED_AFTER" "$v" | sort -V | tail -1)" = "$AQ_FIXED_AFTER" ] || fixed=1
+  printf 'system||%s|%s\n' "$v" "$fixed"
+}
+
+# aq_resolve SONAME: aq_pick's answer for a box, in AQ_KIND, AQ_LIB, AQ_VER and AQ_FIXED.
+aq_resolve() {
+  local r; r=$(aq_pick "$1" /usr/lib "$ROOT/build/prefix/lib" "$AQ_USER/lib") || return 1
+  IFS='|' read -r AQ_KIND AQ_LIB AQ_VER AQ_FIXED <<<"$r"
+}
+aq_desc() {
+  if [ "$AQ_KIND" = private ]; then echo "a private build, $AQ_VER (${AQ_LIB%/lib})"
+  elif [ "$AQ_FIXED" = 1 ]; then echo "the system's, $AQ_VER"
+  else echo "the system's, $AQ_VER, without the fix for nested Wayland outputs (hyprwm/aquamarine#415): headless NVIDIA boxes and confirm-close need omabox setup --aquamarine"; fi
+}
+# What a refusal says when AQ_FIXED is 0 (only the system's can lack the fix).
+aq_lacks() { echo "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415), which the system's aquamarine $AQ_VER lacks"; }
+AQ_HOWTO="omabox setup --aquamarine builds it for you (a minute or two)"
+
+# `omabox setup --aquamarine` (issues #47, #49): build the fix where aq_resolve looks for it. A no-op
+# while the box's aquamarine has it (a private build at AQ_COMMIT, or a system release after
+# AQ_FIXED_AFTER) unless --force. Its tools are the package's optional dependencies.
+cmd_setup() {
+  local aq=0 force=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --aquamarine) aq=1 ;;
+      --force) force=1 ;;
+      -h|--help) echo "usage: omabox setup --aquamarine [--force]   build aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"; return ;;
+      *) die "setup: unknown option $1" ;;
+    esac
+    shift
+  done
+  [ $aq = 1 ] || die "setup: only --aquamarine so far (the rest is install.sh's)"
+  local want; want=$(hypr_aq_soname)
+  OMABOX_AQUAMARINE="" aq_resolve "$want" || exit 1
+  if [ $force = 0 ] && [ "$AQ_FIXED" = 1 ] && { [ "$AQ_KIND" = system ] || [ "${AQ_VER#*@}" = "$AQ_COMMIT" ]; }; then
+    say "boxes use $(aq_desc), which has the fix: nothing to build"
+    return 0
+  fi
+  local t missing=()
+  for t in git cmake ninja hyprwayland-scanner pkg-config c++; do command -v "$t" >/dev/null || missing+=("$t"); done
+  [ ${#missing[@]} = 0 ] || die "setup --aquamarine needs ${missing[*]}: sudo pacman -S --needed git cmake ninja hyprwayland-scanner base-devel"
+  # A checkout builds into its own build/ (as install.sh always did); anything else into the user's
+  # data dir, its source in the cache (not in HOMES: sweep_homes would take it for a box's).
+  local prefix=$AQ_USER src=${XDG_CACHE_HOME:-$HOME/.cache}/omabox-aquamarine
+  if [ -e "$ROOT/.git" ]; then prefix=$ROOT/build/prefix src=$ROOT/build/aquamarine; fi
+  say "building aquamarine $AQ_COMMIT (hyprwm/aquamarine#415) into $prefix"
+  [ -d "$src/.git" ] || git clone -q https://github.com/hyprwm/aquamarine "$src" || die "could not clone aquamarine into $src"
+  git -C "$src" cat-file -e "$AQ_COMMIT^{commit}" 2>/dev/null || git -C "$src" fetch -q origin || die "could not fetch aquamarine in $src"
+  git -C "$src" checkout -q "$AQ_COMMIT" || die "could not check out aquamarine $AQ_COMMIT in $src"
+  # Installed next to the old one, then swapped: a failed build leaves the old one in use. (A running
+  # box keeps the files it loaded.)
+  rm -rf "$prefix.new"
+  if ! { cmake -S "$src" -B "$src/out" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" >/dev/null &&
+         cmake --build "$src/out" && DESTDIR="$prefix.new" cmake --install "$src/out" >/dev/null; }; then
+    die "building aquamarine failed (above)"
+  fi
+  [ -e "$prefix.new$prefix/lib/$want" ] ||
+    die "aquamarine $AQ_COMMIT builds $(elf_needed "$prefix.new$prefix/lib/libaquamarine.so" SONAME || echo "no libaquamarine"), but Hyprland links $want:" \
+      "omabox needs a newer AQ_COMMIT (left in $prefix.new)"
+  echo "$AQ_COMMIT" > "$prefix.new$prefix/.omabox-commit"
+  rm -rf "$prefix.old"; [ ! -e "$prefix" ] || mv "$prefix" "$prefix.old"
+  mv "$prefix.new$prefix" "$prefix" && rm -rf "$prefix.new" "$prefix.old"
+  aq_resolve "$want" || exit 1
+  say "boxes now use $(aq_desc)"
 }
 
 # An ELF file's dynamic section entries of one kind (NEEDED, or SONAME), one per line: its own words,
@@ -3907,6 +4046,9 @@ cmd_config() {
        if [ "${args[1]}" = default ]; then conf_set "$k"; v=$(conf_default "$k")
        else v=$(conf_check "$k" "${args[1]}") || die "config: bad $k: ${args[1]} ($(conf_help "$k"))"; conf_set "$k" "$v"; fi
        [ "$k" = confirm-close ] && confirm_live "$v"
+       if [ "$k" = confirm-close ] && [ "$v" = on ] && aq_resolve "$(hypr_aq_soname)" && [ "$AQ_FIXED" = 0 ]; then
+         say "note: confirm-close needs $(aq_lacks): boxes leave it off until then. $AQ_HOWTO"
+       fi
        echo "$k=$v" ;;
     *) die "config: KEY [VALUE]" ;;
   esac
@@ -3920,11 +4062,12 @@ conf_help() {
 }
 
 # confirm-close is live: running interactive boxes that took it from the config follow a change
-# (--confirm-close / --no-confirm-close on `up` pins a box's own).
+# (--confirm-close / --no-confirm-close on `up` pins a box's own); not one on an aquamarine without
+# the fix, which cannot open its window again (finding 125).
 confirm_live() {
   local d
   for d in "$BOXES"/*/; do
-    [ "$(jq -r 'select(.mode == "interactive") | .confirm_close_from // empty' "$d/box.json" 2>/dev/null)" = config ] || continue
+    [ "$(jq -r 'select(.mode == "interactive" and .aquamarine.fixed != false) | .confirm_close_from // empty' "$d/box.json" 2>/dev/null)" = config ] || continue
     write_confirm_flag "$d/run" "$1"
   done
 }
@@ -3989,7 +4132,7 @@ cmd_ls() {
       jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys \
         '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
           bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null),
-          hyprland_version: (.hyprland_version // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
+          hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
         jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
     done | jq -s -c .
     return
@@ -4439,6 +4582,13 @@ global_box() {
 # with ~/.local/bin/omabox linked to a working copy, an edit made while a command ran used to land in
 # the middle of what it was still reading ("line 1207: q: command not found"). By the time that line
 # is read, bash has the whole file (finding 66).
+# The version, then what a new box would run on: the aquamarine (finding 125).
+cmd_version() {
+  echo "omabox $(cat "$ROOT/VERSION")"
+  local want
+  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then echo "aquamarine: $(aq_desc)"; fi
+}
+
 main() {
   global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
@@ -4475,9 +4625,10 @@ main() {
     host) cmd_host "$@" ;;
     clip) cmd_clip "$@" ;;
     broker) cmd_broker "$@" ;;
+    setup) cmd_setup "$@" ;;
     _reap) cmd__reap "$@" ;;
     help|-h|--help) usage ;;
-    version|-V|--version) echo "omabox $(cat "$ROOT/VERSION")" ;;
+    version|-V|--version) cmd_version ;;
     *) say "unknown command: $cmd (omabox help lists the commands and their options)"; exit 2 ;;
   esac
 }

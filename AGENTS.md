@@ -57,5 +57,6 @@ skips the checks it holds up, but one opened by an omabox older than the suite f
 ## Developed against (2026-09-23)
 
 Hyprland 0.56.2 (Lua config, `hyprctl eval`, dispatch syntax `hl.dsp.*`), aquamarine 0.15.0
-system + patched 0.15.1@7bb8bdf4 in `build/prefix` (needed until a release has PR #415),
+system + patched 0.15.1@7bb8bdf4 in `build/prefix` (headless NVIDIA boxes and confirm-close need it
+until a release has PR #415; everything else runs on the system's),
 labwc 0.20.2 as parent compositor, quickshell 0.3.1.

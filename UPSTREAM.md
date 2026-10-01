@@ -5,18 +5,25 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 
 ## aquamarine: configure fix (PR #415)
 
-- **Needed for:** a nested Hyprland that applies its window's configure (NOTES finding 4).
+- **Needed for:** headless boxes on an NVIDIA render node and confirm-close (a Wayland output made
+  after the backend started, or whose parent is labwc: NOTES findings 4, 125). Everything else runs
+  on the system's aquamarine.
 - **Waiting for:** a release containing commit `7bb8bdf4` ("wayland: fix configure not applying
-  sometimes (#415)", 2026-09-22). Arch has `aquamarine 0.15.0` (2026-09-23).
+  sometimes (#415)", 2026-09-22), after v0.15.1. Arch has `aquamarine 0.15.0` (2026-09-23).
+- **Until then:** `omabox setup --aquamarine` builds `AQ_COMMIT` (a checkout's `build/prefix`,
+  `install.sh` calls it; else `~/.local/share/omabox/aquamarine`); without one, `up` refuses what
+  needs it, saying so.
 - **Check:** `git -C build/aquamarine fetch -q --tags && git -C build/aquamarine tag --contains 7bb8bdf4`,
-  then `pacman -Q aquamarine` at or past that tag.
-- **Then drop:** the aquamarine step, `AQ_*` and the soname check in `install.sh` (and its header
-  comment), its build packages in `PKGS` (cmake, ninja, hyprwayland-scanner, ...), in `bin/omabox`
-  `AQUAMARINE`, the soname check in `check_install` and `--ro-bind "$AQUAMARINE" /opt/omabox/lib`,
-  `LD_LIBRARY_PATH=/opt/omabox/lib` in `share/session.sh` (every process in a box inherits it today:
-  harmless, the dir holds only libaquamarine, but a box's environment differs from the host's there),
-  `build/prefix`, and the mentions in README.md ("patched aquamarine"), NOTES "Reproduce" and
-  AGENTS.md's "Developed against".
+  then `pacman -Q aquamarine` at or past that tag. Once it is, `omabox --version` names the system's
+  copy with no warning and `setup --aquamarine` builds nothing (`AQ_FIXED_AFTER` in `bin/omabox`,
+  0.15.1: correct it if that release lacks the fix).
+- **Then drop:** `cmd_setup`'s build (or all of `setup`, if #49 has not given it other parts), the
+  private-build half of `aq_pick` (`AQ_COMMIT`, `AQ_USER`, the stale-soname note), the refusals and
+  the confirm-close downgrade in `cmd_up`/`cmd_config` with `aq_lacks`/`AQ_HOWTO`, the
+  `/opt/omabox/lib` bind and `LD_LIBRARY_PATH` in `share/start-hyprland.sh`, the aquamarine step and
+  its build packages in `install.sh` (cmake, ninja, hyprwayland-scanner, ...), `OMABOX_AQUAMARINE`
+  and `aq_unfixed` in the suite, and the mentions in README.md, CONTRIBUTING.md, NOTES "Reproduce",
+  the skill's `reference.md` and AGENTS.md's "Developed against". Keep `confirm-close.sh`'s fallback.
 
 ## passt: `pasta --no-pidns`
 

@@ -21,10 +21,11 @@ say so in the title.
 ## Changing it
 
 ```bash
-./install.sh           # builds the tools and the patched aquamarine
+./install.sh           # builds the tools and aquamarine's fix (omabox setup --aquamarine)
 test/run.sh unit       # the fast tier, no box
 test/run.sh            # the whole suite in real, headless boxes, side by side (~1.5 min on 16 CPUs); before a PR
 test/run.sh -j 1       # the same, one test at a time (~8.5 min): what a leak is pinned to, exactly
+OMABOX_AQUAMARINE=system test/run.sh   # on the system's aquamarine, as a package without the fix runs
 shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/* share/guard/*
 ```
 

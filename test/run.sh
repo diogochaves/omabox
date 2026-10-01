@@ -112,6 +112,9 @@ skip() {
   skips+=("$CUR: $1 ($2)"); printf '  \e[33mskip\e[0m %s (%s)\n' "$1" "$2"
   [ "$STRICT" = 0 ] || no "$1" "skipped under --strict: $2"
 }
+# Finding 125: whether the boxes an omabox starts lack aquamarine's fix for nested Wayland outputs
+# (the system's 0.15.1 or older, no private build or OMABOX_AQUAMARINE=system). ARGS: that omabox.
+aq_unfixed() { "$@" --version 2>/dev/null | grep -q '^aquamarine: .*without the fix'; }
 # Issue #45 (finding 121): a peek window you opened on one of the run's boxes (bar widget, omabox
 # peek; its process marked OMABOX_PEEK_BY=you) makes that box in use, by design: it is not reaped for
 # idling or for its agent's exit, and click/keys write marks for it. `held BOX CHECK...` runs a check
@@ -484,7 +487,7 @@ t_unit_config() {
   check_eq "set a workspace" workspace=4 "$(cfg workspace 4)"
   check_eq "special is the scratchpad" workspace=special:scratchpad "$(cfg workspace special)"
   check_eq "special:NAME" workspace=special:omabox "$(cfg workspace special:omabox)"
-  check_eq "confirm-close yes reads on" confirm-close=on "$(cfg confirm-close yes)"
+  check_eq "confirm-close yes reads on" confirm-close=on "$(cfg confirm-close yes | tail -1)"
   check_eq "bar-icon auto" bar-icon=auto "$(cfg bar-icon auto)"
   check_fails "bar-icon takes auto or always" env HOME="$h" "$CLI" config bar-icon sometimes
   check_eq "--json for the widget" '{"workspace":"special:omabox","confirm-close":"on","bar-icon":"auto"}' "$(HOME=$h "$CLI" config --json | jq -c .)"
@@ -593,7 +596,8 @@ t_new() {
 # One version for the CLI and the widget (CHANGELOG.md).
 t_unit_version() {
   local v; v=$(cat "$ROOT/VERSION")
-  check_eq "omabox --version" "omabox $v" "$("$CLI" --version)"
+  check_eq "omabox --version" "omabox $v" "$("$CLI" --version | head -1)"
+  check_match "...then the aquamarine boxes use (finding 125)" "^aquamarine: (a private build, |the system's, )" "$("$CLI" --version | sed -n 2p)"
   check_eq "the widget's manifest has it" "$v" "$(jq -r .version "$ROOT/plugin/manifest.json")"
   check_match "...and its Settings face" "pluginVersion: \"$v\"" "$(grep pluginVersion "$ROOT/plugin/Panel.qml")"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
@@ -1969,6 +1973,61 @@ t_unit_nvidia() {
     "$(PATH=$d/none:$PATH lib nvidia_node 0000:02:00.0 1 "$d/proc" "$d/dev" 2>&1)"
 }
 
+# finding 125 (issue #47): which aquamarine a box runs (aq_pick), and what is refused without the fix.
+t_unit_aquamarine() {
+  local d=$TMP/$P-aq so=libaquamarine.so.14
+  mkdir -p "$d/sys" "$d/co/lib" "$d/user/lib" "$d/stale/lib" "$d/home"
+  : > "$d/sys/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/sys/$so"
+  : > "$d/user/lib/libaquamarine.so.0.15.1"; ln -s libaquamarine.so.0.15.1 "$d/user/lib/$so"; echo abc1234 > "$d/user/.omabox-commit"
+  pick() { OMABOX_AQUAMARINE="" lib aq_pick "$@" 2>&1; }
+  check_eq "no private build: the system's, 0.15.0 lacks the fix" "system||0.15.0|0" "$(pick "$so" "$d/sys" "$d/co/lib")"
+  check_eq "a private build with the soname: used, with its commit, fixed" "private|$d/user/lib|0.15.1@abc1234|1" \
+    "$(pick "$so" "$d/sys" "$d/co/lib" "$d/user/lib")"
+  : > "$d/co/lib/libaquamarine.so.0.15.1"; ln -s libaquamarine.so.0.15.1 "$d/co/lib/$so"
+  check_eq "...the first one listed (a checkout's before the user's)" "private|$d/co/lib|0.15.1|1" \
+    "$(pick "$so" "$d/sys" "$d/co/lib" "$d/user/lib")"
+  check_eq "OMABOX_AQUAMARINE=system: the system's all the same" "system||0.15.0|0" \
+    "$(OMABOX_AQUAMARINE=system lib aq_pick "$so" "$d/sys" "$d/co/lib" 2>&1)"
+  check_match "...anything else refused" "OMABOX_AQUAMARINE is system or unset" "$(OMABOX_AQUAMARINE=yes lib aq_pick "$so" "$d/sys" 2>&1)"
+  if command -v cc >/dev/null; then
+    echo 'int aq(void) { return 0; }' > "$d/aq.c"
+    cc -shared -fPIC -Wl,-soname,libaquamarine.so.13 -o "$d/stale/lib/libaquamarine.so.0.14.0" "$d/aq.c"
+  else : > "$d/stale/lib/libaquamarine.so.0.14.0"; fi
+  local out; out=$(pick "$so" "$d/sys" "$d/stale/lib")
+  check_match "a private build with another soname (stale): skipped, saying so" \
+    "skipping the aquamarine in $d/stale/lib: Hyprland links $so, it has (libaquamarine.so.13|another)" "$out"
+  check_match "...and the system's used" $'\n''system\|\|0.15.0\|0$' "$out"
+  local v
+  for v in 0.15.1:0 0.15.2:1 0.15.10:1 0.16.0:1 1.0:1 0.9.9:0; do
+    : > "$d/sys/libaquamarine.so.${v%:*}"; ln -sf "libaquamarine.so.${v%:*}" "$d/sys/$so"
+    check_eq "the system's ${v%:*}: fixed ${v#*:}" "system||${v%:*}|${v#*:}" "$(pick "$so" "$d/sys")"
+  done
+  check_match "a soname the system lacks" "Hyprland links libaquamarine.so.99, which is not in $d/sys" "$(pick libaquamarine.so.99 "$d/sys")"
+  check_fails "no soname at all: no answer (not a match on the dir)" lib aq_pick "" "$d/sys" "$d/user/lib"
+  # What needs the fix, on this machine's system aquamarine (OMABOX_AQUAMARINE=system).
+  if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
+    check_match "without the fix: up --confirm-close refused, saying why and what to run" \
+      "--confirm-close .*needs aquamarine's fix .*hyprwm/aquamarine#415.*omabox setup --aquamarine" \
+      "$(OMABOX_AQUAMARINE=system ob up "$P-aq" --interactive --confirm-close 2>&1)"
+    check_fails "...nothing made" test -e "$XDG_RUNTIME_DIR/omabox/$P-aq"
+    check_match "...config confirm-close on: set, with a note" "note: confirm-close needs aquamarine's fix.*confirm-close=on" \
+      "$(HOME=$d/home OMABOX_AQUAMARINE=system "$CLI" config confirm-close on 2>&1 | tr '\n' ' ')"
+    local n nv=""
+    for n in /dev/dri/renderD*; do [ "$(lib render_driver "$n")" != nvidia ] || { nv=$n; break; }; done
+    if [ -n "$nv" ]; then
+      check_match "...a headless box on NVIDIA refused, saying what to run" "a headless box on NVIDIA \($nv\) needs aquamarine's fix.*omabox setup --aquamarine" \
+        "$(OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=$nv ob up "$P-aq" 2>&1)"
+      check_fails "...nothing made" test -e "$XDG_RUNTIME_DIR/omabox/$P-aq"
+    else
+      skip "a headless box on NVIDIA without the fix is refused" "no NVIDIA render node"
+    fi
+  else
+    skip "what needs aquamarine's fix is refused without it" "the system's aquamarine has it"
+  fi
+  check_match "setup with no part" "only --aquamarine so far" "$("$CLI" setup 2>&1)"
+  check_match "...an unknown option" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
+}
+
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
 t_unit_hyprland() {
   local d=$TMP/$P-hyp out
@@ -1986,11 +2045,12 @@ t_unit_hyprland() {
     # A build against another aquamarine: a stub library with another soname, and a program linking it.
     echo 'int aq(void) { return 0; }' > "$d/aq.c"; echo 'int aq(void); int main(void) { return aq(); }' > "$d/m.c"
     mkdir -p "$d/aq99" "$d/aq14" "$d/b99" "$d/b14"
-    local so; so=$(readelf -d "$ROOT/build/prefix/lib/libaquamarine.so" | sed -n 's/.*(SONAME).*\[\(.*\)\]$/\1/p')
+    local so; so=$(lib hypr_aq_soname)
     cc -shared -fPIC -Wl,-soname,libaquamarine.so.99 -o "$d/aq99/libaquamarine.so" "$d/aq.c" &&
       cc -o "$d/b99/Hyprland" "$d/m.c" -L"$d/aq99" -laquamarine
     check_match "a build against another libaquamarine soname is refused, saying which" \
-      "links libaquamarine.so.99, but the patched aquamarine a box runs with is $so" "$(ob up "$P-h1" --hyprland "$d/b99/Hyprland" 2>&1)"
+      "links libaquamarine.so.99, which neither the system nor a private build of omabox's has \(the system has $so\)" \
+      "$(ob up "$P-h1" --hyprland "$d/b99/Hyprland" 2>&1)"
     # The right soname, but a library the box does not have.
     cc -shared -fPIC -Wl,-soname,"$so" -o "$d/aq14/libaquamarine.so" "$d/aq.c" &&
       cc -shared -fPIC -Wl,-soname,libomaboxmissing.so.1 -o "$d/aq14/libomaboxmissing.so" "$d/aq.c" &&
@@ -2755,34 +2815,53 @@ t_guard() {
   gone() { [ "$(state "$1")" = gone ]; }
   # shellcheck disable=SC2329
   is() { [ "$(state "$1")" = "$2" ]; }
-  "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
-  # issue #24: a window on 1 and one on 2, 2 shown: the new window must show 2 again, not a new one
-  local cch=("${in[@]}" "$CLI" hyprctl -b cc)
-  # shellcheck disable=SC2329 # called through until_ok
-  ccwins() { "${cch[@]}" -j clients | jq -e --argjson n "$1" 'length == $n' >/dev/null; }
-  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
-  until_ok 10 ccwins 1
-  "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
-  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
-  until_ok 10 ccwins 2
-  "${cl[@]}" >/dev/null
-  check "confirm-close: the box stays after a close" holds 2 is cc up
-  check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
-  check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
-  check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
-  check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
-    "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
-  # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
-  check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
-  "${cl[@]}" >/dev/null
-  check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
-  "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1
-  "${in[@]}" "$CLI" config confirm-close on >/dev/null
-  "${cl[@]}" >/dev/null
-  check "config confirm-close on reaches a running box" holds 2 is lv up
-  "${in[@]}" "$CLI" config confirm-close off >/dev/null
-  "${cl[@]}" >/dev/null
-  check "...and off again: one close ends it, cleared" until_ok 8 gone lv
+  if aq_unfixed "${in[@]}" "$CLI"; then
+    # finding 125: without aquamarine's fix the box cannot open its window again
+    check_match "no aquamarine fix: --confirm-close refused, saying why" "--confirm-close .*needs aquamarine's fix" \
+      "$("${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close 2>&1)"
+    check_eq "...before anything started" gone "$(state cc)"
+    "${in[@]}" "$CLI" config confirm-close on >/dev/null 2>&1
+    check_match "...on in the settings: off for the box, saying so" "confirm-close is on in your settings, but it needs" \
+      "$("${in[@]}" "$CLI" up lv --interactive --no-shell 2>&1)"
+    "${cl[@]}" >/dev/null
+    check "...so one close ends it, cleared" until_ok 8 gone lv
+    "${in[@]}" "$CLI" config confirm-close off >/dev/null
+    # The flag on all the same (the library changed under a running box): confirm-close.sh finds no
+    # new window and ends the box rather than leave it with none.
+    "${in[@]}" "$CLI" up fb --interactive --no-shell >/dev/null 2>&1
+    "${in[@]}" sh -c "echo on > '$("${in[@]}" "$CLI" path fb)/run/omabox.confirm-close'"
+    "${cl[@]}" >/dev/null
+    check "...and a box whose flag is on anyway ends when no window comes" until_ok 12 gone fb
+  else
+    "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
+    # issue #24: a window on 1 and one on 2, 2 shown: the new window must show 2 again, not a new one
+    local cch=("${in[@]}" "$CLI" hyprctl -b cc)
+    # shellcheck disable=SC2329 # called through until_ok
+    ccwins() { "${cch[@]}" -j clients | jq -e --argjson n "$1" 'length == $n' >/dev/null; }
+    "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+    until_ok 10 ccwins 1
+    "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
+    "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+    until_ok 10 ccwins 2
+    "${cl[@]}" >/dev/null
+    check "confirm-close: the box stays after a close" holds 2 is cc up
+    check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+    check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
+    check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
+    check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
+      "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
+    # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
+    check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
+    "${cl[@]}" >/dev/null
+    check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
+    "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1
+    "${in[@]}" "$CLI" config confirm-close on >/dev/null
+    "${cl[@]}" >/dev/null
+    check "config confirm-close on reaches a running box" holds 2 is lv up
+    "${in[@]}" "$CLI" config confirm-close off >/dev/null
+    "${cl[@]}" >/dev/null
+    check "...and off again: one close ends it, cleared" until_ok 8 gone lv
+  fi
   # A box that dies without being closed stays dead, logs kept, until `down`
   "${in[@]}" "$CLI" up cr --interactive --no-shell >/dev/null 2>&1
   "${in[@]}" "$CLI" run -b cr -- pkill -KILL -x Hyprland >/dev/null 2>&1
@@ -3035,16 +3114,20 @@ t_keys_to_box() {
   check "...and focus still drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
   check "keys-to-box off with the box focused: the keys are the host's at once" "${in[@]}" keys-to-box -b ka off
   check "...submap, border and file off" until_ok 5 kis "|aquamarine|plain|"
-  # issue #24: a confirm-close keep recreates the box's output (a new window, the same client).
-  "${in[@]}" keys-to-box -b ka on >/dev/null 2>&1
-  "${in[@]}" config confirm-close on >/dev/null
-  ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'pid:$pa' })" >/dev/null
-  # shellcheck disable=SC2329
-  reopened() { "${in[@]}" path ka >/dev/null && ob run -b "$B" -- test -f "$("${in[@]}" path ka)/run/omabox.reopened"; }
-  check "confirm-close keeps the box, with a new window (issue #24)" until_ok 8 reopened
-  "${in[@]}" config confirm-close off >/dev/null
-  focus class:foot; focus "pid:$pa"
-  check "after a confirm-close keep, its new window is still the keys-to-box box" until_ok 5 kis "omabox|aquamarine|border|ka"
+  if aq_unfixed "${in[@]}"; then
+    skip "a confirm-close keep keeps the keys-to-box box (issue #24)" "aquamarine without the fix for nested Wayland outputs: no keep (t_guard checks that)"
+  else
+    # issue #24: a confirm-close keep recreates the box's output (a new window, the same client).
+    "${in[@]}" keys-to-box -b ka on >/dev/null 2>&1
+    "${in[@]}" config confirm-close on >/dev/null
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'pid:$pa' })" >/dev/null
+    # shellcheck disable=SC2329
+    reopened() { "${in[@]}" path ka >/dev/null && ob run -b "$B" -- test -f "$("${in[@]}" path ka)/run/omabox.reopened"; }
+    check "confirm-close keeps the box, with a new window (issue #24)" until_ok 8 reopened
+    "${in[@]}" config confirm-close off >/dev/null
+    focus class:foot; focus "pid:$pa"
+    check "after a confirm-close keep, its new window is still the keys-to-box box" until_ok 5 kis "omabox|aquamarine|border|ka"
+  fi
   "${in[@]}" down ka >/dev/null 2>&1
   check "down with the box focused: nobody is left in the submap" until_ok 5 kre '^\|[a-z]*\|plain\|$'
   "${in[@]}" down --all >/dev/null 2>&1
@@ -3636,7 +3719,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
-  t_unit_nvidia t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
+  t_unit_nvidia t_unit_aquamarine t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
