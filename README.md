@@ -151,6 +151,8 @@ omabox restart-shell                          # after editing the plugin
 The plugin is mounted read-only and turned on in the box's `shell.json` where its manifest says.
 The box's bar has the built-in widgets plus the plugins you mount, nothing else. When that leaves it
 with no workspace numbers, it gets Omarchy's: where your plugin's were, or after the menu.
+When the shell does not load a plugin (a manifest it refuses, a QML error), `up` and `restart-shell`
+say why, with Omarchy's plugin validator's message when it has one; the box comes up anyway.
 
 ### A Hyprland change
 

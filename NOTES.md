@@ -2570,6 +2570,22 @@ from them.
     a terminal's bash included) prints `OMABOX_OMARCHY_VERSION`, which `up` reads on the host the same
     way (inside a box, the box's own); with `--omarchy`, the tree's own script (its git commit). The
     pacman database stays out of boxes. `t_uwsm_app` (run and a terminal's bash).
+138. **Why a mounted plugin is not in the bar** (2026-10-01). Checked in a box with four fixtures: the
+    shell drops a manifest it refuses (`schemaVersion` "1") with one `PluginRegistry: ... at
+    <manifest>` line and leaves it out of `shell listPlugins`; a missing entry point or a QML syntax
+    error is listed as enabled while the log says `Plugin widget ID failed: <file>: <error>`; `up`
+    exited 0 with a bar lacking the widget each time, the reason only in `shell.log`. Omarchy's
+    `omarchy-plugin-validate` catches the first two, not the QML error, and refuses some plugins the
+    shell loads (a symlink inside). Now `up` and `restart-shell` check each mounted plugin: the
+    validator on its host dir (an `--omarchy` tree's own), then the shell's list and the first
+    warning or error line naming it (its id, or its dir in the box), and print a warning for each
+    problem, never refusing (an agent needs the box up to debug). `box.json` keeps the dirs
+    (`plugin_dirs`) and each one's state (`plugin_status`: loaded, failed, not loaded, disabled, or
+    enabled for a panel/menu/overlay, whose QML loads only when summoned), in `ls --json` and `up
+    --json`. Also checked: `omarchy plugin add /abs/checkout --yes --enable` in a box clones the
+    committed HEAD into the box HOME, places the widget in the box's bar and leaves the user's
+    plugins dir alone; `omarchy plugin remove` leaves nothing in the box's `shell.json`.
+    `t_plugin_check`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

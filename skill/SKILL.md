@@ -193,7 +193,9 @@ omabox restart-shell                           # after editing the plugin (the m
 The box's `shell.json` has only built-in widgets plus the plugins you mount, each enabled where its
 manifest says. It copies the user's bar layout (Omarchy's workspace numbers in place of a plugin's
 that is left out); `omabox up --stock-bar` uses Omarchy's default bar
-instead (workspaces, clock, the stock right side), to see a plugin as most people will. Do not mount plugins you were not asked to test (some talk to real services).
+instead (workspaces, clock, the stock right side), to see a plugin as most people will. When the
+shell does not load a plugin, `up` and `restart-shell` print why (`warning: plugin ID failed: <QML
+error>`, or Omarchy's validator's message): read that before looking for the widget in a shot. Do not mount plugins you were not asked to test (some talk to real services).
 
 ## A Hyprland change
 
