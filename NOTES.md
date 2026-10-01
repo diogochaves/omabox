@@ -2469,97 +2469,98 @@ the designs here were measured in boxes and built for a contained desktop, and n
     Removing a lock file another `up` may be waiting on is the classic flock race (two holders of
     "the same" lock); they are empty and on a tmpfs gone at logout. The recipe gained `base-devel` in
     its optdepends (omabox's own `setup --aquamarine` hint names it).
-131. **`systemd-run` and `systemd-cat` stand-ins** (2026-10-01, from a comparison with omadev). Both
-    checked in a box before the fix. Omarchy 4 starts the browser (SUPER+SHIFT+B,
-    `omarchy-launch-browser`), LocalSend (menu share) and the Hermes theme with `systemd-run --user`;
-    a box without `--systemd` has no user manager, so it said "Failed to connect to user scope bus"
-    and the launcher still exited 0: the bind opened nothing. `omarchy restart shell` (Omarchy's own,
-    not `omabox restart-shell`) killed the bar and asked `omarchy-launch-shell` for a new one, which
-    runs it under `systemd-cat -t omarchy-shell`; with no journald that failed, its supervisor
-    retried, and the box was left with no bar. `share/bin/systemd-run` (first on the box's PATH) runs a
-    `--user` command directly: detached, output in `apps.log`, or in the foreground with `--wait`,
-    `--pipe` or `--scope` (exit code passed on); `-E`, `--working-directory`, `--same-dir` are kept, the
-    unit options dropped. Timers (`--on-*`) are refused, naming `--systemd`: reminders also list and
-    stop their timers with `systemctl`. With `--systemd` (or without `--user`) it is the real one,
-    except for omabox's `uwsm-app`: that detaches the app and returns, so the transient unit ended at
-    once and took the app with its cgroup: in `--systemd` boxes the browser bind had never worked
-    either. `share/bin/systemd-cat` appends to `~/IDENTIFIER.log`; the shell's tag goes to
-    `~/shell.log` and records the shell's pid where `omabox restart-shell` looks. `share/shell.sh`
-    now asks the old shell to quit (`quickshell kill --pid`) before a signal: a shell Omarchy's
-    launcher started is started again when it dies of a signal, not when it quits. Either restart
-    after the other leaves one shell (`t_omarchy_restart`).
+Findings 131-136 started from reading omadev (github.com/llstrk/omadev, MIT), nested Omarchy
+sessions as windows; each was checked in boxes first, and no code was taken from it.
+131. **`systemd-run` and `systemd-cat` stand-ins** (2026-10-01). Both checked in a box before the fix.
+    Omarchy 4 starts the browser (SUPER+SHIFT+B, `omarchy-launch-browser`), LocalSend (menu share) and
+    the Hermes theme with `systemd-run --user`; a box without `--systemd` has no user manager, so it
+    said "Failed to connect to user scope bus" and the launcher still exited 0: the bind opened
+    nothing. `omarchy restart shell` (Omarchy's own, not `omabox restart-shell`) killed the bar and
+    asked `omarchy-launch-shell` for a new one, which runs it under `systemd-cat -t omarchy-shell`;
+    with no journald that failed, its supervisor retried, and the box was left with no bar.
+    `share/bin/systemd-run` (first on the box's PATH) runs a `--user` command directly: detached,
+    output in `apps.log`, or in the foreground with `--wait`, `--pipe` or `--scope` (exit code passed
+    on); `-E`, `--working-directory`, `--same-dir` are kept, the unit options dropped. Timers
+    (`--on-*`) are refused, naming `--systemd`: reminders also list and stop their timers with
+    `systemctl`. With `--systemd` (or without `--user`) it is the real one, except for omabox's
+    `uwsm-app`: that detaches the app and returns, so the transient unit ended at once and took the app
+    with its cgroup: in `--systemd` boxes the browser bind had never worked either.
+    `share/bin/systemd-cat` appends to `~/IDENTIFIER.log`; the shell's tag goes to `~/shell.log` and
+    records the shell's pid where `omabox restart-shell` looks. `share/shell.sh` now asks the old shell
+    to quit (`quickshell kill --pid`) before a signal: a shell Omarchy's launcher started is started
+    again when it dies of a signal, not when it quits. Either restart after the other leaves one shell
+    (`t_omarchy_restart`).
 
-132. **Keys held when an interactive box loses focus stayed down in it** (2026-10-01, from a
-    comparison with omadev). aquamarine's Wayland backend listens only to `wl_keyboard.key` and
-    `modifiers`, not `leave`, so a key down when the host moves focus off the box window (SUPER+1 on
-    the host, focus-follows-mouse) is released where focus is by then, and the box never hears it.
-    Seen in a stand-in host (finding 26): SUPER held in the box while focus went to the stand-in's
-    foot, released there; back in the box, `w` closed the box's foot (SUPER+W) instead of typing. A
-    control with no focus change typed `w`. A held letter would repeat in the box's app the same way.
-    `patches/aquamarine/` carries the fix, which `setup --aquamarine` applies to `AQ_COMMIT`: the
-    keys reported pressed are tracked and released on `leave`, with a `modifiers` event that keeps
-    only the locks; keys down on `enter` are not pressed (they were pressed for something else). It
-    keeps the public header as it is, so the build stays a drop-in for the system's soname. A build
-    records `AQ_BUILD` (`7bb8bdf4+keys`); `setup` says when the private build is older, and
-    `setup --aquamarine` rebuilds it. Boxes on the system's aquamarine keep the bug until a release has
-    the fix (UPSTREAM.md; the PR text is prepared). Test: `t_held_keys` (fails on the old build).
-133. **setup and the widget across installs and upgrades** (2026-10-01, from a comparison with
-    omadev). Three gaps a package makes likely. (1) A `~/.local/bin/omabox` linked by a checkout's
-    setup stays when the user moves to the package; setup under `/usr` never looked at it. Omarchy's
-    `env-bootstrap` appends `~/.local/bin` after `/usr/bin`, so the package's runs, but a PATH with it
-    first (the user's own rc) runs the checkout, the widget's `omabox` too. A system install's setup
-    now says what the file is (a link to where, gone, or a file of its own) and whether PATH finds it
-    first, and offers to remove a link (Y/n, in a terminal; "not asked" otherwise). (2) The widget was
-    linked but left off; setup now asks whether to put it in the bar, as `omarchy plugin add` does:
-    `omarchy-shell shell rescanPlugins`, then `omarchy plugin enable` until the shell knows it (the
-    rescan returns before it is done). A "no" is remembered in `~/.config/omabox/widget-declined`, as
-    the guard's is. (3) A shell does not reload a plugin when its files change (finding 41), so after
-    an upgrade the bar runs the old widget against the new CLI. `config --json` now names the CLI's
-    version; the widget compares it with its own `pluginVersion` and says, in its alert strip, to
-    restart the shell (dismissable, once per version). Only widgets from this version on can say it.
-    Tests: `t_setup_prompts` answers through `script(1)` in a box (the widget in the box's bar, a
-    "no" remembered; under `--installed`, the old link removed), `t_widget` (the note), and
-    `omarchy-plugin-validate` on the widget in `t_unit_version`.
-134. **`up` on a running box refuses options it lacks; `down` frees the host's submap** (2026-10-01,
-    from a comparison with omadev). (1) `up NAME --plugin X` on a box without X said "options
-    ignored" and exited 0, so an agent went on without what it asked for. Now the options given are
-    compared with `box.json` (mode, size, net, allow, systemd, stock bar, Xwayland, no-shell,
-    Hyprland build, save, plugins mounted) and any it lacks are refused, exit 1, naming each and what
-    to do; a bare `up`, or one asking for what the box has, is fine. Mounts, `--env` and `--idle` are
-    not compared. `box.json` records `xwayland` and `shell` for that. `up --json` prints the box as
-    `ls --json` lists it. (2) A host config reload drops passthrough's hooks and the submap's binds
-    but keeps the submap (seen in a stand-in host: "omabox" with `omabox_pass_version` nil, SUPER+1
-    dead); a box's reaper puts the hooks back within 2 s, but with the last interactive box going at
-    that moment nothing would, and every bind of the user's would stay dead. `down` of an interactive
-    box now resets the host's submap when it is "omabox" and no interactive box is left
-    (`t_submap_release`: reaper killed, reload, down, SUPER+1 works again).
-135. **`up --omarchy DIR`, and the host's dev link kept out of boxes** (2026-10-01, from a comparison
-    with omadev). Omarchy's `env-bootstrap` sources `/etc/omarchy.conf` (written by `omarchy dev
-    link`) in every bash: the box HOME's `.bashrc` (from `/etc/skel`) included. Boxes bind the host's
-    `/etc`, so on a dev-linked host a box terminal set `OMARCHY_PATH` to the host's checkout and put its
-    `bin` first, while the session ran the packaged Omarchy: seen in a box with a nested overlay `/etc`
-    standing in for a dev link (`omarchy-version` came from the fake checkout). Not seen on a real
-    dev-linked host (none here; `omarchy dev link` needs sudo). Every box now has its own
-    `omarchy.conf` (`$D/omarchy.conf`): bound over the host's when there is one, naming the packaged
-    Omarchy or `--omarchy`'s tree. `up --omarchy DIR` runs a tree (it must have `bin/`,
-    `default/hypr/bootstrap.lua`, `shell/shell.qml`; `/usr/share/omarchy` itself is the default):
-    mounted read-only at its own path (refused as `--ro-bind`'s are; a jailed agent's, as
-    `--hyprland`'s); `OMABOX_OMARCHY` makes `start-hyprland.sh` set `OMARCHY_PATH` to it (Hyprland's
-    config, then the shell and everything Hyprland starts), `session.sh` put its `bin` after omabox's
-    stand-ins and source its uwsm defaults; `--stock-bar` and the desktop-entry fallback read its
-    `config`/`applications`. With no host `omarchy.conf` to bind over (bwrap cannot add a file to a
-    read-only bind), `/etc` is a read-only overlay with the box's file on top (`--overlay-src /etc
-    --overlay-src $D/etc --ro-overlay /etc`; the last source is the top layer, checked). `box.json`,
-    `ls --json` and `up_already` know it; `run` passes it to a throwaway box. Left as on the host's
-    dev link: files Omarchy installs outside its tree (`/etc`, units, `/etc/skel`). `t_omarchy_tree`
-    (a copy of the installed tree with markers; a box inside it without `--omarchy` runs the installed
-    one, through the bind over the outer box's file).
-136. **An interactive box's window under another tool's host rule** (2026-10-01). omadev adds a
-    runtime rule to the host for every `aquamarine` window (float, no focus, workspace `name:omadev`),
-    and aquamarine names every nested window so: it catches ours once omadev ran in the session.
+132. **Keys held when an interactive box loses focus stayed down in it** (2026-10-01). aquamarine's
+    Wayland backend listens only to `wl_keyboard.key` and `modifiers`, not `leave`, so a key down when
+    the host moves focus off the box window (SUPER+1 on the host, focus-follows-mouse) is released
+    where focus is by then, and the box never hears it. Seen in a stand-in host (finding 26): SUPER
+    held in the box while focus went to the stand-in's foot, released there; back in the box, `w`
+    closed the box's foot (SUPER+W) instead of typing. A control with no focus change typed `w`. A held
+    letter would repeat in the box's app the same way. `patches/aquamarine/` carries the fix, which
+    `setup --aquamarine` applies to `AQ_COMMIT`: the keys reported pressed are tracked and released on
+    `leave`, with a `modifiers` event that keeps only the locks; keys down on `enter` are not pressed
+    (they were pressed for something else). It keeps the public header as it is, so the build stays a
+    drop-in for the system's soname. A build records `AQ_BUILD` (`7bb8bdf4+keys`); `setup` says when
+    the private build is older, and `setup --aquamarine` rebuilds it. Boxes on the system's aquamarine
+    keep the bug until a release has the fix (UPSTREAM.md; the PR text is prepared). Test:
+    `t_held_keys` (fails on the old build).
+133. **setup and the widget across installs and upgrades** (2026-10-01). Three gaps a package makes
+    likely. (1) A `~/.local/bin/omabox` linked by a checkout's setup stays when the user moves to the
+    package; setup under `/usr` never looked at it. Omarchy's `env-bootstrap` appends `~/.local/bin`
+    after `/usr/bin`, so the package's runs, but a PATH with it first (the user's own rc) runs the
+    checkout, the widget's `omabox` too. A system install's setup now says what the file is (a link to
+    where, gone, or a file of its own) and whether PATH finds it first, and offers to remove a link
+    (Y/n, in a terminal; "not asked" otherwise). (2) The widget was linked but left off; setup now asks
+    whether to put it in the bar, as `omarchy plugin add` does: `omarchy-shell shell rescanPlugins`,
+    then `omarchy plugin enable` until the shell knows it (the rescan returns before it is done). A
+    "no" is remembered in `~/.config/omabox/widget-declined`, as the guard's is. (3) A shell does not
+    reload a plugin when its files change (finding 41), so after an upgrade the bar runs the old widget
+    against the new CLI. `config --json` now names the CLI's version; the widget compares it with its
+    own `pluginVersion` and says, in its alert strip, to restart the shell (dismissable, once per
+    version). Only widgets from this version on can say it. Tests: `t_setup_prompts` answers through
+    `script(1)` in a box (the widget in the box's bar, a "no" remembered; under `--installed`, the old
+    link removed), `t_widget` (the note), and `omarchy-plugin-validate` on the widget in
+    `t_unit_version`.
+134. **`up` on a running box refuses options it lacks; `down` frees the host's submap** (2026-10-01).
+    (1) `up NAME --plugin X` on a box without X said "options ignored" and exited 0, so an agent went
+    on without what it asked for. Now the options given are compared with `box.json` (mode, size, net,
+    allow, systemd, stock bar, Xwayland, no-shell, Hyprland build, save, plugins mounted) and any it
+    lacks are refused, exit 1, naming each and what to do; a bare `up`, or one asking for what the box
+    has, is fine. Mounts, `--env` and `--idle` are not compared. `box.json` records `xwayland` and
+    `shell` for that. `up --json` prints the box as `ls --json` lists it. (2) A host config reload
+    drops passthrough's hooks and the submap's binds but keeps the submap (seen in a stand-in host:
+    "omabox" with `omabox_pass_version` nil, SUPER+1 dead); a box's reaper puts the hooks back within 2
+    s, but with the last interactive box going at that moment nothing would, and every bind of the
+    user's would stay dead. `down` of an interactive box now resets the host's submap when it is
+    "omabox" and no interactive box is left (`t_submap_release`: reaper killed, reload, down, SUPER+1
+    works again).
+135. **`up --omarchy DIR`, and the host's dev link kept out of boxes** (2026-10-01). Omarchy's
+    `env-bootstrap` sources `/etc/omarchy.conf` (written by `omarchy dev link`) in every bash: the box
+    HOME's `.bashrc` (from `/etc/skel`) included. Boxes bind the host's `/etc`, so on a dev-linked host
+    a box terminal set `OMARCHY_PATH` to the host's checkout and put its `bin` first, while the session
+    ran the packaged Omarchy: seen in a box with a nested overlay `/etc` standing in for a dev link
+    (`omarchy-version` came from the fake checkout). Not seen on a real dev-linked host (none here;
+    `omarchy dev link` needs sudo). Every box now has its own `omarchy.conf` (`$D/omarchy.conf`): bound
+    over the host's when there is one, naming the packaged Omarchy or `--omarchy`'s tree. `up --omarchy
+    DIR` runs a tree (it must have `bin/`, `default/hypr/bootstrap.lua`, `shell/shell.qml`;
+    `/usr/share/omarchy` itself is the default): mounted read-only at its own path (refused as
+    `--ro-bind`'s are; a jailed agent's, as `--hyprland`'s); `OMABOX_OMARCHY` makes `start-hyprland.sh`
+    set `OMARCHY_PATH` to it (Hyprland's config, then the shell and everything Hyprland starts),
+    `session.sh` put its `bin` after omabox's stand-ins and source its uwsm defaults; `--stock-bar` and
+    the desktop-entry fallback read its `config`/`applications`. With no host `omarchy.conf` to bind
+    over (bwrap cannot add a file to a read-only bind), `/etc` is a read-only overlay with the box's
+    file on top (`--overlay-src /etc --overlay-src $D/etc --ro-overlay /etc`; the last source is the
+    top layer, checked). `box.json`, `ls --json` and `up_already` know it; `run` passes it to a
+    throwaway box. Left as on the host's dev link: files Omarchy installs outside its tree (`/etc`,
+    units, `/etc/skel`). `t_omarchy_tree` (a copy of the installed tree with markers; a box inside it
+    without `--omarchy` runs the installed one, through the bind over the outer box's file).
+136. **An interactive box's window under another tool's host rule** (2026-10-01). A tool that nests
+    Hyprland can add a runtime rule to the host for every `aquamarine` window (float, no focus, a
+    workspace of its own), and aquamarine names every nested window so: it catches ours too.
     Tried in a stand-in host: our exec rule's workspace (9) and no-focus won, but the window
     floated. The exec rule now says `float = false` too: tiled on its workspace whatever such a rule
-    says (`t_submap_release` checks it under an omadev-like rule).
+    says (`t_submap_release` checks it under such a rule).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

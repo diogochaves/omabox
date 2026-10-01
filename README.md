@@ -172,7 +172,7 @@ session/suspend/lock paths never run in one.
 ### An Omarchy change
 
 ```bash
-omabox up dev --omarchy ~/code/omarchy     # your Omarchy checkout instead of /usr/share/omarchy
+omabox up dev --omarchy ~/src/omarchy      # your Omarchy checkout instead of /usr/share/omarchy
 ```
 
 The box runs that tree as `omarchy dev link` would, without touching your system: its Hyprland
