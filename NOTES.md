@@ -2445,6 +2445,29 @@ the designs here were measured in boxes and built for a contained desktop, and n
     whenever the host has `/usr/bin/omabox`, and the gpu check skips when a client of the render
     node gets no `drm-driver` fdinfo line (amdgpu writes one on a fresh fd, before any engine
     time). `OMABOX_TEST_INSTALLED` stays for `--installed`'s user namespace (`t_jail`).
+130. **What more package testing found** (2026-10-01, for the omarchy-pkgs PR). Round two, the
+    package from omarchy-pkgs' own builder (their CI's `bin/build`, in Docker in the VM), plus
+    `setup --aquamarine` from the package, an interactive box, an upgrade (`-1` to `-2`), a second
+    user, and the installed layout with boxes on the RTX. Fixed:
+    - **A user Omarchy has set no theme for** (an account that never logged in: Omarchy makes
+      `~/.local/state/omarchy/current/theme` at the first login) made `up` die on a bare `cp: cannot
+      stat`, leaving the box's dirs behind. `up` now says so before anything is made, and what to do.
+    - **No box can start** (on NVIDIA without aquamarine's fix, from an install that has no private
+      build): the suite failed 166 checks, one per `up`. It now starts a probe box first; when that is
+      refused it fails once, with `up`'s message, and runs the unit tests only.
+    - **A box started inside a box** (the suite's stand-in hosts) looked for a private aquamarine only
+      in the checkout's `build/prefix` and the data dir, out of reach from a system install there. In a
+      box, `aq_resolve` now also takes the box's own, which `up` binds at `/opt/omabox/lib`. The save
+      tests use a data dir of their own: they link the user's build into it.
+    - `setup --remove` left `~/.cache/omabox` (where boxes' homes go) behind, empty: it now removes it
+      and the data dir's `omabox/` once empty (never a box's home still in it, nor saves).
+    - The tools' Makefiles put `$(LDFLAGS)` after the libraries, so a distro's `-Wl,--as-needed` came
+      too late: `libm` (from wayland-client's pkg-config) stayed linked unused in keyboard, peek and
+      still (namcap said so). `$(LDFLAGS)` now comes first.
+    Kept on purpose: an empty `.lock-NAME` per box name in `$XDG_RUNTIME_DIR/omabox` outlives the box.
+    Removing a lock file another `up` may be waiting on is the classic flock race (two holders of
+    "the same" lock); they are empty and on a tmpfs gone at logout. The recipe gained `base-devel` in
+    its optdepends (omabox's own `setup --aquamarine` hint names it).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

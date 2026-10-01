@@ -1081,6 +1081,11 @@ cmd_up() {
   [ "$net" != connected ] || [ -c /dev/net/tun ] ||
     die "a box's network needs /dev/net/tun (the tun kernel module); --net isolated does without, and has no internet"
   check_install "$hyprland"
+  # A box starts from the user's Omarchy look (seed_home), which Omarchy makes at their first login:
+  # an account that never logged in has no theme yet (finding 130). Said before anything is made.
+  [ -d "$HOME/.local/state/omarchy/current/theme" ] ||
+    die "Omarchy has not set a theme for you yet ($HOME/.local/state/omarchy/current/theme), and a box" \
+      "starts from your Omarchy look: log into Omarchy once, or set one: omarchy-theme-set \"Tokyo Night\""
   # What needs aquamarine's fix (finding 125), refused before anything is made: a headless box on an
   # NVIDIA render node (its screen is labwc's Wayland output) and confirm-close asked for on `up`.
   # confirm-close from the settings is turned off for the box instead, below.
@@ -1433,7 +1438,11 @@ aq_pick() {
 
 # aq_resolve SONAME: aq_pick's answer for a box, in AQ_KIND, AQ_LIB, AQ_VER and AQ_FIXED.
 aq_resolve() {
-  local r; r=$(aq_pick "$1" /usr/lib "$ROOT/build/prefix/lib" "$AQ_USER/lib") || return 1
+  # In a box (an omabox started there: the suite's stand-in hosts), the box's own aquamarine too, last:
+  # `up` binds a private build at /opt/omabox/lib, and the user's data dir is not in reach there
+  # (a system install has no checkout build/prefix to find instead; finding 130).
+  local here=(); [ ! -f /opt/omabox/share/session.sh ] || here=(/opt/omabox/lib)
+  local r; r=$(aq_pick "$1" /usr/lib "$ROOT/build/prefix/lib" "$AQ_USER/lib" "${here[@]}") || return 1
   IFS='|' read -r AQ_KIND AQ_LIB AQ_VER AQ_FIXED <<<"$r"
 }
 aq_desc() {
@@ -1582,6 +1591,9 @@ setup_remove() {
   setup_unlink "$HOME/.local/bin/omabox" "$ROOT/bin/omabox"
   local cache=${XDG_CACHE_HOME:-$HOME/.cache}/omabox-aquamarine
   if [ -e "$AQ_USER" ] || [ -e "$cache" ]; then rm -rf "$AQ_USER" "$cache"; echo "removed the aquamarine build in $AQ_USER"; fi
+  # The dirs boxes' homes and the build lived in, once nothing is left in them (a box's home stays
+  # while it is up; saves stay, said below).
+  rmdir "$HOMES" "${AQ_USER%/*}" 2>/dev/null || true
   [ ! -e "$ROOT/.git" ] || echo "kept: this checkout's build/ (the aquamarine build, if any) goes with the checkout"
   [ -z "$(list_names)" ] || echo "boxes are still up (omabox ls): omabox down --all"
   echo "kept: your settings (~/.config/omabox) and saves (~/.local/share/omabox/saves); delete them yourself if you want them gone"
