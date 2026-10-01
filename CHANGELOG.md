@@ -3,7 +3,11 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.4.1 — 2026-10-01
+
+Fixes from more testing of the package for Omarchy's repository: a clear message instead of a bare
+error for an account Omarchy has not set a theme for, no empty directories left by
+`setup --remove`, and a test suite that copes with an installed omabox on NVIDIA.
 
 ### Fixed
 
