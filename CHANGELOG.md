@@ -10,6 +10,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox setup` offers to put the bar widget in your bar** (yes by default, a "no" remembered).
 - **The widget says when it is older than the omabox installed** (after an upgrade, until the shell
   restarts), and `omabox config --json` names the version.
+- **`omabox up --omarchy DIR`** runs a box on an Omarchy checkout instead of the installed Omarchy
+  (its Hyprland config, shell, `bin/` and `OMARCHY_PATH`), as `omarchy dev link` would, without
+  touching your system.
 - **`omabox up --json`** prints the box as `omabox ls --json` lists it.
 
 ### Changed
@@ -30,6 +33,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   says whether it takes over, and offers to remove it.
 - **Your Hyprland binds are never left dead** by an interactive box going down right after a config
   reload (the host could stay in omabox's key-passing mode with no way out).
+- **A box no longer follows your own `omarchy dev link`** in its terminals (they took the host's
+  checkout while the rest of the box ran the installed Omarchy).
+- **An interactive box's window stays tiled on its workspace** when another tool's rule floats
+  every nested Hyprland window (omadev's does).
 - **`omarchy restart shell` in a box brings the bar back.** It left the box with no bar (no journald
   for `systemd-cat`); it and `omabox restart-shell` now take turns cleanly.
 

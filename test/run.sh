@@ -3417,7 +3417,11 @@ t_submap_release() {
   local B=$P-sr
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
   local in=("$CLI" run -b "$B" -- "$CLI")
+  # A host rule like omadev's (finding 136): every aquamarine window floating, on its own workspace.
+  ob hyprctl -b "$B" eval 'hl.window_rule({ name = "omadev-like", match = { class = "aquamarine" }, float = true, workspace = "name:omadev silent" })' >/dev/null
   "${in[@]}" up sa --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  check_eq "under a host rule for every aquamarine window, the box's is still tiled on workspace 9" "9 false" \
+    "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | "\(.workspace.name) \(.floating)"')"
   local pa
   pa=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/sa/run " && { echo "$p"; break; }; done')
   ob hyprctl -b "$B" dispatch "hl.dsp.focus({ window = 'pid:$pa' })" >/dev/null
@@ -3464,6 +3468,41 @@ t_setup_prompts() {
   out=$(in_tty $'n\n')
   check "...no: not in the bar, and remembered" bash -c "! grep -q '\"chaves.omabox\"' '$H/.config/omarchy/shell.json' && test -e '$H/.config/omabox/widget-declined'"
   check_match "...then not asked again" "bar widget: not asked \(you said no before" "$(in_tty "")"
+  ob down "$B" >/dev/null
+}
+
+# `up --omarchy DIR` (finding 135): a box on another Omarchy tree, a copy of the installed one with a
+# marker in its bin and its Hyprland bootstrap. The session, the bar, `run` and a terminal's bash (its
+# /etc/omarchy.conf) all use it; a box started inside that one, without --omarchy, does not follow the
+# outer box's /etc/omarchy.conf (as a box does not follow the host's dev link).
+t_omarchy_tree() {
+  local B=$P-ot T=$TMP/omarchy-tree f
+  mkdir -p "$T"
+  for f in /usr/share/omarchy/*; do
+    case ${f##*/} in themes) ln -s "$f" "$T/themes" ;; *) cp -a "$f" "$T/" ;; esac
+  done
+  chmod -R u+w "$T"
+  # (The package's bin/ links to /usr/bin: a file of its own in the link's place.)
+  rm -f "$T/bin/omarchy-version"; printf '#!/bin/sh\necho omabox-tree\n' > "$T/bin/omarchy-version"; chmod +x "$T/bin/omarchy-version"
+  printf '\nomabox_tree_marker = "tree"\n' >> "$T/default/hypr/bootstrap.lua"
+  check_match "--omarchy refuses a folder that is not an Omarchy tree" "not an Omarchy tree \(no bin\)" "$(ob up "$B" --omarchy "$TMP" 2>&1)"
+  ob up "$B" --net isolated --omarchy "$T" >/dev/null 2>&1 || { no "up --omarchy" "failed"; return; }
+  check_eq "the box's Hyprland loaded the tree's config" tree "$(ob lua -b "$B" 'return omabox_tree_marker')"
+  check_eq "...run has it as OMARCHY_PATH" "$T" "$(ob run -b "$B" -- sh -c 'echo "$OMARCHY_PATH"')"
+  check_eq "...and its bin first" omabox-tree "$(ob run -b "$B" -- omarchy-version)"
+  check_match "...the bar runs from it" "quickshell -n -p $T/shell" "$(ob run -b "$B" -- pgrep -a quickshell)"
+  check_eq "...a terminal's bash too (the box's /etc/omarchy.conf)" "$T omabox-tree" "$(ob run -b "$B" -- bash -ic 'echo "$OMARCHY_PATH $(omarchy-version)"' 2>/dev/null)"
+  check_eq "ls --json names it" "$T" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy')"
+  check_match "up again with another tree: refused" "--omarchy /usr/share/omarchy" "$(ob up "$B" --omarchy /usr/share/omarchy 2>&1)"
+  # A box in that box, on the installed Omarchy: the outer /etc/omarchy.conf names the tree.
+  local in=("$CLI" run -b "$B" -- "$CLI")
+  if "${in[@]}" up oi --no-shell >/dev/null 2>&1; then
+    check_eq "a box started where /etc/omarchy.conf names another tree runs the installed Omarchy" "/usr/share/omarchy" \
+      "$("${in[@]}" run -b oi -- bash -ic 'echo "$OMARCHY_PATH"' 2>/dev/null)"
+    "${in[@]}" down oi >/dev/null 2>&1
+  else
+    no "up inside the --omarchy box" "failed"
+  fi
   ob down "$B" >/dev/null
 }
 
@@ -4054,7 +4093,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_submap_release t_setup_prompts t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

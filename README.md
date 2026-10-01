@@ -169,6 +169,20 @@ Lua config, IPC, protocols) on a virtual output with virtual input devices; the 
 (modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices and the
 session/suspend/lock paths never run in one.
 
+### An Omarchy change
+
+```bash
+omabox up dev --omarchy ~/code/omarchy     # your Omarchy checkout instead of /usr/share/omarchy
+```
+
+The box runs that tree as `omarchy dev link` would, without touching your system: its Hyprland
+config, its shell (bar), its `bin/` first on the box's PATH (binds, menus, `omabox run`), and
+`OMARCHY_PATH` in a terminal's bash. The tree is mounted read-only at its own path, so an edit shows
+after `omabox restart-shell` (the shell) or `omabox hyprctl reload` (the config). It must have
+`bin/`, `default/hypr/bootstrap.lua` and `shell/shell.qml`. Files Omarchy installs outside its tree
+(`/etc`, systemd units, `/etc/skel`) stay the installed ones. A box never follows your own
+`omarchy dev link`: without `--omarchy` it runs the packaged Omarchy.
+
 ## Seeing a box yourself
 
 <p><img src="docs/media/interactive.png" alt="An interactive box: a whole Omarchy desktop as a window next to a terminal, with a terminal of its own open inside" width="800"></p>

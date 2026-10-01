@@ -743,7 +743,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       linked when they exist). PKGS names what the box runs (quickshell, gtk3, xdg-terminal-exec, dbus).
       `t_unit_install` runs it with a temporary HOME and stubs (a failing `make`, a `sudo` that refuses).
     - *The box session* gets Omarchy's `TERMINAL`/`EDITOR` (its uwsm env.d default; they were unset).
-      A dev link (`/etc/omarchy.conf`) is not followed: a box always runs the packaged Omarchy.
+      A dev link (`/etc/omarchy.conf`) is not followed: a box always runs the packaged Omarchy
+      (until finding 135 this held for the session only, not for a terminal's bash).
       *uwsm-app*: options after `-T` go to `xdg-terminal-exec` as uwsm passes them (it maps
       `--app-id`/`--title` to the terminal's flags when the terminal's entry declares them; foot's does
       not, with uwsm too); a `.desktop` path launches with `gio launch`; a missing command fails.
@@ -2532,6 +2533,33 @@ the designs here were measured in boxes and built for a contained desktop, and n
     that moment nothing would, and every bind of the user's would stay dead. `down` of an interactive
     box now resets the host's submap when it is "omabox" and no interactive box is left
     (`t_submap_release`: reaper killed, reload, down, SUPER+1 works again).
+135. **`up --omarchy DIR`, and the host's dev link kept out of boxes** (2026-10-01, from a comparison
+    with omadev). Omarchy's `env-bootstrap` sources `/etc/omarchy.conf` (written by `omarchy dev
+    link`) in every bash: the box HOME's `.bashrc` (from `/etc/skel`) included. Boxes bind the host's
+    `/etc`, so on a dev-linked host a box terminal set `OMARCHY_PATH` to the host's checkout and put its
+    `bin` first, while the session ran the packaged Omarchy: seen in a box with a nested overlay `/etc`
+    standing in for a dev link (`omarchy-version` came from the fake checkout). Not seen on a real
+    dev-linked host (none here; `omarchy dev link` needs sudo). Every box now has its own
+    `omarchy.conf` (`$D/omarchy.conf`): bound over the host's when there is one, naming the packaged
+    Omarchy or `--omarchy`'s tree. `up --omarchy DIR` runs a tree (it must have `bin/`,
+    `default/hypr/bootstrap.lua`, `shell/shell.qml`; `/usr/share/omarchy` itself is the default):
+    mounted read-only at its own path (refused as `--ro-bind`'s are; a jailed agent's, as
+    `--hyprland`'s); `OMABOX_OMARCHY` makes `start-hyprland.sh` set `OMARCHY_PATH` to it (Hyprland's
+    config, then the shell and everything Hyprland starts), `session.sh` put its `bin` after omabox's
+    stand-ins and source its uwsm defaults; `--stock-bar` and the desktop-entry fallback read its
+    `config`/`applications`. With no host `omarchy.conf` to bind over (bwrap cannot add a file to a
+    read-only bind), `/etc` is a read-only overlay with the box's file on top (`--overlay-src /etc
+    --overlay-src $D/etc --ro-overlay /etc`; the last source is the top layer, checked). `box.json`,
+    `ls --json` and `up_already` know it; `run` passes it to a throwaway box. Left as on the host's
+    dev link: files Omarchy installs outside its tree (`/etc`, units, `/etc/skel`). `t_omarchy_tree`
+    (a copy of the installed tree with markers; a box inside it without `--omarchy` runs the installed
+    one, through the bind over the outer box's file).
+136. **An interactive box's window under another tool's host rule** (2026-10-01). omadev adds a
+    runtime rule to the host for every `aquamarine` window (float, no focus, workspace `name:omadev`),
+    and aquamarine names every nested window so: it catches ours once omadev ran in the session.
+    Tried in a stand-in host: our exec rule's workspace (9) and no-focus won, but the window
+    floated. The exec rule now says `float = false` too: tiled on its workspace whatever such a rule
+    says (`t_submap_release` checks it under an omadev-like rule).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -2560,9 +2588,7 @@ Bugs and ideas live in the GitHub issues. Known gaps:
   aquamarine patched downstream (#48) cannot be told from its version: it would still be refused for
   headless NVIDIA boxes and confirm-close until omabox learns how to recognise it (finding 125).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44):
-  `--quickshell PATH` (a shell or Quickshell change); `--omarchy PATH` (a local Omarchy tree instead
-  of `/usr/share/omarchy`, `OMARCHY_PATH`, as `omarchy dev link` does on the host; `session.sh` and
-  `hyprland.lua` read the packaged one today); `--lib DIR` (library dirs ahead of the system's, for
+  `--quickshell PATH` (a shell or Quickshell change); `--omarchy DIR` is done (finding 135); `--lib DIR` (library dirs ahead of the system's, for
   hyprutils/aquamarine/hyprlang work; `/opt/omabox/lib` comes first now). A `--hyprland` build whose
   RUNPATH points outside its own folder finds those libraries on the host (`ldd` passes) but not in
   the box.
