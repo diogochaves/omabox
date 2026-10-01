@@ -5,6 +5,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **`omabox up --plugin` and `restart-shell` say why a plugin is not in the bar**: Omarchy's plugin
+  validator's message, or the shell's own (a refused manifest, a QML error), as a warning; the box
+  still comes up. `omabox ls --json` and `up --json` have each plugin's state (`plugin_status`).
+
 ### Fixed
 
 - **`omarchy-version` works in a box**: it says the installed Omarchy's version (or, with `up

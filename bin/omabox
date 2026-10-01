@@ -108,6 +108,8 @@ variables (a password too: never on a command line); --env-file FILE hands it a 
 (a dev.env: read as data, nothing expanded; --pass wins); \`keys --pass VAR\` types one (never \`-t\`
 for a secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+--plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; \`up\` and
+\`restart-shell\` warn when Omarchy's validator or the shell refuses it (\`ls --json\`: plugin_status).
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
 box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
 starts); hyprctl and hyprpm stay the installed ones (a warning when the versions differ). \`ls\` and
@@ -754,6 +756,55 @@ resolve_plugin() {
   printf '%s\t%s\n' "$id" "$dir"
 }
 
+# Why a mounted plugin is not in the box's bar (finding 138): the shell drops a manifest it refuses with
+# one `PluginRegistry:` line in its log, and lists a plugin whose QML fails to load as enabled while
+# it logs `Plugin widget ID failed: ...`; the box came up either way. After `up` and `restart-shell`:
+# Omarchy's validator on each mounted plugin's dir (the box's Omarchy's: an --omarchy tree's), then the
+# shell's plugin list and its log. Warnings, never a refusal: the shell loads some plugins the validator
+# refuses (a symlink inside), and an agent needs the box up to debug one. Each plugin's state goes into
+# box.json (`plugin_status`, in `ls --json` and `up --json`): loaded, failed (listed, its QML did not
+# load), not loaded (not listed), disabled, or enabled (a panel, menu or overlay only: its QML loads
+# when summoned, so its errors show then, in `omabox log shell`).
+plugin_check() {
+  local ids id dir tree validate listed=null log lines why v kinds state status='{}' bad=0
+  ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null) || return 0
+  [ -n "$ids" ] || return 0
+  tree=$(meta omarchy); validate=${tree:-/usr/share/omarchy}/bin/omarchy-plugin-validate
+  [ -x "$validate" ] || validate=""
+  if [ "$(jq -r '.shell | tostring' "$D/box.json")" != false ]; then
+    listed=$(box_exec omarchy-shell shell listPlugins 2>/dev/null | jq -c 'map({(.id): {enabled, kinds}}) | add // {}' 2>/dev/null) || listed=null
+    [ -n "$listed" ] || listed=null
+    # Its warnings and errors, colour codes and the level/category prefix dropped.
+    log=$(sed 's/\x1b\[[0-9;]*m//g' "$D/home/shell.log" 2>/dev/null | sed -nE 's/^ *(WARN|ERROR) +[^:]*: //p')
+  fi
+  for id in $ids; do
+    dir=$(jq -r --arg i "$id" '.plugin_dirs[$i] // empty' "$D/box.json")
+    v=""; if [ -n "$validate" ] && [ -n "$dir" ] && ! v=$("$validate" "$dir" 2>&1 >/dev/null); then
+      v=${v:-"$validate failed"}; say "warning: plugin $id: $v"; bad=1
+    else v=""; fi
+    state=unchecked why=""
+    if [ "$listed" != null ]; then
+      # Lines naming it: its id between characters an id cannot have, or its dir in the box.
+      lines=$(grep -E "(^|[^A-Za-z0-9._-])$(re_quote "$id")([^A-Za-z0-9._-]|$)" <<<"$log" || true)
+      kinds=$(jq -r --arg i "$id" '.[$i].kinds // [] | join(" ")' <<<"$listed")
+      if ! jq -e --arg i "$id" 'has($i)' <<<"$listed" >/dev/null; then
+        state="not loaded" why=$(head -n 1 <<<"$lines"); why=${why:-"the shell does not list it"}
+      elif why=$(grep -E -m 1 ' failed|failed to load|has no barWidget entry point' <<<"$lines"); then state=failed
+      elif ! jq -e --arg i "$id" '.[$i].enabled' <<<"$listed" >/dev/null; then state=disabled why="listed but not enabled"
+      elif [[ " $kinds " =~ \ (bar-widget|bar|service)\  ]]; then state=loaded why=$(head -n 1 <<<"$lines")
+      else state=enabled why=$(head -n 1 <<<"$lines"); fi
+      case $state in
+        loaded|enabled) [ -z "$why" ] || say "plugin $id $state, with a warning in the shell log: $why" ;;
+        *) say "warning: plugin $id $state: $why"; bad=1 ;;
+      esac
+    fi
+    status=$(jq -c --arg i "$id" --arg s "$state" --arg w "$why" --arg v "$v" \
+      '.[$i] = ({state: $s} + (if $w != "" then {log: $w} else {} end) + (if $v != "" then {validate: $v} else {} end))' <<<"$status")
+  done
+  [ $bad = 0 ] || say "the shell's log: omabox log -b $NAME shell"
+  jq --argjson s "$status" '.plugin_status = $s' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+}
+
 # The ids of the workspace widgets among the user's plugins and the mounted ones ("id<TAB>dir" lines
 # on stdin), as a JSON array: a bar widget whose manifest says "workspace" (name, description or
 # aliases), as omarchy.workspaces' does. There is no kind for it, and a plugin left out of the box is
@@ -1233,12 +1284,13 @@ cmd_up() {
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg agent "$agent" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
+    --argjson plugin_dirs "$(printf '%s\n' "${PLUGINS[@]}" | jq -R 'select(. != "") | split("\t") | {(.[0]): .[1]}' | jq -s 'add // {}')" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg omarchy "$omarchy" \
     --argjson xwayland "$xwayland" --argjson shell "$shell" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
-    '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, net: $net, allow: $allow,
+    '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
       xwayland: ($xwayland == 1), shell: ($shell == 1),
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
@@ -1418,6 +1470,7 @@ cmd_up() {
   jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
+  plugin_check
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
@@ -3858,6 +3911,7 @@ cmd_restart_shell() {
   done
   wait_ready 1
   say "shell restarted in box '$NAME'"
+  plugin_check
 }
 
 # --- guard ---------------------------------------------------------------------------------------
@@ -4448,7 +4502,7 @@ box_json() {
   [ ! -f "$D/keys-to-box" ] || keys=true
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
-      bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
+      plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
 }

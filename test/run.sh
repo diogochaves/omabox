@@ -1816,6 +1816,50 @@ t_stock_bar() {
   check "down" ob down "$B"
 }
 
+# finding 138: why a mounted plugin is not in the box's bar, said at up and restart-shell (Omarchy's
+# validator, then the shell's list and log), and in ls --json; and `omarchy plugin add` from a checkout
+# acting on the box only.
+t_plugin_check() {
+  local B=$P-pc F=$TMP/plugins out
+  pfix() {   # DIR ID JQ: a bar widget that draws its dir's name
+    mkdir -p "$F/$1"
+    jq -n --arg id "$2" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
+      entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' | jq "$3" > "$F/$1/manifest.json"
+    printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$1" > "$F/$1/W.qml"
+  }
+  pfix good "$P.good" .; pfix schema "$P.schema" '.schemaVersion = "1"'
+  pfix entry "$P.entry" '.entryPoints.barWidget = "Missing.qml"'; pfix qml "$P.qml" .
+  cp "$F/qml/W.qml" "$F/W.qml.fixed"; echo 'BarWidget {' >> "$F/qml/W.qml"
+  pfix inst "$P.inst" .; git -C "$F/inst" init -q && git -C "$F/inst" add . && git -C "$F/inst" -c user.name=t -c user.email=t@t commit -qm t
+  out=$(ob up "$B" --net isolated --ro-bind "$F" --plugin "$F/good" --plugin "$F/schema" --plugin "$F/entry" --plugin "$F/qml" 2>&1) ||
+    { no "up with plugins the shell refuses still comes up (warnings, not a refusal)" "$out"; return; }
+  ok "up with plugins the shell refuses still comes up (warnings, not a refusal)"
+  check_match "a bad manifest: the validator's message" "plugin $P.schema: omarchy-plugin-validate: unsupported or missing schemaVersion" "$out"
+  check_match "...and the shell's: not loaded" "plugin $P.schema not loaded: PluginRegistry: unsupported schemaVersion" "$out"
+  check_match "a missing entry point: the validator's message" "plugin $P.entry: omarchy-plugin-validate: entry point file not found" "$out"
+  check_match "...and the shell's: failed" "plugin $P.entry failed: Plugin widget $P.entry failed: .*No such file" "$out"
+  check_match "a QML error (the validator passes it): the shell's line" "plugin $P.qml failed: Plugin widget $P.qml failed: .*Syntax error" "$out"
+  check_match "...and where the rest is" "omabox log -b $B shell" "$out"
+  check_fails "a plugin that loads: no line" grep -q "$P.good" <<<"$out"
+  check_eq "ls --json: each plugin's state" "loaded failed failed not loaded" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".good", $p + ".qml", $p + ".entry", $p + ".schema"] | .state] | join(" ")')"
+  cp "$F/W.qml.fixed" "$F/qml/W.qml"
+  out=$(ob restart-shell -b "$B" 2>&1)
+  check_fails "fixed, restart-shell: no line for it" grep -q "$P.qml failed" <<<"$out"
+  check_match "...still one for the others" "plugin $P.entry failed" "$out"
+  check_eq "...and ls --json has it loaded" loaded "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.qml" '.[] | select(.name == $n) | .plugin_status[$i].state')"
+  # The install path (a plugin's README way), on the committed checkout: into the box HOME and its shell.
+  local H; H=$(ob path "$B")/home
+  check "omarchy plugin add from a checkout in the box" ob run -b "$B" -- omarchy plugin add "$F/inst" --yes --enable
+  check "...cloned into the box HOME" test -d "$H/.config/omarchy/plugins/$P.inst/.git"
+  check_fails "...not into yours" test -e "$HOME/.config/omarchy/plugins/$P.inst"
+  check_match "...placed in the box's bar" "\"$P.inst\"" "$(jq -c .bar.layout "$H/.config/omarchy/shell.json")"
+  check "omarchy plugin remove in the box" ob run -b "$B" -- omarchy plugin remove "$P.inst" --yes
+  check_fails "...leaves nothing in its shell.json" grep -q "$P.inst" "$H/.config/omarchy/shell.json"
+  check_fails "...nor its plugins dir" test -e "$H/.config/omarchy/plugins/$P.inst"
+  ob down "$B" >/dev/null
+}
+
 # Saves (finding 100): a box HOME kept for up/run --from. In the suite's own data dir, never the user's.
 # The user's aquamarine build (setup --aquamarine) lives in the data dir too: linked in, so a box from a
 # save finds it where the user's own boxes do (finding 130: on NVIDIA it was refused without it).
@@ -4097,7 +4141,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
