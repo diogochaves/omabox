@@ -2401,6 +2401,15 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `build/` goes with the checkout. `t_unit_setup` checks both in a temp HOME, with the XDG dirs
     pointed there too: the session sets them, so HOME alone would have aimed `--remove` at the user's
     own aquamarine build (seen in a first run of the test: nothing was there to delete).
+127. **`shot -o` to a path that cannot be written says so, before capturing** (2026-10-01, issue #63).
+    The capture was written to `OUT.part` through a redirect; when that failed (a read-only mount, a
+    root-owned dir) the shot took it for a failed capture: an interactive box said "no frame ... in
+    10 s: ask the user" (after 0.05 s, sending an agent to the user for a bad path), a headless one
+    "grim failed" after the shell's own error. `shot_path` now makes the directory and writes and
+    removes `OUT.part` before the box is asked for anything: `shot: cannot write OUT: Permission
+    denied` (or the directory that cannot be made), exit 1, nothing left behind. The default path in
+    `$TMPDIR` goes through it too, once the box's name is known. Checked in a real box and by
+    `t_unit_shot_hidden` (both modes, the box never asked).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

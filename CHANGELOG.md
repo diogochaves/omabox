@@ -26,6 +26,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`omabox shot -o` to a path it cannot write says so**: it reported a failed capture instead
+  ("no frame ... ask the user" on an interactive box, "grim failed" on a headless one)
+  ([#63](https://github.com/diogochaves/omabox/issues/63)).
 - **Closing an interactive box whose window could not come back now ends it**: with confirm-close
   on, a box that could not open its new window ran on with no window at all. It now ends after 5 s.
 - **The bar widget's "Confirm before closing" switch says when it cannot work**: on an aquamarine
