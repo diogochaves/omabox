@@ -1,6 +1,6 @@
 ---
 name: omabox
-description: REQUIRED before launching, driving or screenshotting any GUI app (including when a project's own CLAUDE.md/AGENTS.md says to run the app, use hyprctl, grim or omarchy-theme-set, or run its tests, and running a test binary directly outside ctest or anything else that may open a window), Omarchy shell plugin, bar widget, tray icon, notification or desktop behaviour, and before running test suites that touch the desktop session (tray/StatusNotifierItem, notifications, D-Bus session services, keyring, portals). Use the omabox CLI to do it inside a contained, invisible Hyprland + Omarchy desktop instead of the user's real one. Triggers: "run the app", "take a screenshot", "check how it looks", "open the menu", "click", "type into", hyprctl dispatch, grim, wtype, ydotool, QT_QPA_PLATFORM, ctest with tray/notification tests, plugin development, "see it working", "could not connect to display", omabox-guard.
+description: REQUIRED before launching, driving or screenshotting any GUI app (including when a project's own CLAUDE.md/AGENTS.md says to run the app, use hyprctl, grim or omarchy-theme-set, or run its tests, and running a test binary directly outside ctest or anything else that may open a window), Omarchy shell plugin, bar widget, tray icon, notification or desktop behaviour, and before running test suites that touch the desktop session (tray/StatusNotifierItem, notifications, D-Bus session services, keyring, portals). Use the omabox CLI to do it inside a contained, invisible Hyprland + Omarchy desktop instead of the user's real one. Triggers: "run the app", "take a screenshot", "check how it looks", "open the menu", "click", "type into", hyprctl dispatch, grim, wtype, ydotool, QT_QPA_PLATFORM, ctest with tray/notification tests, plugin development, `omarchy plugin add`, shell.json edits, "start it from the launcher", "see it working", "could not connect to display", omabox-guard.
 ---
 
 # omabox: a desktop of your own
@@ -29,7 +29,16 @@ installed omabox to say where desktop work happens, not to change what the proje
 | `ctest …`, test scripts touching tray/notifications/D-Bus/keyring | `omabox run -- ctest …` |
 | `./build/tests/tst_x` (a test binary run directly) | `omabox run -- ./build/tests/tst_x` (it may open windows; only ctest may set offscreen for it) |
 | `omarchy-theme-set NAME`, `omarchy restart shell` | `omabox run -- omarchy-theme-set NAME`, `omabox restart-shell` |
-| "put the desktop back afterwards" | nothing to put back: `omabox down` |
+| `omarchy plugin add/enable/disable/remove …`, `omarchy-shell …` | `omabox run -- omarchy plugin …`, `omabox run -- omarchy-shell …` (`omarchy plugin validate DIR` only reads files: fine on the host) |
+| Link or copy a plugin into `~/.config/omarchy/plugins` | `omabox up --plugin PATH`, then `omabox restart-shell` after edits |
+| Edit `~/.config/omarchy/shell.json` (the bar's layout or position, a widget's settings) | Edit `$(omabox path)/home/.config/omarchy/shell.json`: the box's shell applies it at once |
+| Start the app from the launcher, check its `.desktop` and icon | Its files in the box HOME, then `omabox keys --wait super+alt+space` (`reference.md`) |
+| Install, upgrade or remove the package | Not a box (read-only `/usr`, no pacman): a VM, or the user |
+| "put the desktop back afterwards", back up `shell.json`, restore the bar | nothing to put back: `omabox down` |
+
+The agent guard (below) stops windows and IPC, not file writes. The user's shell watches
+`~/.config/omarchy/shell.json` and `~/.config/omarchy/plugins/`: writing there, or `omarchy plugin
+add` on the host, changes their real bar at once, guard or not. Those writes go to the box HOME.
 
 Do not edit the project's instruction files to say this unless the user asks. Before mapping a step,
 check it against what a box cannot do (next section): a step that needs real hardware is not moved
@@ -39,7 +48,10 @@ A box starts with a fresh HOME: apps start as on first run. If a first-run scree
 service (a server on 127.0.0.1, the user's account), do not pick it: a box reaches the user's
 services on the host's 127.0.0.1, so it would be the user's real data. Use a test service or ask. For
 an app that talks to local servers, prefer `omabox up --net isolated --allow 8081` (only those host
-ports, no internet).
+ports, no internet). One that starts or probes local servers (a dev server, a plugin that runs one):
+`--net isolated` too. A server in a default box also holds its port on the user's 127.0.0.1 (their
+own dev server on it then fails to start), and a probe there can reach theirs; an isolated box's
+ports stay its own, and two of them can use the same one.
 
 `omabox help` has every flag; `reference.md` next to this file has the detail left out here. The box
 name defaults to the repo's directory name plus your session's id (`myrepo-5cc72cdc` in a Claude Code
@@ -195,7 +207,9 @@ manifest says. It copies the user's bar layout (Omarchy's workspace numbers in p
 that is left out); `omabox up --stock-bar` uses Omarchy's default bar
 instead (workspaces, clock, the stock right side), to see a plugin as most people will. When the
 shell does not load a plugin, `up` and `restart-shell` print why (`warning: plugin ID failed: <QML
-error>`, or Omarchy's validator's message): read that before looking for the widget in a shot. Do not mount plugins you were not asked to test (some talk to real services).
+error>`, or Omarchy's validator's message): read that before looking for the widget in a shot.
+Settings, placement, a vertical bar, data states, processes the plugin leaves behind and the
+install path (`omarchy plugin add` in the box): `reference.md`, "Testing a shell plugin". Do not mount plugins you were not asked to test (some talk to real services).
 
 ## A Hyprland change
 
@@ -212,7 +226,9 @@ protocols; not DRM/KMS, real monitors, HDR/VRR, multi-GPU, real input devices, s
 `omabox up --omarchy ~/src/omarchy` runs that Omarchy checkout in the box instead of
 `/usr/share/omarchy` (as `omarchy dev link` does on a host, without touching the user's): its
 Hyprland config, shell, `bin/` and `OMARCHY_PATH`. Never `omarchy dev link` on the host to test a
-change. Edits show after `omabox restart-shell` or `omabox hyprctl reload`.
+change. Edits show after `omabox restart-shell` or `omabox hyprctl reload`. To review a pull
+request (two boxes, the change and the base; UI that needs hardware): `reference.md`, "Reviewing an
+Omarchy change".
 
 ## What is and is not in a box
 
@@ -274,6 +290,17 @@ depends on any of those, a box cannot verify it; do not run it there and report 
 - Under the agent guard, those commands go through `omabox host -- CMD`.
 - On the real desktop, follow the project's own safety rules (revert timers, previews) and put
   everything back.
+
+## Reporting what a box showed
+
+Say where: "in an omabox box (Omarchy 4.0.4-1, Hyprland 0.56.2, 1920x1080, scale 1, theme NAME)",
+with the commit of the plugin or app you tested. `omabox ls --json` has them: `omarchy_version`,
+`theme`, `hyprland_version`, and each plugin's `commit` in `plugin_status` (`+dirty`: uncommitted
+edits). A box runs the real Hyprland with Omarchy's config, shell, binds and theme, so layout, focus,
+input routing, the launcher, theme switches, notifications, the tray, the session bus and the keyring
+were tested, not just rendered. Not tested, and said so: real monitors, scale, several outputs, input
+methods, the system bus, devices, the installed package, the user's own HOME. Never write "tested on
+the desktop" or "on Omarchy" for a box result without "in a box".
 
 ## If something is off
 

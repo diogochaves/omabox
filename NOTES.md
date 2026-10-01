@@ -2595,6 +2595,22 @@ from them.
     `theme.name` (so a theme switched in the box shows). Checked in a box: version, a dirty plugin,
     and `catppuccin` after `omarchy-theme-set Catppuccin` there. `t_plugin_check`, `t_uwsm_app`,
     `t_omarchy_tree`.
+140. **Plugin and app steps that act on the real desktop, mapped to boxes** (2026-10-01). Plugin and
+    app checklists tell agents to link plugins into `~/.config/omarchy/plugins`, edit `shell.json`,
+    run `omarchy plugin add`, start apps from the launcher, switch themes and record demos "on a live
+    desktop". Checked in boxes for the skill's table and reference.md recipes: an edit to the box's
+    `shell.json` applies at once (`bar.position` "left" redrew the bar with no restart: the shell's
+    FileView watches it although Quickshell's file watcher is off), so the same edit to the user's
+    file changes their bar; under the guard `omarchy-shell` says "not running" (IPC is caught), file
+    writes are not. `moveBarWidget`, `setBarWidget` (kept inline in the layout entry; `index` needs
+    `section`), `setPluginEnabled ... false` act on the box's file. `omarchy plugin add` refuses an id
+    a `--plugin` mount already holds ("already used by"). The launcher lists a `.desktop` added to
+    the box HOME after the shell started, and starts it through the `uwsm-app` stand-in.
+    `omarchy-theme-set` works in a box (`theme.name` follows). Two `--net isolated` boxes served the
+    same port, with nothing on the host's. `omarchy-osd -i volume-high -p 40` draws the OSD. A
+    `wf-recorder` stopped with SIGINT finishes only on its next frame: a still screen keeps it
+    running until something moves. The skill's description now has a unit check against the 1024
+    characters agent hosts allow.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

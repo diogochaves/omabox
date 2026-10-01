@@ -326,6 +326,9 @@ It stops accidents. It does not stop:
 - an agent that sets the variables back, or runs `omabox host` unasked, on purpose;
 - processes the agent starts itself rather than through its shell (MCP servers: a headed browser
   MCP opens on your desktop);
+- file writes: your shell watches `~/.config/omarchy/shell.json` and `~/.config/omarchy/plugins/`,
+  so an agent editing them (or running `omarchy plugin add` on the host) changes your real bar at
+  once; the skill sends those writes to the box's HOME;
 - anything over the session bus or the user manager (notifications, the keyring, apps started over
   D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment);
 - links opened by other routes: a browser started directly with a URL (it hands the URL to the one
@@ -378,7 +381,9 @@ blocks the network and every other socket, omabox's included), or see
   works. A server in a box that listens on `::1` only cannot be reached from outside it.
 - A box's ports are forwarded to your host's `127.0.0.1` only (never your LAN address), usually
   within a second of its server listening, the ephemeral range included; other boxes reach them
-  there too. A TCP port there also takes the UDP port of the same number.
+  there too. A TCP port there also takes the UDP port of the same number. So while a connected box
+  runs a server on a port, your own server cannot start on it; an isolated box's ports stay its own
+  (two isolated boxes can use the same port).
 - Inside a box, your machine's LAN address is the box itself. A connected box started inside
   another box has no network.
 - Every box needs `passt` (which `install.sh` installs), and a connected one `/dev/net/tun`. Its own

@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **The agent skill knows plugin and app work**: what to do in a box instead of linking a plugin into
+  your plugins dir, editing your `shell.json` or running `omarchy plugin add` on your desktop (writes
+  the guard does not stop: your bar would change at once), and recipes for testing a shell plugin
+  (settings, placement, a vertical bar, data states, leftover processes, the install path), an app
+  from the launcher, a theme switch, a demo video, and reviewing an Omarchy pull request. It also
+  says how to report what a box showed, and to use `--net isolated` for anything that starts local
+  servers (a connected box's server holds that port on your machine too).
+
 - **`omabox up --plugin` and `restart-shell` say why a plugin is not in the bar**: Omarchy's plugin
   validator's message, or the shell's own (a refused manifest, a QML error), as a warning; the box
   still comes up. `omabox ls --json` and `up --json` have each plugin's state (`plugin_status`).
