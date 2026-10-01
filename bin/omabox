@@ -1312,7 +1312,7 @@ cmd_up() {
     --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
-    --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell"
+    --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell" --setenv OMABOX_OMARCHY_VERSION "$(omarchy_version)"
     "${hypr_env[@]}" "${envs[@]}" /opt/omabox/share/session.sh)
 
   local launch=(bwrap)
@@ -1792,6 +1792,16 @@ omarchy_tree() {
     [ -e "$p/$f" ] || die "--omarchy: $p is not an Omarchy tree (no $f)"
   done
   [ "$p" = /usr/share/omarchy ] || printf '%s\n' "$p"
+}
+# The installed Omarchy's version, as Omarchy's omarchy-version reads it (omarchy-dev on the edge
+# channel, else omarchy), for the box's stand-in (share/bin/omarchy-version): a box has no pacman
+# database. Inside a box (the suite's stand-in hosts), the box's own.
+omarchy_version() {
+  local p v
+  for p in omarchy-dev omarchy; do
+    v=$(pacman -Q "$p" 2>/dev/null | awk '{ print $2 }') && [ -n "$v" ] && { echo "$v"; return 0; }
+  done
+  echo "${OMABOX_OMARCHY_VERSION:-}"
 }
 hypr_bin() {
   local p; p=$(readlink -f -- "$1" 2>/dev/null) && [ -f "$p" ] || die "--hyprland: no such file: $1"
