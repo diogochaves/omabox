@@ -2586,6 +2586,15 @@ from them.
     committed HEAD into the box HOME, places the widget in the box's bar and leaves the user's
     plugins dir alone; `omarchy plugin remove` leaves nothing in the box's `shell.json`.
     `t_plugin_check`.
+139. **What a box tested, in `ls --json`** (2026-10-01). An agent reporting a box result had to work
+    out the Omarchy version (which failed in a box, 137), the theme and which state of its plugin it
+    ran. `box.json` now records `omarchy_version` at `up` (the host's package version, or `dev
+    COMMIT[+dirty]` for an `--omarchy` tree, `dev` outside git), each mounted plugin's `commit` in
+    `plugin_status` (short HEAD, `+dirty` with uncommitted or untracked files; none outside git),
+    refreshed at `restart-shell`; `ls --json` adds `theme`, read live from the box HOME's
+    `theme.name` (so a theme switched in the box shows). Checked in a box: version, a dirty plugin,
+    and `catppuccin` after `omarchy-theme-set Catppuccin` there. `t_plugin_check`, `t_uwsm_app`,
+    `t_omarchy_tree`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
