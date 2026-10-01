@@ -88,9 +88,11 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    loads it. Outside a checkout it goes to `~/.local/share/omabox/aquamarine`.
 3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay`, `events`
    (need `wayland-scanner`; protocol XML is vendored).
-4. Links: `~/.local/bin/omabox` → `bin/omabox`; `skill/` as `skills/omabox` in `~/.agents` and
-   `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when those exist); `plugin/` as
-   `~/.config/omarchy/plugins/chaves.omabox`. A real directory where a link goes stops the install.
+4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
+   `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
+   those exist); `plugin/` as `~/.config/omarchy/plugins/chaves.omabox`; makes `~/.config/omabox`;
+   asks about the agent guard. A real directory where a link goes stops it. `omabox setup --remove`
+   undoes it.
 5. Try it: `omabox up && omabox shot`, then `omabox down`. The spike's hand-run scripts (`spike/*.sh`,
    wayvnc, gvncviewer) are history: VNC went in finding 34.
 
@@ -2382,6 +2384,23 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `omabox`, as `t_widget` has it): unavailable, a click on the switch sent nothing; available after
     reopening Settings, on, and a click sent `config confirm-close off`. The suite checks the CLI's
     field only: no key opens Settings, and the gear's place depends on the bar layout a box copies.
+126. **`omabox setup` is what each user runs; install.sh is the system part** (2026-10-01, issue #49).
+    A package installs files for everyone; it cannot link into each user's HOME. So the per-user
+    steps of install.sh moved, unchanged and with the same messages, into `omabox setup`: the
+    `~/.local/bin/omabox` link (not for a system install under `/usr`, whose command is
+    `/usr/bin/omabox`), the agent skill in each agent's dir, the bar widget, `~/.config/omabox`, the
+    agent guard (asked in a terminal, a "no" remembered). install.sh keeps the packages, the tools and
+    `setup --aquamarine` (finding 125), then calls `omabox setup`. The widget must stay a per-user
+    link: Omarchy's shell reads third-party plugins only from `~/.config/omarchy/plugins` (its
+    `PluginRegistry`; its own dir holds first-party plugins, and `omarchy.*` ids are reserved).
+    `omabox setup --remove` undoes it: `guard off` when this HOME's guard is on or outdated, `broker
+    off` when this HOME has the broker's unit, `omarchy plugin disable chaves.omabox` when this HOME's
+    `shell.json` has the widget (that asks the running shell, as the command does), then the links,
+    each only while it still points at this omabox (never a real dir or a link moved elsewhere), and
+    the per-user aquamarine build and its source. Settings and saves stay, said so; a checkout's
+    `build/` goes with the checkout. `t_unit_setup` checks both in a temp HOME, with the XDG dirs
+    pointed there too: the session sets them, so HOME alone would have aimed `--remove` at the user's
+    own aquamarine build (seen in a first run of the test: nothing was there to delete).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

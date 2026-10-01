@@ -5,6 +5,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **`omabox setup`** makes what each user needs: the links (omabox, the agent skill, the bar
+  widget), the settings dir, and the agent guard question. `install.sh` runs it; a package's users
+  will run it themselves. **`omabox setup --remove`** undoes it before you delete omabox: guard and
+  broker off, widget disabled, links removed; your settings and saves stay
+  ([#49](https://github.com/diogochaves/omabox/issues/49)).
+
 ### Changed
 
 - **omabox runs on your system's aquamarine unless a box needs the fix** (Hyprland's backend
