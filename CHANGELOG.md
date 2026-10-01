@@ -19,7 +19,6 @@ desktop to boxes, with recipes.
   from the launcher, a theme switch, a demo video, and reviewing an Omarchy pull request. It also
   says how to report what a box showed, and to use `--net isolated` for anything that starts local
   servers (a connected box's server holds that port on your machine too).
-
 - **`omabox up --plugin` and `restart-shell` say why a plugin is not in the bar**: Omarchy's plugin
   validator's message, or the shell's own (a refused manifest, a QML error), as a warning; the box
   still comes up. `omabox ls --json` and `up --json` have each plugin's state (`plugin_status`).
