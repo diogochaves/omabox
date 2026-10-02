@@ -2725,6 +2725,21 @@ from them.
     `omarchy-version` printed nothing (finding 137's "first on every box PATH" was not so) and the
     browser-policy stand-in (finding 75) was skipped the same way. `share/hyprland.lua` puts the
     stand-ins first again after Omarchy's config, and after a reload too; `t_main` checks a bind's.
+150. **Other agents' models with the skill** (2026-10-01, #84). OpenCode 1.18 (logged in to OpenCode Go),
+    one prompt, "Take a screenshot of the desktop and tell me what the bar shows", the guard on (the
+    shell's environment inherited). Every model loaded the skill first. kimi-k3: a box, small crops,
+    `ls --json` and the box's `shell.json` to name widgets, "in an omabox box" in the answer, offered
+    to take it down. qwen3.8-flash: a box too, but some fifteen shots and hover attempts, a wrong
+    `pointer --move` it corrected, stopped at 7 min with its box up. big-pickle (a free model):
+    `omabox host -- grim`, the user's real screen, then read a crop of the bar and OCR of it (the
+    capture went to its provider). `host` is the guard's way through by design and the skill gives it
+    for when the user asks for their real desktop; the model read "the desktop" as that. Weighed and
+    left: a click-to-allow toast for agents' captures through `host` (Omarchy's notifications carry
+    only a default action: a click on the toast answers `default`, an unclicked one closes after
+    8 s), and more skill text; both cost upkeep or every session's context for a weak model's
+    misreading, and without omabox that model would have run grim directly. The skill is written for
+    capable models. Boxes from an OpenCode session have no session suffix (`skilltest`), unlike
+    Claude Code's and Codex's.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
