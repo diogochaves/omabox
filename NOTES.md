@@ -2767,6 +2767,22 @@ from them.
     there. `t_unit_leak_scan` had taken its fixture's interactive window for a box of the user's
     whose box.json changed during the run (`their_new_box` reads the real runtime dir): its scans run
     in an empty one.
+153. **The Omarchy omabox relies on, as one test** (2026-10-02, #82). Omarchy updates on its own
+    schedule, and what moved under omabox showed up as a box failing later, naming nothing.
+    `t_unit_omarchy_contract` reads it from the installed Omarchy (`OMABOX_TEST_OMARCHY=DIR`: a
+    checkout, to see an update coming), one named check each, with where omabox uses it: the Hyprland
+    modules `share/hyprland.lua` runs or skips (`default.hypr.autostart` by name), the commands omabox
+    runs and the ones `share/bin` stands in for (still called so), the paths `omarchy-theme-set`
+    writes, the shell's IPC methods and their argument counts (`plugin_check`, `setup`, and every one
+    the skill names), `listPlugins`' fields, the log lines `plugin_check` reads, the layers `up` and
+    the skill wait for, the built-in plugin ids and the `omarchy.` prefix `shell_json_filter` keeps,
+    the plugins dir, kinds, `defaultSection` and the shell.json keys omabox writes. Each check is
+    against the files, not a running shell: a unit test, no box. It checks itself on a linked copy
+    with one method's arguments and the bar's layer changed. Run on Omarchy's `quattro` head
+    (821ae58): all hold, once the IPC is read from any block with a literal `target` (the shell's is
+    now `ShellIpc`, an IpcHandler that also answers on the shell's own socket; `omarchy-shell` tries
+    it with socat before `qs ipc`). Not yet in a release (4.0.4 here): boxes are to be checked with it
+    when it is.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

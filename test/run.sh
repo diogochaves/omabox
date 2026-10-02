@@ -11,6 +11,8 @@
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd); a PATTERN
 #                            that matches no test exits 2
 #   --strict (or OMABOX_TEST_STRICT=1): a skipped check (a tool this machine lacks) fails
+#   OMABOX_TEST_OMARCHY=DIR: the Omarchy tree t_unit_omarchy_contract reads (default /usr/share/omarchy):
+#                            a checkout, to see what an Omarchy update moves before it is released
 #   test/run.sh --installed [ARGS...]   the same against omabox installed as a package would be:
 #                            read-only at /usr/lib/omabox, /usr/bin/omabox (a throwaway namespace)
 #
@@ -698,6 +700,150 @@ t_unit_version() {
   else
     skip "the widget passes omarchy-plugin-validate" "no omarchy-plugin-validate here"
   fi
+}
+
+# The Omarchy omabox relies on (issue #82). Omarchy updates on its own schedule: an IPC method, a
+# shell.json key, a log line or a file that moves under omabox showed up as a box failing somewhere
+# later, naming nothing. Each item here says where omabox uses it, so a move is one named failure.
+# omarchy_contract DIR: one line per item of the Omarchy tree DIR: its name, a tab, and what is wrong
+# with it there (nothing when it holds).
+# The shell's IPC: the methods of each block with a literal target (an IpcHandler, or a component made
+# of one: Omarchy's ShellIpc), as "TARGET METHOD ARGS". String literals and // comments are left out of
+# the brace count.
+IPC_METHODS='
+import re, sys
+for path in sys.argv[1:]:
+    stack = []   # one [target, functions] per open brace
+    for line in open(path):
+        bare = re.sub(r"\"(\\.|[^\"\\])*\"|\x27(\\.|[^\x27\\])*\x27", "\"\"", line).split("//")[0]
+        if stack:
+            m = re.match(r"\s*target:\s*\"([^\"]*)\"", line)
+            if m: stack[-1][0] = m.group(1)
+            m = re.match(r"\s*function\s+(\w+)\s*\(([^)]*)\)", line)
+            if m: stack[-1][1].append((m.group(1), len([a for a in m.group(2).split(",") if a.strip()])))
+        for c in re.findall(r"[{}]", bare):
+            if c == "{": stack.append([None, []])
+            elif stack:
+                target, fns = stack.pop()
+                for name, n in fns if target is not None else []: print(target, name, n)
+'
+# The shell's methods omabox and its skill use, METHOD:ARGS:WHO. Every one the skill names is here
+# (t_unit_omarchy_contract checks).
+OMARCHY_IPC='listPlugins:0:plugin_check rescanPlugins:0:setup ping:0:skill summon:2:skill toggle:2:skill
+  hide:1:skill call:3:skill listShellConfig:0:skill moveBarWidget:2:skill putBarWidget:2:skill
+  setBarWidget:4:skill enablePlugin:2:skill setPluginEnabled:2:skill reloadConfig:0:skill
+  debugBarGeometry:0:skill togglePanelAt:2:skill'
+omarchy_contract() {
+  local o=$1 s=$1/shell ipc e m n who have ids
+  # oc NAME WHY CMD...: the item holds when CMD succeeds.
+  oc() { local n=$1 w=$2; shift 2; if "$@" >/dev/null 2>&1; then printf '%s\t\n' "$n"; else printf '%s\t%s\n' "$n" "$w"; fi; }
+  # oc_has FILE FIXED-STRING
+  oc_has() { grep -qF -- "$2" "$1"; }
+  # Hyprland: share/hyprland.lua runs Omarchy's config by these modules; `up --omarchy` wants a tree
+  # with bootstrap.lua and shell.qml.
+  oc "default/hypr/bootstrap.lua (share/hyprland.lua runs it)" "missing" test -f "$o/default/hypr/bootstrap.lua"
+  oc "default/hypr/omarchy.lua (share/hyprland.lua requires default.hypr.omarchy)" "missing" test -f "$o/default/hypr/omarchy.lua"
+  oc "default.hypr.autostart, required by name (share/hyprland.lua marks it loaded: no session autostart in a box)" \
+    "no default/hypr/autostart.lua, or nothing requires \"default.hypr.autostart\": a renamed one would run Omarchy's autostart in every box" \
+    bash -c 'test -f "$1/autostart.lua" && grep -qF "require(\"default.hypr.autostart\")" "$1"/*.lua' _ "$o/default/hypr"
+  oc "default.hypr.paths' omarchy_path (share/hyprland.lua puts omabox's stand-ins before its bin)" "not in default/hypr/paths.lua" \
+    oc_has "$o/default/hypr/paths.lua" omarchy_path
+  oc "default/hypr/toggles.lua (share/hyprland.lua requires default.hypr.toggles)" "missing" test -f "$o/default/hypr/toggles.lua"
+  oc "default/hypr/envs.lua (caller_path tells an Omarchy checkout's bin by it, finding 149)" "missing" test -f "$o/default/hypr/envs.lua"
+  oc "default/uwsm/default (share/session.sh: TERMINAL, EDITOR)" "missing" test -f "$o/default/uwsm/default"
+  oc "shell/shell.qml (share/shell.sh runs quickshell -p \$OMARCHY_PATH/shell)" "missing" test -f "$s/shell.qml"
+  oc "config/omarchy/shell.json, a bar.layout of sections (up --stock-bar, shell_json_filter)" \
+    "missing, or its bar.layout is not an object of arrays" \
+    jq -e '(.bar.layout | type == "object") and all(.bar.layout[]; type == "array") and (.idle | type == "object")' "$o/config/omarchy/shell.json"
+  # Commands omabox runs, and the ones its stand-ins (share/bin) take the place of.
+  oc "omarchy-shell (plugin_check, setup)" "not in bin/" test -x "$o/bin/omarchy-shell"
+  oc "omarchy-plugin-validate (plugin_check, up's warnings)" "not in bin/" test -x "$o/bin/omarchy-plugin-validate"
+  oc "omarchy plugin enable says \"is not known\" for a plugin the shell has not scanned yet (setup_widget waits on it)" \
+    "no omarchy-plugin-enable, or it says something else now" oc_has "$o/bin/omarchy-plugin-enable" "is not known"
+  oc "omarchy-plugin-disable (setup --remove)" "not in bin/" test -x "$o/bin/omarchy-plugin-disable"
+  oc "omarchy-launch-shell runs the shell under systemd-cat -t omarchy-shell (share/bin/systemd-cat logs it to ~/shell.log)" \
+    "no omarchy-launch-shell, or it starts the shell another way: omarchy restart shell would leave a box with no bar (finding 131)" \
+    oc_has "$o/bin/omarchy-launch-shell" "systemd-cat -t omarchy-shell"
+  oc "omarchy-launch-browser uses systemd-run --user (share/bin/systemd-run runs it without a user manager)" \
+    "no omarchy-launch-browser, or it starts the browser another way" oc_has "$o/bin/omarchy-launch-browser" "systemd-run --user"
+  oc "omarchy-theme-set-browser-policy, called by an omarchy-* (share/bin's stand-in for it)" \
+    "nothing in bin/ calls it: the stand-in is stale, or the policy is set another way (with sudo, which a box lacks)" \
+    bash -c 'grep -lF omarchy-theme-set-browser-policy "$1"/bin/* | grep -qv "/omarchy-theme-set-browser-policy$"' _ "$o"
+  oc "omarchy-version (share/bin's stand-in for it)" "not in bin/" test -x "$o/bin/omarchy-version"
+  oc "omarchy-menu-select (share/confirm-close.sh)" "not in bin/" test -x "$o/bin/omarchy-menu-select"
+  oc "omarchy-theme-set-gnome (share/session.sh: the theme's colour mode, finding 148)" "not in bin/" test -x "$o/bin/omarchy-theme-set-gnome"
+  for e in current/theme current/theme.name current/background; do
+    oc "omarchy-theme-set writes ~/.local/state/omarchy/$e (seed_home copies it)" "not named in bin/omarchy-theme-set" \
+      oc_has "$o/bin/omarchy-theme-set" ".local/state/omarchy/$e"
+  done
+  # The shell's IPC.
+  ipc=$(python3 -c "$IPC_METHODS" "$s/shell.qml" 2>&1) || ipc=""
+  for e in $OMARCHY_IPC; do
+    IFS=: read -r m n who <<<"$e"
+    have=$(awk -v m="$m" '$1 == "shell" && $2 == m { print $3; exit }' <<<"$ipc")
+    oc "omarchy-shell shell $m, $n argument(s) ($who)" \
+      "$([ -n "$have" ] && echo "takes $have argument(s) now" || echo "not a method of shell.qml's IpcHandler (target \"shell\")")" \
+      test "$have" = "$n"
+  done
+  for e in id kinds enabled; do
+    oc "shell listPlugins entries have $e (plugin_check)" "not in listPlugins' entries in shell.qml" \
+      bash -c 'sed -n "/function listPlugins(/,/return JSON.stringify/p" "$1" | grep -qE "^ *$2:"' _ "$s/shell.qml" "$e"
+  done
+  # The shell's log lines plugin_check reads (finding 138).
+  oc "\"PluginRegistry: \" warnings for a refused manifest (plugin_check: not loaded)" "no console.warn(\"PluginRegistry: ...) in services/PluginRegistry.qml" \
+    oc_has "$s/services/PluginRegistry.qml" 'console.warn("PluginRegistry: '
+  oc "\"Plugin widget ID failed: \" (plugin_check: failed)" "not logged so in shell.qml" \
+    grep -qE 'console\.warn\("Plugin widget " \+ [A-Za-z_.]+ \+ " failed: "' "$s/shell.qml"
+  oc "\"has no barWidget entry point\" (plugin_check: failed)" "not logged in shell.qml" oc_has "$s/shell.qml" "has no barWidget entry point"
+  oc "\"failed to load\" (plugin_check: failed)" "not logged in shell.qml" oc_has "$s/shell.qml" " failed to load"
+  # Layers: the bar is what `up` waits for; the others are the skill's `wait layer` examples.
+  for e in omarchy-bar omarchy-menu omarchy-notifications; do
+    oc "layer $e ($([ "$e" = omarchy-bar ] && echo "up waits for it" || echo "the skill's wait layer"))" "no WlrLayershell.namespace \"$e\" under shell/" \
+      grep -RqF --include="*.qml" "WlrLayershell.namespace: \"$e\"" "$s"
+  done
+  # Built-in plugins: shell_json_filter keeps every omarchy.* id as built-in, and names these.
+  ids=$(find "$s" -name '*manifest.json' -exec jq -r '.id // empty' {} + 2>/dev/null)
+  for e in omarchy.menu omarchy.workspaces omarchy.tray omarchy.notifications omarchy.clock; do
+    oc "built-in plugin $e (shell_json_filter, wait_ready, the skill)" "no manifest under shell/ has this id" grep -qxF "$e" <<<"$ids"
+  done
+  oc "every built-in plugin's id starts with omarchy. (shell_json_filter keeps those)" \
+    "$(grep -v '^omarchy\.' <<<"$ids" | tr '\n' ' ')" bash -c '[ -n "$1" ] && ! grep -qv "^omarchy\." <<<"$1"' _ "$ids"
+  oc "third-party plugins in ~/.config/omarchy/plugins (up mounts --plugin there)" "PluginRegistry's pluginsDir is elsewhere" \
+    oc_has "$s/services/PluginRegistry.qml" '"/.config/omarchy/plugins"'
+  # Plugin kinds plugin_check tells apart, and the manifest key place_plugin reads.
+  for e in bar bar-widget service; do
+    oc "plugin kind \"$e\" (plugin_check)" "\"$e\" not in shell.qml" oc_has "$s/shell.qml" "\"$e\""
+  done
+  oc "barWidget.defaultSection (seed_home places a mounted widget by it)" "not read by services/PluginRegistry.qml" \
+    oc_has "$s/services/PluginRegistry.qml" defaultSection
+  # shell.json keys seed_home writes: read by the shell under these names.
+  for e in disabledPlugins:services/PluginRegistry.qml centerAnchor:plugins/bar/Bar.qml screensaver:plugins/services/idle/Service.qml; do
+    oc "shell.json ${e%%:*} (shell_json_filter)" "not read in shell/${e#*:}" oc_has "$s/${e#*:}" "${e%%:*}"
+  done
+}
+
+t_unit_omarchy_contract() {
+  local o=${OMABOX_TEST_OMARCHY:-/usr/share/omarchy} name why
+  if [ ! -f "$o/shell/shell.qml" ]; then skip "the Omarchy contract (issue #82)" "no Omarchy at $o (OMABOX_TEST_OMARCHY names a tree)"; return; fi
+  note "Omarchy at $o"
+  while IFS=$'\t' read -r name why; do
+    if [ -z "$why" ]; then ok "Omarchy: $name"; else no "Omarchy: $name" "$why (in $o)"; fi
+  done < <(omarchy_contract "$o")
+  local m missing=""
+  while read -r m; do
+    [[ " ${OMARCHY_IPC//$'\n'/ } " == *" $m:"* ]] || missing+="$m "
+  done < <(grep -ohE '`(omarchy-shell )?shell [a-z][A-Za-z]+' "$ROOT"/skill/*.md | sed 's/.* //' | sort -u)
+  check_eq "every shell method the skill names is in the contract (OMARCHY_IPC)" "" "$missing"
+  # The check itself, on a copy of that tree (links, two files real) with one method's arguments
+  # changed and the bar's layer renamed: those two fail, nothing else.
+  local t=$TMP/omarchy; rm -rf "$t"; cp -rs "$(readlink -f "$o")" "$t"
+  rm "$t/shell/shell.qml" "$t/shell/plugins/bar/Bar.qml"
+  sed 's/function moveBarWidget(id: string, /function moveBarWidget(/' "$o/shell/shell.qml" > "$t/shell/shell.qml"
+  sed 's/"omarchy-bar"/"omarchy-topbar"/' "$o/shell/plugins/bar/Bar.qml" > "$t/shell/plugins/bar/Bar.qml"
+  check_eq "...a moved method and a renamed layer: those two fail, with what changed" \
+    "omarchy-shell shell moveBarWidget, 2 argument(s) (skill): takes 1 argument(s) now|layer omarchy-bar (up waits for it): no WlrLayershell.namespace \"omarchy-bar\" under shell/" \
+    "$(omarchy_contract "$t" | awk -F'\t' '$2 != "" { print $1 ": " $2 }' | paste -sd '|')"
+  rm -rf "$t"
 }
 
 # The leak detector's reading of events (finding 80), on lines as the watcher logs them (the
@@ -4302,7 +4448,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_saves
+UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
