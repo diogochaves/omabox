@@ -2655,6 +2655,16 @@ from them.
     Text.PlainText` fails; checked against a fixture that has one of each). `omabox gpu` names the
     box's aquamarine as `up` recorded it (a line under the first; `aquamarine` in `--json`), as #47
     promised and `ls --json` and `--version` already did.
+145. **pi skipped the skill: its description was not valid YAML** (2026-10-01, checking the agents
+    #84 lists). SKILL.md's `description:` was a plain scalar holding `Triggers: "run the app"`; to a
+    strict YAML parser `: ` there starts a mapping ("mapping values are not allowed here"). pi 1.0.0
+    skips a malformed SKILL.md without a word: `get_commands` over `pi --mode rpc --offline` (no model
+    call) listed its other skills, not omabox. Claude Code, OpenCode, Codex (0.160.0: `skills/list`
+    over `codex app-server`, no login needed, had it with no errors) and Hermes (v0.19.0: falls back
+    to `key: value` lines) read it anyway. The description is a double-quoted string now (`\"`
+    escapes only), which pi lists as `skill:omabox`; `t_unit_version` checks it stays quoted, as it
+    checks the 1024-character cap. None of Codex, pi or Hermes is logged in here, so whether they
+    follow the skill is still untested (#84).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

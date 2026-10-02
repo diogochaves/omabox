@@ -672,9 +672,14 @@ t_unit_version() {
   check_eq "...a check that finds one (and not the plain ones)" "$TMP/rich.qml:2 Text $TMP/rich.qml:7 Label" "$(rich_text "$TMP/rich.qml" | tr '\n' ' ' | sed 's/ $//')"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
   check_eq "config --json names it, for a widget left from before an upgrade (finding 133)" "$v" "$("$CLI" config --json | jq -r .version)"
-  # Agent Skills hosts cap a skill's description at 1024 characters (it grows with each trigger).
-  check "the skill's description is at most 1024 characters" \
-    test "$(sed -n 's/^description: //p' "$ROOT/skill/SKILL.md" | head -n 1 | tr -d '\n' | wc -c)" -le 1024
+  # Agent Skills hosts cap a skill's description at 1024 characters (it grows with each trigger), and
+  # some parse the frontmatter as strict YAML: there an unquoted one with `: ` in it is an error and
+  # the skill is skipped without a word (pi did, finding 145). A double-quoted string, \" escapes only,
+  # reads the same as JSON.
+  local desc; desc=$(sed -n 's/^description: //p' "$ROOT/skill/SKILL.md" | head -n 1 |
+    python3 -c 'import json, sys; v = sys.stdin.read().strip(); assert v.startswith("\""); print(len(json.loads(v)))' 2>&1)
+  check_match "the skill's description is a quoted string" '^[0-9]+$' "$desc"
+  check "...of at most 1024 characters" test "$desc" -le 1024
   if command -v omarchy-plugin-validate >/dev/null; then
     check "the widget passes omarchy-plugin-validate" omarchy-plugin-validate "$ROOT/plugin"
   else
