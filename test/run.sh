@@ -1573,6 +1573,11 @@ t_main() {
   # finding 62: up waits for the shell (bar layer + notification server) before returning
   check "bar is up when up returns" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-bar"
   check "notify-send works right after up" ob run -b "$B" -- notify-send omabox-test
+  # What the box's Hyprland starts (the bar, binds, terminals) has omabox's stand-ins ahead of
+  # Omarchy's bin, which Omarchy's envs.lua puts first (finding 149).
+  ob hyprctl -b "$B" dispatch "hl.dsp.exec_cmd('sh -c \"command -v omarchy-version > ~/t149\"')" >/dev/null
+  ob wait -b "$B" --timeout 5s cmd -- test -s /home/sbx/t149 >/dev/null
+  check_eq "a bind's omarchy-version is omabox's stand-in" /opt/omabox/share/bin/omarchy-version "$(ob run -b "$B" -- cat /home/sbx/t149)"
   # The theme's light or dark mode in the box's dconf (finding 148), for portal dialogs, GTK and Qt.
   local mode; mode=$(ob run -b "$B" -- sh -c 'omarchy-theme-color --file ~/.local/state/omarchy/current/theme/colors.toml mode')
   [ "$mode" = light ] || mode=dark
@@ -3091,6 +3096,11 @@ t_unit_guard_exec_host() {
   check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
   check_eq "...nor one written with a trailing slash (up and run leave it out too)" "/usr/bin:/bin" \
     "$(PATH=/x/share/guard/:/usr/bin:/y/share/guard:/bin lib caller_path)"
+  # A host's `omarchy dev link` puts its checkout's bin first (finding 149): kept for host, not in a box.
+  local dl=$TMP/devlink; mkdir -p "$dl/bin" "$dl/default/hypr"; : > "$dl/default/hypr/envs.lua"
+  check_eq "a box's PATH leaves out an Omarchy checkout's bin (a dev link's)" "/usr/share/omarchy/bin:/usr/bin" \
+    "$(PATH="$dl/bin:/usr/share/omarchy/bin:/usr/bin" lib caller_path box)"
+  check_eq "...host keeps it" "$dl/bin/:/usr/bin" "$(PATH="$dl/bin/:/usr/bin" lib caller_path)"
   check_eq "host: a BROWSER the guard did not set stays (Omarchy sets it in the shell)" firefox \
     "$("${GUARDED[@]}" BROWSER=firefox "$CLI" host -- sh -c 'echo "${BROWSER-unset}"' 2>/dev/null)"
   # The user manager's, through a stand-in systemctl: a plain value is taken, one it quotes is not.

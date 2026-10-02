@@ -2707,6 +2707,24 @@ from them.
     light under a dark theme; the session runs Omarchy's `omarchy-theme-set-gnome` once its bus is
     up (in the background; set before `up` returns), and the chooser is dark (`t_main` checks the
     mode). Not done: PipeWire in boxes, portal logs (dbus-daemon drops activated services' stderr).
+149. **A really dev-linked host, and the PATH a box's processes get** (2026-10-01, #84's list; in the
+    VM: fresh Omarchy 4.0.4, omabox 0.4.5, a v4.0.4 clone with markers, `omarchy dev link`, rebooted
+    into it; record in the maintainer's notes). Held: a plain `up` runs the installed Omarchy
+    (`/etc/omarchy.conf`, `run`, `bash -ic`/`-lc`, Hyprland's and quickshell's environments agree, no
+    marker), `--omarchy` the clone runs the clone, sudo cannot act in a box, and the full suite passes
+    with the link active (1360/0/6; from a git checkout: a `git archive` copy fails 4 checks that
+    assume one). Not held: the caller's PATH. The link puts `<checkout>/bin` first, `caller_path`
+    passed it on, and `up` run from the checkout mounts it, so the box had the checkout's
+    `omarchy-*` ahead of `/usr/bin` while `OMARCHY_PATH` was the package's: two trees mixed.
+    `caller_path box` (a box's PATH, for `run` and the session) now leaves out any Omarchy tree's
+    bin but the package's (a dir beside `default/hypr/envs.lua`); `host` keeps it, the link being the
+    user's real desktop there; `--omarchy` adds its own back. Checked with a stand-in checkout on
+    this machine (its marker not found in the box, `omarchy-theme-set` the package's). Also found
+    there and here: Omarchy's `envs.lua` puts `$OMARCHY_PATH/bin` first for everything the box's
+    Hyprland starts (the bar, binds, terminals), ahead of omabox's stand-ins, so a bind's
+    `omarchy-version` printed nothing (finding 137's "first on every box PATH" was not so) and the
+    browser-policy stand-in (finding 75) was skipped the same way. `share/hyprland.lua` puts the
+    stand-ins first again after Omarchy's config, and after a reload too; `t_main` checks a bind's.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

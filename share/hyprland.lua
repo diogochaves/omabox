@@ -3,6 +3,18 @@
 dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")
 package.loaded["default.hypr.autostart"] = true -- skip: systemd/dbus env import, first-run, monitor-watch, udiskie
 require("default.hypr.omarchy")
+-- Omarchy's envs.lua puts its own bin first for everything Hyprland starts (the bar, binds,
+-- terminals): omabox's stand-ins (omarchy-version, the browser policy) go ahead of it again, as on
+-- every other box PATH (finding 149).
+do
+  local standins = "/opt/omabox/share/bin"
+  local omarchy_bin = require("default.hypr.paths").omarchy_path .. "/bin"
+  local kept = { standins, omarchy_bin }
+  for entry in (os.getenv("PATH") or "/usr/bin"):gmatch("[^:]+") do
+    if entry ~= standins and entry ~= omarchy_bin then table.insert(kept, entry) end
+  end
+  hl.env("PATH", table.concat(kept, ":"))
+end
 -- As Omarchy's stock ~/.config/hypr/hyprland.lua ends (its hypr.* user modules are comments only):
 -- the toggle flags and workspace layouts from ~/.local/state, so Omarchy's toggles work in a box.
 require("default.hypr.toggles")

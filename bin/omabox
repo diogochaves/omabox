@@ -552,11 +552,19 @@ caller_env() {
 
 # The caller's PATH without the guard's xdg-open (finding 92): in a box, and for `host`, links open.
 # Any checkout's: a hook written from another clone or worktree names its own. A PATH entry may end in /.
+# `caller_path box`, for a box's PATH: nor an Omarchy checkout's bin, which a host's `omarchy dev link`
+# puts first (finding 149): a box started from that checkout mounts it, and its omarchy-* came before
+# /usr/bin while OMARCHY_PATH was the package's. A box runs the installed Omarchy, or `--omarchy
+# DIR`'s, which adds its own bin. `host` keeps it: there the link is the user's real desktop.
 caller_path() {
   local d out=() dirs p=${PATH:-}
   ! in_jail || p=${OMABOX_RELAY_PATH:-}   # a jailed caller's, not the broker's own
   IFS=: read -ra dirs <<<"$p"
-  for d in "${dirs[@]}"; do case $d in */share/guard|*/share/guard/) ;; *) out+=("$d") ;; esac; done
+  for d in "${dirs[@]}"; do
+    case $d in */share/guard|*/share/guard/) continue ;; esac
+    [ "${1:-}" != box ] || [ "${d%/}" = /usr/share/omarchy/bin ] || ! [ -f "${d%/}/../default/hypr/envs.lua" ] || continue
+    out+=("$d")
+  done
   local IFS=:; printf '%s' "${out[*]}"
 }
 
@@ -595,7 +603,7 @@ box_exec() {
   fi
   # shellcheck disable=SC2016 # $1/$@ belong to the inner bash
   nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
-    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$(caller_path)" "${pass[@]}" bash -c '
+    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$(caller_path box)" "${pass[@]}" bash -c '
       if [ -n "${OMABOX_PASS_FD:-}" ]; then
         while IFS= read -r -d "" kv <&"$OMABOX_PASS_FD"; do export "$kv"; done
         eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
@@ -1420,7 +1428,7 @@ cmd_up() {
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
     --setenv QT_FORCE_STDERR_LOGGING 1
-    --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path)"
+    --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path box)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
     --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell" --setenv OMABOX_OMARCHY_VERSION "$(omarchy_version)"
