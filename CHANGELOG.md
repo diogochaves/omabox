@@ -3,6 +3,24 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## 0.4.6 — 2026-10-02
+
+Fixes found on a dev-linked Omarchy and with a bar widget kept in a sidebar plugin.
+
+### Fixed
+
+- **A box started from a dev-linked Omarchy checkout runs one Omarchy.** `omarchy dev link` puts the
+  checkout's `bin` first on your PATH, and a box started from inside that checkout had the
+  checkout's `omarchy-*` commands while the rest of it was the installed Omarchy. A box's PATH now
+  leaves an Omarchy checkout's `bin` out (`--omarchy DIR` still runs a checkout on purpose);
+  `omabox host` keeps it, since there the link is your real desktop.
+- **Binds, the bar and terminals in a box get omabox's stand-ins.** Omarchy's config puts its own
+  `bin` first for everything Hyprland starts, so there `omarchy-version` printed nothing and the
+  browser policy stand-in was skipped. They come first again.
+- **`up --plugin` puts a bar widget in the bar when you keep it in a plugin of yours.** A widget you
+  placed inside a sidebar plugin's layout was in no bar in a box (the sidebar is not there): it now
+  goes where its manifest says, its settings kept. Mounting the sidebar too keeps it there.
+
 ## 0.4.5 — 2026-10-01
 
 Fixes found by testing what had shipped untested: a box that outlived its `down`, `wait layer` on
