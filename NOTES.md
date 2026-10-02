@@ -720,7 +720,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       spares first (the us layout has 14 free), with a note when a character only fits above.
       Verified with `GDK_BACKEND=x11 zenity` under `--xwayland`: Ü, α, 😀 arrive. **Open:** € still does
       not reach the X11 app, on any keycode, while Greek letters on the same spare keycodes do; binding it
-      as `U20AC` changed nothing. Wayland apps get it.
+      as `U20AC` changed nothing. Wayland apps get it (→ #85).
     - *peek* (a host process reading frames a box sends): each frame's format, size and stride are
       checked before its buffer is allocated or read (a stride shorter than the width made `draw()` read
       past the buffer). Checked in a box against a fake compositor that sends 4096x4096 with stride 4:
@@ -778,7 +778,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     - **Open, flaky:** `t_failed_up` failed once in ~8 full runs (a failed `up` left its box running:
       state up, bwrap alive; `down` cleared it). Not reproduced in 17 targeted tries, alone or next to
       other tests. The likeliest path is `kill_box` giving up after 10 s while PID 1 is still exiting,
-      as with the dead throwaway above. The test now prints `up`'s own message when it fails.
+      as with the dead throwaway above. The test now prints `up`'s own message when it fails (→ #86).
 
 65. **The agent guard: `omabox guard`** (2026-09-24, after a leak in another project). A worktree
     subagent ran a Qt test binary directly (`./build/tests/tst_qml`, not through ctest, which sets
@@ -2671,36 +2671,24 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 ## Open
 
-Bugs and ideas live in the GitHub issues. Known gaps:
+Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
-- `test/run.sh` ends with a bare `main "$@"`: after main returns, bash reads the file on from where
-  it was, so an edit that grew the file during a run could run what now sits there (the call again).
-  `bin/omabox` ends `main "$@"; exit`; here any `exit` at the end makes shellcheck 0.11 take every
-  test function for dead code (SC2329, and the SC2086 it then no longer rules out), so it is left
-  as it was (finding 124). Until then, do not edit the suite while it runs.
-
-- The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`). A system
-  aquamarine patched downstream (#48) cannot be told from its version: it would still be refused for
-  headless NVIDIA boxes and confirm-close until omabox learns how to recognise it (finding 125).
-- More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44):
-  `--quickshell PATH` (a shell or Quickshell change); `--omarchy DIR` is done (finding 135); `--lib DIR` (library dirs ahead of the system's, for
-  hyprutils/aquamarine/hyprlang work; `/opt/omabox/lib` comes first now). A `--hyprland` build whose
-  RUNPATH points outside its own folder finds those libraries on the host (`ldd` passes) but not in
-  the box.
+- The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
+  aquamarine patched downstream cannot be told from its version: it would still be refused for
+  headless NVIDIA boxes and confirm-close until omabox learns how to recognise it (finding 125;
+  → #48's comment).
+- More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
+  `--omarchy DIR` is done, finding 135): `--quickshell PATH` and `--lib DIR` (library dirs ahead of
+  the system's; `/opt/omabox/lib` comes first now) are parked until a project needs them (→ #81). A
+  `--hyprland` build whose RUNPATH points outside its own folder finds those libraries on the host
+  (`ldd` passes) but not in the box.
 - Portals (finding 12): the file chooser (xdg-desktop-portal-gtk) is checked; other portals, and
   `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
-- AMD and Intel iGPUs and one NVIDIA RTX 4070 SUPER tested; other NVIDIA cards, multi-GPU and other
-  user setups remain open.
+- AMD and Intel iGPUs, an RTX 4070 SUPER (finding 77) and an RTX 5070 Ti (finding 124: the full
+  suite, nothing skipped, 2026-09-30) tested; other NVIDIA cards, multi-GPU and other setups: → #84.
 - Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
-  in; a host overlay would touch the real desktop). A peek that starts while a `click` is deciding
-  whether to write can miss marks until the next peek (the file removed under it); not seen.
-- Findings 80-86 never ran on NVIDIA (the NVIDIA card here is bound to vfio). They should hold on the
-  NVIDIA screen (`WAYLAND-1`, finding 77): they read the screen from `hyprctl monitors` (the first one
-  that is enabled), not by name, so shots, `--in`, marks and `mode` do not care what it is called.
-  `tools/still` binds the one `wl_output` a box offers, and screencopy already works there for
-  `shot`. Assumed, not seen: that `grim -T` (ext-image-copy-capture) and screencopy with damage
-  both work with NVIDIA's renderer, and that labwc's headless parent sends the frame callbacks that
-  let `wait` see a change. `t_main` skips its NVIDIA checks here, saying why.
+  in; an overlay would touch the real desktop; → #81). A peek that starts while a `click` is
+  deciding whether to write can miss marks until the next peek (the file removed under it); not seen.
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
-  `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried.
+  `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried (→ #81).
