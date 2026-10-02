@@ -2739,7 +2739,13 @@ from them.
     8 s), and more skill text; both cost upkeep or every session's context for a weak model's
     misreading, and without omabox that model would have run grim directly. The skill is written for
     capable models. Boxes from an OpenCode session have no session suffix (`skilltest`), unlike
-    Claude Code's and Codex's.
+    Claude Code's and Codex's. pi 1.0.0, the same prompt, on OpenCode Go's key (with a stand-in
+    omabox that refused `host` and logged every call, so a capture could not happen): kimi-k3,
+    qwen3.8-flash (72 s here, against 7 min wandering in OpenCode) and glm-5.3-flash each read
+    SKILL.md first and used only boxes; the first two took theirs down, glm left it up; kimi and qwen
+    offered `omabox host -- grim` only if asked for the real screen. Hermes v0.19.0 could not run on
+    that key: OpenCode Go turns away clients it does not serve ("missing x-opencode-session"), Zen's
+    free models answer only inside OpenCode, paid Zen needs funds. Codex: no login here.
 151. **A mounted widget the user keeps in a sidebar plugin** (2026-10-01, the suite failing after the
     maintainer moved most bar widgets into a sidebar plugin's own layout and the bar to the left).
     `seed_home` took a mounted bar widget as placed when the user's shell.json had it anywhere,
