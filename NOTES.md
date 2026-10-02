@@ -2641,6 +2641,20 @@ from them.
     `lua`, `ls`, `down`, and was refused `host`, `peek`, `--interactive`, `guard`, `clip`; 2.2.1 (the
     options on the command line) works as before. `t_unit_jail_policy` holds a memfd of each name as
     ai-jail does.
+144. **Guards the suite lacked, and `gpu` naming the aquamarine** (2026-10-01, from moving pending
+    work to issues). `test/run.sh` ended with a bare `main "$@"`: after main returned, bash read the
+    file on from where it was, so an edit that grew it during a run could run what sat there. It ends
+    `main "$@"; exit` now, as `bin/omabox` does; shellcheck 0.11 then takes every test (called by
+    name, `"$CUR"`) for dead code (SC2329, finding 124's reason to leave it), so SC2329 is off for the
+    file, and the 44 SC2086 it no longer ruled out are quoted (pids and counters, no change in what
+    runs). The floor a full run must reach was 340 checks (170 unit), set when runs had 360; they have
+    1217-1350 now (651 unit), so most of the suite could stop checking unseen: 1100 and 580, about 90%
+    of the fewest seen (the installed suite on a VM). The bar widget shows box names and errors agents
+    wrote, in the real bar: every text in it was plain, and now `t_unit_version` keeps it so
+    (`rich_text`: a Text, Label, TextEdit, TextArea or TextField without its own `textFormat:
+    Text.PlainText` fails; checked against a fixture that has one of each). `omabox gpu` names the
+    box's aquamarine as `up` recorded it (a line under the first; `aquamarine` in `--json`), as #47
+    promised and `ls --json` and `--version` already did.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

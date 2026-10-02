@@ -3810,6 +3810,8 @@ cmd_gpu() {
   sleep "$secs"
   t1=$(date +%s%N); snap > "$tmp/b"
   local screen; screen=$(box_screen)
+  # Which aquamarine the box runs (as `up` recorded it): rendering cost can depend on it.
+  local aq; aq=$(jq -c '.aquamarine // null' "$D/box.json" 2>/dev/null) || aq=null
   # A client first seen in the second sample started during the window: all its time counts. Every
   # process holding a client is listed, idle ones at 0.0.
   awk -v wall=$((t1 - t0)) '
@@ -3819,14 +3821,16 @@ cmd_gpu() {
     END { for (n in t) printf "%s %.1f\n", n, t[n] / wall * 100
           for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }' "$tmp/a" "$tmp/b" > "$tmp/r"
   if [ $json = 1 ]; then
-    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" '
+    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" '
       [inputs | split(" ")] as $r |
-      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs,
+      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, aquamarine: $aq,
         percent: ([$r[] | select(.[0] != "engine") | {(.[0]): (.[1] | tonumber)}] | add // {}),
         engines: (reduce ($r[] | select(.[0] == "engine")) as $e ({}; .[$e[1]][$e[2]] = ($e[3] | tonumber))) }' < "$tmp/r"
     return
   fi
   echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
+  [ "$aq" = null ] || jq -r '"aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
+    + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)' <<<"$aq"
   grep -v '^engine ' "$tmp/r" | sort -k2 -rn | awk '{ printf "  %-20s %5.1f%%\n", $1, $2 }'
   grep -qv '^engine ' "$tmp/r" || echo "  (no GPU time)"
 }

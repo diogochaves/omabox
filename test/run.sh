@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016 # single-quoted $VARS are expanded inside the box
+# shellcheck disable=SC2329 # tests are called by name; see the exit at the end
 # omabox's regression suite: what NOTES' findings verified, as checks that run in real boxes.
 #
 #   test/run.sh              every test, box tests in parallel (~1.5 min on 16 CPUs; boxes are named
@@ -79,9 +80,10 @@ export OMABOX_SUITE=$P     # marks what the suite starts on the host, for the le
 TMP=$(mktemp -d)
 pass=0 fail=0 failed=() skips=()
 STRICT=${OMABOX_TEST_STRICT:-0}
-# A full run's floor (360 checks, 175 of them unit, on 2026-09-25): a test that silently stops
-# checking shows up here even when everything that did run passed.
-MIN_CHECKS=340 MIN_UNIT=170
+# A full run's floor: a test that silently stops checking shows up here even when everything that
+# did run passed. About 90% of the fewest seen (2026-10-01: 1217 checks in --installed on a VM, 1350
+# from a checkout; 651 unit), so skips on another machine still clear it. Raise it as tests grow.
+MIN_CHECKS=1100 MIN_UNIT=580
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -509,7 +511,7 @@ t_unit_live_edit() {
   "$TMP/live/bin/omabox" help > "$TMP/live/out" 2>&1 & local p=$!
   sleep 0.3
   python3 -c 'import sys; p = sys.argv[1]; n = len(open(p).read()); open(p, "w").write("#!/bin/bash\n" + "q\n" * n)' "$TMP/live/bin/omabox"
-  wait $p; local rc=$?
+  wait "$p"; local rc=$?
   check_eq "an in-place edit mid-run does not break the running command" 0 "$rc"
   check_match "...which finishes as it started" "omabox up" "$(cat "$TMP/live/out")"
   check_eq "session.sh is one block (it runs for the box's life)" "}" "$(tail -n 1 "$ROOT/share/session.sh")"
@@ -622,7 +624,7 @@ t_new() {
   local a=$TMP/new-a b=$TMP/new-b   # fixed names: cleanup takes these boxes down if the suite stops here
   "$CLI" up --new --no-shell --idle 0 > "$a" 2>/dev/null & local pa=$!
   "$CLI" up --new --no-shell --idle 0 > "$b" 2>/dev/null & local pb=$!
-  wait $pa $pb
+  wait "$pa" "$pb"
   local na nb; na=$(cat "$a") nb=$(cat "$b")
   check_match "up --new prints a box-N name" '^box-[0-9]+$' "$na"
   check "...two at once, two different names ($na, $nb)" test -n "$nb" -a "$na" != "$nb"
@@ -632,12 +634,42 @@ t_new() {
 }
 
 # One version for the CLI and the widget (CHANGELOG.md).
+# rich_text FILE...: each QML element that shows text (Text, Label, TextEdit, TextArea, TextField)
+# with no `textFormat: Text.PlainText` of its own, as FILE:LINE TYPE. Braces in strings and //
+# comments are ignored; a component declared from Text counts, its uses (`SettingText { }`) do not.
+RICH_TEXT='
+import re, sys
+shows = re.compile(r"(?<![\w.])(Text|Label|TextEdit|TextArea|TextField)\s*$")
+plain = re.compile(r"textFormat:\s*Text\.PlainText")
+for path in sys.argv[1:]:
+    stack = []   # one [line, type or None, plain] per open brace
+    for n, line in enumerate(open(path), 1):
+        line = re.sub(r"\"(\\.|[^\"\\])*\"", "\"\"", line).split("//")[0]
+        at = 0
+        for m in re.finditer(r"[{}]", line):
+            if stack and plain.search(line, at, m.start()): stack[-1][2] = True
+            at = m.end()
+            if m.group() == "{":
+                t = shows.search(line[:m.start()])
+                stack.append([n, t.group(1) if t else None, False])
+            elif stack:
+                ln, typ, ok = stack.pop()
+                if typ and not ok: print("%s:%d %s" % (path, ln, typ))
+        if stack and plain.search(line, at): stack[-1][2] = True
+'
+rich_text() { python3 -c "$RICH_TEXT" "$@"; }
+
 t_unit_version() {
   local v; v=$(cat "$ROOT/VERSION")
   check_eq "omabox --version" "omabox $v" "$("$CLI" --version | head -1)"
   check_match "...then the aquamarine boxes use (finding 125)" "^aquamarine: (a private build, |the system's, )" "$("$CLI" --version | sed -n 2p)"
   check_eq "the widget's manifest has it" "$v" "$(jq -r .version "$ROOT/plugin/manifest.json")"
   check_match "...and its Settings face" "pluginVersion: \"$v\"" "$(grep pluginVersion "$ROOT/plugin/Panel.qml")"
+  # The widget shows box names and errors agents wrote, in the user's real bar: never as rich text.
+  check_eq "every text in the widget is plain text" "" "$(rich_text "$ROOT"/plugin/*.qml)"
+  printf '%s\n' 'Item {' '  Text { text: "a {"; color: "red" }' '  component T: Text {' '    textFormat: Text.PlainText' '  }' \
+    '  T { text: "b" }' '  Label {' '    Text { textFormat: Text.PlainText }' '  }' '}' > "$TMP/rich.qml"
+  check_eq "...a check that finds one (and not the plain ones)" "$TMP/rich.qml:2 Text $TMP/rich.qml:7 Label" "$(rich_text "$TMP/rich.qml" | tr '\n' ' ' | sed 's/ $//')"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
   check_eq "config --json names it, for a widget left from before an upgrade (finding 133)" "$v" "$("$CLI" config --json | jq -r .version)"
   # Agent Skills hosts cap a skill's description at 1024 characters (it grows with each trigger).
@@ -1228,7 +1260,7 @@ t_unit_agent_session() {
   out=$(bash -c 'echo "me=$$"; CLAUDE_CODE_SESSION_ID=$0 CLAUDE_PID=$$ bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-session" "$lib")
   check_eq "Claude Code: the agent is CLAUDE_PID" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   sleep 30 & local other=$!
-  check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID=$other bash -c 'source "$1"; agent_proc' _ "$lib"
+  check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID="$other" bash -c 'source "$1"; agent_proc' _ "$lib"
   out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib")
   check_eq "Codex: the nearest process without its session variable" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   # ...with 1.5 MB of environment after its variable too (a `tr | grep -q` pipe lost the match there).
@@ -1306,9 +1338,9 @@ t_agent_session() {
   local s10=11111111-2222-4333-8444-5555aaaa0010 b10=$P-ag-aaaa0010
   # shellcheck disable=SC2329 # called through until_ok
   polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null; }
-  agent $s1 & local a1=$!
-  agent $s2 --idle 45m & local a2=$!
-  agent $s7 --idle 0 & local a7=$!
+  agent "$s1" & local a1=$!
+  agent "$s2" --idle 45m & local a2=$!
+  agent "$s7" --idle 0 & local a7=$!
   check "the sessions' boxes start" until_ok 40 test -e "$TMP/ag-$a1" -a -e "$TMP/ag-$a2" -a -e "$TMP/ag-$a7"
   check_eq "session 1 has its box" up "$(state_of "$b1")"
   check_eq "session 2 has its own" up "$(state_of "$b2")"
@@ -1316,10 +1348,10 @@ t_agent_session() {
   check_eq "a session's box keeps the 2 h idle limit" 7200 "$(idle_of "$b1")"
   check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
   check "--idle 0: a reaper still watches the agent, once a minute (not every 5 s)" until_ok 5 polls_every "$b7" 60
-  check_eq "session 1's commands reach its box" "$b1" "$(as $s1 run -- sh -c 'echo $OMABOX_NAME')"
-  as $s2 down >/dev/null 2>&1
+  check_eq "session 1's commands reach its box" "$b1" "$(as "$s1" run -- sh -c 'echo $OMABOX_NAME')"
+  as "$s2" down >/dev/null 2>&1
   check_eq "session 2's down leaves session 1's box up" up "$(state_of "$b1")"
-  as $s1 up "$named" --no-shell --idle 30s >/dev/null 2>&1
+  as "$s1" up "$named" --no-shell --idle 30s >/dev/null 2>&1
   check_eq "a box named with -b is not tied to the agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$named/box.json")"
   (cd "$repo" && env -u OMABOX OMABOX_SESSION=abcd1234 "$CLI" up --no-shell --idle 30s >/dev/null 2>&1)
   check_eq "OMABOX_SESSION set for one command: no agent" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
@@ -1327,8 +1359,8 @@ t_agent_session() {
   check_eq "...nor does an agent of that session take it over" null "$(jq .agent "$XDG_RUNTIME_DIR/omabox/$P-ag-abcd1234/box.json")"
   ob down "$named" "$P-ag-abcd1234" "$b1" "$b7" >/dev/null 2>&1; kill "$a1" "$a2" "$a7" 2>/dev/null
   # Short idle limits, so the reaper polls every few seconds.
-  agent $s3 --idle 30s & local a3=$!
-  agent $s4 --idle 30s & local a4=$!
+  agent "$s3" --idle 30s & local a3=$!
+  agent "$s4" --idle 30s & local a4=$!
   until_ok 40 test -e "$TMP/ag-$a3" -a -e "$TMP/ag-$a4"
   pid_of() { bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$1"; }
   ob run -b "$b3" -- sleep 15 & local busy=$!
@@ -1347,28 +1379,28 @@ t_agent_session() {
   # through need_box (`hyprctl`) or `path`; another session's command that names the box does not.
   # The reapers are stopped meanwhile, so that no check falls between the old agent's exit and that
   # command.
-  agent $s5 --idle 20s & local a5=$!
-  agent $s6 --idle 20s & local a6=$!
-  agent $s8 --idle 20s & local a8=$!
+  agent "$s5" --idle 20s & local a5=$!
+  agent "$s6" --idle 20s & local a6=$!
+  agent "$s8" --idle 20s & local a8=$!
   until_ok 40 test -e "$TMP/ag-$a5" -a -e "$TMP/ag-$a6" -a -e "$TMP/ag-$a8"
-  agent $s5 -- run -- true & local c5=$!
+  agent "$s5" -- run -- true & local c5=$!
   until_ok 20 test -e "$TMP/ag-$c5"
   check_eq "a second agent of a session leaves its box to the first while that runs" "$a5" "$(agent_of "$b5")"
   kill "$c5" 2>/dev/null
   local reapers; mapfile -t reapers < <(pgrep -f "omabox _reap ($b5|$b6|$b8) ")
   kill -STOP "${reapers[@]}"
   kill "$a5" "$a6" "$a8" 2>/dev/null; wait "$a5" "$a6" "$a8" 2>/dev/null
-  agent $s5 -- run -- true & local r5=$!
-  agent $s6 & local r6=$!
-  agent $s9 -- hyprctl -b "$b8" -j version & local o8=$!
+  agent "$s5" -- run -- true & local r5=$!
+  agent "$s6" & local r6=$!
+  agent "$s9" -- hyprctl -b "$b8" -j version & local o8=$!
   until_ok 20 test -e "$TMP/ag-$o8"
   check_eq "another session's command naming the box (-b) does not take it over" "$a8" "$(agent_of "$b8")"
   kill "$o8" 2>/dev/null; wait "$o8" 2>/dev/null   # (had it, the next checks still see their own part)
-  agent $s8 -- hyprctl -j version & local r8=$!
+  agent "$s8" -- hyprctl -j version & local r8=$!
   until_ok 20 test -e "$TMP/ag-$r8"
   check_eq "a resumed session's first hyprctl takes its box over (need_box)" "$r8" "$(agent_of "$b8")"
   kill "$r8" 2>/dev/null; wait "$r8" 2>/dev/null
-  agent $s8 -- path & local q8=$!
+  agent "$s8" -- path & local q8=$!
   until_ok 20 test -e "$TMP/ag-$q8" -a -e "$TMP/ag-$r5" -a -e "$TMP/ag-$r6"
   check_eq "...and so does its first path" "$q8" "$(agent_of "$b8")"
   kill -CONT "${reapers[@]}"
@@ -1388,13 +1420,13 @@ t_agent_session() {
   local lk=$XDG_RUNTIME_DIR/omabox/.lock-$b10 reaper held rf
   # shellcheck disable=SC2329 # called through until_ok
   flock_of() { pgrep -x flock -P "$(pgrep -d, -P "$1")"; }   # the flock an agent's command waits in
-  agent $s10 --idle 20s & local a10=$!
+  agent "$s10" --idle 20s & local a10=$!
   until_ok 40 test -e "$TMP/ag-$a10"
   reaper=$(pgrep -f "omabox _reap $b10 " | head -1)
   flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
   until_ok 5 test -e "$TMP/held"
   kill "$a10" 2>/dev/null; wait "$a10" 2>/dev/null
-  agent $s10 -- run -- true & local r10=$!
+  agent "$s10" -- run -- true & local r10=$!
   until_ok 10 flock_of "$r10"                      # its take_over waits for the lock
   until_ok 15 pgrep -x flock -P "$reaper"          # the reaper said "taking it down"; its down waits
   rf=$(pgrep -x flock -P "$reaper")
@@ -1411,7 +1443,7 @@ t_agent_session() {
   flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
   until_ok 5 test -e "$TMP/held"
   kill "$r10" 2>/dev/null; wait "$r10" 2>/dev/null
-  agent $s10 -- run -d -- true & local d10=$!
+  agent "$s10" -- run -d -- true & local d10=$!
   until_ok 10 flock_of "$d10"
   until_ok 15 pgrep -x flock -P "$reaper"          # the same reaper, now for r10's exit
   local df; df=$(flock_of "$d10")
@@ -1427,7 +1459,7 @@ t_agent_session() {
   # reaper's down and before the new agent's command: that command must not take over the new box,
   # which records no agent. The up's flock and the command's are stopped until their turn.
   local s11=11111111-2222-4333-8444-5555aaaa0011 b11=$P-ag-aaaa0011 uf tf
-  agent $s11 --idle 20s & local a11=$!
+  agent "$s11" --idle 20s & local a11=$!
   until_ok 40 test -e "$TMP/ag-$a11"
   reaper=$(pgrep -f "omabox _reap $b11 " | head -1)
   rm -f "$TMP/held" "$TMP/release"
@@ -1435,8 +1467,8 @@ t_agent_session() {
   flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/held" "$TMP/release" & held=$!
   until_ok 5 test -e "$TMP/held"
   kill "$a11" 2>/dev/null; wait "$a11" 2>/dev/null
-  agent $s11 -- run -- true & local r11=$!
-  (cd "$repo" && exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID=$s11 "$CLI" up --no-shell \
+  agent "$s11" -- run -- true & local r11=$!
+  (cd "$repo" && exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s11" "$CLI" up --no-shell \
     --idle 20s) >/dev/null 2>&1 & local u11=$!
   until_ok 10 flock_of "$r11"
   until_ok 10 pgrep -x flock -P "$u11"
@@ -1636,7 +1668,7 @@ t_main() {
     # client of the render node has no drm-driver line, and nothing is there to list.
     local rn fd fdinfo=0; rn=$(lib render_node)
     exec {fd}<"$rn" && { ! grep -q '^drm-driver:' "/proc/$BASHPID/fdinfo/$fd" || fdinfo=1; exec {fd}<&-; }
-    if [ $fdinfo = 1 ]; then
+    if [ "$fdinfo" = 1 ]; then
       check "gpu --json lists Hyprland" jq -e '.percent | has("Hyprland")' <<<"$gpu"
     else
       skip "gpu --json lists Hyprland" "the render node's driver keeps no DRM fdinfo ($rn)"
@@ -1646,6 +1678,8 @@ t_main() {
     check "gpu --json handles missing driver counters" jq -e '.percent | type == "object"' <<<"$gpu"
   fi
   check_match "gpu first line names the mode" "1280x720@120" "$(ob gpu -b "$B" 1 | head -1)"
+  check_eq "gpu --json names the box's aquamarine (#47)" "$(jq -c .aquamarine "$D/box.json")" "$(jq -c .aquamarine <<<"$gpu")"
+  check "...and so does its text" grep -qF "aquamarine: " <<<"$(ob gpu -b "$B" 1 | sed -n 2p | grep -F -- "$(jq -r .aquamarine.version "$D/box.json")")"
   check_eq "mode @60.0 is accepted and kept as @60" "$screen_name 1280x720@60" "$(ob mode -b "$B" 1280x720@60.0)"
   check_eq "box.json keeps the normalised mode" "1280x720@60" "$(jq -r .size "$D/box.json")"
   check_eq "shot into a missing dir makes it (#27)" "$TMP/nope/x.png" "$(ob shot -b "$B" -o "$TMP/nope/x.png" 2>/dev/null)"
@@ -2027,7 +2061,7 @@ t_race() {
   local B=$P-race
   ob up "$B" --no-shell >/dev/null 2>&1 & local a=$!
   ob up "$B" --no-shell >/dev/null 2>&1 & local b=$!
-  wait $a; wait $b
+  wait "$a"; wait "$b"
   # One bwrap is two processes (its monitor, and the box's PID 1), under one pasta. Anchored: pasta's
   # own command line holds bwrap's too.
   check_eq "one box" 2 "$(pgrep -fc "^bwrap .*--bind $XDG_RUNTIME_DIR/omabox/$B/run " || true)"
@@ -2462,7 +2496,7 @@ t_keys() {
     seen=$(grep -l "pw-$P" /proc/[0-9]*/cmdline 2>/dev/null)
     check_eq "keys --pass: the value is in no /proc/*/cmdline while typing" "" "$seen"
   else no "keys --pass: the keyboard ran (to scan while typing)"; fi
-  wait $kp; check_eq "keys --pass exits 0" 0 $?
+  wait "$kp"; check_eq "keys --pass exits 0" 0 $?
   until_ok 5 ob run -b "$B" -- test -s /tmp/secret
   check_eq "keys --pass types the value, in order with -t (and -t -T is text)" "apw-$P x=y Ü-Tpw-$P x=y Ü" "$(ob run -b "$B" -- cat /tmp/secret)"
   check_match "keys --pass: an unset variable refused" "not in this command's environment" "$(env -u T_NONE "$CLI" keys -b "$B" --pass T_NONE 2>&1)"
@@ -2480,8 +2514,8 @@ t_keys() {
   ob keys -b "$B" -s 3000 a >/dev/null 2>&1 & local k=$!
   ob pointer -b "$B" -- sleep 3000 move 10 10 >/dev/null 2>&1 & local p=$!
   sleep 1.5; ob down "$B" >/dev/null
-  wait $k; check_eq "keys exits 1 when the box goes mid-run" 1 $?
-  wait $p; check_eq "pointer exits 1 when the box goes mid-run" 1 $?
+  wait "$k"; check_eq "keys exits 1 when the box goes mid-run" 1 $?
+  wait "$p"; check_eq "pointer exits 1 when the box goes mid-run" 1 $?
 }
 
 # peek, run inside a box on that box's own screen (never on the host): it draws, and hidden on another
@@ -2596,7 +2630,7 @@ t_throwaway_dead() {
 # package): failures stop it with a message (finding 64), and it links, never nests.
 t_unit_install() {
   # install.sh is a checkout's (it builds the tools into ROOT): a package builds them itself.
-  [ $INSTALLED = 0 ] || { skip "install.sh" "an installed omabox has no install.sh to run"; return; }
+  [ "$INSTALLED" = 0 ] || { skip "install.sh" "an installed omabox has no install.sh to run"; return; }
   local h=$TMP/ih stub=$TMP/ih-stub out
   # The XDG dirs too: the session sets them, and install.sh's `setup --aquamarine` builds under the
   # data dir when ROOT is no checkout (it once did so in the user's own, from an --installed run).
@@ -3556,7 +3590,7 @@ t_setup_prompts() {
   local out; out=$(in_tty "$answers")
   check_match "setup in a terminal asks to show the widget" "Show the omabox widget in your bar\? \[Y/n\]" "$out"
   check "...yes: it is in the box's bar" until_ok 5 grep -q '"chaves.omabox"' "$H/.config/omarchy/shell.json"
-  if [ $sys = 1 ]; then
+  if [ "$sys" = 1 ]; then
     check_match "...a checkout's ~/.local/bin/omabox: said" "links to /nowhere/omabox/bin/omabox, which is gone" "$out"
     check_fails "...yes: removed" test -L "$H/.local/bin/omabox"
   else
@@ -3887,17 +3921,17 @@ t_pointer() {
   tree() { local c; for c in $(pgrep -P "$1"); do echo "$c"; tree "$c"; done; }
   ob pointer -b "$B" --window R --mod ctrl -- move 50 50 sleep 3000 click >/dev/null 2>"$TMP/ptr.err" & local cp=$! kp="" i
   for i in $(seq 50); do
-    for kp in $(tree $cp); do [ "$(cat "/proc/$kp/comm" 2>/dev/null)" = omabox-keyboard ] && break; kp=""; done
+    for kp in $(tree "$cp"); do [ "$(cat "/proc/$kp/comm" 2>/dev/null)" = omabox-keyboard ] && break; kp=""; done
     [ -z "$kp" ] || break; sleep 0.2
   done
   if [ -n "$kp" ]; then
     kill -KILL "$kp"
-    wait $cp; check_eq "the keyboard killed mid-click: omabox exits 1" 1 $?
+    wait "$cp"; check_eq "the keyboard killed mid-click: omabox exits 1" 1 $?
     check_match "...saying it let go early" "let go of ctrl before the end" "$(cat "$TMP/ptr.err")"
     check_match "...the click in that run still had ctrl (SIGKILL cannot be caught)" " 16 $" "$(presses)"
     ob click -b "$B" --window R 50 50 >/dev/null
     check_match "...and the next click has none: omabox cleared it" " 0 $" "$(presses)"
-  else wait $cp; no "pointer --mod: its keyboard tool found (to kill it)"; fi
+  else wait "$cp"; no "pointer --mod: its keyboard tool found (to kill it)"; fi
   ob down "$B" >/dev/null
 }
 
@@ -4009,7 +4043,7 @@ t_wait() {
   # The box going down mid-wait is unknown (1), never satisfied
   ob wait -b "$B" still --quiet 30s > "$TMP/wait.out" 2>&1 & local w=$!
   sleep 1.5; ob down "$B" >/dev/null 2>&1
-  wait $w; rc=$?
+  wait "$w"; rc=$?
   check_eq "the box went down during wait: exit 1" 1 "$rc"
   check_match "...said" "^unknown: box '$B' went down after" "$(cat "$TMP/wait.out")"
 }
@@ -4143,7 +4177,7 @@ t_inspect() {
   ob events -b "$B" --mark m2 >/dev/null 2>&1
   (sleep 1; ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '4' })" >/dev/null) & local d=$!
   out=$(ob events -b "$B" --until '^workspace>>4$' --timeout 5s); rc=$?
-  wait $d
+  wait "$d"
   check_eq "events --until: an event to come, exit 0" 0 "$rc"
   check_match "...printed" ' workspace>>4$' "$out"
   check_match "events --since MARK --until: one that came already" ' workspacev2>>4,4$' "$(ob events -b "$B" --since m2 --until '^workspacev2>>' --timeout 1s)"
@@ -4156,7 +4190,7 @@ t_inspect() {
   check_eq "marks taken during a burst are at line ends" "" "$(for k in "${marks[@]}"; do [ "$k" = 0 ] || [ "$(head -c "$k" "$E" | tail -c 1 | od -An -tx1 | tr -d ' ')" = 0a ] || echo "$k"; done)"
   check_eq "...and the file has no NUL" "$(wc -c < "$E")" "$(tr -d '\0' < "$E" | wc -c)"
   "$CLI" events -b "$B" -f > "$TMP/ev.f" 2>&1 & local ef=$!   # ($CLI: $! is omabox itself, not a subshell running ob)
-  sleep 1; kill -TERM $ef; wait $ef 2>/dev/null
+  sleep 1; kill -TERM "$ef"; wait "$ef" 2>/dev/null
   local bpid; bpid=$(cat "$(ob path -b "$B")/pid")
   check "events -f stopped: its tail goes too" until_ok 3 bash -c "! pgrep -f '^tail -c [+][0-9]+ -F --pid=$bpid '"
   check_match "log events: the file as it is" '^[0-9]+\.[0-9]{3} ' "$(ob log -b "$B" events -n 1)"
@@ -4178,10 +4212,10 @@ t_inspect() {
   check_fails "log: a link out of the box is not followed (box up)" bash -c "'$CLI' log -b '$B' labwc 2>&1 | grep -q omabox-host-secret"
   local t0=$SECONDS
   ob run -b "$B" -- pkill -x Hyprland >/dev/null 2>&1
-  wait $lf; rc=$?
+  wait "$lf"; rc=$?
   check_eq "log -f ends when the box goes down: exit 0" 0 "$rc"
   check "...within seconds, said" test $((SECONDS - t0)) -le 5 -a -n "$(grep "box '$B' went down" "$TMP/log.f")"
-  wait $ef; rc=$?
+  wait "$ef"; rc=$?
   check_eq "events -f too" 0 "$rc"
   check_match "...having seen the box's events" ' workspace>>5' "$(cat "$TMP/ev2.f")"
   check_eq "log: a dead box's logs are still read" omabox-log-1 "$(ob log -b "$B" run -n 2 | head -1)"
@@ -4390,4 +4424,7 @@ main() {
   [ $fail = 0 ]
 }
 
-main "$@"
+# exit: after main returns, bash would read on from where it was in this file, so an edit that grew
+# it during the run would run what sits there now. With it, shellcheck takes every test (called by
+# name, "$CUR") for dead code: SC2329 is off for the file (finding 124).
+main "$@"; exit
