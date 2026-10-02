@@ -1105,7 +1105,7 @@ up_already() {
 
 cmd_up() {
   STOCK_BAR=0
-  local t0; t0=$(date +%s%N)   # a down after this asks for the box gone, even before it has a lock
+  local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
@@ -1276,10 +1276,11 @@ cmd_up() {
   mkdir -p "$BOXES"
   exec {LOCK}>"$BOXES/.lock-$NAME"
   flock -w 60 "$LOCK" || die "box '$NAME' is busy (another up or down); try again"
-  # A down that came after this up started, before it held the lock, found no box and left its time
-  # (finding 147): the box it asked to have gone is this one.
-  local dt; dt=$(cat "$BOXES/.down-$NAME" 2>/dev/null) || dt=0
-  [[ $dt =~ ^[0-9]+$ ]] && [ "$dt" -gt "$t0" ] && die "up: cancelled: omabox down $NAME came while it was starting"
+  # A down started since this up was (or in the same tick: `up X & down X`), before it held the lock,
+  # found no box and left its start (finding 147): the box it asked to have gone is this one.
+  local dt; dt=$(cat "$BOXES/.down-$NAME" 2>/dev/null) || dt=""
+  [[ $dt =~ ^[0-9]+$ ]] && [[ $t0 =~ ^[0-9]+$ ]] && [ "$dt" -ge "$t0" ] &&
+    die "up: cancelled: omabox down $NAME came while it was starting"
   # No down can come first here (this holds the lock): only a box that just died starts again.
   if box_alive && take_over held; then up_already; return 0; fi
   [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
@@ -4550,8 +4551,11 @@ write_confirm_flag() {
   box_file "$1/omabox.confirm-close" "$2" 2>/dev/null || say "could not update ${1%/run}'s confirm-close"
 }
 
+# A down that finds no box leaves when it was started (proc_start: clock ticks since boot), for an up
+# started before it that has no lock yet: they compare starts, not when each got to its check, which
+# load reorders (finding 147). The runtime dir that keeps it goes with a reboot, as the ticks do.
 down_none() {
-  [ -n "${DOWN_IF_CREATED:-}" ] || { mkdir -p "$BOXES" && date +%s%N > "$BOXES/.down-$NAME"; } 2>/dev/null || true
+  [ -n "${DOWN_IF_CREATED:-}" ] || { mkdir -p "$BOXES" && proc_start $$ > "$BOXES/.down-$NAME"; } 2>/dev/null || true
   say "no box '$NAME'"
 }
 cmd_down() {

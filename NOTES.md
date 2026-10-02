@@ -2685,9 +2685,10 @@ from them.
     `up`'s first ~40 ms (no dir yet, or no lock yet) it said "no box" and exited 0, and the box came
     up behind it and stayed for its idle limit. Now: a `down` that finds no dir but a lock file takes
     the lock (saying "waiting for its up to finish" when it has to wait) and looks again; one that
-    finds no box leaves its time in `.down-NAME`, and an `up` that started before that time cancels
-    itself once it has the lock ("up: cancelled: omabox down NAME came while it was starting", exit
-    1); a `down` before an `up` leaves it alone. Six `up X & down X` races, fresh names: no box left
+    finds no box leaves when it was started in `.down-NAME` (clock ticks since boot, from /proc: the
+    time each reached its check came out of order under the suite's load), and an `up` started no
+    later cancels itself once it has the lock
+    ("up: cancelled: omabox down NAME came while it was starting", exit 1); a `down` before an `up` leaves it alone. Six `up X & down X` races, fresh names: no box left
     (before: every time). `t_race` holds the lock itself for the first (it failed on the old code)
     and races a real `up` for the second.
 148. **Portals in a box** (2026-10-01, finding 12 followed up, #84's list). Checked in a box (portal
