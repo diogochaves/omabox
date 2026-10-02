@@ -2679,6 +2679,17 @@ from them.
     `up` only: `restart-shell` records it again (a commit since, `+dirty` once edited). As on a
     host dev link: head's new packages (omasnap...) are missing where the system lacks them, and
     the box HOME is seeded from the installed `/etc/skel`, not the tree's `config/`.
+147. **A `down` while its `up` starts** (2026-10-01, #84's list). `down` waits for an `up` holding the
+    name's lock and then takes its box down (every case from 0.05 s to 3.8 s into the start, headless,
+    isolated and `--no-shell`: nothing left). But it checked for the box dir before the lock: in an
+    `up`'s first ~40 ms (no dir yet, or no lock yet) it said "no box" and exited 0, and the box came
+    up behind it and stayed for its idle limit. Now: a `down` that finds no dir but a lock file takes
+    the lock (saying "waiting for its up to finish" when it has to wait) and looks again; one that
+    finds no box leaves its time in `.down-NAME`, and an `up` that started before that time cancels
+    itself once it has the lock ("up: cancelled: omabox down NAME came while it was starting", exit
+    1); a `down` before an `up` leaves it alone. Six `up X & down X` races, fresh names: no box left
+    (before: every time). `t_race` holds the lock itself for the first (it failed on the old code)
+    and races a real `up` for the second.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -1086,6 +1086,7 @@ up_already() {
 
 cmd_up() {
   STOCK_BAR=0
+  local t0; t0=$(date +%s%N)   # a down after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
@@ -1256,6 +1257,10 @@ cmd_up() {
   mkdir -p "$BOXES"
   exec {LOCK}>"$BOXES/.lock-$NAME"
   flock -w 60 "$LOCK" || die "box '$NAME' is busy (another up or down); try again"
+  # A down that came after this up started, before it held the lock, found no box and left its time
+  # (finding 147): the box it asked to have gone is this one.
+  local dt; dt=$(cat "$BOXES/.down-$NAME" 2>/dev/null) || dt=0
+  [[ $dt =~ ^[0-9]+$ ]] && [ "$dt" -gt "$t0" ] && die "up: cancelled: omabox down $NAME came while it was starting"
   # No down can come first here (this holds the lock): only a box that just died starts again.
   if box_alive && take_over held; then up_already; return 0; fi
   [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
@@ -4526,6 +4531,10 @@ write_confirm_flag() {
   box_file "$1/omabox.confirm-close" "$2" 2>/dev/null || say "could not update ${1%/run}'s confirm-close"
 }
 
+down_none() {
+  [ -n "${DOWN_IF_CREATED:-}" ] || { mkdir -p "$BOXES" && date +%s%N > "$BOXES/.down-$NAME"; } 2>/dev/null || true
+  say "no box '$NAME'"
+}
 cmd_down() {
   local names=() n all=0
   while [ $# -gt 0 ]; do
@@ -4546,11 +4555,16 @@ cmd_down() {
   for n in "${names[@]}"; do
     select_box "$n"
     rm -f "$BOXES/.expired-$NAME"
-    [ -d "$D" ] || { say "no box '$NAME'"; continue; }
+    # No dir and no lock: no box. A lock without a dir can be an `up` in its first ~40 ms (it makes the
+    # dir after taking the lock, finding 147): wait for it below, and take down the box it made.
+    # The time it found none, for an `up` of the name that started before but has no lock yet.
+    [ -d "$D" ] || [ -e "$BOXES/.lock-$NAME" ] || { down_none; continue; }
     mkdir -p "$BOXES"
     local lock; exec {lock}>"$BOXES/.lock-$NAME"
     # The reaper takes a box down through here while holding nothing; anyone else waits for an `up`.
-    flock -w 60 "$lock" || { say "box '$NAME' is busy (an up in progress?); not taken down"; rc=1; exec {lock}>&-; continue; }
+    flock -n "$lock" || { [ -n "${DOWN_IF_CREATED:-}" ] || say "box '$NAME': waiting for its up to finish"; flock -w 60 "$lock"; } ||
+      { say "box '$NAME' is busy (an up in progress?); not taken down"; rc=1; exec {lock}>&-; continue; }
+    [ -d "$D" ] || { exec {lock}>&-; down_none; continue; }
     # The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
     # started a new box under the name (finding 74). Not that one.
     if [ -n "${DOWN_IF_CREATED:-}" ] && [ "$(meta created)" != "$DOWN_IF_CREATED" ]; then exec {lock}>&-; continue; fi

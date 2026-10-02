@@ -2073,6 +2073,26 @@ t_race() {
   check_eq "...behind one pasta" 1 "$(pgrep -fc "^pasta .* -P $XDG_RUNTIME_DIR/omabox/$B/pasta\.pid " || true)"
   check "down" ob down "$B"
   check "nothing of it left running" until_ok 5 none_running "$B"
+  # An up holds the name's lock a moment before it makes the box dir (finding 147): a down then waits
+  # for it, not "no box" while the box comes up behind it. The suite holds the lock, standing in for it.
+  local lk out; exec {lk}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lk"
+  ob down "$B" > "$TMP/race-down" 2>&1 & a=$!
+  sleep 1; out=$(cat "$TMP/race-down")
+  flock -u "$lk"; exec {lk}>&-; wait "$a"
+  check_match "a down while an up holds the lock, before its box dir, waits for it" "waiting for its up" "$out"
+  check_match "...then says no box when that up made none" "no box '$B'" "$(cat "$TMP/race-down")"
+  # Earlier still, before the up has the lock: the down finds nothing, and the up cancels itself.
+  local C=$P-race2 rc
+  ob up "$C" --no-shell > "$TMP/race-up" 2>&1 & a=$!
+  ob down "$C" >/dev/null 2>&1; wait "$a"; rc=$?
+  if [ "$rc" = 0 ]; then
+    check_eq "a down while its up starts: the box is gone (the down waited for it)" "" "$(ob ls --json | jq -r --arg n "$C" '.[] | select(.name == $n) | .name')"
+  else
+    check_match "a down while its up starts: the up says it was cancelled" "cancelled: omabox down $C came while it was starting" "$(cat "$TMP/race-up")"
+  fi
+  check "...nothing of it running" until_ok 5 none_running "$C"
+  check "a down before an up does not cancel it" ob up "$C" --no-shell
+  check "...down" ob down "$C"
 }
 
 # A failed `up` does not leave a box running unseen (finding 63): the box is killed, its dir kept for
