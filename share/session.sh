@@ -83,6 +83,12 @@ o=${OMABOX_OMARCHY:-/usr/share/omarchy}
 [ -r "$o/default/uwsm/default" ] && . "$o/default/uwsm/default"
 export TERMINAL=${TERMINAL:-xdg-terminal-exec} EDITOR=${EDITOR:-omarchy-launch-editor --inline}
 
+# The theme's light or dark mode in the box's dconf, as `omarchy-theme-set` leaves it on the host
+# (finding 148): a fresh dconf says "no preference", so portal dialogs, GTK, libadwaita and Qt apps
+# came out light under a dark theme. In the background: the session does not wait for dconf.
+command -v omarchy-theme-set-gnome >/dev/null &&
+  { without_host_fd omarchy-theme-set-gnome > "$HOME/theme-gnome.log" 2>&1 & }
+
 # `up --hyprland PATH` (finding 116): which build runs, in box.log (this script's stderr), as that
 # build says once it is up: the first line of `hyprctl version` (version, commit, dirty or clean).
 if [ -n "${OMABOX_HYPRLAND:-}" ]; then

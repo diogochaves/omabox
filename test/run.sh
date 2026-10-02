@@ -1573,6 +1573,11 @@ t_main() {
   # finding 62: up waits for the shell (bar layer + notification server) before returning
   check "bar is up when up returns" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-bar"
   check "notify-send works right after up" ob run -b "$B" -- notify-send omabox-test
+  # The theme's light or dark mode in the box's dconf (finding 148), for portal dialogs, GTK and Qt.
+  local mode; mode=$(ob run -b "$B" -- sh -c 'omarchy-theme-color --file ~/.local/state/omarchy/current/theme/colors.toml mode')
+  [ "$mode" = light ] || mode=dark
+  ob wait -b "$B" --timeout 5s cmd -- sh -c "gsettings get org.gnome.desktop.interface color-scheme | grep -q prefer-$mode" >/dev/null
+  check_eq "dconf has the theme's colour mode" "'prefer-$mode'" "$(ob run -b "$B" -- gsettings get org.gnome.desktop.interface color-scheme)"
   check "up on a running box is a no-op" ob up "$B"
   # run: exit codes, environment (findings 47, 49, 57, 58), --env
   # shellcheck disable=SC2016 # expanded inside the box

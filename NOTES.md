@@ -2690,6 +2690,23 @@ from them.
     1); a `down` before an `up` leaves it alone. Six `up X & down X` races, fresh names: no box left
     (before: every time). `t_race` holds the lock itself for the first (it failed on the old code)
     and races a real `up` for the second.
+148. **Portals in a box** (2026-10-01, finding 12 followed up, #84's list). Checked in a box (portal
+    1.22.1, -gtk 1.15.3, -hyprland 1.4.1; `hyprland-portals.conf`: hyprland, then gtk): FileChooser
+    (open, save, cancel), OpenURI and its app chooser (a `file://` URI is refused by the portal, by
+    design), Screenshot (a permission dialog first; interactive and PickColor run slurp and
+    hyprpicker in the box), Notification (an Omarchy toast), Email, Print (no CUPS: file and LPR
+    only), GlobalShortcuts (needs an app id with a .desktop file; `hl.dsp.global` delivered it),
+    idle Inhibit, NetworkMonitor, PowerProfileMonitor, ProxyResolver, InputCapture's session. ScreenCast's picker
+    shows, but Start fails with no PipeWire in the box; with `pipewire` and `wireplumber` started
+    there a frame was read. Account, Location, Camera and logout/suspend Inhibit need the system
+    bus or devices; Secret (the Secret Service itself works), Background, RemoteDesktop, Wallpaper,
+    Clipboard and Usb are not in the portals config, as on the host. Qt with Omarchy's `gtk3`
+    platform theme uses its own GTK3 dialog; with `xdgdesktopportal`, the portal's (Qt's own when
+    the dialog opens at start, before Qt has the portal's version: Qt's behaviour). Fixed: Settings
+    read color-scheme "no preference" (a fresh dconf), so dialogs and GTK/libadwaita/Qt apps were
+    light under a dark theme; the session runs Omarchy's `omarchy-theme-set-gnome` once its bus is
+    up (in the background; set before `up` returns), and the chooser is dark (`t_main` checks the
+    mode). Not done: PipeWire in boxes, portal logs (dbus-daemon drops activated services' stderr).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -2717,8 +2734,8 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   the system's; `/opt/omabox/lib` comes first now) are parked until a project needs them (→ #81). A
   `--hyprland` build whose RUNPATH points outside its own folder finds those libraries on the host
   (`ldd` passes) but not in the box.
-- Portals (finding 12): the file chooser (xdg-desktop-portal-gtk) is checked; other portals, and
-  `QT_QPA_PLATFORM` apps with file choosers, are untested in a box.
+- Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked); portal
+  errors are not logged (dbus-daemon drops an activated service's stderr).
 - AMD and Intel iGPUs, an RTX 4070 SUPER (finding 77) and an RTX 5070 Ti (finding 124: the full
   suite, nothing skipped, 2026-09-30) tested; other NVIDIA cards, multi-GPU and other setups: → #84.
 - Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
