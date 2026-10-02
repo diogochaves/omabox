@@ -370,7 +370,8 @@ blocks the network and every other socket, omabox's included), or see
 - **Not a security boundary**: a box shares your kernel and GPU (a runaway app can load or hang it)
   and, by default, your network. Commands you run on the host, a project's `sudo ./setup` or
   `omabox host -- CMD`, are not boxed. For code you do not trust, use `--net isolated` at least,
-  [ai-jail](#related-projects), or a VM.
+  [ai-jail](#related-projects), or a VM. [SECURITY.md](SECURITY.md) lists each rule that keeps a box
+  off your desktop, where it is enforced and the test that proves it.
 
 <details>
 <summary><b>Networking and mount details</b></summary>

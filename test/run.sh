@@ -1804,6 +1804,9 @@ t_main() {
   check_fails "real HOME invisible" ob run -b "$B" -- test -e "$HOME/.config"
   check_fails "no /dev/input" ob run -b "$B" -- test -e /dev/input
   check_fails "no DRM card node" ob run -b "$B" -- sh -c 'ls /dev/dri/card* >/dev/null 2>&1'
+  check_fails "no seatd socket" ob run -b "$B" -- test -e /run/seatd.sock
+  check_fails "no system bus" ob run -b "$B" -- test -e /run/dbus/system_bus_socket
+  check_eq "the runtime dir is the box's own, not yours" "$(stat -c %i "$D/run")" "$(ob run -b "$B" -- stat -c %i "/run/user/$UID")"
   local screen_name; screen_name=$(ob mode -b "$B" | cut -d' ' -f1)
   if [ "$(jq -r .wayland_screen "$D/box.json")" = true ]; then
     check_eq "NVIDIA uses the private Wayland screen" WAYLAND-1 "$screen_name"
@@ -4066,6 +4069,15 @@ t_unit_pointer() {
   check_match "click --mod junk refused" "not a modifier" "$(ob click -b "$P-x" --mod meta 1 1 2>&1)"
   check_match "drag --mod junk refused" "not a modifier" "$(ob drag -b "$P-x" --mod ctrl,x 1 1 2 2 2>&1)"
   check_match "keys -m is omabox's own" "click, drag or pointer --mod" "$(ob keys -b "$P-x" -m ctrl a 2>&1)"
+  # The input tools refuse outside a box before they connect (SECURITY.md): run from a host shell they
+  # would drive the real desktop. Checked in a sandbox with no /opt/omabox, no runtime dir, no display.
+  local t out rc
+  for t in keyboard pointer; do
+    rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /run \
+      --die-with-parent env -i "$ROOT/tools/$t/omabox-$t" 2>&1) || rc=$?
+    check_eq "omabox-$t refuses outside a box" 2 "$rc"
+    check_match "...and says so" "only runs inside an omabox box" "$out"
+  done
 }
 
 # Travel and modifier clicks in a box (findings 111, 112): two floating terminals side by side on an

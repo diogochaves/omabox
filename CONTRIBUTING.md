@@ -16,7 +16,7 @@ Open an issue with:
   them: they can hold paths and names from your machine.
 
 A problem with safety (a box reaching your real desktop, your files or your session) matters most:
-say so in the title.
+report it privately, as [SECURITY.md](SECURITY.md) says, not in an issue.
 
 ## Changing it
 

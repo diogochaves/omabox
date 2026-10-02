@@ -2783,6 +2783,14 @@ from them.
     now `ShellIpc`, an IpcHandler that also answers on the shell's own socket; `omarchy-shell` tries
     it with socat before `qs ipc`). Not yet in a release (4.0.4 here): boxes are to be checked with it
     when it is.
+154. **Each box rule, where it is enforced, the test that proves it** (2026-10-02, #83). `SECURITY.md`:
+    a table of the rules behind "a box never reaches your desktop" (AGENTS.md's invariants and the
+    ones findings added: mounts, namespaces and network, teardown, tools not following a box's
+    sockets, input, ai-jail), how to report privately (GitHub's private vulnerability reporting), and
+    that a box is no boundary against hostile code. Writing it found rules that no check proved:
+    `t_main` now checks a box has no seatd socket or system bus and that its runtime dir is its own
+    (the inode of the box dir's `run`); `t_unit_pointer` checks `omabox-keyboard` and
+    `omabox-pointer` refuse outside a box, as `omabox-still` and `omabox-events` were already checked.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
