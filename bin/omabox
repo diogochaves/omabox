@@ -909,6 +909,23 @@ shell_json_filter() {
         then del(.bar.centerAnchor) else . end'
 }
 
+# place_plugin ID SECTION KINDS MOUNTED < shell.json: a mounted plugin where its manifest says, unless
+# the user's layout has it. A bar widget is placed when it is in the bar or in a mounted plugin's own
+# layout (a sidebar plugin holding widgets): its entry under `plugins` alone (its settings) is not,
+# nor a place in a plugin the box does not have (finding 151: the widget was then in no bar at all).
+# shellcheck disable=SC2016 # jq, not shell
+place_plugin() {
+  jq --arg id "$1" --arg sec "$2" --argjson kinds "$3" --argjson mounted "$4" '
+    def in_bar: [(.bar.layout // {})[]?[]? | if type == "object" then .id else . end] | index($id);
+    def in_mounted: [(.plugins // [])[] | select(.id != $id and (.id as $p | $mounted | index($p)))
+      | .. | if type == "object" then .id? elif type == "string" then . else empty end] | index($id);
+    if ($kinds | index("bar")) then .bar.id = $id
+    elif ($kinds | index("bar-widget")) then
+      if in_bar or in_mounted then . else .bar.layout[$sec] = ((.bar.layout[$sec] // []) + [{id: $id}]) end
+    elif ([(.plugins // [])[].id] | index($id)) then .
+    else .plugins = ((.plugins // []) + [{id: $id}]) end'
+}
+
 # The box's fake HOME: the user's Omarchy look, no secrets (never api-keys.env, keyrings, tokens).
 # shell.json keeps the user's bar settings but only the built-in widgets plus the plugins mounted
 # into this box, each enabled where its manifest says it belongs. --stock-bar starts from Omarchy's
@@ -946,13 +963,7 @@ seed_home() {
     id=${p%%$'\t'*}; dir=${p#*$'\t'}
     kinds=$(jq -c '.kinds // []' "$dir/manifest.json")
     section=$(jq -r '.barWidget.defaultSection // "center"' "$dir/manifest.json")
-    jq --arg id "$id" --arg sec "$section" --argjson kinds "$kinds" '
-        def ids: [(.bar.layout // {})[]?[]? | if type == "object" then .id else . end] + [(.plugins // [])[].id];
-        if ($kinds | index("bar")) then .bar.id = $id
-        elif (ids | index($id)) then .
-        elif ($kinds | index("bar-widget")) then .bar.layout[$sec] = ((.bar.layout[$sec] // []) + [{id: $id}])
-        else .plugins = ((.plugins // []) + [{id: $id}]) end' \
-      "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
+    place_plugin "$id" "$section" "$kinds" "$ids" < "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
     mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
   done
   rm -rf "$h/.local/state/omarchy/current/theme"   # a save's: cp would copy into it

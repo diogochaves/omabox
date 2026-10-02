@@ -581,6 +581,19 @@ t_unit_seed_copy() {
 t_unit_bar_filter() {
   # shellcheck disable=SC2329 # called below
   bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
+  # A mounted bar widget (finding 151): placed where its manifest says unless the bar, or a mounted
+  # plugin's own layout, has it; its settings entry under plugins, or a place in a plugin the box
+  # lacks, is not a place.
+  local w='["bar-widget"]' side='{"bar":{"layout":{"right":[]}},"plugins":[{"id":"x.side","bottom":["x.w"]},{"id":"x.w","n":1}]}'
+  check_eq "a widget the user keeps in a sidebar plugin the box lacks: in the bar" '[{"id":"x.w"}]' \
+    "$(lib place_plugin x.w right "$w" '["x.w"]' <<<"$side" | jq -c .bar.layout.right)"
+  check_eq "...its settings kept" '{"id":"x.w","n":1}' "$(lib place_plugin x.w right "$w" '["x.w"]' <<<"$side" | jq -c '.plugins[] | select(.id == "x.w")')"
+  check_eq "...not when that plugin is mounted too: it holds the widget" '[]' \
+    "$(lib place_plugin x.w right "$w" '["x.w","x.side"]' <<<"$side" | jq -c .bar.layout.right)"
+  check_eq "...nor when the bar has it" '[{"id":"x.w"}]' \
+    "$(lib place_plugin x.w right "$w" '["x.w"]' <<<'{"bar":{"layout":{"right":[{"id":"x.w"}]}}}' | jq -c .bar.layout.right)"
+  check_eq "a panel plugin: an entry under plugins, once" '[{"id":"x.p"}]' \
+    "$(lib place_plugin x.p right '["panel"]' '["x.p"]' <<<'{"plugins":[{"id":"x.p"}]}' | jq -c .plugins)"
   local user='{"bar":{"centerAnchor":"x.solari","layout":{"left":[{"id":"omarchy.menu"},{"id":"omarchy.system-update"},{"id":"x.gauge"}],
     "center":[{"id":"x.indicators"},{"id":"x.solari"},{"id":"njpatel.omapager"}],"right":[{"id":"omarchy.tray"},{"id":"x.clock"}]}}}'
   check_eq "no workspace widget at all: after the menu, the rest filtered" \
@@ -2791,7 +2804,9 @@ t_omarchy_restart() {
 # logged) and an xdg-open that blocks like an image viewer left open (finding 64).
 t_widget() {
   local B=$P-wg
-  ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  # Omarchy's stock bar, not the user's (finding 151): the crops below look for the widget at the top
+  # right, and a user's own layout may have the bar on a side, or the widget in a plugin of theirs.
+  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
   local H; H=$(ob path "$B")/home
   printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  clip) echo "$*" >> "$HOME/actions"; echo "omabox: handed text (text/plain;charset=utf-8, 3 bytes) from your clipboard to box ia" >&2 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   printf '#!/bin/sh\necho "xdg-open $*" >> "$HOME/actions"; exec sleep 300\n' > "$H/.local/bin/xdg-open"
@@ -3272,7 +3287,7 @@ t_guard() {
 # what clip refuses there is what it refuses, not the suite's own caller.
 t_clip() {
   local B=$P-cl
-  ob up "$B" --net isolated --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
   local in=("$CLI" run -b "$B" --) H; H=$(ob path "$B")/home
   "${in[@]}" "$CLI" up ib --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
   local inb=("${in[@]}" "$CLI" run -b ib --) out rc

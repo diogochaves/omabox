@@ -2740,6 +2740,17 @@ from them.
     misreading, and without omabox that model would have run grim directly. The skill is written for
     capable models. Boxes from an OpenCode session have no session suffix (`skilltest`), unlike
     Claude Code's and Codex's.
+151. **A mounted widget the user keeps in a sidebar plugin** (2026-10-01, the suite failing after the
+    maintainer moved most bar widgets into a sidebar plugin's own layout and the bar to the left).
+    `seed_home` took a mounted bar widget as placed when the user's shell.json had it anywhere,
+    its settings entry under `plugins` included; here the widget's place was inside `chaves.sidebar`'s
+    entry, a plugin the box does not have, so `up --plugin` gave a box whose bar had the widget
+    nowhere ("listed but not enabled"). `place_plugin`: a bar widget is placed when the bar has it or
+    a mounted plugin's own layout does; else it goes where its manifest says, its settings kept.
+    The suite had leaned on the user's layout: `t_widget` and `t_clip` crop the top right for the
+    widget, and the user's bar was on the left now; both start from `--stock-bar`. (Also from the
+    user's own boxes: `--installed` cannot read a user box's state, and
+    `t_unit_leak_scan` once matched its fixture to one.)
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
