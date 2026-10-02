@@ -2665,6 +2665,20 @@ from them.
     escapes only), which pi lists as `skill:omabox`; `t_unit_version` checks it stays quoted, as it
     checks the 1024-character cap. None of Codex, pi or Hermes is logged in here, so whether they
     follow the skill is still untested (#84).
+146. **`--omarchy` on a real Omarchy checkout; hidden 1x1 layers** (2026-10-01, #84's list). Run on a
+    clone of basecamp/omarchy at v4.0.4 (no file differs from `/usr/share/omarchy`; git has docs,
+    tests, `etc/` and three debug scripts more; no build step) and at the head of `quattro`
+    (821ae589), on Hyprland 0.56.2 and quickshell 0.3.1: `up` and the bar, `OMARCHY_PATH` and bin
+    first, the launcher bind, an edit to a bar widget (after `restart-shell`) and to a Lua file
+    (Hyprland reloads it by itself), `omarchy-theme-set`, and no shell or config error a plain box
+    does not have. Head's shell keeps its menus (omarchy-menu, clipboard, emojis, osd, reminders,
+    image-selector) mapped as 1x1 layers while hidden, so `wait layer omarchy-menu` was satisfied
+    with the menu closed and `--gone` never was. A layer counts only bigger than 1x1 now
+    (`layer_at`), for `wait layer` and for `up`'s wait for the bar; checked on head in a box (closed:
+    124; SUPER+ALT+SPACE: at 0,0 1920x1080; Escape: gone). `omarchy_version` for a tree was set at
+    `up` only: `restart-shell` records it again (a commit since, `+dirty` once edited). As on a
+    host dev link: head's new packages (omasnap...) are missing where the system lacks them, and
+    the box HOME is seeded from the installed `/etc/skel`, not the tree's `config/`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

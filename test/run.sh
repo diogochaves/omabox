@@ -3633,6 +3633,13 @@ t_omarchy_tree() {
   check_eq "...a terminal's bash too (the box's /etc/omarchy.conf)" "$T omabox-tree" "$(ob run -b "$B" -- bash -ic 'echo "$OMARCHY_PATH $(omarchy-version)"' 2>/dev/null)"
   check_eq "ls --json names it" "$T" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy')"
   check_eq "...and its version as dev (no git: no commit)" dev "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
+  # Committed, then edited, after up: restart-shell records it as it is now.
+  local ov; ov() { ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version'; }
+  git -C "$T" init -q && git -C "$T" add -A && git -C "$T" -c user.name=t -c user.email=t@t commit -qm t
+  ob restart-shell -b "$B" >/dev/null 2>&1
+  check_eq "...its commit after restart-shell" "dev $(git -C "$T" rev-parse --short HEAD)" "$(ov)"
+  echo '-- edited' >> "$T/default/hypr/bootstrap.lua"; ob restart-shell -b "$B" >/dev/null 2>&1
+  check_eq "...+dirty once edited" "dev $(git -C "$T" rev-parse --short HEAD)+dirty" "$(ov)"
   check_match "up again with another tree: refused" "--omarchy /usr/share/omarchy" "$(ob up "$B" --omarchy /usr/share/omarchy 2>&1)"
   # A box in that box, on the installed Omarchy: the outer /etc/omarchy.conf names the tree.
   local in=("$CLI" run -b "$B" -- "$CLI")
@@ -3955,6 +3962,14 @@ t_unit_wait() {
   check_fails "0 refused" lib ms_duration 0
   check_fails "junk refused" lib ms_duration 2h
   check_eq "the cursor's rectangle" "944,524,64,64" "$(lib cursor_rect "960 540")"
+  # wait layer (finding 146): newer Omarchy keeps a hidden menu mapped at 1x1; that is not the menu.
+  local lj='{"HEADLESS-1":{"levels":{"2":[{"namespace":"omarchy-bar","x":0,"y":0,"w":1920,"h":34}],
+    "3":[{"namespace":"omarchy-menu","x":0,"y":0,"w":1,"h":1},{"namespace":"omarchy-osd","x":0,"y":0,"w":0,"h":0}]}}}'
+  check_eq "wait layer: a drawn layer is there" "0,0 1920x34" "$(lib layer_at omarchy-bar <<<"$lj")"
+  check_eq "...a hidden 1x1 one is not" "" "$(lib layer_at omarchy-menu <<<"$lj")"
+  check_eq "...nor an empty one" "" "$(lib layer_at omarchy-osd <<<"$lj")"
+  check_eq "...the drawn one when both are mapped" "660,300 600x480" \
+    "$(lib layer_at omarchy-menu <<<"${lj/\"w\":1,\"h\":1\}/\"w\":1,\"h\":1\},{\"namespace\":\"omarchy-menu\",\"x\":660,\"y\":300,\"w\":600,\"h\":480\}}")"
   check_match "wait --timeout over 10 min refused" "at most 10m" "$(ob wait -b "$P-x" --timeout 11m still 2>&1)"
   check_match "keys --timeout over 10 min refused" "at most 10m" "$(ob keys -b "$P-x" --wait --timeout 601s a 2>&1)"
   check_match "keys --quiet over 10 min refused" "--quiet is at most 10m" "$(ob keys -b "$P-x" --wait --quiet 20m a 2>&1)"

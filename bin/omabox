@@ -716,7 +716,7 @@ wait_ready() {
   local tray_expected=0
   jq -e '[.bar.layout[][]? | if type == "object" then .id else . end] | index("omarchy.tray") != null' \
     "$D/home/.config/omarchy/shell.json" >/dev/null && tray_expected=1
-  until on_box hyprctl -j layers 2>/dev/null | grep -q '"omarchy-bar"' &&
+  until [ -n "$(on_box hyprctl -j layers 2>/dev/null | layer_at omarchy-bar)" ] &&
         { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
     box_alive || died_starting
     [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
@@ -738,7 +738,7 @@ wait_ready() {
   # render_unfocused_fps (before drawn_hidden, not at all: screencopy never returned).
   [ "$(meta mode)" = interactive ] && return 0
   local geom last="" now same=0
-  geom=$(on_box hyprctl -j layers | jq -r 'first(.. | objects | select(.namespace? == "omarchy-bar")) | "\(.x),\(.y) \(.w)x\(.h)"')
+  geom=$(on_box hyprctl -j layers | layer_at omarchy-bar)
   while [ $same -lt 3 ] && [ $SECONDS -lt $deadline ]; do
     now=$(on_box timeout 2 grim -g "$geom" - 2>/dev/null | md5sum) || now=""   # a missed frame: try again
     if [ "$now" = "$last" ]; then same=$((same + 1)); else same=0; last=$now; fi
@@ -3234,11 +3234,18 @@ win_answer() {
         else "yes \(length) windows: \(map(d) | join("; "))" end' <<<"$hits" ;;
   esac
 }
+# layer_at NAMESPACE < `hyprctl -j layers`: where that layer is drawn, as X,Y WxH, or nothing. A 1x1
+# (or empty) one is not drawn: newer Omarchy shells keep their menus mapped at 1x1 while hidden
+# (finding 146), so a closed launcher would read as open.
+layer_at() {
+  jq -r --arg n "$1" 'first(.. | objects | select(.namespace? == $n and .w > 1 and .h > 1)
+    | "\(.x),\(.y) \(.w)x\(.h)") // empty'
+}
 # shellcheck disable=SC2329 # called through poll_until
 layer_probe() {
   local want=$1 ns=$2 layers l
   layers=$(on_box hyprctl -j layers 2>/dev/null) || return 1
-  l=$(jq -r --arg n "$ns" 'first(.. | objects | select(.namespace? == $n) | "\(.x),\(.y) \(.w)x\(.h)") // empty' <<<"$layers")
+  l=$(layer_at "$ns" <<<"$layers")
   if [ "$want" = gone ]; then if [ -z "$l" ]; then echo yes; else echo no; fi
   elif [ -n "$l" ]; then echo "yes at $l"; else echo no; fi
 }
@@ -3976,6 +3983,13 @@ cmd_restart_shell() {
   wait_ready 1
   say "shell restarted in box '$NAME'"
   plugin_check
+  # An Omarchy tree's commit as it is now, as plugin_check does for each plugin's: it was edited (or
+  # committed) since `up`, and `ls --json` says what the box tested.
+  local tree v; tree=$(meta omarchy)
+  if [ -n "$tree" ]; then
+    v=$(git_rev "$tree")
+    jq --arg v "dev${v:+ $v}" '.omarchy_version = $v' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  fi
 }
 
 # --- guard ---------------------------------------------------------------------------------------
