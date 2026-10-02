@@ -3,6 +3,30 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## 0.4.5 — 2026-10-01
+
+Fixes found by testing what had shipped untested: a box that outlived its `down`, `wait layer` on
+newer Omarchy, pi not loading the skill, and light dialogs under a dark theme.
+
+### Fixed
+
+- **A `down` while its box is still starting takes it down.** A `down` in the first moments of an
+  `up` said "no box" and exited 0, and the box came up behind it and ran until its idle limit. Now
+  it waits for that `up` and takes its box down, or the `up` stops itself ("up: cancelled: omabox
+  down NAME came while it was starting").
+- **`wait layer` on newer Omarchy shells.** Omarchy's development branch keeps its menus mapped as
+  1x1 layers while hidden, so `wait layer omarchy-menu` was satisfied with the launcher closed and
+  `--gone` never was. A layer counts only when it is drawn (bigger than 1x1), here and in `up`'s wait
+  for the bar.
+- **pi loads the agent skill.** The skill's description was not valid YAML to a strict parser, and pi
+  skipped the skill without a word. Claude Code, OpenCode, Codex and Hermes read it either way.
+- **Dialogs follow the theme's light or dark mode.** A box's settings said "no preference", so file
+  choosers and other portal dialogs, GTK, libadwaita and Qt apps were light under a dark theme. A box
+  sets the mode from its theme at start, as `omarchy-theme-set` does on your desktop.
+- **`restart-shell` records an `--omarchy` tree's commit again** (`+dirty` once edited), as it does
+  for plugins, so `ls --json` says what the box tested.
+- `omabox gpu` names the aquamarine the box runs (a line under the first; `aquamarine` in `--json`).
+
 ## 0.4.4 — 2026-10-01
 
 An agent inside ai-jail 2.6.2 drives boxes again, and each command has its own help.
