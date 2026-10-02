@@ -466,6 +466,14 @@ box_alive() {
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
+# up, dead, or unknown: a box whose state this user namespace cannot read (box_pid's 3), for a list,
+# which shows it as that instead of refusing them all (a sandbox's ls, the suite's --installed: #87).
+box_state() {
+  local pid rc=0; pid=$(box_pid) || rc=$?
+  if [ $rc = 3 ]; then echo unknown
+  elif [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo up
+  else echo dead; fi
+}
 
 need_box() {
   if box_alive; then touch "$D/used" 2>/dev/null || true; take_over && return 0; fi
@@ -4611,8 +4619,8 @@ cmd_down() {
 
 # The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it).
 box_json() {
-  local state=dead peeking=false keys=false
-  box_alive && state=up
+  local state peeking=false keys=false
+  state=$(box_state)
   peek_pid >/dev/null && peeking=true
   [ ! -f "$D/keys-to-box" ] || keys=true
   local theme; theme=$(head -n 1 "$D/home/.local/state/omarchy/current/theme.name" 2>/dev/null) || theme=""
@@ -4647,18 +4655,18 @@ cmd_ls() {
     return
   fi
   # IDLE: minutes since the box was last used, of its limit (it goes down when they meet).
-  printf '%-24s %-11s %-16s %-6s %-9s %-9s %s\n' NAME MODE SIZE STATE NET IDLE PLUGINS
+  printf '%-24s %-11s %-16s %-7s %-9s %-9s %s\n' NAME MODE SIZE STATE NET IDLE PLUGINS
   local used
   for n in $(list_names); do
     select_box "$n"
     # A box going down while this lists them has no box.json any more: left out, not the end of the
     # list (under errexit a failed lookup here ended `ls` there; seen with the suite's boxes in parallel).
-    local state=dead idle; box_alive && state=up
+    local state idle; state=$(box_state)
     idle=$(meta idle) || continue
     if [ "${idle:-0}" -gt 0 ] && used=$(stat -c %Y "$D/used" 2>/dev/null); then
       idle="$((($(date +%s) - used) / 60))m/$(human_duration "$idle")"
     else idle=never; fi
-    printf '%-24s %-11s %-16s %-6s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$(meta size)" "$state" "$(meta net)" "$idle" \
+    printf '%-24s %-11s %-16s %-7s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$(meta size)" "$state" "$(meta net)" "$idle" \
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"

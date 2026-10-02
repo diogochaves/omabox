@@ -2758,6 +2758,15 @@ from them.
     widget, and the user's bar was on the left now; both start from `--stock-bar`. (Also from the
     user's own boxes: `--installed` cannot read a user box's state, and
     `t_unit_leak_scan` once matched its fixture to one.)
+152. **A user's box and the suite** (2026-10-02, #87). From another user namespace (the suite's
+    `--installed`, a sandbox that makes its own) a box's process is unreadable, and `box_alive` stops
+    on that (`box_pid`'s 3: not a dead box, which `up` would clear and orphan). `ls` and `ls --json`
+    called it for every box, so one box of the user's made the whole list refuse, and `--installed`
+    failed 37 checks with an interactive box of the user's open. A list now shows such a box as
+    `unknown` (`box_state`; `t_main` checks it through `unshare -Ur`); commands on a box still stop
+    there. `t_unit_leak_scan` had taken its fixture's interactive window for a box of the user's
+    whose box.json changed during the run (`their_new_box` reads the real runtime dir): its scans run
+    in an empty one.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

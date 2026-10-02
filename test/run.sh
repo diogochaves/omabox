@@ -703,7 +703,9 @@ t_unit_version() {
 # The leak detector's reading of events (finding 80), on lines as the watcher logs them (the
 # interactive window's openwindow is Hyprland 0.56's, seen in a stand-in box).
 t_unit_leak_scan() {
-  scan() { printf '1.000 %s\n' "$@" | leak_scan t1-; }
+  # In a runtime dir with no boxes: an interactive box of the user's whose box.json changed during the
+  # run (a restart-shell) would read as one they started, and the fixture's window as its (#87).
+  scan() { printf '1.000 %s\n' "$@" | XDG_RUNTIME_DIR=$TMP/no-boxes leak_scan t1-; }
   leaks() { scan "$@" | grep '^leak:'; }
   check_match "a box of this run's taking focus" "^leak: focus went to a window of this run's: .*OMABOX_NAME=t1-main" "$(scan '~ 0xa pid=5 OMABOX_NAME=t1-main class=foot')"
   check_match "...a process the suite started" "^leak: focus went to a window of this run's" "$(scan '~ 0xa pid=5 OMABOX_SUITE=t1 class=foot')"
@@ -1597,6 +1599,11 @@ t_main() {
   ob wait -b "$B" --timeout 5s cmd -- sh -c "gsettings get org.gnome.desktop.interface color-scheme | grep -q prefer-$mode" >/dev/null
   check_eq "dconf has the theme's colour mode" "'prefer-$mode'" "$(ob run -b "$B" -- gsettings get org.gnome.desktop.interface color-scheme)"
   check "up on a running box is a no-op" ob up "$B"
+  # From another user namespace (a sandbox's, the suite's --installed): unknown, the list not refused (#87).
+  if unshare -Ur true 2>/dev/null; then
+    check_eq "ls from another user namespace: the box is unknown" unknown \
+      "$(unshare -Ur "$CLI" ls --json 2>/dev/null | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
+  else skip "ls from another user namespace" "unshare -Ur is not allowed here"; fi
   # run: exit codes, environment (findings 47, 49, 57, 58), --env
   # shellcheck disable=SC2016 # expanded inside the box
   check_eq "run passes exit codes" 7 "$(ob run -b "$B" -- sh -c 'exit 7'; echo $?)"
