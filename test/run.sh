@@ -2331,6 +2331,10 @@ t_failed_up() {
   else
     ok "up fails when the expected shell never starts"
   fi
+  # kill_box waits for PID 1 (up to 10 s, saying so past that): a failed up returns with its box gone.
+  # Its own message is in the evidence when not (#86).
+  check_eq "...and returns with the box dead (up said: ${out//$'\n'/ | })" dead \
+    "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   # The namespace and bwrap parent can take a moment to exit after the failed command returns.
   # shellcheck disable=SC2329 # called through until_ok
   failed_box_dead() { [ "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')" = dead ]; }

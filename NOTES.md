@@ -2828,6 +2828,15 @@ from them.
       above the shared port. Not checked: whether a box server on a port the host already has fails
       to start in the box (the mirror holds it there), which a dev server like Vite would answer by
       taking the next port.
+157. **A failed `up`'s cleanup stopped after the first kill** (2026-10-03, #86). `up`'s EXIT trap
+    (`[ $? = 0 ] || kill_box`) runs `kill_box` where set -e holds, and its `[ -n "$pid" ] && pkill
+    -CONT -f "^nsenter -t $pid "` fails when there is no stopped launcher, which is the usual case:
+    the trap ended there, after SIGKILL to PID 1 but before killing pasta and waiting for PID 1 (a
+    three-line bash copy of the trap showed it). `down` was not affected (it calls `kill_box` in an
+    `if`). Each step is now `|| true`, so a failed `up` returns with its box gone, or says PID 1 is
+    still exiting after 10 s. `t_failed_up` checks the box reads dead as soon as `up` returns, and
+    prints `up`'s message in the check's name. Whether this was #86's flake (a failed `up` left its
+    box running) is not known: #86 did not reproduce in 24 more runs, eight at a time.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

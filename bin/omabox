@@ -1987,15 +1987,17 @@ lua_str() {
 
 # SIGKILL the box's PID 1 (the kernel then kills everything in its pid namespace; SIGTERM is ignored,
 # finding 6) and pasta's; wait for them, at most 10 s. The dir stays.
+# Each step `|| true`: `up`'s failure trap calls this where set -e holds, and a step that found nothing
+# to do (no stopped launcher, mostly) ended it there, before pasta and the wait (#86).
 kill_box() {
   local pid pasta
   pid=$(box_pid) || true
-  [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
+  [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null || true
   # A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does.
-  [ -n "$pid" ] && pkill -CONT -f "^nsenter -t $pid " 2>/dev/null
+  [ -z "$pid" ] || pkill -CONT -f "^nsenter -t $pid " 2>/dev/null || true
   # A box whose pid was never found: pasta's own pid namespace holds it, end that instead.
   if pasta=$(box_pasta); then
-    kill -KILL "$pasta" "$(pgrep -P "$pasta" | head -1)" 2>/dev/null
+    kill -KILL "$pasta" "$(pgrep -P "$pasta" | head -1)" 2>/dev/null || true
   fi
   local end=$((SECONDS + 10))
   while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; do
