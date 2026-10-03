@@ -2791,6 +2791,13 @@ from them.
     `t_main` now checks a box has no seatd socket or system bus and that its runtime dir is its own
     (the inode of the box dir's `run`); `t_unit_pointer` checks `omabox-keyboard` and
     `omabox-pointer` refuse outside a box, as `omabox-still` and `omabox-events` were already checked.
+155. **The widget speaks omarchy-console's convention** (2026-10-02). The console's rail hosts bar
+    widgets and slides a running one up; it reads a widget's own `consoleAwake` (bool) and
+    `consoleState` (`starting`, `running`, `failed`) off its root, and only falls back to a built-in
+    reading of the widget's private properties (here `upCount > 0`). The widget now says it itself:
+    awake and `running` while a box is up, nothing else (a box has no starting or failed state the
+    list shows). Checked in a box with the rail and a stub `omabox ls`: one box up woke it, an empty
+    list put it back, with the rail's built-in mappings removed so only the convention could.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

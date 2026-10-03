@@ -3,6 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- **The bar widget says whether a box is up, for omarchy-console's rail.** It exposes
+  `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
+  widget's own box count.
+
 ## 0.4.6 — 2026-10-02
 
 Fixes found on a dev-linked Omarchy and with a bar widget kept in a sidebar plugin.
