@@ -3178,7 +3178,7 @@ t_widget() {
   # right, and a user's own layout may have the bar on a side, or the widget in a plugin of theirs.
   ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
   local H; H=$(ob path "$B")/home
-  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  clip) echo "$*" >> "$HOME/actions"; echo "omabox: handed text (text/plain;charset=utf-8, 3 bytes) from your clipboard to box ia" >&2 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
+  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; n=$(cat "$HOME/hang" 2>/dev/null || echo 0); if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$HOME/hang"; [ ! -e "$HOME/hang-deaf" ] || trap "" TERM; x=$(sleep 600 | cat); fi; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  clip) echo "$*" >> "$HOME/actions"; echo "omabox: handed text (text/plain;charset=utf-8, 3 bytes) from your clipboard to box ia" >&2 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   printf '#!/bin/sh\necho "xdg-open $*" >> "$HOME/actions"; exec sleep 300\n' > "$H/.local/bin/xdg-open"
   printf '#!/bin/sh\necho "notify-send $*" >> "$HOME/actions"\n' > "$H/.local/bin/notify-send"
   chmod +x "$H/.local/bin/omabox" "$H/.local/bin/xdg-open" "$H/.local/bin/notify-send"
@@ -3191,10 +3191,11 @@ t_widget() {
   # A list poll that started after this call: the stub logs each `ls` before it reads the list, so
   # that poll read the list as it is now (then a moment for the widget to take it in).
   polled() { local n; n=$(grep -c . "$H/polls" 2>/dev/null); until_ok 12 lines_over "$H/polls" "${n:-0}" .; sleep 0.3; }
-  # The widget's own settings, in its shell.json entry (read live; finding 169): a poll each second.
+  # The widget's own settings, in its shell.json entry (read live; finding 169): a poll each second,
+  # and 2 s for an `ls --json` to answer (finding 170's checks below).
   local sj=$H/.config/omarchy/shell.json
   local n; n=$(grep -c . "$H/polls" 2>/dev/null)
-  jq '.bar.layout[] |= map(if .id == "chaves.omabox" then . + {refreshIntervalSec: 1} else . end)' "$sj" > "$TMP/wg-shell.json" &&
+  jq '.bar.layout[] |= map(if .id == "chaves.omabox" then . + {refreshIntervalSec: 1, listTimeoutSec: 2} else . end)' "$sj" > "$TMP/wg-shell.json" &&
     cat "$TMP/wg-shell.json" > "$sj"
   check "the widget reads its own settings: two polls in 4 s (finding 169; 5 s apart by default)" \
     until_ok 4 lines_over "$H/polls" "$((${n:-0} + 1))" .
@@ -3298,6 +3299,27 @@ t_widget() {
   panel_shot '{"version":"9.9.9"}' "$TMP/wg-newer.png"
   check "a widget of the CLI's version says nothing more than one told no version" cmp -s "$TMP/wg-nover.png" "$TMP/wg-same.png"
   check_fails "...an older one says to restart the shell (finding 133)" cmp -s "$TMP/wg-same.png" "$TMP/wg-newer.png"
+  # Finding 170: an `ls --json` that never answers is stopped after the widget's limit (2 s, set at
+  # the top) with all it started, and counted as one failed poll; the next poll runs. The stub hangs
+  # as many polls as $H/hang says, in a $(... | ...) the way `head` on a FIFO did (#95).
+  echo 3 > "$H/hang"
+  check "an ls --json that hangs is stopped: three in a row are notified so (finding 170)" \
+    until_ok 20 grep -qx "notify-send -a omabox omabox: cannot list boxes omabox ls --json did not answer in 2 s" "$H/actions"
+  check "...with what it started (no sleep of its left)" until_ok 5 bash -c "! '$CLI' run -b '$B' -- pgrep -fx 'sleep 600'"
+  until_ok 5 grep -qx 0 "$H/hang"; polled   # one that answered: the failures count from 0 again
+  # One deaf to SIGTERM, its children too, is killed 2 s on; each counts once: two in a row (not
+  # four, with a "cannot run" each) notify nothing, and the list the poll after reads is shown.
+  jq -n "[$row + {name: \"after\"}]" > "$H/list.json"
+  : > "$H/hang-deaf"; echo 2 > "$H/hang"
+  until_ok 15 grep -qx 0 "$H/hang"   # the second one started (the first took 2 + 2 s)
+  n=$(grep -c . "$H/polls")
+  check "...one deaf to SIGTERM is killed, and the poll after it runs" until_ok 12 lines_over "$H/polls" "$n" .
+  sleep 0.3; rm "$H/hang-deaf"
+  check "...with what it started" until_ok 5 bash -c "! '$CLI' run -b '$B' -- pgrep -fx 'sleep 600'"
+  check_eq "...two in a row are two failures, not a notification" 1 "$(grep -c "cannot list boxes" "$H/actions")"
+  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+  ob keys -b "$B" Down s >/dev/null
+  check "...and the list after them is read (shot -b after)" until_ok 3 grep -qx "shot -b after" "$H/actions"
   # (Not with omabox installed on the host: the box sees its /usr/bin/omabox, so there is always one.)
   if [ ! -e /usr/bin/omabox ]; then
     mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"

@@ -2991,6 +2991,24 @@ from them.
     are `cliConfig`; the same box polled every 2 s, and every 1 s once the entry said 1, live (the
     bar patches a widget's settings in place on a `shell.json` write). Since 0.1.0. `t_widget` sets
     `refreshIntervalSec: 1` in its entry and checks two polls come within 4 s.
+170. **The bar widget's `ls --json` has a time limit** (2026-10-03). `refresh` skips a poll while one
+    runs, and nothing ended one that never answered: the FIFO of finding 159 froze the widget's list
+    from 15:33 until the `ls` was killed by hand. #95 removed that cause; now a poll still running
+    after `listTimeoutSec` (15 s by default, hand-edited in the widget's `shell.json` entry; `ls
+    --json` answers in ~65 ms) is stopped and counted as a failed poll, "omabox ls --json did not
+    answer in 15 s" (the panel's strip; the third in a row a notification, as before), and the next
+    poll runs. Quickshell's `running = false` (`Process::setRunning`, 0.3.1's source) is
+    `QProcess::terminate()`, SIGTERM to that one process; `running` stays true until it exits, then
+    `exited`, then `runningChanged`. Its children would outlive it (`head` on the FIFO was one), one
+    more each poll, so the widget collects the tree under the process with `pgrep -P` and sends all
+    of it SIGTERM, then SIGKILL 2 s later, with its own SIGKILL to the process 3 s on in case that
+    could not run. A `timedOut` flag makes that exit the timeout failure, and the `exited` one keeps
+    "cannot run" out of it. Not `timeout(1)`: it would change the "cannot run" detection (it exits
+    127 itself). `configProc` has no limit: it is not skipped while running, and a hung one keeps
+    the settings as they were rather than the list. `t_widget` (limit 2 s): three hangs in a row are
+    notified with that reason and leave none of their processes; two deaf to SIGTERM are killed, are
+    two failures, not four, and the list after them is read. All fail on 0.4.7's widget; without the
+    `exited` flag the counts fail, with `running = false` in place of the tree the leftover checks.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

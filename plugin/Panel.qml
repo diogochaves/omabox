@@ -21,6 +21,15 @@ Panel {
     var n = Number(setting("refreshIntervalSec", 5))
     return isFinite(n) && n >= 1 ? Math.min(Math.round(n), 300) : 5
   }
+  // How long one `omabox ls --json` may take before it is stopped and counted as a failed poll
+  // (finding 170). It answers in well under a second (65 ms with two boxes); 15 s is far past an
+  // answer that is merely slow (a loaded machine, many boxes), and short enough that a hang shows in
+  // the panel while the user still looks. Not in the manifest's schema: a hand-edited
+  // "listTimeoutSec" in the widget's shell.json entry (the suite sets 2).
+  readonly property int listTimeoutSec: {
+    var n = Number(setting("listTimeoutSec", 15))
+    return isFinite(n) && n >= 1 ? Math.min(Math.round(n), 300) : 15
+  }
 
   property var boxes: []
   property int selectedIndex: 0
@@ -149,6 +158,7 @@ Panel {
   function refresh() {
     if (listProc.running) return
     listProc.exited = false
+    listProc.timedOut = false
     listProc.running = true
   }
 
@@ -262,18 +272,47 @@ Panel {
     id: listProc
     // A command that cannot start (not on PATH) never emits exited: running just drops back.
     property bool exited: false
+    // Stopped by listLimit: its exit (SIGTERM or SIGKILL) is that failure, not its exit code.
+    property bool timedOut: false
     command: [root.command, "ls", "--json"]
     stdout: StdioCollector { id: listOut; waitForEnd: true }
     stderr: StdioCollector { id: listErr; waitForEnd: true }
+    onStarted: listLimit.restart()
     onExited: function(code) {
       exited = true
-      if (code === 0) root.parseList(listOut.text)
+      if (timedOut) root.listFailed("omabox ls --json did not answer in " + root.listTimeoutSec + " s")
+      else if (code === 0) root.parseList(listOut.text)
       else root.listFailed((listErr.text.trim().split("\n").pop() || root.command + " ls: exit " + code))
     }
-    onRunningChanged: if (!running) Qt.callLater(function() {
-      if (!listProc.exited && !listProc.running) root.listFailed("cannot run " + root.command)
-    })
+    onRunningChanged: if (!running) {
+      listLimit.stop()
+      listKill.stop()
+      Qt.callLater(function() {
+        if (!listProc.exited && !listProc.running) root.listFailed("cannot run " + root.command)
+      })
+    }
   }
+
+  // refresh() skips a poll while one runs, so one `ls --json` that never answers froze the list for
+  // good (finding 170: a FIFO in a box HOME, #95, from 15:33 until it was killed by hand). Past the
+  // limit it is stopped with all it started. `running = false` alone is Quickshell's SIGTERM to that
+  // one process (running stays true until it is gone; then exited, then runningChanged): its children,
+  // such as the `head` blocked on that FIFO, would be left behind, one more each poll. So the tree
+  // under it is collected first, then all of it gets SIGTERM and, 2 s later, SIGKILL; SIGKILL from
+  // here 3 s on in case that could not run. Its exit is then this failure, not "cannot run".
+  readonly property string treeKill: 't=$0 all=; while [ -n "$t" ]; do all="$all $t" n=; for p in $t; do n="$n $(pgrep -P "$p")"; done; t=$(echo $n); done; kill -TERM $all 2>/dev/null; sleep 2; kill -KILL $all 2>/dev/null'
+  Timer {
+    id: listLimit
+    interval: root.listTimeoutSec * 1000
+    onTriggered: {
+      var pid = Number(listProc.processId)
+      if (!listProc.running || !(pid > 1)) return
+      listProc.timedOut = true
+      Quickshell.execDetached(["sh", "-c", root.treeKill, String(pid)])
+      listKill.restart()
+    }
+  }
+  Timer { id: listKill; interval: 3000; onTriggered: if (listProc.running) listProc.signal(9) }
 
   Process {
     id: actionProc
