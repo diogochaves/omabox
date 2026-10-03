@@ -52,8 +52,10 @@ ports, no internet). One that starts or probes local servers (a dev server, a pl
 `--net isolated` too. A server in a default box also holds its port on the user's 127.0.0.1 (their
 own dev server on it then fails to start), and a probe there can reach theirs, or another box's
 (only one box gets a port on the host; `omabox ports` says which hold it): check your server from
-inside the box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`). An isolated box's ports
-stay its own, and two of them can use the same one.
+inside the box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`). The host's servers, another
+box's among them, are mirrored into a default box: a server that fails with "address in use" on a
+port nothing in the box uses means the host or another box holds it (`omabox ports` names the
+holder); use another port. An isolated box's ports stay its own, and two of them can use the same one.
 
 `omabox help CMD` (or `omabox CMD --help`) has one command's flags and notes, `omabox help` every
 command's (long: read it only for an overview); `reference.md` next to this file has the detail left

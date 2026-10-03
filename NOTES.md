@@ -2830,9 +2830,19 @@ from them.
       runs of 2) the strong `-t` blocks with a weak `-T`, and a strong `-T` with a weak `-t` does
       not. It needs the port held on the host by another namespace's forward: one namespace whose
       port a host server held still forwarded its later port (1 run). `t_ports` checks both boxes
-      still forward a later server above the shared port. Not checked: whether a box server on a port the host already has fails
-      to start in the box (the mirror holds it there), which a dev server like Vite would answer by
-      taking the next port.
+      still forward a later server above the shared port.
+    - *A box server on a port the host already has fails to start* (checked 2026-10-03, #89): pasta's
+      `-T auto` mirrors the host's listeners into the box, another box's forward among them, and the
+      mirror holds the port there. A 127.0.0.1 server in one box, then the same port in a second box
+      3 s later: the second's run log `OSError: [Errno 98] Address already in use`, `ss -tlnp` in it
+      `LISTEN 0 128 *%lo:PORT` with no process, `ports` the first box only ("this box"); the same
+      with a host server started 3 s before the box's. Started at one instant (one rescan), both
+      listen and `ports` says `shared`. A dev server that takes the next free port (Vite) would move
+      on (not tried). README said each of two boxes' servers "still answers inside its own box";
+      README, the skill and `help ports` now say the second fails to start. `t_ports` starts its two
+      `shared` servers ~50 ms apart, so a pasta rescan between them would stop one: it checks each
+      listens in its box (a box process on the port, not pasta's mirror) before reading `ports`,
+      naming the one missing.
 157. **A failed `up`'s cleanup stopped after the first kill** (2026-10-03, #86). `up`'s EXIT trap
     (`[ $? = 0 ] || kill_box`) runs `kill_box` where set -e holds, and its `[ -n "$pid" ] && pkill
     -CONT -f "^nsenter -t $pid "` fails when there is no stopped launcher, which is the usual case:

@@ -140,8 +140,11 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   between boxes always. A box's server is reachable from the host (and other boxes) on
   `127.0.0.1:PORT` within about a second of listening (poll for it); one on `::1` only is not,
   though its port there is still taken, and connections to it are reset.
-  Only one box gets each port there: of two connected boxes listening on one port, one reaches the
-  host and the other does not. `omabox ports` lists every box's servers and what holds each port on
+  The host's servers are mirrored into each connected box, another box's forwarded ports among
+  them, so a box server on a port the host or another box already has fails to start: "address in
+  use" on a port nothing in the box uses means the host or another box holds it (`omabox ports`
+  names the holder); use another port. Only servers started in two boxes within about a second of
+  each other both run; then one reaches the host and the other does not. `omabox ports` lists every box's servers and what holds each port on
   the host (this box; this box but reset, for a server on `::1` only; several boxes, any of which
   may have it, naming those on `::1` only that would reset; a host process; nothing yet; an
   isolated box's servers are not forwarded). Check a server you started from

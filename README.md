@@ -386,8 +386,12 @@ blocks the network and every other socket, omabox's included), or see
   within a second of its server listening, the ephemeral range included; other boxes reach them
   there too. A TCP port there also takes the UDP port of the same number. So while a connected box
   runs a server on a port, your own server cannot start on it; an isolated box's ports stay its own
-  (two isolated boxes can use the same port). When two connected boxes run a server on the same
-  port, only one of them gets it on your `127.0.0.1`; each still answers inside its own box.
+  (two isolated boxes can use the same port). The other way round, a connected box sees your
+  host's servers on their ports, another box's forwarded ports among them, so a server a box starts
+  on a port your host or another connected box already has fails to start (address in use). Only
+  servers started in two boxes within about a second of each other both run, each answering inside
+  its own box, and only one of them gets the port on your `127.0.0.1`. A dev server that takes the
+  next free port when its own is taken (as Vite does) moves on by itself.
   `omabox ports` (next release) lists every box's servers and what holds each port on your
   `127.0.0.1`: that box, any of the boxes sharing it, or one of your own processes.
 - Inside a box, your machine's LAN address is the box itself. A connected box started inside

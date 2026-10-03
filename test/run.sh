@@ -2112,6 +2112,13 @@ t_ports() {
   ob run -b "$A" -d -- python3 -m http.server "$shared" --bind 127.0.0.1 --directory /home/sbx >/dev/null
   ob run -b "$B" -d -- python3 -m http.server "$shared" --bind 0.0.0.0 --directory /home/sbx >/dev/null
   ob run -b "$A" -d -- python3 -m http.server "$local6" --bind ::1 --directory /home/sbx >/dev/null
+  # A's and B's servers on $shared start ~50 ms apart and both run only because no pasta rescan (each
+  # second) falls between them: one started after the other's port reached the host finds it mirrored
+  # into its own box and fails, address in use (finding 156, #89). A rare flake, so say which one.
+  for b in "$A" "$B"; do
+    check "ports: $b's server on the shared port listens in its box (no rescan between the two starts)" \
+      until_ok 10 ob run -b "$b" -- bash -c "ss -Htlnp 'sport = :$shared' | grep -q python3"
+  done
   # Once the host has both forwards and B has the mirror of the host server (pasta rescans each second).
   check "ports: the host has the box servers' ports" until_ok 10 bash -c "ss -Htln 'sport = :$own' | grep -q . && ss -Htln 'sport = :$shared' | grep -q ."
   check "...and pasta mirrored the host server into a box" until_ok 10 ob run -b "$B" -- bash -c "ss -Htln 'sport = :$hostp' | grep -q ."
