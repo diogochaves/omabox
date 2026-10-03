@@ -78,7 +78,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [left|right|middle] [--double]
                [--steps N] [--mod MODS]                  --steps: travel there; --mod ctrl: ctrl-click
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [left|right|middle]
-              [--steps 10] [--hold MS] [--mod MODS]      press, move, hold, release
+              [--steps 10] [--hold DURATION] [--mod MODS]  press, move, hold, release
   omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- ARGS...
                  raw: move X Y [--steps N], click/down/up [BTN], scroll DY, sleep MS
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
@@ -177,6 +177,11 @@ focus-follows-mouse the windows on the way take focus, as with a real mouse (\`p
 move A move B\` passes through A). --mod MODS (ctrl, shift, alt, super, altgr; ctrl+shift, or --mod
 again) holds modifiers down across a click, drag or pointer run, released after it, whatever happens
 to omabox. SUPER with the left or right button is Hyprland's move or resize window, not the app's.
+@ drag
+\`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
+reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
+number is seconds, as for --quiet and --timeout (\`keys -s\` and \`pointer sleep\` take milliseconds).
+--shot FILE takes a shot while the button is still down.
 @ wait keys click run
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
 count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
@@ -3069,7 +3074,7 @@ cmd_pointer() {
 }
 
 # omabox drag X1 Y1 X2 Y2 (#25): press at the first point, move to the second in --steps, hold there
-# --hold MS (a drop target reacting to the hover), release. --window and --in map both points as for
+# --hold DURATION (a drop target reacting to the hover), release. --window and --in map both points as for
 # click; --shot FILE takes a shot while the button is still down (the pointer tool pauses for it);
 # --mod MODS holds modifiers down from the press to the release.
 cmd_drag() {
@@ -3081,7 +3086,7 @@ cmd_drag() {
       --in) optarg "$@"; in=$2; shift ;;
       --no-raise) raise=0 ;;
       --steps) optarg "$@"; steps=$(steps_arg drag "$2"); shift ;;
-      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "drag: --hold is up to 60s (300ms, 2s), got $2"; shift ;;
+      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "drag: --hold takes a duration up to 60s, like 300ms or 2s (a bare number is seconds), got $2"; shift ;;
       --shot) optarg "$@"; shot=$2; shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle) btn=$1 ;;

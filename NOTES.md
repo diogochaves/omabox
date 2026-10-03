@@ -2942,6 +2942,14 @@ from them.
     - *`omabox help ports` lists the states* (2026-10-03, #94): a `@ ports` paragraph names each
       `host.state` and what it means; before, it printed only the shared network paragraph.
       `t_unit_cli` checks it names `this-resets` and `shared`.
+166. **`drag --hold` said MS but a bare number is seconds** (2026-10-03, #103). The usage line and
+    reference.md said `--hold MS`, but it is read by `ms_duration`, like `--quiet` and `--timeout`: a bare
+    `--hold 2` held 2 s, and `--hold 500` was refused as "up to 60s (300ms, 2s), got 500". Kept the
+    parsing (one rule for every duration option) and fixed the words: `--hold DURATION` in the usage
+    line and reference.md, a `@ drag` help paragraph (300ms or 2s, a bare number is seconds, up to
+    60s), and the refusal says the unit. `keys -s MS` and `pointer sleep MS` do take milliseconds
+    (passed to the tools, which read an integer of ms) and stay. `t_unit_cli` checks `help drag` says
+    so, `t_unit_pointer` the refusal, `t_pointer` that `--hold 300ms` holds 300 ms and is done in 2 s.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

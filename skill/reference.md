@@ -16,11 +16,13 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 
 ## Pointer, in detail
 
-- `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [left|right|middle] [--steps 10] [--hold MS]
+- `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [left|right|middle] [--steps 10] [--hold DURATION]
   [--mod MODS] [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold
-  there `--hold` (a drop target reacting to the hover), release. `--shot FILE` takes a shot while the
-  button is still down (a drag's own feedback). Both points are mapped as for `click`. It jumps to the
-  first point: to get there on foot, `pointer --steps N -- move X1 Y1` first.
+  there `--hold` (a drop target reacting to the hover), release. `--hold` is a duration, `300ms` or
+  `2s` (a bare number is seconds, up to 60s), unlike `keys -s` and `pointer sleep`, which take ms.
+  `--shot FILE` takes a shot while the button is still down (a drag's own feedback). Both points are
+  mapped as for `click`. It jumps to the first point: to get there on foot, `pointer --steps N --
+  move X1 Y1` first.
 - `omabox pointer [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- move X Y [--steps N], click
   [BTN], down [BTN], up [BTN], scroll DY, sleep MS` in one run: raw, it raises nothing (a `--window`
   must be on screen and uncovered). The button defaults to left. A button pressed with `down` stays

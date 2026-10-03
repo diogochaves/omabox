@@ -1303,6 +1303,9 @@ t_unit_cli() {
   check_match "...a fraction of the full help" "^yes$" "$( (( $(ob help shot | wc -c) * 5 < ${#full} )) && echo yes)"
   check_match "...run's has up's options" "omabox up .*--net isolated" "$(ob help run | tr '\n' ' ')"
   check_match "...ports' names its states (#94)" "this-resets .*shared " "$(ob help ports | tr '\n' ' ')"
+  check_match "...drag's: --hold is a duration, a bare number seconds, as ms_duration reads it (#103)" \
+    "--hold DURATION.*like 300ms or 2s: a bare number is seconds" "$(ob help drag | tr '\n' ' ')"
+  check_eq "...which it does" 2000 "$(lib ms_duration 2)"
   check_eq "...an unknown one: one line, exit 2" "1 2" "$(ob help shoot 2>&1 | wc -l) $(ob help shoot >/dev/null 2>&1; echo $?)"
   check_match "...hyprctl's --help is hyprctl's" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl --help 2>&1)"
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
@@ -4226,6 +4229,7 @@ t_unit_pointer() {
   check_match "pointer --steps 1000 refused" "--steps is 1-999" "$(ob pointer -b "$P-x" --steps 1000 -- move 1 1 2>&1)"
   check_match "click --mod junk refused" "not a modifier" "$(ob click -b "$P-x" --mod meta 1 1 2>&1)"
   check_match "drag --mod junk refused" "not a modifier" "$(ob drag -b "$P-x" --mod ctrl,x 1 1 2 2 2>&1)"
+  check_match "drag --hold 500 refused, saying the unit (#103)" "like 300ms or 2s \\(a bare number is seconds\\), got 500" "$(ob drag -b "$P-x" --hold 500 1 1 2 2 2>&1)"
   check_match "keys -m is omabox's own" "click, drag or pointer --mod" "$(ob keys -b "$P-x" -m ctrl a 2>&1)"
   # The input tools refuse outside a box before they connect (SECURITY.md): run from a host shell they
   # would drive the real desktop. Checked in a sandbox with no /opt/omabox, no runtime dir, no display.
@@ -4295,6 +4299,11 @@ t_pointer() {
   check_eq "click, --mod ctrl, alt+ctrl, pointer and drag --mod ctrl, --mod super (Hyprland's move bind: not for the app), then none held" \
     "0 16 24 16 16 0 " "$(presses)"
   check_eq "...SUPER+click moved nothing (no motion)" "700 300" "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.title == "R") | "\(.at[0]) \(.at[1])"')"
+  # drag --hold is a duration (#103): 300ms holds 300 ms, not 300 s (nor is a bare 2 two ms).
+  local t0 took; t0=$(now_ms)
+  ob drag -b "$B" --window R 50 50 150 50 --hold 300ms >/dev/null
+  took=$(( $(now_ms) - t0 ))
+  check_eq "drag --hold 300ms: held 300 ms, under 2 s in all" yes "$( ((took >= 300 && took < 2000)) && echo yes || echo "took $took ms")"
   # Never left down: a pause that times out lets go; the tool killed outright leaves them down until
   # the next keyboard event, which omabox then sends.
   local out
