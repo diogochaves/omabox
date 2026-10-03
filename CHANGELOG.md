@@ -3,6 +3,23 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## 0.4.8 — 2026-10-03
+
+A security fix for boxes started from a save, and a bar widget that no longer freezes on a command
+that hangs.
+
+### Fixed
+
+- **`up --from` no longer writes through links in a saved HOME.** A box can put links in its HOME,
+  and a save keeps them; starting a box from that save then made omabox, on your machine, write the
+  box's settings wherever those links pointed, onto your own files. omabox now removes such links
+  before it seeds the box. If you start boxes from saves of boxes that ran code you do not trust,
+  update.
+- **The bar widget stops an `omabox ls --json` that does not answer** within 15 s, with what it
+  started, and says so; one that hung used to freeze the widget's list until it was killed by hand.
+- **The bar widget reads its own settings.** Its `command` and `refreshIntervalSec` in shell.json
+  were ignored since 0.1.0 (the CLI's settings hid them); `listTimeoutSec` sets the new limit.
+
 ## 0.4.7 — 2026-10-03
 
 Fixes from a review of the whole tool, first among them `ls --json` reading a file the box can
