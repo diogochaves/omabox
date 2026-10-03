@@ -351,8 +351,9 @@ blocks the network and every other socket, omabox's included), or see
   finds node, python, uv as on the host), the `--plugin` dirs, and your git `user.name` and
   `user.email`. Nothing else of your HOME. Refused whatever you pass: anything that is or contains
   HOME, `~/.config/omarchy` or `/tmp`, the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
-  `~/.password-store`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`), your runtime dir, `/run`,
-  `/dev`, `/proc`, `/sys`.
+  `~/.password-store`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, gh's,
+  gcloud's, azure's and 1Password's `op` config), omabox's own saves and box HOMEs
+  (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys`.
 - **Its HOME** is fake, seeded with your theme and shell settings and nothing secret (no API keys,
   keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app changed there.
 - **Its session**: a private session bus and a throwaway keyring (secrets stored and read without

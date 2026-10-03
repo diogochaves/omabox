@@ -1059,9 +1059,10 @@ robind_spec() {
 # Why a host path must not go into a box (prints the reason), or nothing (fails) when it may (finding
 # 63). Read-only mounts, overlays and plugin dirs are files the box's code can read, and sockets it can
 # connect() to whatever the network mode. Refused: anything that contains HOME, ~/.config/omarchy
-# (api-keys.env) or /tmp; anything inside or containing the secret stores, the runtime dir, /run, the
-# kernel's trees, or /tmp's socket dirs (X11, tmux, ssh-agent). A repo in /tmp or a plugin under
-# ~/.config/omarchy/plugins is fine.
+# (api-keys.env) or /tmp; anything inside or containing the secret stores (with the token dirs of gh,
+# gcloud, azure and 1Password's op), omabox's own data dir (saves hold a box's keyring) and box HOMEs,
+# the runtime dir (omabox's box dirs too), /run, the kernel's trees, or /tmp's socket dirs (X11, tmux,
+# ssh-agent). A repo in /tmp or a plugin under ~/.config/omarchy/plugins is fine.
 refuse_src() {
   local s x; s=$(readlink -f -- "$1" 2>/dev/null) || s=$1; s=${s%/}/
   for x in "$HOME" "$HOME/.config/omarchy" /tmp; do
@@ -1069,7 +1070,9 @@ refuse_src() {
     case "$x" in "$s"*) echo "it contains $x"; return 0 ;; esac
   done
   for x in "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.local/share/keyrings" "$HOME/.password-store" \
-           "$HOME/.aws" "$HOME/.kube" "$HOME/.docker" "$HOME/.netrc" \
+           "$HOME/.aws" "$HOME/.kube" "$HOME/.docker" "$HOME/.netrc" "$HOME/.config/gh" \
+           "$HOME/.config/gcloud" "$HOME/.azure" "$HOME/.config/op" "$HOME/.git-credentials" \
+           "$HOME/.config/git/credentials" "${SAVES%/saves}" "$HOMES" \
            "${XDG_RUNTIME_DIR:-/run/user/$UID}" /run /dev /proc /sys /tmp/.X11-unix /tmp/.ICE-unix \
            /tmp/tmux-* /tmp/ssh-* /tmp/gpg-*; do
     [[ $x == *\** ]] && continue   # a glob that matched nothing

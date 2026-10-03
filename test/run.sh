@@ -456,6 +456,13 @@ t_unit_mount_rules() {
   check_fails "a repo inside /tmp is fine" lib refuse_src "$TMP"
   check_fails "a plugin inside ~/.config/omarchy/plugins is fine" lib refuse_src "$HOME/.config/omarchy/plugins/x"
   check "HOME/.config/omarchy itself refused (api keys)" lib refuse_src "$HOME/.config/omarchy"
+  # #98: omabox's own saves and box HOMEs, and other tools' tokens
+  local x
+  for x in .local/share/omabox .local/share/omabox/saves .cache/omabox .config/gh .config/gcloud .azure \
+           .config/op .git-credentials .config/git/credentials; do
+    check "HOME/$x refused" lib refuse_src "$HOME/$x"
+  done
+  check_fails "HOME/code is fine" lib refuse_src "$HOME/code"
   check "/ refused" lib refuse_src /
   check_fails "a repo is fine" lib refuse_src "$ROOT"
   check_fails "mise's installs are fine" lib refuse_src "${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs"

@@ -246,8 +246,8 @@ Omarchy change".
 
 - Read-only in the box: the repo you ran `omabox up` from (same path), `--ro-bind` and `--plugin` dirs,
   mise's toolchains; nothing else of the user's HOME. Mounting HOME, `~/.config/omarchy` or `/tmp` (or
-  a dir containing them), secret stores (`~/.ssh`, keyrings...), `/run` or the runtime dir is refused:
-  do not work around it.
+  a dir containing them), secret stores (`~/.ssh`, keyrings, `~/.config/gh`...), omabox's own saves and
+  box HOMEs, `/run` or the runtime dir is refused: do not work around it.
 - The box HOME is fake: `/home/sbx` inside, `omabox path` → `<dir>/home` on the host (seed a widget's
   data files there). `/home/sbx` does not exist on the host: a path under it passed to a service
   running on the host (a download dir sent to a local server) fails there. Use a path both can see.

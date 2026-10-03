@@ -2857,6 +2857,13 @@ from them.
     tray check) and `plugin_check`'s `shell.log`; `log` was already guarded (107). With a FIFO, a link
     and a directory linked out of the HOME, `ls --json` answered in ~40 ms with `theme: null`. A file
     the box swaps between the check and the read is not caught (accepted). `t_main` checks both cases.
+160. **Mount sources refuse omabox's own saves and box HOMEs, and more token dirs** (2026-10-03, #98).
+    `up --ro-bind ~/.local/share/omabox/saves` came up (saves hold a box's keyring, finding 100), and
+    so did `~/.cache/omabox` (every live box's HOME), `~/.config/gh` (its token), gcloud's, azure's
+    and `op`'s. `refuse_src` now refuses omabox's data dir and HOMES (as `SAVES`/`HOMES` resolve them),
+    `~/.config/{gh,gcloud,op}`, `~/.azure`, `~/.git-credentials` and `~/.config/git/credentials` for
+    `--ro-bind`, `--overlay`, `--plugin` and `--hyprland` alike; omabox's runtime dir was refused
+    already (inside the runtime dir). `t_unit_mount_rules` checks each, and `~/code` still mounts.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
