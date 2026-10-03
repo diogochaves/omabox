@@ -3191,6 +3191,13 @@ t_widget() {
   # A list poll that started after this call: the stub logs each `ls` before it reads the list, so
   # that poll read the list as it is now (then a moment for the widget to take it in).
   polled() { local n; n=$(grep -c . "$H/polls" 2>/dev/null); until_ok 12 lines_over "$H/polls" "${n:-0}" .; sleep 0.3; }
+  # The widget's own settings, in its shell.json entry (read live; finding 169): a poll each second.
+  local sj=$H/.config/omarchy/shell.json
+  local n; n=$(grep -c . "$H/polls" 2>/dev/null)
+  jq '.bar.layout[] |= map(if .id == "chaves.omabox" then . + {refreshIntervalSec: 1} else . end)' "$sj" > "$TMP/wg-shell.json" &&
+    cat "$TMP/wg-shell.json" > "$sj"
+  check "the widget reads its own settings: two polls in 4 s (finding 169; 5 s apart by default)" \
+    until_ok 4 lines_over "$H/polls" "$((${n:-0} + 1))" .
   polled
   ob run -b "$B" -- omarchy-shell chaves.omabox open
   check "the panel opens" until_ok 3 panel

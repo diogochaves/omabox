@@ -41,21 +41,22 @@ Panel {
   // ...when that box is up in the list: a file left by a Hyprland that went away never lights the icon.
   readonly property string keysBox:
     boxes.some(function(b) { return b.name === keysFileBox && b.state === "up" }) ? keysFileBox : ""
-  // `omabox config --json`; the defaults until it answers.
-  property var settings: ({ "workspace": "9", "confirm-close": "off", "bar-icon": "always" })
+  // `omabox config --json`; the defaults until it answers. Not named `settings`: that is the base
+  // Panel's, which the bar sets to this widget's shell.json entry for setting() (finding 169).
+  property var cliConfig: ({ "workspace": "9", "confirm-close": "off", "bar-icon": "always" })
   // bar-icon: always (the default) keeps the icon, and the panel's settings, in the bar with no box
   // up, dimmed; auto shows it only while any box exists.
-  readonly property bool alwaysShown: settings["bar-icon"] !== "auto"
+  readonly property bool alwaysShown: cliConfig["bar-icon"] !== "auto"
   readonly property bool shown: hasBoxes || alwaysShown
   readonly property string workspaceLabel: {
-    var w = String(settings.workspace || "9")
+    var w = String(cliConfig.workspace || "9")
     return w === "special:scratchpad" ? "the scratchpad" : w.indexOf("special:") === 0 ? "special:" + w.slice(8) : "workspace " + w
   }
   readonly property var workspaceOptions: {
     var o = []
     for (var i = 1; i <= 10; i++) o.push({ value: String(i), label: "Workspace " + i })
     o.push({ value: "special:scratchpad", label: "Scratchpad (SUPER+S)" })
-    var cur = String(settings.workspace || "9")
+    var cur = String(cliConfig.workspace || "9")
     if (!o.some(function(x) { return x.value === cur }))   // set by hand: shown as it is
       o.push({ value: cur, label: cur.indexOf("special:") === 0 ? "Special: " + cur.slice(8) : "Workspace " + cur })
     return o
@@ -70,7 +71,7 @@ Panel {
   // `config --json` names the CLI's version; a difference is said once per version, dismissable.
   property string staleDismissed: ""
   readonly property string staleNote: {
-    var v = settings.version
+    var v = cliConfig.version
     return v && v !== pluginVersion && v !== staleDismissed
       ? "omabox " + v + " is installed; this widget is " + pluginVersion + ". Restart the shell to load the new one: omarchy restart shell"
       : ""
@@ -317,7 +318,7 @@ Panel {
       try {
         var c = JSON.parse(configOut.text)
         if (c && typeof c === "object") {
-          root.settings = c
+          root.cliConfig = c
           // A pick sets the Dropdown's own value, which ends its binding: show the setting again (a
           // refused pick, or `omabox config workspace N` since).
           wsDropdown.value = String(c.workspace || "9")
@@ -566,7 +567,7 @@ Panel {
               hoverColor: root.bar.urgent
               fontFamily: root.bar.fontFamily
               onClicked: {
-                if (root.lastError === "" && root.listError === "") root.staleDismissed = root.settings.version || ""
+                if (root.lastError === "" && root.listError === "") root.staleDismissed = root.cliConfig.version || ""
                 root.lastError = ""; root.listError = ""
               }
             }
@@ -660,7 +661,7 @@ Panel {
               showLabel: false
               fontFamily: root.bar.fontFamily
               options: root.workspaceOptions
-              value: String(root.settings.workspace || "9")
+              value: String(root.cliConfig.workspace || "9")
               onChanged: function(v) { root.setSetting("workspace", v) }
             }
           }
@@ -668,11 +669,11 @@ Panel {
           // Off and greyed while boxes cannot open their window again (an aquamarine without the fix,
           // NOTES finding 125): `config --json` says so, read again each time Settings opens.
           SettingSwitch {
-            readonly property bool available: root.settings["confirm-close-available"] !== false
+            readonly property bool available: root.cliConfig["confirm-close-available"] !== false
             title: "Confirm before closing"
             caption: available ? "Closing an interactive box's window asks first; closing it again shuts the box down."
               : "Needs aquamarine's fix for nested Wayland outputs: run omabox setup --aquamarine, then open Settings again."
-            checked: available && root.settings["confirm-close"] === "on"
+            checked: available && root.cliConfig["confirm-close"] === "on"
             enabled: available
             onToggled: if (available) root.setSetting("confirm-close", checked ? "off" : "on")
           }

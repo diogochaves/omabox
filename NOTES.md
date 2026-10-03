@@ -2981,6 +2981,16 @@ from them.
     beforehand. `t_saves` plants a link to a file and one for `current` to a dir, both the suite's:
     after `up --from` both are as they were and the new box's are real (on 0.4.7 five checks failed);
     `t_unit_seed_copy` checks `home_unlink` and seed_copy over links, relative and dangling ones too.
+169. **The bar widget never read its own settings** (2026-10-03). The widget kept the CLI's
+    `config --json` in a property named `settings`, which is also the name of the base `Panel`'s
+    property that the bar sets to the widget's `shell.json` entry and `setting()` reads. Ours hid it:
+    the bar's write landed in the CLI's settings (until `config --json` answered and replaced them),
+    so `setting()` read the CLI's keys and `command` and `refreshIntervalSec` were always their
+    defaults (seen in a box: `refreshIntervalSec: 2` in the entry, polls stayed 5 s apart; logged,
+    the property went CLI defaults, then the entry, then the CLI's answer). Now the CLI's settings
+    are `cliConfig`; the same box polled every 2 s, and every 1 s once the entry said 1, live (the
+    bar patches a widget's settings in place on a `shell.json` write). Since 0.1.0. `t_widget` sets
+    `refreshIntervalSec: 1` in its entry and checks two polls come within 4 s.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
