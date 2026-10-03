@@ -1333,6 +1333,18 @@ t_unit_cli() {
   for lb in a c; do echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls/omabox/$P-ls$lb/box.json"; done
   check_eq "ls: a box going down meanwhile is left out, not the end of the list" "$P-lsa $P-lsc 0" \
     "$(XDG_RUNTIME_DIR=$TMP/rt-ls "$CLI" ls 2>&1 | awk 'NR > 1 {printf "%s ", $1}'; echo "${PIPESTATUS[0]}")"
+  # ports while a box goes down (#92, finding 164): box.json gone after the up check ($P-pb, from
+  # the start of its scan) or during its scan ($P-pa, while its processes are read). No live PID 1:
+  # the box's state and sockets are stubbed, one server on 0.0.0.0:40001 held by this shell.
+  local pr=$TMP/rt-ports/omabox; mkdir -p "$pr/$P-pa" "$pr/$P-pb"
+  echo '{"net":"connected"}' > "$pr/$P-pa/box.json"
+  check_eq "ports: a box going down meanwhile is listed as it was or left out, exit 0" "$P-pa 40001 nothing"$'\n'0 \
+    "$(env -u OMABOX_JAIL XDG_RUNTIME_DIR="$TMP/rt-ports" bash -c 'source "$1"; P=$2
+      list_names() { echo "$P-pa $P-pb"; }; box_state() { echo up; }; box_pid() { echo $$; }
+      box_pids() { [ "$NAME" != "$P-pa" ] || rm "$D/box.json"; echo $$; }
+      sock_owners() { echo "424242 $$"; }
+      tcp_listeners() { [ "$1" = /proc/self/net ] || echo "40001 0.0.0.0 0 424242"; }
+      cmd_ports --json' lib "$TMP/lib/bin/omabox" "$P" 2>&1 | jq -r '.[] | "\(.box) \(.port) \(.host.state)"'; echo "${PIPESTATUS[0]}")"
   # A dir an up left with box.json and no info.json (finding 163): listed, dead, so down --all sees it.
   mkdir -p "$TMP/rt-ls2/omabox/$P-lsd"; echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls2/omabox/$P-lsd/box.json"
   check_eq "ls: a dir with box.json and no info.json is listed, dead" "$P-lsd dead" \

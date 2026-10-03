@@ -2900,6 +2900,15 @@ from them.
     when `OMABOX_RENDER_NODE` names no usable render node (it used to say the box is up).
     `t_up_aborted` checks both failures leave nothing; `t_unit_cli` that a dir with only box.json is
     listed dead, and that no `$(save_dir` is inside a `cp` argument.
+164. **`ports` ended silently when a box went down during its scan** (2026-10-03, #92). Each box's
+    `net` was read (`meta`, jq on box.json) at its first listener, in an assignment inside `|| { }`,
+    where `set -e` holds: a box read as up whose dir `down` removed before that (`box_pids`,
+    `sock_owners` lie between, tens of ms) made `ports` exit 2 with no output. Not seen by hand (0 of 40
+    runs around one `down`); expected as a rare `t_ports` flake under `-j 8`. `net` is now read once per
+    box right after the up check, `|| net=""`, and a box whose box.json is gone by then is left out; one
+    whose box.json goes later is listed as it was. `t_unit_cli` runs `cmd_ports` with the box's state
+    and sockets stubbed (no live PID 1): box.json gone before the scan and during it, exit 0 (the code
+    before exits 2 with nothing, checked on a copy).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

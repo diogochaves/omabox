@@ -3995,18 +3995,23 @@ cmd_ports() {
   done
   if [ -n "$name" ]; then select_box "$name"; need_box; name=$NAME; fi
   # Every box up is read, -b NAME or not: whether its port reaches here depends on the others.
-  local n pid ino p port addr uid key pkeys=() me pids=(); me=$(id -u)
+  local n pid net ino p port addr uid key pkeys=() me pids=(); me=$(id -u)
   local -A addrs=() comm=() pnet=() serving=() own=()
   for n in $(list_names); do
     select_box "$n"
     [ "$(box_state)" = up ] && pid=$(box_pid) && [ -n "$pid" ] || continue
+    # Read once, in an assignment with a fallback (#92): a box going down meanwhile has its dir
+    # removed, and a bare failing meta in the loop below ended ports under set -e, with no output.
+    # A box whose box.json is gone already is left out.
+    net=$(meta net) || net=""
+    [ -n "$net" ] || [ -f "$D/box.json" ] || continue
     own=(); mapfile -t pids < <(box_pids)
     while read -r ino p; do own[$ino]=$p; done < <(sock_owners "${pids[@]}")
     # Sockets no box process holds are pasta's, in the box: its mirrors of the host's servers (-T).
     while read -r port addr uid ino; do
       p=${own[$ino]:-}; [ -n "$p" ] || continue
       key="$NAME $port"
-      [ -n "${addrs[$key]:-}" ] || { pkeys+=("$key"); comm[$key]=$(cat "/proc/$p/comm" 2>/dev/null || echo "?"); pnet[$key]=$(meta net); }
+      [ -n "${addrs[$key]:-}" ] || { pkeys+=("$key"); comm[$key]=$(cat "/proc/$p/comm" 2>/dev/null || echo "?"); pnet[$key]=$net; }
       [[ ,${addrs[$key]:-}, == *",$addr,"* ]] || addrs[$key]=${addrs[$key]:+${addrs[$key]},}$addr
     done < <(tcp_listeners "/proc/$pid/net")
   done
