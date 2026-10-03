@@ -2965,6 +2965,22 @@ from them.
     holding box.log, hyprland.log, labwc.log and the HOME's other logs. `t_failed_up` checks the message
     names a dir under the suite's own state dir that has hyprland.log or box.log, that no box is left,
     and the cap (11 older dirs and a new one: the 10 newest stay, a dot-dir is left alone).
+168. **`up --from` wrote through the links a save kept** (2026-10-03). A box writes its HOME as it
+    likes, `save` keeps it as it is (links included), and `up --from` copies it into the new box's HOME
+    and runs `seed_home` there, on the host, before the box starts. A link the box left where seed_home
+    writes was followed: `~/.config/omarchy/shell.json` linked to a host file had that file overwritten
+    with the box's shell.json (seen on 0.4.7), and a linked dir on the way (`.config`,
+    `.local/state/omarchy/current`, a terminal config dir; absolute or relative, which resolve on the
+    host) took the mkdirs, copies and the `rm -rf` of the old theme. Now `home_unlink` removes the link
+    (or FIFO) itself at each path seed_home writes and at every dir on the way to it, walking down from
+    the HOME, before the first write; seed_copy does it for its own dir. Inside a copied dir, GNU tar
+    1.35 (tried) puts a real dir in place of a link at a dir it extracts and unlinks one at a file, and
+    `tar -cf - *` lists every dir before what is in it; with no dir entry first it did follow the link,
+    which seed_copy's archives never lack. A fresh HOME is empty: what a fresh box gets is unchanged.
+    The one other host write into a box HOME, `run -d`'s `run-<ns>.log`, has a name the box cannot know
+    beforehand. `t_saves` plants a link to a file and one for `current` to a dir, both the suite's:
+    after `up --from` both are as they were and the new box's are real (on 0.4.7 five checks failed);
+    `t_unit_seed_copy` checks `home_unlink` and seed_copy over links, relative and dangling ones too.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

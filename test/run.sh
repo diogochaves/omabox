@@ -575,13 +575,30 @@ t_unit_seed_copy() {
   echo secret > "$s/api-keys.env"; echo token > "$s/repo/.env"; echo url > "$s/repo/.git/config"
   echo colors > "$s/repo/colors.toml"; echo conf > "$s/term/foot.ini"
   ln -s "$s/api-keys.env" "$s/term/keys"; ln -s "$s/repo" "$s/theme"
-  lib seed_copy "$s/theme" "$s/out/theme"
-  lib seed_copy "$s/term" "$s/out/term"
+  lib seed_copy "$s/theme" "$s/out" theme
+  lib seed_copy "$s/term" "$s/out" term
   check_eq "a linked dir is copied" colors "$(cat "$s/out/theme/colors.toml")"
   check_fails "...without its hidden files" test -e "$s/out/theme/.env"
   check_fails "...or .git" test -e "$s/out/theme/.git"
   check "a link inside stays a link" test -L "$s/out/term/keys"
   check_fails "...with nothing of its target in the box HOME" grep -rqs secret "$s/out"
+  # finding 168: a HOME from a save has the box's links where seed_home writes, which it never follows:
+  # a dir on the way (absolute or relative, to a dir or nowhere), the dir itself, or a file in it.
+  local o=$s/host; mkdir -p "$o/cfg/x" "$s/h2/.local/a" "$s/h3/c" "$s/h4/d"; echo host > "$o/file"
+  ln -s "$o/cfg" "$s/h2/.config"; ln -s ../../../host/cfg "$s/h2/.local/a/b"; ln -s "$o/none" "$s/h2/leaf"
+  mkfifo "$s/h2/fifo"; ln -s "$o/file" "$s/h3/c/f"; ln -s "$o/cfg" "$s/h4/d/term"
+  lib home_unlink "$s/h2" .config/omarchy/shell.json .local/a/b/c leaf fifo
+  check "home_unlink: no link or FIFO left on the paths" bash -c "! find '$s/h2' -type l -o -type p | grep -q ."
+  lib home_unlink "$s/h3" c/f
+  check "...a link at the file itself goes" test ! -e "$s/h3/c/f" -a ! -L "$s/h3/c/f"
+  check_eq "...its target untouched" host "$(cat "$o/file")"
+  lib seed_copy "$s/term" "$s/h4" d/term
+  mkdir -p "$s/h4/e/term/x"; ln -s "$o/file" "$s/h4/e/term/foot.ini"; ln -s ../../../../host/cfg "$s/h4/e/term/x/y"
+  mkdir -p "$s/term/x/y"; echo deep > "$s/term/x/y/z"
+  lib seed_copy "$s/term" "$s/h4" e/term
+  check "seed_copy into a linked dir: a real dir now" test -f "$s/h4/d/term/foot.ini" -a ! -L "$s/h4/d/term"
+  check "...over links inside it: real files and dirs" test -f "$s/h4/e/term/foot.ini" -a ! -L "$s/h4/e/term/foot.ini" -a -f "$s/h4/e/term/x/y/z"
+  check_eq "...nothing written outside the HOME" "cfg cfg/x file host" "$(find "$o" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$o/file")"
 }
 
 # The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left
@@ -2305,6 +2322,23 @@ t_saves() {
   check_eq "...the bar's config seeded again, not the save's" null "$(ob run -b "$B2" -- jq .junk /home/sbx/.config/omarchy/shell.json)"
   check "...the theme seeded again (not copied into the save's)" ob run -b "$B2" -- sh -c 't=/home/sbx/.local/state/omarchy/current/theme; test -d $t && test ! -e $t/theme'
   check_eq "...box.json says where it came from" "$S" "$(jq -r .from "$(ob path "$B2")/box.json")"
+  # finding 168: a save keeps the links the box made in its HOME, and seed_home, on the host, wrote
+  # through them. Links where it writes, to a file and a dir of the suite's: up --from leaves both as
+  # they were.
+  local B3=$P-sv3 S2=$P-s2 hf=$TMP/sv-host-file hd=$TMP/sv-host-dir H
+  echo "the host's line" > "$hf"; mkdir -p "$hd/theme"; echo sentinel > "$hd/theme/keep"
+  ob run -b "$B2" -- sh -c 'ln -sfn "$1" ~/.config/omarchy/shell.json && rm -rf ~/.local/state/omarchy/current &&
+    ln -s "$2" ~/.local/state/omarchy/current' _ "$hf" "$hd" >/dev/null 2>&1
+  check "a save of a box with links where seed_home writes" sv save "$S2" -b "$B2"
+  check "...starts" sv up "$B3" --from "$S2" --no-shell
+  check_eq "...the file a link pointed at untouched" "the host's line" "$(cat "$hf")"
+  check_eq "...the dir a link pointed at untouched" "theme theme/keep sentinel" "$(find "$hd" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$hd/theme/keep")"
+  H=$(ob path "$B3")/home
+  check "...its shell.json a real file" test -f "$H/.config/omarchy/shell.json" -a ! -L "$H/.config/omarchy/shell.json"
+  check "...its current theme a real dir, seeded" test -d "$H/.local/state/omarchy/current/theme" -a ! -L "$H/.local/state/omarchy/current"
+  check "...and the box runs" ob run -b "$B3" -- test -s /home/sbx/.local/state/omarchy/current/theme.name
+  check "down" ob down "$B3"
+  check "...saves rm" sv saves rm "$S2"
   check "down" ob down "$B2"
   check_eq "run --from: a throwaway box with the save" hello \
     "$(cd "$(tmp_repo sv)" && env -u OMABOX XDG_DATA_HOME="$TMP/data" "$CLI" run --from "$S" --no-shell -- cat /home/sbx/.local/share/app/data 2>/dev/null)"
