@@ -3,6 +3,52 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## 0.4.7 — 2026-10-03
+
+Fixes from a review of the whole tool, first among them `ls --json` reading a file the box can
+replace, and `omabox ports`, which says which box holds a port on your machine.
+
+### Added
+
+- **`omabox ports`** lists every box's TCP servers and what holds each port on your `127.0.0.1`:
+  that box, one of several boxes serving on it, one of your own processes, or nothing yet
+  (`--json` too; `omabox help ports` lists the states) (#88).
+- **SECURITY.md**: each box rule, where it is enforced and the test that proves it, and how to
+  report a way around one privately (#83).
+
+### Fixed
+
+- **`ls --json` reads only plain files from a box.** A box could make its theme name a pipe, which
+  hung `ls --json` and the bar widget, or a link to one of your files, whose first line then showed
+  as the box's theme. The same check now covers every file omabox reads from a box's HOME (#95).
+- **Mounting omabox's own saves and box HOMEs is refused**, with the token dirs of gh, gcloud,
+  azure, 1Password's `op` and git's credential files, as `~/.ssh` already was (#98).
+- **Six rare states no longer end omabox without a word**: a peek window closing during `down`, a
+  shell log the host cannot read in `restart-shell`, a failed bar capture while `up` waits, a box
+  dying at two points of `up`, and `run -d` on a box that is gone (#101).
+- **A box's idle limit holds when a `down` fails.** The reaper that takes idle and orphaned boxes
+  down stopped when a `down` timed out under load, leaving the box running; it tries again now. A
+  throwaway's owner is checked by its start time too, so a reused pid does not keep its box (#99).
+- **A failed `up` leaves nothing behind**, and `up --from` reads its save once: a save removed while
+  `up` waited could have made it copy your home into the box (#96).
+- **`ports` no longer exits silently** when a box goes down while it reads it (#92).
+- **`ports` names a box whose server listens on `::1` only** as holding its port: its pasta takes
+  the port on your `127.0.0.1` and connections there are reset; it said "not forwarded" (#90).
+- **The docs say a box server on a port your host or another box has fails to start** (address in
+  use); they said it still answered inside its box (#89).
+- **`omabox help ports` lists what its states mean**, and leftover text from `ports` is fixed (#94).
+- **`drag --hold` is documented as a duration** (`300ms`, `2s`; a bare number is seconds), and its
+  refusal says so; the docs said milliseconds (#103).
+- **A failed throwaway `run` keeps its logs** where its message points (#100).
+- **A box keeps forwarding its servers when one of its ports is taken on your machine.** pasta
+  stopped forwarding every port above one it could not bind, for as long as it was taken (#88).
+- **A failed `up` takes its box down completely**: its cleanup stopped after the first step and
+  could leave the network helper running.
+- **`ls` lists a box it cannot read as `unknown`** instead of refusing the whole list (from a
+  sandbox, for instance) (#87).
+- **An `up` and a `down` of one box started together** are ordered by when each was started, so
+  the `down` wins as it should under load.
+
 ## 0.4.6 — 2026-10-02
 
 Fixes found on a dev-linked Omarchy and with a bar widget kept in a sidebar plugin.

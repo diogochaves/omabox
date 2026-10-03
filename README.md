@@ -392,7 +392,7 @@ blocks the network and every other socket, omabox's included), or see
   servers started in two boxes within about a second of each other both run, each answering inside
   its own box, and only one of them gets the port on your `127.0.0.1`. A dev server that takes the
   next free port when its own is taken (as Vite does) moves on by itself.
-  `omabox ports` (next release) lists every box's servers and what holds each port on your
+  `omabox ports` lists every box's servers and what holds each port on your
   `127.0.0.1`: that box, any of the boxes sharing it, or one of your own processes.
 - Inside a box, your machine's LAN address is the box itself. A connected box started inside
   another box has no network.
