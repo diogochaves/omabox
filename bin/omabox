@@ -697,10 +697,25 @@ extent() {
     die "cannot read the screen size of box '$NAME' (its Hyprland did not answer)"
 }
 
+# File PATH of the selected box's HOME, for the host to read: printed resolved when it is a regular
+# file, not a link, and inside the HOME once its dirs are resolved; 1 otherwise. The box writes its
+# HOME freely: a FIFO there hangs the host's read, a link reads a host file (finding 159). A file the
+# box swaps between this check and the read is not caught: the read can still block or follow a link.
+box_home_file() {
+  local f=$D/home/$1 home p
+  [ -f "$f" ] && [ ! -L "$f" ] || return 1
+  home=$(readlink -e -- "$D/home") && p=$(readlink -e -- "$f") || return 1
+  [[ $p == "$home"/* ]] || return 1
+  printf '%s\n' "$p"
+}
+
 # A box that ended while `up` waited for it, with Hyprland's last line when it logged one (an interactive
 # box's: an abort such as finding 95's `CBackend::create() failed!`).
 died_starting() {
-  local last; last=$(grep -v '^[[:space:]]*$' "$D/home/hyprland.log" 2>/dev/null | tail -n 1 | sed 's/^[[:space:]]*//') || true
+  local f last=""
+  if f=$(box_home_file hyprland.log); then
+    last=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -n 1 | sed 's/^[[:space:]]*//') || true
+  fi
   die "box '$NAME' died while starting${last:+ (Hyprland: $last)}; logs: $D/home/*.log $D/box.log"
 }
 
@@ -732,8 +747,9 @@ wait_ready() {
   [ "$want_shell" = 1 ] || return 0
   # The bar on screen; only wait for the tray watcher when the user's layout has a tray.
   local tray_expected=0
-  jq -e '[.bar.layout[][]? | if type == "object" then .id else . end] | index("omarchy.tray") != null' \
-    "$D/home/.config/omarchy/shell.json" >/dev/null && tray_expected=1
+  local f; f=$(box_home_file .config/omarchy/shell.json) &&
+    jq -e '[.bar.layout[][]? | if type == "object" then .id else . end] | index("omarchy.tray") != null' \
+    "$f" >/dev/null && tray_expected=1
   until [ -n "$(on_box hyprctl -j layers 2>/dev/null | layer_at omarchy-bar)" ] &&
         { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
     box_alive || died_starting
@@ -836,7 +852,7 @@ resolve_plugin() {
 # load), not loaded (not listed), disabled, or enabled (a panel, menu or overlay only: its QML loads
 # when summoned, so its errors show then, in `omabox log shell`).
 plugin_check() {
-  local ids id dir tree validate listed=null log lines why v kinds state status='{}' bad=0
+  local ids id dir tree validate listed=null log f lines why v kinds state status='{}' bad=0
   ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null) || return 0
   [ -n "$ids" ] || return 0
   tree=$(meta omarchy); validate=${tree:-/usr/share/omarchy}/bin/omarchy-plugin-validate
@@ -845,7 +861,8 @@ plugin_check() {
     listed=$(box_exec omarchy-shell shell listPlugins 2>/dev/null | jq -c 'map({(.id): {enabled, kinds}}) | add // {}' 2>/dev/null) || listed=null
     [ -n "$listed" ] || listed=null
     # Its warnings and errors, colour codes and the level/category prefix dropped.
-    log=$(sed 's/\x1b\[[0-9;]*m//g' "$D/home/shell.log" 2>/dev/null | sed -nE 's/^ *(WARN|ERROR) +[^:]*: //p')
+    log=""; f=$(box_home_file shell.log) &&
+      log=$(sed 's/\x1b\[[0-9;]*m//g' "$f" 2>/dev/null | sed -nE 's/^ *(WARN|ERROR) +[^:]*: //p')
   fi
   for id in $ids; do
     dir=$(jq -r --arg i "$id" '.plugin_dirs[$i] // empty' "$D/box.json")
@@ -4752,13 +4769,24 @@ cmd_down() {
   return $rc
 }
 
+# The box's theme name (its theme.name's first line), "" when the file is not one to read or the name
+# not a plain one: the box writes that file, and whatever reads `ls --json` shows the name (finding 159).
+box_theme() {
+  local f theme=""
+  if f=$(box_home_file .local/state/omarchy/current/theme.name); then
+    { IFS= read -r -n 65 theme < "$f"; } 2>/dev/null || true   # EOF without a newline: 1, the line read
+  fi
+  [[ $theme =~ ^[A-Za-z0-9\ ._-]{1,64}$ ]] || theme=""
+  printf '%s' "$theme"
+}
+
 # The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it).
 box_json() {
   local state peeking=false keys=false
   state=$(box_state)
   peek_pid >/dev/null && peeking=true
   [ ! -f "$D/keys-to-box" ] || keys=true
-  local theme; theme=$(head -n 1 "$D/home/.local/state/omarchy/current/theme.name" 2>/dev/null) || theme=""
+  local theme; theme=$(box_theme)
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
       plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),

@@ -2846,6 +2846,17 @@ from them.
     The keyboard tool's typing code is unchanged since 64 (only its Makefile moved), so the likely
     change is below it: this machine has Xwayland 24.1.13 and libxkbcommon 1.13.2 since
     2026-09-30, installed after 64's run. Not checked on the older versions.
+159. **Host-side reads of the box HOME take regular files only** (2026-10-03, #95). `ls --json` and
+    `up --json` read the box's theme with `head` on its `theme.name`, which the box writes: made a
+    FIFO there, `timeout 40 omabox ls --json` exited 124 (and the bar widget, which polls it, froze);
+    made a link to `/etc/hostname`, the box's `theme` was the host's hostname (any host file's first
+    line, `api-keys.env`'s too). Now `box_home_file` gives the host a HOME file only when it is a
+    regular file, not a link, and inside the HOME with its dirs resolved (like finding 107's dead-box
+    logs), and the theme is kept only when it matches `^[A-Za-z0-9 ._-]{1,64}$` (else null). The same
+    check guards the other reads: `died_starting`'s `hyprland.log`, `wait_ready`'s `shell.json` (the
+    tray check) and `plugin_check`'s `shell.log`; `log` was already guarded (107). With a FIFO, a link
+    and a directory linked out of the HOME, `ls --json` answered in ~40 ms with `theme: null`. A file
+    the box swaps between the check and the read is not caught (accepted). `t_main` checks both cases.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

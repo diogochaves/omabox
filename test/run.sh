@@ -1898,6 +1898,24 @@ t_main() {
   if [ -d /etc/skel/.config/omarchy ]; then check "the box HOME starts from /etc/skel" test -f "$D/home/.local/state/omarchy/toggles/hypr/flags.lua"
   else skip "the box HOME starts from /etc/skel" "no /etc/skel/.config/omarchy"; fi
   check_fails "no api-keys.env in the box HOME" test -e "$D/home/.config/omarchy/api-keys.env"
+  # The box writes the theme.name ls --json reads (finding 159): a FIFO there does not hang it, a link
+  # to a host file does not show that file's first line.
+  local tn=/home/sbx/.local/state/omarchy/current/theme.name th
+  ob run -b "$B" -- mv "$tn" "$tn.t159"
+  ob run -b "$B" -- mkfifo "$tn"
+  check "ls --json with a FIFO as theme.name returns" bash -c "timeout -k 1 5 '$CLI' ls --json > '$D/t159.json' 2>/dev/null"
+  # (Without the fix a reader stays blocked on it, holding the check's output: opened read-write
+  # here, it gets EOF and ends.)
+  : 9<>"$D/home/.local/state/omarchy/current/theme.name"
+  check_eq "...lists the box with no theme" "up " "$(jq -r --arg n "$B" '.[] | select(.name == $n) | "\(.state) \(.theme // "")"' "$D/t159.json" 2>&1)"
+  ob run -b "$B" -- mv "$tn" "$tn.fifo"
+  printf 'theme159\n' > "$D/t159.name"
+  ob run -b "$B" -- ln -s "$D/t159.name" "$tn"
+  th=$(timeout -k 1 5 "$CLI" ls --json 2>/dev/null | jq -r --arg n "$B" '.[] | select(.name == $n) | .theme // ""') || th=failed
+  check_eq "...nor a link's target's first line" "" "$th"
+  ob run -b "$B" -- mv -f "$tn.t159" "$tn"
+  th=$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .theme // ""') || th=failed
+  check_eq "...and the file back, its name" "$(head -n 1 "$D/home/.local/state/omarchy/current/theme.name")" "$th"
   ob run -b "$B" -- omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1
   check "an Omarchy toggle applies (gaps off)" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j getoption general:gaps_out | jq -e '.css == \"0 0 0 0\"'"
   ob run -b "$B" -- omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1
