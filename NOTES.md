@@ -2886,6 +2886,20 @@ from them.
     watched on instead of ending the reaper, so a run SIGKILLed after that still has its dir cleared.
     `t_unit_agent_session` checks `owner_alive` and that no reaper `cmd_down` is bare;
     `t_throwaway_killed` that box.json has `owner_start`. Forcing a failed `down` is not tested.
+163. **`up --from` could copy the user's home, and a failed `up` left a dir `ls` did not see**
+    (2026-10-03, #96). The save was copied from `"$(save_dir "$FROM")/home/."`: a failing command
+    substitution inside an argument is not an error under `set -e`, so a save removed while `up` waited
+    (check_install, the box lock) made the source `/home/.` (the race is suspected, not seen). The
+    render node was first resolved for real after `rm_box; mkdir`, and inside `[ ]` tests its `die` was
+    swallowed: `OMABOX_RENDER_NODE=/dev/dri/card9 up` left a dir and HOME that `ls` and `down --all`
+    did not list (no info.json). `up` now resolves both once, in assignments, before anything is made;
+    `check_install` takes the render node. The EXIT trap is set before the dir is made: on a failure it
+    kills the box and, when no box.json was written yet, removes the dir (with box.json it stays for
+    the logs, as before). `list_names` lists a dir with box.json or info.json, so a dir left after
+    box.json shows dead and `down --all` clears it. A side effect: `up` of a box already up now fails
+    when `OMABOX_RENDER_NODE` names no usable render node (it used to say the box is up).
+    `t_up_aborted` checks both failures leave nothing; `t_unit_cli` that a dir with only box.json is
+    listed dead, and that no `$(save_dir` is inside a `cp` argument.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -485,10 +485,12 @@ need_box() {
   die "no box '$NAME' is up (${have:+up: $have; }start one with: omabox up $NAME)"
 }
 
+# A dir with box.json (written by `up` before the launch) or info.json (bwrap's): one that `up` left
+# behind is listed (dead), so `down --all` clears it (finding 163).
 list_names() {
   local d id=""; ! in_jail || id=$(jail_get .id)
   for d in "$BOXES"/*/; do
-    [ -f "$d/info.json" ] || continue
+    [ -f "$d/box.json" ] || [ -f "$d/info.json" ] || continue
     [ -z "$id" ] || [ "$(jq -r '.jail // empty' "$d/box.json" 2>/dev/null)" = "$id" ] || continue
     basename "$d"
   done 2>/dev/null; true
@@ -1256,9 +1258,13 @@ cmd_up() {
   [ -z "$allow" ] || [ "$net" = isolated ] || die "up: --allow needs --net isolated"
   [ "$net" = connected ] && [ -f /opt/omabox/share/session.sh ] && net=none
   [[ -z $allow || $allow =~ ^[0-9]+(,[0-9]+)*$ ]] || die "up: --allow takes ports: 8081,8082"
+  # The save's dir, resolved once (finding 163): an assignment, so its refusal ends `up`. A save_dir call
+  # inside cp's argument would not (set -e ignores it there), and a save removed while `up` waited for
+  # the lock below would make the source /home/., the user's home.
+  local from_dir=""
   if [ -n "$FROM" ]; then
-    save_dir "$FROM" >/dev/null   # (not inside the $(...) below: its refusal must end `up`)
-    local saved_on; saved_on=$(jq -r '.hyprland // empty' "$SAVES/$FROM/save.json" 2>/dev/null) || saved_on=""
+    from_dir=$(save_dir "$FROM")
+    local saved_on; saved_on=$(jq -r '.hyprland // empty' "$from_dir/save.json" 2>/dev/null) || saved_on=""
     [ "$saved_on" = "$hyprland" ] ||
       say "note: save '$FROM' was made in a box on ${saved_on:-the installed Hyprland}, this one runs ${hyprland:-the installed Hyprland}"
   fi
@@ -1286,7 +1292,10 @@ cmd_up() {
     die "cannot start a box here: this sandbox refuses new namespaces. Inside ai-jail, omabox goes through the broker: run 'omabox broker on' outside the jail and add the lines it prints to ~/.ai-jail"
   [ "$net" != connected ] || [ -c /dev/net/tun ] ||
     die "a box's network needs /dev/net/tun (the tun kernel module); --net isolated does without, and has no internet"
-  check_install "$hyprland"
+  # The render node, resolved once, before anything is made (finding 163): its refusal ends `up` here.
+  # Inside a [ ] test its die was swallowed; the first real call came after the box dir was made.
+  local render; render=$(render_node)
+  check_install "$render" "$hyprland"
   # A box starts from the user's Omarchy look (seed_home), which Omarchy makes at their first login:
   # an account that never logged in has no theme yet (finding 130). Said before anything is made.
   [ -d "$HOME/.local/state/omarchy/current/theme" ] ||
@@ -1296,9 +1305,9 @@ cmd_up() {
   # NVIDIA render node (its screen is labwc's Wayland output) and confirm-close asked for on `up`.
   # confirm-close from the settings is turned off for the box instead, below.
   if [ "$AQ_FIXED" = 0 ]; then
-    if [ $interactive = 0 ] && [ "$(render_driver "$(render_node)")" = nvidia ]; then
+    if [ $interactive = 0 ] && [ "$(render_driver "$render")" = nvidia ]; then
       local others; others=$(render_nodes | while read -r n; do [ "$(render_driver "$n")" = nvidia ] || printf ' %s (%s)' "$n" "$(render_driver "$n")"; done)
-      die "a headless box on NVIDIA ($(render_node)) needs $(aq_lacks): $AQ_HOWTO${others:+; or render on another GPU with OMABOX_RENDER_NODE:$others}"
+      die "a headless box on NVIDIA ($render) needs $(aq_lacks): $AQ_HOWTO${others:+; or render on another GPU with OMABOX_RENDER_NODE:$others}"
     fi
     [ "$confirm_from" = config ] || [ "$confirm" != on ] ||
       die "--confirm-close (the window it opens again) needs $(aq_lacks): $AQ_HOWTO"
@@ -1358,8 +1367,13 @@ cmd_up() {
     why=$(refuse_dest "$p") && die "refusing to overlay $p in a box: $why"
   done
 
+  # From here a box dir exists, and from launch.sh on a box may be running: if `up` fails, kill it
+  # rather than leave it running unseen, with no idle expiry. Once box.json is written the dir stays,
+  # so the logs `die` points at can be read; `ls` shows it dead, `down` clears it. Before that it goes:
+  # a half-made dir (no box.json) that only `down NAME` cleared (finding 163).
+  trap '[ $? = 0 ] || { kill_box || true; [ -f "$D/box.json" ] || rm_box; }' EXIT
   rm_box; rm -f "$BOXES/.expired-$NAME"; mkdir -p "$D/run" "$HOMES/$NAME/home"; ln -s "$HOMES/$NAME/home" "$D/home"
-  [ -z "$FROM" ] || cp -a --reflink=auto "$(save_dir "$FROM")/home/." "$HOMES/$NAME/home/" || die "could not copy save '$FROM' into box '$NAME'"
+  [ -z "$from_dir" ] || cp -a --reflink=auto "$from_dir/home/." "$HOMES/$NAME/home/" || die "could not copy save '$FROM' into box '$NAME'"
   # The name is taken now (its dir exists): let the next `up --new` choose, and keep the lock out of
   # the box's long-lived processes.
   [ -z "${NEWLOCK:-}" ] || exec {NEWLOCK}>&-
@@ -1373,8 +1387,7 @@ cmd_up() {
     confirm=off
     say "confirm-close is on in your settings, but it needs $(aq_lacks): off for this box (closing its window ends it). $AQ_HOWTO"
   fi
-  local render renders nvidia_devs=() dev n wayland_screen=0 run=/run/user/$UID
-  render=$(render_node)
+  local renders nvidia_devs=() dev n wayland_screen=0 run=/run/user/$UID
   if [ $interactive = 1 ]; then
     mapfile -t renders < <(render_nodes)
     # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it
@@ -1559,10 +1572,7 @@ cmd_up() {
     printf ' %q' setsid "${launch[@]}" --unsetenv HL_EXEC_RULE_TOKEN "${args[@]}"
     printf ' 3>%q </dev/null >%q 2>&1\n' "$D/info.json" "$D/box.log"
   } > "$D/launch.sh"
-  # From here a box may be running: if `up` fails, kill it rather than leave it running unseen, with no
-  # idle expiry. The dir stays, so the logs `die` points at can be read; `ls` shows it dead, `down`
-  # clears it.
-  trap '[ $? = 0 ] || kill_box' EXIT
+  # From here a box may be running (the EXIT trap set before the dir was made kills it if `up` fails).
   if [ $interactive = 1 ]; then
     install_passthrough
     # Launched by the host Hyprland so its exec rules apply to exactly this process's window: onto
@@ -1603,13 +1613,15 @@ cmd_up() {
 }
 
 # What `up` needs from install.sh: the helpers, and an aquamarine with the soname the box's Hyprland
-# links (aq_resolve). check_install [HYPRLAND]: the installed one, or `up --hyprland`'s build (finding
-# 116), which is refused here rather than left to crash in the box.
+# links (aq_resolve). check_install RENDER [HYPRLAND]: the box's render node (render_node's), and the
+# installed Hyprland, or `up --hyprland`'s build (finding 116), which is refused here rather than left
+# to crash in the box.
 check_install() {
   [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] && [ -x "$EVENTS" ] || die "missing $KEYBOARD, $POINTER, $STILL or $EVENTS: run install.sh"
   # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
-  [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$(render_node)")" != nvidia ] ||
+  [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$1")" != nvidia ] ||
     die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
+  shift
   if [ -z "${1:-}" ]; then
     aq_resolve "$(hypr_aq_soname)" || exit 1
     return 0

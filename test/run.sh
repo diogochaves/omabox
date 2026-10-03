@@ -1333,6 +1333,13 @@ t_unit_cli() {
   for lb in a c; do echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls/omabox/$P-ls$lb/box.json"; done
   check_eq "ls: a box going down meanwhile is left out, not the end of the list" "$P-lsa $P-lsc 0" \
     "$(XDG_RUNTIME_DIR=$TMP/rt-ls "$CLI" ls 2>&1 | awk 'NR > 1 {printf "%s ", $1}'; echo "${PIPESTATUS[0]}")"
+  # A dir an up left with box.json and no info.json (finding 163): listed, dead, so down --all sees it.
+  mkdir -p "$TMP/rt-ls2/omabox/$P-lsd"; echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls2/omabox/$P-lsd/box.json"
+  check_eq "ls: a dir with box.json and no info.json is listed, dead" "$P-lsd dead" \
+    "$(XDG_RUNTIME_DIR=$TMP/rt-ls2 "$CLI" ls --json | jq -r '.[] | "\(.name) \(.state)"')"
+  # --from's save dir is resolved once, in an assignment (finding 163): a $(save_dir ...) inside cp's
+  # argument is not an error under set -e, and a save removed meanwhile made the source /home/.
+  check_fails "no \$(save_dir ...) inside a cp argument" grep -n 'cp .*\$(save_dir' "$ROOT/bin/omabox"
   # run -d's -q, --print-log and --replace (issues #42, #29; findings 109, 110)
   check_match "run -q without -d refused" "go with -d" "$(ob run -b "$P-x" -q -- true 2>&1)"
   check_match "run --replace without -d refused" "go with -d" "$(ob run -b "$P-x" --replace -- true 2>&1)"
@@ -2384,6 +2391,24 @@ t_failed_up() {
   check "the box becomes dead, not running" until_ok 10 failed_box_dead
   check "nothing of it remains running" until_ok 10 failed_box_processes_gone
   check "down clears it" ob down "$B"
+}
+
+# An up that fails before box.json leaves no half-made dir that ls and down --all would not see
+# (finding 163). /dev/dri/card9 is only a path render_node refuses (not a render node): never bound.
+t_up_aborted() {
+  local B=$P-abort S=$P-abs out
+  out=$(OMABOX_RENDER_NODE=/dev/dri/card9 "$CLI" up "$B" --no-shell 2>&1) && no "up with no usable render node fails" "$out"
+  check_eq "up with no usable render node fails, saying so once" "omabox: no usable GPU render node (/dev/dri/renderD*); set OMABOX_RENDER_NODE" "$out"
+  check_fails "...and leaves no box dir" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+  check_fails "...nor a box HOME" test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$B"
+  check_eq "...nor a box ls lists" "" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .name')"
+  # A failure after the dir is made (a save cp cannot read) is cleared by up's EXIT trap.
+  mkdir -p "$TMP/data/omabox/saves/$S/home/locked" && chmod 700 "$TMP/data/omabox/saves"
+  chmod 000 "$TMP/data/omabox/saves/$S/home/locked"
+  check_match "up --from a save it cannot copy fails" "could not copy save '$S'" "$(sv up "$B" --no-shell --from "$S" 2>&1)"
+  chmod 700 "$TMP/data/omabox/saves/$S/home/locked"
+  check_fails "...and leaves no box dir" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+  check_fails "...nor a box HOME" test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$B"
 }
 
 # A box whose Hyprland died reads dead, not up (finding 63).
@@ -4557,7 +4582,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
