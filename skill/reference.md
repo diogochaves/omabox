@@ -140,8 +140,10 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   between boxes always. A box's server is reachable from the host (and other boxes) on
   `127.0.0.1:PORT` within about a second of listening (poll for it); one on `::1` only is not.
   Only one box gets each port there: of two connected boxes listening on one port, one reaches the
-  host and the other does not, and nothing says which (#88). Check a server you started from inside
-  its box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`), never from the host.
+  host and the other does not. `omabox ports` lists every box's servers and what holds each port on
+  the host (this box; several boxes, any of which may have it; a host process; nothing yet; a box
+  server on `::1` only, or in an isolated box, is not forwarded). Check a server you started from
+  inside its box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`), never from the host.
   Inside a box the host's LAN address is the box itself. A connected box started inside a box has
   no network.
 

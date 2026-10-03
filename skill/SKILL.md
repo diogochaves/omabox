@@ -51,9 +51,9 @@ an app that talks to local servers, prefer `omabox up --net isolated --allow 808
 ports, no internet). One that starts or probes local servers (a dev server, a plugin that runs one):
 `--net isolated` too. A server in a default box also holds its port on the user's 127.0.0.1 (their
 own dev server on it then fails to start), and a probe there can reach theirs, or another box's
-(only one box gets a port on the host): check your server from inside the box (`omabox wait cmd --
-curl -fsS http://127.0.0.1:PORT/`). An isolated box's ports stay its own, and two of them can use
-the same one.
+(only one box gets a port on the host; `omabox ports` says which hold it): check your server from
+inside the box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`). An isolated box's ports
+stay its own, and two of them can use the same one.
 
 `omabox help CMD` (or `omabox CMD --help`) has one command's flags and notes, `omabox help` every
 command's (long: read it only for an overview); `reference.md` next to this file has the detail left

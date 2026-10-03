@@ -2003,7 +2003,7 @@ t_connected() {
   ob run -b "$B" -d -- python3 -m http.server "$port" --bind 127.0.0.1 --directory /home/sbx/www >/dev/null
   check "the host reaches a box server as localhost" until_ok 10 bash -c "curl -fsS --max-time 2 http://localhost:$port/ | grep -qx '$tok'"
   check_eq "...which is bound on the host's 127.0.0.1 only" "127.0.0.1:$port" "$(ss -Htuln "sport = :$port" | awk '{print $5}' | sort -u)"
-  # ...and on a port the kernel chose (1-65535,auto: auto alone skips the ephemeral range)
+  # ...and on a port the kernel chose (the ephemeral range has a rule of its own: auto alone skips it)
   tok=box0-$P-$RANDOM
   mkdir -p "$D/home/www0" && echo "$tok" > "$D/home/www0/index.html"
   ob run -b "$B" -d -- python3 -c "$PORT0" /home/sbx/www0 /home/sbx/port0 >/dev/null
@@ -2034,6 +2034,51 @@ t_connected() {
   # Stopped now, and dropped from SERVERS (cleanup's, for a suite stopped midway): by the end of the
   # suite their pids may be another process's.
   kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
+  check "down" ob down "$B"
+}
+
+# finding 156 (#88): `ports` lists a box's servers and what holds each port on the host's 127.0.0.1:
+# the box itself, or every box serving on it when there are several (only one gets it, and which is
+# not readable). The host's servers pasta mirrors into a box are not the box's. And the box that lost
+# the shared port still forwards the servers it starts later, on higher ports: with one strong rule
+# for every port, pasta gave up on the ports after one it could not bind.
+t_ports() {
+  local A=$P-pa B=$P-pb own shared local6 hostp out later b
+  if ! ob up "$A" --no-shell >/dev/null 2>&1 || ! ob up "$B" --no-shell >/dev/null 2>&1; then
+    no "ports: up two boxes" "failed"; ob down "$A" >/dev/null 2>&1; ob down "$B" >/dev/null 2>&1; return
+  fi
+  # The shared port low, so the ones checked after it are above it.
+  while shared=$((20000 + RANDOM % 1000)); ss -Htuln "sport = :$shared" | grep -q .; do :; done
+  until own=$(free_port); [ "$own" != "$shared" ]; do :; done
+  until local6=$(free_port); [ "$local6" != "$own" ] && [ "$local6" != "$shared" ]; do :; done
+  until hostp=$(free_port); [ "$hostp" != "$own" ] && [ "$hostp" != "$shared" ] && [ "$hostp" != "$local6" ]; do :; done
+  mkdir -p "$TMP/ports"
+  python3 -m http.server "$hostp" --bind 127.0.0.1 --directory "$TMP/ports" >/dev/null 2>&1 & SERVERS+=($!)
+  ob run -b "$A" -d -- python3 -m http.server "$own" --bind 127.0.0.1 --directory /home/sbx >/dev/null
+  ob run -b "$A" -d -- python3 -m http.server "$shared" --bind 127.0.0.1 --directory /home/sbx >/dev/null
+  ob run -b "$B" -d -- python3 -m http.server "$shared" --bind 0.0.0.0 --directory /home/sbx >/dev/null
+  ob run -b "$A" -d -- python3 -m http.server "$local6" --bind ::1 --directory /home/sbx >/dev/null
+  # Once the host has both forwards and B has the mirror of the host server (pasta rescans each second).
+  check "ports: the host has the box servers' ports" until_ok 10 bash -c "ss -Htln 'sport = :$own' | grep -q . && ss -Htln 'sport = :$shared' | grep -q ."
+  check "...and pasta mirrored the host server into a box" until_ok 10 ob run -b "$B" -- bash -c "ss -Htln 'sport = :$hostp' | grep -q ."
+  out=$(ob ports --json)
+  q() { jq -r --arg b "$1" --argjson p "$2" '.[] | select(.box == $b and .port == $p) | .host | [.state, ((.boxes // []) | join(","))] | join(" ")' <<<"$out"; }
+  check_eq "...a box's server reaches the host as its own" "this $A" "$(q "$A" "$own")"
+  check_eq "...a port two boxes serve on names both, for each" "shared $A,$B|shared $A,$B" "$(q "$A" "$shared")|$(q "$B" "$shared")"
+  check_eq "...a server on ::1 only is not forwarded" "box-only " "$(q "$A" "$local6")"
+  check_eq "...the host's server mirrored into a box is not the box's" "" "$(q "$B" "$hostp")"
+  out=$(ob ports -b "$B")
+  check_match "ports -b lists that box only" "^BOX .*"$'\n'"$B +$shared +0\.0\.0\.0 +python3? +one of $A, $B" "$out"
+  check_eq "...one line" 2 "$(wc -l <<<"$out")"
+  # Both boxes serve on the shared port, so whichever lost it holds a port pasta cannot bind.
+  for b in "$A" "$B"; do
+    until later=$(free_port); [ "$later" -gt "$shared" ] && [ "$later" != "$own" ] && [ "$later" != "$local6" ] && [ "$later" != "$hostp" ]; do :; done
+    ob run -b "$b" -d -- python3 -m http.server "$later" --bind 127.0.0.1 --directory /home/sbx >/dev/null
+    check "...a box serving on the shared port still forwards a later server, above it ($b)" \
+      until_ok 10 bash -c "ss -Htln 'sport = :$later' | grep -q ."
+  done
+  kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
+  check "down" ob down "$A"
   check "down" ob down "$B"
 }
 
@@ -4462,7 +4507,7 @@ t_inspect() {
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
-BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

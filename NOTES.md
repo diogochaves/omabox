@@ -2801,6 +2801,33 @@ from them.
     another box's. The README, the skill and `omabox help` now say one box gets each port and that
     agents check their server from inside the box (`wait cmd -- curl`). Still open (#88): showing
     which box holds a port, and `--publish HOST:BOX` (#81).
+156. **`omabox ports`, and a lost port stopped a box's later forwards** (2026-10-03, #88). `ports`
+    lists each box's TCP servers (the listening sockets in `/proc/PID/net/tcp{,6}` of its network
+    namespace that a box process holds, by inode: the others are pasta's mirrors of the host's
+    servers, `-T`) and what holds each port on this side's 127.0.0.1 (`/proc/self/net`): `this`, the
+    box; `shared`, several boxes serve on it and one of them has it; `host`, a process of ours we
+    can read, named; `other-user`; `nothing` yet; `box-only` for a server on ::1 or 127.x but
+    127.0.0.1; `isolated`; `no-network`. Which pasta holds a port cannot be read: pasta is
+    non-dumpable (`/proc/PID/fd` is refused), so a port held by a socket of ours that no readable
+    process has is put down to the boxes serving on it, all named. Nothing connects to a port to
+    tell them apart (Diogo's call: it could be one of the user's services; a rootless Podman's
+    pasta is just as unreadable, and would be taken for a box's). Two other ideas failed: a second
+    `-t` address per box (127.0.1.N) reset a server bound to 127.0.0.1, as most dev servers are.
+    - *The bug it found*: `t_ports` failed 2 runs in 7: the box that lost the shared port never
+      forwarded its own server, started with it. Reproduced by hand: while a box holds a port its
+      pasta cannot bind on the host (another box's, a host server's), every port above it is never
+      forwarded (3 of 3 above a lost 20043, 3 of 3 below it fine; 3 of 3 failed in the suite with the
+      old arguments), until the box stops that server. pasta (2026_07_28) parses `1-65535,auto` as
+      a strong rule, and a strong rule's failed bind aborts the rest of the rule (`fwd_sync_one`
+      returns -1), on every rescan; a weak rule skips the port. Only exclude-only specs are weak
+      (`auto`, `all`, `~N`), and those leave out the ephemeral range. Now each direction has two
+      rules: `auto` (weak) and `$EPH,auto` from `ip_local_port_range` (strong: a port lost there
+      still stops the ephemeral ports above it). `-T`/`-U` had the same rule: a host port pasta
+      could not mirror into a box (a box server on it) stopped the mirrors above it; changed the
+      same way, not reproduced separately. `t_ports` checks both boxes still forward a later server
+      above the shared port. Not checked: whether a box server on a port the host already has fails
+      to start in the box (the mirror holds it there), which a dev server like Vite would answer by
+      taking the next port.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
