@@ -2822,10 +2822,12 @@ from them.
       returns -1), on every rescan; a weak rule skips the port. Only exclude-only specs are weak
       (`auto`, `all`, `~N`), and those leave out the ephemeral range. Now each direction has two
       rules: `auto` (weak) and `$EPH,auto` from `ip_local_port_range` (strong: a port lost there
-      still stops the ephemeral ports above it). `-T`/`-U` had the same rule: a host port pasta
-      could not mirror into a box (a box server on it) stopped the mirrors above it; changed the
-      same way, not reproduced separately. `t_ports` checks both boxes still forward a later server
-      above the shared port. Not checked: whether a box server on a port the host already has fails
+      still stops the ephemeral ports above it). `-T`/`-U` changed the same way, for symmetry: in a
+      standalone repro (two pasta namespaces, no omabox; 2
+      runs of 2) the strong `-t` blocks with a weak `-T`, and a strong `-T` with a weak `-t` does
+      not. It needs the port held on the host by another namespace's forward: one namespace whose
+      port a host server held still forwarded its later port (1 run). `t_ports` checks both boxes
+      still forward a later server above the shared port. Not checked: whether a box server on a port the host already has fails
       to start in the box (the mirror holds it there), which a dev server like Vite would answer by
       taking the next port.
 157. **A failed `up`'s cleanup stopped after the first kill** (2026-10-03, #86). `up`'s EXIT trap

@@ -66,9 +66,10 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 ## Could be reported (nothing waiting on it)
 
 - aquamarine: fixed protocol versions (NOTES finding 2).
-- passt: in a strong auto rule (`1-65535,auto`, `32768-60999,auto`), a port pasta cannot bind (held
-  on the other side) stops every port after it in the rule, on each rescan, while it is held
-  (`fwd_sync_one` returns -1; a weak rule skips the port). omabox uses `auto`, which is weak, plus a
+- passt: in a strong `-t` auto rule (`1-65535,auto`, `32768-60999,auto`), a port pasta cannot bind
+  on the host (another namespace's forward holds it) stops the namespace's later ports, on each
+  rescan, while it is held (`fwd_sync_one` returns -1; a weak rule skips the port). Standalone
+  repro, no omabox: two pasta namespaces. omabox uses `auto`, which is weak, plus a
   strong rule for the ephemeral range only, where the bug remains (NOTES finding 156). A weak
   explicit range, or a skip in auto rules, would let that rule go too.
 
