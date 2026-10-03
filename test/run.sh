@@ -2187,6 +2187,12 @@ t_plugin_check() {
   check_fails "fixed, restart-shell: no line for it" grep -q "$P.qml failed" <<<"$out"
   check_match "...still one for the others" "plugin $P.entry failed" "$out"
   check_eq "...and ls --json has it loaded" loaded "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.qml" '.[] | select(.name == $n) | .plugin_status[$i].state')"
+  # finding 161: a shell.log the host cannot read (write-only, so the shell still writes it) does not
+  # end restart-shell after "shell restarted".
+  ob run -b "$B" -- chmod 200 /home/sbx/shell.log
+  check "restart-shell with a shell.log the host cannot read" ob restart-shell -b "$B"
+  ob run -b "$B" -- chmod 644 /home/sbx/shell.log
+  check_eq "...ls --json still has plugin_status" loaded "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.good" '.[] | select(.name == $n) | .plugin_status[$i].state')"
   # The install path (a plugin's README way), on the committed checkout: into the box HOME and its shell.
   local H; H=$(ob path "$B")/home
   check "omarchy plugin add from a checkout in the box" ob run -b "$B" -- omarchy plugin add "$F/inst" --yes --enable

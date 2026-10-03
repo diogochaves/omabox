@@ -740,6 +740,7 @@ wait_ready() {
       die "could not set the NVIDIA box screen to $size"
     local screen
     until screen=$(box_screen) && [ "${screen#* }" = "$size" ]; do
+      box_alive || died_starting
       [ $SECONDS -lt $deadline ] || die "NVIDIA box screen stayed at ${screen#* }, asked for $size"
       sleep 0.1
     done
@@ -774,7 +775,8 @@ wait_ready() {
   local geom last="" now same=0
   geom=$(on_box hyprctl -j layers | layer_at omarchy-bar)
   while [ $same -lt 3 ] && [ $SECONDS -lt $deadline ]; do
-    now=$(on_box timeout 2 grim -g "$geom" - 2>/dev/null | md5sum) || now=""   # a missed frame: try again
+    # A missed frame starts the count again: it is not the same as the last.
+    now=$(on_box timeout 2 grim -g "$geom" - 2>/dev/null | md5sum) || { same=0; last=""; sleep 0.1; continue; }
     if [ "$now" = "$last" ]; then same=$((same + 1)); else same=0; last=$now; fi
     sleep 0.1
   done
@@ -862,7 +864,7 @@ plugin_check() {
     [ -n "$listed" ] || listed=null
     # Its warnings and errors, colour codes and the level/category prefix dropped.
     log=""; f=$(box_home_file shell.log) &&
-      log=$(sed 's/\x1b\[[0-9;]*m//g' "$f" 2>/dev/null | sed -nE 's/^ *(WARN|ERROR) +[^:]*: //p')
+      { log=$(sed 's/\x1b\[[0-9;]*m//g' "$f" 2>/dev/null | sed -nE 's/^ *(WARN|ERROR) +[^:]*: //p') || log=""; }
   fi
   for id in $ids; do
     dir=$(jq -r --arg i "$id" '.plugin_dirs[$i] // empty' "$D/box.json")
@@ -1580,7 +1582,7 @@ cmd_up() {
     sleep 0.05
   done
   # What box_pid checks from now on: this box's pid namespace, not a later owner of the pid.
-  local ns; ns=$(readlink "/proc/$(box_pid)/ns/pid")
+  local ns; ns=$(readlink "/proc/$(box_pid)/ns/pid") || died_starting
   jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
@@ -2367,7 +2369,8 @@ cmd_run() {
       # control ignores SIGINT and SIGQUIT: the job gets them back.
       local jpid
       # shellcheck disable=SC2016 # $@ and $! belong to the inner bash
-      jpid=$(settle_act box_exec bash -c '(trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "$@" 3>&1 </dev/null >"$log" 2>&1)
+      jpid=$(settle_act box_exec bash -c '(trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "$@" 3>&1 </dev/null >"$log" 2>&1) ||
+        die "run -d: could not start the command (see $log)"
       [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@"
       [ $print_log = 0 ] || echo "$log"
       [ $quiet = 1 ] || say "started in box '$NAME' (log: $log)"
@@ -4756,7 +4759,8 @@ cmd_down() {
     if [ -n "${DOWN_IF_CREATED:-}" ] && [ "$(meta created)" != "$DOWN_IF_CREATED" ]; then exec {lock}>&-; continue; fi
     # Nor, when it decided on an agent that exited, a box its session took over meanwhile (take_over).
     if [ -n "${DOWN_IF_AGENT_GONE:-}" ] && agent_alive; then exec {lock}>&-; continue; fi
-    local p; p=$(peek_pid) && kill "$p" 2>/dev/null   # its peek window, if one is open
+    # Its peek window, if one is open (one that closed since pgrep must not end the down here).
+    local p; { p=$(peek_pid) && kill "$p"; } 2>/dev/null || true
     local was_interactive=0; [ "$(meta mode)" != interactive ] || was_interactive=1
     if ! kill_box; then rc=1; exec {lock}>&-; continue; fi
     # Its reaper, unless that is us: nothing may be left running for a box that is gone.

@@ -49,6 +49,9 @@ skips the checks it holds up, but one opened by an omabox older than the suite f
 
 - Bash for the CLI unless a part clearly needs C (like `tools/pointer`). `set -euo pipefail`,
   shellcheck-clean.
+- Under `set -e`, a `$(...)` that may fail goes in an assignment with `|| fallback`, never bare inside
+  an argument, and the last command of an `&&` chain must be allowed to fail if it is not the point of
+  the line.
 - Small commits, imperative subject, body says why.
 - Every behaviour change gets a line in `NOTES.md` (a finding, or an item under Open). Keep the
   "Reproduce on a fresh Omarchy install" section runnable: it becomes `install.sh`.

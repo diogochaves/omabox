@@ -2864,6 +2864,16 @@ from them.
     `~/.config/{gh,gcloud,op}`, `~/.azure`, `~/.git-credentials` and `~/.config/git/credentials` for
     `--ro-bind`, `--overlay`, `--plugin` and `--hyprland` alike; omabox's runtime dir was refused
     already (inside the runtime dir). `t_unit_mount_rules` checks each, and `~/code` still mounts.
+161. **Six lines where `set -e` or pipefail ended omabox silently** (2026-10-03, #101). `down` killed a
+    peek window with `p=$(peek_pid) && kill "$p"`: one that closed after pgrep ended the down before
+    the box was killed or its dir removed, with no message. `plugin_check`'s shell.log pipeline failed
+    on a log the host cannot read (`chmod 200` in the box: `restart-shell` exited 2 after "shell
+    restarted"; in `up` the EXIT trap would have killed the box). `wait_ready`'s bar-still loop counted
+    a failed capture as "same", so three misses ended the wait. A box gone between `up`'s pid poll and
+    its `readlink` of the pid namespace, or while the NVIDIA screen wait ran, did not say
+    `died_starting`. `run -d` that could not reach the box put `box_exec`'s message in the job log and
+    exited silently. Each now falls back or says why; the rule is in AGENTS.md's Conventions, and
+    `t_plugin_check` runs `restart-shell` with a shell.log the host cannot read.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
