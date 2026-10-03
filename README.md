@@ -384,7 +384,9 @@ blocks the network and every other socket, omabox's included), or see
   within a second of its server listening, the ephemeral range included; other boxes reach them
   there too. A TCP port there also takes the UDP port of the same number. So while a connected box
   runs a server on a port, your own server cannot start on it; an isolated box's ports stay its own
-  (two isolated boxes can use the same port).
+  (two isolated boxes can use the same port). When two connected boxes run a server on the same
+  port, only one of them gets it on your `127.0.0.1`, and nothing says which
+  ([#88](https://github.com/diogochaves/omabox/issues/88)); each still answers inside its own box.
 - Inside a box, your machine's LAN address is the box itself. A connected box started inside
   another box has no network.
 - Every box needs `passt` (which `install.sh` installs), and a connected one `/dev/net/tun`. Its own

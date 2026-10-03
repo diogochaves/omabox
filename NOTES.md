@@ -2791,6 +2791,16 @@ from them.
     `t_main` now checks a box has no seatd socket or system bus and that its runtime dir is its own
     (the inode of the box dir's `run`); `t_unit_pointer` checks `omabox-keyboard` and
     `omabox-pointer` refuse outside a box, as `omabox-still` and `omabox-events` were already checked.
+155. **Two boxes on one port** (2026-10-03, #88). Three connected boxes (`up --new --no-shell`),
+    each serving its own name with `python -m http.server 18731 --bind 127.0.0.1`: each answered
+    inside its box; from the host, `curl 127.0.0.1:18731` answered box-2 every time (not the first
+    box started; likely whichever box's pasta bound the port first, not checked), and the other two
+    said nothing. A host server on the port failed (address in use). After `down box-2` the port was
+    refused for about a second, then answered box-1. So parallel agents' dev servers on one port
+    (5173) show the user one of them, and an agent checking its server from the host can reach
+    another box's. The README, the skill and `omabox help` now say one box gets each port and that
+    agents check their server from inside the box (`wait cmd -- curl`). Still open (#88): showing
+    which box holds a port, and `--publish HOST:BOX` (#81).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -128,7 +128,8 @@ box up, \`run\` uses it and the repo is read-only there (tests that write into t
 @ up run
 Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
 the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
-second after they listen. --net isolated: a loopback and the --allow ports only.
+second after they listen, one box per port (of two boxes on one port, only one gets it there).
+--net isolated: a loopback and the --allow ports only.
 @ run keys up
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
 variables (a password too: never on a command line); --env-file FILE hands it a file's KEY=VAL lines
