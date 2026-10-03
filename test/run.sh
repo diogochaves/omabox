@@ -1302,6 +1302,7 @@ t_unit_cli() {
   check_eq "...an alias's (screenshot)" "$(ob help shot)" "$(ob screenshot -h)"
   check_match "...a fraction of the full help" "^yes$" "$( (( $(ob help shot | wc -c) * 5 < ${#full} )) && echo yes)"
   check_match "...run's has up's options" "omabox up .*--net isolated" "$(ob help run | tr '\n' ' ')"
+  check_match "...ports' names its states (#94)" "this-resets .*shared " "$(ob help ports | tr '\n' ' ')"
   check_eq "...an unknown one: one line, exit 2" "1 2" "$(ob help shoot 2>&1 | wc -l) $(ob help shoot >/dev/null 2>&1; echo $?)"
   check_match "...hyprctl's --help is hyprctl's" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl --help 2>&1)"
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"

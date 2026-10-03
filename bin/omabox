@@ -132,6 +132,12 @@ the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 12
 second after they listen, one box per port (a box server on a port the host or another box has
 fails to start, address in use; of two started within a second, only one gets it there:
 \`omabox ports\` names the holders). --net isolated: a loopback and the --allow ports only.
+@ ports
+ON 127.0.0.1:PORT HERE, by its --json host.state: this (this box); this-resets (this box's pasta
+holds it, but the server is on ::1 or a 127.x other than 127.0.0.1 only, so connections are reset);
+shared (several boxes serve on it and one of them holds it, which cannot be read; one on ::1 only is
+named as resetting); host (a process of yours, named); other-user; nothing (yet: a port comes about
+a second after its server listens); isolated, no-network (the box's net: nothing is forwarded).
 @ run keys up
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
 variables (a password too: never on a command line); --env-file FILE hands it a file's KEY=VAL lines

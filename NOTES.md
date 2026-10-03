@@ -2814,7 +2814,7 @@ from them.
     non-dumpable (`/proc/PID/fd` is refused), so a port held by a socket of ours that no readable
     process has is put down to the boxes serving on it, all named. Nothing connects to a port to
     tell them apart (Diogo's call: it could be one of the user's services; a rootless Podman's
-    pasta is just as unreadable, and would be taken for a box's). Two other ideas failed: a second
+    pasta is just as unreadable, and would be taken for a box's). Another idea failed: a second
     `-t` address per box (127.0.1.N) reset a server bound to 127.0.0.1, as most dev servers are.
     - *The bug it found*: `t_ports` failed 2 runs in 7: the box that lost the shared port never
       forwarded its own server, started with it. Reproduced by hand: while a box holds a port its
@@ -2939,6 +2939,9 @@ from them.
     the host and a connection to it fails, its state, and the two-box case, both servers started at one
     instant (a `sh` loop on `date +%s%N`): one started after the other's pasta took the port finds it
     mirrored into its own box and cannot listen (#89).
+    - *`omabox help ports` lists the states* (2026-10-03, #94): a `@ ports` paragraph names each
+      `host.state` and what it means; before, it printed only the shared network paragraph.
+      `t_unit_cli` checks it names `this-resets` and `shared`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
