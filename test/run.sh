@@ -2758,9 +2758,10 @@ t_keys() {
     ob run -b "$B" -d -- sh -c 'GDK_BACKEND=x11 zenity --entry --text t > /tmp/x11' >/dev/null
     until_ok 15 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"zenity\" and .xwayland'"
     sleep 1   # mapped is not yet taking keys
-    ob keys -b "$B" -t 'aÜbα😀' -s 300 Return >/dev/null
+    # € too (#85: it did not arrive here in 2026-09, with Ü and α on the same kind of spare keycode).
+    ob keys -b "$B" -t 'aÜb€α😀' -s 300 Return >/dev/null
     until_ok 5 ob run -b "$B" -- test -s /tmp/x11
-    check_eq "an X11 app gets characters outside the layout" 'aÜbα😀' "$(ob run -b "$B" -- cat /tmp/x11)"
+    check_eq "an X11 app gets characters outside the layout" 'aÜb€α😀' "$(ob run -b "$B" -- cat /tmp/x11)"
   else skip "an X11 app gets characters outside the layout" "no zenity"; fi
   check "pointer: click, then move" ob pointer -b "$B" -- click move 10 10
   check_eq "pointer: sleep -1 refused" 2 "$(timeout 5 "$CLI" pointer -b "$B" -- sleep -1 >/dev/null 2>&1; echo $?)"

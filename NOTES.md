@@ -720,7 +720,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       spares first (the us layout has 14 free), with a note when a character only fits above.
       Verified with `GDK_BACKEND=x11 zenity` under `--xwayland`: Ü, α, 😀 arrive. **Open:** € still does
       not reach the X11 app, on any keycode, while Greek letters on the same spare keycodes do; binding it
-      as `U20AC` changed nothing. Wayland apps get it (→ #85).
+      as `U20AC` changed nothing. Wayland apps get it (→ #85; it arrives now: finding 158).
     - *peek* (a host process reading frames a box sends): each frame's format, size and stride are
       checked before its buffer is allocated or read (a stride shorter than the width made `draw()` read
       past the buffer). Checked in a box against a fake compositor that sends 4096x4096 with stride 4:
@@ -2837,6 +2837,13 @@ from them.
     still exiting after 10 s. `t_failed_up` checks the box reads dead as soon as `up` returns, and
     prints `up`'s message in the check's name. Whether this was #86's flake (a failed `up` left its
     box running) is not known: #86 did not reproduce in 24 more runs, eight at a time.
+158. **€ reaches X11 apps now** (2026-10-03, #85; finding 64's open item). In an `--xwayland` box
+    (us layout, which has € only on keycode 443, out of X11's reach, so `keys` gives it a spare up
+    to 255), `GDK_BACKEND=x11 zenity --entry` (`xwayland: true` in `hyprctl clients`) got
+    `aÜb€cα` and `€€ x €` byte for byte, and `t_keys`' X11 check, now with €, passed 3 runs of 3.
+    The keyboard tool's typing code is unchanged since 64 (only its Makefile moved), so the likely
+    change is below it: this machine has Xwayland 24.1.13 and libxkbcommon 1.13.2 since
+    2026-09-30, installed after 64's run. Not checked on the older versions.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
