@@ -2097,7 +2097,7 @@ t_connected() {
 # the shared port still forwards the servers it starts later, on higher ports: with one strong rule
 # for every port, pasta gave up on the ports after one it could not bind.
 t_ports() {
-  local A=$P-pa B=$P-pb own shared local6 hostp out later b
+  local A=$P-pa B=$P-pb own shared local6 hostp out later b two at
   if ! ob up "$A" --no-shell >/dev/null 2>&1 || ! ob up "$B" --no-shell >/dev/null 2>&1; then
     no "ports: up two boxes" "failed"; ob down "$A" >/dev/null 2>&1; ob down "$B" >/dev/null 2>&1; return
   fi
@@ -2115,11 +2115,14 @@ t_ports() {
   # Once the host has both forwards and B has the mirror of the host server (pasta rescans each second).
   check "ports: the host has the box servers' ports" until_ok 10 bash -c "ss -Htln 'sport = :$own' | grep -q . && ss -Htln 'sport = :$shared' | grep -q ."
   check "...and pasta mirrored the host server into a box" until_ok 10 ob run -b "$B" -- bash -c "ss -Htln 'sport = :$hostp' | grep -q ."
+  # A server on ::1 only still has its pasta take the port here (finding 165), and resets connections.
+  check "...a server on ::1 only takes its port on the host too" until_ok 10 bash -c "ss -Htln 'sport = :$local6' | grep -q ."
+  check_fails "...where a connection to it fails" curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$local6/"
   out=$(ob ports --json)
   q() { jq -r --arg b "$1" --argjson p "$2" '.[] | select(.box == $b and .port == $p) | .host | [.state, ((.boxes // []) | join(","))] | join(" ")' <<<"$out"; }
   check_eq "...a box's server reaches the host as its own" "this $A" "$(q "$A" "$own")"
   check_eq "...a port two boxes serve on names both, for each" "shared $A,$B|shared $A,$B" "$(q "$A" "$shared")|$(q "$B" "$shared")"
-  check_eq "...a server on ::1 only is not forwarded" "box-only " "$(q "$A" "$local6")"
+  check_eq "...a server on ::1 only: this box holds the port, and resets" "this-resets $A" "$(q "$A" "$local6")"
   check_eq "...the host's server mirrored into a box is not the box's" "" "$(q "$B" "$hostp")"
   out=$(ob ports -b "$B")
   check_match "ports -b lists that box only" "^BOX .*"$'\n'"$B +$shared +0\.0\.0\.0 +python3? +one of $A, $B" "$out"
@@ -2131,6 +2134,22 @@ t_ports() {
     check "...a box serving on the shared port still forwards a later server, above it ($b)" \
       until_ok 10 bash -c "ss -Htln 'sport = :$later' | grep -q ."
   done
+  # A ::1 server in B and a 127.0.0.1 one in A on one port (finding 165): B's pasta competes for the
+  # port here as A's does, so both are named, B as the one that resets. Both start at one instant: a
+  # server started after the other's pasta took the port finds that port mirrored into its own box.
+  until two=$(free_port); [ "$two" != "$own" ] && [ "$two" != "$shared" ] && [ "$two" != "$local6" ] && [ "$two" != "$hostp" ]; do :; done
+  at=$(($(date +%s%N) + 2000000000))
+  for b in "$B ::1" "$A 127.0.0.1"; do
+    ob run -b "${b% *}" -d -- sh -c "while [ \$(date +%s%N) -lt $at ]; do sleep 0.01; done; exec python3 -m http.server $two --bind ${b#* } --directory /home/sbx" >/dev/null
+  done
+  both_on() { [ "$(ob ports --json | jq --argjson p "$two" '[.[] | select(.port == $p)] | length')" = 2 ] && ss -Htln "sport = :$two" | grep -q .; }
+  check "...two boxes' servers on one port, ::1 and 127.0.0.1, both listen and the host has the port" until_ok 10 both_on
+  out=$(ob ports --json)
+  check_eq "...each names both" "shared $A,$B|shared $A,$B" "$(q "$A" "$two")|$(q "$B" "$two")"
+  check_eq "...and the ::1 one as the one that resets" "$B|$B" \
+    "$(jq -r --argjson p "$two" '[.[] | select(.port == $p) | .host.resets | join(",")] | join("|")' <<<"$out")"
+  check_match "...and says so" "^$A +$two +127\.0\.0\.1 +python3? +one of $A, $B: .* \($B's server is on ::1 only and would reset\)$" \
+    "$(ob ports -b "$A" | grep "^$A  *$two ")"
   kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
   check "down" ob down "$A"
   check "down" ob down "$B"

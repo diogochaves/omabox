@@ -2806,8 +2806,11 @@ from them.
     namespace that a box process holds, by inode: the others are pasta's mirrors of the host's
     servers, `-T`) and what holds each port on this side's 127.0.0.1 (`/proc/self/net`): `this`, the
     box; `shared`, several boxes serve on it and one of them has it; `host`, a process of ours we
-    can read, named; `other-user`; `nothing` yet; `box-only` for a server on ::1 or 127.x but
-    127.0.0.1; `isolated`; `no-network`. Which pasta holds a port cannot be read: pasta is
+    can read, named; `other-user`; `nothing` yet; `isolated`; `no-network` (and `this-resets`, a
+    server on ::1 or 127.x but 127.0.0.1 only whose pasta holds the port: it was `box-only`, "not
+    forwarded", until finding 165). `--json` has `host.state`, with `boxes` for `this`,
+    `this-resets` and `shared`, `resets` for `shared`, `pid` and `process` for `host`, `uid` for
+    `other-user`. Which pasta holds a port cannot be read: pasta is
     non-dumpable (`/proc/PID/fd` is refused), so a port held by a socket of ours that no readable
     process has is put down to the boxes serving on it, all named. Nothing connects to a port to
     tell them apart (Diogo's call: it could be one of the user's services; a rootless Podman's
@@ -2909,6 +2912,23 @@ from them.
     whose box.json goes later is listed as it was. `t_unit_cli` runs `cmd_ports` with the box's state
     and sockets stubbed (no live PID 1): box.json gone before the scan and during it, exit 0 (the code
     before exits 2 with nothing, checked on a copy).
+165. **A server on ::1 only still takes its port on the host; `ports` said it was not forwarded**
+    (2026-10-03, #90). pasta's auto scan forwards every listener in the box, whatever its address, so a
+    box server on `::1` (or a 127.x but 127.0.0.1) only has its pasta bind the port on the host's
+    127.0.0.1, where connections are reset: nothing in the box listens on 127.0.0.1 (`--bind 127.0.0.2`
+    reset too). `ports` called such a server `box-only`, "not forwarded", and left its box out of the
+    port's candidates: with a `::1` server in one box and a 127.0.0.1 one in another, started within a
+    second, the second box's line said "this box" while the first's pasta held the port (5 of 5 tries in
+    the review, `curl` reset). Now every connected box serving on a port is a candidate: alone and
+    local-only it is `this-resets` ("this box's pasta holds it, but connections are reset"); several are
+    `shared`, and the local-only ones are named (`resets` in `--json`, "B's server is on ::1 only and
+    would reset" in the text). A local-only server whose port nothing holds here yet is `nothing`, as
+    any. `box-only` is gone; README and the skill say the port is still taken. The repro after the fix:
+    both lines `shared`, naming both boxes, the `::1` one under `resets`; a lone `::1` and a lone
+    127.0.0.2 server each `this-resets`, `curl` reset. `t_ports` checks the `::1` server's port is on
+    the host and a connection to it fails, its state, and the two-box case, both servers started at one
+    instant (a `sh` loop on `date +%s%N`): one started after the other's pasta took the port finds it
+    mirrored into its own box and cannot listen (#89).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

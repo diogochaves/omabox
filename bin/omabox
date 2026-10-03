@@ -3974,10 +3974,11 @@ sock_owners() {
     sed -nE 's|^socket:\[([0-9]+)\] /proc/([0-9]+)/fd$|\1 \2|p'
 }
 
-# ports (#88, finding 156): each box's TCP servers, and what holds their port on this side's
-# 127.0.0.1. A connected box's pasta takes a box server's port here about a second after it listens
-# (-t 127.0.0.1/1-65535,auto), but a port has one holder: of two boxes serving on one, one gets it
-# and the other's pasta says nothing. pasta is non-dumpable (its /proc/PID/fd is refused), so which
+# ports (#88, findings 156 and 165): each box's TCP servers, and what holds their port on this
+# side's 127.0.0.1. A connected box's pasta takes a box server's port here about a second after it
+# listens (-t 127.0.0.1/auto and the ephemeral range, whatever address the server is on: one on ::1
+# only takes it too, and connections to it are then reset), but a port has one holder: of two boxes
+# serving on one, one gets it and the other's pasta says nothing. pasta is non-dumpable (its /proc/PID/fd is refused), so which
 # pasta holds a port cannot be read: a port held by a socket of ours that no readable process has is
 # put down to the boxes serving on it, all of them named when there are several. Nothing connects to
 # a port to tell them apart: it could be one of the user's own services (a rootless Podman's pasta
@@ -4016,10 +4017,11 @@ cmd_ports() {
     done < <(tcp_listeners "/proc/$pid/net")
   done
   # A server on ::1 or a 127.x but 127.0.0.1 only is not reachable from outside its box (NOTES 89),
-  # though pasta may still hold its port here.
+  # but its pasta still takes its port here (finding 165): connections to it are reset. So it is one
+  # of the port's candidates all the same, named as one that resets.
   local_only() { local a; for a in ${1//,/ }; do [ "$a" = ::1 ] || { [[ $a == 127.* ]] && [ "$a" != 127.0.0.1 ]; } || return 1; done; }
   for key in "${pkeys[@]}"; do
-    [ "${pnet[$key]}" = connected ] && ! local_only "${addrs[$key]}" && serving[${key#* }]+=" ${key%% *}"
+    [ "${pnet[$key]}" = connected ] && serving[${key#* }]+=" ${key%% *}"
   done
   # What holds each port on 127.0.0.1 here: a listener on 127.0.0.1, 0.0.0.0 or :: (or their mapped
   # forms) keeps pasta from binding it.
@@ -4033,18 +4035,24 @@ cmd_ports() {
     pids=(/proc/[0-9]*); pids=("${pids[@]#/proc/}")
     while read -r ino p; do hostpid[$ino]=$p; done < <(sock_owners "${pids[@]}")
   fi
-  local state who boxes out=()
+  local state who boxes resets b out=()
   for key in "${pkeys[@]}"; do
-    n=${key%% *} port=${key#* } boxes="" who=""
+    n=${key%% *} port=${key#* } boxes="" resets="" who=""
     if [ "${pnet[$key]}" = isolated ]; then state=isolated
     elif [ "${pnet[$key]}" != connected ]; then state=no-network
-    elif local_only "${addrs[$key]}"; then state=box-only
     elif [ -z "${held[$port]:-}" ]; then state=nothing
     elif uid=${held[$port]%% *}; [ "$uid" != "$me" ]; then state=other-user who=$uid
     elif ino=${held[$port]#* }; [ -n "${hostpid[$ino]:-}" ]; then state=host who=${hostpid[$ino]}
-    else boxes=${serving[$port]# }; if [ "$boxes" = "$n" ]; then state=this; else state=shared; fi
+    else
+      boxes=${serving[$port]# }
+      for b in $boxes; do ! local_only "${addrs[$b $port]}" || resets+=" $b"; done
+      resets=${resets# }
+      if [ "$boxes" != "$n" ]; then state=shared
+      elif [ -n "$resets" ]; then state=this-resets
+      else state=this
+      fi
     fi
-    out+=("$n|$port|${addrs[$key]}|${comm[$key]}|$state|$who|$boxes")
+    out+=("$n|$port|${addrs[$key]}|${comm[$key]}|$state|$who|$boxes|$resets")
   done
   [ -z "$name" ] || { local o kept=(); for o in "${out[@]}"; do [ "${o%%|*}" != "$name" ] || kept+=("$o"); done; out=("${kept[@]}"); }
   [ ${#out[@]} = 0 ] || mapfile -t out < <(printf '%s\n' "${out[@]}" | sort -t'|' -k1,1 -k2,2n)
@@ -4053,26 +4061,30 @@ cmd_ports() {
     for o in "${out[@]}"; do
       IFS='|' read -r -a f <<<"$o|"
       jq -nc --arg box "${f[0]}" --argjson port "${f[1]}" --arg addr "${f[2]}" --arg proc "${f[3]}" --arg state "${f[4]}" \
-        --arg who "${f[5]}" --arg boxes "${f[6]}" --arg hcomm "$( [ "${f[4]}" != host ] || cat "/proc/${f[5]}/comm" 2>/dev/null)" '
+        --arg who "${f[5]}" --arg boxes "${f[6]}" --arg resets "${f[7]}" --arg hcomm "$( [ "${f[4]}" != host ] || cat "/proc/${f[5]}/comm" 2>/dev/null)" '
         { box: $box, port: $port, address: ($addr | split(",")), process: $proc,
           host: ({ state: $state }
-            + (if $state == "this" or $state == "shared" then { boxes: ($boxes | split(" ")) } else {} end)
+            + (if $state == "this" or $state == "this-resets" or $state == "shared" then { boxes: ($boxes | split(" ")) } else {} end)
+            + (if $state == "shared" then { resets: ($resets | split(" ")) } else {} end)
             + (if $state == "host" then { pid: ($who | tonumber), process: $hcomm } else {} end)
             + (if $state == "other-user" then { uid: ($who | tonumber) } else {} end)) }'
     done | jq -sc .
     return
   fi
   printf '%-24s %-6s %-17s %-12s %s\n' BOX PORT ADDRESS PROCESS "ON 127.0.0.1:PORT HERE"
-  local o f says
+  local o f says r why
   for o in "${out[@]}"; do
     IFS='|' read -r -a f <<<"$o|"
     case ${f[4]} in
       this) says="this box" ;;
-      shared) says="one of ${f[6]// /, }: only one of them gets it, omabox cannot tell which" ;;
+      this-resets) says="this box's pasta holds it, but connections are reset: the server listens on ${f[2]} only (127.0.0.1, 0.0.0.0 or :: would answer)" ;;
+      shared)
+        why=""
+        for r in ${f[7]}; do why+="${why:+; }$r's server is on ${addrs[$r ${f[1]}]} only and would reset"; done
+        says="one of ${f[6]// /, }: only one of them gets it, omabox cannot tell which${why:+ ($why)}" ;;
       host) says="not this box: $(cat "/proc/${f[5]}/comm" 2>/dev/null || echo "a process") (pid ${f[5]}) holds it" ;;
       other-user) says="not this box: a process of uid ${f[5]} holds it" ;;
       nothing) says="nothing yet (a port comes about a second after its server listens)" ;;
-      box-only) says="not forwarded: it listens on ${f[2]} only (127.0.0.1, 0.0.0.0 or :: would be)" ;;
       isolated) says="not forwarded: the box is isolated" ;;
       no-network) says="not forwarded: the box has no network" ;;
     esac

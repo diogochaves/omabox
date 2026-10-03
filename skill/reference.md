@@ -138,11 +138,13 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - Across the box boundary use `127.0.0.1`, not `localhost`, with a server listening on IPv4
   (`127.0.0.1`, `0.0.0.0` or `::`): from a box, `localhost` is reset on an IPv4-only server, and
   between boxes always. A box's server is reachable from the host (and other boxes) on
-  `127.0.0.1:PORT` within about a second of listening (poll for it); one on `::1` only is not.
+  `127.0.0.1:PORT` within about a second of listening (poll for it); one on `::1` only is not,
+  though its port there is still taken, and connections to it are reset.
   Only one box gets each port there: of two connected boxes listening on one port, one reaches the
   host and the other does not. `omabox ports` lists every box's servers and what holds each port on
-  the host (this box; several boxes, any of which may have it; a host process; nothing yet; a box
-  server on `::1` only, or in an isolated box, is not forwarded). Check a server you started from
+  the host (this box; this box but reset, for a server on `::1` only; several boxes, any of which
+  may have it, naming those on `::1` only that would reset; a host process; nothing yet; an
+  isolated box's servers are not forwarded). Check a server you started from
   inside its box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`), never from the host.
   Inside a box the host's LAN address is the box itself. A connected box started inside a box has
   no network.

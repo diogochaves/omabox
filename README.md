@@ -380,7 +380,8 @@ blocks the network and every other socket, omabox's included), or see
 - Across the box boundary, use `127.0.0.1:PORT`, with a server that listens on IPv4 (`127.0.0.1`,
   `0.0.0.0` or `::`). `localhost` works from your host into a box, but from a box it is reset when
   the server listens on IPv4 only, as most dev servers do, and from one box to another it never
-  works. A server in a box that listens on `::1` only cannot be reached from outside it.
+  works. A server in a box that listens on `::1` only cannot be reached from outside it, though its
+  port is still taken on your `127.0.0.1`, where connections to it are reset.
 - A box's ports are forwarded to your host's `127.0.0.1` only (never your LAN address), usually
   within a second of its server listening, the ephemeral range included; other boxes reach them
   there too. A TCP port there also takes the UDP port of the same number. So while a connected box
