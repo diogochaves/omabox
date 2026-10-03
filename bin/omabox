@@ -2368,6 +2368,38 @@ job_replace() {
   [ "$quiet" = 1 ] || say "--replace: stopped the earlier job ($n window$([ "$n" = 1 ] || echo s)) in $(ms_s $(($(date +%s%3N) - t0)))$([ $sig = TERM ] || echo "; it ignored SIGTERM for 5 s: killed")"
 }
 
+# A throwaway whose `up` failed: its logs, copied out of the box dir its `down` removes (finding 167),
+# into DIR=<state>/omabox/failed-runs/<name>-<date>, which is printed; 1 when there was none to copy
+# (an `up` that failed before box.json removed its dir). Its box is dead by now (up's trap killed it),
+# so nothing swaps a file under the copy; still only regular files, not links, inside the box's own
+# dirs: the box writes its HOME and runtime dir (a FIFO would hang cp, a link copy a host file in).
+# The 10 newest such dirs are kept.
+keep_run_logs() {
+  local base=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/failed-runs keep f p run n=0
+  [ -f "$D/box.json" ] || return 1
+  keep=$base/$NAME-$(date +%Y%m%d-%H%M%S)
+  mkdir -p "$base" && mkdir "$keep" || return 1
+  if [ -f "$D/box.log" ] && [ ! -L "$D/box.log" ]; then cp -P -- "$D/box.log" "$keep/" && n=$((n + 1)); fi
+  for f in "$D"/home/*.log; do
+    p=$(box_home_file "${f##*/}") || continue
+    cp -P -- "$p" "$keep/" && n=$((n + 1))
+  done
+  run=$(readlink -e -- "$D/run") || run=""
+  for f in "$D"/run/hypr/*/hyprland.log; do
+    [ -n "$run" ] && [ -f "$f" ] && [ ! -L "$f" ] && [ ! -e "$keep/hyprland.log" ] || continue
+    p=$(readlink -e -- "$f") && [[ $p == "$run"/hypr/* ]] || continue
+    cp -P -- "$p" "$keep/hyprland.log" && n=$((n + 1))
+  done
+  [ $n -gt 0 ] || { rmdir -- "$keep"; return 1; }
+  # Past 10, the oldest go (a flapping CI would fill the state dir): only names a box's dir can have,
+  # so the rm is on a path inside base, never base itself.
+  while IFS= read -r -d '' f; do
+    f=${f#* }
+    if [[ $f =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then rm -rf -- "${base:?}/$f"; fi
+  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\0' | sort -z -rn | tail -z -n +11)
+  printf '%s\n' "$keep"
+}
+
 cmd_run() {
   local name="" detach=0 up_args=() quiet=0 print_log=0 replace=0
   while [ $# -gt 0 ]; do
@@ -2458,8 +2490,11 @@ cmd_run() {
   # would not). --owner: if this process is killed outright, the box's reaper takes the box down.
   local err
   if ! err=$("$ROOT/bin/omabox" up "$NAME" "${overlay[@]}" --idle 0 --owner $$ "${up_args[@]}" 2>&1 >/dev/null); then
-    printf '%s\n' "$err" | grep -v "^omabox: box '$NAME' up " >&2
-    die "throwaway box failed to start"
+    # Its logs, out of the dir the EXIT trap's `down` removes: the message names the copies.
+    local kept
+    if kept=$(keep_run_logs); then err=${err//"$D/home/"/"$kept/"}; err=${err//"$D/"/"$kept/"}; fi
+    printf '%s\n' "$err" | grep -v "^omabox: box '$NAME' up " >&2 || true
+    die "throwaway box failed to start${kept:+; its logs are kept in $kept}"
   fi
   # Its warnings and notes still reach the caller (another Hyprland version than hyprctl's, finding 116).
   printf '%s\n' "$err" | grep -E '^omabox: (warning|note):' >&2 || true

@@ -2433,6 +2433,25 @@ t_failed_up() {
   check "the box becomes dead, not running" until_ok 10 failed_box_dead
   check "nothing of it remains running" until_ok 10 failed_box_processes_gone
   check "down clears it" ob down "$B"
+  # A throwaway that fails the same way keeps its logs outside the box dir its own `down` removes, and
+  # says where (finding 167). The suite's own state dir: never the user's failed-runs.
+  local repo st=$TMP/state-fr kept; repo=$(tmp_repo fr)
+  out=$(cd "$repo" && exec env -u OMABOX XDG_STATE_HOME="$st" OMABOX_READY_TIMEOUT=2 "$CLI" run --env OMABOX_SHELL=0 -- true 2>&1) &&
+    no "a throwaway whose up fails fails" "$out"
+  check_match "a failed throwaway says where its logs are kept" "logs are kept in $st/omabox/failed-runs/$P-fr-run[0-9]+-[0-9]{8}-[0-9]{6}$" "$out"
+  kept=${out##*logs are kept in }
+  check "...a dir with its Hyprland log or box.log" bash -c '[ -f "$1/hyprland.log" ] || [ -f "$1/box.log" ]' _ "$kept"
+  check_eq "...and no box of it is left" "" "$(ob ls --json | jq -r --arg p "$P-fr-run" '.[] | select(.name | startswith($p)) | .name')"
+  # Past 10 kept dirs the oldest go, and only dirs a box name can have.
+  rm -rf "$st"
+  local d=$TMP/fr-box i; mkdir -p "$d/home" "$st/omabox/failed-runs/.x"; echo '{}' > "$d/box.json"; echo log > "$d/box.log"
+  for i in 01 02 03 04 05 06 07 08 09 10 11; do mkdir "$st/omabox/failed-runs/old-$i"; touch -d "2026-01-$i" "$st/omabox/failed-runs/old-$i"; done
+  touch -d 2025-01-01 "$st/omabox/failed-runs/.x"
+  kept=$(D=$d NAME=new XDG_STATE_HOME=$st lib keep_run_logs) || true
+  check_eq "...the 10 newest kept dirs stay" "$kept old-03 old-04 old-05 old-06 old-07 old-08 old-09 old-10 old-11" \
+    "$kept $(cd "$st/omabox/failed-runs" && printf '%s\n' old-* | paste -sd ' ')"
+  check "...and a name no box has is left alone" test -d "$st/omabox/failed-runs/.x"
+  rm -rf "$st"
 }
 
 # An up that fails before box.json leaves no half-made dir that ls and down --all would not see

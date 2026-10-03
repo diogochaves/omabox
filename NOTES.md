@@ -2950,6 +2950,21 @@ from them.
     60s), and the refusal says the unit. `keys -s MS` and `pointer sleep MS` do take milliseconds
     (passed to the tools, which read an integer of ms) and stay. `t_unit_cli` checks `help drag` says
     so, `t_unit_pointer` the refusal, `t_pointer` that `--hold 300ms` holds 300 ms and is done in 2 s.
+167. **A failed throwaway pointed at logs its own teardown deleted** (2026-10-03, #100). A `run --
+    CMD` whose box failed to start printed `up`'s "logs: <box dir>/home/*.log <box dir>/box.log", then
+    its EXIT trap's `down` removed that dir and the box HOME: a dead box keeps its logs until `down`,
+    and a throwaway's `down` comes at once. Now `run` first copies its box.log, the HOME's `*.log` and
+    the runtime dir's `hypr/*/hyprland.log` (as `hyprland.log`) into
+    `${XDG_STATE_HOME:-~/.local/state}/omabox/failed-runs/<name>-<date>/`, rewrites the box dir's
+    paths in `up`'s message to it, and ends "throwaway box failed to start; its logs are kept in DIR";
+    `down` still runs, so no box is left. Only regular files, not links, inside the box's own dirs, with
+    `cp -P` (the box writes its HOME and runtime dir, finding 159; it is dead by then, up's trap killed
+    it). An `up` that failed before box.json had its dir removed already: nothing kept, nothing said.
+    The 10 newest dirs stay (a flapping CI would fill the state dir); the oldest go, only names a box
+    dir can have. By hand, `OMABOX_READY_TIMEOUT=2 omabox run --env OMABOX_SHELL=0 -- true` named a dir
+    holding box.log, hyprland.log, labwc.log and the HOME's other logs. `t_failed_up` checks the message
+    names a dir under the suite's own state dir that has hyprland.log or box.log, that no box is left,
+    and the cap (11 older dirs and a new one: the 10 newest stay, a dot-dir is left alone).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
