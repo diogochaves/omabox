@@ -1477,6 +1477,16 @@ t_unit_agent_session() {
   jq -n --argjson a "$nopid" '{agent: $a, agent_start: ""}' > "$zd/box.json"
   check_fails "...nor one that records a pid gone, with no start time" alive
   check_fails "proc_stat takes no empty pid" bash -c 'source "$1"; proc_stat "" 0' _ "$lib"
+  # finding 162: a throwaway's owner (`run`) by its pid and start time; a reused pid is not it, and a
+  # box.json from before owner_start goes by the pid alone. Every reaper down may fail and is retried:
+  # none is a bare command, which would end the reaper under set -e.
+  local ostart; ostart=$(lib proc_start $$)
+  check "the owner that runs is alive" lib owner_alive $$ "$ostart"
+  check_fails "...not a pid that runs with another start time (reused)" lib owner_alive $$ "1$ostart"
+  check "...a pid alone when no start was recorded" lib owner_alive $$ ""
+  check_fails "...and none for a pid gone" lib owner_alive "$nopid" ""
+  check_fails "no bare cmd_down in the reaper (it would end it when the down fails)" \
+    grep -nE '^\s*DOWN_IF_CREATED=.*cmd_down "\$NAME"\s*$' "$lib"
   check_fails "agent_proc fails when its agent's start time cannot be read (it exited meanwhile)" \
     env CLAUDE_CODE_SESSION_ID="t-$P-session" bash -c 'source "$1"; proc_start() { :; }; CLAUDE_PID=$$; agent_proc' _ "$lib"
 }
@@ -2745,6 +2755,9 @@ t_throwaway_killed() {
   local repo; repo=$(tmp_repo tk)
   (cd "$repo" && exec env -u OMABOX "$CLI" run -- sleep 300) & local r=$!
   until_ok 30 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-tk-run\"))'"
+  local j=("$XDG_RUNTIME_DIR"/omabox/"$P"-tk-run*/box.json)
+  check "its box.json records its owner's start time (a reused pid is not it)" \
+    jq -e --arg s "$(lib proc_start "$r")" '.owner_start == $s and $s != ""' "${j[0]}"
   kill -KILL "$r"
   check "its box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-tk-run\"))'"
 }

@@ -2874,6 +2874,18 @@ from them.
     `died_starting`. `run -d` that could not reach the box put `box_exec`'s message in the job log and
     exited silently. Each now falls back or says why; the rule is in AGENTS.md's Conventions, and
     `t_plugin_check` runs `restart-shell` with a shell.log the host cannot read.
+162. **A reaper whose `down` failed ended, and a throwaway's owner was a bare pid** (2026-10-03, #99).
+    Every `cmd_down` in `cmd__reap` was a bare command: one that returned 1 (the box's lock busy for
+    60 s, or PID 1 still exiting after 10 s under load) ended the reaper under `set -e`, leaving the box
+    with no idle expiry, or a dead dir nobody cleared. Each is now `|| true`, and a box still there
+    after it, with the reaper's `created` (not a new box under the name, nor one its session took
+    over: `down` leaves those on purpose), is tried again at the next poll (`reap_retry`, said once in
+    reap.log). `up --owner` records `owner_start` beside `owner` and the reaper checks both, not a
+    zombie, as `agent_alive` does (a pid reused after the run was SIGKILLed kept the box until logout);
+    a box.json from before goes by the pid alone. A throwaway found dead while its run still runs is
+    watched on instead of ending the reaper, so a run SIGKILLed after that still has its dir cleared.
+    `t_unit_agent_session` checks `owner_alive` and that no reaper `cmd_down` is bare;
+    `t_throwaway_killed` that box.json has `owner_start`. Forcing a failed `down` is not tested.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

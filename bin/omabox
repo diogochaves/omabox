@@ -1389,10 +1389,12 @@ cmd_up() {
   else
     renders=("$render")
   fi
+  # The owner's start time with its pid, as for an agent: a pid reused after a SIGKILLed run is not it.
+  local owner_start=""; [ -z "$owner" ] || owner_start=$(proc_start "$owner") || owner_start=""
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
-    --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg agent "$agent" \
+    --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson plugin_dirs "$(printf '%s\n' "${PLUGINS[@]}" | jq -R 'select(. != "") | split("\t") | {(.[0]): .[1]}' | jq -s 'add // {}')" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
@@ -1410,6 +1412,7 @@ cmd_up() {
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
       + (if $omarchy != "" then {omarchy: $omarchy} else {} end)
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
+      + (if $owner_start != "" then {owner_start: $owner_start} else {} end)
       + (if $agent != "" then ($agent | split(" ") | {agent: (.[0] | tonumber), agent_start: .[1]}) else {} end)
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
           drawn_hidden: true} else {} end)' > "$D/box.json"
@@ -2055,8 +2058,8 @@ human_duration() {
 # window, an `omabox run` still running), it stays while in use and goes at the next check once nobody
 # uses it, without waiting out its idle limit. A dead one keeps its logs, as others do.
 cmd__reap() {
-  select_box "$1"; local created=$2 idle owner mode agent; idle=$(meta idle); owner=$(meta owner); mode=$(meta mode)
-  agent=$(meta agent)
+  select_box "$1"; local created=$2 idle owner owner_start mode agent retry_said=0; idle=$(meta idle); owner=$(meta owner)
+  owner_start=$(meta owner_start) || owner_start=""; mode=$(meta mode); agent=$(meta agent)
   [ -n "$idle" ] || idle=0
   [ "$idle" -gt 0 ] || [ -n "$owner$agent" ] || [ "$mode" = interactive ] || return 0
   local every=$((idle / 4)); [ $every -le 60 ] || every=60; [ $every -ge 5 ] || every=5
@@ -2067,22 +2070,29 @@ cmd__reap() {
   # Its host session, found once (keys_ensure asks it every poll); in a subshell first, as it dies
   # when it finds none.
   [ "$mode" != interactive ] || { (host_session) >/dev/null 2>&1 && host_session; } || true
+  # Every down here may fail (its lock busy for 60 s, PID 1 slow to exit under load): the reaper then
+  # tries again at its next poll (reap_retry) instead of ending, which would leave the box with nobody
+  # to take it down (finding 162).
   while sleep "$every"; do
     [ "$(meta created)" = "$created" ] || return 0
     if ! box_alive; then
-      if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then DOWN_IF_CREATED=$created cmd_down "$NAME"
+      if [ -n "$owner" ] && ! owner_alive "$owner" "$owner_start"; then DOWN_IF_CREATED=$created cmd_down "$NAME" || true
       # Ended on purpose (its window closed, or "Shut down" when asked): nothing to keep. A box that
       # died any other way stays dead, logs and all, until `down` (finding 71). Interactive only: the
       # file is the box's to write, and a headless box has no window to close (finding 74).
       elif [ "$mode" = interactive ] && [ -f "$D/run/omabox.closed" ]; then
         say "$(date -Is) box '$NAME': closed by its user: clearing it"
-        DOWN_IF_CREATED=$created cmd_down "$NAME"
+        DOWN_IF_CREATED=$created cmd_down "$NAME" || true
+      # Its run still runs: that clears it, or this reaper does once the run is gone (killed outright).
+      elif [ -n "$owner" ]; then continue
+      else return 0
       fi
-      return 0
+      reap_retry || return 0; continue
     fi
-    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    if [ -n "$owner" ] && ! owner_alive "$owner" "$owner_start"; then
       say "$(date -Is) box '$NAME': its omabox run ($owner) is gone: taking it down"
-      DOWN_IF_CREATED=$created cmd_down "$NAME"; return 0
+      DOWN_IF_CREATED=$created cmd_down "$NAME" || true
+      reap_retry || return 0; continue
     fi
     # The host's passthrough hooks, back after a config reload there (finding 118). A subshell: a host
     # that does not answer (its session ending) must not end the reaper.
@@ -2094,19 +2104,40 @@ cmd__reap() {
     fi
     if [ -n "$agent" ] && ! agent_alive; then
       say "$(date -Is) box '$NAME': its agent session ($(meta agent)) ended: taking it down"
-      DOWN_IF_CREATED=$created DOWN_IF_AGENT_GONE=1 cmd_down "$NAME"
+      DOWN_IF_CREATED=$created DOWN_IF_AGENT_GONE=1 cmd_down "$NAME" || true
       # Still up, with an agent that runs: its session took it over meanwhile (take_over). Watch that.
-      [ -d "$D" ] && [ "$(meta created)" = "$created" ] && agent_alive || return 0
-      say "$(date -Is) box '$NAME': taken over by its session's new agent ($(meta agent)): kept"; continue
+      # With none, the down failed: again at the next poll.
+      [ -d "$D" ] && [ "$(meta created)" = "$created" ] || return 0
+      if agent_alive; then say "$(date -Is) box '$NAME': taken over by its session's new agent ($(meta agent)): kept"; continue; fi
+      reap_retry || true; continue
     fi
     [ "$idle" -gt 0 ] || continue
     [ $(($(date +%s) - $(stat -c %Y "$D/used"))) -ge "$idle" ] || continue
     local human; human=$(human_duration "$idle")
     say "$(date -Is) box '$NAME' idle for $human: taking it down"
-    DOWN_IF_CREATED=$created cmd_down "$NAME"
-    [ -d "$D" ] || echo "$human" > "$BOXES/.expired-$NAME"
-    return 0
+    DOWN_IF_CREATED=$created cmd_down "$NAME" || true
+    [ -d "$D" ] || { echo "$human" > "$BOXES/.expired-$NAME"; return 0; }
+    reap_retry || return 0
   done
+}
+
+# After a reaper's down (cmd__reap's locals: created, retry_said): whether its box is still there, the
+# same one (a new box that took the name, or a down that left a box on purpose, is not to retry), and
+# wants another try at the next poll. Said once, not every poll.
+reap_retry() {
+  [ -d "$D" ] && [ "$(meta created)" = "$created" ] || return 1
+  [ "$retry_said" = 1 ] || say "$(date -Is) box '$NAME': down did not finish, retrying"
+  retry_said=1
+}
+
+# Whether the `omabox run` that owns a throwaway box (PID, START as `up` recorded them) still runs:
+# its pid, started when it was then, and not a zombie, as agent_alive (a pid reused after the run was
+# SIGKILLed is not it). A box.json from before owner_start has the pid alone to go by.
+owner_alive() {
+  kill -0 "$1" 2>/dev/null || return 1
+  [ -n "$2" ] || return 0
+  local state start; state=$(proc_stat "$1" 0) && start=$(proc_start "$1") || return 1
+  [ "$state" != Z ] && [ "$start" = "$2" ]
 }
 
 # Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and not
