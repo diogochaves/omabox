@@ -3105,6 +3105,15 @@ from them.
     socket (a stand-in file) is; `t_keys`: keys and pointer stopped in their sleep exit 3 about 10 s
     on, and the box answers once continued. All seven fail on 0.4.8's tools (they waited until the
     test's 40 s timeout). `install.sh --check` passes.
+178. **`down` no longer stops silently on a reaper that just exited** (2026-10-03, #115; finding 161's
+    class). After `kill_box`, `down` kills the box's reaper with `[ "$p" = $$ ] || ... || kill "$p"`:
+    a reaper that woke, saw the box dead and returned between `pgrep` and `kill` failed that kill,
+    the last command of the list, and errexit ended `omabox down` there: exit 1, no message, the dead
+    box's dir and HOME left (a second `down` cleared them). The kill ends in `|| true` (the reaper
+    gone is the goal); no other list in `cmd_down` ends in a command that may fail without being its
+    point. The race itself is not forced; `t_unit_run_named_dead` runs the real `cmd_down` under the
+    CLI's `set -e` with `pgrep` naming a gone pid: `rm_box` reached, "down", exit 0 (on the old code:
+    exit 1, nothing said).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

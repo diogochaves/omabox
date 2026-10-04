@@ -5004,9 +5004,10 @@ cmd_down() {
     local p; { p=$(peek_pid) && kill "$p"; } 2>/dev/null || true
     local was_interactive=0; [ "$(meta mode)" != interactive ] || was_interactive=1
     if ! kill_box; then rc=1; exec {lock}>&-; continue; fi
-    # Its reaper, unless that is us: nothing may be left running for a box that is gone.
+    # Its reaper, unless that is us: nothing may be left running for a box that is gone. One that
+    # exited since pgrep (it saw the box dead) is gone already: no failure (#115, finding 178).
     for p in $(pgrep -f "^(/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox") _reap $(re_quote "$NAME") "); do
-      [ "$p" = $$ ] || [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null
+      [ "$p" = $$ ] || [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null || true
     done
     rm_box
     exec {lock}>&-

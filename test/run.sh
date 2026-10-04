@@ -528,6 +528,13 @@ t_unit_refusals() {
 
 t_unit_run_named_dead() {
   check_fails "run -b on a box that is not up fails (no throwaway)" ob run -b "$P-nope" -- true
+  # #115, finding 178: a reaper that exits between down's pgrep and its kill (it saw the box dead)
+  # failed that kill, the last of an || list, and errexit ended `down` silently before rm_box.
+  # The real cmd_down under the CLI's set -e; pgrep names a pid that is gone.
+  local b=$TMP/downrace; mkdir -p "$b/racebox"; echo '{"mode":"headless"}' > "$b/racebox/box.json"
+  check_eq "down: a reaper gone since pgrep is no failure, the box is cleared" $'rm_box\nomabox: box \'racebox\' down\nrc 0' \
+    "$(bash -c 'source "$1"; BOXES=$2; kill_box() { :; }; peek_pid() { return 1; }; pgrep() { echo 999999999; }
+      rm_box() { echo rm_box; }; cmd_down racebox; echo "rc $?"' _ "$TMP/lib/bin/omabox" "$b" 2>&1)"
 }
 
 # finding 66: an edit to bin/omabox (linked from ~/.local/bin) while a command runs must not change
