@@ -3237,6 +3237,15 @@ from them.
     `restart-shell` exit 1 naming a report that exists, the dialog closed, no `org.quickshell`
     window; a clean restart after says restarted; a crash past 10 s is restarted by Quickshell, its
     dialog closed, the bar back. 18 of its checks (with `t_unit_shell_crash`'s) fail on the old code.
+184. **The skill says what a usage study saw agents find by trial** (2026-10-04, #138): `wait change`
+    in the loop, and waits never sent to `/dev/null`; a screen that never stops moving; compound
+    commands refused in worktree subagents; symptom rows for the box's own labwc killed, a shell
+    crash (said by `up`/`restart-shell` now, finding 183), a dispatcher `lua` returned, a hung box
+    (said now, findings 181-182) and a name from another directory; outputs added by hand. In
+    reference.md: the plugin registry's own reload, a config reload's fresh Lua state, vertical-only
+    scroll, where `log -i` goes, a widget hosted by another plugin, frame grabs; `help drag`: `--shot`
+    is not fitted. Lines for open issues (#122, #127-#136) say what is true today: shorten each when
+    it lands.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

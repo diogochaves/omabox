@@ -66,7 +66,9 @@ you are done, and before `/clear`. In a git worktree the name is the worktree's 
 worktree agent has its own box with no `-b`. Subagents in one checkout share the session's box: for
 one of its own, `omabox up --new` prints a free name (`box-3`); pass it as `-b box-3` on every call,
 typed out (your shell does not keep a variable between commands). To use a box the user started,
-pass `-b NAME` (see `omabox ls`); it goes before the command too (`omabox -b box-3 shot`).
+pass `-b NAME` (see `omabox ls`); it goes before the command too (`omabox -b box-3 shot`). In a
+worktree-isolated Claude Code subagent, compound commands (`wait cmd --`, `hyprctl eval`, `$(…)`, `$B`
+aliases) are refused: one literal `omabox -b NAME …` per Bash call, or a script file.
 
 ## The loop
 
@@ -87,6 +89,7 @@ omabox keys --pass PASSWORD Return         # type a secret from your environment
 omabox click 960 540 [right] [--double]    # layout coordinates, as in the screenshot (--wait too)
 omabox click --steps 20 --mod ctrl 960 540 # travel there (hovering what it crosses), then ctrl-click
 omabox wait window myapp                   # or --gone; wait layer omarchy-menu; wait cmd -- CMD; wait still
+omabox wait change && omabox wait still --quiet 500ms   # after writing a file the app watches
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
 omabox log [shell|apps|run|…] [--grep RE]  # the box's logs, Hyprland's by default (-f follows)
 omabox events --mark m1                    # then act, then: events --since m1 [--grep RE | --until RE]
@@ -114,7 +117,10 @@ No `sleep` between actions: `--wait` returns once what the action caused has set
 waits for a window, a layer, a command or a still screen (0 yes, 124 not in time, 1 cannot tell).
 Late content passes `still`: wait for a title (`wait window title:RE`) or `wait cmd -- …`. A shot
 right after a `click` or `keys` without `--wait` can show the frame before the redraw: use `--wait`,
-or `omabox wait still`, before the shot.
+or `omabox wait still`, before the shot. Something on screen that never stops moving (a breathing
+glow, a spinner) makes `wait still` and `--wait` time out (124, "still changing"): `-g` the part under
+test (`--ignore` the moving region once it exists, #131). Keep the `satisfied:`/`unsatisfied:` line:
+never send a wait to `/dev/null`.
 
 `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a title; `title:RE`, `class:RE`, `pid:N` or an address
 (`0x…`) narrow it; `wait window SEL` is satisfied by any window it matches. Coordinates are screenshot pixels; a cropped or scaled shot says so on stderr:
@@ -154,6 +160,11 @@ with a button is Hyprland's own (move, resize), never the app's.
 | `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new`, then `-b box-N` as it printed. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
+| "box is dead" right after `omabox run -- pkill -x labwc` (or Hyprland, quickshell) | Those are the box itself: kill your own process by PID; `omabox down` then `up` to recover. |
+| `warning: the shell crashed … (report: PATH)` from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`; `restart-shell` once fixed. |
+| `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
+| "its Hyprland did not answer (hung? …)", `ls` says `hung` | The box's Hyprland is stuck (a plugin under test?): `omabox log`, then `omabox down`. |
+| "no box 'default-…' is up" | The box is named after the directory you run omabox from: run it from the repo, or pass `-b NAME` (`omabox ls`). |
 
 ## Tests that touch the desktop
 
@@ -281,7 +292,8 @@ into the box yourself (`keys -t`, `run -- wl-copy`).
 A box is a desktop without hardware. It has:
 
 - one **virtual screen** (any size and refresh rate, scale 1): no real monitor, so no real modes, HDR,
-  VRR, 10-bit, colour management, scale, multi-monitor, hotplug or DPMS;
+  VRR, 10-bit, colour management, scale, hotplug or DPMS; several outputs only by hand (`omabox
+  hyprctl output create headless NAME`; a reload drops it);
 - no **system bus**: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit;
 - no **devices**: no audio (PipeWire), no `/dev/i2c` (DDC/CI monitor brightness), no backlight, no
   real keyboards/mice/touchpads/tablets, cameras, USB, printers;
@@ -312,9 +324,9 @@ with the commit of the plugin or app you tested. `omabox ls --json` has them: `o
 `theme`, `hyprland_version`, and each plugin's `commit` in `plugin_status` (`+dirty`: uncommitted
 edits). A box runs the real Hyprland with Omarchy's config, shell, binds and theme, so layout, focus,
 input routing, the launcher, theme switches, notifications, the tray, the session bus and the keyring
-were tested, not just rendered. Not tested, and said so: real monitors, scale, several outputs, input
-methods, the system bus, devices, the installed package, the user's own HOME. Never write "tested on
-the desktop" or "on Omarchy" for a box result without "in a box".
+were tested, not just rendered. Not tested, and said so: real monitors, scale, several outputs (unless
+made by hand, and said so), input methods, the system bus, devices, the installed package, the user's
+own HOME. Never write "tested on the desktop" or "on Omarchy" for a box result without "in a box".
 
 ## If something is off
 

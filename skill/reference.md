@@ -26,7 +26,7 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   move X1 Y1` first.
 - `omabox pointer [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- move X Y [--steps N], click
   [BTN], down [BTN], up [BTN], scroll DY, sleep MS` in one run: raw, it raises nothing (a `--window`
-  must be on screen and uncovered). The button defaults to left. A button pressed with `down` stays
+  must be on screen and uncovered). `scroll DY` is vertical only. The button defaults to left. A button pressed with `down` stays
   down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
   box's next clicks are drags.
 - `keys -t TEXT` and `--pass VAR` type a newline as Return and a tab as Tab; any other control
@@ -72,6 +72,9 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   tables and Hyprland's objects (a window, a monitor, a layer) as JSON, objects inside them by name
   (`HL.Workspace(1:1)`); `--json` quotes strings too. A long script: `omabox lua - < script.lua`. A Lua
   error is exit 1 with its message. Globals you set stay for the next call (until a config reload).
+- A config reload (`hyprctl reload`, a theme switch, `omabox mode`, an interactive box's window
+  resize) starts a fresh Lua state: binds, rules, `hl.config` values and plugins added with `lua`,
+  `eval` or `plugin load` are gone. Re-apply them on `configreloaded`.
 - An error inside a callback (`hl.on`, `hl.timer`) is not in `lua`'s answer, and when the callback
   runs later (a timer, an app's event) it is logged nowhere, not even in the Hyprland log: seen
   nothing, check with `pcall` inside the callback and keep the error in a global to read with
@@ -81,7 +84,8 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
   `--systemd`), `box` (bwrap). A box that died keeps its logs until `down`: read them to see why.
-  `-f` follows until the box goes down (exit 0). Hyprland writes its log in pieces: a line about
+  `-f` follows until the box goes down (exit 0). `-i` goes before `--grep RE`, not between them:
+  `--grep -i RE` greps for `-i` and reads RE as a log's name. Hyprland writes its log in pieces: a line about
   what just happened can come a moment (or many lines) later; `-f` shows it when it does.
 - `omabox events`: Hyprland's event stream (`activewindow>>`, `urgent>>`, `openlayer>>`,
   `workspace>>`, ...) as the box recorded it from its start, one stamped line each (`--json`:
@@ -217,9 +221,13 @@ servers), then:
 
 - **Loaded?** `up` and `restart-shell` print a warning for a plugin the shell did not load (its
   validator's message, or the shell's QML error); `omabox ls --json` has its `plugin_status`. A panel,
-  menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`.
-- **Edits**: `omabox restart-shell` (the mount is live; the shell's own file watcher is off in a
-  box, so nothing reloads by itself). A `keepLoaded` plugin or a service needs a restart on any
+  menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`. A
+  widget placed in another mounted plugin's layout shows as `disabled: listed but not enabled`:
+  check it with that plugin's IPC.
+- **Edits**: `omabox restart-shell` (the mount is live). Quickshell's own watcher is off in a box,
+  but Omarchy's plugin registry still reloads a changed local plugin, sometimes several times per
+  save ("Local plugin changed, reloading" in `omabox log shell`): `restart-shell` after edits, then
+  `wait still`, before a shot. A `keepLoaded` plugin or a service needs a restart on any
   desktop: Omarchy keeps the loaded instance across its hot reload.
 - **Open and close**: `omabox run -- omarchy-shell shell summon ID ['{"payload":1}']` (a bar widget
   takes no payload), `shell hide ID`, `shell toggle ID`; the user's ways to close it are keys and
@@ -273,7 +281,10 @@ servers), then:
   then `omabox run -- pkill -INT -x wf-recorder`. It finishes on its next frame, and a still screen
   sends none: `omabox pointer -- move X Y`, then `omabox wait cmd -- sh -c '! pgrep -x wf-recorder'`.
   The file is `$(omabox path)/home/demo.mp4`; frames come only when the screen changes, so `ffmpeg -i
-  demo.mp4 -vf fps=30 out.mp4` for a steady rate.
+  demo.mp4 -vf fps=30 out.mp4` for a steady rate. Frames to compare instead (an animation's steps):
+  `omabox run -d -- sh -c 'mkdir -p ~/cap; while :; do grim -t ppm ~/cap/$(date +%s%3N).ppm; done'`,
+  act, then `omabox run -- pkill -f 'grim -t ppm'`; they are in `$(omabox path)/home/cap`. `magick` is
+  on the host (a contact sheet: `magick montage`); Python PIL is not.
 - **The package itself** (install, upgrade, removal, pacman hooks): not in a box (a read-only `/usr`,
   no pacman). A VM, or ask the user.
 

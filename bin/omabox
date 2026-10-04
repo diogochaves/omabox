@@ -185,9 +185,9 @@ to omabox. SUPER with the left or right button is Hyprland's move or resize wind
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
 number is seconds, as for --quiet and --timeout (\`keys -s\` and \`pointer sleep\` take milliseconds).
---shot FILE takes a shot while the button is still down. --wait ignores the cursor along the
-drag's path (it is in every frame): what the drag changes beside it counts, a change wholly under it
-may not.
+--shot FILE takes a shot while the button is still down: the whole layout at the highest output
+scale (no --fit yet). --wait ignores the cursor along the drag's path (it is in every frame): what
+the drag changes beside it counts, a change wholly under it may not.
 @ wait keys click run
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
 count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
