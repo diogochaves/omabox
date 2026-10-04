@@ -394,6 +394,11 @@ blocks the network and every other socket, omabox's included), or see
   next free port when its own is taken (as Vite does) moves on by itself.
   `omabox ports` lists every box's servers and what holds each port on your
   `127.0.0.1`: that box, any of the boxes sharing it, or one of your own processes.
+- To open a box's server from another machine on your tailnet, share its port from your host with
+  Tailscale: `tailscale serve --bg --http=3000 3000`, then open `http://<machine-name>:3000` (by
+  name: the tailnet IP answers 404). Everyone on your tailnet reaches it, users you share the
+  machine with included; your LAN does not. It stays on after the box goes down (answering 502)
+  until `tailscale serve --http=3000 off`.
 - Inside a box, your machine's LAN address is the box itself. A connected box started inside
   another box has no network.
 - Every box needs `passt` (which `install.sh` installs), and a connected one `/dev/net/tun`. Its own
