@@ -906,10 +906,12 @@ t_unit_omarchy_contract() {
   while IFS=$'\t' read -r name why; do
     if [ -z "$why" ]; then ok "Omarchy: $name"; else no "Omarchy: $name" "$why (in $o)"; fi
   done < <(omarchy_contract "$o")
-  local m missing=""
+  local m missing="" named=0
   while read -r m; do
+    named=$((named + 1))
     [[ " ${OMARCHY_IPC//$'\n'/ } " == *" $m:"* ]] || missing+="$m "
   done < <(grep -ohE '`(omarchy-shell )?shell [a-z][A-Za-z]+' "$ROOT"/skill/*.md | sed 's/.* //' | sort -u)
+  check "the skill names shell methods (#110: else the check below has nothing to compare)" test "$named" -gt 0
   check_eq "every shell method the skill names is in the contract (OMARCHY_IPC)" "" "$missing"
   # The check itself, on a copy of that tree (links, two files real) with one method's arguments
   # changed and the bar's layer renamed: those two fail, nothing else.
@@ -1235,7 +1237,9 @@ t_unit_broker_units() {
   check_match "on: the socket enabled" "enable --now omabox-broker.socket" "$(cat "$TMP/systemctl.log")"
   check_match "on: prints the ~/.ai-jail lines" "ro_maps = \[\"$ROOT/bin/omabox:.*/omabox-relay\", \"$ROOT/skill\", \"$XDG_RUNTIME_DIR/omabox/.broker\"\]" "$out"
   check_eq "...and leaves ~/.ai-jail alone" 'ro_maps = ["/x"]' "$(cat "$h/.ai-jail")"
-  command -v systemd-analyze >/dev/null && check "the units are valid" systemd-analyze --user verify "$u/omabox-broker.socket" "$u/omabox-broker.service"
+  if command -v systemd-analyze >/dev/null; then
+    check "the units are valid" systemd-analyze --user verify "$u/omabox-broker.socket" "$u/omabox-broker.service"
+  else skip "the units are valid" "no systemd-analyze"; fi
   HOME=$h PATH=$stub:$PATH "$CLI" broker off >/dev/null 2>&1
   check_fails "off: the units gone" test -e "$u/omabox-broker.service"
 }
@@ -1317,7 +1321,9 @@ EOF
   sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jail.out" | tr '\n' ' '; }
   check_match "up from the jail" "box '$P-jail' up .*rc=0" "$(sect up)"
   check_match "its box has no network (the jail has none)" "$P-jail .* isolated " "$(sect ls)"
-  check_match "...and only its own boxes are listed" "^NAME [^$]*$P-jail[^$]*rc=0 $" "$(sect ls | sed "s/$P-host//")"
+  # (#110: not by matching around the user's box with it stripped out first, which passed either way)
+  check_match "...its own box listed" "^NAME .*$P-jail .*rc=0 $" "$(sect ls)"
+  check_fails "...and not the user's box" grep -q -- "$P-host" <<<"$(sect ls)"
   check_eq "run starts in the jail's project, mounted" "$repo hi rc=0 " "$(sect pwd)"
   check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
   check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
@@ -1348,7 +1354,9 @@ t_unit_registry() {
 }
 
 t_unit_cli() {
-  check_eq "inside a box OMABOX=1 is not a box name" "$(cd "$ROOT" && lib default_name)" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
+  local dn0; dn0=$(cd "$ROOT" && lib default_name)
+  check_match "default_name gives a name (#110: compared below)" '^[A-Za-z0-9]' "$dn0"
+  check_eq "inside a box OMABOX=1 is not a box name" "$dn0" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
   check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
   check_eq "under run, OMABOX=NAME names the box (#19)" inner "$(OMABOX=inner OMABOX_NAME=outer lib default_name)"
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
@@ -1498,8 +1506,11 @@ t_unit_keys_to_box() {
   check_match "...and ls says so under the box" "^  keys-to-box: on" "$(XDG_RUNTIME_DIR=$rt "$CLI" ls | sed -n 3p)"
   if command -v luac >/dev/null; then check "passthrough.lua compiles" luac -p "$ROOT/share/passthrough.lua"
   else skip "passthrough.lua compiles" "no luac"; fi
-  check_eq "PASS_VERSION is passthrough.lua's VERSION" "$(sed -n 's/^local VERSION = \([0-9]*\)$/\1/p' "$ROOT/share/passthrough.lua")" \
-    "$(sed -n 's/^PASS_VERSION=\([0-9]*\) .*/\1/p' "$CLI")"
+  # (#110: each side a number first; two empty extractions compared equal)
+  local lv cv; lv=$(sed -n 's/^local VERSION = \([0-9]*\)$/\1/p' "$ROOT/share/passthrough.lua"); cv=$(sed -n 's/^PASS_VERSION=\([0-9]*\) .*/\1/p' "$CLI")
+  check_match "passthrough.lua's VERSION read" '^[0-9]+$' "$lv"
+  check_match "PASS_VERSION read" '^[0-9]+$' "$cv"
+  check_eq "PASS_VERSION is passthrough.lua's VERSION" "$lv" "$cv"
 }
 
 # finding 88: an agent session's default box is its own.
@@ -1981,7 +1992,7 @@ t_main() {
   check_eq "box.json keeps the normalised mode" "1280x720@60" "$(jq -r .size "$D/box.json")"
   check_eq "shot into a missing dir makes it (#27)" "$TMP/nope/x.png" "$(ob shot -b "$B" -o "$TMP/nope/x.png" 2>/dev/null)"
   check_match "...unless it cannot" "cannot make the directory" "$(ob shot -b "$B" -o "/proc/nope/x.png" 2>&1)"
-  check_match "keys takes -b after the tokens" "" "$(ob keys Escape -b "$B" 2>&1)"
+  check "keys takes -b after the tokens" ob keys Escape -b "$B"
   check_match "ls shows idle against the limit" "$B .* [0-9]+m/2h" "$(ob ls)"
   check "ls --json has idle, allow, bar, systemd" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | has(\"idle\") and has(\"allow\") and has(\"bar\") and has(\"systemd\")'"
   # a stub CLI in the box HOME's ~/.local/bin wins in run too (as in the session, finding 57)
@@ -2126,7 +2137,7 @@ t_connected() {
   else no "the box has a network namespace of its own" "box [$ns], host [$(readlink /proc/self/ns/net)]"; fi
   if getent ahosts archlinux.org >/dev/null 2>&1; then
     check "DNS resolves in the box" ob run -b "$B" -- getent ahosts archlinux.org
-  else echo "       (the host resolves no names: DNS not checked)"; fi
+  else skip "DNS resolves in the box" "the host resolves no names"; fi
   # host -> box as localhost: the host tries ::1 first, which must be refused, not reset (pasta
   # binds the host side on 127.0.0.1 only); forwards take up to about a second to appear.
   port=$(free_port) tok=box-$P-$RANDOM
@@ -2161,7 +2172,7 @@ t_connected() {
     got=$(ob run -b "$B" -- curl -s --max-time 2 "http://$gw:$hport/")
     if [[ $got != *"$htok"* ]]; then ok "the box's gateway is not the host's loopback"
     else no "the box's gateway is not the host's loopback" "$gw:$hport answered as the host server"; fi
-  else echo "       (the box has no default route: gateway not checked)"; fi
+  else skip "the box's gateway is not the host's loopback" "the box has no default route"; fi
   # Stopped now, and dropped from SERVERS (cleanup's, for a suite stopped midway): by the end of the
   # suite their pids may be another process's.
   kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
@@ -2458,7 +2469,12 @@ t_hostile() {
   local out; out=$(ob shot -b "$A" -o "$TMP/hostile.png" 2>&1) || true
   if [ -s "$TMP/hostile.png" ]; then
     check_fails "shot does not follow the box's symlink to another screen" grep -q '800 x 600' <<<"$(file "$TMP/hostile.png")"
-  else ok "shot does not follow the box's symlink to another screen (it failed instead)"; fi
+  else
+    # (#110) A failure counts only as the one expected: grim could not reach that display.
+    check_match "shot does not follow the box's symlink to another screen (it failed: no display)" \
+      "grim failed: .*(connect|display)" "$out"
+  fi
+  check "...and the honest box's shot still works" ob shot -b "$B" -o "$TMP/honest.png"
   # a tampered omabox.env: a WAYLAND_DISPLAY with a path in it is refused
   ob run -b "$A" -- sh -c 'tr "\0" "\n" < $XDG_RUNTIME_DIR/omabox.env | sed "s|^WAYLAND_DISPLAY=.*|WAYLAND_DISPLAY=../../../run/user/1000/wayland-1|" | tr "\n" "\0" > $XDG_RUNTIME_DIR/e && mv $XDG_RUNTIME_DIR/e $XDG_RUNTIME_DIR/omabox.env'
   check_match "a path in WAYLAND_DISPLAY is refused" "no WAYLAND_DISPLAY" "$(ob hyprctl -b "$A" monitors 2>&1)"
@@ -2994,9 +3010,10 @@ t_keys() {
   # A compositor alive but stopped (#108, finding 177): each tool gives up after 10 s with exit 3
   # instead of waiting forever (timeout 40: on the old tools, 124). Stopped once they are past the
   # CLI's own hyprctl calls, in their -s / sleep.
-  timeout 40 "$CLI" keys -b "$B" -s 3000 a >/dev/null 2>"$TMP/stop.k" & local k=$!
-  timeout 40 "$CLI" pointer -b "$B" -- sleep 3000 move 10 10 >/dev/null 2>"$TMP/stop.p" & local p=$!
-  sleep 1.5; ob run -b "$B" -- sh -c 'kill -STOP $(pidof Hyprland)'
+  timeout 40 "$CLI" keys -b "$B" -s 3003 a >/dev/null 2>"$TMP/stop.k" & local k=$!
+  timeout 40 "$CLI" pointer -b "$B" -- sleep 3004 move 10 10 >/dev/null 2>"$TMP/stop.p" & local p=$!
+  until_ok 10 pgrep -f 'omabox-keyboard .* -s 3003 a$' >/dev/null; until_ok 10 pgrep -f 'omabox-pointer .* sleep 3004 ' >/dev/null
+  ob run -b "$B" -- sh -c 'kill -STOP $(pidof Hyprland)'
   local t0=$SECONDS rk=0 rp=0
   wait "$k" || rk=$?; wait "$p" || rp=$?
   local took=$((SECONDS - t0))
@@ -3005,9 +3022,11 @@ t_keys() {
   check_match "...said" "keyboard: .*no answer in 10 s.*pointer: .*no answer in 10 s" "$(cat "$TMP/stop.k" "$TMP/stop.p" | tr '\n' ' ')"
   check "...in about 10 s ($took s after the stop)" test "$took" -le 16
   check "...and the box answers again once it goes on" until_ok 10 ob keys -b "$B" shift
-  ob keys -b "$B" -s 3000 a >/dev/null 2>&1 & k=$!
-  ob pointer -b "$B" -- sleep 3000 move 10 10 >/dev/null 2>&1 & p=$!
-  sleep 1.5; ob down "$B" >/dev/null
+  ob keys -b "$B" -s 3001 a >/dev/null 2>&1 & k=$!
+  ob pointer -b "$B" -- sleep 3002 move 10 10 >/dev/null 2>&1 & p=$!
+  # (#110) Once each tool runs in the box: before that, "not up" is exit 1 too.
+  until_ok 10 pgrep -f 'omabox-keyboard .* -s 3001 a$' >/dev/null; until_ok 10 pgrep -f 'omabox-pointer .* sleep 3002 ' >/dev/null
+  ob down "$B" >/dev/null
   wait "$k"; check_eq "keys exits 1 when the box goes mid-run" 1 $?
   wait "$p"; check_eq "pointer exits 1 when the box goes mid-run" 1 $?
 }
@@ -4603,9 +4622,10 @@ t_wait() {
   check "...a window beside it is still" ob wait -b "$B" still --window 'title:^A$'
   check_eq "wait change: the loop changes" 0 "$(ob wait -b "$B" change --window 'title:^R$' >/dev/null; echo $?)"
   # Absence and timeouts
-  local t0=$SECONDS
-  check_eq "a window that never comes: 124" 124 "$(ob wait -b "$B" --timeout 1s window 'title:^nope$' >/dev/null; echo $?)"
-  check "...at the deadline" test $((SECONDS - t0)) -le 4
+  # (#110) The wait's own elapsed, not the clock around the CLI: its start-up under load took 1-2 s.
+  local tw; tw=$(ob wait -b "$B" --timeout 1s --json window 'title:^nope$'); rc=$?
+  check_eq "a window that never comes: 124" "124 unsatisfied" "$rc $(jq -r .result <<<"$tw")"
+  check "...at the deadline (1 s asked, $(jq -r .elapsed <<<"$tw") s)" jq -e '.elapsed >= 1 and .elapsed < 3' <<<"$tw"
   # Several windows match (A and R): any is an answer, each named (#37).
   out=$(ob wait -b "$B" window foot); rc=$?
   check_eq "several windows match: satisfied (#37)" 0 "$rc"

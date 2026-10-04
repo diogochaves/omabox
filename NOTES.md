@@ -3122,6 +3122,22 @@ from them.
     point. The race itself is not forced; `t_unit_run_named_dead` runs the real `cmd_down` under the
     CLI's `set -e` with `pgrep` naming a gone pid: `rm_box` reached, "down", exit 0 (on the old code:
     exit 1, nothing said).
+179. **Suite checks that could not fail now can** (2026-10-03, #110; the suite's design: 80, 121).
+    (1) `t_jail`'s "only its own boxes are listed" stripped the user's box name from `ls` and then
+    matched `[^$]*`, anything: it passed whatever `ls` listed. Now the jail's box must be listed and
+    the user's not. Broken on purpose in a worktree: with only `list_names`' jail filter gone, `ls`
+    dies on the first box not the jail's (`select_box` refuses it: a second layer), and old and new
+    checks both fail; with both gone, the user's box is listed, the old check passes and the new
+    one fails. (2) `t_main`'s "keys takes -b after the tokens" matched an empty regex; now the
+    command must succeed (`t_main` is skipped here: unrun). (3) `t_hostile`: a shot that failed for
+    any reason passed; now the failure must be grim not reaching the display, and the honest box's
+    shot must work. (4) `systemd-analyze`, DNS and the gateway in `t_unit_broker_units` and
+    `t_connected` passed silently, or printed a note, when they could not run: skips now. (5) Values
+    compared from both sides (PASS_VERSION, `default_name`, the skill's shell methods) are checked
+    non-empty first. (6) `t_keys`' "keys/pointer exit 1 when the box goes mid-run" (and #108's
+    stopped compositor) waited 1.5 s for the tools to start; under load a CLI not yet in the box
+    exits 1 too ("not up"). They wait for each tool's process, each with a pause of its own. (7)
+    `t_wait`'s deadline was measured around the CLI with SECONDS; now `--json`'s own `elapsed`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
