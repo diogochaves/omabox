@@ -3021,6 +3021,18 @@ from them.
     dangling link copies, its links stay links, no secret in the box HOME, an empty source is
     refused; four of those fail on the old `cp -rL`. A box from this machine's theme (frieren) has
     the same theme as the host (`diff -r`) and its background.
+172. **`drag --wait` no longer settles on its own cursor** (2026-10-03, #102). The software cursor
+    is in every frame (finding 82), and `drag --wait` ignored it only where it was and where it
+    would end: the steps between were changes, so a drag over an empty screen "settled after 0.73s
+    (last change ... 14x23)", the arrow on its way. As `click --steps` does (finding 111), the move
+    to the start is now its own pointer run before the baseline frame, and the cursor's rect at each
+    point of the path is ignored (`path_rects`: at most 30, consecutive points sharing one beyond
+    that; `omabox-still` takes 32 `--ignore`, up from 8). Not the path's bounding box, which the issue
+    proposed: a drop target or a selection inside it would not count. Hiding the cursor while
+    watching does not work: `cursor:invisible` is set but the box still draws it. A change wholly
+    under the path may not count (said in `help drag`); a one-line foot selection still does, its
+    row reaching above the rects. `t_wait`: across an empty screen 124 (fails on 0.4.8), selecting
+    foot text 0; `t_unit_pointer`: `path_rects`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -38,7 +38,7 @@
 #define DRM_FORMAT_XBGR8888 0x34324258
 #define DRM_FORMAT_ABGR8888 0x34324241
 #define MAX_SIDE 16384
-#define MAX_IGNORE 8
+#define MAX_IGNORE 32   // drag --wait: the cursor along its path (omabox path_rects: 30)
 #define THIN 4   // a change this thin or thinner is a caret, not a change
 
 struct rect { int x, y, w, h; };

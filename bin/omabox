@@ -181,7 +181,9 @@ to omabox. SUPER with the left or right button is Hyprland's move or resize wind
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
 number is seconds, as for --quiet and --timeout (\`keys -s\` and \`pointer sleep\` take milliseconds).
---shot FILE takes a shot while the button is still down.
+--shot FILE takes a shot while the button is still down. --wait ignores the cursor along the
+drag's path (it is in every frame): what the drag changes beside it counts, a change wholly under it
+may not.
 @ wait keys click run
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
 count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
@@ -3200,9 +3202,13 @@ cmd_drag() {
   [ -z "$shot" ] || seq+=(pause)
   seq+=(up "$btn")
   local ext; ext=$(extent)
+  # --wait (finding 172): the cursor is in every frame, and a drag moves it across the screen while
+  # it is watched. To the start first, on its own (as click --steps, finding 111), then the cursor at
+  # each point of the path is not the change looked for; what the drag does beside it is.
   if [ "$SETTLE_WAIT" = 1 ]; then
-    p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
-    SETTLE_ARGS+=(--ignore "$(cursor_rect "$x2 $y2")")
+    on_box "$BOX_POINTER" --extent "$ext" move "$x1" "$y1"
+    local r
+    while read -r r; do SETTLE_ARGS+=(--ignore "$r"); done < <(path_rects "$x1" "$y1" "${SEQ[@]}")
     settle_begin settle "${SETTLE_ARGS[@]}"
     settle_ready "$SETTLE_JSON"
   fi
@@ -3258,6 +3264,22 @@ ms_s() { awk -v m="$1" 'BEGIN { printf "%.2fs", m / 1000 }'; }
 # (over a terminal or a field) is centred on it, ~10 px above and 5 left; the busy cursor shown while
 # the box starts reaches ~40 px down.
 cursor_rect() { echo "$((${1% *} - 16)),$((${1#* } - 16)),64,64"; }
+# The cursor_rects of a path, X Y then steps_to's SEQ (`move X Y` each), at most 30 (omabox-still
+# takes 32 --ignore): beyond that, consecutive points share one rectangle around them all.
+# path_rects X Y [move X Y]...
+path_rects() {
+  local xs=("$1") ys=("$2") n per i j x0 y0 x1 y1; shift 2
+  while [ $# -ge 3 ]; do xs+=("$2"); ys+=("$3"); shift 3; done
+  n=${#xs[@]} per=$(((${#xs[@]} + 29) / 30))
+  for ((i = 0; i < n; i += per)); do
+    x0=${xs[i]} y0=${ys[i]} x1=${xs[i]} y1=${ys[i]}
+    for ((j = i + 1; j < i + per && j < n; j++)); do
+      ((xs[j] < x0)) && x0=${xs[j]}; ((xs[j] > x1)) && x1=${xs[j]}
+      ((ys[j] < y0)) && y0=${ys[j]}; ((ys[j] > y1)) && y1=${ys[j]}
+    done
+    echo "$((x0 - 16)),$((y0 - 16)),$((x1 - x0 + 64)),$((y1 - y0 + 64))"
+  done
+}
 cursor_now() { on_box hyprctl cursorpos | tr -d ' ' | awk -F, '/^[0-9]+,[0-9]+$/ { print $1, $2 }'; }
 
 # omabox-still in the box, waiting on its first frame (the baseline). Its stdin is a pipe held here:

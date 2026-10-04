@@ -4317,6 +4317,10 @@ t_window() {
 t_unit_pointer() {
   check_eq "steps_to: N moves, the last on the target" "move 3 7 move 6 14 move 10 21" "$(lib eval 'SEQ=(); steps_to 0 0 10 21 3; echo "${SEQ[*]}"')"
   check_eq "...leftwards and up too" "move 5 5 move 0 0" "$(lib eval 'SEQ=(); steps_to 10 10 0 0 2; echo "${SEQ[*]}"')"
+  check_eq "path_rects (drag --wait): the cursor's rect at each point" "84,84,64,64 34,34,64,64 -16,-16,64,64" \
+    "$(lib eval 'SEQ=(); steps_to 100 100 0 0 2; path_rects 100 100 "${SEQ[@]}" | xargs')"
+  check_eq "...999 steps: 30 rects (omabox-still takes 32), from the start to the end" "30 -16,-16 984,984" \
+    "$(lib eval 'SEQ=(); steps_to 0 0 1000 1000 999; path_rects 0 0 "${SEQ[@]}"' | awk -F, '{ n++; if (n == 1) a = $1 "," $2; e = $1 + $3 - 64 "," $2 + $4 - 64 } END { print n, a, e }')"
   check_eq "--mod: names, any case, each once, in order given" "ctrl+shift+super" "$(lib mods_add "" Control,shift+CTRL+win)"
   check_eq "...added to earlier ones" "alt+ctrl" "$(lib mods_add alt ctrl+alt)"
   check_match "...not a modifier: refused" "'hyper' is not a modifier" "$(lib mods_add "" ctrl+hyper 2>&1)"
@@ -4533,6 +4537,16 @@ t_wait() {
   check_eq "wait cmd: 0 once it succeeds" 0 "$rc"
   check_match "...after it did" "^satisfied: cmd after (0\.[5-9]|[1-9])" "$out"
   check_eq "wait cmd that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms cmd -- false >/dev/null; echo $?)"
+  # drag --wait (#102, finding 172): its own cursor crossing the screen is not a change; what the drag
+  # does beside it (foot's selection across several lines) is.
+  ob run -b "$B" -- pkill -x foot >/dev/null
+  ob wait -b "$B" window foot --gone >/dev/null; ob wait -b "$B" still >/dev/null
+  out=$(ob drag -b "$B" --wait --json --start 1s 200 200 900 700 2>/dev/null); rc=$?
+  check_eq "drag --wait across an empty screen: 124" "124 unsatisfied" "$rc $(jq -r .result <<<"$out")"
+  ob run -b "$B" -d --wait -- foot -T D sh -c 'for i in $(seq 60); do echo "line $i: the quick brown fox jumps over the lazy dog"; done; exec sleep 600' >/dev/null 2>&1
+  out=$(ob drag -b "$B" --wait 200 200 900 700); rc=$?
+  check_eq "drag --wait selecting text: settled" 0 "$rc"
+  check_match "...on a change that is not the cursor" "^satisfied: settled after .*last change" "$out"
   # A region off the screen watches nothing: unknown (1), never still
   out=$(ob wait -b "$B" still -g "5000,5000 10x10"); rc=$?
   check_eq "wait still -g off the screen: exit 1" 1 "$rc"
