@@ -3129,7 +3129,7 @@ from them.
     dies on the first box not the jail's (`select_box` refuses it: a second layer), and old and new
     checks both fail; with both gone, the user's box is listed, the old check passes and the new
     one fails. (2) `t_main`'s "keys takes -b after the tokens" matched an empty regex; now the
-    command must succeed (`t_main` is skipped here: unrun). (3) `t_hostile`: a shot that failed for
+    command must succeed (`t_main` runs here; only its NVIDIA checks skip). (3) `t_hostile`: a shot that failed for
     any reason passed; now the failure must be grim not reaching the display, and the honest box's
     shot must work. (4) `systemd-analyze`, DNS and the gateway in `t_unit_broker_units` and
     `t_connected` passed silently, or printed a note, when they could not run: skips now. (5) Values
@@ -3152,6 +3152,22 @@ from them.
     (the event names only the namespace; `hyprctl layers` gives each layer's pid), judged the same
     way. `t_unit_leak_scan`: six fixtures; `t_leak_control`: a foot started on the stand-in with the
     suite's marker, `workspace '3 silent'` and `no_initial_focus`, is reported.
+    Coverage: (4) `check_box_safety NAME [RUNNER...]` (no `/dev/input`, DRM card, seatd or system
+    bus; for a box of this host also its own runtime dir, and nothing else of the user's: on the
+    tmpfs the runtime dir is, the only mount in the box is `/omabox/NAME/...`, crafted mountinfo
+    lines show a whole-dir mount caught) runs on every kind the suite starts: headless (`t_main`),
+    `--net isolated` (`t_isolated`), `--systemd`, `--xwayland` (`t_keys`), `--hyprland`, `--omarchy`
+    (`t_omarchy_tree`), `--from` (`t_saves`), interactive (`t_guard`'s inner) and nested
+    (`t_leak_control`'s). (5) `t_main`: no `~/.ssh`, `~/.gnupg`, gh, aws, `.netrc`,
+    `.git-credentials` in the box HOME, its keyrings not a copy of the user's (the box has its own),
+    and a token-like variable in `up`'s environment not in the session's (read from Hyprland's
+    environ; `--env`'s variable there shows the read works). (6) One check each for `env`, `click`
+    right/middle/`--double`, `pointer scroll`, `down/up BTN`, `drag` middle/`--steps`, `--mod altgr`
+    (`t_pointer`, whose foot reports each press); `shot FILE`, `events --grep -i`, `mode host`
+    (`t_inspect`); `up --no-confirm-close` over the setting, `peek --workspace` (`t_guard`'s
+    stand-in); and a throwaway `run --overlay --net isolated --allow --size --plugin`
+    (`t_run_options`: the overlay written over, the folder unchanged; the allowed port 200, another
+    000; 800x600; the plugin mounted). `drag --hold` was covered already (#103).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

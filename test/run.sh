@@ -157,6 +157,25 @@ skip() {
   skips+=("$CUR: $1 ($2)"); printf '  \e[33mskip\e[0m %s (%s)\n' "$1" "$2"
   [ "$STRICT" = 0 ] || no "$1" "skipped under --strict: $2"
 }
+# check_box_safety NAME [RUNNER...]: AGENTS.md's box safety invariant on box NAME (#111, finding 180):
+# none of the real seat's devices, seatd or the system bus, the runtime dir its own. RUNNER is how to
+# reach the box's omabox (default: this one; a box nested in a stand-in: `omabox run -b S --` and
+# its omabox). For a box of this host, also nothing of your runtime dir mounted in it but its own dir
+# (on the tmpfs your runtime dir is, the only mount's root is /omabox/NAME/...).
+check_box_safety() {
+  local b=$1; shift
+  local via=("$@"); [ ${#via[@]} -gt 0 ] || via=("$CLI")
+  check_fails "$b: no /dev/input" "${via[@]}" run -b "$b" -- test -e /dev/input
+  check_fails "$b: no DRM card node" "${via[@]}" run -b "$b" -- sh -c 'ls /dev/dri/card* >/dev/null 2>&1'
+  check_fails "$b: no seatd socket" "${via[@]}" run -b "$b" -- test -e /run/seatd.sock
+  check_fails "$b: no system bus" "${via[@]}" run -b "$b" -- test -e /run/dbus/system_bus_socket
+  [ $# = 0 ] || return 0
+  check_eq "$b: the runtime dir is the box's own, not yours" "$(stat -c %i "$XDG_RUNTIME_DIR/omabox/$b/run")" \
+    "$("$CLI" run -b "$b" -- stat -c %i "/run/user/$UID")"
+  local dev; dev=$(awk -v m="$XDG_RUNTIME_DIR" '$5 == m { print $3; exit }' /proc/self/mountinfo)
+  check_eq "$b: nothing of your runtime dir is mounted in it but its own dir" "" \
+    "$("$CLI" run -b "$b" -- awk -v d="$dev" '$3 == d { print $4 " at " $5 }' /proc/self/mountinfo | grep -v "^/omabox/$b/")"
+}
 # Finding 125: whether the boxes an omabox starts lack aquamarine's fix for nested Wayland outputs
 # (the system's 0.15.1 or older, no private build or OMABOX_AQUAMARINE=system). ARGS: that omabox.
 aq_unfixed() { "$@" --version 2>/dev/null | grep -q '^aquamarine: .*without the fix'; }
@@ -1108,6 +1127,34 @@ t_unit_parallel() {
   check_match "...one that ran no check too" "t_fake_none: the test ran checks" "$out"
 }
 
+# A throwaway run takes up's options (#111, finding 180): --overlay (the box writes over the folder,
+# the folder is unchanged), --net isolated --allow (that port reached, another not), --size, --plugin.
+# Two throwaway servers of the suite's own on free ports.
+t_run_options() {
+  local repo ov=$TMP/run-ov port other s1 s2 out
+  repo=$(tmp_repo ro); mkdir -p "$ov"; echo host > "$ov/f"
+  read -r port other < <(python3 -c 'import socket
+a, b = socket.socket(), socket.socket(); a.bind(("127.0.0.1", 0)); b.bind(("127.0.0.1", 0))
+print(a.getsockname()[1], b.getsockname()[1])')
+  python3 -m http.server --bind 127.0.0.1 "$port" --directory "$ov" >/dev/null 2>&1 & s1=$!
+  python3 -m http.server --bind 127.0.0.1 "$other" --directory "$ov" >/dev/null 2>&1 & s2=$!
+  until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$port/" >/dev/null; until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$other/" >/dev/null
+  # shellcheck disable=SC2016 # expanded in the box
+  out=$(cd "$repo" && env -u OMABOX "$CLI" run --overlay "$ov" --net isolated --allow "$port" --size 800x600 --plugin "$ROOT/plugin" -- sh -c '
+    echo box > "$1/f" && cat "$1/f"
+    curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$2/" || true
+    curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$3/" || true
+    hyprctl -j monitors | jq -r ".[0] | \"\(.width)x\(.height)\""
+    test -f ~/.config/omarchy/plugins/chaves.omabox/manifest.json && echo plugin' sh "$ov" "$port" "$other" 2>/dev/null)
+  kill "$s1" "$s2" 2>/dev/null || true
+  check_eq "run --overlay: the box writes over the folder" box "$(sed -n 1p <<<"$out")"
+  check_eq "...the folder itself unchanged" host "$(cat "$ov/f")"
+  check_eq "run --net isolated --allow PORT: that port reached" 200 "$(sed -n 2p <<<"$out")"
+  check_eq "...another host port not" 000 "$(sed -n 3p <<<"$out")"
+  check_eq "run --size 800x600" 800x600 "$(sed -n 4p <<<"$out")"
+  check_eq "run --plugin: mounted in the box HOME" plugin "$(sed -n 5p <<<"$out")"
+}
+
 # The leak detector, proven (finding 80): the watcher the host gets, on a box standing in for the
 # host. Quiet, it reports nothing; then a box's window taking focus, a workspace switch and back,
 # omabox's workspace coming up, a key from `omabox keys` and a window of the suite's opened silently
@@ -1144,6 +1191,7 @@ t_leak_control() {
   local in=("$CLI" run -b "$S" --) C=$P-cin wd
   ob run -b "$S" -- pkill -x foot   # (focus coming back to it would be a leak of its own)
   "${in[@]}" "$CLI" up "$C" --no-shell --idle 0 >/dev/null 2>&1 || no "up a box in the stand-in" "failed"
+  check_box_safety "$C" "${in[@]}" "$CLI"   # a nested box (#111)
   # shellcheck disable=SC2329 # called through until_ok
   seen() { slice "$log" "$1" "$2" | grep -- "$3" >/dev/null; }
   # shellcheck disable=SC2329
@@ -1892,7 +1940,8 @@ t_unit_uwsm_guard() {
 # One box for most checks: connected network, default size.
 t_main() {
   local B=$P-main s0=$SECONDS
-  check "up" ob up "$B" --env OMABOX_TEST=yes
+  # (A secret-looking variable in up's environment, which the box session must not get: #111.)
+  check "up" env T111_API_TOKEN="leak-$P" "$CLI" up "$B" --env OMABOX_TEST=yes
   local D; D=$(ob path -b "$B")
   check_eq "box.json mode headless" headless "$(jq -r .mode "$D/box.json")"
   check_eq "box.json size WxH@HZ" "1920x1080@60" "$(jq -r .size "$D/box.json")"
@@ -1969,11 +2018,7 @@ t_main() {
   check "repo visible at its path" ob run -b "$B" -- test -f "$ROOT/bin/omabox"
   check_fails "repo read-only" ob run -b "$B" -- touch "$ROOT/.omabox-test-write"
   check_fails "real HOME invisible" ob run -b "$B" -- test -e "$HOME/.config"
-  check_fails "no /dev/input" ob run -b "$B" -- test -e /dev/input
-  check_fails "no DRM card node" ob run -b "$B" -- sh -c 'ls /dev/dri/card* >/dev/null 2>&1'
-  check_fails "no seatd socket" ob run -b "$B" -- test -e /run/seatd.sock
-  check_fails "no system bus" ob run -b "$B" -- test -e /run/dbus/system_bus_socket
-  check_eq "the runtime dir is the box's own, not yours" "$(stat -c %i "$D/run")" "$(ob run -b "$B" -- stat -c %i "/run/user/$UID")"
+  check_box_safety "$B"
   local screen_name; screen_name=$(ob mode -b "$B" | cut -d' ' -f1)
   if [ "$(jq -r .wayland_screen "$D/box.json")" = true ]; then
     check_eq "NVIDIA uses the private Wayland screen" WAYLAND-1 "$screen_name"
@@ -2065,6 +2110,18 @@ t_main() {
   if [ -d /etc/skel/.config/omarchy ]; then check "the box HOME starts from /etc/skel" test -f "$D/home/.local/state/omarchy/toggles/hypr/flags.lua"
   else skip "the box HOME starts from /etc/skel" "no /etc/skel/.config/omarchy"; fi
   check_fails "no api-keys.env in the box HOME" test -e "$D/home/.config/omarchy/api-keys.env"
+  # #111, finding 180: nor any other secret store a HOME has, nor a secret from up's environment.
+  local sec found=""
+  for sec in .ssh .gnupg .config/gh .aws .netrc .git-credentials; do [ ! -e "$D/home/$sec" ] || found+="$sec "; done
+  check_eq "...nor ~/.ssh, ~/.gnupg, gh, aws, .netrc, .git-credentials" "" "$found"
+  # (The box has a keyring of its own, by design: never a copy of yours.)
+  for sec in "$HOME"/.local/share/keyrings/*.keyring; do
+    [ -f "$sec" ] && [ -f "$D/home/.local/share/keyrings/${sec##*/}" ] && cmp -s "$sec" "$D/home/.local/share/keyrings/${sec##*/}" && found+="${sec##*/} "
+  done
+  check_eq "...nor a copy of your keyrings" "" "$found"
+  local senv; senv=$(ob run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ')
+  check_match "...the session's environment read (--env's variable is there)" "OMABOX_TEST=yes" "$senv"
+  check_fails "...nor a token from up's environment in it" grep -q "leak-$P" <<<"$senv"
   # The box writes the theme.name ls --json reads (finding 159): a FIFO there does not hang it, a link
   # to a host file does not show that file's first line.
   local tn=/home/sbx/.local/state/omarchy/current/theme.name th
@@ -2117,6 +2174,7 @@ t_isolated() {
   check "the host reaches both servers" until_ok 5 bash -c \
     "curl -fsS --max-time 2 http://127.0.0.1:$allowed/ | grep -qx '$tok' && curl -fsS --max-time 2 http://127.0.0.1:$other/ | grep -qx '$tok'"
   check "up --net isolated --allow $allowed" ob up "$B" --net isolated --allow "$allowed"
+  check_box_safety "$B"
   check_eq "allowed host port reachable" "$tok" "$(ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$allowed/")"
   check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$other/"
   check_fails "no internet" ob run -b "$B" -- curl -s --max-time 3 -o /dev/null https://archlinux.org
@@ -2426,6 +2484,7 @@ t_saves() {
   check_eq "...nor the box's logs" "" "$(cd "$d/home" && ls -- *.log 2>/dev/null)"
   check "down" ob down "$B"
   check "...starts" sv up "$B2" --from "$S" --no-shell
+  check_box_safety "$B2"
   check_eq "...with the app's data" hello "$(ob run -b "$B2" -- cat /home/sbx/.local/share/app/data)"
   check_eq "...and its keyring secret" pw "$(ob run -b "$B2" -- secret-tool lookup service omabox-test)"
   check_eq "...an app config changed in the box kept (no /etc/skel over it)" "# mine" "$(ob run -b "$B2" -- tail -n 1 /home/sbx/.config/btop/btop.conf)"
@@ -2482,6 +2541,7 @@ t_dbus_user_app() {
 t_systemd() {
   local B=$P-sd
   check "up --systemd --net isolated" ob up "$B" --systemd --net isolated
+  check_box_safety "$B"
   check_match "user manager up" '^(running|degraded)$' "$(ob run -b "$B" -- systemctl --user is-system-running 2>&1)"
   check_eq "only the document portal may fail" "" \
     "$(ob run -b "$B" -- systemctl --user --failed --no-legend --plain | awk '{print $1}' | grep -v '^xdg-document-portal.service$')"
@@ -2897,6 +2957,7 @@ t_hyprland() {
   local B=$P-hyp h=$TMP/$P-hbuild/Hyprland D=$XDG_RUNTIME_DIR/omabox/$P-hyp
   mkdir -p "${h%/*}"; cp /usr/bin/Hyprland "$h"
   check "up --hyprland (a copy of the installed one), shell and bar up" ob up "$B" --hyprland "$h"
+  check_box_safety "$B"
   check_eq "the box's Hyprland runs it" "$h" "$(ob run -b "$B" -- sh -c 'readlink /proc/$(pgrep -x Hyprland)/exe')"
   check_match "ls says so, under its line" "^  Hyprland: $h \(Hyprland [0-9.]+ built from" "$(ob ls | grep -A1 "^$B " | tail -n 1)"
   check_eq "ls --json has the binary" "$h" "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .hyprland')"
@@ -3003,6 +3064,7 @@ t_throwaway_killed() {
 t_keys() {
   local B=$P-keys
   ob up "$B" --no-shell --net isolated --xwayland >/dev/null 2>&1 || { no "up" "failed"; return; }
+  check_box_safety "$B"
   ob hyprctl -b "$B" eval "hl.bind('SUPER + CTRL + ALT + J', hl.dsp.exec_cmd('touch /tmp/lower'))
     hl.bind('SUPER + CTRL + ALT + SHIFT + J', hl.dsp.exec_cmd('touch /tmp/upper'))
     hl.bind('SUPER + CTRL + ALT + slash', hl.dsp.exec_cmd('touch /tmp/slash'))" >/dev/null
@@ -3709,6 +3771,7 @@ t_guard() {
   sleep 1
   check_eq "...and its abort is not a journaled crash" 0 "$(journalctl --since "$since" MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 -o json --no-pager 2>/dev/null | grep -c omarchy-crash-omabox)"
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
+  check_box_safety inner "${in[@]}" "$CLI"
   # finding 95: it renders on the GPU its host names, so it gets every render node the host has (and
   # an NVIDIA one's userspace nodes), not just the one a headless box would pick.
   local gpu_nodes='ls /dev/dri/renderD* /dev/nvidiactl /dev/nvidia[0-9]* 2>/dev/null; true'
@@ -3802,6 +3865,12 @@ t_guard() {
     "${in[@]}" "$CLI" config confirm-close off >/dev/null
     "${cl[@]}" >/dev/null
     check "...and off again: one close ends it, cleared" until_ok 8 gone lv
+    # #111: --no-confirm-close wins over the setting
+    "${in[@]}" "$CLI" config confirm-close on >/dev/null
+    "${in[@]}" "$CLI" up nc --interactive --no-shell --no-confirm-close >/dev/null 2>&1
+    "${in[@]}" "$CLI" config confirm-close off >/dev/null
+    "${cl[@]}" >/dev/null
+    check "up --no-confirm-close with the setting on: one close ends it" until_ok 8 gone nc
   fi
   # A box that dies without being closed stays dead, logs kept, until `down`
   "${in[@]}" "$CLI" up cr --interactive --no-shell >/dev/null 2>&1
@@ -3815,6 +3884,9 @@ t_guard() {
   check_eq "...the stand-in's monitor" "$(ob mode -b "$B")" "$("${in[@]}" "$CLI" mode -b inner2)"
   check "peek under the guard" "${in[@]}" "$CLI" peek inner2
   check "...its window appears" until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\") | select(.workspace.name == \"9\")'"
+  "${in[@]}" pkill -x omabox-peek >/dev/null 2>&1
+  check "peek --workspace 4 (#111)" "${in[@]}" "$CLI" peek inner2 --workspace 4
+  check "...its window on 4" until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\") | select(.workspace.name == \"4\")'"
   "${in[@]}" "$CLI" down --all >/dev/null 2>&1
   ob down "$B" >/dev/null
 }
@@ -4213,6 +4285,7 @@ t_omarchy_tree() {
   printf '\nomabox_tree_marker = "tree"\n' >> "$T/default/hypr/bootstrap.lua"
   check_match "--omarchy refuses a folder that is not an Omarchy tree" "not an Omarchy tree \(no bin\)" "$(ob up "$B" --omarchy "$TMP" 2>&1)"
   ob up "$B" --net isolated --omarchy "$T" >/dev/null 2>&1 || { no "up --omarchy" "failed"; return; }
+  check_box_safety "$B"
   check_eq "the box's Hyprland loaded the tree's config" tree "$(ob lua -b "$B" 'return omabox_tree_marker')"
   check_eq "...run has it as OMARCHY_PATH" "$T" "$(ob run -b "$B" -- sh -c 'echo "$OMARCHY_PATH"')"
   check_eq "...and its bin first" omabox-tree "$(ob run -b "$B" -- omarchy-version)"
@@ -4571,6 +4644,36 @@ t_pointer() {
     ob click -b "$B" --window R 50 50 >/dev/null
     check_match "...and the next click has none: omabox cleared it" " 0 $" "$(presses)"
   else wait "$cp"; no "pointer --mod: its keyboard tool found (to kill it)"; fi
+  # #111, finding 180: what no check sent before. R's codes since a count: presses (0 left, 1 middle,
+  # 2 right) and the wheel (64 up, 65 down); motions are 32 and up below 64 (32 + a held button).
+  local n0
+  # shellcheck disable=SC2329 # called below
+  pr() { reports | tail -n +$((n0 + 1)) | awk '$1 < 32 || $1 >= 64' | tr '\n' ' '; }
+  # shellcheck disable=SC2329
+  dragged() { reports | tail -n +$((n0 + 1)) | awk '$1 == 32' | wc -l; }   # motions, left held
+  n0=$(reports | wc -l); ob click -b "$B" --window R 50 50 right >/dev/null
+  check_eq "click right: button 2" "2 " "$(pr)"
+  n0=$(reports | wc -l); ob click -b "$B" --window R 50 50 middle >/dev/null
+  check_eq "click middle: button 1" "1 " "$(pr)"
+  n0=$(reports | wc -l); ob click -b "$B" --window R 50 50 --double >/dev/null
+  check_eq "click --double: two presses" "0 0 " "$(pr)"
+  n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 scroll 3 >/dev/null
+  check_match "pointer scroll 3: the wheel down" '^(65 )+$' "$(pr)"
+  n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 scroll -3 >/dev/null
+  check_match "...scroll -3: up" '^(64 )+$' "$(pr)"
+  n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 down right move 90 90 up right >/dev/null
+  check_eq "pointer down right ... up right: button 2" "2 " "$(pr)"
+  n0=$(reports | wc -l); ob drag -b "$B" --window R 50 50 150 50 middle >/dev/null
+  check_eq "drag middle: button 1" "1 " "$(pr)"
+  local d3 d12
+  n0=$(reports | wc -l); ob drag -b "$B" --window R 50 100 250 100 --steps 3 >/dev/null; d3=$(dragged)
+  n0=$(reports | wc -l); ob drag -b "$B" --window R 50 100 250 100 --steps 12 >/dev/null; d12=$(dragged)
+  check "drag --steps: 3 steps move less often than 12 ($d3, $d12 motions)" test "$d3" -ge 3 -a "$d3" -lt "$d12"
+  n0=$(reports | wc -l)
+  check "click --mod altgr" ob click -b "$B" --window R 50 50 --mod altgr
+  ob click -b "$B" --window R 50 50 >/dev/null
+  check_eq "...and nothing held after it (the next click plain)" "0 0 " "$(pr)"
+  check_match "env: the box's display to export" "^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/run/wayland-[0-9]+$" "$(ob env -b "$B" | head -1)"
   ob down "$B" >/dev/null
 }
 
@@ -4845,6 +4948,14 @@ t_inspect() {
   check_match "click off the screen: said" "click: 99999,99999 is off the 1920x1080 screen" "$(ob click -b "$B" 99999 99999 2>&1)"
   check_match "...pointer and drag too" "pointer: 1920,5 is off.*drag: 5,5000 is off" "$(ob pointer -b "$B" -- move 1920 5 2>&1; ob drag -b "$B" 5 5 5 5000 2>&1)"
   check_match "shot -g off the screen: grim's reason" "shot: grim failed: .*did not intersect" "$(ob shot -b "$B" -g "5000,5000 10x10" 2>&1)"
+  # #111, finding 180: shot FILE as an argument, events --grep -i, mode host on a box (then back).
+  ob shot -b "$B" "$TMP/positional.png" >/dev/null 2>&1
+  check_match "shot FILE (an argument, not -o)" "PNG image data, 1920 x 1080" "$(file "$TMP/positional.png")"
+  check_match "events --grep -i: any case" "openwindow>>" "$(ob events -b "$B" --grep '^OPENWINDOW>>' -i)"
+  check_eq "...without -i, the case as given" "" "$(ob events -b "$B" --grep '^OPENWINDOW>>')"
+  ob mode -b "$B" host >/dev/null 2>&1
+  check_eq "mode host: the box takes your focused monitor's mode" "$(lib parse_mode host)" "$(ob mode -b "$B" | awk '{print $2}')"
+  ob mode -b "$B" 1920x1080 >/dev/null 2>&1
   ob events -b "$B" --mark m2 >/dev/null 2>&1
   (sleep 1; ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '4' })" >/dev/null) & local d=$!
   out=$(ob events -b "$B" --until '^workspace>>4$' --timeout 5s); rc=$?
@@ -4898,7 +5009,7 @@ t_inspect() {
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
-BOX=(t_leak_control t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
