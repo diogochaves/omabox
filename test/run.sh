@@ -1892,7 +1892,7 @@ t_unit_shot_hidden() {
   # (The box's Hyprland answers for its screen size, finding 81; only grim gets no frame: it blocks
   # until its timeout, 124. Any other failure is grim's to explain, finding 176.)
   shot_msg() { bash -c 'source "$1"; BOXES=$2; need_box() { :; }
-    on_box() { [ "$*" = "hyprctl -j monitors" ] || { echo "grim: ${GRIM_SAYS:-}" >&2; return "${GRIM_RC:-124}"; }; echo "[{\"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]"; }
+    on_box() { [[ "$*" == *"hyprctl -j monitors" ]] || { echo "grim: ${GRIM_SAYS:-}" >&2; return "${GRIM_RC:-124}"; }; echo "[{\"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]"; }
     cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1; }
   echo '{"mode": "interactive", "workspace": "9"}' > "$d/box.json"
   out=$(shot_msg)
@@ -1906,8 +1906,8 @@ t_unit_shot_hidden() {
   check_fails "...and no partial PNG left" test -e "$TMP/boxes/x.png.part"
   out=$(GRIM_RC=1 GRIM_SAYS="bad geometry" shot_msg)
   check_match "...grim failing otherwise: its reason, not ask the user" "shot: grim failed: grim: bad geometry$" "$out"
-  check_match "a box whose Hyprland does not answer: said, not a silent exit" "cannot read the screen size of box 'oldbox'" \
-    "$(bash -c 'source "$1"; BOXES=$2; need_box() { :; }; on_box() { return 1; }; cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1)"
+  check_match "a box whose Hyprland does not answer: said, not a silent exit" "box 'oldbox': its Hyprland did not answer \(hung\?" \
+    "$(bash -c 'source "$1"; BOXES=$2; need_box() { :; }; box_alive() { :; }; on_box() { return 1; }; cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1)"
   mkdir -p "$d/run" && echo 1 > "$d/run/omabox.reopened"
   out=$(shot_msg)
   check_match "a window confirm-close reopened: not drawn while hidden, ask the user" "confirm-close.*not drawn while hidden.*ask the user" "$out"
@@ -3137,10 +3137,13 @@ t_keys() {
 }
 
 # A box whose Hyprland is alive but does not answer (stopped here; in use, a plugin under test's
-# deadlock): what asks it ends, saying so in words (#124, finding 181). Continued, it answers again.
+# deadlock): what asks it ends, saying so in words (#124, #125, findings 181-182). Continued, it
+# answers again.
 t_hung() {
   local B=$P-hung out rc t0 took
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  ob run -b "$B" -d -q -- foot -T F sleep 600
+  ob wait -b "$B" window 'title:^F$' >/dev/null
   ob run -b "$B" -- pkill -STOP -x Hyprland
   # The tool `wait` runs, in the box: its first round trip has a deadline (on 0.4.8 it never returned).
   t0=$(now_ms); out=$(timeout 40 "$CLI" run -b "$B" -- /opt/omabox/bin/omabox-still still --timeout 3000 2>&1); rc=$?
@@ -3150,14 +3153,31 @@ t_hung() {
   check "...in about 10 s ($took ms)" test "$took" -lt 16000
   t0=$(now_ms); out=$(timeout 40 "$CLI" wait -b "$B" still --timeout 3s 2>&1); rc=$?; took=$(($(now_ms) - t0))
   check_eq "wait still --timeout 3s: exit 1, not timeout's 124" 1 "$rc"
-  check_match "...said in words" "^unknown: box '$B': its Hyprland did not answer.* \(hung\? omabox log -b $B; omabox down $B\)$" "$out"
-  check "...within 20 s ($took ms)" test "$took" -lt 20000
-  t0=$(now_ms); out=$(timeout 40 "$CLI" keys -b "$B" --wait a 2>&1); rc=$?; took=$(($(now_ms) - t0))
-  check_eq "keys --wait: exit 1" 1 "$rc"
-  check_match "...said in words" "box '$B': its Hyprland did not answer" "$out"
-  check "...within 20 s ($took ms)" test "$took" -lt 20000
+  check_match "...said in words" "box '$B': its Hyprland did not answer( in 10 s)? \(hung\? omabox log -b $B; omabox down $B\)$" "$out"
+  check "...within 9 s ($took ms; its first hyprctl's 5 s, finding 182)" test "$took" -lt 9000
+  # Each of these ends in a few seconds with those words, never a line of jq's (#125, finding 182):
+  # on 0.4.8 windows printed jq's usage after 15 s, shot -g "grim failed" after 10, and ls said up.
+  hung_says() {
+    local n=$1 t0 out rc took; shift
+    t0=$(now_ms); out=$(timeout 40 "$CLI" "$@" 2>&1); rc=$?; took=$(($(now_ms) - t0))
+    if [ "$rc" != 0 ] && [ "$rc" != 124 ] && [[ $out == *"box '$B': its Hyprland did not answer"* ]] && [[ $out != *jq:* ]] &&
+       [ "$took" -lt 9000 ]; then ok "$n ($took ms)"; else no "$n" "exit $rc after $took ms: $out"; fi
+  }
+  hung_says "keys --wait: said, within 9 s" keys -b "$B" --wait a
+  hung_says "windows: said, no jq line, within 9 s" windows -b "$B"
+  hung_says "click --window: said" click -b "$B" --window foot 1 1
+  hung_says "shot -g: said, not \"grim failed\"" shot -b "$B" -g "0,0 100x100"
+  hung_says "shot: said" shot -b "$B"
+  hung_says "wait window: said" wait -b "$B" window foot
+  hung_says "wait layer: said" wait -b "$B" layer omarchy-bar
+  check_match "ls: hung, not up" "^$B +headless +[^ ]+ +hung " "$(ob ls | grep "^$B ")"
+  check_eq "ls --json: hung, its state still up (the bar widget offers Down for any other)" "up true" \
+    "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | "\(.state) \(.hung)"')"
   ob run -b "$B" -- pkill -CONT -x Hyprland
   check_match "continued: wait still is satisfied again" "^satisfied: still" "$(ob wait -b "$B" still --timeout 5s 2>&1)"
+  check_match "...ls says up" "^$B +headless +[^ ]+ +up " "$(ob ls | grep "^$B ")"
+  check_eq "...ls --json: not hung" "up false" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | "\(.state) \(.hung)"')"
+  check "...and windows answers" ob windows -b "$B"
   ob down "$B" >/dev/null
 }
 

@@ -10,6 +10,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`wait still` and every `--wait` end on a box whose Hyprland stopped answering** (stopped, or
   deadlocked by a plugin under test): "its Hyprland did not answer (hung? …)", exit 1, where they
   waited forever whatever `--timeout` said (#124).
+- **A box whose Hyprland stopped answering is said so in a few seconds**, with the same words, by
+  `windows`, every `--window`, `shot -g`, `wait window` and `wait layer`, where they printed jq's
+  errors or "grim failed" after 10-15 s. `omabox ls` shows such a box as `hung`, and `ls --json`
+  has `"hung": true` (#125).
 
 ## 0.4.8 — 2026-10-03
 

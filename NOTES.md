@@ -3187,6 +3187,29 @@ from them.
     at 45 s; omabox-still run in the box ends `unknown hung` at 10 s. `t_hung` (new) checks both and
     `keys --wait`, then `kill -CONT` and a satisfied `wait still`; `t_unit_wait` runs `settle_end`
     on a tool that never ends: killed, exit 1, ~4 s (the old code hit the check's 30 s timeout).
+182. **A hung box's Hyprland is said so, in seconds, by every command that asks it** (2026-10-04,
+    #125; finding 181). With Hyprland alive but stopped, `windows` printed jq's usage (`invalid JSON
+    text passed to --argjson`) after 15 s, `--window` on click/shot/keys/drag and `wait window` the
+    same, `shot -g` only "grim failed" after 10 s, and `ls` said `up`. `box_windows` fed three `hyprctl
+    -j` outputs (each hyprctl's 5 s IPC timeout) straight to `jq --argjson`. `hypr_json ARGS` is one
+    `hyprctl -j` with a deadline, its answer checked as JSON (`jq -e type`); none is `box 'NAME': its
+    Hyprland did not answer (hung? omabox log -b NAME; omabox down NAME)`, exit 1 (or "went down"
+    when the box is gone). `box_windows` stops at its first unanswered question, and its callers
+    take its list with `|| exit $?`, not as an argument (where a failure was lost and became "did
+    not list its windows"). The same for `cursor_now` (as JSON: `hyprctl -j cursorpos`), `extent`,
+    `box_screen`, `kb_tool`, `win_raise`, `layer_probe`, `run --replace`'s window checks and `mode`.
+    `timeout 6` around hyprctl: its own 5 s does not cover connecting, and once a stopped Hyprland's
+    listen backlog is full (~40 calls here), hyprctl blocked in `connect` for good (seen; a later
+    call hit the suite's own limit). `wait window`/`layer` turn a failed probe of a box still up into
+    the same words after a 1 s `hyprctl version`. `shot` runs the capture beside a 2 s read: a
+    capture still going then asks `hyprctl version` (2 s), and no answer stops it (`kill_tree`) and
+    says so; a healthy shot costs nothing more. `ls` asks every box that is up (`omabox.env`
+    written) at once, 1 s each: `hung` in its STATE column, `"hung": true` in `ls --json`, whose
+    `state` stays `up` (the bar widget offers Down for any other state, as for a dead box; a box
+    `save` has paused reads as hung meanwhile). `t_hung`: with the box stopped, `wait still`, `keys
+    --wait`, `windows`, `click --window`, `shot -g`, `shot`, `wait window` and `wait layer` each exit
+    non-zero with the words and no `jq:` line in 4-7 s; `ls` says `hung`; continued, `up` and
+    `windows` answers. `t_unit_shot_hidden` stubs the new call.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

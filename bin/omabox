@@ -558,6 +558,19 @@ on_box() {
 hung_text() { echo "box '$NAME': its Hyprland did not answer${1:+ in $1} (hung? omabox log -b $NAME; omabox down $NAME)"; }
 # 0 when the box's Hyprland answers over IPC within SECS (default 2). hypr_answers [SECS]
 hypr_answers() { box_alive && on_box timeout "${1:-2}" hyprctl version >/dev/null 2>&1; }
+# `hyprctl -j ARGS` in the box, its answer checked as JSON (#125, finding 182). A Hyprland that does
+# not answer is said in words and the command ends, exit 1: hyprctl's "IPC didn't respond" text went
+# to jq, which printed its usage, and three such calls took 15 s. timeout: hyprctl's own 5 s does not
+# cover connecting, and once a stopped Hyprland's listen backlog is full, connect waits forever. In
+# $(...) the caller ends too with `x=$(hypr_json ...) || exit $?`. Only for queries whose answer is
+# always JSON (not getoption of an unknown option). hypr_json ARGS...
+hypr_json() {
+  local out
+  out=$(on_box timeout 6 hyprctl -j "$@" 2>/dev/null) || out=""
+  if jq -e type >/dev/null 2>&1 <<<"$out"; then printf '%s\n' "$out"; return 0; fi
+  box_alive || die "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
+  die "$(hung_text)"
+}
 # PID and every process under it, deepest first, SIGKILLed: a tool left waiting on a hung box.
 kill_tree() { local c; for c in $(pgrep -P "$1"); do kill_tree "$c"; done; kill -KILL "$1" 2>/dev/null || true; }
 # PID is running: not gone, and not a child that exited and was not waited for yet (a zombie).
@@ -739,9 +752,10 @@ on_screen() {
   [ "$2" -lt "${4%x*}" ] && [ "$3" -lt "${4#*x}" ] || die "$1: $2,$3 is off the $4 screen of box '$NAME'"
 }
 extent() {
-  on_box hyprctl -j monitors 2>/dev/null | jq -er '[.[] | select(.disabled | not)] |
-    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"' 2>/dev/null ||
-    die "cannot read the screen size of box '$NAME' (its Hyprland did not answer)"
+  local m; m=$(hypr_json monitors) || exit $?
+  jq -er '[.[] | select(.disabled | not)] |
+    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"' <<<"$m" 2>/dev/null ||
+    die "cannot read the screen size of box '$NAME' (it lists no monitor)"
 }
 
 # File PATH of the selected box's HOME, for the host to read: printed resolved when it is a regular
@@ -786,7 +800,7 @@ wait_ready() {
     on_box hyprctl eval "hl.monitor({ output = 'WAYLAND-1', mode = '$size', position = '0x0', scale = 1 })" >/dev/null ||
       die "could not set the NVIDIA box screen to $size"
     local screen
-    until screen=$(box_screen) && [ "${screen#* }" = "$size" ]; do
+    until screen=$(box_screen 2>/dev/null) && [ "${screen#* }" = "$size" ]; do
       box_alive || died_starting
       [ $SECONDS -lt $deadline ] || die "NVIDIA box screen stayed at ${screen#* }, asked for $size"
       sleep 0.1
@@ -798,7 +812,7 @@ wait_ready() {
   local f; f=$(box_home_file .config/omarchy/shell.json) &&
     jq -e '[.bar.layout[][]? | if type == "object" then .id else . end] | index("omarchy.tray") != null' \
     "$f" >/dev/null && tray_expected=1
-  until [ -n "$(on_box hyprctl -j layers 2>/dev/null | layer_at omarchy-bar)" ] &&
+  until [ -n "$(on_box hyprctl -j layers 2>/dev/null | layer_at omarchy-bar 2>/dev/null)" ] &&
         { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
     box_alive || died_starting
     [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
@@ -2442,7 +2456,8 @@ job_replace() {
   # Its windows, to see them go (Hyprland's pids are the box's).
   local wins bpids hpids
   bpids=$(awk '{ print $2 }' <<<"$procs" | jq -sc .)
-  wins=$(on_box hyprctl -j clients | jq -r --argjson p "$bpids" '.[] | select(.pid as $x | any($p[]; . == $x)) | .address') || wins=""
+  local cj; cj=$(hypr_json clients) || exit $?
+  wins=$(jq -r --argjson p "$bpids" '.[] | select(.pid as $x | any($p[]; . == $x)) | .address' <<<"$cj") || wins=""
   local sig=TERM t0 end
   t0=$(date +%s%3N) end=$((t0 + 5000))
   mapfile -t hpids < <(awk '{ print $1 }' <<<"$procs")
@@ -2458,7 +2473,7 @@ job_replace() {
   local still="" n=0
   if [ -n "$wins" ]; then
     end=$((SECONDS + 3))
-    while still=$(on_box hyprctl -j clients | jq -r '.[].address' | grep -Fx -f <(printf '%s\n' "$wins") | xargs); [ -n "$still" ]; do
+    while cj=$(hypr_json clients) || exit $?; still=$(jq -r '.[].address' <<<"$cj" | grep -Fx -f <(printf '%s\n' "$wins") | xargs); [ -n "$still" ]; do
       [ $SECONDS -lt $end ] || die "--replace: the earlier job ended, but its window $still is still there; nothing started"
       sleep 0.1
     done
@@ -2545,7 +2560,7 @@ cmd_run() {
       local log; log=$D/home/run-$(date +%s%N).log
       # --wait: until what it opens has settled (a first frame within 5 s unless --start says).
       if [ "$SETTLE_WAIT" = 1 ]; then
-        local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+        local p; p=$(cursor_now) || exit $?; [ -z "$p" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
         settle_begin settle --start 5000 "${SETTLE_ARGS[@]}"
         settle_ready "$SETTLE_JSON"
       fi
@@ -2630,8 +2645,14 @@ WIN_JQ='
       cover: [$all[] | select(.address != $t.address and .onscreen and above(.; $t) and overlaps($t))
               | {address, class, title, at, size}]}]'
 win_annotate() { jq -c -n --argjson c "$1" --argjson m "$2" --argjson a "$3" "$WIN_JQ"; }
+# One question at a time, the first left unanswered the end (hypr_json): callers take its list with
+# `wins=$(box_windows) || exit $?`, never as an argument, where its exit would be lost.
 box_windows() {
-  win_annotate "$(on_box hyprctl -j clients)" "$(on_box hyprctl -j monitors)" "$(on_box hyprctl -j activewindow)"
+  local c m a
+  c=$(hypr_json clients) || exit $?
+  m=$(hypr_json monitors) || exit $?
+  a=$(hypr_json activewindow) || exit $?
+  win_annotate "$c" "$m" "$a"
 }
 
 # A window selector (SEL): active, an address (0x..., address:0x...), pid:N, class:RE, title:RE,
@@ -2690,8 +2711,8 @@ win_raise() {
     out=$(on_box hyprctl dispatch "hl.dsp.window.alter_zorder({ mode = 'top', window = 'address:$addr' })" 2>&1) || true
     [ "$out" = ok ] || die "could not raise window $addr: $out"
   fi
-  local deadline=$((SECONDS + 3))
-  until [ "$(on_box hyprctl -j activewindow | jq -r '.address // empty')" = "$addr" ]; do
+  local deadline=$((SECONDS + 3)) a
+  until a=$(hypr_json activewindow) || exit $?; [ "$(jq -r '.address // empty' <<<"$a")" = "$addr" ]; do
     [ $SECONDS -lt $deadline ] || die "window $addr did not take focus"
     sleep 0.05
   done
@@ -2704,7 +2725,8 @@ win_point() {
   local raise=$1 x=$2 y=$3 w desc why; shift 3
   # `|| exit`: win_point runs in its caller's $(...), where errexit is off (no inherit_errexit), so
   # win_select's exit 2 (none or several) would otherwise fall through to a wrong message and exit 1.
-  w=$(win_select "$(box_windows)" "$@") || exit $?
+  local wins; wins=$(box_windows) || exit $?
+  w=$(win_select "$wins" "$@") || exit $?
   desc=$(win_desc "$w")
   jq -e --argjson x "$x" --argjson y "$y" '$x < .size[0] and $y < .size[1]' <<<"$w" >/dev/null ||
     die "$x,$y is outside window $desc ($(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w"); coordinates are the window's own)"
@@ -2712,7 +2734,8 @@ win_point() {
   if [ -n "$why" ]; then
     [ "$raise" = 1 ] || die "window $desc is $why (click --window raises it; --no-raise and pointer do not)"
     win_raise "$w"
-    w=$(win_select "$(box_windows)" "$(jq -r .address <<<"$w")") || exit $?
+    wins=$(box_windows) || exit $?
+    w=$(win_select "$wins" "$(jq -r .address <<<"$w")") || exit $?
     why=$(win_blocked "$w" "$x" "$y")
     [ -z "$why" ] || die "window $desc is still $why after focusing it: move or close that window first"
   fi
@@ -2810,7 +2833,8 @@ shot_point() {
     # "ADDRESS", or "ADDRESS X,Y WxH" for a -g crop of it: where the crop starts, the window's size.
     local addr org wsz; read -r addr org wsz <<<"$ref"
     [ -n "$org" ] || org=0,0 wsz=${lw}x$lh
-    local w; w=$(jq -c --arg a "$addr" 'first(.[] | select(.address == $a)) // empty' <<<"$(box_windows)")
+    local w wins; wins=$(box_windows) || exit $?
+    w=$(jq -c --arg a "$addr" 'first(.[] | select(.address == $a)) // empty' <<<"$wins")
     [ -n "$w" ] || die "--in: the window of that shot ($addr) is gone"
     [ "$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")" = "$wsz" ] ||
       die "--in: window $(win_desc "$w") is $(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w") now, $wsz in the shot: take a new one"
@@ -2871,7 +2895,8 @@ cmd_shot() {
   local grim=(grim -l 1) win="" where lw lh ww wh gx gy
   [ -z "$g" ] || read -r gx gy lw lh <<<"$g"
   if [ ${#sels[@]} -gt 0 ]; then
-    win=$(win_select "$(box_windows)" "${sels[@]}")
+    local wins; wins=$(box_windows)
+    win=$(win_select "$wins" "${sels[@]}")
     local id; id=$(jq -r .stableId <<<"$win")
     [[ $id =~ ^[0-9a-fA-F]+$ ]] || die "shot: window $(win_desc "$win") has no stableId to capture it by ($id)"
     grim+=(-T "$id")
@@ -2904,9 +2929,26 @@ cmd_shot() {
   # A jailed caller's file through its own fd, never reopened by name: /dev/fd/N opened for writing
   # would give the broker more than the caller passed (a read-only fd of a file it may not write).
   put() { if [ -n "$tofd" ]; then grab >&"$tofd"; else grab > "$file"; fi; }
-  local grc=0
-  { { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } && put; } || grc=$?
+  # The capture runs beside this shell (#125, finding 182): one still going after 2 s is a big one, or
+  # a Hyprland that stopped answering, where grim waited out its 10 s and said only "grim failed".
+  # Then the box is asked once: no answer is said in words, and the capture stopped.
+  local capfd cap grc=""
+  exec {capfd}< <(rc=0; { { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } && put; } || rc=$?; echo "$rc")
+  cap=$!
+  if ! read -r -t 2 -u "$capfd" grc; then
+    if ! hypr_answers; then
+      exec {capfd}<&-; kill_tree "$cap"; rm -f "$gerr"; [ -n "$tofd" ] || rm -f "$file"
+      box_alive || die "shot: box '$NAME' went down (why: omabox log -b $NAME all)"
+      die "shot: $(hung_text)"
+    fi
+    read -r -u "$capfd" grc || grc=1
+  fi
+  exec {capfd}<&-
   local why; why=$(tr '\n' ' ' < "$gerr" | sed 's/ *$//'); rm -f "$gerr"
+  # grim's own timeout: asked again, in case the box stopped answering during it.
+  if [ "$grc" = 124 ] && [ "$(meta mode)" != interactive ] && ! hypr_answers; then
+    [ -n "$tofd" ] || rm -f "$file"; die "shot: $(hung_text)"
+  fi
   if [ "$grc" != 0 ] || [ ! -s "$file" ]; then
     [ -n "$tofd" ] || rm -f "$file"
     # Never tell an agent to show the window: switching the user's workspace for a frame is what the
@@ -2974,7 +3016,8 @@ cmd_keys() {
   [ $# -gt 0 ] || die "keys: nothing to send"
   # --window: that window focused first (finding 81), as a click on it would.
   if [ ${#sels[@]} -gt 0 ]; then
-    local w; w=$(win_select "$(box_windows)" "${sels[@]}")
+    local w wins; wins=$(box_windows)
+    w=$(win_select "$wins" "${sels[@]}")
     [ "$(jq -r .active <<<"$w")" = true ] || win_raise "$w"
   fi
   kb_tool
@@ -2993,7 +3036,7 @@ cmd_keys() {
   if [ "$SETTLE_WAIT" = 1 ]; then
     # --wait: the screen before the keys, then a change and quiet after them. The cursor hides on a
     # key press: not a change.
-    local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+    local p; p=$(cursor_now) || exit $?; [ -z "$p" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
     settle_begin settle "${SETTLE_ARGS[@]}"
     settle_ready "$SETTLE_JSON"
     settle_act keys_send
@@ -3008,14 +3051,12 @@ cmd_keys() {
 # they mean to its binds (kb_options like altwin:swap_lalt_lwin move Super). Not in $(...): it sets KB.
 KB=()
 kb_tool() {
-  local layout variant model options
-  # One answer first, said in words when there is none (a stopped Hyprland: jq's parse error, exit 5).
-  on_box hyprctl -j getoption input:kb_layout 2>/dev/null | jq -e . >/dev/null 2>&1 ||
-    die "box '$NAME': its Hyprland did not answer (hyprctl getoption)"
-  layout=$(on_box hyprctl -j getoption input:kb_layout | jq -r '.str // "us"' | cut -d, -f1)
-  variant=$(on_box hyprctl -j getoption input:kb_variant | jq -r '.str // ""' | cut -d, -f1)
-  model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')
-  options=$(on_box hyprctl -j getoption input:kb_options | jq -r '.str // ""')
+  local j layout variant model options
+  # A Hyprland that does not answer is said in words (hypr_json; once jq's parse error, exit 5).
+  j=$(hypr_json getoption input:kb_layout) || exit $?; layout=$(jq -r '.str // "us"' <<<"$j" | cut -d, -f1)
+  j=$(hypr_json getoption input:kb_variant) || exit $?; variant=$(jq -r '.str // ""' <<<"$j" | cut -d, -f1)
+  j=$(hypr_json getoption input:kb_model) || exit $?; model=$(jq -r '.str // ""' <<<"$j")
+  j=$(hypr_json getoption input:kb_options) || exit $?; options=$(jq -r '.str // ""' <<<"$j")
   KB=("$BOX_KEYBOARD" --layout "${layout:-us}" --variant "$variant" --model "$model" --options "$options")
 }
 
@@ -3080,8 +3121,9 @@ with_mods() {
 # From where the pointer is, "X Y" inside the layout: where a move that travels (--steps) starts.
 pointer_at() {
   local p ext
-  p=$(cursor_now) && [ -n "$p" ] || die "cannot tell where the pointer of box '$NAME' is (hyprctl cursorpos)"
-  ext=$(extent)
+  p=$(cursor_now) || exit $?
+  [ -n "$p" ] || die "cannot tell where the pointer of box '$NAME' is (hyprctl cursorpos)"
+  ext=$(extent) || exit $?
   local x=${p% *} y=${p#* } w=${ext%x*} h=${ext#*x}
   echo "$((x < w ? x : w - 1)) $((y < h ? y : h - 1))"
 }
@@ -3155,7 +3197,7 @@ cmd_click() {
     return
   fi
   # --wait: the cursor where it is and where it goes is not the change looked for.
-  local p; p=$(cursor_now) && [ -n "$p" ] && SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+  local p; p=$(cursor_now) || exit $?; [ -z "$p" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
   settle_begin settle "${SETTLE_ARGS[@]}"
   settle_ready "$SETTLE_JSON"
@@ -3353,7 +3395,11 @@ path_rects() {
     echo "$((x0 - 16)),$((y0 - 16)),$((x1 - x0 + 64)),$((y1 - y0 + 64))"
   done
 }
-cursor_now() { on_box hyprctl cursorpos | tr -d ' ' | awk -F, '/^[0-9]+,[0-9]+$/ { print $1, $2 }'; }
+# Where the pointer is, "X Y"; a box not answering ends the command (hypr_json): `p=$(cursor_now) || exit $?`.
+cursor_now() {
+  local j; j=$(hypr_json cursorpos) || exit $?
+  jq -r 'select((.x | type) == "number" and (.y | type) == "number") | "\(.x | floor) \(.y | floor)"' <<<"$j"
+}
 
 # omabox-still in the box, waiting on its first frame (the baseline). Its stdin is a pipe held here:
 # when this process goes (an action failed, Ctrl-C), the tool sees it close and ends. Sets
@@ -3556,7 +3602,7 @@ layer_at() {
 # shellcheck disable=SC2329 # called through poll_until
 layer_probe() {
   local want=$1 ns=$2 layers l
-  layers=$(on_box hyprctl -j layers 2>/dev/null) || return 1
+  layers=$(hypr_json layers 2>/dev/null) || return 1
   l=$(layer_at "$ns" <<<"$layers")
   if [ "$want" = gone ]; then if [ -z "$l" ]; then echo yes; else echo no; fi
   elif [ -n "$l" ]; then echo "yes at $l"; else echo no; fi
@@ -3581,7 +3627,8 @@ poll_until() {
     now=$(($(date +%s%3N) - POLL_T0))
     [ $rc != 2 ] || exit 2
     if [ $rc != 0 ]; then
-      box_alive && die "wait: could not ask box '$NAME'"
+      # A probe that could not ask a box still up: its Hyprland not answering, said so (#125).
+      box_alive && { hypr_answers 1 || die "$(hung_text)"; die "wait: could not ask box '$NAME'"; }
       res=unknown msg="box '$NAME' went down after $(ms_s $now)"; break
     fi
     detail=${out#* }; [ "$detail" != "$out" ] || detail=""
@@ -3662,12 +3709,13 @@ cmd_wait() {
         region=${g// /,}
       elif [ ${#sels[@]} -gt 0 ]; then
         # Its place on the screen: what is drawn there is what is watched.
-        local w; w=$(win_select "$(box_windows)" "${sels[@]}")
+        local w wins; wins=$(box_windows)
+        w=$(win_select "$wins" "${sels[@]}")
         [ "$(jq -r .onscreen <<<"$w")" = true ] || die "wait: window $(win_desc "$w") is not on screen (workspace $(jq -r .workspace <<<"$w")): $cond watches its place on the screen"
         region=$(jq -r '"\(.at[0]),\(.at[1]),\(.size[0]),\(.size[1])"' <<<"$w")
       fi
       [ -z "$region" ] || args+=(--region "$region")
-      p=$(cursor_now) && [ -n "$p" ] && args+=(--ignore "$(cursor_rect "$p")")
+      p=$(cursor_now) || exit $?; [ -z "$p" ] || args+=(--ignore "$(cursor_rect "$p")")
       settle_begin "$cond" "${args[@]}"
       local rc=0; settle_end "$cond" "$json" "" || rc=$?
       return $rc ;;
@@ -4044,7 +4092,8 @@ cmd_events() {
 
 # The box's screen: output name and mode (WxH@HZ as Hyprland reports it).
 box_screen() {
-  on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0] // empty |
+  local m; m=$(hypr_json monitors) || exit $?
+  jq -r <<<"$m" 'map(select(.disabled | not)) | .[0] // empty |
     "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
 }
 
@@ -4076,7 +4125,7 @@ cmd_mode() {
   local out; out=$(on_box hyprctl eval "hl.monitor({ output = '${screen%% *}', mode = '$want', position = '0x0', scale = 1 })" 2>&1) || true
   [ "$out" = ok ] || die "mode: hyprctl eval failed: $out"
   local deadline=$((SECONDS + 5))
-  until screen=$(box_screen) && [ "${screen#* }" = "$want" ]; do
+  until { screen=$(box_screen) || exit $?; } && [ "${screen#* }" = "$want" ]; do
     [ $SECONDS -lt $deadline ] || die "mode: asked for $want, box reports ${screen#* }"
     sleep 0.1
   done
@@ -5055,19 +5104,34 @@ box_theme() {
   printf '%s' "$theme"
 }
 
-# The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it).
+# The boxes up whose Hyprland does not answer within 1 s (#125, finding 182), their names one a line.
+# All asked at once, so `ls` takes 1 s at most for them. One still starting (no omabox.env) is not asked.
+hung_boxes() {
+  local n dir; dir=$(mktemp -d)
+  for n in $(list_names); do
+    select_box "$n"
+    [ "$(box_state)" = up ] && [ -s "$D/run/omabox.env" ] || continue
+    { hypr_answers 1 || : > "$dir/$n"; } 2>/dev/null &
+  done
+  wait
+  ls -1 -- "$dir"; rm -rf -- "$dir"
+}
+
+# The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it). HUNG: true
+# when hung_boxes named it. Its state stays `up`: the bar widget offers Down for any other state, as
+# for a dead box, and a box `save` has paused answers no IPC either. box_json [HUNG]
 box_json() {
-  local state peeking=false keys=false
+  local state peeking=false keys=false hung=${1:-false}
   state=$(box_state)
   peek_pid >/dev/null && peeking=true
   [ ! -f "$D/keys-to-box" ] || keys=true
   local theme; theme=$(box_theme)
-  jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" \
+  jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
       plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null),
-      omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
-    jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, plugins: [], peeking: false, keys_to_box: false}'
+      omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
+    jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false}'
 }
 
 # After an interactive box went (finding 134): the host out of the "omabox" submap once no interactive
@@ -5084,11 +5148,11 @@ submap_release() {
 
 # --json is for the bar widget (plugin/): one array, a single pass, with peek state.
 cmd_ls() {
-  local n
+  local n hung; hung=$(hung_boxes)
   if [ "${1:-}" = --json ]; then
     for n in $(list_names); do
       select_box "$n"
-      box_json
+      box_json "$(grep -qFx -- "$n" <<<"$hung" && echo true || echo false)"
     done | jq -s -c .
     return
   fi
@@ -5100,6 +5164,7 @@ cmd_ls() {
     # A box going down while this lists them has no box.json any more: left out, not the end of the
     # list (under errexit a failed lookup here ended `ls` there; seen with the suite's boxes in parallel).
     local state idle; state=$(box_state)
+    [ "$state" != up ] || ! grep -qFx -- "$n" <<<"$hung" || state=hung
     idle=$(meta idle) || continue
     if [ "${idle:-0}" -gt 0 ] && used=$(stat -c %Y "$D/used" 2>/dev/null); then
       idle="$((($(date +%s) - used) / 60))m/$(human_duration "$idle")"
