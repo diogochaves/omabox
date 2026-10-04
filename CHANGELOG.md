@@ -5,6 +5,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **The bar widget says whether a box is up, for omarchy-console's rail.** It exposes
+  `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
+  widget's own box count.
+
 ### Fixed
 
 - **`wait still` and every `--wait` end on a box whose Hyprland stopped answering** (stopped, or

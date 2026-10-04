@@ -211,6 +211,8 @@ after `omabox restart-shell` (the shell) or `omabox hyprctl reload` (the config)
 - **The bar widget** (`chaves.omabox`): the omabox mark in your bar lists every box, with **Peek**
   (or **Show**, for an interactive one), **Screenshot** and **Down**, **Paste your clipboard into the
   box** and **Copy the box's clipboard out** on an interactive one, and **New interactive box**.
+  For omarchy-console's rail it also exposes `consoleAwake` (true while a box is up) and
+  `consoleState` (`running` then), the console's convention for a module's state.
 
 <p><img src="docs/media/widget.png" alt="The widget's panel with no boxes up and its New interactive box button, and its Settings face: where windows open, confirm before closing, always show in the bar" width="800"></p>
 
