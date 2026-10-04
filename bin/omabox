@@ -1017,8 +1017,7 @@ seed_home() {
     place_plugin "$id" "$section" "$kinds" "$ids" < "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
     mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
   done
-  rm -rf "$h/.local/state/omarchy/current/theme"   # a save's: cp would copy into it
-  cp -rL "$state/theme" "$h/.local/state/omarchy/current/theme"
+  seed_theme "$state/theme" "$h"
   cp "$state/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null || true
   if bg=$(readlink "$state/background"); then
     ln -sfn "/home/sbx/.local/state/omarchy/current/theme/${bg#*/current/theme/}" "$h/.local/state/omarchy/current/background"
@@ -1073,6 +1072,20 @@ seed_copy() {
     set -- *; [ $# -gt 0 ] || exit 0
     tar --exclude='.[!.]*' --exclude=node_modules --exclude=api-keys.env -cf - -- "$@"
   ) 2>/dev/null | tar -C "$2/$3" -xf - 2>/dev/null || true
+}
+
+# The user's current theme into the box HOME, by seed_copy (finding 171): omarchy-theme-set keeps
+# the links of a theme the user wrote with cp -r, and following them (cp -rL) brought what they point
+# at into the box, a dangling one ending `up`. A link to a host path dangles in the box (a background
+# linked from ~/Pictures is not there); one into /usr/share/omarchy still works.
+# seed_theme SRC HOME
+seed_theme() {
+  local dst=$2/.local/state/omarchy/current/theme copied
+  home_unlink "$2" .local/state/omarchy/current/theme
+  rm -rf -- "$dst"   # a save's: the copy would merge with it
+  seed_copy "$1" "$2" .local/state/omarchy/current/theme
+  copied=$(ls -A -- "$dst" 2>/dev/null) || copied=""
+  [ -n "$copied" ] || die "could not copy your current theme ($1) into the box HOME ($dst)"
 }
 
 # home_unlink HOME REL...: a link or FIFO at HOME/REL, or at any dir on the way to it, is removed (the

@@ -599,6 +599,19 @@ t_unit_seed_copy() {
   check "seed_copy into a linked dir: a real dir now" test -f "$s/h4/d/term/foot.ini" -a ! -L "$s/h4/d/term"
   check "...over links inside it: real files and dirs" test -f "$s/h4/e/term/foot.ini" -a ! -L "$s/h4/e/term/foot.ini" -a -f "$s/h4/e/term/x/y/z"
   check_eq "...nothing written outside the HOME" "cfg cfg/x file host" "$(find "$o" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$o/file")"
+  # finding 171: the current theme keeps the links of a theme the user wrote; never followed, a
+  # dangling one no failure, and a save's theme (a link to a host dir here) replaced, not merged.
+  local th=$s/state/theme cur=.local/state/omarchy/current; mkdir -p "$th/backgrounds" "$s/h5/$cur"
+  echo colors > "$th/colors.toml"; echo bg > "$th/backgrounds/1.jpg"
+  ln -s "$s/api-keys.env" "$th/keys.toml"; ln -s "$s/none" "$th/backgrounds/2.jpg"
+  ln -s "$o/cfg" "$s/h5/$cur/theme"
+  check "seed_theme: a theme with a link to a secret and a dangling link" lib seed_theme "$th" "$s/h5"
+  check_eq "...copied" "colors bg" "$(cat "$s/h5/$cur/theme/colors.toml" "$s/h5/$cur/theme/backgrounds/1.jpg" | xargs)"
+  check "...its links still links" test -L "$s/h5/$cur/theme/keys.toml" -a -L "$s/h5/$cur/theme/backgrounds/2.jpg"
+  check_fails "...nothing of their targets in the box HOME" grep -rqs secret "$s/h5"
+  check_eq "...a save's theme replaced, its link's target untouched" "x" "$(find "$o/cfg" -mindepth 1 -printf '%P\n' | xargs)"
+  mkdir -p "$s/empty"
+  check_eq "...nothing to copy: up says so" 1 "$(lib seed_theme "$s/empty" "$s/h5" 2>&1 | grep -c 'could not copy your current theme')"
 }
 
 # The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left

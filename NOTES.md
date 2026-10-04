@@ -3009,6 +3009,18 @@ from them.
     notified with that reason and leave none of their processes; two deaf to SIGTERM are killed, are
     two failures, not four, and the list after them is read. All fail on 0.4.7's widget; without the
     `exited` flag the counts fail, with `running = false` in place of the tree the leftover checks.
+171. **The current theme is copied without following its links** (2026-10-03, #97). `seed_home`
+    copied `~/.local/state/omarchy/current/theme` with `cp -rL`. `omarchy-theme-set` drops the links
+    of a theme installed from a repo (`.git` in it), but a theme the user wrote is copied with `cp
+    -r`, its links kept: one to `api-keys.env` brought the keys into the box HOME (finding 74's
+    class), and a dangling one ended `up` with a bare `cp: cannot stat`. `seed_theme` copies it with
+    `seed_copy` (links stay links, no hidden files, nothing `refuse_src` keeps out), replaces a
+    save's theme rather than merging with it, and says so when nothing could be copied. A link to a
+    host path dangles in the box (a background linked from `~/Pictures` is missing there); one into
+    `/usr/share/omarchy` still works. `t_unit_seed_copy`: a theme with a link to a secret and a
+    dangling link copies, its links stay links, no secret in the box HOME, an empty source is
+    refused; four of those fail on the old `cp -rL`. A box from this machine's theme (frieren) has
+    the same theme as the host (`diff -r`) and its background.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
