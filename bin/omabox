@@ -2999,6 +2999,9 @@ cmd_keys() {
 KB=()
 kb_tool() {
   local layout variant model options
+  # One answer first, said in words when there is none (a stopped Hyprland: jq's parse error, exit 5).
+  on_box hyprctl -j getoption input:kb_layout 2>/dev/null | jq -e . >/dev/null 2>&1 ||
+    die "box '$NAME': its Hyprland did not answer (hyprctl getoption)"
   layout=$(on_box hyprctl -j getoption input:kb_layout | jq -r '.str // "us"' | cut -d, -f1)
   variant=$(on_box hyprctl -j getoption input:kb_variant | jq -r '.str // ""' | cut -d, -f1)
   model=$(on_box hyprctl -j getoption input:kb_model | jq -r '.str // ""')

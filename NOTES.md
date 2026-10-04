@@ -58,7 +58,8 @@ Driving it from the host is `omabox` (`omabox help`): `hyprctl`, `grim` (shot), 
 pointer and `omabox-still` (`wait`, finding 82) all run inside the box's mount namespace (`nsenter -U -m`), so they only ever see the box's
 sockets (finding 63). The spike's manual way (a symlinked runtime dir, `wtype`, the pointer run from a
 host shell) is history and unsafe: `wtype` sends the wrong keys (13), and a tool run from a host shell
-drives the real desktop; both tools now refuse to run outside a box.
+drives the real desktop; both tools now refuse to run outside a box (where `/opt/omabox/share` is
+no mount point, or the system bus is there: finding 177).
 
 ## Reproduce on a fresh Omarchy install
 
@@ -3085,6 +3086,25 @@ from them.
     and grim's own words, as for a headless box. `t_inspect` (1-4, 6, 7, 10) and `t_unit_refusals`
     (5); all nine fail on the old code. (10) on an interactive box: `t_unit_shot_hidden`, its grim stub
     now times out (124) as a hidden window's grim does, and one failing otherwise gives grim's reason.
+177. **The input tools' guard is no directory test, and a stopped compositor ends them** (2026-10-03,
+    #108; the guard: findings 63, 80). (1) keyboard, pointer, still and events refused outside a box
+    by `access("/opt/omabox/share")`: any host with that directory (an install there, a stray mkdir)
+    would run them against the real desktop. `tools/common/box.h` now asks for what every box has and
+    no host does: `/opt/omabox/share` the root of a mount (`statx` `STATX_ATTR_MOUNT_ROOT`; before
+    Linux 5.8 a device other than `/opt/omabox`'s) and no `/run/dbus/system_bus_socket` (the box
+    safety invariant; Omarchy always has the bus). Not `/proc/self/mountinfo`, which the issue
+    proposed: a tool omabox starts with `nsenter -U -m` is not in the box's pid namespace, and the
+    box's `/proc` has no `self` for it (still refused every `wait` that way). Nor the issue's
+    `$XDG_RUNTIME_DIR/omabox.env`: Hyprland's start hook launches events, keyboard and pointer
+    `--hold` before it writes that file. (2) Every round trip waited forever on a compositor alive
+    but stopped (SIGSTOP, a deadlock), holding `keys`/`click` (and `-m`'s modifiers).
+    `tools/common/roundtrip.h` is `wl_display_roundtrip` with a 10 s deadline (prepare_read + poll,
+    as still and peek do): "lost the compositor (no answer in 10 s)", exit 3. `keys` met a stopped
+    Hyprland at its first `hyprctl getoption` and died in jq (exit 5): now said in words. `t_unit_pointer`:
+    all four refuse in a bare sandbox, keyboard and pointer where the dir is plain and where a bus
+    socket (a stand-in file) is; `t_keys`: keys and pointer stopped in their sleep exit 3 about 10 s
+    on, and the box answers once continued. All seven fail on 0.4.8's tools (they waited until the
+    test's 40 s timeout). `install.sh --check` passes.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

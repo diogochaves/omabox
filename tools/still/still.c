@@ -34,6 +34,7 @@
 #include <wayland-client.h>
 
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
+#include "../common/box.h"
 
 #define DRM_FORMAT_XBGR8888 0x34324258
 #define DRM_FORMAT_ABGR8888 0x34324241
@@ -331,7 +332,7 @@ static void unsatisfied(void) {
 int main(int argc, char **argv) {
     // Only ever inside a box (omabox runs it there): from a host shell, WAYLAND_DISPLAY is the user's
     // real desktop, and there is nothing of theirs to wait on.
-    if (access("/opt/omabox/share", F_OK) != 0) {
+    if (!omabox_inside_box()) {
         fprintf(stderr, "%s: only runs inside an omabox box (use omabox wait)\n", argv[0]);
         return 2;
     }

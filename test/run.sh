@@ -2968,8 +2968,22 @@ t_keys() {
   else skip "an X11 app gets characters outside the layout" "no zenity"; fi
   check "pointer: click, then move" ob pointer -b "$B" -- click move 10 10
   check_eq "pointer: sleep -1 refused" 2 "$(timeout 5 "$CLI" pointer -b "$B" -- sleep -1 >/dev/null 2>&1; echo $?)"
-  ob keys -b "$B" -s 3000 a >/dev/null 2>&1 & local k=$!
-  ob pointer -b "$B" -- sleep 3000 move 10 10 >/dev/null 2>&1 & local p=$!
+  # A compositor alive but stopped (#108, finding 177): each tool gives up after 10 s with exit 3
+  # instead of waiting forever (timeout 40: on the old tools, 124). Stopped once they are past the
+  # CLI's own hyprctl calls, in their -s / sleep.
+  timeout 40 "$CLI" keys -b "$B" -s 3000 a >/dev/null 2>"$TMP/stop.k" & local k=$!
+  timeout 40 "$CLI" pointer -b "$B" -- sleep 3000 move 10 10 >/dev/null 2>"$TMP/stop.p" & local p=$!
+  sleep 1.5; ob run -b "$B" -- sh -c 'kill -STOP $(pidof Hyprland)'
+  local t0=$SECONDS rk=0 rp=0
+  wait "$k" || rk=$?; wait "$p" || rp=$?
+  local took=$((SECONDS - t0))
+  ob run -b "$B" -- sh -c 'kill -CONT $(pidof Hyprland)'
+  check_eq "keys and pointer give up on a stopped compositor: exit 3" "3 3" "$rk $rp"
+  check_match "...said" "keyboard: .*no answer in 10 s.*pointer: .*no answer in 10 s" "$(cat "$TMP/stop.k" "$TMP/stop.p" | tr '\n' ' ')"
+  check "...in about 10 s ($took s after the stop)" test "$took" -le 16
+  check "...and the box answers again once it goes on" until_ok 10 ob keys -b "$B" shift
+  ob keys -b "$B" -s 3000 a >/dev/null 2>&1 & k=$!
+  ob pointer -b "$B" -- sleep 3000 move 10 10 >/dev/null 2>&1 & p=$!
   sleep 1.5; ob down "$B" >/dev/null
   wait "$k"; check_eq "keys exits 1 when the box goes mid-run" 1 $?
   wait "$p"; check_eq "pointer exits 1 when the box goes mid-run" 1 $?
@@ -4367,11 +4381,24 @@ t_unit_pointer() {
   # The input tools refuse outside a box before they connect (SECURITY.md): run from a host shell they
   # would drive the real desktop. Checked in a sandbox with no /opt/omabox, no runtime dir, no display.
   local t out rc
-  for t in keyboard pointer; do
+  local arg
+  for t in keyboard pointer still events; do
+    arg=(); [ "$t" != events ] || arg=(/dev/null)   # (events wants its file first, or it says its usage)
     rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /run \
-      --die-with-parent env -i "$ROOT/tools/$t/omabox-$t" 2>&1) || rc=$?
+      --die-with-parent env -i "$ROOT/tools/$t/omabox-$t" "${arg[@]}" 2>&1) || rc=$?
     check_eq "omabox-$t refuses outside a box" 2 "$rc"
     check_match "...and says so" "only runs inside an omabox box" "$out"
+  done
+  # (#108, finding 177) Not a directory test: a plain /opt/omabox/share (an install, a stray mkdir) is
+  # no box, nor is a mount there where the system bus is (a stand-in file for its socket, never the bus).
+  : > "$TMP/fakebus"
+  for t in keyboard pointer; do
+    rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --dir /opt/omabox/share \
+      --tmpfs /run --die-with-parent env -i "$ROOT/tools/$t/omabox-$t" 2>&1) || rc=$?
+    check_eq "omabox-$t refuses where /opt/omabox/share is a plain dir" "2 yes" "$rc $(grep -q 'only runs inside' <<<"$out" && echo yes)"
+    rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --ro-bind "$ROOT/share" /opt/omabox/share \
+      --tmpfs /run --dir /run/dbus --ro-bind "$TMP/fakebus" /run/dbus/system_bus_socket --die-with-parent env -i "$ROOT/tools/$t/omabox-$t" 2>&1) || rc=$?
+    check_eq "...and where the system bus is, a mount there or not" "2 yes" "$rc $(grep -q 'only runs inside' <<<"$out" && echo yes)"
   done
 }
 

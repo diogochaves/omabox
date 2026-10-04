@@ -12,6 +12,7 @@
 // a sandbox it cannot move the real desktop's cursor. Exit 1 if the compositor goes away mid-run.
 // --hold keeps an idle pointer on the seat until the compositor goes away (NOTES finding 41): omabox's
 // own, left out of the usage line (it never returns; agents took it for "hold the button").
+#define _GNU_SOURCE
 #include <linux/input-event-codes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,8 @@
 #include <wayland-client.h>
 
 #include "wlr-virtual-pointer-unstable-v1-client-protocol.h"
+#include "../common/box.h"
+#include "../common/roundtrip.h"
 
 static struct wl_seat *seat;
 static struct zwlr_virtual_pointer_manager_v1 *manager;
@@ -72,7 +75,9 @@ static double numd(const char *s, double lo, double hi) {
 static struct wl_display *display;
 // A lost compositor (box gone, protocol error) is a failure, not "clicked" (finding 63).
 static void sync_or_die(void) {
-    if (wl_display_roundtrip(display) < 0) { fprintf(stderr, "omabox-pointer: lost the compositor\n"); exit(1); }
+    int r = omabox_roundtrip(display, 10000);   // a stopped compositor never answers (finding 177)
+    if (r == -2) { fprintf(stderr, "omabox-pointer: lost the compositor (no answer in 10 s)\n"); exit(3); }
+    if (r < 0) { fprintf(stderr, "omabox-pointer: lost the compositor\n"); exit(1); }
 }
 static void sleep_ms(long ms) {
     struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
@@ -137,7 +142,7 @@ int main(int argc, char **argv) {
     // which could be a connection to another compositor, the user's real one (finding 63).
     // Only ever inside a box (omabox runs it there, in the box's mount namespace): run from a host
     // shell, WAYLAND_DISPLAY is the user's real desktop (it happened once: a parse check clicked it).
-    if (access("/opt/omabox/share", F_OK) != 0) {
+    if (!omabox_inside_box()) {
         fprintf(stderr, "%s: only runs inside an omabox box (use omabox keys/click/pointer)\n", argv[0]);
         return 2;
     }

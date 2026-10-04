@@ -37,6 +37,8 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "virtual-keyboard-unstable-v1-client-protocol.h"
+#include "../common/box.h"
+#include "../common/roundtrip.h"
 
 static struct wl_seat *seat;
 static struct zwp_virtual_keyboard_manager_v1 *manager;
@@ -81,7 +83,9 @@ static long num(const char *s, long lo, long hi) {
 
 // A lost compositor (box gone, protocol error) is a failure, not "keys sent" (finding 64).
 static void sync_or_die(void) {
-    if (wl_display_roundtrip(display) < 0) { fprintf(stderr, "omabox-keyboard: lost the compositor\n"); exit(1); }
+    int r = omabox_roundtrip(display, 10000);   // a stopped compositor never answers (finding 177)
+    if (r == -2) { fprintf(stderr, "omabox-keyboard: lost the compositor (no answer in 10 s)\n"); exit(3); }
+    if (r < 0) { fprintf(stderr, "omabox-keyboard: lost the compositor\n"); exit(1); }
 }
 
 // A keysym's first (keycode, modifiers) in layout 0 of the keymap, lowest level first. The modifiers
@@ -477,7 +481,7 @@ static char **stdin_texts(int *argc, char **argv, int first) {
 int main(int argc, char **argv) {
     // Only ever inside a box (omabox runs it there, in the box's mount namespace): run from a host
     // shell, WAYLAND_DISPLAY is the user's real desktop (it happened once: a parse check clicked it).
-    if (access("/opt/omabox/share", F_OK) != 0) {
+    if (!omabox_inside_box()) {
         fprintf(stderr, "%s: only runs inside an omabox box (use omabox keys/click/pointer)\n", argv[0]);
         return 2;
     }

@@ -10,6 +10,7 @@
 // It stops writing at MAX_BYTES (the log is on the disk the box HOME is on: an app that retitles its
 // window every frame should not fill it). Ends when Hyprland closes the socket; dies with the box.
 // Refuses outside a box: on the host it would record the real session's events.
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -19,6 +20,8 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../common/box.h"
 
 #define MAX_BYTES (256L << 20)
 #define MAX_LINE (64 << 10)   // longer lines (a huge title) are cut here
@@ -53,7 +56,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: omabox-events FILE\n");
         return 2;
     }
-    if (access("/opt/omabox/share", F_OK) != 0) {
+    if (!omabox_inside_box()) {
         fprintf(stderr, "omabox-events: only runs inside an omabox box\n");
         return 2;
     }
