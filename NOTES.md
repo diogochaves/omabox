@@ -2853,6 +2853,14 @@ from them.
     still exiting after 10 s. `t_failed_up` checks the box reads dead as soon as `up` returns, and
     prints `up`'s message in the check's name. Whether this was #86's flake (a failed `up` left its
     box running) is not known: #86 did not reproduce in 24 more runs, eight at a time.
+    That first check did not guard the fix (#91): run against a3fc49f's CLI it passed 2 of 2, since
+    the old trap's SIGKILL to PID 1 had already made the box read dead, and pasta, the step it
+    skipped, exits by itself once bwrap is gone. `t_unit_kill_box` now runs the real `kill_box`
+    under set -e with two sleeps (not the shell's children) for PID 1 and pasta: it must run to its
+    end with both gone. On a3fc49f's CLI it failed 3 of 3, "PID 1 gone, pasta alive", the end
+    never reached. (Today's trap calls `kill_box || true`, which turns set -e off inside it; the
+    test guards `kill_box` itself, which `down` and others call too.) No `t_failed_up` failure in 13
+    full runs and 3 targeted ones on 2026-10-03.
 158. **€ reaches X11 apps now** (2026-10-03, #85; finding 64's open item). In an `--xwayland` box
     (us layout, which has € only on keycode 443, out of X11's reach, so `keys` gives it a spare up
     to 255), `GDK_BACKEND=x11 zenity --entry` (`xwayland: true` in `hyprctl clients`) got
