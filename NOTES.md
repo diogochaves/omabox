@@ -3052,6 +3052,21 @@ from them.
     in `--json` (a non-ASCII class pads by characters too). The only `@tsv` in the CLI.
     `t_unit_window_select`: a quoted title, an empty class, the other columns; all three fail on the
     old pipeline. In a box, `say "hi" \ back` and a class `é-class` print as `--json` has them.
+175. **`up` refuses what could only break the box, before it makes anything** (2026-10-03, #106).
+    `--env XDG_RUNTIME_DIR=/nowhere` came after omabox's own `--setenv`s and won: "Hyprland not up
+    after 30s", nothing more. `env_reserved` names what the session sets or what changes every
+    program in it (PATH, HOME, XDG_RUNTIME_DIR, XDG_{DATA,CONFIG,CACHE,STATE}_HOME, WAYLAND_DISPLAY,
+    WAYLAND_SOCKET, DISPLAY, HYPRLAND_INSTANCE_SIGNATURE, LD_PRELOAD, LD_LIBRARY_PATH, BASH_ENV, ENV);
+    `up --env`, `run --pass` and `--env-file` (by line, never the value) refuse those. Not
+    `OMABOX_*`, which the issue listed: they are the box's own switches, and the suite sets
+    `OMABOX_SHELL=0` on purpose to make an up fail. A plugin's manifest id names its dir in the box
+    HOME and was word-split: now letters, digits, `.` `_` `-`, not starting with `.` or `-` (`../x`
+    or `a b` refused, naming the dir). Plugins are now resolved before `up` takes its lock, so a
+    refused or missing plugin leaves no `.lock-NAME` either (it did). `--allow` ports are 1-65535
+    (pasta's own refusal came from inside the box) and kept sorted, each once (`allow_ports`), so a
+    box up with `8082,8081` is the box `--allow 8081,8082` asks for. `t_unit_refusals`: each refused
+    with its message, no box dir or lock; `allow_ports`. A box up with `8082,8081` then `up --allow
+    8081,8082`: already up; `--allow 8081`: refused, naming `8081,8082`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

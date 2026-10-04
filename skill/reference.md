@@ -106,7 +106,8 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   (`setsid: failed to execute alacritty`); Omarchy's terminal is `foot` or what the host has.
 - The session's PATH is yours (mise's tools, as in `omabox run`) with the box HOME's `~/.local/bin`
   first: drop a stub CLI there to fake one a plugin calls. `--env KEY=VAL` on `up` sets a variable for
-  the whole session (the bar included), e.g. a plugin's API base pointed at a stub.
+  the whole session (the bar included), e.g. a plugin's API base pointed at a stub; not one the
+  session sets itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, LD_PRELOAD...): refused.
 - `omabox up --systemd` gives the box a real systemd user manager: `systemctl --user`, units in the box
   HOME's `~/.config/systemd/user`, `systemd-run --user` timers (for plugins that manage their own
   service or schedule alarms). No journald (`journalctl --user` is empty) and no logind either way.

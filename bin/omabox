@@ -144,7 +144,9 @@ variables (a password too: never on a command line); --env-file FILE hands it a 
 (a dev.env: read as data, nothing expanded; --pass wins); \`keys --pass VAR\` types one (never \`-t\`
 for a secret: the process list shows it). \`keys -t\` and \`keys --pass\` type newline and tab
 (Return, Tab); any other control character is refused (exit 2); a value's one trailing \\r is dropped.
---env KEY=VAL is the box session's, on \`up\`.
+--env KEY=VAL is the box session's, on \`up\`; not what the session sets itself (PATH, HOME,
+XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, DISPLAY, HYPRLAND_INSTANCE_SIGNATURE, LD_PRELOAD...),
+nor by run --pass or --env-file.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run restart-shell
@@ -551,6 +553,17 @@ on_box() {
     WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" "$@"
 }
 
+# A variable the box session sets, or that changes how every program in it runs (finding 175):
+# --env, run --pass and --env-file refuse it, which only broke the box late ("Hyprland not up after
+# 30s"). Not OMABOX_*: those are the box's own switches, and the suite sets some on purpose.
+env_reserved() {
+  case $1 in
+    PATH|HOME|XDG_RUNTIME_DIR|XDG_DATA_HOME|XDG_CONFIG_HOME|XDG_CACHE_HOME|XDG_STATE_HOME) return 0 ;;
+    WAYLAND_DISPLAY|WAYLAND_SOCKET|DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|LD_PRELOAD|LD_LIBRARY_PATH|BASH_ENV|ENV) return 0 ;;
+  esac
+  return 1
+}
+
 # run --env-file FILE (#30): its KEY=VAL lines, NUL-separated. `export ` and # comment lines are
 # allowed, and a value in matching quotes loses them; nothing is expanded (the file is data, not a
 # script) and a # after a value is part of it. A bad line fails with its number, never its text.
@@ -562,6 +575,7 @@ envfile_read() {
     [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
     [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || die "--env-file $f: line $n is not KEY=VALUE"
     k=${BASH_REMATCH[2]} v=${BASH_REMATCH[3]}
+    ! env_reserved "$k" || die "--env-file $f: line $n sets $k: it is the box session's own"
     if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v=${BASH_REMATCH[1]}; fi
     printf '%s=%s\0' "$k" "$v"
   done < "$f"
@@ -859,6 +873,8 @@ resolve_plugin() {
   fi
   id=$(jq -r '.id // empty' "$dir/manifest.json")
   [ -n "$id" ] || die "no id in $dir/manifest.json"
+  # It names the plugin's dir in the box HOME and is split on whitespace (finding 175).
+  [[ $id =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || die "plugin $dir: its manifest id '$id' must be letters, digits, . _ - (not starting with . or -)"
   printf '%s\t%s\n' "$id" "$dir"
 }
 
@@ -1164,6 +1180,16 @@ refuse_dest() {
   return 1
 }
 
+# --allow's ports in order, each once (finding 175): 8082,8081,8081 is 8081,8082, so a box up with
+# them compares equal however they were given. Fails on a port out of 1-65535 (pasta's own message
+# came late, from inside the box). allow_ports LIST
+allow_ports() {
+  [ -n "$1" ] || return 0
+  local p; local -a ps; IFS=, read -ra ps <<<"$1"
+  for p in "${ps[@]}"; do [[ $p =~ ^[0-9]{1,5}$ ]] && ((10#$p >= 1 && 10#$p <= 65535)) || return 1; done
+  printf '%s\n' "${ps[@]}" | awk '{ print $1 + 0 }' | sort -nu | paste -sd,
+}
+
 # What `up` says of a box that is up already, which counts as use. The options given that the box
 # does not have are refused (finding 134): an agent asking for a plugin, isolation or a size would
 # otherwise go on without it. Only those given: a bare `up` takes the box as it is. Mounts, --env and
@@ -1177,7 +1203,7 @@ up_already() {
   case " $given " in *" net "*)
     if [ "$net" = isolated ]; then [ "$(meta net)" = isolated ] || diff+=("--net isolated (it is $(meta net))")
     elif [ "$(meta net)" = isolated ]; then diff+=("--net connected (it is isolated)"); fi ;; esac
-  case " $given " in *" allow "*) [ "$(meta allow)" = "$allow" ] || diff+=("--allow $allow (it allows $(meta allow | grep . || echo none))") ;; esac
+  case " $given " in *" allow "*) [ "$(allow_ports "$(meta allow)")" = "$allow" ] || diff+=("--allow $allow (it allows $(meta allow | grep . || echo none))") ;; esac
   case " $given " in *" systemd "*) [ "$(meta systemd)" = true ] || diff+=("--systemd (it has no user manager)") ;; esac
   case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
   case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
@@ -1224,7 +1250,9 @@ cmd_up() {
       --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec"); shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
-      --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"; envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
+      --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
+        ! env_reserved "${2%%=*}" || die "up: --env cannot set ${2%%=*}: it is the box session's own"
+        envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
       --idle) optarg "$@"; idle=$2; shift ;;
       --from) optarg "$@"; FROM=$2; shift ;;
       --hyprland) optarg "$@"; hyprland=$(hypr_bin "$2") || exit 1; shift ;;
@@ -1240,6 +1268,9 @@ cmd_up() {
     esac
     shift
   done
+  # A plugin that cannot be mounted (not there, or a manifest id that is not a name: finding 175) is
+  # refused before any lock or box dir is made.
+  local p; for p in "${plugin_args[@]}"; do resolve_plugin "$p" >/dev/null; done
   if [ $new = 1 ]; then
     # A name no box has (finding 73): box-1, box-2, ... The choice holds a lock until the box's dir
     # exists, so two at once (a double click in the widget) never pick the same one. Printed on stdout.
@@ -1319,6 +1350,8 @@ cmd_up() {
   [ -z "$allow" ] || [ "$net" = isolated ] || die "up: --allow needs --net isolated"
   [ "$net" = connected ] && [ -f /opt/omabox/share/session.sh ] && net=none
   [[ -z $allow || $allow =~ ^[0-9]+(,[0-9]+)*$ ]] || die "up: --allow takes ports: 8081,8082"
+  local ports; ports=$(allow_ports "$allow") || die "up: --allow takes ports from 1 to 65535, got $allow"
+  allow=$ports
   # The save's dir, resolved once (finding 163): an assignment, so its refusal ends `up`. A save_dir call
   # inside cp's argument would not (set -e ignores it there), and a save removed while `up` waited for
   # the lock below would make the source /home/., the user's home.
@@ -1388,7 +1421,7 @@ cmd_up() {
   [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
     die "--systemd needs your systemd user manager (systemctl --user) to delegate the box a cgroup"
   PLUGINS=()
-  local p; for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
+  for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
   for p in "${PLUGINS[@]}"; do
     why=$(refuse_src "${p#*$'\t'}") && die "refusing to mount plugin ${p#*$'\t'} into a box: $why"
   done
@@ -2463,6 +2496,7 @@ cmd_run() {
       --wait|--start|--timeout|--strict|--json) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
       --pass) optarg "$@"
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "run: --pass takes a variable name, got $2"
+        ! env_reserved "$2" || die "run: --pass cannot set $2: it is the box session's own"
         caller_env "$2" >/dev/null || die "run: --pass $2: not in this command's environment (export it first)"
         PASS+=("$2"); shift ;;
       --env-file) optarg "$@"

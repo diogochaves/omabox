@@ -504,6 +504,22 @@ t_unit_refusals() {
   check_match "an isolated box is refused up front from a no_new_privs process" \
     "cannot start from a no_new_privs process" "$(setpriv --no-new-privs "$CLI" up "$P-r20" --net isolated 2>&1)"
   check_fails "...before its box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r20"
+  # #106, finding 175: what can only break the box is refused up front, named.
+  check_match "--env of the box session's own refused" "--env cannot set XDG_RUNTIME_DIR: it is the box session's own" \
+    "$(ob up "$P-r21" --no-shell --env XDG_RUNTIME_DIR=/nowhere 2>&1)"
+  check_match "...LD_PRELOAD too" "cannot set LD_PRELOAD" "$(ob up "$P-r22" --env LD_PRELOAD=/x.so 2>&1)"
+  check_match "--allow 0 refused" "ports from 1 to 65535, got 0" "$(ob up "$P-r23" --net isolated --allow 0 2>&1)"
+  check_match "--allow 70000 refused" "ports from 1 to 65535, got 8081,70000" "$(ob up "$P-r24" --net isolated --allow 8081,70000 2>&1)"
+  mkdir -p "$TMP/badid"; echo '{"id":"../x"}' > "$TMP/badid/manifest.json"
+  check_match "a plugin whose manifest id is a path refused" "manifest id '../x' must be letters, digits" "$(ob up "$P-r25" --plugin "$TMP/badid" 2>&1)"
+  echo '{"id":"a b"}' > "$TMP/badid/manifest.json"
+  check_match "...or has a space" "manifest id 'a b' must be" "$(ob up "$P-r26" --plugin "$TMP/badid" 2>&1)"
+  check_match "run --pass of the box session's own refused" "--pass cannot set PATH" "$(ob run -b "$P-x" --pass PATH -- true 2>&1)"
+  printf 'A=1\nexport HOME=/x\n' > "$TMP/reserved.env"
+  check_match "...--env-file's too, by line" "line 2 sets HOME: it is the box session's own" "$(ob run -b "$P-x" --env-file "$TMP/reserved.env" -- true 2>&1)"
+  check_eq "allow_ports: sorted, each once" "22,8081,8082" "$(lib allow_ports 8082,22,8081,08081)"
+  check_eq "...none for none" "" "$(lib allow_ports "")"
+  local r; for r in 21 22 23 24 25 26; do check_fails "...no box dir or lock for $P-r$r" test -e "$XDG_RUNTIME_DIR/omabox/$P-r$r" -o -e "$XDG_RUNTIME_DIR/omabox/.lock-$P-r$r"; done
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
