@@ -29,6 +29,9 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   must be on screen and uncovered). The button defaults to left. A button pressed with `down` stays
   down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
   box's next clicks are drags.
+- `keys -t TEXT` and `--pass VAR` type a newline as Return and a tab as Tab; any other control
+  character (backspace, escape, a carriage return) is refused, exit 2, before anything is typed. A
+  `--pass` value's one trailing `\r` (a Windows line ending) is dropped.
 - **Travel** (`--steps N` on `click` and `pointer`; 1-999, 1 is a jump): N moves in a straight line
   from where the pointer is, each seen by Hyprland and drawn before the next (~40 ms apart), so
   focus-follows-mouse and hover happen on the way. Pick N so a step (the distance over N) is narrower

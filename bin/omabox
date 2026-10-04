@@ -142,7 +142,9 @@ a second after its server listens); isolated, no-network (the box's net: nothing
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
 variables (a password too: never on a command line); --env-file FILE hands it a file's KEY=VAL lines
 (a dev.env: read as data, nothing expanded; --pass wins); \`keys --pass VAR\` types one (never \`-t\`
-for a secret: the process list shows it). --env KEY=VAL is the box session's, on \`up\`.
+for a secret: the process list shows it). \`keys -t\` and \`keys --pass\` type newline and tab
+(Return, Tab); any other control character is refused (exit 2); a value's one trailing \\r is dropped.
+--env KEY=VAL is the box session's, on \`up\`.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run restart-shell

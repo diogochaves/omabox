@@ -6,8 +6,9 @@
 // COMBO is super+space, ctrl+shift+t, Return, a, F5, ctrl++, super+/ ... (modifiers: super ctrl shift
 // alt altgr; a key is a keysym name or a single character). With modifiers a letter is the key, not
 // the shifted symbol: SUPER+W is super+w, as in Hyprland's binds; shift+w for SUPER+SHIFT+W. On its own
-// an uppercase letter types it (A is shift+a). -t types TEXT; -T types the next NUL-terminated text
-// read from stdin (a secret: never in argv, where the process list shows it); -s sleeps.
+// an uppercase letter types it (A is shift+a). -t types TEXT (newline and tab as Return and Tab; any
+// other control character is refused, exit 2); -T types the next NUL-terminated text read from stdin
+// (a secret: never in argv, where the process list shows it; one trailing \r dropped); -s sleeps.
 // -m MODS (ctrl, shift+alt, ...) presses those modifiers and keeps them down to the end of the run,
 // under whatever comes after; -p MS prints "paused" and waits for a line (or the end) on stdin, MS at
 // most: `omabox click --mod` clicks there with the pointer tool (#25). Held modifiers are released
@@ -368,6 +369,22 @@ static struct xkb_keymap *with_spares(struct xkb_context *ctx, int argc, char **
     return km;
 }
 
+// -t TEXT may hold newline and tab (Return, Tab), no other control character: xkb maps them to keys
+// (0x08 BackSpace, 0x0D Return, 0x1B Escape, 0x7F Delete), so a stray one would edit, submit or close
+// instead of typing. Checked for every text before anything is sent; 0 refuses the run (exit 2).
+static int text_controls_ok(int argc, char **argv, int first) {
+    for (int a = first; a < argc; a++) {
+        if (strcmp(argv[a], "-t") || a + 1 >= argc) continue;
+        const unsigned char *s = (const unsigned char *)argv[++a];
+        for (const unsigned char *p = s; *p; p++)
+            if ((*p < 0x20 && *p != '\n' && *p != '\t') || *p == 0x7f) {
+                fprintf(stderr, "omabox-keyboard: text has a control character (U+%04X) at byte %td; only newline and tab are typed\n", *p, p - s);
+                return 0;
+            }
+    }
+    return 1;
+}
+
 static int do_text(const char *s, int run) {
     const unsigned char *p = (const unsigned char *)s;
     uint32_t cp;
@@ -439,6 +456,8 @@ static char **stdin_texts(int *argc, char **argv, int first) {
         } else if (a >= first && !strcmp(argv[a], "-T")) {
             char *nul = at < len ? memchr(buf + at, 0, len - at) : NULL;
             if (!nul) { fprintf(stderr, "omabox-keyboard: -T: no NUL-terminated text left on stdin\n"); exit(2); }
+            // A value pasted with a Windows line ending: its \r is not part of the secret.
+            if (nul > buf + at && nul[-1] == '\r') nul[-1] = 0;
             out[o++] = "-t";
             out[o++] = buf + at;
             at = (size_t)(nul - buf) + 1;
@@ -489,6 +508,8 @@ int main(int argc, char **argv) {
         signal(SIGPIPE, SIG_IGN);
     }
     if (!hold) argv = stdin_texts(&argc, argv, i);
+
+    if (!hold && !text_controls_ok(argc, argv, i)) return 2;
 
     struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_ENVIRONMENT_NAMES);
     keymap = ctx ? xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS) : NULL;

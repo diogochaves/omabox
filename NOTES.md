@@ -3033,6 +3033,17 @@ from them.
     under the path may not count (said in `help drag`); a one-line foot selection still does, its
     row reaching above the rects. `t_wait`: across an empty screen 124 (fails on 0.4.8), selecting
     foot text 0; `t_unit_pointer`: `path_rects`.
+173. **`keys` refuses control characters in text** (2026-10-03, #104; the keys history: 64, 158).
+    libxkbcommon maps C0 controls to keys (`xkb_utf32_to_keysym`: 0x08 BackSpace, 0x0D Return, 0x1B
+    Escape, 0x7F Delete, 0x0B Clear; the rest Unicode keysyms on spare keycodes), so `keys -t
+    $'abc\x08\x08xyz'` typed `axyz`, and a `--pass` value pasted with a trailing `\r` submitted the
+    form. `omabox-keyboard` now checks every text before it builds a keymap or connects: newline and
+    tab are typed (Return, Tab, as documented), any other control below 0x20 and 0x7F refuses the
+    run, exit 2, "text has a control character (U+0008) at byte 2; only newline and tab are typed",
+    nothing typed. A `-T` (`--pass`) value drops one trailing `\r` (a Windows line ending) silently;
+    `\r\n` is refused, not typed as two Returns. `t_keys`: backspace, escape, delete and `\r` refused
+    in `-t` and `--pass`, a tab typed, `cr\r` typed as `cr` with no extra Return; all six fail on
+    0.4.8's tool.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -2914,21 +2914,26 @@ t_keys() {
   check_eq "junk -s refused (was 0)" 2 "$(ob keys -b "$B" -s abc x >/dev/null 2>&1; echo $?)"
   check_eq "junk --delay refused" 2 "$(ob keys -b "$B" --delay -1 x >/dev/null 2>&1; echo $?)"
   check_match "bad UTF-8 refused" "bad UTF-8" "$(ob keys -b "$B" -t $'\xe9x' 2>&1)"
-  ob keys -b "$B" + - / shift+a Return ctrl+d >/dev/null
+  # Control characters (#104, finding 173): xkb maps them to keys (BackSpace, Escape, Delete, Return).
+  check_eq "a control character in -t refused: exit 2" 2 "$(ob keys -b "$B" -t $'ab\x08c' >/dev/null 2>&1; echo $?)"
+  check_match "...said, with where" "control character \(U\+0008\) at byte 2; only newline and tab are typed" "$(ob keys -b "$B" -t $'ab\x08c' 2>&1)"
+  check_eq "...escape, delete and a carriage return too" "2 2 2" "$(for c in $'\x1b' $'\x7f' $'\r'; do ob keys -b "$B" -t "x${c}y" >/dev/null 2>&1; printf '%s ' $?; done | xargs)"
+  check_eq "...in a --pass value too" 2 "$(T_BS=$'a\x08b' "$CLI" keys -b "$B" --pass T_BS >/dev/null 2>&1; echo $?)"
+  ob keys -b "$B" + - / shift+a -t $'\t1' Return ctrl+d >/dev/null
   until_ok 5 ob run -b "$B" -- test -s /tmp/typed
-  check_eq "+ - / typed, nothing from the refused runs" '+-/A' "$(ob run -b "$B" -- cat /tmp/typed)"
+  check_eq "+ - / and a tab typed, nothing from the refused runs" $'+-/A\t1' "$(ob run -b "$B" -- cat /tmp/typed)"
   # keys --pass (finding 84): the caller's variable is typed, and no process's argv has it meanwhile.
   ob run -b "$B" -d -- foot sh -c 'cat > /tmp/secret' >/dev/null
   until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '[.[] | select(.class == \"foot\")] | length == 1'"
   local seen=""
-  T_PW="pw-$P x=y Ü" "$CLI" keys -b "$B" -t a --pass T_PW -s 1500 -t -T --pass T_PW Return ctrl+d & local kp=$!
+  T_PW="pw-$P x=y Ü" T_CR=$'cr\r' "$CLI" keys -b "$B" -t a --pass T_PW -s 1500 -t -T --pass T_PW --pass T_CR Return ctrl+d & local kp=$!
   if until_ok 10 pgrep -f 'omabox-keyboard .* -T -s 1500'; then
     seen=$(grep -l "pw-$P" /proc/[0-9]*/cmdline 2>/dev/null)
     check_eq "keys --pass: the value is in no /proc/*/cmdline while typing" "" "$seen"
   else no "keys --pass: the keyboard ran (to scan while typing)"; fi
   wait "$kp"; check_eq "keys --pass exits 0" 0 $?
   until_ok 5 ob run -b "$B" -- test -s /tmp/secret
-  check_eq "keys --pass types the value, in order with -t (and -t -T is text)" "apw-$P x=y Ü-Tpw-$P x=y Ü" "$(ob run -b "$B" -- cat /tmp/secret)"
+  check_eq "keys --pass types the value, in order with -t (and -t -T is text; a trailing \\r dropped, not a Return)" "apw-$P x=y Ü-Tpw-$P x=y Ücr"$'\n.' "$(ob run -b "$B" -- sh -c 'cat /tmp/secret; echo .')"
   check_match "keys --pass: an unset variable refused" "not in this command's environment" "$(env -u T_NONE "$CLI" keys -b "$B" --pass T_NONE 2>&1)"
   check_match "keys --pass: a bad name refused" "takes a variable name" "$(ob keys -b "$B" --pass 'a b' 2>&1)"
   if command -v zenity >/dev/null; then
