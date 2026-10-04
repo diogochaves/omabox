@@ -803,18 +803,24 @@ shell_running() { local st; st=$(on_box cat "/proc/$1/stat" 2>/dev/null) && [[ $
 # How the shell went since SHELL_BEFORE, or a failure when it did not: "crashed REPORT" (the report's
 # path here; - when there is none yet) or "exited" (its pid gone, no crash). shell_crash [PID]
 shell_crash() {
-  local pid=${1:-} new f
-  new=$(comm -13 <(sort <<<"$SHELL_BEFORE") <(shell_crash_dirs | sort) | tail -n 1)
-  if [ -n "$new" ]; then
-    # (The box names it: only a plain name goes into the message.)
-    if [[ $new =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "crashed $D/home/.cache/quickshell/crashes/$new/report.txt"
-    else echo "crashed -"; fi
-    return 0
-  fi
-  if f=$(box_home_file shell.log) && grep -aq 'Quickshell has crashed' "$f" 2>/dev/null; then echo "crashed -"; return 0; fi
-  if [ -n "$pid" ] && ! shell_running "$pid"; then echo exited; return 0; fi
-  return 1
+  local pid=${1:-} i
+  shell_crash_report && return 0
+  shell_crash_logged || { [ -n "$pid" ] && ! shell_running "$pid"; } || return 1
+  # The crash handler, another process, writes the report just after the shell's pid goes and its log
+  # line (seen: "exited" said for a SEGV, its report there a moment later). A second for it.
+  for ((i = 0; i < 10; i++)); do sleep 0.1; shell_crash_report && return 0; done
+  if shell_crash_logged; then echo "crashed -"; else echo exited; fi
 }
+# A new report folder since SHELL_BEFORE: "crashed REPORT" ("crashed -" for a name not plain).
+shell_crash_report() {
+  local new
+  new=$(comm -13 <(sort <<<"$SHELL_BEFORE") <(shell_crash_dirs | sort) | tail -n 1)
+  [ -n "$new" ] || return 1
+  # (The box names it: only a plain name goes into the message.)
+  if [[ $new =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "crashed $D/home/.cache/quickshell/crashes/$new/report.txt"
+  else echo "crashed -"; fi
+}
+shell_crash_logged() { local f; f=$(box_home_file shell.log) && grep -aq 'Quickshell has crashed' "$f" 2>/dev/null; }
 # shell_crash's answer in words. shell_crash_text WHEN HOW
 shell_crash_text() {
   case $2 in

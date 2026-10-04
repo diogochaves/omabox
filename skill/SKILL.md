@@ -161,7 +161,7 @@ with a button is Hyprland's own (move, resize), never the app's.
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
 | "box is dead" right after `omabox run -- pkill -x labwc` (or Hyprland, quickshell) | Those are the box itself: kill your own process by PID; `omabox down` then `up` to recover. |
-| `warning: the shell crashed … (report: PATH)` from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`; `restart-shell` once fixed. |
+| "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`; `restart-shell` once fixed. |
 | `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
 | "its Hyprland did not answer (hung? …)", `ls` says `hung` | The box's Hyprland is stuck (a plugin under test?): `omabox log`, then `omabox down`. |
 | "no box 'default-…' is up" | The box is named after the directory you run omabox from: run it from the repo, or pass `-b NAME` (`omabox ls`). |

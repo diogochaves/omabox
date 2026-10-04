@@ -3231,7 +3231,7 @@ t_shell_crash() {
   check_eq "restart-shell, the new shell crashing: exit 1 (was 0)" 1 "$rc"
   check_fails "...never \"shell restarted\"" grep -q "shell restarted" <<<"$out"
   check_match "...says it crashed, naming the report" \
-    "warning: the shell crashed (while|after) starting \(report: $H/\.cache/quickshell/crashes/[A-Za-z0-9_.-]+/report\.txt; omabox log -b $B shell\)" "$out"
+    "(warning|omabox): the shell crashed (while|after) starting \(report: $H/\.cache/quickshell/crashes/[A-Za-z0-9_.-]+/report\.txt; omabox log -b $B shell\)" "$out"
   rep=$(sed -n 's/.*(report: \([^;]*\);.*/\1/p' <<<"$out")
   check "...which is there (${rep##*/crashes/})" test -s "$rep"
   check "the crash dialog is closed as it opens (said in shell.log)" until_ok 10 grep -q "closed the shell's crash dialog" "$H/shell.log"

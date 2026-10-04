@@ -3237,6 +3237,11 @@ from them.
     `restart-shell` exit 1 naming a report that exists, the dialog closed, no `org.quickshell`
     window; a clean restart after says restarted; a crash past 10 s is restarted by Quickshell, its
     dialog closed, the bar back. 18 of its checks (with `t_unit_shell_crash`'s) fail on the old code.
+    The shell's pid goes before the crash handler (another process) writes the report: a review's
+    suite run saw "exited" for the SEGV. A pid gone, or the log's line alone, now waits up to 1 s
+    for a report folder before it is called an exit (or a crash with no report). A crash before the
+    bar is `up`'s or restart-shell's error (`omabox: the shell crashed while starting …`), one after
+    it the `warning:`; t_shell_crash takes either (its SEGV lands on both sides of the bar).
 184. **The skill says what a usage study saw agents find by trial** (2026-10-04, #138): `wait change`
     in the loop, and waits never sent to `/dev/null`; a screen that never stops moving; compound
     commands refused in worktree subagents; symptom rows for the box's own labwc killed, a shell
