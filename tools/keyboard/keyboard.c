@@ -305,7 +305,11 @@ static int do_combo(const char *tok, int run) {
     if (held) sym = xkb_keysym_to_lower(sym);
     struct hit h;
     if (sym == XKB_KEY_NoSymbol || !find_keysym(sym, &h)) {
-        fprintf(stderr, "omabox-keyboard: no key for '%s' in this layout\n", keyname);
+        // A character on no key of the layout: -t gives it a spare keycode (finding 176).
+        const unsigned char *q = (const unsigned char *)keyname;
+        int one = sym != XKB_KEY_NoSymbol && !held && decode(&q, &cp) && !*q;
+        fprintf(stderr, "omabox-keyboard: no key for '%s' in this layout%s%s%s\n", keyname,
+                one ? " (omabox keys -t '" : "", one ? keyname : "", one ? "' types characters outside the layout)" : "");
         return 0;
     }
     return chord(held | held_for(h.mask), h.code, run); // A, question, ...: the shifted symbol

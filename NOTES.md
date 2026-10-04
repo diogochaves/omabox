@@ -3067,6 +3067,24 @@ from them.
     box up with `8082,8081` is the box `--allow 8081,8082` asks for. `t_unit_refusals`: each refused
     with its message, no box dir or lock; `allow_ports`. A box up with `8082,8081` then `up --allow
     8081,8082`: already up; `--allow 8081`: refused, naming `8081,8082`.
+176. **Small CLI edges, each now said in words** (2026-10-03, #107). (1) `lua`: a value's metamethod
+    (`__len`, `__pairs`, `__tostring`) raising while `lua.lua` encodes it escaped the `pcall` and
+    came back as "did not answer as expected"; the encoding is now in a `pcall` too, a Lua error,
+    exit 1. (2) `events --mark v1.0` removed the mark `v1x0` (`grep -v "^$mark "`, a regex): marks are
+    compared as a field (awk). (3) `keys -T`, the tool's stdin flag, died on an unbound `pass[i]`:
+    refused as omabox's own. (4) `lua return -1` was "unknown option -1": once the source has begun,
+    a `-` word is part of it (a source starting with `-` still goes after `--`). (5) `up 'bad name!'`
+    made `bad-name-` without a word: `up` notes the name as written. (6) `click`, `pointer` and `drag`
+    past the screen got the pointer tool's "bad number" and usage: `on_screen` names the point and
+    the screen. (7) `keys ü` (a character on no key) says `-t 'ü'` types it. (8) `gpu`: a process
+    whose comm is `engine` was read as an engine row; process rows are `proc NAME PCT` now (by
+    reading, not reproduced). (9) `win_select` with no window list at all (a box going down) said
+    "SEL matches  windows"; now "did not list its windows", and `wait window` treats it as the box
+    not answering (by reading). (10) `shot` on an interactive box said "no frame, ask the user" for
+    any grim failure: only a timeout (124) or an empty capture is that now; otherwise "grim failed:"
+    and grim's own words, as for a headless box. `t_inspect` (1-4, 6, 7, 10) and `t_unit_refusals`
+    (5); all nine fail on the old code. (10) on an interactive box: `t_unit_shot_hidden`, its grim stub
+    now times out (124) as a hidden window's grim does, and one failing otherwise gives grim's reason.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

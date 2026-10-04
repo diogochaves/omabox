@@ -94,6 +94,9 @@ local function enc(v, depth, expand)
   return str(tostring(v))   -- a function, a thread, a userdata not expanded
 end
 
+-- Encoding runs the values' metamethods (__len, __pairs, __tostring): an error there is the agent's
+-- Lua error too, not an answer the host cannot read (finding 176).
 local out = {}
-for i = 2, res.n do out[i - 1] = enc(res[i], 0, true) end
+local ok, e = pcall(function() for i = 2, res.n do out[i - 1] = enc(res[i], 0, true) end end)
+if not ok then error(ERR .. tostring(e), 0) end
 error(OK .. "[" .. table.concat(out, ",") .. "]", 0)

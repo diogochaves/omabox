@@ -723,6 +723,11 @@ parse_mode() {
 # The layout's size, for mapping absolute pointer coordinates.
 # (Under set -e a caller's `x=$(extent)` would end omabox without a word when the box's Hyprland
 # does not answer: extent says so and fails.)
+# X Y on the box's screen of EXTENT (WxH), or the command dies saying so (finding 176): past it the
+# pointer tool refused the number with its usage. on_screen CMD X Y EXTENT
+on_screen() {
+  [ "$2" -lt "${4%x*}" ] && [ "$3" -lt "${4#*x}" ] || die "$1: $2,$3 is off the $4 screen of box '$NAME'"
+}
 extent() {
   on_box hyprctl -j monitors 2>/dev/null | jq -er '[.[] | select(.disabled | not)] |
     "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"' 2>/dev/null ||
@@ -1282,6 +1287,8 @@ cmd_up() {
     name=box-$n
   fi
   select_box "$name"
+  # A name with characters a box name cannot have is written with - (finding 176): said, once, here.
+  [ -z "$name" ] || [ "$NAME" = "$name" ] || say "note: box name '$name' written as '$NAME'"
   # The box an agent session gets by default goes when the agent does (finding 93), or when idle; so
   # does that name given with -b (it is the same box). Not an interactive box (the user's window), a
   # throwaway, or any box while OMABOX is set (it names the box instead of the session).
@@ -2636,6 +2643,8 @@ WIN_SEL_JQ='
 win_select() {
   local wins=$1 hits; shift
   [ $# -gt 0 ] || die "no window selector"
+  # No list at all (not an empty one): the box did not answer (finding 176).
+  [ -n "$wins" ] || die "box '$NAME' did not list its windows (is it going down?)"
   hits=$(jq -c "$WIN_SEL_JQ" --args "$@" <<<"$wins" 2>&1) || { say "bad window selector ($*): ${hits#jq: error*: }"; exit 2; }
   case $(jq length <<<"$hits") in
     1) jq -c '.[0]' <<<"$hits"; return ;;
@@ -2880,24 +2889,30 @@ cmd_shot() {
   # failed capture never leaves a half-written or empty PNG at $out. A window's first capture can be
   # a frame from long ago: one that is off screen gets no frame callbacks, so it stops rendering, and
   # the capture itself is what makes it draw again (finding 81). So a window is captured twice.
-  grab() { on_box timeout 10 "${grim[@]}" -; }
+  local gerr; gerr=$(mktemp)
+  grab() { on_box timeout 10 "${grim[@]}" - 2>>"$gerr"; }
   # A jailed caller's file through its own fd, never reopened by name: /dev/fd/N opened for writing
   # would give the broker more than the caller passed (a read-only fd of a file it may not write).
   put() { if [ -n "$tofd" ]; then grab >&"$tofd"; else grab > "$file"; fi; }
-  if ! { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } || ! put || [ ! -s "$file" ]; then
+  local grc=0
+  { { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } && put; } || grc=$?
+  local why; why=$(tr '\n' ' ' < "$gerr" | sed 's/ *$//'); rm -f "$gerr"
+  if [ "$grc" != 0 ] || [ ! -s "$file" ]; then
     [ -n "$tofd" ] || rm -f "$file"
     # Never tell an agent to show the window: switching the user's workspace for a frame is what the
     # box exists to avoid. A restart is the user's to do: a box from before drawn_hidden needs one, and
     # so does one whose window confirm-close replaced (the new window has no render_unfocused).
     # confirm-close.sh leaves omabox.reopened for that; the box can write there, so only test for it.
-    if [ "$(meta mode)" = interactive ]; then
+    # Only a capture that timed out (or gave nothing) is "no frame": grim refusing what it was asked
+    # (a bad -g) says why (finding 176), not "ask the user".
+    if [ "$(meta mode)" = interactive ] && { [ "$grc" = 124 ] || [ "$grc" = 0 ]; }; then
       [ "$(meta drawn_hidden)" = true ] ||
         die "shot: no frame from interactive box '$NAME': it was started by an older omabox, which does not draw its window while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
       [ ! -f "$D/run/omabox.reopened" ] ||
         die "shot: no frame from interactive box '$NAME': the user closed its window and kept the box running (confirm-close), and the new window is not drawn while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
       die "shot: no frame from interactive box '$NAME' ($(ws_text "$(meta workspace)")) in 10 s: ask the user; never switch the user's workspace or focus to get one"
     fi
-    die "shot: grim failed"
+    die "shot: grim failed${why:+: $why}"
   fi
   [ -n "$tofd" ] || { mv "$file" "$out"; file=$out; }
   local iw ih screen
@@ -2933,6 +2948,7 @@ cmd_keys() {
       # A value is the tool's, whatever it looks like (-t --wait types "--wait", -t --pass "--pass").
       -t|-s|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
       -m|-p) die "keys: $1 is omabox's own (to hold a modifier across a click: click, drag or pointer --mod)" ;;
+      -T) die "keys: -T is omabox's own (--pass VAR types one of your variables)" ;;
       --pass) optarg "$@"
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "keys: --pass takes a variable name, got $2"
         caller_env "$2" >/dev/null || die "keys: --pass $2: not in this command's environment (export it first)"
@@ -3109,6 +3125,7 @@ cmd_click() {
   local seq=(move "$x" "$y" click "$btn")
   [ $double = 1 ] && seq+=(click "$btn")
   local ext; ext=$(extent)
+  on_screen click "$x" "$y" "$ext"
   # --steps: the way there first, on its own, so --wait watches what the click does, not the pointer
   # crossing the screen, and --mod holds its modifiers for the click alone.
   if [ "$steps" -gt 1 ]; then
@@ -3159,7 +3176,8 @@ cmd_pointer() {
   select_box "$name"; need_box
   # Moves to screen pixels (--in, --window), in steps from where the pointer was (--steps). The mark
   # has the moves as asked, in screen pixels: a step each would pass peek's 64 tokens.
-  local args=() marks=() p n cur="" mapped=0
+  local args=() marks=() p n cur="" mapped=0 ext
+  ext=$(extent)
   [ -z "$in" ] && [ ${#sels[@]} = 0 ] || mapped=1
   while [ $# -gt 0 ]; do
     if [ "$1" = move ] && [ $# -ge 3 ]; then
@@ -3180,6 +3198,7 @@ cmd_pointer() {
           p=$(win_point 0 "$wx" "$wy" "$wa") || exit $?
         else p=${p#screen }; fi
       fi
+      on_screen pointer "${p% *}" "${p#* }" "$ext"
       if [ "$n" -gt 1 ]; then
         [ -n "$cur" ] || cur=$(pointer_at)
         SEQ=(); steps_to "${cur% *}" "${cur#* }" "${p% *}" "${p#* }" "$n"
@@ -3190,7 +3209,6 @@ cmd_pointer() {
       if [ "${4:-}" = --steps ]; then shift 5; else shift 3; fi
     else args+=("$1"); marks+=("$1"); shift; fi
   done
-  local ext; ext=$(extent)
   with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${args[@]}"
   [ -z "$mods" ] || mark "combo $mods"
   mark "ptr $ext ${marks[*]}"
@@ -3243,6 +3261,7 @@ cmd_drag() {
   [ -z "$shot" ] || seq+=(pause)
   seq+=(up "$btn")
   local ext; ext=$(extent)
+  on_screen drag "$x1" "$y1" "$ext"; on_screen drag "$x2" "$y2" "$ext"
   # --wait (finding 172): the cursor is in every frame, and a drag moves it across the screen while
   # it is watched. To the start first, on its own (as click --steps, finding 111), then the cursor at
   # each point of the path is not the change looked for; what the drag does beside it is.
@@ -3482,6 +3501,7 @@ win_probe() {
 # shellcheck disable=SC2329 # called through win_probe
 win_answer() {
   local want=$1 wins=$2 hits n; shift 2
+  [ -n "$wins" ] || return 1   # no list: the box not answering, not "none match" (finding 176)
   hits=$(jq -c "$WIN_SEL_JQ" --args "$@" <<<"$wins" 2>&1) || { say "bad window selector ($*): ${hits#jq: error*: }"; return 2; }
   n=$(jq length <<<"$hits")
   case $want in
@@ -3646,7 +3666,8 @@ cmd_lua() {
       -h|--help) usage lua; return ;;
       --) shift; src+=("$@"); break ;;
       -) src+=("$1") ;;
-      -*) die "lua: unknown option $1 (a Lua source starting with - goes after --)" ;;
+      # After the source has begun, a word like -1 is part of it (`omabox lua return -1`, finding 176).
+      -*) [ ${#src[@]} -gt 0 ] || die "lua: unknown option $1 (a Lua source starting with - goes after --)"; src+=("$1") ;;
       *) src+=("$1") ;;
     esac
     shift
@@ -3929,7 +3950,8 @@ cmd_events() {
     [ $LOG_LIVE = 1 ] || need_box
     local size; size=$(events_size) || die "events: cannot read the size of box '$NAME''s events.log"
     if [ -n "$mark" ]; then
-      { grep -v "^$mark " "$D/events.marks" 2>/dev/null || true; echo "$mark $size"; } > "$D/events.marks.new"
+      # The name as a field, not a regex (finding 176: v1.0 dropped v1x0).
+      { awk -v m="$mark" '$1 != m' "$D/events.marks" 2>/dev/null || true; echo "$mark $size"; } > "$D/events.marks.new"
       mv -f "$D/events.marks.new" "$D/events.marks"
       say "events: mark '$mark' at byte $size (--since $mark)"
     else
@@ -4088,21 +4110,22 @@ cmd_gpu() {
     FNR == NR { a[$1 " " $2] = $3; next }
     !(($1 " " $2) in seen) { seen[$1 " " $2]; if (!($1 in who)) who[$1] = $5
       d = $3 - a[$1 " " $2]; if (d < 0) d = 0; t[who[$1]] += d; te[who[$1] " " $2] += d }
-    END { for (n in t) printf "%s %.1f\n", n, t[n] / wall * 100
+    END { for (n in t) printf "proc %s %.1f\n", n, t[n] / wall * 100
           for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }' "$tmp/a" "$tmp/b" > "$tmp/r"
   if [ $json = 1 ]; then
     jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" '
       [inputs | split(" ")] as $r |
       { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, aquamarine: $aq,
-        percent: ([$r[] | select(.[0] != "engine") | {(.[0]): (.[1] | tonumber)}] | add // {}),
+        percent: ([$r[] | select(.[0] == "proc") | {(.[1]): (.[2] | tonumber)}] | add // {}),
         engines: (reduce ($r[] | select(.[0] == "engine")) as $e ({}; .[$e[1]][$e[2]] = ($e[3] | tonumber))) }' < "$tmp/r"
     return
   fi
   echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
   [ "$aq" = null ] || jq -r '"aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
     + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)' <<<"$aq"
-  grep -v '^engine ' "$tmp/r" | sort -k2 -rn | awk '{ printf "  %-20s %5.1f%%\n", $1, $2 }'
-  grep -qv '^engine ' "$tmp/r" || echo "  (no GPU time)"
+  # Rows by kind (finding 176): a process whose comm is `engine` is a process.
+  grep '^proc ' "$tmp/r" | sort -k3 -rn | awk '{ printf "  %-20s %5.1f%%\n", $2, $3 }'
+  grep -q '^proc ' "$tmp/r" || echo "  (no GPU time)"
 }
 
 # Listening TCP sockets in a /proc net dir, "PORT ADDR UID INODE" each. ADDR: 127.0.0.1, 0.0.0.0, ::,

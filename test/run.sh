@@ -519,7 +519,9 @@ t_unit_refusals() {
   check_match "...--env-file's too, by line" "line 2 sets HOME: it is the box session's own" "$(ob run -b "$P-x" --env-file "$TMP/reserved.env" -- true 2>&1)"
   check_eq "allow_ports: sorted, each once" "22,8081,8082" "$(lib allow_ports 8082,22,8081,08081)"
   check_eq "...none for none" "" "$(lib allow_ports "")"
-  local r; for r in 21 22 23 24 25 26; do check_fails "...no box dir or lock for $P-r$r" test -e "$XDG_RUNTIME_DIR/omabox/$P-r$r" -o -e "$XDG_RUNTIME_DIR/omabox/.lock-$P-r$r"; done
+  check_match "a box name with characters it cannot have: said as written (#107)" "note: box name '$P-r27 x!' written as '$P-r27-x-'" \
+    "$(ob up "$P-r27 x!" --net isolated --allow 0 2>&1)"
+  local r; for r in 21 22 23 24 25 26 27-x-; do check_fails "...no box dir or lock for $P-r$r" test -e "$XDG_RUNTIME_DIR/omabox/$P-r$r" -o -e "$XDG_RUNTIME_DIR/omabox/.lock-$P-r$r"; done
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
@@ -1763,9 +1765,10 @@ t_mode_lock() {
 t_unit_shot_hidden() {
   local d=$TMP/boxes/oldbox out
   mkdir -p "$d"
-  # (The box's Hyprland answers for its screen size, finding 81; only grim gets no frame.)
+  # (The box's Hyprland answers for its screen size, finding 81; only grim gets no frame: it blocks
+  # until its timeout, 124. Any other failure is grim's to explain, finding 176.)
   shot_msg() { bash -c 'source "$1"; BOXES=$2; need_box() { :; }
-    on_box() { [ "$*" = "hyprctl -j monitors" ] || return 1; echo "[{\"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]"; }
+    on_box() { [ "$*" = "hyprctl -j monitors" ] || { echo "grim: ${GRIM_SAYS:-}" >&2; return "${GRIM_RC:-124}"; }; echo "[{\"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]"; }
     cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1; }
   echo '{"mode": "interactive", "workspace": "9"}' > "$d/box.json"
   out=$(shot_msg)
@@ -1777,6 +1780,8 @@ t_unit_shot_hidden() {
   check_match "...ask the user" "ask the user" "$out"
   check_fails "...and no restart" grep -q restart <<<"$out"
   check_fails "...and no partial PNG left" test -e "$TMP/boxes/x.png.part"
+  out=$(GRIM_RC=1 GRIM_SAYS="bad geometry" shot_msg)
+  check_match "...grim failing otherwise: its reason, not ask the user" "shot: grim failed: grim: bad geometry$" "$out"
   check_match "a box whose Hyprland does not answer: said, not a silent exit" "cannot read the screen size of box 'oldbox'" \
     "$(bash -c 'source "$1"; BOXES=$2; need_box() { :; }; on_box() { return 1; }; cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1)"
   mkdir -p "$d/run" && echo 1 > "$d/run/omabox.reopened"
@@ -4700,6 +4705,11 @@ t_inspect() {
   check_eq "lua: a Lua error is exit 1" 1 "$rc"
   check_eq "...with its message" "lua: lua:1: boom" "$out"
   check_match "lua: a syntax error too" "^lua: lua:1: .*near" "$(ob lua -b "$B" '1 +' 2>&1)"
+  # #107, finding 176: a metamethod's error while encoding is a Lua error too; -1 after the source is source.
+  check_eq "lua: an error in a value's metamethod is a Lua error" "1 lua: lua:1: boom" \
+    "$(out=$(ob lua -b "$B" 'return setmetatable({}, {__len = function() error("boom") end})' 2>&1); echo "$? $out")"
+  check_eq "lua return -1" -1 "$(ob lua -b "$B" return -1)"
+  check_match "...a source starting with - still needs --" "unknown option -1" "$(ob lua -b "$B" -1 2>&1)"
   # Calls at once share nothing (no file between them).
   local i pids=(); for i in 1 2 3 4 5 6; do ob lua -b "$B" "$i * 11" > "$TMP/lua.$i" 2>&1 & pids+=($!); done
   wait "${pids[@]}"   # (not a bare wait: the suite's host watcher is a job too)
@@ -4714,6 +4724,14 @@ t_inspect() {
   check_match "events --since MARK --grep --json" ',evt$' "$(ob events -b "$B" --since m1 --grep '^openwindow>>' --json | jq -r .data)"
   check_eq "...--since OFFSET is the same" "$(ob events -b "$B" --since m1)" "$(ob events -b "$B" --since "$m1")"
   check_fails "...nothing from before the mark" bash -c "'$CLI' events -b '$B' --since m1 | grep -q 'omabox>>listening'"
+  ob events -b "$B" --mark v1x0 >/dev/null 2>&1; ob events -b "$B" --mark v1.0 >/dev/null 2>&1
+  check "events --mark v1.0 leaves the mark v1x0 (a name, not a regex)" ob events -b "$B" --since v1x0
+  # #107, finding 176: the other small refusals, said in words.
+  check_match "keys -T is omabox's own" "-T is omabox's own" "$(ob keys -b "$B" -T 2>&1)"
+  check_match "keys ü: -t named for a character outside the layout" "no key for 'ü' in this layout \(omabox keys -t 'ü' types" "$(ob keys -b "$B" ü 2>&1)"
+  check_match "click off the screen: said" "click: 99999,99999 is off the 1920x1080 screen" "$(ob click -b "$B" 99999 99999 2>&1)"
+  check_match "...pointer and drag too" "pointer: 1920,5 is off.*drag: 5,5000 is off" "$(ob pointer -b "$B" -- move 1920 5 2>&1; ob drag -b "$B" 5 5 5 5000 2>&1)"
+  check_match "shot -g off the screen: grim's reason" "shot: grim failed: .*did not intersect" "$(ob shot -b "$B" -g "5000,5000 10x10" 2>&1)"
   ob events -b "$B" --mark m2 >/dev/null 2>&1
   (sleep 1; ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '4' })" >/dev/null) & local d=$!
   out=$(ob events -b "$B" --until '^workspace>>4$' --timeout 5s); rc=$?
