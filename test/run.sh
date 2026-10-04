@@ -134,10 +134,14 @@ evidence() {
   [ ! -s "$UNTIL" ] || cp "$UNTIL" "$e/last-wait.txt"
   slice "$EVID/host-events.log" "$CUR" > "$e/host-events.log" 2>/dev/null
   for b in $("$CLI" ls --json 2>/dev/null | jq -r --arg p "$P-" '.[] | select((.name | startswith($p)) and .state == "up") | .name'); do
-    d=$e/boxes/$b; mkdir -p "$d"; bd=$("$CLI" path "$b")
+    # Reading a box is using it (need_box touches `used`, `path` too): its idle clock is put back after,
+    # or other tests' idle boxes (t_idle, t_reap_race) expired late and failed too (#111, finding 180).
+    d=$e/boxes/$b; mkdir -p "$d"; bd=$XDG_RUNTIME_DIR/omabox/$b
+    [ ! -e "$bd/used" ] || touch -r "$bd/used" "$d/.used"
     timeout 10 "$CLI" shot -b "$b" -o "$d/screen.png" >/dev/null 2>&1
     for q in clients layers activewindow activeworkspace devices; do timeout 5 "$CLI" hyprctl -b "$b" -j "$q" > "$d/$q.json" 2>&1; done
     timeout 5 "$CLI" hyprctl -b "$b" cursorpos > "$d/cursorpos" 2>&1
+    [ ! -e "$d/.used" ] || touch -r "$d/.used" "$bd/used" 2>/dev/null
     for f in "$bd/box.log" "$bd"/home/*.log "$bd"/run/hypr/*/hyprland.log "$bd/run/events.log"; do [ -f "$f" ] && tail -n 100 "$f" > "$d/${f##*/}"; done
   done
   printf '       evidence: %s\n' "$e"
@@ -229,7 +233,8 @@ try:
     s = socket.socket(socket.AF_UNIX); s.connect(os.path.basename(path))
 except OSError as e:
     say("== watcher failed: %s" % e); sys.exit(1)
-KEEP = ("openwindow>>", "closewindow>>", "activewindowv2>>", "workspacev2>>", "activespecial>>", "activelayout>>")
+KEEP = ("openwindow>>", "closewindow>>", "activewindowv2>>", "workspacev2>>", "activespecial>>", "activelayout>>",
+        "openlayer>>", "closelayer>>")
 def hypr(what):
     return json.loads(subprocess.run(["hyprctl", "-j", what], capture_output=True, text=True, timeout=5).stdout)
 def focused():
@@ -237,11 +242,17 @@ def focused():
         return describe(hypr("activewindow"))
     except Exception as e:
         return "? %s" % e
-def opened(addr):   # a peek window just opened: whose (its process environment says who asked)
+def opened(addr):   # a window just opened: whose (its process environment says who asked)
     try:
         return describe(next(w for w in hypr("clients") if w.get("address") == "0x" + addr))
     except Exception as e:
         return "0x%s ? %s" % (addr, e)
+def layer(ns):      # a layer just opened (the event names only its namespace): each of that name
+    try:
+        ls = [l for m in hypr("layers").values() for lv in m.get("levels", {}).values() for l in lv if l.get("namespace") == ns]
+        return "; ".join(describe(dict(l, **{"class": "layer:" + ns})) for l in ls) or "? none named %s" % ns
+    except Exception as e:
+        return "? %s" % e
 def describe(w):
     pid, cls, tags = w.get("pid", -1), w.get("class"), []
     try:
@@ -274,7 +285,9 @@ while True:
         if not l.startswith(KEEP): continue
         say(l)
         if l.startswith("activewindowv2>>") and l != "activewindowv2>>": say("~ " + focused())
-        if l.startswith("openwindow>>") and l[12:].split(",", 3)[2:3] == ["omabox-peek"]: say("+ " + opened(l[12:].split(",")[0]))
+        # Every window and layer: whose process (#111: a suite window opened silently was only a note).
+        if l.startswith("openwindow>>"): say("+ " + opened(l[12:].split(",")[0]))
+        if l.startswith("openlayer>>"): say("+ " + layer(l[11:]))
 '
 
 # leak_scan PREFIX < LOG: what in a watcher's log is the suite's (a box's name starts with PREFIX, the
@@ -295,12 +308,13 @@ while True:
 # something omabox's that is not marked yours, or on nothing (the suite's boxes open nothing there)
 # is a leak.
 leak_scan() {
-  local pre=$1 ws=${2:-} line data cls title kb notes=() peek="" wsup="" prev="" who
+  local pre=$1 ws=${2:-} line data cls title kb notes=() peek="" other="" wsup="" prev="" who
   local wsleak="leak: omabox's workspace $ws came up (if you went there yourself, run the suite again)"
   while IFS= read -r line; do
     line=${line#* }
     # What the next line decides: a peek window's `+` line; the focus omabox's workspace brought.
     if [ -n "$peek" ] && [[ $line != '+ '* ]]; then echo "leak: a window opened: $peek"; peek=""; fi
+    if [ -n "$other" ] && [[ $line != '+ '* ]]; then notes+=("$other"); other=""; fi   # (a watcher with no + line)
     if [ -n "$wsup" ] && [[ $line != '~ '* && $line != activewindowv2\>\>?* ]]; then echo "$wsleak"; wsup=""; fi
     # What the focus line just before says, for a workspace line (whose, or `leak`); gone after any other.
     [[ $line == '~ '* || $line == workspacev2\>\>* || $line == activespecial\>\>* ]] || prev=""
@@ -310,8 +324,17 @@ leak_scan() {
         if [ "$cls" = aquamarine ] && data=$(their_new_box "$pre"); then notes+=("window of your box $data")
         elif data=$(omabox_window "$pre" "$cls" "$title"); then
           if [ "$cls" = omabox-peek ]; then peek=$data; else echo "leak: a window opened: $data"; fi
-        else notes+=("window $cls"); fi ;;
+        else other="window $cls"; fi ;;   # its + line says whose (#111)
+      openlayer\>\>*) other="layer ${line#*>>}" ;;
       '+ '*)
+        # Any other window or layer: the suite's process or a box's of this run is a leak, opened on
+        # your desktop however quietly (no focus, a silent workspace); anything else is yours, a note.
+        if [ -n "$other" ]; then
+          if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* || $line == *" OMABOX_NAME=$pre"* ]]; then
+            echo "leak: a ${other%% *} opened, of this run's: ${line#+ }"
+          else notes+=("$other"); fi
+          other=""; continue
+        fi
         [ -n "$peek" ] || continue
         title=${line#* title=}
         if [[ " $line " == *" OMABOX_SUITE=${pre%-} "* ]]; then echo "leak: a window opened: a peek window, by this run's commands: ${line#+ }"
@@ -354,6 +377,7 @@ leak_scan() {
     esac
   done
   [ -z "$peek" ] || echo "leak: a window opened: $peek"
+  [ -z "$other" ] || notes+=("$other")
   [ -z "$wsup" ] || echo "$wsleak"
   [ ${#notes[@]} = 0 ] || echo "note: not the suite's: $(printf '%s\n' "${notes[@]}" | awk '!seen[$0]++ && n++ < 8' | paste -sd, - | sed 's/,/, /g')"
 }
@@ -942,6 +966,17 @@ t_unit_leak_scan() {
   check_match "a peek of this run's box" "^leak: a window opened: a peek window" "$(scan 'openwindow>>a,9,omabox-peek,omabox peek: t1-b')"
   check_match "...the peek tool started on its own" "^leak: focus went to a peek window" "$(scan '~ 0xa pid=5 class=omabox-peek title=omabox peek')"
   check_eq "...a peek of yours is not a leak" "" "$(leaks 'openwindow>>a,9,omabox-peek,omabox peek: mine' '~ 0xa pid=5 class=omabox-peek title=omabox peek: mine')"
+  # #111, finding 180: any window or layer opened on the host is looked up (its + line); the suite's,
+  # or a process of this run's box, is a leak even with no focus (a silent workspace, no_initial_focus).
+  check_match "a window of the suite's opened silently: a leak" "^leak: a window opened, of this run's: 0xb pid=7 OMABOX_SUITE=t1 class=foot" \
+    "$(scan 'openwindow>>b,3,foot,x' '+ 0xb pid=7 OMABOX_SUITE=t1 class=foot')"
+  check_match "...one of this run's box's processes too" "^leak: a window opened, of this run's: .*OMABOX_NAME=t1-main" \
+    "$(scan 'openwindow>>b,3,foot,x' '+ 0xb pid=7 OMABOX_NAME=t1-main class=foot')"
+  check_eq "...yours is a note" "note: not the suite's: window firefox" "$(scan 'openwindow>>b,3,firefox,x' '+ 0xb pid=7 class=firefox')"
+  check_eq "...and so is one with no + line (an older watcher)" "note: not the suite's: window foot" "$(scan 'openwindow>>b,3,foot,x' 'closewindow>>b')"
+  check_match "a layer of this run's box on the host: a leak" "^leak: a layer opened, of this run's: .*OMABOX_NAME=t1-main class=layer:notifications" \
+    "$(scan 'openlayer>>notifications' '+ 0xc pid=8 OMABOX_NAME=t1-main class=layer:notifications')"
+  check_eq "...your own layer a note" "note: not the suite's: layer notifications" "$(scan 'openlayer>>notifications' '+ 0xc pid=8 class=layer:notifications')"
   # Issue #45 (finding 121): a peek at this run's box, as the bar widget opens it (`omabox peek
   # --focus`: the window, its `+` line, focus, workspace 9, focus again; seen in a stand-in), with each
   # marker its process can have.
@@ -1075,8 +1110,8 @@ t_unit_parallel() {
 
 # The leak detector, proven (finding 80): the watcher the host gets, on a box standing in for the
 # host. Quiet, it reports nothing; then a box's window taking focus, a workspace switch and back,
-# omabox's workspace coming up, and a key from `omabox keys` are leaked into the stand-in on purpose,
-# and each must be reported. A clean
+# omabox's workspace coming up, a key from `omabox keys` and a window of the suite's opened silently
+# are leaked into the stand-in on purpose, and each must be reported. A clean
 # host log means something only then: when this test fails, so does the host's verdict.
 t_leak_control() {
   local S=$P-ctl f0=$fail log
@@ -1149,6 +1184,14 @@ t_leak_control() {
   check_eq "omabox's workspace brought up by you (focus on your app there): no leak" "" "$(slice "$log" mine special | leak_scan "$P-" 9 | grep '^leak:')"
   check "...noted, with the focus it brought" scanned mine special "^note: .*workspace 9 for foot"
   check "a special workspace of omabox's coming up empty is reported" scanned special end2 "^leak: omabox's workspace special:omabox came up" special:omabox
+  # #111, finding 180: a window of the suite's that opens silently (no focus, a silent workspace), as a
+  # regressed exec in up, peek or run -d would, is reported from its process, not noted as yours.
+  mark silent
+  ob hyprctl -b "$S" eval "hl.exec_cmd('env OMABOX_SUITE=$P foot -a silentleak sleep 60', { workspace = '3 silent', no_initial_focus = true })" >/dev/null
+  until_ok 10 seen silent "" "^[0-9.]* + .*class=silentleak"
+  mark end3
+  check "a window of the suite's opened silently is reported" scanned silent end3 "^leak: a window opened, of this run's: .*OMABOX_SUITE=$P .*class=silentleak"
+  ob run -b "$S" -- pkill -f 'foot -a silentleak' >/dev/null 2>&1
   ob down "$S" >/dev/null 2>&1
   [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }

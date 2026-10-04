@@ -3138,6 +3138,20 @@ from them.
     stopped compositor) waited 1.5 s for the tools to start; under load a CLI not yet in the box
     exits 1 too ("not up"). They wait for each tool's process, each with a pause of its own. (7)
     `t_wait`'s deadline was measured around the CLI with SECONDS; now `--json`'s own `elapsed`.
+180. **The suite's harness: evidence keeps idle clocks, silent windows are leaks** (2026-10-03, #111;
+    the harness: 80, 121). (1) A test's first failure collects evidence from every live box of the
+    run (`shot`, `hyprctl`), and reading a box is using it: `need_box` touched `used`, and so did the
+    `omabox path` evidence ran first. Other tests' idle boxes then expired late: with six failures
+    forced 5 s apart (throwaway tests in a worktree), `t_idle`'s 10 s box never went down and
+    `t_idle` failed. Evidence now builds the box dir's path itself and puts `used` back (`touch -r`)
+    after reading; the same run keeps `t_idle` green, 2 of 2. (2) The host watcher looked up a new
+    window's process only for a peek window: any other window opened without focus (a silent
+    workspace, `no_initial_focus`, what a regressed exec in `up`, `peek` or `run -d` would do) was a
+    note. Now every `openwindow` gets its `+` line, and a window whose process carries this run's
+    `OMABOX_SUITE` or a box's `OMABOX_NAME` is a leak. (3) `openlayer`/`closelayer` are watched too
+    (the event names only the namespace; `hyprctl layers` gives each layer's pid), judged the same
+    way. `t_unit_leak_scan`: six fixtures; `t_leak_control`: a foot started on the stand-in with the
+    suite's marker, `workspace '3 silent'` and `no_initial_focus`, is reported.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
