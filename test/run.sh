@@ -4125,6 +4125,14 @@ t_omarchy_tree() {
 # workspace above the rest; off-screen workspaces, inactive group tabs and unmapped windows.
 t_unit_window_select() {
   local c m m_sp act='{"address":"0xb"}'
+  # windows' table (#105, finding 174): a title's quotes escaped once, as in --json; an empty class
+  # keeps its column (the title starts at the 99th character, after the six padded ones).
+  local rows; rows=$(lib windows_table <<<'[
+    {"address":"0xa","pid":7,"workspace":1,"onscreen":true,"cover":[],"active":true,"size":[10,20],"at":[1,2],"class":"foot","title":"say \"hi\" \\ x"},
+    {"address":"0xb","pid":8,"workspace":2,"onscreen":false,"cover":[],"active":false,"size":[3,4],"at":[5,6],"class":"","title":"no class"}]')
+  check_eq "windows: a quoted title escaped once" '"say \"hi\" \\ x"' "$(sed -n 1p <<<"$rows" | cut -c99-)"
+  check_eq "...an empty class keeps its column" '"no class"' "$(sed -n 2p <<<"$rows" | cut -c99-)"
+  check_match "...the rest in theirs" '^0xb +8 +2 +off-screen +3x4 at 5,6 +"no class"$' "$(sed -n 2p <<<"$rows")"
   c=$(jq -nc '
     def w($a; $cl; $t; $ws; $x; $y; $w; $h; $fl): {address: $a, stableId: "1", class: $cl, title: $t,
       initialClass: $cl, initialTitle: $t, pid: 10, workspace: {id: $ws, name: ($ws | tostring)}, at: [$x, $y],

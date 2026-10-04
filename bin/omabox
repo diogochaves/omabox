@@ -2684,12 +2684,17 @@ cmd_windows() {
   [ -z "$(meta hyprland)" ] || printf 'box %s runs Hyprland %s%s\n' "$NAME" "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
   # Bottom to top, as they stack.
   printf '%-16s %-8s %-10s %-20s %-22s %-16s %s\n' ADDRESS PID WORKSPACE STATE GEOMETRY CLASS TITLE
-  jq -r '.[] | [.address, .pid, .workspace,
-      ((if .onscreen | not then "off-screen" elif .cover != [] then "covered" else "on-screen" end) + (if .active then ",active" else "" end)),
-      "\(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])", .class, (.title | tojson)] | @tsv' <<<"$wins" |
-    while IFS=$'\t' read -r a p ws st g c t; do
-      printf '%-16s %-8s %-10s %-20s %-22s %-16s %s\n' "$a" "$p" "$ws" "$st" "$g" "$c" "$t"
-    done
+  windows_table <<<"$wins"
+}
+# windows' rows from box_windows' JSON on stdin, padded in jq (finding 174): through @tsv and a tab
+# IFS, an empty class collapsed (the title under CLASS) and a title's quotes were escaped twice. The
+# title is JSON-quoted once, as in --json.
+windows_table() {
+  jq -r 'def pad($n): tostring | . + (" " * ($n - length) // "");
+    .[] | [(.address | pad(16)), (.pid | pad(8)), (.workspace | pad(10)),
+      ((if .onscreen | not then "off-screen" elif .cover != [] then "covered" else "on-screen" end)
+        + (if .active then ",active" else "" end) | pad(20)),
+      ("\(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])" | pad(22)), (.class | pad(16)), (.title | tojson)] | join(" ")'
 }
 
 # --- driving ------------------------------------------------------------------------------------

@@ -3044,6 +3044,14 @@ from them.
     `\r\n` is refused, not typed as two Returns. `t_keys`: backspace, escape, delete and `\r` refused
     in `-t` and `--pass`, a tab typed, `cr\r` typed as `cr` with no extra Return; all six fail on
     0.4.8's tool.
+174. **`windows`' table keeps its columns and quotes titles once** (2026-10-03, #105). The rows went
+    through jq's `@tsv` and back through `read` with a tab IFS: tab is IFS whitespace, so an empty
+    field (a client with no class: Hyprland says `"class": ""`) collapsed and the title landed under
+    CLASS; and `@tsv` escapes backslashes, so a title already JSON-quoted (`tojson`) showed `say
+    \\"hi\\"`. `windows_table` pads the columns in jq and joins them, the title JSON-quoted once as
+    in `--json` (a non-ASCII class pads by characters too). The only `@tsv` in the CLI.
+    `t_unit_window_select`: a quoted title, an empty class, the other columns; all three fail on the
+    old pipeline. In a box, `say "hi" \ back` and a class `é-class` print as `--json` has them.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
