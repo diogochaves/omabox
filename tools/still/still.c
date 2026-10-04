@@ -20,7 +20,8 @@
 //   satisfied|unsatisfied|unknown REASON t=MS first=MS last=MS change=X,Y,W,H ignored=X,Y,W,H why=WHY frames=N
 // (times from `ready`, - when there is none). Exit 0 satisfied, 124 unsatisfied, 1 unknown, 2 usage.
 // unknown: no first frame within --first ms (default 2000: an interactive box's hidden window is not
-// rendered), the compositor went away, or with --tied, stdin closed (the caller is gone).
+// rendered), the compositor went away, it did not answer its first round trip within 10 s (`hung`: alive
+// but stopped or deadlocked, finding 181), or with --tied, stdin closed (the caller is gone).
 #define _GNU_SOURCE
 #include <errno.h>
 #include <poll.h>
@@ -35,6 +36,7 @@
 
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
 #include "../common/box.h"
+#include "../common/roundtrip.h"
 
 #define DRM_FORMAT_XBGR8888 0x34324258
 #define DRM_FORMAT_ABGR8888 0x34324241
@@ -359,7 +361,11 @@ int main(int argc, char **argv) {
     display = wl_display_connect(NULL);
     if (!display) { fprintf(stderr, "omabox-still: cannot connect to $WAYLAND_DISPLAY\n"); return 1; }
     wl_registry_add_listener(wl_display_get_registry(display), &registry_listener, NULL);
-    if (wl_display_roundtrip(display) < 0) finish("unknown", "lost", 1);
+    // A stopped compositor still accepts the connection (its listen backlog), and a plain roundtrip then
+    // waited forever, --timeout or not (#124, finding 181). Everything after this has a deadline.
+    int r = omabox_roundtrip(display, 10000);
+    if (r == -2) finish("unknown", "hung", 1);
+    if (r < 0) finish("unknown", "lost", 1);
     if (!shm || !manager || !output) { fprintf(stderr, "omabox-still: the compositor offers no screencopy, shm or output\n"); return 1; }
 
     // The first frame: the baseline. None in time is an unrendered screen (a hidden interactive box).

@@ -3,6 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`wait still` and every `--wait` end on a box whose Hyprland stopped answering** (stopped, or
+  deadlocked by a plugin under test): "its Hyprland did not answer (hung? …)", exit 1, where they
+  waited forever whatever `--timeout` said (#124).
+
 ## 0.4.8 — 2026-10-03
 
 A security fix for boxes started from a save, and a bar widget that no longer freezes on a command

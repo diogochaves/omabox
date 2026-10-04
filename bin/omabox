@@ -553,6 +553,16 @@ on_box() {
     WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" "$@"
 }
 
+# A box whose PID 1 lives but whose Hyprland does not answer (stopped, or deadlocked by a plugin under
+# test; #124, findings 181-182) is said so in these words. hung_text [IN]: IN is how long it was given.
+hung_text() { echo "box '$NAME': its Hyprland did not answer${1:+ in $1} (hung? omabox log -b $NAME; omabox down $NAME)"; }
+# 0 when the box's Hyprland answers over IPC within SECS (default 2). hypr_answers [SECS]
+hypr_answers() { box_alive && on_box timeout "${1:-2}" hyprctl version >/dev/null 2>&1; }
+# PID and every process under it, deepest first, SIGKILLed: a tool left waiting on a hung box.
+kill_tree() { local c; for c in $(pgrep -P "$1"); do kill_tree "$c"; done; kill -KILL "$1" 2>/dev/null || true; }
+# PID is running: not gone, and not a child that exited and was not waited for yet (a zombie).
+running() { local s; s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1; s=${s##*) }; [ "${s%% *}" != Z ]; }
+
 # A variable the box session sets, or that changes how every program in it runs (finding 175):
 # --env, run --pass and --env-file refuse it, which only broke the box late ("Hyprland not up after
 # 30s"). Not OMABOX_*: those are the box's own switches, and the suite sets some on purpose.
@@ -3359,11 +3369,18 @@ settle_begin() {
   exec {SETTLE_IN}>"$dir/in" {SETTLE_OUT}<"$dir/out"
   rm -rf "$dir"
   SETTLE_ERR=""
+  # 12 s for `ready` (or the tool's answer): a hung compositor is the tool's own "unknown hung" at 10 s
+  # (finding 181), read here and said in words; before, after 5 s, settle_end waited on it forever.
+  local end=$((SECONDS + 12)) rc
   while :; do
-    if ! read -r -t 5 -u "$SETTLE_OUT" line; then line=""; break; fi
-    [[ $line == ready* ]] && break
-    [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
-    SETTLE_ERR+="${SETTLE_ERR:+; }$line"
+    if read -r -t 1 -u "$SETTLE_OUT" line; then
+      [[ $line == ready* ]] && break
+      [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
+      SETTLE_ERR+="${SETTLE_ERR:+; }$line"
+    else
+      rc=$?; line=""
+      [ $rc -gt 128 ] && [ $SECONDS -lt $end ] || break   # EOF (the tool is gone), or no answer in time
+    fi
   done
   SETTLE_LINE=$line
   SETTLE_T0=$(date +%s%3N)
@@ -3402,6 +3419,11 @@ settle_end() {
   fi
   exec {SETTLE_IN}>&- {SETTLE_OUT}<&-
   SETTLE_IN="" SETTLE_OUT=""
+  # Every wait in the tool has a deadline (finding 181), but this one does not depend on that (#124):
+  # one still running 2 s after it answered, or after `ready` never came, is killed, with what runs it.
+  local i
+  for ((i = 0; i < 40; i++)); do running "$SETTLE_PID" || break; sleep 0.05; done
+  [ $i -lt 40 ] || kill_tree "$SETTLE_PID"
   wait "$SETTLE_PID" 2>/dev/null || true
   local res reason kv; local -A f=()
   read -r res reason kv <<<"$line"
@@ -3414,18 +3436,22 @@ settle_end() {
       not-rendered)
         # A hidden interactive box is drawn (finding 90) unless it is older than that or confirm-close
         # replaced its window: as shot says, a restart is the user's, and nobody shows the window.
-        if [ "$(meta mode)" != interactive ]; then reason="box '$NAME' sent no frame"
+        # A headless box always draws: no frame is a Hyprland that stopped answering (#124).
+        if [ "$(meta mode)" != interactive ]; then
+          if hypr_answers; then reason="box '$NAME' sent no frame"; else reason=$(hung_text); fi
         elif [ "$(meta drawn_hidden)" != true ]; then
           reason="box '$NAME' not rendered: an older omabox started it, and it is not drawn while hidden (it needs a restart: ask the user; never switch their workspace or focus)"
         elif [ -f "$D/run/omabox.reopened" ]; then
           reason="box '$NAME' not rendered: its window was replaced (confirm-close) and is not drawn while hidden (ask the user; never switch their workspace or focus)"
         else reason="box '$NAME' sent no frame ($(ws_text "$(meta workspace)"); ask the user; never switch their workspace or focus)"; fi ;;
+      hung) reason=$(hung_text "10 s") ;;
       refused) reason="box '$NAME' refused a screen capture${SETTLE_ERR:+ ($SETTLE_ERR)}" ;;
       off-screen) reason="the region watched is not on the screen of box '$NAME'" ;;
       *) # Its compositor gone: the box is (being) taken down.
          local end gone; gone=$(($(date +%s%3N) - SETTLE_T0)) end=$((SECONDS + 2))
          while box_alive && [ $SECONDS -lt $end ]; do sleep 0.2; done
          if ! box_alive; then reason="box '$NAME' went down after $(ms_s "$gone")"
+         elif ! hypr_answers; then reason=$(hung_text)   # no answer at all from the tool, either
          else reason="lost the box's screen${SETTLE_ERR:+ ($SETTLE_ERR)}"; fi ;;
     esac
   fi

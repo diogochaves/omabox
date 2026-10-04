@@ -3136,6 +3136,31 @@ t_keys() {
   wait "$p"; check_eq "pointer exits 1 when the box goes mid-run" 1 $?
 }
 
+# A box whose Hyprland is alive but does not answer (stopped here; in use, a plugin under test's
+# deadlock): what asks it ends, saying so in words (#124, finding 181). Continued, it answers again.
+t_hung() {
+  local B=$P-hung out rc t0 took
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  ob run -b "$B" -- pkill -STOP -x Hyprland
+  # The tool `wait` runs, in the box: its first round trip has a deadline (on 0.4.8 it never returned).
+  t0=$(now_ms); out=$(timeout 40 "$CLI" run -b "$B" -- /opt/omabox/bin/omabox-still still --timeout 3000 2>&1); rc=$?
+  took=$(($(now_ms) - t0))
+  check_eq "omabox-still on a stopped Hyprland: unknown, exit 1 (not timeout's 124)" 1 "$rc"
+  check_match "...hung" "^unknown hung " "$out"
+  check "...in about 10 s ($took ms)" test "$took" -lt 16000
+  t0=$(now_ms); out=$(timeout 40 "$CLI" wait -b "$B" still --timeout 3s 2>&1); rc=$?; took=$(($(now_ms) - t0))
+  check_eq "wait still --timeout 3s: exit 1, not timeout's 124" 1 "$rc"
+  check_match "...said in words" "^unknown: box '$B': its Hyprland did not answer.* \(hung\? omabox log -b $B; omabox down $B\)$" "$out"
+  check "...within 20 s ($took ms)" test "$took" -lt 20000
+  t0=$(now_ms); out=$(timeout 40 "$CLI" keys -b "$B" --wait a 2>&1); rc=$?; took=$(($(now_ms) - t0))
+  check_eq "keys --wait: exit 1" 1 "$rc"
+  check_match "...said in words" "box '$B': its Hyprland did not answer" "$out"
+  check "...within 20 s ($took ms)" test "$took" -lt 20000
+  ob run -b "$B" -- pkill -CONT -x Hyprland
+  check_match "continued: wait still is satisfied again" "^satisfied: still" "$(ob wait -b "$B" still --timeout 5s 2>&1)"
+  ob down "$B" >/dev/null
+}
+
 # peek, run inside a box on that box's own screen (never on the host): it draws, and hidden on another
 # workspace it stops capturing (finding 64; the old one scaled 30 frames a second nobody saw).
 # Marks (finding 85): what `click`/`keys` did, drawn by that peek over its view. The CLI writes them
@@ -4716,6 +4741,17 @@ t_unit_wait() {
         env -i "$ROOT/tools/still/omabox-still" still --timeout 100 2>&1) || rc=$?
   check_eq "omabox-still refuses outside a box" 2 "$rc"
   check_match "...and says so" "only runs inside an omabox box" "$out"
+  # #124, finding 181: settle_end waited on the tool with no limit. One that never ends (and never
+  # answered) is killed after 2 s, with what runs it; a box not answering either is said so.
+  out=$(timeout 30 bash -c 'source "$1"; NAME=u D=$2; box_alive() { return 0; }; hypr_answers() { return 1; }
+    sleep 300 & SETTLE_PID=$!; exec {SETTLE_IN}>/dev/null {SETTLE_OUT}</dev/null
+    SETTLE_LINE="" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); t0=$SECONDS rc=0
+    settle_end still 0 "" || rc=$?
+    echo "rc $rc in $((SECONDS - t0))s, the tool $(kill -0 "$SETTLE_PID" 2>/dev/null && echo alive || echo gone)"' \
+    _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
+  check_match "settle_end: a tool that never ends is not waited for (#124)" \
+    "^unknown: box 'u': its Hyprland did not answer \(hung\? omabox log -b u; omabox down u\)$" "$(head -n 1 <<<"$out")"
+  check_match "...exit 1 within seconds, the tool killed" "^rc 1 in [2-6]s, the tool gone$" "$(tail -n 1 <<<"$out")"
 }
 
 # omabox wait and --wait (finding 82) in a box of their own: two terminals side by side, one of them
@@ -5010,7 +5046,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hung t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

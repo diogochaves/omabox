@@ -1,8 +1,8 @@
-// omabox_roundtrip(): wl_display_roundtrip with a deadline (finding 177), for the input tools
-// (keyboard, pointer). A compositor that is alive but stopped (SIGSTOP, a deadlock) never answers,
-// and a plain roundtrip waited forever, holding the caller's `omabox keys/click` (and with -m, its
-// modifiers). After a failure the tool exits: the sync callback may still be pending, with this
-// function's frame as its data.
+// omabox_roundtrip(): wl_display_roundtrip with a deadline (finding 177), for the tools (keyboard,
+// pointer; still's first one, finding 181). A compositor that is alive but stopped (SIGSTOP, a
+// deadlock) never answers, and a plain roundtrip waited forever, holding the caller's `omabox
+// keys/click` (and with -m, its modifiers) or `wait`. After a failure the tool exits: the sync
+// callback may still be pending, with this function's frame as its data.
 #ifndef OMABOX_ROUNDTRIP_H
 #define OMABOX_ROUNDTRIP_H
 

@@ -3168,6 +3168,25 @@ from them.
     stand-in); and a throwaway `run --overlay --net isolated --allow --size --plugin`
     (`t_run_options`: the overlay written over, the folder unchanged; the allowed port 200, another
     000; 800x600; the plugin mounted). `drag --hold` was covered already (#103).
+181. **`wait still` and `--wait` end on a Hyprland that stopped answering** (2026-10-04, #124;
+    finding 177's class). A box whose Hyprland was alive but stopped (SIGSTOP; in use, a Hyprland
+    plugin under test deadlocked it) held `omabox wait still` forever, `--timeout` or not, and every
+    `--wait` the same way: an agent's capture script blocked 300 s, and it then wrapped every call in
+    `timeout 10`. omabox-still's first `wl_display_roundtrip`, right after connecting, had no
+    deadline: a stopped compositor's socket still takes the connection (its listen backlog), so the
+    connect succeeds and the round trip blocks. It goes through `tools/common/roundtrip.h` now (10 s)
+    and ends `unknown hung`. In the CLI, `settle_begin` read 5 s for `ready`, then `settle_end` ran
+    `wait` on the tool with no limit (closing `--tied`'s stdin reaches the tool only in `pump`).
+    `settle_begin` reads up to 12 s (the tool answers at 10), and `settle_end` gives the tool 2 s
+    after its answer, or after `ready` never came, then kills it and what runs it (`kill_tree`).
+    `hung`, a headless box's `not-rendered` (one always draws) and a tool gone without a word, with
+    the box up and IPC not answering, are said as `box 'NAME': its Hyprland did not answer [in 10 s]
+    (hung? omabox log -b NAME; omabox down NAME)`, `unknown:`, exit 1. In a box: `pkill -STOP -x
+    Hyprland`, then `wait still --timeout 3s` exits 1 with that line after 15 s (5 s of them
+    `hyprctl cursorpos`'s own timeout: finding 182 makes that the end), where 0.4.8 was still waiting
+    at 45 s; omabox-still run in the box ends `unknown hung` at 10 s. `t_hung` (new) checks both and
+    `keys --wait`, then `kill -CONT` and a satisfied `wait still`; `t_unit_wait` runs `settle_end`
+    on a tool that never ends: killed, exit 1, ~4 s (the old code hit the check's 30 s timeout).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
