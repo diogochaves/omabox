@@ -790,6 +790,50 @@ wait_hyprland() {
   done
 }
 
+# The shell crashing as it starts (#126, finding 183). Quickshell's crash handler writes each crash's
+# report into a new folder under the box HOME's ~/.cache/quickshell/crashes and logs "Quickshell has
+# crashed" in shell.log (which shell.sh starts afresh); one within 10 s of its start is not restarted.
+# Those folders now, for shell_crash to tell a new one: SHELL_BEFORE, set before the shell starts.
+SHELL_BEFORE="" BAR_AT=0
+shell_crash_dirs() { ls -1 -- "$D/home/.cache/quickshell/crashes" 2>/dev/null || true; }
+# The Omarchy shell's pid in the box (share/shell.sh writes it), or nothing.
+shell_pid() { local p; p=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [[ $p =~ ^[0-9]+$ ]] && echo "$p"; }
+# Box pid PID is a process, and not one that exited and was not reaped yet.
+shell_running() { local st; st=$(on_box cat "/proc/$1/stat" 2>/dev/null) && [[ $st != *") Z "* ]]; }
+# How the shell went since SHELL_BEFORE, or a failure when it did not: "crashed REPORT" (the report's
+# path here; - when there is none yet) or "exited" (its pid gone, no crash). shell_crash [PID]
+shell_crash() {
+  local pid=${1:-} new f
+  new=$(comm -13 <(sort <<<"$SHELL_BEFORE") <(shell_crash_dirs | sort) | tail -n 1)
+  if [ -n "$new" ]; then
+    # (The box names it: only a plain name goes into the message.)
+    if [[ $new =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "crashed $D/home/.cache/quickshell/crashes/$new/report.txt"
+    else echo "crashed -"; fi
+    return 0
+  fi
+  if f=$(box_home_file shell.log) && grep -aq 'Quickshell has crashed' "$f" 2>/dev/null; then echo "crashed -"; return 0; fi
+  if [ -n "$pid" ] && ! shell_running "$pid"; then echo exited; return 0; fi
+  return 1
+}
+# shell_crash's answer in words. shell_crash_text WHEN HOW
+shell_crash_text() {
+  case $2 in
+    "crashed -") echo "warning: the shell crashed $1 starting (omabox log -b $NAME shell)" ;;
+    crashed\ *) echo "warning: the shell crashed $1 starting (report: ${2#crashed }; omabox log -b $NAME shell)" ;;
+    *) echo "warning: the shell exited $1 starting (omabox log -b $NAME shell)" ;;
+  esac
+}
+# Once its bar is on screen: the shell watched until 2 s after the bar came (BAR_AT, ms), as a crash
+# there went unsaid ("shell restarted", exit 0). Prints the warning and succeeds when it went.
+shell_watch() {
+  local how
+  while :; do
+    if how=$(shell_crash "$(shell_pid)"); then shell_crash_text after "$how"; return 0; fi
+    [ "$(date +%s%3N)" -lt $((BAR_AT + 2000)) ] || return 1
+    sleep 0.1
+  done
+}
+
 wait_ready() {
   local want_shell=$1 deadline=$((SECONDS + READY_TIMEOUT))
   wait_hyprland
@@ -812,12 +856,16 @@ wait_ready() {
   local f; f=$(box_home_file .config/omarchy/shell.json) &&
     jq -e '[.bar.layout[][]? | if type == "object" then .id else . end] | index("omarchy.tray") != null' \
     "$f" >/dev/null && tray_expected=1
+  local how
   until [ -n "$(on_box hyprctl -j layers 2>/dev/null | layer_at omarchy-bar 2>/dev/null)" ] &&
         { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
     box_alive || died_starting
+    # A shell that crashed (or quit) on its way up: said now, with its report, not after READY_TIMEOUT.
+    if how=$(shell_crash "$(shell_pid)"); then die "$(shell_crash_text while "$how" | sed 's/^warning: //')"; fi
     [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
     sleep 0.1
   done
+  BAR_AT=$(date +%s%3N)
   # And the notification server (the built-in one, or a mounted plugin's: every box has one, finding
   # 42), which registers up to ~3 s after the bar: a `notify-send` right after `up` failed with
   # ServiceUnknown (finding 62). A server that never comes is a warning, not a failed box.
@@ -1504,6 +1552,7 @@ cmd_up() {
   [ -z "${NEWLOCK:-}" ] || exec {NEWLOCK}>&-
   sweep_homes
   seed_home
+  SHELL_BEFORE=$(shell_crash_dirs)   # (none in a fresh HOME, nor in a save: it keeps no .cache)
   # Read again as late as possible: a change made while this box was being set up (the widget's
   # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
   # confirm_live sees the box.
@@ -1724,7 +1773,9 @@ cmd_up() {
   jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
-  plugin_check
+  # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
+  local crashed=""; [ "$shell" != 1 ] || crashed=$(shell_watch) || true
+  [ -n "$crashed" ] || plugin_check
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
@@ -1735,6 +1786,7 @@ cmd_up() {
   local screen; screen=$(box_screen); say "box '$NAME' up (${screen#* }) in $D"
   if [ $json = 1 ]; then box_json
   elif [ $new = 1 ]; then echo "$NAME"; fi
+  [ -z "$crashed" ] || { say "$crashed"; exit 1; }
 }
 
 # What `up` needs from install.sh: the helpers, and an aquamarine with the soname the box's Hyprland
@@ -4481,6 +4533,7 @@ cmd_restart_shell() {
   local name; name=$(name_arg restart-shell "$@") || exit 1
   select_box "$name"; need_box
   local old; old=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) || old=""
+  SHELL_BEFORE=$(shell_crash_dirs)
   on_box hyprctl dispatch "hl.dsp.exec_cmd('/opt/omabox/share/shell.sh')" >/dev/null
   local deadline=$((SECONDS + 15)) new
   until new=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [ -n "$new" ] && [ "$new" != "$old" ]; do
@@ -4488,6 +4541,8 @@ cmd_restart_shell() {
     sleep 0.1
   done
   wait_ready 1
+  # A shell that crashed just after its bar came is no restart (#126): said with its report, exit 1.
+  local crashed; if crashed=$(shell_watch); then say "$crashed"; exit 1; fi
   say "shell restarted in box '$NAME'"
   plugin_check
   # An Omarchy tree's commit as it is now, as plugin_check does for each plugin's: it was edited (or

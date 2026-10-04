@@ -3210,6 +3210,33 @@ from them.
     --wait`, `windows`, `click --window`, `shot -g`, `shot`, `wait window` and `wait layer` each exit
     non-zero with the words and no `jq:` line in 4-7 s; `ls` says `hung`; continued, `up` and
     `windows` answers. `t_unit_shot_hidden` stubs the new call.
+183. **A shell that crashes as it starts is said so, and its crash dialog takes no keys** (2026-10-04,
+    #126). `restart-shell` said "shell restarted" (exit 0) once the bar was up, though the new shell
+    crashed seconds later; `up` the same. Quickshell 0.3.1's crash handler (on unless
+    `QS_DISABLE_CRASH_HANDLER`) writes a report folder under `~/.cache/quickshell/crashes`, logs
+    "Quickshell has crashed under pid N", and within 10 s of the start does not restart the shell
+    (past 10 s it restarts it in place, same pid). Either way its reporter opens a dialog (class
+    `org.quickshell`, title "quickshell") that takes focus: in use, the next `omabox keys` Return
+    hit its "Open report page", which opened a browser in the box (2 crashes in ~25 restarts, seen
+    in a plugin's tests). `wait_ready` now watches for a crash while it waits for the bar (a new
+    report folder since `SHELL_BEFORE`, the log's line, or the pid from omabox-shell.pid gone or a
+    zombie) and dies saying so with the report's host path instead of after 30 s; `up` and
+    `restart-shell` then watch until 2 s after the bar came (`shell_watch`): `warning: the shell
+    crashed after starting (report: …/report.txt; omabox log -b NAME shell)`, exit 1, no
+    "restarted" and no plugin_check. `up` leaves the box up in that case (a crash before the bar is
+    a failed `up`, as before: the box goes, its dir and report stay). Costs `up` ~0.7 s (the watch's
+    remainder after the bar settles). The dialog: share/hyprland.lua's `window.open` hook kills a
+    window's process whose environ has `__QUICKSHELL_CRASH_DUMP_PID` (only the reporter's does;
+    every Quickshell window is `org.quickshell`, a project's own included) and adds a line to
+    shell.log; the reporter writes the report before it shows the window, and the shell's restart
+    does not depend on it. Not `QS_DISABLE_CRASH_HANDLER` (checked: "Crash handling disabled.", no
+    report, no restart), nor `QS_CRASHREPORT_URL` (only the URL of "Open report page"; the dialog
+    still takes focus). shell.sh truncates shell.log before writing the new pid (restart-shell reads
+    the log once the pid changes) and opens it for appending, or the shell's next write overwrote
+    the hook's line. `t_shell_crash`: a SEGV once the new shell's config has loaded makes
+    `restart-shell` exit 1 naming a report that exists, the dialog closed, no `org.quickshell`
+    window; a clean restart after says restarted; a crash past 10 s is restarted by Quickshell, its
+    dialog closed, the bar back. 18 of its checks (with `t_unit_shell_crash`'s) fail on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

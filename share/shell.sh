@@ -22,5 +22,9 @@ if old=$(cat "$pidfile" 2>/dev/null) && [ "$(cat "/proc/$old/comm" 2>/dev/null)"
   for _ in $(seq 100); do kill -0 "$old" 2>/dev/null || break; sleep 0.05; done
   kill -KILL "$old" 2>/dev/null
 fi
+# A fresh log each start, before the new pid is there (`restart-shell` reads this log for a crash once
+# it is), written in append mode: a line the box's Hyprland adds (the crash dialog it closes, finding
+# 183) is not overwritten by the shell's next one.
+: > "$HOME/shell.log"
 echo $$ > "$pidfile"
-QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 exec /usr/bin/quickshell -n -p "$OMARCHY_PATH/shell" > "$HOME/shell.log" 2>&1
+QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 exec /usr/bin/quickshell -n -p "$OMARCHY_PATH/shell" >> "$HOME/shell.log" 2>&1

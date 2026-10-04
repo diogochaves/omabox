@@ -115,6 +115,27 @@ hl.config({
   xwayland = { enabled = os.getenv("OMABOX_XWAYLAND") == "1" },
 })
 
+-- Quickshell's crash reporter (#126, NOTES finding 183): when the shell crashes, Quickshell writes a
+-- report under ~/.cache/quickshell/crashes, then opens a dialog that takes focus. Nobody reads it in a
+-- box, and it took the keys meant for the app under test (Return on it opened a browser). It is
+-- closed as it opens; the report stays, and `up`/`restart-shell` name it. Told apart by its process's
+-- environment, which only the reporter has, never by its class: every Quickshell window, a project's
+-- own included, is org.quickshell. (Not QS_DISABLE_CRASH_HANDLER: that writes no report at all.)
+-- Global guard: one handler, however many reloads.
+if not omabox_crash_hook then
+  omabox_crash_hook = hl.on("window.open", function(w)
+    if not w or w.class ~= "org.quickshell" or type(w.pid) ~= "number" then return end
+    local f = io.open("/proc/" .. math.floor(w.pid) .. "/environ", "rb")
+    if not f then return end
+    local env = f:read("a") or ""
+    f:close()
+    if not env:find("__QUICKSHELL_CRASH_DUMP_PID=", 1, true) then return end
+    local pid = math.floor(w.pid)
+    hl.exec_cmd("kill " .. pid .. "; echo \"omabox: closed the shell's crash dialog (pid " .. pid ..
+      "); the report is in ~/.cache/quickshell/crashes\" >> \"$HOME/shell.log\"")
+  end)
+end
+
 hl.on("hyprland.start", function()
   -- The box's events, from the start, for `omabox events` (NOTES finding 108): a line each, stamped.
   hl.exec_cmd('/opt/omabox/bin/omabox-events "$HOME/events.log"')

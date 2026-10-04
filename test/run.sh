@@ -3181,6 +3181,73 @@ t_hung() {
   ob down "$B" >/dev/null
 }
 
+# How up and restart-shell tell a shell that crashed as it started (#126, finding 183): a new report
+# folder, a crash line in shell.log, or its pid gone; then what they say.
+t_unit_shell_crash() {
+  local d=$TMP/sc
+  mkdir -p "$d/home/.cache/quickshell/crashes/old" "$d/run"; : > "$d/home/shell.log"; echo 42 > "$d/run/omabox-shell.pid"
+  sc() {   # STAT: what /proc/PID/stat says in the box ("" for no such process)
+    STAT=$1 bash -c 'source "$1"; NAME=u D=$2; SHELL_BEFORE=old
+      on_box() { [ -n "$STAT" ] && echo "$STAT"; }
+      shell_crash "$(shell_pid)" && echo "rc 0" || echo "rc $?"' _ "$TMP/lib/bin/omabox" "$d" 2>&1 | tr '\n' ' '
+  }
+  check_eq "no new report, no crash line, the shell running: no crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
+  mkdir "$d/home/.cache/quickshell/crashes/q1k4dmt"
+  check_eq "a new report folder: crashed, its report named" "crashed $d/home/.cache/quickshell/crashes/q1k4dmt/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
+  check_eq "...said with it" "warning: the shell crashed after starting (report: /r/report.txt; omabox log -b u shell)" \
+    "$(bash -c 'source "$1"; NAME=u; shell_crash_text after "crashed /r/report.txt"' _ "$TMP/lib/bin/omabox")"
+  rmdir "$d/home/.cache/quickshell/crashes/q1k4dmt"; mkdir "$d/home/.cache/quickshell/crashes/a b"
+  check_eq "a folder named oddly (the box names it): crashed, no path" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
+  rmdir "$d/home/.cache/quickshell/crashes/a b"
+  printf ' ERROR: Quickshell has crashed under pid 43\n' > "$d/home/shell.log"
+  check_eq "only the log's crash line: crashed" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
+  check_eq "...said without a report" "warning: the shell crashed while starting (omabox log -b u shell)" \
+    "$(bash -c 'source "$1"; NAME=u; shell_crash_text while "crashed -"' _ "$TMP/lib/bin/omabox")"
+  : > "$d/home/shell.log"
+  check_eq "its pid gone: exited" "exited rc 0 " "$(sc "")"
+  check_eq "...or a zombie" "exited rc 0 " "$(sc "42 (quickshell) Z 1")"
+  check_eq "...said as exited" "warning: the shell exited after starting (omabox log -b u shell)" \
+    "$(bash -c 'source "$1"; NAME=u; shell_crash_text after exited' _ "$TMP/lib/bin/omabox")"
+  check_eq "the report folders before a restart are not a crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
+}
+
+# A shell that crashes as restart-shell starts it (#126, finding 183): no "restarted", exit 1, the
+# report named; Quickshell's crash dialog, which took the box's keys, closed as it opens (the box's
+# Hyprland does it), the report kept. Also past 10 s, when Quickshell restarts the shell itself.
+t_shell_crash() {
+  local B=$P-crash D H out rc old p i rs rep
+  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home
+  old=$(cat "$D/run/omabox-shell.pid")
+  ob restart-shell -b "$B" > "$TMP/crash.out" 2>&1 & rs=$!
+  # The new shell (its pid written, its log started), crashed once its config has loaded.
+  p=""; for i in $(seq 300); do
+    p=$(cat "$D/run/omabox-shell.pid" 2>/dev/null)
+    [ -n "$p" ] && [ "$p" != "$old" ] && grep -aq 'Configuration Loaded' "$H/shell.log" 2>/dev/null && break
+    sleep 0.05
+  done
+  ob run -b "$B" -- kill -SEGV "$p"
+  wait "$rs"; rc=$?; out=$(cat "$TMP/crash.out")
+  check_eq "restart-shell, the new shell crashing: exit 1 (was 0)" 1 "$rc"
+  check_fails "...never \"shell restarted\"" grep -q "shell restarted" <<<"$out"
+  check_match "...says it crashed, naming the report" \
+    "warning: the shell crashed (while|after) starting \(report: $H/\.cache/quickshell/crashes/[A-Za-z0-9_.-]+/report\.txt; omabox log -b $B shell\)" "$out"
+  rep=$(sed -n 's/.*(report: \([^;]*\);.*/\1/p' <<<"$out")
+  check "...which is there (${rep##*/crashes/})" test -s "$rep"
+  check "the crash dialog is closed as it opens (said in shell.log)" until_ok 10 grep -q "closed the shell's crash dialog" "$H/shell.log"
+  check_eq "...no org.quickshell window is left to take keys" 0 "$(ob windows -b "$B" --json | jq '[.[] | select(.class == "org.quickshell")] | length')"
+  out=$(ob restart-shell -b "$B" 2>&1); rc=$?
+  check_eq "a restart that works: exit 0, \"restarted\" (the earlier report is not a new crash)" "0 yes" "$rc $(grep -q 'shell restarted' <<<"$out" && echo yes)"
+  # Past 10 s Quickshell restarts the shell itself; its dialog came all the same.
+  p=$(cat "$D/run/omabox-shell.pid"); sleep 11
+  ob run -b "$B" -- kill -SEGV "$p"
+  check "a crash past 10 s: Quickshell restarts the shell" until_ok 15 grep -q "Quickshell has been restarted" "$H/shell.log"
+  check "...its dialog closed too" until_ok 10 grep -q "closed the shell's crash dialog" "$H/shell.log"
+  check "...the bar back" ob wait -b "$B" layer omarchy-bar
+  check_eq "...no org.quickshell window" 0 "$(ob windows -b "$B" --json | jq '[.[] | select(.class == "org.quickshell")] | length')"
+  ob down "$B" >/dev/null
+}
+
 # peek, run inside a box on that box's own screen (never on the host): it draws, and hidden on another
 # workspace it stops capturing (finding 64; the old one scaled 30 frames a second nobody saw).
 # Marks (finding 85): what `click`/`keys` did, drawn by that peek over its view. The CLI writes them
@@ -5064,9 +5131,9 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel)
+  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hung t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
