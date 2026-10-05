@@ -192,7 +192,8 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - What a box proves: compositor logic runs for real on a virtual output with virtual input devices
   (layouts, focus, input routing, the Lua config, IPC, protocols). What it never runs: the DRM/KMS
   backend (modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices, and the
-  session/suspend/lock paths. Those stay the real desktop's (or a VM's with passthrough): say so.
+  session and suspend paths, or a real password at the lock screen (the lock itself runs: "Testing
+  the lock screen"). Those stay the real desktop's (or a VM's with passthrough): say so.
 - Inside ai-jail the build must be in the jail's project (or a folder the jail was given whole).
 
 ## The Omarchy shell's IPC (direct routes)
@@ -255,7 +256,8 @@ servers), then:
   in the box's bar. Not in a box that mounts it with `--plugin`: there its id is taken. Then
   `omabox run -- omarchy plugin remove ID --yes`, and nothing of it should be left in the box's
   `shell.json` or plugins dir.
-- **Not in a box**: several monitors, a scale other than 1, the lock screen, real devices.
+- **Not in a box**: several monitors, a scale other than 1, a real password at the lock screen (the
+  lock itself runs: "Testing the lock screen"), real devices.
 
 ## Testing an app as a desktop app
 
@@ -303,6 +305,29 @@ servers), then:
 - Edits to the tree: `omabox restart-shell` (the shell; `keepLoaded` plugins, such as the OSD,
   notifications, the menu and the lock, keep their old code until then) or `omabox hyprctl reload`
   (the config).
+
+## Testing the lock screen
+
+The shell's lock runs in a box: the system menu's Lock (or `omabox run -- omarchy-system-lock`)
+takes a real session lock (`omabox wait cmd -- omarchy-hyprland-session-locked`), keys go to the lock
+and not the window under it, a wrong password is refused. What a box cannot do is accept a real
+password: it cannot read `/etc/shadow`, so PAM fails every password ("cannot retrieve authentication
+info"). Never type the user's password into a box. To test unlocking, give the lock a PAM config of
+your own and a test password, through an Omarchy tree (`up --omarchy`; a box refuses mounts on its
+`/etc`):
+
+- A copy of `/usr/share/omarchy` (or the checkout under review) where
+  `shell/plugins/lock/Service.qml`'s password `PamContext` gets `configDirectory: "/opt/lockpam"`
+  next to its `config: "omarchy-lock-password"`.
+- In a folder of yours: `omarchy-lock-password` with `auth required pam_exec.so expose_authtok quiet
+  /opt/lockpam/check` and `account required pam_permit.so`; `check`, executable, compares stdin up
+  to its NUL with the test password (`IFS= read -r -d "" pw; [ "$pw" = test-pw ]`).
+- `omabox up --omarchy COPY --ro-bind FOLDER:/opt/lockpam`, then `omabox keys --pass VAR Return` on
+  the lock (a variable holding the test password); unlocked once `omarchy-hyprland-session-locked`
+  fails. `omabox log shell` shows each PAM attempt and the folder it used.
+
+`t_lock` in the suite does exactly this. The real PAM stack (pam_unix, faillock, fingerprint), the
+login screen and the disk passphrase stay a VM's to test.
 
 ## Showing the user
 

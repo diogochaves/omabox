@@ -243,8 +243,8 @@ installed Hyprland (never install it, never run it on the host): before/after of
 two boxes. It must link the libaquamarine soname omabox provides (`up` refuses it otherwise, saying
 which); hyprctl stays the installed one (`up` warns when the versions differ). `omabox ls` and
 `windows` name the build. A box proves layouts, focus, input routing, the Lua config, IPC and
-protocols; not DRM/KMS, real monitors, HDR/VRR, multi-GPU, real input devices, suspend or lock
-(`reference.md`).
+protocols; not DRM/KMS, real monitors, HDR/VRR, multi-GPU, real input devices, suspend, or a real
+password at the lock screen (`reference.md`).
 
 ## An Omarchy change
 
@@ -298,7 +298,8 @@ A box is a desktop without hardware. It has:
 - no **devices**: no audio (PipeWire), no `/dev/i2c` (DDC/CI monitor brightness), no backlight, no
   real keyboards/mice/touchpads/tablets, cameras, USB, printers;
 - no **session integration**: no systemd user manager unless `omabox up --systemd` (and never
-  journald or logind), no installed .desktop files/URL handlers, no lock/idle/suspend, and a fresh
+  journald or logind), no installed .desktop files/URL handlers, no idle or suspend, a lock screen
+  that locks but takes no real password (unlocking: a test PAM config, `reference.md`), and a fresh
   HOME instead of the user's data.
 
 So before testing, look at what the change touches: the project's code and instructions. Signals:

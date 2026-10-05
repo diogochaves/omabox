@@ -4385,13 +4385,19 @@ t_setup_prompts() {
 # marker in its bin and its Hyprland bootstrap. The session, the bar, `run` and a terminal's bash (its
 # /etc/omarchy.conf) all use it; a box started inside that one, without --omarchy, does not follow the
 # outer box's /etc/omarchy.conf (as a box does not follow the host's dev link).
-t_omarchy_tree() {
-  local B=$P-ot T=$TMP/omarchy-tree f
+# copy_omarchy DIR: the installed Omarchy as a tree of files of our own (themes linked: the bulk).
+copy_omarchy() {
+  local T=$1 f
   mkdir -p "$T"
   for f in /usr/share/omarchy/*; do
     case ${f##*/} in themes) ln -s "$f" "$T/themes" ;; *) cp -a "$f" "$T/" ;; esac
   done
   chmod -R u+w "$T"
+}
+
+t_omarchy_tree() {
+  local B=$P-ot T=$TMP/omarchy-tree
+  copy_omarchy "$T"
   # (The package's bin/ links to /usr/bin: a file of its own in the link's place.)
   rm -f "$T/bin/omarchy-version"; printf '#!/bin/sh\necho omabox-tree\n' > "$T/bin/omarchy-version"; chmod +x "$T/bin/omarchy-version"
   printf '\nomabox_tree_marker = "tree"\n' >> "$T/default/hypr/bootstrap.lua"
@@ -4422,6 +4428,48 @@ t_omarchy_tree() {
   else
     no "up inside the --omarchy box" "failed"
   fi
+  ob down "$B" >/dev/null
+}
+
+# The shell's lock screen in a box (finding 186): the system menu's Lock takes a real session lock,
+# keys go to the lock and not the window under it, a wrong password keeps it, the right one gives the
+# desktop back with that window focused. A box cannot read /etc/shadow, so the tree's lock asks a
+# PAM config of the test's (pam_exec, a test password) instead of /etc/pam.d's.
+t_lock() {
+  local B=$P-lk T=$TMP/lock-tree K=$TMP/lockpam addr svc
+  copy_omarchy "$T"
+  svc=$T/shell/plugins/lock/Service.qml
+  if ! grep -q '^    config: "omarchy-lock-password"$' "$svc"; then
+    no "the lock's PamContext is where the test expects it" "no 'config: \"omarchy-lock-password\"' line in $svc"; return
+  fi
+  sed -i 's|^    config: "omarchy-lock-password"$|&\n    configDirectory: "/opt/omabox-lockpam"|' "$svc"
+  mkdir -p "$K"
+  printf '%s' omabox-lock-pw > "$K/password"
+  printf '#!/bin/bash\nIFS= read -r -d "" pw || true\n[ "$pw" = "$(cat /opt/omabox-lockpam/password)" ]\n' > "$K/check"
+  chmod +x "$K/check"
+  printf 'auth required pam_exec.so expose_authtok quiet /opt/omabox-lockpam/check\naccount required pam_permit.so\n' \
+    > "$K/omarchy-lock-password"
+  ob up "$B" --net isolated --omarchy "$T" --ro-bind "$K:/opt/omabox-lockpam" >/dev/null 2>&1 || { no "up with the lock's test PAM" "failed"; return; }
+  check_box_safety "$B"
+  # A terminal whose input goes to a file: anything typed into it while locked would land there.
+  ob run -b "$B" -d -q --wait -- foot sh -c 'cat > "$HOME/typed"' >/dev/null 2>&1
+  addr=$(ob hyprctl -b "$B" -j activewindow | jq -r .address)
+  ob keys -b "$B" super+escape >/dev/null
+  check "SUPER+ESCAPE opens the system menu" ob wait -b "$B" --timeout 5s layer omarchy-menu
+  ob keys -b "$B" -t Lock Return >/dev/null
+  check "its Lock takes a session lock" ob wait -b "$B" --timeout 5s cmd -- omarchy-hyprland-session-locked
+  ob wait -b "$B" --timeout 5s still --quiet 300ms >/dev/null
+  OMABOX_T_PW=wrong-pw ob keys -b "$B" --pass OMABOX_T_PW Return >/dev/null
+  ob wait -b "$B" --timeout 5s still --quiet 300ms >/dev/null
+  check "a wrong password keeps it locked" ob run -b "$B" -- omarchy-hyprland-session-locked
+  check_match "...the lock asked the test's PAM config" 'with config "omarchy-lock-password" in dir "/opt/omabox-lockpam"' "$(ob log -b "$B" shell -n all)"
+  ob wait -b "$B" --timeout 10s still --quiet 1s >/dev/null
+  OMABOX_T_PW=omabox-lock-pw ob keys -b "$B" --pass OMABOX_T_PW Return >/dev/null
+  check "the right password unlocks it" ob wait -b "$B" --timeout 10s cmd -- sh -c '! omarchy-hyprland-session-locked'
+  check_eq "...the window from before is focused again" "$addr" "$(ob hyprctl -b "$B" -j activewindow | jq -r .address)"
+  check_eq "...and got none of the keys typed while locked" "" "$(ob run -b "$B" -- cat /home/sbx/typed 2>&1)"
+  ob keys -b "$B" -t unlocked Return >/dev/null
+  check "...though it gets them now (the check above can see a leak)" ob wait -b "$B" --timeout 5s cmd -- grep -qx unlocked /home/sbx/typed
   ob down "$B" >/dev/null
 }
 
@@ -5133,7 +5181,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

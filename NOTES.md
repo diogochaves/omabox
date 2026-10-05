@@ -2017,7 +2017,8 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `relay_call` sends the path absolute. What a box proves: compositor logic on a virtual output with
     virtual input devices (layouts, focus, input routing, the Lua config, IPC, protocols); never the
     DRM/KMS backend (modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices, or
-    the session/suspend/lock paths: those stay the real desktop's, or a VM's with passthrough.
+    the session/suspend paths and a real password at the lock (finding 186: the lock itself runs):
+    those stay the real desktop's, or a VM's with passthrough.
     Verified in a box with a copy of `/usr/bin/Hyprland` in a scratch dir: the box's Hyprland process
     runs it (`readlink /proc/PID/exe`, its pid namespace the box's), shell and bar up (shot),
     `ls`/`ls --json`/`windows` name it with the version line, box.log has the line, the folder is
@@ -3258,6 +3259,24 @@ from them.
     awake and `running` while a box is up, nothing else (a box has no starting or failed state the
     list shows). Checked in a box with the rail and a stub `omabox ls`: one box up woke it, an empty
     list put it back, with the rail's built-in mappings removed so only the convention could.
+186. **The lock screen runs in a box; only a real password cannot unlock it** (2026-10-05). The
+    skill said a box has no lock. Omarchy 4.0.4's lock is the shell's `lock` plugin (Quickshell's
+    `WlSessionLock`, ext-session-lock), not hyprlock, and in a box it works: SUPER+ESCAPE, Lock takes
+    a session lock (`omarchy-hyprland-session-locked` exits 0), keys go to the lock field and not the
+    window under it, a wrong password says "Authentication failed". Every password fails, though:
+    the lock's `PamContext` runs `/etc/pam.d/omarchy-lock-password` (pam_unix), and in the box's user
+    namespace `/etc/shadow` is `nobody`'s and setuid `unix_chkpwd` gains nothing, so PAM answers
+    "Authentication service cannot retrieve authentication info" (code 9). Right as it is: a box
+    must never check, or be handed, the user's password. pam_faillock's tally goes to the box's own
+    `/run` (the host's `faillock --user` stayed empty after a wrong password in a box). `--ro-bind`
+    onto `/etc/pam.d` is refused (the box's own system), so unlocking is tested through `--omarchy`:
+    a copy whose `PamContext` gets `configDirectory` pointing at a mounted folder with a pam_exec
+    config and a test password. With that, menu → Lock → wrong password (still locked) → right
+    password → the same window focused again took 4.5 s after `up` (~5 s), 9.85 s with teardown, in
+    four runs out of four, every step checked by a command, not a screenshot. `t_lock` does it, and
+    checks a terminal reading into a file got none of the keys typed while locked (then that it gets
+    keys once unlocked, so the check can see a leak); reference.md has the recipe. Still a VM's:
+    the real PAM stack, fingerprint, the login screen and the disk passphrase.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
