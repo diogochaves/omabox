@@ -520,6 +520,14 @@ t_unit_mount_rules() {
   check "dest /tmp refused" lib refuse_dest /tmp
   check "dest /tmp/.X11-unix refused" lib refuse_dest /tmp/.X11-unix
   check_eq "//usr normalised to /usr" "/usr" "$(lib robind_spec "$ROOT://usr" | cut -f2)"
+  # --seed SRC:DEST (#80): DEST is in the box HOME, however written; never above it.
+  check_eq "seed: DEST relative to the box HOME" "$ROOT/VERSION"$'\t'".config/x/v" "$(lib seed_spec "$ROOT/VERSION:.config/x/v")"
+  check_eq "seed: ~/ and /home/sbx/ are the box HOME" ".config/v .config/v" \
+    "$(lib seed_spec "$ROOT/VERSION:~/.config/v" | cut -f2) $(lib seed_spec "$ROOT/VERSION:/home/sbx/.config/v" | cut -f2)"
+  check_match "seed: .. out of the HOME refused" "must be inside the box HOME" "$(lib seed_spec "$ROOT/VERSION:a/../../x" 2>&1)"
+  check_match "seed: another absolute DEST refused" "DEST is in the box HOME" "$(lib seed_spec "$ROOT/VERSION:/etc/x" 2>&1)"
+  check_match "seed: the HOME itself refused" "must be inside the box HOME" "$(lib seed_spec "$ROOT/VERSION:~/" 2>&1)"
+  check_match "seed: no DEST refused" "SRC:DEST" "$(lib seed_spec "$ROOT/VERSION" 2>&1)"
 }
 
 t_unit_refusals() {
@@ -540,6 +548,8 @@ t_unit_refusals() {
   check_fails "--ro-bind onto /opt refused" ob up "$P-r14" --ro-bind "$ROOT:/opt"
   check_fails "--ro-bind onto //usr refused" ob up "$P-r15" --ro-bind "$ROOT://usr"
   check_fails "two names refused" ob up "$P-r16" "$P-r17"
+  check_fails "--seed of a secret store refused" ob up "$P-r19" --seed "$HOME/.ssh:x"
+  check_fails "--seed of ~/.config/omarchy refused (api-keys.env)" ob up "$P-r20" --seed "$HOME/.config/omarchy:x"
   check_fails "--plugin HOME refused" bash -c "mkdir -p '$TMP/fakehome' && echo '{\"id\":\"x.y\"}' > '$TMP/fakehome/manifest.json' && HOME='$TMP/fakehome' '$CLI' up '$P-r18' --plugin '$TMP/fakehome'"
   # (/dev/net/tun hidden in a mount namespace of its own: pasta would fail inside the box, 10 s later)
   check_match "a connected box without /dev/net/tun is refused up front" "needs /dev/net/tun" \
@@ -2068,11 +2078,14 @@ t_unit_uwsm_guard() {
 t_main() {
   local B=$P-main s0=$SECONDS
   # (A secret-looking variable in up's environment, which the box session must not get: #111.)
-  check "up" env T111_API_TOKEN="leak-$P" "$CLI" up "$B" --env OMABOX_TEST=yes
+  check "up" env T111_API_TOKEN="leak-$P" "$CLI" up "$B" --env OMABOX_TEST=yes --seed "$ROOT/VERSION:.config/seeded/v" --seed "$ROOT/plugin:~/seeded-dir"
   local D; D=$(ob path -b "$B")
   check_eq "box.json mode headless" headless "$(jq -r .mode "$D/box.json")"
   check_eq "box.json size WxH@HZ" "1920x1080@60" "$(jq -r .size "$D/box.json")"
   check_eq "idle default 2h" 7200 "$(jq -r .idle "$D/box.json")"
+  check_eq "--seed: a file in the box HOME (#80)" "$(cat "$ROOT/VERSION")" "$(ob run -b "$B" -- cat /home/sbx/.config/seeded/v)"
+  check_eq "...a folder's contents" "$(cat "$ROOT/plugin/manifest.json")" "$(ob run -b "$B" -- cat /home/sbx/seeded-dir/manifest.json)"
+  check_match "...up again without it: already up, said" "is already up, without what you asked for: --seed" "$(ob up "$B" --seed "$ROOT/VERSION:x" 2>&1)"
   check_eq "ls --json has the box's GPU, the node it renders on (#118)" "$(ob run -b "$B" -- printenv OMABOX_RENDER_NODE)" \
     "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .render.node')"
   check "ls --json lists it up" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\" and .state == \"up\")'"

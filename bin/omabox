@@ -63,7 +63,7 @@ usage_text() {
 omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
   omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
-            [--ro-bind DIR[:DEST]]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
+            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
@@ -158,6 +158,10 @@ for a secret: the process list shows it). \`keys -t\` and \`keys --pass\` type n
 that is up hands it to the command, as --env-file does (--pass wins). Never what the session sets
 itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, DISPLAY, HYPRLAND_INSTANCE_SIGNATURE,
 LD_PRELOAD...), by any of them.
+@ up run
+--seed SRC:DEST: a file or folder of yours copied into the box HOME at DEST (.config/x or ~/.config/x)
+before its session starts, for a plugin that reads its config once at start; the same refusals as
+--ro-bind (no secret stores, no ~/.config/omarchy). A copy: the box's changes stay in the box.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run reload
@@ -1456,6 +1460,32 @@ home_unlink() {
   done
 }
 
+# up --seed SRC:DEST (#80): a file or folder of the host's, copied into the box HOME at DEST before the
+# session starts (a plugin that reads its config once at start finds it there). DEST is in the box HOME:
+# `.config/x`, `~/.config/x` or `/home/sbx/.config/x`, never above it. Prints "src<TAB>dest" (SRC
+# resolved, DEST relative to the HOME), or says why not and fails. The refusals are --ro-bind's (up).
+seed_spec() {
+  local src=${1%%:*} dest=${1#*:} r
+  [[ $1 == *:* ]] && [ -n "$src" ] && [ -n "$dest" ] || { say "--seed: SRC:DEST (a file or folder, and where in the box HOME), got $1"; return 1; }
+  src=${src/#\~/$HOME}
+  [ -e "$src" ] || { say "--seed: no such path: $src"; return 1; }
+  src=$(readlink -f -- "$src")
+  # shellcheck disable=SC2088 # a literal ~/ in DEST: the box HOME, not ours
+  case $dest in "~/"*) dest=${dest#"~/"} ;; /home/sbx/*) dest=${dest#/home/sbx/} ;; /*) say "--seed: DEST is in the box HOME (.config/x, ~/.config/x), got $dest"; return 1 ;; esac
+  r=$(realpath -m --relative-base=/h -- "/h/$dest")
+  [[ $r != /* ]] && [ "$r" != . ] || { say "--seed: DEST must be inside the box HOME, got $dest"; return 1; }
+  printf '%s\t%s\n' "$src" "$r"
+}
+# Copy SRC into the box HOME at REL (seed_spec's), replacing what seed_home put there; links on the way
+# are cleared first (a save's HOME may have them: finding 168). A folder's contents go into REL.
+seed_copy_in() {
+  local h=$D/home
+  home_unlink "$h" "$2"
+  mkdir -p -- "$(dirname -- "$h/$2")"
+  if [ -d "$1" ]; then mkdir -p -- "$h/$2" && cp -a --reflink=auto -- "$1/." "$h/$2/"
+  else rm -rf -- "${h:?}/$2" && cp -a --reflink=auto -- "$1" "$h/$2"; fi || die "--seed: could not copy $1 to ~/$2 in the box"
+}
+
 # A read-only mount spec, DIR or DIR:DEST (DEST absolute, e.g. ~/nas:/mnt/nas to test path mapping):
 # prints "src<TAB>dest" (both resolved), or fails if DIR does not exist.
 robind_spec() {
@@ -1543,6 +1573,9 @@ up_already() {
   case " $given " in *" omarchy "*) [ "$(meta omarchy)" = "$omarchy" ] || diff+=("--omarchy ${omarchy:-/usr/share/omarchy} (it runs $(meta omarchy | grep . || echo /usr/share/omarchy))") ;; esac
   case " $given " in *" hyprland "*) [ "$(meta hyprland)" = "$hyprland" ] || diff+=("--hyprland $hyprland (it runs $(meta hyprland | grep . || echo "the installed one"))") ;; esac
   case " $given " in *" from "*) [ "$(meta from)" = "$FROM" ] || diff+=("--from $FROM (it started from $(meta from | grep . || echo "no save"))") ;; esac
+  case " $given " in *" seed "*)
+    [ "$(printf '%s\n' "${seeds[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.seeds // []' "$D/box.json" 2>/dev/null)" ] ||
+      diff+=("--seed (files are seeded only when a box starts)") ;; esac
   ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null)
   for p in "${plugin_args[@]}"; do
     id=$(resolve_plugin "$p" | cut -f1)
@@ -1561,13 +1594,13 @@ cmd_up() {
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
-  local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
+  local overlays=() robinds=() plugin_args=() envs=() seeds=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell)
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -1580,6 +1613,7 @@ cmd_up() {
       --plugin) optarg "$@"; plugin_args+=("$2"); shift ;;
       --overlay) optarg "$@"; [ -d "$2" ] || die "--overlay: no such directory: $2"; overlays+=("$(readlink -f -- "$2")"); shift ;;
       --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec"); shift ;;
+      --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
@@ -1642,6 +1676,9 @@ cmd_up() {
     done
     for x in "${robinds[@]}"; do
       jail_root "${x%%$'\t'*}" >/dev/null || die "up: ${x%%$'\t'*} is not a folder this jail was given whole (its project, or one of its maps), so it does not go into the box"
+    done
+    for x in "${seeds[@]}"; do
+      jail_sees "${x%%$'\t'*}" >/dev/null || die "up: --seed ${x%%$'\t'*} is not in a folder this jail sees, so it is not copied into the box"
     done
     # --hyprland's folder is mounted as --ro-bind's are: one of the jail's folders, whole. A build
     # inside the jail's project needs no mount of its own: the project is in the box, and the path
@@ -1790,6 +1827,9 @@ cmd_up() {
     why=$(refuse_dest "$dest") && die "refusing to mount $src at $dest in a box: $why"
     ro_args+=(--ro-bind "$src" "$dest")
   done
+  for p in "${seeds[@]}"; do
+    why=$(refuse_src "${p%%$'\t'*}") && die "refusing to seed ${p%%$'\t'*} into a box: $why"
+  done
   for p in "${overlays[@]}"; do
     why=$(refuse_src "$p") && die "refusing to overlay $p in a box: $why"
     why=$(refuse_dest "$p") && die "refusing to overlay $p in a box: $why"
@@ -1810,6 +1850,7 @@ cmd_up() {
   [ -z "${NEWLOCK:-}" ] || exec {NEWLOCK}>&-
   sweep_homes
   seed_home
+  for p in "${seeds[@]}"; do seed_copy_in "${p%%$'\t'*}" "${p#*$'\t'}"; done
   SHELL_BEFORE=$(shell_crash_dirs)   # (none in a fresh HOME, nor in a save: it keeps no .cache)
   # Read again as late as possible: a change made while this box was being set up (the widget's
   # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
@@ -1854,12 +1895,13 @@ cmd_up() {
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
-    --argjson render "$render_json" \
+    --argjson render "$render_json" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
       xwayland: ($xwayland == 1), autoreload: ($autoreload == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
       + (if $render != null then {render: $render} else {} end)
+      + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
@@ -2874,7 +2916,7 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;

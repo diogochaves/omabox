@@ -439,6 +439,9 @@ blocks the network and every other socket, omabox's included), or see
   mapping); DEST cannot be `/`, a system dir, `/run`, `/tmp` itself, `/opt/omabox`, the box HOME, or
   a dir above those. A plugin dir inside `~/.config/omarchy/plugins` is fine. A throwaway `run`
   outside a repo mounts nothing of the current dir.
+- `--seed SRC:DEST` (next release) copies a file or folder into the box HOME before the session
+  starts (`--seed ./fixture.json:.config/myplugin/config.json`), for a plugin that reads its config
+  once at start; the same sources are refused as for `--ro-bind`.
 
 </details>
 

@@ -379,6 +379,8 @@ most people will. Then:
   setBarWidget ID KEY VALUE_JSON '{}'` (kept in the widget's entry in the bar layout),
   `moveBarWidget ID '{"section":"left","after":"omarchy.clock"}'`, `setPluginEnabled ID false`. Or
   edit the box's `$(omabox path)/home/.config/omarchy/shell.json`: its shell applies it at once.
+- **A config the plugin reads once at start**: `omabox up --plugin PATH --seed ./fixtures/config.json:.config/myplugin/config.json`
+  copies it into the box HOME before the shell starts (no second shell start, no wrong state in between).
 - **A vertical or bottom bar**: `"bar": {"position": "left"}` (`right`, `bottom`) in that file.
 - **Data states** (missing tool, signed out, empty, malformed output, slow, failing): a stub CLI
   in `$(omabox path)/home/.local/bin` (ahead of yours on the box's PATH, the bar's included; not for

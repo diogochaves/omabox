@@ -3795,6 +3795,19 @@ from them.
     (a vfio-bound GPU, one with no lspci name, a non-display device); `gpu release` is unit-tested on
     a fake runtime dir only, since in the suite it would take real boxes down. t_widget_list drives the
     picker through the panel's new `face settings` IPC and `inspect`.
+225. **`up --seed SRC:DEST`: files in the box HOME before the session starts** (2026-10-06, #80). A
+    plugin that reads its config once at start (`Component.onCompleted`) needed it written into
+    `$(omabox path)/home` after `up`, then `restart-shell`: a second shell start, with its plugin check,
+    and a window where the bar showed the wrong state; three setup scripts in a usage study did exactly
+    that. `--seed` (repeatable; `run` passes it to a throwaway box) copies a file, or a folder's
+    contents, into the box HOME at DEST after seed_home and before the box starts, so it also replaces
+    what seed_home put there. DEST is in the box HOME however written (`.config/x`, `~/.config/x`,
+    `/home/sbx/.config/x`), never the HOME itself or above it; links on its way are cleared first, as
+    seed_home does for a save's HOME (finding 168). SRC gets --ro-bind's refusals (refuse_src: secret
+    stores, `~/.config/omarchy`, HOME, the runtime dir...), and a jailed agent's must be something its
+    jail sees. A box up without the same seeds is "already up, without what you asked for" (box.json
+    keeps them). Checked in t_main (a file and a folder), t_unit_mount_rules (DEST shapes),
+    t_unit_refusals.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

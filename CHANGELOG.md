@@ -7,6 +7,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`omabox up --seed SRC:DEST`** (and `run --seed`): a file or folder copied into the box HOME before
+  its session starts, for a plugin that reads its config once at start, where a box needed a second
+  shell start after writing it in (#80).
 - **`omabox up --autoreload`**: the box's Hyprland reloads its config when a file it loaded
   changes, as a desktop's does, so a project can see what a file change does (a helper that
   rewrites a file the config loads, on a Hyprland event, reloads a desktop for ever). Boxes keep
