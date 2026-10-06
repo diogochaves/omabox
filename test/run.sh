@@ -1478,6 +1478,9 @@ t_unit_cli() {
   check_match "...drag's: --hold is a duration, a bare number seconds, as ms_duration reads it (#103)" \
     "--hold DURATION.*like 300ms or 2s: a bare number is seconds" "$(ob help drag | tr '\n' ' ')"
   check_eq "...which it does" 2000 "$(lib ms_duration 2)"
+  check "confirm-close calls the box's own hyprctl and jq (#113: a stub must not end the box)" \
+    grep -qE '^hyprctl\(\) \{ /usr/bin/hyprctl .*$' "$ROOT/share/confirm-close.sh"
+  check "...and jq" grep -qE '^jq\(\) \{ /usr/bin/jq ' "$ROOT/share/confirm-close.sh"
   check_match "...up's: --new starts the box, so its options go on that call (#148)" "--new\] +start it under a free name" "$(ob help up)"
   check_match "...as the skill says" "up --new \[--plugin …\]\` starts a box" "$(cat "$ROOT/skill/SKILL.md")"
   check_eq "...an unknown one: one line, exit 2" "1 2" "$(ob help shoot 2>&1 | wc -l) $(ob help shoot >/dev/null 2>&1; echo $?)"
@@ -3567,6 +3570,14 @@ t_uwsm_app() {
     "$(ob run -b "$B" -- sh -c 'o=$(systemd-run --user --wait -E V=out sh -c "echo \$V; exit 3"); echo "$o $?"')"
   check_match "...a timer says it needs --systemd" "omabox up --systemd" "$(ob run -b "$B" -- systemd-run --user --on-active=1m true 2>&1)"
   check_eq "systemd-cat -t ID writes to ~/ID.log" "hi" "$(ob run -b "$B" -- sh -c 'echo hi | systemd-cat -t omabox-t; cat ~/omabox-t.log')"
+  check_eq "...--level-prefix VALUE spaced: VALUE is not the command (#113)" "lp" \
+    "$(ob run -b "$B" -- sh -c 'systemd-cat -t omabox-lp --level-prefix false echo lp; cat ~/omabox-lp.log' 2>&1)"
+  check_match "systemd-run --shell: not supported, said (#113)" "--shell is not supported in a box" \
+    "$(ob run -b "$B" -- systemd-run --user --shell 2>&1)"
+  ob run -b "$B" -- sh -c 'printf "[Desktop Entry]\nType=Application\nName=t2\nExec=foot --app-id=omabox.desk2 sleep 60\nActions=x;\n[Desktop Action x]\nName=x\nExec=true\n" > /tmp/t2.desktop'
+  ob run -b "$B" -- uwsm-app -- /tmp/t2.desktop:x >/dev/null
+  check "uwsm-app launches a desktop file by path with an action (dropped) (#113)" until_ok 10 \
+    bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox.desk2\")'"
   # omarchy-version (finding 137): Omarchy's asks pacman, which a box has no database for (exit 1).
   local ov; ov=$(pacman -Q omarchy-dev 2>/dev/null || pacman -Q omarchy 2>/dev/null) || ov=${OMABOX_OMARCHY_VERSION:-}
   check_eq "omarchy-version says the installed Omarchy's version" "${ov#* }" "$(ob run -b "$B" -- omarchy-version)"
@@ -3898,6 +3909,9 @@ t_unit_guard_settings() {
   check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$co/share/guard" \
     "$(bash -c '. "$1"; echo "${PATH%%:*}"' _ "$f")"
   check_match "Codex's hook gives the note" "^omabox guard: shell commands here have no display" "$(sh -c "$chook")"
+  CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null
+  check_eq "...a second session start: the guard's dir once on PATH (#113)" 1 \
+    "$(bash -c '. "$1"; tr : "\n" <<<"$PATH" | grep -cxF "$2"' _ "$f" "$co/share/guard")"
   # #142: the note says `!` commands are guarded, and gets through whole (it sits in the hooks'
   # single-quoted echo, so a ' in it would cut it short or break the hook).
   check_match "...whole, saying the user's ! commands are guarded (#142)" \
@@ -4446,6 +4460,14 @@ t_keys_to_box() {
     jq -r '[.[] | select(.description | startswith("omabox:"))] | group_by(.submap) | map("\(.[0].submap):\(length)") | reverse | join(" ")')"
   focus class:foot; focus "pid:$pa"
   check "...and focus still drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
+  # A newer passthrough over an older one with no reload between (#113): the reaper installs it again;
+  # its unbind takes the toggle out of both submaps.
+  ob lua -b "$B" 'omabox_pass_version = 3' >/dev/null
+  check "a newer passthrough over an older one: installed again" until_ok 6 reinstalled
+  check_eq "...still one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
+    jq -r '[.[] | select(.description | startswith("omabox:"))] | group_by(.submap) | map("\(.[0].submap):\(length)") | reverse | join(" ")')"
+  focus class:foot; focus "pid:$pa"
+  check "...focus drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
   check "keys-to-box off with the box focused: the keys are the host's at once" "${in[@]}" keys-to-box -b ka off
   check "...submap, border and file off" until_ok 5 kis "|aquamarine|plain|"
   if aq_unfixed "${in[@]}"; then
@@ -5298,6 +5320,9 @@ t_inspect() {
   check_eq "lua: a source that ends in ]" 5 "$(ob lua -b "$B" '({5})[1]')"
   check_eq "lua --json: strings quoted" $'"s"\n1' "$(ob lua -b "$B" --json '"s", 1')"
   check_eq "lua: a NUL survives the trip (JSON)" '"a\u0000b"' "$(ob lua -b "$B" --json '"a\0b"')"
+  check_eq "lua: a byte that is not UTF-8 is \\u00XX (here as jq reads it), not U+FFFD (#113); UTF-8 stays" '"aÿbétéÃ"' \
+    "$(ob lua -b "$B" --json '"a\xffb\xe9t\xc3\xa9\xc3"')"
+  check_eq "...a stray byte after a 4-byte character" '"😀'$'\xc2\x80''"' "$(ob lua -b "$B" --json '"\xf0\x9f\x98\x80\x80"')"
   check_eq "lua: a Hyprland object's fields (from its stubs)" 1920 "$(ob lua -b "$B" 'hl.get_monitors()[1]' | jq .width)"
   check_match "...an object inside one is its name" '^"HL\.Workspace' "$(ob lua -b "$B" 'hl.get_monitors()[1]' | jq .active_workspace)"
   check_eq "lua: the source on stdin" 42 "$(echo 'return 40 + 2' | ob lua -b "$B" -)"

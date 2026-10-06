@@ -8,12 +8,13 @@
 # need the real manager (the units are listed and stopped with systemctl): say so. With `up --systemd`,
 # or without --user, the real systemd-run; but never for omabox's uwsm-app, in any box: it detaches
 # the app and returns, and the unit's end then killed the app with the unit's cgroup.
-args=("$@") user=0 fg=0 timer="" dir="" envs=()
+args=("$@") user=0 fg=0 shell=0 timer="" dir="" envs=()
 while [ $# -gt 0 ]; do
   case $1 in
     --) shift; break ;;
     --user) user=1 ;;
     --wait|-W|--pipe|-P|--scope|--pty|-t|--pty-late) fg=1 ;;
+    -S|--shell) shell=1 ;;
     --on-active|--on-boot|--on-startup|--on-unit-active|--on-unit-inactive|--on-calendar) timer=$1; shift ;;
     --on-*) timer=${1%%=*} ;;
     -E|--setenv) envs+=("$2"); shift ;;
@@ -37,6 +38,7 @@ if [ -n "$timer" ]; then
   echo "systemd-run (omabox): $timer timers need a user manager: start the box with omabox up --systemd" >&2
   exit 1
 fi
+[ $shell = 0 ] || { echo "systemd-run (omabox): --shell is not supported in a box without a user manager (omabox up --systemd has one)" >&2; exit 1; }
 [ $# -gt 0 ] || { echo "systemd-run (omabox): nothing to run" >&2; exit 1; }
 command -v "$1" >/dev/null || { echo "systemd-run (omabox): $1: command not found" >&2; exit 1; }
 [ -z "$dir" ] || cd "$dir" || exit 1

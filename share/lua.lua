@@ -40,9 +40,25 @@ local function class_fields(name)
   return omabox_lua_fields[name]
 end
 
+-- A byte that is not part of valid UTF-8 (a raw file name, binary data) is \u00XX, its Latin-1 reading:
+-- left raw, jq on the host turned each into U+FFFD without a word (#113).
 local function str(s)
   local esc = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\t"] = "\\t", ["\r"] = "\\r" }
-  return '"' .. s:gsub('[%c"\\]', function(c) return esc[c] or string.format("\\u%04x", c:byte()) end) .. '"'
+  s = s:gsub('[%c"\\]', function(c) return esc[c] or string.format("\\u%04x", c:byte()) end)
+  if not utf8.len(s) then
+    local out, i, n = {}, 1, #s
+    while i <= n do
+      if utf8.len(s, i, i) then
+        local c = s:byte(i)   -- a valid character: its first byte says how long it is
+        local j = i + (c < 0x80 and 0 or c < 0xe0 and 1 or c < 0xf0 and 2 or 3)
+        out[#out + 1] = s:sub(i, j); i = j + 1
+      else
+        out[#out + 1] = string.format("\\u%04x", s:byte(i)); i = i + 1
+      end
+    end
+    s = table.concat(out)
+  end
+  return '"' .. s .. '"'
 end
 
 local function num(v)

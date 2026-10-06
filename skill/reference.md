@@ -85,7 +85,8 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 - `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
   of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
-  `--systemd`), `box` (bwrap). A box that died keeps its logs until `down`: read them to see why.
+  `--systemd`), `events` (Hyprland's events, which `omabox events` reads), `box` (bwrap), `reap` (the
+  reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
   `-f` follows until the box goes down (exit 0). `-i` goes before `--grep RE`, not between them:
   `--grep -i RE` greps for `-i` and reads RE as a log's name. Hyprland writes its log in pieces: a line about
   what just happened can come a moment (or many lines) later; `-f` shows it when it does.
@@ -110,8 +111,10 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   or in `/tmp` inside, and seed a widget's data files (a usage record, a store) there while the box runs.
 - The box has the host's programs, not more: an app the host does not have fails in the box too
   (`setsid: failed to execute alacritty`); Omarchy's terminal is `foot` or what the host has.
-- The session's PATH is yours (mise's tools, as in `omabox run`) with the box HOME's `~/.local/bin`
-  first: drop a stub CLI there to fake one a plugin calls. `--env KEY=VAL` on `up` sets a variable for
+- The session's PATH is yours (mise's tools, as in `omabox run`) after omabox's stand-ins and the box
+  HOME's `~/.local/bin`: drop a stub CLI there to fake one a plugin calls. What Hyprland starts (the
+  bar, binds, terminals) has Omarchy's bin ahead of `~/.local/bin`, so a stub there answers for
+  `wpctl`, `brightnessctl` or a plugin's CLI, never for an `omarchy-*` command. `--env KEY=VAL` on `up` sets a variable for
   the whole session (the bar included), e.g. a plugin's API base pointed at a stub; not one the
   session sets itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, LD_PRELOAD...): refused.
 - `omabox up --systemd` gives the box a real systemd user manager: `systemctl --user`, units in the box
@@ -241,7 +244,8 @@ servers), then:
   edit the box's `$(omabox path)/home/.config/omarchy/shell.json`: its shell applies it at once.
 - **A vertical or bottom bar**: `"bar": {"position": "left"}` (`right`, `bottom`) in that file.
 - **Data states** (missing tool, signed out, empty, malformed output, slow, failing): a stub CLI
-  in `$(omabox path)/home/.local/bin` (first on the box's PATH, the bar's included), offline with
+  in `$(omabox path)/home/.local/bin` (ahead of yours on the box's PATH, the bar's included; not for
+  `omarchy-*` commands, whose bin comes first for the bar), offline with
   `--net isolated`.
 - **Theme**: `omabox run -- omarchy-theme-set NAME` (names: `omabox run -- omarchy-theme-list`),
   `omabox wait still`, `omabox shot`.

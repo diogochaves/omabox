@@ -3442,6 +3442,24 @@ from them.
     `up` from outside a repo still starts a box and names the existing one. Checks in
     t_unit_agent_session (stubbed boxes) and t_agent_session (a `run` from $TMP reaches the session's
     box); they failed on the old code.
+201. **In-box scripts: a stub cannot end a box; the stand-ins parse what they missed** (2026-10-06,
+    #113). confirm-close.sh called `hyprctl` and `jq` through PATH, where a test's stub in the box
+    HOME's `~/.local/bin` comes first: a stub `hyprctl` that fails ended an interactive box without
+    asking. It calls /usr/bin's now (omarchy-menu-select stays on PATH: Omarchy's, stubbable). `omabox
+    lua` gave bytes that are not UTF-8 raw, and jq on the host made each U+FFFD without a word: they
+    are `\u00XX` now (Latin-1), valid UTF-8 as it is. systemd-cat took `--level-prefix VALUE`'s VALUE
+    for the command; systemd-run said "nothing to run" for `--shell` (now: not supported without a user
+    manager); uwsm-app sent `/x.desktop:action` to gtk-launch, which takes ids only (now gio, the action
+    dropped). The guard's SessionStart line added `share/guard` to PATH again at each start (harmless):
+    it checks first now (an existing hook reads `outdated` until `omabox guard on`). Docs: a stub in
+    `~/.local/bin` answers for non-Omarchy commands only on the bar's PATH (finding 149 put Omarchy's
+    bin ahead of it there); `events` and `reap` logs listed. Not changed, checked in a box (Hyprland
+    0.56.2): passthrough.lua's `hl.unbind(key)` on a reinstall takes the toggle out of every submap,
+    not only the default one, and `hl.window_rule` with a name already defined returns that same rule,
+    so a VERSION bump without a reload leaves one bind in each submap and one border rule (the issue
+    expected doubles); t_keys_to_box checks the binds after such a reinstall. lua.lua's encoder was
+    already inside its pcall (finding 176) and install.sh already lists python. New checks in
+    t_unit_cli, t_unit_guard_settings, t_uwsm_app, t_inspect and t_keys_to_box.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

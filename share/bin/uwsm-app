@@ -18,11 +18,13 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# A desktop file by path may name an action (/x.desktop:open): gio launch has none, so it is dropped.
+file=${1:-}; [[ $file != /*.desktop:* ]] || file=${file%:*}
 if [ $# -eq 0 ]; then
   [ $term = 1 ] || { echo "uwsm-app (omabox): nothing to run" >&2; exit 1; }
   set -- xdg-terminal-exec "${topts[@]}"
-elif [[ $1 == /*.desktop ]] && [ -f "$1" ]; then
-  set -- gio launch "$@"                  # a desktop file by path (gtk-launch takes only IDs)
+elif [[ $file == /*.desktop ]] && [ -f "$file" ]; then
+  set -- gio launch "$file" "${@:2}"      # a desktop file by path (gtk-launch takes only IDs)
 elif [[ $1 == *.desktop || $1 == *.desktop:* ]] && ! command -v "$1" >/dev/null; then
   set -- gtk-launch "${1%%:*}" "${@:2}"   # desktop entry ID (the :action part is not supported)
 elif [ $term = 1 ]; then

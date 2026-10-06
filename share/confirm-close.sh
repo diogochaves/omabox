@@ -5,6 +5,11 @@
 # is a yes (hyprland.lua exits on a close while omabox.close-asking exists); "Keep it running" or
 # Escape is a no.
 set -uo pipefail
+# The box's own hyprctl and jq, by path: a test's stub of either in the box HOME's ~/.local/bin (first
+# on the session's PATH) must not end the box without asking (#113). omarchy-menu-select is Omarchy's,
+# through PATH: a test may stub that one.
+hyprctl() { /usr/bin/hyprctl "$@"; }
+jq() { /usr/bin/jq "$@"; }
 
 # Ending on purpose: omabox.closed tells the box's reaper to clear it (finding 71).
 quit() { echo 1 > "$XDG_RUNTIME_DIR/omabox.closed"; hyprctl dispatch 'hl.dsp.exit()' >/dev/null 2>&1; exit 0; }

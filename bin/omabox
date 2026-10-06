@@ -4741,7 +4741,7 @@ user asked for their real desktop in this task, run that command with: omabox ho
 # say so once omabox is gone (issue #51: deleted without `guard off`, nothing is left to undo it).
 GUARD_GONE="omabox guard: omabox is gone ($ROOT/bin/omabox)"
 GUARD_HOOK="if [ ! -x '$ROOT/bin/omabox' ]; then echo '$GUARD_GONE, so the guard is not applied: shell commands here reach the real desktop. Its SessionStart hook (the one naming $GUARD) can go from settings.json'; \
-elif [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'export ${GUARD_ENV[*]} PATH=\"$GUARD_PATH:\$PATH\"; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
+elif [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi"
 # shellcheck disable=SC2016 # jq, not shell
 GUARD_JQ='def ours: (.command? // "") | contains($g);

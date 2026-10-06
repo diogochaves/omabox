@@ -9,7 +9,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --) shift; break ;;
     -t|--identifier) tag=$2; shift ;;
-    -p|--priority|--stderr-priority|--namespace) shift ;;
+    -p|--priority|--stderr-priority|--namespace|--level-prefix) shift ;;
     --identifier=*) tag=${1#*=} ;;
     -h|--help) echo "systemd-cat (omabox stand-in): output to ~/IDENTIFIER.log; systemd-cat [-t ID] [--] [CMD [ARG...]]"; exit 0 ;;
     -*) ;;
