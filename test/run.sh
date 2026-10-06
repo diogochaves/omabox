@@ -2406,6 +2406,32 @@ t_stock_bar() {
 # finding 138: why a mounted plugin is not in the box's bar, said at up and restart-shell (Omarchy's
 # validator, then the shell's list and log), and in ls --json; and `omarchy plugin add` from a checkout
 # acting on the box only.
+# #127: a widget placed in another mounted plugin's own layout (a sidebar that hosts widgets) is that
+# plugin's to load: the shell lists it not enabled, and up/restart-shell called it disabled (38 times).
+t_plugin_hosted() {
+  local B=$P-ph F=$TMP/hosted out H
+  hfix() {   # DIR ID: a bar widget
+    mkdir -p "$F/$1"
+    jq -n --arg id "$2" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
+      entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$F/$1/manifest.json"
+    printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$1" > "$F/$1/W.qml"
+  }
+  hfix a "$P.ha"; hfix b "$P.hb"; hfix c "$P.hc"
+  ob up "$B" --net isolated --plugin "$F/a" --plugin "$F/b" --plugin "$F/c" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  H=$(ob path "$B")/home
+  # A out of the bar into B's own entry; C out of the bar, in nothing's.
+  jq --arg a "$P.ha" --arg b "$P.hb" --arg c "$P.hc" \
+    '.bar.layout |= map_values(map(select((if type == "object" then .id else . end) as $x | $x != $a and $x != $c)))
+     | .plugins = [(.plugins // [])[] | select(.id != $b)] + [{id: $b, widgets: [{id: $a}]}]' \
+    "$H/.config/omarchy/shell.json" > "$TMP/hosted.json" && cp "$TMP/hosted.json" "$H/.config/omarchy/shell.json"
+  out=$(ob restart-shell -b "$B" 2>&1)
+  check_fails "a widget hosted in another mounted plugin's layout: no \"disabled\" warning (#127)" grep -q "$P.ha disabled" <<<"$out"
+  check_eq "...ls --json: hosted, and by which" "hosted $P.hb" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.ha" '.[] | select(.name == $n) | .plugin_status[$i] | "\(.state) \(.host)"')"
+  check_match "a widget off the bar and in no plugin's layout: still disabled" "plugin $P.hc disabled: listed but not enabled" "$out"
+  ob down "$B" >/dev/null 2>&1
+}
+
 t_plugin_check() {
   local B=$P-pc F=$TMP/plugins out
   pfix() {   # DIR ID JQ: a bar widget that draws its dir's name
@@ -5335,7 +5361,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

@@ -225,8 +225,8 @@ servers), then:
 - **Loaded?** `up` and `restart-shell` print a warning for a plugin the shell did not load (its
   validator's message, or the shell's QML error); `omabox ls --json` has its `plugin_status`. A panel,
   menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`. A
-  widget placed in another mounted plugin's layout shows as `disabled: listed but not enabled`:
-  check it with that plugin's IPC.
+  widget placed in another mounted plugin's layout is `hosted` (`plugin_status`'s `host` names that
+  plugin), with no warning: check it with that plugin's IPC.
 - **Edits**: `omabox restart-shell` (the mount is live). Nothing reloads by itself in a box (neither
   Quickshell's watcher nor Omarchy's plugin registry's), so a shot never catches a half-reloaded
   plugin: `restart-shell` after edits, then `wait still`, before a shot. A `keepLoaded` plugin or a service needs a restart on any

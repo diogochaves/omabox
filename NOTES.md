@@ -3412,6 +3412,14 @@ from them.
     passes it on: live reloads again, harmless, and t_unit_omarchy_contract names the change.
     t_plugin_check: a host edit to a mounted plugin logs no "Local plugin changed" (on the old code it
     did).
+197. **A widget hosted by another mounted plugin is not called disabled** (2026-10-06, #127). A bar
+    widget placed in another mounted plugin's own layout (a sidebar that hosts widgets; place_plugin
+    already counts that as placed, 151) is loaded by that plugin, and the shell's `listPlugins` gives
+    it `enabled: false`; plugin_check read that as `disabled: listed but not enabled` and warned at
+    every up and restart-shell (38 times in the usage study; wrappers ended up filtering it out). Now
+    a listed, not-enabled plugin whose id is in a mounted plugin's entry of the box's shell.json
+    (place_plugin's in_mounted test) is `hosted`, with `host` in plugin_status and no line; anything
+    else not enabled still warns. t_plugin_hosted (on the old code: `disabled`, warned).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -1004,7 +1004,7 @@ resolve_plugin() {
 # load), not loaded (not listed), disabled, or enabled (a panel, menu or overlay only: its QML loads
 # when summoned, so its errors show then, in `omabox log shell`).
 plugin_check() {
-  local ids id dir tree validate listed=null log f lines why v kinds state status='{}' bad=0
+  local ids id dir tree validate listed=null log f lines why v kinds state status='{}' bad=0 host cfg=""
   ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null) || return 0
   [ -n "$ids" ] || return 0
   tree=$(meta omarchy); validate=${tree:-/usr/share/omarchy}/bin/omarchy-plugin-validate
@@ -1012,6 +1012,7 @@ plugin_check() {
   if [ "$(jq -r '.shell | tostring' "$D/box.json")" != false ]; then
     listed=$(box_exec omarchy-shell shell listPlugins 2>/dev/null | jq -c 'map({(.id): {enabled, kinds}}) | add // {}' 2>/dev/null) || listed=null
     [ -n "$listed" ] || listed=null
+    cfg=$(box_home_file .config/omarchy/shell.json) || cfg=""
     # Its warnings and errors, colour codes and the level/category prefix dropped.
     log=""; f=$(box_home_file shell.log) &&
       { log=$(sed 's/\x1b\[[0-9;]*m//g' "$f" 2>/dev/null | sed -nE 's/^ *(WARN|ERROR) +[^:]*: //p') || log=""; }
@@ -1021,7 +1022,7 @@ plugin_check() {
     v=""; if [ -n "$validate" ] && [ -n "$dir" ] && ! v=$("$validate" "$dir" 2>&1 >/dev/null); then
       v=${v:-"$validate failed"}; say "warning: plugin $id: $v"; bad=1
     else v=""; fi
-    state=unchecked why=""
+    state=unchecked why="" host=""
     if [ "$listed" != null ]; then
       # Lines naming it: its id between characters an id cannot have, or its dir in the box.
       lines=$(grep -E "(^|[^A-Za-z0-9._-])$(re_quote "$id")([^A-Za-z0-9._-]|$)" <<<"$log" || true)
@@ -1029,16 +1030,24 @@ plugin_check() {
       if ! jq -e --arg i "$id" 'has($i)' <<<"$listed" >/dev/null; then
         state="not loaded" why=$(head -n 1 <<<"$lines"); why=${why:-"the shell does not list it"}
       elif why=$(grep -E -m 1 ' failed|failed to load|has no barWidget entry point' <<<"$lines"); then state=failed
-      elif ! jq -e --arg i "$id" '.[$i].enabled' <<<"$listed" >/dev/null; then state=disabled why="listed but not enabled"
+      elif ! jq -e --arg i "$id" '.[$i].enabled' <<<"$listed" >/dev/null; then
+        # A widget in another mounted plugin's own entry (a sidebar that hosts widgets, as place_plugin
+        # counts it placed) is that plugin's to load, not the bar's: listed, not enabled, and fine (#127).
+        host=$([ -z "$cfg" ] || jq -r --arg id "$id" --argjson m "$(jq -R . <<<"$ids" | jq -sc .)" \
+          '[(.plugins // [])[] | select(.id != $id and (.id as $p | $m | index($p)))
+            | select([.. | if type == "object" then .id? elif type == "string" then . else empty end] | index($id)) | .id][0] // empty' \
+          "$cfg" 2>/dev/null) || host=""
+        if [ -n "$host" ]; then state=hosted why=""; else state=disabled why="listed but not enabled"; fi
       elif [[ " $kinds " =~ \ (bar-widget|bar|service)\  ]]; then state=loaded why=$(head -n 1 <<<"$lines")
       else state=enabled why=$(head -n 1 <<<"$lines"); fi
       case $state in
+        hosted) ;;
         loaded|enabled) [ -z "$why" ] || say "plugin $id $state, with a warning in the shell log: $why" ;;
         *) say "warning: plugin $id $state: $why"; bad=1 ;;
       esac
     fi
     status=$(jq -c --arg i "$id" --arg s "$state" --arg w "$why" --arg v "$v" --arg c "$([ -z "$dir" ] || git_rev "$dir")" \
-      '.[$i] = ({state: $s} + (if $c != "" then {commit: $c} else {} end) + (if $w != "" then {log: $w} else {} end)
+      --arg h "$host" '.[$i] = ({state: $s} + (if $h != "" then {host: $h} else {} end) + (if $c != "" then {commit: $c} else {} end) + (if $w != "" then {log: $w} else {} end)
         + (if $v != "" then {validate: $v} else {} end))' <<<"$status")
   done
   [ $bad = 0 ] || say "the shell's log: omabox log -b $NAME shell"
