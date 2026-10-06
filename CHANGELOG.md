@@ -10,8 +10,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **More monitors in a headless box**: `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below`,
   and `omabox monitor add SPEC | remove NAME | list` on a running one: any size, scale and place, a bar
   on each, kept over a config reload, `remove` as an unplug. `shot --monitor NAME`, `peek --monitor
-  NAME`, and `drag --shot` takes `--shot-fit`, `--shot-g`, `--shot-monitor`. Not yet on NVIDIA or
-  interactive boxes (#122).
+  NAME`, and `drag --shot` takes `--shot-fit`, `--shot-g`, `--shot-monitor`. Not yet on NVIDIA
+  boxes (#122). In an interactive box each monitor is a window on your desktop, on the box's
+  workspace without focus; closing it unplugs it (#123).
 - **`omabox up --seed SRC:DEST`** (and `run --seed`): a file or folder copied into the box HOME before
   its session starts, for a plugin that reads its config once at start, where a box needed a second
   shell start after writing it in (#80).

@@ -112,7 +112,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last by default), or `omabox monitor add SPEC`
   / `remove NAME` (an unplug) / `list` on a running box. Coordinates are the layout's;
   `shot --monitor NAME` (`--fit` for a mixed-scale layout, which comes out at the highest scale),
-  `drag --shot F --shot-monitor NAME`. Headless boxes only, and not on NVIDIA (`up` says so).
+  `drag --shot F --shot-monitor NAME`. Not on NVIDIA headless boxes (`up` says so). In an interactive
+  box (the user's) each monitor is a window on their desktop: only when they ask for it.
 - **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
   put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
   only; `--json`). Never read host-wide tools (nvtop, radeontop, scripts summing `/proc/*/fdinfo` by

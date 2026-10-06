@@ -22,6 +22,20 @@ require("default.hypr.toggles")
 
 local interactive = os.getenv("OMABOX_INTERACTIVE") == "1"
 
+-- More monitors (#122, #123): `omabox monitor add` (and `up --monitor`) make each one and write it to
+-- omabox.monitors, "NAME MODE POSITION SCALE" a line (a headless box's as Hyprland made it; an
+-- interactive box's window: preferred, auto-right); its rule comes back on every load, so a reload
+-- keeps it. Read after the box's own screen rule, which they override for their output.
+local function omabox_extra_monitors()
+  local mf = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.monitors")
+  if not mf then return end
+  for line in mf:lines() do
+    local n, m, p, s = line:match("^([%w_-]+) (%S+) (%S+) ([%d.]+)$")
+    if n then hl.monitor({ output = n, mode = m, position = p, scale = tonumber(s) }) end
+  end
+  mf:close()
+end
+
 if interactive then
   -- The window on the user's desktop is the screen; it follows that window's size. Any name: after a
   -- close with confirm-close on, the window the box opens again is WAYLAND-2 (finding 70).
@@ -88,12 +102,14 @@ if interactive then
   -- re-arrange for it: bar and wallpaper keep the old size until something else commits (NOTES
   -- finding 28). Only a config reload fixes it, so watch the size and reload when it changes.
   -- Global guard: one timer, however many reloads.
+  -- Every monitor's: an interactive box can have a window per monitor (#123).
   if not omabox_resize_timer then
     local last
     omabox_resize_timer = hl.timer(function()
-      local m = hl.get_monitors()[1]
-      if not m then return end
-      local now = m.name .. " " .. m.width .. "x" .. m.height
+      local parts = {}
+      for _, m in ipairs(hl.get_monitors()) do table.insert(parts, m.name .. " " .. m.width .. "x" .. m.height) end
+      if #parts == 0 then return end
+      local now = table.concat(parts, ",")
       if last and now ~= last then hl.exec_cmd("/usr/bin/hyprctl reload") end
       last = now
     end, { timeout = 250, type = "repeat" })
@@ -109,18 +125,8 @@ else
   if f then mode = f:read("l") or mode; f:close() end
   if not mode:find("@") then mode = mode .. "@60" end
   hl.monitor({ output = waylandScreen and "WAYLAND-1" or "HEADLESS-2", mode = mode, position = "0x0", scale = 1 })
-  -- More monitors (#122): `omabox monitor add` (and `up --monitor`) make each one and write it to
-  -- omabox.monitors, "NAME WxH@HZ XxY SCALE" a line, as Hyprland made it; its rule comes back on every
-  -- load, so a reload keeps its mode, position and scale.
-  local mf = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.monitors")
-  if mf then
-    for line in mf:lines() do
-      local n, m, p, s = line:match("^([%w_-]+) (%d+x%d+@[%d.]+) (%d+x%d+) ([%d.]+)$")
-      if n then hl.monitor({ output = n, mode = m, position = p, scale = tonumber(s) }) end
-    end
-    mf:close()
-  end
 end
+omabox_extra_monitors()
 hl.config({
   debug = { vfr = true, disable_logs = false },
   -- No reload because a file changed (#140): a box changes when the agent asks (`hyprctl reload`,

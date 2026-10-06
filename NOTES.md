@@ -3834,7 +3834,32 @@ from them.
     `output create wayland` does come up, takes a mode and scale (1080x1920, 2560x1440 at 1.6), but it
     is another window on labwc's one output, under the main one: it gets no frames, and grim on it
     waits for ever. Making that work needs labwc outputs of their own per monitor; refused for now,
-    saying why. Interactive boxes refuse it until #123.
+    saying why. Interactive boxes: finding 227.
+227. **An interactive box's monitors: a window each on the desktop** (2026-10-06, #123). `up
+    --interactive --monitor SPEC` and `monitor add` on an interactive box make another Wayland output in
+    the box (`output create wayland`), which aquamarine opens as a second window on the host. Left alone
+    it lands on the user's active workspace, tiled and focused (finding 70): the exec rule that places
+    the first window holds for that one only. A host window rule cannot match a pid, and one switched
+    on from `window.open_early` (seen: the event fires with the window's pid and class) comes too late,
+    as does a tag set there: the window's workspace and focus are already decided. What works: a rule
+    for class `aquamarine` (workspace, silent, `no_initial_focus`, `render_unfocused`, floating at the
+    SPEC's size) switched on just before `output create` and off as soon as the box's client (the
+    outer bwrap's pid) has one more window, at most 5 s, and off on any exit. Its cost: another nested
+    Hyprland's window opening in that second would be caught too (stated in the code). The window's
+    size is the SPEC's in host logical pixels, kept within 90% of the host's focused monitor at the
+    same aspect (said); the box monitor's mode follows the window, a resize included (the resize watch
+    in share/hyprland.lua now watches every monitor, not the first). Placed `auto-right` or
+    `auto-down` (or X,Y) in the box, scale from the SPEC, kept in `omabox.monitors` ("NAME preferred
+    POSITION SCALE") for reloads; both branches of the config now read that file. Closing a monitor's
+    window unplugs it; closing the first with another open leaves the box on that one (the
+    `monitor.removed` handler only ends a box with no monitor left). Needs aquamarine's fix (refused
+    without, saying so). `ls` keeps `window` and box.json no monitors for an interactive box: the user
+    closes and resizes its windows without omabox, so a record would go stale; `monitor list` reads
+    them live. All of it checked in a stand-in host (t_monitors_window, finding 26): the window on
+    workspace 9, floating 800x600, the stand-in's focus and workspace unchanged, the rule off after, a
+    2560x1440 SPEC fitted to 1728x972, a box started after not caught, a resize followed (1000x800), a
+    reload keeping them, the two closes. The suite's refusal check for a box without the fix now runs
+    only where it is refused (with the fix it would open a window on the real desktop).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

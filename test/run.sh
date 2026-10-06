@@ -557,7 +557,11 @@ t_unit_refusals() {
   check_fails "--ro-bind onto //usr refused" ob up "$P-r15" --ro-bind "$ROOT://usr"
   check_fails "two names refused" ob up "$P-r16" "$P-r17"
   check_fails "--seed of a secret store refused" ob up "$P-r19" --seed "$HOME/.ssh:x"
-  check_match "--monitor on an interactive box refused (#123)" "for headless boxes" "$(ob up "$P-r28" --interactive --monitor 800x600 2>&1)"
+  # (#123) Only where it is refused: with the fix it would open a window on the real desktop.
+  if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
+    check_match "--monitor on an interactive box without aquamarine's fix: refused" "opens a window per monitor, which needs aquamarine's fix" \
+      "$(OMABOX_AQUAMARINE=system ob up "$P-r28" --interactive --monitor 800x600 2>&1)"
+  fi
   check_match "--monitor with a bad SPEC refused" "a size is WxH" "$(ob up "$P-r29" --monitor big 2>&1)"
   check_fails "--seed of ~/.config/omarchy refused (api-keys.env)" ob up "$P-r20" --seed "$HOME/.config/omarchy:x"
   check_fails "--plugin HOME refused" bash -c "mkdir -p '$TMP/fakehome' && echo '{\"id\":\"x.y\"}' > '$TMP/fakehome/manifest.json' && HOME='$TMP/fakehome' '$CLI' up '$P-r18' --plugin '$TMP/fakehome'"
@@ -4196,6 +4200,47 @@ t_monitors() {
   ob down "$B" >/dev/null
 }
 
+# An interactive box's monitors (#123), each a window on the "desktop": all in a box standing in for
+# the host (finding 26), with a terminal focused on its workspace 1 and the box on 9.
+t_monitors_window() {
+  local S=$P-monh
+  ob up "$S" --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
+  local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
+  if aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
+  ob run -b "$S" -d -- foot >/dev/null 2>&1
+  ob wait -b "$S" window foot >/dev/null 2>&1
+  check "up --interactive --monitor 800x600 in the stand-in" "${in[@]}" up wm --interactive --no-shell --monitor 800x600
+  # shellcheck disable=SC2329 # called through until_ok
+  mons() { [ "$("${in[@]}" monitor -b wm list --json | jq -r "$1")" = "$2" ]; }
+  # shellcheck disable=SC2329 # called through check
+  boxwins() { ob hyprctl -b "$S" -j clients | jq -c '[.[] | select(.class == "aquamarine") | {ws: .workspace.name, floating, size}]'; }
+  check_eq "its second window: on workspace 9, floating at the SPEC's size" \
+    '[{"ws":"9","floating":false,"size":[1896,1056]},{"ws":"9","floating":true,"size":[800,600]}]' "$(boxwins)"
+  check_eq "...the stand-in's focus and workspace unchanged" "foot 1" "$(ob hyprctl -b "$S" -j activewindow | jq -r .class) $(ob hyprctl -b "$S" -j activeworkspace | jq -r .id)"
+  check_eq "...the box has the monitor, right of its first" "WAYLAND-2 800x600@60 1896 0" \
+    "$("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name == "WAYLAND-2") | "\(.name) \(.mode) \(.x) \(.y)"')"
+  check_eq "...and the host rule is off again" false "$(ob lua -b "$S" 'omabox_monitor_rule:is_enabled()')"
+  check_match "monitor add bigger than the stand-in's screen: the window keeps its aspect, said" "does not fit on your 1920x1080 monitor: its window is 1728x972" \
+    "$("${in[@]}" monitor -b wm add 2560x1440,scale=1.5,below 2>&1)"
+  "${in[@]}" up wm2 --interactive --no-shell >/dev/null 2>&1
+  check_eq "a box started after: its window is not taken for a monitor (tiled)" 2 \
+    "$(ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class == "aquamarine" and .floating == false)] | length')"
+  "${in[@]}" down wm2 >/dev/null 2>&1
+  local a; a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .size == [800, 600]) | .address')
+  ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$a', x = 1000, y = 800 })" >/dev/null
+  check "resizing the window resizes the box's monitor" until_ok 3 mons '.[] | select(.name == "WAYLAND-2") | .mode' 1000x800@60
+  "${in[@]}" hyprctl -b wm reload >/dev/null 2>&1; sleep 1
+  check_eq "a config reload keeps its monitors" "WAYLAND-1 WAYLAND-2 WAYLAND-3" "$("${in[@]}" monitor -b wm list --json | jq -r 'map(.name) | join(" ")')"
+  ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$a' })" >/dev/null
+  check "closing a monitor's window: that monitor goes" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-1 WAYLAND-3"
+  check_match "...the box stays up" " up " "$("${in[@]}" ls | grep '^wm ')"
+  a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .floating == false) | .address')
+  ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$a' })" >/dev/null
+  check "closing its first window with another open: it stays up on that one" until_ok 3 mons 'map(.name) | join(" ")' WAYLAND-3
+  check_match "...up" " up " "$("${in[@]}" ls | grep '^wm ')"
+  ob down "$S" >/dev/null
+}
+
 # The agent guard (finding 65): the fake display agents' shells get, and omabox still finding the
 # user's session from such a shell. Sessions are faked in a runtime dir of our own where it matters.
 GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
@@ -6109,7 +6154,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_monitors t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

@@ -467,7 +467,15 @@ omabox shot --monitor HEADLESS-4          # one monitor; omabox peek --monitor H
 
 The first monitor is `--size`'s. Click, drag and pointer coordinates are the layout's (`shot` of the
 whole layout shows where each monitor is). They survive a config reload. Not in an NVIDIA box (it draws
-on one Wayland output of its own: `omabox config gpu` another GPU) nor, yet, an interactive one (#123).
+on one Wayland output of its own: `omabox config gpu` another GPU).
+
+In a box you drive (`up --interactive --monitor 1280x720`, or `monitor add`), each monitor is a window
+on your desktop, opened on the box's workspace without taking focus, floating at the SPEC's size. Its
+shape is the SPEC's, its size only as big as fits on your screen (a 5120x1440 monitor on a 2560x1440
+screen is a smaller window of the same aspect): for an exact large resolution use a headless box and
+`peek --monitor`. Resizing a window resizes that monitor; closing it unplugs it. The box's own layout
+(right, below) only matters inside the box: your pointer enters a monitor by entering its window.
+This needs aquamarine's fix (`omabox setup --aquamarine`).
 
 </details>
 

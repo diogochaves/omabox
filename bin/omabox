@@ -102,7 +102,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox output [-b NAME] (drop [--for DURATION] [--cycles N] | back)   the screen gone (a monitor off), and back
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
-  omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a headless box's other monitors
+  omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
@@ -323,7 +323,9 @@ is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name). \`monitor remove NAME
 moves its workspaces to the others. They survive a config reload. Coordinates (click, drag, pointer,
 -g) are the layout's; \`shot --monitor NAME\` takes one monitor (a shot of a mixed-scale layout comes
 out at the highest scale: --fit), \`peek --monitor NAME\` opens a window of it. Not on an NVIDIA box
-(it draws on one Wayland output) nor an interactive one.
+(it draws on one Wayland output). An interactive box's monitors are windows on your desktop, on its
+workspace, floating at the SPEC's size (within your screen, aspect kept; a resize changes the mode),
+placed right of or below the others in the box; closing one unplugs it. They need aquamarine's fix.
 @ gpu
 \`gpu release GPU\` (a PCI slot, or nvidia, amd, intel: \`omabox config gpu\` lists them) takes down every
 headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
@@ -1787,8 +1789,11 @@ cmd_up() {
   # More monitors (#122): headless boxes on a headless output; an interactive box's are windows (#123),
   # and an NVIDIA box draws on labwc's one Wayland output (finding 77).
   if [ ${#monitors[@]} -gt 0 ]; then
-    [ $interactive = 0 ] || die "up: --monitor is for headless boxes (an interactive box's monitors would be windows on your desktop: not yet, #123)"
-    [ "$(render_driver "$render")" != nvidia ] || die "up: --monitor: $(monitor_nvidia_text)"
+    if [ $interactive = 1 ]; then
+      [ "$AQ_FIXED" = 1 ] || die "up: --monitor on an interactive box opens a window per monitor, which needs $(aq_lacks): $AQ_HOWTO"
+    else
+      [ "$(render_driver "$render")" != nvidia ] || die "up: --monitor: $(monitor_nvidia_text)"
+    fi
   fi
   # What needs aquamarine's fix (finding 125), refused before anything is made: a headless box on an
   # NVIDIA render node (its screen is labwc's Wayland output) and confirm-close asked for on `up`.
@@ -2122,7 +2127,10 @@ cmd_up() {
   wait_ready "$shell"
   # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
   # really became (Hyprland may round a scale), the shell giving each its bar as it comes.
-  for spec in "${monitors[@]}"; do UP_LOCKED=1 monitor_add "$spec" "" >/dev/null; done
+  for spec in "${monitors[@]}"; do
+    if [ $interactive = 1 ]; then UP_LOCKED=1 monitor_add_window "$spec" >/dev/null
+    else UP_LOCKED=1 monitor_add "$spec" "" >/dev/null; fi
+  done
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
   local crashed=""; [ "$shell" != 1 ] || crashed=$(shell_watch) || true
   # Crashes said here are not said again by the next command (shell_note, #147).
@@ -4935,6 +4943,8 @@ monitor_nvidia_text() {
 monitors_file() { cat "$D/run/omabox.monitors" 2>/dev/null || true; }
 # box.json's list of every monitor (for ls --json), from Hyprland, under the box's lock as mode writes it.
 monitors_record() {
+  # Not an interactive box's: the user closes and resizes its windows without omabox (monitor list).
+  [ "$(meta mode)" = headless ] || return 0
   local m lock=""; m=$(hypr_json monitors) || return 0
   # `up` holds the lock already (UP_LOCKED); anything else takes it.
   if [ -z "${UP_LOCKED:-}" ]; then lock_file lock "$BOXES/.lock-$NAME" -w 60 || return 0; fi
@@ -4979,6 +4989,55 @@ monitor_add() {
   monitors_record
   echo "$line"
 }
+# An interactive box's monitor (#123): a window on the user's desktop, as its first one is. The box's
+# Hyprland makes it (`output create wayland`); the host would put it on the user's active workspace,
+# focused (finding 70: an exec rule holds for the first window only, and no window rule matches a pid).
+# So a host rule for aquamarine windows (workspace, silent, no focus, drawn hidden, floating at the
+# SPEC's size) is on from just before the window is made until it is there, at most 5 s: a nested
+# Hyprland of the user's opening a window in that second would be caught too. The size is the SPEC's
+# in the host's logical pixels, kept within 90% of the host's focused monitor (aspect kept, said); the
+# box monitor's mode follows its window. Placed `auto-right` or `auto-down` of the others in the box
+# (X,Y as given); kept in omabox.monitors as "NAME preferred POSITION SCALE" for the box's reloads.
+monitor_add_window() {
+  local spec mode scale place w h hw hh fw fh ws pid n0 before name end m pos res
+  spec=$(monitor_spec "$1") || exit 1
+  read -r mode scale place <<<"$spec"
+  w=${mode%%x*} h=${mode#*x}; h=${h%@*}
+  read -r hw hh < <(host_hyprctl -j monitors | jq -r 'map(select(.focused)) | .[0] // empty | "\(.width / .scale | floor) \(.height / .scale | floor)"')
+  [[ $hw =~ ^[0-9]+$ ]] || die "monitor add: cannot read your focused monitor's size"
+  read -r fw fh < <(awk -v w="$w" -v h="$h" -v W="$hw" -v H="$hh" 'BEGIN { f = 1; if (w > W * 0.9) f = W * 0.9 / w; if (h * f > H * 0.9) f = H * 0.9 / h
+    printf "%d %d\n", w * f, h * f }')
+  [ "$fw" = "$w" ] && [ "$fh" = "$h" ] || say "monitor add: ${w}x$h does not fit on your ${hw}x$hh monitor: its window is ${fw}x$fh (same aspect)"
+  ws=$(meta workspace); ws=$(ws_check "${ws:-9}") || die "monitor add: box '$NAME' has no usable workspace in box.json"
+  # The box's windows are the outer bwrap's on the host (omabox-wlfd connects, then execs it).
+  pid=$(ps -o ppid= -p "$(box_pid)" | tr -d ' ')
+  [[ $pid =~ ^[0-9]+$ ]] || die "monitor add: cannot find box '$NAME''s windows on your desktop"
+  n0=$(host_hyprctl -j clients | jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length')
+  before=$(hypr_json monitors | jq -c 'map(.name)')
+  MON_RULE_ON=1
+  trap '[ -z "${MON_RULE_ON:-}" ] || host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true' EXIT
+  host_eval "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine\$' }, workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = true, size = '$fw $fh' })"
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create wayland 2>&1) || true
+  [ "$res" = ok ] || die "monitor add: the box could not make another window: $res"
+  end=$((SECONDS + 5))
+  until [ "$(host_hyprctl -j clients | jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length')" -gt "$n0" ]; do
+    [ $SECONDS -lt $end ] || die "monitor add: no new window of box '$NAME' on your desktop in 5 s"
+    sleep 0.05
+  done
+  host_eval "omabox_monitor_rule:set_enabled(false)"; MON_RULE_ON=""
+  end=$((SECONDS + 5))
+  until m=$(hypr_json monitors) && name=$(jq -er --argjson b "$before" 'map(.name) - $b | .[0]' <<<"$m" 2>/dev/null); do
+    [ $SECONDS -lt $end ] || die "monitor add: the box lists no new monitor"
+    sleep 0.05
+  done
+  case $place in right) pos="auto-right" ;; below) pos="auto-down" ;; *) pos=${place/,/x} ;; esac
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$name', mode = 'preferred', position = '$pos', scale = $scale })" 2>&1) || true
+  [ "$res" = ok ] || die "monitor add: $name is there, but setting its place and scale failed: $res"
+  box_file "$D/run/omabox.monitors" "$( { monitors_file; echo "$name preferred $pos $scale"; } | grep .)" || die "monitor add: could not record $name for the box's config reloads"
+  sleep 0.3
+  monitors_record
+  hypr_json monitors | jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"'
+}
 cmd_monitor() {
   local name="" act="" args=() mname="" json=0
   while [ $# -gt 0 ]; do
@@ -5007,11 +5066,19 @@ cmd_monitor() {
     fi
     return
   fi
-  [ "$(meta mode)" = headless ] || die "monitor: box '$NAME' is interactive: its monitors would be windows on your desktop (not yet, #123)"
-  [ "$(meta wayland_screen)" != true ] || die "monitor: box '$NAME': $(monitor_nvidia_text)"
+  if [ "$(meta mode)" = interactive ]; then
+    [ "$(jq -r '.aquamarine.fixed' "$D/box.json")" != false ] ||
+      die "monitor: box '$NAME' opens a window per monitor, which needs aquamarine's fix (hyprwm/aquamarine#415): omabox setup --aquamarine, then a new box"
+  else
+    [ "$(meta wayland_screen)" != true ] || die "monitor: box '$NAME': $(monitor_nvidia_text)"
+  fi
   if [ "$act" = add ]; then
     [ ${#args[@]} = 1 ] || die "monitor add SPEC (WxH[@HZ][,scale=S][,right|below|X,Y])"
-    local line; line=$(monitor_add "${args[0]}" "$mname")
+    local line
+    if [ "$(meta mode)" = interactive ]; then
+      [ -z "$mname" ] || die "monitor add: an interactive box's monitors are named by its windows (WAYLAND-N): no --name"
+      line=$(monitor_add_window "${args[0]}")
+    else line=$(monitor_add "${args[0]}" "$mname"); fi
     say "box '$NAME' has a monitor $line"
     echo "${line%% *}"
     return
