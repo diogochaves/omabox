@@ -3511,6 +3511,18 @@ from them.
     callers killed at once leave no command: passes on the old one too, the race is rarely hit),
     t_pointer (the junk --extent: failed on the old tool). The peek changes run in t_peek; its deadline
     and format paths have no test (a box that never renders, a format change mid-session).
+206. **The broker serves `ports` and `config KEY` to a jailed agent, and says why a caller outside a jail
+    reached it** (2026-10-06, #93 and #114). `ports` was left off broker_check's list when it was added
+    (156), so a jailed agent's dev server on a shared port, the case `ports` is for, got "not for an
+    agent inside ai-jail". Allowed now (Diogo's call, 2026-10-06), listing the jail's own boxes
+    (list_names), with the host side by state only: `host` and `other-user` without the pid, process
+    name or uid (the user's desktop, which the jail keeps the agent from); known gap: another jail's
+    box holding the port reads as `host` (its pasta). `config KEY` (a read) was refused with "does not
+    change omabox's settings": one known key is allowed now, `KEY VALUE` and `KEY default` still
+    refused. And a caller not in a jail lands on the broker only when its omabox cannot make a user
+    namespace (relay_wanted): the refusal says so and names the sysctls. Checks in
+    t_unit_jail_policy (the allowed and refused forms; `ports` stubbed as t_unit_cli does, jailed and
+    not).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

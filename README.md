@@ -458,8 +458,10 @@ These projects are good at what it does not do.
   when the jail has none (`--net isolated`), only the jail's own project mounted, and only the boxes
   that jail started (never yours, nor another jail's), which go down when the jail exits. Driving a
   box is running code in it, so that is what stops a box from being a way out of the jail. Not for a
-  jailed agent: `omabox host`, `peek`, interactive boxes, `guard`, `config` changes. A shot is
-  written into the jail by its own `omabox`; the broker never opens a path the jail names.
+  jailed agent: `omabox host`, `peek`, interactive boxes, `guard`, `config` changes. `omabox ports`
+  lists the jail's boxes and says a host process or another user holds a port without naming it (next
+  release). A shot is written into the jail by its own `omabox`; the broker never opens a path the
+  jail names.
   `omabox broker off` turns it off. Checked with ai-jail 2.2.1 and 2.6.2.
 - **[omarchy-in-omarchy](https://github.com/jankeesvw/omarchy-in-omarchy)** is a disposable Omarchy
   in QEMU/KVM (8 GB of RAM by default, minutes on its first start): for what needs a whole machine,

@@ -1318,6 +1318,29 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   # A save that does not exist: were --from let through, up would stop at "no save", no box started.
   check_match "up --from refused to a jailed agent (finding 100)" "saves are the user's" "$(OMABOX_JAIL=$J "$CLI" up "$P-jf" --from nosuch 2>&1)"
   check "allowed: shot, keys, up, down, config --json" bash -c 'source "$1"; for c in shot keys up down; do broker_check $c; done; broker_check config --json' _ "$TMP/lib/bin/omabox"
+  check "allowed: config KEY, a read (#114)" lib broker_check config workspace
+  for c in "config workspace 5" "config workspace default" "config nokey" "config --json workspace"; do
+    # shellcheck disable=SC2086 # the command and its arguments
+    check_match "...refused: $c" "does not change" "$(lib broker_check $c 2>&1)"
+  done
+  check "allowed: ports (#93)" lib broker_check ports --json
+  # ports for a jailed caller: the host side by state only (#93). The stubs of t_unit_cli's ports check:
+  # one box, its port held by this shell (host), then by another uid.
+  # (The box's server is socket 424242; the host's listener on the port, socket 515151 of uid UID.)
+  local pr=$TMP/rt-jports/omabox; mkdir -p "$pr/$P-jp"; echo '{"net":"connected","jail":"j1"}' > "$pr/$P-jp/box.json"
+  jports() {   # JAILED(0|1) UID ARGS...: cmd_ports with the port held by uid UID
+    local j=$1 u=$2; shift 2
+    env -u OMABOX_JAIL XDG_RUNTIME_DIR="$TMP/rt-jports" bash -c 'source "$1"; P=$2 u=$3; [ "$4" = 0 ] || OMABOX_JAIL={\"id\":\"j1\"}; shift 4
+      list_names() { echo "$P-jp"; }; box_state() { echo up; }; box_pid() { echo $$; }; box_pids() { echo $$; }
+      sock_owners() { echo "424242 $$"; echo "515151 $$"; }
+      tcp_listeners() { if [ "$1" = /proc/self/net ]; then echo "40001 0.0.0.0 $u 515151"; else echo "40001 0.0.0.0 0 424242"; fi; }
+      cmd_ports "$@"' lib "$TMP/lib/bin/omabox" "$P" "$u" "$j" "$@" 2>&1
+  }
+  check_match "ports, not jailed: the host process named" "not this box: bash \\(pid [0-9]+\\) holds it" "$(jports 0 "$(id -u)")"
+  check_eq "ports, jailed: no pid or process in --json" '{"state":"host"}' "$(jports 1 "$(id -u)" --json | jq -c '.[0].host')"
+  check_match "...nor in the text" "not this box: a process of the user's holds it" "$(jports 1 "$(id -u)")"
+  check_eq "...another user's: no uid" '{"state":"other-user"}' "$(jports 1 4242 --json | jq -c '.[0].host')"
+  check_match "...said so" "not this box: another user's process holds it" "$(jports 1 4242)"
 }
 
 # omabox broker on/off writes a socket and a service for the user manager (systemctl stubbed: the real

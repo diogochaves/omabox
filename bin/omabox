@@ -4508,6 +4508,9 @@ cmd_ports() {
       else state=this
       fi
     fi
+    # A jailed agent (#93) is told the state, not which of the user's processes (pid, name) or which
+    # other user (uid) holds the port: that is the user's desktop, which the jail keeps it from.
+    ! in_jail || who=""
     out+=("$n|$port|${addrs[$key]}|${comm[$key]}|$state|$who|$boxes|$resets")
   done
   [ -z "$name" ] || { local o kept=(); for o in "${out[@]}"; do [ "${o%%|*}" != "$name" ] || kept+=("$o"); done; out=("${kept[@]}"); }
@@ -4517,13 +4520,13 @@ cmd_ports() {
     for o in "${out[@]}"; do
       IFS='|' read -r -a f <<<"$o|"
       jq -nc --arg box "${f[0]}" --argjson port "${f[1]}" --arg addr "${f[2]}" --arg proc "${f[3]}" --arg state "${f[4]}" \
-        --arg who "${f[5]}" --arg boxes "${f[6]}" --arg resets "${f[7]}" --arg hcomm "$( [ "${f[4]}" != host ] || cat "/proc/${f[5]}/comm" 2>/dev/null)" '
+        --arg who "${f[5]}" --arg boxes "${f[6]}" --arg resets "${f[7]}" --arg hcomm "$( [ "${f[4]}" != host ] || [ -z "${f[5]}" ] || cat "/proc/${f[5]}/comm" 2>/dev/null)" '
         { box: $box, port: $port, address: ($addr | split(",")), process: $proc,
           host: ({ state: $state }
             + (if $state == "this" or $state == "this-resets" or $state == "shared" then { boxes: ($boxes | split(" ")) } else {} end)
             + (if $state == "shared" then { resets: ($resets | split(" ")) } else {} end)
-            + (if $state == "host" then { pid: ($who | tonumber), process: $hcomm } else {} end)
-            + (if $state == "other-user" then { uid: ($who | tonumber) } else {} end)) }'
+            + (if $state == "host" and $who != "" then { pid: ($who | tonumber), process: $hcomm } else {} end)
+            + (if $state == "other-user" and $who != "" then { uid: ($who | tonumber) } else {} end)) }'
     done | jq -sc .
     return
   fi
@@ -4538,8 +4541,10 @@ cmd_ports() {
         why=""
         for r in ${f[7]}; do why+="${why:+; }$r's server is on ${addrs[$r ${f[1]}]} only and would reset"; done
         says="one of ${f[6]// /, }: only one of them gets it, omabox cannot tell which${why:+ ($why)}" ;;
-      host) says="not this box: $(cat "/proc/${f[5]}/comm" 2>/dev/null || echo "a process") (pid ${f[5]}) holds it" ;;
-      other-user) says="not this box: a process of uid ${f[5]} holds it" ;;
+      host) if [ -z "${f[5]}" ]; then says="not this box: a process of the user's holds it"
+            else says="not this box: $(cat "/proc/${f[5]}/comm" 2>/dev/null || echo "a process") (pid ${f[5]}) holds it"; fi ;;
+      other-user) if [ -z "${f[5]}" ]; then says="not this box: another user's process holds it"
+                  else says="not this box: a process of uid ${f[5]} holds it"; fi ;;
       nothing) says="nothing yet (a port comes about a second after its server listens)" ;;
       isolated) says="not forwarded: the box is isolated" ;;
       no-network) says="not forwarded: the box has no network" ;;
@@ -5559,7 +5564,9 @@ broker_init() {
     fi
     p=$pp
   done
-  [ -n "$jail" ] || die "the omabox broker serves agents inside ai-jail; this caller is not in one (run omabox without the broker)"
+  # Not in a jail, a caller's omabox hands its command here only when it cannot make a user namespace
+  # (relay_wanted, #114): say so, or the refusal reads like the broker's fault.
+  [ -n "$jail" ] || die "the omabox broker serves agents inside ai-jail; this caller is not in one. Its omabox came here because it cannot make a user namespace: unprivileged user namespaces look disabled on this machine (sysctl kernel.unprivileged_userns_clone, kernel.apparmor_restrict_unprivileged_userns); omabox needs them (./install.sh --check starts a box to show it works)"
   [ "$(readlink "/proc/$peer/ns/pid")" != "$(readlink "/proc/$jail/ns/pid")" ] || die "broker: the caller is not inside its jail"
   local policy start
   start=$(proc_start "$jail") && [ -n "$start" ] || die "broker: the jail is gone"
@@ -5581,8 +5588,12 @@ broker_check() {
   local cmd=$1; shift
   case $cmd in
     up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|reload|mode|gpu|env|path|down|ls|list) ;;
+    # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
+    ports) ;;
     help|-h|--help|version|-V|--version) ;;
-    config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
+    # Reading is not changing (#114): bare, --json, or one known KEY; never KEY VALUE nor KEY default.
+    config) [ $# = 0 ] || [ "$*" = --json ] || { [ $# = 1 ] && [ -n "$(conf_default "$1")" ]; } ||
+      die "config: a jailed agent does not change omabox's settings" ;;
     # Never on the allowed list: it hands the user's clipboard over (finding 119).
     clip) die "omabox clip is not for agents: the user hands their clipboard over themselves" ;;
     *) die "omabox $cmd is not for an agent inside ai-jail" ;;
