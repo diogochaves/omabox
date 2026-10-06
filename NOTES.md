@@ -3523,6 +3523,20 @@ from them.
     namespace (relay_wanted): the refusal says so and names the sysctls. Checks in
     t_unit_jail_policy (the allowed and refused forms; `ports` stubbed as t_unit_cli does, jailed and
     not).
+207. **`up --autoreload` keeps Hyprland's autoreload on** (2026-10-06). Finding 193 turned it off in
+    every box, after the config's own files load, so a project's own config files cannot turn it back
+    on, and a whole class of bug went invisible in a box: a helper that rewrites a file Hyprland's
+    config loaded, on a Hyprland event (`configreloaded`), reloads a desktop for ever and a box never
+    (seen in a shell plugin's project: ~4,000 reloads in minutes on a desktop, none in its boxes). A
+    project's reload check had to turn autoreload on live before each count, and a reload switched it
+    off again, so a loop counted as one. `--autoreload` sets OMABOX_AUTORELOAD=1 and hyprland.lua
+    leaves `misc.disable_autoreload` off; the config is still the box's own copy, so an update of
+    omabox still reloads nothing, but one of Omarchy (its default/hypr files) does, as on the desk: an
+    opt-in, said in `help up`. `box.json` and `ls --json` have `autoreload`; `up` on a box without it
+    refuses `--autoreload` (finding 134). `omabox reload` writes the copy only when it differs: in an
+    --autoreload box the write was a reload of its own (two for one `reload`); with a newer omabox it
+    still can be. t_autoreload and a check in t_config_kept; on the old code `up --autoreload` was
+    "unknown option".
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

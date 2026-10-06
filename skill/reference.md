@@ -77,6 +77,8 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   with `lua`, `eval` or `plugin load` are gone. Re-apply them on `configreloaded`. Nothing reloads
   because a file changed: a box runs its own copy of omabox's config, made at `up`, with autoreload
   off, so an update of omabox or Omarchy leaves it as it is; `omabox reload` takes the newer one.
+  A test that must see what a file change does, as a desktop would (a helper that rewrites a file
+  the config loads, on a Hyprland event, reloads for ever there): `omabox up --autoreload`.
 - An error inside a callback (`hl.on`, `hl.timer`) is not in `lua`'s answer, and when the callback
   runs later (a timer, an app's event) it is logged nowhere, not even in the Hyprland log: seen
   nothing, check with `pcall` inside the callback and keep the error in a global to read with

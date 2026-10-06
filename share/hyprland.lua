@@ -1,5 +1,6 @@
 -- omabox nested Hyprland: real Omarchy defaults, minus Omarchy's session autostart.
--- Settings come from the environment `omabox up` sets: OMABOX_SIZE (WxH@HZ), OMABOX_INTERACTIVE, OMABOX_XWAYLAND.
+-- Settings come from the environment `omabox up` sets: OMABOX_SIZE (WxH@HZ), OMABOX_INTERACTIVE, OMABOX_XWAYLAND,
+-- OMABOX_AUTORELOAD.
 dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")
 package.loaded["default.hypr.autostart"] = true -- skip: systemd/dbus env import, first-run, monitor-watch, udiskie
 require("default.hypr.omarchy")
@@ -112,8 +113,9 @@ end
 hl.config({
   debug = { vfr = true, disable_logs = false },
   -- No reload because a file changed (#140): a box changes when the agent asks (`hyprctl reload`,
-  -- `omabox reload`), not when omabox or Omarchy is updated under it.
-  misc = { disable_watchdog_warning = true, disable_autoreload = true },
+  -- `omabox reload`), not when omabox or Omarchy is updated under it. `up --autoreload` keeps it on,
+  -- as on a desktop, for a project that has to see what a file change does (a reload loop).
+  misc = { disable_watchdog_warning = true, disable_autoreload = os.getenv("OMABOX_AUTORELOAD") ~= "1" },
   xwayland = { enabled = os.getenv("OMABOX_XWAYLAND") == "1" },
 })
 

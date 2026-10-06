@@ -7,6 +7,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`omabox up --autoreload`**: the box's Hyprland reloads its config when a file it loaded
+  changes, as a desktop's does, so a project can see what a file change does (a helper that
+  rewrites a file the config loads, on a Hyprland event, reloads a desktop for ever). Boxes keep
+  autoreload off otherwise. `omabox reload` no longer rewrites an unchanged config copy.
 - **The bar widget says whether a box is up, for omarchy-console's rail.** It exposes
   `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
   widget's own box count.

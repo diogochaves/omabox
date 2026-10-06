@@ -64,7 +64,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
   omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
-            [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--no-shell] [--from SAVE]
+            [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
@@ -151,6 +151,11 @@ itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, DISPLAY, HYPRL
 LD_PRELOAD...), by any of them.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+@ up run reload
+--autoreload: the box's Hyprland reloads its config when a file it loaded changes, as a desktop's
+does; a box turns that off, so an update of omabox or Omarchy leaves it as it is. For a project that
+must see what a file change does (a helper rewriting a file the config loads, on a Hyprland event,
+reloads for ever). Its config is still the box's own copy; an Omarchy update reloads it too.
 @ up run restart-shell
 --plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; \`up\` and
 \`restart-shell\` warn when Omarchy's validator or the shell refuses it (\`ls --json\`: plugin_status).
@@ -200,9 +205,10 @@ Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box
 @ up run
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
 @ reload
-A box's Hyprland runs a copy of omabox's config made at \`up\`, with autoreload off: updating omabox
-(a pull, an upgrade) leaves running boxes as they are. \`reload\` copies this omabox's config in and
-reloads it; like any config reload, binds, rules and Lua state added since are gone.
+A box's Hyprland runs a copy of omabox's config made at \`up\`, with autoreload off (unless
+\`up --autoreload\`): updating omabox (a pull, an upgrade) leaves running boxes as they are. \`reload\`
+copies this omabox's config in (only when it differs) and reloads it; like any config reload, binds,
+rules and Lua state added since are gone.
 @ lua
 \`lua\` takes an expression or statements (\`return\` what to print); one line per value: strings and
 numbers as they are, nil as nil, tables and Hyprland's objects (a window, a monitor) as JSON (--json:
@@ -1374,6 +1380,7 @@ up_already() {
   case " $given " in *" systemd "*) [ "$(meta systemd)" = true ] || diff+=("--systemd (it has no user manager)") ;; esac
   case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
   case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
+  case " $given " in *" autoreload "*) [ "$(meta autoreload)" = true ] || diff+=("--autoreload (its autoreload is off)") ;; esac
   case " $given " in *" no-shell "*) [ "$(jq -r '.shell | tostring' "$D/box.json" 2>/dev/null)" = false ] || diff+=("--no-shell (it has the shell)") ;; esac
   case " $given " in *" omarchy "*) [ "$(meta omarchy)" = "$omarchy" ] || diff+=("--omarchy ${omarchy:-/usr/share/omarchy} (it runs $(meta omarchy | grep . || echo /usr/share/omarchy))") ;; esac
   case " $given " in *" hyprland "*) [ "$(meta hyprland)" = "$hyprland" ] || diff+=("--hyprland $hyprland (it runs $(meta hyprland | grep . || echo "the installed one"))") ;; esac
@@ -1395,14 +1402,14 @@ cmd_up() {
   STOCK_BAR=0
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
-  local size=1920x1080 interactive=0 xwayland=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
+  local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--no-shell)
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -1428,6 +1435,7 @@ cmd_up() {
       --stock-bar) STOCK_BAR=1 ;;
       --systemd) systemd=1 ;;
       --xwayland) xwayland=1 ;;
+      --autoreload) autoreload=1 ;;
       --no-shell) shell=0 ;;
       -h|--help) usage up; return ;;
       -*) die "up: unknown option $1" ;;
@@ -1678,12 +1686,12 @@ cmd_up() {
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg omarchy "$omarchy" \
-    --argjson xwayland "$xwayland" --argjson shell "$shell" \
+    --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
-      xwayland: ($xwayland == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
+      xwayland: ($xwayland == 1), autoreload: ($autoreload == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
@@ -1756,6 +1764,7 @@ cmd_up() {
     --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path box)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
+    --setenv OMABOX_AUTORELOAD "$autoreload"
     --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell" --setenv OMABOX_OMARCHY_VERSION "$(omarchy_version)"
     "${hypr_env[@]}" "${envs[@]}" /opt/omabox/share/session.sh)
 
@@ -2700,7 +2709,7 @@ cmd_run() {
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
       --size|--plugin|--ro-bind|--overlay|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
-      --xwayland|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
+      --xwayland|--autoreload|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
       -*) die "run: unknown option $1 (the command goes after --; --interactive is up's only)" ;;
@@ -4688,8 +4697,10 @@ name_arg() {
 cmd_reload() {
   local name; name=$(name_arg reload "$@") || exit 1
   select_box "$name"; need_box
+  # Written only when it differs: in an --autoreload box the write is a reload of its own.
   # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
-  on_box sh -c 'cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua; cat > "$cfg.new" && mv -f "$cfg.new" "$cfg"' \
+  on_box sh -c 'cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua; cat > "$cfg.new" &&
+    if cmp -s "$cfg.new" "$cfg"; then rm -f "$cfg.new"; else mv -f "$cfg.new" "$cfg"; fi' \
     < "$ROOT/share/hyprland.lua" || die "reload: could not write the config copy in box '$NAME'"
   local rc=0
   on_box timeout "$HYPR_LIMIT" hyprctl reload >/dev/null || rc=$?
@@ -5383,7 +5394,7 @@ box_json() {
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
     --arg sh "$sh" --argjson crashes "$crashes" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
-      plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
+      plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false}'
