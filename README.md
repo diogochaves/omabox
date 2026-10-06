@@ -296,7 +296,10 @@ test start GTK, which needs a display, so `ctest` with `QT_QPA_PLATFORM=offscree
 A browser already running on your desktop takes a URL over its own socket, not the display, and with
 `misc:focus_on_activate` takes focus too. So `BROWSER` and `GH_BROWSER` name omabox's
 `share/guard/xdg-open`, which fails with a note to give you the link instead, and Claude Code and
-`guard exec` also put it first on PATH as `xdg-open`. Inside a box, links open as usual.
+`guard exec` also put it first on PATH as `xdg-open`. Inside a box, links open as usual. Quickshell's
+own IPC needs no display either, so `quickshell kill` or `qs ipc` from a guarded shell would reach
+your desktop's shell (`omarchy restart shell` stopped it, and could not start it again): the same
+PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc` and pass the rest on.
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a

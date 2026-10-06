@@ -1,0 +1,3 @@
+#!/bin/sh
+# The guard's qs: the same as its quickshell (qs is a link to quickshell).
+exec "${0%/*}/quickshell" "$@"

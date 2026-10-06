@@ -210,7 +210,8 @@ never take the display from elsewhere (`/proc/*/environ`, `hyprctl instances`,
 `$XDG_RUNTIME_DIR/wayland-*`). omabox itself keeps working. Opening a link or file on the user's
 desktop (`xdg-open`, `gh … --web`, anything using `$BROWSER`) fails too ("omabox guard: not opening"):
 give the user the link. To look at a page yourself, open it in your box (`omabox run -d -- xdg-open
-URL`, then `omabox shot`).
+URL`, then `omabox shot`). So do `quickshell kill` and `qs ipc` ("not running quickshell kill"): they
+would reach the user's desktop shell; a box's shell is `omabox run -- qs ipc …` or `omabox restart-shell`.
 
 When the user asked for their **real** desktop in this task ("switch my theme", reload my Hyprland
 config after an edit, see the change on my screen), run that one command with `omabox host -- CMD`

@@ -3479,6 +3479,14 @@ t_omarchy_restart() {
   check_fails "...no omarchy-launch-shell left to start another" ob run -b "$B" -- pgrep -f '[o]marchy-launch-shell'
   check "omarchy-restart-shell again" timeout 30 "$CLI" run -b "$B" -- omarchy-restart-shell
   check "...one shell" until_ok 5 one_shell
+  # #141: under the guard (an agent's shell, the box standing in for the host), `omarchy restart shell`
+  # stopped the shell over Quickshell's IPC, then could not start it again (its hyprctl is guarded).
+  local g=("$CLI" run -b "$B" -- "${GUARDED[@]}") qpid; qpid=$(ob run -b "$B" -- pgrep -x quickshell)
+  check_fails "guarded omarchy-restart-shell fails" timeout 30 "${g[@]}" omarchy-restart-shell
+  check_eq "...the shell still running, the same one" "$qpid" "$(ob run -b "$B" -- pgrep -x quickshell)"
+  check_match "guarded quickshell kill --any-display refused" "omabox guard: not running quickshell kill" \
+    "$("${g[@]}" sh -c 'quickshell kill -p "$OMARCHY_PATH/shell" --any-display' 2>&1)"
+  check_match "guarded qs list --all still lists it" "$qpid" "$("${g[@]}" qs list --all 2>&1)"
   ob down "$B" >/dev/null
 }
 
@@ -3810,6 +3818,25 @@ t_unit_guard_exec_host() {
   fi
   check_eq "...and BROWSER, GH_BROWSER name it" "$ROOT/share/guard/xdg-open $ROOT/share/guard/xdg-open" \
     "$("$CLI" guard exec -- sh -c 'echo $BROWSER $GH_BROWSER')"
+  # #141: Quickshell's IPC needs no display, so under the guard `kill` and `ipc` reached the desktop's
+  # shell. The guard's quickshell and qs refuse them; the rest goes on to the next quickshell on PATH,
+  # here a stub (so a refusal that failed would reach it, never the real one).
+  printf '#!/bin/sh\necho "real quickshell reached: $*"\n' > "$TMP/fakeopen/quickshell"; chmod +x "$TMP/fakeopen/quickshell"
+  local qs; qs=$("${gx[@]}" sh -c 'command -v quickshell; command -v qs' | xargs)
+  check_eq "guard exec: quickshell and qs are the guard's" "$ROOT/share/guard/quickshell $ROOT/share/guard/qs" "$qs"
+  if [ "$qs" = "$ROOT/share/guard/quickshell $ROOT/share/guard/qs" ]; then
+    check_match "...quickshell kill --any-display refused" "omabox guard: not running quickshell kill here" \
+      "$("${gx[@]}" quickshell kill -p /usr/share/omarchy/shell --any-display 2>&1)"
+    check_eq "...with exit 4" 4 "$("${gx[@]}" quickshell kill --any-display >/dev/null 2>&1; echo $?)"
+    check_match "...qs ipc call refused, after an option with a value" "not running quickshell ipc here" \
+      "$("${gx[@]}" qs -p /usr/share/omarchy/shell ipc --any-display call shell ping 2>&1)"
+    check_match "...qs msg (ipc call's old name) refused" "not running quickshell msg here" "$("${gx[@]}" qs msg -i abc x y 2>&1)"
+    check_eq "...list goes on, its arguments whole" "real quickshell reached: list --all --json" "$("${gx[@]}" qs list --all --json 2>&1)"
+    check_eq "...so does --version" "real quickshell reached: --version" "$("${gx[@]}" quickshell --version 2>&1)"
+    check_eq "...and a config whose path is a subcommand's name" "real quickshell reached: -p /tmp/kill log" "$("${gx[@]}" qs -p /tmp/kill log 2>&1)"
+  else
+    no "...which refuse kill and ipc" "not run: quickshell under guard exec is [$qs], not the guard's"
+  fi
   # The session omabox finds, not $HYPRLAND_INSTANCE_SIGNATURE: under the guard (an agent running the
   # suite) that is the guard's.
   local sig want; sig=$(bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
@@ -3819,6 +3846,8 @@ t_unit_guard_exec_host() {
   local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
   check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
   check_fails "...not the guard's" grep -q share/guard <<<"$open"
+  check_fails "host: the real quickshell and qs, not the guard's (#141)" grep -q share/guard \
+    <<<"$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v quickshell; command -v qs' 2>/dev/null)"
   check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
   check_eq "...nor one written with a trailing slash (up and run leave it out too)" "/usr/bin:/bin" \
     "$(PATH=/x/share/guard/:/usr/bin:/y/share/guard:/bin lib caller_path)"

@@ -3277,6 +3277,26 @@ from them.
     checks a terminal reading into a file got none of the keys typed while locked (then that it gets
     keys once unlocked, so the check can see a leak); reference.md has the recipe. Still a VM's:
     the real PAM stack, fingerprint, the login screen and the disk passphrase.
+187. **The guard keeps the desktop's shell: `quickshell kill` and `ipc` are refused** (2026-10-06,
+    #141). The guard took the display and Hyprland's socket away (65-67), but Quickshell talks over
+    its own socket (`$XDG_RUNTIME_DIR/quickshell/by-id/*/ipc.sock`), which needs neither. Under the
+    guard, `omarchy restart shell` ran `quickshell kill -p … --any-display`, which reached the real
+    shell ("Exiting due to IPC request."), then its `hyprctl dispatch` relaunch hit `omabox-guard`:
+    the user was left with no bar (VERIFIED 2026-10-04, Omarchy 4.0.4; recovered with `omabox host --
+    omarchy restart shell`). The guard stopped what would add to the desktop and let through what
+    removes from it. Now the guard's PATH (Claude Code's hook, `guard exec`) puts
+    `share/guard/quickshell` and `qs` first, as xdg-open (92): they refuse `kill`, `ipc` and `msg` (its
+    old name) with exit 4 and a note, and pass the rest (`list`, `log`, `--version`, running a config,
+    which fails for want of a display) to the next quickshell on PATH that is no guard's. Refused
+    outright, not only with `--any-display`/`-i`/`--pid`: without those they match instances by
+    display and find nothing from a guarded shell, so nothing is lost. `omarchy restart shell` now
+    fails with no effect; its "did not become ready" is all it says, since it sends the kill's stderr
+    to /dev/null. In a box and for `host` the guard's directory is off PATH (caller_path), so neither
+    reaches the stand-ins. Codex sets only variables, so it has no stand-ins (as for xdg-open).
+    `omarchy-shell` itself fails closed (its `qs ipc` matches by display). Checks: t_unit_guard_exec_host
+    (refusals, argv passed whole, against a stub after the guard on PATH; `host` gets the real one),
+    t_omarchy_restart (under the guard in a box standing in for the host, `omarchy-restart-shell`
+    fails and the shell is the same process after; on the old code, in a worktree, it was gone).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

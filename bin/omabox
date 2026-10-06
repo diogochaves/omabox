@@ -4573,12 +4573,15 @@ cmd_restart_shell() {
 # - no opening links or files on the desktop (finding 92): xdg-open, gh --web and whatever reads $BROWSER
 #   reach a browser already running there over its own socket, not the display. BROWSER and GH_BROWSER
 #   name share/guard/xdg-open, which refuses; Claude Code's and `guard exec`'s PATH also put it first
-#   as xdg-open (Codex only sets values, so it gets the variables).
+#   as xdg-open (Codex only sets values, so it gets the variables);
+# - no stopping the desktop's shell (#141): Quickshell's IPC needs no display, so `quickshell kill` and
+#   `ipc` reached it, and `omarchy restart shell` stopped it with nothing to start it again. That PATH's
+#   share/guard/quickshell and qs refuse them (Codex, with no PATH of ours, does not get them).
 GUARD_PATH=$ROOT/share/guard
 GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
   BROWSER="$GUARD_PATH/xdg-open" GH_BROWSER="$GUARD_PATH/xdg-open")
 GUARD_NOTE="omabox guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). Anything that may open a \
-window (apps, test binaries run outside ctest), hyprctl, grim and keyring checks go through omabox (load the omabox \
+window (apps, test binaries run outside ctest), hyprctl, grim, qs and keyring checks go through omabox (load the omabox \
 skill). Opening a link or file there (xdg-open, gh --web) is refused too: give the user the link. Never point \
 WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real session. Only when the \
 user asked for their real desktop in this task, run that command with: omabox host -- CMD"

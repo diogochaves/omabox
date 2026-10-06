@@ -1,0 +1,33 @@
+#!/bin/sh
+# The agent guard's quickshell (and qs), issue #141: first on a guarded agent's PATH, as xdg-open is.
+# The guard takes the display and Hyprland's socket away, but Quickshell's IPC goes over its own socket
+# in $XDG_RUNTIME_DIR/quickshell, which needs neither: `kill` and `ipc` with --any-display, -i/--id or
+# --pid reach the desktop's Omarchy shell. `omarchy restart shell` stopped it that way, and its relaunch
+# (hyprctl) is guarded, so the user was left with no bar. Without those options they find nothing from
+# here (instances are matched by display), so no use is lost: refuse kill, ipc and msg (ipc call's old
+# name) outright. list and log only read; running a config fails for want of a display, as any app.
+# In a box, and for `omabox host`, the guard's directory is off PATH and this is not reached.
+subcommand() {   # (its own "$@": the command's stays whole for exec)
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -p|--path|-c|--config|-m|--manifest|--log-rules|--debug) shift ;;   # an option's value, not a subcommand
+      -*) ;;
+      *) echo "$1"; return ;;
+    esac
+    [ $# = 0 ] || shift
+  done
+}
+sub=$(subcommand "$@")
+case $sub in
+  kill|ipc|msg)
+    echo "omabox guard: not running quickshell $sub here: from this shell it reaches the user's desktop shell (stopping their bar, which nothing here can start again). For a box's shell: omabox run -- qs $sub ..., or omabox restart-shell. Only when the user asked for their real desktop: omabox host -- CMD" >&2
+    exit 4 ;;
+esac
+# The next quickshell on PATH that is not a guard's (any checkout's, as caller_path in bin/omabox).
+set -f; IFS=:
+for d in $PATH; do
+  case $d in */share/guard|*/share/guard/|"") continue ;; esac
+  [ -x "$d/quickshell" ] && { unset IFS; exec "$d/quickshell" "$@"; }
+done
+echo "omabox guard: no quickshell on PATH" >&2
+exit 127
