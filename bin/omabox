@@ -4960,8 +4960,25 @@ cmd_host() {
     case $val in ""|*/share/guard/xdg-open|\$\'*) unset "$v" ;; *) export "$v=$val" ;; esac
   done
   ulimit -Sc "$(ulimit -Hc)" 2>/dev/null || true
-  say "on your real desktop: $*"
+  say "on your real desktop: $(host_record "$@")"
   exec "$@"
+}
+
+# The line host prints is the record of what ran on the user's desktop (issue #150): every argument,
+# with a long one cut to its start and how much is left out, so an expanded PATH does not drown it.
+# NAME=value past 60 characters of value, anything else past 120.
+host_record() {
+  local a rec=() name val
+  for a; do
+    if [[ $a =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      name=${a%%=*}; val=${a#*=}
+      (( ${#val} <= 60 )) || a="$name=${val:0:40}…(+$(( ${#val} - 40 )) chars)"
+    elif (( ${#a} > 120 )); then
+      a="${a:0:40}…(+$(( ${#a} - 40 )) chars)"
+    fi
+    rec+=("$a")
+  done
+  echo "${rec[*]}"
 }
 
 cmd_env() {

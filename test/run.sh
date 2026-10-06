@@ -4010,6 +4010,13 @@ EOF
     "$("${GUARDED[@]}" PATH="$TMP/sysenv:$ROOT/share/guard:$PATH" "$CLI" host -- sh -c 'echo "${BROWSER-unset} ${GH_BROWSER-unset}"' 2>/dev/null)"
   check_eq "host: Qt logging as usual" unset "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo ${QT_FORCE_STDERR_LOGGING-unset}' 2>/dev/null)"
   check_match "host says what it runs" "on your real desktop: true" "$("${GUARDED[@]}" "$CLI" host -- true 2>&1)"
+  # The record shortens only long arguments (#150): an expanded PATH, a long word.
+  local hl long; long=$(printf '/opt/long/install/dir/bin:%.0s' {1..30})
+  hl=$("${GUARDED[@]}" "$CLI" host -- env "PATH=$long$PATH" true 2>&1)
+  check_match "host: a long NAME=value is cut, env, PATH= and true still there" "on your real desktop: env PATH=/opt/long/install/dir/bin:/opt/long/inst…\(\+[0-9]+ chars\) true$" "$hl"
+  check_match "...one line under 200 characters" "^1 ([0-9]|[0-9][0-9]|1[0-9][0-9])$" "$(wc -l <<<"$hl") ${#hl}"
+  check_eq "...a short command exactly as it is" "omabox: on your real desktop: printf %s A=b x" "$("${GUARDED[@]}" "$CLI" host -- printf %s A=b x 2>&1 >/dev/null)"
+  check_eq "...a long word cut too" "true $(printf 'a%.0s' {1..40})…(+90 chars) x" "$(lib host_record true "$(printf 'a%.0s' {1..130})" x)"
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
 }
 

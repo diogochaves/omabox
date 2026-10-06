@@ -3425,6 +3425,12 @@ from them.
     --plugin …`, which `already up, without what you asked for` refused: `--new` had started a bare
     box. Both now say it starts the box and takes `up`'s options on that call; t_unit_cli checks the
     two texts.
+199. **`omabox host` shortens only long arguments in its record** (2026-10-06, #150). The line host
+    prints before it runs a command is the only record of what ran on the user's desktop, so it stays;
+    but `host -- env PATH=$PATH …` printed ~900 characters of expanded PATH ahead of the part that
+    mattered. A `NAME=value` with a value over 60 characters is now `NAME=<first 40>…(+N chars)`, any
+    other argument over 120 the same; the program and short arguments stay verbatim. Checks in
+    t_unit_guard_exec_host (the long ones failed on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
