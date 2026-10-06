@@ -61,8 +61,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
-- **Nothing inside `~/.config/omarchy` goes into a box but `plugins/` and `themes/`**: `--ro-bind`
-  mounted a file or folder inside it (`api-keys.env`, `hooks/`), refusing only the folder itself.
+- **Nothing inside `~/.config/omarchy` goes into a box but `plugins/` and `themes/`**, nor a link
+  there or in a secret store to a file elsewhere: `--ro-bind` mounted a file or folder inside it
+  (`api-keys.env`, `hooks/`), refusing only the folder itself.
   The new `--seed` gets the same refusal, never writes through a link already in its DEST (an
   earlier seed's, or a save's: it overwrote the host file the link named), and takes a relative
   SRC from inside ai-jail (#159).

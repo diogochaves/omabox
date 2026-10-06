@@ -1526,10 +1526,18 @@ robind_spec() {
 # the runtime dir (omabox's box dirs too), /run, the kernel's trees, or /tmp's socket dirs (X11, tmux,
 # ssh-agent). A repo in /tmp is fine. Inside ~/.config/omarchy (where a dotfiles link puts it too), only
 # plugins/ and themes/ (finding 228: api-keys.env itself went in, and hooks/ are the user's scripts);
-# with `look`, seed_home's own copies of the user's look, branding/ and extensions/ too.
+# with `look`, seed_home's own copies of the user's look, branding/ and extensions/ too. Both the path
+# as given (made absolute, links not followed) and where it leads: a link at api-keys.env to a dotfiles
+# file is refused as itself, and a harmless-looking link to a secret store by its target (finding 228).
 # refuse_src PATH [look]
 refuse_src() {
-  local s x o; s=$(readlink -f -- "$1" 2>/dev/null) || s=$1; s=${s%/}/
+  local r l; r=$(readlink -f -- "$1" 2>/dev/null) || r=$1
+  l=$(realpath -ms -- "$1" 2>/dev/null) || l=$r
+  refuse_path "$r" "${2:-}" || { [ "$l" != "$r" ] && refuse_path "$l" "${2:-}"; }
+}
+# refuse_path ABSPATH [look]: refuse_src's rules for one absolute path, taken as it is.
+refuse_path() {
+  local s=${1%/}/ x o
   o=$(readlink -f -- "$HOME/.config/omarchy" 2>/dev/null) || o=$HOME/.config/omarchy
   for x in "$HOME" "$HOME/.config/omarchy" "$o" /tmp; do
     x=${x%/}/
@@ -1630,6 +1638,7 @@ cmd_up() {
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
+  local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
   local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
@@ -1645,9 +1654,10 @@ cmd_up() {
       --no-confirm-close) confirm=off ;;
       --interactive|-i) interactive=1 ;;
       --plugin) optarg "$@"; plugin_args+=("$2"); shift ;;
-      --overlay) optarg "$@"; [ -d "$2" ] || die "--overlay: no such directory: $2"; overlays+=("$(readlink -f -- "$2")"); shift ;;
-      --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec"); shift ;;
-      --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); shift ;;
+      --overlay) optarg "$@"; [ -d "$2" ] || die "--overlay: no such directory: $2"; overlays+=("$(readlink -f -- "$2")"); named+=("overlay $2 in"); shift ;;
+      --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec")
+        g=${2%%:/*}; named+=("mount ${g/#\~/$HOME} into"); shift ;;
+      --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); g=${2%%:*}; named+=("seed ${g/#\~/$HOME} into"); shift ;;
       --monitor) optarg "$@"; monitor_spec "$2" >/dev/null || exit 1; monitors+=("$2"); shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
@@ -1860,10 +1870,16 @@ cmd_up() {
       line=${line%%[[:space:]]#*}; [[ $line == \#* ]] && continue      # comments: whole line, or after a space
       line=${line#"${line%%[![:space:]]*}"}; line=${line%"${line##*[![:space:]]}"}   # trim, keep inner spaces
       [ -n "$line" ] || continue
-      if spec=$(robind_spec "$line"); then robinds+=("$spec")
+      if spec=$(robind_spec "$line"); then robinds+=("$spec"); g=${line%%:/*}; named+=("mount ${g/#\~/$HOME} into")
       else say "$HOME/.config/omabox/ro-bind: skipping $line (no such path)"; fi
     done < "$HOME/.config/omabox/ro-bind"
   fi
+  # A path as named, too (finding 228): one inside ~/.config/omarchy or a secret store is refused even
+  # when it is a link to somewhere that would be fine. (The specs below hold where each one leads.)
+  for p in "${named[@]}"; do
+    g=${p#* }; g=${g% *}
+    why=$(refuse_src "$g") && die "refusing to ${p%% *} $g ${p##* } a box: $why"
+  done
   local src dest ro_args=()
   for p in "${robinds[@]}"; do
     src=${p%%$'\t'*} dest=${p#*$'\t'}

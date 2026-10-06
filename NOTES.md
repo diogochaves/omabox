@@ -3878,9 +3878,11 @@ from them.
     any path containing that). The issue asked for `plugins/` only; `themes/` too, because Omarchy's
     theme installer clones a theme there with its history, and an agent working on one has `up` mount
     that checkout (its top) as any other; seed_home copies every theme into every box already.
-    seed_home's own copies of branding/ and extensions/ pass `look` to keep them. Still open: a link
-    at `~/.config/omarchy/api-keys.env` to a file elsewhere resolves outside and is not refused by
-    this rule (the callers pass refuse_src resolved paths). (3) relay_call made `--plugin`,
+    seed_home's own copies of branding/ and extensions/ pass `look` to keep them. refuse_src checks
+    the path as given too (made absolute, links not followed: `realpath -ms`), not only where it
+    leads, and `up` runs it on each `--ro-bind`, `--seed`, `--overlay` and `ro-bind` file path as
+    named (its specs hold resolved ones): a link at `~/.config/omarchy/api-keys.env` to a dotfiles
+    file, or in `~/.ssh` to a key kept elsewhere, is refused as itself. (3) relay_call made `--plugin`,
     `--overlay`, `--hyprland` and `--ro-bind` paths absolute, not `--seed`'s SRC: the broker runs in
     `/`, so reference.md's `--seed ./fixtures/x.json:…` failed from ai-jail. Now a relative SRC that
     exists is sent absolute, DEST as given; one that does not is sent as given, for the broker to say
@@ -3888,8 +3890,9 @@ from them.
     path": its cases are real files in a fake HOME now. Checked: t_unit_seed_copy (a link to a file
     and to a dir, both orders, a save's links under DEST; 5 of its checks fail on the old code),
     t_unit_mount_rules (api-keys.env, a hook, branding with and without `look`, plugins/ and themes/
-    allowed, the dotfiles link; the relay), t_unit_refusals (`up` refuses `--seed` of `.ssh/id_test`
-    and `api-keys.env`, and `--ro-bind` of `hooks/`, in a fake HOME); and in a real box: the
+    allowed, the dotfiles link, a link inside `~/.config/omarchy` and `~/.ssh` given absolute or
+    relative; the relay), t_unit_refusals (`up` refuses `--seed` of `.ssh/id_test`, of a link in
+    `.ssh` and of `api-keys.env`, and `--ro-bind` of `hooks/`, in a fake HOME); and in a real box: the
     two-folder reproduction (a link to a file and to a dir) leaves the host's files as they were, and
     the box has the seeded ones. The relay was not run through a real ai-jail (its unit check only).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)

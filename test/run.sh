@@ -514,6 +514,13 @@ t_unit_mount_rules() {
   check_fails "...in seed_home's look it is fine" fhlib refuse_src "$o/branding" look
   check_fails "...a plugin dir under it is fine" fhlib refuse_src "$o/plugins/x.y"
   check_fails "...a theme dir too" fhlib refuse_src "$o/themes/t"
+  # ...and by the path as given: a link there (or in a secret store) to a file that would be fine.
+  mkdir -p "$fh/dots" "$fh/.ssh"; echo fake > "$fh/dots/keys.env"; echo fake > "$fh/dots/id"
+  ln -s ../../dots/keys.env "$o/linked-keys.env"; ln -s ../dots/id "$fh/.ssh/id_linked"
+  check_match "a link inside ~/.config/omarchy to a dotfiles file refused" "it is inside .*/.config/omarchy/" "$(fhlib refuse_src "$o/linked-keys.env")"
+  check_match "...a link in ~/.ssh too" "it is inside .*/.ssh/" "$(fhlib refuse_src "$fh/.ssh/id_linked")"
+  check_match "...given relative, as named" "it is inside .*/.config/omarchy/" "$(cd "$o" && fhlib refuse_src linked-keys.env)"
+  check_fails "...what they point at, named itself, is fine" fhlib refuse_src "$fh/dots/keys.env"
   mv "$o" "$fh/omarchy-real"; ln -s ../omarchy-real "$o"   # ~/.config/omarchy a dotfiles link
   check "...through a dotfiles link, api-keys.env still refused" fhlib refuse_src "$fh/omarchy-real/api-keys.env"
   check "...and the dir that holds it" fhlib refuse_src "$fh/omarchy-real"
@@ -585,6 +592,9 @@ t_unit_refusals() {
     "$(HOME=$fh ob up "$P-r30" --no-shell --seed "$fh/.ssh/id_test:x" 2>&1)"
   check_match "--seed of api-keys.env refused" "refusing to seed $fh/.config/omarchy/api-keys.env into a box: it is inside" \
     "$(HOME=$fh ob up "$P-r30" --no-shell --seed "$fh/.config/omarchy/api-keys.env:x" 2>&1)"
+  ln -s "$TMP/rf-key" "$fh/.ssh/id_linked"; echo fake > "$TMP/rf-key"
+  check_match "--seed of a link in a secret store refused, as named" "refusing to seed $fh/.ssh/id_linked into a box: it is inside $fh/.ssh/" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --seed "$fh/.ssh/id_linked:x" 2>&1)"
   check_match "--ro-bind of a hook's folder refused" "refusing to mount $fh/.config/omarchy/hooks into a box: it is inside" \
     "$(HOME=$fh ob up "$P-r30" --no-shell --ro-bind "$fh/.config/omarchy/hooks:/mnt/h" 2>&1)"
   # (#123) Only where it is refused: with the fix it would open a window on the real desktop.
