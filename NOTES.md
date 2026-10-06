@@ -3684,6 +3684,21 @@ from them.
     shot's stderr, interactive windows, clip, `host`, the real-hardware ask), and `down --all` was
     added to the loop's comment. To measure: the per-load size and carried tokens in usage sessions
     after this (`.local/usage`), against 2026-10-01..04.
+216. **`up` gives up at once on a box that dies after its bar is on screen** (2026-10-06, #157).
+    t_throwaway_dead's "the dead box goes within 15 s" failed in every full suite on the RTX (`gpu
+    nvidia`) and none on the AMD. Reproduced 3 of 3 with a dozen box-heavy tests beside it: the dead
+    box went after 30 s, its `omabox up` still running. Since #137 a box's reaper starts with the box,
+    so the test's wait for the reaper no longer meant "up is done" (its comment said so); on the RTX the
+    bar comes later and the kill landed while up waited for the bar to hold still. That loop (now
+    bar_settle) never looked at the box: on a dead box every capture failed and it retried until
+    READY_TIMEOUT (30 s from wait_ready's start), holding the box's lock, so the reaper's `down`
+    (owner gone, box dead) waited on it. It and the notification-server wait before it now check
+    box_alive and say "died while starting" at once (the notification wait said "no notification
+    server" after 5 s instead). By hand: a box killed as its bar appeared, up exited 125 ms later. A
+    box test that killed into that window was dropped: a capture lasts a few ms and the window under a
+    second, so it caught it rarely; t_unit_up_dies_late runs bar_settle with box_alive saying gone
+    (fails on the old code, which waited out the deadline: 29 s in one lucky run of that box test).
+    t_throwaway_dead's comment now says its up may still run. Full suites on the RTX: see the commit.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

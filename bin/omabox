@@ -1013,6 +1013,7 @@ wait_ready() {
   # (NameHasOwner: `busctl status` exits 0 for a name nobody owns yet.)
   until [ "$(box_exec busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus \
            NameHasOwner s org.freedesktop.Notifications 2>/dev/null)" = "b true" ]; do
+    box_alive || died_starting
     [ $SECONDS -lt $nd ] || { say "no notification server on the box's bus yet; see $D/home/shell.log"; break; }
     sleep 0.1
   done
@@ -1021,9 +1022,16 @@ wait_ready() {
   # interactive boxes: they are for the user's eyes, and a hidden one draws only at the host's
   # render_unfocused_fps (before drawn_hidden, not at all: screencopy never returned).
   [ "$(meta mode)" = interactive ] && return 0
-  local geom last="" now same=0
-  geom=$(on_box hyprctl -j layers | layer_at omarchy-bar)
-  while [ $same -lt 3 ] && [ $SECONDS -lt $deadline ]; do
+  local geom; geom=$(on_box hyprctl -j layers | layer_at omarchy-bar)
+  bar_settle "$geom" "$deadline"
+}
+# Until the bar's pixels at GEOM hold still (3 identical captures), or DEADLINE ($SECONDS). A box gone
+# meanwhile fails every capture: said now (#157, finding 216), where this retried until the deadline,
+# up held the box's lock that long, and the reaper's down of the dead box waited too.
+bar_settle() {
+  local geom=$1 deadline=$2 last="" now same=0
+  while [ $same -lt 3 ] && [ $SECONDS -lt "$deadline" ]; do
+    box_alive || died_starting
     # A missed frame starts the count again: it is not the same as the last.
     now=$(on_box timeout 2 grim -g "$geom" - 2>/dev/null | md5sum) || { same=0; last=""; sleep 0.1; continue; }
     if [ "$now" = "$last" ]; then same=$((same + 1)); else same=0; last=$now; fi
