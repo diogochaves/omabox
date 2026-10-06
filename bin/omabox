@@ -230,14 +230,14 @@ number is seconds, as for --quiet and --timeout (\`keys -s\` and \`pointer sleep
 --shot FILE takes a shot while the button is still down: the whole layout at the highest output
 scale (no --fit yet). --wait ignores the cursor along the drag's path (it is in every frame): what
 the drag changes beside it counts, a change wholly under it may not.
-@ wait keys click run
+@ wait keys click run scroll drag
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
-count, and are said (--strict counts them). \`keys\`, \`click\`, \`drag\` and \`run -d\` take --wait [--start 2s]
-[--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--json]: a change within --start (5s for
-run -d), then quiet. --ignore "X,Y WxH" (up to 16) leaves out an animation that never stops (a
-spinner, a glow); a 124 "still changing" names it when one small region kept changing. -g watches
-only that part of the screen. The screen is every monitor; -g, --window and --ignore pick parts of
-it, all in the layout's coordinates (as click's).
+count, and are said (--strict counts them). \`keys\`, \`click\`, \`scroll\`, \`drag\` and \`run -d\` take --wait
+[--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--json]: a change within
+--start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16) leaves out an animation that never
+stops (a spinner, a glow); a 124 "still changing" names it when one small region kept changing. -g
+watches only that part of the screen. The screen is every monitor; -g, --window and --ignore pick
+parts of it, all in the layout's coordinates (as click's), --ignore with --window too.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
@@ -4319,6 +4319,20 @@ settle_opt() {
 settle_opts_check() {
   [ "$SETTLE_WAIT" = 1 ] || { [ ${#SETTLE_ARGS[@]} = 0 ] && [ "$SETTLE_JSON" = 0 ]; } ||
     die "--start, --quiet, --timeout, --strict, --ignore, -g and --json go with --wait"
+  # An --ignore that misses -g's region leaves nothing out: said, as wait does (#162).
+  local i region=""
+  for ((i = 0; i < ${#SETTLE_ARGS[@]} - 1; i++)); do [ "${SETTLE_ARGS[i]}" != --region ] || region=${SETTLE_ARGS[i + 1]}; done
+  [ -n "$region" ] || return 0
+  for ((i = 0; i < ${#SETTLE_ARGS[@]} - 1; i++)); do
+    if [ "${SETTLE_ARGS[i]}" != --mask ] || rects_meet "${SETTLE_ARGS[i + 1]}" "$region"; then continue; fi
+    say "--ignore \"$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${SETTLE_ARGS[i + 1]}")\" is outside -g's region: it leaves nothing out there"
+  done
+}
+# Whether two X,Y,W,H rectangles overlap. rects_meet A B
+rects_meet() {
+  local ax ay aw ah bx by bw bh
+  IFS=, read -r ax ay aw ah <<<"$1"; IFS=, read -r bx by bw bh <<<"$2"
+  [ $((ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah)) = 1 ]
 }
 # An --ignore region (#131) as omabox-still's X,Y,W,H, in MASK; at most 16 of them: the tool takes 48
 # with the cursor's (drag --wait's path: 30). Not in $(...): it counts in MASKS. mask_arg GEOM
@@ -4489,6 +4503,13 @@ cmd_wait() {
         region=$(jq -r '"\(.at[0]),\(.at[1]),\(.size[0]),\(.size[1])"' <<<"$w")
       fi
       [ -z "$region" ] || args+=(--region "$region")
+      # --ignore is the screen's (the layout's) coordinates, with --window too: one that misses the
+      # region watched leaves nothing out, said rather than silent (#162).
+      local i
+      for ((i = 1; i < ${#masks[@]}; i += 2)); do
+        [ -z "$region" ] || rects_meet "${masks[i]}" "$region" ||
+          say "wait: --ignore \"$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${masks[i]}")\" is outside the region watched: it takes the screen's coordinates, not the window's"
+      done
       p=$(cursor_now) || exit $?; [ -z "$p" ] || args+=(--ignore "$(cursor_rect "$p")")
       settle_begin "$cond" "${args[@]}"
       local rc=0; settle_end "$cond" "$json" "" || rc=$?

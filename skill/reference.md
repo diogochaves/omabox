@@ -181,11 +181,12 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   CMD` (exit 0 inside the box). `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several.
-- `keys`, `click`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM]
-  [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s for `run
-  -d`), then `--quiet` with none. `-g` watches only that part of the screen.
+- `keys`, `click`, `scroll`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s]
+  [-g GEOM] [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s
+  for `run -d`), then `--quiet` with none. `-g` watches only that part of the screen.
 - The screen watched is every monitor of the box. `-g`, `--window`, `--ignore` and the regions the line
-  names are the layout's coordinates, as for `click` and `shot -g`.
+  names are the layout's coordinates, as for `click` and `shot -g`; `--ignore` stays that with
+  `--window` too (not the window's own coordinates: one outside the region watched is said).
 - `--ignore "X,Y WxH"` (up to 16; `--strict` keeps them) leaves out an animation that never stops. A 124
   "still changing" whose late changes were all in one small region ends with `--ignore "X,Y WxH" if
   that is an animation`: add it if the shot shows a spinner or a glow there, not the app under test.

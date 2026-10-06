@@ -3954,11 +3954,15 @@ from them.
     of all of it. Without xdg-output (not Hyprland) it watches the first output, as before. Rotated
     outputs are not handled (a box has none). Single monitor, same speed: `wait still` on an idle NVIDIA
     box 354 ms (old) and 356 ms (new) wall, mean of 20 each, the tool's own elapsed 0.304 and 0.305 s;
-    the tool alone, from connecting to its answer, 10.3 and 11.2 ms (one more round trip). Checked in t_monitors_wait on the AMD iGPU (three monitors, one at 1.6: the cell named
+    the tool alone, from connecting to its answer, 10.3 and 11.2 ms (one more round trip). With it:
+    `wait still --window SEL --ignore` takes the screen's coordinates as everything else does (help and
+    reference say so now), and an `--ignore` that misses the region watched (`--window`, `-g`) is said on
+    stderr instead of masking nothing in silence; `help scroll` and `help drag` carry the `--wait`
+    paragraph. Checked in t_monitors_wait on the AMD iGPU (three monitors, one at 1.6: the cell named
     inside its window, `--ignore` it, `--window` and `-g` on it, `-g` across two monitors and on the main
     one, `run -d --wait` and `keys --wait` (and with `-g`) into a terminal on the third, all again after
-    `output drop`/`back`; 19 of its checks fail with the old tool) and t_unit_wait (the hint's
-    area); t_wait unchanged on NVIDIA's WAYLAND-1. By hand in a box: a monitor
+    `output drop`/`back`; 19 of its checks fail with the old tool) and t_unit_wait (the hint's area,
+    the --ignore note, the help); t_wait unchanged on NVIDIA's WAYLAND-1. By hand in a box: a monitor
     removed and one added mid-wait, a drop mid-wait (with `-g` on the main screen: unknown, its only
     output gone).
 

@@ -4301,6 +4301,8 @@ t_monitors_wait() {
   done
   ob keys -b "$B" --window 'title:^T$' Return >/dev/null
   check "what was typed reached it" until_ok 5 bash -c "[ \"\$('$CLI' run -b '$B' -- cat /tmp/typed)\" = xyxy ]"
+  check_match "wait --window --ignore outside the window: said, screen coordinates" "outside the region watched: it takes the screen's coordinates" \
+    "$(ob wait -b "$B" still --window 'title:^N$' --ignore "10,10 8x11" --timeout 500ms 2>&1 >/dev/null)"
   ob down "$B" >/dev/null
 }
 # cell_in "X,Y WxH" "X0 Y0 X1 Y1": the rectangle is inside, and the size of a terminal cell.
@@ -5912,13 +5914,16 @@ t_unit_wait() {
   check_match "cmd needs a command" "nothing to run" "$(ob wait -b "$P-x" cmd -- 2>&1)"
   check_match "--quiet without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --quiet 1s a 2>&1)"
   check_match "run --wait needs -d" "goes with -d" "$(ob run -b "$P-x" --wait -- true 2>&1)"
-  # --ignore and -g (#131, finding 207)
+  # --ignore and -g (#131, finding 208)
   check_match "--ignore without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --ignore "1,1 5x5" a 2>&1)"
   check_match "-g without --wait refused" "go with --wait" "$(ob click -b "$P-x" -g "1,1 5x5" 1 1 2>&1)"
   check_match "--ignore junk refused" '--ignore is "X,Y WxH"' "$(ob wait -b "$P-x" still --ignore 1,2,3 2>&1)"
   check_match "...on --wait too" '--ignore is "X,Y WxH"' "$(ob run -b "$P-x" -d --wait --ignore 1x2 -- true 2>&1)"
   check_match "-g twice on --wait refused" "-g once" "$(ob keys -b "$P-x" --wait -g "1,1 5x5" -g "2,2 5x5" a 2>&1)"
   check_match "wait window --ignore refused" "go with still and change" "$(ob wait -b "$P-x" window x --ignore "1,1 5x5" 2>&1)"
+  check_match "--wait --ignore outside -g's region: said (#162)" 'ignore "100,100 5x5" is outside -g' \
+    "$(ob keys -b "$P-x" --wait -g "0,0 10x10" --ignore "100,100 5x5" a 2>&1)"
+  check_eq "...one inside it is not" "" "$(ob keys -b "$P-x" --wait -g "0,0 10x10" --ignore "5,5 5x5" a 2>&1 | grep outside)"
   local ig=() i; for i in $(seq 17); do ig+=(--ignore "$i,1 5x5"); done
   check_match "17 --ignore refused" "at most 16" "$(ob wait -b "$P-x" still "${ig[@]}" 2>&1)"
   # The 124's hint: changes kept to a small region late in the wait are named as an --ignore; a large
@@ -5931,13 +5936,15 @@ t_unit_wait() {
     'unsatisfied: still changing after 10.00s (last change 9.99s at 28,90 14x900); from 5.00s on it changed only at 27,81 15x918: --ignore "27,81 15x918" if that is an animation' "$out"
   out=$(bash -c "$hint" _ "$TMP/lib/bin/omabox" "$TMP" \
     "unsatisfied changing t=10000 first=10 last=9990 change=0,0,1920,1080 ignored=- why=- late=0,0,1000,1080 frames=500" 2>&1)
-  check_eq "...over half the screen: no hint" 'unsatisfied: still changing after 10.00s (last change 9.99s at 0,0 1920x1080)' "$out"
+  check_eq "...over a quarter of the screen: no hint" 'unsatisfied: still changing after 10.00s (last change 9.99s at 0,0 1920x1080)' "$out"
   # Several monitors (#162, finding 231): a quarter of what they cover, not of the box around them
   # (3000x2370 here, with gaps); the tool says so as area=N.
   out=$(bash -c "${hint/ready 1920x1080/ready 3000x2370 area=3240000}" _ "$TMP/lib/bin/omabox" "$TMP" \
     "unsatisfied changing t=10000 first=10 last=9990 change=1920,450,1080,900 ignored=- why=- late=1920,450,1080,900 frames=500" 2>&1)
   check_eq "...several monitors: a quarter of their own area (area=), not of the box around them" \
     'unsatisfied: still changing after 10.00s (last change 9.99s at 1920,450 1080x900)' "$out"
+  check_match "help scroll and help drag have the --wait section (#162)" "take --wait.*take --wait" \
+    "$(ob help scroll | tr '\n' ' ') $(ob help drag | tr '\n' ' ')"
   local out rc=0
   out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --die-with-parent \
         env -i "$ROOT/tools/still/omabox-still" still --timeout 100 2>&1) || rc=$?
@@ -6027,7 +6034,7 @@ t_wait() {
   check_eq "wait cmd: 0 once it succeeds" 0 "$rc"
   check_match "...after it did" "^satisfied: cmd after (0\.[5-9]|[1-9])" "$out"
   check_eq "wait cmd that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms cmd -- false >/dev/null; echo $?)"
-  # A steady animation (#131, finding 207): one cell that never stops changing. The 124 names it as an
+  # A steady animation (#131, finding 208): one cell that never stops changing. The 124 names it as an
   # --ignore; --ignore'd, wait still and keys --wait are satisfied; -g watches elsewhere.
   ob run -b "$B" -- pkill -x foot >/dev/null
   ob wait -b "$B" window foot --gone >/dev/null
