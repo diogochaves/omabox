@@ -1862,6 +1862,15 @@ cmd_up() {
   # What box_pid checks from now on: this box's pid namespace, not a later owner of the pid.
   local ns; ns=$(readlink "/proc/$(box_pid)/ns/pid") || died_starting
   jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  # Its reaper now, not once up is done (#137): an up killed from here on (SIGKILL: no EXIT trap; a
+  # harness's timeout) left a box that nothing took down, its idle limit and agent unwatched. Should
+  # this up fail instead, its trap ends the box and the reaper with it (a box gone: nothing to watch).
+  # `starting` (this up, as pid and start time) keeps the reaper from counting the rest as idle.
+  echo "$$ $(proc_start $$)" > "$D/starting"
+  touch "$D/used"
+  if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
+    setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
+  fi
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
@@ -1872,10 +1881,7 @@ cmd_up() {
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
-  touch "$D/used"
-  if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
-    setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
-  fi
+  rm -f "$D/starting"; touch "$D/used"
   local screen; screen=$(box_screen); say "box '$NAME' up (${screen#* }) in $D"
   if [ $json = 1 ]; then box_json
   elif [ $new = 1 ]; then echo "$NAME"; fi
@@ -2394,6 +2400,10 @@ cmd__reap() {
       reap_retry || true; continue
     fi
     [ "$idle" -gt 0 ] || continue
+    # Not while its up still runs (this reaper starts before it is done: #137): a slow start is not
+    # idle time. An up killed meanwhile left the file: its pid gone, the idle limit counts.
+    local st; st=$(cat "$D/starting" 2>/dev/null) || st=""
+    [ -z "$st" ] || ! owner_alive "${st%% *}" "${st#* }" || continue
     [ $(($(date +%s) - $(stat -c %Y "$D/used"))) -ge "$idle" ] || continue
     local human; human=$(human_duration "$idle")
     say "$(date -Is) box '$NAME' idle for $human: taking it down"

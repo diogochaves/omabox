@@ -3473,6 +3473,19 @@ from them.
     shared them, and finding 200's session lookup saw the other run's boxes. Five concurrent runs of
     the six tests on a loaded machine (load 10-13, two 3440x1440 boxes up): old tests failed
     t_inspect 4 of 5 and the #136 check 5 of 5; the new ones 0 of 5 (and 0 of 3 at three at once).
+203. **A box's reaper starts with the box, not when `up` is done** (2026-10-06, #137). `up` started the
+    reaper (idle limit, agent session, owner) as its last step, so an `up` SIGKILLed after its box had
+    started (no EXIT trap: a suite run killed with its process group, a harness's timeout) left a box
+    that nothing would take down: REPRODUCED by killing t_agent_session's process group while its three
+    boxes were starting: all three stayed up with no reaper, IDLE `never` (idle set, no `used` file yet),
+    as in the usage study's listing; killed once they were up, every box went within a reaper poll. Now
+    the reaper starts once the box's PID 1 is confirmed (its pidns recorded), and `used` is touched
+    there; `up` leaves its pid and start time in the box dir's `starting` until it is done, and the
+    reaper skips its idle check while that process runs, so a slow start is not idle time (not the
+    box's lock: t_reap_race holds that as another `up` of the name would, and the reaper must decide). The repro again: all three down within 60 s. t_up_killed (an up
+    killed after its box started: a reaper, the box down at its idle limit; both failed on the old
+    code). Not built from the issue's proposal: an `orphan` state in `ls` and `down --orphans`, and idle
+    limits for the suite's boxes: the cause was the missing reaper, and boxes with one are taken down.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
