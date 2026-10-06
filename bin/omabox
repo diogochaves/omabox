@@ -827,6 +827,33 @@ shell_crash_report() {
   else echo "crashed -"; fi
 }
 shell_crash_logged() { local f; f=$(box_home_file shell.log) && grep -aq 'Quickshell has crashed' "$f" 2>/dev/null; }
+# The shell mid-session (#147). Omarchy's launcher starts a crashed shell again, up to 5 times a minute
+# (finding 194); past that, or once something stopped the launcher, the box has no shell while every
+# command treated it as healthy. shell_state: none (--no-shell), running, restarting (gone, its launcher
+# about to start it again) or gone.
+shell_state() {
+  [ "$(meta shell)" = true ] || { echo none; return; }
+  local p; if p=$(shell_pid) && shell_running "$p"; then echo running
+  elif [ "$(on_box pgrep -cf '[o]marchy-launch-shell' 2>/dev/null)" -gt 0 ] 2>/dev/null; then echo restarting
+  else echo gone; fi
+}
+# Its crashes since `up`: the report folders Quickshell's handler wrote (a crash past 10 s keeps its pid,
+# so only these tell it; a fresh box HOME has none, and a save keeps no .cache).
+shell_crashes() { shell_crash_dirs | grep -c . || true; }
+# One line from shot, wait, windows, keys and click (#147): the shell gone, or crashed since the last
+# command said so (started again, but what the test sees changed).
+shell_note() {
+  [ "$(meta shell)" = true ] || return 0
+  local n seen state; n=$(shell_crashes); seen=$(cat "$D/shell-crashes-seen" 2>/dev/null) || seen=0
+  [[ $seen =~ ^[0-9]+$ ]] || seen=0
+  state=$(shell_state)
+  if [ "$state" = gone ]; then
+    say "warning: box '$NAME' has no shell (gone$([ "$n" = 0 ] || echo " after $n crash(es)"); omabox log -b $NAME shell; omabox restart-shell -b $NAME)"
+  elif [ "$n" -gt "$seen" ]; then
+    say "warning: the shell crashed since the last command and was started again$([ "$state" = running ] || echo " (it is starting)") (omabox log -b $NAME shell)"
+  fi
+  echo "$n" > "$D/shell-crashes-seen" 2>/dev/null || true
+}
 # shell_crash's answer in words. shell_crash_text WHEN HOW
 shell_crash_text() {
   case $2 in
@@ -1787,6 +1814,8 @@ cmd_up() {
   wait_ready "$shell"
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
   local crashed=""; [ "$shell" != 1 ] || crashed=$(shell_watch) || true
+  # Crashes said here are not said again by the next command (shell_note, #147).
+  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true
   [ -n "$crashed" ] || plugin_check
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
@@ -2830,7 +2859,7 @@ cmd_windows() {
     esac
     shift
   done
-  select_box "$name"; need_box
+  select_box "$name"; need_box; shell_note
   local wins; wins=$(box_windows)
   if [ $json = 1 ]; then jq . <<<"$wins"; return; fi
   # A box on a Hyprland build of its own (finding 116) says so first.
@@ -2963,7 +2992,7 @@ cmd_shot() {
     in_jail && die "shot: a jailed agent's shot is written by its own omabox (--to-fd), never at a path here"
     [ -z "$out" ] || shot_path "$out"
   fi
-  select_box "$name"; need_box
+  select_box "$name"; need_box; shell_note
   if [ -z "$tofd" ] && [ -z "$out" ]; then shot_path "${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png"; fi
   # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
   # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
@@ -3089,7 +3118,7 @@ cmd_keys() {
   done
   settle_opts_check
   set -- "${toks[@]}"
-  select_box "$name"; need_box
+  select_box "$name"; need_box; shell_note
   [ $# -gt 0 ] || die "keys: nothing to send"
   # --window: that window focused first (finding 81), as a click on it would.
   if [ ${#sels[@]} -gt 0 ]; then
@@ -3244,7 +3273,7 @@ cmd_click() {
   [ ${#xy[@]} -eq 2 ] || die "click: need X Y"
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "click: --in or --window, not both"
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "click: --no-raise goes with --window or --in"
-  select_box "$name"; need_box
+  select_box "$name"; need_box; shell_note
   local x=${xy[0]} y=${xy[1]} p
   if [ -n "$in" ]; then
     p=$(shot_point "$in" "$x" "$y")
@@ -3764,7 +3793,7 @@ cmd_wait() {
     *) die "wait: unknown condition $cond (still, change, window, layer, cmd)" ;;
   esac
   [ "$cond" != change ] || [ -z "$quiet" ] || die "wait change: no --quiet (that is still's)"
-  select_box "$name"; need_box
+  select_box "$name"; need_box; shell_note
   case $cond in
     window)
       local w="window ${sels[*]}"
@@ -4613,7 +4642,9 @@ cmd_restart_shell() {
   done
   wait_ready 1
   # A shell that crashed just after its bar came is no restart (#126): said with its report, exit 1.
-  local crashed; if crashed=$(shell_watch); then say "$crashed"; exit 1; fi
+  local crashed=""; crashed=$(shell_watch) || crashed=""
+  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true   # said here, not again (shell_note, #147)
+  if [ -n "$crashed" ]; then say "$crashed"; exit 1; fi
   say "shell restarted in box '$NAME'"
   plugin_check
   # An Omarchy tree's commit as it is now, as plugin_check does for each plugin's: it was edited (or
@@ -5259,11 +5290,13 @@ box_json() {
   peek_pid >/dev/null && peeking=true
   [ ! -f "$D/keys-to-box" ] || keys=true
   local theme; theme=$(box_theme)
+  local sh=none crashes=0; if [ "$state" = up ]; then sh=$(shell_state); crashes=$(shell_crashes); fi
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
+    --arg sh "$sh" --argjson crashes "$crashes" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
       plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null),
-      omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys}' "$D/box.json" 2>/dev/null ||
+      omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false}'
 }
 
@@ -5289,8 +5322,9 @@ cmd_ls() {
     done | jq -s -c .
     return
   fi
-  # IDLE: minutes since the box was last used, of its limit (it goes down when they meet).
-  printf '%-24s %-11s %-16s %-7s %-9s %-9s %s\n' NAME MODE SIZE STATE NET IDLE PLUGINS
+  # IDLE: minutes since the box was last used, of its limit (it goes down when they meet). SHELL (#147):
+  # running, restarting or gone, and its crashes since up (+N, as running+2); - for none or a box not up.
+  printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' NAME MODE SIZE STATE SHELL NET IDLE PLUGINS
   local used
   for n in $(list_names); do
     select_box "$n"
@@ -5302,7 +5336,10 @@ cmd_ls() {
     if [ "${idle:-0}" -gt 0 ] && used=$(stat -c %Y "$D/used" 2>/dev/null); then
       idle="$((($(date +%s) - used) / 60))m/$(human_duration "$idle")"
     else idle=never; fi
-    printf '%-24s %-11s %-16s %-7s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$(meta size)" "$state" "$(meta net)" "$idle" \
+    local sh=- c; if [ "$state" = up ] && [ "$(meta shell)" = true ]; then
+      sh=$(shell_state); c=$(shell_crashes); [ "$c" = 0 ] || sh+="+$c"
+    fi
+    printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$(meta size)" "$state" "$sh" "$(meta net)" "$idle" \
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"

@@ -3387,6 +3387,19 @@ from them.
     after `omarchy restart shell`), and no copy to drift. Should Omarchy set QS_DISABLE_CRASH_HANDLER
     (UPSTREAM.md), there are no report folders: shell_crash then has only the log line and the pid.
     Checks in t_shell_crash and t_omarchy_restart, failing on the old code (worktree).
+195. **A shell gone mid-session is said** (2026-10-06, #147). omabox watched for a crash only around
+    `up` and `restart-shell` (183); later, `ls` said `up` and every command went on while the box had
+    no shell (seen: an output-drop loop crashed it twice within Quickshell's 10 s guard). With 194 the
+    launcher brings most back, but it gives up after 5 a minute, and a crash past 10 s keeps its pid
+    (Quickshell's handler execs in place), so only its report folder tells. Now `ls` has a SHELL
+    column (`running`, `restarting`: gone with the launcher still there, `gone`, `-` for `--no-shell`
+    or a box not up; `+N` the crashes since `up`, by report folders, none in a fresh HOME or a save)
+    and `ls --json` `shell_state`/`shell_crashes`. shot, wait, windows, keys and click print "box X
+    has no shell" every time it is gone, and once "the shell crashed since the last command" (a
+    count kept in the box dir on the host; `up` and `restart-shell` set it after saying a crash
+    themselves). One nsenter more per command. Checks in t_shell_crash (a crash past 10 s said once,
+    the launcher stopped: gone in ls and shot, back with restart-shell) and t_own_processes (`none`);
+    they failed on the old code (worktree).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

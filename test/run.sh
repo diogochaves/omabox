@@ -2228,7 +2228,7 @@ t_connected() {
   # (No box, nothing to check; and no stray dir from writing into its HOME.)
   if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up (--net host: connected's old name)"
   else no "up (--net host: connected's old name)" "$out"; return; fi
-  check_match "ls shows it connected" "$B +headless .* up +connected " "$(ob ls)"
+  check_match "ls shows it connected" "$B +headless .* up +[^ ]+ +connected " "$(ob ls)"
   # A no_new_privs process (a sandboxed agent's) cannot start a box behind pasta, but can use this one.
   rc=0; out=$(setpriv --no-new-privs "$CLI" up "$B" 2>&1) || rc=$?
   check_match "up from a no_new_privs process finds it already up" "box '$B' is already up" "$out"
@@ -2729,7 +2729,7 @@ t_no_new_privs() {
   rc=0; out=$(setpriv --no-new-privs "$CLI" up "$B" --no-shell 2>&1) || rc=$?
   check_eq "up from a no_new_privs process" 0 "$rc"
   check_match "...says the box has no network, and why" "box '$B' has no network: .*no_new_privs" "$out"
-  check_match "ls shows it with none" "$B +headless .* up +none " "$(ob ls)"
+  check_match "ls shows it with none" "$B +headless .* up +[^ ]+ +none " "$(ob ls)"
   check_fails "...and it has no pasta" test -e "$D/pasta.pid"
   ns=$(ob run -b "$B" -- readlink /proc/self/ns/net)
   if [[ $ns == net:* ]] && [ "$ns" != "$(readlink /proc/self/ns/net)" ]; then ok "the box has a network namespace of its own"
@@ -3261,11 +3261,30 @@ t_shell_crash() {
   check_eq "a restart that works: exit 0, \"restarted\" (the earlier report is not a new crash)" "0 yes" "$rc $(grep -q 'shell restarted' <<<"$out" && echo yes)"
   # Past 10 s Quickshell restarts the shell itself; its dialog came all the same.
   p=$(cat "$D/run/omabox-shell.pid"); sleep 11
+  ob windows -b "$B" >/dev/null 2>&1   # (any crash before is said by now)
   ob run -b "$B" -- kill -SEGV "$p"
   check "a crash past 10 s: Quickshell restarts the shell" until_ok 15 grep -q "Quickshell has been restarted" "$H/shell.log"
+  # #147: it keeps its pid, so nothing else would tell; the next command says it, once.
+  sleep 1
+  check_match "...the next command says it crashed (#147)" "warning: the shell crashed since the last command and was started again" \
+    "$(ob windows -b "$B" 2>&1 >/dev/null)"
+  check_fails "...once" grep -q "crashed since" <<<"$(ob windows -b "$B" 2>&1 >/dev/null)"
   check "...its dialog closed too" until_ok 10 grep -q "closed the shell's crash dialog" "$H/shell.log"
   check "...the bar back" ob wait -b "$B" layer omarchy-bar
   check_eq "...no org.quickshell window" 0 "$(ob windows -b "$B" --json | jq '[.[] | select(.class == "org.quickshell")] | length')"
+  check_match "ls: the shell running, and its crashes since up (#147)" "^$B +headless +[^ ]+ +up +running\+2 " "$(ob ls | grep "^$B ")"
+  # #147: a box with no shell left read as healthy to every command. Its launcher stopped, it is gone.
+  # shellcheck disable=SC2329 # called through until_ok
+  shell_is() { [ "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state')" = "$1" ]; }
+  ob run -b "$B" -- pkill -f '[o]marchy-launch-shell'
+  check "the launcher stopped, the shell with it: ls --json says gone" until_ok 10 shell_is gone
+  check_match "...ls too" "^$B +headless +[^ ]+ +up +gone\+2 " "$(ob ls | grep "^$B ")"
+  check_match "...and shot warns" "warning: box '$B' has no shell \(gone after 2 crash\(es\); omabox log -b $B shell; omabox restart-shell -b $B\)" \
+    "$(ob shot -b "$B" -o "$TMP/gone.png" 2>&1 >/dev/null)"
+  check_eq "...every time" 1 "$(ob shot -b "$B" -o "$TMP/gone.png" 2>&1 >/dev/null | grep -c 'has no shell')"
+  check "restart-shell brings it back" ob restart-shell -b "$B"
+  check "...running" shell_is running
+  check_fails "...shot warns no more" grep -q shell <<<"$(ob shot -b "$B" -o "$TMP/back.png" 2>&1 >/dev/null)"
   ob down "$B" >/dev/null
 }
 
@@ -3517,6 +3536,8 @@ t_own_processes() {
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
   check_eq "the box's labwc is named omabox-labwc (#128)" 1 "$(ob run -b "$B" -- pgrep -cx omabox-labwc)"
   check_fails "...so nothing in it is named labwc" ob run -b "$B" -- pgrep -x labwc
+  check_eq "a --no-shell box: its shell none in ls --json, - in ls (#147)" "none -" \
+    "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state') $(ob ls | awk -v n="$B" '$1 == n { print $5 }')"
   ob run -b "$B" -- pkill -x labwc >/dev/null 2>&1
   # shellcheck disable=SC2329 # called through holds
   is_up() { [ "$("$CLI" ls --json | jq -r --arg n "$B" '[.[] | select(.name == $n) | .state][0] // "gone"')" = up ]; }
