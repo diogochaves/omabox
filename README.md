@@ -34,8 +34,8 @@ real desktop saw no window at all.
 - **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config).
 - **A GPU render node** (`/dev/dri/renderD*`). Tested on AMD and Intel iGPUs, an NVIDIA RTX 4070
   SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
-  the first usable node (`OMABOX_RENDER_NODE` overrides); an interactive box renders on the GPU your
-  desktop renders on.
+  the first usable node, or the GPU `omabox config gpu` names (next release; `OMABOX_RENDER_NODE`
+  overrides); an interactive box renders on the GPU your desktop renders on.
 - For headless boxes on NVIDIA and for confirm-close: aquamarine's fix (Hyprland's backend library),
   until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415). Everything else
   runs on your system's aquamarine. `install.sh` builds it privately into `build/prefix`
@@ -240,6 +240,11 @@ them, and `omabox config KEY default` puts one back.
   the bar widget greys its switch out.
 - `bar-icon`: `always` (the default) keeps the widget's icon in the bar with no box up, dimmed, so
   its settings are a click away; `auto` shows it only while boxes exist.
+- `gpu` (next release): the GPU headless boxes render on: `auto` (the default: the first usable
+  render node), `nvidia`, `amd`, `intel`, or a PCI slot as `lspci -D` prints it (`0000:01:00.0`).
+  When that GPU is not there (an NVIDIA card handed to a VM), `up` renders on the first one and says
+  so. `OMABOX_RENDER_NODE=/dev/dri/renderDN` overrides it. Interactive boxes render on your desktop's
+  GPU whatever it says. `auto` stays the default: on a laptop the iGPU saves battery.
 
 Passthrough (SUPER+ALT+ESCAPE) turns itself off when focus leaves the box, or on the first key you
 press with the pointer outside it. With **keys-to-box** on (per box, off by default, until the box

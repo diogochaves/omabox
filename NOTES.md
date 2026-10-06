@@ -3641,6 +3641,25 @@ from them.
     check sets it to 0. foot reports each notch as several mouse lines (its multiplier). Checks:
     t_unit_pointer (refusals, pointer_marks), t_pointer (foot's reports: right, left, down with a
     wheel, `pointer hscroll`, up with a finger; binds counting 2, 1 and 3 events).
+214. **`omabox config gpu auto|nvidia|amd|intel|SLOT`: the GPU a headless box renders on** (2026-10-06,
+    #156). Boxes took the first usable render node (the iGPU on this desk); OMABOX_RENDER_NODE moved
+    them, but named a node that vanishes when the RTX goes to vfio-pci for the VM (every `up` died),
+    whose number comes from probe order, in every terminal's environment and never a jailed agent's
+    (its `up` runs in the broker's). The setting is in the config file. render_node takes, in order:
+    OMABOX_RENDER_NODE; the first usable node whose driver is the kind named (nvidia: nvidia or
+    nouveau; amd: amdgpu or radeon; intel: i915 or xe) or whose PCI slot is the one named (0000:01:00.0;
+    03:00.0 stored whole); else the first usable node, with one line from `up`. `auto` stays the
+    default (a laptop's iGPU saves battery). Interactive boxes are unchanged (finding 95: the
+    desktop's compositor names their GPU). `gpu nvidia` without aquamarine's fix keeps finding 125's
+    refusal, which now names the setting. /dev/dri and /sys/class/drm are the variables DRI and SYSDRM,
+    so t_unit_gpu runs render_node on a fake tree (an AMD and an NVIDIA GPU): auto, by kind, by slot,
+    a kind not there and the NVIDIA node gone fall back said, OMABOX_RENDER_NODE first, `config gpu`
+    normalises and refuses junk. Live, the full suite with `config gpu nvidia` on the RTX 5070 Ti
+    (every box on renderD129): 1983/18/1. 17 were t_output: a headless NVIDIA box draws on labwc's
+    Wayland output, which `output drop` refuses by design (finding 210); t_output now checks that
+    refusal there and skips the rest. One, t_throwaway_dead's 15 s, timed out under the full run's load
+    and passed alone twice on the RTX. The vfio-pci fallback on the real card is for Diogo (sudo); the
+    fake tree covers it.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

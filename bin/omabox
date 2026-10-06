@@ -113,7 +113,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox ls [--json]
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
-  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon
+  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu
   omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
   omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
@@ -268,6 +268,10 @@ click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); nev
 @ up config
 Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
 second close is a yes).
+A headless box renders on the first GPU; \`omabox config gpu nvidia\` (amd, intel, or a PCI slot as
+\`lspci -D\` names it) picks another, and \`up\` falls back to the first, saying so, when that one is
+not there (a card handed to a VM). \$OMABOX_RENDER_NODE overrides it. An interactive box renders on
+the GPU your desktop's compositor uses, whatever the setting.
 @ up setup --version
 aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until a release has it): a
 headless box on an NVIDIA render node and confirm-close need it, and \`up\` refuses them without it;
@@ -334,14 +338,21 @@ say() { echo "omabox: $*" >&2; }
 # ~/.config/omabox/config, KEY=VALUE lines: what `omabox config` and the bar widget change (finding
 # 70). A value that does not check out is ignored with a warning, never used.
 CONFIG=$HOME/.config/omabox/config
-CONF_KEYS=(workspace confirm-close bar-icon)
-conf_default() { case $1 in workspace) echo 9 ;; confirm-close) echo off ;; bar-icon) echo always ;; esac; }
+CONF_KEYS=(workspace confirm-close bar-icon gpu)
+conf_default() { case $1 in workspace) echo 9 ;; confirm-close) echo off ;; bar-icon) echo always ;; gpu) echo auto ;; esac; }
 # A value for KEY, printed in its normal form, or a failure.
 conf_check() {
   case $1 in
     workspace) ws_check "$2" ;;
     confirm-close) case $2 in on|true|yes|1) echo on ;; off|false|no|0) echo off ;; *) return 1 ;; esac ;;
     bar-icon) case $2 in auto|always) echo "$2" ;; *) return 1 ;; esac ;;
+    # A kind of GPU (by its driver) or a PCI slot, as 0000:03:00.0 (03:00.0 taken too).
+    gpu) local g=${2,,}
+      case $g in
+        auto|nvidia|amd|intel) echo "$g" ;;
+        *) [[ $g =~ ^([0-9a-f]{4}:)?[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || return 1
+           [[ $g == ????:* ]] || g=0000:$g; echo "$g" ;;
+      esac ;;
     *) return 1 ;;
   esac
 }
@@ -1022,29 +1033,52 @@ wait_ready() {
 
 # --- up ------------------------------------------------------------------------------------------
 
-# The GPU render node the box renders with: $OMABOX_RENDER_NODE, else the first usable one. Only ever a
-# render node (renderD*), never a card node: that is the seat (finding 5).
+# Where render nodes and their devices are; variables so the suite can point them at a fake tree.
+DRI=/dev/dri SYSDRM=/sys/class/drm
+# The GPU render node the box renders with: $OMABOX_RENDER_NODE; else the first usable one the `gpu`
+# setting names (#156, finding 214), stored so a jailed agent's `up` (the broker's environment) and every
+# terminal get it; else, and when that GPU is not there (an NVIDIA card handed to a VM: vfio-pci), the
+# first usable one, said. renderD numbers come from probe order: the setting names a driver or a slot.
+# Only ever a render node (renderD*), never a card node: that is the seat (finding 5).
 render_node() {
-  local n=${OMABOX_RENDER_NODE:-}
+  local n=${OMABOX_RENDER_NODE:-} want
   if [ -z "$n" ]; then
-    for n in /dev/dri/renderD*; do [ -r "$n" ] && [ -w "$n" ] && break; n=""; done
+    want=$(conf_get gpu)
+    if [ "$want" != auto ]; then
+      for n in "$DRI"/renderD*; do [ -r "$n" ] && [ -w "$n" ] && gpu_is "$n" "$want" && break; n=""; done
+      [ -n "$n" ] || say "gpu $want (omabox config gpu): none usable here, so the first GPU: $(render_nodes | head -n 1)"
+    fi
+    if [ -z "$n" ]; then
+      for n in "$DRI"/renderD*; do [ -r "$n" ] && [ -w "$n" ] && break; n=""; done
+    fi
   fi
-  [[ $n =~ ^/dev/dri/renderD[0-9]+$ ]] && [ -r "$n" ] && [ -w "$n" ] ||
-    die "no usable GPU render node (/dev/dri/renderD*); set OMABOX_RENDER_NODE"
+  [[ $n =~ ^$DRI/renderD[0-9]+$ ]] && [ -r "$n" ] && [ -w "$n" ] ||
+    die "no usable GPU render node ($DRI/renderD*); set OMABOX_RENDER_NODE"
   echo "$n"
 }
+# Whether render node N is the GPU WANT names: nvidia, amd, intel (by its driver) or a PCI slot.
+gpu_is() {
+  case $2 in
+    nvidia) [[ $(render_driver "$1") =~ ^(nvidia|nouveau)$ ]] ;;
+    amd) [[ $(render_driver "$1") =~ ^(amdgpu|radeon)$ ]] ;;
+    intel) [[ $(render_driver "$1") =~ ^(i915|xe)$ ]] ;;
+    *) [ "$(render_slot "$1")" = "$2" ] ;;
+  esac
+}
+# The PCI slot of a render node's GPU: 0000:03:00.0.
+render_slot() { basename "$(readlink -f "$SYSDRM/${1##*/}/device")"; }
 
 # Every usable render node, for an interactive box: its Hyprland renders on the GPU the desktop's
 # compositor names (aquamarine's Wayland backend opens the parent's dmabuf main device), which is not
 # necessarily render_node's, so the box gets them all (finding 95). Still render nodes only.
 render_nodes() {
   local n
-  for n in /dev/dri/renderD*; do [ -r "$n" ] && [ -w "$n" ] && echo "$n"; done
+  for n in "$DRI"/renderD*; do [ -r "$n" ] && [ -w "$n" ] && echo "$n"; done
   return 0
 }
 
 # The kernel driver behind a render node: amdgpu, i915, xe, nvidia, ...
-render_driver() { basename "$(readlink -f "/sys/class/drm/${1##*/}/device/driver")"; }
+render_driver() { basename "$(readlink -f "$SYSDRM/${1##*/}/device/driver")"; }
 
 # Match the selected render node to NVIDIA's userspace device node. Never expose a DRM card.
 # nvidia_device RENDER [CREATE]: CREATE 0 leaves a missing node missing (see nvidia_node).
@@ -1621,7 +1655,7 @@ cmd_up() {
   if [ "$AQ_FIXED" = 0 ]; then
     if [ $interactive = 0 ] && [ "$(render_driver "$render")" = nvidia ]; then
       local others; others=$(render_nodes | while read -r n; do [ "$(render_driver "$n")" = nvidia ] || printf ' %s (%s)' "$n" "$(render_driver "$n")"; done)
-      die "a headless box on NVIDIA ($render) needs $(aq_lacks): $AQ_HOWTO${others:+; or render on another GPU with OMABOX_RENDER_NODE:$others}"
+      die "a headless box on NVIDIA ($render) needs $(aq_lacks): $AQ_HOWTO${others:+; or render on another GPU (omabox config gpu amd, intel or a slot; or OMABOX_RENDER_NODE):$others}"
     fi
     [ "$confirm_from" = config ] || [ "$confirm" != on ] ||
       die "--confirm-close (the window it opens again) needs $(aq_lacks): $AQ_HOWTO"
@@ -5773,6 +5807,7 @@ conf_help() {
     workspace) echo "1-99, special (the scratchpad, SUPER+S) or special:NAME" ;;
     confirm-close) echo "on or off" ;;
     bar-icon) echo "always (the default) or auto (only while boxes exist)" ;;
+    gpu) echo "auto (the default: the first GPU), nvidia, amd, intel or a PCI slot (0000:03:00.0); headless boxes only" ;;
   esac
 }
 
