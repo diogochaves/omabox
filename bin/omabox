@@ -3960,14 +3960,17 @@ settle_begin() {
   SETTLE_ERR=""
   # 12 s for `ready` (or the tool's answer): a hung compositor is the tool's own "unknown hung" at 10 s
   # (finding 181), read here and said in words; before, after 5 s, settle_end waited on it forever.
-  local end=$((SECONDS + 12)) rc
+  local end=$((SECONDS + 12)) rc part=""
   while :; do
     if read -r -t 1 -u "$SETTLE_OUT" line; then
+      line=$part$line part=""
       [[ $line == ready* ]] && break
       [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
       SETTLE_ERR+="${SETTLE_ERR:+; }$line"
     else
-      rc=$?; line=""
+      # A read that timed out keeps what it had of a line (bash): the rest comes with the next one
+      # (finding 217: the answer's first byte was lost, "nsatisfied", and read as no answer).
+      rc=$? part+=$line line=""
       [ $rc -gt 128 ] && [ $SECONDS -lt $end ] || break   # EOF (the tool is gone), or no answer in time
     fi
   done
@@ -3992,15 +3995,18 @@ settle_act() { if [ -n "${SETTLE_IN:-}" ]; then "$@" {SETTLE_IN}>&- {SETTLE_OUT}
 # "change", "settle"); SENT is what an action already did, said on stderr when the answer is not yes.
 # settle_end COND JSON SENT
 settle_end() {
-  local cond=$1 json=$2 sent=$3 line=$SETTLE_LINE rc used=$SECONDS scr=${SETTLE_LINE#ready }
+  local cond=$1 json=$2 sent=$3 line=$SETTLE_LINE rc used=$SECONDS scr=${SETTLE_LINE#ready } part=""
   if [[ $line == ready* ]]; then
     line=""
     while :; do
       if read -r -t 1 -u "$SETTLE_OUT" line; then
+        line=$part$line part=""
         [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
         SETTLE_ERR+="${SETTLE_ERR:+; }$line"; line=""; continue
       else
+        # A timed-out read keeps its part of a line: the rest comes next (finding 217).
         rc=$?; [ $rc -gt 128 ] || { line=""; break; }   # EOF: the tool is gone without an answer
+        part+=$line line=""
       fi
       # Waiting is using the box (idle expiry, finding 59).
       if [ $((SECONDS - used)) -ge 30 ]; then touch "$D/used" 2>/dev/null || true; used=$SECONDS; fi

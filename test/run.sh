@@ -3554,6 +3554,21 @@ t_throwaway_dead() {
   check "the dead box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$n\")'"
 }
 
+# The still tool's answer split across settle_end's 1 s reads (finding 217): bash keeps what a timed-out
+# read had of a line; it was dropped, and "nsatisfied ..." read as no answer ("lost the box's screen").
+t_unit_settle_read() {
+  local out
+  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; box_alive() { return 0; }
+    exec {SETTLE_OUT}< <(printf u; sleep 1.5; printf "%s\n" "nsatisfied changing t=2002 first=2 last=1970 change=27,31,7,10 ignored=- why=- late=- frames=42")
+    exec {SETTLE_IN}>/dev/null; sleep 0.1 & SETTLE_PID=$!
+    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); rc=0; settle_end still 0 "" || rc=$?; echo "rc $rc"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
+  check_match "an answer split across a read timeout is read whole" "^unsatisfied: still changing after 2\.00s" "$out"
+  check_match "...124" "rc 124$" "$out"
+  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; on_box() { { printf r; sleep 1.5; printf "eady 1920x1080\n"; sleep 5; }; }
+    settle_begin still; echo "line [$SETTLE_LINE] err [$SETTLE_ERR]"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
+  check_match "settle_begin: a ready line split across a read timeout too" "line \[ready 1920x1080\] err \[\]" "$out"
+}
+
 # up's waits after the bar, on a box that died meanwhile (#157, finding 216): bar_settle retried its
 # captures until READY_TIMEOUT (30 s), holding the box's lock, so the reaper's down of the dead box
 # waited that long. Here box_alive says gone and every capture fails: it must say so at once.
@@ -5829,7 +5844,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)

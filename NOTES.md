@@ -3699,6 +3699,16 @@ from them.
     second, so it caught it rarely; t_unit_up_dies_late runs bar_settle with box_alive saying gone
     (fails on the old code, which waited out the deadline: 29 s in one lucky run of that box test).
     t_throwaway_dead's comment now says its up may still run. Full suites on the RTX: see the commit.
+217. **A wait's answer split across a 1 s read is read whole** (2026-10-06, found while checking #157).
+    Two full suites on the RTX failed t_wait's #131 checks with "unknown: lost the box's screen
+    (nsatisfied changing ...)": the still tool's answer had lost its first byte. settle_begin and
+    settle_end read the tool's lines with `read -t 1`; bash reads a pipe a byte at a time, and a read
+    that times out keeps what it had of a line in the variable, which both loops threw away. An answer
+    arriving on a read's 1 s boundary (2.002 s after `ready` for `--timeout 2s`: whole-second timeouts
+    land there) lost its head, and the rest read as no answer, exit 1 instead of 124. 1 in 3 by hand on
+    the RTX; the AMD's timing missed the boundary. Both loops now keep a timed-out read's part and
+    prepend it to the next. t_unit_settle_read splits an answer and a `ready` line across a read
+    timeout (both failed on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
