@@ -1995,6 +1995,13 @@ t_main() {
   local e30; e30=$(ob run -b "$B" --env-file "$TMP/t30bad.env" -- true 2>&1)
   check_match "--env-file: a bad line refused by its number" "line 2 is not KEY=VALUE" "$e30"
   check_fails "...its text never shown" grep -q hunter2 <<<"$e30"
+  # #130: run --env on a box that is up was dropped ("already up: --env ... ignored"); now the command's.
+  local e130; e130=$(ob run -b "$B" --env T130=bar -- sh -c 'echo "T130=${T130-unset}"' 2>&1)
+  check_eq "run --env on a box that is up: the command's (#130)" "T130=bar" "$e130"
+  check_eq "...after --env-file's, so the flag wins; --pass wins over both" "flag|pass" \
+    "$(T30D=pass ob run -b "$B" --env-file "$TMP/t30.env" --env T30A=flag --env T30D=flag --pass T30D -- sh -c 'echo "$T30A|$T30D"')"
+  check_match "...not the box session's own" "--env cannot set HOME" "$(ob run -b "$B" --env HOME=/x -- true 2>&1)"
+  check_match "...KEY=VAL only" "--env wants KEY=VAL" "$(ob run -b "$B" --env T130 -- true 2>&1)"
   check_eq "--pass ROOT is the caller's, not omabox's own (finding 74)" "/x y" "$(ROOT="/x y" ob run -b "$B" --pass ROOT -- sh -c 'echo "$ROOT"')"
   check_fails "--pass of a name only omabox has fails" env -u GUARD "$CLI" run -b "$B" --pass GUARD -- true
   # finding 67: crashes in a box skip systemd-coredump (a core limit of exactly 1 byte), so they never
@@ -5101,6 +5108,10 @@ t_unit_inspect() {
   check_match "log: an unknown log named, with the ones there are" "no log called nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
   check_match "log -n takes a number or all" "-n takes a number" "$(ob log -b "$P-x" -n 5x 2>&1)"
   check_match "log --grep: a bad expression said" "takes a regular expression" "$(ob log -b "$P-x" --grep '(' 2>&1)"
+  # #130: `--grep -i RE` took -i as the expression, and RE as a log's name.
+  check_fails "log --grep -i RE: -i is the flag, RE the expression (#130)" grep -q "no log called" \
+    <<<"$(ob log -b "$P-x" --grep -i 'plugin|error' 2>&1)"
+  check_match "log --grep -x: an option taken for the expression, refused" "--grep takes RE" "$(ob log -b "$P-x" --grep -x 2>&1)"
   check "log is a jailed agent's (its own boxes only: select_box)" lib broker_check log
   check_eq "events --since OFFSET" "123 0" "$(lib events_since 123)"
   check_match "events --since 30s: from then on" "^0 [0-9]{13}$" "$(lib events_since 30s)"
@@ -5146,6 +5157,15 @@ t_inspect() {
   check_eq "lua: an error in a value's metamethod is a Lua error" "1 lua: lua:1: boom" \
     "$(out=$(ob lua -b "$B" 'return setmetatable({}, {__len = function() error("boom") end})' 2>&1); echo "$? $out")"
   check_eq "lua return -1" -1 "$(ob lua -b "$B" return -1)"
+  # #130: a dispatcher returned is not run, and agents read its value as "ran": said on stderr.
+  ob run -b "$B" -- rm -f /tmp/omabox-t130
+  out=$(ob lua -b "$B" 'hl.dsp.exec_cmd("touch /tmp/omabox-t130")' 2>&1 >/dev/null)
+  check_match "lua: a dispatcher returned is said not run (#130)" "a dispatcher, returned and not run: omabox lua 'hl\.dispatch\(EXPR\)'" "$out"
+  check_eq "...its value as before, exit 0" "0 HL.Dispatcher" "$(v=$(ob lua -b "$B" 'hl.dsp.exec_cmd("true")' 2>/dev/null); echo "$? $v")"
+  sleep 0.5
+  check_fails "...and it did not run" ob run -b "$B" -- test -e /tmp/omabox-t130
+  check_match "lua: a function, said not called" "a function, returned and not called" "$(ob lua -b "$B" 'function() end' 2>&1 >/dev/null)"
+  check_eq "...a plain value says nothing more" "" "$(ob lua -b "$B" '1, "HL.Dispatcher"' 2>&1 >/dev/null)"
   check_match "...a source starting with - still needs --" "unknown option -1" "$(ob lua -b "$B" -1 2>&1)"
   # Calls at once share nothing (no file between them).
   local i pids=(); for i in 1 2 3 4 5 6; do ob lua -b "$B" "$i * 11" > "$TMP/lua.$i" 2>&1 & pids+=($!); done
@@ -5203,6 +5223,7 @@ t_inspect() {
   # log (finding 107): Hyprland's by default, the others by name, followed until the box goes.
   check_eq "log: Hyprland's, -n lines" 5 "$(ob log -b "$B" -n 5 | wc -l)"
   check_match "log --grep" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep 'creating the' -i -n 1)"
+  check_match "log --grep -i RE, as grep users type it (#130)" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep -i 'creating the' -n 1)"
   check_match "path --logs: where each is" "^hyprland +$(ob path -b "$B")/run/hypr/[^/]+/hyprland\.log$" "$(ob path -b "$B" --logs | grep '^hyprland')"
   ob run -b "$B" -d -- sh -c 'echo omabox-log-1; sleep 1.5; echo omabox-log-2; sleep 600' >/dev/null 2>&1
   check "log run: the latest run -d's" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-log-1"

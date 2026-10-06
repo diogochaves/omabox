@@ -144,9 +144,10 @@ variables (a password too: never on a command line); --env-file FILE hands it a 
 (a dev.env: read as data, nothing expanded; --pass wins); \`keys --pass VAR\` types one (never \`-t\`
 for a secret: the process list shows it). \`keys -t\` and \`keys --pass\` type newline and tab
 (Return, Tab); any other control character is refused (exit 2); a value's one trailing \\r is dropped.
---env KEY=VAL is the box session's, on \`up\`; not what the session sets itself (PATH, HOME,
-XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, DISPLAY, HYPRLAND_INSTANCE_SIGNATURE, LD_PRELOAD...),
-nor by run --pass or --env-file.
+--env KEY=VAL is the box session's, on \`up\` (and a throwaway \`run\`'s box); \`run --env\` on a box
+that is up hands it to the command, as --env-file does (--pass wins). Never what the session sets
+itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, DISPLAY, HYPRLAND_INSTANCE_SIGNATURE,
+LD_PRELOAD...), by any of them.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run restart-shell
@@ -2573,7 +2574,7 @@ keep_run_logs() {
 }
 
 cmd_run() {
-  local name="" detach=0 up_args=() quiet=0 print_log=0 replace=0
+  local name="" detach=0 up_args=() quiet=0 print_log=0 replace=0 envs=() kv
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -2593,7 +2594,11 @@ cmd_run() {
         in_jail && die "run: --env-file is read by a jailed agent's own omabox, never at a path here"
         envfile_read "$2" >/dev/null   # a bad line stops here, said
         local kvs; mapfile -d '' kvs < <(envfile_read "$2"); ENVKV+=("${kvs[@]}"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--net|--allow|--env|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      # The command's on a box that is up (#130: it was dropped there), a throwaway box's otherwise.
+      --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
+        ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
+        envs+=("$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
@@ -2609,6 +2614,7 @@ cmd_run() {
   select_box "$name"
   if box_alive; then
     [ ${#up_args[@]} -eq 0 ] || say "box '$NAME' is already up: ${up_args[*]} ignored"
+    ENVKV+=("${envs[@]}")   # after --env-file's, so the flag wins; --pass wins over both
     touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
     take_over || need_box   # gone while it waited: says so
     if [ $detach = 1 ]; then
@@ -2643,6 +2649,7 @@ cmd_run() {
     return $rc
   fi
   [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
+  for kv in "${envs[@]}"; do up_args+=(--env "$kv"); done
   # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
   # replaced by a throwaway: that would run the command in a new network namespace without the box's mounts
   # (its --net isolated included), and hide what happened to it.
@@ -3848,6 +3855,10 @@ $code
        hypr_answers || die "$(hung_text)"
        die "lua: the box's Hyprland did not answer as expected: $out" ;;
   esac
+  # A dispatcher or function returned is an answer, but agents read it as "ran" (#130): said, exit 0.
+  local kinds=${vals%%:*}; vals=${vals#*:}
+  [[ $kinds != *d* ]] || say "lua: a dispatcher, returned and not run: omabox lua 'hl.dispatch(EXPR)' (or omabox hyprctl dispatch 'EXPR')"
+  [[ $kinds != *f* ]] || say "lua: a function, returned and not called"
   if [ $json = 1 ]; then jq -c '.[]' <<<"$vals"
   else jq -r '.[] | if type == "string" then . elif type == "null" then "nil" else tojson end' <<<"$vals"; fi
 }
@@ -3912,7 +3923,11 @@ cmd_log() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -f|--follow) follow=1 ;;
-      --grep) optarg "$@"; LOG_RE=$2; shift ;;
+      # `--grep -i RE` as grep users type it (#130); any other value starting with - is an option
+      # taken for the expression.
+      --grep) optarg "$@"; if [ "$2" = -i ]; then LOG_I=(-i); shift; optarg "$@"; fi
+        [[ $2 != -* ]] || die "log: --grep takes RE (-i goes before or after it; an RE starting with - as [-]...), got $2"
+        LOG_RE=$2; shift ;;
       -i) LOG_I=(-i) ;;
       -n) optarg "$@"; [[ $2 =~ ^([0-9]{1,7}|all)$ ]] || die "log: -n takes a number of lines, or all"; n=$2; shift ;;
       -h|--help) usage log; return ;;

@@ -182,7 +182,8 @@ PORTS -- ctest ...` (`up`'s options work here). With a box already up, `run` use
 `run` gives the command the box's environment, not your shell's: a variable a test needs (a test
 server's password from `dev.env`, say; a test that skips is the sign) goes with `--pass NAME`, off
 the command line, or a whole file with `--env-file`: `omabox run --env-file ./dev.env -- ctest …`
-(KEY=VAL lines, read as data). Never `--env KEY=secret`: that is in the process list. A `run -d`
+(KEY=VAL lines, read as data); a plain value: `run --env KEY=VAL` (on a box that is up, the
+command's; never a secret: that is in the process list). A `run -d`
 command's output, a Qt app's warnings and QML errors too, is in the log file it prints (`-q`: no
 line; `--print-log`: only the path, on stdout, for a script).
 

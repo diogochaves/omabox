@@ -3328,6 +3328,19 @@ from them.
     `repl` with no code. A connect-only ping first and the call unbounded was the other way: it costs
     a call each time and leaves a hang after the ping unbounded. t_hung: both said within 16 s on a
     stopped box (on the old code its outer timeout ended them), `rollinglog -f` still following at 13 s.
+191. **Three CLI edges agents tripped on** (2026-10-06, #130, from the usage study). (1) `log --grep -i
+    RE` took `-i` as the expression and RE as a log's name ("no log called plugin|error"), or grepped
+    the Hyprland log for `-i` when RE was also a log's name: now `--grep -i RE` is read as grep users
+    type it, and any other `--grep` value starting with `-` is refused. (2) `lua` returning a
+    dispatcher (`hl.dsp.exec_cmd(...)`, a userdata whose tostring is `HL.Dispatcher`, with no
+    readable metatable) printed it, exit 0, and nothing ran; agents read that as "ran" nine times.
+    lua.lua now sends a letter per value ahead of the JSON (d a dispatcher, f a function, - else) and
+    `lua` says on stderr "a dispatcher, returned and not run: omabox lua 'hl.dispatch(EXPR)'" or "a
+    function, returned and not called"; still exit 0, the value is a right answer. (3) `run --env
+    K=V` on a box that is up was dropped ("already up: --env ... ignored"); now it is the command's,
+    as --env-file's lines (after them, so the flag wins; --pass wins over both), with up's KEY=VAL
+    and reserved-name checks. On a throwaway box it stays the box's. Checks in t_unit_inspect,
+    t_inspect and t_main; each failed on the old code in a worktree.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

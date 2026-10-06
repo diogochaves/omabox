@@ -96,7 +96,15 @@ end
 
 -- Encoding runs the values' metamethods (__len, __pairs, __tostring): an error there is the agent's
 -- Lua error too, not an answer the host cannot read (finding 176).
-local out = {}
-local ok, e = pcall(function() for i = 2, res.n do out[i - 1] = enc(res[i], 0, true) end end)
+-- Before the values, one letter each (#130): d a dispatcher (hl.dsp.*, a userdata Hyprland names
+-- HL.Dispatcher; returned, it does not run), f a function (not called), - anything else.
+local out, kinds = {}, {}
+local ok, e = pcall(function()
+  for i = 2, res.n do
+    local v = res[i]
+    out[i - 1] = enc(v, 0, true)
+    kinds[i - 1] = (type(v) == "userdata" and tostring(v):match("^HL%.Dispatcher") and "d") or (type(v) == "function" and "f") or "-"
+  end
+end)
 if not ok then error(ERR .. tostring(e), 0) end
-error(OK .. "[" .. table.concat(out, ",") .. "]", 0)
+error(OK .. table.concat(kinds) .. ":[" .. table.concat(out, ",") .. "]", 0)
