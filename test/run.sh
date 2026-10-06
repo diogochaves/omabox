@@ -1731,9 +1731,12 @@ t_unit_agent_session() {
 # keeps its logs. The "agent" here is a shell that exports its own pid as CLAUDE_PID, as Claude Code does.
 t_agent_session() {
   local repo; repo=$(tmp_repo ag)
-  local s1=11111111-2222-4333-8444-5555aaaa0001 s2=11111111-2222-4333-8444-5555aaaa0002
-  local s3=11111111-2222-4333-8444-5555aaaa0003 s4=11111111-2222-4333-8444-5555aaaa0004
-  local s5=11111111-2222-4333-8444-5555aaaa0005 s6=11111111-2222-4333-8444-5555aaaa0006
+  # Session ids of this run's own (#116): another run's (a second suite at once) would carry the same id
+  # tail, and the session-scoped lookups (#136) would see its boxes as this session's too.
+  local u; u=$(printf '%06d' $(( $$ % 1000000 )))
+  local s1=11111111-2222-4333-8444-5555${u}01 s2=11111111-2222-4333-8444-5555${u}02
+  local s3=11111111-2222-4333-8444-5555${u}03 s4=11111111-2222-4333-8444-5555${u}04
+  local s5=11111111-2222-4333-8444-5555${u}05 s6=11111111-2222-4333-8444-5555${u}06
   as() { local s=$1; shift; (cd "$repo" && env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s" "$CLI" "$@"); }
   # Run in the background: exec makes that process the agent, so $! is its pid. Its first command is
   # `up --no-shell` with the options given, or the one after -- (agent S -- run -- true); then it
@@ -1750,10 +1753,10 @@ t_agent_session() {
   state_of() { "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
   # shellcheck disable=SC2329 # called through until_ok
   gone() { [ "$(state_of "$1")" = gone ]; }
-  local b1=$P-ag-aaaa0001 b2=$P-ag-aaaa0002 b3=$P-ag-aaaa0003 b4=$P-ag-aaaa0004 named=$P-ag-named
-  local b5=$P-ag-aaaa0005 b6=$P-ag-aaaa0006 s7=11111111-2222-4333-8444-5555aaaa0007 b7=$P-ag-aaaa0007
-  local s8=11111111-2222-4333-8444-5555aaaa0008 b8=$P-ag-aaaa0008 s9=11111111-2222-4333-8444-5555aaaa0009
-  local s10=11111111-2222-4333-8444-5555aaaa0010 b10=$P-ag-aaaa0010
+  local b1=$P-ag-${u}01 b2=$P-ag-${u}02 b3=$P-ag-${u}03 b4=$P-ag-${u}04 named=$P-ag-named
+  local b5=$P-ag-${u}05 b6=$P-ag-${u}06 s7=11111111-2222-4333-8444-5555${u}07 b7=$P-ag-${u}07
+  local s8=11111111-2222-4333-8444-5555${u}08 b8=$P-ag-${u}08 s9=11111111-2222-4333-8444-5555${u}09
+  local s10=11111111-2222-4333-8444-5555${u}10 b10=$P-ag-${u}10
   # shellcheck disable=SC2329 # called through until_ok
   polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null; }
   agent "$s1" & local a1=$!
@@ -1783,7 +1786,8 @@ t_agent_session() {
   agent "$s4" --idle 30s & local a4=$!
   until_ok 40 test -e "$TMP/ag-$a3" -a -e "$TMP/ag-$a4"
   pid_of() { bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$1"; }
-  ob run -b "$b3" -- sleep 15 & local busy=$!
+  # Busy until told (#116: a fixed sleep 15 that took 9 s to start under load ended before the check).
+  ob run -b "$b3" -- sh -c 'until [ -e /tmp/t116-done ]; do sleep 0.2; done' & local busy=$!
   # The run is use once its nsenter is up; a check before that would find the box unused.
   until_ok 10 pgrep -f "^nsenter -t $(pid_of "$b3") "; kill "$a3" 2>/dev/null
   local pid4; pid4=$(pid_of "$b4")
@@ -1791,7 +1795,7 @@ t_agent_session() {
   sleep 10
   check_eq "its agent gone, a box in use stays" up "$(state_of "$b3")"
   check_eq "a box that died stays dead, logs and all, when its agent goes" dead "$(state_of "$b4")"
-  wait "$busy" 2>/dev/null
+  ob run -b "$b3" -- touch /tmp/t116-done; wait "$busy" 2>/dev/null
   held "$b3" check "...and once not in use, the box goes (before its idle limit)" until_ok 15 gone "$b3"
   ob down "$b3" "$b4" >/dev/null 2>&1
   # A session resumed in a new process (`claude --continue`: the same id, another CLAUDE_PID) takes
@@ -1878,7 +1882,7 @@ t_agent_session() {
   # And with an `up` of the name that finds no agent (no CLAUDE_PID) queued too, let in after the
   # reaper's down and before the new agent's command: that command must not take over the new box,
   # which records no agent. The up's flock and the command's are stopped until their turn.
-  local s11=11111111-2222-4333-8444-5555aaaa0011 b11=$P-ag-aaaa0011 uf tf
+  local s11=11111111-2222-4333-8444-5555${u}11 b11=$P-ag-${u}11 uf tf
   agent "$s11" --idle 20s & local a11=$!
   until_ok 40 test -e "$TMP/ag-$a11"
   reaper=$(pgrep -f "omabox _reap $b11 " | head -1)
@@ -3108,11 +3112,12 @@ t_isolated_no_pidfile() {
 t_run_idle() {
   local repo=$TMP/$P-exp
   mkdir -p "$repo" && git -C "$repo" init -q
-  (cd "$repo" && "$CLI" up --idle 10s --no-shell --net isolated >/dev/null 2>&1)
+  # 15 s: a run every 3 s, and room for one slow under load (#116: 10 s left a gap near the limit).
+  (cd "$repo" && "$CLI" up --idle 15s --no-shell --net isolated >/dev/null 2>&1)
   for _ in 1 2 3 4 5; do (cd "$repo" && "$CLI" run -- true); sleep 3; done
   check "a box used only through run stays up" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$P-exp\" and .state == \"up\")'"
   until_ok 40 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$P-exp\")'"
-  held "$P-exp" check_match "after expiry run reports it (no throwaway)" "went down after 10s idle" "$(cd "$repo" && "$CLI" run -- true 2>&1)"
+  held "$P-exp" check_match "after expiry run reports it (no throwaway)" "went down after 15s idle" "$(cd "$repo" && "$CLI" run -- true 2>&1)"
   ob down "$P-exp" >/dev/null 2>&1
 }
 
@@ -3662,6 +3667,15 @@ t_omarchy_restart() {
   ob down "$B" >/dev/null
 }
 
+# Whether the box's keyboard panel (Omarchy's KeyboardPanel, the widget's) is open and takes keys
+# (#116): a closing one stays mapped through its fade-out with no keyboard interactivity, so a layer
+# there is not enough: keys sent then were lost, and a keyed row of the widget's flaked under load.
+panel_takes_keys() {
+  [ "$(ob lua -b "$1" 'for _, l in ipairs(hl.get_layers()) do
+    if l.namespace == "omarchy-keyboard-panel" and l.mapped and l.interactivity > 0 then return true end
+  end return false')" = true ]
+}
+
 # The bar widget (plugin/) in a box's own bar, against a stand-in omabox (a list from a file, actions
 # logged) and an xdg-open that blocks like an image viewer left open (finding 64).
 t_widget() {
@@ -3677,7 +3691,7 @@ t_widget() {
   local row='{"mode":"headless","size":"1920x1080@60","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"host","state":"up","peeking":false}'
   jq -n "[$row + {name: \"a\"}, $row + {name: \"b\"}]" > "$H/list.json"; : > "$H/actions"
   # shellcheck disable=SC2329 # called through until_ok and check_fails
-  panel() { ob hyprctl -b "$B" -j layers | grep -q omarchy-keyboard-panel; }
+  panel() { panel_takes_keys "$B"; }
   # shellcheck disable=SC2329 # called through until_ok
   lines_over() { [ "$(grep -c -- "$3" "$1" 2>/dev/null)" -gt "$2" ]; }
   # A list poll that started after this call: the stub logs each `ls` before it reads the list, so
@@ -4292,7 +4306,7 @@ t_clip() {
   printf '#!/bin/sh\nexec %q "$@"\n' "$CLI" > "$H/.local/bin/omabox"; chmod +x "$H/.local/bin/omabox"
   "${in[@]}" sh -c 'printf "via the widget" | wl-copy'
   # shellcheck disable=SC2329 # called through until_ok
-  panel() { ob hyprctl -b "$B" -j layers | grep -q omarchy-keyboard-panel; }
+  panel() { panel_takes_keys "$B"; }
   # shellcheck disable=SC2329 # called through until_ok
   has() { [ "$("${inb[@]}" wl-paste -n 2>/dev/null)" = "$1" ]; }
   # shellcheck disable=SC2329 # called through until_ok
@@ -5138,7 +5152,9 @@ t_wait() {
   check "wait window: it is there" ob wait -b "$B" window 'title:^A$' --focused
   out=$(ob keys -b "$B" --wait -t hello); rc=$?
   check_eq "keys --wait: typing settles" 0 "$rc"
-  check_match "...the cursor hidden by the key press is ignored, said" "ignored .*: cursor" "$out"
+  # omabox-still names the last thing it ignored: the cursor the key press hid, or foot's caret when a
+  # later frame had it (#116: seen under load). Either way not a change that kept it from settling.
+  check_match "...the cursor hidden by the key press (or the caret) is ignored, said" "ignored .*: (cursor|caret\?)" "$out"
   local err; out=$(ob keys -b "$B" --wait --start 1s shift 2>"$TMP/wait.err"); rc=$?; err=$(cat "$TMP/wait.err")
   check_eq "keys --wait of a key that changes nothing: 124" 124 "$rc"
   check_match "...nothing changed" "^unsatisfied: nothing changed in 1\.[0-9]+s" "$out"
@@ -5356,7 +5372,10 @@ t_inspect() {
   check_match "events --mark prints the offset" '^[0-9]+$' "$m1"
   ob run -b "$B" -d --wait -- foot -T evt sleep 600 >/dev/null 2>&1
   check_match "events --since MARK --grep --json" ',evt$' "$(ob events -b "$B" --since m1 --grep '^openwindow>>' --json | jq -r .data)"
-  check_eq "...--since OFFSET is the same" "$(ob events -b "$B" --since m1)" "$(ob events -b "$B" --since "$m1")"
+  # The same start: the first read is where the second begins (#116: the end of run -d --wait's
+  # screen watch, screencast>>0, could be logged between the two reads).
+  local e1 e2; e1=$(ob events -b "$B" --since m1); e2=$(ob events -b "$B" --since "$m1")
+  check "...--since OFFSET reads from the same place" test -n "$e1" -a "${e2:0:${#e1}}" = "$e1"
   check_fails "...nothing from before the mark" bash -c "'$CLI' events -b '$B' --since m1 | grep -q 'omabox>>listening'"
   ob events -b "$B" --mark v1x0 >/dev/null 2>&1; ob events -b "$B" --mark v1.0 >/dev/null 2>&1
   check "events --mark v1.0 leaves the mark v1x0 (a name, not a regex)" ob events -b "$B" --since v1x0

@@ -3460,6 +3460,19 @@ from them.
     expected doubles); t_keys_to_box checks the binds after such a reinstall. lua.lua's encoder was
     already inside its pcall (finding 176) and install.sh already lists python. New checks in
     t_unit_cli, t_unit_guard_settings, t_uwsm_app, t_inspect and t_keys_to_box.
+202. **Suite checks that flaked under load wait for their condition** (2026-10-06, #116). The widget's
+    keyed rows (t_widget, t_clip) sent keys once a panel layer was listed, but Omarchy's KeyboardPanel
+    stays mapped through its fade-out with keyboard interactivity 0 (seen in a box: `1` while priming,
+    `2` open, `0` after Escape), so reopening right after an action found the closing one and the keys
+    were lost; `panel_takes_keys` waits for the layer mapped with interactivity above 0. t_wait's
+    "cursor hidden" check takes the caret too (omabox-still names only the last thing it ignored).
+    t_inspect compares `--since m1` as the start of `--since OFFSET` (events, such as run -d --wait's
+    closing screencast>>0, may land between two reads). t_agent_session's busy box stays busy until
+    told, not for 15 s from a start that took 9 s; t_run_idle's limit is 15 s for a run every 3 s.
+    t_agent_session's fake session ids carry the run's pid: two suites at once (another session's)
+    shared them, and finding 200's session lookup saw the other run's boxes. Five concurrent runs of
+    the six tests on a loaded machine (load 10-13, two 3440x1440 boxes up): old tests failed
+    t_inspect 4 of 5 and the #136 check 5 of 5; the new ones 0 of 5 (and 0 of 3 at three at once).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
