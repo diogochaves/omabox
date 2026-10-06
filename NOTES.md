@@ -3658,8 +3658,11 @@ from them.
     (every box on renderD129): 1983/18/1. 17 were t_output: a headless NVIDIA box draws on labwc's
     Wayland output, which `output drop` refuses by design (finding 210); t_output now checks that
     refusal there and skips the rest. One, t_throwaway_dead's 15 s, timed out under the full run's load
-    and passed alone twice on the RTX. The vfio-pci fallback on the real card is for Diogo (sudo); the
-    fake tree covers it.
+    and passed alone twice on the RTX. On the real card (Diogo's sudo, 2026-10-06), with `gpu nvidia`
+    set: `rtx vfio` (refused while a box held the card: its Hyprland and omabox-labwc hold renderD129
+    and /dev/nvidia0, so the switch never kills a box), then `up` printed the one fallback line and the
+    box rendered on renderD128 (a shot worked); `rtx nvidia`, and the next `up` was on renderD129
+    again, no setting changed.
 215. **A short SKILL.md, the rest in reference.md by section** (2026-10-06, #143). The skill had become
     the largest item omabox puts into an agent's context: 9.8k tokens a load (29 KB), 68 loads in 51
     sessions of other projects, 44 of them subagents', 78M tokens carried, more than every box image
