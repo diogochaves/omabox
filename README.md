@@ -245,7 +245,12 @@ them, and `omabox config KEY default` puts one back.
   `omabox config gpu` lists the GPUs with the values that name each, and marks the one in use.
   When that GPU is not there (an NVIDIA card handed to a VM), `up` renders on the first one and says
   so. `OMABOX_RENDER_NODE=/dev/dri/renderDN` overrides it. Interactive boxes render on your desktop's
-  GPU whatever it says. `auto` stays the default: on a laptop the iGPU saves battery.
+  GPU whatever it says. `auto` stays the default: on a laptop the iGPU saves battery. The widget's
+  Settings has it as a picker on a machine with more than one GPU (a GPU bound to `vfio-pci` is listed,
+  unavailable). `omabox ls` shows each box's GPU, and **`omabox gpu release GPU`** takes down the
+  headless boxes on one (naming each) before you hand it to a VM: a box holds its render node.
+  Tested on a desktop with an AMD iGPU and an NVIDIA dGPU (on `nvidia` and on `vfio-pci`); laptops
+  (hybrid graphics, MUX, eGPU) should work the same but are untested: reports welcome (#119).
 
 Passthrough (SUPER+ALT+ESCAPE) turns itself off when focus leaves the box, or on the first key you
 press with the pointer outside it. With **keys-to-box** on (per box, off by default, until the box

@@ -3775,6 +3775,26 @@ from them.
     interactive row have their slots at the same x, a click in an empty slot runs nothing, `click
     --double` on Down does not confirm and a click after it does, `d d` does not and `d`, 0.5 s, `d`
     does, `n n` starts nothing.
+224. **Each box records its GPU; `gpu release`; a GPU picker in the widget** (2026-10-06, #118, the
+    rest of it after finding 214). `box.json` (and `ls --json`) has a headless box's `render`: node,
+    PCI slot, driver and `fallback` (the setting's GPU was not there, render_fallback); an interactive
+    box has none (finding 95). Plain `ls` puts `GPU: nvidia 0000:01:00.0 (renderD129)` under a box's
+    line on a machine with more than one render node. `omabox gpu release GPU` (a slot, or a kind)
+    takes down the live headless boxes on it, naming each, by their record, or, for a box from before
+    it, by a render node of that GPU one of its processes has open; never an interactive box; refused
+    to a jailed agent (it takes other boxes down). Live on this desk: a box on each GPU, `gpu release
+    amd` took the AMD one only; `gpu release 01:00.0` took the RTX box and box-1 (started before the
+    record, found by its open renderD129). `config --json` lists the display-class GPUs on the PCI
+    bus (`gpus`: slot, driver, lspci's bracketed name, node or null, available, why), so a card on
+    vfio-pci shows (no render node: "bound to vfio-pci"), plus `gpu-auto` and `gpu-now` (by slot).
+    The widget's Settings has "GPU for agent boxes" under "Where windows open" when there is more than
+    one GPU or the setting names one: Auto (naming its GPU), each GPU (`name · driver`, or
+    `unavailable`), a kind or slot set by hand shown as it is; a dim line says where new boxes render,
+    an amber one when the chosen GPU is not there and why; rows' captions name their box's driver
+    (after the mode, before what elides). SYSPCI and LSPCI join DRI/SYSDRM for t_unit_gpu's fake tree
+    (a vfio-bound GPU, one with no lspci name, a non-display device); `gpu release` is unit-tested on
+    a fake runtime dir only, since in the suite it would take real boxes down. t_widget_list drives the
+    picker through the panel's new `face settings` IPC and `inspect`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

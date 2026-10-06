@@ -115,7 +115,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   615.71.09 does not expose the per-process DRM counters `gpu` needs; on that driver it reports no
   percentages.
 - Which GPU: headless boxes render on the one the user's `omabox config gpu` names (`auto`: the first;
-  `up` says when it fell back because that GPU is gone). It is their setting: ask before changing it.
+  `up` says when it fell back because that GPU is gone; `ls --json` has each box's `render`: node, pci,
+  driver, fallback). It is their setting: ask before changing it. `omabox gpu release GPU` takes every
+  box on a GPU down, others' too: the user's to run, never yours.
 
 ## Pointer, in detail
 

@@ -91,6 +91,34 @@ Panel {
     return o
   }
 
+  // The GPUs, for the picker in Settings and the rows' captions (#118): `config --json`'s list of every
+  // GPU on the bus, the one `auto` takes and the one a headless box renders on now, by PCI slot.
+  readonly property var gpus: Array.isArray(cliConfig.gpus) ? cliConfig.gpus : []
+  readonly property string gpuSetting: String(cliConfig.gpu || "auto")
+  readonly property bool gpuShown: gpus.length > 1 || gpuSetting !== "auto"
+  function gpuBySlot(slot) { return gpus.find(function(g) { return g.pci === slot }) }
+  function gpuName(g) { return g ? (g.name || (g.driver + " " + g.pci)) : "" }
+  readonly property string gpuNowName: gpuName(gpuBySlot(cliConfig["gpu-now"])) || "no GPU"
+  readonly property var gpuOptions: {
+    var o = [{ value: "auto", label: "Auto (now: " + (gpuName(gpuBySlot(cliConfig["gpu-auto"])) || "none") + ")" }]
+    gpus.forEach(function(g) {
+      o.push({ value: g.pci, label: gpuName(g) + " · " + (g.available ? g.driver : "unavailable") })
+    })
+    var cur = gpuSetting
+    if (!o.some(function(x) { return x.value === cur }))   // a kind, or a slot set by hand: shown as it is
+      o.push({ value: cur, label: cur === "nvidia" ? "Any NVIDIA GPU" : cur === "amd" ? "Any AMD GPU" : cur === "intel" ? "Any Intel GPU" : cur })
+    return o
+  }
+  readonly property string gpuWhy: { var g = gpuBySlot(gpuSetting); return g && g.why ? g.why : "" }
+  // The setting names a GPU and new boxes render elsewhere: it is not there now (vfio-pci, gone).
+  readonly property bool gpuFallback: {
+    if (gpuSetting === "auto") return false
+    var now = gpuBySlot(cliConfig["gpu-now"])
+    if (!now) return true
+    var kinds = { nvidia: ["nvidia", "nouveau"], amd: ["amdgpu", "radeon"], intel: ["i915", "xe"] }
+    return kinds[gpuSetting] ? kinds[gpuSetting].indexOf(now.driver) < 0 : now.pci !== gpuSetting
+  }
+
   // The card's two faces, as omawin's: the box list, and Settings behind the gear at the top right,
   // which Back (or Esc) leaves.
   property string face: "list"
@@ -259,6 +287,8 @@ Panel {
     if (armedDown === b.name) return "Press again to shut it down"
     if (b.state !== "up") return "dead · Down cleans it up"
     var parts = [b.mode || "?"]
+    // Its GPU (#118), on a machine with more than one: next to the mode, before what elides.
+    if (b.render && gpus.length > 1) parts.push(b.render.driver + (b.render.fallback ? " (fallback)" : ""))
     if (b.mode !== "interactive" && b.size) parts.push(b.size)
     var a = age(b.created); if (a) parts.push(a)
     if (b.plugins && b.plugins.length) parts.push(b.plugins.join(", "))
@@ -429,6 +459,7 @@ Panel {
           // A pick sets the Dropdown's own value, which ends its binding: show the setting again (a
           // refused pick, or `omabox config workspace N` since).
           wsDropdown.value = String(c.workspace || "9")
+          if (gpuDropdown) gpuDropdown.value = String(c.gpu || "auto")
         }
       } catch (e) {}
     }
@@ -788,6 +819,34 @@ Panel {
             }
           }
 
+          // The GPU headless boxes render on (#118), on a machine with more than one (or with one named
+          // in the settings, so it can be set back to Auto).
+          Column {
+            visible: root.gpuShown
+            width: parent.width
+            spacing: Style.space(6)
+
+            SettingText { text: "GPU for agent boxes"; bold: true }
+            SettingText { text: "Headless boxes render here. Interactive boxes always use the desktop's GPU."; dim: true }
+            Dropdown {
+              id: gpuDropdown
+              width: parent.width
+              showLabel: false
+              fontFamily: root.fontFamily
+              options: root.gpuOptions
+              value: root.gpuSetting
+              onChanged: function(v) { root.setSetting("gpu", v) }
+            }
+            SettingText {
+              id: gpuLine
+              text: root.gpuFallback ? "Not there now" + (root.gpuWhy ? " (" + root.gpuWhy + ")" : "") + ": new boxes render on "
+                + root.gpuNowName + " until it is."
+                : "New boxes render on " + root.gpuNowName + "."
+              dim: !root.gpuFallback
+              color: root.gpuFallback ? root.urgent : Qt.darker(root.foreground, 1.4)
+            }
+          }
+
           // Off and greyed while boxes cannot open their window again (an aquamarine without the fix,
           // NOTES finding 125): `config --json` says so, read again each time Settings opens.
           SettingSwitch {
@@ -1045,7 +1104,10 @@ Panel {
     var out = { held: held, newCount: newCount, selected: selectedName, face: face,
       list: { contentY: boxList.contentY, height: boxList.height, contentHeight: boxList.contentHeight },
       newButton: Math.round(newButton.mapToItem(null, 0, 0).y), hintsBottom: Math.round(hints.mapToItem(null, 0, hints.height).y),
-      screen: panel.screenH, rows: [] }
+      screen: panel.screenH, rows: [],
+      gpu: { shown: gpuShown, value: gpuDropdown.value, options: gpuOptions.map(function(o) { return o.label }),
+        line: gpuLine.text, at: (function() { var q = gpuDropdown.mapToItem(null, gpuDropdown.width / 2, gpuDropdown.height / 2)
+          return { x: Math.round(q.x), y: Math.round(q.y) } })() } }
     var vis = boxList.mapToItem(null, 0, 0)
     for (var i = 0; i < boxList.contentItem.children.length; i++) {
       var r = boxList.contentItem.children[i]
@@ -1071,5 +1133,7 @@ Panel {
   IpcHandler {
     target: "chaves.omabox.panel"
     function inspect(): string { return root.inspect() }
+    // The panel open on a face: list or settings (the gear).
+    function face(name: string): void { if (name === "list" || name === "settings") { root.open(); root.openFace(name) } }
   }
 }

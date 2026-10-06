@@ -29,7 +29,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox config gpu auto|nvidia|amd|intel|SLOT`**: the GPU headless boxes render on, kept in the
   settings (a jailed agent's `up` and every terminal get it), falling back to the first GPU when
   that one is gone, where `OMABOX_RENDER_NODE` named a node that could vanish or change number;
-  `omabox config gpu` lists the GPUs, their slots and the one in use (#156).
+  `omabox config gpu` lists the GPUs, their slots and the one in use (#156). The widget's Settings
+  has it as a picker, `ls` shows each box's GPU (`render` in `ls --json`), and **`omabox gpu release
+  GPU`** takes down the headless boxes on a GPU before it goes to a VM (#118).
 - **`omabox output drop [--for DURATION] [--cycles N]` and `output back`**: a headless box's screen
   goes and comes back under its own name, mode and position, as a monitor that drops off on wake
   does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).

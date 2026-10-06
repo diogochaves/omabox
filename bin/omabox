@@ -99,6 +99,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
   omabox output [-b NAME] (drop [--for DURATION] [--cycles N] | back)   the screen gone (a monitor off), and back
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
+  omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
@@ -306,6 +307,11 @@ At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box
 @ up mode gpu run
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
+@ gpu
+\`gpu release GPU\` (a PCI slot, or nvidia, amd, intel: \`omabox config gpu\` lists them) takes down every
+headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
+render node, and on NVIDIA its /dev/nvidia*). Interactive boxes are left alone (they render on the
+desktop's GPU), and so are boxes on other GPUs. Each box's GPU is in \`ls\` and \`ls --json\` (render).
 @ output
 \`output drop\` removes a headless box's only screen, as a monitor that drops off on wake (standby, a
 KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on its return.
@@ -1055,7 +1061,7 @@ bar_settle() {
 # --- up ------------------------------------------------------------------------------------------
 
 # Where render nodes and their devices are; variables so the suite can point them at a fake tree.
-DRI=/dev/dri SYSDRM=/sys/class/drm
+DRI=/dev/dri SYSDRM=/sys/class/drm SYSPCI=/sys/bus/pci/devices LSPCI=lspci
 # The GPU render node the box renders with: $OMABOX_RENDER_NODE; else the first usable one the `gpu`
 # setting names (#156, finding 214), stored so a jailed agent's `up` (the broker's environment) and every
 # terminal get it; else, and when that GPU is not there (an NVIDIA card handed to a VM: vfio-pci), the
@@ -1086,6 +1092,44 @@ gpu_is() {
     *) [ "$(render_slot "$1")" = "$2" ] ;;
   esac
 }
+# Whether render node N is a fallback: the gpu setting names a GPU and N is not it (not there, or not
+# usable), and OMABOX_RENDER_NODE did not choose.
+render_fallback() {
+  local want; want=$(conf_get gpu)
+  [ -z "${OMABOX_RENDER_NODE:-}" ] && [ "$want" != auto ] && ! gpu_is "$1" "$want"
+}
+# The render node of the GPU at PCI SLOT, or nothing.
+slot_node() {
+  local n
+  for n in "$DRI"/renderD*; do [ -e "$n" ] && [ "$(render_slot "$n")" = "$1" ] && { echo "$n"; return; }; done
+  return 0
+}
+# The GPUs on the PCI bus (display class 0x03), as JSON for the widget's picker (#118): each one's slot,
+# driver, name (lspci's, when there is one), render node and whether a box can render on it, with why not.
+# From the bus, not /dev/dri, so a GPU handed to a VM (vfio-pci, no render node) is listed too.
+gpu_json() {
+  local dev slot drv name node avail why
+  for dev in "$SYSPCI"/*; do
+    [[ $(cat "$dev/class" 2>/dev/null) == 0x03* ]] || continue
+    slot=${dev##*/} drv="" name="" why=""
+    [ ! -e "$dev/driver" ] || drv=$(basename "$(readlink -f "$dev/driver")")
+    if command -v "$LSPCI" >/dev/null 2>&1; then
+      # `01:00.0 "VGA ..." "NVIDIA Corporation" "GB203 [GeForce RTX 5070 Ti]" ...`: the model's
+      # bracketed name, or the whole model.
+      name=$("$LSPCI" -mm -s "$slot" 2>/dev/null | awk -F'"' 'NR == 1 { print $6 }')
+      [[ ! $name =~ \[(.+)\] ]] || name=${BASH_REMATCH[1]}
+    fi
+    node=$(slot_node "$slot") avail=false
+    if [ -z "$drv" ]; then why="no driver"
+    elif [ -z "$node" ]; then why="bound to $drv"
+    elif [ ! -r "$node" ] || [ ! -w "$node" ]; then why="no access to $node"
+    else avail=true; fi
+    jq -nc --arg pci "$slot" --arg driver "$drv" --arg name "$name" --arg node "$node" --argjson available $avail --arg why "$why" \
+      '{pci: $pci, driver: $driver, name: $name, node: (if $node == "" then null else $node end), available: $available}
+        + (if $why != "" then {why: $why} else {} end)'
+  done | jq -sc .
+}
+
 # The PCI slot of a render node's GPU: 0000:03:00.0.
 render_slot() { basename "$(readlink -f "$SYSDRM/${1##*/}/device")"; }
 # The `gpu` kind a driver counts as, or nothing.
@@ -1792,6 +1836,12 @@ cmd_up() {
   fi
   # The owner's start time with its pid, as for an agent: a pid reused after a SIGKILLed run is not it.
   local owner_start=""; [ -z "$owner" ] || owner_start=$(proc_start "$owner") || owner_start=""
+  # Where a headless box renders (#118): the node, its GPU's slot and driver, and whether the gpu setting's
+  # GPU was not there (fallback). An interactive box renders where the desktop does (finding 95): none.
+  local render_json=null
+  [ $interactive = 1 ] || render_json=$(jq -nc --arg node "$render" --arg pci "$(render_slot "$render")" \
+    --arg driver "$(render_driver "$render")" --argjson fallback "$(render_fallback "$render" && echo true || echo false)" \
+    '{node: $node, pci: $pci, driver: $driver, fallback: $fallback}')
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
@@ -1804,10 +1854,12 @@ cmd_up() {
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
+    --argjson render "$render_json" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
       xwayland: ($xwayland == 1), autoreload: ($autoreload == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
+      + (if $render != null then {render: $render} else {} end)
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
@@ -4921,11 +4973,55 @@ cmd_gdb() {
   say "gdb watches $what (pid $pid in box '$NAME'): on a crash, every thread's backtrace goes to omabox log -b $NAME gdb"
 }
 
+# gpu release GPU (#118): take down the headless boxes rendering on that GPU (a slot, or nvidia, amd,
+# intel), naming each, so it can be handed elsewhere (a VM: a box holds its render node, and an NVIDIA
+# one its /dev/nvidia*, which keeps a switch to vfio-pci from going through). Never an interactive box
+# (the desktop's GPU) or a box on another GPU. The user's to run: refused to a jailed agent. A box from
+# before box.json named its GPU (no .render) counts when a process of it has that GPU's node open.
+gpu_release() {
+  [ $# = 1 ] || die "gpu release: GPU (a PCI slot, or nvidia, amd, intel; omabox config gpu lists them)"
+  in_jail && die "gpu release takes down every box on a GPU: the user's to run, not a jailed agent's"
+  local want n names=() on node
+  want=$(conf_check gpu "$1") && [ "$want" != auto ] || die "gpu release: not a GPU: $1 (a PCI slot, or nvidia, amd, intel)"
+  for n in $(list_names); do
+    select_box "$n"
+    if [ "$(meta mode)" != headless ] || ! box_alive; then continue; fi
+    node=$(jq -r '.render.node // empty' "$D/box.json" 2>/dev/null) || node=""
+    if [ -n "$node" ]; then
+      on=$(jq -r '.render | "\(.driver) \(.pci)"' "$D/box.json")
+      case $want in
+        nvidia|amd|intel) [ "$(gpu_kind "${on%% *}")" = "$want" ] || continue ;;
+        *) [ "${on#* }" = "$want" ] || continue ;;
+      esac
+    else
+      on=$(box_render_held "$want") || continue
+    fi
+    say "gpu release: taking box '$n' down (it renders on $on)"
+    names+=("$n")
+  done
+  [ ${#names[@]} -gt 0 ] || { say "gpu release: no headless box renders on $want"; return 0; }
+  cmd_down "${names[@]}"
+}
+# For a box with no .render: the driver and slot of the render node of GPU WANT one of its processes
+# has open, or a failure.
+box_render_held() {
+  local p f t
+  for p in $(box_pids 2>/dev/null); do
+    for f in /proc/"$p"/fd/*; do
+      t=$(readlink "$f" 2>/dev/null) || continue
+      if [[ ! $t =~ ^/dev/dri/renderD[0-9]+$ ]] || ! gpu_is "$t" "$1"; then continue; fi
+      echo "$(render_driver "$t") $(render_slot "$t")"; return 0
+    done
+  done
+  return 1
+}
+
 # GPU engine time of this box's processes, as % of wall time, by process name. Host-wide tools sum
 # DRM fdinfo by name, so a box's Hyprland and quickshell merge with the real ones; here a process
 # belongs to the box when it is in the box's pid namespace. Any driver that reports drm-engine-*;
 # a DRM client shared by several fds or processes counts once (drm-pdev + drm-client-id).
 cmd_gpu() {
+  [ "${1:-}" != release ] || { shift; gpu_release "$@"; return; }
   local name="" secs=5 json=0
   while [ $# -gt 0 ]; do
     case $1 in
@@ -5827,8 +5923,15 @@ cmd_config() {
         # its own (finding 133).
         local avail=true want
         if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null && [ "$AQ_FIXED" = 0 ]; then avail=false; fi
+        # The GPUs for the widget's picker (#118): every one on the bus, the one `auto` takes and the one a
+        # headless box renders on now (the setting's, or its fallback), by slot.
+        local now auto; now=$(OMABOX_RENDER_NODE="" render_node 2>/dev/null) || now=""
+        auto=$(render_nodes | head -n 1)
         for k in "${CONF_KEYS[@]}"; do printf '%s\t%s\n' "$k" "$(conf_get "$k")"; done |
-          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s --argjson a "$avail" --arg v "$(cat "$ROOT/VERSION")" 'add + {"confirm-close-available": $a, version: $v}'
+          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s --argjson a "$avail" --arg v "$(cat "$ROOT/VERSION")" --argjson gpus "$(gpu_json)" \
+            --arg now "${now:+$(render_slot "$now")}" --arg auto "${auto:+$(render_slot "$auto")}" \
+            'add + {"confirm-close-available": $a, version: $v, gpus: $gpus,
+              "gpu-auto": (if $auto == "" then null else $auto end), "gpu-now": (if $now == "" then null else $now end)}'
       else
         for k in "${CONF_KEYS[@]}"; do echo "$k=$(conf_get "$k")"; done
       fi ;;
@@ -5978,7 +6081,7 @@ box_json() {
     --arg sh "$sh" --argjson crashes "$crashes" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
       plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
-      hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null),
+      hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false}'
 }
@@ -6008,7 +6111,7 @@ cmd_ls() {
   # IDLE: minutes since the box was last used, of its limit (it goes down when they meet). SHELL (#147):
   # running, restarting or gone, and its crashes since up (+N, as running+2); - for none or a box not up.
   printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' NAME MODE SIZE STATE SHELL NET IDLE PLUGINS
-  local used
+  local used gpus; gpus=$(render_nodes | wc -l)
   for n in $(list_names); do
     select_box "$n"
     # A box going down while this lists them has no box.json any more: left out, not the end of the
@@ -6028,6 +6131,9 @@ cmd_ls() {
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
     # keys-to-box (finding 117), when on: SUPER keys follow focus into it.
     [ ! -f "$D/keys-to-box" ] || echo "  keys-to-box: on (SUPER keys go to it while its window has focus and the pointer)"
+    # Its GPU (#118), on a machine with more than one: the driver and slot, and when it is a fallback.
+    [ "$gpus" -lt 2 ] || jq -r '.render // empty | "  GPU: \(.driver) \(.pci) (\(.node | sub(".*/"; "")))"
+      + (if .fallback then ", the gpu setting'"'"'s GPU was not there" else "" end)' "$D/box.json" 2>/dev/null || true
   done
 }
 
