@@ -4260,6 +4260,57 @@ t_monitors() {
   ob down "$B" >/dev/null
 }
 
+# wait and --wait on a box with more monitors (#162, finding 231): the screen watched is all of them,
+# in layout coordinates. One at scale 1.6 holds a cell that never stops changing, a terminal to type
+# into is on the third; the same again after the main screen is dropped and back (it is advertised
+# last then: the old tool watched the first output advertised, and named its pixels as the screen's).
+t_monitors_wait() {
+  local B=$P-monw n out rc g w when
+  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
+  [ -n "$n" ] || { skip "monitors wait" "no render node here but NVIDIA's, whose boxes refuse monitors"; return; }
+  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
+    --monitor 1080x1920,below >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
+  ob pointer -b "$B" -- move 2300 200 >/dev/null
+  ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
+  ob wait -b "$B" window 'title:^N$' >/dev/null
+  w=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "N") | "\(.at[0]) \(.at[1]) \(.at[0] + .size[0]) \(.at[1] + .size[1])"')
+  for when in "" " (after output drop and back)"; do
+    out=$(ob wait -b "$B" still --timeout 2s); rc=$?
+    check_eq "a cell changing on the second monitor: wait still 124$when" 124 "$rc"
+    g=$(sed -n 's/.*--ignore "\([^"]*\)".*/\1/p' <<<"$out")
+    check "...named as an --ignore in the layout, a cell inside its window ($g in $w)$when" cell_in "$g" "$w"
+    check_eq "...--ignore it: still$when" 0 "$(ob wait -b "$B" still --ignore "$g" >/dev/null; echo $?)"
+    check_eq "...--window on it: 124, and still with --ignore$when" "124 0" \
+      "$(ob wait -b "$B" still --window 'title:^N$' --timeout 1500ms >/dev/null; echo $?) $(ob wait -b "$B" still --window 'title:^N$' --ignore "$g" >/dev/null; echo $?)"
+    out=$(ob wait -b "$B" change -g "1920,0 800x450" --json)
+    check_eq "...wait change -g on that monitor: changed there$when" "satisfied $g" \
+      "$(jq -r '"\(.result) \(.change.x),\(.change.y) \(.change.w)x\(.change.h)"' <<<"$out")"
+    check_eq "...-g on the main screen only: still$when" 0 "$(ob wait -b "$B" still -g "0,0 1920x1080" >/dev/null; echo $?)"
+    check_eq "...-g across the main screen and that one: 124$when" 124 "$(ob wait -b "$B" still -g "1800,0 300x300" --timeout 1s >/dev/null; echo $?)"
+    if [ -z "$when" ]; then
+      ob pointer -b "$B" -- move 2400 1500 >/dev/null
+      check_eq "run -d --wait of a window on the third monitor: settled" 0 \
+        "$(ob run -b "$B" -d --wait --ignore "$g" -- foot -T T sh -c 'cat > /tmp/typed' >/dev/null 2>&1; echo $?)"
+    fi
+    out=$(ob keys -b "$B" --window 'title:^T$' --wait --ignore "$g" -t x); rc=$?
+    check_eq "keys --wait into a window on the third monitor: settled$when" 0 "$rc"
+    check_match "...on a change there (from 1920,450)$when" "last change .* at (19[2-9][0-9]|2[0-9]{3}),(4[5-9][0-9]|[5-9][0-9]{2}|[0-9]{4}) " "$out"
+    check_eq "...with -g on that monitor: settled$when" 0 \
+      "$(ob keys -b "$B" --window 'title:^T$' --wait -g "1920,450 1080x1920" -t y >/dev/null; echo $?)"
+    [ -n "$when" ] || ob output -b "$B" drop --for 500ms >/dev/null
+  done
+  ob keys -b "$B" --window 'title:^T$' Return >/dev/null
+  check "what was typed reached it" until_ok 5 bash -c "[ \"\$('$CLI' run -b '$B' -- cat /tmp/typed)\" = xyxy ]"
+  ob down "$B" >/dev/null
+}
+# cell_in "X,Y WxH" "X0 Y0 X1 Y1": the rectangle is inside, and the size of a terminal cell.
+cell_in() {
+  [[ $1 =~ ^([0-9]+),([0-9]+)\ ([0-9]+)x([0-9]+)$ ]] || return 1
+  local x=${BASH_REMATCH[1]} y=${BASH_REMATCH[2]} cw=${BASH_REMATCH[3]} ch=${BASH_REMATCH[4]} x0 y0 x1 y1
+  read -r x0 y0 x1 y1 <<<"$2"
+  [ "$x" -ge "$x0" ] && [ "$y" -ge "$y0" ] && [ $((x + cw)) -le "$x1" ] && [ $((y + ch)) -le "$y1" ] && [ "$cw" -le 20 ] && [ "$ch" -le 30 ]
+}
+
 # An interactive box's monitors (#123), each a window on the "desktop": all in a box standing in for
 # the host (finding 26), with a terminal focused on its workspace 1 and the box on 9.
 t_monitors_window() {
@@ -5881,6 +5932,12 @@ t_unit_wait() {
   out=$(bash -c "$hint" _ "$TMP/lib/bin/omabox" "$TMP" \
     "unsatisfied changing t=10000 first=10 last=9990 change=0,0,1920,1080 ignored=- why=- late=0,0,1000,1080 frames=500" 2>&1)
   check_eq "...over half the screen: no hint" 'unsatisfied: still changing after 10.00s (last change 9.99s at 0,0 1920x1080)' "$out"
+  # Several monitors (#162, finding 231): a quarter of what they cover, not of the box around them
+  # (3000x2370 here, with gaps); the tool says so as area=N.
+  out=$(bash -c "${hint/ready 1920x1080/ready 3000x2370 area=3240000}" _ "$TMP/lib/bin/omabox" "$TMP" \
+    "unsatisfied changing t=10000 first=10 last=9990 change=1920,450,1080,900 ignored=- why=- late=1920,450,1080,900 frames=500" 2>&1)
+  check_eq "...several monitors: a quarter of their own area (area=), not of the box around them" \
+    'unsatisfied: still changing after 10.00s (last change 9.99s at 1920,450 1080x900)' "$out"
   local out rc=0
   out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --die-with-parent \
         env -i "$ROOT/tools/still/omabox-still" still --timeout 100 2>&1) || rc=$?
@@ -6245,7 +6302,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_monitors_wait t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

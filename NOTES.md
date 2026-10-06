@@ -3546,11 +3546,12 @@ from them.
     `--strict` keeps, said as `ignored WxH at X,Y: --ignore`. `--ignore "X,Y WxH"` (repeatable, geom_parse's
     forms) is the CLI's; `-g` on `--wait` watches only that part, as `wait still -g` did. The tool also
     reports `late=`: one box around every significant change in the second half of `--timeout`. A 124
-    "still changing" whose late box is at most a quarter of the screen ends with `from 5.00s on it
+    "still changing" whose late box is at most a quarter of the screen (of the monitors watched, since
+    finding 231) ends with `from 5.00s on it
     changed only at X,Y WxH: --ignore "X,Y WxH" if that is an animation`; it can be narrower than an
     animation that grows (a counter gaining a digit), and the action's own change falls in the first
     half, so a `--wait` gets the hint too. JSON: `late_changes`. Checks: t_unit_wait (the refusals,
-    the hint and no hint on half the screen, from a fake tool line), t_wait (a foot redrawing one cell
+    the hint and no hint on over a quarter of the screen, from a fake tool line), t_wait (a foot redrawing one cell
     20 times a second: 124 with the hint, `wait still --ignore` it satisfied, `--strict` too, keys
     --wait 124 without it and settled with it, keys --wait -g elsewhere "nothing changed"); on the old
     code the options were "unknown" and there was no hint.
@@ -3832,6 +3833,7 @@ from them.
     window on the host). Checked in t_monitors on the AMD iGPU: three monitors with their modes, scales
     and positions, a bar on each, the pointer and a click on the second and third moving the active
     workspace there, `shot --monitor` 1080x1920, a reload keeping all three, remove and add again.
+    (`wait` and `--wait` still watched only the first output advertised: finding 231.)
     **NVIDIA boxes refuse it.** Their screen is labwc's Wayland output (finding 77), and a headless
     output there fails as the first did (GBM cannot allocate: "REJECTED preferred mode"). A second
     `output create wayland` does come up, takes a mode and scale (1080x1920, 2560x1440 at 1.6), but it
@@ -3930,6 +3932,35 @@ from them.
     name, which the box linked to a host file: untouched, the log the box's); t_unit_seed_copy also
     checks that a folder seed merges with what DEST had. On b02dfcc the t_gdb and t_replace checks
     fail.
+231. **`wait` and `--wait` watch every monitor, in layout coordinates** (2026-10-06, #162). omabox-still
+    bound the first `wl_output` the compositor advertised ("a box has one screen", finding 82) and
+    compared that output's pixels with `-g`, `--window`, `--ignore` and the cursor's rectangle, which
+    are the layout's. On a box with `--monitor` (finding 226): a spinner on HEADLESS-3 read `satisfied:
+    still`; `keys --wait -t x` into a window there and `run -d --wait -- foot` opening on a scale-1.6
+    monitor were 124 "nothing changed" (the x was typed); `wait still --window` on monitor 2 and `-g
+    "1920,0 800x450"` were "not on the screen"; and after `output drop`/`back` the re-created HEADLESS-2
+    is advertised last, so the tool watched HEADLESS-3 and named its own pixels as the screen's
+    (`--ignore "42,48 12x17"` for a cell at 1946,30). Now it binds every output there when it starts,
+    and xdg-output (`zxdg_output_manager_v1`, its XML vendored as screencopy's is) gives each one's place
+    and logical size; the buffer's size over that is its scale. It captures the outputs the region
+    touches (all without one), each with its own buffers and frame in flight; every rectangle in is
+    mapped once into each output's pixels (rounded outwards), and every change out back into the layout,
+    so `change=`, `ignored=`, `late=` and the hint are layout coordinates at any scale. A caret is thin
+    in layout pixels. The plain copy taken before an answer is one per output, and the answer waits for
+    all of them. `ready WxH area=N`: the box around the outputs watched and their own area, which the
+    hint's "a quarter of the screen" (finding 208) now uses, so the gaps of a mixed layout do not count.
+    A watched output unplugged mid-wait is a change of all of it and is no longer watched (none left:
+    unknown, "lost the box's screen"); one plugged in mid-wait is not watched; one that moves is a change
+    of all of it. Without xdg-output (not Hyprland) it watches the first output, as before. Rotated
+    outputs are not handled (a box has none). Single monitor, same speed: `wait still` on an idle NVIDIA
+    box 354 ms (old) and 356 ms (new) wall, mean of 20 each, the tool's own elapsed 0.304 and 0.305 s;
+    the tool alone, from connecting to its answer, 10.3 and 11.2 ms (one more round trip). Checked in t_monitors_wait on the AMD iGPU (three monitors, one at 1.6: the cell named
+    inside its window, `--ignore` it, `--window` and `-g` on it, `-g` across two monitors and on the main
+    one, `run -d --wait` and `keys --wait` (and with `-g`) into a terminal on the third, all again after
+    `output drop`/`back`; 19 of its checks fail with the old tool) and t_unit_wait (the hint's
+    area); t_wait unchanged on NVIDIA's WAYLAND-1. By hand in a box: a monitor
+    removed and one added mid-wait, a drop mid-wait (with `-g` on the main screen: unknown, its only
+    output gone).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -467,7 +467,7 @@ omabox shot --monitor HEADLESS-4          # one monitor; omabox peek --monitor H
 ```
 
 The first monitor is `--size`'s. Click, drag and pointer coordinates are the layout's (`shot` of the
-whole layout shows where each monitor is). They survive a config reload. Not in an NVIDIA box (it draws
+whole layout shows where each monitor is), and so are `wait`'s and `--wait`'s, which watch every monitor. They survive a config reload. Not in an NVIDIA box (it draws
 on one Wayland output of its own: `omabox config gpu` another GPU).
 
 In a box you drive (`up --interactive --monitor 1280x720`, or `monitor add`), each monitor is a window

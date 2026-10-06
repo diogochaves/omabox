@@ -80,6 +80,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   browser); the report is kept (#126).
 - **A box's session bus is at `$XDG_RUNTIME_DIR/bus`, and its runtime dir is 0700**, as in a
   session: helpers that check their bus refused the old one (a socket in `/tmp`, a 0755 dir) (#153).
+- **`wait still`, `wait change` and every `--wait` watch every monitor of a box**, in the layout's
+  coordinates as `click` and `shot -g` take them: a change on another monitor (a spinner, typing into
+  a window there, an app opening at scale 1.6) went unseen, `-g` or `--window` there was "not on the
+  screen", and after `output drop`/`back` the regions named were another monitor's own pixels (#162).
 - **The bar widget no longer logs `TypeError`s while a bar rebuilds** (a `bar.layout` edit with the
   widget inside another plugin): it falls back to the theme's colours while its bar is gone (#155).
 - **A box can no longer make `gdb --watch` write to your files**: it appended its header to whatever

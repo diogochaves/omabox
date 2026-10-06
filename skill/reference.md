@@ -184,6 +184,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `keys`, `click`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM]
   [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s for `run
   -d`), then `--quiet` with none. `-g` watches only that part of the screen.
+- The screen watched is every monitor of the box. `-g`, `--window`, `--ignore` and the regions the line
+  names are the layout's coordinates, as for `click` and `shot -g`.
 - `--ignore "X,Y WxH"` (up to 16; `--strict` keeps them) leaves out an animation that never stops. A 124
   "still changing" whose late changes were all in one small region ends with `--ignore "X,Y WxH" if
   that is an animation`: add it if the shot shows a spinner or a glow there, not the app under test.

@@ -236,7 +236,8 @@ count, and are said (--strict counts them). \`keys\`, \`click\`, \`drag\` and \`
 [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--json]: a change within --start (5s for
 run -d), then quiet. --ignore "X,Y WxH" (up to 16) leaves out an animation that never stops (a
 spinner, a glow); a 124 "still changing" names it when one small region kept changing. -g watches
-only that part of the screen.
+only that part of the screen. The screen is every monitor; -g, --window and --ignore pick parts of
+it, all in the layout's coordinates (as click's).
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
@@ -4258,12 +4259,14 @@ settle_end() {
       else msg+=" (no change${ign:+; ignored $ign})"; fi ;;
     unsatisfied:nothing) msg="nothing changed in $(ms_s "${f[t]}")${ign:+ (ignored $ign)}" ;;
     unsatisfied:changing) msg="still changing after $(ms_s "${f[t]}") (last change $(ms_s "${f[last]}") at $geo)"
-      # Kept from its answer by one small part of the screen (at most a quarter): an animation there
-      # (a spinner, a glow) is --ignore'd by name (#131).
-      local la=${f[late]:--} lw lh
-      if [ "$la" != - ] && [[ $scr =~ ^([0-9]+)x([0-9]+)$ ]]; then
+      # Kept from its answer by one small part of the screen (at most a quarter of what was watched:
+      # `ready WxH area=N`, N the monitors' own area, finding 231): an animation there (a spinner, a
+      # glow) is --ignore'd by name (#131).
+      local la=${f[late]:--} lw lh area=""
+      [[ $scr =~ ^([0-9]+)x([0-9]+)( area=([0-9]+))?$ ]] && area=${BASH_REMATCH[4]:-$((BASH_REMATCH[1] * BASH_REMATCH[2]))}
+      if [ "$la" != - ] && [ -n "$area" ]; then
         IFS=, read -r _ _ lw lh <<<"$la"
-        if [ $((4 * lw * lh)) -le $((BASH_REMATCH[1] * BASH_REMATCH[2])) ]; then
+        if [ $((4 * lw * lh)) -le "$area" ]; then
           la=$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"$la")
           msg+="; from $(ms_s $((f[t] / 2))) on it changed only at $la: --ignore \"$la\" if that is an animation"
         fi
