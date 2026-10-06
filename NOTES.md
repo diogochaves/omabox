@@ -3341,6 +3341,19 @@ from them.
     as --env-file's lines (after them, so the flag wins; --pass wins over both), with up's KEY=VAL
     and reserved-name checks. On a throwaway box it stays the box's. Checks in t_unit_inspect,
     t_inspect and t_main; each failed on the old code in a worktree.
+192. **A test's `pkill -x labwc` no longer ends the box** (2026-10-06, #128). A headless box's parent
+    compositor is a labwc in the box, run with `-S` so the box ends with it (finding 63); an agent that
+    started its own nested labwc and stopped it with `omabox run -- pkill -x labwc` killed the box,
+    and the next command printed nsenter's raw "cannot open /proc/N/ns/user". session.sh now starts
+    it through a link, `$XDG_RUNTIME_DIR/omabox-labwc -> /usr/bin/labwc`: a process's name (comm, what
+    `pkill -x` and `pgrep -x` match) is the name of the path given to execve, so `exec -a` would not
+    have done. Nothing in omabox looked for it by name (checked); its log is still `labwc`. And when
+    `run`'s command fails and the box is gone after it, `run` says "box 'NAME' went down while this
+    command ran" (Hyprland, quickshell: the box's own; kill by PID); for a command killed (137) it
+    waits up to 2 s for the box's PID 1 to be gone, which outlives its children by a moment, so other
+    failures are not slowed. `share/` scripts are safe to edit under running boxes (bin/omabox ends in
+    `main "$@"; exit`, session.sh is one `{ }` block: bash has parsed them whole). t_own_processes; on
+    the old code its five checks failed (worktree).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

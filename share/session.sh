@@ -120,8 +120,11 @@ fi
 # wl_compositor v6 and xdg_wm_base v6). DISPLAY is dropped for Hyprland so nothing wakes labwc's lazy
 # Xwayland. -S: labwc ends when Hyprland does, and then so does the box, as in the interactive branch;
 # otherwise a box whose Hyprland died reads `up` while nothing in it works (finding 63).
+# Started through a link named omabox-labwc (#128): a process's name (comm, what pkill -x matches) is
+# the name of the path it was started by, so a test's own `pkill -x labwc` no longer ends the box.
 export WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDER_DRM_DEVICE=$OMABOX_RENDER_NODE
-/usr/bin/labwc -S /opt/omabox/share/start-hyprland.sh > "$HOME/labwc.log" 2>&1
+ln -sf /usr/bin/labwc "$XDG_RUNTIME_DIR/omabox-labwc"
+"$XDG_RUNTIME_DIR/omabox-labwc" -S /opt/omabox/share/start-hyprland.sh > "$HOME/labwc.log" 2>&1
 kill -KILL -1
 exit 0
 }

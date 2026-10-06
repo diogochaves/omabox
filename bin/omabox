@@ -2646,6 +2646,13 @@ cmd_run() {
     local rc=0
     box_exec "$@" || rc=$?
     touch "$D/used" 2>/dev/null || true
+    # A box ended from inside (#128: a test's pkill of the box's own compositor or shell) left only
+    # nsenter's raw line, or the command's own kill, to go by.
+    # A command the box's end killed (137) can return a moment before its PID 1 is gone: waited for
+    # then only, so a failing test is not slowed.
+    if [ $rc = 137 ]; then local _; for _ in 1 2 3 4 5 6 7 8 9 10; do box_alive || break; sleep 0.2; done; fi
+    [ $rc = 0 ] || box_alive ||
+      say "box '$NAME' went down while this command ran (its Hyprland, omabox-labwc and quickshell are the box's own: stop your own process by its PID; why: omabox log -b $NAME all)"
     return $rc
   fi
   [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"

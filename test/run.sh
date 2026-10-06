@@ -3479,6 +3479,23 @@ t_uwsm_app() {
   ob down "$B" >/dev/null
 }
 
+# #128: the box's own compositor is not a test's to end by name, and a box ended from inside is said so.
+t_own_processes() {
+  local B=$P-own out rc
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  check_eq "the box's labwc is named omabox-labwc (#128)" 1 "$(ob run -b "$B" -- pgrep -cx omabox-labwc)"
+  check_fails "...so nothing in it is named labwc" ob run -b "$B" -- pgrep -x labwc
+  ob run -b "$B" -- pkill -x labwc >/dev/null 2>&1
+  # shellcheck disable=SC2329 # called through holds
+  is_up() { [ "$("$CLI" ls --json | jq -r --arg n "$B" '[.[] | select(.name == $n) | .state][0] // "gone"')" = up ]; }
+  check "pkill -x labwc in a box leaves it up" holds 2 is_up
+  check "...its Hyprland answering" ob hyprctl -b "$B" version
+  out=$(ob run -b "$B" -- sh -c 'pkill -x Hyprland; sleep 10' 2>&1); rc=$?
+  check_match "a box ended from inside: said in words" "box '$B' went down while this command ran" "$out"
+  check "...not exit 0" test "$rc" != 0
+  ob down "$B" >/dev/null 2>&1
+}
+
 # `omarchy restart shell` (Omarchy's own, finding 131) in a box: its launcher runs the bar under
 # systemd-cat, which a box lacked, and the bar was gone. It and `omabox restart-shell`, in turns, leave
 # one shell each time.
@@ -5252,7 +5269,7 @@ t_inspect() {
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_held_keys t_up_again t_plugin_check t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
