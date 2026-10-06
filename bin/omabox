@@ -4670,13 +4670,16 @@ guard_claude() {
 
 # guard_codex state|on|off. TOML is edited as text (our block only) and the result checked with
 # python's tomllib: a config whose own shell_environment_policy.set would clash is refused, untouched.
-# Then its hook in hooks.json; on only when both are there and current.
+# Then its hook in hooks.json; on only when both are there and current. The system's python (#152), not
+# PATH's: Omarchy's mise puts its shims first, and a shim can fail (an untrusted config under changed
+# XDG dirs) or be a Python with no tomllib.
 guard_codex() {
   local file hooks; file=${CODEX_HOME:-$HOME/.codex}/config.toml hooks=${CODEX_HOME:-$HOME/.codex}/hooks.json
   [ ! -L "$file" ] || file=$(readlink -f "$file")
   [ "$1" != on ] || guard_hooks "$hooks" "$GUARD_CODEX_HOOK" check
   local out
-  out=$(python3 - "$1" "$file" "$GUARD_CODEX" <<'PY'
+  [ -x /usr/bin/python3 ] || die "guard: Codex's config is checked with /usr/bin/python3 (package python), which is not installed"
+  out=$(/usr/bin/python3 - "$1" "$file" "$GUARD_CODEX" <<'PY'
 import os, sys, tomllib
 mode, path, block = sys.argv[1:]
 try:

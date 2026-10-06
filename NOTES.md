@@ -3307,6 +3307,18 @@ from them.
     session) and the skill now say `!` is guarded and not to hand the user a desktop command that way:
     `omabox host -- CMD` once they asked, or their own terminal. The note changed, so `omabox guard`
     reads a hook from before as outdated; `omabox guard on claude` (or install.sh's offer) renews it.
+189. **The guard reads Codex's config with the system's Python** (2026-10-06, #152). `guard_codex`
+    ran `python3` from PATH. Omarchy activates mise (`default/bash/init`, and `env-bootstrap` puts its
+    shims on PATH for login shells and the session), so once a mise tool brings Python, `python3` is
+    a shim. With `XDG_CONFIG_HOME` elsewhere and the working directory under the real HOME, mise reads
+    the real `~/.config/mise/config.toml` as a project config of an ancestor directory, looks for its
+    trust under `XDG_STATE_HOME`, finds none and exits with an error instead of running Python (from
+    /tmp it runs; an untrusted project `mise.toml` falls back to /usr/bin/python3). The suite's
+    t_unit_install fakes those dirs, so two of its checks failed on any such machine: the Codex line
+    became `codex: mise ERROR …`, which their grep for `^Codex` dropped. Now `/usr/bin/python3`
+    (package `python`, in install.sh's list), refused in words if missing; the checks match
+    case-insensitively so a failing state shows as one; t_unit_guard_settings checks the state with a
+    failing `python3` first on PATH.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

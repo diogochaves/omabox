@@ -3417,11 +3417,11 @@ t_unit_install() {
     "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*you said no before.*: omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
   printf 'y\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
   check_match "...in a terminal, yes updates Claude Code's and leaves Codex off" "Claude Code .*: on Codex .*: off" \
-    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+    "$("${guard[@]}" | grep -iE '^(Claude Code|Codex)' | tr '\n' ' ')"
   rm "$h/.config/omabox/guard-declined"; printf '%s\n' "$old" > "$h/.claude/settings.json"
   printf 'n\ny\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
   check_match "...no to the update and yes to turning it on: only Codex's changes" "Claude Code .*: outdated Codex .*: on" \
-    "$("${guard[@]}" | grep -E '^(Claude Code|Codex)' | tr '\n' ' ')"
+    "$("${guard[@]}" | grep -iE '^(Claude Code|Codex)' | tr '\n' ' ')"
   check_fails "...and the no to the update is not remembered" test -e "$h/.config/omabox/guard-declined"
   rm -rf "$h/.codex"
   rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
@@ -3687,6 +3687,12 @@ t_unit_guard_settings() {
   local h=$TMP/gh s out
   mkdir -p "$h/.claude"; s=$h/.claude/settings.json
   g() { HOME=$h "$CLI" guard "$@" 2>&1; }
+  # #152: Codex's config is read with the system's python, not PATH's (Omarchy's mise puts its shims
+  # first, and one can fail: an untrusted config once the XDG dirs change).
+  local ph=$TMP/gh-py; mkdir -p "$ph/.codex" "$TMP/badpy"
+  printf '#!/bin/sh\necho "mise ERROR stub" >&2\nexit 1\n' > "$TMP/badpy/python3"; chmod +x "$TMP/badpy/python3"
+  check_match "Codex's state with a failing python3 first on PATH (#152)" "^Codex \(.*\): off$" \
+    "$(HOME=$ph PATH="$TMP/badpy:$PATH" "$CLI" guard 2>&1 | grep -i '^codex')"
   check_match "no file: off, and shows what on does" "off.*omabox guard on" "$(g | tr '\n' ' ')"
   g on >/dev/null
   check_eq "on creates it with our hook" 1 "$(jq '[.hooks.SessionStart[].hooks[] | select(.command | contains("omabox-guard"))] | length' "$s")"
