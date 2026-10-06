@@ -135,7 +135,9 @@ shots show the pointer (hover evidence: a `-g` crop of the screen); window shots
 text. Take the smallest that shows it: `shot --window SEL` for one app, `-g "X,Y WxH"` for the part
 under test (a menu, a field, a bar widget), `--fit 1280` to check a whole screen's layout (full size
 to read small text); click on those with `--in`. `--wait`'s `at X,Y WxH` is the last change only:
-where to look, not everything that changed.
+where to look, not everything that changed. A colour is `omabox pixel X Y` (`--window SEL`: the app's
+own, before Omarchy's window opacity blends it), never read off a shot; `shot -g "X,Y 40x30" --zoom 8`
+shows a 1 px border or a glyph's edge unblended.
 
 **The pointer is test state.** Under Omarchy's focus-follows-mouse the window the pointer rests on,
 or last passed over, takes focus, and gets it back when a menu or panel closes. A box's pointer starts

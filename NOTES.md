@@ -3554,6 +3554,22 @@ from them.
     20 times a second: 124 with the hint, `wait still --ignore` it satisfied, `--strict` too, keys
     --wait 124 without it and settled with it, keys --wait -g elsewhere "nothing changed"); on the old
     code the options were "unknown" and there was no hint.
+209. **`omabox pixel X Y` and `shot -g … --zoom N`** (2026-10-06, #133). Checking a colour (a theme role
+    reaching a widget, a hover tint, a 1 px border) took a shot and then one `magick … %[pixel:]` call per
+    pixel (Python's PIL is not on the host: 13 failed tries in the usage study), and small detail a
+    `magick -scale` of each shot. `pixel` grabs the box around its points once as PPM (`grim -t ppm`: no
+    encoding, read with od, no image tool) and prints `#rrggbb`, `X,Y #rrggbb` for several, a JSON line
+    each with --json; `--window SEL` reads the window's own pixels (grim -T, grabbed twice as shot does),
+    `--in SHOT` maps a shot's pixels as click does; jailed agents get it (relay_in). Seen while testing
+    it: a foot window drawn #123456 reads #123355 on the screen (Omarchy's window opacity blends it
+    with the background) and the screen pixel under the pointer is the pointer's, so `--window` is the
+    app's colour and the screen's is what is shown; help says so. `--zoom N` (2-16, with -g, at most
+    2000 px a side) is ImageMagick's `-scale N00%` of the grab: grim's own `-s` blends neighbours (a
+    red/green edge scaled by 4 had five colours between), and a whole-number -scale repeats pixels.
+    magick is in Omarchy's base packages, not omabox's dependencies: --zoom says so when it is
+    missing. Checks: t_unit_pixel (refusals), t_pixel (a background set with `hl.config`, a foot of a
+    known colour through --window and --json, refusals off screen and window, a 10x10 zoom across the
+    window's corner is 80x80 with the plain crop's colours only, pixel and click --in it map back).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -282,7 +282,7 @@ servers), then:
   entry's name (`StartupWMClass`), and `omabox log apps` what the launcher ran. A launcher start goes
   through omabox's `uwsm-app` stand-in: a plain process, without the user's uwsm environment.
 - **Theme switch while it is open**: `omabox run -- omarchy-theme-set NAME`, `omabox wait still`,
-  `omabox shot --window myapp`. The colours are in the box's
+  `omabox shot --window myapp`, `omabox pixel --window myapp X Y` for a colour. The colours are in the box's
   `~/.local/state/omarchy/current/theme/colors.toml`; `omarchy-theme-set` replaces that whole
   directory (`rm -rf`, then `mv`), so an app watching a file or the directory itself loses track:
   watch `current/`. A malformed theme: edit the box's copy of that file.

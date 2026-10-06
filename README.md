@@ -94,6 +94,7 @@ omabox run -d -- ./build/src/myapp     # launch an app inside (detached; prints 
 omabox shot                            # screenshot; prints the PNG path (--fit 2000: scaled down)
 omabox windows                         # the box's windows, where they are, what covers them
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
+omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail (next release)
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
 omabox keys -t 'hello world' Return    # type text, then press a key
 omabox keys --wait super+space         # ...and return once the screen has settled (no sleeps)

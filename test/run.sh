@@ -5022,6 +5022,47 @@ t_window() {
   ob down "$B" >/dev/null
 }
 
+# pixel and shot --zoom (#133, finding 209): what is refused before any box is asked.
+t_unit_pixel() {
+  check_match "pixel: X Y needed" "need X Y" "$(ob pixel -b "$P-x" 5 2>&1)"
+  check_match "pixel: a bad coordinate" "bad argument" "$(ob pixel -b "$P-x" 1 x 2>&1)"
+  check_match "pixel: --in or --window" "not both" "$(ob pixel -b "$P-x" --in a.png -w x 1 1 2>&1)"
+  check_match "pixel: at most 32 points" "at most 32" "$(ob pixel -b "$P-x" $(seq 66) 2>&1)"
+  check "pixel is a jailed agent's" lib broker_check pixel
+  check_match "shot --zoom needs -g" "goes with -g" "$(ob shot -b "$P-x" --zoom 4 2>&1)"
+  check_match "shot --zoom 2-16" "takes 2-16" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 17 2>&1)"
+  check_match "shot --zoom or --fit" "not both" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 4 --fit 100 2>&1)"
+  check_match "shot --zoom past 2000 px refused" "is 2400x80: at most 2000 px" "$(ob shot -b "$P-x" -g "0,0 300x10" --zoom 8 2>&1)"
+}
+
+# pixel and shot --zoom (#133, finding 209) in a box: a known background, a terminal of a known colour.
+t_pixel() {
+  local B=$P-pix o=$TMP/pix out
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  mkdir -p "$o"
+  ob lua -b "$B" 'hl.config({ misc = { background_color = 0xff345678 } })' >/dev/null
+  check_eq "pixel X Y: the screen's colour there" "#345678" "$(ob pixel -b "$B" 3 3)"
+  ob run -b "$B" -d -q --wait -- foot -T K -o colors-dark.background=123456 -o colors-dark.alpha=1.0 sleep 600 >/dev/null 2>&1
+  check_eq "pixel --window: the window's own pixels" $'0,0 #123456\n40,30 #123456' "$(ob pixel -b "$B" -w 'title:^K$' 0 0 40 30)"
+  check_eq "...--json, a line each" '{"x":40,"y":30,"hex":"#123456","r":18,"g":52,"b":86}' "$(ob pixel -b "$B" -w 'title:^K$' --json 40 30)"
+  check_match "a point off the screen refused" "outside the screen" "$(ob pixel -b "$B" 5000 1 2>&1)"
+  check_match "...off the window too" "outside the window" "$(ob pixel -b "$B" -w 'title:^K$' 5000 1 2>&1)"
+  # --zoom: a crop across the window's corner, each pixel 8x8 and no colour blended between them.
+  local ax ay; read -r ax ay < <(ob windows -b "$B" --json | jq -r '.[] | select(.title == "K") | "\(.at[0]) \(.at[1])"')
+  ob pointer -b "$B" -- move 900 900 >/dev/null 2>&1
+  local err; err=$(ob shot -b "$B" -g "$((ax - 4)),$((ay - 4)) 10x10" --zoom 8 -o "$o/z.png" 2>&1 >/dev/null)
+  check_match "shot --zoom 8 of 10x10: 80x80" "80 x 80," "$(file "$o/z.png")"
+  check_match "...said, with --in" "80x80 image of the screen's 10x10 at .*\(zoomed 8 times\); click with --in" "$err"
+  ob shot -b "$B" -g "$((ax - 4)),$((ay - 4)) 10x10" -o "$o/z1.png" >/dev/null 2>&1
+  check_eq "...the colours of the plain crop, none blended" "$(magick "$o/z1.png" -unique-colors -format %w info:)" "$(magick "$o/z.png" -unique-colors -format %w info:)"
+  local px; px=$(ob pixel -b "$B" --in "$o/z.png" 44 44)
+  check_match "pixel --in the zoomed shot: a colour" "^#[0-9a-f]{6}$" "$px"
+  check_eq "...the screen's pixel there" "$(ob pixel -b "$B" $((ax + 1)) $((ay + 1)))" "$px"
+  ob click -b "$B" --in "$o/z.png" 44 44 >/dev/null 2>&1
+  check_eq "click --in the zoomed shot" "$((ax + 1)), $((ay + 1))" "$(ob hyprctl -b "$B" cursorpos)"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before
 # any box is asked.
 t_unit_pointer() {
@@ -5592,9 +5633,9 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

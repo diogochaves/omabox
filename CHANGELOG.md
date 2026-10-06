@@ -17,6 +17,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`--ignore "X,Y WxH"` on `wait still`, `wait change` and every `--wait`, and `-g` on `--wait`**:
   an animation that never stops (a spinner, a glow) no longer keeps them from their answer. A 124
   "still changing" names the region that kept changing as an `--ignore` to add (#131).
+- **`omabox pixel X Y`** prints the colour of a screen or window pixel (`#rrggbb`, several points
+  in one call, `--json`, `--in SHOT`), and **`shot -g … --zoom N`** shows a small crop with each
+  pixel N x N, unblended: colours and 1 px details without an image tool of your own (#133).
 
 ### Fixed
 
