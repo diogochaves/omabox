@@ -152,8 +152,12 @@ int main(int argc, char **argv) {
     for (; i < argc; i++) {
         if (!strcmp(argv[i], "--hold")) hold = 1;
         else if (!strcmp(argv[i], "--extent") && i + 1 < argc) {
-            char x;
-            if (sscanf(argv[++i], "%u%c%u", &ew, &x, &eh) != 3 || x != 'x' || !ew || !eh || ew > 65536 || eh > 65536) usage();
+            // WxH, digits only: sscanf took 1920x1080abc (#109).
+            const char *s = argv[++i], *x = strchr(s, 'x');
+            if (!x || x == s || !x[1] || strspn(s, "0123456789") != (size_t)(x - s) || strspn(x + 1, "0123456789") != strlen(x + 1)) usage();
+            unsigned long w = strtoul(s, NULL, 10), h = strtoul(x + 1, NULL, 10);
+            if (!w || !h || w > 65536 || h > 65536) usage();
+            ew = (unsigned)w, eh = (unsigned)h;
         } else break;
     }
     if (i >= argc && !hold) usage();

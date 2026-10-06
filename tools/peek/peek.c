@@ -40,12 +40,14 @@ struct shmbuf {
     struct wl_buffer *buffer;
     uint32_t *data;
     int width, height, stride;
+    uint32_t format;
     size_t size;
     int busy;
 };
 
 static int shmbuf_create(struct shmbuf *b, struct wl_shm *shm, int width, int height, int stride, uint32_t format) {
     b->size = (size_t)stride * (size_t)height;
+    b->format = format;
     int fd = memfd_create("omabox-peek", MFD_CLOEXEC);
     if (fd < 0) return 0;
     if (ftruncate(fd, (off_t)b->size) < 0) { close(fd); return 0; }
@@ -118,7 +120,9 @@ static void global_remove(void *data, struct wl_registry *reg, uint32_t name) { 
 static const struct wl_registry_listener box_registry = {box_global, global_remove};
 
 static void frame_copy(void) {
-    if (box.buf.buffer && (box.buf.width != box.width || box.buf.height != box.height || box.buf.stride != box.stride))
+    // A new size or format (#109: a buffer of the old format failed every copy, silently): a new buffer.
+    if (box.buf.buffer && (box.buf.width != box.width || box.buf.height != box.height || box.buf.stride != box.stride ||
+                           box.buf.format != box.format))
         shmbuf_destroy(&box.buf);
     if (!box.buf.buffer && !shmbuf_create(&box.buf, box.shm, box.width, box.height, box.stride, box.format)) {
         fprintf(stderr, "omabox-peek: cannot allocate a capture buffer\n");
@@ -134,7 +138,8 @@ static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *f, uint32_
                  format == DRM_FORMAT_XBGR8888 || format == DRM_FORMAT_ABGR8888;
     if (!fmt_ok || !w || !h || w > MAX_SIDE || h > MAX_SIDE || stride % 4 || stride < w * 4 ||
         (uint64_t)stride * h > INT32_MAX) {
-        fprintf(stderr, "omabox-peek: the box sent a frame it cannot have (format %#x, %ux%u, stride %u)\n", format, w, h, stride);
+        fprintf(stderr, "omabox-peek: the box sent a frame it cannot have (format %#x, %ux%u, stride %u; it reads "
+                        "XRGB8888, ARGB8888, XBGR8888 and ABGR8888 only, not a 10-bit output's)\n", format, w, h, stride);
         exit(1);
     }
     box.format = format; box.width = (int)w; box.height = (int)h; box.stride = (int)stride;
@@ -192,9 +197,9 @@ static void wm_ping(void *data, struct xdg_wm_base *wm, uint32_t serial) { (void
 static const struct xdg_wm_base_listener wm_listener = {wm_ping};
 
 static void host_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t version) {
-    (void)data; (void)version;
+    (void)data;
     if (!strcmp(iface, wl_compositor_interface.name))
-        host.compositor = wl_registry_bind(reg, name, &wl_compositor_interface, 4);
+        host.compositor = wl_registry_bind(reg, name, &wl_compositor_interface, version < 4 ? version : 4);
     else if (!strcmp(iface, wl_subcompositor_interface.name))
         host.subcompositor = wl_registry_bind(reg, name, &wl_subcompositor_interface, 1);
     else if (!strcmp(iface, wl_shm_interface.name))
@@ -772,8 +777,28 @@ int main(int argc, char **argv) {
     if (!host.compositor || !host.shm || !host.wm) { fprintf(stderr, "omabox-peek: host lacks compositor, shm or xdg_wm_base\n"); return 1; }
 
     // First frame before the window, so the window can open at a sensible size.
+    // Within 10 s (#109): a box that never renders left a peek with no window, which omabox then took
+    // for the box's peek window.
     capture();
-    while (!box.have_frame && box.frame) if (wl_display_dispatch(box.display) < 0) return 1;
+    const int64_t first_until = now_ms() + 10000;
+    while (!box.have_frame && box.frame) {
+        while (wl_display_prepare_read(box.display) != 0)
+            if (wl_display_dispatch_pending(box.display) < 0) return 1;
+        if (box.have_frame || !box.frame) { wl_display_cancel_read(box.display); break; }
+        int64_t left = first_until - now_ms();
+        if (left <= 0) {
+            wl_display_cancel_read(box.display);
+            fprintf(stderr, "omabox-peek: the box sent no frame in 10 s\n");
+            return 1;
+        }
+        if (wl_display_flush(box.display) < 0 && errno != EAGAIN) { wl_display_cancel_read(box.display); return 1; }
+        struct pollfd pf = {.fd = wl_display_get_fd(box.display), .events = POLLIN};
+        int n = poll(&pf, 1, (int)left);
+        if (n > 0 && (pf.revents & POLLIN)) { if (wl_display_read_events(box.display) < 0) return 1; }
+        else wl_display_cancel_read(box.display);
+        if (n > 0 && (pf.revents & (POLLERR | POLLHUP))) return 1;
+        if (wl_display_dispatch_pending(box.display) < 0) return 1;
+    }
     if (!box.have_frame) { fprintf(stderr, "omabox-peek: the box refused a screen capture\n"); return 1; }
 
     host.surface = wl_compositor_create_surface(host.compositor);

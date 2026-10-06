@@ -3493,6 +3493,24 @@ from them.
     processes in the nested box held it. launch.sh now closes every fd above 2 before its exec (fd 3,
     bwrap's info fd, is opened by that exec); on the same line, so bash has read it before the loop
     closes the script's own fd. t_leak_control's nested box (failed on the old code).
+205. **Small robustness fixes in the C tools** (2026-10-06, #109, from the C review). omabox-peek kept
+    its capture buffer when only the frame's format changed, and every copy into it then failed
+    silently (a frozen view): the format is compared too, as omabox-still does. Its first capture
+    waited for a frame with no deadline, so a box that never renders left a windowless peek that
+    omabox took for the box's peek window: 10 s, then "the box sent no frame in 10 s", exit 1. It bound
+    the host's wl_compositor at version 4 whatever was offered: now at most what is. peek and still
+    name the formats they read (XRGB8888, ARGB8888, XBGR8888, ABGR8888) when a frame is in another,
+    such as a 10-bit output's. omabox-relay killed a gone caller's command by its process group, which
+    does not exist until the child's setsid(): the handler now waits (a CLOEXEC pipe, closed at the
+    command's exec) before it watches for the hangup; and it serves at most 64 connections at once,
+    closing the rest (SIGCHLD counts them down), so a same-uid flood cannot fork without bound. (The
+    issue's setpgid(0,0) before setsid() would make setsid fail: a group leader cannot start a
+    session.) omabox-pointer's --extent took `1920x1080abc` (sscanf): digits only now. omabox-keyboard's
+    UTF-8 decoder stepped past the NUL of an empty token (in bounds, the outcome right): it returns no
+    character. Checks: t_unit_relay (64 held connections turn a call away: failed on the old relay;
+    callers killed at once leave no command: passes on the old one too, the race is rarely hit),
+    t_pointer (the junk --extent: failed on the old tool). The peek changes run in t_peek; its deadline
+    and format paths have no test (a box that never renders, a format change mid-session).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -257,6 +257,7 @@ static int decode(const unsigned char **pp, uint32_t *cp) {
     const unsigned char *p = *pp;
     int len;
     uint32_t min;
+    if (!*p) return 0;   // an empty token: no character, and not a step past its NUL
     if (*p < 0x80) { *cp = *p; len = 1; min = 0; }
     else if (*p >= 0xC2 && *p <= 0xDF) { *cp = *p & 0x1f; len = 2; min = 0x80; }
     else if ((*p >> 4) == 14) { *cp = *p & 0x0f; len = 3; min = 0x800; }

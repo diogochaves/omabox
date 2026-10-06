@@ -246,9 +246,15 @@ static void serve(int conn) {
     env[ne] = NULL, args[na] = NULL;
 
     signal(SIGCHLD, SIG_DFL);
+    // The command's session exists before the caller's hangup is looked for (#109): a kill(-child)
+    // before the child's setsid() found no group, and the command ran on. The pipe's write end is
+    // the child's alone and closes at its exec (or exit), after setsid().
+    int started[2];
+    if (pipe2(started, O_CLOEXEC) < 0) _exit(1);
     pid_t child = fork();
     if (child < 0) _exit(1);
     if (child == 0) {
+        close(started[0]);
         setsid();
         // Into place: the caller's fds as 0, 1, 2, 3..., the pidfd after them. Moved above the
         // targets first, so no dup2 overwrites one still to be placed.
@@ -261,6 +267,10 @@ static void serve(int conn) {
         fprintf(stderr, "omabox-relay: %s: %s\n", args[0], strerror(errno));
         _exit(127);
     }
+    close(started[1]);
+    char c;
+    while (read(started[0], &c, 1) < 0 && errno == EINTR) {}
+    close(started[0]);
     for (int k = 0; k < nfds; k++) close(fds[k]);
     close(pidfd);
     int cfd = (int)syscall(SYS_pidfd_open, child, 0);
@@ -284,6 +294,15 @@ static void serve(int conn) {
     int32_t status = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
     if (!gone) write_all(conn, &status, sizeof(status));
     _exit(0);
+}
+
+#define MAX_HANDLERS 64
+static volatile sig_atomic_t handlers;
+static void reap_handlers(int sig) {
+    (void)sig;
+    int e = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0) handlers--;
+    errno = e;
 }
 
 static int cmd_listen(int argc, char **argv) {
@@ -316,13 +335,23 @@ static int cmd_listen(int argc, char **argv) {
         return 2;
     }
     unsetenv("LISTEN_PID"), unsetenv("LISTEN_FDS"), unsetenv("LISTEN_FDNAMES");
-    signal(SIGCHLD, SIG_IGN);   // connection handlers are reaped by the kernel
+    // Connection handlers are counted (#109): a caller of the same uid flooding the socket gets at
+    // most MAX_HANDLERS at once, the rest closed at once, instead of a fork each without bound.
+    struct sigaction sa = {.sa_handler = reap_handlers, .sa_flags = SA_RESTART | SA_NOCLDSTOP};
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
     for (;;) {
         int conn = accept4(ls, NULL, NULL, SOCK_CLOEXEC);
         if (conn < 0) { if (errno == EINTR || errno == ECONNABORTED) continue; die("accept"); }
+        if (handlers >= MAX_HANDLERS) { close(conn); continue; }
+        sigset_t chld, old;   // the count changed by this loop and the handler, never both at once
+        sigemptyset(&chld); sigaddset(&chld, SIGCHLD);
+        sigprocmask(SIG_BLOCK, &chld, &old);
         pid_t pid = fork();
-        if (pid == 0) { close(ls); serve(conn); }
+        if (pid == 0) { sigprocmask(SIG_SETMASK, &old, NULL); close(ls); serve(conn); }
+        if (pid > 0) handlers++;
+        sigprocmask(SIG_SETMASK, &old, NULL);
         close(conn);
     }
 }

@@ -1352,6 +1352,7 @@ t_unit_relay() {
     [ -n "${OMABOX_BROKER_PIDFD:-}" ] && grep -q "^Pid:[[:space:]]*$OMABOX_BROKER_PEER$" "/proc/self/fdinfo/$OMABOX_BROKER_PIDFD" && printf "pidfd=ok|"
     [ ! -e /dev/fd/3 ] || [ "$OMABOX_BROKER_PIDFD" = 3 ] || { printf "fd3=%s|" "$(cat /dev/fd/3)"; }
     [ "$1" != sleep ] || { echo $$ > '"$d/cmd"'; exec sleep 30; }
+    [ "$1" != sleepq ] || exec -a omabox-t109-'"$P"' sleep 30
     exit 7' bash >/dev/null 2>&1 & SERVERS+=($!)
   until_ok 5 test -S "$d/sock" >/dev/null
   local out rc=0
@@ -1372,6 +1373,20 @@ sys.stdout.write(subprocess.run(sys.argv[1:], stdin=a, capture_output=True, text
   check_match "an --fd file reaches the command as fd 3" "fd3=passed" "$("$R" call "$d/sock" --fd 5 -- x 5<"$d/f" 2>&1)"
   timeout 1 "$R" call "$d/sock" -- sleep >/dev/null 2>&1
   check "the command goes when its caller does" until_ok 5 bash -c "! kill -0 \$(cat '$d/cmd') 2>/dev/null"
+  # Callers killed as soon as they start (#109): some go before the command's setsid(), whose group a
+  # kill then did not find. None of the commands left once the relay's 3 s grace is over.
+  local i; for i in $(seq 20); do "$R" call "$d/sock" -- sleepq >/dev/null 2>&1 & kill -KILL $! 2>/dev/null; done
+  check "callers killed at once: none of their commands left" until_ok 5 bash -c "! pgrep -f '^omabox-t109-$P' >/dev/null"
+  # At most 64 connections served at once (#109): a same-uid flood no longer forks without bound.
+  python3 -I -c 'import socket, sys, time
+s = [socket.socket(socket.AF_UNIX) for _ in range(64)]
+for c in s: c.connect(sys.argv[1])
+time.sleep(4)' "$d/sock" & local flood=$!
+  sleep 1
+  check_match "...a call past 64 held connections is turned away (not served: 7; nor left waiting: 124)" '^[1-9]$|^[1-9][0-9]$' \
+    "$(timeout 3 "$R" call "$d/sock" -- x >/dev/null 2>&1; rc=$?; [ "$rc" != 7 ] && [ "$rc" != 124 ] && echo "$rc")"
+  wait "$flood"
+  check_eq "...and served once they close" 7 "$(timeout 15 "$R" call "$d/sock" -- x >/dev/null 2>&1; echo $?)"
 }
 
 # A jailed agent's omabox, through the broker, in a real ai-jail (finding 99): it drives a box of its
@@ -5064,6 +5079,10 @@ t_pointer() {
   out=$(ob run -b "$B" -- sh -c 'sleep 2 | /opt/omabox/bin/omabox-keyboard -m ctrl -p 300; echo "rc=$?"' 2>&1)
   check_match "a pause with nothing on stdin times out, letting go" "letting go.*rc=1" "$(tr '\n' ' ' <<<"$out")"
   check_eq "-p and -T together refused" 2 "$(ob run -b "$B" -- /opt/omabox/bin/omabox-keyboard -m ctrl -p 300 -T </dev/null >/dev/null 2>&1; echo $?)"
+  check_eq "the pointer tool's --extent: WxH with junk after it refused (#109)" 2 \
+    "$(ob run -b "$B" -- /opt/omabox/bin/omabox-pointer --extent 1920x1080abc sleep 1 >/dev/null 2>&1; echo $?)"
+  check_eq "...a sign refused" 2 "$(ob run -b "$B" -- /opt/omabox/bin/omabox-pointer --extent -1920x1080 sleep 1 >/dev/null 2>&1; echo $?)"
+  check_eq "...WxH taken" 0 "$(ob run -b "$B" -- /opt/omabox/bin/omabox-pointer --extent 1920x1080 sleep 1 >/dev/null 2>&1; echo $?)"
   ob click -b "$B" --window R 50 50 >/dev/null
   check_match "...after it, a click has no modifier" " 0 $" "$(presses)"
   tree() { local c; for c in $(pgrep -P "$1"); do echo "$c"; tree "$c"; done; }

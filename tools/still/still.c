@@ -171,7 +171,8 @@ static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *f, uint32_
     int ok = fmt == WL_SHM_FORMAT_XRGB8888 || fmt == WL_SHM_FORMAT_ARGB8888 ||
              fmt == DRM_FORMAT_XBGR8888 || fmt == DRM_FORMAT_ABGR8888;
     if (!ok || !w || !h || w > MAX_SIDE || h > MAX_SIDE || s % 4 || s < w * 4 || (uint64_t)s * h > INT32_MAX) {
-        fprintf(stderr, "omabox-still: a frame it cannot read (format %#x, %ux%u, stride %u)\n", fmt, w, h, s);
+        fprintf(stderr, "omabox-still: a frame it cannot read (format %#x, %ux%u, stride %u; it reads XRGB8888, "
+                        "ARGB8888, XBGR8888 and ABGR8888 only, not a 10-bit output's)\n", fmt, w, h, s);
         exit(1);
     }
     fformat = fmt; fw = (int)w; fh = (int)h; fstride = (int)s;
