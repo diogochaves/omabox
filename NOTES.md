@@ -3660,6 +3660,21 @@ from them.
     refusal there and skips the rest. One, t_throwaway_dead's 15 s, timed out under the full run's load
     and passed alone twice on the RTX. The vfio-pci fallback on the real card is for Diogo (sudo); the
     fake tree covers it.
+215. **A short SKILL.md, the rest in reference.md by section** (2026-10-06, #143). The skill had become
+    the largest item omabox puts into an agent's context: 9.8k tokens a load (29 KB), 68 loads in 51
+    sessions of other projects, 44 of them subagents', 78M tokens carried, more than every box image
+    (56M). SKILL.md is now 12.4 KB (~4.1k tokens at the same 3 bytes a token): the frontmatter
+    (description unchanged), the never-do list, the project-instructions table (merged rows), the
+    loop, the five driving rules, the guard, ai-jail, plugins/Hyprland/Omarchy in a line each, what a
+    box mounts and refuses, showing the user, what a box cannot test, reporting; each detail it leaves
+    out is "ref: SECTION", a section of reference.md (11 of them; t_unit_version checks each names a
+    heading there, and that SKILL.md stays under 14 KB). New in reference.md: Project instructions, in detail; Shots;
+    Symptoms (every row of the old table, plus idle); Tests that touch the desktop; The guard, in
+    detail; When a box cannot test it, in detail; the pointer, plugin, Omarchy-checkout paragraphs
+    into their sections. Every safety rule stayed in SKILL.md (the guard, secret-tool on the host,
+    shot's stderr, interactive windows, clip, `host`, the real-hardware ask), and `down --all` was
+    added to the loop's comment. To measure: the per-load size and carried tokens in usage sessions
+    after this (`.local/usage`), against 2026-10-01..04.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

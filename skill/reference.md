@@ -1,6 +1,107 @@
 # omabox: reference
 
-Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothing here relaxes them.
+Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The safety rules are all in
+`SKILL.md`; nothing here relaxes them.
+
+## Project instructions, in detail
+
+- More of the project's steps, in a box: `grim -T ID` → `omabox shot --window SEL`; a test binary run
+  directly (`./build/tests/tst_x`) has none of ctest's environment (a Qt test opens real windows):
+  `omabox run -- ./build/tests/tst_x`; starting the app from the launcher, its `.desktop` and icon:
+  its files in the box HOME, then `omabox keys --wait super+alt+space` ("Testing an app as a desktop
+  app"); `omarchy-theme-set NAME` → `omabox run -- omarchy-theme-set NAME`; `omarchy plugin
+  add/enable/disable/remove` → `omabox run -- omarchy plugin …`; a back-up and restore of the bar
+  around a test: nothing to restore, the box's bar is its own.
+- A box starts with a fresh HOME: apps start as on first run. A server in a default box also holds
+  its port on the user's 127.0.0.1 (their own dev server on it then fails to start), and a probe there
+  can reach theirs or another box's (only one box gets a port on the host; `omabox ports` says which
+  holds it): check your server from inside the box (`omabox wait cmd -- curl -fsS
+  http://127.0.0.1:PORT/`). A server that fails with "address in use" on a port nothing in the box
+  uses: the host or another box holds it (`omabox ports` names it); use another port. An isolated
+  box's ports are its own; two of them can use the same one.
+- Names: the repo's directory plus your session's id (`myrepo-5cc72cdc` in a Claude Code or Codex
+  session); in a git worktree, the worktree's folder, so a worktree agent has its own box with no
+  `-b`. A box goes down when your agent exits, not on `/clear` or `/resume`. `-b NAME` also goes
+  before the command (`omabox -b box-3 shot`). In a worktree-isolated Claude Code subagent compound
+  commands (`wait cmd --`, `hyprctl eval`, `$(…)`, `$B` aliases) are refused: one literal `omabox -b
+  NAME …` per Bash call, or a script file.
+- `omabox help CMD` (or `omabox CMD --help`): one command's flags and notes; `omabox help`: every
+  command (long: for an overview only).
+
+## Shots
+
+- `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
+  title; `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is
+  satisfied by any window it matches. `shot --window SEL -g "X,Y WxH"` crops the window in its own
+  coordinates.
+- Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
+  --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. 1920x1080
+  is read 1:1; on a bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and
+  `click --in` it. Screen shots show the pointer (hover evidence: a `-g` crop of the screen); window
+  shots never do. A shot right after a `click` or `keys` without `--wait` can show the frame before
+  the redraw: `--wait`, or `omabox wait still`, first.
+- One image outweighs anything omabox prints as text. Take the smallest that shows it: `shot --window
+  SEL` for one app, `-g "X,Y WxH"` for the part under test (a menu, a field, a bar widget), `--fit
+  1280` for a whole screen's layout (full size to read small text). `--wait`'s `at X,Y WxH` is the
+  last change only: where to look, not everything that changed.
+- A colour: `omabox pixel X Y` (several points in one call; `--window SEL` reads the app's own pixels,
+  before Omarchy's window opacity blends it and with no pointer over it). `shot -g "X,Y 40x30" --zoom
+  8` shows a 1 px border or a glyph's edge unblended. Never read a colour off a scaled shot.
+- Frames over time (a transition): `shot --burst N --sheet --diff --after -- ACTION` ("Testing an app
+  as a desktop app"), one contact sheet, never a loop of shots.
+
+## Symptoms
+
+| Symptom | Next step |
+|---|---|
+| After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
+| `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
+| `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
+| `unsatisfied: still changing` (124) | Something never stops moving (a spinner, a glow): the line names the region; `--ignore "X,Y WxH"` it, or `-g` the part under test. |
+| Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
+| Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
+| A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
+| The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
+| `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
+| `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new` with those options (it starts the box), then `-b box-N` as it printed. |
+| `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
+| Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
+| "went down while this command ran", or "box is dead" after `omabox run -- pkill -x Hyprland` (or quickshell, omabox-labwc) | Those are the box itself (`pkill -x labwc` no longer matches its own): kill your own process by PID; `omabox down` then `up` to recover. |
+| "box … has no shell", or `ls` says `gone` under SHELL (bar gone mid-test) | It crashed past what Omarchy's launcher restarts: `omabox log shell`, then `restart-shell`. "the shell crashed since the last command": it came back, but what you see changed (a shot may show it starting). |
+| "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`; `restart-shell` once fixed. For its stack: `omabox gdb --shell --watch`, the crash again, `omabox log gdb`. As on a desktop, Omarchy's launcher starts it again (up to 5 times a minute), so the bar may be back: the crash still happened. |
+| `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
+| "its Hyprland did not answer (hung? …)", `ls` says `hung` | The box's Hyprland is stuck (a plugin under test?): `omabox gdb` for where, `omabox log`, then `omabox down`. |
+| "no box 'default-…' is up" | The box is named after the directory you run omabox from: run it from the repo, or pass `-b NAME` (`omabox ls`). |
+| A box went down by itself ("idle") | 2h with no omabox command against it (`up --idle 0` keeps one, `--idle 30m`); your session's box still goes when your agent exits; a `run -d` job is not use: a server you only poll over HTTP needs `--idle 0`. `down --all` takes other agents' and the user's boxes too. |
+
+## Tests that touch the desktop
+
+- With no box up, `omabox run -- ctest …` starts a throwaway box with the current repo as a
+  **discarded overlay** (writes succeed, the checkout never changes), runs, tears down: tray and
+  notification tests register with the box's bar, not the user's. Use it for any test that talks to
+  the session bus, the tray, notifications, the keyring or a compositor; tests that talk to 127.0.0.1:
+  `omabox run --net isolated --allow PORTS -- ctest ...` (`up`'s options work here). With a box
+  already up, `run` uses it and the repo is **read-only** there: a test that writes into the tree
+  fails; `omabox down` first.
+- `run` gives the command the box's environment, not your shell's: a variable a test needs (a test
+  server's password from `dev.env`; a test that skips is the sign) goes with `--pass NAME`, off the
+  command line, or a whole file with `--env-file`: `omabox run --env-file ./dev.env -- ctest …`
+  (KEY=VAL lines, read as data); a plain value: `run --env KEY=VAL` (never a secret: that is in the
+  process list). A `run -d` command's output, a Qt app's warnings and QML errors too, is in the log
+  file it prints (`-q`: no line; `--print-log`: only the path, on stdout).
+- Check what a keyring or D-Bus test left behind inside the box (`omabox run -- secret-tool …`), never
+  with `secret-tool` on the host: that is the user's real keyring, and `search --all` prints the
+  secrets themselves.
+
+## The guard, in detail
+
+- `QT_QPA_PLATFORM=offscreen` still works under the guard. To look at a web page yourself, open it in
+  your box (`omabox run -d -- xdg-open URL`, then `omabox shot`). `quickshell kill` and `qs ipc` are
+  refused ("not running quickshell kill"): they would reach the user's desktop shell; a box's shell is
+  `omabox run -- qs ipc …` or `omabox restart-shell`.
+- `omabox host -- CMD` examples, once the user asked for their real desktop: `omabox host -- hyprctl
+  reload`, `omabox host -- omarchy-theme-set NAME`. Testing, screenshots and anything the user did not
+  ask to see on their desktop stay in a box: `shot` works on a hidden interactive box.
 
 ## Screen size and rendering cost
 
@@ -13,9 +114,19 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   anything that repaints per frame costs ~2.4x more at 144 Hz than at the default 60. NVIDIA driver
   615.71.09 does not expose the per-process DRM counters `gpu` needs; on that driver it reports no
   percentages.
+- Which GPU: headless boxes render on the one the user's `omabox config gpu` names (`auto`: the first;
+  `up` says when it fell back because that GPU is gone). It is their setting: ask before changing it.
 
 ## Pointer, in detail
 
+- **The pointer is test state.** Under Omarchy's focus-follows-mouse the window the pointer rests on,
+  or last passed over, takes focus, and gets it back when a menu or panel closes. A box's pointer
+  starts at the screen's centre and stays wherever the last command left it (`omabox hyprctl
+  cursorpos`). `click` and `pointer -- move` jump: they cross nothing on the way. Before a test whose
+  result depends on focus, put the pointer where a user's would be (`omabox pointer -- move X Y`), and
+  when the way there matters (to the bar, across other windows) travel: `click --steps 20 X Y`,
+  `pointer --steps 20 -- move X Y`. `--mod ctrl` (shift, alt; `ctrl+shift`) holds modifiers across a
+  click or drag; SUPER with a button is Hyprland's own (move, resize), never the app's.
 - `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [left|right|middle] [--steps 10] [--hold DURATION]
   [--mod MODS] [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold
   there `--hold` (a drop target reacting to the hover), release. `--hold` is a duration, `300ms` or
@@ -243,7 +354,11 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 
 The checks a plugin's own checklist asks for "on a live desktop", in a box. `omabox up --plugin
 PATH` (add `--stock-bar` for Omarchy's default bar, `--net isolated` when it starts or probes local
-servers), then:
+servers), then `omabox restart-shell` after each edit (the mount is live, read-only). The box's
+`shell.json` has only built-in widgets plus the plugins you mount, each enabled where its manifest
+says, in a copy of the user's bar layout (Omarchy's workspace numbers in place of a plugin's left out);
+`--stock-bar` uses Omarchy's default bar (workspaces, clock, the stock right side), to see a plugin as
+most people will. Then:
 
 - **Loaded?** `up` and `restart-shell` print a warning for a plugin the shell did not load (its
   validator's message, or the shell's QML error); `omabox ls --json` has its `plugin_status`. A panel,
@@ -325,6 +440,10 @@ servers), then:
 
 ## Reviewing an Omarchy change
 
+- `omabox up --omarchy ~/src/omarchy` runs that checkout in the box instead of `/usr/share/omarchy`
+  (as `omarchy dev link` does on a host, without touching the user's): its Hyprland config, shell,
+  `bin/` and `OMARCHY_PATH`. Never `omarchy dev link` on the host to test a change. Edits show after
+  `omabox restart-shell` or `omabox hyprctl reload`.
 - Two boxes side by side: the change and the release it changes. Check the change out in a worktree
   (`git fetch origin pull/123/head:pr-123`, `git worktree add ../omarchy-pr-123 pr-123`), never by
   switching the user's checkout. Then `omabox up pr --omarchy ../omarchy-pr-123` and `omabox up
@@ -361,6 +480,20 @@ your own and a test password, through an Omarchy tree (`up --omarchy`; a box ref
 
 `t_lock` in the suite does exactly this. The real PAM stack (pam_unix, faillock, fingerprint), the
 login screen and the disk passphrase stay a VM's to test.
+
+## When a box cannot test it, in detail
+
+- The screen: any size and refresh rate, scale 1; no real modes, HDR, VRR, 10-bit, colour management,
+  scale or DPMS. Several outputs only by hand (`omabox hyprctl output create headless NAME`; a reload
+  drops it). The screen going and coming back (a monitor dropping off on wake, a KVM, a dock) can be
+  tested: `omabox output drop --for 300ms --cycles 20`, which stops at the first shell crash.
+- No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit. No
+  devices: no audio (PipeWire), no `/dev/i2c` (DDC/CI brightness), no backlight, no real keyboards,
+  mice, touchpads, tablets, cameras, USB or printers. No systemd user manager unless `up --systemd`
+  (never journald or logind), no installed `.desktop` files or URL handlers, no idle or suspend; the
+  lock screen locks but takes no real password ("Testing the lock screen").
+- Reporting: each plugin's `commit` in `ls --json`'s `plugin_status` ends in `+dirty` for uncommitted
+  edits. Outputs made by hand count as tested only when said so.
 
 ## Showing the user
 

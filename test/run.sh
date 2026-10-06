@@ -815,6 +815,13 @@ t_unit_version() {
     python3 -c 'import json, sys; v = sys.stdin.read().strip(); assert v.startswith("\""); print(len(json.loads(v)))' 2>&1)
   check_match "the skill's description is a quoted string" '^[0-9]+$' "$desc"
   check "...of at most 1024 characters" test "$desc" -le 1024
+  # #143, finding 215: SKILL.md is short and names the rest as "ref: SECTION", a heading of reference.md.
+  local refs="" r gone=""
+  while read -r r; do refs+="$r|"; grep -qxF "## $r" "$ROOT/skill/reference.md" || gone+="$r; "; done \
+    < <(grep -oE 'ref: [A-Z][^.:)]*[a-z]' "$ROOT/skill/SKILL.md" | sed 's/^ref: //' | sort -u)
+  check "SKILL.md points to reference.md by section" test -n "$refs"
+  check_eq "...every section it names is there" "" "$gone"
+  check "...and stays short (under 14 KB: #143)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 14000
   if command -v omarchy-plugin-validate >/dev/null; then
     check "the widget passes omarchy-plugin-validate" omarchy-plugin-validate "$ROOT/plugin"
   else

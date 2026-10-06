@@ -36,6 +36,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (or shell, or any process of the box), hung or stopped too; `--watch` catches a crash into `omabox
   log gdb`. A gdb started in the box was refused by the kernel's ptrace rules (#135).
 
+### Changed
+
+- **The agent skill is a third of its size** (SKILL.md 29 KB → 12 KB, ~4k tokens a load): what every
+  task needs stays, every safety rule included; the rest is in `reference.md`, named by section (#143).
+
 ### Fixed
 
 - **`wait still` and every `--wait` end on a box whose Hyprland stopped answering** (stopped, or
