@@ -3537,6 +3537,23 @@ from them.
     --autoreload box the write was a reload of its own (two for one `reload`); with a newer omabox it
     still can be. t_autoreload and a check in t_config_kept; on the old code `up --autoreload` was
     "unknown option".
+208. **`--ignore` an animation that never stops, on `wait still|change` and every `--wait`; `-g` on
+    `--wait`** (2026-10-06, #131). A spinner, a breathing glow or an animated edge kept `wait still` and
+    `--wait` from their answer until the 10 s timeout (124, "still changing"), and agents fell back to
+    `sleep` and `|| true`: in a usage study 27 of 38 such answers sat in calls that exited 0, most of
+    them a 15 px strip of a plugin's animated edge. omabox-still took `--ignore` rectangles for the
+    cursor only; it now takes up to 16 `--mask` ones too (48 in all, drag's path keeps its 30), which
+    `--strict` keeps, said as `ignored WxH at X,Y: --ignore`. `--ignore "X,Y WxH"` (repeatable, geom_parse's
+    forms) is the CLI's; `-g` on `--wait` watches only that part, as `wait still -g` did. The tool also
+    reports `late=`: one box around every significant change in the second half of `--timeout`. A 124
+    "still changing" whose late box is at most a quarter of the screen ends with `from 5.00s on it
+    changed only at X,Y WxH: --ignore "X,Y WxH" if that is an animation`; it can be narrower than an
+    animation that grows (a counter gaining a digit), and the action's own change falls in the first
+    half, so a `--wait` gets the hint too. JSON: `late_changes`. Checks: t_unit_wait (the refusals,
+    the hint and no hint on half the screen, from a fake tool line), t_wait (a foot redrawing one cell
+    20 times a second: 124 with the hint, `wait still --ignore` it satisfied, `--strict` too, keys
+    --wait 124 without it and settled with it, keys --wait -g elsewhere "nothing changed"); on the old
+    code the options were "unknown" and there was no hint.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

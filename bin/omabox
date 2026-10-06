@@ -82,7 +82,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- ARGS...
                  raw: move X Y [--steps N], click/down/up [BTN], scroll DY, sleep MS
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
-         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--strict] | change [-g GEOM | --window SEL]
+         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
+               | change [-g GEOM | --window SEL] [--ignore GEOM]...
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | cmd -- CMD [ARG...]
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
@@ -197,8 +198,11 @@ scale (no --fit yet). --wait ignores the cursor along the drag's path (it is in 
 the drag changes beside it counts, a change wholly under it may not.
 @ wait keys click run
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
-count, and are said (--strict counts them). \`keys\`, \`click\` and \`run -d\` take --wait [--start 2s]
-[--quiet 300ms] [--timeout 10s] [--json]: a change within --start (5s for run -d), then quiet.
+count, and are said (--strict counts them). \`keys\`, \`click\`, \`drag\` and \`run -d\` take --wait [--start 2s]
+[--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--json]: a change within --start (5s for
+run -d), then quiet. --ignore "X,Y WxH" (up to 16) leaves out an animation that never stops (a
+spinner, a glow); a 124 "still changing" names it when one small region kept changing. -g watches
+only that part of the screen.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
@@ -2694,7 +2698,7 @@ cmd_run() {
       --replace) replace=1 ;;
       --quiet) { [ $# -ge 2 ] && ms_duration "$2" >/dev/null; } || die "run: --quiet takes a duration (--wait's quiet period); -q is the flag that silences run -d"
         settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
-      --wait|--start|--timeout|--strict|--json) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
+      --wait|--start|--timeout|--strict|--json|--ignore|-g) settle_opt "$@"; shift $((SETTLE_TOOK - 1)) ;;
       --pass) optarg "$@"
         [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "run: --pass takes a variable name, got $2"
         ! env_reserved "$2" || die "run: --pass cannot set $2: it is the box session's own"
@@ -3340,7 +3344,7 @@ cmd_click() {
       --steps) optarg "$@"; steps=$(steps_arg click "$2"); shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle) btn=$1 ;;
-      --*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
+      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
       *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$((10#$1))") ;;
     esac
     shift
@@ -3468,7 +3472,7 @@ cmd_drag() {
       --shot) optarg "$@"; shot=$2; shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle) btn=$1 ;;
-      --*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "drag: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
+      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "drag: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
       *) [[ $1 =~ ^[0-9]+$ ]] || die "drag: bad argument $1"; xy+=("$((10#$1))") ;;
     esac
     shift
@@ -3631,7 +3635,7 @@ settle_act() { if [ -n "${SETTLE_IN:-}" ]; then "$@" {SETTLE_IN}>&- {SETTLE_OUT}
 # "change", "settle"); SENT is what an action already did, said on stderr when the answer is not yes.
 # settle_end COND JSON SENT
 settle_end() {
-  local cond=$1 json=$2 sent=$3 line=$SETTLE_LINE rc used=$SECONDS
+  local cond=$1 json=$2 sent=$3 line=$SETTLE_LINE rc used=$SECONDS scr=${SETTLE_LINE#ready }
   if [[ $line == ready* ]]; then
     line=""
     while :; do
@@ -3685,7 +3689,7 @@ settle_end() {
   fi
   local geo="" ign=""
   [ "${f[change]:--}" = - ] || geo=$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${f[change]}")
-  [ "${f[ignored]:--}" = - ] || ign=$(awk -F, -v w="${f[why]}" '{ printf "%sx%s at %s,%s: %s", $3, $4, $1, $2, (w == "caret" ? "caret?" : w) }' <<<"${f[ignored]}")
+  [ "${f[ignored]:--}" = - ] || ign=$(awk -F, -v w="${f[why]}" '{ printf "%sx%s at %s,%s: %s", $3, $4, $1, $2, (w == "caret" ? "caret?" : w == "mask" ? "--ignore" : w) }' <<<"${f[ignored]}")
   local msg
   case $res:$reason in
     satisfied:changed) msg="changed after $(ms_s "${f[last]}") at $geo" ;;
@@ -3694,16 +3698,27 @@ settle_end() {
       if [ -n "$geo" ]; then msg+=" (last change $(ms_s "${f[last]}") at $geo${ign:+; ignored $ign})"
       else msg+=" (no change${ign:+; ignored $ign})"; fi ;;
     unsatisfied:nothing) msg="nothing changed in $(ms_s "${f[t]}")${ign:+ (ignored $ign)}" ;;
-    unsatisfied:changing) msg="still changing after $(ms_s "${f[t]}") (last change $(ms_s "${f[last]}") at $geo)" ;;
+    unsatisfied:changing) msg="still changing after $(ms_s "${f[t]}") (last change $(ms_s "${f[last]}") at $geo)"
+      # Kept from its answer by one small part of the screen (at most a quarter): an animation there
+      # (a spinner, a glow) is --ignore'd by name (#131).
+      local la=${f[late]:--} lw lh
+      if [ "$la" != - ] && [[ $scr =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        IFS=, read -r _ _ lw lh <<<"$la"
+        if [ $((4 * lw * lh)) -le $((BASH_REMATCH[1] * BASH_REMATCH[2])) ]; then
+          la=$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"$la")
+          msg+="; from $(ms_s $((f[t] / 2))) on it changed only at $la: --ignore \"$la\" if that is an animation"
+        fi
+      fi ;;
     *) msg=$reason ;;
   esac
   if [ "$json" = 1 ]; then
     jq -nc --arg res "$res" --arg cond "$cond" --arg msg "$msg" --arg t "${f[t]:-}" --arg first "${f[first]:-}" \
-      --arg last "${f[last]:-}" --arg ch "${f[change]:--}" --arg ig "${f[ignored]:--}" --arg why "${f[why]:--}" --arg frames "${f[frames]:-}" '
+      --arg last "${f[last]:-}" --arg ch "${f[change]:--}" --arg ig "${f[ignored]:--}" --arg why "${f[why]:--}" --arg frames "${f[frames]:-}" \
+      --arg late "${f[late]:--}" '
       def secs: if . == "" or . == "-" then null else tonumber / 1000 end;
       def box: if . == "-" then null else split(",") | map(tonumber) | {x: .[0], y: .[1], w: .[2], h: .[3]} end;
       {result: $res, condition: $cond, message: $msg, elapsed: ($t | secs), first_change: ($first | secs),
-       last_change: ($last | secs), change: ($ch | box),
+       last_change: ($last | secs), change: ($ch | box), late_changes: ($late | box),
        ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
        frames: (if $frames == "" then null else $frames | tonumber end)}'
   else
@@ -3719,11 +3734,16 @@ settle_end() {
 # --wait on keys, click and run -d: its options, taken where the command parses its own. Sets
 # SETTLE_WAIT, SETTLE_ARGS (for omabox-still), SETTLE_JSON, and SETTLE_TOOK: how many words it took (0:
 # not one of these). Not in $(...): it sets globals. settle_opt OPT [VALUE]
-SETTLE_ARGS=() SETTLE_JSON=0 SETTLE_WAIT=0 SETTLE_TOOK=0
+SETTLE_ARGS=() SETTLE_JSON=0 SETTLE_WAIT=0 SETTLE_TOOK=0 SETTLE_REGION=0
 settle_opt() {
-  local ms
+  local ms g
   SETTLE_TOOK=1
   case $1 in
+    --ignore) [ $# -ge 2 ] || die "--ignore takes a region: \"X,Y WxH\""
+      mask_arg "$2"; SETTLE_ARGS+=(--mask "$MASK"); SETTLE_TOOK=2 ;;
+    -g) { [ $# -ge 2 ] && g=$(geom_parse "$2"); } || die "-g is \"X,Y WxH\" (or X,Y,W,H): the part of the screen --wait watches"
+      [ "$SETTLE_REGION" = 0 ] || die "-g once: one region is watched"
+      SETTLE_ARGS+=(--region "${g// /,}"); SETTLE_REGION=1 SETTLE_TOOK=2 ;;
     --wait) SETTLE_WAIT=1 ;;
     --json) SETTLE_JSON=1 ;;
     --start|--quiet|--timeout)
@@ -3736,7 +3756,15 @@ settle_opt() {
 }
 settle_opts_check() {
   [ "$SETTLE_WAIT" = 1 ] || { [ ${#SETTLE_ARGS[@]} = 0 ] && [ "$SETTLE_JSON" = 0 ]; } ||
-    die "--start, --quiet, --timeout, --strict and --json go with --wait"
+    die "--start, --quiet, --timeout, --strict, --ignore, -g and --json go with --wait"
+}
+# An --ignore region (#131) as omabox-still's X,Y,W,H, in MASK; at most 16 of them: the tool takes 48
+# with the cursor's (drag --wait's path: 30). Not in $(...): it counts in MASKS. mask_arg GEOM
+MASKS=0 MASK=""
+mask_arg() {
+  local g; g=$(geom_parse "$1") || die "--ignore is \"X,Y WxH\" (or X,Y,W,H), got $1"
+  MASKS=$((MASKS + 1)); [ $MASKS -le 16 ] || die "--ignore: at most 16 regions"
+  MASK=${g// /,}
 }
 
 # A window for wait's messages: d is where it is too, n only what it is.
@@ -3832,11 +3860,12 @@ poll_until() {
 }
 
 cmd_wait() {
-  local name="" json=0 tmo=10000 cond="" quiet="" strict=0 geom="" sels=() want="" ns="" run=()
+  local name="" json=0 tmo=10000 cond="" quiet="" strict=0 geom="" sels=() want="" ns="" run=() masks=()
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
+      --ignore) optarg "$@"; mask_arg "$2"; masks+=(--mask "$MASK"); shift ;;
       --timeout) optarg "$@"; tmo=$(ms_duration "$2") || die "wait: --timeout takes a duration: 500ms, 10s, 2m"
         [ "$tmo" -le $WAIT_MAX_MS ] || die "wait: --timeout is at most 10m (got $2)"; shift ;;
       --quiet) optarg "$@"; quiet=$(ms_duration "$2") || die "wait: --quiet takes a duration: 300ms, 1s"
@@ -3860,11 +3889,12 @@ cmd_wait() {
       [ -z "$want" ] || die "wait: --gone and --focused go with window or layer"
       [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "wait: -g or --window, not both" ;;
     window) [ ${#sels[@]} -gt 0 ] || die "wait window: which window? (a SEL, as for shot --window)"
-      [ -z "$geom$quiet" ] && [ $strict = 0 ] || die "wait window: -g, --quiet and --strict go with still and change" ;;
+      [ -z "$geom$quiet" ] && [ $strict = 0 ] && [ ${#masks[@]} = 0 ] || die "wait window: -g, --quiet, --strict and --ignore go with still and change" ;;
     layer) [ -n "$ns" ] || die "wait layer: which layer? its namespace (omabox hyprctl layers): omarchy-menu, ..."
       [ "$want" != focused ] || die "wait layer: --gone or nothing"
-      [ ${#sels[@]} = 0 ] && [ -z "$geom$quiet" ] && [ $strict = 0 ] || die "wait layer: only --gone" ;;
-    cmd) [ ${#run[@]} -gt 0 ] || die "wait cmd: nothing to run (omabox wait cmd -- CMD ...)" ;;
+      [ ${#sels[@]} = 0 ] && [ -z "$geom$quiet" ] && [ $strict = 0 ] && [ ${#masks[@]} = 0 ] || die "wait layer: only --gone" ;;
+    cmd) [ ${#run[@]} -gt 0 ] || die "wait cmd: nothing to run (omabox wait cmd -- CMD ...)"
+      [ ${#masks[@]} = 0 ] || die "wait cmd: --ignore goes with still and change" ;;
     "") die "wait: for what? still, change, window SEL, layer NAMESPACE or cmd -- CMD (omabox help)" ;;
     *) die "wait: unknown condition $cond (still, change, window, layer, cmd)" ;;
   esac
@@ -3883,7 +3913,7 @@ cmd_wait() {
       else poll_until "layer $ns" "no layer $ns" 2 "$tmo" "$json" layer_probe present "$ns"; fi ;;
     cmd) poll_until "cmd" "cmd still failing" 1 "$tmo" "$json" cmd_probe "${run[@]}" ;;
     still|change)
-      local args=(--timeout "$tmo") region="" p
+      local args=(--timeout "$tmo" "${masks[@]}") region="" p
       [ -z "$quiet" ] || args+=(--quiet "$quiet")
       [ $strict = 0 ] || args+=(--strict)
       if [ -n "$geom" ]; then

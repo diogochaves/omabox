@@ -119,8 +119,8 @@ waits for a window, a layer, a command or a still screen (0 yes, 124 not in time
 Late content passes `still`: wait for a title (`wait window title:RE`) or `wait cmd -- …`. A shot
 right after a `click` or `keys` without `--wait` can show the frame before the redraw: use `--wait`,
 or `omabox wait still`, before the shot. Something on screen that never stops moving (a breathing
-glow, a spinner) makes `wait still` and `--wait` time out (124, "still changing"): `-g` the part under
-test (`--ignore` the moving region once it exists, #131). Keep the `satisfied:`/`unsatisfied:` line:
+glow, a spinner) makes `wait still` and `--wait` time out (124, "still changing"): the line names it,
+`--ignore "X,Y WxH"` it (or `-g` the part under test). Keep the `satisfied:`/`unsatisfied:` line:
 never send a wait to `/dev/null`.
 
 `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a title; `title:RE`, `class:RE`, `pid:N` or an address

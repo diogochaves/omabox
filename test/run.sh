@@ -5219,6 +5219,26 @@ t_unit_wait() {
   check_match "cmd needs a command" "nothing to run" "$(ob wait -b "$P-x" cmd -- 2>&1)"
   check_match "--quiet without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --quiet 1s a 2>&1)"
   check_match "run --wait needs -d" "goes with -d" "$(ob run -b "$P-x" --wait -- true 2>&1)"
+  # --ignore and -g (#131, finding 207)
+  check_match "--ignore without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --ignore "1,1 5x5" a 2>&1)"
+  check_match "-g without --wait refused" "go with --wait" "$(ob click -b "$P-x" -g "1,1 5x5" 1 1 2>&1)"
+  check_match "--ignore junk refused" '--ignore is "X,Y WxH"' "$(ob wait -b "$P-x" still --ignore 1,2,3 2>&1)"
+  check_match "...on --wait too" '--ignore is "X,Y WxH"' "$(ob run -b "$P-x" -d --wait --ignore 1x2 -- true 2>&1)"
+  check_match "-g twice on --wait refused" "-g once" "$(ob keys -b "$P-x" --wait -g "1,1 5x5" -g "2,2 5x5" a 2>&1)"
+  check_match "wait window --ignore refused" "go with still and change" "$(ob wait -b "$P-x" window x --ignore "1,1 5x5" 2>&1)"
+  local ig=() i; for i in $(seq 17); do ig+=(--ignore "$i,1 5x5"); done
+  check_match "17 --ignore refused" "at most 16" "$(ob wait -b "$P-x" still "${ig[@]}" 2>&1)"
+  # The 124's hint: changes kept to a small region late in the wait are named as an --ignore; a large
+  # one is not (ignoring most of the screen is not waiting on it).
+  local hint='source "$1"; NAME=u D=$2; exec {SETTLE_IN}>/dev/null {SETTLE_OUT}< <(echo "$3"); sleep 0.1 & SETTLE_PID=$!
+    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); settle_end still 0 ""'
+  out=$(bash -c "$hint" _ "$TMP/lib/bin/omabox" "$TMP" \
+    "unsatisfied changing t=10000 first=10 last=9990 change=28,90,14,900 ignored=- why=- late=27,81,15,918 frames=500" 2>&1)
+  check_eq "a 124 still changing in one small region: named as an --ignore" \
+    'unsatisfied: still changing after 10.00s (last change 9.99s at 28,90 14x900); from 5.00s on it changed only at 27,81 15x918: --ignore "27,81 15x918" if that is an animation' "$out"
+  out=$(bash -c "$hint" _ "$TMP/lib/bin/omabox" "$TMP" \
+    "unsatisfied changing t=10000 first=10 last=9990 change=0,0,1920,1080 ignored=- why=- late=0,0,1000,1080 frames=500" 2>&1)
+  check_eq "...over half the screen: no hint" 'unsatisfied: still changing after 10.00s (last change 9.99s at 0,0 1920x1080)' "$out"
   local out rc=0
   out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --die-with-parent \
         env -i "$ROOT/tools/still/omabox-still" still --timeout 100 2>&1) || rc=$?
@@ -5308,6 +5328,30 @@ t_wait() {
   check_eq "wait cmd: 0 once it succeeds" 0 "$rc"
   check_match "...after it did" "^satisfied: cmd after (0\.[5-9]|[1-9])" "$out"
   check_eq "wait cmd that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms cmd -- false >/dev/null; echo $?)"
+  # A steady animation (#131, finding 207): one cell that never stops changing. The 124 names it as an
+  # --ignore; --ignore'd, wait still and keys --wait are satisfied; -g watches elsewhere.
+  ob run -b "$B" -- pkill -x foot >/dev/null
+  ob wait -b "$B" window foot --gone >/dev/null
+  ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
+  ob wait -b "$B" window 'title:^N$' >/dev/null
+  out=$(ob wait -b "$B" still --timeout 2s); rc=$?
+  check_eq "a cell that never stops changing: 124" 124 "$rc"
+  check_match "...named as an --ignore" '; from 1\.[0-9]+s on it changed only at [0-9]+,[0-9]+ [0-9]+x[0-9]+: --ignore "[0-9]+,[0-9]+ [0-9]+x[0-9]+" if that is an animation$' "$out"
+  local g; g=$(sed -n 's/.*--ignore "\([^"]*\)".*/\1/p' <<<"$out")
+  out=$(ob wait -b "$B" still --ignore "$g"); rc=$?
+  check_eq "wait still --ignore \"$g\": satisfied" 0 "$rc"
+  check_match "...saying what it ignored" "ignored [0-9]+x[0-9]+ at [0-9]+,[0-9]+: --ignore\)$" "$out"
+  out=$(ob wait -b "$B" still --ignore "$g" --strict --json); rc=$?
+  check_eq "...--strict keeps an --ignore" "0 satisfied" "$rc $(jq -r .result <<<"$out")"
+  out=$(ob keys -b "$B" --wait --timeout 2s -t x 2>/dev/null); rc=$?
+  check_eq "keys --wait without it: 124" 124 "$rc"
+  check_match "...still changing" "^unsatisfied: still changing" "$out"
+  out=$(ob keys -b "$B" --wait --ignore "$g" -t y); rc=$?
+  check_eq "keys --wait --ignore it: settled" 0 "$rc"
+  out=$(ob keys -b "$B" --wait --start 1s -g "1000,600 200x200" --json shift 2>/dev/null); rc=$?
+  check_eq "keys --wait -g elsewhere: nothing changed there (not still changing)" "124 unsatisfied nothing changed" \
+    "$rc $(jq -r '"\(.result) \(.message | split(" in ")[0])"' <<<"$out")"
+  check "wait --json: late_changes is the region" jq -e '.late_changes.w > 0' <<<"$(ob wait -b "$B" still --timeout 1s --json)"
   # drag --wait (#102, finding 172): its own cursor crossing the screen is not a change; what the drag
   # does beside it (foot's selection across several lines) is.
   ob run -b "$B" -- pkill -x foot >/dev/null

@@ -49,13 +49,18 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
 ## Waiting, in detail
 
 - `omabox wait [--timeout 10s] [--json] COND`, one condition per call (chain with `&&`): `still
-  [--quiet 300ms] [-g GEOM | --window SEL] [--strict]`, `change [-g | --window]`, `window SEL [--gone
+  [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change [-g | --window]
+  [--ignore GEOM]...`, `window SEL [--gone
   | --focused]`, `layer NAMESPACE [--gone]` (`omarchy-menu`, `omarchy-notifications`, ...), `cmd --
   CMD` (exit 0 inside the box). `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several.
-- `keys`, `click`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [--json]`:
-  the screen before the action, a change within `--start` (5 s for `run -d`), then `--quiet` with none.
+- `keys`, `click`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM]
+  [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s for `run
+  -d`), then `--quiet` with none. `-g` watches only that part of the screen.
+- `--ignore "X,Y WxH"` (up to 16; `--strict` keeps them) leaves out an animation that never stops. A 124
+  "still changing" whose late changes were all in one small region ends with `--ignore "X,Y WxH" if
+  that is an animation`: add it if the shot shows a spinner or a glow there, not the app under test.
 - A caret (a change 4 px or thinner) and the software cursor (in every frame; it hides on a key
   press) are not changes; the line says what was ignored. `--strict` counts them (a thin progress bar
   or spinner is ignored like a caret otherwise).

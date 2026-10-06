@@ -1,6 +1,6 @@
 // omabox-still: wait until the screen of the Wayland display in $WAYLAND_DISPLAY holds still, or changes.
 //
-//   omabox-still (still | change | settle) [--region X,Y,W,H] [--ignore X,Y,W,H]... [--quiet MS]
+//   omabox-still (still | change | settle) [--region X,Y,W,H] [--ignore X,Y,W,H]... [--mask X,Y,W,H]... [--quiet MS]
 //                [--start MS] [--timeout MS] [--first MS] [--strict] [--tied]
 //
 // still:  satisfied once nothing significant has changed for --quiet ms (default 300).
@@ -12,13 +12,16 @@
 // something was drawn: an idle screen costs nothing while it waits. Every frame is compared with the
 // one before, pixel by pixel, inside --region (default: the whole output). A change is significant
 // unless it is 4 pixels or less in width or height (a text caret blinking) or lies inside an --ignore
-// rectangle (where the software cursor is: Hyprland hides it on a key press); --strict counts all.
+// rectangle (where the software cursor is: Hyprland hides it on a key press) or a --mask one (the
+// caller's: an animation that never stops, #131); --strict counts all but a --mask.
 // Before it answers "nothing changed" or "still", one plain copy (which never waits) is compared too, so
 // a change drawn between two requests is not missed.
 //
 // Prints `ready WxH` once it has the first frame (the caller acts after that), then one line:
-//   satisfied|unsatisfied|unknown REASON t=MS first=MS last=MS change=X,Y,W,H ignored=X,Y,W,H why=WHY frames=N
-// (times from `ready`, - when there is none). Exit 0 satisfied, 124 unsatisfied, 1 unknown, 2 usage.
+//   satisfied|unsatisfied|unknown REASON t=MS first=MS last=MS change=X,Y,W,H ignored=X,Y,W,H why=WHY
+//   late=X,Y,W,H frames=N
+// (times from `ready`, - when there is none; late: all the significant changes in the second half of
+// --timeout, one box around them: what kept a wait from its answer). Exit 0 satisfied, 124 unsatisfied, 1 unknown, 2 usage.
 // unknown: no first frame within --first ms (default 2000: an interactive box's hidden window is not
 // rendered), the compositor went away, it did not answer its first round trip within 10 s (`hung`: alive
 // but stopped or deadlocked, finding 181), or with --tied, stdin closed (the caller is gone).
@@ -41,13 +44,14 @@
 #define DRM_FORMAT_XBGR8888 0x34324258
 #define DRM_FORMAT_ABGR8888 0x34324241
 #define MAX_SIDE 16384
-#define MAX_IGNORE 32   // drag --wait: the cursor along its path (omabox path_rects: 30)
+#define MAX_IGNORE 48   // drag --wait: the cursor along its path (omabox path_rects: 30), and 16 --mask
 #define THIN 4   // a change this thin or thinner is a caret, not a change
 
 struct rect { int x, y, w, h; };
 
 static void usage(void) {
-    fprintf(stderr, "usage: omabox-still (still|change|settle) [--region X,Y,W,H] [--ignore X,Y,W,H]... [--quiet MS]\n"
+    fprintf(stderr, "usage: omabox-still (still|change|settle) [--region X,Y,W,H] [--ignore X,Y,W,H]... [--mask X,Y,W,H]...\n"
+                    "                    [--quiet MS]\n"
                     "                    [--start MS] [--timeout MS] [--first MS] [--strict] [--tied]\n");
     exit(2);
 }
@@ -84,11 +88,13 @@ static enum mode mode;
 static long quiet = 300, start = 2000, timeout = 10000, first = 2000;
 static int strict, tied, have_region;
 static struct rect region, ignore[MAX_IGNORE];
-static int nignore;
+static int nignore, masked[MAX_IGNORE];   // masked: a --mask, which --strict keeps
 
 static int64_t t0 = -1;               // when `ready` was printed
 static int64_t first_sig = -1, last_sig = -1;   // ms since t0
 static struct rect sig_box, ign_box;  // the last significant change, the last ignored one
+static struct rect late_box;          // around every significant change after timeout/2
+static int nlate;
 static const char *ign_why;
 static long frames;
 
@@ -252,13 +258,14 @@ static int compare(void) {
         if (!memcmp(a + x0, b + x0, (size_t)(x1 - x0) * 4)) continue;
         for (int x = x0; x < x1; x++) {
             if (!((a[x] ^ b[x]) & 0xffffff)) continue;   // colour only: X/alpha bytes may be anything
-            int i = strict ? -1 : ignored(x, y);
+            int i = ignored(x, y);
+            if (strict && i >= 0 && !masked[i]) i = -1;
             if (i >= 0) grow(&ig[i], &ni[i], x, y);
             else grow(&s, &ns, x, y);
         }
     }
     for (int i = 0; i < nignore; i++)
-        if (ni[i]) { ign_box = ig[i]; ign_why = "cursor"; }
+        if (ni[i]) { ign_box = ig[i]; ign_why = masked[i] ? "mask" : "cursor"; }
     if (!ns) return 0;
     if (!strict && (s.w <= THIN || s.h <= THIN)) { ign_box = s; ign_why = "caret"; return 0; }
     sig_box = s;
@@ -273,14 +280,15 @@ static void rect_str(char *out, size_t n, const struct rect *r, int have) {
 }
 
 static void finish(const char *result, const char *reason, int code) {
-    char t[32] = "-", f[32] = "-", l[32] = "-", s[64], ig[64];
+    char t[32] = "-", f[32] = "-", l[32] = "-", s[64], ig[64], la[64];
     if (t0 >= 0) snprintf(t, sizeof(t), "%lld", (long long)(now_ms() - t0));
     if (first_sig >= 0) snprintf(f, sizeof(f), "%lld", (long long)first_sig);
     if (last_sig >= 0) snprintf(l, sizeof(l), "%lld", (long long)last_sig);
     rect_str(s, sizeof(s), &sig_box, last_sig >= 0);
     rect_str(ig, sizeof(ig), &ign_box, ign_why != NULL);
-    printf("%s %s t=%s first=%s last=%s change=%s ignored=%s why=%s frames=%ld\n",
-           result, reason, t, f, l, s, ig, ign_why ? ign_why : "-", frames);
+    rect_str(la, sizeof(la), &late_box, nlate);
+    printf("%s %s t=%s first=%s last=%s change=%s ignored=%s why=%s late=%s frames=%ld\n",
+           result, reason, t, f, l, s, ig, ign_why ? ign_why : "-", la, frames);
     fflush(stdout);
     exit(code);
 }
@@ -351,7 +359,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--tied")) tied = 1;
         else if (!v) usage();
         else if (!strcmp(a, "--region")) { region = parse_rect(v); have_region = 1; i++; }
-        else if (!strcmp(a, "--ignore")) { if (nignore == MAX_IGNORE) usage(); ignore[nignore++] = parse_rect(v); i++; }
+        else if (!strcmp(a, "--ignore") || !strcmp(a, "--mask")) {
+            if (nignore == MAX_IGNORE) usage();
+            masked[nignore] = !strcmp(a, "--mask");
+            ignore[nignore++] = parse_rect(v); i++;
+        }
         else if (!strcmp(a, "--quiet")) { quiet = num(v, 1, 600000); i++; }
         else if (!strcmp(a, "--start")) { start = num(v, 1, 600000); i++; }
         else if (!strcmp(a, "--timeout")) { timeout = num(v, 1, 600000); i++; }
@@ -406,6 +418,10 @@ int main(int argc, char **argv) {
             if (compare()) {
                 if (first_sig < 0) first_sig = t;
                 last_sig = t;
+                if (2 * t >= timeout) {
+                    grow(&late_box, &nlate, sig_box.x, sig_box.y);
+                    grow(&late_box, &nlate, sig_box.x + sig_box.w - 1, sig_box.y + sig_box.h - 1);
+                }
             }
             have_prev = 1;
             prev = !prev;
