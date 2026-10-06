@@ -3731,6 +3731,12 @@ t_unit_guard_settings() {
   check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$co/share/guard" \
     "$(bash -c '. "$1"; echo "${PATH%%:*}"' _ "$f")"
   check_match "Codex's hook gives the note" "^omabox guard: shell commands here have no display" "$(sh -c "$chook")"
+  # #142: the note says `!` commands are guarded, and gets through whole (it sits in the hooks'
+  # single-quoted echo, so a ' in it would cut it short or break the hook).
+  check_match "...whole, saying the user's ! commands are guarded (#142)" \
+    "! commands the user runs are under this guard too.*omabox host -- CMD$" "$(sh -c "$chook")"
+  check_match "...and so does Claude Code's" "! commands the user runs are under this guard too.*omabox host -- CMD$" \
+    "$(CLAUDE_ENV_FILE=$f sh -c "$hook")"
   # Issue #51: omabox deleted without `guard off` (a checkout removed, a package uninstalled).
   rm -rf "$co" "$f"
   check_match "omabox gone: the hook says so, in one line" "^omabox guard: omabox is gone \($co/bin/omabox\), so the guard is not applied" "$(CLAUDE_ENV_FILE=$f sh -c "$hook")"

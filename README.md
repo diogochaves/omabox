@@ -305,8 +305,10 @@ PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc`
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a
   Qt program's abort never becomes a "Process crashed" notification on your desktop. It also tells
   the agent in one line what the error means and when `omabox host` is allowed. Claude Code's own
-  process is not changed (clipboard paste, opening the browser); your `!` commands most likely are
-  not either (not checked). If omabox is gone (deleted without `guard off`), the hook applies nothing
+  process is not changed (clipboard paste, opening the browser). Your own `!` commands in Claude Code
+  run in the session's shell, so they get the guard too: run desktop commands (`omarchy restart
+  shell`, `hyprctl reload`, a theme switch) in your own terminal, or ask the agent to use `omabox
+  host`. If omabox is gone (deleted without `guard off`), the hook applies nothing
   and says so in one line.
 - **Codex**: `[shell_environment_policy.set]` in a marked block of `~/.codex/config.toml` (a config
   whose own `set` table would clash is refused, untouched, with the lines to add by hand), and a

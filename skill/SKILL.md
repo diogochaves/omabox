@@ -216,7 +216,9 @@ would reach the user's desktop shell; a box's shell is `omabox run -- qs ipc …
 When the user asked for their **real** desktop in this task ("switch my theme", reload my Hyprland
 config after an edit, see the change on my screen), run that one command with `omabox host -- CMD`
 (e.g. `omabox host -- hyprctl reload`, `omabox host -- omarchy-theme-set NAME`). Only then: it is
-the one way past the guard, and it is on the record. Testing, screenshots and anything the user did
+the one way past the guard, and it is on the record. The user's own `!` commands run under the guard
+too: never hand them a `! CMD` that touches their desktop (`omarchy restart shell`, `hyprctl reload`);
+use `omabox host -- CMD` once they asked, or tell them to run it in their own terminal. Testing, screenshots and anything the user did
 not ask to see on their desktop stay in a box. Never use it to switch the user's workspace or focus
 so you can see a box: `shot` works on a hidden interactive box, and when `shot` gets no frame, ask
 the user (see Showing the user).

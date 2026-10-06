@@ -3297,6 +3297,16 @@ from them.
     (refusals, argv passed whole, against a stub after the guard on PATH; `host` gets the real one),
     t_omarchy_restart (under the guard in a box standing in for the host, `omarchy-restart-shell`
     fails and the shell is the same process after; on the old code, in a worktree, it was gone).
+188. **The user's `!` commands are guarded too** (2026-10-06, #142; corrects 67, which called them the
+    way past the guard before `omabox host`, and the README's "most likely not, not checked"). Claude
+    Code sources `$CLAUDE_ENV_FILE` before every shell command of the session, and a `!` command is
+    one: an agent told the user to run `! omarchy restart shell`, its `quickshell kill` worked, its
+    relaunch hit `omabox-guard`, and the user had no bar (2026-10-04; that part is 187). Verified by its
+    outcome, not by a test: a `!` command cannot be run from the suite. Claude Code's own prompt tells
+    the model to suggest `! CMD` for what the user should run, so the guard's note (printed every
+    session) and the skill now say `!` is guarded and not to hand the user a desktop command that way:
+    `omabox host -- CMD` once they asked, or their own terminal. The note changed, so `omabox guard`
+    reads a hook from before as outdated; `omabox guard on claude` (or install.sh's offer) renews it.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
