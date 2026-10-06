@@ -1823,7 +1823,12 @@ cmd_up() {
   # rule by the launched pid or by this token in the client's environment, and pasta forks, so a
   # top-level box's window (every one is behind pasta, finding 89) only lands on its workspace through
   # the token. bwrap drops it inside.
-  { printf '#!/usr/bin/env bash\nexec'
+  # Only 0-2 go on into the box, and the info fd launch.sh opens (#112): a box behind pasta has every
+  # other fd closed by pasta, but a nested or no_new_privs box (no pasta) got all of omabox's caller's
+  # (an agent harness's pipe, a lock, a log), readable or writable from inside. One line with the exec:
+  # bash has read it whole before the loop closes its own script's fd.
+  # shellcheck disable=SC2016 # launch.sh's own loop
+  { printf '#!/usr/bin/env bash\nfor f in /proc/self/fd/*; do f=${f##*/}; [ "$f" -le 2 ] || eval "exec $f>&-"; done 2>/dev/null; exec'
     # USER/LOGNAME too (finding 49): widgets and scripts name the user from them. SHELL, which login
     # sets on the host (terminals and multiplexers open it), and every locale variable, not only LANG
     # (finding 58: LC_TIME and the rest are the user's formats).

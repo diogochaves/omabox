@@ -3486,6 +3486,13 @@ from them.
     killed after its box started: a reaper, the box down at its idle limit; both failed on the old
     code). Not built from the issue's proposal: an `orphan` state in `ls` and `down --orphans`, and idle
     limits for the suite's boxes: the cause was the missing reaper, and boxes with one are taken down.
+204. **A box gets none of its caller's fds, with or without pasta** (2026-10-06, #112). Behind pasta
+    (every top-level box) pasta closes inherited fds; a box without it (nested connected, or started
+    from a no_new_privs process: `net none`, finding 89) ran bwrap straight from launch.sh, which passed
+    on every fd omabox had: VERIFIED with a file open as fd 7 in the caller of a nested `up`, 11
+    processes in the nested box held it. launch.sh now closes every fd above 2 before its exec (fd 3,
+    bwrap's info fd, is opened by that exec); on the same line, so bash has read it before the loop
+    closes the script's own fd. t_leak_control's nested box (failed on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

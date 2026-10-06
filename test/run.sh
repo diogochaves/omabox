@@ -1193,8 +1193,12 @@ t_leak_control() {
   # a command other than `omabox peek` opening one would look like) is a leak.
   local in=("$CLI" run -b "$S" --) C=$P-cin wd
   ob run -b "$S" -- pkill -x foot   # (focus coming back to it would be a leak of its own)
-  "${in[@]}" "$CLI" up "$C" --no-shell --idle 0 >/dev/null 2>&1 || no "up a box in the stand-in" "failed"
+  # (Started with a file open as fd 7, which no process of the nested box may hold: #112.)
+  "${in[@]}" bash -c 'echo x > /tmp/omabox-t112; exec 7</tmp/omabox-t112; exec "$@"' _ "$CLI" up "$C" --no-shell --idle 0 >/dev/null 2>&1 ||
+    no "up a box in the stand-in" "failed"
   check_box_safety "$C" "${in[@]}" "$CLI"   # a nested box (#111)
+  check_eq "a nested box (no pasta) holds none of its caller's fds (#112)" 0 \
+    "$("${in[@]}" "$CLI" run -b "$C" -- sh -c 'for p in /proc/[0-9]*; do ls -l "$p/fd" 2>/dev/null; done | grep -c omabox-t112')"
   # shellcheck disable=SC2329 # called through until_ok
   seen() { slice "$log" "$1" "$2" | grep -- "$3" >/dev/null; }
   # shellcheck disable=SC2329
