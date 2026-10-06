@@ -99,7 +99,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
                                                          a box's logs: hyprland (the default), shell, apps, run,
-                                                         events, keyring, labwc, systemd, box, reap
+                                                         events, keyring, labwc, systemd, gdb, box, reap
+  omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
   omabox events [-b NAME] --mark [MARK]                  from here: prints the offset, keeps MARK for --since
   omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
@@ -231,6 +232,13 @@ hl.timer) that runs later is logged nowhere: catch it with pcall.
 \`run -d\`'s, apps what Omarchy's launcher started, box bwrap's. -f follows them until the box goes
 down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
 come late.
+@ gdb
+\`gdb\` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a
+process of the box), stopped or deadlocked too, and leaves it as it was; -- ARGS replace the backtrace
+with gdb's own (-ex 'info threads'). --watch attaches until a crash: the backtrace of the fatal
+signal goes to \`omabox log gdb\`, then the crash goes on. gdb gets CAP_SYS_PTRACE in the box's user
+namespace only: it traces the box's processes, never the host's. No symbols beyond the binaries'
+own (debuginfod off).
 @ events
 \`events\`: what the box's Hyprland reported on its event socket (activewindow>>, urgent>>, ...) from
 its start, never cleared. --mark MARK takes "from here" (a byte offset: safe while events come);
@@ -4130,14 +4138,14 @@ $code
 # read inside its mount namespace (on_box), where a path resolves as the box sees it and only the
 # box's own files are; a dead box's from the host, only as regular files inside its own dirs. box.log
 # and reap.log are the box dir's, which the box never sees.
-LOG_NAMES=(hyprland shell apps run events keyring labwc systemd box reap)
+LOG_NAMES=(hyprland shell apps run events keyring labwc systemd gdb box reap)
 # Where log NAME of the selected box is: "box PATH" (as the box sees it) or "host PATH"; 1 when the
 # box has none, 2 for a name that is no log.
 log_where() {
   local sig r
   case $1 in
     hyprland) sig=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || return 1; echo "box /run/user/$UID/hypr/$sig/hyprland.log" ;;
-    shell|keyring|apps|labwc|systemd|events) echo "box /home/sbx/$1.log" ;;
+    shell|keyring|apps|labwc|systemd|events|gdb) echo "box /home/sbx/$1.log" ;;
     # The latest `run -d` (their names are run-<ns since 1970>.log: in order as text).
     run) r=$(cd "$D/home" 2>/dev/null && printf '%s\n' run-*.log | grep -E '^run-[0-9]+\.log$' | sort | tail -n 1) &&
       [ -n "$r" ] || return 1; echo "box /home/sbx/$r" ;;
@@ -4587,6 +4595,76 @@ output_back() {
   done
   rm -f -- "$D/output.dropped"
   echo "$screen"
+}
+
+# gdb on a box's Hyprland, shell or any of its processes (#135, finding 211). A gdb started beside
+# them (omabox run) is refused, `ptrace: Operation not permitted`: Yama's ptrace_scope 1 lets only an
+# ancestor trace, or a tracer with CAP_SYS_PTRACE in the traced process's user namespace. omabox owns
+# the box's user namespace, so nsenter --keep-caps hands gdb that one capability there (setpriv drops
+# every other, the bounding set too). It traces the box's processes and nothing outside: it runs in
+# the box's pid namespace, where no other process has a number. No core is needed (a box's limit is
+# 1 byte, finding 67): a backtrace of what runs (a hang), or --watch, gdb attached until a fatal
+# signal, its backtrace written to the box's gdb log before the process's own handler runs.
+cmd_gdb() {
+  local name="" target=hyprland pid="" watch=0 extra=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --shell) target=shell ;;
+      --pid) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,6}$ ]] || die "gdb: --pid takes a pid in the box (omabox run -- ps -e), got $2"; target=pid pid=$2; shift ;;
+      --watch) watch=1 ;;
+      -h|--help) usage gdb; return ;;
+      --) shift; extra=("$@"); break ;;
+      *) die "gdb: unknown option $1 (gdb's own go after --)" ;;
+    esac
+    shift
+  done
+  [ $watch = 0 ] || [ ${#extra[@]} = 0 ] || die "gdb: --watch runs its own commands; -- ARGS go with a backtrace"
+  select_box "$name"; need_box
+  [ -x /usr/bin/gdb ] || die "gdb: no /usr/bin/gdb (package gdb); a box runs the host's"
+  local bp; bp=$(box_pid); [ -n "$bp" ] || die "box '$NAME' is not up"
+  local ns=(nsenter -t "$bp" -U -m -p --preserve-credentials)
+  case $target in
+    hyprland) pid=$("${ns[@]}" pgrep -xo Hyprland) || die "gdb: box '$NAME' has no Hyprland running" ;;
+    shell) { pid=$(shell_pid) && shell_running "$pid"; } || die "gdb: box '$NAME' has no shell running ($(shell_state))" ;;
+    pid) "${ns[@]}" test -d "/proc/$pid" || die "gdb: box '$NAME' has no process $pid (omabox run -b $NAME -- ps -e)" ;;
+  esac
+  local what tracer
+  what=$("${ns[@]}" cat "/proc/$pid/comm" 2>/dev/null) || what=$target
+  # A traced process's tracer, 0 for none.
+  tracer_of() { "${ns[@]}" sed -n 's/^TracerPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
+  tracer=$(tracer_of "$pid") || tracer=0
+  [ "${tracer:-0}" = 0 ] || die "gdb: $what (pid $pid in box '$NAME') is traced already, by pid $tracer (a gdb --watch?): omabox run -b $NAME -- kill $tracer ends that"
+  # shellcheck disable=SC2054 # setpriv's capability lists
+  local caps=("${ns[@]}" --keep-caps -- setpriv --inh-caps=-all,+sys_ptrace --ambient-caps=-all,+sys_ptrace
+    --bounding-set=-all,+sys_ptrace --)
+  local gdb=(env -i PATH=/usr/bin HOME=/home/sbx LANG="${LANG:-C.UTF-8}"
+    gdb -nx -batch -iex 'set debuginfod enabled off' -iex 'set pagination off' -iex 'set width 0'
+    -iex 'set print thread-events off')
+  if [ $watch = 0 ]; then
+    [ ${#extra[@]} -gt 0 ] || extra=(-ex 'thread apply all bt')
+    local rc=0
+    timeout 120 "${caps[@]}" "${gdb[@]}" -p "$pid" "${extra[@]}" || rc=$?
+    [ $rc != 124 ] || die "gdb: no answer in 120 s"
+    return $rc
+  fi
+  # Watched: started in a session of its own in the box (it ends with the box), into the gdb log. A
+  # fatal signal stops it before the process's handler; gdb writes every thread's backtrace and quits,
+  # detaching, and the signal goes on (pass): the process crashes as it would have, report and all.
+  local log=/home/sbx/gdb.log
+  printf '\n== omabox gdb --watch %s (pid %s in the box), %s\n' "$what" "$pid" "$(date -Is)" >> "$D/home/gdb.log" ||
+    die "gdb: cannot write the box's gdb log"
+  # shellcheck disable=SC2016 # the inner sh's
+  "${caps[@]}" setsid -f sh -c 'log=$1; shift; exec "$@" >> "$log" 2>&1 </dev/null' sh "$log" \
+    "${gdb[@]}" -p "$pid" -ex 'handle all nostop noprint pass' \
+    -ex 'handle SIGSEGV SIGABRT SIGBUS SIGFPE SIGILL stop print pass' -ex continue \
+    -ex 'echo \n== omabox: a fatal signal; every thread:\n' -ex 'thread apply all bt' -ex 'echo == omabox: end\n'
+  local end=$((SECONDS + 10))
+  until tracer=$(tracer_of "$pid") && [ "${tracer:-0}" != 0 ]; do
+    [ $SECONDS -lt $end ] || die "gdb: did not attach to $what in 10 s (omabox log -b $NAME gdb)"
+    sleep 0.1
+  done
+  say "gdb watches $what (pid $pid in box '$NAME'): on a crash, every thread's backtrace goes to omabox log -b $NAME gdb"
 }
 
 # GPU engine time of this box's processes, as % of wall time, by process name. Host-wide tools sum
@@ -5837,7 +5915,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|pixel|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|reload|mode|output|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|pixel|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|gpu|env|path|down|ls|list) ;;
     # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
     ports) ;;
     help|-h|--help|version|-V|--version) ;;
@@ -6111,7 +6189,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click pointer drag wait hyprctl lua log logs events peek restart-shell reload mode output gpu ports env path down save clip "
+BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output gpu ports env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -6174,6 +6252,7 @@ main() {
     reload) cmd_reload "$@" ;;
     mode) cmd_mode "$@" ;;
     output) cmd_output "$@" ;;
+    gdb) cmd_gdb "$@" ;;
     gpu) cmd_gpu "$@" ;;
     ports) cmd_ports "$@" ;;
     env) cmd_env "$@" ;;

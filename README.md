@@ -96,6 +96,7 @@ omabox windows                         # the box's windows, where they are, what
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail (next release)
 omabox output drop --for 300ms         # the screen gone and back, as a monitor waking up (next release)
+omabox gdb [--watch]                   # backtraces of the box's Hyprland: a hang, or a crash (next release)
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
 omabox keys -t 'hello world' Return    # type text, then press a key
 omabox keys --wait super+space         # ...and return once the screen has settled (no sleeps)

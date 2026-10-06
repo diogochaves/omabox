@@ -23,6 +23,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox output drop [--for DURATION] [--cycles N]` and `output back`**: a headless box's screen
   goes and comes back under its own name, mode and position, as a monitor that drops off on wake
   does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
+- **`omabox gdb [--shell | --pid PID] [--watch]`**: every thread's backtrace of the box's Hyprland
+  (or shell, or any process of the box), hung or stopped too; `--watch` catches a crash into `omabox
+  log gdb`. A gdb started in the box was refused by the kernel's ptrace rules (#135).
 
 ### Fixed
 

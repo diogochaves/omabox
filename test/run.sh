@@ -5098,6 +5098,43 @@ t_output() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# omabox gdb (#135, finding 211): a backtrace of the box's Hyprland, running or stopped, of a process
+# of the box, and --watch catching a crash; a gdb of the box's own (run) is still refused.
+t_gdb() {
+  local B=$P-gdb out rc
+  check_match "gdb: --watch and -- ARGS refused" "--watch runs its own" "$(ob gdb -b "$P-x" --watch -- -ex bt 2>&1)"
+  check_match "gdb: --pid junk refused" "--pid takes a pid" "$(ob gdb -b "$P-x" --pid x 2>&1)"
+  check_match "gdb: gdb's options after --" "after --" "$(ob gdb -b "$P-x" -ex bt 2>&1)"
+  check "gdb is a jailed agent's" lib broker_check gdb
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  out=$(ob gdb -b "$B" 2>&1); rc=$?
+  check_eq "gdb: exit 0" 0 "$rc"
+  check_match "...every thread's backtrace, down to main" $'\n#[0-9]+ +0x[0-9a-f]+ in main \\(\\)' "$out"
+  check_match "a gdb run in the box itself is still refused (ptrace_scope)" "ptrace: Operation not permitted" \
+    "$(ob run -b "$B" -- gdb -nx -batch -p "$(ob run -b "$B" -- pgrep -xo Hyprland)" 2>&1)"
+  ob run -b "$B" -- pkill -STOP -xo Hyprland
+  out=$(timeout 30 "$CLI" gdb -b "$B" 2>&1); rc=$?
+  check_match "a stopped Hyprland: backtraced (exit $rc)" $'\n#[0-9]+ +0x[0-9a-f]+ in main \\(\\)' "$out"
+  check_match "...and left stopped" "^State:.*stopped" "$(ob run -b "$B" -- grep State "/proc/$(ob run -b "$B" -- pgrep -xo Hyprland)/status")"
+  ob run -b "$B" -- pkill -CONT -xo Hyprland
+  check "...it answers again" until_ok 5 ob hyprctl -b "$B" version
+  ob run -b "$B" -d -q -- sleep 600
+  local sp; sp=$(ob run -b "$B" -- pgrep -xn sleep)
+  check_match "gdb --pid: a process of the box" "in (clock_nanosleep|__GI___clock_nanosleep|nanosleep)|#0 " "$(ob gdb -b "$B" --pid "$sp" 2>&1)"
+  check_match "...one it has not: refused" "has no process 99999" "$(ob gdb -b "$B" --pid 99999 2>&1)"
+  check_match "gdb --shell with no shell: refused" "has no shell running" "$(ob gdb -b "$B" --shell 2>&1)"
+  out=$(ob gdb -b "$B" --watch 2>&1); rc=$?
+  check_eq "gdb --watch: exit 0" 0 "$rc"
+  check_match "...said, with where the backtrace goes" "gdb watches Hyprland .*omabox log -b $B gdb" "$out"
+  check_match "...a second gdb: refused, naming the watch" "traced already, by pid [0-9]+" "$(ob gdb -b "$B" 2>&1)"
+  ob run -b "$B" -- pkill -SEGV -xo Hyprland
+  check "...a crash: the box goes down as it would have" until_ok 15 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | .state == \"dead\"'"
+  out=$(ob log -b "$B" gdb -n all 2>&1)
+  check_match "...the gdb log has the signal" "received signal SIGSEGV" "$out"
+  check_match "...and every thread's backtrace, down to main" $'\n#[0-9]+ +0x[0-9a-f]+ in main \\(\\)' "$out"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before
 # any box is asked.
 t_unit_pointer() {
@@ -5670,7 +5707,7 @@ t_inspect() {
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_output t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

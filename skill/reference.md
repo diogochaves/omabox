@@ -207,6 +207,13 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   session and suspend paths, or a real password at the lock screen (the lock itself runs: "Testing
   the lock screen"). Those stay the real desktop's (or a VM's with passthrough): say so.
 - Inside ai-jail the build must be in the jail's project (or a folder the jail was given whole).
+- **A hang or a crash**: `omabox gdb` prints every thread's backtrace of the box's Hyprland, stopped
+  or deadlocked too, and leaves it as it was (`-- -ex 'info threads'`: gdb's own commands). A crash:
+  `omabox gdb --watch` before the step that crashes it; the box then goes down as it would have, and
+  `omabox log gdb` has the fatal signal and every thread's backtrace (the box writes no core and no
+  Hyprland crash report). `--shell` for the shell, `--pid PID` for any process of the box. A gdb run
+  with `omabox run` is refused (`ptrace: Operation not permitted`). Symbols: what the binaries carry
+  (a debug build has them); Arch's are on debuginfod, offline from the addresses.
 
 ## The Omarchy shell's IPC (direct routes)
 

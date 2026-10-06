@@ -3586,6 +3586,28 @@ from them.
     cycles at 50 ms-2 s here. Checks in t_output (the refusals, drop and back by hand, three 300 ms
     cycles under the same name and mode, the shell's log, a shot of the old size, a SIGSEGV to the shell
     mid-cycles ending them with exit 1 and its report).
+211. **`omabox gdb`: backtraces of a box's Hyprland, shell or process; `--watch` for a crash** (2026-10-06,
+    #135). A box is where a Hyprland plugin or build gets broken, but a gdb started there (`omabox
+    run -- gdb -p`) got `ptrace: Operation not permitted` and a crash left no core (limit 1 byte,
+    finding 67): agents bisected a deadlock with fopen markers compiled into a plugin. Yama's
+    `ptrace_scope` 1 lets only an ancestor trace, or a tracer with CAP_SYS_PTRACE in the traced
+    process's user namespace. omabox owns the box's user namespace, so `nsenter --keep-caps` (util-linux
+    2.39+) gives gdb that one capability there, setpriv dropping every other (inheritable, ambient and
+    bounding sets): it traces the box's processes and nothing else, and in the box's pid namespace no
+    other process has a number. So the issue's `up --debug` (prctl PR_SET_PTRACER_ANY, which would let
+    any process of the user trace the box's Hyprland, other boxes' too) is not needed, and every box
+    can be debugged as it is. `gdb` is a batch `thread apply all bt` (120 s limit; `-- ARGS` replace
+    it); a SIGSTOPped Hyprland answers in 0.2 s and stays stopped. `--watch` attaches in a session of
+    its own (it ends with the box), all signals passed but SIGSEGV, SIGABRT, SIGBUS, SIGFPE and SIGILL,
+    which stop it: every thread's backtrace goes to the box's `gdb` log (`omabox log gdb`, a dead
+    box's too), then gdb detaches and the signal goes on, so the process crashes as it would have. A
+    process already traced is refused, naming the tracer. Checked here: boxes set
+    HYPRLAND_NO_CRASHREPORTER=1 (since 0.1.0), so Hyprland writes no crash report in a box; the
+    watch is the route. Symbols: debuginfod off (an isolated box has no network); Arch's binaries
+    carry enough for `main ()` and Hyprland's own frames (`CEventLoopManager::enterLoop()`). Checks
+    in t_gdb (refusals, a backtrace to main, a gdb run in the box still refused, a stopped Hyprland
+    backtraced and left stopped, --pid of a box sleep and of one it has not, --shell without a shell,
+    --watch then a second gdb refused, a SIGSEGV: the box dead and the log with the signal and main).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
