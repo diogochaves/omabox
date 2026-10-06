@@ -241,7 +241,8 @@ them, and `omabox config KEY default` puts one back.
 - `bar-icon`: `always` (the default) keeps the widget's icon in the bar with no box up, dimmed, so
   its settings are a click away; `auto` shows it only while boxes exist.
 - `gpu` (next release): the GPU headless boxes render on: `auto` (the default: the first usable
-  render node), `nvidia`, `amd`, `intel`, or a PCI slot as `lspci -D` prints it (`0000:01:00.0`).
+  render node), `nvidia`, `amd`, `intel`, or a PCI slot (`0000:01:00.0`: for two GPUs of one kind).
+  `omabox config gpu` lists the GPUs with the values that name each, and marks the one in use.
   When that GPU is not there (an NVIDIA card handed to a VM), `up` renders on the first one and says
   so. `OMABOX_RENDER_NODE=/dev/dri/renderDN` overrides it. Interactive boxes render on your desktop's
   GPU whatever it says. `auto` stays the default: on a laptop the iGPU saves battery.

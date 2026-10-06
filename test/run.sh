@@ -5202,6 +5202,17 @@ t_unit_gpu() {
   HOME=$f/home ob config gpu amd >/dev/null
   check_eq "config gpu amd: set" "amd" "$(HOME=$f/home ob config gpu)"
   check_eq "...in config --json" "amd" "$(HOME=$f/home ob config --json | jq -r .gpu)"
+  # The list (config gpu, on stderr): every node, its driver and slot, what names it, * where boxes go.
+  : > "$f/dri/renderD129"
+  local list; list=$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
+    printf 'gpu=nvidia\n' > \$CONFIG; cmd_config gpu 2>&1 >/dev/null")
+  check_match "config gpu lists the GPUs, on stderr" "^GPUs \(\* = where a headless box renders now" "$list"
+  check_match "...the AMD one, with what names it" $'\n  renderD128 +amdgpu +0000:0a:00.0 +gpu amd or gpu 0000:0a:00.0' "$list"
+  check_match "...the NVIDIA one marked: gpu nvidia is set" $'\n\\* renderD129 +nvidia +0000:01:00.0 +gpu nvidia or gpu 0000:01:00.0' "$list"
+  check_eq "...stdout stays the value" nvidia "$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; cmd_config gpu 2>/dev/null")"
+  check_match "config gpu intel with no Intel GPU: a note" "note: no usable GPU here is intel now" \
+    "$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; cmd_config gpu intel 2>&1 >/dev/null")"
+  check_eq "...none for one that is there" "" "$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; cmd_config gpu amd 2>&1 >/dev/null")"
 }
 
 # Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before

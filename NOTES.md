@@ -3657,12 +3657,18 @@ from them.
     normalises and refuses junk. Live, the full suite with `config gpu nvidia` on the RTX 5070 Ti
     (every box on renderD129): 1983/18/1. 17 were t_output: a headless NVIDIA box draws on labwc's
     Wayland output, which `output drop` refuses by design (finding 210); t_output now checks that
-    refusal there and skips the rest. One, t_throwaway_dead's 15 s, timed out under the full run's load
-    and passed alone twice on the RTX. On the real card (Diogo's sudo, 2026-10-06), with `gpu nvidia`
+    refusal there and skips the rest. One, t_throwaway_dead's 15 s (the reaper clearing a throwaway
+    found dead), timed out under the full run's load, and again in the next full run with `gpu
+    nvidia` (2 of 2 full runs on the RTX, none of the day's on the AMD). Not found: it passes alone,
+    and by hand the dead box went in 3.4 s alone and 5.0 s with six boxes starting on the RTX. On the real card (Diogo's sudo, 2026-10-06), with `gpu nvidia`
     set: `rtx vfio` (refused while a box held the card: its Hyprland and omabox-labwc hold renderD129
     and /dev/nvidia0, so the switch never kills a box), then `up` printed the one fallback line and the
     box rendered on renderD128 (a shot worked); `rtx nvidia`, and the next `up` was on renderD129
-    again, no setting changed.
+    again, no setting changed. `omabox config gpu` then lists the GPUs on stderr (stdout stays the value,
+    which scripts and jailed agents read): each render node, its driver, its slot, the values that name
+    it, `*` on render_node's choice; setting a kind or slot no usable GPU matches now says so. Two GPUs
+    of one kind (an AMD APU and an AMD card, Intel and Arc) are told apart by slot; the config takes no
+    renderD path (probe order). Checked in t_unit_gpu on the fake tree.
 215. **A short SKILL.md, the rest in reference.md by section** (2026-10-06, #143). The skill had become
     the largest item omabox puts into an agent's context: 9.8k tokens a load (29 KB), 68 loads in 51
     sessions of other projects, 44 of them subagents', 78M tokens carried, more than every box image

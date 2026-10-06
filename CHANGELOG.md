@@ -28,7 +28,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   where `pointer -- scroll DY` was one vertical event only (#134).
 - **`omabox config gpu auto|nvidia|amd|intel|SLOT`**: the GPU headless boxes render on, kept in the
   settings (a jailed agent's `up` and every terminal get it), falling back to the first GPU when
-  that one is gone, where `OMABOX_RENDER_NODE` named a node that could vanish or change number (#156).
+  that one is gone, where `OMABOX_RENDER_NODE` named a node that could vanish or change number;
+  `omabox config gpu` lists the GPUs, their slots and the one in use (#156).
 - **`omabox output drop [--for DURATION] [--cycles N]` and `output back`**: a headless box's screen
   goes and comes back under its own name, mode and position, as a monitor that drops off on wake
   does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
