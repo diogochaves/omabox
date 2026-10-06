@@ -5166,6 +5166,14 @@ t_gdb() {
 # Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before
 # any box is asked.
 t_unit_pointer() {
+  # omabox scroll (#134, finding 213)
+  check_match "scroll: X Y DY needed" "need X Y DY" "$(ob scroll -b "$P-x" 1 2 2>&1)"
+  check_match "scroll: not both 0" "not both 0" "$(ob scroll -b "$P-x" 1 2 0 0 2>&1)"
+  check_match "scroll: a bad source" "--source is wheel" "$(ob scroll -b "$P-x" 1 2 3 --source mouse 2>&1)"
+  check_match "scroll: --in or --window" "not both" "$(ob scroll -b "$P-x" --in a -w b 1 2 3 2>&1)"
+  check_match "scroll: --quiet goes with --wait" "go with --wait" "$(ob scroll -b "$P-x" --quiet 1s 1 2 3 2>&1)"
+  check "scroll is a jailed agent's" lib broker_check scroll
+  check_eq "pointer marks: peek's words only" "move 1 2 scroll 15 scroll -3" "$(lib pointer_marks move 1 2 source wheel scroll 15 hscroll -3)"
   check_eq "steps_to: N moves, the last on the target" "move 3 7 move 6 14 move 10 21" "$(lib eval 'SEQ=(); steps_to 0 0 10 21 3; echo "${SEQ[*]}"')"
   check_eq "...leftwards and up too" "move 5 5 move 0 0" "$(lib eval 'SEQ=(); steps_to 10 10 0 0 2; echo "${SEQ[*]}"')"
   check_eq "path_rects (drag --wait): the cursor's rect at each point" "84,84,64,64 34,34,64,64 -16,-16,64,64" \
@@ -5310,6 +5318,28 @@ t_pointer() {
   check_match "pointer scroll 3: the wheel down" '^(65 )+$' "$(pr)"
   n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 scroll -3 >/dev/null
   check_match "...scroll -3: up" '^(64 )+$' "$(pr)"
+  # #134, finding 213: sideways, and a wheel's notches (foot reports each notch as several lines: its
+  # scroll multiplier; the notches are counted by Hyprland's binds below).
+  n0=$(reports | wc -l); ob scroll -b "$B" --window R 60 60 0 30 --source wheel >/dev/null
+  check_match "scroll 0 30 --source wheel: right" '^(67 )+$' "$(pr)"
+  n0=$(reports | wc -l); ob scroll -b "$B" --window R 60 60 0 -15 --source wheel >/dev/null
+  check_match "...0 -15: left" '^(66 )+$' "$(pr)"
+  n0=$(reports | wc -l); ob scroll -b "$B" --window R 60 60 45 --source wheel >/dev/null
+  check_match "...45: down" '^(65 )+$' "$(pr)"
+  n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 hscroll 15 >/dev/null
+  check_match "pointer hscroll 15: right" '^(67 )+$' "$(pr)"
+  n0=$(reports | wc -l); ob scroll -b "$B" --window R 60 60 -60 --source finger >/dev/null
+  check_match "scroll -60 --source finger: up" '^(64 )+$' "$(pr)"
+  # Hyprland's wheel binds: mouse_left/right too (with no delay between scroll events: binds take
+  # one in 300 ms by default, a real wheel's too).
+  ob lua -b "$B" 'hl.config({ binds = { scroll_event_delay = 0 } })
+    for _, k in ipairs({ "mouse_left", "mouse_right", "mouse_down" }) do
+      hl.bind(k, function() local f = io.open("/tmp/" .. k, "a"); f:write("x\n"); f:close() end)
+    end' >/dev/null
+  ob scroll -b "$B" 960 540 0 30 --source wheel >/dev/null; ob scroll -b "$B" 960 540 0 -15 >/dev/null
+  ob scroll -b "$B" 960 540 45 --source wheel >/dev/null
+  check_eq "Hyprland binds: mouse_right twice (two notches), mouse_left once (one plain event), mouse_down 3" "2 1 3" \
+    "$(ob run -b "$B" -- wc -l /tmp/mouse_right /tmp/mouse_left /tmp/mouse_down | awk 'NR <= 3 { printf "%s%s", (NR > 1 ? " " : ""), $1 }')"
   n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 down right move 90 90 up right >/dev/null
   check_eq "pointer down right ... up right: button 2" "2 " "$(pr)"
   n0=$(reports | wc -l); ob drag -b "$B" --window R 50 50 150 50 middle >/dev/null

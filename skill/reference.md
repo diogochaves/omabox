@@ -25,10 +25,16 @@ Detail that `SKILL.md` points to. The safety rules are all in `SKILL.md`; nothin
   mapped as for `click`. It jumps to the first point: to get there on foot, `pointer --steps N --
   move X1 Y1` first.
 - `omabox pointer [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- move X Y [--steps N], click
-  [BTN], down [BTN], up [BTN], scroll DY, sleep MS` in one run: raw, it raises nothing (a `--window`
-  must be on screen and uncovered). `scroll DY` is vertical only. The button defaults to left. A button pressed with `down` stays
+  [BTN], down [BTN], up [BTN], scroll DY, hscroll DX, source wheel|finger|continuous|tilt, sleep MS` in
+  one run: raw, it raises nothing (a `--window` must be on screen and uncovered). The button defaults to left. A button pressed with `down` stays
   down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
   box's next clicks are drags.
+- `omabox scroll [--window SEL | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger]`: the pointer
+  there, then a scroll; DY down, DX right (negative: up, left), 15 a wheel notch. `--source wheel` is a
+  mouse's notches (one per frame: apps counting them see each), `finger` a touchpad's smooth scroll
+  ending in a stop (kinetic scrolling); none is one plain event. Hyprland binds see the wheel as
+  `mouse_down`/`mouse_up`/`mouse_left`/`mouse_right`, at most one per `binds.scroll_event_delay`
+  (300 ms) as from a real wheel.
 - `keys -t TEXT` and `--pass VAR` type a newline as Return and a tab as Tab; any other control
   character (backspace, escape, a carriage return) is refused, exit 2, before anything is typed. A
   `--pass` value's one trailing `\r` (a Windows line ending) is dropped.

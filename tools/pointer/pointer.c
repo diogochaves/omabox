@@ -1,8 +1,14 @@
 // omabox-pointer: drive a virtual pointer on the Wayland display in $WAYLAND_DISPLAY.
 //
-//   omabox-pointer --extent WxH  move X Y  click [BTN]  down [BTN]  up [BTN]  scroll DY  sleep MS  pause
+//   omabox-pointer --extent WxH  move X Y  click [BTN]  down [BTN]  up [BTN]  scroll DY  hscroll DX
+//                  source wheel|finger|continuous|tilt  sleep MS  pause
 //   omabox-pointer --hold
 //
+// scroll DY / hscroll DX: the vertical / horizontal axis, in wl_pointer's units (a wheel notch is 15;
+// positive is down / right). With no source they go as one axis event, as before. `source` sets it for
+// the scrolls after it (#134): wheel and tilt send a notch (15, discrete 1) per frame, as a mouse wheel
+// does, so an app counting notches sees each; finger and continuous send the distance in 10 frames,
+// then axis_stop (a touchpad lifting off: kinetic scrolling starts there).
 // BTN is left (the default), right or middle. pause prints "paused" on stdout and waits for a line (or
 // the end) on stdin: `omabox drag --shot` takes its shot there, with the button still down.
 //
@@ -14,6 +20,7 @@
 // own, left out of the usage line (it never returns; agents took it for "hold the button").
 #define _GNU_SOURCE
 #include <linux/input-event-codes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,13 +34,14 @@
 
 static struct wl_seat *seat;
 static struct zwlr_virtual_pointer_manager_v1 *manager;
+static uint32_t manager_version;
 
 static void global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t version) {
     (void)data;
     if (!strcmp(iface, wl_seat_interface.name) && !seat)
         seat = wl_registry_bind(reg, name, &wl_seat_interface, 1);
     else if (!strcmp(iface, zwlr_virtual_pointer_manager_v1_interface.name))
-        manager = wl_registry_bind(reg, name, &zwlr_virtual_pointer_manager_v1_interface, version < 2 ? version : 2);
+        manager = wl_registry_bind(reg, name, &zwlr_virtual_pointer_manager_v1_interface, manager_version = version < 2 ? version : 2);
 }
 static void global_remove(void *data, struct wl_registry *reg, uint32_t name) { (void)data; (void)reg; (void)name; }
 static const struct wl_registry_listener registry_listener = {global, global_remove};
@@ -51,7 +59,8 @@ static uint32_t button_code(const char *name) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: omabox-pointer [--extent WxH] (move X Y | click [BTN] | down [BTN] | up [BTN] | scroll DY | sleep MS | pause)...  BTN: left (default), right, middle\n");
+    fprintf(stderr, "usage: omabox-pointer [--extent WxH] (move X Y | click [BTN] | down [BTN] | up [BTN] | scroll DY | hscroll DX |\n"
+                    "                      source wheel|finger|continuous|tilt | sleep MS | pause)...  BTN: left (default), right, middle\n");
     exit(2);
 }
 
@@ -72,6 +81,15 @@ static double numd(const char *s, double lo, double hi) {
     return v;
 }
 
+static int source_code(const char *s) {
+    if (!s) return -1;
+    if (!strcmp(s, "wheel")) return WL_POINTER_AXIS_SOURCE_WHEEL;
+    if (!strcmp(s, "finger")) return WL_POINTER_AXIS_SOURCE_FINGER;
+    if (!strcmp(s, "continuous")) return WL_POINTER_AXIS_SOURCE_CONTINUOUS;
+    if (!strcmp(s, "tilt")) return WL_POINTER_AXIS_SOURCE_WHEEL_TILT;
+    return -1;
+}
+
 static struct wl_display *display;
 // A lost compositor (box gone, protocol error) is a failure, not "clicked" (finding 63).
 static void sync_or_die(void) {
@@ -84,9 +102,42 @@ static void sleep_ms(long ms) {
     nanosleep(&ts, NULL);
 }
 
+// One scroll of D on AXIS, as SOURCE sends it (-1: one axis event, as before #134).
+static void scroll(struct zwlr_virtual_pointer_v1 *ptr, uint32_t axis, double d, int source) {
+    if (source < 0) {
+        zwlr_virtual_pointer_v1_axis(ptr, now_ms(), axis, wl_fixed_from_double(d));
+        zwlr_virtual_pointer_v1_frame(ptr);
+        return;
+    }
+    if (source == WL_POINTER_AXIS_SOURCE_WHEEL || source == WL_POINTER_AXIS_SOURCE_WHEEL_TILT) {
+        long notches = (long)(fabs(d) / 15 + 0.5);
+        if (notches < 1) notches = 1;
+        int dir = d < 0 ? -1 : 1;
+        for (long k = 0; k < notches; k++) {
+            zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
+            zwlr_virtual_pointer_v1_axis_discrete(ptr, now_ms(), axis, wl_fixed_from_int(15 * dir), dir);
+            zwlr_virtual_pointer_v1_frame(ptr);
+            sync_or_die();
+            sleep_ms(15);
+        }
+        return;
+    }
+    for (int k = 0; k < 10; k++) {
+        zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
+        zwlr_virtual_pointer_v1_axis(ptr, now_ms(), axis, wl_fixed_from_double(d / 10));
+        zwlr_virtual_pointer_v1_frame(ptr);
+        sync_or_die();
+        sleep_ms(8);
+    }
+    zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
+    zwlr_virtual_pointer_v1_axis_stop(ptr, now_ms(), axis);
+    zwlr_virtual_pointer_v1_frame(ptr);
+}
+
 // One pass over the commands: with run = 0 it only checks them (before connecting, so a bad token
 // never leaves half a sequence done, or a button held down); with run = 1 it sends them.
 static void commands(struct zwlr_virtual_pointer_v1 *ptr, int argc, char **argv, int i, uint32_t ew, uint32_t eh, int run) {
+    int src = -1, *source = &src;   // `source`: for the scrolls after it
     for (; i < argc; i++) {
         const char *cmd = argv[i];
         if (!strcmp(cmd, "move") && i + 2 < argc) {
@@ -113,11 +164,16 @@ static void commands(struct zwlr_virtual_pointer_v1 *ptr, int argc, char **argv,
             if (!run) continue;
             zwlr_virtual_pointer_v1_button(ptr, now_ms(), button_code(b), !strcmp(cmd, "down") ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
             zwlr_virtual_pointer_v1_frame(ptr);
-        } else if (!strcmp(cmd, "scroll") && i + 1 < argc) {
-            double dy = numd(argv[++i], -10000, 10000);
+        } else if (!strcmp(cmd, "source") && i + 1 < argc) {
+            *source = source_code(argv[++i]);
+            if (*source < 0) { fprintf(stderr, "omabox-pointer: source is wheel, finger, continuous or tilt, got '%s'\n", argv[i]); usage(); }
             if (!run) continue;
-            zwlr_virtual_pointer_v1_axis(ptr, now_ms(), WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(dy));
-            zwlr_virtual_pointer_v1_frame(ptr);
+            if (manager_version < 2) { fprintf(stderr, "omabox-pointer: this compositor's virtual pointer (v1) takes no scroll source\n"); exit(1); }
+        } else if ((!strcmp(cmd, "scroll") || !strcmp(cmd, "hscroll")) && i + 1 < argc) {
+            double d = numd(argv[++i], -10000, 10000);
+            if (!run) continue;
+            uint32_t axis = cmd[0] == 'h' ? WL_POINTER_AXIS_HORIZONTAL_SCROLL : WL_POINTER_AXIS_VERTICAL_SCROLL;
+            scroll(ptr, axis, d, *source);
         } else if (!strcmp(cmd, "sleep") && i + 1 < argc) {
             long ms = num(argv[++i], 0, 600000);
             if (!run) continue;

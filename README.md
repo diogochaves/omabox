@@ -103,6 +103,7 @@ omabox keys -t 'hello world' Return    # type text, then press a key
 omabox keys --wait super+space         # ...and return once the screen has settled (no sleeps)
 omabox wait window myapp               # or: still, change, layer NAMESPACE, cmd -- CMD (--gone too)
 omabox click 960 540 [right] [--double]
+omabox scroll 960 540 0 30 --source wheel   # sideways (DX), a wheel's notches or a touchpad's (next release)
 omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
 omabox drag --window myapp 10 10 200 80   # press, move, release; --shot FILE while it is held
 omabox hyprctl -j clients              # the box's Hyprland, never yours

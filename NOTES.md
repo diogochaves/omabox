@@ -3625,6 +3625,22 @@ from them.
     passes one). Checks: t_unit_pixel (refusals), t_burst (5 frames 100 ms apart at 200x200, the
     summary, --after keys with --diff showing a change after the first frame, the sheet, click --in a
     frame).
+213. **Horizontal scroll and scroll sources: `omabox scroll X Y DY [DX] [--source ...]`, `pointer --
+    hscroll DX`, `source S`** (2026-10-06, #134). The pointer tool sent one vertical axis event with no
+    source, so a scrolling layout, a carousel or a plugin's overview could not be scrolled sideways (an
+    agent remapped the plugin's own config to vertical, testing another code path), and nothing told a
+    wheel from a touchpad. The tool takes `hscroll DX` and `source wheel|finger|continuous|tilt` for the
+    scrolls after it (virtual pointer v2: axis_source, axis_discrete, axis_stop; a v1 compositor is
+    refused): wheel and tilt send a notch (15, discrete 1) per frame, finger and continuous the
+    distance in 10 frames 8 ms apart and then axis_stop; with no source it is one axis event, as
+    before. `omabox scroll` moves there and scrolls, mapped and raised as click (--window, --in), with
+    --wait. Peek's mark parser drops a whole mark with a word it does not know: pointer_marks shows a
+    hscroll as a scroll and leaves the source out (peek unchanged). Seen: Hyprland's wheel binds
+    (`mouse_left`/`mouse_right`/`mouse_down`) fire once per notch, and a finger scroll's 10 frames
+    are 10 binds; `binds.scroll_event_delay` (300 ms) drops scroll events closer than that, so the
+    check sets it to 0. foot reports each notch as several mouse lines (its multiplier). Checks:
+    t_unit_pointer (refusals, pointer_marks), t_pointer (foot's reports: right, left, down with a
+    wheel, `pointer hscroll`, up with a finger; binds counting 2, 1 and 3 events).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

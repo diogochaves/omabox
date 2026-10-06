@@ -23,6 +23,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`shot --burst N [--every DURATION] [--diff] [--sheet] [--after -- ACTION]`**: frames of a
   transition into a folder, each with its time and (`--diff`) what changed from the one before, the
   action sent after the first frame, and one contact sheet of them all (#132).
+- **`omabox scroll X Y DY [DX] [--source wheel|finger|continuous|tilt]`** and `pointer -- hscroll DX`:
+  horizontal scrolling, and a mouse wheel's notches or a touchpad's smooth scroll with its stop,
+  where `pointer -- scroll DY` was one vertical event only (#134).
 - **`omabox output drop [--for DURATION] [--cycles N]` and `output back`**: a headless box's screen
   goes and comes back under its own name, mode and position, as a monitor that drops off on wake
   does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
