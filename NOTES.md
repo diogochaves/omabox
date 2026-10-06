@@ -3420,6 +3420,11 @@ from them.
     a listed, not-enabled plugin whose id is in a mounted plugin's entry of the box's shell.json
     (place_plugin's in_mounted test) is `hosted`, with `host` in plugin_status and no line; anything
     else not enabled still warns. t_plugin_hosted (on the old code: `disabled`, warned).
+198. **`up --new` says it starts the box** (2026-10-06, #148). The skill and `help up` read as if
+    `--new` only picked a name ("prints a free name"); agents ran `up --new`, then `-b box-2 up
+    --plugin …`, which `already up, without what you asked for` refused: `--new` had started a bare
+    box. Both now say it starts the box and takes `up`'s options on that call; t_unit_cli checks the
+    two texts.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

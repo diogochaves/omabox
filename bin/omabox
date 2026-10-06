@@ -68,7 +68,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
-            [--new]                                      a free name, box-1, box-2, ... (printed)
+            [--new]                                      start it under a free name, box-1, box-2, ... (printed)
             [--json]                                     the box as ls --json lists it, on stdout
   omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only

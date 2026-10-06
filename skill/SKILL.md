@@ -64,9 +64,10 @@ out here. The box name defaults to the repo's directory name plus your session's
 name. It goes down by itself when your agent exits, not on `/clear` or `/resume`: `omabox down` when
 you are done, and before `/clear`. In a git worktree the name is the worktree's folder, so a
 worktree agent has its own box with no `-b`. Subagents in one checkout share the session's box: for
-one of its own, `omabox up --new` prints a free name (`box-3`); pass it as `-b box-3` on every call,
-typed out (your shell does not keep a variable between commands). To use a box the user started,
-pass `-b NAME` (see `omabox ls`); it goes before the command too (`omabox -b box-3 shot`). In a
+one of its own, `omabox up --new [--plugin …]` starts a box under a free name and prints it
+(`box-3`): give it all its options on that call, then `-b box-3` on every later call, typed out
+(your shell does not keep a variable between commands). To use a box the user started, pass
+`-b NAME` (see `omabox ls`); it goes before the command too (`omabox -b box-3 shot`). In a
 worktree-isolated Claude Code subagent, compound commands (`wait cmd --`, `hyprctl eval`, `$(…)`, `$B`
 aliases) are refused: one literal `omabox -b NAME …` per Bash call, or a script file.
 
@@ -74,7 +75,7 @@ aliases) are refused: one literal `omabox -b NAME …` per Bash call, or a scrip
 
 ```bash
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
-omabox up --new                            # or one of your own: prints box-N, then -b box-N on each call
+omabox up --new                            # or one of your own: starts box-N (options here), then -b box-N
 omabox run -d --wait -- ./build/src/myapp  # launch, detached (log path printed); returns once drawn
 omabox run -d --replace --wait -- ./myapp  # after a rebuild: stops the one run -d started, then as above
 omabox shot                                # prints a PNG path: Read it to look
@@ -157,7 +158,7 @@ with a button is Hyprland's own (move, resize), never the app's.
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
-| `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new`, then `-b box-N` as it printed. |
+| `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new` with those options (it starts the box), then `-b box-N` as it printed. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
 | "went down while this command ran", or "box is dead" after `omabox run -- pkill -x Hyprland` (or quickshell, omabox-labwc) | Those are the box itself (`pkill -x labwc` no longer matches its own): kill your own process by PID; `omabox down` then `up` to recover. |

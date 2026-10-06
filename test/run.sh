@@ -1478,6 +1478,8 @@ t_unit_cli() {
   check_match "...drag's: --hold is a duration, a bare number seconds, as ms_duration reads it (#103)" \
     "--hold DURATION.*like 300ms or 2s: a bare number is seconds" "$(ob help drag | tr '\n' ' ')"
   check_eq "...which it does" 2000 "$(lib ms_duration 2)"
+  check_match "...up's: --new starts the box, so its options go on that call (#148)" "--new\] +start it under a free name" "$(ob help up)"
+  check_match "...as the skill says" "up --new \[--plugin …\]\` starts a box" "$(cat "$ROOT/skill/SKILL.md")"
   check_eq "...an unknown one: one line, exit 2" "1 2" "$(ob help shoot 2>&1 | wc -l) $(ob help shoot >/dev/null 2>&1; echo $?)"
   check_match "...hyprctl's --help is hyprctl's" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl --help 2>&1)"
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
