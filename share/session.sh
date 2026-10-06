@@ -41,8 +41,11 @@ if [ "${OMABOX_SYSTEMD:-0}" = 1 ]; then
   DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 else
   # Private session bus: tray, notifications, portals, dconf, keyring stay inside. Started by hand,
-  # not with dbus-run-session, so the host fd can be kept from it.
-  DBUS_SESSION_BUS_ADDRESS=$(without_host_fd dbus-daemon --session --fork --print-address) || exit 1
+  # not with dbus-run-session, so the host fd can be kept from it. At $XDG_RUNTIME_DIR/bus, where a
+  # session has it (and the systemd boxes above), not a socket in /tmp: a helper that checks its bus
+  # wants it in the 0700 runtime dir (#153).
+  DBUS_SESSION_BUS_ADDRESS=$(without_host_fd dbus-daemon --session --fork --print-address \
+    --address="unix:path=$XDG_RUNTIME_DIR/bus") || exit 1
 fi
 export DBUS_SESSION_BUS_ADDRESS
 echo "$DBUS_SESSION_BUS_ADDRESS" > "$XDG_RUNTIME_DIR/dbus-address"

@@ -1757,6 +1757,9 @@ cmd_up() {
   # a half-made dir (no box.json) that only `down NAME` cleared (finding 163).
   trap '[ $? = 0 ] || { kill_box || true; [ -f "$D/box.json" ] || rm_box; }' EXIT
   rm_box; rm -f "$BOXES/.expired-$NAME"; mkdir -p "$D/run" "$HOMES/$NAME/home"; ln -s "$HOMES/$NAME/home" "$D/home"
+  # The box's XDG_RUNTIME_DIR, 0700 as a session's (#153): a helper that checks its session bus
+  # refuses a runtime dir others can read.
+  chmod 700 "$D/run"
   [ -z "$from_dir" ] || cp -a --reflink=auto "$from_dir/home/." "$HOMES/$NAME/home/" || die "could not copy save '$FROM' into box '$NAME'"
   # The name is taken now (its dir exists): let the next `up --new` choose, and keep the lock out of
   # the box's long-lived processes.

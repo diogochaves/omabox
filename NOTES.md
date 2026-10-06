@@ -3731,6 +3731,16 @@ from them.
     `fontFamily` as `bar ? bar.x : Color.x / Style.font.family`, as Omarchy's agents panel does, and
     every binding reads those. t_unit_version checks that no line reads `bar.` unguarded (52 on the
     old file).
+220. **A box's session bus is `$XDG_RUNTIME_DIR/bus`, in a 0700 runtime dir** (2026-10-06, #153). A
+    box's bus was dbus-daemon's default, a socket in the box's `/tmp` (`unix:path=/tmp/dbus-…`), and
+    its runtime dir (the host's `<box dir>/run`, made by `mkdir -p`) was 0755. A helper that checks its
+    bus refuses that (omapager's KDE Connect reply helper: the bus must be a socket of its user right
+    in `XDG_RUNTIME_DIR`, a dir of its user with no group or other bits), so nothing it guards could be
+    tested in a box, and loosening the helper was rightly refused as weakening a security check. `up`
+    now makes the dir 0700 and session.sh starts the bus with `--address=unix:path=$XDG_RUNTIME_DIR/bus`,
+    where a session (and an `up --systemd` box) has it. That helper's own check passes in a new box and
+    fails in one started before. t_dbus_user_app checks the mode, owner and the bus (both checks failed
+    on the old code); every bus test passes unchanged.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

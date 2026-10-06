@@ -2701,6 +2701,10 @@ t_dbus_user_app() {
   local B=$P-dbusapp
   check "up" ob up "$B" --no-shell
   check_eq "XDG_DATA_HOME as in a session" /home/sbx/.local/share "$(ob run -b "$B" -- printenv XDG_DATA_HOME)"
+  # #153: a helper that checks its bus wants it in a 0700 runtime dir of its user, as a session has.
+  check_eq "the runtime dir is 0700, its user's (#153)" "700 $(id -u)" "$(ob run -b "$B" -- sh -c 'stat -c "%a %u" "$XDG_RUNTIME_DIR"')"
+  check_eq "...the session bus is the socket in it" "unix:path=/run/user/$UID/bus socket" \
+    "$(ob run -b "$B" -- sh -c 'echo "${DBUS_SESSION_BUS_ADDRESS%%,*} $(stat -c %F "$XDG_RUNTIME_DIR/bus")"')"
   dbus_user_app "$B"
   check "down" ob down "$B"
 }
