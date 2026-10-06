@@ -3251,6 +3251,11 @@ t_shell_crash() {
   rep=$(sed -n 's/.*(report: \([^;]*\);.*/\1/p' <<<"$out")
   check "...which is there (${rep##*/crashes/})" test -s "$rep"
   check "the crash dialog is closed as it opens (said in shell.log)" until_ok 10 grep -q "closed the shell's crash dialog" "$H/shell.log"
+  # #151: as on a user's desktop, Omarchy's launcher starts it again (Quickshell does not, so soon after
+  # its start): the box had no bar left.
+  check "...the bar back: Omarchy's launcher started the shell again (#151)" until_ok 20 ob wait -b "$B" layer omarchy-bar
+  check "...a new shell, its pid recorded" until_ok 5 bash -c "p=\$(cat '$D/run/omabox-shell.pid'); [ -n \"\$p\" ] && [ \"\$p\" != '$p' ]"
+  check "...the launcher's reason in shell.log (the box's logger)" grep -q "omarchy-shell: Omarchy shell exited with status [0-9]*; relaunching" "$H/shell.log"
   check_eq "...no org.quickshell window is left to take keys" 0 "$(ob windows -b "$B" --json | jq '[.[] | select(.class == "org.quickshell")] | length')"
   out=$(ob restart-shell -b "$B" 2>&1); rc=$?
   check_eq "a restart that works: exit 0, \"restarted\" (the earlier report is not a new crash)" "0 yes" "$rc $(grep -q 'shell restarted' <<<"$out" && echo yes)"
@@ -3531,12 +3536,15 @@ t_omarchy_restart() {
   ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
   # shellcheck disable=SC2329 # called through check
   one_shell() { [ "$(ob run -b "$B" -- pgrep -cx quickshell)" = 1 ] && ob run -b "$B" -- omarchy-shell shell ping >/dev/null 2>&1; }
+  check_eq "up runs the shell under omarchy-launch-shell, as Omarchy does (#151)" "1 1" \
+    "$(ob run -b "$B" -- pgrep -cf '[o]marchy-launch-shell') $(ob run -b "$B" -- pgrep -cx quickshell)"
   check "omarchy-restart-shell succeeds in a box" timeout 30 "$CLI" run -b "$B" -- omarchy-restart-shell
   check "...one shell, answering" until_ok 5 one_shell
   check_eq "...its pid where omabox restart-shell looks" "$(ob run -b "$B" -- pgrep -x quickshell)" "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-shell.pid"')"
   check "omabox restart-shell after it" timeout 30 "$CLI" restart-shell -b "$B"
-  check "...one shell, answering, Omarchy's launcher gone" until_ok 5 one_shell
-  check_fails "...no omarchy-launch-shell left to start another" ob run -b "$B" -- pgrep -f '[o]marchy-launch-shell'
+  check "...one shell, answering" until_ok 5 one_shell
+  # Under one launcher, its own (#151): Omarchy's stopped with the shell it ran, none left to start another.
+  check_eq "...under one omarchy-launch-shell" 1 "$(ob run -b "$B" -- pgrep -cf '[o]marchy-launch-shell')"
   check "omarchy-restart-shell again" timeout 30 "$CLI" run -b "$B" -- omarchy-restart-shell
   check "...one shell" until_ok 5 one_shell
   # #141: under the guard (an agent's shell, the box standing in for the host), `omarchy restart shell`

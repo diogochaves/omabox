@@ -3368,6 +3368,25 @@ from them.
     already said Omarchy edits under `--omarchy` show after `hyprctl reload`. Boxes started before
     this still follow the live file: fixing it here reloaded one (the maintainer's `host-base`, at
     the edit). t_config_kept; on the old code its checks failed (worktree).
+194. **A box runs its shell as Omarchy does, under `omarchy-launch-shell`** (2026-10-06, #151).
+    share/shell.sh exec'd quickshell itself. Since 4.0.4 Omarchy starts the shell with that launcher,
+    which starts it again when it exits non-zero (after 1 s, at most 5 times a minute, not once the
+    compositor is gone); Quickshell itself does not restart a shell that crashes within 10 s of its
+    start. So a crash there left a box with no bar where a user's desktop gets one back. shell.sh now
+    execs `$OMARCHY_PATH/bin/omarchy-launch-shell` (a tree without it: quickshell as before), with
+    its output in shell.log. The launcher's `systemd-cat` is the box's stand-in (131), which writes
+    each new shell's pid (it execs quickshell), so the pid follows relaunches, and now runs the box's
+    own /usr/bin/quickshell for the `omarchy-shell` tag: the launcher finds it through PATH, where a
+    test's stub in the box HOME's ~/.local/bin came first and replaced the bar (t_main caught it; the
+    shell's PATH stays the session's, for the stubs plugins call). A new `logger` stand-in sends its
+    "exited with status N; relaunching" to shell.log (a box has no syslog). restart-shell asks the
+    shell to quit (exit 0: its launcher ends too); one that will not has its launcher stopped first,
+    or the launcher would start a second shell next to the new one. Finding 183's detection stays:
+    `up`/`restart-shell` still warn and exit 1, the bar just comes back after. Option 2 (a copy of
+    the relaunch policy in shell.sh) was not taken: one mode (a box already ran under the launcher
+    after `omarchy restart shell`), and no copy to drift. Should Omarchy set QS_DISABLE_CRASH_HANDLER
+    (UPSTREAM.md), there are no report folders: shell_crash then has only the log line and the pid.
+    Checks in t_shell_crash and t_omarchy_restart, failing on the old code (worktree).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

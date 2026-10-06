@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# omabox stand-in for logger (#151), first on the box's PATH: a box has no syslog socket, so the real
+# one fails. omarchy-launch-shell says why it starts the shell again with `logger -t omarchy-shell`:
+# that goes to ~/shell.log, where systemd-cat's stand-in sends the shell's own output; another tag to
+# ~/TAG.log (~/logger.log without -t). The message is the arguments, or stdin's lines.
+tag=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    --) shift; break ;;
+    -t|--tag) tag=$2; shift ;;
+    --tag=*) tag=${1#*=} ;;
+    -p|--priority|-n|--server|-P|--port|-f|--file|--id=*|--socket-errors=*) [[ $1 == *=* ]] || shift ;;
+    -h|--help) echo "logger (omabox stand-in): to ~/TAG.log; logger [-t TAG] [MESSAGE...]"; exit 0 ;;
+    -*) ;;
+    *) break ;;
+  esac
+  shift
+done
+log=$HOME/${tag:-logger}.log
+[ "$tag" != omarchy-shell ] || log=$HOME/shell.log
+line() { printf '%s %s: %s\n' "$(date '+%F %T')" "${tag:-logger}" "$1" >> "$log"; }
+if [ $# -gt 0 ]; then line "$*"; else while IFS= read -r l; do line "$l"; done; fi

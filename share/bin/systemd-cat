@@ -21,6 +21,9 @@ log=$HOME/${tag:-systemd-cat}.log
 if [ "$tag" = omarchy-shell ]; then
   log=$HOME/shell.log
   [ $# = 0 ] || echo $$ > "$XDG_RUNTIME_DIR/omabox-shell.pid"
+  # The box's own quickshell (#151: the launcher runs the bar in every box now), not a stub of a test's
+  # in the box HOME's ~/.local/bin, which comes before /usr/bin; the shell's PATH stays the session's.
+  [ "${1:-}" != quickshell ] || set -- /usr/bin/quickshell "${@:2}"
 fi
 [ $# -gt 0 ] || exec cat >> "$log"
 exec "$@" >> "$log" 2>&1
