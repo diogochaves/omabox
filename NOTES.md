@@ -2467,7 +2467,7 @@ the designs here were measured in boxes and built for a contained desktop, and n
     - The tools' Makefiles put `$(LDFLAGS)` after the libraries, so a distro's `-Wl,--as-needed` came
       too late: `libm` (from wayland-client's pkg-config) stayed linked unused in keyboard, peek and
       still (namcap said so). `$(LDFLAGS)` now comes first.
-    Kept on purpose: an empty `.lock-NAME` per box name in `$XDG_RUNTIME_DIR/omabox` outlives the box.
+    Kept on purpose (until finding 218): an empty `.lock-NAME` per box name in `$XDG_RUNTIME_DIR/omabox` outlives the box.
     Removing a lock file another `up` may be waiting on is the classic flock race (two holders of
     "the same" lock); they are empty and on a tmpfs gone at logout. The recipe gained `base-devel` in
     its optdepends (omabox's own `setup --aquamarine` hint names it).
@@ -3709,6 +3709,18 @@ from them.
     the RTX; the AMD's timing missed the boundary. Both loops now keep a timed-out read's part and
     prepend it to the next. t_unit_settle_read splits an answer and a `ready` line across a read
     timeout (both failed on the old code).
+218. **The runtime dir no longer keeps a file per box name ever used** (2026-10-06, #158). 47 h after
+    a boot, `$XDG_RUNTIME_DIR/omabox` held 4443 `.lock-NAME` and 580 `.down-NAME` files (100 KB of
+    directory) for one box up: the empty lock per name was kept on purpose (finding 130), on the
+    idea of one per box, but names are seldom used twice (the suite's `t<pid>-*`: 4198 of them; a
+    session's `*-run<N>`). Now one helper, lock_file, takes every
+    `.lock-*` and, after its flock, checks that its fd is still the path's file (device and inode),
+    opening it again if not. That is the fix for the race that kept the files: a waiter on a removed
+    lock file held it while a newcomer locked a new one. So `down` removes the name's lock while
+    holding it, once the box is gone (and when it finds a lock with no box). A `.down-` marker is read
+    only by an `up` not yet at its lock, a minute at most: `down_none` sweeps those older than 10
+    minutes. The suite removes its `t<pid>-*` markers on exit. t_unit_lock_markers (five of its
+    checks failed on the old code); t_race and t_reap_race pass unchanged.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

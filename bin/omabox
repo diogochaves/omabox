@@ -478,6 +478,19 @@ proc_stat() {
 proc_ppid() { proc_stat "$1" 1; }
 proc_start() { proc_stat "$1" 19; }
 
+# lock_file VAR FILE FLOCK_OPTS...: opens FILE on a new fd, stored in VAR, and flocks it; on failure
+# the fd is closed again. A `down` removes a name's lock file once the box is gone (#158), so an fd
+# opened before that may lock the removed file, which nobody else sees: then it opens the path again.
+lock_file() {
+  local -n _lf_fd=$1; local f=$2; shift 2
+  while :; do
+    exec {_lf_fd}>"$f" || return 1
+    flock "$@" "$_lf_fd" || { exec {_lf_fd}>&-; return 1; }
+    [ "$(stat -Lc %d:%i "/dev/fd/$_lf_fd" 2>/dev/null)" != "$(stat -c %d:%i "$f" 2>/dev/null)" ] || return 0
+    exec {_lf_fd}>&-
+  done
+}
+
 # Sets NAME and D (the box dir). Names end up in paths and window titles: keep them tame. NAME_DERIVED:
 # 1 when the name came from default_name, not from the caller.
 select_box() {
@@ -1552,8 +1565,7 @@ cmd_up() {
     # exists, so two at once (a double click in the widget) never pick the same one. Printed on stdout.
     [ -z "$name" ] || die "up: --new picks the name itself, got $name too"
     mkdir -p "$BOXES"
-    exec {NEWLOCK}>"$BOXES/.lock-new"
-    flock -w 60 "$NEWLOCK" || die "another up --new is still choosing a name; try again"
+    lock_file NEWLOCK "$BOXES/.lock-new" -w 60 || die "another up --new is still choosing a name; try again"
     local n=1; while [ -e "$BOXES/box-$n" ]; do n=$((n + 1)); done
     name=box-$n
   fi
@@ -1688,8 +1700,7 @@ cmd_up() {
   # One `up` or `down` per name at a time: two agents in one repo both running `omabox up` would
   # otherwise each start a box on the same dir, and one would be orphaned where `down` cannot see it.
   mkdir -p "$BOXES"
-  exec {LOCK}>"$BOXES/.lock-$NAME"
-  flock -w 60 "$LOCK" || die "box '$NAME' is busy (another up or down); try again"
+  LOCK=""; lock_file LOCK "$BOXES/.lock-$NAME" -w 60 || die "box '$NAME' is busy (another up or down); try again"
   # A down started since this up was (or in the same tick: `up X & down X`), before it held the lock,
   # found no box and left its start (finding 147): the box it asked to have gone is this one.
   local dt; dt=$(cat "$BOXES/.down-$NAME" 2>/dev/null) || dt=""
@@ -2568,8 +2579,7 @@ take_over() {
   [ -n "$(meta agent)" ] && ! agent_alive && session_box || return 0
   local agent lock="" rc=0; agent=$(agent_proc) || return 0
   if [ "${1:-}" != held ]; then
-    exec {lock}>"$BOXES/.lock-$NAME"
-    flock -w 60 "$lock" || { exec {lock}>&-; return 0; }
+    lock_file lock "$BOXES/.lock-$NAME" -w 60 || return 0
   fi
   # Both checked again under the lock: the reaper's down, then a new `up` of the name that found no
   # agent, may have come first.
@@ -4735,8 +4745,7 @@ cmd_mode() {
   # the box's lock, as take_over writes it: a takeover between this read and write would be undone
   # (the agent that exited put back, and the box taken down under the new one; finding 93).
   box_file "$D/run/omabox.mode" "$want" || die "mode: could not record $want for the box's config reloads"
-  local lock; exec {lock}>"$BOXES/.lock-$NAME"
-  flock -w 60 "$lock" || die "mode: box '$NAME' is busy (an up or down); $want is set, but ls will not show it"
+  local lock; lock_file lock "$BOXES/.lock-$NAME" -w 60 || die "mode: box '$NAME' is busy (an up or down); $want is set, but ls will not show it"
   box_alive || die "mode: box '$NAME' went down meanwhile"
   jq --arg s "$want" '.size = $s' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   exec {lock}>&-
@@ -5865,9 +5874,12 @@ write_confirm_flag() {
 
 # A down that finds no box leaves when it was started (proc_start: clock ticks since boot), for an up
 # started before it that has no lock yet: they compare starts, not when each got to its check, which
-# load reorders (finding 147). The runtime dir that keeps it goes with a reboot, as the ticks do.
+# load reorders (finding 147). The runtime dir that keeps it goes with a reboot, as the ticks do. Only
+# an `up` that has not reached its lock yet reads it, a minute at most (its flock -w 60): one older
+# than 10 minutes is read by nobody, and goes (#158).
 down_none() {
   [ -n "${DOWN_IF_CREATED:-}" ] || { mkdir -p "$BOXES" && proc_start $$ > "$BOXES/.down-$NAME"; } 2>/dev/null || true
+  find "$BOXES" -maxdepth 1 -name '.down-*' -type f -mmin +10 -delete 2>/dev/null || true
   say "no box '$NAME'"
 }
 cmd_down() {
@@ -5895,11 +5907,13 @@ cmd_down() {
     # The time it found none, for an `up` of the name that started before but has no lock yet.
     [ -d "$D" ] || [ -e "$BOXES/.lock-$NAME" ] || { down_none; continue; }
     mkdir -p "$BOXES"
-    local lock; exec {lock}>"$BOXES/.lock-$NAME"
+    local lock lk=$BOXES/.lock-$NAME
     # The reaper takes a box down through here while holding nothing; anyone else waits for an `up`.
-    flock -n "$lock" || { [ -n "${DOWN_IF_CREATED:-}" ] || say "box '$NAME': waiting for its up to finish"; flock -w 60 "$lock"; } ||
-      { say "box '$NAME' is busy (an up in progress?); not taken down"; rc=1; exec {lock}>&-; continue; }
-    [ -d "$D" ] || { exec {lock}>&-; down_none; continue; }
+    lock_file lock "$lk" -n || { [ -n "${DOWN_IF_CREATED:-}" ] || say "box '$NAME': waiting for its up to finish"; lock_file lock "$lk" -w 60; } ||
+      { say "box '$NAME' is busy (an up in progress?); not taken down"; rc=1; continue; }
+    # A box gone takes its lock file with it, removed while held (#158): names are seldom used twice
+    # (the suite's t<pid>-…, a session's …-run<N>), and each kept one a file in the runtime dir.
+    [ -d "$D" ] || { rm -f "$lk"; exec {lock}>&-; down_none; continue; }
     # The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
     # started a new box under the name (finding 74). Not that one.
     if [ -n "${DOWN_IF_CREATED:-}" ] && [ "$(meta created)" != "$DOWN_IF_CREATED" ]; then exec {lock}>&-; continue; fi
@@ -5914,7 +5928,7 @@ cmd_down() {
     for p in $(pgrep -f "^(/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox") _reap $(re_quote "$NAME") "); do
       [ "$p" = $$ ] || [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null || true
     done
-    rm_box
+    rm_box; rm -f "$lk"
     exec {lock}>&-
     # (A subshell: a host that does not answer must not fail the down.)
     [ $was_interactive = 0 ] || (submap_release) >/dev/null 2>&1 || true
@@ -6365,8 +6379,7 @@ cmd_save() {
   select_box "$name"; need_box
   mkdir -p "$SAVES"; chmod 700 "$SAVES"
   # One save per name at a time (locked where the boxes' are); what a killed one left behind goes now.
-  local lock; exec {lock}>"$BOXES/.lock-save-$save"
-  flock -w 60 "$lock" || die "save '$save' is being written by another omabox save; try again"
+  local lock; lock_file lock "$BOXES/.lock-save-$save" -w 60 || die "save '$save' is being written by another omabox save; try again"
   local d; for d in "$SAVES"/.new-"$save"-* "$SAVES"/.old-"$save"-*; do
     [ -e "$d" ] && ! kill -0 "${d##*-}" 2>/dev/null && rm_save "$d"
   done

@@ -97,6 +97,8 @@ cleanup() {
   while read -r p; do [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null; done < "$TMP/descendants"
   for b in $("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-"); do "$CLI" down "$b" >/dev/null 2>&1; done
   cat "$TMP"/new-[ab] 2>/dev/null | while read -r b; do "$CLI" down "$b" >/dev/null 2>&1; done   # t_new's box-N boxes
+  # What its names left in the runtime dir (#158): a test's own lock, a down that found no box.
+  rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox"/.{lock,down,expired}-"$P"-* 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   rm -rf "$TMP"
@@ -593,6 +595,33 @@ t_unit_run_named_dead() {
   check_eq "down: a reaper gone since pgrep is no failure, the box is cleared" $'rm_box\nomabox: box \'racebox\' down\nrc 0' \
     "$(bash -c 'source "$1"; BOXES=$2; kill_box() { :; }; peek_pid() { return 1; }; pgrep() { echo 999999999; }
       rm_box() { echo rm_box; }; cmd_down racebox; echo "rc $?"' _ "$TMP/lib/bin/omabox" "$b" 2>&1)"
+}
+
+# #158: the runtime dir kept a .lock- per box name ever used and a .down- per down that found none.
+# down removes the lock it holds once the box is gone; lock_file opens again a lock file removed
+# while it waited, so it and a newcomer never both hold one; down_none sweeps markers past 10 min.
+t_unit_lock_markers() {
+  local b=$TMP/lockm out; mkdir -p "$b/gone"; echo '{"mode":"headless"}' > "$b/gone/box.json"
+  : > "$b/.lock-gone"; : > "$b/.lock-nodir"
+  out=$(bash -c 'source "$1"; BOXES=$2; kill_box() { :; }; peek_pid() { return 1; }; pgrep() { :; }
+    rm_box() { rm -rf "$D"; }; cmd_down gone nodir' _ "$TMP/lib/bin/omabox" "$b" 2>&1)
+  check_match "down takes the box down" "box 'gone' down" "$out"
+  check_fails "...and removes its lock file" test -e "$b/.lock-gone"
+  check_fails "a lock file with no box: down removes it too" test -e "$b/.lock-nodir"
+  : > "$b/.down-old"; touch -d '-11 min' "$b/.down-old"; : > "$b/.down-new"
+  bash -c 'source "$1"; BOXES=$2; NAME=none; down_none' _ "$TMP/lib/bin/omabox" "$b" >/dev/null 2>&1
+  check_fails "down_none sweeps a .down- marker older than 10 minutes" test -e "$b/.down-old"
+  check "...keeps a fresh one" test -e "$b/.down-new"
+  check "...and writes its own" test -s "$b/.down-none"
+  # A holder removes the file while a waiter waits on it, as down does: the waiter must end up on
+  # the path's file, so a newcomer's -n fails while it holds it.
+  out=$(timeout 20 bash -c 'source "$1"; f=$2/.lock-x
+    ( lock_file h "$f" -w 5; sleep 1; rm -f "$f"; sleep 0.5 ) & sleep 0.3
+    ( lock_file w "$f" -w 10; echo "waiter on path: $([ "$(stat -Lc %i /dev/fd/$w)" = "$(stat -c %i "$f")" ] && echo yes || echo no)"
+      ( lock_file n "$f" -n && echo "newcomer locked it too" || echo "newcomer refused" ); sleep 0.2 )
+    wait' _ "$TMP/lib/bin/omabox" "$b" 2>&1)
+  check_match "a lock file removed under a waiter: the waiter locks the new one" "waiter on path: yes" "$out"
+  check_match "...and holds it alone" "newcomer refused" "$out"
 }
 
 # finding 66: an edit to bin/omabox (linked from ~/.local/bin) while a command runs must not change
@@ -5844,7 +5873,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
