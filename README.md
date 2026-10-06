@@ -114,7 +114,8 @@ omabox ls                              # boxes, mode, size, state, plugins
   an agent started with `omabox guard exec`) the name also gets the session's id, `myrepo-5cc72cdc`,
   so two agents in one repo each get their own box, and it goes down when its agent exits (not while
   you peek at it or an `omabox run` is going). An agent does not pick up a box you started yourself
-  unless told `-b myrepo`. `-b NAME` or `OMABOX=NAME` picks a box; `OMABOX_SESSION=` (empty) turns
+  unless told `-b myrepo`. A command the agent runs outside any repo uses its session's box when it
+  has one (next release). `-b NAME` or `OMABOX=NAME` picks a box; `OMABOX_SESSION=` (empty) turns
   the per-session names off. Two repos with the same directory name need `-b`.
 - **Screen**: `--size 3440x1440`, `3440x1440@144`, or `host` for your focused monitor;
   `omabox mode` changes it live.

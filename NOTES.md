@@ -3431,6 +3431,17 @@ from them.
     mattered. A `NAME=value` with a value over 60 characters is now `NAME=<first 40>…(+N chars)`, any
     other argument over 120 the same; the program and short arguments stay verbatim. Checks in
     t_unit_guard_exec_host (the long ones failed on the old code).
+200. **A command from outside any repo finds the session's own box** (2026-10-06, #136). The default
+    name is the git toplevel's basename plus the session's id, so an agent that ran a command from a
+    scratch directory got `default-SESSION` and "no box 'default-…' is up", its own box listed last,
+    unmarked, with a hint to start a second one; agents wrote `-b NAME` on every call (319 aliases in
+    the usage study). Now, when the derived name is `default-…`, no box has it, the command is not
+    `up` and exactly one up box carries the session's id, that box is used and said once (a
+    `noted-default` file in its dir). Never for a name given (`-b`, `OMABOX=`) or in a jail. Where it
+    does not apply (another repo's name, two such boxes), "no box" names the session's box(es) first;
+    `up` from outside a repo still starts a box and names the existing one. Checks in
+    t_unit_agent_session (stubbed boxes) and t_agent_session (a `run` from $TMP reaches the session's
+    box); they failed on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

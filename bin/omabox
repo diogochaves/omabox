@@ -419,12 +419,15 @@ proc_stat() {
 proc_ppid() { proc_stat "$1" 1; }
 proc_start() { proc_stat "$1" 19; }
 
-# Sets NAME and D (the box dir). Names end up in paths and window titles: keep them tame.
+# Sets NAME and D (the box dir). Names end up in paths and window titles: keep them tame. NAME_DERIVED:
+# 1 when the name came from default_name, not from the caller.
 select_box() {
   NAME=${1:-$(default_name)}
   NAME=$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40)
   [[ $NAME =~ ^[A-Za-z0-9] ]] || die "bad box name: $NAME"
   D=$BOXES/$NAME
+  NAME_DERIVED=0; [ -n "${1:-}" ] || NAME_DERIVED=1
+  [ "$NAME_DERIVED" = 0 ] || [ -n "${SELECT_PLAIN:-}" ] || session_fallback
   # A jailed agent drives only the boxes its jail started (finding 99): not the user's, nor another
   # jail's, which may see more than this one.
   if in_jail && [ -f "$D/box.json" ] && [ "$(meta jail)" != "$(jail_get .id)" ]; then
@@ -433,7 +436,38 @@ select_box() {
 }
 # Whether the box selected is the one this agent session's commands get by default (finding 88). A
 # jailed agent's boxes go with its jail instead.
-session_box() { ! in_jail && ! env_names_box && agent_session >/dev/null && [ "$NAME" = "$(select_box ""; echo "$NAME")" ]; }
+session_box() { ! in_jail && ! env_names_box && agent_session >/dev/null && [ "$NAME" = "$(SELECT_PLAIN=1 select_box ""; echo "$NAME")" ]; }
+
+# The boxes up that carry this agent session's id (finding 88's suffix), other than the one selected,
+# one per line; nothing outside a session, in a jail (its boxes go by jail) or with OMABOX naming the box.
+session_boxes() {
+  local sid n; ! in_jail && ! env_names_box && sid=$(agent_session) || return 0
+  for n in $(list_names); do
+    [[ $n == *-"$sid" ]] && [ "$n" != "$NAME" ] || continue
+    [ "$(NAME=$n D=$BOXES/$n box_state)" = up ] && echo "$n"
+  done; true
+}
+# `up` outside any repo, while this session has a box from its repo (issue #136): a second box starts,
+# but the first one is named.
+up_session_note() {
+  [[ $NAME == default-* ]] && [ "$(box_state)" != up ] || return 0
+  local mine; mine=$(session_boxes)
+  [ -z "$mine" ] || say "note: this session already has box ${mine//$'\n'/ } (started from another directory); -b NAME to use it"
+}
+# A command run outside any repo derives default-SESSION, while the session's box was started in its
+# repo as REPO-SESSION (issue #136): that box is the one meant, when it is the session's only box and
+# no box has the derived name. Not for `up` (it says so instead), nor a name given (-b, OMABOX=), which
+# select_box takes as it is. Said once per box, on stderr.
+session_fallback() {
+  [[ $NAME == default-* ]] && [ "${MAIN_CMD:-}" != up ] && [ ! -e "$D" ] || return 0
+  local mine; mine=$(session_boxes)
+  [ -n "$mine" ] && [ "$(wc -l <<<"$mine")" = 1 ] || return 0
+  local from=$NAME
+  NAME=$mine D=$BOXES/$mine
+  [ -e "$D/noted-default" ] && return 0
+  say "note: no box '$from' (this directory is in no repo); using this session's box '$NAME', started from its repo (-b $NAME names it)"
+  : > "$D/noted-default" 2>/dev/null || true
+}
 
 # The box's PID 1 on the host, or nothing. Top-level boxes run inside pasta's pid namespace (Arch's
 # pasta has no --no-pidns yet: UPSTREAM.md), so bwrap's child-pid is pasta's numbering: pasta_pid
@@ -505,6 +539,14 @@ need_box() {
   if box_alive; then touch "$D/used" 2>/dev/null || true; take_over && return 0; fi
   [ -f "$BOXES/.expired-$NAME" ] && die "box '$NAME' went down after $(cat "$BOXES/.expired-$NAME") idle (start it again with: omabox up $NAME; --idle 0 keeps it)"
   [ -f "$D/box.json" ] && die "box '$NAME' is dead (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
+  # A name derived in another directory than the session's box was started in (issue #136): that box
+  # first, by name.
+  local mine; [ "${NAME_DERIVED:-0}" = 0 ] || mine=$(session_boxes)
+  if [ -n "${mine:-}" ]; then
+    [ "$(wc -l <<<"$mine")" = 1 ] &&
+      die "no box '$NAME' is up; this session's box is '$mine' (started from another directory): -b $mine"
+    die "no box '$NAME' is up; this session's boxes are ${mine//$'\n'/ } (started from other directories): -b NAME"
+  fi
   local have; have=$(list_names | tr '\n' ' ')
   die "no box '$NAME' is up (${have:+up: $have; }start one with: omabox up $NAME)"
 }
@@ -1409,6 +1451,7 @@ cmd_up() {
   select_box "$name"
   # A name with characters a box name cannot have is written with - (finding 176): said, once, here.
   [ -z "$name" ] || [ "$NAME" = "$name" ] || say "note: box name '$name' written as '$NAME'"
+  [ -n "$name" ] || up_session_note
   # The box an agent session gets by default goes when the agent does (finding 93), or when idle; so
   # does that name given with -b (it is the same box). Not an interactive box (the user's window), a
   # throwaway, or any box while OMABOX is set (it names the box instead of the session).

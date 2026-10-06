@@ -1689,6 +1689,38 @@ t_unit_agent_session() {
     grep -nE '^\s*DOWN_IF_CREATED=.*cmd_down "\$NAME"\s*$' "$lib"
   check_fails "agent_proc fails when its agent's start time cannot be read (it exited meanwhile)" \
     env CLAUDE_CODE_SESSION_ID="t-$P-session" bash -c 'source "$1"; proc_start() { :; }; CLAUDE_PID=$$; agent_proc' _ "$lib"
+  # A command run outside any repo (default-SESSION) while the session's box came from its repo (#136):
+  # boxes in a runtime dir of their own, "up" as the stub box_state says. In $TMP: no repo.
+  local sr=$TMP/rt-sess sid=5cc72cdc b
+  for b in "$P-r-$sid" "$P-q-$sid" "$P-r-0000beef"; do mkdir -p "$sr/omabox/$b"; echo '{}' > "$sr/omabox/$b/box.json"; done
+  # sel UP CMD [OMABOX=] FN...: as command CMD with the boxes in UP up, run FN... after select_box ""
+  sel() {
+    local up=$1 cmd=$2; shift 2
+    (cd "$TMP" && env -u OMABOX -u OMABOX_SESSION -u CODEX_THREAD_ID XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
+      bash -c 'source "$1"; up=$2; MAIN_CMD=$3; shift 3
+        box_state() { if [[ " $up " == *" $NAME "* ]]; then echo up; else echo dead; fi; }
+        box_alive() { [ "$(box_state)" = up ]; }
+        select_box ""; eval "$*"' _ "$lib" "$up" "$cmd" "$@" 2>&1)
+  }
+  check_eq "no repo: this session's one box is used, said once (#136)" \
+    "omabox: note: no box 'default-$sid' (this directory is in no repo); using this session's box '$P-r-$sid', started from its repo (-b $P-r-$sid names it)"$'\n'"$P-r-$sid" \
+    "$(sel "$P-r-$sid $P-r-0000beef" wait echo '$NAME')"
+  check_eq "...once" "$P-r-$sid" "$(sel "$P-r-$sid" wait echo '$NAME' | tr -d '\n')"
+  rm -f "$sr/omabox/$P-r-$sid/noted-default"
+  check_eq "...not for up" "default-$sid" "$(sel "$P-r-$sid" up echo '$NAME')"
+  check_eq "...not with OMABOX naming the box" "x" "$(sel "$P-r-$sid" wait 'OMABOX=x; select_box ""; echo $NAME' | tail -1)"
+  check_eq "...not with -b" "default-$sid" "$(sel "$P-r-$sid" wait select_box "default-$sid" \; echo '$NAME' 2>&1 | tail -1)"
+  check_eq "...nor another session's box" "default-$sid" "$(sel "$P-r-0000beef" wait echo '$NAME')"
+  check_match "...two of the session's boxes: neither, both named" \
+    "no box 'default-$sid' is up; this session's boxes are $P-(r|q)-$sid $P-(r|q)-$sid \(started from other directories\)" \
+    "$(sel "$P-r-$sid $P-q-$sid" wait need_box)"
+  check_match "in another repo: the session's box named first" \
+    "no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' \(started from another directory\): -b $P-r-$sid" \
+    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
+      bash -c 'source "$1"; want=$2; box_state() { if [ "$NAME" = "$want" ]; then echo up; else echo dead; fi; }; box_alive() { false; }; MAIN_CMD=wait; select_box ""; need_box' _ "$lib" "$P-r-$sid" 2>&1)"
+  check_eq "up there: the session's box named, the new one still starts"     "omabox: note: this session already has box $P-r-$sid (started from another directory); -b NAME to use it"     "$(sel "$P-r-$sid" up up_session_note)"
+  check_eq "...nothing when it has none" "" "$(sel "$P-r-0000beef" up up_session_note)"
+  check_match "...a name given: as before" "no box 'nope' is up \(up: " "$(sel "$P-r-$sid" wait select_box nope \; need_box)"
 }
 
 # findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the
@@ -1732,6 +1764,8 @@ t_agent_session() {
   check_eq "--idle still sets it" 2700 "$(idle_of "$b2")"
   check "--idle 0: a reaper still watches the agent, once a minute (not every 5 s)" until_ok 5 polls_every "$b7" 60
   check_eq "session 1's commands reach its box" "$b1" "$(as "$s1" run -- sh -c 'echo $OMABOX_NAME')"
+  check_eq "...from a directory in no repo too (#136)" "$b1" \
+    "$(cd "$TMP" && env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s1" "$CLI" run -- sh -c 'echo $OMABOX_NAME' 2>/dev/null)"
   as "$s2" down >/dev/null 2>&1
   check_eq "session 2's down leaves session 1's box up" up "$(state_of "$b1")"
   as "$s1" up "$named" --no-shell --idle 30s >/dev/null 2>&1
