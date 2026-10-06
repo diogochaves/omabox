@@ -3010,7 +3010,7 @@ cmd_run() {
       # --replace: the earlier job of this command stopped and its windows gone before the screen is
       # watched (their closing is not what --wait waits for) and before it starts again (finding 110).
       [ $replace = 0 ] || job_replace "$quiet" "$@"
-      local log; log=$D/home/run-$(date +%s%N).log
+      local log; log=run-$(date +%s%N).log
       # --wait: until what it opens has settled (a first frame within 5 s unless --start says).
       if [ "$SETTLE_WAIT" = 1 ]; then
         local p; p=$(cursor_now) || exit $?; [ -z "$p" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
@@ -3021,11 +3021,15 @@ cmd_run() {
       # pid (in the box) on fd 3 and exits: nsenter exits with it and the job is reparented to the
       # box's PID 1. A host nsenter left waiting would stop along with it and hang down (finding 39).
       # Not `setsid -f`, which forks and never says the pid. A background job of a shell without job
-      # control ignores SIGINT and SIGQUIT: the job gets them back.
+      # control ignores SIGINT and SIGQUIT: the job gets them back. Its log is opened in the box, as
+      # a new file (finding 229): from the host, a link the box put at that name would be written
+      # through; in the box it resolves to the box's own files. What fails before that is said here.
       local jpid
       # shellcheck disable=SC2016 # $@ and $! belong to the inner bash
-      jpid=$(settle_act box_exec bash -c '(trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "$@" 3>&1 </dev/null >"$log" 2>&1) ||
-        die "run -d: could not start the command (see $log)"
+      jpid=$(settle_act box_exec bash -c 'rm -f -- "$1" && set -C && exec >"$1" 2>&1 || exit 125; set +C; shift
+        (trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "/home/sbx/$log" "$@" 3>&1 </dev/null >&2) ||
+        die "run -d: could not start the command"
+      log=$D/home/$log
       [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@"
       [ $print_log = 0 ] || echo "$log"
       [ $quiet = 1 ] || say "started in box '$NAME' (log: $log)"
@@ -5255,7 +5259,13 @@ cmd_gdb() {
   select_box "$name"; need_box
   [ -x /usr/bin/gdb ] || die "gdb: no /usr/bin/gdb (package gdb); a box runs the host's"
   local bp; bp=$(box_pid); [ -n "$bp" ] || die "box '$NAME' is not up"
-  local ns=(nsenter -t "$bp" -U -m -p --preserve-credentials)
+  # Every namespace of the box, its network too (finding 229): gdb parses the box's ELF and DWARF
+  # holding CAP_SYS_PTRACE there, so it reaches nothing of the host's network (abstract sockets
+  # included) either. A box started before finding 89 shares the host's, which is not ours to join.
+  local ns=(nsenter -t "$bp" -U -m -p -u -i) net
+  net=$(readlink "/proc/$bp/ns/net") || net=""
+  [ "$net" = "$(readlink /proc/self/ns/net)" ] || ns+=(-n)
+  ns+=(--preserve-credentials)
   case $target in
     hyprland) pid=$("${ns[@]}" pgrep -xo Hyprland) || die "gdb: box '$NAME' has no Hyprland running" ;;
     shell) { pid=$(shell_pid) && shell_running "$pid"; } || die "gdb: box '$NAME' has no shell running ($(shell_state))" ;;
@@ -5263,6 +5273,8 @@ cmd_gdb() {
   esac
   local what tracer
   what=$("${ns[@]}" cat "/proc/$pid/comm" 2>/dev/null) || what=$target
+  # The box names its processes (prctl, /proc/PID/comm: newlines and escapes allowed): printed tamed.
+  what=${what//[^A-Za-z0-9 ._:+@-]/?}; [ -n "$what" ] || what=$target
   # A traced process's tracer, 0 for none.
   tracer_of() { "${ns[@]}" sed -n 's/^TracerPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
   tracer=$(tracer_of "$pid") || tracer=0
@@ -5283,8 +5295,14 @@ cmd_gdb() {
   # Watched: started in a session of its own in the box (it ends with the box), into the gdb log. A
   # fatal signal stops it before the process's handler; gdb writes every thread's backtrace and quits,
   # detaching, and the signal goes on (pass): the process crashes as it would have, report and all.
-  local log=/home/sbx/gdb.log
-  printf '\n== omabox gdb --watch %s (pid %s in the box), %s\n' "$what" "$pid" "$(date -Is)" >> "$D/home/gdb.log" ||
+  # The log is written from inside the box, its header too (finding 229): from the host, a link the box
+  # put at gdb.log was followed, and the header appended to any file of the user's. In the box a link
+  # resolves to the box's own files; a link or FIFO there is replaced, as `log` reads only a regular
+  # file (finding 107) and a FIFO would hang this write (10 s at most).
+  local log=/home/sbx/gdb.log head
+  head=$(printf '\n== omabox gdb --watch %s (pid %s in the box), %s' "$what" "$pid" "$(date -Is)")
+  # shellcheck disable=SC2016 # the inner sh's
+  timeout 10 "${ns[@]}" sh -c '{ [ ! -L "$1" ] && [ ! -p "$1" ]; } || rm -f -- "$1"; printf "%s\n" "$2" >> "$1"' sh "$log" "$head" ||
     die "gdb: cannot write the box's gdb log"
   # shellcheck disable=SC2016 # the inner sh's
   "${caps[@]}" setsid -f sh -c 'log=$1; shift; exec "$@" >> "$log" 2>&1 </dev/null' sh "$log" \

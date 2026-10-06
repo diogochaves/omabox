@@ -804,9 +804,10 @@ t_unit_seed_copy() {
   check "...the link in place of the file, as copied" test -L "$s/b2/home/.cfg/f"
   check_match "...a link where a dir is: refused, as cp did" "could not copy" "$(seed_in "$s/b4" "$sd/B" "$sd/A" 2>&1)"
   ln -s "$v/file" "$s/b3/home/.cfg/f"; ln -s "$v/dir" "$s/b3/home/.cfg/sub/d"; mkdir -p "$sd/C/sub/d"; echo seeded > "$sd/C/sub/d/g"
-  cp "$sd/B/f" "$sd/C/f"
+  cp "$sd/B/f" "$sd/C/f"; echo own > "$s/b3/home/.cfg/kept"
   check "seed: a save's links under DEST" seed_in "$s/b3" "$sd/C"
   check_eq "...nothing written outside the HOME" "dir dir/g file victim victim" "$(find "$v" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$v/file" "$v/dir/g" | xargs)"
+  check_eq "...merged with what DEST had (finding 229)" "own seeded" "$(cat "$s/b3/home/.cfg/kept" "$s/b3/home/.cfg/f" | xargs)"
 }
 
 # The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left
@@ -5500,12 +5501,13 @@ t_output() {
 # omabox gdb (#135, finding 211): a backtrace of the box's Hyprland, running or stopped, of a process
 # of the box, and --watch catching a crash; a gdb of the box's own (run) is still refused.
 t_gdb() {
-  local B=$P-gdb out rc
+  local B=$P-gdb out rc D
   check_match "gdb: --watch and -- ARGS refused" "--watch runs its own" "$(ob gdb -b "$P-x" --watch -- -ex bt 2>&1)"
   check_match "gdb: --pid junk refused" "--pid takes a pid" "$(ob gdb -b "$P-x" --pid x 2>&1)"
   check_match "gdb: gdb's options after --" "after --" "$(ob gdb -b "$P-x" -ex bt 2>&1)"
   check "gdb is a jailed agent's" lib broker_check gdb
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$(ob path "$B")
   out=$(ob gdb -b "$B" 2>&1); rc=$?
   check_eq "gdb: exit 0" 0 "$rc"
   check_match "...every thread's backtrace, down to main" $'\n#[0-9]+ +0x[0-9a-f]+ in main \\(\\)' "$out"
@@ -5522,9 +5524,30 @@ t_gdb() {
   check_match "gdb --pid: a process of the box" "in (clock_nanosleep|__GI___clock_nanosleep|nanosleep)|#0 " "$(ob gdb -b "$B" --pid "$sp" 2>&1)"
   check_match "...one it has not: refused" "has no process 99999" "$(ob gdb -b "$B" --pid 99999 2>&1)"
   check_match "gdb --shell with no shell: refused" "has no shell running" "$(ob gdb -b "$B" --shell 2>&1)"
+  # finding 229: the box's gdb.log linked to a host file, and a process named with a newline and an
+  # escape. The watch's header is written in the box: the host file untouched, the log a file again.
+  echo keep > "$TMP/gdb-victim"
+  ob run -b "$B" -- ln -sf "$TMP/gdb-victim" /home/sbx/gdb.log
+  # (in one write: bash's printf writes up to the newline first, and each write replaces the name)
+  ob run -b "$B" -d -q -- python3 -c 'import os, time
+os.write(os.open("/proc/self/comm", os.O_WRONLY), b"x\x1b[1my\nz"); open("/tmp/t229.pid", "w").write(str(os.getpid())); time.sleep(600)'
+  local wp; until_ok 5 ob run -b "$B" -- test -s /tmp/t229.pid >/dev/null; wp=$(ob run -b "$B" -- cat /tmp/t229.pid)
+  out=$(ob gdb -b "$B" --pid "$wp" --watch 2>&1); rc=$?
+  check_eq "gdb --watch over a gdb.log linked to a host file: exit 0" 0 "$rc"
+  check_eq "...that file untouched" keep "$(cat "$TMP/gdb-victim")"
+  check "...the box's gdb.log a file of its own" test -f "$D/home/gdb.log" -a ! -L "$D/home/gdb.log"
+  check_match "...a name with a newline and an escape: printed tamed" "gdb watches x\?\?1my\?z \(pid $wp in box" "$out"
+  check_match "...in the header too" "== omabox gdb --watch x\?\?1my\?z \(pid $wp in the box\)" "$(ob log -b "$B" gdb -n all 2>&1)"
   out=$(ob gdb -b "$B" --watch 2>&1); rc=$?
   check_eq "gdb --watch: exit 0" 0 "$rc"
   check_match "...said, with where the backtrace goes" "gdb watches Hyprland .*omabox log -b $B gdb" "$out"
+  # ...from the box's network namespace (finding 229), not the host's: the gdb that is the box's
+  # (its pid namespace) and traces.
+  local bp g gn=""; bp=$(cat "$D/pid")
+  for g in $(pgrep -x gdb); do
+    [ "$(readlink "/proc/$g/ns/pid")" = "$(readlink "/proc/$bp/ns/pid")" ] && gn+="$(readlink "/proc/$g/ns/net") "
+  done
+  check_eq "...gdb in the box's network namespace" "$(readlink "/proc/$bp/ns/net") $(readlink "/proc/$bp/ns/net") " "$gn"
   check_match "...a second gdb: refused, naming the watch" "traced already, by pid [0-9]+" "$(ob gdb -b "$B" 2>&1)"
   ob run -b "$B" -- pkill -SEGV -xo Hyprland
   check "...a crash: the box goes down as it would have" until_ok 15 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | .state == \"dead\"'"
@@ -6047,6 +6070,15 @@ t_replace() {
   # A missing command still says so in its log
   out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
   check "a missing command: said in its log" until_ok 5 grep -q 'setsid: failed to execute omabox-no-such-command' "$out"
+  # finding 229: the log is opened in the box. A box that knows the name (a `date` of the suite's says
+  # it here) and links it to a host file: that file untouched, the log a file of the box's.
+  mkdir -p "$TMP/rep-bin"; echo keep > "$TMP/rep-victim"
+  printf '#!/bin/sh\n[ "$1" = +%%s%%N ] && { echo 1229; exit; }\nexec /usr/bin/date "$@"\n' > "$TMP/rep-bin/date"; chmod +x "$TMP/rep-bin/date"
+  ob run -b "$B" -- ln -sf "$TMP/rep-victim" /home/sbx/run-1229.log
+  out=$(PATH=$TMP/rep-bin:$PATH ob run -b "$B" -d -q --print-log -- echo omabox-t229 2>&1)
+  check_eq "run -d over a link the box put at its log's name: the path" "$D/home/run-1229.log" "$out"
+  check "...the log is the box's, with the output" until_ok 5 bash -c "[ -f '$D/home/run-1229.log' ] && [ ! -L '$D/home/run-1229.log' ] && grep -qx omabox-t229 '$D/home/run-1229.log'"
+  check_eq "...the link's target untouched" keep "$(cat "$TMP/rep-victim")"
   ob down "$B" >/dev/null 2>&1
 }
 

@@ -2988,7 +2988,7 @@ from them.
     `tar -cf - *` lists every dir before what is in it; with no dir entry first it did follow the link,
     which seed_copy's archives never lack. A fresh HOME is empty: what a fresh box gets is unchanged.
     The one other host write into a box HOME, `run -d`'s `run-<ns>.log`, has a name the box cannot know
-    beforehand. `t_saves` plants a link to a file and one for `current` to a dir, both the suite's:
+    beforehand (since finding 229 it is opened in the box; gdb's log there and --seed's copy, finding 228, were two more). `t_saves` plants a link to a file and one for `current` to a dir, both the suite's:
     after `up --from` both are as they were and the new box's are real (on 0.4.7 five checks failed);
     `t_unit_seed_copy` checks `home_unlink` and seed_copy over links, relative and dangling ones too.
 169. **The bar widget never read its own settings** (2026-10-03). The widget kept the CLI's
@@ -3608,6 +3608,8 @@ from them.
     in t_gdb (refusals, a backtrace to main, a gdb run in the box still refused, a stopped Hyprland
     backtraced and left stopped, --pid of a box sleep and of one it has not, --shell without a shell,
     --watch then a second gdb refused, a SIGSEGV: the box dead and the log with the signal and main).
+    Since finding 229 gdb also enters the box's network, UTS and IPC namespaces, and the --watch header
+    is written from inside the box, as the rest of the log is.
 212. **`shot --burst N` [--every] [--diff] [--sheet] [--after -- ACTION]** (2026-10-06, #132). A
     transition, a hover, an animation's end or a README demo needs frames over time; four agents built
     their own grabbers (a grim loop in the box through `run -d`, loops of `omabox shot` stitched with
@@ -3895,6 +3897,40 @@ from them.
     `.ssh` and of `api-keys.env`, and `--ro-bind` of `hooks/`, in a fake HOME); and in a real box: the
     two-folder reproduction (a link to a file and to a dir) leaves the host's files as they were, and
     the box has the seeded ones. The relay was not run through a real ai-jail (its unit check only).
+229. **Host-side writes into a box HOME, from inside the box** (2026-10-06, #160). `gdb --watch`
+    appended its header to `$D/home/gdb.log` from the host, following a link the box put there:
+    `omabox run -- ln -sf HOSTFILE /home/sbx/gdb.log`, then a `--watch` added the line to HOSTFILE
+    (any file the user can write), and `$what`, the target's `/proc/PID/comm`, is the box's to set
+    (newlines, escapes). Now the header is written in the box's namespaces, as gdb's output already
+    was: a link there resolves to the box's own files (the box writes only its HOME, its runtime dir
+    and, with --systemd, its cgroup), and a link or FIFO at gdb.log is replaced by a file, as `log`
+    reads only a regular file (finding 107; a FIFO would hang the write, 10 s at most). The name is
+    printed with anything but `A-Za-z0-9 ._:+@-` as `?`. gdb, which holds CAP_SYS_PTRACE in the box's
+    user namespace while it parses the box's ELF and DWARF, ran in the host's network namespace (its
+    abstract sockets too, finding 89); it now enters the box's network, UTS and IPC namespaces too, as
+    `box_exec` does (a box from before finding 89 shares the host's, not ours to join): debuginfod is
+    off and nothing of gdb's needs the host's network. The sweep of the other host-side writes: (1)
+    `up --from SAVE --seed DIR:DEST` wrote through a link the save kept inside DEST: finding 228 (a
+    copy by tar since). (2) `run -d`'s log, `run-<ns>.log`, opened from the
+    host in the box HOME: a name the box cannot know beforehand (finding 168), but it is now opened
+    in the box all the same, removed and made anew (`set -C`), so a box that guesses it reaches only
+    its own files; what fails before that (nsenter) goes to omabox's stderr instead of the log. The
+    rest were safe: seed_home, seed_copy and seed_theme clear links first (finding 168); `up --from`
+    copies into a HOME just made; `box_file` writes the runtime dir's files (omabox.mode,
+    omabox.monitors, omabox.confirm-close) as a file of the box dir renamed over them (finding 74);
+    `reload` writes from inside the box; `rm_box`'s `rm -rf` and `chmod -R` do not follow links;
+    `keep_run_logs` and every read go through `box_home_file` (finding 159); `save` copies links as
+    links; the marks, jobs, shots.tsv, events.marks and output.dropped are in the box dir, which the
+    box cannot see. Not changed: `shot -o PATH` (and `--burst -o`) writes where the caller says, a box
+    HOME too, where a box could have put a link at `PATH.part`; and an agent that edits a file of
+    `$(omabox path)/home` from the host (the skill's shell.json advice) follows the box's links as any
+    host write would. Checks: t_gdb (gdb.log linked to a host file: the file untouched, gdb.log a
+    file with the header; a process named `x\e[1my\nz` printed `x??1my?z`, in the header too; the
+    watching gdbs in the box's network namespace), t_replace (a `date` of the suite's gives the log's
+    name, which the box linked to a host file: untouched, the log the box's); t_unit_seed_copy also
+    checks that a folder seed merges with what DEST had. On b02dfcc the t_gdb and t_replace checks
+    fail.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

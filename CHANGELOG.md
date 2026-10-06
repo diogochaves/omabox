@@ -82,6 +82,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   session: helpers that check their bus refused the old one (a socket in `/tmp`, a 0755 dir) (#153).
 - **The bar widget no longer logs `TypeError`s while a bar rebuilds** (a `bar.layout` edit with the
   widget inside another plugin): it falls back to the theme's colours while its bar is gone (#155).
+- **A box can no longer make `gdb --watch` write to your files**: it appended its header to whatever
+  the box's `gdb.log` linked to; the header is now written from inside the box, as the rest of the
+  log is, and `run -d`'s log is opened in the box too. `gdb` runs in the box's network namespace, and
+  prints a process name the box set with escapes or newlines as `?` (#160).
 
 ## 0.4.8 — 2026-10-03
 
