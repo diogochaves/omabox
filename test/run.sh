@@ -3161,7 +3161,7 @@ t_hung() {
     local n=$1 t0 out rc took; shift
     t0=$(now_ms); out=$(timeout 40 "$CLI" "$@" 2>&1); rc=$?; took=$(($(now_ms) - t0))
     if [ "$rc" != 0 ] && [ "$rc" != 124 ] && [[ $out == *"box '$B': its Hyprland did not answer"* ]] && [[ $out != *jq:* ]] &&
-       [ "$took" -lt 9000 ]; then ok "$n ($took ms)"; else no "$n" "exit $rc after $took ms: $out"; fi
+       [ "$took" -lt "${HUNG_MAX:-9000}" ]; then ok "$n ($took ms)"; else no "$n" "exit $rc after $took ms: $out"; fi
   }
   hung_says "keys --wait: said, within 9 s" keys -b "$B" --wait a
   hung_says "windows: said, no jq line, within 9 s" windows -b "$B"
@@ -3170,6 +3170,10 @@ t_hung() {
   hung_says "shot: said" shot -b "$B"
   hung_says "wait window: said" wait -b "$B" window foot
   hung_says "wait layer: said" wait -b "$B" layer omarchy-bar
+  # #139: these two passed straight to hyprctl, which then waited in connect for good (on 804f2d5 the
+  # outer timeout ended them). Their limit is 10 s.
+  HUNG_MAX=16000 hung_says "hyprctl clients: said, within 16 s" hyprctl -b "$B" clients
+  HUNG_MAX=16000 hung_says "lua 'return 1': said, within 16 s" lua -b "$B" 'return 1'
   check_match "ls: hung, not up" "^$B +headless +[^ ]+ +hung " "$(ob ls | grep "^$B ")"
   check_eq "ls --json: hung, its state still up (the bar widget offers Down for any other)" "up true" \
     "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | "\(.state) \(.hung)"')"
@@ -3178,6 +3182,11 @@ t_hung() {
   check_match "...ls says up" "^$B +headless +[^ ]+ +up " "$(ob ls | grep "^$B ")"
   check_eq "...ls --json: not hung" "up false" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | "\(.state) \(.hung)"')"
   check "...and windows answers" ob windows -b "$B"
+  check_eq "...hyprctl and lua answer as before" "1" "$(ob lua -b "$B" 'return 1')"
+  # ...and what follows is not cut at hyprctl's limit: still following past it, ended from outside.
+  out=$(timeout 13 "$CLI" hyprctl -b "$B" rollinglog -f 2>&1); rc=$?
+  check_eq "hyprctl rollinglog -f still follows past the 10 s limit (#139)" 124 "$rc"
+  check_fails "...and is not called hung" grep -q "did not answer" <<<"$out"
   ob down "$B" >/dev/null
 }
 

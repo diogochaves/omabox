@@ -3780,11 +3780,25 @@ cmd_wait() {
   esac
 }
 
+# HYPR_LIMIT: how long `hyprctl` and `lua` wait for the box's Hyprland (#139). hyprctl's own 5 s IPC
+# timeout does not cover connecting, which waits forever once a stopped Hyprland's backlog is full
+# (finding 182), so an agent's call could hang for good.
+HYPR_LIMIT=10
 cmd_hyprctl() {
   local name=""
   while [ "${1:-}" = -b ] || [ "${1:-}" = --box ]; do optarg "$@"; name=$2; shift 2; done
   select_box "$name"; need_box
-  on_box hyprctl "$@"
+  # Not for what runs until the caller ends it: rollinglog -f, a repl with no code (interactive). A
+  # connect-only check first (hypr_answers) would leave a hang after it unbounded, and cost a call.
+  local a follow=0
+  for a; do case $a in -f|--follow) [[ " $* " != *" rollinglog "* ]] || follow=1 ;; esac; done
+  [ "${!#}" != repl ] || follow=1
+  if [ $follow = 1 ]; then on_box hyprctl "$@"; return; fi
+  local rc=0
+  on_box timeout "$HYPR_LIMIT" hyprctl "$@" || rc=$?
+  [ $rc = 124 ] || return $rc
+  box_alive || die "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
+  die "$(hung_text "$HYPR_LIMIT s")"
 }
 
 # Lua in the box's Hyprland, and what it returns (issue #40, finding 106): `hyprctl eval` answers only
@@ -3819,15 +3833,20 @@ cmd_lua() {
   while [[ $code == *"]$lvl]"* ]]; do lvl+="="; done
   # Lua drops the newline after the opening bracket (the source starts as given); the one before the
   # closing bracket keeps a source that ends in ] from closing it early.
-  out=$(on_box hyprctl eval "(function(...)
+  local rc=0
+  out=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "(function(...)
 $(cat "$ROOT/share/lua.lua")
 end)([${lvl}[
 $code
-]$lvl])" 2>&1) || true
+]$lvl])" 2>&1) || rc=$?
   case $out in
     "error: omabox-lua-ok:"*) vals=${out#"error: omabox-lua-ok:"} ;;
     "error: omabox-lua-error:"*) echo "lua: ${out#"error: omabox-lua-error:"}" >&2; return 1 ;;
-    *) box_alive || die "box '$NAME' went down"; die "lua: the box's Hyprland did not answer as expected: $out" ;;
+    *) box_alive || die "box '$NAME' went down"
+       # No answer in time (#139), or hyprctl's own "didn't respond": a hung Hyprland, in its words.
+       [ $rc != 124 ] || die "$(hung_text "$HYPR_LIMIT s")"
+       hypr_answers || die "$(hung_text)"
+       die "lua: the box's Hyprland did not answer as expected: $out" ;;
   esac
   if [ $json = 1 ]; then jq -c '.[]' <<<"$vals"
   else jq -r '.[] | if type == "string" then . elif type == "null" then "nil" else tojson end' <<<"$vals"; fi

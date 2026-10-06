@@ -3319,6 +3319,15 @@ from them.
     (package `python`, in install.sh's list), refused in words if missing; the checks match
     case-insensitively so a failing state shows as one; t_unit_guard_settings checks the state with a
     failing `python3` first on PATH.
+190. **`omabox hyprctl` and `lua` end on a hung box too** (2026-10-06, #139; 181-182 did it for the
+    calls omabox makes itself). Both passed straight to hyprctl, which waits in `connect` for good once
+    a stopped Hyprland's backlog is full, so an agent's call could hang forever. Now they wait 10 s
+    (`HYPR_LIMIT`), then say `hung_text`'s words ("did not answer in 10 s (hung? …)"), or that the box
+    went down; `lua` also says hung when hyprctl gave up by itself ("didn't respond") and the box does
+    not answer a ping. Not for what runs until the caller ends it: `rollinglog -f`/`--follow` and a
+    `repl` with no code. A connect-only ping first and the call unbounded was the other way: it costs
+    a call each time and leaves a hang after the ping unbounded. t_hung: both said within 16 s on a
+    stopped box (on the old code its outer timeout ended them), `rollinglog -f` still following at 13 s.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
