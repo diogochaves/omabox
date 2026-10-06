@@ -3400,6 +3400,18 @@ from them.
     themselves). One nsenter more per command. Checks in t_shell_crash (a crash past 10 s said once,
     the launcher stopped: gone in ls and shot, back with restart-shell) and t_own_processes (`none`);
     they failed on the old code (worktree).
+196. **Nothing reloads a plugin by itself in a box** (2026-10-06, #129). shell.sh's
+    `QS_DISABLE_FILE_WATCHER` stops only Quickshell's own watcher; Omarchy's PluginRegistry runs
+    `inotifywait -m -r … <pluginsDir>` and reloads a local plugin on each event, and a `--plugin`
+    mount is the host checkout, so every save there reloaded it in the box, ~4 times per save (an
+    editor's temp file and rename), seen 9 times in the usage study; a shot or `wait still` caught it
+    half-reloaded, and `restart-shell` reloaded it twice. Kept off, as the docs said: a stand-in
+    `inotifywait` in share/bin (first on the shell's PATH) takes that exact argv and waits, without
+    watching, until the shell is gone (exiting would have the registry start it again a second
+    later); any other argv goes to /usr/bin/inotifywait. If the registry's argv changes, the stand-in
+    passes it on: live reloads again, harmless, and t_unit_omarchy_contract names the change.
+    t_plugin_check: a host edit to a mounted plugin logs no "Local plugin changed" (on the old code it
+    did).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

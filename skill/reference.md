@@ -227,10 +227,9 @@ servers), then:
   menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`. A
   widget placed in another mounted plugin's layout shows as `disabled: listed but not enabled`:
   check it with that plugin's IPC.
-- **Edits**: `omabox restart-shell` (the mount is live). Quickshell's own watcher is off in a box,
-  but Omarchy's plugin registry still reloads a changed local plugin, sometimes several times per
-  save ("Local plugin changed, reloading" in `omabox log shell`): `restart-shell` after edits, then
-  `wait still`, before a shot. A `keepLoaded` plugin or a service needs a restart on any
+- **Edits**: `omabox restart-shell` (the mount is live). Nothing reloads by itself in a box (neither
+  Quickshell's watcher nor Omarchy's plugin registry's), so a shot never catches a half-reloaded
+  plugin: `restart-shell` after edits, then `wait still`, before a shot. A `keepLoaded` plugin or a service needs a restart on any
   desktop: Omarchy keeps the loaded instance across its hot reload.
 - **Open and close**: `omabox run -- omarchy-shell shell summon ID ['{"payload":1}']` (a bar widget
   takes no payload), `shell hide ID`, `shell toggle ID`; the user's ways to close it are keys and

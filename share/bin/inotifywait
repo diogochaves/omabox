@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# omabox stand-in for inotifywait (#129), first on the PATH of what the box's Hyprland starts. Omarchy's
+# plugin registry watches the plugins dir with it and reloads a local plugin on each change, often
+# several times per save of a mounted --plugin (its files are the host checkout's); a shot or `wait
+# still` then caught a half-reloaded plugin. In a box nothing reloads by itself: `omabox restart-shell`
+# does. For that one watch, exactly as Omarchy runs it, this waits without watching, and ends with the
+# shell (exiting would only have the registry start it again a second later); anything else goes to the
+# real one. t_unit_omarchy_contract checks the registry still runs it this way.
+if [ $# = 8 ] && [ "${*:1:7}" = "-m -r -q -e close_write,create,delete,move --format %w%f" ] &&
+   [[ ${8%/} == */.config/omarchy/plugins ]]; then
+  while kill -0 "$PPID" 2>/dev/null; do sleep 5; done
+  exit 0
+fi
+exec /usr/bin/inotifywait "$@"

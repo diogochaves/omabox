@@ -884,6 +884,9 @@ omarchy_contract() {
   oc "omarchy-launch-shell runs the shell under systemd-cat -t omarchy-shell (share/bin/systemd-cat logs it to ~/shell.log)" \
     "no omarchy-launch-shell, or it starts the shell another way: omarchy restart shell would leave a box with no bar (finding 131)" \
     oc_has "$o/bin/omarchy-launch-shell" "systemd-cat -t omarchy-shell"
+  oc "the plugin registry watches pluginsDir with this inotifywait (share/bin/inotifywait keeps that watch idle, #129)" \
+    "PluginRegistry.qml runs inotifywait another way: in a box a mounted plugin reloads by itself on every save again" \
+    bash -c 'tr -d " \n" < "$1" | grep -qF "command:[\"inotifywait\",\"-m\",\"-r\",\"-q\",\"-e\",\"close_write,create,delete,move\",\"--format\",\"%w%f\",registry.pluginsDir]"' _ "$s/services/PluginRegistry.qml"
   oc "omarchy-launch-browser uses systemd-run --user (share/bin/systemd-run runs it without a user manager)" \
     "no omarchy-launch-browser, or it starts the browser another way" oc_has "$o/bin/omarchy-launch-browser" "systemd-run --user"
   oc "omarchy-theme-set-browser-policy, called by an omarchy-* (share/bin's stand-in for it)" \
@@ -2431,6 +2434,13 @@ t_plugin_check() {
   check_match "...a checkout's commit, +dirty with uncommitted files (finding 139)" "^[0-9a-f]{7,}\+dirty$" \
     "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.good" '.[] | select(.name == $n) | .plugin_status[$i].commit')"
   check_eq "...none for a plugin outside git" null "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.qml" '.[] | select(.name == $n) | .plugin_status[$i].commit')"
+  # #129: Omarchy's plugin registry reloaded a mounted plugin on every save on the host, several times
+  # each; in a box nothing reloads by itself (share/bin/inotifywait keeps its watch idle).
+  echo '// t129' >> "$F/good/W.qml"; sleep 3
+  check_fails "an edit on the host to a mounted plugin reloads nothing by itself (#129)" grep -q "Local plugin changed" \
+    <<<"$(ob log -b "$B" shell -n all)"
+  check_match "...the registry's watch is the box's stand-in, waiting" "/opt/omabox/share/bin/inotifywait -m -r -q" \
+    "$(ob run -b "$B" -- pgrep -af '[i]notifywait')"
   check_eq "ls --json: the box's theme" "$(cat "$(ob path "$B")/home/.local/state/omarchy/current/theme.name")" \
     "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .theme')"
   cp "$F/W.qml.fixed" "$F/qml/W.qml"
