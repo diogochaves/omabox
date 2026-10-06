@@ -262,9 +262,14 @@ attention) and the widget's icon is lit in it.
 The widget's panel shows each box's mode, size, age, plugins, whether it is being peeked at and
 where its keys go, and a count in the bar when there are several. Keys: arrows or j/k, Enter or `p`
 peek/show, `s` shot, `v` paste your clipboard in and `c` copy the box's out, `f` keys-to-box on or off
-(these three on an interactive box), `d` down (twice within 3 s;
-Enter on a dead box arms it), `n` new, `r` refresh. **New interactive box** starts one under a free name (`omabox up --interactive --new`:
-box-1, box-2, ...) and brings its window forward. If `omabox ls` fails, the panel says so. The
+(these three on an interactive box), `d` down (twice within 3 s, the second at least 0.4 s after the
+first, so a double-click is not a confirmation; Enter on a dead box arms it), `n` new (twice, the
+same way), `r` refresh. **New interactive box** starts one under a free name (`omabox up --interactive --new`:
+box-1, box-2, ...) and brings its window forward. Every row has its buttons in the same places, an
+empty slot where an action does not apply, so a click from habit never lands on another action. While
+the pointer is over the panel the list holds still: a box that goes stays greyed, marked gone, and a
+new one is counted in the header (`1 NEW`) until the pointer leaves. A list taller than the screen
+scrolls, the New button and the keys staying in view. If `omabox ls` fails, the panel says so. The
 widget only displays `omabox ls --json` and runs `omabox`; the CLI owns every rule.
 
 </details>

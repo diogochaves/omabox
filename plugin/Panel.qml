@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -37,12 +38,25 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  property var boxes: []
+  property var boxes: []               // the last `omabox ls --json`
+  // What the list shows (#117): the boxes' names in order, and each one's data. While the pointer is
+  // over the panel nothing moves under it: rows update in place, a box that went stays in its slot
+  // (marked gone, its actions off), and a new one is only counted in the header until the pointer
+  // leaves (or the panel closes). Rows are built again only when the names change.
+  property var rows: []
+  property var rowData: ({})
+  property int newCount: 0
+  readonly property bool held: opened && holdHover.hovered
+  onHeldChanged: syncRows(false)
   property int selectedIndex: 0
   property string selectedName: ""     // the selection follows the box, not its place in the list
   property bool cursorActive: false
   property string armedDown: ""        // box whose Down was pressed once; a second press confirms
   property bool armedNew: false        // n pressed once: a second n starts a box (a stray key does not)
+  // When Down or n was armed: a second press sooner than confirmGapMs is the same gesture (a
+  // double-click, a key bounced or typed twice), not a confirmation (#120). It stays armed.
+  property real armedAt: 0
+  readonly property int confirmGapMs: 400
   property var pendingSet: null        // a setting picked while the last one was still being written
   property string busy: ""             // box an action is running for
   property string lastError: ""        // kept until the next action succeeds
@@ -108,6 +122,13 @@ Panel {
   })
 
   readonly property bool hasBoxes: boxes.length > 0
+  // The list's height when the screen is short (#121): the card's room less everything else on the
+  // list face, and never under two rows.
+  readonly property real listRoom: panel.availableCardHeight > 0
+    ? Math.max(Style.space(80), panel.availableCardHeight - panel.verticalContentInset - hero.height
+      - (alertStrip.visible ? alertStrip.height + column.spacing : 0) - column.spacing
+      - listSep.height - newButton.height - hints.height - listFace.spacing * 3)
+    : 100000
   readonly property int upCount: boxes.filter(function(b) { return b.state === "up" }).length
   readonly property int deadCount: boxes.length - upCount
   // The console convention (omarchy-console DESIGN.md §6), read by its rail: running while a box is up.
@@ -115,6 +136,7 @@ Panel {
   readonly property string consoleState: consoleAwake ? "running" : ""
   // One wording for the tooltip and the panel: the icon shows while any box exists, dead ones too.
   readonly property string countText: (upCount === 1 ? "1 box up" : upCount + " boxes up") + (deadCount ? " · " + deadCount + " dead" : "")
+    + (newCount ? " · " + newCount + " new" : "")
 
   visible: shown
   implicitWidth: shown ? button.implicitWidth : 0
@@ -178,8 +200,34 @@ Panel {
     listFailures = 0
     listError = ""
     boxes = parsed
-    var i = boxes.findIndex(function(b) { return b.name === selectedName })
-    select(i >= 0 ? i : Math.min(selectedIndex, Math.max(0, boxes.length - 1)))
+    syncRows(false)
+  }
+
+  // The rows from the list (#117). Held (the pointer over the panel), the rows stay: their data is
+  // the list's, a box gone from it keeps its last data marked gone, and new ones are counted. Not
+  // held, or forced (the list emptied after failures), the rows are the list. The selection follows
+  // its box by name, scrolled into view when the rows are not held.
+  function syncRows(force) {
+    var live = {}, names = []
+    boxes.forEach(function(b) { live[b.name] = b; names.push(b.name) })
+    var data = {}, fresh = 0
+    if (held && !force) {
+      rows.forEach(function(n) { data[n] = live[n] || Object.assign({}, rowData[n], { gone: true }) })
+      fresh = names.filter(function(n) { return rows.indexOf(n) < 0 }).length
+      if (armedDown !== "" && data[armedDown] && data[armedDown].gone) armedDown = ""
+    } else {
+      data = live
+      if (JSON.stringify(names) !== JSON.stringify(rows)) rows = names
+    }
+    if (JSON.stringify(data) !== JSON.stringify(rowData)) rowData = data
+    newCount = fresh
+    var i = rows.indexOf(selectedName)
+    select(i >= 0 ? i : Math.min(selectedIndex, Math.max(0, rows.length - 1)))
+    if (!held) showSelected()
+  }
+
+  function showSelected() {
+    if (rows.length > 0) boxList.positionViewAtIndex(selectedIndex, ListView.Contain)
   }
 
   // Keep the last list through a hiccup, but say so; after three failures in a row it is gone, and
@@ -187,12 +235,12 @@ Panel {
   function listFailed(why) {
     listError = why
     if (++listFailures === 3) Quickshell.execDetached(["notify-send", "-a", "omabox", "omabox: cannot list boxes", why])
-    if (listFailures >= 3) boxes = []
+    if (listFailures >= 3) { boxes = []; syncRows(true) }
   }
 
   function select(i) {
     selectedIndex = i
-    selectedName = boxes[i] ? boxes[i].name : ""
+    selectedName = rows[i] !== undefined ? rows[i] : ""
   }
 
   function age(created) {
@@ -207,6 +255,7 @@ Panel {
   }
 
   function caption(b) {
+    if (b.gone) return "gone"
     if (armedDown === b.name) return "Press again to shut it down"
     if (b.state !== "up") return "dead · Down cleans it up"
     var parts = [b.mode || "?"]
@@ -222,7 +271,7 @@ Panel {
 
   // keys-to-box (finding 117): an interactive box's SUPER keys follow focus into its window, or not.
   function keysToBox(b) {
-    if (!b || b.state !== "up" || b.mode !== "interactive") return
+    if (!b || b.gone || b.state !== "up" || b.mode !== "interactive") return
     run(b.name, "keys-to-box", [command, "keys-to-box", "-b", b.name, b.keys_to_box ? "off" : "on"])
   }
 
@@ -243,7 +292,7 @@ Panel {
   // Peek at a headless box (or bring its peek forward); show an interactive one. On a dead box the
   // only thing to do is Down: arm it.
   function peek(b) {
-    if (!b) return
+    if (!b || b.gone) return
     if (b.state !== "up") { down(b); return }
     if (run(b.name, "peek", [command, "peek", "-b", b.name, "--focus"])) close()
   }
@@ -251,7 +300,7 @@ Panel {
   // omabox shot only: the viewer opens detached, so an image left open does not hold up every later
   // action (xdg-open waits for the viewer on Hyprland).
   function shot(b) {
-    if (!b) return
+    if (!b || b.gone) return
     if (b.state !== "up") { down(b); return }
     if (run(b.name, "shot", [command, "shot", "-b", b.name])) close()
   }
@@ -259,23 +308,33 @@ Panel {
   // Your clipboard into an interactive box, or the box's out (omabox clip, issue #23): one item, once.
   // Headless boxes are agents': the CLI refuses them, and the panel offers them nothing.
   function clip(b, out) {
-    if (!b || b.state !== "up" || b.mode !== "interactive") return
+    if (!b || b.gone || b.state !== "up" || b.mode !== "interactive") return
     var args = [command, "clip", "-b", b.name]
     if (out) args.push("--from-box")
     if (run(b.name, out ? "clip out" : "clip", args)) close()
   }
 
   function down(b) {
-    if (!b) return
+    if (!b || b.gone) return
     if (armedDown !== b.name) {
       armedDown = b.name
+      armedAt = Date.now()
       disarm.restart()
       return
     }
+    if (Date.now() - armedAt < confirmGapMs) return
     if (run(b.name, "down", [command, "down", b.name])) armedDown = ""
   }
 
-  function selected() { return boxes[selectedIndex] }
+  // n twice, with the same gap as Down's.
+  function armNew() {
+    if (!armedNew) { armedNew = true; armedAt = Date.now(); disarm.restart(); return }
+    if (Date.now() - armedAt < confirmGapMs) return
+    armedNew = false
+    newBox()
+  }
+
+  function selected() { return rowData[rows[selectedIndex]] }
 
   Process {
     id: listProc
@@ -475,11 +534,15 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+
+      // The pointer anywhere over the card holds the list still (#117).
+      HoverHandler { id: holdHover }
       onMoveRequested: function(dx, dy) {
         if (root.face !== "list") return
         if (!root.cursorActive) { root.cursorActive = true; return }
-        if (dy !== 0 && root.boxes.length > 0) {
-          root.select((root.selectedIndex + dy + root.boxes.length) % root.boxes.length)
+        if (dy !== 0 && root.rows.length > 0) {
+          root.select((root.selectedIndex + dy + root.rows.length) % root.rows.length)
+          root.showSelected()
           root.armedDown = ""
         }
       }
@@ -492,8 +555,7 @@ Panel {
         if (t === "r") { root.refresh(); return }
         if (t === "n") {
           // Twice, like Down: a stray n (typed as if into a search) must not open a window.
-          if (root.armedNew) { root.armedNew = false; root.newBox() }
-          else { root.armedNew = true; disarm.restart() }
+          root.armNew()
           return
         }
         if (!root.cursorActive) return
@@ -570,6 +632,7 @@ Panel {
         // The last failure, full width in the urgent colour: a pill in the hero was too small to read.
         // A failing list comes first: everything below it may be stale.
         Rectangle {
+          id: alertStrip
           visible: root.lastError !== "" || root.listError !== "" || root.staleNote !== ""
           width: parent.width
           implicitHeight: alertRow.implicitHeight + Style.space(12)
@@ -624,40 +687,50 @@ Panel {
 
         // ============================= the list =============================
         Column {
+          id: listFace
           visible: root.face === "list"
           width: parent.width
           spacing: Style.space(12)
 
-          PanelSeparator { foreground: root.foreground }
+          PanelSeparator { id: listSep; foreground: root.foreground }
 
-          Column {
+          Text {
+            visible: root.rows.length === 0
             width: parent.width
+            textFormat: Text.PlainText
+            text: "No boxes up"
+            color: Qt.darker(root.foreground, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            horizontalAlignment: Text.AlignHCenter
+          }
+
+          // Only the rows scroll (#121): the list takes the height the screen leaves once the hero, an
+          // alert, the New button and the hints are in, so those stay in view with any number of boxes.
+          // A ListView, as Omarchy's long lists: the wheel scrolls it, and keys keep the selection in
+          // view (showSelected); a row the pointer selects is not scrolled to, so nothing moves under it.
+          ListView {
+            id: boxList
+            visible: root.rows.length > 0
+            width: parent.width
+            height: Math.min(contentHeight, root.listRoom)
             spacing: Style.space(4)
-
-            Text {
-              visible: !root.hasBoxes
-              width: parent.width
-              textFormat: Text.PlainText
-              text: "No boxes up"
-              color: Qt.darker(root.foreground, 1.4)
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              horizontalAlignment: Text.AlignHCenter
-            }
-
-            Repeater {
-              model: root.boxes
-              BoxRow {
-                required property var modelData
-                required property int index
-                width: parent.width
-                box: modelData
-                rowIndex: index
-              }
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            model: root.rows
+            delegate: BoxRow {
+              required property var modelData
+              required property int index
+              width: ListView.view.width
+              box: root.rowData[modelData] || ({})
+              rowIndex: index
             }
           }
 
           Button {
+            id: newButton
             width: parent.width
             bordered: true
             iconText: root.icons.add
@@ -673,6 +746,7 @@ Panel {
           }
 
           Text {
+            id: hints
             width: parent.width
             textFormat: Text.PlainText
             // No-break spaces keep each key with its action when the line wraps.
@@ -815,12 +889,15 @@ Panel {
     id: row
     property var box: ({})
     property int rowIndex: 0
-    readonly property bool up: box.state === "up"
+    readonly property bool gone: box.gone === true   // gone from the list while it was held (#117)
+    readonly property bool up: box.state === "up" && !gone
+    readonly property bool interactive: box.mode === "interactive"
     readonly property bool rowSelected: root.cursorActive && root.selectedIndex === rowIndex
     readonly property bool armed: root.armedDown === box.name
 
     hasCursor: rowSelected
     foreground: root.foreground
+    opacity: gone ? 0.45 : 1
     implicitHeight: content.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
@@ -873,62 +950,126 @@ Panel {
         }
       }
 
-      Row {
+      // Every row has the same six slots in the same order (#120): Peek/Show, Keys, Shot, Paste in,
+      // Copy out, Down. One that does not apply to the row is empty, never removed, so a click from
+      // habit lands on the same action on every row, and never on an interactive box's clipboard. A
+      // click in an empty slot (or between buttons) does nothing: it does not fall through to the row.
+      Item {
         id: actions
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.space(2)
+        implicitWidth: slots.implicitWidth
+        implicitHeight: slots.implicitHeight
+        width: implicitWidth
+        height: implicitHeight
 
-        PanelActionButton {
-          visible: row.up
-          iconText: row.box.mode === "interactive" ? root.icons.show : root.icons.peek
-          tooltipText: row.box.mode === "interactive" ? "Show" : "Peek"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.peek(row.box)
-        }
-        PanelActionButton {   // keys-to-box: lit while on
-          visible: row.up && row.box.mode === "interactive"
-          iconText: root.icons.keys
-          tooltipText: row.box.keys_to_box ? "SUPER keys follow focus and the pointer into it: on (f)" : "SUPER keys to the box while it has focus and the pointer: off (f)"
-          foreground: row.box.keys_to_box ? root.urgent : root.foreground
-          hoverColor: root.urgent
-          fontFamily: root.fontFamily
-          onClicked: root.keysToBox(row.box)
-        }
-        PanelActionButton {
-          visible: row.up
-          iconText: root.icons.shot
-          tooltipText: "Screenshot"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.shot(row.box)
-        }
-        PanelActionButton {
-          visible: row.up && row.box.mode === "interactive"
-          iconText: root.icons.clipIn
-          tooltipText: "Paste your clipboard into the box"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.clip(row.box, false)
-        }
-        PanelActionButton {
-          visible: row.up && row.box.mode === "interactive"
-          iconText: root.icons.clipOut
-          tooltipText: "Copy the box's clipboard out"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.clip(row.box, true)
-        }
-        PanelActionButton {
-          iconText: root.icons.down
-          tooltipText: row.armed ? "Click again to shut it down" : "Down"
-          foreground: row.armed ? root.urgent : root.foreground
-          hoverColor: root.urgent
-          fontFamily: root.fontFamily
-          onClicked: root.down(row.box)
+        MouseArea { anchors.fill: parent }
+
+        Row {
+          id: slots
+          spacing: Style.space(2)
+
+          SlotButton {
+            slot: "peek"
+            applies: row.up
+            iconText: row.interactive ? root.icons.show : root.icons.peek
+            tooltipText: row.interactive ? "Show" : "Peek"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.peek(row.box)
+          }
+          SlotButton {   // keys-to-box: lit while on
+            slot: "keys"
+            applies: row.up && row.interactive
+            iconText: root.icons.keys
+            tooltipText: row.box.keys_to_box ? "SUPER keys follow focus and the pointer into it: on (f)" : "SUPER keys to the box while it has focus and the pointer: off (f)"
+            foreground: row.box.keys_to_box ? root.urgent : root.foreground
+            hoverColor: root.urgent
+            fontFamily: root.fontFamily
+            onClicked: root.keysToBox(row.box)
+          }
+          SlotButton {
+            slot: "shot"
+            applies: row.up
+            iconText: root.icons.shot
+            tooltipText: "Screenshot"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.shot(row.box)
+          }
+          SlotButton {
+            slot: "clipIn"
+            applies: row.up && row.interactive
+            iconText: root.icons.clipIn
+            tooltipText: "Paste your clipboard into the box"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.clip(row.box, false)
+          }
+          SlotButton {
+            slot: "clipOut"
+            applies: row.up && row.interactive
+            iconText: root.icons.clipOut
+            tooltipText: "Copy the box's clipboard out"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.clip(row.box, true)
+          }
+          SlotButton {
+            slot: "down"
+            applies: !row.gone
+            iconText: root.icons.down
+            tooltipText: row.armed ? "Click again to shut it down" : "Down"
+            foreground: row.armed ? root.urgent : root.foreground
+            hoverColor: root.urgent
+            fontFamily: root.fontFamily
+            onClicked: root.down(row.box)
+          }
         }
       }
     }
+  }
+
+  // A row's action slot: there on every row, empty where the action does not apply (#120).
+  component SlotButton: PanelActionButton {
+    property string slot: ""
+    property bool applies: true
+    objectName: "slot-" + slot
+    enabled: applies
+    opacity: applies ? 1 : 0
+  }
+
+  // What the panel shows, as JSON, for tests and agents (#117, #120, #121): the rows in order, each
+  // with its place on screen and its action slots' centres, and the list's scroll. Read only.
+  function inspect() {
+    var out = { held: held, newCount: newCount, selected: selectedName, face: face,
+      list: { contentY: boxList.contentY, height: boxList.height, contentHeight: boxList.contentHeight },
+      newButton: Math.round(newButton.mapToItem(null, 0, 0).y), hintsBottom: Math.round(hints.mapToItem(null, 0, hints.height).y),
+      screen: panel.screenH, rows: [] }
+    var vis = boxList.mapToItem(null, 0, 0)
+    for (var i = 0; i < boxList.contentItem.children.length; i++) {
+      var r = boxList.contentItem.children[i]
+      if (r.rowIndex === undefined || !r.box || !r.box.name) continue
+      var p = r.mapToItem(null, 0, 0)
+      var slotsOut = {}
+      collect(r, slotsOut)
+      out.rows.push({ name: r.box.name, index: r.rowIndex, gone: r.gone, x: p.x, y: p.y, w: r.width, h: r.height,
+        visible: p.y >= vis.y - 1 && p.y + r.height <= vis.y + boxList.height + 1, slots: slotsOut })
+    }
+    out.rows.sort(function(a, b) { return a.index - b.index })
+    return JSON.stringify(out)
+  }
+  function collect(item, into) {
+    for (var i = 0; i < item.children.length; i++) {
+      var c = item.children[i]
+      if (typeof c.objectName === "string" && c.objectName.indexOf("slot-") === 0) {
+        var q = c.mapToItem(null, c.width / 2, c.height / 2)
+        into[c.objectName.slice(5)] = { x: Math.round(q.x), y: Math.round(q.y), applies: c.applies }
+      } else collect(item.children[i], into)
+    }
+  }
+  IpcHandler {
+    target: "chaves.omabox.panel"
+    function inspect(): string { return root.inspect() }
   }
 }

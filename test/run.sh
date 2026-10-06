@@ -4007,6 +4007,105 @@ t_widget() {
   ob down "$B" >/dev/null
 }
 
+# The widget's box list with 20 made-up boxes (#117 the list held still under the pointer, #121 only
+# the rows scroll, #120 the same action slots on every row and a confirm that a double-click does not
+# give), read through the panel's inspect IPC: its rows, where each is on screen, their action slots.
+t_widget_list() {
+  local B=$P-wl
+  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  local H; H=$(ob path "$B")/home
+  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  config) echo "{}" ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
+  chmod +x "$H/.local/bin/omabox"
+  local row='{"mode":"headless","size":"1920x1080@60","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"host","state":"up","peeking":false}'
+  local irow='{"mode":"interactive","size":"window","created":"2026-09-24T02:00:00-03:00","plugins":[],"net":"host","state":"up","peeking":false}'
+  jq -n "[range(1; 21) as \$i | (if \$i % 3 == 0 then $irow else $row end) + {name: (\"box-\" + (\$i | tostring | if length < 2 then \"0\" + . else . end))}]" > "$H/list.json"
+  : > "$H/actions"
+  local sj=$H/.config/omarchy/shell.json
+  jq '.bar.layout[] |= map(if .id == "chaves.omabox" then . + {refreshIntervalSec: 1} else . end)' "$sj" > "$TMP/wl-shell.json" &&
+    cat "$TMP/wl-shell.json" > "$sj"
+  # shellcheck disable=SC2329 # called through until_ok, holds and check
+  insp() { ob run -b "$B" -- omarchy-shell chaves.omabox.panel inspect; }
+  # shellcheck disable=SC2329
+  q() { insp | jq -r "$1"; }
+  # shellcheck disable=SC2329
+  wl_polled() { local n; n=$(grep -c . "$H/polls" 2>/dev/null); until_ok 12 bash -c "[ \$(grep -c . '$H/polls') -gt $((${n:-0} + 1)) ]"; sleep 0.3; }
+  # shellcheck disable=SC2329
+  open_panel() { ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel_takes_keys "$B"; }
+  # shellcheck disable=SC2329
+  no_down() { ! grep -q "^down " "$H/actions"; }
+  # shellcheck disable=SC2329
+  slot() { q ".rows[] | select(.name == \"$1\") | .slots.$2 | \"\(.x) \(.y)\""; }
+  wl_polled
+  ob pointer -b "$B" -- move 10 1000 >/dev/null
+  open_panel
+  check_eq "20 rows" 20 "$(q '.rows | length')"
+  # #121: only the rows scroll; the New button and the hints stay on screen.
+  check "the list scrolls (taller than the room it has; #121)" test "$(q '.list.contentHeight > .list.height')" = true
+  check "...the New button and the hints stay on screen" test "$(q '.hintsBottom <= .screen and .newButton > 0')" = true
+  check_eq "...the last row is out of view" false "$(q '.rows[-1].visible')"
+  local x y; read -r x y < <(q '.rows[4] | "\(.x + 100) \(.y + 10)"')
+  ob scroll -b "$B" "$x" "$y" 300 --source wheel >/dev/null
+  check "the wheel over the list brings the last row into view" until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r '.rows[-1].visible')\" = true ]"
+  # #120: the same six slots on every row, in the same place; empty where they do not apply.
+  check_eq "a headless and an interactive row have their slots at the same x (#120)" \
+    "$(q '.rows[0].slots | [.[] | .x] | @text')" "$(q '.rows[2].slots | [.[] | .x] | @text')"
+  check_eq "...a headless row's keys and clipboard slots are empty" "false false false" "$(q '.rows[0].slots | "\(.keys.applies) \(.clipIn.applies) \(.clipOut.applies)"')"
+  : > "$H/actions"
+  # shellcheck disable=SC2046 # X Y
+  ob click -b "$B" $(slot box-20 clipIn) >/dev/null
+  check "...a click in an empty slot runs nothing (not the row's peek)" holds 1 bash -c "[ ! -s '$H/actions' ]"
+  # shellcheck disable=SC2046
+  ob click -b "$B" --double $(slot box-20 down) >/dev/null
+  check "a double-click on Down does not confirm it" holds 1 no_down
+  # shellcheck disable=SC2046
+  ob click -b "$B" $(slot box-20 down) >/dev/null
+  check "...a click after it does (down box-20)" until_ok 3 grep -qx "down box-20" "$H/actions"
+  check_eq "...once" 1 "$(grep -c "^down " "$H/actions")"
+  ob pointer -b "$B" -- move 10 1000 >/dev/null
+  open_panel; : > "$H/actions"
+  ob keys -b "$B" Down d d >/dev/null
+  check "d d with no gap does not confirm" holds 1 no_down
+  open_panel
+  ob keys -b "$B" Down d >/dev/null; sleep 0.5; ob keys -b "$B" d >/dev/null
+  check "d, a pause, d does (one down)" until_ok 3 bash -c "[ \$(grep -c '^down ' '$H/actions') = 1 ]"
+  open_panel; : > "$H/actions"
+  ob keys -b "$B" n n >/dev/null
+  check "n n with no gap starts nothing" holds 1 bash -c "! grep -q '^up ' '$H/actions'"
+  # #121: ↑ from the first row selects the last, scrolled into view.
+  open_panel
+  ob keys -b "$B" Down >/dev/null   # the cursor on the selected row; Up to the first, then once more
+  local i ups=(); i=$(q '.selected as $s | [.rows[].name] | index($s)')
+  for ((; i >= 0; i--)); do ups+=(Up); done
+  ob keys -b "$B" "${ups[@]}" >/dev/null
+  check "Up from the first row selects the last, in view (#121)" until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r '\"\(.selected) \(.rows[-1].visible)\"')\" = 'box-20 true' ]"
+  # #117: with the pointer on a row, a box that sorts before it comes and one after it goes.
+  open_panel
+  read -r x y < <(q '.list as $l | .rows[4] | "\(.x + 100) \(.y + 10 + $l.contentY)"')   # where row 5 is unscrolled
+  ob scroll -b "$B" "$x" "$y" -300 --source wheel >/dev/null
+  until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r .list.contentY)\" = 0 ]"
+  read -r x y < <(q '.rows[1] | "\(.x + 100) \(.y + 10)"')
+  ob pointer -b "$B" -- move "$x" "$y" >/dev/null
+  check_eq "the row under the pointer is selected" box-02 "$(q .selected)"
+  local before; before=$(q '[.rows[] | {name, y}] | @json')
+  jq '[.[0] + {name: "box-00"}] + [.[] | select(.name != "box-04")]' "$H/list.json" > "$H/l" && mv "$H/l" "$H/list.json"
+  wl_polled
+  check_eq "held under the pointer, the rows do not move (#117)" "$before" "$(q '[.rows[] | {name, y}] | @json')"
+  check_eq "...the selection stays" box-02 "$(q .selected)"
+  check_eq "...the new box is counted, not shown" "true 1" "$(q '"\(.held) \(.newCount)"')"
+  check_eq "...the gone one stays in its slot, marked" true "$(q '.rows[] | select(.name == "box-04") | .gone')"
+  : > "$H/actions"
+  read -r x y < <(q '.rows[] | select(.name == "box-04") | "\(.x + 100) \(.y + 10)"')
+  ob click -b "$B" "$x" "$y" >/dev/null
+  check "...a click on it does nothing" holds 1 bash -c "[ ! -s '$H/actions' ]"
+  ob pointer -b "$B" -- move 10 1000 >/dev/null
+  check "the pointer off the panel: the list as it is (box-00 in, box-04 out)" until_ok 3 bash -c \
+    "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r '\"\(.held) \(.newCount) \([.rows[].name] | index(\"box-00\")) \([.rows[].name] | index(\"box-04\"))\"')\" = 'false 0 0 null' ]"
+  jq -n "[$row + {name: \"a\"}, $irow + {name: \"b\"}]" > "$H/list.json"; wl_polled
+  check "with two boxes the list is as tall as its rows" test "$(q '.list.height == .list.contentHeight and (.rows | length) == 2')" = true
+  check_eq "the widget logged no QML errors" "" "$(ob log -b "$B" shell -n all --grep "Panel.qml|TypeError|ReferenceError" | grep -v IpcHandler)"
+  ob down "$B" >/dev/null
+}
+
 # The agent guard (finding 65): the fake display agents' shells get, and omabox still finding the
 # user's session from such a shell. Sessions are faked in a runtime dir of our own where it matters.
 GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
@@ -5882,7 +5981,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
@@ -5894,7 +5993,7 @@ default_jobs() {
   local n m; n=$(($(nproc) / 2)) m=$(awk '/^MemAvailable:/ {print int($2 / 2097152)}' /proc/meminfo)
   [ "$m" -ge "$n" ] || n=$m; [ "$n" -le 8 ] || n=8; [ "$n" -ge 1 ] || n=1; echo "$n"
 }
-SLOW=(t_agent_session t_widget t_run_idle t_guard t_peek t_reap_race t_wait t_pointer t_clip t_replace t_idle)
+SLOW=(t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_reap_race t_wait t_pointer t_clip t_replace t_idle)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }

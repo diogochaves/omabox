@@ -3741,6 +3741,40 @@ from them.
     where a session (and an `up --systemd` box) has it. That helper's own check passes in a new box and
     fails in one started before. t_dbus_user_app checks the mode, owner and the bus (both checks failed
     on the old code); every bus test passes unchanged.
+221. **The widget's list holds still under the pointer** (2026-10-06, #117). Each poll assigned a new
+    array to the list, and the rows' Repeater built every row again, every 2 s, changed or not; rows are
+    in `ls` order, so a box starting or going moved every row after it, and the next click landed on
+    the box that slid under the pointer (worst after the widget's own Down). The list now shows `rows`
+    (names, in order) with each row's data looked up by name: the rows are built again only when the
+    names change, and a row's state, age and caption update in place. While the pointer is over the
+    card (one HoverHandler on it, `held`), the names stay: a box gone from `ls` keeps its slot, greyed,
+    "gone", every action off (a `d` armed on it disarms); a new one is only counted in the header
+    (`20 BOXES UP · 1 NEW`). The pointer leaving, or the panel closing, puts the list as it is. The
+    icon, its count and the header's counts read the list itself; three failed polls still empty it
+    at once. Checked in a box against a stand-in `omabox` listing 20 boxes: box-00 added and box-04
+    removed with the pointer on box-02 left every row where it was (t_widget_list).
+222. **Only the widget's rows scroll** (2026-10-06, #121). With 20 boxes on a 1080p screen the card,
+    capped at the screen by Omarchy's KeyboardPanel, cut off rows 19-20, the New button and the key
+    hints, and ↑/↓ selected rows out of sight. The rows are now a ListView, as Omarchy's long lists
+    (Wi-Fi, Bluetooth), with an as-needed scrollbar, as tall as its rows or the room the card has
+    left (`listRoom`: the screen's card height less the hero, an alert, the New button, the hints).
+    ↑/↓ and a selection that follows its box after a poll scroll the selected row into view; a row
+    selected by the pointer is not scrolled to (it would move under the pointer, against 221). With
+    few boxes the card is as tall as before. The panel answers `omarchy-shell chaves.omabox.panel
+    inspect` with what it shows as JSON (rows, their place on screen and their action slots, the
+    scroll, the hold), read only, for t_widget_list and for agents looking at it.
+223. **The same action slots on every row, and a confirm that needs a gap** (2026-10-06, #120). A
+    headless row was [Peek][Shot][Down] and an interactive one [Show][Keys][Shot][Paste in][Copy
+    out][Down], both right-aligned, so an agent row's Peek sat over an interactive row's Paste in: a
+    click from habit handed the user's clipboard to a box. Now every row has the six slots in that
+    order, a slot that does not apply empty (`opacity 0`, `enabled false`), and a click in an empty
+    slot or between buttons is taken by the slots' own MouseArea instead of falling through to the
+    row's peek. And Down's confirm was the next press with no gap, so a double-click (or `d d`) shut a
+    box down: a press within 400 ms of arming is now ignored (it stays armed), for the button, `d`,
+    Delete and a dead row's click, and for `n n`. Checked in t_widget_list: a headless and an
+    interactive row have their slots at the same x, a click in an empty slot runs nothing, `click
+    --double` on Down does not confirm and a click after it does, `d d` does not and `d`, 0.5 s, `d`
+    does, `n n` starts nothing.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -39,6 +39,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **The bar widget's list holds still while the pointer is over it**: a box that goes stays in its
+  row, greyed and marked gone, and a new one is counted in the header until the pointer leaves, so a
+  click never lands on a box that slid under it (#117). **A list taller than the screen scrolls**,
+  the New button and the keys staying in view (#121). **Every row has its buttons in the same
+  places**, so a click from habit on an interactive box's row no longer pastes your clipboard into it,
+  and **a double-click on Down no longer shuts a box down** (nor `d d`, `n n`) (#120).
 - **The agent skill is a third of its size** (SKILL.md 29 KB → 12 KB, ~4k tokens a load): what every
   task needs stays, every safety rule included; the rest is in `reference.md`, named by section (#143).
 
