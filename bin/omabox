@@ -64,6 +64,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
   omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
+            [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors (headless)
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
@@ -81,6 +82,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                [--steps N] [--mod MODS]                  --steps: travel there; --mod ctrl: ctrl-click
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [left|right|middle]
               [--steps 10] [--hold DURATION] [--mod MODS]  press, move, hold, release
+              [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)
   omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- ARGS...
                  raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
                  source wheel|finger|continuous|tilt, sleep MS
@@ -100,6 +102,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox output [-b NAME] (drop [--for DURATION] [--cycles N] | back)   the screen gone (a monitor off), and back
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
+  omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a headless box's other monitors
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
@@ -311,6 +314,16 @@ At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box
 @ up mode gpu run
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
+@ up monitor shot peek
+More monitors (headless boxes): \`up --monitor SPEC\` (repeatable) or \`monitor add SPEC\` on a running box.
+SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one by default, or below it, or
+at X,Y in the layout (which starts at 0,0 on the main screen: no left or above). Scale 1 to 4; Hyprland
+may round it to a whole-pixel size (2560x1440 at 1.5 becomes 1.6). The main screen (--size, \`mode\`)
+is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name). \`monitor remove NAME\` unplugs one: Hyprland
+moves its workspaces to the others. They survive a config reload. Coordinates (click, drag, pointer,
+-g) are the layout's; \`shot --monitor NAME\` takes one monitor (a shot of a mixed-scale layout comes
+out at the highest scale: --fit), \`peek --monitor NAME\` opens a window of it. Not on an NVIDIA box
+(it draws on one Wayland output) nor an interactive one.
 @ gpu
 \`gpu release GPU\` (a PCI slot, or nvidia, amd, intel: \`omabox config gpu\` lists them) takes down every
 headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
@@ -1573,6 +1586,9 @@ up_already() {
   case " $given " in *" omarchy "*) [ "$(meta omarchy)" = "$omarchy" ] || diff+=("--omarchy ${omarchy:-/usr/share/omarchy} (it runs $(meta omarchy | grep . || echo /usr/share/omarchy))") ;; esac
   case " $given " in *" hyprland "*) [ "$(meta hyprland)" = "$hyprland" ] || diff+=("--hyprland $hyprland (it runs $(meta hyprland | grep . || echo "the installed one"))") ;; esac
   case " $given " in *" from "*) [ "$(meta from)" = "$FROM" ] || diff+=("--from $FROM (it started from $(meta from | grep . || echo "no save"))") ;; esac
+  case " $given " in *" monitor "*)
+    [ "$(printf '%s\n' "${monitors[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.monitor_specs // []' "$D/box.json" 2>/dev/null)" ] ||
+      diff+=("--monitor (it has $(jq -r '.monitor_specs // [] | if length == 0 then "none" else join(", ") end' "$D/box.json" 2>/dev/null))") ;; esac
   case " $given " in *" seed "*)
     [ "$(printf '%s\n' "${seeds[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.seeds // []' "$D/box.json" 2>/dev/null)" ] ||
       diff+=("--seed (files are seeded only when a box starts)") ;; esac
@@ -1594,13 +1610,13 @@ cmd_up() {
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
-  local overlays=() robinds=() plugin_args=() envs=() seeds=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
+  local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed)
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed|--monitor)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -1614,6 +1630,7 @@ cmd_up() {
       --overlay) optarg "$@"; [ -d "$2" ] || die "--overlay: no such directory: $2"; overlays+=("$(readlink -f -- "$2")"); shift ;;
       --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec"); shift ;;
       --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); shift ;;
+      --monitor) optarg "$@"; monitor_spec "$2" >/dev/null || exit 1; monitors+=("$2"); shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
@@ -1767,6 +1784,12 @@ cmd_up() {
   [ -d "$HOME/.local/state/omarchy/current/theme" ] ||
     die "Omarchy has not set a theme for you yet ($HOME/.local/state/omarchy/current/theme), and a box" \
       "starts from your Omarchy look: log into Omarchy once, or set one: omarchy-theme-set \"Tokyo Night\""
+  # More monitors (#122): headless boxes on a headless output; an interactive box's are windows (#123),
+  # and an NVIDIA box draws on labwc's one Wayland output (finding 77).
+  if [ ${#monitors[@]} -gt 0 ]; then
+    [ $interactive = 0 ] || die "up: --monitor is for headless boxes (an interactive box's monitors would be windows on your desktop: not yet, #123)"
+    [ "$(render_driver "$render")" != nvidia ] || die "up: --monitor: $(monitor_nvidia_text)"
+  fi
   # What needs aquamarine's fix (finding 125), refused before anything is made: a headless box on an
   # NVIDIA render node (its screen is labwc's Wayland output) and confirm-close asked for on `up`.
   # confirm-close from the settings is turned off for the box instead, below.
@@ -1895,13 +1918,14 @@ cmd_up() {
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
-    --argjson render "$render_json" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
+    --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
       xwayland: ($xwayland == 1), autoreload: ($autoreload == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
+      + (if ($mspecs | length) > 0 then {monitor_specs: $mspecs} else {} end)
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
@@ -2096,6 +2120,9 @@ cmd_up() {
   fi
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
+  # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
+  # really became (Hyprland may round a scale), the shell giving each its bar as it comes.
+  for spec in "${monitors[@]}"; do UP_LOCKED=1 monitor_add "$spec" "" >/dev/null; done
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
   local crashed=""; [ "$shell" != 1 ] || crashed=$(shell_watch) || true
   # Crashes said here are not said again by the next command (shell_note, #147).
@@ -2702,8 +2729,12 @@ box_file() {
 # A regular expression matching $1 literally (for pgrep -f).
 re_quote() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g'; }
 
-# The pid of this box's peek window, if one is open.
-peek_pid() { pgrep -f "^$(re_quote "$PEEK --box $D/run/")" | head -1 | grep .; }
+# The pid of this box's peek window, if one is open; with OUTPUT, the one showing that monitor (#122).
+peek_pid() {
+  local re; re="^$(re_quote "$PEEK --box $D/run/")"
+  [ -z "${1:-}" ] || re+=".* --output $(re_quote "$1") --fps "
+  pgrep -f "$re" | head -1 | grep .
+}
 
 # What click/pointer/keys did, one line each, for the peek window to draw (finding 85; the formats are
 # in tools/peek). Only while a peek window is open. $D/marks is in the box dir, which the box cannot
@@ -2916,7 +2947,7 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--seed|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--monitor|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
@@ -3245,7 +3276,7 @@ shot_path() {
 }
 
 cmd_shot() {
-  local name="" out="" geom="" sels=() fit="" tofd="" as="" zoom="" burst="" every=0 sheet=0 bdiff=0 after=()
+  local name="" out="" geom="" sels=() fit="" tofd="" as="" zoom="" burst="" every=0 sheet=0 bdiff=0 after=() monitor=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -3257,6 +3288,7 @@ cmd_shot() {
       -g) optarg "$@"; geom=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --active) sels+=(active) ;;
+      --monitor) optarg "$@"; [[ $2 =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "shot: --monitor takes a monitor's name (omabox monitor list), got $2"; monitor=$2; shift ;;
       --fit) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{1,4}$ ]] || die "shot: --fit takes the longest side in pixels (10-99999), got $2"; fit=$2; shift ;;
       --zoom) optarg "$@"; [[ $2 =~ ^([2-9]|1[0-6])$ ]] || die "shot: --zoom takes 2-16 (each pixel N x N), got $2"; zoom=$2; shift ;;
       --burst) optarg "$@"; [[ $2 =~ ^([2-9]|[1-9][0-9]|1[0-9][0-9]|200)$ ]] || die "shot: --burst takes 2-200 frames, got $2"; burst=$2; shift ;;
@@ -3303,6 +3335,14 @@ cmd_shot() {
     [ -z "$out" ] || [ -n "$burst" ] || shot_path "$out"
   fi
   select_box "$name"; need_box; shell_note
+  # --monitor (#122): that monitor's part of the layout, as -g would take it (so --in maps it back).
+  if [ -n "$monitor" ]; then
+    [ -z "$g" ] && [ ${#sels[@]} = 0 ] || die "shot: --monitor, -g or --window: one of them"
+    local mons; mons=$(hypr_json monitors)
+    g=$(jq -r --arg n "$monitor" 'first(.[] | select(.name == $n and (.disabled | not))) |
+      "\(.x) \(.y) \(.width / .scale | floor) \(.height / .scale | floor)"' <<<"$mons")
+    [ -n "$g" ] || die "shot: box '$NAME' has no monitor $monitor ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
+  fi
   if [ -z "$tofd" ] && [ -z "$out" ] && [ -z "$burst" ]; then shot_path "${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png"; fi
   # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
   # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
@@ -3924,7 +3964,7 @@ cmd_pointer() {
 # click; --shot FILE takes a shot while the button is still down (the pointer tool pauses for it);
 # --mod MODS holds modifiers down from the press to the release.
 cmd_drag() {
-  local name="" btn=left xy=() sels=() raise=1 in="" steps=10 hold=0 shot="" mods=""
+  local name="" btn=left xy=() sels=() raise=1 in="" steps=10 hold=0 shot="" mods="" shot_args=()
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -3934,6 +3974,10 @@ cmd_drag() {
       --steps) optarg "$@"; steps=$(steps_arg drag "$2"); shift ;;
       --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "drag: --hold takes a duration up to 60s, like 300ms or 2s (a bare number is seconds), got $2"; shift ;;
       --shot) optarg "$@"; shot=$2; shift ;;
+      # The held shot like any shot (#122): smaller, a part, one monitor; it says what it took, for --in.
+      --shot-fit) optarg "$@"; shot_args+=(--fit "$2"); shift ;;
+      --shot-g) optarg "$@"; shot_args+=(-g "$2"); shift ;;
+      --shot-monitor) optarg "$@"; shot_args+=(--monitor "$2"); shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle) btn=$1 ;;
       -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "drag: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
@@ -3946,6 +3990,7 @@ cmd_drag() {
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "drag: --in or --window, not both"
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "drag: --no-raise goes with --window or --in"
   [ -z "$shot" ] || [ "$SETTLE_WAIT" = 0 ] || die "drag: --shot or --wait, not both (the shot is the look)"
+  [ ${#shot_args[@]} = 0 ] || [ -n "$shot" ] || die "drag: --shot-fit, --shot-g and --shot-monitor go with --shot FILE"
   [ -z "$shot" ] || ! in_jail || die "drag: --shot is not for an agent inside ai-jail yet: omabox shot after the drag, or --hold and a shot of its own"
   select_box "$name"; need_box
   # Both points to screen pixels: from a shot's image, then from a window's coordinates.
@@ -3999,7 +4044,7 @@ drag_shot() {
   coproc DRAG { on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; }
   local dout=${DRAG[0]} din=${DRAG[1]} dpid=$DRAG_PID
   if read -r -t 120 line <&"$dout" && [ "$line" = paused ]; then
-    ( cmd_shot -b "$NAME" -o "$shot" ) || rc=$?
+    ( cmd_shot -b "$NAME" -o "$shot" "${shot_args[@]}" ) || rc=$?
   else rc=1; say "drag: the pointer did not get to the end of the drag"; fi
   echo >&"$din" || true
   exec {din}>&- || true
@@ -4802,9 +4847,11 @@ cmd_events() {
 # The box's screen: output name and mode (WxH@HZ as Hyprland reports it).
 box_screen() {
   local m; m=$(hypr_json monitors) || exit $?
-  jq -r <<<"$m" 'map(select(.disabled | not)) | .[0] // empty |
-    "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
+  jq -r <<<"$m" "$MAIN_SCREEN"' // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
 }
+# The box's main screen in `hyprctl -j monitors` (jq): HEADLESS-2 or WAYLAND-1 (an NVIDIA box's, or an
+# interactive box's window), or the first enabled one; never one of `monitor add`'s (#122).
+MAIN_SCREEN='map(select(.disabled | not)) | (map(select(.name == "HEADLESS-2" or (.name | startswith("WAYLAND-")))) + .) | .[0]'
 
 # Change a headless box's mode live. `hyprctl keyword monitor` fails under the Lua config ("keyword
 # can't work with non-legacy parsers"), so it goes through eval; omabox.mode keeps it over a reload.
@@ -4847,6 +4894,144 @@ cmd_mode() {
   jq --arg s "$want" '.size = $s' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   exec {lock}>&-
   echo "$screen"
+}
+
+# More monitors in a headless box (#122): `up --monitor SPEC` and `monitor add/remove/list`. A monitor
+# is a headless output the box's Hyprland makes (`hyprctl output create headless NAME`) with a rule for
+# its mode, position and scale. Each one made is kept in the box's runtime dir, omabox.monitors ("NAME
+# WxH@HZ XxY SCALE" a line, as Hyprland made it), which the box's config reads on every load: a reload
+# keeps them. HEADLESS-2 is the main screen (`--size`, `omabox mode`), never removed here.
+#
+# SPEC: WxH[@HZ][,scale=S][,right|below|X,Y]; scale 1-4 (up to 2 decimals), placed right of the last
+# monitor by default, below it, or at X,Y in the layout (from 0,0: no negative positions, so left and
+# above are an X,Y with the others placed after it). Prints "MODE SCALE PLACE".
+monitor_spec() {
+  local mode="" scale=1 place=right part parts x=""
+  IFS=, read -r -a parts <<<"$1"
+  [ ${#parts[@]} -gt 0 ] || { say "--monitor: WxH[@HZ][,scale=S][,right|below|X,Y], got nothing"; return 1; }
+  mode=${parts[0]}
+  [[ $mode =~ ^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}(@[0-9]{1,3}(\.[0-9]{1,3})?)?$ ]] || { say "--monitor: a size is WxH or WxH@HZ, got $mode ($1)"; return 1; }
+  [[ $mode == *@* ]] || mode=$mode@60
+  for part in "${parts[@]:1}"; do
+    case $part in
+      scale=*) scale=${part#scale=}
+        if ! [[ $scale =~ ^[1-4](\.[0-9]{1,2})?$ ]] || ! awk -v s="$scale" 'BEGIN { exit !(s >= 1 && s <= 4) }'; then
+          say "--monitor: scale is 1 to 4, up to 2 decimals, got $scale ($1)"; return 1
+        fi ;;
+      right|below) place=$part ;;
+      left|above) say "--monitor: the layout starts at 0,0: put this one first with X,Y and the others after it, got $part ($1)"; return 1 ;;
+      *) if [[ $part =~ ^[0-9]{1,5}$ ]]; then
+           if [ -z "$x" ]; then x=$part; place=""; else place=$x,$part; x=""; fi
+         else say "--monitor: scale=S, right, below or X,Y, got $part ($1)"; return 1; fi ;;
+    esac
+  done
+  [ -z "$x" ] && [ -n "$place" ] || { say "--monitor: a position is X,Y, got $x alone ($1)"; return 1; }
+  echo "$mode $scale $place"
+}
+monitor_nvidia_text() {
+  echo "a headless box on NVIDIA draws on labwc's one Wayland output (finding 77), and a box's monitors are headless outputs: render it on another GPU (OMABOX_RENDER_NODE, or omabox config gpu)"
+}
+# The monitors `monitor add` made, as the box's config reads them.
+monitors_file() { cat "$D/run/omabox.monitors" 2>/dev/null || true; }
+# box.json's list of every monitor (for ls --json), from Hyprland, under the box's lock as mode writes it.
+monitors_record() {
+  local m lock=""; m=$(hypr_json monitors) || return 0
+  # `up` holds the lock already (UP_LOCKED); anything else takes it.
+  if [ -z "${UP_LOCKED:-}" ]; then lock_file lock "$BOXES/.lock-$NAME" -w 60 || return 0; fi
+  box_alive || return 0
+  jq --argjson m "$m" '.monitors = ($m | map(select(.disabled | not)) | map({name, mode: "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)",
+    scale, x, y}))' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  [ -z "$lock" ] || exec {lock}>&-
+}
+# monitor_add SPEC NAME: a new monitor (NAME, or the next free HEADLESS-N), placed and made; prints
+# its line as Hyprland made it.
+monitor_add() {
+  local spec mode scale place name=$2 m prev x y res end line
+  spec=$(monitor_spec "$1") || exit 1
+  read -r mode scale place <<<"$spec"
+  m=$(hypr_json monitors)
+  if [ -z "$name" ]; then
+    local i=3; while jq -e --arg n "HEADLESS-$i" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || grep -q "^HEADLESS-$i " <(monitors_file); do i=$((i + 1)); done
+    name=HEADLESS-$i
+  else
+    [[ $name =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor add: --name is letters, digits, - and _, got $name"
+    ! jq -e --arg n "$name" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor add: box '$NAME' already has a monitor $name"
+  fi
+  # The last monitor made (or the main screen), in layout pixels: the new one goes right of it or below.
+  prev=$(monitors_file | tail -n 1 | cut -d' ' -f1); [ -n "$prev" ] || prev=$(jq -r "$MAIN_SCREEN"'.name // empty' <<<"$m")
+  read -r x y < <(jq -r --arg n "$prev" --arg p "$place" 'first(.[] | select(.name == $n)) |
+    if $p == "below" then "\(.x) \(.y + (.height / .scale | floor))" else "\(.x + (.width / .scale | floor)) \(.y)" end' <<<"$m")
+  [ "$place" = right ] || [ "$place" = below ] || { x=${place%,*} y=${place#*,}; }
+  [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]] || die "monitor add: cannot place it (no monitor $prev to put it next to)"
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create headless "$name" 2>&1) || true
+  [ "$res" = ok ] || die "monitor add: creating $name failed: $res"
+  # The scale always set, never left to Hyprland: a new output with no rule came up at scale 2.
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$name', mode = '$mode', position = '${x}x$y', scale = $scale })" 2>&1) || true
+  [ "$res" = ok ] || { on_box hyprctl output remove "$name" >/dev/null 2>&1 || true; die "monitor add: $name was made, but setting its mode failed: $res"; }
+  end=$((SECONDS + 5))
+  until m=$(hypr_json monitors) && line=$(jq -er --arg n "$name" --arg w "${mode%@*}" --arg x "$x" --arg y "$y" 'first(.[] | select(.name == $n and
+      "\(.width)x\(.height)" == $w and (.x | tostring) == $x and (.y | tostring) == $y)) |
+      "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"' <<<"$m" 2>/dev/null); do
+    [ $SECONDS -lt $end ] || die "monitor add: $name did not come up as $mode at $x,$y (omabox monitor list -b $NAME)"
+    sleep 0.05
+  done
+  box_file "$D/run/omabox.monitors" "$( { monitors_file; echo "$line"; } | grep .)" || die "monitor add: could not record $name for the box's config reloads"
+  monitors_record
+  echo "$line"
+}
+cmd_monitor() {
+  local name="" act="" args=() mname="" json=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --name) optarg "$@"; mname=$2; shift ;;
+      --json) json=1 ;;
+      -h|--help) usage monitor; return ;;
+      -*) die "monitor: unknown option $1" ;;
+      *) if [ -z "$act" ]; then act=$1; else args+=("$1"); fi ;;
+    esac
+    shift
+  done
+  case $act in add|remove|list) ;; *) die "monitor: add SPEC, remove NAME or list (omabox help monitor)" ;; esac
+  select_box "$name"; need_box
+  if [ "$act" = list ]; then
+    [ ${#args[@]} = 0 ] || die "monitor list takes no arguments"
+    local m ws; m=$(hypr_json monitors)
+    if [ $json = 1 ]; then
+      jq -c 'map(select(.disabled | not)) | map({name, mode: "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)", scale, x, y,
+        workspace: .activeWorkspace.name})' <<<"$m"
+    else
+      printf '%-14s %-16s %-6s %-11s %s\n' NAME MODE SCALE POSITION WORKSPACE
+      jq -r 'map(select(.disabled | not))[] | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.scale) \(.x),\(.y) \(.activeWorkspace.name)"' <<<"$m" |
+        while read -r a b c d ws; do printf '%-14s %-16s %-6s %-11s %s\n' "$a" "$b" "$c" "$d" "$ws"; done
+    fi
+    return
+  fi
+  [ "$(meta mode)" = headless ] || die "monitor: box '$NAME' is interactive: its monitors would be windows on your desktop (not yet, #123)"
+  [ "$(meta wayland_screen)" != true ] || die "monitor: box '$NAME': $(monitor_nvidia_text)"
+  if [ "$act" = add ]; then
+    [ ${#args[@]} = 1 ] || die "monitor add SPEC (WxH[@HZ][,scale=S][,right|below|X,Y])"
+    local line; line=$(monitor_add "${args[0]}" "$mname")
+    say "box '$NAME' has a monitor $line"
+    echo "${line%% *}"
+    return
+  fi
+  [ ${#args[@]} = 1 ] && [ -z "$mname" ] || die "monitor remove NAME"
+  local out=${args[0]} res end m
+  [[ $out =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor remove: not a monitor's name: $out"
+  [ "$out" != "$(hypr_json monitors | jq -r "$MAIN_SCREEN"'.name')" ] || die "monitor remove: $out is the box's main screen (omabox output drop takes it away for a while)"
+  m=$(hypr_json monitors)
+  jq -e --arg n "$out" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor remove: box '$NAME' has no monitor $out ($(jq -r 'map(.name) | join(", ")' <<<"$m"))"
+  box_file "$D/run/omabox.monitors" "$(monitors_file | grep -v "^$out ")" || die "monitor remove: could not update the box's record"
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output remove "$out" 2>&1) || true
+  [ "$res" = ok ] || die "monitor remove: removing $out failed: $res"
+  end=$((SECONDS + 5))
+  until m=$(hypr_json monitors) && ! jq -e --arg n "$out" 'any(.[]; .name == $n)' <<<"$m" >/dev/null; do
+    [ $SECONDS -lt $end ] || die "monitor remove: $out still listed 5 s after its removal"
+    sleep 0.05
+  done
+  monitors_record
+  say "box '$NAME': $out removed (its workspaces moved to the other monitors, as on an unplug)"
 }
 
 # output drop / back (#146, finding 210): the box's only screen gone and back, as a monitor dropping
@@ -4907,7 +5092,7 @@ cmd_output() {
 # The screen away: kept in $D/output.dropped, removed, gone from `monitors` within 5 s.
 output_drop() {
   local m; m=$(hypr_json monitors) || exit $?
-  local rec; rec=$(jq -r 'map(select(.disabled | not)) | .[0] // empty |
+  local rec; rec=$(jq -r "$MAIN_SCREEN"' // empty |
     "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"' <<<"$m")
   [ -n "$rec" ] && [ "${rec%% *}" != FALLBACK ] || die "output: box '$NAME' has no screen to drop (omabox output back -b $NAME)"
   local out=${rec%% *} res
@@ -5313,13 +5498,14 @@ cmd_keys_to_box() {
 # --focus (the bar widget's click, so the user asked for it) then brings that window forward, and for
 # an interactive box its own window; it never focuses anything unasked.
 cmd_peek() {
-  local name="" fps=10 focus=0 ws=""
+  local name="" fps=10 focus=0 ws="" monitor=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --fps) optarg "$@"; fps=$2; shift ;;
       --workspace) optarg "$@"; ws=$(ws_check "$2") || die "--workspace: 1-99, special (the scratchpad, SUPER+S) or special:NAME, got $2"; shift ;;
       --focus) focus=1 ;;
+      --monitor) optarg "$@"; [[ $2 =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "peek: --monitor takes a monitor's name (omabox monitor list), got $2"; monitor=$2; shift ;;
       -*) die "peek: unknown option $1" ;;
       *) [ -z "$name" ] || die "peek: one box name, got $name and $1"; name=$1 ;;
     esac
@@ -5333,10 +5519,20 @@ cmd_peek() {
     [ $focus = 1 ] && { focus_pid "$(ps -o ppid= -p "$(box_pid)" | tr -d ' ')"; return; }
     say "box '$NAME' is interactive: it is already a window on $(ws_text "$(meta workspace)")"; return
   fi
-  local pid; pid=$(peek_pid) || true
+  # The screen it shows (#122): the main one, or --monitor's; one peek window each.
+  local mons output; mons=$(hypr_json monitors)
+  output=$(jq -r "$MAIN_SCREEN"'.name // empty' <<<"$mons")
+  if [ -n "$monitor" ]; then
+    jq -e --arg n "$monitor" 'any(.[]; .name == $n and (.disabled | not))' <<<"$mons" >/dev/null ||
+      die "peek: box '$NAME' has no monitor $monitor ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
+    [ "$monitor" != "$output" ] || monitor=""
+  fi
+  output=${monitor:-$output}
+  [[ $output =~ ^[A-Za-z0-9_-]+$ ]] || die "peek: box '$NAME' reports no usable output ($output)"
+  local pid; pid=$(peek_pid "$output") || true
   if [ -n "$pid" ]; then
     [ $focus = 1 ] && { focus_pid "$pid"; return; }
-    say "box '$NAME' already has a peek window"; return
+    say "box '$NAME' already has a peek window${monitor:+ of $monitor}"; return
   fi
   [ -n "$ws" ] || ws=$(conf_get workspace)
   [ -x "$PEEK" ] || die "missing $PEEK: run install.sh"
@@ -5344,21 +5540,19 @@ cmd_peek() {
   # host's side of its runtime dir, which the box can write: only a real socket, no symlink (finding
   # 63; tools/peek also checks every frame it is sent). Everything that goes into the host's Lua is
   # a checked, tame value.
-  local wd sock output
+  local wd sock
   wd=$(box_env WAYLAND_DISPLAY) || die "peek: box '$NAME' has no WAYLAND_DISPLAY"
   sock=$D/run/$wd
   [ -S "$sock" ] && [ ! -L "$sock" ] || die "peek: $sock is not the box's Wayland socket"
-  output=$(on_box hyprctl -j monitors | jq -r 'map(select(.disabled | not)) | .[0].name // empty')
-  [[ $output =~ ^[A-Za-z0-9_-]+$ ]] || die "peek: box '$NAME' reports no usable output ($output)"
   # A fresh marks file (finding 85) that only we can read; peek reads what is added to it.
   rm -f "$D/marks"; (umask 077; : > "$D/marks")
   local marker; marker=$(peek_marker)
   # Launched by the host Hyprland: its exec rules put exactly this window on that workspace, unfocused.
-  host_eval "hl.exec_cmd('${marker:+env $marker }$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
+  host_eval "hl.exec_cmd('${marker:+env $marker }$(lua_str "$PEEK") --box $(lua_str "$sock") --output $output --fps $fps --title \"omabox peek: $NAME${monitor:+ · $monitor}\" --marks $(lua_str "$D/marks")', { workspace = '$ws silent', no_initial_focus = true })"
   say "peek at box '$NAME' on $(ws_text "$ws") (view only; close it with SUPER+W, or it goes with the box)"
   [ $focus = 1 ] || return 0
   local deadline=$((SECONDS + 5))
-  until pid=$(peek_pid) && host_hyprctl -j clients | jq -e --argjson p "$pid" 'any(.pid == $p)' >/dev/null; do
+  until pid=$(peek_pid "$output") && host_hyprctl -j clients | jq -e --argjson p "$pid" 'any(.pid == $p)' >/dev/null; do
     [ $SECONDS -lt $deadline ] || die "peek window did not appear"
     sleep 0.05
   done
@@ -6124,6 +6318,7 @@ box_json() {
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
       plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
+      monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false}'
 }
@@ -6167,7 +6362,8 @@ cmd_ls() {
     local sh=- c; if [ "$state" = up ] && [ "$(meta shell)" = true ]; then
       sh=$(shell_state); c=$(shell_crashes); [ "$c" = 0 ] || sh+="+$c"
     fi
-    printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$(meta size)" "$state" "$sh" "$(meta net)" "$idle" \
+    local nm; nm=$(jq -r '.monitors // [] | length' "$D/box.json" 2>/dev/null) || nm=0
+    printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$([ "${nm:-0}" -le 1 ] && meta size || echo "$nm monitors")" "$state" "$sh" "$(meta net)" "$idle" \
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
@@ -6665,6 +6861,7 @@ main() {
     restart-shell) cmd_restart_shell "$@" ;;
     reload) cmd_reload "$@" ;;
     mode) cmd_mode "$@" ;;
+    monitor) cmd_monitor "$@" ;;
     output) cmd_output "$@" ;;
     gdb) cmd_gdb "$@" ;;
     gpu) cmd_gpu "$@" ;;

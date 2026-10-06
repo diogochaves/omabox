@@ -447,8 +447,29 @@ blocks the network and every other socket, omabox's included), or see
 
 Some things still need your real machine: your real data and services, desktop integration outside a
 session (.desktop files, URL handlers, autostart; systemd user units only in a `--systemd` box, and
-never with journald or logind), real monitors (scaling, multi-monitor), lock/idle/suspend, and final
-release acceptance.
+never with journald or logind), real monitors (their modes, HDR, VRR, a real hotplug), lock/idle/suspend,
+and final release acceptance.
+
+<details>
+<summary><b>Several monitors with one (next release)</b></summary>
+
+A headless box can have as many virtual monitors as a test needs, at any size, scale and place, so a
+plugin or app can be tried on a desk you do not have: a bar on each screen, windows moving between
+them, a portrait or ultrawide screen, mixed scales, a monitor unplugged.
+
+```bash
+omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below   # portrait right, a scaled one below it
+omabox monitor list                       # name, mode, scale, position, workspace
+omabox monitor add 3440x1440,0,3000       # another, at X,Y in the layout
+omabox monitor remove HEADLESS-3          # an unplug: its workspaces move to the others
+omabox shot --monitor HEADLESS-4          # one monitor; omabox peek --monitor HEADLESS-4 to watch it
+```
+
+The first monitor is `--size`'s. Click, drag and pointer coordinates are the layout's (`shot` of the
+whole layout shows where each monitor is). They survive a config reload. Not in an NVIDIA box (it draws
+on one Wayland output of its own: `omabox config gpu` another GPU) nor, yet, an interactive one (#123).
+
+</details>
 
 ## Related projects
 

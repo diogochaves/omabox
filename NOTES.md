@@ -3808,6 +3808,33 @@ from them.
     jail sees. A box up without the same seeds is "already up, without what you asked for" (box.json
     keeps them). Checked in t_main (a file and a folder), t_unit_mount_rules (DEST shapes),
     t_unit_refusals.
+226. **More monitors in a headless box: `up --monitor`, `omabox monitor add/remove/list`** (2026-10-06,
+    #122). A box had one screen; a second one could be made by hand (`hyprctl output create headless`)
+    but a reload dropped its mode, and new outputs with no rule came up at scale 2. Now a SPEC
+    `WxH[@HZ][,scale=S][,right|below|X,Y]` makes one: `output create headless HEADLESS-N` (or
+    `--name`), then its rule through `hyprctl eval` with the scale always set; placed right of (or
+    below) the last one made, by the size Hyprland gave it (a scale may be rounded: 1.5 → 1.6 for
+    2560x1440), or at X,Y. Each one made is written, as Hyprland reports it, to the runtime dir's
+    `omabox.monitors`, which `share/hyprland.lua` reads on every load: a reload keeps every mode,
+    position and scale. `up --monitor` adds them after the bar is up, one at a time (the shell gives
+    each its bar as it comes). No `left`/`above`: the layout starts at 0,0 on the main screen, and the
+    main screen's position is fixed there by `--size`, `mode` and `output back`; put a monitor first at
+    X,Y instead. `monitor remove` is an unplug (`monitorremoved` in `events`; Hyprland moves its
+    workspaces); the main screen (HEADLESS-2) is refused. `box_screen`, `output drop` and `peek` now take
+    the main screen by name (MAIN_SCREEN) instead of the first listed. `box.json` and `ls --json` have
+    `monitors`; `ls` says `3 monitors` in the size column. `shot --monitor NAME` is that monitor's
+    rectangle as `-g` takes it (so `--in` maps it); `drag --shot` takes `--shot-fit`, `--shot-g` and
+    `--shot-monitor` (a 3440x1440 box's drag shot could not be made smaller); `peek --monitor NAME` opens
+    a peek window per monitor (`tools/peek --output`), told apart by its `--output` (not run here: a
+    window on the host). Checked in t_monitors on the AMD iGPU: three monitors with their modes, scales
+    and positions, a bar on each, the pointer and a click on the second and third moving the active
+    workspace there, `shot --monitor` 1080x1920, a reload keeping all three, remove and add again.
+    **NVIDIA boxes refuse it.** Their screen is labwc's Wayland output (finding 77), and a headless
+    output there fails as the first did (GBM cannot allocate: "REJECTED preferred mode"). A second
+    `output create wayland` does come up, takes a mode and scale (1080x1920, 2560x1440 at 1.6), but it
+    is another window on labwc's one output, under the main one: it gets no frames, and grim on it
+    waits for ever. Making that work needs labwc outputs of their own per monitor; refused for now,
+    saying why. Interactive boxes refuse it until #123.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

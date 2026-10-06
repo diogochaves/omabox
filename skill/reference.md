@@ -107,6 +107,12 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 
 - `omabox up --size 3440x1440` for another screen size (@60), `--size 3440x1440@144` for a refresh
   rate, `--size host` for the user's own monitor; `omabox mode` shows or changes it on a running box.
+- **More monitors** (a bar on each, windows between them, portrait, ultrawide, mixed scale, an
+  unplug): `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below` (SPEC
+  `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last by default), or `omabox monitor add SPEC`
+  / `remove NAME` (an unplug) / `list` on a running box. Coordinates are the layout's;
+  `shot --monitor NAME` (`--fit` for a mixed-scale layout, which comes out at the highest scale),
+  `drag --shot F --shot-monitor NAME`. Headless boxes only, and not on NVIDIA (`up` says so).
 - **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
   put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
   only; `--json`). Never read host-wide tools (nvtop, radeontop, scripts summing `/proc/*/fdinfo` by
@@ -487,17 +493,17 @@ login screen and the disk passphrase stay a VM's to test.
 
 ## When a box cannot test it, in detail
 
-- The screen: any size and refresh rate, scale 1; no real modes, HDR, VRR, 10-bit, colour management,
-  scale or DPMS. Several outputs only by hand (`omabox hyprctl output create headless NAME`; a reload
-  drops it). The screen going and coming back (a monitor dropping off on wake, a KVM, a dock) can be
-  tested: `omabox output drop --for 300ms --cycles 20`, which stops at the first shell crash.
+- The screens: any size, refresh rate, number (`--monitor`) and scale for the extra ones; no real
+  modes, HDR, VRR, 10-bit, colour management or DPMS. The screen going and coming back (a monitor
+  dropping off on wake, a KVM, a dock) can be tested: `omabox output drop --for 300ms --cycles 20`,
+  which stops at the first shell crash; an unplug for good: `omabox monitor remove NAME`.
 - No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit. No
   devices: no audio (PipeWire), no `/dev/i2c` (DDC/CI brightness), no backlight, no real keyboards,
   mice, touchpads, tablets, cameras, USB or printers. No systemd user manager unless `up --systemd`
   (never journald or logind), no installed `.desktop` files or URL handlers, no idle or suspend; the
   lock screen locks but takes no real password ("Testing the lock screen").
 - Reporting: each plugin's `commit` in `ls --json`'s `plugin_status` ends in `+dirty` for uncommitted
-  edits. Outputs made by hand count as tested only when said so.
+  edits. Virtual monitors are not the user's: say which layout you tested.
 
 ## Showing the user
 

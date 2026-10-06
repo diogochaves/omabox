@@ -109,6 +109,17 @@ else
   if f then mode = f:read("l") or mode; f:close() end
   if not mode:find("@") then mode = mode .. "@60" end
   hl.monitor({ output = waylandScreen and "WAYLAND-1" or "HEADLESS-2", mode = mode, position = "0x0", scale = 1 })
+  -- More monitors (#122): `omabox monitor add` (and `up --monitor`) make each one and write it to
+  -- omabox.monitors, "NAME WxH@HZ XxY SCALE" a line, as Hyprland made it; its rule comes back on every
+  -- load, so a reload keeps its mode, position and scale.
+  local mf = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.monitors")
+  if mf then
+    for line in mf:lines() do
+      local n, m, p, s = line:match("^([%w_-]+) (%d+x%d+@[%d.]+) (%d+x%d+) ([%d.]+)$")
+      if n then hl.monitor({ output = n, mode = m, position = p, scale = tonumber(s) }) end
+    end
+    mf:close()
+  end
 end
 hl.config({
   debug = { vfr = true, disable_logs = false },

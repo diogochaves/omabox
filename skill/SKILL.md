@@ -146,7 +146,7 @@ yourself; when `shot` gets no frame, ask. `omabox config` is the user's: change 
 
 ## When a box cannot test it: real hardware and the real session
 
-A box has one virtual screen (scale 1; `omabox output drop` makes it vanish and return), no system bus
+A box has virtual screens only (`--monitor` for more, any size and scale; `omabox output drop` makes one vanish and return), no system bus
 (NetworkManager, bluetooth, UPower, logind), no devices (audio, DDC/CI, backlight, real input, USB), no
 suspend, a lock screen with no real password, and a fresh HOME. A change touching `hl.monitor`,
 HDR/VRR/`cm`, `ddcutil`, backlight, `wpctl`, `nmcli`, `bluetoothctl`, `powerprofilesctl`,

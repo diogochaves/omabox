@@ -528,6 +528,14 @@ t_unit_mount_rules() {
   check_match "seed: another absolute DEST refused" "DEST is in the box HOME" "$(lib seed_spec "$ROOT/VERSION:/etc/x" 2>&1)"
   check_match "seed: the HOME itself refused" "must be inside the box HOME" "$(lib seed_spec "$ROOT/VERSION:~/" 2>&1)"
   check_match "seed: no DEST refused" "SRC:DEST" "$(lib seed_spec "$ROOT/VERSION" 2>&1)"
+  # --monitor SPEC (#122)
+  check_eq "monitor: WxH, at 60, scale 1, right" "1080x1920@60 1 right" "$(lib monitor_spec 1080x1920)"
+  check_eq "monitor: rate, scale, below" "2560x1440@144 1.6 below" "$(lib monitor_spec 2560x1440@144,scale=1.6,below)"
+  check_eq "monitor: X,Y" "800x600@60 1 0,1080" "$(lib monitor_spec 800x600,0,1080)"
+  check_eq "monitor: X,Y then scale" "800x600@60 2 100,0" "$(lib monitor_spec 800x600,100,0,scale=2)"
+  local bad; for bad in 1080 0x100 1080x1920,scale=5 1080x1920,scale=0.5 1080x1920,scale=1.234 1080x1920,left 1080x1920,above 1080x1920,5 1080x1920,up ""; do
+    check_fails "monitor: '$bad' refused" lib monitor_spec "$bad"
+  done
 }
 
 t_unit_refusals() {
@@ -549,6 +557,8 @@ t_unit_refusals() {
   check_fails "--ro-bind onto //usr refused" ob up "$P-r15" --ro-bind "$ROOT://usr"
   check_fails "two names refused" ob up "$P-r16" "$P-r17"
   check_fails "--seed of a secret store refused" ob up "$P-r19" --seed "$HOME/.ssh:x"
+  check_match "--monitor on an interactive box refused (#123)" "for headless boxes" "$(ob up "$P-r28" --interactive --monitor 800x600 2>&1)"
+  check_match "--monitor with a bad SPEC refused" "a size is WxH" "$(ob up "$P-r29" --monitor big 2>&1)"
   check_fails "--seed of ~/.config/omarchy refused (api-keys.env)" ob up "$P-r20" --seed "$HOME/.config/omarchy:x"
   check_fails "--plugin HOME refused" bash -c "mkdir -p '$TMP/fakehome' && echo '{\"id\":\"x.y\"}' > '$TMP/fakehome/manifest.json' && HOME='$TMP/fakehome' '$CLI' up '$P-r18' --plugin '$TMP/fakehome'"
   # (/dev/net/tun hidden in a mount namespace of its own: pasta would fail inside the box, 10 s later)
@@ -4143,6 +4153,49 @@ t_widget_list() {
   ob down "$B" >/dev/null
 }
 
+# Monitors beyond the first in a headless box (#122): up --monitor, monitor add/remove/list, kept over a
+# reload, the shell's bar on each, the pointer and clicks across them, a shot of one. A box on NVIDIA
+# draws on labwc's one Wayland output and refuses them: this runs on another GPU, or is skipped.
+t_monitors() {
+  local B=$P-mon n
+  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
+  [ -n "$n" ] || { skip "monitors" "no render node here but NVIDIA's, whose boxes refuse them"; return; }
+  check "up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below" env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --stock-bar \
+    --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below
+  local ml; ml=$(ob monitor -b "$B" list --json)
+  check_eq "three monitors: modes, scales, positions" \
+    "HEADLESS-2 1920x1080@60 1 0 0|HEADLESS-3 1080x1920@60 1 1920 0|HEADLESS-4 2560x1440@60 1.6 1920 1920" \
+    "$(jq -r 'map("\(.name) \(.mode) \(.scale) \(.x) \(.y)") | join("|")' <<<"$ml")"
+  check_eq "ls --json has them" 3 "$("$CLI" ls --json | jq --arg b "$B" '.[] | select(.name == $b) | .monitors | length')"
+  check_match "ls says 3 monitors" "^$B +headless +3 monitors " "$("$CLI" ls | grep "^$B ")"
+  check "the shell has a bar on each" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq -r '[to_entries[] | select([.value.levels[][] | .namespace] | index(\"omarchy-bar\")) | .key] | sort | join(\" \")')\" = 'HEADLESS-2 HEADLESS-3 HEADLESS-4' ]"
+  ob pointer -b "$B" -- move 2500 2400 >/dev/null
+  check_eq "the pointer onto the third: its workspace is the active one" HEADLESS-4 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .monitor)"
+  ob click -b "$B" 2400 900 >/dev/null
+  check_eq "a click on the second lands there" "2400, 900" "$(ob hyprctl -b "$B" cursorpos)"
+  check_eq "...and its workspace is active" HEADLESS-3 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .monitor)"
+  ob shot -b "$B" --monitor HEADLESS-3 -o "$TMP/mon3.png" >/dev/null 2>&1
+  check_match "shot --monitor HEADLESS-3: that monitor, 1080x1920" "1080 x 1920" "$(file "$TMP/mon3.png")"
+  check_match "...said, for --in" "screen's 1080x1920 at 1920,0|^omabox: .*1920,0" "$(ob shot -b "$B" --monitor HEADLESS-3 -o "$TMP/mon3b.png" 2>&1 >/dev/null)"
+  check_match "shot --monitor of one it does not have: refused" "has no monitor HEADLESS-9" "$(ob shot -b "$B" --monitor HEADLESS-9 2>&1)"
+  ob hyprctl -b "$B" reload >/dev/null
+  sleep 1
+  check_eq "a config reload keeps them" "$(jq -c 'map({name, mode, scale, x, y})' <<<"$ml")" "$(ob monitor -b "$B" list --json | jq -c 'map({name, mode, scale, x, y})')"
+  local ev0; ev0=$(ob log -b "$B" events -n all | grep -c monitorremoved)
+  check "monitor remove HEADLESS-3" ob monitor -b "$B" remove HEADLESS-3
+  check_eq "...gone from the list" "HEADLESS-2 HEADLESS-4" "$(ob monitor -b "$B" list --json | jq -r 'map(.name) | join(" ")')"
+  check "...an unplug the box's events saw" until_ok 3 bash -c "[ \$('$CLI' log -b '$B' events -n all | grep -c 'monitorremoved>>HEADLESS-3') -gt $ev0 ]"
+  check_eq "monitor add again: the free name" HEADLESS-3 "$(ob monitor -b "$B" add 800x600,0,3000 2>/dev/null)"
+  check_eq "...at X,Y" "800x600@60 0 3000" "$(ob monitor -b "$B" list --json | jq -r '.[] | select(.name == "HEADLESS-3") | "\(.mode) \(.x) \(.y)"')"
+  check_match "the main screen is not removed" "is the box's main screen" "$(ob monitor -b "$B" remove HEADLESS-2 2>&1)"
+  check_match "a monitor it does not have" "has no monitor HEADLESS-9" "$(ob monitor -b "$B" remove HEADLESS-9 2>&1)"
+  # On NVIDIA (the gpu setting's GPU, when it is that) up refuses before it gets to the box.
+  [ "$(lib eval 'render_driver "$(render_node 2>/dev/null)"')" != nvidia ] ||
+    check_match "--monitor on an NVIDIA box: refused, saying why" "draws on labwc's one Wayland output" "$(ob up "$P-monnv" --monitor 800x600 2>&1)"
+  check_match "up again without them: already up, said" "is already up, without what you asked for: --monitor" "$(OMABOX_RENDER_NODE=$n ob up "$B" --monitor 800x600 2>&1)"
+  ob down "$B" >/dev/null
+}
+
 # The agent guard (finding 65): the fake display agents' shells get, and omabox still finding the
 # user's session from such a shell. Sessions are faked in a runtime dir of our own where it matters.
 GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
@@ -6056,7 +6109,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_monitors t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
