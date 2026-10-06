@@ -3721,6 +3721,16 @@ from them.
     only by an `up` not yet at its lock, a minute at most: `down_none` sweeps those older than 10
     minutes. The suite removes its `t<pid>-*` markers on exit. t_unit_lock_markers (five of its
     checks failed on the old code); t_race and t_reap_race pass unchanged.
+219. **The widget reads its bar only where the bar may be null** (2026-10-06, #155). On the desk a
+    `bar.layout` edit logged 86 `TypeError: Cannot read property 'foreground' of null` (also
+    `fontFamily`, `urgent`) from the widget's Panel.qml, its rows' bindings reading `root.bar.*` while
+    the widget's bar went away (Omarchy builds the new widgets before deleting the old). There the
+    widget was hosted by a plugin of the desk's; with Omarchy's own bar it did not reproduce in a box
+    (the widget moved between sections and the bar's position changed, panel open, rows listed: no
+    error), so the case is a host that rebuilds. The panel now has `foreground`, `urgent` and
+    `fontFamily` as `bar ? bar.x : Color.x / Style.font.family`, as Omarchy's agents panel does, and
+    every binding reads those. t_unit_version checks that no line reads `bar.` unguarded (52 on the
+    old file).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

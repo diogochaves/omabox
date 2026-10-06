@@ -55,6 +55,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   report, and exit 1; `restart-shell` said "shell restarted". Quickshell's crash dialog no longer
   appears in a box, where it took the keys meant for the app under test (Return on it opened a
   browser); the report is kept (#126).
+- **The bar widget no longer logs `TypeError`s while a bar rebuilds** (a `bar.layout` edit with the
+  widget inside another plugin): it falls back to the theme's colours while its bar is gone (#155).
 
 ## 0.4.8 — 2026-10-03
 

@@ -834,6 +834,9 @@ t_unit_version() {
   printf '%s\n' 'Item {' '  Text { text: "a {"; color: "red" }' '  component T: Text {' '    textFormat: Text.PlainText' '  }' \
     '  T { text: "b" }' '  Label {' '    Text { textFormat: Text.PlainText }' '  }' '}' > "$TMP/rich.qml"
   check_eq "...a check that finds one (and not the plain ones)" "$TMP/rich.qml:2 Text $TMP/rich.qml:7 Label" "$(rich_text "$TMP/rich.qml" | tr '\n' ' ' | sed 's/ $//')"
+  # #155: a bar rebuild leaves the old widget's `bar` null while its bindings still run.
+  check_eq "the widget reads its bar only where it may be null (bar ? bar.x : ...; #155)" "" \
+    "$(grep -nE "(root\.|[^.A-Za-z_])bar\.[A-Za-z]" "$ROOT"/plugin/*.qml | grep -vE "bar \? bar\.|^[^:]*:[0-9]+: *//")"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
   check_eq "config --json names it, for a widget left from before an upgrade (finding 133)" "$v" "$("$CLI" config --json | jq -r .version)"
   # Agent Skills hosts cap a skill's description at 1024 characters (it grows with each trigger), and

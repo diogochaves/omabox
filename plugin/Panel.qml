@@ -31,6 +31,12 @@ Panel {
     return isFinite(n) && n >= 1 ? Math.min(Math.round(n), 300) : 15
   }
 
+  // The bar's colours and font, or the theme's while the bar is null: a `bar.layout` change rebuilds
+  // every widget, the new before the old are deleted, and the old ones' bindings read a bar already gone.
+  readonly property color foreground: bar ? bar.foreground : Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+
   property var boxes: []
   property int selectedIndex: 0
   property string selectedName: ""     // the selection follows the box, not its place in the list
@@ -515,7 +521,7 @@ Panel {
 
               Mark {
                 anchors.fill: parent
-                color: root.bar.foreground
+                color: root.foreground
               }
             }
           }
@@ -523,8 +529,8 @@ Panel {
           title: root.face === "settings" ? "Settings" : "Boxes"
           meta: root.face === "settings" ? "omabox " + root.pluginVersion
             : (root.hasBoxes ? root.countText : "no boxes").toUpperCase()
-          foreground: root.bar.foreground
-          fontFamily: root.bar.fontFamily
+          foreground: root.foreground
+          fontFamily: root.fontFamily
           // omawin's: the gear into Settings, and Back out of it, share the top right.
           trailingControl: Component {
             Row {
@@ -536,8 +542,8 @@ Panel {
                 fontSize: Style.font.caption
                 verticalPadding: Style.spacing.xs
                 horizontalPadding: Style.spacing.sm
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.foreground
+                fontFamily: root.fontFamily
                 tooltipText: "Settings"
                 opacity: 0.7
                 onClicked: root.openFace("settings")
@@ -552,8 +558,8 @@ Panel {
                 fontSize: Style.font.caption
                 verticalPadding: Style.spacing.controlPaddingY
                 horizontalPadding: Style.spacing.sm
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.foreground
+                fontFamily: root.fontFamily
                 tooltipText: "Back · Esc"
                 onClicked: root.goBack()
               }
@@ -568,9 +574,9 @@ Panel {
           width: parent.width
           implicitHeight: alertRow.implicitHeight + Style.space(12)
           radius: Style.cornerRadius
-          color: Util.alpha(root.bar.urgent, 0.14)
+          color: Util.alpha(root.urgent, 0.14)
           border.width: 1
-          border.color: Util.alpha(root.bar.urgent, 0.55)
+          border.color: Util.alpha(root.urgent, 0.55)
 
           Row {
             id: alertRow
@@ -586,8 +592,8 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: root.icons.alert
-              color: root.bar.urgent
-              font.family: root.bar.fontFamily
+              color: root.urgent
+              font.family: root.fontFamily
               font.pixelSize: Style.font.body
             }
             Text {
@@ -595,8 +601,8 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: root.listError !== "" ? "list: " + root.listError : root.lastError !== "" ? root.lastError : root.staleNote
-              color: root.bar.urgent
-              font.family: root.bar.fontFamily
+              color: root.urgent
+              font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.Wrap
             }
@@ -605,9 +611,9 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               iconText: root.icons.dismiss
               tooltipText: "Dismiss"
-              foreground: root.bar.urgent
-              hoverColor: root.bar.urgent
-              fontFamily: root.bar.fontFamily
+              foreground: root.urgent
+              hoverColor: root.urgent
+              fontFamily: root.fontFamily
               onClicked: {
                 if (root.lastError === "" && root.listError === "") root.staleDismissed = root.cliConfig.version || ""
                 root.lastError = ""; root.listError = ""
@@ -622,7 +628,7 @@ Panel {
           width: parent.width
           spacing: Style.space(12)
 
-          PanelSeparator { foreground: root.bar.foreground }
+          PanelSeparator { foreground: root.foreground }
 
           Column {
             width: parent.width
@@ -633,8 +639,8 @@ Panel {
               width: parent.width
               textFormat: Text.PlainText
               text: "No boxes up"
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
+              color: Qt.darker(root.foreground, 1.4)
+              font.family: root.fontFamily
               font.pixelSize: Style.font.body
               horizontalAlignment: Text.AlignHCenter
             }
@@ -658,8 +664,8 @@ Panel {
             text: root.action === "new" ? "Starting a box…" : root.armedNew ? "Press n again to start one" : "New interactive box"
             iconSize: Style.font.bodySmall
             fontSize: Style.font.body
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
+            foreground: root.foreground
+            fontFamily: root.fontFamily
             tooltipText: "A window on " + root.workspaceLabel + ", named box-1, box-2, …"
             enabled: !actionProc.running
             opacity: enabled ? 1.0 : 0.6
@@ -672,9 +678,9 @@ Panel {
             // No-break spaces keep each key with its action when the line wraps.
             text: ["↑↓ move", "p peek/show", "s shot", "f keys", "v paste in", "c copy out", "d down", "n new", "r refresh"]
               .map(function(h) { return h.replace(/ /g, "\u00a0") }).join("\u00a0· ")
-            color: root.bar.foreground
+            color: root.foreground
             opacity: 0.5
-            font.family: root.bar.fontFamily
+            font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
@@ -689,7 +695,7 @@ Panel {
           width: parent.width
           spacing: Style.space(14)
 
-          PanelSeparator { foreground: root.bar.foreground }
+          PanelSeparator { foreground: root.foreground }
 
           Column {
             width: parent.width
@@ -701,7 +707,7 @@ Panel {
               id: wsDropdown
               width: parent.width
               showLabel: false
-              fontFamily: root.bar.fontFamily
+              fontFamily: root.fontFamily
               options: root.workspaceOptions
               value: String(root.cliConfig.workspace || "9")
               onChanged: function(v) { root.setSetting("workspace", v) }
@@ -727,7 +733,7 @@ Panel {
             onToggled: root.setSetting("bar-icon", checked ? "auto" : "always")
           }
 
-          PanelSeparator { foreground: root.bar.foreground }
+          PanelSeparator { foreground: root.foreground }
 
           Column {
             width: parent.width
@@ -748,8 +754,8 @@ Panel {
     width: parent ? parent.width : 0
     textFormat: Text.PlainText
     wrapMode: Text.WordWrap
-    color: dim ? Qt.darker(root.bar.foreground, 1.4) : root.bar.foreground
-    font.family: root.bar.fontFamily
+    color: dim ? Qt.darker(root.foreground, 1.4) : root.foreground
+    font.family: root.fontFamily
     font.pixelSize: Style.font.caption
     font.bold: bold
   }
@@ -777,7 +783,7 @@ Panel {
       interactive: sw.enabled
       opacity: sw.enabled ? 1 : 0.4
       busy: setProc.running
-      foreground: root.bar.foreground
+      foreground: root.foreground
       onToggled: sw.toggled()
     }
   }
@@ -790,16 +796,16 @@ Panel {
     Text {
       textFormat: Text.PlainText
       text: parent.label
-      color: root.bar.foreground
+      color: root.foreground
       opacity: 0.6
-      font.family: root.bar.fontFamily
+      font.family: root.fontFamily
       font.pixelSize: Style.font.caption
     }
     Text {
       textFormat: Text.PlainText
       text: parent.value
-      color: Qt.darker(root.bar.foreground, 1.4)
-      font.family: root.bar.fontFamily
+      color: Qt.darker(root.foreground, 1.4)
+      font.family: root.fontFamily
       font.pixelSize: Style.font.caption
       font.bold: true
     }
@@ -814,7 +820,7 @@ Panel {
     readonly property bool armed: root.armedDown === box.name
 
     hasCursor: rowSelected
-    foreground: root.bar.foreground
+    foreground: root.foreground
     implicitHeight: content.implicitHeight + Style.spacing.rowPaddingX
 
     MouseArea {
@@ -850,9 +856,9 @@ Panel {
           width: parent.width
           textFormat: Text.PlainText
           text: row.box.name + (root.busy === row.box.name ? " …" : "")
-          color: root.bar.foreground
+          color: root.foreground
           opacity: row.up ? 1 : 0.6
-          font.family: root.bar.fontFamily
+          font.family: root.fontFamily
           font.pixelSize: Style.font.body
           elide: Text.ElideRight
         }
@@ -860,8 +866,8 @@ Panel {
           width: parent.width
           textFormat: Text.PlainText
           text: root.caption(row.box)
-          color: row.armed ? root.bar.urgent : Qt.darker(root.bar.foreground, 1.4)
-          font.family: root.bar.fontFamily
+          color: row.armed ? root.urgent : Qt.darker(root.foreground, 1.4)
+          font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
         }
@@ -877,49 +883,49 @@ Panel {
           visible: row.up
           iconText: row.box.mode === "interactive" ? root.icons.show : root.icons.peek
           tooltipText: row.box.mode === "interactive" ? "Show" : "Peek"
-          foreground: root.bar.foreground
-          fontFamily: root.bar.fontFamily
+          foreground: root.foreground
+          fontFamily: root.fontFamily
           onClicked: root.peek(row.box)
         }
         PanelActionButton {   // keys-to-box: lit while on
           visible: row.up && row.box.mode === "interactive"
           iconText: root.icons.keys
           tooltipText: row.box.keys_to_box ? "SUPER keys follow focus and the pointer into it: on (f)" : "SUPER keys to the box while it has focus and the pointer: off (f)"
-          foreground: row.box.keys_to_box ? root.bar.urgent : root.bar.foreground
-          hoverColor: root.bar.urgent
-          fontFamily: root.bar.fontFamily
+          foreground: row.box.keys_to_box ? root.urgent : root.foreground
+          hoverColor: root.urgent
+          fontFamily: root.fontFamily
           onClicked: root.keysToBox(row.box)
         }
         PanelActionButton {
           visible: row.up
           iconText: root.icons.shot
           tooltipText: "Screenshot"
-          foreground: root.bar.foreground
-          fontFamily: root.bar.fontFamily
+          foreground: root.foreground
+          fontFamily: root.fontFamily
           onClicked: root.shot(row.box)
         }
         PanelActionButton {
           visible: row.up && row.box.mode === "interactive"
           iconText: root.icons.clipIn
           tooltipText: "Paste your clipboard into the box"
-          foreground: root.bar.foreground
-          fontFamily: root.bar.fontFamily
+          foreground: root.foreground
+          fontFamily: root.fontFamily
           onClicked: root.clip(row.box, false)
         }
         PanelActionButton {
           visible: row.up && row.box.mode === "interactive"
           iconText: root.icons.clipOut
           tooltipText: "Copy the box's clipboard out"
-          foreground: root.bar.foreground
-          fontFamily: root.bar.fontFamily
+          foreground: root.foreground
+          fontFamily: root.fontFamily
           onClicked: root.clip(row.box, true)
         }
         PanelActionButton {
           iconText: root.icons.down
           tooltipText: row.armed ? "Click again to shut it down" : "Down"
-          foreground: row.armed ? root.bar.urgent : root.bar.foreground
-          hoverColor: root.bar.urgent
-          fontFamily: root.bar.fontFamily
+          foreground: row.armed ? root.urgent : root.foreground
+          hoverColor: root.urgent
+          fontFamily: root.fontFamily
           onClicked: root.down(row.box)
         }
       }
