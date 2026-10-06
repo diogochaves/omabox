@@ -89,6 +89,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox peek [-b NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
   omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
+  omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
@@ -198,6 +199,10 @@ down, an interactive box's hidden window renders nothing): never 0 for what coul
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
 @ up run
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
+@ reload
+A box's Hyprland runs a copy of omabox's config made at \`up\`, with autoreload off: updating omabox
+(a pull, an upgrade) leaves running boxes as they are. \`reload\` copies this omabox's config in and
+reloads it; like any config reload, binds, rules and Lua state added since are gone.
 @ lua
 \`lua\` takes an expression or statements (\`return\` what to print); one line per value: strings and
 numbers as they are, nil as nil, tables and Hyprland's objects (a window, a monitor) as JSON (--json:
@@ -4576,6 +4581,25 @@ name_arg() {
 
 # share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: the new pid appearing there is
 # the restart (a project's own quickshell in the box is not the Omarchy shell, finding 63).
+# `omabox reload` (#140): the box's copy of the config, from this omabox's share/, reloaded once. Written
+# in the box's mount namespace, as a new file renamed over the old: the runtime dir is the box's to
+# change, and a link it put there resolves inside the box.
+cmd_reload() {
+  local name; name=$(name_arg reload "$@") || exit 1
+  select_box "$name"; need_box
+  # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
+  on_box sh -c 'cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua; cat > "$cfg.new" && mv -f "$cfg.new" "$cfg"' \
+    < "$ROOT/share/hyprland.lua" || die "reload: could not write the config copy in box '$NAME'"
+  local rc=0
+  on_box timeout "$HYPR_LIMIT" hyprctl reload >/dev/null || rc=$?
+  if [ $rc != 0 ]; then
+    box_alive || die "box '$NAME' went down"
+    [ $rc != 124 ] || die "$(hung_text "$HYPR_LIMIT s")"
+    die "reload: hyprctl reload failed (exit $rc)"
+  fi
+  say "box '$NAME': config reloaded from $ROOT/share/hyprland.lua (binds, rules and Lua state added since are gone)"
+}
+
 cmd_restart_shell() {
   local name; name=$(name_arg restart-shell "$@") || exit 1
   select_box "$name"; need_box
@@ -5435,7 +5459,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|mode|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|reload|mode|gpu|env|path|down|ls|list) ;;
     help|-h|--help|version|-V|--version) ;;
     config) [ $# = 0 ] || [ "$*" = --json ] || die "config: a jailed agent does not change omabox's settings" ;;
     # Never on the allowed list: it hands the user's clipboard over (finding 119).
@@ -5705,7 +5729,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot windows keys keys-to-box click pointer drag wait hyprctl lua log logs events peek restart-shell mode gpu ports env path down save clip "
+BOX_CMDS=" up run shot screenshot windows keys keys-to-box click pointer drag wait hyprctl lua log logs events peek restart-shell reload mode gpu ports env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -5764,6 +5788,7 @@ main() {
     events) cmd_events "$@" ;;
     peek) cmd_peek "$@" ;;
     restart-shell) cmd_restart_shell "$@" ;;
+    reload) cmd_reload "$@" ;;
     mode) cmd_mode "$@" ;;
     gpu) cmd_gpu "$@" ;;
     ports) cmd_ports "$@" ;;

@@ -111,7 +111,9 @@ else
 end
 hl.config({
   debug = { vfr = true, disable_logs = false },
-  misc = { disable_watchdog_warning = true },
+  -- No reload because a file changed (#140): a box changes when the agent asks (`hyprctl reload`,
+  -- `omabox reload`), not when omabox or Omarchy is updated under it.
+  misc = { disable_watchdog_warning = true, disable_autoreload = true },
   xwayland = { enabled = os.getenv("OMABOX_XWAYLAND") == "1" },
 })
 

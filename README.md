@@ -58,7 +58,9 @@ run it after a Hyprland upgrade too: a private aquamarine whose soname Hyprland 
 skipped for the system's (`omabox --version` says which one boxes use). **From a checkout to the
 package** (once Omarchy's repository has it): `omabox setup --remove` in the checkout first; if you
 forget, the package's `omabox setup` finds the checkout's `~/.local/bin/omabox` and offers to remove
-it. After an upgrade the bar runs the old widget until the shell restarts; its panel says so.
+it. After an upgrade the bar runs the old widget until the shell restarts; its panel says so. Boxes
+already up keep the Hyprland config they started with: `omabox reload` (next release) gives one
+the new one, or `down` and `up`.
 
 <details>
 <summary><b>Remove</b></summary>

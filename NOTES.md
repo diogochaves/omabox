@@ -3354,6 +3354,20 @@ from them.
     failures are not slowed. `share/` scripts are safe to edit under running boxes (bin/omabox ends in
     `main "$@"; exit`, session.sh is one `{ }` block: bash has parsed them whole). t_own_processes; on
     the old code its five checks failed (worktree).
+193. **A box keeps the config it started with** (2026-10-06, #140). Every box mounts the checkout's (or
+    package's) `share/` live and its Hyprland's config was `share/hyprland.lua`, so changing that file
+    (a pull, a branch switch, an edit, an upgrade) reloaded every running box at once and wiped what
+    agents had added with `lua`/`eval`/`plugin load`. Reproduced in a worktree box: an append in place
+    and a git-style replace (new file renamed over) each fired `configreloaded` and dropped a global
+    and an `hl.config` value; an edit to another `share/` file (lua.lua) reloaded nothing. Now
+    start-hyprland.sh copies the config into the box's runtime dir and starts Hyprland on the copy,
+    and hyprland.lua sets `misc.disable_autoreload` (an Omarchy upgrade changes files its config
+    loads too). Explicit reloads stay: `hyprctl reload` (the copy), a theme switch, and `omabox
+    reload [-b NAME]`, which writes the current `share/hyprland.lua` over the copy inside the box's
+    mount namespace (a link the box put there resolves in the box) and reloads once. The docs
+    already said Omarchy edits under `--omarchy` show after `hyprctl reload`. Boxes started before
+    this still follow the live file: fixing it here reloaded one (the maintainer's `host-base`, at
+    the edit). t_config_kept; on the old code its checks failed (worktree).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
