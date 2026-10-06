@@ -4233,6 +4233,12 @@ t_monitors() {
   check_eq "ls --json has them" 3 "$("$CLI" ls --json | jq --arg b "$B" '.[] | select(.name == $b) | .monitors | length')"
   check_match "ls says 3 monitors" "^$B +headless +3 monitors " "$("$CLI" ls | grep "^$B ")"
   check "the shell has a bar on each" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq -r '[to_entries[] | select([.value.levels[][] | .namespace] | index(\"omarchy-bar\")) | .key] | sort | join(\" \")')\" = 'HEADLESS-2 HEADLESS-3 HEADLESS-4' ]"
+  check_eq "-b NAME before monitor (#161)" "$ml" "$(ob -b "$B" monitor list --json 2>&1)"
+  # A point in the gap below the main screen, left of the others (#161): grim alone failed, and beside
+  # a point on a monitor it read black.
+  check_match "pixel in a gap between monitors: refused, saying so" "100,1500 is not on any monitor \(.*HEADLESS-3 1920,0 1080x1920" "$(ob pixel -b "$B" 100 1500 2>&1)"
+  check_match "...with a point on a monitor too" "100,1500 is not on any monitor" "$(ob pixel -b "$B" 10 10 100 1500 2>&1)"
+  check_match "...a point on the third: its colour" "^#[0-9a-f]{6}$" "$(ob pixel -b "$B" 2000 2000 2>&1)"
   ob pointer -b "$B" -- move 2500 2400 >/dev/null
   check_eq "the pointer onto the third: its workspace is the active one" HEADLESS-4 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .monitor)"
   ob click -b "$B" 2400 900 >/dev/null
@@ -4245,12 +4251,23 @@ t_monitors() {
   ob hyprctl -b "$B" reload >/dev/null
   sleep 1
   check_eq "a config reload keeps them" "$(jq -c 'map({name, mode, scale, x, y})' <<<"$ml")" "$(ob monitor -b "$B" list --json | jq -c 'map({name, mode, scale, x, y})')"
+  # mode (#161): the ones placed right of (and below) it move with it, out of the larger main screen.
+  local out; out=$(ob mode -b "$B" 2560x1440 2>&1 >/dev/null)
+  check_eq "mode 2560x1440: the monitor right of it moves, and the one below that" "HEADLESS-2 0 0|HEADLESS-3 2560 0|HEADLESS-4 2560 1920" \
+    "$(ob monitor -b "$B" list --json | jq -r 'map("\(.name) \(.x) \(.y)") | join("|")')"
+  check_match "...said" "moved the monitors placed next to it: HEADLESS-3 to 2560,0, HEADLESS-4 to 2560,1920" "$out"
+  ob mode -b "$B" 1920x1080 >/dev/null 2>&1
+  check_eq "...and back with mode 1920x1080" "$(jq -c 'map({name, x, y})' <<<"$ml")" "$(ob monitor -b "$B" list --json | jq -c 'map({name, x, y})')"
   local ev0; ev0=$(ob log -b "$B" events -n all | grep -c monitorremoved)
   check "monitor remove HEADLESS-3" ob monitor -b "$B" remove HEADLESS-3
-  check_eq "...gone from the list" "HEADLESS-2 HEADLESS-4" "$(ob monitor -b "$B" list --json | jq -r 'map(.name) | join(" ")')"
+  check_eq "...gone from the list; the one placed below it goes below the main screen now" "HEADLESS-2 0 0|HEADLESS-4 0 1080" \
+    "$(ob monitor -b "$B" list --json | jq -r 'map("\(.name) \(.x) \(.y)") | join("|")')"
   check "...an unplug the box's events saw" until_ok 3 bash -c "[ \$('$CLI' log -b '$B' events -n all | grep -c 'monitorremoved>>HEADLESS-3') -gt $ev0 ]"
   check_eq "monitor add again: the free name" HEADLESS-3 "$(ob monitor -b "$B" add 800x600,0,3000 2>/dev/null)"
   check_eq "...at X,Y" "800x600@60 0 3000" "$(ob monitor -b "$B" list --json | jq -r '.[] | select(.name == "HEADLESS-3") | "\(.mode) \(.x) \(.y)"')"
+  check_match "output drop with other monitors: the main screen off, the others on (#161)" \
+    "has its main screen \(HEADLESS-2\) off now, (HEADLESS-4, HEADLESS-3|HEADLESS-3, HEADLESS-4) still on" "$(ob output -b "$B" drop 2>&1)"
+  ob output -b "$B" back >/dev/null 2>&1
   check_match "the main screen is not removed" "is the box's main screen" "$(ob monitor -b "$B" remove HEADLESS-2 2>&1)"
   check_match "a monitor it does not have" "has no monitor HEADLESS-9" "$(ob monitor -b "$B" remove HEADLESS-9 2>&1)"
   # On NVIDIA (the gpu setting's GPU, when it is that) up refuses before it gets to the box.
@@ -4322,34 +4339,45 @@ t_monitors_window() {
   if aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
   ob run -b "$S" -d -- foot >/dev/null 2>&1
   ob wait -b "$S" window foot >/dev/null 2>&1
-  check "up --interactive --monitor 800x600 in the stand-in" "${in[@]}" up wm --interactive --no-shell --monitor 800x600
+  check "up --interactive --monitor 800x600 --monitor 600x400,below in the stand-in" "${in[@]}" up wm --interactive --no-shell --monitor 800x600 --monitor 600x400,below
   # shellcheck disable=SC2329 # called through until_ok
   mons() { [ "$("${in[@]}" monitor -b wm list --json | jq -r "$1")" = "$2" ]; }
   # shellcheck disable=SC2329 # called through check
-  boxwins() { ob hyprctl -b "$S" -j clients | jq -c '[.[] | select(.class == "aquamarine") | {ws: .workspace.name, floating, size}]'; }
-  check_eq "its second window: on workspace 9, floating at the SPEC's size" \
-    '[{"ws":"9","floating":false,"size":[1896,1056]},{"ws":"9","floating":true,"size":[800,600]}]' "$(boxwins)"
+  boxwins() { ob hyprctl -b "$S" -j clients | jq -c '[.[] | select(.class == "aquamarine") | {ws: .workspace.name, floating, at, size}] | sort_by(.at)'; }
+  # How many pairs of the box's windows on the stand-in overlap.
+  # shellcheck disable=SC2329 # called through check
+  overlaps() { ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class == "aquamarine")] as $w | [range(0; $w | length) as $i | range($i + 1; $w | length) as $j
+    | select($w[$i].at[0] < $w[$j].at[0] + $w[$j].size[0] and $w[$j].at[0] < $w[$i].at[0] + $w[$i].size[0]
+      and $w[$i].at[1] < $w[$j].at[1] + $w[$j].size[1] and $w[$j].at[1] < $w[$i].at[1] + $w[$i].size[1])] | length'; }
+  # Side by side (#161): the main window floated and made smaller, the monitors' to its right, the
+  # second below the first, as the box lays them out; the stand-in's gaps are 10 and borders 2.
+  check_eq "its monitors' windows: on workspace 9, floating at the SPECs' sizes, beside the main one, made smaller" \
+    '[{"ws":"9","floating":true,"at":[12,12],"size":[1084,1056]},{"ws":"9","floating":true,"at":[1108,12],"size":[800,600]},{"ws":"9","floating":true,"at":[1108,624],"size":[600,400]}]' "$(boxwins)"
+  check_eq "...none over another" 0 "$(overlaps)"
   check_eq "...the stand-in's focus and workspace unchanged" "foot 1" "$(ob hyprctl -b "$S" -j activewindow | jq -r .class) $(ob hyprctl -b "$S" -j activeworkspace | jq -r .id)"
-  check_eq "...the box has the monitor, right of its first" "WAYLAND-2 800x600@60 1896 0" \
-    "$("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name == "WAYLAND-2") | "\(.name) \(.mode) \(.x) \(.y)"')"
+  check_eq "...the box has the monitors: right of its first, and below the last one, as in a headless box" \
+    "WAYLAND-2 800x600@60 1084 0|WAYLAND-3 600x400@60 1084 600" \
+    "$("${in[@]}" monitor -b wm list --json | jq -r 'map(select(.name != "WAYLAND-1") | "\(.name) \(.mode) \(.x) \(.y)") | join("|")')"
   check_eq "...and the host rule is off again" false "$(ob lua -b "$S" 'omabox_monitor_rule:is_enabled()')"
-  check_match "monitor add bigger than the stand-in's screen: the window keeps its aspect, said" "does not fit on your 1920x1080 monitor: its window is 1728x972" \
-    "$("${in[@]}" monitor -b wm add 2560x1440,scale=1.5,below 2>&1)"
+  local main; main=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .at == [12, 12]) | .address')
+  local out; out=$("${in[@]}" monitor -b wm add 2560x1440,scale=1.5,below 2>&1)
+  check_match "monitor add bigger than the stand-in's screen: the window keeps its aspect, said" "does not fit on your 1920x1080 monitor: its window is 1728x972" "$out"
+  check_match "...no room beside the others: said" "has no room for box 'wm''s windows side by side" "$out"
+  check_eq "...it opens centred" "[96,54]" "$(ob hyprctl -b "$S" -j clients | jq -c '.[] | select(.class == "aquamarine" and .size == [1728, 972]) | .at')"
   "${in[@]}" up wm2 --interactive --no-shell >/dev/null 2>&1
-  check_eq "a box started after: its window is not taken for a monitor (tiled)" 2 \
+  check_eq "a box started after: its window is not taken for a monitor (tiled)" 1 \
     "$(ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class == "aquamarine" and .floating == false)] | length')"
   "${in[@]}" down wm2 >/dev/null 2>&1
   local a; a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .size == [800, 600]) | .address')
   ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$a', x = 1000, y = 800 })" >/dev/null
   check "resizing the window resizes the box's monitor" until_ok 3 mons '.[] | select(.name == "WAYLAND-2") | .mode' 1000x800@60
   "${in[@]}" hyprctl -b wm reload >/dev/null 2>&1; sleep 1
-  check_eq "a config reload keeps its monitors" "WAYLAND-1 WAYLAND-2 WAYLAND-3" "$("${in[@]}" monitor -b wm list --json | jq -r 'map(.name) | join(" ")')"
+  check_eq "a config reload keeps its monitors" "WAYLAND-1 WAYLAND-2 WAYLAND-3 WAYLAND-4" "$("${in[@]}" monitor -b wm list --json | jq -r 'map(.name) | join(" ")')"
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$a' })" >/dev/null
-  check "closing a monitor's window: that monitor goes" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-1 WAYLAND-3"
+  check "closing a monitor's window: that monitor goes" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-1 WAYLAND-3 WAYLAND-4"
   check_match "...the box stays up" " up " "$("${in[@]}" ls | grep '^wm ')"
-  a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .floating == false) | .address')
-  ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$a' })" >/dev/null
-  check "closing its first window with another open: it stays up on that one" until_ok 3 mons 'map(.name) | join(" ")' WAYLAND-3
+  ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$main' })" >/dev/null
+  check "closing its first window with others open: it stays up on those" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-3 WAYLAND-4"
   check_match "...up" " up " "$("${in[@]}" ls | grep '^wm ')"
   ob down "$S" >/dev/null
 }
@@ -5442,6 +5470,37 @@ t_window() {
 }
 
 # pixel and shot --zoom (#133, finding 209): what is refused before any box is asked.
+# Multi-monitor edges (#161) that need no box.
+t_unit_monitors() {
+  # Every command whose usage takes -b NAME takes it before the command too: monitor was left out.
+  local bcmds missing="" c n=0 out d=$TMP/maw
+  bcmds=$(lib eval 'echo "$BOX_CMDS"')
+  for c in $(ob help 2>&1 | sed -nE 's/^  omabox ([a-z-]+) .*-b NAME.*/\1/p' | sort -u); do
+    n=$((n + 1)); [[ $bcmds == *" $c "* ]] || missing+=" $c"
+  done
+  check_eq "every command whose usage takes -b NAME is one -b NAME before it reaches ($n of them)" "" "$missing"
+  check "...the usage has them" test "$n" -gt 20
+  # An interactive box's windows side by side on the host: the main one gives up the room.
+  check_eq "desk: a monitor right, one below it" "room 1084 1056|1096 0|1096 612" \
+    "$(printf '%s\n' '1896 1056 12' 'right 800 600' 'below 600 400' | lib desk_layout | paste -sd'|')"
+  check_eq "desk: an X,Y one goes right" "room 1084 1056|1096 0" "$(printf '%s\n' '1896 1056 12' '0x900 800 600' | lib desk_layout | paste -sd'|')"
+  check_eq "desk: one below the main window" "room 1896 444|0 456" "$(printf '%s\n' '1896 1056 12' 'below 800 600' | lib desk_layout | paste -sd'|')"
+  check_eq "desk: the main window would keep under a third: no room" none "$(printf '%s\n' '1896 1056 12' 'right 1728 972' | lib desk_layout)"
+  check_eq "desk: a column taller than the area: no room" none "$(printf '%s\n' '1896 1056 12' 'right 800 600' 'below 800 600' | lib desk_layout)"
+  # An interactive monitor that fails in `up` (a second --monitor): up's EXIT trap, which takes the box
+  # down, still runs; monitor_add_window's own trap (the host rule off) took its place in up's shell.
+  mkdir -p "$d"; echo '{}' > "$d/box.json"
+  out=$(bash -c 'source "$1"; D=$2 NAME=t
+    meta() { echo 9; }; ws_check() { echo "$1"; }; box_pid() { echo $$; }; hypr_json() { echo "[]"; }
+    host_hyprctl() { case $* in "-j monitors") echo "[{\"id\": 0, \"focused\": true, \"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]" ;;
+      -j\ *) echo "[]" ;; *) echo ok ;; esac; }
+    host_eval() { die "host hyprctl eval failed: a stub"; }
+    trap "echo up-trap" EXIT
+    monitor_add_window 800x600; echo "went on"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
+  check_match "a monitor add failing in up: up's own EXIT trap runs (it takes the box down)" "a stub.*up-trap" "$(tr '\n' ' ' <<<"$out")"
+  check_fails "...and up stops there" grep -q "went on" <<<"$out"
+}
+
 t_unit_pixel() {
   check_match "pixel: X Y needed" "need X Y" "$(ob pixel -b "$P-x" 5 2>&1)"
   check_match "pixel: a bad coordinate" "bad argument" "$(ob pixel -b "$P-x" 1 x 2>&1)"
@@ -6307,7 +6366,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_monitors_wait t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)

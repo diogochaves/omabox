@@ -3820,7 +3820,8 @@ from them.
     below) the last one made, by the size Hyprland gave it (a scale may be rounded: 1.5 → 1.6 for
     2560x1440), or at X,Y. Each one made is written, as Hyprland reports it, to the runtime dir's
     `omabox.monitors`, which `share/hyprland.lua` reads on every load: a reload keeps every mode,
-    position and scale. `up --monitor` adds them after the bar is up, one at a time (the shell gives
+    position and scale (since finding 230 the line keeps the place asked for, and the config places
+    them). `up --monitor` adds them after the bar is up, one at a time (the shell gives
     each its bar as it comes). No `left`/`above`: the layout starts at 0,0 on the main screen, and the
     main screen's position is fixed there by `--size`, `mode` and `output back`; put a monitor first at
     X,Y instead. `monitor remove` is an unplug (`monitorremoved` in `events`; Hyprland moves its
@@ -3855,7 +3856,8 @@ from them.
     same aspect (said); the box monitor's mode follows the window, a resize included (the resize watch
     in share/hyprland.lua now watches every monitor, not the first). Placed `auto-right` or
     `auto-down` (or X,Y) in the box, scale from the SPEC, kept in `omabox.monitors` ("NAME preferred
-    POSITION SCALE") for reloads; both branches of the config now read that file. Closing a monitor's
+    POSITION SCALE") for reloads; both branches of the config now read that file. (Finding 230: placed
+    as a headless box's now, and the windows side by side on the host.) Closing a monitor's
     window unplugs it; closing the first with another open leaves the box on that one (the
     `monitor.removed` handler only ends a box with no monitor left). Needs aquamarine's fix (refused
     without, saying so). `ls` keeps `window` and box.json no monitors for an interactive box: the user
@@ -3932,6 +3934,60 @@ from them.
     name, which the box linked to a host file: untouched, the log the box's); t_unit_seed_copy also
     checks that a folder seed merges with what DEST had. On b02dfcc the t_gdb and t_replace checks
     fail.
+230. **Multi-monitor edges** (2026-10-06, #161; review of findings 226-227). (1) `omabox -b NAME
+    monitor list` said "unknown command": `monitor` was missing from BOX_CMDS. t_unit_monitors now
+    reads every usage line that takes `-b NAME` and checks each command is in BOX_CMDS. (2) `mode`
+    left the other monitors where they were: a 1280x720 one right of a 1920x1080 main screen stayed at
+    1920,0 after `mode 2560x1440`, inside it. (4) `below` meant two things: a headless box's went below
+    the last one made, an interactive box's (`auto-down`) below the whole layout at x=0. Both from the
+    same cause, a position fixed when the monitor was made. Now `omabox.monitors` keeps the place asked
+    for: "NAME MODE PLACE SCALE", PLACE `right`, `below` or `XxY` (mode and scale still as Hyprland
+    made them; an interactive one's mode `preferred`). One function in share/hyprland.lua,
+    `omabox_place_monitors()`, places them all in order from it: right of or below the line before (the
+    first: the main screen, live, or the config's mode before it exists), by its logical size (the
+    line's mode over its scale; an interactive window's live size); an XxY one stays; one not there (a
+    window closed) is skipped and the next goes next to the one before it. The config calls it on
+    every load, and omabox through `hyprctl eval` (one place that places, so the CLI and a reload never
+    disagree): `monitor add` (headless and interactive alike: `below` is below the last one made in
+    both), `mode` (it says which moved), `monitor remove` (one placed next to the removed one goes next
+    to the one before it, as a reload would put it; said). An interactive box's resize watch reloads,
+    so a resized window moves the ones after it too. A line of the old format ("NAME MODE XxY SCALE", a
+    box started before) reads as XxY, and `auto-right` passes through. `hl.monitor` through eval takes
+    effect before eval returns (the positions read right after are the new ones). (3) `up --interactive
+    --monitor` lost `up`'s failure trap: monitor_add_window set its own EXIT trap (the host rule off)
+    in `up`'s shell, replacing `up`'s, so a failure after it (a second `--monitor`) left the box and
+    its windows up. Its body is a subshell now, its trap its own. Reasoned from the code and checked
+    with stubs (t_unit_monitors: a failing `host_eval` after the trap; up's trap runs and nothing after
+    it), not with a real failing `--monitor` in a stand-in: nothing makes one fail on demand. (5)
+    `pixel` checked points against the layout's bounding box: in the gap below a smaller monitor grim
+    alone failed ("geometry did not intersect"), and with a point on a monitor the grab spanned the gap
+    and read `#000000`. Each point is now checked against the monitors' rectangles: "X,Y is not on any
+    monitor (NAME X,Y WxH, ...)" (one monitor: "outside the screen", as before). (6) An interactive
+    box's monitor windows opened floating, centred on the host's monitor, over its main window and each
+    other. Now they go side by side on the host monitor the main window is on (`desk_layout`): its
+    free area (`reserved` and the outer gap, `getoption general:gaps_out` + `border_size`, taken off),
+    the main window at its corner, each monitor's window right of or below the one before it, as the
+    box lays them out (an X,Y one goes right: the host cannot mirror a layout's gaps), the main window
+    floated and made smaller by what they need (`hl.dsp.window.float`, `resize`, `move`, by address:
+    no focus moves; its box screen follows, as a resize does). A tiled main window fills the workspace,
+    so without that nothing has room. The new window is put in place by the rule's `move` (relative to
+    its monitor; the dispatcher's `move` is global: both seen in a stand-in with a second monitor at
+    1920,0), the others moved; their addresses are kept host-side in `$D/monitor-windows`. When the
+    main window would keep under a third of the area either way, or the others do not fit beside it,
+    `monitor add` says so and the window opens centred, as before. A rule of the same name keeps an
+    earlier one's `move` (seen: a window with no room opened where the last one had gone), so the
+    centre is given too. Costs: on a workspace shared with other tiled windows, the floated main
+    window leaves its tile to them and may then cover them; a size the user gave the main window is
+    replaced at the next `monitor add`. (7) `output drop` said "has no screen now" with other monitors
+    still on: it names them now; the rest of a drop with monitors (MAIN_SCREEN then picks another, and
+    a second drop takes it) is #163. Checked: t_monitors (`-b NAME monitor list`; `mode 2560x1440`
+    moving the one right of it and the one below that, said, and back; after removing the middle one,
+    the one below it under the main screen; `pixel` in the gap alone and with another point; the
+    drop's wording), t_monitors_window in a stand-in (finding 26: `--monitor 800x600 --monitor
+    600x400,below`: the main window 1084x1056 at 12,12, the others at 1108,12 and 1108,624, none over
+    another, the stand-in's focus and workspace unchanged; in the box WAYLAND-3 below WAYLAND-2 at
+    1084,600, not at 0,1056; a 2560x1440 one with no room: said, centred at 96,54), t_unit_monitors
+    (`desk_layout`'s cases, BOX_CMDS, the trap). On 69f9b5b 19 of those checks fail.
 231. **`wait` and `--wait` watch every monitor, in layout coordinates** (2026-10-06, #162). omabox-still
     bound the first `wl_output` the compositor advertised ("a box has one screen", finding 82) and
     compared that output's pixels with `-g`, `--window`, `--ignore` and the cursor's rectangle, which

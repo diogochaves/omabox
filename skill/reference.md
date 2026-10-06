@@ -109,8 +109,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   rate, `--size host` for the user's own monitor; `omabox mode` shows or changes it on a running box.
 - **More monitors** (a bar on each, windows between them, portrait, ultrawide, mixed scale, an
   unplug): `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below` (SPEC
-  `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last by default), or `omabox monitor add SPEC`
-  / `remove NAME` (an unplug) / `list` on a running box. Coordinates are the layout's;
+  `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last made by default, moving with it), or
+  `omabox monitor add SPEC` / `remove NAME` (an unplug) / `list` on a running box. Coordinates are the
+  layout's (`pixel` refuses one in a gap between monitors);
   `shot --monitor NAME` (`--fit` for a mixed-scale layout, which comes out at the highest scale),
   `drag --shot F --shot-monitor NAME`. Not on NVIDIA headless boxes (`up` says so). In an interactive
   box (the user's) each monitor is a window on their desktop: only when they ask for it.

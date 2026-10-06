@@ -23,17 +23,52 @@ require("default.hypr.toggles")
 local interactive = os.getenv("OMABOX_INTERACTIVE") == "1"
 
 -- More monitors (#122, #123): `omabox monitor add` (and `up --monitor`) make each one and write it to
--- omabox.monitors, "NAME MODE POSITION SCALE" a line (a headless box's as Hyprland made it; an
--- interactive box's window: preferred, auto-right); its rule comes back on every load, so a reload
--- keeps it. Read after the box's own screen rule, which they override for their output.
-local function omabox_extra_monitors()
+-- omabox.monitors, "NAME MODE PLACE SCALE" a line, in the order made. MODE and SCALE as Hyprland made
+-- them (an interactive box's window: preferred, its window's size). PLACE as asked (#161): `right` or
+-- `below` the line before it (the first: the main screen), or XxY. Placed here, on every load (a
+-- reload keeps them) and whenever omabox asks (omabox_place_monitors(), after `mode`, `monitor add`
+-- and `monitor remove`): a main screen of another size, or a window resized, moves the ones placed
+-- next to it; an XxY one stays. One that is not there (an interactive box's window closed) is skipped: the next goes
+-- next to the one before it. Read after the box's own screen rule, which they override for their output.
+local main_screen, main_mode -- set below: the main screen's name (nil: the first other), its mode before it exists
+function omabox_place_monitors()
   local mf = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.monitors")
   if not mf then return end
+  local lines, extra = {}, {}
   for line in mf:lines() do
     local n, m, p, s = line:match("^([%w_-]+) (%S+) (%S+) ([%d.]+)$")
-    if n then hl.monitor({ output = n, mode = m, position = p, scale = tonumber(s) }) end
+    if n then table.insert(lines, { name = n, mode = m, place = p, scale = tonumber(s) }); extra[n] = true end
   end
   mf:close()
+  -- Layout boxes, in logical pixels as Hyprland lays monitors out: the main screen's first.
+  local live, prev = {}, nil
+  local function rect(m) return { x = m.x, y = m.y, w = math.floor(m.width / m.scale), h = math.floor(m.height / m.scale) } end
+  for _, m in ipairs(hl.get_monitors()) do
+    live[m.name] = m
+    if not prev and not extra[m.name] and m.name ~= "FALLBACK" and (not main_screen or m.name == main_screen) then prev = rect(m) end
+  end
+  if not prev and main_mode then
+    local w, h = main_mode:match("^(%d+)x(%d+)")
+    if w then prev = { x = 0, y = 0, w = tonumber(w), h = tonumber(h) } end
+  end
+  for _, l in ipairs(lines) do
+    local W, H = l.mode:match("^(%d+)x(%d+)")
+    local m = live[l.name]
+    if W or m then
+      local w, h
+      if W then w, h = math.floor(tonumber(W) / l.scale), math.floor(tonumber(H) / l.scale)
+      else w, h = math.floor(m.width / m.scale), math.floor(m.height / m.scale) end
+      local x, y = l.place:match("^(%d+)x(%d+)$")
+      local pos = l.place
+      if x then x, y = tonumber(x), tonumber(y)
+      elseif prev and l.place == "right" then x, y = prev.x + prev.w, prev.y
+      elseif prev and l.place == "below" then x, y = prev.x, prev.y + prev.h
+      else pos = l.place == "below" and "auto-down" or "auto-right" end
+      if x then pos = x .. "x" .. y end
+      hl.monitor({ output = l.name, mode = l.mode, position = pos, scale = l.scale })
+      prev = x and { x = x, y = y, w = w, h = h } or nil
+    end
+  end
 end
 
 if interactive then
@@ -124,9 +159,10 @@ else
   local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.mode")
   if f then mode = f:read("l") or mode; f:close() end
   if not mode:find("@") then mode = mode .. "@60" end
-  hl.monitor({ output = waylandScreen and "WAYLAND-1" or "HEADLESS-2", mode = mode, position = "0x0", scale = 1 })
+  main_screen, main_mode = waylandScreen and "WAYLAND-1" or "HEADLESS-2", mode
+  hl.monitor({ output = main_screen, mode = mode, position = "0x0", scale = 1 })
 end
-omabox_extra_monitors()
+omabox_place_monitors()
 hl.config({
   debug = { vfr = true, disable_logs = false },
   -- No reload because a file changed (#140): a box changes when the agent asks (`hyprctl reload`,

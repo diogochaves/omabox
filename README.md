@@ -466,17 +466,21 @@ omabox monitor remove HEADLESS-3          # an unplug: its workspaces move to th
 omabox shot --monitor HEADLESS-4          # one monitor; omabox peek --monitor HEADLESS-4 to watch it
 ```
 
-The first monitor is `--size`'s. Click, drag and pointer coordinates are the layout's (`shot` of the
-whole layout shows where each monitor is), and so are `wait`'s and `--wait`'s, which watch every monitor. They survive a config reload. Not in an NVIDIA box (it draws
-on one Wayland output of its own: `omabox config gpu` another GPU).
+The first monitor is `--size`'s. Each one goes right of (or below) the last one made, and moves with
+it: `omabox mode` on the first, or the one before it unplugged (an X,Y one stays). Click, drag,
+pointer and pixel coordinates are the layout's (`shot` of the whole layout shows where each monitor
+is), and so are `wait`'s and `--wait`'s, which watch every monitor. They survive a config reload. Not
+in an NVIDIA box (it draws on one Wayland output of its own: `omabox config gpu` another GPU).
 
 In a box you drive (`up --interactive --monitor 1280x720`, or `monitor add`), each monitor is a window
 on your desktop, opened on the box's workspace without taking focus, floating at the SPEC's size. Its
 shape is the SPEC's, its size only as big as fits on your screen (a 5120x1440 monitor on a 2560x1440
 screen is a smaller window of the same aspect): for an exact large resolution use a headless box and
-`peek --monitor`. Resizing a window resizes that monitor; closing it unplugs it. The box's own layout
-(right, below) only matters inside the box: your pointer enters a monitor by entering its window.
-This needs aquamarine's fix (`omabox setup --aquamarine`).
+`peek --monitor`. The windows go side by side as the box lays its monitors out (right, below), the
+box's main window floated and made smaller to give them room; when your screen has no room for that,
+omabox says so and the new window opens centred over the others. Resizing a window resizes that
+monitor; closing it unplugs it. Your pointer enters a monitor by entering its window. This needs
+aquamarine's fix (`omabox setup --aquamarine`).
 
 </details>
 

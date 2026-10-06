@@ -318,24 +318,29 @@ Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate 
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
 @ up monitor shot peek
 More monitors (headless boxes): \`up --monitor SPEC\` (repeatable) or \`monitor add SPEC\` on a running box.
-SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one by default, or below it, or
-at X,Y in the layout (which starts at 0,0 on the main screen: no left or above). Scale 1 to 4; Hyprland
-may round it to a whole-pixel size (2560x1440 at 1.5 becomes 1.6). The main screen (--size, \`mode\`)
-is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name). \`monitor remove NAME\` unplugs one: Hyprland
-moves its workspaces to the others. They survive a config reload. Coordinates (click, drag, pointer,
--g) are the layout's; \`shot --monitor NAME\` takes one monitor (a shot of a mixed-scale layout comes
-out at the highest scale: --fit), \`peek --monitor NAME\` opens a window of it. Not on an NVIDIA box
-(it draws on one Wayland output). An interactive box's monitors are windows on your desktop, on its
-workspace, floating at the SPEC's size (within your screen, aspect kept; a resize changes the mode),
-placed right of or below the others in the box; closing one unplugs it. They need aquamarine's fix.
+SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one made by default, or below
+it, or at X,Y in the layout (which starts at 0,0 on the main screen: no left or above). Scale 1 to 4;
+Hyprland may round it to a whole-pixel size (2560x1440 at 1.5 becomes 1.6). The main screen (--size,
+\`mode\`) is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name). \`monitor remove NAME\` unplugs one:
+Hyprland moves its workspaces to the others. They survive a config reload, and one placed right or
+below moves when the one before it changes size (\`mode\`, said) or goes; an X,Y one stays. Coordinates
+(click, drag, pointer, pixel, -g) are the layout's (\`pixel\` refuses a point in a gap between them);
+\`shot --monitor NAME\` takes one monitor (a shot of a mixed-scale layout comes out at the highest
+scale: --fit), \`peek --monitor NAME\` opens a window of it. Not on an NVIDIA box (it draws on one
+Wayland output). An interactive box's monitors are windows on your desktop, on its workspace,
+floating at the SPEC's size (within your screen, aspect kept; a resize changes the mode), placed in
+the box as a headless box's; closing one unplugs it. On your screen they go side by side as the box
+lays them out, its main window floated and made smaller for them; without room for that (it would
+keep under a third of the screen), said, the new one opens centred over them. They need aquamarine's fix.
 @ gpu
 \`gpu release GPU\` (a PCI slot, or nvidia, amd, intel: \`omabox config gpu\` lists them) takes down every
 headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
 render node, and on NVIDIA its /dev/nvidia*). Interactive boxes are left alone (they render on the
 desktop's GPU), and so are boxes on other GPUs. Each box's GPU is in \`ls\` and \`ls --json\` (render).
 @ output
-\`output drop\` removes a headless box's only screen, as a monitor that drops off on wake (standby, a
-KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on its return.
+\`output drop\` removes a headless box's screen (its main one: other monitors stay), as a monitor that
+drops off on wake (standby, a KVM, a dock) does: the shell and apps lose their per-screen windows and
+rebuild them on its return.
 \`output back\` brings it back with the same name, mode and position. --for DURATION does both, the
 screen gone that long; --cycles N repeats, with gaps from 50ms to 2s without --for (a second after
 each return), and stops at the first shell crash (exit 1, its report named).
@@ -3537,6 +3542,16 @@ cmd_pixel() {
     read -r lim_w lim_h < <(jq -r '"\(.size[0]) \(.size[1])"' <<<"$w")
   else
     local ext; ext=$(extent); lim_w=${ext%x*} lim_h=${ext#*x}
+    # Each point on a monitor, not only inside the layout's bounds (#161): in a gap between monitors grim
+    # fails alone, and reads black beside a point on one.
+    local mons off
+    mons=$(hypr_json monitors) || exit $?
+    off=$(jq -r --argjson p "$(printf '%s\n' "${pts[@]}" | jq -s .)" '[.[] | select(.disabled | not)] as $m |
+      [range(0; $p | length; 2) | [$p[.], $p[. + 1]] | select(. as [$x, $y] | $m | all(.[];
+        $x < .x or $y < .y or $x >= .x + (.width / .scale | floor) or $y >= .y + (.height / .scale | floor)))] |
+      if length == 0 or ($m | length) < 2 then empty
+      else "\(.[0][0]),\(.[0][1]) is not on any monitor (\($m | map("\(.name) \(.x),\(.y) \(.width / .scale | floor)x\(.height / .scale | floor)") | join(", ")))" end' <<<"$mons") || off=""
+    [ -z "$off" ] || die "pixel: $off"
   fi
   local x0=99999 y0=99999 x1=0 y1=0
   for ((i = 0; i < ${#pts[@]}; i += 2)); do
@@ -4961,18 +4976,28 @@ cmd_mode() {
   box_alive || die "mode: box '$NAME' went down meanwhile"
   jq --arg s "$want" '.size = $s' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   exec {lock}>&-
+  # Its other monitors placed right of or below it move with its new size (#161); an X,Y one stays.
+  if [ -n "$(monitors_file | grep . || true)" ]; then
+    local moved
+    moved=$(monitors_place) || die "mode: $want is set, but the monitors placed next to it were not moved (omabox monitor list -b $NAME)"
+    [ -z "$moved" ] || say "mode: moved the monitors placed next to it: $moved"
+    monitors_record
+  fi
   echo "$screen"
 }
 
 # More monitors in a headless box (#122): `up --monitor SPEC` and `monitor add/remove/list`. A monitor
 # is a headless output the box's Hyprland makes (`hyprctl output create headless NAME`) with a rule for
 # its mode, position and scale. Each one made is kept in the box's runtime dir, omabox.monitors ("NAME
-# WxH@HZ XxY SCALE" a line, as Hyprland made it), which the box's config reads on every load: a reload
-# keeps them. HEADLESS-2 is the main screen (`--size`, `omabox mode`), never removed here.
+# WxH@HZ PLACE SCALE" a line, mode and scale as Hyprland made them, PLACE as asked: right, below or
+# XxY), which the box's config reads on every load and places them from (share/hyprland.lua's
+# omabox_place_monitors, the one place that does): a reload keeps them, and a main screen of another
+# size (`mode`) moves the ones placed next to it (#161). HEADLESS-2 is the main screen (`--size`,
+# `omabox mode`), never removed here.
 #
 # SPEC: WxH[@HZ][,scale=S][,right|below|X,Y]; scale 1-4 (up to 2 decimals), placed right of the last
-# monitor by default, below it, or at X,Y in the layout (from 0,0: no negative positions, so left and
-# above are an X,Y with the others placed after it). Prints "MODE SCALE PLACE".
+# monitor made by default, below it, or at X,Y in the layout (from 0,0: no negative positions, so left
+# and above are an X,Y with the others placed after it). Prints "MODE SCALE PLACE".
 monitor_spec() {
   local mode="" scale=1 place=right part parts x=""
   IFS=, read -r -a parts <<<"$1"
@@ -5013,10 +5038,21 @@ monitors_record() {
     scale, x, y}))' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   [ -z "$lock" ] || exec {lock}>&-
 }
+# The box's config places the monitors in omabox.monitors as they are now (its omabox_place_monitors);
+# prints the ones that moved, "NAME to X,Y, ...".
+monitors_place() {
+  local m0 res; m0=$(hypr_json monitors) || return 1
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "omabox_place_monitors()" 2>&1) || true
+  [ "$res" = ok ] || { say "placing box '$NAME''s monitors failed: $res"; return 1; }
+  hypr_json monitors | jq -r --argjson a "$m0" 'map(. as $n | select(any($a[]; .name == $n.name and (.x != $n.x or .y != $n.y)))
+    | "\(.name) to \(.x),\(.y)") | join(", ")'
+}
+# omabox.monitors' PLACE for a SPEC's: right, below, or X,Y as XxY.
+monitor_place() { case $1 in right|below) echo "$1" ;; *) echo "${1/,/x}" ;; esac; }
 # monitor_add SPEC NAME: a new monitor (NAME, or the next free HEADLESS-N), placed and made; prints
-# its line as Hyprland made it.
+# its line as Hyprland made it ("NAME MODE XxY SCALE").
 monitor_add() {
-  local spec mode scale place name=$2 m prev x y res end line
+  local spec mode scale place name=$2 m res end line rest
   spec=$(monitor_spec "$1") || exit 1
   read -r mode scale place <<<"$spec"
   m=$(hypr_json monitors)
@@ -5027,25 +5063,27 @@ monitor_add() {
     [[ $name =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor add: --name is letters, digits, - and _, got $name"
     ! jq -e --arg n "$name" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor add: box '$NAME' already has a monitor $name"
   fi
-  # The last monitor made (or the main screen), in layout pixels: the new one goes right of it or below.
-  prev=$(monitors_file | tail -n 1 | cut -d' ' -f1); [ -n "$prev" ] || prev=$(jq -r "$MAIN_SCREEN"'.name // empty' <<<"$m")
-  read -r x y < <(jq -r --arg n "$prev" --arg p "$place" 'first(.[] | select(.name == $n)) |
-    if $p == "below" then "\(.x) \(.y + (.height / .scale | floor))" else "\(.x + (.width / .scale | floor)) \(.y)" end' <<<"$m")
-  [ "$place" = right ] || [ "$place" = below ] || { x=${place%,*} y=${place#*,}; }
-  [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]] || die "monitor add: cannot place it (no monitor $prev to put it next to)"
+  # Written first, as asked: the box's config places it from there, right of (or below) the last one
+  # made, by the size Hyprland gave that one. The scale always set, never left to Hyprland: a new
+  # output with no rule came up at scale 2.
+  rest=$(monitors_file)
+  box_file "$D/run/omabox.monitors" "$( { echo "$rest"; echo "$name $mode $(monitor_place "$place") $scale"; } | grep .)" ||
+    die "monitor add: could not record $name for the box's config reloads"
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create headless "$name" 2>&1) || true
-  [ "$res" = ok ] || die "monitor add: creating $name failed: $res"
-  # The scale always set, never left to Hyprland: a new output with no rule came up at scale 2.
-  res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$name', mode = '$mode', position = '${x}x$y', scale = $scale })" 2>&1) || true
-  [ "$res" = ok ] || { on_box hyprctl output remove "$name" >/dev/null 2>&1 || true; die "monitor add: $name was made, but setting its mode failed: $res"; }
+  [ "$res" = ok ] || { box_file "$D/run/omabox.monitors" "$rest" || true; die "monitor add: creating $name failed: $res"; }
+  monitors_place >/dev/null || { on_box hyprctl output remove "$name" >/dev/null 2>&1 || true; box_file "$D/run/omabox.monitors" "$rest" || true
+    die "monitor add: $name was made, but setting its mode failed"; }
   end=$((SECONDS + 5))
-  until m=$(hypr_json monitors) && line=$(jq -er --arg n "$name" --arg w "${mode%@*}" --arg x "$x" --arg y "$y" 'first(.[] | select(.name == $n and
-      "\(.width)x\(.height)" == $w and (.x | tostring) == $x and (.y | tostring) == $y)) |
-      "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"' <<<"$m" 2>/dev/null); do
-    [ $SECONDS -lt $end ] || die "monitor add: $name did not come up as $mode at $x,$y (omabox monitor list -b $NAME)"
+  until m=$(hypr_json monitors) && line=$(jq -er --arg n "$name" --arg w "${mode%@*}" 'first(.[] | select(.name == $n and
+      "\(.width)x\(.height)" == $w)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"' <<<"$m" 2>/dev/null); do
+    [ $SECONDS -lt $end ] || die "monitor add: $name did not come up as $mode (omabox monitor list -b $NAME)"
     sleep 0.05
   done
-  box_file "$D/run/omabox.monitors" "$( { monitors_file; echo "$line"; } | grep .)" || die "monitor add: could not record $name for the box's config reloads"
+  # Kept with its mode and scale as Hyprland made them (a scale may be rounded): the next one is
+  # placed by those.
+  local made_mode made_scale; read -r _ made_mode _ made_scale <<<"$line"
+  box_file "$D/run/omabox.monitors" "$( { echo "$rest"; echo "$name $made_mode $(monitor_place "$place") $made_scale"; } | grep .)" ||
+    die "monitor add: could not record $name for the box's config reloads"
   monitors_record
   echo "$line"
 }
@@ -5055,48 +5093,140 @@ monitor_add() {
 # So a host rule for aquamarine windows (workspace, silent, no focus, drawn hidden, floating at the
 # SPEC's size) is on from just before the window is made until it is there, at most 5 s: a nested
 # Hyprland of the user's opening a window in that second would be caught too. The size is the SPEC's
-# in the host's logical pixels, kept within 90% of the host's focused monitor (aspect kept, said); the
-# box monitor's mode follows its window. Placed `auto-right` or `auto-down` of the others in the box
-# (X,Y as given); kept in omabox.monitors as "NAME preferred POSITION SCALE" for the box's reloads.
-monitor_add_window() {
-  local spec mode scale place w h hw hh fw fh ws pid n0 before name end m pos res
+# in the host's logical pixels, kept within 90% of the host monitor the box's window is on (aspect
+# kept, said); the box monitor's mode follows its window. In the box it is placed as a headless box's
+# (right of or below the last one made, or X,Y: omabox_place_monitors), kept in omabox.monitors as
+# "NAME preferred PLACE SCALE" for the box's reloads.
+# On the host (#161) the box's windows go side by side on that monitor, as the box lays them out
+# (desk_layout): the main window floated and made smaller to give them room, the rule's `move` putting
+# the new one in its place. Without room (the main window would keep less than a third of the monitor
+# either way), said, and the new window opens over them, centred, as before.
+# A subshell: its EXIT trap (the host rule off) is its own. In `up`'s shell it took the place of up's,
+# and an up failing after it left the box running (#161).
+monitor_add_window() (
+  local spec mode scale place w h hw hh fw fh ws pid n0 before name end m res
+  local clients mons main="" mon="" known=() line addr names=() lay=() rule_move layout="" i
   spec=$(monitor_spec "$1") || exit 1
   read -r mode scale place <<<"$spec"
   w=${mode%%x*} h=${mode#*x}; h=${h%@*}
-  read -r hw hh < <(host_hyprctl -j monitors | jq -r 'map(select(.focused)) | .[0] // empty | "\(.width / .scale | floor) \(.height / .scale | floor)"')
-  [[ $hw =~ ^[0-9]+$ ]] || die "monitor add: cannot read your focused monitor's size"
-  read -r fw fh < <(awk -v w="$w" -v h="$h" -v W="$hw" -v H="$hh" 'BEGIN { f = 1; if (w > W * 0.9) f = W * 0.9 / w; if (h * f > H * 0.9) f = H * 0.9 / h
-    printf "%d %d\n", w * f, h * f }')
-  [ "$fw" = "$w" ] && [ "$fh" = "$h" ] || say "monitor add: ${w}x$h does not fit on your ${hw}x$hh monitor: its window is ${fw}x$fh (same aspect)"
   ws=$(meta workspace); ws=$(ws_check "${ws:-9}") || die "monitor add: box '$NAME' has no usable workspace in box.json"
   # The box's windows are the outer bwrap's on the host (omabox-wlfd connects, then execs it).
   pid=$(ps -o ppid= -p "$(box_pid)" | tr -d ' ')
   [[ $pid =~ ^[0-9]+$ ]] || die "monitor add: cannot find box '$NAME''s windows on your desktop"
-  n0=$(host_hyprctl -j clients | jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length')
+  clients=$(host_hyprctl -j clients) || die "monitor add: cannot read your desktop's windows"
+  mons=$(host_hyprctl -j monitors) || die "monitor add: cannot read your desktop's monitors"
+  n0=$(jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length' <<<"$clients")
+  # Its monitors' windows ($D/monitor-windows, "NAME ADDRESS" a line, in the order made), the ones
+  # still open; the main window is the box's other one, on the box's workspace.
+  while read -r name addr; do
+    if jq -e --arg a "$addr" 'any(.[]; .address == $a)' <<<"$clients" >/dev/null 2>&1; then known+=("$name $addr"); fi
+  done < <(cat "$D/monitor-windows" 2>/dev/null || true)
+  main=$(jq -c --argjson p "$pid" --arg ws "$ws" --argjson k "$(printf '%s\n' "${known[@]}" | jq -R 'select(. != "") | split(" ")[1]' | jq -s .)" \
+    'first(.[] | select(.pid == $p and .workspace.name == $ws and (.address as $a | $k | index($a) | not))) // empty' <<<"$clients")
+  [ -z "$main" ] || mon=$(jq -c --argjson id "$(jq .monitor <<<"$main")" 'first(.[] | select(.id == $id)) // empty' <<<"$mons")
+  [ -n "$mon" ] || mon=$(jq -c 'first(.[] | select(.focused)) // empty' <<<"$mons")
+  read -r hw hh < <(jq -r '"\(.width / .scale | floor) \(.height / .scale | floor)"' <<<"${mon:-null}")
+  [[ $hw =~ ^[0-9]+$ ]] || die "monitor add: cannot read your monitor's size"
+  read -r fw fh < <(awk -v w="$w" -v h="$h" -v W="$hw" -v H="$hh" 'BEGIN { f = 1; if (w > W * 0.9) f = W * 0.9 / w; if (h * f > H * 0.9) f = H * 0.9 / h
+    printf "%d %d\n", w * f, h * f }')
+  [ "$fw" = "$w" ] && [ "$fh" = "$h" ] || say "monitor add: ${w}x$h does not fit on your ${hw}x$hh monitor: its window is ${fw}x$fh (same aspect)"
+  # Centred on the monitor, unless it has room beside the others (below). Always given: a rule of the
+  # same name keeps an earlier one's `move` (seen: a window with no room opened where the last one went).
+  rule_move=", move = '$(((hw - fw) / 2)) $(((hh - fh) / 2))'"
+  # Side by side (#161): the monitor's free area (its bar's room and the outer gaps taken off), the
+  # main window, then each monitor's window at its size, in the order made.
+  if [ -n "$main" ]; then
+    local gap bw ax ay aw ah mx my
+    gap=$(host_hyprctl -j getoption general:gaps_out | jq -r '(.css // (.int | tostring)) | split(" ")[0] | tonumber? // empty' 2>/dev/null) || gap=""
+    bw=$(host_hyprctl -j getoption general:border_size | jq -r '.int // empty' 2>/dev/null) || bw=""
+    [[ $gap =~ ^[0-9]+$ ]] || gap=10
+    [[ $bw =~ ^[0-9]+$ ]] || bw=2
+    gap=$((gap + bw))
+    read -r mx my ax ay aw ah < <(jq -r --argjson g "$gap" '(.reserved // [0, 0, 0, 0]) as $r |
+      "\(.x) \(.y) \(.x + $r[0] + $g) \(.y + $r[1] + $g) \((.width / .scale | floor) - $r[0] - $r[2] - 2 * $g) \((.height / .scale | floor) - $r[1] - $r[3] - 2 * $g)"' <<<"$mon")
+    for line in "${known[@]}"; do
+      name=${line%% *} addr=${line#* }
+      names+=("$addr")
+      lay+=("$(awk -v n="$name" '$1 == n { print $3; exit }' <(monitors_file)) $(jq -r --arg a "$addr" 'first(.[] | select(.address == $a)) | "\(.size[0]) \(.size[1])"' <<<"$clients")")
+    done
+    layout=$(printf '%s\n' "$aw $ah $gap" "${lay[@]}" "$(monitor_place "$place") $fw $fh" | grep . | desk_layout)
+    if [ "${layout%% *}" = room ]; then
+      # The new window's place, last line, relative to its monitor (as a rule's `move` takes it).
+      read -r i m < <(tail -n 1 <<<"$layout")
+      rule_move=", move = '$((ax - mx + i)) $((ay - my + m))'"
+    else
+      say "monitor add: your ${hw}x$hh monitor has no room for box '$NAME''s windows side by side: the new one opens over them (drag it, or ask for a smaller one)"
+      layout=""
+    fi
+  fi
   before=$(hypr_json monitors | jq -c 'map(.name)')
   MON_RULE_ON=1
   trap '[ -z "${MON_RULE_ON:-}" ] || host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true' EXIT
-  host_eval "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine\$' }, workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = true, size = '$fw $fh' })"
+  host_eval "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine\$' }, workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = true, size = '$fw $fh'$rule_move })"
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create wayland 2>&1) || true
   [ "$res" = ok ] || die "monitor add: the box could not make another window: $res"
   end=$((SECONDS + 5))
-  until [ "$(host_hyprctl -j clients | jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length')" -gt "$n0" ]; do
+  until clients=$(host_hyprctl -j clients) && [ "$(jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length' <<<"$clients")" -gt "$n0" ]; do
     [ $SECONDS -lt $end ] || die "monitor add: no new window of box '$NAME' on your desktop in 5 s"
     sleep 0.05
   done
   host_eval "omabox_monitor_rule:set_enabled(false)"; MON_RULE_ON=""
+  # The new window: the box's one that is neither the main one nor a known monitor's.
+  addr=$(jq -r --argjson p "$pid" --arg m "$(jq -r '.address // empty' <<<"${main:-null}")" --argjson k "$(printf '%s\n' "${names[@]}" | jq -R 'select(. != "")' | jq -s .)" \
+    'first(.[] | select(.pid == $p and .address != $m and (.address as $a | $k | index($a) | not))) | .address // empty' <<<"$clients")
   end=$((SECONDS + 5))
   until m=$(hypr_json monitors) && name=$(jq -er --argjson b "$before" 'map(.name) - $b | .[0]' <<<"$m" 2>/dev/null); do
     [ $SECONDS -lt $end ] || die "monitor add: the box lists no new monitor"
     sleep 0.05
   done
-  case $place in right) pos="auto-right" ;; below) pos="auto-down" ;; *) pos=${place/,/x} ;; esac
-  res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$name', mode = 'preferred', position = '$pos', scale = $scale })" 2>&1) || true
-  [ "$res" = ok ] || die "monitor add: $name is there, but setting its place and scale failed: $res"
-  box_file "$D/run/omabox.monitors" "$( { monitors_file; echo "$name preferred $pos $scale"; } | grep .)" || die "monitor add: could not record $name for the box's config reloads"
+  [ -z "$addr" ] || echo "$name $addr" >> "$D/monitor-windows"
+  # The others to their places: the main window floated and made smaller (its box screen follows), the
+  # monitors' windows moved. Our own windows on the box's workspace: no focus moves.
+  if [ -n "$layout" ]; then
+    local mw mh x y
+    read -r mw mh < <(head -n 1 <<<"$layout" | cut -d" " -f2-)
+    addr=$(jq -r .address <<<"$main")
+    [ "$(jq -r .floating <<<"$main")" = true ] || host_eval "hl.dispatch(hl.dsp.window.float({ action = 'enable', window = 'address:$addr' }))"
+    host_eval "hl.dispatch(hl.dsp.window.resize({ window = 'address:$addr', x = $mw, y = $mh }))"
+    host_eval "hl.dispatch(hl.dsp.window.move({ window = 'address:$addr', x = $ax, y = $ay }))"
+    i=0
+    while read -r x y; do
+      [ $i -lt ${#names[@]} ] || break
+      host_eval "hl.dispatch(hl.dsp.window.move({ window = 'address:${names[i]}', x = $((ax + x)), y = $((ay + y)) }))"
+      i=$((i + 1))
+    done < <(tail -n +2 <<<"$layout")
+  fi
+  box_file "$D/run/omabox.monitors" "$( { monitors_file; echo "$name preferred $(monitor_place "$place") $scale"; } | grep .)" || die "monitor add: could not record $name for the box's config reloads"
+  monitors_place >/dev/null || die "monitor add: $name is there, but setting its place and scale failed"
   sleep 0.3
   monitors_record
   hypr_json monitors | jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"'
+)
+# An interactive box's windows side by side on the host (#161), from stdin: "AW AH GAP" (the free
+# area), then "PLACE W H" a window, in the order made (right, below; an XxY one goes right: the host
+# has no room to mirror a layout's gaps). The main window starts at the area's corner as large as the
+# area, and gives up what the others need. Prints "room MW MH" (the main window's size) and "X Y" a
+# window (from the area's corner), or "none": what is left to the main window is under a third of the
+# area either way, or the others do not fit beside it.
+desk_layout() {
+  awk 'NR == 1 { aw = $1; ah = $2; g = $3; next }
+    { n++; pl[n] = $1; w[n] = $2; h[n] = $3 }
+    function lay(mw, mh,   i, px, py, pw, ph) {
+      px = 0; py = 0; pw = mw; ph = mh; ex = mw; ey = mh
+      for (i = 1; i <= n; i++) {
+        if (pl[i] == "below") { x[i] = px; y[i] = py + ph + g } else { x[i] = px + pw + g; y[i] = py }
+        px = x[i]; py = y[i]; pw = w[i]; ph = h[i]
+        if (px + pw > ex) ex = px + pw
+        if (py + ph > ey) ey = py + ph
+      }
+    }
+    END {
+      lay(aw, ah); mw = aw - (ex > aw ? ex - aw : 0); mh = ah - (ey > ah ? ey - ah : 0)
+      lay(mw, mh)
+      if (ex > aw || ey > ah || mw * 3 < aw || mh * 3 < ah) { print "none"; exit }
+      print "room", mw, mh
+      for (i = 1; i <= n; i++) print x[i], y[i]
+    }'
 }
 cmd_monitor() {
   local name="" act="" args=() mname="" json=0
@@ -5157,8 +5287,11 @@ cmd_monitor() {
     [ $SECONDS -lt $end ] || die "monitor remove: $out still listed 5 s after its removal"
     sleep 0.05
   done
+  # One placed right of or below it now goes next to the one before it, as a reload would place it.
+  local moved
+  moved=$(monitors_place) || die "monitor remove: $out removed, but the monitors placed next to it were not moved (omabox monitor list -b $NAME)"
   monitors_record
-  say "box '$NAME': $out removed (its workspaces moved to the other monitors, as on an unplug)"
+  say "box '$NAME': $out removed (its workspaces moved to the other monitors, as on an unplug)${moved:+; moved $moved}"
 }
 
 # output drop / back (#146, finding 210): the box's only screen gone and back, as a monitor dropping
@@ -5189,7 +5322,11 @@ cmd_output() {
   if [ "$act" = back ]; then output_back; return; fi
   if [ -z "$gap$cycles" ]; then
     output_drop
-    say "box '$NAME' has no screen now: omabox output back -b $NAME"
+    # With other monitors one is still there (#161).
+    local left gone; left=$(hypr_json monitors | jq -r 'map(select((.disabled | not) and .name != "FALLBACK") | .name) | join(", ")') || left=""
+    gone=$(cut -d' ' -f1 "$D/output.dropped") || gone=""
+    if [ -n "$left" ]; then say "box '$NAME' has its main screen ($gone) off now, $left still on: omabox output back -b $NAME"
+    else say "box '$NAME' has no screen now: omabox output back -b $NAME"; fi
     return
   fi
   # Cycles: gone for --for (or, without it, gaps from 50 ms to 2 s in turn: one of them found the crash
@@ -6942,7 +7079,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output gpu ports env path down save clip "
+BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu ports env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
