@@ -3608,6 +3608,23 @@ from them.
     in t_gdb (refusals, a backtrace to main, a gdb run in the box still refused, a stopped Hyprland
     backtraced and left stopped, --pid of a box sleep and of one it has not, --shell without a shell,
     --watch then a second gdb refused, a SIGSEGV: the box dead and the log with the signal and main).
+212. **`shot --burst N` [--every] [--diff] [--sheet] [--after -- ACTION]** (2026-10-06, #132). A
+    transition, a hover, an animation's end or a README demo needs frames over time; four agents built
+    their own grabbers (a grim loop in the box through `run -d`, loops of `omabox shot` stitched with
+    magick, frames compared with `magick compare`). A whole `shot` of a crop is ~50 ms (its window and
+    hang checks), a bare `on_box grim` ~16 ms: the burst is a host-side loop of bare grabs into a
+    folder (`frame-001.png`...), as fast as they come or `--every` apart by the clock, so the box writes
+    nothing that lands on the host (no files of its own to move, finding 168's kind). Each frame is
+    recorded as a shot (`click --in` any), a window off screen primed once. `--after -- ACTION` runs
+    `omabox -b NAME ACTION` beside the burst once the first frame is there (only commands that act;
+    its exit code is the burst's). `--diff`: the box around the pixels that differ from the frame
+    before (`magick ... -compose difference -threshold 0 -format %@`), or `same`. `--sheet`: `magick
+    montage`, tiles at most 320 px wide, 5 a row, labelled `N: TIMEs`, 8-bit: twelve 600x200 frames
+    in one image under 1700 px wide. ImageMagick (Omarchy's base packages) only for those two, said
+    when missing. Jailed agents: refused (each frame would need a file of the jail's, as relay_shot
+    passes one). Checks: t_unit_pixel (refusals), t_burst (5 frames 100 ms apart at 200x200, the
+    summary, --after keys with --diff showing a change after the first frame, the sheet, click --in a
+    frame).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

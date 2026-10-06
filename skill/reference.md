@@ -301,6 +301,10 @@ servers), then:
   save NAME`, then `up --from NAME`.
 - **Focus loss**: open another window (`omabox run -d -- foot`) or the Omarchy menu (`keys
   super+space`) while the app holds a drag (`pointer -- down`, ..., `up`), then come back.
+- **A transition or an animation** (a panel sliding in, a hover fading): `omabox shot -g "X,Y WxH"
+  --burst 12 --sheet --diff --after -- keys super+space`: the first frame, then the keys, the rest as
+  fast as they come (~16 ms a crop; `--every 100ms` for a slower one), each frame's time and what
+  changed from the one before, and one contact sheet to read instead of twelve shots.
 - **A demo or README capture**: shots of a box are clean (a fresh HOME, no notifications of the
   user's). Video: `omabox run -- sh -c 'setsid wf-recorder -y -f ~/demo.mp4 >~/wf.log 2>&1 &'`, act,
   then `omabox run -- pkill -INT -x wf-recorder`. It finishes on its next frame, and a still screen

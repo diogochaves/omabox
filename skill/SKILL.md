@@ -137,7 +137,8 @@ under test (a menu, a field, a bar widget), `--fit 1280` to check a whole screen
 to read small text); click on those with `--in`. `--wait`'s `at X,Y WxH` is the last change only:
 where to look, not everything that changed. A colour is `omabox pixel X Y` (`--window SEL`: the app's
 own, before Omarchy's window opacity blends it), never read off a shot; `shot -g "X,Y 40x30" --zoom 8`
-shows a 1 px border or a glyph's edge unblended.
+shows a 1 px border or a glyph's edge unblended. Frames over time (a transition): `shot --burst N
+--sheet --after -- ACTION`, one contact sheet, never a loop of shots.
 
 **The pointer is test state.** Under Omarchy's focus-follows-mouse the window the pointer rests on,
 or last passed over, takes focus, and gets it back when a menu or panel closes. A box's pointer starts

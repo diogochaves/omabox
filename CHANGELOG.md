@@ -20,6 +20,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox pixel X Y`** prints the colour of a screen or window pixel (`#rrggbb`, several points
   in one call, `--json`, `--in SHOT`), and **`shot -g … --zoom N`** shows a small crop with each
   pixel N x N, unblended: colours and 1 px details without an image tool of your own (#133).
+- **`shot --burst N [--every DURATION] [--diff] [--sheet] [--after -- ACTION]`**: frames of a
+  transition into a folder, each with its time and (`--diff`) what changed from the one before, the
+  action sent after the first frame, and one contact sheet of them all (#132).
 - **`omabox output drop [--for DURATION] [--cycles N]` and `output back`**: a headless box's screen
   goes and comes back under its own name, mode and position, as a monitor that drops off on wake
   does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
