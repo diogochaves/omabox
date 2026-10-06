@@ -3570,6 +3570,22 @@ from them.
     missing. Checks: t_unit_pixel (refusals), t_pixel (a background set with `hl.config`, a foot of a
     known colour through --window and --json, refusals off screen and window, a 10x10 zoom across the
     window's corner is 80x80 with the plain crop's colours only, pixel and click --in it map back).
+210. **`omabox output drop [--for DURATION] [--cycles N]` and `output back`** (2026-10-06, #146). A box
+    reproduced a real Quickshell crash on wake from monitor standby every time (a plugin's QML `parent:`
+    binding flipping while Qt attached a window), by `hyprctl output remove HEADLESS-2` and `output
+    create headless`, while the skill said a box cannot do hotplug. By hand the output came back under a
+    new name (HEADLESS-3, ..., -24) at 960x540: the box's config rule names HEADLESS-2, and the mode
+    from `up --size` or `omabox mode` went with it. `drop` keeps "NAME MODE XxY SCALE" in
+    $D/output.dropped (host side) and removes the output (Hyprland shows FALLBACK meanwhile); `back`
+    creates it under that name and sets the mode, position and scale with `hl.monitor`, done when
+    `monitors` says so. `--for` does both; `--cycles N` repeats (gaps from 50 ms to 2 s in turn without
+    --for, a second after each return) and stops at the first shell crash (Quickshell's report folders,
+    shell_crashes): exit 1, the report's path. Headless boxes only: an interactive box's screen is its
+    window, an NVIDIA box's a private Wayland output (not tried). The stock shell logs "There are no
+    outputs - creating placeholder screen" and `Got removal for monitor "FALLBACK"` and survives 4
+    cycles at 50 ms-2 s here. Checks in t_output (the refusals, drop and back by hand, three 300 ms
+    cycles under the same name and mode, the shell's log, a shot of the old size, a SIGSEGV to the shell
+    mid-cycles ending them with exit 1 and its report).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

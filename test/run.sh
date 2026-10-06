@@ -5063,6 +5063,41 @@ t_pixel() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# output drop/back (#146, finding 210): the box's only screen gone and back, under its name and mode;
+# the shell sees it go (its log) and survives; the refusals.
+t_output() {
+  local B=$P-out out rc
+  check_match "output: drop or back" "drop or back" "$(ob output -b "$P-x" 2>&1)"
+  check_match "output back takes no --for" "takes no --for" "$(ob output -b "$P-x" back --for 1s 2>&1)"
+  check_match "output --for junk" "takes a duration" "$(ob output -b "$P-x" drop --for soon 2>&1)"
+  check_match "output --cycles 0" "takes 1-999" "$(ob output -b "$P-x" drop --cycles 0 2>&1)"
+  check "output is a jailed agent's" lib broker_check output
+  ob up "$B" --size 1280x720 --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  local before; before=$(ob mode -b "$B")
+  check_match "output back with the screen there: refused" "has its screen" "$(ob output -b "$B" back 2>&1)"
+  ob output -b "$B" drop >/dev/null 2>&1; rc=$?
+  check_eq "output drop: exit 0" 0 "$rc"
+  check_eq "...the box lists no screen of its own" "[]" "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK")]')"
+  check_match "...a second drop: nothing to drop" "no screen to drop" "$(ob output -b "$B" drop 2>&1)"
+  out=$(ob output -b "$B" back); rc=$?
+  check_eq "output back: the same name and mode ($before)" "0 $before" "$rc $out"
+  out=$(ob output -b "$B" drop --for 300ms --cycles 3); rc=$?
+  check_eq "drop --for 300ms --cycles 3: exit 0" 0 "$rc"
+  check_eq "...three cycles, each back as before, the shell running" \
+    "$(for i in 1 2 3; do echo "cycle $i/3: gone for 0.30s, back as $before; shell running"; done)" "$out"
+  check_eq "...the box's mode as before" "$before" "$(ob mode -b "$B")"
+  check "...the shell saw the screen go (its log)" until_ok 5 bash -c "'$CLI' log -b '$B' shell | grep -q 'There are no outputs'"
+  check "...a shot is the size it was" bash -c "'$CLI' shot -b '$B' -o '$TMP/out.png' >/dev/null 2>&1 && file '$TMP/out.png' | grep -q '1280 x 720,'"
+  # A shell crash ends the cycles, its report named (a SIGSEGV stands in for a plugin's crash).
+  ( sleep 2.5; ob run -b "$B" -- pkill -SEGV -x quickshell ) & local k=$!
+  out=$(ob output -b "$B" drop --for 1s --cycles 8 2>&1); rc=$?
+  wait "$k"
+  check_eq "a shell crash during the cycles: exit 1" 1 "$rc"
+  check_match "...said, with its report" "shell crashed"$'\n'"omabox: output: the shell crashed in cycle [1-8] \(report: $(ob path "$B")/home/\.cache/quickshell/crashes/[^/]+/report\.txt;" "$out"
+  check_eq "...the screen is back all the same" "$before" "$(ob mode -b "$B")"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before
 # any box is asked.
 t_unit_pointer() {
@@ -5635,7 +5670,7 @@ t_inspect() {
 
 UNIT=(t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_output t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

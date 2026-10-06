@@ -93,6 +93,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
+  omabox output [-b NAME] (drop [--for DURATION] [--cycles N] | back)   the screen gone (a monitor off), and back
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
@@ -277,6 +278,12 @@ At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box
 @ up mode gpu run
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
+@ output
+\`output drop\` removes a headless box's only screen, as a monitor that drops off on wake (standby, a
+KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on its return.
+\`output back\` brings it back with the same name, mode and position. --for DURATION does both, the
+screen gone that long; --cycles N repeats, with gaps from 50ms to 2s without --for (a second after
+each return), and stops at the first shell crash (exit 1, its report named).
 @ guard host
 The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
 exist, so a window, hyprctl or grim outside a box fails instead of reaching your desktop; omabox
@@ -4486,6 +4493,102 @@ cmd_mode() {
   echo "$screen"
 }
 
+# output drop / back (#146, finding 210): the box's only screen gone and back, as a monitor dropping
+# off on wake (deep standby, a KVM, a dock) is: per-screen windows torn down and rebuilt, where shell
+# plugins and apps crash (a real one was found this way). back re-creates it under the same name, mode,
+# position and scale: a plain `output create headless` named it HEADLESS-3, -4, ... at 960x540.
+# What was dropped is kept in $D/output.dropped ("NAME MODE XxY SCALE").
+OUTPUT_GAPS=(50 300 1000 2000 100 600 1500 200)
+cmd_output() {
+  local name="" act="" gap="" cycles=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --for) optarg "$@"; gap=$(ms_duration "$2") && [ "$gap" -le 60000 ] || die "output: --for takes a duration up to 60s, like 300ms or 2s, got $2"; shift ;;
+      --cycles) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,2}$ ]] || die "output: --cycles takes 1-999, got $2"; cycles=$2; shift ;;
+      -h|--help) usage output; return ;;
+      drop|back) [ -z "$act" ] || die "output: drop or back, not both"; act=$1 ;;
+      -*) die "output: unknown option $1" ;;
+      *) die "output: drop or back, got $1" ;;
+    esac
+    shift
+  done
+  [ -n "$act" ] || die "output: drop or back (omabox output drop --for 300ms: gone, then back)"
+  [ "$act" = drop ] || { [ -z "$gap$cycles" ]; } || die "output back takes no --for or --cycles"
+  select_box "$name"; need_box
+  [ "$(meta mode)" = headless ] || die "output: box '$NAME' is interactive: its screen is its window on your desktop"
+  [ "$(meta wayland_screen)" != true ] || die "output: box '$NAME' draws on a private Wayland output (NVIDIA): only a headless output is dropped"
+  if [ "$act" = back ]; then output_back; return; fi
+  if [ -z "$gap$cycles" ]; then
+    output_drop
+    say "box '$NAME' has no screen now: omabox output back -b $NAME"
+    return
+  fi
+  # Cycles: gone for --for (or, without it, gaps from 50 ms to 2 s in turn: one of them found the crash
+  # in #146), back, a second to rebuild. The first shell crash ends them: that is what they look for.
+  local i g n0 n sh=0 screen
+  [ "$(meta shell)" = true ] && sh=1
+  n0=$(shell_crashes)
+  for ((i = 1; i <= ${cycles:-1}; i++)); do
+    g=${gap:-${OUTPUT_GAPS[(i - 1) % ${#OUTPUT_GAPS[@]}]}}
+    output_drop
+    sleep "$(awk -v m="$g" 'BEGIN { printf "%.3f", m / 1000 }')"
+    screen=$(output_back)
+    sleep 1
+    box_alive || die "output: box '$NAME' went down in cycle $i (its Hyprland: omabox log -b $NAME hyprland)"
+    n=0; [ $sh = 0 ] || n=$(shell_crashes)
+    if [ "$n" -gt "$n0" ]; then
+      echo "cycle $i/${cycles:-1}: gone for $(ms_s "$g"), back as $screen; shell crashed"
+      echo "$n" > "$D/shell-crashes-seen" 2>/dev/null || true
+      local new; new=$(find "$D/home/.cache/quickshell/crashes" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' 2>/dev/null | sort -rn | head -n 1) || true
+      new=${new#* }
+      [[ $new =~ ^[A-Za-z0-9_.-]+$ ]] && new="report: $D/home/.cache/quickshell/crashes/$new/report.txt; " || new=""
+      die "output: the shell crashed in cycle $i (${new}omabox log -b $NAME shell)"
+    fi
+    echo "cycle $i/${cycles:-1}: gone for $(ms_s "$g"), back as $screen$([ $sh = 0 ] || echo "; shell $(shell_state)")"
+  done
+}
+# The screen away: kept in $D/output.dropped, removed, gone from `monitors` within 5 s.
+output_drop() {
+  local m; m=$(hypr_json monitors) || exit $?
+  local rec; rec=$(jq -r 'map(select(.disabled | not)) | .[0] // empty |
+    "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"' <<<"$m")
+  [ -n "$rec" ] && [ "${rec%% *}" != FALLBACK ] || die "output: box '$NAME' has no screen to drop (omabox output back -b $NAME)"
+  local out=${rec%% *} res
+  [[ $out =~ ^[A-Za-z0-9_-]+$ ]] || die "output: the screen's name is not one to pass on: $out"
+  echo "$rec" > "$D/output.dropped"
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output remove "$out" 2>&1) || true
+  [ "$res" = ok ] || die "output: removing $out failed: $res"
+  local end=$((SECONDS + 5))
+  until m=$(hypr_json monitors) && ! jq -e --arg n "$out" 'any(.[]; .name == $n)' <<<"$m" >/dev/null; do
+    [ $SECONDS -lt $end ] || die "output: $out still listed 5 s after its removal"
+    sleep 0.05
+  done
+}
+# The screen back as it was: same name (the box's config rule names it), mode, position and scale.
+output_back() {
+  local rec out mode pos scale res screen
+  rec=$(cat "$D/output.dropped" 2>/dev/null) || {
+    screen=$(box_screen)
+    [ -z "$screen" ] || die "output: box '$NAME' has its screen ($screen): nothing to bring back"
+    die "output: box '$NAME' has no screen and no record of the one it had: omabox down $NAME"
+  }
+  read -r out mode pos scale <<<"$rec"
+  [[ $out =~ ^[A-Za-z0-9_-]+$ && $mode =~ ^[0-9]+x[0-9]+@[0-9.]+$ && $pos =~ ^-?[0-9]+x-?[0-9]+$ && $scale =~ ^[0-9.]+$ ]] ||
+    die "output: $D/output.dropped is not one omabox wrote: $rec"
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create headless "$out" 2>&1) || true
+  [ "$res" = ok ] || die "output: creating $out again failed: $res"
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$out', mode = '$mode', position = '$pos', scale = $scale })" 2>&1) || true
+  [ "$res" = ok ] || die "output: $out is back, but setting its mode failed: $res"
+  local end=$((SECONDS + 5))
+  until screen=$(box_screen) && [ "$screen" = "$out $mode" ]; do
+    [ $SECONDS -lt $end ] || die "output: $out came back as ${screen:-nothing}, not $mode"
+    sleep 0.05
+  done
+  rm -f -- "$D/output.dropped"
+  echo "$screen"
+}
+
 # GPU engine time of this box's processes, as % of wall time, by process name. Host-wide tools sum
 # DRM fdinfo by name, so a box's Hyprland and quickshell merge with the real ones; here a process
 # belongs to the box when it is in the box's pid namespace. Any driver that reports drm-engine-*;
@@ -5734,7 +5837,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|pixel|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|reload|mode|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|pixel|windows|keys|click|pointer|drag|wait|hyprctl|lua|log|logs|events|restart-shell|reload|mode|output|gpu|env|path|down|ls|list) ;;
     # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
     ports) ;;
     help|-h|--help|version|-V|--version) ;;
@@ -6008,7 +6111,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click pointer drag wait hyprctl lua log logs events peek restart-shell reload mode gpu ports env path down save clip "
+BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click pointer drag wait hyprctl lua log logs events peek restart-shell reload mode output gpu ports env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -6070,6 +6173,7 @@ main() {
     restart-shell) cmd_restart_shell "$@" ;;
     reload) cmd_reload "$@" ;;
     mode) cmd_mode "$@" ;;
+    output) cmd_output "$@" ;;
     gpu) cmd_gpu "$@" ;;
     ports) cmd_ports "$@" ;;
     env) cmd_env "$@" ;;

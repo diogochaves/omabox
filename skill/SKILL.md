@@ -300,8 +300,10 @@ into the box yourself (`keys -t`, `run -- wl-copy`).
 A box is a desktop without hardware. It has:
 
 - one **virtual screen** (any size and refresh rate, scale 1): no real monitor, so no real modes, HDR,
-  VRR, 10-bit, colour management, scale, hotplug or DPMS; several outputs only by hand (`omabox
-  hyprctl output create headless NAME`; a reload drops it);
+  VRR, 10-bit, colour management, scale or DPMS; several outputs only by hand (`omabox
+  hyprctl output create headless NAME`; a reload drops it). The screen going and coming back (a
+  monitor dropping off on wake, a KVM, a dock) *can* be tested: `omabox output drop --for 300ms`
+  (`--cycles 20`), which stops at the first shell crash;
 - no **system bus**: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit;
 - no **devices**: no audio (PipeWire), no `/dev/i2c` (DDC/CI monitor brightness), no backlight, no
   real keyboards/mice/touchpads/tablets, cameras, USB, printers;

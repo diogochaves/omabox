@@ -281,6 +281,10 @@ servers), then:
   Return`, `omabox wait window myapp`; `omabox windows --json` has the class to compare with the
   entry's name (`StartupWMClass`), and `omabox log apps` what the launcher ran. A launcher start goes
   through omabox's `uwsm-app` stand-in: a plain process, without the user's uwsm environment.
+- **The monitor dropping off and back** (wake from standby, a KVM, a dock): `omabox output drop --for
+  300ms --cycles 20`. Per-screen windows (a bar, a panel, an app's) are torn down and rebuilt; the
+  cycles stop at the first shell crash, naming its report. `output drop` and `output back` by hand
+  to look at the box in between (`omabox log shell`: "There are no outputs").
 - **Theme switch while it is open**: `omabox run -- omarchy-theme-set NAME`, `omabox wait still`,
   `omabox shot --window myapp`, `omabox pixel --window myapp X Y` for a colour. The colours are in the box's
   `~/.local/state/omarchy/current/theme/colors.toml`; `omarchy-theme-set` replaces that whole
