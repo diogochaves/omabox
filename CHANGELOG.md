@@ -61,6 +61,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **Nothing inside `~/.config/omarchy` goes into a box but `plugins/` and `themes/`**: `--ro-bind`
+  mounted a file or folder inside it (`api-keys.env`, `hooks/`), refusing only the folder itself.
+  The new `--seed` gets the same refusal, never writes through a link already in its DEST (an
+  earlier seed's, or a save's: it overwrote the host file the link named), and takes a relative
+  SRC from inside ai-jail (#159).
 - **`wait still` and every `--wait` end on a box whose Hyprland stopped answering** (stopped, or
   deadlocked by a plugin under test): "its Hyprland did not answer (hung? …)", exit 1, where they
   waited forever whatever `--timeout` said (#124).

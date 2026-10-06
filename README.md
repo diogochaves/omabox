@@ -381,7 +381,8 @@ blocks the network and every other socket, omabox's included), or see
   in `~/.config/omabox/ro-bind` (one per line) or `--ro-bind`; mise's toolchains (so `omabox run`
   finds node, python, uv as on the host), the `--plugin` dirs, and your git `user.name` and
   `user.email`. Nothing else of your HOME. Refused whatever you pass: anything that is or contains
-  HOME, `~/.config/omarchy` or `/tmp`, the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
+  HOME, `~/.config/omarchy` or `/tmp`, anything inside `~/.config/omarchy` but `plugins/` and
+  `themes/` (`api-keys.env`, your hooks), the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
   `~/.password-store`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, gh's,
   gcloud's, azure's and 1Password's `op` config), omabox's own saves and box HOMEs
   (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys`.
@@ -437,7 +438,7 @@ blocks the network and every other socket, omabox's included), or see
   X11 display used to catch X11 apps started on the host).
 - `--ro-bind DIR:DEST` mounts a dir somewhere else (`--ro-bind ~/nas:/mnt/nas`, to test path
   mapping); DEST cannot be `/`, a system dir, `/run`, `/tmp` itself, `/opt/omabox`, the box HOME, or
-  a dir above those. A plugin dir inside `~/.config/omarchy/plugins` is fine. A throwaway `run`
+  a dir above those. A plugin dir inside `~/.config/omarchy/plugins` is fine (a theme in `themes/` too). A throwaway `run`
   outside a repo mounts nothing of the current dir.
 - `--seed SRC:DEST` (next release) copies a file or folder into the box HOME before the session
   starts (`--seed ./fixture.json:.config/myplugin/config.json`), for a plugin that reads its config

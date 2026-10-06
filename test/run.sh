@@ -501,6 +501,28 @@ t_unit_mount_rules() {
   check_fails "a repo inside /tmp is fine" lib refuse_src "$TMP"
   check_fails "a plugin inside ~/.config/omarchy/plugins is fine" lib refuse_src "$HOME/.config/omarchy/plugins/x"
   check "HOME/.config/omarchy itself refused (api keys)" lib refuse_src "$HOME/.config/omarchy"
+  # finding 228: what is inside ~/.config/omarchy, as real files in a fake HOME (a missing path passed
+  # here once for the wrong reason). Only plugins/ and themes/; seed_home's look (branding, extensions).
+  local fh=$TMP/mr-home o; o=$fh/.config/omarchy
+  # shellcheck disable=SC2329 # called below
+  fhlib() { env HOME="$fh" bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
+  mkdir -p "$o/plugins/x.y" "$o/themes/t" "$o/hooks" "$o/branding" "$fh/proj/fixtures"
+  echo fake > "$o/api-keys.env"; echo 'echo hi' > "$o/hooks/post-update"
+  check_match "a file inside ~/.config/omarchy refused (api-keys.env)" "it is inside .*/.config/omarchy/" "$(fhlib refuse_src "$o/api-keys.env")"
+  check "...a hook too" fhlib refuse_src "$o/hooks/post-update"
+  check "...branding, outside seed_home's look" fhlib refuse_src "$o/branding"
+  check_fails "...in seed_home's look it is fine" fhlib refuse_src "$o/branding" look
+  check_fails "...a plugin dir under it is fine" fhlib refuse_src "$o/plugins/x.y"
+  check_fails "...a theme dir too" fhlib refuse_src "$o/themes/t"
+  mv "$o" "$fh/omarchy-real"; ln -s ../omarchy-real "$o"   # ~/.config/omarchy a dotfiles link
+  check "...through a dotfiles link, api-keys.env still refused" fhlib refuse_src "$fh/omarchy-real/api-keys.env"
+  check "...and the dir that holds it" fhlib refuse_src "$fh/omarchy-real"
+  check_fails "...a plugin there still fine" fhlib refuse_src "$fh/omarchy-real/plugins/x.y"
+  # A jailed caller's relative --seed SRC goes absolute (the broker runs in /); DEST is the box's.
+  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$TMP/mr-relay"; chmod +x "$TMP/mr-relay"
+  local out; out=$(cd "$fh/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --seed fixtures:.config/x --seed nowhere:y' _ "$TMP/lib/bin/omabox" "$TMP/mr-relay")
+  check_match "relay: a relative --seed SRC goes absolute, DEST as given" "\|--seed\|$fh/proj/fixtures:\.config/x\|" "$out"
+  check_match "...one that is not there as given, for the broker to say so" "\|--seed\|nowhere:y\|" "$out"
   # #98: omabox's own saves and box HOMEs, and other tools' tokens
   local x
   for x in .local/share/omabox .local/share/omabox/saves .cache/omabox .config/gh .config/gcloud .azure \
@@ -556,7 +578,15 @@ t_unit_refusals() {
   check_fails "--ro-bind onto /opt refused" ob up "$P-r14" --ro-bind "$ROOT:/opt"
   check_fails "--ro-bind onto //usr refused" ob up "$P-r15" --ro-bind "$ROOT://usr"
   check_fails "two names refused" ob up "$P-r16" "$P-r17"
-  check_fails "--seed of a secret store refused" ob up "$P-r19" --seed "$HOME/.ssh:x"
+  # A fake HOME's real files (finding 228): a path that is not there is refused for that alone.
+  local fh=$TMP/rf-home; mkdir -p "$fh/.ssh" "$fh/.config/omarchy/hooks" "$fh/.local/state/omarchy/current/theme"
+  echo fake > "$fh/.ssh/id_test"; echo fake > "$fh/.config/omarchy/api-keys.env"; echo 'echo hi' > "$fh/.config/omarchy/hooks/post-update"
+  check_match "--seed of a secret store refused" "refusing to seed $fh/.ssh/id_test into a box: it is inside $fh/.ssh/" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --seed "$fh/.ssh/id_test:x" 2>&1)"
+  check_match "--seed of api-keys.env refused" "refusing to seed $fh/.config/omarchy/api-keys.env into a box: it is inside" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --seed "$fh/.config/omarchy/api-keys.env:x" 2>&1)"
+  check_match "--ro-bind of a hook's folder refused" "refusing to mount $fh/.config/omarchy/hooks into a box: it is inside" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --ro-bind "$fh/.config/omarchy/hooks:/mnt/h" 2>&1)"
   # (#123) Only where it is refused: with the fix it would open a window on the real desktop.
   if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
     check_match "--monitor on an interactive box without aquamarine's fix: refused" "opens a window per monitor, which needs aquamarine's fix" \
@@ -748,6 +778,25 @@ t_unit_seed_copy() {
   check_eq "...a save's theme replaced, its link's target untouched" "x" "$(find "$o/cfg" -mindepth 1 -printf '%P\n' | xargs)"
   mkdir -p "$s/empty"
   check_eq "...nothing to copy: up says so" 1 "$(lib seed_theme "$s/empty" "$s/h5" 2>&1 | grep -c 'could not copy your current theme')"
+  # finding 228: up --seed's folder copy into a DEST that holds links already (an earlier --seed's, or
+  # a save's): replaced, never written through, whichever comes first; a link to a dir as well.
+  local v=$s/victim sd=$s/sd; mkdir -p "$v/dir" "$sd/A" "$sd/B/d" "$sd/B/e" "$s/b1/home" "$s/b2/home" "$s/b3/home/.cfg/sub" "$s/b4/home"
+  echo victim > "$v/file"; echo victim > "$v/dir/g"
+  ln -s "$v/file" "$sd/A/f"; ln -s "$v/dir" "$sd/A/d"; ln -s ../../../victim/dir "$sd/A/e"
+  echo seeded > "$sd/B/f"; echo seeded > "$sd/B/d/g"; echo seeded > "$sd/B/e/h"
+  # shellcheck disable=SC2329 # called below
+  seed_in() { bash -c 'source "$1"; D=$2; shift 2; for x; do seed_copy_in "$x" .cfg; done' lib "$TMP/lib/bin/omabox" "$@"; }
+  check "seed: a folder over a folder's links" seed_in "$s/b1" "$sd/A" "$sd/B"
+  check_eq "...its files, real ones" "seeded seeded seeded" "$(cat "$s/b1/home/.cfg/f" "$s/b1/home/.cfg/d/g" "$s/b1/home/.cfg/e/h" | xargs)"
+  check "...no link left where they went" test ! -L "$s/b1/home/.cfg/f" -a ! -L "$s/b1/home/.cfg/d" -a ! -L "$s/b1/home/.cfg/e"
+  mkdir -p "$sd/A2"; ln -s "$v/file" "$sd/A2/f"
+  check "seed: the other order" seed_in "$s/b2" "$sd/B" "$sd/A2"
+  check "...the link in place of the file, as copied" test -L "$s/b2/home/.cfg/f"
+  check_match "...a link where a dir is: refused, as cp did" "could not copy" "$(seed_in "$s/b4" "$sd/B" "$sd/A" 2>&1)"
+  ln -s "$v/file" "$s/b3/home/.cfg/f"; ln -s "$v/dir" "$s/b3/home/.cfg/sub/d"; mkdir -p "$sd/C/sub/d"; echo seeded > "$sd/C/sub/d/g"
+  cp "$sd/B/f" "$sd/C/f"
+  check "seed: a save's links under DEST" seed_in "$s/b3" "$sd/C"
+  check_eq "...nothing written outside the HOME" "dir dir/g file victim victim" "$(find "$v" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$v/file" "$v/dir/g" | xargs)"
 }
 
 # The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left

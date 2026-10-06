@@ -3803,9 +3803,10 @@ from them.
     contents, into the box HOME at DEST after seed_home and before the box starts, so it also replaces
     what seed_home put there. DEST is in the box HOME however written (`.config/x`, `~/.config/x`,
     `/home/sbx/.config/x`), never the HOME itself or above it; links on its way are cleared first, as
-    seed_home does for a save's HOME (finding 168). SRC gets --ro-bind's refusals (refuse_src: secret
-    stores, `~/.config/omarchy`, HOME, the runtime dir...), and a jailed agent's must be something its
-    jail sees. A box up without the same seeds is "already up, without what you asked for" (box.json
+    seed_home does for a save's HOME (finding 168), and a folder's copy never writes through a link
+    already inside DEST (finding 228). SRC gets --ro-bind's refusals (refuse_src: secret stores,
+    anything in `~/.config/omarchy` but `plugins/` and `themes/`, HOME, the runtime dir...), and a
+    jailed agent's must be something its jail sees (a relative one is sent absolute, finding 228). A box up without the same seeds is "already up, without what you asked for" (box.json
     keeps them). Checked in t_main (a file and a folder), t_unit_mount_rules (DEST shapes),
     t_unit_refusals.
 226. **More monitors in a headless box: `up --monitor`, `omabox monitor add/remove/list`** (2026-10-06,
@@ -3860,6 +3861,37 @@ from them.
     2560x1440 SPEC fitted to 1728x972, a box started after not caught, a resize followed (1000x800), a
     reload keeping them, the two closes. The suite's refusal check for a box without the fix now runs
     only where it is refused (with the fix it would open a window on the real desktop).
+228. **`up --seed` wrote through links inside DEST; a file inside `~/.config/omarchy` went into a box**
+    (2026-10-06, #159; review of the unreleased work). (1) A folder seed was `cp -a SRC/. DEST/` into a
+    DEST that may hold links already: an earlier `--seed`'s (folder A with `f -> outside/victim`, then
+    folder B with a regular `f`: the host's `victim` was overwritten, reproduced) or a save's (a box
+    plants the link in its HOME, `up --from SAVE --seed` writes through it on the host, finding 168's
+    class). GNU `cp -a` writes through a link at a file it copies over. home_unlink clears links only
+    on the way to DEST, and clearing every link under DEST would take seed_home's own (the background
+    link). Now the copy is tar's, as seed_copy's: it puts a real dir in place of a link at a dir and
+    unlinks a link (or FIFO) at a file before writing. A link in SRC where DEST has a real dir is
+    refused (tar: "File exists"), as cp did. (2) refuse_src refused `~/.config/omarchy` only when a
+    path contained it, so `--seed ~/.config/omarchy/api-keys.env:x` copied the keys into the box HOME
+    (and from there into saves), and `--ro-bind` mounted a file or a dir such as `hooks/` (that part is
+    in released versions; from ai-jail `jail_sees` already refused it). Now anything inside it is
+    refused but `plugins/` and `themes/`, also where a dotfiles link puts it (the dir resolved, and
+    any path containing that). The issue asked for `plugins/` only; `themes/` too, because Omarchy's
+    theme installer clones a theme there with its history, and an agent working on one has `up` mount
+    that checkout (its top) as any other; seed_home copies every theme into every box already.
+    seed_home's own copies of branding/ and extensions/ pass `look` to keep them. Still open: a link
+    at `~/.config/omarchy/api-keys.env` to a file elsewhere resolves outside and is not refused by
+    this rule (the callers pass refuse_src resolved paths). (3) relay_call made `--plugin`,
+    `--overlay`, `--hyprland` and `--ro-bind` paths absolute, not `--seed`'s SRC: the broker runs in
+    `/`, so reference.md's `--seed ./fixtures/x.json:…` failed from ai-jail. Now a relative SRC that
+    exists is sent absolute, DEST as given; one that does not is sent as given, for the broker to say
+    so. The old `t_unit_refusals` `~/.ssh` case passed on a machine without `~/.ssh` for "no such
+    path": its cases are real files in a fake HOME now. Checked: t_unit_seed_copy (a link to a file
+    and to a dir, both orders, a save's links under DEST; 5 of its checks fail on the old code),
+    t_unit_mount_rules (api-keys.env, a hook, branding with and without `look`, plugins/ and themes/
+    allowed, the dotfiles link; the relay), t_unit_refusals (`up` refuses `--seed` of `.ssh/id_test`
+    and `api-keys.env`, and `--ro-bind` of `hooks/`, in a fake HOME); and in a real box: the
+    two-folder reproduction (a link to a file and to a dir) leaves the host's files as they were, and
+    the box has the seeded ones. The relay was not run through a real ai-jail (its unit check only).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -164,7 +164,8 @@ LD_PRELOAD...), by any of them.
 @ up run
 --seed SRC:DEST: a file or folder of yours copied into the box HOME at DEST (.config/x or ~/.config/x)
 before its session starts, for a plugin that reads its config once at start; the same refusals as
---ro-bind (no secret stores, no ~/.config/omarchy). A copy: the box's changes stay in the box.
+--ro-bind (no secret stores; nothing in ~/.config/omarchy but plugins/ and themes/). A copy: the
+box's changes stay in the box; a link already in DEST is replaced, never written through.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run reload
@@ -1427,14 +1428,15 @@ seed_home() {
 # Copy one of the user's dirs into the box HOME (seed_home). The dir itself may be a link (dotfiles), but
 # links inside it stay links, to host paths the box does not have, instead of bringing in what they
 # point at (finding 74: a theme linked from its repo brought its .env and .git/config, a link to
-# api-keys.env the keys). No hidden files or node_modules, and nothing refuse_src keeps out of a mount.
+# api-keys.env the keys). No hidden files or node_modules, and nothing refuse_src keeps out of a mount
+# but the look it copies from ~/.config/omarchy (branding, extensions, themes; refuse_src's `look`).
 # DEST is HOME/REL, cleared of links first (finding 168); inside it, a link a save left where the copy
 # writes is replaced, not followed: tar lists a dir before what is in it, and GNU tar puts a real dir
 # in place of a link at a dir it extracts, and unlinks one at a file.
 # seed_copy SRC HOME REL
 seed_copy() {
   local src; src=$(readlink -f -- "$1" 2>/dev/null) && [ -d "$src" ] || return 0
-  ! refuse_src "$src" >/dev/null || return 0
+  ! refuse_src "$src" look >/dev/null || return 0
   home_unlink "$2" "$3"
   mkdir -p "$2/$3"
   (
@@ -1492,12 +1494,15 @@ seed_spec() {
   printf '%s\t%s\n' "$src" "$r"
 }
 # Copy SRC into the box HOME at REL (seed_spec's), replacing what seed_home put there; links on the way
-# are cleared first (a save's HOME may have them: finding 168). A folder's contents go into REL.
+# are cleared first (a save's HOME may have them: finding 168). A folder's contents go into REL, which
+# may hold links already (a save's, or an earlier --seed's): never written through (finding 228). cp -a
+# writes through a link at a file it copies over, onto the host; tar, as seed_copy's, puts a real dir
+# in place of a link at a dir and unlinks one at a file (or a FIFO) before writing.
 seed_copy_in() {
   local h=$D/home
   home_unlink "$h" "$2"
   mkdir -p -- "$(dirname -- "$h/$2")"
-  if [ -d "$1" ]; then mkdir -p -- "$h/$2" && cp -a --reflink=auto -- "$1/." "$h/$2/"
+  if [ -d "$1" ]; then mkdir -p -- "$h/$2" && tar -C "$1" -cf - . | tar -C "$h/$2" -xpf -
   else rm -rf -- "${h:?}/$2" && cp -a --reflink=auto -- "$1" "$h/$2"; fi || die "--seed: could not copy $1 to ~/$2 in the box"
 }
 
@@ -1519,12 +1524,23 @@ robind_spec() {
 # (api-keys.env) or /tmp; anything inside or containing the secret stores (with the token dirs of gh,
 # gcloud, azure and 1Password's op), omabox's own data dir (saves hold a box's keyring) and box HOMEs,
 # the runtime dir (omabox's box dirs too), /run, the kernel's trees, or /tmp's socket dirs (X11, tmux,
-# ssh-agent). A repo in /tmp or a plugin under ~/.config/omarchy/plugins is fine.
+# ssh-agent). A repo in /tmp is fine. Inside ~/.config/omarchy (where a dotfiles link puts it too), only
+# plugins/ and themes/ (finding 228: api-keys.env itself went in, and hooks/ are the user's scripts);
+# with `look`, seed_home's own copies of the user's look, branding/ and extensions/ too.
+# refuse_src PATH [look]
 refuse_src() {
-  local s x; s=$(readlink -f -- "$1" 2>/dev/null) || s=$1; s=${s%/}/
-  for x in "$HOME" "$HOME/.config/omarchy" /tmp; do
+  local s x o; s=$(readlink -f -- "$1" 2>/dev/null) || s=$1; s=${s%/}/
+  o=$(readlink -f -- "$HOME/.config/omarchy" 2>/dev/null) || o=$HOME/.config/omarchy
+  for x in "$HOME" "$HOME/.config/omarchy" "$o" /tmp; do
     x=${x%/}/
     case "$x" in "$s"*) echo "it contains $x"; return 0 ;; esac
+  done
+  for x in "$HOME/.config/omarchy" "$o"; do
+    x=${x%/}/
+    case "$s" in "$x"*) ;; *) continue ;; esac
+    case ${s#"$x"} in plugins/*|themes/*) continue ;; esac
+    if [ "${2:-}" = look ]; then case ${s#"$x"} in branding/*|extensions/*) continue ;; esac; fi
+    echo "it is inside $x (api-keys.env, your hooks): only plugins/ and themes/ may go into a box"; return 0
   done
   for x in "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.local/share/keyrings" "$HOME/.password-store" \
            "$HOME/.aws" "$HOME/.kube" "$HOME/.docker" "$HOME/.netrc" "$HOME/.config/gh" \
@@ -6642,6 +6658,9 @@ relay_call() {
       --plugin|--overlay) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
       --hyprland) [[ $a != /* && -e $a ]] && a=$(readlink -f -- "$a") ;;
       --ro-bind) [[ $a != /* ]] && a=$(readlink -f -- "${a%%:/*}")${a#"${a%%:/*}"} ;;
+      # SRC:DEST: only SRC is the caller's path (DEST is in the box HOME). One that is not there is
+      # sent as given, for the broker to say so.
+      --seed) if [[ $a == ?*:* && $a != [/~]* ]] && [ -e "${a%%:*}" ]; then a=$(readlink -f -- "${a%%:*}"):${a#*:}; fi ;;
     esac
     args+=("$a"); prev=$a
   done
