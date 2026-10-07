@@ -4612,13 +4612,17 @@ cell_in() {
 # An interactive box's monitors (#123), each a window on the "desktop": all in a box standing in for
 # the host (finding 26), with a terminal focused on its workspace 1 and the box on 9.
 t_monitors_window() {
+  # The stand-in at the size of the screen #174 was found on (3440x1440, scale 1).
   local S=$P-monh
-  ob up "$S" --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
+  ob up "$S" --size 3440x1440 --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
   local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
   if aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
   ob run -b "$S" -d -- foot >/dev/null 2>&1
   ob wait -b "$S" window foot >/dev/null 2>&1
-  check "up --interactive --monitor 800x600 --monitor 600x400,below in the stand-in" "${in[@]}" up wm --interactive --no-shell --monitor 800x600 --monitor 600x400,below
+  local out
+  out=$("${in[@]}" up wm --interactive --no-shell --monitor 1080x1920 --monitor 1280x720,below 2>&1)
+  check_match "up --interactive --monitor 1080x1920 --monitor 1280x720,below in the stand-in (#174's)" "box 'wm' up" "$out"
+  check_match "...the windows: the layout at 53% of its size, said" "its layout at 53% of its size" "$out"
   # shellcheck disable=SC2329 # called through until_ok
   mons() { [ "$("${in[@]}" monitor -b wm list --json | jq -r "$1")" = "$2" ]; }
   # shellcheck disable=SC2329 # called through check
@@ -4628,35 +4632,78 @@ t_monitors_window() {
   overlaps() { ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class == "aquamarine")] as $w | [range(0; $w | length) as $i | range($i + 1; $w | length) as $j
     | select($w[$i].at[0] < $w[$j].at[0] + $w[$j].size[0] and $w[$j].at[0] < $w[$i].at[0] + $w[$i].size[0]
       and $w[$i].at[1] < $w[$j].at[1] + $w[$j].size[1] and $w[$j].at[1] < $w[$i].at[1] + $w[$i].size[1])] | length'; }
-  # Side by side (#161): the main window floated and made smaller, the monitors' to its right, the
-  # second below the first, as the box lays them out; the stand-in's gaps are 10 and borders 2.
-  check_eq "its monitors' windows: on workspace 9, floating at the SPECs' sizes, beside the main one, made smaller" \
-    '[{"ws":"9","floating":true,"at":[12,12],"size":[1084,1056]},{"ws":"9","floating":true,"at":[1108,12],"size":[800,600]},{"ws":"9","floating":true,"at":[1108,624],"size":[600,400]}]' "$(boxwins)"
+  # Each monitor's mode, scale, its size in the layout (the mode over the scale) and place.
+  # shellcheck disable=SC2329 # called through check_eq
+  layout() { "${in[@]}" monitor -b wm list --json | jq -r 'map(. as $m | ($m.mode | split("@")[0] | split("x") | map(tonumber)) as $p
+    | "\($m.name) \($m.mode) \($m.scale) \($p[0] / $m.scale | round)x\($p[1] / $m.scale | round) \($m.x),\($m.y)") | join("|")'; }
+  # The box's layout scaled as a whole (#174): 1920x1080 at 0,0, 1080x1920 right of it, 1280x720
+  # below that, at 63/120 (each window whole pixels), with the stand-in's gap (10 + border 2) between
+  # windows that touch in the box, the picture centred in the free area.
+  check_eq "its windows: on workspace 9, floating, the box's layout scaled to 0.525 and centred" \
+    '[{"ws":"9","floating":true,"at":[874,21],"size":[1008,567]},{"ws":"9","floating":true,"at":[1894,21],"size":[567,1008]},{"ws":"9","floating":true,"at":[1894,1041],"size":[672,378]}]' "$(boxwins)"
   check_eq "...none over another" 0 "$(overlaps)"
   check_eq "...the stand-in's focus and workspace unchanged" "foot 1" "$(ob hyprctl -b "$S" -j activewindow | jq -r .class) $(ob hyprctl -b "$S" -j activeworkspace | jq -r .id)"
-  check_eq "...the box has the monitors: right of its first, and below the last one, as in a headless box" \
-    "WAYLAND-2 800x600@60 1084 0|WAYLAND-3 600x400@60 1084 600" \
-    "$("${in[@]}" monitor -b wm list --json | jq -r 'map(select(.name != "WAYLAND-1") | "\(.name) \(.mode) \(.x) \(.y)") | join("|")')"
+  check_eq "...each monitor a view: its window's pixels at 0.525, so the size asked for, placed as asked" \
+    "WAYLAND-1 1008x567@60 0.525 1920x1080 0,0|WAYLAND-2 567x1008@60 0.525 1080x1920 1920,0|WAYLAND-3 672x378@60 0.525 1280x720 1920,1920" "$(layout)"
   check_eq "...and the host rule is off again" false "$(ob lua -b "$S" 'omabox_monitor_rule:is_enabled()')"
-  local main; main=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .at == [12, 12]) | .address')
-  local out; out=$("${in[@]}" monitor -b wm add 2560x1440,scale=1.5,below 2>&1)
-  check_match "monitor add bigger than the stand-in's screen: the window keeps its aspect, said" "does not fit on your 1920x1080 monitor: its window is 1728x972" "$out"
-  check_match "...no room beside the others: said" "has no room for box 'wm''s windows side by side" "$out"
-  check_eq "...it opens centred" "[96,54]" "$(ob hyprctl -b "$S" -j clients | jq -c '.[] | select(.class == "aquamarine" and .size == [1728, 972]) | .at')"
+  # The stand-in's pointer in each window, at its middle (on workspace 9 now, where the windows are):
+  # the box's pointer in the middle of that monitor. aquamarine reports a point of the window; Hyprland
+  # 0.56 placed it over the whole layout, so every middle was (1600, 1079); omabox's build places it.
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '9' })" >/dev/null
+  if ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+layout'; then
+    local at=""
+    for p in "1378 304" "2177 525" "2230 1230"; do
+      # shellcheck disable=SC2086 # X Y
+      ob pointer -b "$S" -- move $p >/dev/null 2>&1
+      sleep 0.4
+      at+="$("${in[@]}" hyprctl -b wm cursorpos 2>/dev/null)|"
+    done
+    # Each within a pixel of the middle (the window's pixel rounds).
+    check_eq "the pointer in a monitor's window: on that monitor, where it is in the window (finding 238; $at)" ok \
+      "$(awk -F'|' '{ split("960 540 2460 960 2560 2280", w, " "); bad = 0
+        for (i = 1; i <= 3; i++) { split($i, p, ", "); if ((p[1] - w[2 * i - 1]) ^ 2 > 1 || (p[2] - w[2 * i]) ^ 2 > 1) bad = 1 }
+        print bad ? "off" : "ok" }' <<<"$at")"
+  else
+    skip "the pointer in a monitor's window lands on that monitor" "not omabox's aquamarine build (omabox setup --aquamarine)"
+  fi
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null
+  out=$("${in[@]}" monitor -b wm add 800x600,0,1080 2>&1)
+  check_match "monitor add 800x600,0,1080: a view too" "a monitor WAYLAND-4 420x315@60 0x1080 0.525" "$out"
+  check_eq "...the picture laid out again with it, below the main window as in the box" \
+    '[{"ws":"9","floating":true,"at":[874,15],"size":[1008,567]},{"ws":"9","floating":true,"at":[874,594],"size":[420,315]},{"ws":"9","floating":true,"at":[1894,15],"size":[567,1008]},{"ws":"9","floating":true,"at":[1894,1047],"size":[672,378]}]' "$(boxwins)"
+  check_eq "...none over another" 0 "$(overlaps)"
   "${in[@]}" up wm2 --interactive --no-shell >/dev/null 2>&1
   check_eq "a box started after: its window is not taken for a monitor (tiled)" 1 \
     "$(ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class == "aquamarine" and .floating == false)] | length')"
   "${in[@]}" down wm2 >/dev/null 2>&1
-  local a; a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .size == [800, 600]) | .address')
-  ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$a', x = 1000, y = 800 })" >/dev/null
-  check "resizing the window resizes the box's monitor" until_ok 3 mons '.[] | select(.name == "WAYLAND-2") | .mode' 1000x800@60
+  out=$("${in[@]}" monitor -b wm remove WAYLAND-3 2>&1)
+  check_match "monitor remove WAYLAND-3: the picture laid out again without it" "its layout at 73% of its size" "$out"
+  check_eq "...bigger now" '[{"ws":"9","floating":true,"at":[626,24],"size":[1392,783]},{"ws":"9","floating":true,"at":[626,819],"size":[580,435]},{"ws":"9","floating":true,"at":[2030,24],"size":[783,1392]}]' "$(boxwins)"
+  check "...the views at 0.725, the sizes as asked" until_ok 3 mons 'map("\(.name) \(.mode) \(.scale)") | join("|")' \
+    "WAYLAND-1 1392x783@60 0.725|WAYLAND-2 783x1392@60 0.725|WAYLAND-4 580x435@60 0.725"
+  check_eq "...the stand-in's focus and workspace unchanged" "foot 1" "$(ob hyprctl -b "$S" -j activewindow | jq -r .class) $(ob hyprctl -b "$S" -j activeworkspace | jq -r .id)"
+  # A window the user resizes: its view's scale follows, the monitor keeps its size and place; a
+  # window of another shape shows the monitor smaller along the side that does not fit.
+  local a; a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .size == [783, 1392]) | .address')
+  ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$a', x = 810, y = 1440 })" >/dev/null
+  check "resizing a monitor's window to 810x1440: its view at 0.75, the monitor still 1080x1920 at 1920,0" until_ok 3 mons \
+    '.[] | select(.name == "WAYLAND-2") | "\(.mode) \(.scale) \(.x),\(.y)"' "810x1440@60 0.75 1920,0"
+  ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$a', x = 700, y = 700 })" >/dev/null
+  check "...to 700x700: at 0.64815, the monitor 1080x1080" until_ok 3 mons '.[] | select(.name == "WAYLAND-2") | "\(.mode) \(.scale)"' "700x700@60 0.64815"
+  check_eq "...its size in the layout" "1080x1080" "$(layout | tr '|' '\n' | awk '$1 == "WAYLAND-2" { print $4 }')"
   "${in[@]}" hyprctl -b wm reload >/dev/null 2>&1; sleep 1
-  check_eq "a config reload keeps its monitors" "WAYLAND-1 WAYLAND-2 WAYLAND-3 WAYLAND-4" "$("${in[@]}" monitor -b wm list --json | jq -r 'map(.name) | join(" ")')"
+  check_eq "a config reload keeps its monitors and views" "WAYLAND-1 0.725 WAYLAND-2 0.64815 WAYLAND-4 0.725" \
+    "$("${in[@]}" monitor -b wm list --json | jq -r 'map("\(.name) \(.scale)") | join(" ")')"
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$a' })" >/dev/null
-  check "closing a monitor's window: that monitor goes" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-1 WAYLAND-3 WAYLAND-4"
+  check "closing a monitor's window: that monitor goes" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-1 WAYLAND-4"
   check_match "...the box stays up" " up " "$("${in[@]}" ls | grep '^wm ')"
+  "${in[@]}" monitor -b wm remove WAYLAND-4 >/dev/null 2>&1
+  check_eq "removing the last monitor: the main window tiles again, filling the workspace" '[{"ws":"9","floating":false,"at":[12,12],"size":[3416,1416]}]' "$(boxwins)"
+  check "...its screen its window's size again, at scale 1" until_ok 3 mons 'map("\(.name) \(.mode) \(.scale)") | join("|")' "WAYLAND-1 3416x1416@60 1"
+  "${in[@]}" monitor -b wm add 800x600 >/dev/null 2>&1
+  local main; main=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .floating and .size[0] > 1000) | .address')
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$main' })" >/dev/null
-  check "closing its first window with others open: it stays up on those" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-3 WAYLAND-4"
+  check "closing its first window with another open: it stays up on that one" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-2"
   check_match "...up" " up " "$("${in[@]}" ls | grep '^wm ')"
   ob down "$S" >/dev/null
 }
@@ -5772,13 +5819,20 @@ t_unit_monitors() {
   done
   check_eq "every command whose usage takes -b NAME is one -b NAME before it reaches ($n of them)" "" "$missing"
   check "...the usage has them" test "$n" -gt 20
-  # An interactive box's windows side by side on the host: the main one gives up the room.
-  check_eq "desk: a monitor right, one below it" "room 1084 1056|1096 0|1096 612" \
-    "$(printf '%s\n' '1896 1056 12' 'right 800 600' 'below 600 400' | lib desk_layout | paste -sd'|')"
-  check_eq "desk: an X,Y one goes right" "room 1084 1056|1096 0" "$(printf '%s\n' '1896 1056 12' '0x900 800 600' | lib desk_layout | paste -sd'|')"
-  check_eq "desk: one below the main window" "room 1896 444|0 456" "$(printf '%s\n' '1896 1056 12' 'below 800 600' | lib desk_layout | paste -sd'|')"
-  check_eq "desk: the main window would keep under a third: no room" none "$(printf '%s\n' '1896 1056 12' 'right 1728 972' | lib desk_layout)"
-  check_eq "desk: a column taller than the area: no room" none "$(printf '%s\n' '1896 1056 12' 'right 800 600' 'below 800 600' | lib desk_layout)"
+  # An interactive box's layout as a picture on the host (#174): one scale for all, whole pixels when
+  # a scale near gives them, the gap between windows that touch in the box, centred; never enlarged.
+  pic() { printf '%s\n' "$@" | lib desk_picture | paste -sd'|'; }
+  check_eq "picture: #174's layout on a 3440x1440 screen, at 63/120" "0.525 1|main 862 9 1008 567|WAYLAND-2 1882 9 567 1008|WAYLAND-3 1882 1029 672 378" \
+    "$(pic '3416 1416 12' 'main 0 0 1920 1080' 'WAYLAND-2 1920 0 1080 1920' 'WAYLAND-3 1920 1920 1280 720')"
+  check_eq "picture: its first two" "0.73333 1|main 602 4 1408 792|WAYLAND-2 2022 4 792 1408" \
+    "$(pic '3416 1416 12' 'main 0 0 1920 1080' 'WAYLAND-2 1920 0 1080 1920')"
+  check_eq "picture: no scale near gives 1366x768 whole pixels: rounded" "0.56667 1|main 11 222 1088 612|WAYLAND-2 1111 222 774 435" \
+    "$(pic '1896 1056 12' 'main 0 0 1920 1080' 'WAYLAND-2 1920 0 1366 768')"
+  check_eq "picture: an X,Y one below the main window, a tall one right of it (60/120: whole pixels for 800x600)" "0.5 1|main 380 24 960 540|WAYLAND-3 380 576 400 300|WAYLAND-2 1352 24 540 960" \
+    "$(pic '2272 1008 12' 'main 0 0 1920 1080' 'WAYLAND-3 0 1080 800 600' 'WAYLAND-2 1920 0 1080 1920')"
+  check_eq "picture: a lone monitor smaller than the area is not enlarged" "1 1|main 1308 408 800 600" "$(pic '3416 1416 12' 'main 0 0 800 600')"
+  check_eq "picture: too big even at Hyprland's smallest scale (1/4): laid out at it, said" "0.25 0|main 0 15 480 270|WAYLAND-2 492 15 480 270|WAYLAND-3 984 15 480 270" \
+    "$(pic '500 300 12' 'main 0 0 1920 1080' 'WAYLAND-2 1920 0 1920 1080' 'WAYLAND-3 3840 0 1920 1080')"
   # An interactive monitor that fails in `up` (a second --monitor): up's EXIT trap, which takes the box
   # down, still runs; monitor_add_window's own trap (the host rule off) took its place in up's shell.
   mkdir -p "$d"; echo '{}' > "$d/box.json"
@@ -5787,6 +5841,8 @@ t_unit_monitors() {
     host_hyprctl() { case $* in "-j monitors") echo "[{\"id\": 0, \"focused\": true, \"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]" ;;
       -j\ *) echo "[]" ;; *) echo ok ;; esac; }
     host_eval() { die "host hyprctl eval failed: a stub"; }
+    on_box() { case $* in *omabox_monitor_layout*) echo "error: omabox-layout:main 0 0 1920 1080,WAYLAND-2 1920 0 800 600" ;; *) echo ok ;; esac; }
+    box_file() { :; }
     trap "echo up-trap" EXIT
     monitor_add_window 800x600; echo "went on"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
   check_match "a monitor add failing in up: up's own EXIT trap runs (it takes the box down)" "a stub.*up-trap" "$(tr '\n' ' ' <<<"$out")"

@@ -116,7 +116,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   `drag --shot F --shot-monitor NAME`; `peek --monitor NAME` for the user, one window per monitor
   (`shot` is the whole layout). Names: HEADLESS-2 (the first), HEADLESS-3, ...; on NVIDIA WAYLAND-1,
   WAYLAND-2, ... (`monitor list`). In an interactive box (the user's) each monitor is a window on their
-  desktop: only when they ask for it.
+  desktop, the box's layout scaled as a whole (each a view: the size asked for, at a scale below 1):
+  only when they ask for it.
 - **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
   put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
   only; `--json`). Never read host-wide tools (nvtop, radeontop, scripts summing `/proc/*/fdinfo` by

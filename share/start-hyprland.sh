@@ -12,6 +12,9 @@ fi
 # /opt/omabox/lib: a private aquamarine with the fix for nested Wayland outputs, when omabox mounted
 # one (finding 125); without it, the system's.
 lib=(); [ ! -d /opt/omabox/lib ] || lib=(LD_LIBRARY_PATH=/opt/omabox/lib)
+# An interactive box's monitors in its layout (hyprland.lua writes the file), for omabox's aquamarine
+# build to put the pointer in a monitor's window on that monitor (finding 238); others ignore it.
+[ "${OMABOX_INTERACTIVE:-0}" != 1 ] || lib+=(AQ_WAYLAND_LAYOUT="$XDG_RUNTIME_DIR/omabox.layout")
 # The box's own copy of omabox's config (#140): share/ is the checkout's or package's, live, and a
 # change to it (a pull, an upgrade) reloaded every running box, dropping what agents had added in Lua.
 # Autoreload is off too (hyprland.lua); `omabox reload` refreshes the copy and reloads it.

@@ -33,7 +33,8 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   submit the patch itself; if someone fixes it upstream, check the fix with `t_held_keys`.
 - **Until then:** `patches/aquamarine/0001-*.patch`, applied by `setup --aquamarine` on top of
   `AQ_COMMIT` (`AQ_BUILD` names the result). Boxes on the system's aquamarine keep the bug.
-- **Then drop:** the patch, the `git apply` loop in `setup_aquamarine`, `AQ_BUILD` (back to
+- **Then drop:** the patch, `+keys` in `AQ_BUILD` (and the suite's checks for it); with no other
+  patch left (the pointer's, below), the `git apply` loop in `setup_aquamarine`, `AQ_BUILD` (back to
   `AQ_COMMIT`) and the stale-build note in `setup_user`; `t_held_keys` then checks any aquamarine
   that has the fix.
 
@@ -62,6 +63,24 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Workaround:** a size watcher in `share/hyprland.lua` that reloads the box's config (NOTES finding
   28; brief black flicker).
 - **Then drop:** that watcher, after checking a resize in an interactive box.
+
+## Hyprland: a nested Hyprland puts the pointer over its whole layout
+
+- **Needed for:** an interactive box with more monitors: the pointer in a monitor's window (NOTES
+  finding 238).
+- **Waiting for:** a Hyprland that maps an absolute pointer event to the output it names; not
+  reported yet. Hyprland 0.56.2's `src/devices/Mouse.cpp` passes aquamarine's `SWarpEvent` on
+  without its `output`, and `CPointerManager::warpAbsolute` maps the point over the box around every
+  monitor (a pointer has no `m_boundOutput` setting), so a point of any window but a lone one lands
+  in the wrong place: the middle of each of three windows put the box's pointer at (1600, 1079).
+- **Until then:** `patches/aquamarine/0002-*.patch` (`AQ_BUILD` `+layout`): aquamarine reads each
+  output's box in the layout from the file `AQ_WAYLAND_LAYOUT` names (the box's
+  `share/hyprland.lua` writes it at each layout change; `share/start-hyprland.sh` sets the variable
+  for interactive boxes) and gives the point in the whole layout's terms. omabox-specific: not to
+  submit. Boxes on another aquamarine keep the bug; `monitor add` says so.
+- **Then drop:** the patch, `AQ_WAYLAND_LAYOUT` and `write_layout` in `share/hyprland.lua`,
+  `+layout` in `AQ_BUILD` and in `monitor_add_window`'s note; `t_monitors_window`'s pointer check
+  then checks any build.
 
 ## Could be reported (nothing waiting on it)
 

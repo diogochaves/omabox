@@ -39,8 +39,9 @@ real desktop saw no window at all.
 - For headless boxes on NVIDIA and for confirm-close: aquamarine's fix (Hyprland's backend library),
   until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415). Everything else
   runs on your system's aquamarine. `install.sh` builds it privately into `build/prefix`
-  (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries a fix
-  of omabox's for interactive boxes: a key held when the box's window loses focus is released.
+  (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries two
+  fixes of omabox's for interactive boxes: a key held when the box's window loses focus is
+  released, and your pointer in a monitor's window lands on that monitor.
 
 ## Install
 
@@ -478,15 +479,17 @@ A peek window shows one monitor (the first, or `peek --monitor NAME`): one windo
 on the workspace, each showing the agent's pointer and clicks on its own monitor (its keys on all);
 the whole layout at once is `omabox shot`.
 
-In a box you drive (`up --interactive --monitor 1280x720`, or `monitor add`), each monitor is a window
-on your desktop, opened on the box's workspace without taking focus, floating at the SPEC's size. Its
-shape is the SPEC's, its size only as big as fits on your screen (a 5120x1440 monitor on a 2560x1440
-screen is a smaller window of the same aspect): for an exact large resolution use a headless box and
-`peek --monitor`. The windows go side by side as the box lays its monitors out (right, below), the
-box's main window floated and made smaller to give them room; when your screen has no room for that,
-omabox says so and the new window opens centred over the others. Resizing a window resizes that
-monitor; closing it unplugs it. Your pointer enters a monitor by entering its window. This needs
-aquamarine's fix (`omabox setup --aquamarine`).
+In a box you drive (`up --interactive --monitor 1080x1920 --monitor 1280x720,below`, or `monitor
+add`), each monitor is a window on your desktop, opened on the box's workspace without taking focus.
+The windows are the box's layout scaled as a whole, the picture display settings draw: on a
+3440x1440 screen that layout (1920x1080, a portrait one right of it, a 1280x720 one below that)
+becomes windows of 1008x567, 567x1008 and 672x378, arranged as in the box, centred. Each window is
+a view of its monitor: the bar and apps see the size asked for (the main screen's `--size`, 1920x1080
+by default, and each SPEC), drawn at the window's scale (0.525 here), so text is small. `monitor add`
+and `remove` lay the picture out again. Resizing a window changes its view's scale, not the
+monitor; closing it unplugs it. For an exact large resolution at full size use a headless box and
+`peek --monitor`. This needs aquamarine's fix, and the pointer lands on the monitor whose window it
+is in only with omabox's build of it (`omabox setup --aquamarine` makes both).
 
 </details>
 

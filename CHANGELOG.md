@@ -15,8 +15,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (#164); `drag --shot` takes `--shot-fit`, `--shot-g`, `--shot-monitor`; `pixel` refuses a point in a
   gap between monitors. On a box rendering on NVIDIA too, where they are named WAYLAND-1, WAYLAND-2,
   ... (#122, #165). In an interactive box each monitor is a window on your desktop, on the box's
-  workspace without focus, side by side with the others as the box lays them out (its main window
-  made smaller for them, or said when your screen has no room); closing it unplugs it (#123, #161).
+  workspace without focus; together they are the box's layout scaled as a whole, as display settings
+  draw it, laid out again at each `monitor add` and `remove`, and each window is a view of its
+  monitor, which keeps the size asked for (the main screen `--size`'s) at the window's scale: resizing
+  a window scales its view. Closing one unplugs it. Your pointer in a monitor's window lands on that
+  monitor (with omabox's aquamarine build: `omabox setup --aquamarine`) (#123, #161, #174).
 - **`omabox output drop [NAME] [--for DURATION] [--cycles N]` and `output back [NAME]`**: a headless
   box's screen goes and comes back under its own name, mode and position, as a monitor that drops
   off on wake does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
@@ -111,6 +114,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **An interactive box's window resized just after a config reload is followed.** The box's bar and
+  wallpaper kept the old size when the resize came in the quarter second after a reload (#174).
 - **A link inside your current theme no longer brings the file it names into a box.** omabox copied
   your theme into each box HOME following its links, and `omarchy-theme-set` keeps the links of a
   theme you made: a link to `api-keys.env` put your keys in every box (and in its saves). Links in

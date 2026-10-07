@@ -81,6 +81,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    ```
    git clone https://github.com/hyprwm/aquamarine build/aquamarine
    git -C build/aquamarine checkout 7bb8bdf4      # "wayland: fix configure not applying sometimes (#415)"
+   for p in patches/aquamarine/*.patch; do git -C build/aquamarine apply "$PWD/$p"; done   # omabox's own (findings 132, 238)
    cmake -S build/aquamarine -B build/aquamarine/out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PWD/build/prefix
    cmake --build build/aquamarine/out && cmake --install build/aquamarine/out
    ```
@@ -3883,7 +3884,10 @@ from them.
     in share/hyprland.lua now watches every monitor, not the first). Placed `auto-right` or
     `auto-down` (or X,Y) in the box, scale from the SPEC, kept in `omabox.monitors` ("NAME preferred
     POSITION SCALE") for reloads; both branches of the config now read that file. (Finding 230: placed
-    as a headless box's now, and the windows side by side on the host.) Closing a monitor's
+    as a headless box's now, and the windows side by side on the host. Finding 238: the windows are
+    the box's layout scaled as a whole, each a view of its monitor, which keeps the SPEC's size; a
+    resize changes the view's scale; the pointer in a window lands on its monitor only with omabox's
+    aquamarine.) Closing a monitor's
     window unplugs it; closing the first with another open leaves the box on that one (the
     `monitor.removed` handler only ends a box with no monitor left). Needs aquamarine's fix (refused
     without, saying so). `ls` keeps `window` and box.json no monitors for an interactive box: the user
@@ -4004,7 +4008,8 @@ from them.
     earlier one's `move` (seen: a window with no room opened where the last one had gone), so the
     centre is given too. Costs: on a workspace shared with other tiled windows, the floated main
     window leaves its tile to them and may then cover them; a size the user gave the main window is
-    replaced at the next `monitor add`. (7) `output drop` said "has no screen now" with other monitors
+    replaced at the next `monitor add`. (Replaced by finding 238: the box's layout scaled as a
+    whole.) (7) `output drop` said "has no screen now" with other monitors
     still on: it names them now; the rest of a drop with monitors (MAIN_SCREEN then picks another, and
     a second drop takes it) is #163, finding 232. Checked: t_monitors (`-b NAME monitor list`; `mode 2560x1440`
     moving the one right of it and the one below that, said, and back; after removing the middle one,
@@ -4328,6 +4333,96 @@ from them.
     session-box fallback (finding 200) applies to `down` too, so `omabox down` from a scratch dir takes
     the session's repo box down; `help` (the names section, shown by `help down`, `up`, `run`, `ls`,
     `path`) did not mention the fallback at all: it does, `down` named. t_unit_cli checks `help down`.
+238. **An interactive box's monitors: its layout scaled as a whole, each window a view; the pointer
+    in a monitor's window** (2026-10-06, #174; corrects 227, 230 (6), 28's watch). On a 3440x1440
+    desktop `up demo -i --monitor 1080x1920 --monitor 1280x720,below` gave the main window 2591x1402
+    at 54,26, the portrait one 729x1296 in the strip left on the right and the 1280x720 one centred
+    over the main window (finding 230's layout keeps the main window big and fits the others around
+    it): nothing like the box's layout. In a stand-in at 3440x1440 (`--no-shell`): 2675x1416 at
+    12,12, 729x1296 at 2699,12, 1280x720 at 1080,360, and the box's Hyprland said "Monitor WAYLAND-2
+    overlaps" (a new output comes up at 0x0 under the general rule before omabox places it). Wanted:
+    the box's layout drawn as display settings draw it, scaled by one factor to fit, each window a
+    scaled view of a monitor that keeps the mode asked for. How a window can show a monitor bigger
+    than itself (aquamarine's Wayland output takes its window's size as its mode, finding 28):
+    (a) **A box monitor scale below 1: works on Hyprland 0.56.2 as it is.** Its monitor rule takes a
+    scale down to 0.25 (`CMonitorRuleParser::parseScale`). `hl.monitor` at 0.525 on a 1008x567 output
+    made a 1920x1080 monitor: wallpaper and bar laid out at 1920x1080, a foot tiled 1854x1056, a click
+    on the bar at layout coordinates landing. A scale that does not divide the window into whole
+    pixels is moved by Hyprland to one that does (0.5208 on 1000x562 became 0.5: a 2000x1124
+    monitor) unless `debug:disable_scale_checks` is on (then the size is rounded: 1920x1079). Apps
+    that take a fractional scale (foot, the Qt bar) draw at the window's own pixels: small, sharp
+    text (shot in a stand-in, `--monitor`s with the shell and a foot each). `monitor list` shows the
+    window's pixels as the mode, with the scale.
+    (b) **The host scaling a full-size buffer (wp_viewporter in aquamarine's Wayland backend): read,
+    not built.** The buffer would stay at the mode asked for. But Hyprland 0.56 counts every output
+    not on DRM as `m_createdByUser`, and its `state` listener sets `m_forceSize` and re-applies the
+    rule at every configure's size, so the mode follows the window unless aquamarine stops reporting
+    the window's size once the consumer has chosen another mode: a third patch that changes what a
+    configure means (viewporter bound, a viewport per output, the pointer scaled by the view's size),
+    in omabox's build only, and the host would downscale with linear filtering (no mipmaps) what (a)
+    draws at the window's pixels. What it would keep that (a) loses: a monitor's own scale
+    (`scale=1.5` draws at 1.5 in the box; under (a) every view draws at the window's scale, only the
+    SPEC's size over its scale is kept). (a) needs no patch for the views: chosen.
+    (c) Modes following the windows, the windows laid out as the picture: not needed.
+    **Box side** (share/hyprland.lua): an interactive monitor's line in omabox.monitors keeps the mode
+    and scale asked for (it was `preferred`). With such lines the box has views: the main screen's
+    size is `--size` (OMABOX_SIZE: 1920x1080 by default), each monitor's its SPEC over its scale; they
+    are placed by those sizes (a resized window moves nothing); each rule is `preferred` (the window's
+    pixels) at the scale max(window w / size w, window h / size h): the whole monitor in its window,
+    which along a side of another shape makes the monitor smaller (a 700x700 window: 1080x1080 at
+    0.64815). `disable_scale_checks` is on in interactive boxes. `omabox_layout()` computes it all once
+    for `omabox_place_monitors()` and `omabox_monitor_layout()`, the layout omabox lays the windows
+    out by ("NAME X Y W H", raised as an error: `hyprctl eval` passes back nothing else), which takes
+    the line of a monitor not made yet. A line whose window is not there keeps its place, as a dropped
+    headless one does; a box with no monitors is its window's size at scale 1, as before.
+    **Host side** (bin/omabox): `desk_picture`: one scale for all, the largest at which the picture
+    fits the free area of the host monitor the main window is on (reserved space, `gaps_out` and the
+    border off), at most 1, in 120ths as Hyprland's fractional scales are, and when one within 6/120
+    gives every window whole pixels, that one (#174's: 63/120, 1008x567, 567x1008, 672x378); the gap
+    between windows once per further column or row of left or top edges (a pair that touches in the
+    box keeps it, less a pixel of rounding: no overlap); centred. A layout that does not fit at 1/4,
+    Hyprland's smallest scale, is laid out at it, past the area, said. `desk_relay` moves and resizes
+    the box's windows by address (no focus moves), floats the main one (recorded in
+    `$D/main-window` when it tiled: it tiles again when the last monitor goes) and waits for the box's
+    main monitor to take its new size, so the views' scale is read from it. `monitor add` names the
+    output (the next free WAYLAND-N, `output create wayland NAME`), lays the windows there out again,
+    writes the line and places it (its rule, at the views' scale, there before the output: no overlap
+    at 0x0 any more), then opens the window with the host rule at its size and place; `monitor
+    remove` lays the rest out again. Both first drop the lines and addresses of windows closed on the
+    desktop (`desk_prune`: a line kept would keep a hole in the picture). A box started before keeps
+    its config copy, which has no `omabox_monitor_layout`: `monitor add` says to start it again.
+    **The pointer**: checking (a)'s input, the stand-in's pointer at the middle of each of #174's
+    windows put the box's at (1600, 1079) each time, and with finding 230's layout too (the middle of
+    the portrait window: (1974, 1008), on the main screen). aquamarine gives the point in its window's
+    terms and names the output, but Hyprland 0.56.2's `Mouse.cpp` drops the output and
+    `CPointerManager::warpAbsolute` maps the point over the box around every monitor (a pointer has
+    no bound output setting): every interactive box with monitors since #123 had it, only a lone
+    window mapped right. No Lua event sees pointer motion. Fixed in omabox's aquamarine build, patch
+    0002 (`AQ_BUILD` `7bb8bdf4+keys+layout`): with `AQ_WAYLAND_LAYOUT` (`start-hyprland.sh`, interactive
+    boxes) naming a file of "NAME X Y W H" lines, which the box's Lua writes at every
+    `monitor.layout_changed` (sizes rounded as Hyprland rounds them), the point is given in the whole
+    layout's terms; the file is read again when it changes (a stat per event). omabox-specific, not
+    for upstream: the fix is Hyprland's (UPSTREAM.md). On any other aquamarine `monitor add` says the
+    pointer lands in the wrong place. Clicking workspace 4 in monitor 2's bar from the stand-in put
+    workspace 4 on monitor 2.
+    **Resize watch** (finding 28): a reload starts a fresh Lua state, with a new timer whose first
+    tick took the sizes as they were then, so a window resized between a reload and that tick was
+    never seen (its view kept the old scale: t_monitors_window caught it, a resize just after `monitor
+    remove`'s). The timer starts from the sizes its load placed by.
+    Checked: t_monitors_window in a stand-in at 3440x1440 (#174's command: 1008x567 at 874,21,
+    567x1008 at 1894,21, 672x378 at 1894,1041, none over another, the stand-in's focus and workspace
+    unchanged, said "at 53%"; in the box 1008x567, 567x1008, 672x378 at 0.525, so 1920x1080,
+    1080x1920, 1280x720 at 0,0, 1920,0, 1920,1920; the pointer at each window's middle within a pixel
+    of its monitor's (skipped without the build); `monitor add 800x600,0,1080` laid out again with it
+    below the main window, 420x315 at 874,594; `remove WAYLAND-3`: 0.725, bigger, focus unchanged; a
+    window resized to 810x1440: 0.75, still 1080x1920 at 1920,0; to 700x700: 0.64815, 1080x1080; a
+    reload keeping the views; a closed window's monitor gone; the last `remove`: the main window tiled
+    again, 3416x1416 at scale 1; the main window closed with another open), t_unit_monitors
+    (`desk_picture`'s cases: #174's, two, a 1366x768 with no whole-pixel scale near, an X,Y one, a lone
+    small one not enlarged, one past 1/4; the trap, its stubs now giving the layout), t_monitors,
+    t_monitors_nvidia, t_held_keys. Not checked: the real desktop (by rule: the stand-in only), a
+    host at a scale above 1 (the window's buffer is its logical size, and so the view's pixels:
+    untried), an X11 app at a scale below 1.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

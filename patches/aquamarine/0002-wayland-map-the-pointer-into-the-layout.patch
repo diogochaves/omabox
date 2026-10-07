@@ -1,0 +1,78 @@
+--- a/src/backend/Wayland.cpp
++++ b/src/backend/Wayland.cpp
+@@ -6,6 +6,9 @@
+ #include "FormatUtils.hpp"
+ #include <chrono>
+ #include <cstring>
++#include <fstream>
++#include <hyprutils/math/Box.hpp>
++#include <sys/stat.h>
+ #include <xf86drm.h>
+ #include <gbm.h>
+ #include <fcntl.h>
+@@ -367,14 +370,64 @@
+     pointer->setFrame([this](CCWlPointer* r) { events.frame.emit(); });
+ }
+ 
++// A consumer that maps an absolute warp over the box around all its outputs, not over the output it
++// names (Hyprland 0.56 drops SWarpEvent::output), puts a pointer in any window but a lone one's in
++// the wrong place. With AQ_WAYLAND_LAYOUT naming a file of "NAME X Y W H" lines, each output's box in
++// the consumer's layout (logical pixels, as the consumer lays its outputs out; the consumer keeps it
++// up to date), the warp is given in that whole layout's terms: a point in an output's window lands
++// on that output. The file is read again whenever it changes.
++static bool layoutAbsolute(const std::string& name, Vector2D& abs) {
++    static const char*                      PATH = getenv("AQ_WAYLAND_LAYOUT");
++    static struct timespec                  mtime = {};
++    static off_t                            size  = -1;
++    static std::vector<std::pair<std::string, CBox>> boxes;
++    if (!PATH || !*PATH)
++        return false;
++
++    struct stat st;
++    if (stat(PATH, &st) != 0)
++        return false;
++    if (st.st_mtim.tv_sec != mtime.tv_sec || st.st_mtim.tv_nsec != mtime.tv_nsec || st.st_size != size) {
++        mtime = st.st_mtim;
++        size  = st.st_size;
++        boxes.clear();
++        std::ifstream f(PATH);
++        std::string   n;
++        double        bx, by, bw, bh;
++        while (f >> n >> bx >> by >> bw >> bh) {
++            if (bw > 0 && bh > 0)
++                boxes.emplace_back(n, CBox{bx, by, bw, bh});
++        }
++    }
++
++    const auto it = std::ranges::find_if(boxes, [&](const auto& b) { return b.first == name; });
++    if (it == boxes.end())
++        return false;
++
++    double x0 = it->second.x, y0 = it->second.y, x1 = x0 + it->second.w, y1 = y0 + it->second.h;
++    for (auto const& [_, b] : boxes) {
++        x0 = std::min(x0, b.x);
++        y0 = std::min(y0, b.y);
++        x1 = std::max(x1, b.x + b.w);
++        y1 = std::max(y1, b.y + b.h);
++    }
++
++    const Vector2D point = Vector2D{it->second.x, it->second.y} + abs * Vector2D{it->second.w, it->second.h};
++    abs                  = (point - Vector2D{x0, y0}) / Vector2D{x1 - x0, y1 - y0};
++    return true;
++}
++
+ void Aquamarine::CWaylandPointer::emitWarp(uint32_t timeMs, wl_fixed_t x, wl_fixed_t y) {
+     const auto output = backend->focusedOutput.lock();
+     if (!output || output->waylandState.surfaceSize.x <= 0 || output->waylandState.surfaceSize.y <= 0)
+         return;
+ 
++    auto absolute = Vector2D{wl_fixed_to_double(x), wl_fixed_to_double(y)} / output->waylandState.surfaceSize;
++    layoutAbsolute(output->name, absolute);
++
+     events.warp.emit(SWarpEvent{
+         .timeMs   = timeMs,
+-        .absolute = Vector2D{wl_fixed_to_double(x), wl_fixed_to_double(y)} / output->waylandState.surfaceSize,
++        .absolute = absolute,
+         .output   = SP<IOutput>(output),
+     });
+ }
