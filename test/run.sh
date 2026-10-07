@@ -3360,6 +3360,24 @@ t_up_killed() {
   gone() { ! "$CLI" ls --json | jq -e --arg n "$B" '.[] | select(.name == $n)' >/dev/null; }
   check "...which takes it down at its idle limit" until_ok 60 gone
   ob down "$B" >/dev/null 2>&1
+  # Finding 237: killed sooner, once bwrap has started (info.json) but before up has found the box's
+  # PID 1 and recorded its pid namespace (up waits up to 10 s for that): stopped there, then killed.
+  B=$P-uk3
+  local bd=$XDG_RUNTIME_DIR/omabox/$B end=$((SECONDS + 30))
+  "$CLI" up "$B" --idle 20s --no-shell --net isolated >/dev/null 2>&1 & up=$!
+  until [ -s "$bd/info.json" ] || [ "$SECONDS" -ge "$end" ]; do sleep 0.002; done
+  kill -STOP "$up" 2>/dev/null
+  if [ ! -s "$bd/info.json" ]; then no "up ($B): bwrap started" "no info.json in 30 s"
+  elif jq -e .pidns "$bd/box.json" >/dev/null 2>&1; then
+    kill -KILL "$up" 2>/dev/null
+    skip "an up killed before it recorded its box's pid namespace" "it recorded it before it could be stopped (load)"
+  else
+    kill -KILL "$up" 2>/dev/null
+    check "an up killed before it recorded its box's pid namespace: the box has a reaper (finding 237)" until_ok 3 pgrep -f "omabox _reap $B "
+    check "...which records it" until_ok 20 jq -e .pidns "$bd/box.json"
+    check "...and takes the box down at its idle limit" until_ok 60 gone
+  fi
+  ob down "$B" >/dev/null 2>&1
   # While its up still runs (here: this shell, as up writes itself in `starting`), idle time is not
   # counted; once that process is gone, it is.
   B=$P-uk2

@@ -3486,7 +3486,8 @@ from them.
     that nothing would take down: REPRODUCED by killing t_agent_session's process group while its three
     boxes were starting: all three stayed up with no reaper, IDLE `never` (idle set, no `used` file yet),
     as in the usage study's listing; killed once they were up, every box went within a reaper poll. Now
-    the reaper starts once the box's PID 1 is confirmed (its pidns recorded), and `used` is touched
+    the reaper starts once the box's PID 1 is confirmed (its pidns recorded; finding 237 moved it to
+    before the launch, the up to 10 s before that being the same gap), and `used` is touched
     there; `up` leaves its pid and start time in the box dir's `starting` until it is done, and the
     reaper skips its idle check while that process runs, so a slow start is not idle time (not the
     box's lock: t_reap_race holds that as another `up` of the name would, and the reaper must decide). The repro again: all three down within 60 s. t_up_killed (an up
@@ -4254,6 +4255,15 @@ from them.
     10 minutes. t_unit_lock_markers: a waiter on the lock of a down slowed while it holds it reads the
     marker; a lock that appears as the marker is written is gone through; an old note swept, a younger
     one kept. All three failed on the old code.
+    (3) Finding 203's reaper started once `up` had recorded the box's pid namespace, after a wait for
+    its PID 1 of up to 10 s: an `up` killed in that wait still left a box with no reaper. The reaper
+    starts before the launch now, with `starting` and `used`, and waits for the record itself
+    (`reap_wait_pidns`) while its `up` runs; an `up` gone first leaves the record to the reaper (the
+    box's PID 1 once it shows, within 15 s, said in reap.log; none: the box never started, and the
+    loop finds it dead). t_up_killed: an `up` stopped as bwrap writes info.json, its pidns not yet
+    recorded, then SIGKILLed: a reaper, the pidns recorded, the box down at its 20 s idle limit (all
+    three failed on the old code; skipped, saying so, when load lets the `up` record it before it is
+    stopped).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

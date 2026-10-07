@@ -2189,6 +2189,17 @@ cmd_up() {
     printf ' %q' setsid "${launch[@]}" --unsetenv HL_EXEC_RULE_TOKEN "${args[@]}"
     printf ' 3>%q </dev/null >%q 2>&1\n' "$D/info.json" "$D/box.log"
   } > "$D/launch.sh"
+  # Its reaper now, before the box starts, not once up is done (#137): an up killed after the launch
+  # (SIGKILL: no EXIT trap; a harness's timeout) left a box that nothing took down, its idle limit and
+  # agent unwatched; and not once the box's pid namespace is recorded below either (finding 237: that
+  # can take 10 s). The reaper waits for that record itself, and makes it if this up is gone first.
+  # Should this up fail instead, its trap ends the box, and the reaper ends with it (nothing to watch).
+  # `starting` (this up, as pid and start time) keeps the reaper from counting the rest as idle.
+  echo "$$ $(proc_start $$)" > "$D/starting"
+  touch "$D/used"
+  if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
+    setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
+  fi
   # From here a box may be running (the EXIT trap set before the dir was made kills it if `up` fails).
   if [ $interactive = 1 ]; then
     install_passthrough
@@ -2214,15 +2225,6 @@ cmd_up() {
   # What box_pid checks from now on: this box's pid namespace, not a later owner of the pid.
   local ns; ns=$(readlink "/proc/$(box_pid)/ns/pid") || died_starting
   jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
-  # Its reaper now, not once up is done (#137): an up killed from here on (SIGKILL: no EXIT trap; a
-  # harness's timeout) left a box that nothing took down, its idle limit and agent unwatched. Should
-  # this up fail instead, its trap ends the box and the reaper with it (a box gone: nothing to watch).
-  # `starting` (this up, as pid and start time) keeps the reaper from counting the rest as idle.
-  echo "$$ $(proc_start $$)" > "$D/starting"
-  touch "$D/used"
-  if [ "$idle_s" != 0 ] || [ -n "$owner$agent" ] || [ $interactive = 1 ]; then
-    setsid -f "$ROOT/bin/omabox" _reap "$NAME" "$(meta created)" </dev/null >>"$D/reap.log" 2>&1 {LOCK}>&-
-  fi
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
   # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
@@ -2716,6 +2718,7 @@ cmd__reap() {
   # Its host session, found once (keys_ensure asks it every poll); in a subshell first, as it dies
   # when it finds none.
   [ "$mode" != interactive ] || { (host_session) >/dev/null 2>&1 && host_session; } || true
+  reap_wait_pidns || return 0
   # Every down here may fail (its lock busy for 60 s, PID 1 slow to exit under load): the reaper then
   # tries again at its next poll (reap_retry) instead of ending, which would leave the box with nobody
   # to take it down (finding 162).
@@ -2768,6 +2771,29 @@ cmd__reap() {
     DOWN_IF_CREATED=$created cmd_down "$NAME" || true
     [ -d "$D" ] || { echo "$human" > "$BOXES/.expired-$NAME"; prune_marks; return 0; }
     reap_retry || return 0
+  done
+}
+
+# A reaper starts as its box is launched (finding 237), before `up` has recorded the box's pid namespace,
+# which box_pid checks from then on. It waits for that record while its `up` (the `starting` file) runs;
+# an `up` gone first (SIGKILLed) leaves it to the reaper: the box's PID 1 once it shows, within 15 s,
+# else the box never started, and the loop finds it dead. Fails when the box is gone or another took
+# the name (cmd__reap's local: created).
+reap_wait_pidns() {
+  local st pid ns end=$((SECONDS + 15))
+  while [ -z "$(meta pidns)" ]; do
+    [ -f "$D/box.json" ] && [ "$(meta created)" = "$created" ] || return 1
+    st=$(cat "$D/starting" 2>/dev/null) || st=""
+    if [ -z "$st" ] || ! owner_alive "${st%% *}" "${st#* }"; then
+      pid=$(box_pid) || pid=""
+      if [ -n "$pid" ] && ns=$(readlink "/proc/$pid/ns/pid"); then
+        jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" 2>/dev/null && mv "$D/box.json.tmp" "$D/box.json" || return 1
+        say "$(date -Is) box '$NAME': its up ended before it recorded the box's pid namespace: recorded here"
+        return 0
+      fi
+      [ $SECONDS -lt $end ] || return 0
+    fi
+    sleep 0.2
   done
 }
 
