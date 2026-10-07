@@ -3422,6 +3422,7 @@ t_unit_aquamarine() {
     : > "$d/sys/libaquamarine.so.${v%:*}"; ln -sf "libaquamarine.so.${v%:*}" "$d/sys/$so"
     check_eq "the system's ${v%:*}: fixed ${v#*:}" "system||${v%:*}|${v#*:}" "$(pick "$so" "$d/sys")"
   done
+  aq_symbol_checks "$d"
   check_match "a soname the system lacks" "Hyprland links libaquamarine.so.99, which is not in $d/sys" "$(pick libaquamarine.so.99 "$d/sys")"
   check_fails "no soname at all: no answer (not a match on the dir)" lib aq_pick "" "$d/sys" "$d/user/lib"
   # What needs the fix, on this machine's system aquamarine (OMABOX_AQUAMARINE=system).
@@ -3455,6 +3456,71 @@ t_unit_aquamarine() {
     check_eq "config --json: confirm-close available with the fix" true "$(HOME=$d/home "$CLI" config --json | jq '."confirm-close-available"')"
   fi
   check_match "setup: an unknown option, refused before anything is done" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
+}
+
+# finding 245 (issue #48): the system's aquamarine has the fix when it exports what #415 added, whatever
+# its version says (a package patched with #415 keeps the version it patched); what needs the fix
+# follows. On real libraries: omabox's build (0.15.1@7bb8bdf4 and its patches) and the stock 0.15.0.
+aq_symbol_checks() {
+  local d=$1/sym so out real="" c common
+  so=$(lib hypr_aq_soname) || { no "the soname Hyprland links"; return; }
+  mkdir -p "$d/stub" "$d/patched" "$d/stock" "$d/home/.local/state/omarchy/current/theme" "$d/boxes" \
+    "$d/dri" "$d/drm/renderD129" "$d/pci/0000:01:00.0" "$d/drivers/nvidia"
+  # sys DIR: which aquamarine boxes run when DIR is the system's (no private build).
+  sys() { OMABOX_AQUAMARINE=system lib eval "AQ_SYSDIR='$1'; aq_resolve '$so' && echo \"\$AQ_KIND|\$AQ_VER|\$AQ_FIXED|\$(aq_desc)\"" 2>&1; }
+  # A library of the stock version exporting #415's CWaylandOutput::applyConfigure, and nothing else.
+  if command -v cc >/dev/null; then
+    printf 'void f(void) __asm__("%s");\nvoid f(void) {}\n' "$(lib eval 'echo $AQ_FIX_SYMBOL')" > "$d/fix.c"
+    cc -shared -fPIC -Wl,-soname,"$so" -o "$d/stub/libaquamarine.so.0.15.0" "$d/fix.c"
+    ln -s libaquamarine.so.0.15.0 "$d/stub/$so"
+    check_match "a system 0.15.0 exporting #415's applyConfigure: fixed, said patched" \
+      "^system\|0\.15\.0\|1\|the system's, 0\.15\.0, patched with the fix" "$(sys "$d/stub")"
+  else
+    skip "a stub 0.15.0 exporting #415's symbol has the fix" "no C compiler"
+  fi
+  # omabox's own build: this checkout's, the main checkout's for a worktree, or the user's.
+  common=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=""
+  for c in "$ROOT/build/prefix/lib/$so" "${common:+${common%/.git}/build/prefix/lib/$so}" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/omabox/aquamarine/lib/$so"; do
+    [ -n "$c" ] && [ -e "$c" ] && { real=$(readlink -f "$c"); break; }
+  done
+  if [ -n "$real" ]; then
+    check "omabox's build ($real) exports #415's symbol" lib aq_has_fix "$real"
+    # As the system's, under the stock version's name: the version says unfixed, the symbol fixed.
+    cp "$real" "$d/patched/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/patched/$so"
+    check_match "...as the system's 0.15.0 (a patched package): fixed, not by its version" "^system\|0\.15\.0\|1\|" "$(sys "$d/patched")"
+  else
+    skip "omabox's aquamarine build has the fix by its symbol" "no build (omabox setup --aquamarine)"
+  fi
+  # The stock one, as this was checked against (a patched package or a later release would have it).
+  if [ "$(pacman -Q aquamarine 2>/dev/null)" = "aquamarine 0.15.0-2" ] && [ -e "/usr/lib/$so" ]; then
+    check_fails "the system's stock 0.15.0 lacks #415's symbol" lib aq_has_fix "/usr/lib/$so"
+    cp "$(readlink -f "/usr/lib/$so")" "$d/stock/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/stock/$so"
+    check_match "...so unfixed, said so" "^system\|0\.15\.0\|0\|.*without the fix" "$(sys "$d/stock")"
+  else
+    skip "the system's stock aquamarine lacks the fix" "not aquamarine 0.15.0-2 here: $(pacman -Q aquamarine 2>&1)"
+  fi
+  # What follows the answer: confirm-close in the settings (the widget's switch), and `up` of a headless
+  # box on NVIDIA (t_unit_gpu's fake GPU), stopped at the box's lock, which comes after the refusals.
+  : > "$d/dri/renderD129"; ln -s "$d/pci/0000:01:00.0" "$d/drm/renderD129/device"; ln -s "$d/drivers/nvidia" "$d/pci/0000:01:00.0/driver"
+  gate() {
+    HOME=$d/home OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=$d/dri/renderD129 lib eval "AQ_SYSDIR='$1' DRI='$d/dri' SYSDRM='$d/drm'
+      BOXES='$d/boxes' CONFIG='$d/home/config' KEYBOARD=/usr/bin/true POINTER=/usr/bin/true STILL=/usr/bin/true EVENTS=/usr/bin/true; $2" 2>&1
+  }
+  local dir avail refused
+  for dir in stub patched stock; do
+    [ -e "$d/$dir/$so" ] || continue
+    if [ "$(sys "$d/$dir" | cut -d'|' -f3)" = 1 ]; then avail=true refused=0; else avail=false refused=1; fi
+    check_eq "the $dir system's: config --json confirm-close-available $avail" "$avail" \
+      "$(gate "$d/$dir" 'cmd_config --json 2>/dev/null' | jq '."confirm-close-available"')"
+    out=$(gate "$d/$dir" "lock_file() { echo 'at the lock'; exit 0; }; cmd_up '$P-aqs'")
+    if [ "$refused" = 1 ]; then
+      check_match "...up of a headless box on NVIDIA refused" "a headless box on NVIDIA \($d/dri/renderD129\) needs aquamarine's fix" "$out"
+    else
+      check_match "...up of a headless box on NVIDIA not refused (stopped at its lock)" "at the lock$" "$out"
+    fi
+  done
+  check_fails "...no box made" test -e "$d/boxes/$P-aqs"
 }
 
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.

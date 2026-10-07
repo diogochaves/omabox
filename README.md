@@ -37,7 +37,8 @@ real desktop saw no window at all.
   the first usable node, or the GPU `omabox config gpu` names (next release; `OMABOX_RENDER_NODE`
   overrides); an interactive box renders on the GPU your desktop renders on.
 - For headless boxes on NVIDIA and for confirm-close: aquamarine's fix (Hyprland's backend library),
-  until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415). Everything else
+  until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415) (a system copy
+  patched with it counts: omabox looks for the fix, not the version). Everything else
   runs on your system's aquamarine. `install.sh` builds it privately into `build/prefix`
   (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries two
   fixes of omabox's for interactive boxes: a key held when the box's window loses focus is
