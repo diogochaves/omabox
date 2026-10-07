@@ -15,7 +15,7 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   needs it, saying so.
 - **Check:** `git -C build/aquamarine fetch -q --tags && git -C build/aquamarine tag --contains 7bb8bdf4`,
   then `pacman -Q aquamarine` at or past that tag, or a package patched with #415 (`OMABOX_AQUAMARINE=system
-  omabox --version` says "patched with the fix": `AQ_FIX_SYMBOL`, finding 245). Once it is, `omabox
+  omabox --version` says "patched with the fix": `AQ_FIX_SYMBOL`, finding 246). Once it is, `omabox
   --version` names the system's copy with no warning and `setup --aquamarine` builds nothing
   (`AQ_FIXED_AFTER` in `bin/omabox`, 0.15.1: correct it if that release lacks the fix).
 - **Then drop:** `cmd_setup`'s build (or all of `setup`, if #49 has not given it other parts), the

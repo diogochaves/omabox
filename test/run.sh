@@ -3482,7 +3482,7 @@ t_unit_aquamarine() {
   check_match "setup: an unknown option, refused before anything is done" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
 }
 
-# finding 245 (issue #48): the system's aquamarine has the fix when it exports what #415 added, whatever
+# finding 246 (issue #48): the system's aquamarine has the fix when it exports what #415 added, whatever
 # its version says (a package patched with #415 keeps the version it patched); what needs the fix
 # follows. On real libraries: omabox's build (0.15.1@7bb8bdf4 and its patches) and the stock 0.15.0.
 aq_symbol_checks() {

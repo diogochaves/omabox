@@ -30,7 +30,7 @@ AQ_BUILD=$AQ_COMMIT+keys+layout+cursor
 AQ_FIXED_AFTER=0.15.1
 # What #415 added that the library exports: CWaylandOutput::applyConfigure. A system aquamarine with
 # it has the fix whatever its version says (a package patched with #415 keeps the version it patched;
-# finding 245): aq_has_fix.
+# finding 246): aq_has_fix.
 AQ_FIX_SYMBOL=_ZN10Aquamarine14CWaylandOutput14applyConfigureEv
 AQ_USER=${XDG_DATA_HOME:-$HOME/.local/share}/omabox/aquamarine
 # Where the system's aquamarine is (a variable for the suite, as DRI and SYSDRM are).
@@ -2552,7 +2552,7 @@ hypr_aq_soname() {
 # system's in SYSDIR; one with another soname is stale (built before an aquamarine upgrade): skipped,
 # said so. FIXED is 1 when it has the fix: every private build (only omabox makes them, at AQ_COMMIT
 # or before), a system one that exports #415's symbol (aq_has_fix: a release with it, or a package
-# patched with it, finding 245) or is after AQ_FIXED_AFTER (should a later release rename the
+# patched with it, finding 246) or is after AQ_FIXED_AFTER (should a later release rename the
 # symbol). OMABOX_AQUAMARINE=system skips the private builds (the suite on stock, finding 125).
 # LIBDIR is empty for the system's: the box's loader finds it.
 aq_pick() {
@@ -2580,7 +2580,7 @@ aq_pick() {
 }
 # aq_has_fix FILE: the library exports #415's CWaylandOutput::applyConfigure (AQ_FIX_SYMBOL): its
 # name in the file, read, never loaded. A grep, not nm: no binutils needed, and half a millisecond on
-# a 1.5 MB library, which is what reading a cache of the answer would cost (finding 245).
+# a 1.5 MB library, which is what reading a cache of the answer would cost (finding 246).
 aq_has_fix() { LC_ALL=C grep -qaF -- "$AQ_FIX_SYMBOL" "$1" 2>/dev/null; }
 # aq_ver_fixed VERSION: a release after AQ_FIXED_AFTER (the release after that one comes from a main
 # that has #415).
