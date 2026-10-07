@@ -10,9 +10,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **More monitors in a headless box**: `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below`,
   and `omabox monitor add SPEC | remove NAME | list` on a running one: any size, scale and place, a bar
   on each, kept over a config reload, `remove` as an unplug; one placed right or below moves with the
-  one before it (`omabox mode`, an unplug). `shot --monitor NAME`, `peek --monitor NAME`, and `drag
-  --shot` takes `--shot-fit`, `--shot-g`, `--shot-monitor`; `pixel` refuses a point in a gap between
-  monitors. Not yet on NVIDIA boxes (#122). In an interactive box each monitor is a window on your
+  one before it (`omabox mode`, an unplug). `shot --monitor NAME`; `peek --monitor NAME`, a peek
+  window per monitor, each marking the clicks and pointer on its own monitor, `down` closing them all
+  (#164); `drag --shot` takes `--shot-fit`, `--shot-g`, `--shot-monitor`; `pixel` refuses a point in a
+  gap between monitors. Not yet on NVIDIA boxes (#122). In an interactive box each monitor is a window on your
   desktop, on the box's workspace without focus, side by side with the others as the box lays them
   out (its main window made smaller for them, or said when your screen has no room); closing it
   unplugs it (#123, #161).

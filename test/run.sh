@@ -3569,6 +3569,34 @@ t_shell_crash() {
   ob down "$B" >/dev/null
 }
 
+# Accent pixels (#ff3cc8, peek's marks) in the screen of box $B (the caller's) within X0 Y0 X1 Y1:
+# "COUNT CX CY", the centre of their bounding box. With ACCENT_KEEP set, in the screen the last call
+# captured (two regions of one frame).
+# shellcheck disable=SC2329 # called through accent_ok and no_accent
+accent() {
+  [ -n "${ACCENT_KEEP:-}" ] || ob run -b "$B" -- grim -t ppm - > "$TMP/peek-$B.ppm"
+  python3 - "$TMP/peek-$B.ppm" "$@" <<'PY'
+import re, sys
+d = open(sys.argv[1], "rb").read()
+m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", d)
+w, px = int(m[1]), d[m.end():]
+x0, y0, x1, y1 = map(int, sys.argv[2:])
+hits = [(x, y) for y in range(y0, y1) for x in range(x0, x1)
+        if px[(y * w + x) * 3] > 200 and px[(y * w + x) * 3 + 1] < 110 and px[(y * w + x) * 3 + 2] > 150]
+if not hits: print(0, 0, 0)
+else: print(len(hits), (min(x for x, _ in hits) + max(x for x, _ in hits)) // 2, (min(y for _, y in hits) + max(y for _, y in hits)) // 2)
+PY
+}
+# shellcheck disable=SC2329 # called through until_ok and holds
+# For until_ok: at least MIN accent pixels there (centred within 8 px of CX,CY when given); prints them.
+accent_ok() {
+  local n=$1 a; shift; read -ra a <<< "$(accent "$1" "$2" "$3" "$4")"; echo "${a[*]}"
+  [ "${a[0]}" -ge "$n" ] || return 1
+  [ $# -lt 6 ] || (( a[1] - $5 >= -8 && a[1] - $5 <= 8 && a[2] - $6 >= -8 && a[2] - $6 <= 8 ))
+}
+# shellcheck disable=SC2329
+no_accent() { local a; read -ra a <<< "$(accent "$@")"; echo "${a[*]}"; [ "${a[0]}" = 0 ]; }
+
 # peek, run inside a box on that box's own screen (never on the host): it draws, and hidden on another
 # workspace it stops capturing (finding 64; the old one scaled 30 frames a second nobody saw).
 # Marks (finding 85): what `click`/`keys` did, drawn by that peek over its view. The CLI writes them
@@ -3591,32 +3619,6 @@ t_peek() {
   ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ window = 'class:omabox-peek', x = 940, y = 520 })" >/dev/null
   check "peek floats at 940,520 960x540" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\") | .at == [940, 520] and .size == [960, 540]'"
   sleep 0.5; local base; base=$(ticks)   # at this size, before any mark
-  # Accent pixels (#ff3cc8) in the box's screen within X0 Y0 X1 Y1: "COUNT CX CY", the centre of their
-  # bounding box.
-  # shellcheck disable=SC2329 # called through accent_ok and no_accent
-  accent() {
-    ob run -b "$B" -- grim -t ppm - > "$TMP/peek.ppm"
-    python3 - "$TMP/peek.ppm" "$@" <<'PY'
-import re, sys
-d = open(sys.argv[1], "rb").read()
-m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", d)
-w, px = int(m[1]), d[m.end():]
-x0, y0, x1, y1 = map(int, sys.argv[2:])
-hits = [(x, y) for y in range(y0, y1) for x in range(x0, x1)
-        if px[(y * w + x) * 3] > 200 and px[(y * w + x) * 3 + 1] < 110 and px[(y * w + x) * 3 + 2] > 150]
-if not hits: print(0, 0, 0)
-else: print(len(hits), (min(x for x, _ in hits) + max(x for x, _ in hits)) // 2, (min(y for _, y in hits) + max(y for _, y in hits)) // 2)
-PY
-  }
-  # shellcheck disable=SC2329 # called through until_ok and holds
-  # For until_ok: at least MIN accent pixels there (centred within 8 px of CX,CY when given); prints them.
-  accent_ok() {
-    local n=$1 a; shift; read -ra a <<< "$(accent "$1" "$2" "$3" "$4")"; echo "${a[*]}"
-    [ "${a[0]}" -ge "$n" ] || return 1
-    [ $# -lt 6 ] || (( a[1] - $5 >= -8 && a[1] - $5 <= 8 && a[2] - $6 >= -8 && a[2] - $6 <= 8 ))
-  }
-  # shellcheck disable=SC2329
-  no_accent() { local a; read -ra a <<< "$(accent "$@")"; echo "${a[*]}"; [ "${a[0]}" = 0 ]; }
   HELD=$B   # (a peek of yours at this box would get these marks too: held)
   ob click -b "$B" 100 100 >/dev/null
   check "no marks file without a peek window" test ! -e "$D/marks"
@@ -3659,6 +3661,74 @@ PY
   check "peek idles while hidden (CPU ticks: $hidden)" test "$hidden" -le 2
   check_fails "peek refuses junk --fps" "$ROOT/tools/peek/omabox-peek" --box /nonexistent --fps abc
   ob down "$B" >/dev/null
+}
+
+# #164, finding 233: `omabox peek` of a box with two monitors, a window each, in a box standing in for
+# the host (finding 26: peek is a host window). Marks are in layout coordinates: each window draws the
+# ones on its own monitor, at that monitor's place and scale; both windows get them (a second peek
+# made the marks file anew, lost to the first); `down` closes every one (it closed the first).
+t_peek_monitors() {
+  local n S=$P-pkm C=$P-pkmc
+  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
+  [ -n "$n" ] || { skip "peek with monitors" "no render node here but NVIDIA's, whose boxes refuse monitors"; return; }
+  env OMABOX_RENDER_NODE="$n" "$CLI" up "$S" --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
+  local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
+  # (The stand-in renders on that node, and so does a box in it.) The second monitor is 1280x720
+  # logical, 1600x900 pixels, at 1920,0.
+  check "up a box with a second monitor at scale 1.25 in the stand-in" "${in[@]}" up "$C" --no-shell --idle 0 --monitor 1600x900,scale=1.25
+  check_eq "...right of the main screen" "1.25 1920 0" \
+    "$("${in[@]}" monitor -b "$C" list --json | jq -r '.[] | select(.name == "HEADLESS-3") | "\(.scale) \(.x) \(.y)"')"
+  check "peek of the main screen in the stand-in" "${in[@]}" peek "$C"
+  check "peek --monitor HEADLESS-3" "${in[@]}" peek "$C" --monitor HEADLESS-3
+  # shellcheck disable=SC2329 # called through until_ok
+  peeks() { [ "$(ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class == "omabox-peek")] | length')" = "$1" ]; }
+  check "two peek windows" until_ok 10 peeks 2
+  # Floated where the views map simply: the main screen's at half size at 20,20 (layout X,Y at
+  # 20 + X/2, 20 + Y/2), HEADLESS-3's at half its logical size at 1000,600 (1000 + (X-1920)/2, 600 + Y/2).
+  local a1 a2
+  a1=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "omabox-peek" and (.title | endswith("HEADLESS-3") | not)) | .address')
+  a2=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "omabox-peek" and (.title | endswith("HEADLESS-3"))) | .address')
+  ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '9' })" >/dev/null
+  place() {   # ADDRESS W H X Y
+    ob hyprctl -b "$S" dispatch "hl.dsp.window.float({ window = 'address:$1' })" >/dev/null
+    ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$1', x = $2, y = $3 })" >/dev/null
+    ob hyprctl -b "$S" dispatch "hl.dsp.window.move({ window = 'address:$1', x = $4, y = $5 })" >/dev/null
+  }
+  place "$a1" 960 540 20 20; place "$a2" 640 360 1000 600
+  check_eq "...placed" "[20,20] [960,540] [1000,600] [640,360]" \
+    "$(ob hyprctl -b "$S" -j clients | jq -r --arg a "$a1" --arg b "$a2" '[(.[] | select(.address == $a)), (.[] | select(.address == $b))] | map("\(.at | tojson) \(.size | tojson)") | join(" ")')"
+  local B=$S   # (accent's box: the stand-in's screen)
+  # One frame of the stand-in: a ring around CX,CY in one window, no accent in the other (MIN X0 Y0
+  # X1 Y1 CX CY, then the other's X0 Y0 X1 Y1); a caption in both.
+  # shellcheck disable=SC2329 # called through until_ok
+  ring_only() { accent_ok "$1" "$2" "$3" "$4" "$5" "$6" "$7" && ACCENT_KEEP=1 no_accent "$8" "$9" "${10}" "${11}"; }
+  # shellcheck disable=SC2329
+  captions() { accent_ok 51 20 440 980 560 && ACCENT_KEEP=1 accent_ok 51 1000 840 1640 960; }
+  sleep 0.5
+  "${in[@]}" click -b "$C" 700 400 >/dev/null
+  check "a click on the main screen: a ring in its peek where it went, none in HEADLESS-3's" \
+    until_ok 3 ring_only 21 310 160 430 280 370 220 1000 600 1640 960
+  check "...nor after" holds 1 no_accent 1000 600 1640 960
+  sleep 3.5
+  "${in[@]}" click -b "$C" 2240 360 >/dev/null
+  # (The pointer glides 120 ms from the main screen: its ring shows there until it leaves.)
+  check "a click on HEADLESS-3: a ring in its peek at its place and scale, none in the main screen's" \
+    until_ok 3 ring_only 21 1100 720 1220 840 1160 780 20 20 980 560
+  check "...nor after" holds 1 no_accent 20 20 980 560
+  sleep 3.5
+  "${in[@]}" keys -b "$C" -t hi >/dev/null
+  check "keys: a caption in both peeks" until_ok 3 captions
+  # down closes every peek window of the box: a process named as a third one (a later pid than the
+  # two) goes too, though nothing ties it to the box's socket.
+  local d; d=$("${in[@]}" path "$C")
+  ob run -b "$S" -d -- bash -c 'exec -a "$1" sleep 300' _ "$ROOT/tools/peek/omabox-peek --box $d/run/x --output HEADLESS-9 --fps 1" >/dev/null 2>&1
+  until_ok 5 ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/run/x "
+  "${in[@]}" down "$C" >/dev/null 2>&1
+  check "down closes both peek windows" until_ok 5 peeks 0
+  # shellcheck disable=SC2329 # called through until_ok
+  none_left() { ! ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/run/"; }
+  check "...and every peek process of the box" until_ok 3 none_left
+  ob down "$S" >/dev/null
 }
 
 # A throwaway whose run is gone and whose box died before the reaper saw it (a teardown that gave up
@@ -6425,7 +6495,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_monitors_wait t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_monitors_wait t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
@@ -6437,7 +6507,7 @@ default_jobs() {
   local n m; n=$(($(nproc) / 2)) m=$(awk '/^MemAvailable:/ {print int($2 / 2097152)}' /proc/meminfo)
   [ "$m" -ge "$n" ] || n=$m; [ "$n" -le 8 ] || n=8; [ "$n" -ge 1 ] || n=1; echo "$n"
 }
-SLOW=(t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_reap_race t_wait t_pointer t_clip t_replace t_idle)
+SLOW=(t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_peek_monitors t_reap_race t_wait t_pointer t_clip t_replace t_idle)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }

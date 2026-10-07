@@ -113,7 +113,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   `omabox monitor add SPEC` / `remove NAME` (an unplug) / `list` on a running box. Coordinates are the
   layout's (`pixel` refuses one in a gap between monitors);
   `shot --monitor NAME` (`--fit` for a mixed-scale layout, which comes out at the highest scale),
-  `drag --shot F --shot-monitor NAME`. Not on NVIDIA headless boxes (`up` says so). In an interactive
+  `drag --shot F --shot-monitor NAME`; `peek --monitor NAME` for the user, one window per monitor
+  (`shot` is the whole layout). Not on NVIDIA headless boxes (`up` says so). In an interactive
   box (the user's) each monitor is a window on their desktop: only when they ask for it.
 - **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
   put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
@@ -518,7 +519,9 @@ login screen and the disk passphrase stay a VM's to test.
 - `omabox peek` opens a live, view-only window of your headless box on the user's workspace 9 (or the
   one they set with `omabox config workspace`) without taking focus. It does not affect the box. Your
   `click`, `pointer` and `keys` show on it for ~3 s (a ring, key captions; `--pass` values as `*`),
-  never in your shots.
+  never in your shots. A window shows one monitor (the main one, or `peek --monitor NAME`): one window
+  per monitor, tiled on that workspace, each with the clicks and pointer on its own monitor (keys on
+  all); the whole layout at once is `omabox shot`.
 - `omabox up --interactive` makes the box a real window on that workspace that the user drives
   (SUPER+ALT+ESCAPE sends SUPER keys to it). The host keeps drawing it while it is hidden, so `shot`,
   `click`, `keys` and `wait` work on it. Once the user closed that window and kept the box running,

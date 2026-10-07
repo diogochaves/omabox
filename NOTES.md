@@ -1279,7 +1279,8 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `combo KEY`, `text TEXT` (≤200 characters, control characters as spaces), `secret N`: a `--pass`
     value only as its length) once the tool has sent them, and only while a peek window of the box
     is open; otherwise the file is removed. The box dir is out of the box's reach, so nothing in a box
-    can forge or read marks. Mode 0600, emptied past 64 KB, fresh for each `peek`, gone with `down`.
+    can forge or read marks. Mode 0600, emptied past 64 KB, fresh for each `peek` (for the first peek
+    window of a box since finding 233: the others share it), gone with `down`.
     `tools/peek --marks FILE` reads it from its end on inotify in the same poll loop, validates each
     line whole (anything else, or a line over 1 KB, is ignored) and draws, in a desynchronized
     `wl_subsurface` over its window (empty input region): a ring that glides (120 ms) to where the
@@ -3832,7 +3833,7 @@ from them.
     rectangle as `-g` takes it (so `--in` maps it); `drag --shot` takes `--shot-fit`, `--shot-g` and
     `--shot-monitor` (a 3440x1440 box's drag shot could not be made smaller); `peek --monitor NAME` opens
     a peek window per monitor (`tools/peek --output`), told apart by its `--output` (not run here: a
-    window on the host). Checked in t_monitors on the AMD iGPU: three monitors with their modes, scales
+    window on the host; run in a stand-in host since, and its marks fixed: finding 233). Checked in t_monitors on the AMD iGPU: three monitors with their modes, scales
     and positions, a bar on each, the pointer and a click on the second and third moving the active
     workspace there, `shot --monitor` 1080x1920, a reload keeping all three, remove and add again.
     (`wait` and `--wait` still watched only the first output advertised: finding 231.)
@@ -4054,6 +4055,39 @@ from them.
     HEADLESS-3 by name and back, its refusals, both away and `back` restoring both with their modes,
     places and scales, `--cycles 2` on HEADLESS-3, the Lua fix. On 950110b 31 of the other checks
     fail; the Lua one fails with the old config and the new CLI.
+233. **Peek with several monitors: each window marks its own monitor** (2026-10-06, #164; review of
+    finding 226's `peek --monitor`, first run in a stand-in host then). (1) Marks were drawn in
+    whole-layout coordinates on each one-monitor view: a mark is `ptr WxH move X Y` with WxH the
+    layout's extent, and tools/peek mapped X/W onto its own output, so the pointer at 3700,100 (on
+    monitor 2) showed in the top-right corner of the main screen's peek. Now peek learns its output's
+    place and logical size from xdg-output (`zxdg_output_manager_v1`, its XML vendored as still's is;
+    it follows a move or a new mode), keeps the pointer and the clicks in layout pixels, and draws a
+    ripple only when the click is on its output, the ring only while the pointer is on it (or
+    gliding: it may come onto it), mapped by that output's place and logical size, so its scale too
+    (the view is the output's pixels, which cover its logical rectangle). Key captions show in every
+    window of the box: a key has no place, and the focused window is not peek's to know. With no
+    output named, a peek shows the first advertised as before, and for one monitor the mapping is
+    the old one (a box at 0,0 whose logical size is the extent); without xdg-output (not Hyprland)
+    the view stands for the whole extent, as before. The pointer's first glide starts at the
+    extent's centre, which is the screen's centre on one monitor and only a guess on several (where
+    Hyprland's cursor starts on the main screen). (2) Every `peek` made `$D/marks` anew (`rm -f`, then
+    a new file), so a peek window already open read the unlinked file and got no more marks. Now the
+    first peek window of a box makes it fresh and the others share it (made only when absent); every
+    window reads it from its end on inotify, and the 64 KB reset (truncated in place) reaches them all.
+    The file is still in the box dir, 0600: the box can neither read nor forge it (finding 85). (3)
+    `down` killed the first peek (`peek_pid`'s first pid); the others went only when the box's socket
+    did, or never, for one not reading it. It kills every peek of the box now (`peek_pids`). (4)
+    README, reference.md and `help peek` say one window per monitor, tiled on the workspace, the
+    marks of each on its own, and that the whole layout at once is `omabox shot`; peek's usage line has
+    `--monitor`. Checked in t_peek_monitors, in a stand-in host (finding 26) on the AMD iGPU: a box in
+    it with HEADLESS-3 1600x900 at scale 1.25 right of the main screen, `omabox peek` and `peek
+    --monitor HEADLESS-3` run there, the two windows floated at half size: a click at 700,400 rings in
+    the main screen's window at 370,220 and, in the same frame of the stand-in, nothing in the
+    other's; a click at 2240,360 rings in HEADLESS-3's at 1160,780 (half its logical size, not its
+    pixels) and nothing in the main one's once the glide has left it; `keys -t hi` captions both;
+    `down` of the box closes both windows and a third process named as its peek. With 950110b's CLI
+    and peek those four checks fail: the main screen's window drew nothing, and HEADLESS-3's drew the
+    click on the main screen, at 1140,733 (seen in a shot). t_peek (one monitor) unchanged.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -4088,7 +4122,8 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   suite, nothing skipped, 2026-09-30) tested; other NVIDIA cards, multi-GPU and other setups: → #84.
 - Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
   in; an overlay would touch the real desktop; → #81). A peek that starts while a `click` is
-  deciding whether to write can miss marks until the next peek (the file removed under it); not seen.
+  deciding whether to write can miss marks until it is opened again (the file removed under it; since
+  finding 233 the box's other peek windows share the new file); not seen.
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
   `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried (→ #81).

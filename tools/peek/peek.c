@@ -2,6 +2,9 @@
 //
 //   omabox-peek --box /path/to/box/wayland-1 [--output NAME] [--fps N] [--title TEXT] [--marks FILE]
 //
+// One window shows one of the box's outputs (--output, else the first advertised); a box with several
+// monitors gets a peek window each.
+//
 // Two Wayland connections: to the box's compositor, where it only ever captures the screen
 // (wlr-screencopy, the same way `omabox shot` does; no input, nothing in the box changes), and to the
 // host compositor ($WAYLAND_DISPLAY), where it shows the frames in a window, scaled to fit.
@@ -10,7 +13,8 @@
 // next frame (frame callbacks), so a peek hidden on workspace 9 costs next to nothing.
 // The box is what is being contained, and it can answer on its own socket: every frame's size, stride
 // and format are checked before peek (a host process) reads from the buffer.
-// --marks FILE: what omabox click/pointer/keys did, drawn over the view (see "marks" below).
+// --marks FILE: what omabox click/pointer/keys did, drawn over the view (see "marks" below). Every
+// peek window of a box reads the same file; each draws only what happened on its own output.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -28,6 +32,7 @@
 
 #include "font8x8.h"
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
+#include "xdg-output-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 
 #define DRM_FORMAT_XBGR8888 0x34324258
@@ -84,6 +89,10 @@ static struct {
     uint32_t buf_format;      // of the complete frame in buf (what draw() reads)
     int buf_y_invert;
     int have_frame;  // buf holds a complete frame not yet drawn
+    // Where the output shown is in the box's layout, in logical pixels (xdg-output; it follows a move
+    // or a new mode). Marks are in layout coordinates: this is what maps them onto the view.
+    struct zxdg_output_manager_v1 *xdg_manager;
+    int lx, ly, lw, lh;
 } box;
 
 static void output_name(void *data, struct wl_output *o, const char *name) {
@@ -103,9 +112,21 @@ static void output_description(void *d, struct wl_output *o, const char *s) { (v
 static const struct wl_output_listener output_listener = {
     output_geometry, output_mode, output_done, output_scale, output_name, output_description};
 
+static void xdg_position(void *d, struct zxdg_output_v1 *x, int32_t lx, int32_t ly) { (void)d; (void)x; box.lx = lx; box.ly = ly; }
+static void xdg_size(void *d, struct zxdg_output_v1 *x, int32_t w, int32_t h) {
+    (void)d; (void)x;
+    if (w > 0 && h > 0) { box.lw = w; box.lh = h; }
+}
+static void xdg_done(void *d, struct zxdg_output_v1 *x) { (void)d; (void)x; }
+static void xdg_name(void *d, struct zxdg_output_v1 *x, const char *n) { (void)d; (void)x; (void)n; }
+static void xdg_description(void *d, struct zxdg_output_v1 *x, const char *s) { (void)d; (void)x; (void)s; }
+static const struct zxdg_output_v1_listener xdg_listener = {xdg_position, xdg_size, xdg_done, xdg_name, xdg_description};
+
 static void box_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t version) {
     (void)data;
-    if (!strcmp(iface, wl_shm_interface.name)) {
+    if (!strcmp(iface, zxdg_output_manager_v1_interface.name)) {
+        box.xdg_manager = wl_registry_bind(reg, name, &zxdg_output_manager_v1_interface, version < 2 ? version : 2);
+    } else if (!strcmp(iface, wl_shm_interface.name)) {
         box.shm = wl_registry_bind(reg, name, &wl_shm_interface, 1);
     } else if (!strcmp(iface, zwlr_screencopy_manager_v1_interface.name)) {
         box.manager_version = version < 3 ? version : 3;
@@ -332,6 +353,9 @@ static int64_t now_ms(void) {
 // open (NOTES finding 85). The box cannot reach that file, so it can neither forge nor read marks.
 //   ptr WxH (move X Y | click [BTN] | down BTN | up BTN | scroll DY | sleep MS)...
 //   combo KEY  |  text TEXT  |  secret N
+// WxH is the box's layout (all its monitors), X Y a point in it. A window shows the pointer and the
+// clicks that fall on its own output only, at that output's place and scale (finding 233); key
+// captions show in every window of the box. Without xdg-output the view stands for all of WxH.
 // Any other line is ignored whole. Marks are drawn here only, never into the box's frames, in a
 // subsurface of the window with frame callbacks of its own, and only while one is on show: a ring
 // that glides to the pointer, a ripple per click, key captions at the bottom; all gone ~3 s after
@@ -359,9 +383,10 @@ static struct {
     char line[1024];
     size_t len;
     int skip;                     // in a line too long to be one: dropped up to its newline
-    double fx, fy, tx, ty;        // the pointer glides from f to t (0..1 of the box's layout)
+    double fx, fy, tx, ty;        // the pointer glides from f to t (layout pixels)
     int64_t moved, active;        // when that glide started; the last pointer command
     int have_ptr;
+    int ew, eh;                   // the layout's size, as the last ptr line gave it
     struct ripple ripples[NRIPPLES];
     int next_ripple;
     struct pill pills[NPILLS];
@@ -371,7 +396,7 @@ static struct {
     struct areas drawn[2];
     int last;                     // the buffer shown now
     int waiting, mapped, dirty;
-} marks = {.fd = -1, .ifd = -1, .fx = 0.5, .fy = 0.5, .tx = 0.5, .ty = 0.5};  // a box's cursor starts centred
+} marks = {.fd = -1, .ifd = -1};
 
 // A whole decimal number in [lo, hi].
 static int mark_num(const char *s, long lo, long hi, long *out) {
@@ -422,14 +447,17 @@ static int mark_ptr(char *rest, int64_t now) {
             if (i + 1 >= n || !mark_num(t[++i], 0, 600000, &v)) return 0;
         } else return 0;
     }
+    // A box's cursor starts centred: before the first pointer line, the centre of its layout.
+    if (!marks.ew) { marks.fx = marks.tx = (double)w / 2; marks.fy = marks.ty = (double)h / 2; }
+    marks.ew = (int)w; marks.eh = (int)h;
     double px, py;
     ptr_pos(now, &px, &py);
     double cx = marks.tx, cy = marks.ty;   // where the box's pointer is, as far as we know
     int moved = 0;
     for (int i = 0; i < n; i++) {
         if (!strcmp(t[i], "move")) {
-            mark_num(t[i + 1], 0, w - 1, &v); cx = ((double)v + 0.5) / (double)w;
-            mark_num(t[i + 2], 0, h - 1, &v); cy = ((double)v + 0.5) / (double)h;
+            mark_num(t[i + 1], 0, w - 1, &v); cx = (double)v + 0.5;
+            mark_num(t[i + 2], 0, h - 1, &v); cy = (double)v + 0.5;
             moved = 1;
             i += 2;
         } else if (!strcmp(t[i], "click") || !strcmp(t[i], "down")) {
@@ -604,14 +632,35 @@ static int fade(int64_t age) {
     return age < MARK_FADE ? 255 : age < MARK_GONE ? (int)(255 * (MARK_GONE - age) / (MARK_GONE - MARK_FADE)) : 0;
 }
 
+// A layout point on this window's output: 1, and where it is in the window (the view is dw x dh at
+// ox, oy); 0 when it is on another monitor.
+static int on_view(double x, double y, int dw, int dh, int ox, int oy, float *wx, float *wy) {
+    double rx = 0, ry = 0, rw = marks.ew, rh = marks.eh;
+    if (box.lw > 0) { rx = box.lx; ry = box.ly; rw = box.lw; rh = box.lh; }
+    if (rw <= 0 || rh <= 0 || x < rx || y < ry || x >= rx + rw || y >= ry + rh) return 0;
+    *wx = (float)(ox + (x - rx) / rw * dw);
+    *wy = (float)(oy + (y - ry) / rh * dh);
+    return 1;
+}
+
 static void marks_frame_done(void *data, struct wl_callback *cb, uint32_t t) { (void)data; (void)t; wl_callback_destroy(cb); marks.waiting = 0; }
 static const struct wl_callback_listener marks_frame_listener = {marks_frame_done};
 
 // Draw what is on show, or unmap the subsurface once nothing is. 0: no free buffer, try again soon.
 static int draw_marks(int64_t now) {
-    int on = marks.have_ptr && fade(now - marks.active) > 0;
-    for (int i = 0; i < NRIPPLES; i++)
-        if (marks.ripples[i].t && fade(now - marks.ripples[i].t) > 0) on = 1;
+    int dw, dh, ox, oy;
+    float x, y;
+    fit(host.width, host.height, box.buf.width, box.buf.height, &dw, &dh, &ox, &oy);
+    // On show here: the pointer while it is on this output (or gliding, onto it maybe), the clicks
+    // made on it, the captions.
+    double px, py;
+    ptr_pos(now, &px, &py);
+    const int ptr_on = marks.have_ptr && fade(now - marks.active) > 0;
+    int on = ptr_on && (now - marks.moved < GLIDE_MS || on_view(px, py, dw, dh, ox, oy, &x, &y));
+    for (int i = 0; i < NRIPPLES; i++) {
+        const struct ripple *r = &marks.ripples[i];
+        if (r->t && fade(now - r->t) > 0 && on_view(r->x, r->y, dw, dh, ox, oy, &x, &y)) on = 1;
+    }
     for (int i = 0; i < marks.npills; i++)
         if (fade(now - marks.pills[i].t) > 0) on = 1;
     if (!on) {
@@ -638,20 +687,14 @@ static int draw_marks(int64_t now) {
             for (int y = drawing->a[i].y; y < drawing->a[i].y + drawing->a[i].h; y++)
                 memset(b->data + (size_t)y * (size_t)b->width + (size_t)drawing->a[i].x, 0, (size_t)drawing->a[i].w * 4);
     *drawing = (struct areas){0};
-    int dw, dh, ox, oy;
-    fit(host.width, host.height, box.buf.width, box.buf.height, &dw, &dh, &ox, &oy);
     for (int i = 0; i < NRIPPLES; i++) {
         const struct ripple *r = &marks.ripples[i];
         const int64_t age = now - r->t;
-        if (!r->t || fade(age) <= 0) continue;
-        const float x = (float)(ox + r->x * dw), y = (float)(oy + r->y * dh);
+        if (!r->t || fade(age) <= 0 || !on_view(r->x, r->y, dw, dh, ox, oy, &x, &y)) continue;
         if (age < RIPPLE_MS) ring(b, x, y, 12.0f + 26.0f * (float)age / RIPPLE_MS, 1.5f, ACCENT, (int)(255 * (RIPPLE_MS - age) / RIPPLE_MS));
         if (r->tag) plate(b, (int)x + 16, (int)y + 14, r->tag, (int)strlen(r->tag), 1, fade(age));
     }
-    if (marks.have_ptr && fade(now - marks.active) > 0) {
-        double px, py;
-        ptr_pos(now, &px, &py);
-        const float x = (float)(ox + px * dw), y = (float)(oy + py * dh);
+    if (ptr_on && on_view(px, py, dw, dh, ox, oy, &x, &y)) {
         const int a = fade(now - marks.active);
         ring(b, x, y, 12, 3.5f, 0x000000, a / 2);   // a dark edge, for light screens
         ring(b, x, y, 12, 2, ACCENT, a);
@@ -768,6 +811,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "omabox-peek: the box offers no screencopy, shm or output%s%s\n",
                 box.want_output ? " named " : "", box.want_output ? box.want_output : "");
         return 1;
+    }
+    if (box.xdg_manager) {   // the output's place in the layout, for the marks
+        struct zxdg_output_v1 *x = zxdg_output_manager_v1_get_xdg_output(box.xdg_manager, box.output);
+        zxdg_output_v1_add_listener(x, &xdg_listener, NULL);
+        if (wl_display_roundtrip(box.display) < 0) { fprintf(stderr, "omabox-peek: lost the box\n"); return 1; }
     }
 
     host.display = wl_display_connect(NULL);

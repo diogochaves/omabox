@@ -470,7 +470,10 @@ The first monitor is `--size`'s. Each one goes right of (or below) the last one 
 it: `omabox mode` on the first, or the one before it unplugged (an X,Y one stays). Click, drag,
 pointer and pixel coordinates are the layout's (`shot` of the whole layout shows where each monitor
 is), and so are `wait`'s and `--wait`'s, which watch every monitor. They survive a config reload. Not
-in an NVIDIA box (it draws on one Wayland output of its own: `omabox config gpu` another GPU).
+in an NVIDIA box (it draws on one Wayland output of its own: `omabox config gpu` another GPU). A peek
+window shows one monitor (the first, or `peek --monitor NAME`): one window per monitor, tiled on the
+workspace, each showing the agent's pointer and clicks on its own monitor (its keys on all); the whole
+layout at once is `omabox shot`.
 
 In a box you drive (`up --interactive --monitor 1280x720`, or `monitor add`), each monitor is a window
 on your desktop, opened on the box's workspace without taking focus, floating at the SPEC's size. Its
