@@ -138,15 +138,28 @@ evidence() {
   for b in $("$CLI" ls --json 2>/dev/null | jq -r --arg p "$P-" '.[] | select((.name | startswith($p)) and .state == "up") | .name'); do
     # Reading a box is using it (need_box touches `used`, `path` too): its idle clock is put back after,
     # or other tests' idle boxes (t_idle, t_reap_race) expired late and failed too (#111, finding 180).
+    # After each read, and only from that read's own touch (finding 237): a test using its box meanwhile
+    # got the older time back, and its box could expire early.
     d=$e/boxes/$b; mkdir -p "$d"; bd=$XDG_RUNTIME_DIR/omabox/$b
     [ ! -e "$bd/used" ] || touch -r "$bd/used" "$d/.used"
-    timeout 10 "$CLI" shot -b "$b" -o "$d/screen.png" >/dev/null 2>&1
-    for q in clients layers activewindow activeworkspace devices; do timeout 5 "$CLI" hyprctl -b "$b" -j "$q" > "$d/$q.json" 2>&1; done
-    timeout 5 "$CLI" hyprctl -b "$b" cursorpos > "$d/cursorpos" 2>&1
-    [ ! -e "$d/.used" ] || touch -r "$d/.used" "$bd/used" 2>/dev/null
+    ev_read "$bd" "$d" timeout 10 "$CLI" shot -b "$b" -o "$d/screen.png" >/dev/null 2>&1
+    for q in clients layers activewindow activeworkspace devices; do ev_read "$bd" "$d" timeout 5 "$CLI" hyprctl -b "$b" -j "$q" > "$d/$q.json" 2>&1; done
+    ev_read "$bd" "$d" timeout 5 "$CLI" hyprctl -b "$b" cursorpos > "$d/cursorpos" 2>&1
     for f in "$bd/box.log" "$bd"/home/*.log "$bd"/run/hypr/*/hyprland.log "$bd/run/events.log"; do [ -f "$f" ] && tail -n 100 "$f" > "$d/${f##*/}"; done
   done
   printf '       evidence: %s\n' "$e"
+}
+# ev_read BOXDIR EVDIR CMD...: one of evidence's reads, then the box's `used` as it was before (kept in
+# EVDIR/.used), if the time there now is the read's own: omabox touches it as it starts (need_box), a
+# second at most into the read here. A later time is another use, a test's meanwhile: kept, and the time
+# put back after the next reads (finding 237). (A use in that first second is still taken for the read's.)
+ev_read() {
+  local bd=$1 d=$2 t0=${EPOCHREALTIME//[!0-9]/} m; shift 2   # (microseconds, whatever the locale's point)
+  "$@"
+  [ -e "$d/.used" ] && m=$(stat -c %.6Y "$bd/used" 2>/dev/null) || return 0
+  m=${m//[!0-9]/}
+  if [ "$m" -le $((t0 + 1000000)) ]; then touch -r "$d/.used" "$bd/used" 2>/dev/null
+  else touch -r "$bd/used" "$d/.used"; fi
 }
 # check NAME CMD...: the command must succeed. check_eq NAME WANT GOT. check_fails NAME CMD...
 check() { local n=$1; shift; local out; if out=$("$@" 2>&1); then ok "$n"; else no "$n" "$out"; fi; }
@@ -1145,6 +1158,32 @@ t_unit_omarchy_contract() {
     "omarchy-shell shell moveBarWidget, 2 argument(s) (skill): takes 1 argument(s) now|layer omarchy-bar (up waits for it): no WlrLayershell.namespace \"omarchy-bar\" under shell/" \
     "$(omarchy_contract "$t" | awk -F'\t' '$2 != "" { print $1 ": " $2 }' | paste -sd '|')"
   rm -rf "$t"
+}
+
+# evidence() puts back a box's idle clock after its reads (#111, finding 180), but not over another
+# test's use of that box meanwhile (finding 237). A stand-in omabox lists one box; each read touches its
+# `used` as omabox does; with USE set, the shot read is followed 1.5 s on by another use (USE's time).
+t_unit_evidence() {
+  local r=$TMP/ev; mkdir -p "$r/rt/omabox/$P-ev" "$r/bin"
+  cat > "$r/bin/omabox" <<EOF
+#!/bin/bash
+u=$r/rt/omabox/$P-ev/used
+case \$1 in
+  ls) echo '[{"name": "$P-ev", "state": "up"}]' ;;
+  shot) touch "\$u"; if [ -n "\${USE:-}" ]; then sleep 1.5; touch -d "\$USE" "\$u"; fi ;;
+  *) touch "\$u" ;;
+esac
+EOF
+  chmod +x "$r/bin/omabox"
+  ev() { CLI=$r/bin/omabox EVID=$r/evid-$1 CUR=t_x XDG_RUNTIME_DIR=$r/rt USE=${2:-} evidence "a check" "" >/dev/null 2>&1; }
+  touch -d '-30 seconds' "$r/rt/omabox/$P-ev/used"; local before; before=$(stat -c %.9Y "$r/rt/omabox/$P-ev/used")
+  ev 1
+  check_eq "evidence puts a box's idle clock back after its reads (finding 180)" "$before" "$(stat -c %.9Y "$r/rt/omabox/$P-ev/used")"
+  # Another use during the shot (its time a fixed one in the future, told apart from every touch here):
+  # kept, not the time from before the reads.
+  local later; later=$(date -d '+1 hour' +%s)
+  ev 2 "@$later"
+  check_eq "...but not over a test's use of the box meanwhile (finding 237)" "$later" "$(stat -c %Y "$r/rt/omabox/$P-ev/used")"
 }
 
 # The leak detector's reading of events (finding 80), on lines as the watcher logs them (the
@@ -6756,7 +6795,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
+  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 

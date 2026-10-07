@@ -3147,7 +3147,8 @@ from them.
     `omabox path` evidence ran first. Other tests' idle boxes then expired late: with six failures
     forced 5 s apart (throwaway tests in a worktree), `t_idle`'s 10 s box never went down and
     `t_idle` failed. Evidence now builds the box dir's path itself and puts `used` back (`touch -r`)
-    after reading; the same run keeps `t_idle` green, 2 of 2. (2) The host watcher looked up a new
+    after reading (after each read, and not over another use since finding 237); the same run keeps
+    `t_idle` green, 2 of 2. (2) The host watcher looked up a new
     window's process only for a peek window: any other window opened without focus (a silent
     workspace, `no_initial_focus`, what a regressed exec in `up`, `peek` or `run -d` would do) was a
     note. Now every `openwindow` gets its `+` line, and a window whose process carries this run's
@@ -4303,6 +4304,15 @@ from them.
     and opening the panel shows it. (Finding 221 said the hold's HoverHandler is on the card: it is
     on the key catcher, which fills the card's content, not its padding; harmless, nothing there to
     click.) t_widget_list (failed with the old Panel.qml).
+    (6) The suite's evidence() (finding 180) saved a box's `used` before its reads (a shot, six
+    hyprctl calls: up to 40 s) and put it back after them all: a test using its box meanwhile got the
+    older time back, and its box could expire early. Now each read is followed by `ev_read`'s check:
+    the time put back only when `used` is the read's own touch, which omabox makes as it starts
+    (need_box), within a second of the read's start; a later one is another use, kept, and becomes the
+    time put back after the next reads. A use in a read's first second is still taken for the read's
+    (omabox's touch cannot be told from it by its time); the window was the whole of the reads.
+    t_unit_evidence: a stand-in omabox whose shot is followed 1.5 s on by another use (a time an hour
+    ahead): kept (failed on the old code); with none, the time from before (as before).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
