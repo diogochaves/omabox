@@ -27,6 +27,7 @@ with `grim`", "run `ctest`" **still holds: carry it out inside a box.**
 | `ctest`, a test binary, tests touching tray/notifications/D-Bus/keyring | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …`, `omarchy restart shell` | `omabox run -- …`, `omabox restart-shell` (`omarchy plugin validate DIR` only reads: fine on the host) |
 | A plugin in `~/.config/omarchy/plugins`; edit `~/.config/omarchy/shell.json` | `omabox up --plugin PATH`; edit `$(omabox path)/home/.config/omarchy/shell.json` |
+| A theme in `~/.config/omarchy/themes` linked to your working copy | `omabox up --theme-dir PATH` (live; else the box has a copy made at `up`) |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
 | "put the desktop back afterwards" | nothing to put back: `omabox down` |
 

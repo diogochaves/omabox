@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **A theme you are editing, live in a box**: `omabox up --theme-dir DIR` links the box's
+  `~/.config/omarchy/themes/NAME` to DIR, so edits after `up` reach the box and `omarchy-theme-set
+  NAME` there applies the theme as it is then; a DIR outside the repo is mounted read-only at its own
+  path. Your other themes are still copies made at `up`, and `up` now says so when one is a link into
+  the repo you run it from, or into another checkout of it (a worktree's main one) (#170).
 - **More monitors in a headless box**: `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below`,
   and `omabox monitor add SPEC | remove NAME | list` on a running one: any size, scale and place, a bar
   on each, kept over a config reload, `remove` as an unplug; one placed right or below moves with the

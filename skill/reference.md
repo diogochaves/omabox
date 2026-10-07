@@ -251,6 +251,13 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   path mapping with `--ro-bind ~/nas:/mnt/nas`), mise's toolchains (`omabox run` keeps your PATH, so
   node/python/uv are the host's), `--plugin` dirs and the user's git name/email; nothing else of the
   user's HOME. Outside a repo a throwaway `run` mounts nothing of the current dir.
+- Your custom themes (`~/.config/omarchy/themes/*`) are copied into the box HOME at `up`, a theme
+  that is a link to a working copy too: edits after `up` do not reach the box, and from a git
+  worktree that copy is the link's checkout (usually main), not yours; `up` notes it. `omabox up
+  --theme-dir PATH` (repeatable) gives one live: the box's `themes/NAME` (PATH's name) links to PATH,
+  which the box sees at its own path (inside the repo; anywhere else it is mounted read-only there,
+  refused as `--ro-bind`'s are). `omabox run -- omarchy-theme-set NAME` applies it as it is then;
+  run it again after an edit. `--ro-bind` into the box HOME is refused, and `--seed` is a copy.
 - The box HOME is `omabox path` → `<dir>/home`, readable and writable from the host: put outputs there
   or in `/tmp` inside, and seed a widget's data files (a usage record, a store) there while the box runs.
   Inside the box it is `/home/sbx`, which does not exist on the host: a path under it passed to a

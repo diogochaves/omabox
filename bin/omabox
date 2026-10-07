@@ -66,6 +66,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
   omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
+            [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
@@ -172,6 +173,11 @@ LD_PRELOAD...), by any of them.
 before its session starts, for a plugin that reads its config once at start; the same refusals as
 --ro-bind (no secret stores; nothing in ~/.config/omarchy but plugins/ and themes/). A copy: the
 box's changes stay in the box; a link already in DEST is replaced, never written through.
+@ up run
+--theme-dir DIR: a theme you are editing, live: DIR stays where it is (the repo you run from is in the
+box at its own path; a DIR elsewhere is mounted read-only at its own path, refused as --ro-bind's are)
+and the box HOME's ~/.config/omarchy/themes/NAME (DIR's name) is a link to it, in place of the copy
+\`up\` makes of each of your themes. omarchy-theme-set NAME in the box applies it, as it is then.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run reload
@@ -1531,10 +1537,19 @@ seed_home() {
     home_unlink "$h" ".config/${p##*/}"; cp "$p" "$h/.config/" 2>/dev/null || true
   done
   for dir in branding extensions; do seed_copy "$HOME/.config/omarchy/$dir" "$h" ".config/omarchy/$dir"; done
-  # Each theme on its own: one linked in from the repo it is developed in is followed that far.
+  # Each theme on its own: one linked in from the repo it is developed in is followed that far, a copy
+  # made now (said when that repo is the one `up` runs from, or another checkout of it: #170). A theme
+  # `up --theme-dir` names is a link instead, to its dir at its own path in the box: live.
+  local top td live=" "; top=$(repo_top) || top=""
+  for td in ${THEME_DIRS[@]+"${THEME_DIRS[@]}"}; do live+="${td##*/} "; done
   for dir in "$HOME/.config/omarchy/themes"/*/; do
-    [ -d "$dir" ] && seed_copy "$dir" "$h" ".config/omarchy/themes/$(basename "$dir")"
+    [ -d "$dir" ] || continue
+    id=$(basename "$dir")
+    [[ $live == *" $id "* ]] && continue
+    seed_copy "$dir" "$h" ".config/omarchy/themes/$id"
+    theme_snapshot_note "$dir" "$top"
   done
+  for td in ${THEME_DIRS[@]+"${THEME_DIRS[@]}"}; do home_link "$h" ".config/omarchy/themes/${td##*/}" "$td"; done
   mkdir -p "$h/.local/state/omarchy/toggles"
   seed_copy "$HOME/.local/state/omarchy/toggles/hypr" "$h" .local/state/omarchy/toggles/hypr
   # Without /etc/skel (an older Omarchy), at least the desktop entries: foot's X-TerminalArgAppId is
@@ -1551,6 +1566,53 @@ seed_home() {
     val=$(git -C / config --global "$key" 2>/dev/null) || continue
     git -C / config --file "$h/.gitconfig" "$key" "$val"
   done
+}
+
+# PATH is in the box at its own host path (#170, #171): under a same-path read-only mount `up` makes
+# (cmd_up's robinds: the repo it runs from, ~/.config/omabox/ro-bind, --ro-bind DIR), or under that
+# repo when it is mounted. For a jailed caller, only where the jail sees it too. own_path_visible PATH
+own_path_visible() {
+  local p r s top
+  p=$(readlink -f -- "$1" 2>/dev/null) || return 1
+  ! in_jail || jail_sees "$p" >/dev/null || return 1
+  for r in ${robinds[@]+"${robinds[@]}"}; do
+    s=${r%%$'\t'*}
+    [ "$s" = "${r#*$'\t'}" ] || continue
+    [[ $p == "$s" || $p == "$s"/* ]] && return 0
+  done
+  top=$(repo_top) || return 1
+  ! refuse_src "$top" >/dev/null && [[ $p == "$top" || $p == "$top"/* ]]
+}
+# A link at HOME/REL to TARGET (a path as the box sees it), in place of what was there; links on the
+# way are cleared first (finding 168), never followed. home_link HOME REL TARGET
+home_link() {
+  home_unlink "$1" "$2"
+  mkdir -p -- "$(dirname -- "$1/$2")"
+  rm -rf -- "${1:?}/$2"
+  ln -s -- "$3" "$1/$2"
+}
+
+# What `up` says of a theme seed_home copied from a link (#170): when the link leads into TOP, the repo
+# `up` runs from, or into another checkout of it (a worktree's main one), the copy is a snapshot of
+# that, made now, and --theme-dir gives a live one (this checkout's own, when it has the theme there).
+# Nothing for any other theme. theme_snapshot_note THEME_DIR TOP
+theme_snapshot_note() {
+  local link=${1%/} top=$2 t tc cc ttop own=""
+  [ -L "$link" ] && [ -n "$top" ] || return 0
+  t=$(readlink -f -- "$link") || return 0
+  if [[ $t == "$top"/* ]]; then
+    say "note: theme ${link##*/} is a copy of $t made now: edits after this do not reach the box. up --theme-dir $t gives a live one"
+    return 0
+  fi
+  # Another checkout: git is asked only outside ai-jail (repo_top's reason: a jail's .git/config runs here).
+  ! in_jail || return 0
+  tc=$(git -C "$t" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  cc=$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  [ "$tc" = "$cc" ] || return 0
+  ttop=$(git -C "$t" rev-parse --show-toplevel 2>/dev/null) || return 0
+  [ ! -d "$top/${t#"$ttop"/}" ] || own=$top/${t#"$ttop"/}
+  say "note: theme ${link##*/} is a copy of $t, in another checkout ($ttop), not this one ($top)," \
+    "made now. up --theme-dir ${own:-DIR} gives a live one"
 }
 
 # Copy one of the user's dirs into the box HOME (seed_home). The dir itself may be a link (dotfiles), but
@@ -1746,6 +1808,9 @@ up_already() {
   case " $given " in *" seed "*)
     [ "$(printf '%s\n' "${seeds[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.seeds // []' "$D/box.json" 2>/dev/null)" ] ||
       diff+=("--seed (files are seeded only when a box starts)") ;; esac
+  case " $given " in *" theme-dir "*)
+    [ "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R . | jq -sc .)" = "$(jq -c '.theme_dirs // []' "$D/box.json" 2>/dev/null)" ] ||
+      diff+=("--theme-dir (it has $(jq -r '.theme_dirs // [] | if length == 0 then "none" else join(", ") end' "$D/box.json" 2>/dev/null))") ;; esac
   ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null)
   for p in "${plugin_args[@]}"; do
     id=$(resolve_plugin "$p" | cut -f1)
@@ -1764,14 +1829,14 @@ cmd_up() {
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
-  local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
+  local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() theme_dirs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
   local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed|--monitor)
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed|--monitor|--theme-dir)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -1787,6 +1852,10 @@ cmd_up() {
         g=${2%%:/*}; named+=("mount ${g/#\~/$HOME} into"); shift ;;
       --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); g=${2%%:*}; named+=("seed ${g/#\~/$HOME} into"); shift ;;
       --monitor) optarg "$@"; monitor_spec "$2" >/dev/null || exit 1; monitors+=("$2"); shift ;;
+      --theme-dir) optarg "$@"; [ -d "$2" ] || die "--theme-dir: no such directory: $2"
+        g=$(readlink -f -- "$2"); [[ ${g##*/} != .* ]] || die "--theme-dir: a theme's name (its dir's) cannot start with a dot: $2"
+        [[ " ${theme_dirs[*]##*/} " != *" ${g##*/} "* ]] || die "--theme-dir: two themes named ${g##*/}"
+        theme_dirs+=("$g"); named+=("mount ${2/#\~/$HOME} into"); shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
@@ -1998,6 +2067,17 @@ cmd_up() {
       else say "$HOME/.config/omabox/ro-bind: skipping $line (no such path)"; fi
     done < "$HOME/.config/omabox/ro-bind"
   fi
+  # --theme-dir (#170): the dir, at its own path in the box, which seed_home links into the box HOME's
+  # themes/: the repo `up` runs from has it there already, or a same-path mount; else it is mounted so.
+  # A jailed caller's: in its project, or one of its folders whole (as --ro-bind's).
+  for g in ${theme_dirs[@]+"${theme_dirs[@]}"}; do
+    own_path_visible "$g" && continue
+    if in_jail && ! jail_root "$g" >/dev/null; then
+      die "up: --theme-dir $g is not in this jail's project nor a folder it was given whole, so it does not go into the box"
+    fi
+    robinds+=("$g"$'\t'"$g")
+  done
+  THEME_DIRS=(${theme_dirs[@]+"${theme_dirs[@]}"})
   # A path as named, too (finding 228): one inside ~/.config/omarchy or a secret store is refused even
   # when it is a link to somewhere that would be fine. (The specs below hold where each one leads.)
   for p in "${named[@]}"; do
@@ -2084,6 +2164,7 @@ cmd_up() {
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
+    --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" \
     --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs, net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
@@ -2091,6 +2172,7 @@ cmd_up() {
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
+      + (if ($themes | length) > 0 then {theme_dirs: $themes} else {} end)
       + (if ($mspecs | length) > 0 then {monitor_specs: $mspecs} else {} end)
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
@@ -3146,7 +3228,7 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--seed|--monitor|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--monitor|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
@@ -7361,7 +7443,7 @@ relay_call() {
     if [ "$a" = --env-file ] && [ "$cmd" = run ]; then prev=$a; continue; fi
     if [ "$prev" = --pass ] && [[ $a =~ ^[A-Za-z_][A-Za-z0-9_]{0,58}$ ]] && v=$(caller_env "$a"); then env+=(--env "PASS_$a=$v"); fi
     case $prev in
-      --plugin|--overlay) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
+      --plugin|--overlay|--theme-dir) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
       --hyprland) [[ $a != /* && -e $a ]] && a=$(readlink -f -- "$a") ;;
       --ro-bind) [[ $a != /* ]] && a=$(readlink -f -- "${a%%:/*}")${a#"${a%%:/*}"} ;;
       # SRC:DEST: only SRC is the caller's path (DEST is in the box HOME). One that is not there is
