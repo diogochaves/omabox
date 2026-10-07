@@ -17,16 +17,19 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ... (#122, #165). In an interactive box each monitor is a window on your desktop, on the box's
   workspace without focus, side by side with the others as the box lays them out (its main window
   made smaller for them, or said when your screen has no room); closing it unplugs it (#123, #161).
+- **`omabox output drop [NAME] [--for DURATION] [--cycles N]` and `output back [NAME]`**: a headless
+  box's screen goes and comes back under its own name, mode and position, as a monitor that drops
+  off on wake does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
+  With `--monitor`s, the main screen by default or a monitor by its name, each kept apart until it
+  is back (`back` alone brings back all of them); while the main screen is away `mode` says so and a
+  second `drop` is refused (#163). On NVIDIA boxes too (#165).
 - **`omabox up --seed SRC:DEST`** (and `run --seed`): a file or folder copied into the box HOME before
   its session starts, for a plugin that reads its config once at start, where a box needed a second
-  shell start after writing it in (#80).
+  shell start after writing it in (#80). It gets `--ro-bind`'s refusals (#159).
 - **`omabox up --autoreload`**: the box's Hyprland reloads its config when a file it loaded
   changes, as a desktop's does, so a project can see what a file change does (a helper that
   rewrites a file the config loads, on a Hyprland event, reloads a desktop for ever). Boxes keep
-  autoreload off otherwise. `omabox reload` no longer rewrites an unchanged config copy.
-- **The bar widget says whether a box is up, for omarchy-console's rail.** It exposes
-  `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
-  widget's own box count.
+  autoreload off otherwise (see `omabox reload` under Changed).
 - **`--ignore "X,Y WxH"` on `wait still`, `wait change` and every `--wait`, and `-g` on `--wait`**:
   an animation that never stops (a spinner, a glow) no longer keeps them from their answer. A 124
   "still changing" names the region that kept changing as an `--ignore` to add (#131).
@@ -43,6 +46,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   hscroll DX`: horizontal scrolling, a mouse wheel's notches (a DY that is not whole notches said) or a
   touchpad's smooth scroll with its stop, and Omarchy's SUPER+wheel binds with `--mod super`, where
   `pointer -- scroll DY` was one vertical event only (#134, #167).
+- **`omabox gdb [--shell | --pid PID] [--watch]`**: every thread's backtrace of the box's Hyprland
+  (or shell, or any process of the box), hung or stopped too; `--watch` catches a crash into `omabox
+  log gdb`. A gdb started in the box was refused by the kernel's ptrace rules (#135).
 - **`omabox config gpu auto|nvidia|amd|intel|SLOT`**: the GPU headless boxes render on, kept in the
   settings (a jailed agent's `up` and every terminal get it), falling back to the first GPU when
   that one is gone, where `OMABOX_RENDER_NODE` named a node that could vanish or change number;
@@ -51,72 +57,157 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   **`omabox gpu release GPU`** takes down the headless boxes on a GPU before it goes to a VM, once any
   `up` in progress is done (#118). A driver's name (`config gpu amdgpu`) is taken; a box that fell
   back says why and on which GPU, in `up`, `ls`, `gpu` and the widget (#168).
-- **`omabox output drop [NAME] [--for DURATION] [--cycles N]` and `output back [NAME]`**: a headless
-  box's screen goes and comes back under its own name, mode and position, as a monitor that drops
-  off on wake does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
-  With `--monitor`s, the main screen by default or a monitor by its name, each kept apart until it
-  is back (`back` alone brings back all of them); while the main screen is away `mode` says so and a
-  second `drop` is refused, where they took another monitor for it (#163). On NVIDIA boxes too (#165).
-- **`omabox gdb [--shell | --pid PID] [--watch]`**: every thread's backtrace of the box's Hyprland
-  (or shell, or any process of the box), hung or stopped too; `--watch` catches a crash into `omabox
-  log gdb`. A gdb started in the box was refused by the kernel's ptrace rules (#135).
+- **`omabox ls` has a SHELL column**: `running`, `restarting`, `gone` (a bar that crashed for good
+  mid-test), `+N` for the crashes since `up` (`shell_state` and `shell_crashes` in `ls --json`), and
+  `shot`, `wait`, `windows`, `keys` and `click` say when the shell is gone, and once when it crashed
+  since the last command, where a box with no bar read as up (#147).
+- **The bar widget says whether a box is up, for omarchy-console's rail.** It exposes
+  `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
+  widget's own box count.
+- The README says how to open a box's server from another machine on your tailnet (`tailscale serve`
+  on your host), and what that shares.
 
 ### Changed
 
+- **A running box keeps the Hyprland config it started with.** Every box loaded omabox's config
+  live, so a pull, a branch switch or an upgrade of omabox reloaded every running box at once and
+  wiped the binds, rules and Lua state an agent had added; an Omarchy upgrade could do the same.
+  A box now runs its own copy, with autoreload off (`up --autoreload` keeps it on), and **`omabox
+  reload`** gives it this omabox's config and reloads it once. omabox's other scripts in a box are
+  still the new ones from their next start (#140).
+- **A box's shell runs under `omarchy-launch-shell`, as Omarchy starts it since 4.0.4**: a shell that
+  crashes is started again, as on your desktop, where a box was left with no bar (#151).
+- **A command run outside any repo uses your session's box**, said once, when it has exactly one,
+  `omabox down` included; agents no longer need `-b NAME` on every call from a scratch directory, and
+  "no box" names the session's box first (#136).
+- **`up --env`, `run --pass` and `--env-file` refuse the variables the session sets itself**
+  (`PATH`, `HOME`, `XDG_RUNTIME_DIR`, the `XDG_*_HOME` dirs, the display variables, `LD_PRELOAD`...),
+  which only broke the box 30 s later ("Hyprland not up after 30s"). A plugin's manifest id must be
+  letters, digits, `.`, `_` and `-`, and `--allow` ports 1-65535, kept sorted (`--allow 8082,8081`
+  matches a box up with `8081,8082`) (#106).
+- **`keys -t` and `--pass` refuse control characters other than newline and tab** (exit 2, nothing
+  typed): a backspace or escape in the text was pressed as that key, and a password with a trailing
+  `\r` submitted the form. A `--pass` value's one trailing `\r` (a Windows line ending) is dropped
+  (#104).
+- **`omabox host` shortens only long arguments in the line it prints** before it runs a command
+  (`env PATH=$PATH` printed ~900 characters ahead of what mattered); the record stays (#150).
 - **The bar widget's list holds still while the pointer is over it**: a box that goes stays in its
   row, greyed and marked gone, and a new one is counted in the header until the pointer leaves, so a
   click never lands on a box that slid under it (#117). **A list taller than the screen scrolls**,
-  the New button and the keys staying in view, and stays where the wheel left it (#121, #168). **Every row has its buttons in the same
-  places**, so a click from habit on an interactive box's row no longer pastes your clipboard into it,
-  and **a double-click on Down no longer shuts a box down** (nor `d d`, `n n`) (#120).
+  the New button and the keys staying in view, and stays where the wheel left it (#121, #168).
+  **Every row has its buttons in the same places**, so a click from habit on an interactive box's row
+  no longer pastes your clipboard into it, and **a double-click on Down no longer shuts a box down**
+  (nor `d d`, `n n`) (#120).
 - **The agent skill is a third of its size** (SKILL.md 29 KB → 12 KB, ~4k tokens a load): what every
   task needs stays, every safety rule included; the rest is in `reference.md`, named by section (#143).
+- **The agent skill says what agents worked out by trial** (waits sent to `/dev/null`, screens that
+  never stop moving, compound commands refused in worktree subagents, the plugin registry's reloads,
+  Lua state lost on a reload) (#138), that `up --new` starts the box and takes `up`'s options on that
+  call (#148), and that Omarchy's lock screen runs in a box, with a recipe for unlocking it with a
+  test password (a real one cannot work there).
+- The test suite checks the box safety rules on every kind of box it starts, not one, covers
+  fourteen flags no check used, and no longer passes checks that could not fail or fails ones that
+  ran late under load (#91, #110, #111, #116).
 
 ### Fixed
 
+- **A link inside your current theme no longer brings the file it names into a box.** omabox copied
+  your theme into each box HOME following its links, and `omarchy-theme-set` keeps the links of a
+  theme you made: a link to `api-keys.env` put your keys in every box (and in its saves). Links in
+  the theme now stay links, as in the rest of the box HOME. If a theme of yours has links to files
+  outside it, update (#97).
 - **Nothing inside `~/.config/omarchy` goes into a box but `plugins/` and `themes/`**, nor a link
   there or in a secret store to a file elsewhere: `--ro-bind` mounted a file or folder inside it
-  (`api-keys.env`, `hooks/`), refusing only the folder itself.
-  The new `--seed` gets the same refusal, never writes through a link already in its DEST (an
-  earlier seed's, or a save's: it overwrote the host file the link named), and takes a relative
-  SRC from inside ai-jail (#159).
+  (`api-keys.env`, `hooks/`), refusing only the folder itself. If you or an agent mount anything from
+  `~/.config/omarchy`, update. The new `--seed` gets the same refusal, never writes through a link
+  already in its DEST (an earlier seed's, or a save's: it overwrote the host file the link named),
+  and takes a relative SRC from inside ai-jail (#159).
+- **A box started without pasta gets none of its caller's open files.** A nested box, or one started
+  from a process that cannot gain privileges, inherited every file descriptor omabox's caller had
+  open (a harness pipe, a lock, a log), readable or writable from inside it (#112).
+- **omabox's input tools tell a box from your desktop by what only a box has.** The keyboard,
+  pointer, still and events tools refused outside a box by checking that `/opt/omabox/share` exists,
+  so on a machine with that folder they would have driven your real desktop. They also give up after
+  10 s on a compositor that stopped answering, where `keys` and `click` waited for ever (#108).
+- **A box can no longer make `gdb --watch` write to your files**: it appended its header to whatever
+  the box's `gdb.log` linked to; the header is now written from inside the box, as the rest of the
+  log is, and `run -d`'s log is opened in the box too. `gdb` runs in the box's network namespace, and
+  prints a process name the box set with escapes or newlines as `?` (#160).
+- **Under the agent guard, `quickshell`/`qs` `kill` and `ipc` are refused**, with bundled options
+  too (`qs -np PATH kill --any-display`): `omarchy restart shell` from an agent stopped your
+  desktop's shell and could not start it again, leaving you with no bar (#141, #166). The guard's
+  note and the skill say that your own `!` commands in Claude Code are guarded too, and send desktop
+  commands to your own terminal (#142). The note changed, so `omabox guard` calls an installed hook
+  outdated: `omabox guard on claude` renews it.
 - **`wait still` and every `--wait` end on a box whose Hyprland stopped answering** (stopped, or
   deadlocked by a plugin under test): "its Hyprland did not answer (hung? …)", exit 1, where they
   waited forever whatever `--timeout` said (#124).
 - **A box whose Hyprland stopped answering is said so in a few seconds**, with the same words, by
   `windows`, every `--window`, `shot -g`, `wait window` and `wait layer`, where they printed jq's
   errors or "grim failed" after 10-15 s. `omabox ls` shows such a box as `hung`, and `ls --json`
-  has `"hung": true` (#125).
-- **`omabox hyprctl` on a box whose Hyprland just stopped answering says so in those words**, exit 1,
-  where its first call printed hyprctl's own "IPC didn't respond in time" (#166).
-- **Under the agent guard, `quickshell`/`qs` `kill` and `ipc` are refused with bundled options too**
-  (`qs -np PATH kill --any-display` reached your desktop's shell). The guard's note changed, so
-  `omabox guard` calls an installed hook outdated: `omabox guard on claude` renews it (#166).
+  has `"hung": true` (#125). **`omabox hyprctl` and `omabox lua`** end there in 10 s with the same
+  words, exit 1, where they could wait for ever or print hyprctl's "IPC didn't respond in time"
+  (#139, #166).
 - **A box that goes down while a command reaches into it is said in words** by `keys`, `click` and
   every other command, and by `run` in place of nsenter's "cannot open /proc/…" or a bash "Killed"
-  line, not after them (#166).
+  line (#166). **`omabox run -- pkill -x labwc` no longer ends the box** (its own labwc is
+  `omabox-labwc`), and `run` says when the box went down while its command ran (#128).
 - **`restart-shell` and `up` say when the shell crashes as it starts**, naming Quickshell's crash
   report, and exit 1; `restart-shell` said "shell restarted". Quickshell's crash dialog no longer
   appears in a box, where it took the keys meant for the app under test (Return on it opened a
   browser); the report is kept (#126).
-- **A box's session bus is at `$XDG_RUNTIME_DIR/bus`, and its runtime dir is 0700**, as in a
-  session: helpers that check their bus refused the old one (a socket in `/tmp`, a 0755 dir) (#153).
+- **`up` gives up at once on a box that dies while it waits for the bar**, where it retried until its
+  timeout, holding the box's lock (#157).
+- **A box whose `up` is killed still goes down at its idle limit**: an `up` killed after the box
+  started (a harness's timeout, a suite run ended with its process group) left a box that nothing
+  would take down. The reaper now starts before the box (#137, #168).
+- **`wait` and every `--wait` no longer exit 1 "lost the box's screen"** for an answer that came at a
+  whole second of the wait, as whole-second `--timeout` values make it do (in 0.4.8 too).
 - **`wait still`, `wait change` and every `--wait` watch every monitor of a box**, in the layout's
   coordinates as `click` and `shot -g` take them: a change on another monitor (a spinner, typing into
   a window there, an app opening at scale 1.6) went unseen, `-g` or `--window` there was "not on the
   screen", and after `output drop`/`back` the regions named were another monitor's own pixels. An
   `--ignore` outside the region watched is said, and `help scroll`/`help drag` show `--wait` (#162).
+- **`drag --wait` ignores the cursor along the whole path**, not only at its ends: a drag across an
+  empty screen reported "settled" on its own arrow (#102).
+- **Omarchy's plugin registry no longer reloads a mounted plugin in a box** on every save in your
+  checkout (about four times a save), so a shot or `wait still` never catches it half-reloaded (#129).
+- **A bar widget kept in another mounted plugin's layout is `hosted`**, its host named in
+  `plugin_status`, where `up` and `restart-shell` warned it was disabled every time (#127).
+- **A box's session bus is at `$XDG_RUNTIME_DIR/bus`, and its runtime dir is 0700**, as in a
+  session: helpers that check their bus refused the old one (a socket in `/tmp`, a 0755 dir) (#153).
+- **A jailed agent gets `omabox ports` and `omabox config KEY`**: the ai-jail broker refused both
+  (`config KEY`, a read, as a change). The host side of `ports` is a state only, with no process of
+  yours named, and a port a box outside the jail serves on reads as taken (`host`), without naming
+  that box. A caller outside any jail that reaches the broker is told why (#93, #114, #168).
+- Three edges agents tripped on: `log --grep -i RE` took `-i` as the expression (both orders work
+  now); `lua` returning a dispatcher printed `HL.Dispatcher`, exit 0, and nothing ran (it now says
+  on stderr that it was returned, not run, and how to run it); `run --env K=V` on a box that is up
+  was dropped (#130).
+- `omabox windows` keeps its columns for a window with no class, and shows a quoted title once
+  (`"hi"`, not `\\"hi\\"`) (#105).
+- `down` no longer fails without a word, leaving the dead box's dir and HOME, when the box's reaper
+  exits at the same moment (#115).
+- **An `omabox down` that comes while an `up` of the same box is starting always wins**: two narrow
+  gaps let the `up` start the box anyway (#168).
+- **The runtime dir no longer keeps a lock and a marker for every box name ever used** (4443 lock
+  files two days after a boot, for one box up): they go with the box, a `down`'s marker after ten
+  minutes, an idle box's note after a day (#158, #168).
+- Small edges said in words: `events --mark v1.0` no longer removes the mark `v1x0`; `click`,
+  `pointer` and `drag` past the screen name the point and the screen; `keys ü` suggests `-t`; `shot`
+  on an interactive box gives grim's reason; `up 'bad name!'` says the name as written (#107).
+- `peek` gives up after 10 s on a box that never draws ("the box sent no frame in 10 s"), where it
+  left a peek with no window; `peek` and `wait` name a frame format they cannot read, where peek's
+  view froze; the ai-jail relay serves at most 64 connections at once (#109).
+- In a box, a test's stub `hyprctl` in `~/.local/bin` can no longer end an interactive box without
+  asking (confirm-close); `lua` prints bytes that are not UTF-8 as `\u00XX`, where they came out as
+  U+FFFD; the box's `systemd-cat`, `systemd-run` and `uwsm-app` take `--level-prefix VALUE`, `--shell`
+  and a desktop file's path with an action as the real ones do; the guard's hook no longer adds its
+  folder to PATH again at each session start (#113).
+- The guard's Codex check runs the system's Python, not a mise shim first on PATH that could exit
+  instead; `install.sh` lists `python` (#152).
 - **The bar widget no longer logs `TypeError`s while a bar rebuilds** (a `bar.layout` edit with the
   widget inside another plugin): it falls back to the theme's colours while its bar is gone (#155).
-- **A box can no longer make `gdb --watch` write to your files**: it appended its header to whatever
-  the box's `gdb.log` linked to; the header is now written from inside the box, as the rest of the
-  log is, and `run -d`'s log is opened in the box too. `gdb` runs in the box's network namespace, and
-  prints a process name the box set with escapes or newlines as `?` (#160).
-- **`omabox ports` inside ai-jail no longer calls a port the jail's box's when a box outside the
-  jail serves on it too**: it reads as taken (`host`), without naming that box (#168).
-- **An `omabox down` that comes while an `up` of the same box is starting always wins**: two narrow
-  gaps let the `up` start the box anyway. The runtime dir no longer keeps an "went down after 2h
-  idle" note per box for good: a day (#168).
 
 ## 0.4.8 — 2026-10-03
 

@@ -129,9 +129,10 @@ omabox ls                              # boxes, mode, size, state, plugins
 - **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours), `--systemd` (a real
   systemd user manager, for plugins that manage a service or schedule alarms), `--from SAVE` (start
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
-  the whole box session), `--xwayland`, and `omabox gpu 10` (GPU time of one box's processes, where
-  the driver reports per-process counters). `omabox help` lists every flag, `omabox help CMD` (or
-  `omabox CMD --help`) one command's.
+  the whole box session), `--xwayland`, `--autoreload` (next release: Hyprland reloads its config
+  when a file it loaded changes, as on your desktop), and `omabox gpu 10` (GPU time of one box's
+  processes, where the driver reports per-process counters). `omabox help` lists every flag,
+  `omabox help CMD` (or `omabox CMD --help`) one command's.
 
 ### Tests that touch the desktop
 
@@ -176,8 +177,8 @@ box has (your system's, or omabox's private build); `up` refuses one that does n
 ELF, before the box starts. `omabox ls` and `omabox windows` name the build, so a box on it is never
 taken for a stock one. A box runs the compositor's logic for real (layouts, focus, input routing, the
 Lua config, IPC, protocols) on a virtual output with virtual input devices; the DRM/KMS backend
-(modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices and the
-session/suspend/lock paths never run in one.
+(modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices and the session and
+suspend paths never run in one (the lock screen does, but takes no real password).
 
 ### An Omarchy change
 
@@ -450,8 +451,8 @@ blocks the network and every other socket, omabox's included), or see
 
 Some things still need your real machine: your real data and services, desktop integration outside a
 session (.desktop files, URL handlers, autostart; systemd user units only in a `--systemd` box, and
-never with journald or logind), real monitors (their modes, HDR, VRR, a real hotplug), lock/idle/suspend,
-and final release acceptance.
+never with journald or logind), real monitors (their modes, HDR, VRR, a real hotplug), idle and
+suspend, a real password at the lock screen, and final release acceptance.
 
 <details>
 <summary><b>Several monitors with one (next release)</b></summary>
