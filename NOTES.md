@@ -3298,6 +3298,9 @@ from them.
     (refusals, argv passed whole, against a stub after the guard on PATH; `host` gets the real one),
     t_omarchy_restart (under the guard in a box standing in for the host, `omarchy-restart-shell`
     fails and the shell is the same process after; on the old code, in a worktree, it was gone).
+    Not caught: a caller that runs quickshell by its absolute path (`/usr/bin/quickshell kill …`);
+    Omarchy 4.0.4 calls it by name. Bundled short options (`qs -np PATH kill`) got past the
+    subcommand's reading until 235.
 188. **The user's `!` commands are guarded too** (2026-10-06, #142; corrects 67, which called them the
     way past the guard before `omabox host`, and the README's "most likely not, not checked"). Claude
     Code sources `$CLAUDE_ENV_FILE` before every shell command of the session, and a `!` command is
@@ -3329,6 +3332,7 @@ from them.
     `repl` with no code. A connect-only ping first and the call unbounded was the other way: it costs
     a call each time and leaves a hang after the ping unbounded. t_hung: both said within 16 s on a
     stopped box (on the old code its outer timeout ended them), `rollinglog -f` still following at 13 s.
+    `hyprctl` on a box stopped just before (its backlog empty) still printed hyprctl's own text: 235.
 191. **Three CLI edges agents tripped on** (2026-10-06, #130, from the usage study). (1) `log --grep -i
     RE` took `-i` as the expression and RE as a log's name ("no log called plugin|error"), or grepped
     the Hyprland log for `-i` when RE was also a log's name: now `--grep -i RE` is read as grep users
@@ -3354,7 +3358,8 @@ from them.
     waits up to 2 s for the box's PID 1 to be gone, which outlives its children by a moment, so other
     failures are not slowed. `share/` scripts are safe to edit under running boxes (bin/omabox ends in
     `main "$@"; exit`, session.sh is one `{ }` block: bash has parsed them whole). t_own_processes; on
-    the old code its five checks failed (worktree).
+    the old code its five checks failed (worktree). `run`'s words came after nsenter's line, and the
+    other commands had none: 235.
 193. **A box keeps the config it started with** (2026-10-06, #140). Every box mounts the checkout's (or
     package's) `share/` live and its Hyprland's config was `share/hyprland.lua`, so changing that file
     (a pull, a branch switch, an edit, an upgrade) reloaded every running box at once and wiped what
@@ -4091,6 +4096,47 @@ from them.
     `down` of the box closes both windows and a third process named as its peek. With 950110b's CLI
     and peek those four checks fail: the main screen's window drew nothing, and HEADLESS-3's drew the
     click on the main screen, at 1140,733 (seen in a shot). t_peek (one monitor) unchanged.
+235. **A hung box's first `hyprctl`, the guard's bundled `qs` options, a box gone mid-call** (2026-10-06,
+    #166; review of 187, 190 and 192). (1) After `pkill -STOP -x Hyprland`, `omabox hyprctl clients`
+    printed hyprctl's own "Hyprland IPC didn't respond in time / Couldn't read (6)" after 5 s, exit 6:
+    with the listen backlog still empty, connect succeeds and hyprctl's own 5 s read timeout ends it
+    before omabox's 10 s, and hyprctl prints its errors on stdout. 190 turned only the 124 into words;
+    t_hung passed because its earlier hung calls had filled the backlog. Now `hyprctl`'s answer is held
+    (an unlinked temporary file, byte for byte) and printed once it is not that: any non-zero exit is
+    looked at, and the box gone, or not answering a 2 s ping, is said in `hung_text`'s words (7 s on
+    a box stopped just before; `version` the same). A box that answers keeps hyprctl's own failure
+    (a bad dispatcher: its text and exit 7). `lua` already did that ping. (2) The guard's quickshell
+    took the first word that was no option for the subcommand and skipped only separate values, so
+    `qs -np /usr/share/omarchy/shell kill --any-display` (n a flag, p taking PATH, as Quickshell's
+    CLI11 bundles them: `quickshell -np PATH list` runs) or `qs -dp /x ipc …` passed PATH as the
+    subcommand and reached the desktop's shell. Now short groups are read as CLI11 reads them (a
+    letter of -p/-c/-m takes the rest of its word, or the next word when last; -h -V -n -d -v are
+    flags), `--path` and the other long ones take the next word unless written with =, and the
+    subcommand is the first word naming one (log, list, kill, ipc, msg): any other word is passed
+    over, so a value this does not know of cannot hide a kill after it. Checked against `--help`
+    only (list, log and the top level: never a kill or ipc on the host); CLI11 matched neither a
+    prefix (`li`) nor another case (`LIST`). A caller that runs `/usr/bin/quickshell` by its path is
+    not caught (the stand-in is a PATH entry): Omarchy 4.0.4's omarchy-restart-shell runs `timeout 5
+    quickshell kill …`, by name (checked again), but a future one by path would stop the desktop's
+    shell under the guard again. The guard's note says quickshell/qs, and tells the agent to send a
+    desktop `!` command to the user's own terminal (#142 asked for that half; the skill too). A note
+    changed: `omabox guard` reads an installed hook as outdated until `guard on claude` renews it.
+    (3) 192's words were `run`'s alone, and came after nsenter's raw line or bash's "line 855: N
+    Killed prlimit --core=1: …" for nsenter itself (seen on the old code: `run -- sh -c 'pkill -x
+    Hyprland; sleep 10'` printed both lines). `on_box` and `box_exec` now run nsenter with its stderr
+    held (`ns_held`) and the caller's stderr on another fd, which the command in the box takes as its
+    stderr first thing, so the command's own errors pass as before (a terminal stays a terminal). On a
+    box gone after a failure (up to 2 s for its PID 1 to go), what was held is dropped: `on_box`
+    says "box 'NAME' went down (why: …)" in its place (keys, click and the rest through it), `run`
+    (and a throwaway box's run, which said nothing) its own line; on a box that is up it is printed
+    as it came. And a PID 1 that has exited but is not yet reaped (a zombie: kill -0 answers, its
+    namespaces are gone, nsenter's "cannot open /proc/N/ns/user") is no longer alive for `box_alive`
+    and `ls`. The cost is a temporary file per call through the box (mktemp, unlinked at once). Not
+    reproduced: on_box meeting the dying box in a real one (a race of milliseconds); checked with
+    stand-ins for nsenter in t_unit_box_gone, and for `run` in t_own_processes (one line, the words).
+    Checks: t_hung (the first call after the stop, 7 s), t_unit_guard_exec_host (-np, -dp, -pn,
+    -vnp, -npX and --path= before kill and ipc refused, list passed whole, `-np kill list` a value),
+    t_unit_box_gone, t_own_processes; each failed on the old code (b065a05, in a worktree).
 236. **`shot --burst` edges; `scroll --mod`, a wheel's rounding, tilt** (2026-10-06, #167; review of
     findings 212 and 213). (1) `--after`'s list of
     commands that act lacked `scroll` (added a commit later) and `monitor` (a hotplug is a

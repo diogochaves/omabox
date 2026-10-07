@@ -641,7 +641,9 @@ box_pasta() {
 box_alive() {
   local pid rc=0; pid=$(box_pid) || rc=$?
   [ $rc != 3 ] || die "cannot tell whether box '$NAME' is up from this user namespace (a sandbox's?): run omabox outside it"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  # Not a zombie (#166): a PID 1 that has exited but is not reaped yet answers kill -0, while its
+  # namespaces are gone (nsenter: "cannot open /proc/N/ns/…").
+  [ -n "$pid" ] && running "$pid"
 }
 meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
 # up, dead, or unknown: a box whose state this user namespace cannot read (box_pid's 3), for a list,
@@ -649,7 +651,7 @@ meta() { jq -r --arg k "$1" '.[$k] // empty' "$D/box.json" 2>/dev/null; }
 box_state() {
   local pid rc=0; pid=$(box_pid) || rc=$?
   if [ $rc = 3 ]; then echo unknown
-  elif [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo up
+  elif [ -n "$pid" ] && running "$pid"; then echo up
   else echo dead; fi
 }
 
@@ -711,12 +713,54 @@ BOX_EVENTS=/opt/omabox/bin/omabox-events
 # socket path, which from the host dir is past the 108-byte limit, finding 7.) stdin/stdout pass
 # through: `grim -` writes the host's file.
 on_box() {
-  local pid wd sig
+  local pid wd sig rc=0
   pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
   wd=$(box_env WAYLAND_DISPLAY) || die "box '$NAME': no WAYLAND_DISPLAY in its omabox.env"
   sig=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || die "box '$NAME': no HYPRLAND_INSTANCE_SIGNATURE in its omabox.env"
-  nsenter -t "$pid" -U -m --preserve-credentials -- env -i PATH=/usr/bin XDG_RUNTIME_DIR="/run/user/$UID" \
-    WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" "$@"
+  # shellcheck disable=SC2016 # the inner sh's
+  ns_held nsenter -t "$pid" -U -m --preserve-credentials -- env -i PATH=/usr/bin XDG_RUNTIME_DIR="/run/user/$UID" \
+    WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" OMABOX_EFD=@EFD \
+    /usr/bin/sh -c 'case $OMABOX_EFD in *[!0-9]*) ;; *) eval "exec 2>&$OMABOX_EFD $OMABOX_EFD>&-" ;; esac
+      unset OMABOX_EFD; exec "$@"' sh "$@" || rc=$?
+  ns_said $rc "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
+  return $rc
+}
+# nsenter's own words kept apart from the command's (#166). Run CMD with its stderr held in a file, and
+# the caller's stderr on another fd, whose number goes in CMD's first word OMABOX_EFD=@EFD (an env
+# assignment; the first only, so a user's command after it is never changed): the command in the box
+# makes that fd its stderr first thing, so it writes where it always did. What came before (nsenter's
+# "cannot open /proc/N/ns/user" on a box going down, bash's "Killed" line for nsenter itself) is in
+# NS_HELD, for ns_said. ns_held CMD...
+ns_held() {
+  local f w r e a set=0 args=() rc=0
+  NS_HELD=""
+  f=$(mktemp) || { "$@"; return; }
+  # shellcheck disable=SC2094 # on purpose: written through one fd, read back through the other
+  exec {w}>"$f" {r}<"$f" {e}>&2
+  rm -f -- "$f"
+  for a; do
+    if [ $set = 0 ] && [ "$a" = OMABOX_EFD=@EFD ]; then args+=("OMABOX_EFD=$e") set=1; else args+=("$a"); fi
+  done
+  # (A group: bash says a command killed by a signal on the stderr it has then.)
+  { "${args[@]}" {w}>&- {r}<&-; } 2>&"$w" || rc=$?
+  exec {w}>&- {e}>&-
+  IFS= read -r -d '' NS_HELD <&"$r" || true
+  exec {r}<&-
+  return $rc
+}
+# What ns_held held, after a command that ended RC: on a box that went down meanwhile (its PID 1 can
+# outlive the command by a moment: up to 2 s), WORDS instead, or nothing when the caller says it (run);
+# else as it came. ns_said RC [WORDS]
+ns_said() {
+  [ -n "${NS_HELD:-}" ] || return 0
+  if [ "$1" != 0 ]; then
+    local _
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      box_alive || { [ -z "${2:-}" ] || { say "$2"; BOX_GONE_SAID=1; }; return 0; }
+      sleep 0.2
+    done
+  fi
+  printf '%s' "$NS_HELD" >&2
 }
 
 # A box whose PID 1 lives but whose Hyprland does not answer (stopped, or deadlocked by a plugin under
@@ -832,9 +876,13 @@ box_exec() {
       for v in "${PASS[@]}"; do printf '%s=%s\0' "$v" "$(caller_env "$v")"; done)
     pass=(OMABOX_PASS_FD="$pfd")
   fi
+  # The command's stderr is the caller's (ns_held): nsenter's own words on a box going down are left to
+  # the caller (run says it in its words), or printed as they came on a box that is up.
+  local rc=0
   # shellcheck disable=SC2016 # $1/$@ belong to the inner bash
-  nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
-    env -i "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$(caller_path box)" "${pass[@]}" bash -c '
+  ns_held nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
+    env -i OMABOX_EFD=@EFD "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$(caller_path box)" "${pass[@]}" bash -c '
+      case $OMABOX_EFD in *[!0-9]*) ;; *) eval "exec 2>&$OMABOX_EFD $OMABOX_EFD>&-" ;; esac; unset OMABOX_EFD
       if [ -n "${OMABOX_PASS_FD:-}" ]; then
         while IFS= read -r -d "" kv <&"$OMABOX_PASS_FD"; do export "$kv"; done
         eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
@@ -848,9 +896,9 @@ box_exec() {
         case $d in /*) ;; *) continue ;; esac
         case ":$p:" in *":$d:"*) ;; *) [ -d "$d" ] && p=$p:$d ;; esac
       done
-      unset IFS OMABOX_CALLER_PATH; set +f; PATH=$p exec -- "$@"' bash "$cwd" "$@"
-  local rc=$?
+      unset IFS OMABOX_CALLER_PATH; set +f; PATH=$p exec -- "$@"' bash "$cwd" "$@" || rc=$?
   [ ${#pass[@]} -eq 0 ] || exec {pfd}<&-
+  ns_said $rc
   return $rc
 }
 
@@ -859,6 +907,7 @@ box_exec() {
 # no display) never becomes a "Process crashed" notification on the user's desktop through
 # omarchy-crash-watch (finding 67). The hard limit stays: `ulimit -c unlimited` inside gets cores back.
 # With a hard limit of 0 there are no cores to skip.
+# shellcheck disable=SC2329 # called through ns_held
 nocore() {
   if [ "$(ulimit -Hc)" = 0 ]; then "$@"; else prlimit --core=1: "$@"; fi
 }
@@ -3063,13 +3112,7 @@ cmd_run() {
     local rc=0
     box_exec "$@" || rc=$?
     touch "$D/used" 2>/dev/null || true
-    # A box ended from inside (#128: a test's pkill of the box's own compositor or shell) left only
-    # nsenter's raw line, or the command's own kill, to go by.
-    # A command the box's end killed (137) can return a moment before its PID 1 is gone: waited for
-    # then only, so a failing test is not slowed.
-    if [ $rc = 137 ]; then local _; for _ in 1 2 3 4 5 6 7 8 9 10; do box_alive || break; sleep 0.2; done; fi
-    [ $rc = 0 ] || box_alive ||
-      say "box '$NAME' went down while this command ran (its Hyprland, omabox-labwc and quickshell are the box's own: stop your own process by its PID; why: omabox log -b $NAME all)"
+    run_gone $rc
     return $rc
   fi
   [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
@@ -3104,7 +3147,17 @@ cmd_run() {
   printf '%s\n' "$err" | grep -E '^omabox: (warning|note):' >&2 || true
   local rc=0
   box_exec "$@" || rc=$?
+  run_gone $rc
   return $rc
+}
+# A box ended from inside (#128: a test's pkill of the box's own compositor or shell) left only
+# nsenter's raw line, or the command's own kill, to go by; box_exec holds those back on a box that
+# went down (#166), and this says it. A command the box's end killed (137) can return a moment before
+# its PID 1 is gone: waited for then only, so a failing test is not slowed. run_gone RC
+run_gone() {
+  if [ "$1" = 137 ]; then local _; for _ in 1 2 3 4 5 6 7 8 9 10; do box_alive || break; sleep 0.2; done; fi
+  [ "$1" = 0 ] || box_alive ||
+    say "box '$NAME' went down while this command ran (its Hyprland, omabox-labwc and quickshell are the box's own: stop your own process by its PID; why: omabox log -b $NAME all)"
 }
 
 # --- windows -------------------------------------------------------------------------------------

@@ -661,6 +661,40 @@ t_unit_run_named_dead() {
       rm_box() { echo rm_box; }; cmd_down racebox; echo "rc $?"' _ "$TMP/lib/bin/omabox" "$b" 2>&1)"
 }
 
+# #166: a command through on_box or box_exec on a box going down as it entered printed nsenter's raw
+# "cannot open /proc/N/ns/user", or bash's "Killed" line for nsenter, before any words (run's came
+# after them; keys and the rest had none). Stand-ins for nsenter and the box; nothing runs in a box.
+t_unit_box_gone() {
+  local L=$TMP/lib/bin/omabox out z
+  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
+    nsenter() { echo "nsenter: cannot open /proc/1/ns/user: No such file or directory" >&2; return 1; }
+    on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
+  check_eq "on_box on a box gone as it entered: said in words, without nsenter's line" \
+    $'omabox: box \'bg\' went down (why: omabox log -b bg all; clear it with: omabox down bg)\nrc 1' "$out"
+  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }; sleep() { :; }
+    nsenter() { echo "nsenter: reassociate to namespace failed: Operation not permitted" >&2; return 1; }
+    on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
+  check_eq "...on a box that is up, nsenter's line as it came" $'nsenter: reassociate to namespace failed: Operation not permitted\nrc 1' "$out"
+  # The command's own stderr is never held back: it is the caller's, through the fd the command takes.
+  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
+    nsenter() { while [ "$1" != -- ]; do shift; done; shift; "$@"; }
+    on_box sh -c "echo said >&2; exit 2" || echo "rc $?"' _ "$L" 2>&1)
+  check_eq "...a command's own stderr passes, the box's end or not" $'said\nrc 2' "$out"
+  mkdir -p "$TMP/boxgone/run"; : > "$TMP/boxgone/run/omabox.env"
+  out=$(bash -c 'source "$1"; NAME=bg D=$2; box_pid() { echo 1; }; box_alive() { return 1; }; nocore() { "$@"; }; caller_path() { :; }
+    nsenter() { case " $* " in *" -p "*) sh -c "kill -9 \$\$" ;; *) return 1 ;; esac; }
+    box_exec true || echo "rc $?"' _ "$L" "$TMP/boxgone" 2>&1)
+  check_eq "box_exec on a box gone: no \"Killed\" line, left to run's words" "rc 137" "$out"
+  # A PID 1 that exited and is not reaped yet is no box: its namespaces are gone.
+  # (Its parent execs a sleep, which never reaps it.)
+  sh -c 'sleep 0 & echo $! > "$1"; exec sleep 10' _ "$TMP/boxgone-zpid" & local zp=$! i
+  for i in $(seq 40); do z=$(cat "$TMP/boxgone-zpid" 2>/dev/null) && [ "$(cut -d' ' -f3 "/proc/$z/stat" 2>/dev/null)" = Z ] && break; sleep 0.05; done
+  check_eq "a zombie PID 1 is not alive (nor up in ls)" "Z gone dead" \
+    "$(Z=$z bash -c 'source "$1"; NAME=bg; box_pid() { echo "$Z"; }; printf "%s " "$(cut -d" " -f3 "/proc/$Z/stat")"
+      box_alive && printf "alive " || printf "gone "; box_state' _ "$L" 2>&1)"
+  kill "$zp" 2>/dev/null; wait "$zp" 2>/dev/null
+}
+
 # #158: the runtime dir kept a .lock- per box name ever used and a .down- per down that found none.
 # down removes the lock it holds once the box is gone; lock_file opens again a lock file removed
 # while it waited, so it and a newcomer never both hold one; down_none sweeps markers past 10 min.
@@ -3971,6 +4005,8 @@ t_own_processes() {
   out=$(ob run -b "$B" -- sh -c 'pkill -x Hyprland; sleep 10' 2>&1); rc=$?
   check_match "a box ended from inside: said in words" "box '$B' went down while this command ran" "$out"
   check "...not exit 0" test "$rc" != 0
+  # #166: instead of nsenter's line or bash's "Killed" one for it, not after them.
+  check_eq "...in those words alone" 1 "$(grep -c . <<<"$out")"
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -6554,7 +6590,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_monitors_wait t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)

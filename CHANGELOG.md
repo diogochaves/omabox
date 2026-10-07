@@ -85,6 +85,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `windows`, every `--window`, `shot -g`, `wait window` and `wait layer`, where they printed jq's
   errors or "grim failed" after 10-15 s. `omabox ls` shows such a box as `hung`, and `ls --json`
   has `"hung": true` (#125).
+- **`omabox hyprctl` on a box whose Hyprland just stopped answering says so in those words**, exit 1,
+  where its first call printed hyprctl's own "IPC didn't respond in time" (#166).
+- **Under the agent guard, `quickshell`/`qs` `kill` and `ipc` are refused with bundled options too**
+  (`qs -np PATH kill --any-display` reached your desktop's shell). The guard's note changed, so
+  `omabox guard` calls an installed hook outdated: `omabox guard on claude` renews it (#166).
+- **A box that goes down while a command reaches into it is said in words** by `keys`, `click` and
+  every other command, and by `run` in place of nsenter's "cannot open /proc/…" or a bash "Killed"
+  line, not after them (#166).
 - **`restart-shell` and `up` say when the shell crashes as it starts**, naming Quickshell's crash
   report, and exit 1; `restart-shell` said "shell restarted". Quickshell's crash dialog no longer
   appears in a box, where it took the keys meant for the app under test (Return on it opened a
