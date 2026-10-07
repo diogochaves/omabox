@@ -2279,9 +2279,9 @@ cmd_up() {
   # OMABOX_OMARCHY: the tree share/start-hyprland.sh and session.sh run instead of /usr/share/omarchy.
   [ -z "$omarchy" ] || hypr_env+=(--setenv OMABOX_OMARCHY "$omarchy")
   # OMABOX_AQUAMARINE=system (finding 125) holds for the boxes a box starts too (the suite's stand-in hosts).
+  [ -z "${OMABOX_AQUAMARINE:-}" ] || hypr_env+=(--setenv OMABOX_AQUAMARINE "$OMABOX_AQUAMARINE")
   # OMABOX_BOX (#172): the box's name in every process of its session, so a host process list tells a
   # box's shell from the desktop's (/proc/PID/environ; `omabox which PID`).
-  [ -z "${OMABOX_AQUAMARINE:-}" ] || hypr_env+=(--setenv OMABOX_AQUAMARINE "$OMABOX_AQUAMARINE")
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
