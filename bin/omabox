@@ -67,6 +67,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
             [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
+            [--theme NAME]                               start on that theme, not your desktop's current one
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
@@ -180,6 +181,11 @@ box's changes stay in the box; a link already in DEST is replaced, never written
 box at its own path; a DIR elsewhere is mounted read-only at its own path, refused as --ro-bind's are)
 and the box HOME's ~/.config/omarchy/themes/NAME (DIR's name) is a link to it, in place of the copy
 \`up\` makes of each of your themes. omarchy-theme-set NAME in the box applies it, as it is then.
+@ up run
+--theme NAME: the box starts on that theme (Omarchy's, one of yours or a --theme-dir one; checked
+before anything is made), not your desktop's current one: omarchy-theme-set NAME runs in the box
+before its Hyprland and bar start, so a test gets the same look whatever your desktop is on (its
+background: the theme's first). Over a --from save's look too. \`up\` again with another is refused.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run reload
@@ -838,6 +844,7 @@ env_reserved() {
     PATH|HOME|XDG_RUNTIME_DIR|XDG_DATA_HOME|XDG_CONFIG_HOME|XDG_CACHE_HOME|XDG_STATE_HOME) return 0 ;;
     WAYLAND_DISPLAY|WAYLAND_SOCKET|DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|LD_PRELOAD|LD_LIBRARY_PATH|BASH_ENV|ENV) return 0 ;;
     OMABOX_BOX) return 0 ;;   # the box's name (#172): what `which` and a host process list go by
+    OMABOX_THEME) return 0 ;; # up --theme's, checked first (finding 245)
   esac
   return 1
 }
@@ -1033,11 +1040,15 @@ box_home_file() {
 # A box that ended while `up` waited for it, with Hyprland's last line when it logged one (an interactive
 # box's: an abort such as finding 95's `CBackend::create() failed!`).
 died_starting() {
-  local f last=""
+  local f last="" sess why=""
   if f=$(box_home_file hyprland.log); then
     last=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -n 1 | sed 's/^[[:space:]]*//') || true
   fi
-  die "box '$NAME' died while starting${last:+ (Hyprland: $last)}; logs: $D/home/*.log $D/box.log"
+  # Or why share/session.sh ended it before Hyprland started (finding 245: up --theme's omarchy-theme-set;
+  # not its line naming an --hyprland build).
+  if [ -n "$last" ]; then why=" (Hyprland: $last)"
+  elif sess=$(grep '^session\.sh: ' "$D/box.log" 2>/dev/null | grep -vm 1 '^session\.sh: Hyprland ' | cut -c 1-200) && [ -n "$sess" ]; then why=" (${sess#session.sh: })"; fi
+  die "box '$NAME' died while starting$why; logs: $D/home/*.log $D/box.log"
 }
 
 # Until the box's Hyprland is up (share/hyprland.lua writes omabox.env once it is).
@@ -1550,10 +1561,19 @@ seed_home() {
     place_plugin "$id" "$section" "$kinds" "$ids" < "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
     mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
   done
-  seed_theme "$state/theme" "$h"
-  cp "$state/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null || true
-  if bg=$(readlink "$state/background"); then
-    ln -sfn "/home/sbx/.local/state/omarchy/current/theme/${bg#*/current/theme/}" "$h/.local/state/omarchy/current/background"
+  # The user's current theme, or with `up --theme NAME` none of it (finding 245): the box's session
+  # runs omarchy-theme-set NAME before Hyprland starts, which makes all three. A save's go first, so
+  # nothing of its look is left if that fails, and the background is the theme's first, as on a first
+  # set (omarchy-theme-set takes the one after the current background when it is one of the theme's).
+  if [ -n "${THEME:-}" ]; then
+    rm -rf -- "$h/.local/state/omarchy/current/theme" "$h/.local/state/omarchy/current/theme.name" \
+      "$h/.local/state/omarchy/current/background"
+  else
+    seed_theme "$state/theme" "$h"
+    cp "$state/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null || true
+    if bg=$(readlink "$state/background"); then
+      ln -sfn "/home/sbx/.local/state/omarchy/current/theme/${bg#*/current/theme/}" "$h/.local/state/omarchy/current/background"
+    fi
   fi
   # The rest of the user's look (finding 69), none of it secret: terminal configs (they include the
   # theme's colours) and the terminal choice, branding (About sizes its window from about.txt), the
@@ -1652,6 +1672,21 @@ seed_theme() {
   seed_copy "$1" "$2" .local/state/omarchy/current/theme
   copied=$(ls -A -- "$dst" 2>/dev/null) || copied=""
   [ -n "$copied" ] || die "could not copy your current theme ($1) into the box HOME ($dst)"
+}
+
+# `up --theme NAME` (finding 245): NAME as omarchy-theme-set names it (tags dropped, lower case, spaces
+# as dashes), printed when a theme of that name is there: in OMARCHY's themes, the user's (seed_home
+# copies them all into the box) or one of THEME_DIRS (by its dir's name). Dies saying which there are.
+# theme_named NAME OMARCHY [THEME_DIR...]
+theme_named() {
+  local name=$1 o=$2 n d names; shift 2
+  n=$(sed -E 's/<[^>]+>//g' <<<"$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+  [[ $n =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || die "--theme: not a theme's name: $name"
+  for d; do [ "${d##*/}" != "$n" ] || { echo "$n"; return 0; }; done
+  for d in "$o/themes/$n" "$HOME/.config/omarchy/themes/$n"; do [ ! -d "$d" ] || { echo "$n"; return 0; }; done
+  names=$(for d in "$o/themes"/*/ "$HOME/.config/omarchy/themes"/*/; do [ -d "$d" ] && basename "$d"; done; printf '%s\n' "${@##*/}")
+  names=$(grep . <<<"$names" | sort -u | paste -sd ' ') || names=""
+  die "--theme: no theme $n in $o/themes, ~/.config/omarchy/themes${*:+ or --theme-dir}${names:+ (there are: $names)}"
 }
 
 # home_unlink HOME REL...: a link or FIFO at HOME/REL, or at any dir on the way to it, is removed (the
@@ -1843,6 +1878,7 @@ up_already() {
   case " $given " in *" seed "*)
     [ "$(printf '%s\n' "${seeds[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.seeds // []' "$D/box.json" 2>/dev/null)" ] ||
       diff+=("--seed (files are seeded only when a box starts)") ;; esac
+  case " $given " in *" theme "*) [ "$(meta theme)" = "$THEME" ] || diff+=("--theme $THEME (it started on $(meta theme | grep . || echo "your desktop's theme"))") ;; esac
   case " $given " in *" theme-dir "*)
     [ "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R . | jq -sc .)" = "$(jq -c '.theme_dirs // []' "$D/box.json" 2>/dev/null)" ] ||
       diff+=("--theme-dir (it has $(jq -r '.theme_dirs // [] | if length == 0 then "none" else join(", ") end' "$D/box.json" 2>/dev/null))") ;; esac
@@ -1860,7 +1896,7 @@ up_already() {
 }
 
 cmd_up() {
-  STOCK_BAR=0
+  STOCK_BAR=0 THEME=""
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
@@ -1871,7 +1907,7 @@ cmd_up() {
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed|--monitor|--theme-dir)
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed|--monitor|--theme-dir|--theme)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -1891,6 +1927,7 @@ cmd_up() {
         g=$(readlink -f -- "$2"); [[ ${g##*/} != .* ]] || die "--theme-dir: a theme's name (its dir's) cannot start with a dot: $2"
         [[ " ${theme_dirs[*]##*/} " != *" ${g##*/} "* ]] || die "--theme-dir: two themes named ${g##*/}"
         theme_dirs+=("$g"); named+=("mount ${2/#\~/$HOME} into"); shift ;;
+      --theme) optarg "$@"; THEME=$2; shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
@@ -1915,6 +1952,9 @@ cmd_up() {
   # A plugin that cannot be mounted (not there, or a manifest id that is not a name: finding 175) is
   # refused before any lock or box dir is made.
   local p; for p in "${plugin_args[@]}"; do resolve_plugin "$p" >/dev/null; done
+  # --theme NAME (finding 245): a theme there is (Omarchy's, the user's, a --theme-dir's), named as
+  # omarchy-theme-set names it, which the box's session runs with it; refused here, as a plugin is.
+  [ -z "$THEME" ] || THEME=$(theme_named "$THEME" "${omarchy:-/usr/share/omarchy}" ${theme_dirs[@]+"${theme_dirs[@]}"}) || exit 1
   if [ $new = 1 ]; then
     # A name no box has (finding 73): box-1, box-2, ... The choice holds a lock until the box's dir
     # exists, so two at once (a double click in the widget) never pick the same one. Printed on stdout.
@@ -2047,9 +2087,10 @@ cmd_up() {
   check_install "$render" "$hyprland"
   # A box starts from the user's Omarchy look (seed_home), which Omarchy makes at their first login:
   # an account that never logged in has no theme yet (finding 130). Said before anything is made.
-  [ -d "$HOME/.local/state/omarchy/current/theme" ] ||
+  # With --theme the box starts on that one instead (checked above).
+  [ -n "$THEME" ] || [ -d "$HOME/.local/state/omarchy/current/theme" ] ||
     die "Omarchy has not set a theme for you yet ($HOME/.local/state/omarchy/current/theme), and a box" \
-      "starts from your Omarchy look: log into Omarchy once, or set one: omarchy-theme-set \"Tokyo Night\""
+      "starts from your Omarchy look: log into Omarchy once, or set one: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME)"
   # More monitors (#122): headless boxes on a headless output (on NVIDIA a Wayland output, #165, which
   # needs aquamarine's fix as its screen does: refused below); an interactive box's are windows (#123).
   if [ ${#monitors[@]} -gt 0 ] && [ $interactive = 1 ]; then
@@ -2215,7 +2256,7 @@ cmd_up() {
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
-    --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" \
+    --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" --arg theme "$THEME" \
     --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
       plugin_via: (reduce $plugins[] as $i ({}; .[$i] = (if $linked | index($i) then "linked" else "mounted" end))), net: $net, allow: $allow,
@@ -2225,6 +2266,7 @@ cmd_up() {
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
       + (if ($themes | length) > 0 then {theme_dirs: $themes} else {} end)
+      + (if $theme != "" then {theme: $theme} else {} end)
       + (if ($mspecs | length) > 0 then {monitor_specs: $mspecs} else {} end)
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
@@ -2292,6 +2334,8 @@ cmd_up() {
   [ -z "$omarchy" ] || hypr_env+=(--setenv OMABOX_OMARCHY "$omarchy")
   # OMABOX_AQUAMARINE=system (finding 125) holds for the boxes a box starts too (the suite's stand-in hosts).
   [ -z "${OMABOX_AQUAMARINE:-}" ] || hypr_env+=(--setenv OMABOX_AQUAMARINE "$OMABOX_AQUAMARINE")
+  # OMABOX_THEME: `up --theme`'s, which share/session.sh sets before Hyprland starts (finding 245).
+  [ -z "$THEME" ] || hypr_env+=(--setenv OMABOX_THEME "$THEME")
   # OMABOX_BOX (#172): the box's name in every process of its session, so a host process list tells a
   # box's shell from the desktop's (/proc/PID/environ; `omabox which PID`).
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
@@ -3285,7 +3329,7 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--monitor|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--theme|--monitor|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;

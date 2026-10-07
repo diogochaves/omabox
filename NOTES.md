@@ -4704,6 +4704,53 @@ from them.
     bridge, assumed to export), Firefox, VTE terminals, the share of real sessions' shots that are
     of GTK/Qt apps rather than the shell.
 
+245. **A box's look followed whatever theme the desk was on that day** (2026-10-07, #173). A box
+    starts on the user's current theme by design (finding 69), so a test whose result depends on the
+    theme changed with the desk: in one project a profile-switch script's "enter the base theme" step
+    did nothing because the box already sat on a variant of that theme copied from the desk. **`up
+    --theme NAME`** starts the box on NAME. Of the two ways to do it, it is the second: (a) stage
+    `current/theme` on the host as `omarchy-theme-set` does (copy Omarchy's theme, overlay the
+    user's, run the templates, write `theme.name`, pick a background), or (b) seed as today, then run
+    `omarchy-theme-set NAME` in the box before Hyprland. (b) is Omarchy's own logic, kept in step with
+    it for free (the user overlay, a repo-installed theme's rules, `colors.toml` from an old
+    `alacritty.toml`, the templates, `shell.*.toml` overrides, the background choice), and in the
+    box it is the box's Omarchy: `--omarchy DIR`'s themes and templates, the box HOME's `themed/`
+    (from /etc/skel). It costs ~150 ms at start. share/session.sh runs `$OMARCHY_PATH/bin/omarchy-theme-set`
+    with that bin first on PATH and `OMARCHY_THEME_HEADLESS=1` (no shell to tell yet, no terminals to
+    restart, no hooks, warm-ups or keyboard RGB; only the background link is made), after the PATH
+    is set and before `omarchy-theme-set-gnome` reads the theme's mode (finding 148) and before
+    Hyprland and the bar read the theme. seed_home then copies none of the desk's theme (no current
+    theme, `theme.name` or background; a save's are removed): the desk need not have one (finding
+    130's check is skipped), and the background is the theme's first (headless `omarchy-theme-set`
+    takes the one after the current background when that is one of the theme's: a save on the same
+    theme would have started on its second). A set that fails, or leaves no theme, ends the box
+    (`kill -KILL -1`, as a `--systemd` box whose manager does not come up), and `died_starting` now
+    gives session.sh's line from box.log when Hyprland logged none: `box 'x' died while starting (up
+    --theme: omarchy-theme-set NAME failed: <its last line> (~/theme-set.log))`. NAME is named as
+    `omarchy-theme-set` names it (tags dropped, lower case, spaces as dashes: `"Tokyo Night"` is
+    `tokyo-night`), must be `[a-z0-9][a-z0-9._-]{0,63}` and must be there, checked right after the
+    options are read (before the lock, a `--new` name or the box dir): in Omarchy's themes (the
+    `--omarchy` tree's), `~/.config/omarchy/themes` (seed_home copies them all) or a `--theme-dir`'s
+    name; refused saying which there are. `box.json` has `theme`; `up` again with another says the
+    box started on its own (or the desktop's); `ls --json`'s `theme` reads the box's `theme.name` as
+    before. With `--from SAVE` the flag wins over the save's look. `OMABOX_THEME` carries it to the
+    session and `--env` cannot set it (env_reserved), so no name skips the check. `run` passes it to a
+    throwaway box. Not like the desk: a theme cloned from a git repo into `~/.config/omarchy/themes`
+    comes into the box without its `.git` (seed_copy skips hidden files), so the box's
+    `omarchy-theme-set` treats it as the user's own and keeps its Lua and terminal configs, which the
+    desk's drops; and the user's `~/.config/omarchy/backgrounds/NAME/` is not seeded, so the
+    background is the theme's own first. Checked: t_theme (desk on baseline: `--theme tokyo-night`
+    gives its `theme.name`, `colors.toml`, generated `hyprland.lua`, first background, the stock bar
+    in its background colour by `pixel`, `ls --json`; `up` again with `nord` refused, with
+    `Tokyo-night` fine; a save of it up `--from` with `--theme nord` is on nord, without the flag on
+    the desk's theme as before; an unknown name refused with no box dir; an `--omarchy` tree whose
+    `omarchy-theme-set` fails: `up` fails with its line), t_unit_theme_dir (`theme_named`: Omarchy's
+    by its display name, the user's, a `--theme-dir`'s, an unknown one listing those there are, a
+    path, a dot name), t_unit_no_theme (`--theme` on an account with no theme gets past that check;
+    an unknown one is refused, nothing made), t_unit_omarchy_contract (`omarchy-theme-set` still
+    reads `OMARCHY_THEME_HEADLESS`). All fail on the old code (`up: unknown option --theme`; no
+    `theme_named`). Not checked: an interactive box with `--theme` (the same session.sh path).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

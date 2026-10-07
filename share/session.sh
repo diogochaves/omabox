@@ -86,6 +86,19 @@ o=${OMABOX_OMARCHY:-/usr/share/omarchy}
 [ -r "$o/default/uwsm/default" ] && . "$o/default/uwsm/default"
 export TERMINAL=${TERMINAL:-xdg-terminal-exec} EDITOR=${EDITOR:-omarchy-launch-editor --inline}
 
+# `up --theme NAME` (finding 245): the box's theme is NAME, not the desktop's, set as Omarchy sets one
+# (its themes overlaid with the user's, its templates, the first background) before Hyprland and the
+# bar read it. Headless: no shell to tell, no terminals to restart, no hooks. seed_home left no
+# current theme, so one that fails here ends the box (box.log says why) rather than run without one.
+if [ -n "${OMABOX_THEME:-}" ]; then
+  if ! without_host_fd env PATH="$o/bin:$PATH" OMARCHY_PATH="$o" OMARCHY_THEME_HEADLESS=1 \
+      "$o/bin/omarchy-theme-set" "$OMABOX_THEME" > "$HOME/theme-set.log" 2>&1 ||
+    [ ! -d "$HOME/.local/state/omarchy/current/theme" ]; then
+    echo "session.sh: up --theme: omarchy-theme-set $OMABOX_THEME failed: $(grep . "$HOME/theme-set.log" | tail -n 1) (~/theme-set.log)" >&2
+    kill -KILL -1; exit 1
+  fi
+fi
+
 # The theme's light or dark mode in the box's dconf, as `omarchy-theme-set` leaves it on the host
 # (finding 148): a fresh dconf says "no preference", so portal dialogs, GTK, libadwaita and Qt apps
 # came out light under a dark theme. In the background: the session does not wait for dconf.

@@ -7,6 +7,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **A box on a theme of your choosing**: `omabox up --theme NAME` starts the box on that theme
+  (Omarchy's, one of yours or a `--theme-dir` one) instead of your desktop's current one, so a test
+  gets the same start whatever your desktop is on; with `--from SAVE` it wins over the save's look.
+  An unknown name is refused before anything is made (#173).
 - **A theme you are editing, live in a box**: `omabox up --theme-dir DIR` links the box's
   `~/.config/omarchy/themes/NAME` to DIR, so edits after `up` reach the box and `omarchy-theme-set
   NAME` there applies the theme as it is then; a DIR outside the repo is mounted read-only at its own

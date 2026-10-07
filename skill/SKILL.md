@@ -28,6 +28,7 @@ with `grim`", "run `ctest`" **still holds: carry it out inside a box.**
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …`, `omarchy restart shell` | `omabox run -- …`, `omabox restart-shell` (`omarchy plugin validate DIR` only reads: fine on the host) |
 | A plugin in `~/.config/omarchy/plugins`; edit `~/.config/omarchy/shell.json` | `omabox up --plugin PATH`; edit `$(omabox path)/home/.config/omarchy/shell.json` |
 | A theme in `~/.config/omarchy/themes` linked to your working copy | `omabox up --theme-dir PATH` (live; else the box has a copy made at `up`) |
+| A result that depends on the theme (colours, shots compared across runs, a theme-switch flow) | `omabox up --theme NAME` (else the box starts on whatever the desktop is on) |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
 | "put the desktop back afterwards" | nothing to put back: `omabox down` |
 
