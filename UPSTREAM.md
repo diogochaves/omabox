@@ -82,6 +82,37 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   `+layout` in `AQ_BUILD` and in `monitor_add_window`'s note; `t_monitors_window`'s pointer check
   then checks any build.
 
+## Omarchy: the shell's crash dialog takes focus (not reported yet)
+
+- **Needed for:** driving a box after its shell crashed. Quickshell's crash reporter opens a dialog
+  (class `org.quickshell`, title `quickshell`) that takes focus; a following `omabox keys` Return hit
+  its "Open report page" and opened a browser in the box (NOTES finding 183).
+- **Waiting for:** Omarchy keeping that dialog from opening or from taking focus. Checked on 4.0.4-1
+  and `quattro` 81145eb (2026-10-05): the shell is relaunched by `omarchy-launch-shell` (about 1.5 s
+  after a crash within Quickshell's 10 s window), the dialog still opens, and no window rule covers
+  it. Not reported upstream yet.
+- **Until then:** `share/hyprland.lua`'s `window.open` hook closes the reporter's window (its environ
+  has `__QUICKSHELL_CRASH_DUMP_PID`).
+- **Then drop:** nothing while omabox supports an Omarchy without the fix: the hook costs nothing
+  when no dialog opens.
+
+## Omarchy: idle timeout 0 means off (#12538): no change planned
+
+- omabox sets `idle.screensaver` and `idle.lock` to 1000000 s in a box's `shell.json` (NOTES
+  finding 51). `quattro` 7901d7d (merged 2026-10-04, after v4.0.4) makes 0 mean off, but on 4.0.4
+  and before, 0 starts the screensaver and lock at once. 1000000 holds idle off on both, and stays
+  under the Qt timer's limit of about 24.8 days (#13920). Do not switch to 0 while omabox supports
+  4.0.4, an installed one or an `--omarchy` tree that old.
+
+## Omarchy: `plugin enable` right after `rescanPlugins` (#9304): no change planned
+
+- setup's widget prompt (`setup_widget` in `bin/omabox`) retries `omarchy plugin enable` (20 x
+  0.2 s) while it says "is not known": `rescanPlugins` returns before the shell has discovered the
+  plugin (NOTES finding 133). Upstream: #9304 and #11115, with fixes in #11117, #11118 and #7754 (a
+  targeted `discoverPlugins`; `plugin add --enable` discovers first). The retry is harmless where
+  that is fixed: keep it. If #7754 lands, `discoverPlugins` could replace rescan plus retry, only
+  where the shell has the method (`t_unit_omarchy_contract` can tell).
+
 ## Could be reported (nothing waiting on it)
 
 - aquamarine: fixed protocol versions (NOTES finding 2).
