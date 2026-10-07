@@ -1957,8 +1957,9 @@ cmd_up() {
     shift
   done
   # A plugin that cannot be mounted (not there, or a manifest id that is not a name: finding 175) is
-  # refused before any lock or box dir is made.
-  local p; for p in "${plugin_args[@]}"; do resolve_plugin "$p" >/dev/null; done
+  # refused before any lock or box dir is made; PLUGINS ("id<TAB>dir" each) is what the box mounts.
+  PLUGINS=()
+  local p; for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
   # --theme NAME (finding 245): a theme there is (Omarchy's, the user's, a --theme-dir's), named as
   # omarchy-theme-set names it, which the box's session runs with it; refused here, as a plugin is.
   [ -z "$THEME" ] || THEME=$(theme_named "$THEME" "${omarchy:-/usr/share/omarchy}" ${theme_dirs[@]+"${theme_dirs[@]}"}) || exit 1
@@ -2127,8 +2128,6 @@ cmd_up() {
   if box_alive && take_over held; then up_already; return 0; fi
   [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
     die "--systemd needs your systemd user manager (systemctl --user) to delegate the box a cgroup"
-  PLUGINS=()
-  for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
   for p in "${PLUGINS[@]}"; do
     why=$(refuse_src "${p#*$'\t'}") && die "refusing to mount plugin ${p#*$'\t'} into a box: $why"
   done
