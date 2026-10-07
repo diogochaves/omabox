@@ -3678,7 +3678,8 @@ from them.
     nvidia` (2 of 2 full runs on the RTX, none of the day's on the AMD). Not found: it passes alone,
     and by hand the dead box went in 3.4 s alone and 5.0 s with six boxes starting on the RTX. On the real card (Diogo's sudo, 2026-10-06), with `gpu nvidia`
     set: `rtx vfio` (refused while a box held the card: its Hyprland and omabox-labwc hold renderD129
-    and /dev/nvidia0, so the switch never kills a box), then `up` printed the one fallback line and the
+    and /dev/nvidia0, so the switch never kills a box), then `up` printed the one fallback line (with
+    no reason nor the GPU taken instead until finding 237) and the
     box rendered on renderD128 (a shot worked); `rtx nvidia`, and the next `up` was on renderD129
     again, no setting changed. `omabox config gpu` then lists the GPUs on stderr (stdout stays the value,
     which scripts and jailed agents read): each render node, its driver, its slot, the values that name
@@ -3795,7 +3796,8 @@ from them.
     rest of it after finding 214). `box.json` (and `ls --json`) has a headless box's `render`: node,
     PCI slot, driver and `fallback` (the setting's GPU was not there, render_fallback); an interactive
     box has none (finding 95). Plain `ls` puts `GPU: nvidia 0000:01:00.0 (renderD129)` under a box's
-    line on a machine with more than one render node. `omabox gpu release GPU` (a slot, or a kind)
+    line on a machine with more than one render node (or, since finding 237, when it is a fallback,
+    with why). `omabox gpu release GPU` (a slot, or a kind)
     takes down the live headless boxes on it, naming each, by their record, or, for a box from before
     it, by a render node of that GPU one of its processes has open; never an interactive box; refused
     to a jailed agent (it takes other boxes down). Live on this desk: a box on each GPU, `gpu release
@@ -3807,7 +3809,9 @@ from them.
     one GPU or the setting names one: Auto (naming its GPU), each GPU (`name · driver`, or
     `unavailable`), a kind or slot set by hand shown as it is; a dim line says where new boxes render,
     an amber one when the chosen GPU is not there and why; rows' captions name their box's driver
-    (after the mode, before what elides). SYSPCI and LSPCI join DRI/SYSDRM for t_unit_gpu's fake tree
+    (after the mode, before what elides). (Finding 237: the "why" was there only for a slot, the
+    picker's `unavailable` had none, and captions counted GPUs on the bus where `ls` counts render
+    nodes.) SYSPCI and LSPCI join DRI/SYSDRM for t_unit_gpu's fake tree
     (a vfio-bound GPU, one with no lspci name, a non-display device); `gpu release` is unit-tested on
     a fake runtime dir only, since in the suite it would take real boxes down. t_widget_list drives the
     picker through the panel's new `face settings` IPC and `inspect`.
@@ -4264,6 +4268,32 @@ from them.
     recorded, then SIGKILLed: a reaper, the pidns recorded, the box down at its 20 s idle limit (all
     three failed on the old code; skipped, saying so, when load lets the `up` record it before it is
     stopped).
+    (4) #118's follow-ups (findings 214, 224). `config gpu amdgpu` (or `i915`, `xe`, `nouveau`,
+    `radeon`) was refused while the list prints those names next to each GPU: a driver's name is
+    taken as its kind now (`gpu release` too). The fallback line said "none usable here, so the first
+    GPU: /dev/dri/renderD128": now why, from the bus, and which GPU instead: "gpu nvidia (omabox config
+    gpu): none usable here (0000:01:00.0: bound to vfio-pci), so the first GPU: amdgpu 0000:0a:00.0
+    (renderD128)". A GPU's kind comes from its driver, else its PCI vendor (0x10de, 0x1002, 0x8086):
+    a card on vfio-pci is still NVIDIA's (`pci_kind`; `kind` in `config --json`'s `gpus`). The box
+    records it: `render.wanted` and `render.why` with `fallback`. Plain `ls` showed the GPU line only
+    with two usable render nodes, so a box that fell back on a machine with one left (the RTX on
+    vfio-pci) got none, when it matters most: the line is there for a fallback too, with the reason
+    ("GPU: amdgpu 0000:0a:00.0 (renderD128), a fallback: gpu nvidia was not usable (0000:01:00.0:
+    bound to vfio-pci)"). `omabox gpu` names the box's GPU the same way (`render` in `--json`; an
+    interactive box: "the desktop's"). `gpu release` skipped a box whose `up` was in progress (no
+    box.json yet, or no box running), which then held the GPU: it waits for every name's lock that is
+    busy (an `up` or `down`), 60 s at most each, saying which, before it reads the boxes; the lock
+    files opened to read, never made (a down removes them). In the widget: the picker reads
+    "GeForce RTX 5070 Ti · unavailable (bound to vfio-pci)"; the amber line's reason looked GPUs up by
+    slot only, so `gpu nvidia` had none: it takes the GPUs of that kind too; a row's caption counted
+    every GPU on the bus (a vfio-bound one too) where `ls` counts render nodes, and named the driver
+    only: now as `ls` (more than one render node, or a fallback), driver and short slot ("amdgpu
+    7a:00.0 (fallback)"). Checks: t_unit_gpu on its fake tree (the fallback line with each reason, a
+    slot that is no GPU, the ls line of a fallback box on one usable GPU and none for another, the
+    aliases and `config gpu amdgpu` storing amd, each GPU's kind, `gpu release` waiting for a held
+    lock and taking that box down too: all failed on the old code); t_main (`gpu` and `gpu --json`
+    name the box's GPU); t_widget_list in a box (the picker's reason, the amber line under `gpu
+    nvidia`, the captions; each failed with the old Panel.qml, given `caption` in inspect).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -241,14 +241,16 @@ them, and `omabox config KEY default` puts one back.
 - `bar-icon`: `always` (the default) keeps the widget's icon in the bar with no box up, dimmed, so
   its settings are a click away; `auto` shows it only while boxes exist.
 - `gpu` (next release): the GPU headless boxes render on: `auto` (the default: the first usable
-  render node), `nvidia`, `amd`, `intel`, or a PCI slot (`0000:01:00.0`: for two GPUs of one kind).
-  `omabox config gpu` lists the GPUs with the values that name each, and marks the one in use.
-  When that GPU is not there (an NVIDIA card handed to a VM), `up` renders on the first one and says
-  so. `OMABOX_RENDER_NODE=/dev/dri/renderDN` overrides it. Interactive boxes render on your desktop's
+  render node), `nvidia`, `amd`, `intel` (or a driver's name: `amdgpu`, `i915`, ...), or a PCI slot
+  (`0000:01:00.0`: for two GPUs of one kind). `omabox config gpu` lists the GPUs with the values that
+  name each, and marks the one in use. When that GPU is not there (an NVIDIA card handed to a VM), `up`
+  renders on the first one and says so, and why (`bound to vfio-pci`).
+  `OMABOX_RENDER_NODE=/dev/dri/renderDN` overrides it. Interactive boxes render on your desktop's
   GPU whatever it says. `auto` stays the default: on a laptop the iGPU saves battery. The widget's
   Settings has it as a picker on a machine with more than one GPU (a GPU bound to `vfio-pci` is listed,
-  unavailable). `omabox ls` shows each box's GPU, and **`omabox gpu release GPU`** takes down the
-  headless boxes on one (naming each) before you hand it to a VM: a box holds its render node.
+  unavailable, and why). `omabox ls` and `omabox gpu` show each box's GPU, and **`omabox gpu release
+  GPU`** takes down the headless boxes on one (naming each, after any `up` in progress) before you hand
+  it to a VM: a box holds its render node.
   Tested on a desktop with an AMD iGPU and an NVIDIA dGPU (on `nvidia` and on `vfio-pci`); laptops
   (hybrid graphics, MUX, eGPU) should work the same but are untested: reports welcome (#119).
 

@@ -347,7 +347,9 @@ aquamarine's fix, as NVIDIA boxes do.
 \`gpu release GPU\` (a PCI slot, or nvidia, amd, intel: \`omabox config gpu\` lists them) takes down every
 headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
 render node, and on NVIDIA its /dev/nvidia*). Interactive boxes are left alone (they render on the
-desktop's GPU), and so are boxes on other GPUs. Each box's GPU is in \`ls\` and \`ls --json\` (render).
+desktop's GPU), and so are boxes on other GPUs. An \`up\` or \`down\` in progress is waited for first.
+Each box's GPU is in \`gpu\`, \`ls\` (with more than one GPU, or when it is a fallback, and why) and
+\`--json\` (render).
 @ output
 \`output drop [OUT]\` removes one of a headless box's screens, as a monitor that drops off on wake
 (standby, a KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on
@@ -394,10 +396,12 @@ conf_check() {
     workspace) ws_check "$2" ;;
     confirm-close) case $2 in on|true|yes|1) echo on ;; off|false|no|0) echo off ;; *) return 1 ;; esac ;;
     bar-icon) case $2 in auto|always) echo "$2" ;; *) return 1 ;; esac ;;
-    # A kind of GPU (by its driver) or a PCI slot, as 0000:03:00.0 (03:00.0 taken too).
+    # A kind of GPU (by its driver) or a PCI slot, as 0000:03:00.0 (03:00.0 taken too). A driver's
+    # name is its kind (finding 237): `config gpu` lists each GPU by its driver.
     gpu) local g=${2,,}
       case $g in
         auto|nvidia|amd|intel) echo "$g" ;;
+        nouveau|amdgpu|radeon|i915|xe) gpu_kind "$g" ;;
         *) [[ $g =~ ^([0-9a-f]{4}:)?[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || return 1
            [[ $g == ????:* ]] || g=0000:$g; echo "$g" ;;
       esac ;;
@@ -1160,16 +1164,19 @@ DRI=/dev/dri SYSDRM=/sys/class/drm SYSPCI=/sys/bus/pci/devices LSPCI=lspci
 # first usable one, said. renderD numbers come from probe order: the setting names a driver or a slot.
 # Only ever a render node (renderD*), never a card node: that is the seat (finding 5).
 render_node() {
-  local n=${OMABOX_RENDER_NODE:-} want
+  local n=${OMABOX_RENDER_NODE:-} want fell=0
   if [ -z "$n" ]; then
     want=$(conf_get gpu)
     if [ "$want" != auto ]; then
       for n in "$DRI"/renderD*; do [ -r "$n" ] && [ -w "$n" ] && gpu_is "$n" "$want" && break; n=""; done
-      [ -n "$n" ] || say "gpu $want (omabox config gpu): none usable here, so the first GPU: $(render_nodes | head -n 1)"
+      [ -n "$n" ] || fell=1
     fi
     if [ -z "$n" ]; then
       for n in "$DRI"/renderD*; do [ -r "$n" ] && [ -w "$n" ] && break; n=""; done
     fi
+    # Why, and which GPU instead (finding 237): "none usable here" alone left the user to find out.
+    [ $fell = 0 ] || [ -z "$n" ] ||
+      say "gpu $want (omabox config gpu): none usable here ($(gpu_why_not "$want")), so the first GPU: $(render_driver "$n") $(render_slot "$n") (${n##*/})"
   fi
   [[ $n =~ ^$DRI/renderD[0-9]+$ ]] && [ -r "$n" ] && [ -w "$n" ] ||
     die "no usable GPU render node ($DRI/renderD*); set OMABOX_RENDER_NODE"
@@ -1203,27 +1210,64 @@ gpu_json() {
   local dev slot drv name node avail why
   for dev in "$SYSPCI"/*; do
     [[ $(cat "$dev/class" 2>/dev/null) == 0x03* ]] || continue
-    slot=${dev##*/} drv="" name="" why=""
-    [ ! -e "$dev/driver" ] || drv=$(basename "$(readlink -f "$dev/driver")")
+    slot=${dev##*/} drv=$(pci_driver "$dev") name=""
     if command -v "$LSPCI" >/dev/null 2>&1; then
       # `01:00.0 "VGA ..." "NVIDIA Corporation" "GB203 [GeForce RTX 5070 Ti]" ...`: the model's
       # bracketed name, or the whole model.
       name=$("$LSPCI" -mm -s "$slot" 2>/dev/null | awk -F'"' 'NR == 1 { print $6 }')
       [[ ! $name =~ \[(.+)\] ]] || name=${BASH_REMATCH[1]}
     fi
-    node=$(slot_node "$slot") avail=false
-    if [ -z "$drv" ]; then why="no driver"
-    elif [ -z "$node" ]; then why="bound to $drv"
-    elif [ ! -r "$node" ] || [ ! -w "$node" ]; then why="no access to $node"
-    else avail=true; fi
-    jq -nc --arg pci "$slot" --arg driver "$drv" --arg name "$name" --arg node "$node" --argjson available $avail --arg why "$why" \
-      '{pci: $pci, driver: $driver, name: $name, node: (if $node == "" then null else $node end), available: $available}
+    node=$(slot_node "$slot") why=$(pci_why "$dev") avail=false
+    [ -n "$why" ] || avail=true
+    jq -nc --arg pci "$slot" --arg driver "$drv" --arg kind "$(pci_kind "$dev")" --arg name "$name" --arg node "$node" \
+      --argjson available $avail --arg why "$why" \
+      '{pci: $pci, driver: $driver, kind: (if $kind == "" then null else $kind end), name: $name,
+        node: (if $node == "" then null else $node end), available: $available}
         + (if $why != "" then {why: $why} else {} end)'
   done | jq -sc .
+}
+# The driver a PCI device (its dir in SYSPCI) is bound to, or nothing.
+pci_driver() { [ ! -e "$1/driver" ] || basename "$(readlink -f "$1/driver")"; }
+# The `gpu` kind of a PCI device: by its driver, else (bound to vfio-pci, or to none) by its vendor, so
+# an NVIDIA card handed to a VM is still one (finding 237); nothing for another vendor.
+pci_kind() {
+  local k; k=$(gpu_kind "$(pci_driver "$1")")
+  [ -n "$k" ] || case $(cat "$1/vendor" 2>/dev/null) in 0x10de) k=nvidia ;; 0x1002) k=amd ;; 0x8086) k=intel ;; esac
+  echo "$k"
+}
+# Why a box cannot render on the GPU at PCI device dir DEV, or nothing when it can.
+pci_why() {
+  local drv node; drv=$(pci_driver "$1") node=$(slot_node "${1##*/}")
+  if [ -z "$drv" ]; then echo "no driver"
+  elif [ -z "$node" ]; then echo "bound to $drv"
+  elif [ ! -r "$node" ] || [ ! -w "$node" ]; then echo "no access to $node"
+  fi
+}
+# Why no usable GPU is the one WANT names (a kind or a slot): each such GPU on the bus with its reason
+# ("0000:01:00.0: bound to vfio-pci"), or that there is none. For render_node's fallback line.
+gpu_why_not() {
+  local dev why_s="" w
+  for dev in "$SYSPCI"/*; do
+    [[ $(cat "$dev/class" 2>/dev/null) == 0x03* ]] || continue
+    case $1 in
+      nvidia|amd|intel) [ "$(pci_kind "$dev")" = "$1" ] || continue ;;
+      *) [ "${dev##*/}" = "$1" ] || continue ;;
+    esac
+    w=$(pci_why "$dev"); why_s+="${why_s:+; }${dev##*/}: ${w:-usable now}"
+  done
+  if [ -n "$why_s" ]; then echo "$why_s"
+  else case $1 in nvidia|amd|intel) echo "no $1 GPU on this machine" ;; *) echo "no GPU at $1" ;; esac; fi
 }
 
 # The PCI slot of a render node's GPU: 0000:03:00.0.
 render_slot() { basename "$(readlink -f "$SYSDRM/${1##*/}/device")"; }
+# A box's GPU as `ls` and `gpu` say it, from its render record (box.json's) on stdin: driver, slot and
+# node, and for a fallback the setting's GPU and why it was not usable (finding 237).
+render_line() {
+  jq -r '"GPU: \(.driver) \(.pci) (\(.node | sub(".*/"; "")))"
+    + (if .fallback then ", a fallback: gpu \(.wanted // "(the setting)") was not usable"
+      + (if (.why // "") != "" then " (\(.why))" else "" end) else "" end)'
+}
 # The `gpu` kind a driver counts as, or nothing.
 gpu_kind() { case $1 in nvidia|nouveau) echo nvidia ;; amdgpu|radeon) echo amd ;; i915|xe) echo intel ;; esac; }
 # Every render node, for `omabox config gpu` (#156): its driver, its slot, the values that name it, and
@@ -2007,10 +2051,15 @@ cmd_up() {
   local owner_start=""; [ -z "$owner" ] || owner_start=$(proc_start "$owner") || owner_start=""
   # Where a headless box renders (#118): the node, its GPU's slot and driver, and whether the gpu setting's
   # GPU was not there (fallback). An interactive box renders where the desktop does (finding 95): none.
-  local render_json=null
+  # A fallback keeps the setting's value and why it was not there (finding 237), for `ls` and `gpu`.
+  local render_json=null fb=false wanted="" why=""
+  if [ $interactive = 0 ] && render_fallback "$render"; then
+    fb=true wanted=$(conf_get gpu); why=$(gpu_why_not "$wanted") || why=""
+  fi
   [ $interactive = 1 ] || render_json=$(jq -nc --arg node "$render" --arg pci "$(render_slot "$render")" \
-    --arg driver "$(render_driver "$render")" --argjson fallback "$(render_fallback "$render" && echo true || echo false)" \
-    '{node: $node, pci: $pci, driver: $driver, fallback: $fallback}')
+    --arg driver "$(render_driver "$render")" --argjson fallback "$fb" --arg wanted "$wanted" --arg why "$why" \
+    '{node: $node, pci: $pci, driver: $driver, fallback: $fallback}
+      + (if $fallback then {wanted: $wanted, why: $why} else {} end)')
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
@@ -5775,6 +5824,7 @@ gpu_release() {
   in_jail && die "gpu release takes down every box on a GPU: the user's to run, not a jailed agent's"
   local want n names=() on node
   want=$(conf_check gpu "$1") && [ "$want" != auto ] || die "gpu release: not a GPU: $1 (a PCI slot, or nvidia, amd, intel)"
+  gpu_release_wait
   for n in $(list_names); do
     select_box "$n"
     if [ "$(meta mode)" != headless ] || ! box_alive; then continue; fi
@@ -5793,6 +5843,27 @@ gpu_release() {
   done
   [ ${#names[@]} -gt 0 ] || { say "gpu release: no headless box renders on $want"; return 0; }
   cmd_down "${names[@]}"
+}
+# Before gpu release reads the boxes: an `up` in progress has no box.json yet, or no box running, and
+# was skipped, its box then holding the GPU (finding 237). Each name's lock busy (an up, or a down) is
+# waited for, 60 s at most, until none is; the lock file opened to read, never made (a down removes it).
+gpu_release_wait() {
+  local f fd n pass busy=1
+  for ((pass = 0; busy && pass < 5; pass++)); do
+    busy=0
+    for f in "$BOXES"/.lock-*; do
+      n=${f##*/.lock-}
+      [ -f "$f" ] && [[ $n != save-* ]] || continue
+      { exec {fd}<"$f"; } 2>/dev/null || continue   # (a bare exec 2>/dev/null would keep it)
+      if ! flock -n "$fd"; then
+        busy=1
+        if [ "$n" = new ]; then say "gpu release: waiting for an up --new to choose its name"
+        else say "gpu release: waiting for box '$n' (an up or down in progress)"; fi
+        flock -w 60 "$fd" || { exec {fd}<&-; die "gpu release: box '$n' still busy after 60 s; nothing taken down"; }
+      fi
+      exec {fd}<&-
+    done
+  done
 }
 # For a box with no .render: the driver and slot of the render node of GPU WANT one of its processes
 # has open, or a failure.
@@ -5850,6 +5921,8 @@ cmd_gpu() {
   local screen; screen=$(box_screen)
   # Which aquamarine the box runs (as `up` recorded it): rendering cost can depend on it.
   local aq; aq=$(jq -c '.aquamarine // null' "$D/box.json" 2>/dev/null) || aq=null
+  # And which GPU (finding 237), as `up` recorded it: none for an interactive box (the desktop's).
+  local rj; rj=$(jq -c '.render // null' "$D/box.json" 2>/dev/null) || rj=null
   # A client first seen in the second sample started during the window: all its time counts. Every
   # process holding a client is listed, idle ones at 0.0.
   awk -v wall=$((t1 - t0)) '
@@ -5859,9 +5932,9 @@ cmd_gpu() {
     END { for (n in t) printf "proc %s %.1f\n", n, t[n] / wall * 100
           for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }' "$tmp/a" "$tmp/b" > "$tmp/r"
   if [ $json = 1 ]; then
-    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" '
+    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" --argjson render "$rj" '
       [inputs | split(" ")] as $r |
-      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, aquamarine: $aq,
+      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, aquamarine: $aq, render: $render,
         percent: ([$r[] | select(.[0] == "proc") | {(.[1]): (.[2] | tonumber)}] | add // {}),
         engines: (reduce ($r[] | select(.[0] == "engine")) as $e ({}; .[$e[1]][$e[2]] = ($e[3] | tonumber))) }' < "$tmp/r"
     return
@@ -5869,6 +5942,9 @@ cmd_gpu() {
   echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
   [ "$aq" = null ] || jq -r '"aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
     + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)' <<<"$aq"
+  if [ "$rj" != null ]; then render_line <<<"$rj" || true
+  elif [ "$(meta mode)" = interactive ]; then echo "GPU: the desktop's (an interactive box renders where your compositor does)"
+  fi
   # Rows by kind (finding 176): a process whose comm is `engine` is a process.
   grep '^proc ' "$tmp/r" | sort -k3 -rn | awk '{ printf "  %-20s %5.1f%%\n", $2, $3 }'
   grep -q '^proc ' "$tmp/r" || echo "  (no GPU time)"
@@ -6785,7 +6861,7 @@ conf_help() {
     workspace) echo "1-99, special (the scratchpad, SUPER+S) or special:NAME" ;;
     confirm-close) echo "on or off" ;;
     bar-icon) echo "always (the default) or auto (only while boxes exist)" ;;
-    gpu) echo "auto (the default: the first GPU), nvidia, amd, intel or a PCI slot (0000:03:00.0); headless boxes only; omabox config gpu lists them" ;;
+    gpu) echo "auto (the default: the first GPU), nvidia, amd, intel (or a driver: nouveau, amdgpu, radeon, i915, xe) or a PCI slot (0000:03:00.0); headless boxes only; omabox config gpu lists them" ;;
   esac
 }
 
@@ -6973,9 +7049,11 @@ cmd_ls() {
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
     # keys-to-box (finding 117), when on: SUPER keys follow focus into it.
     [ ! -f "$D/keys-to-box" ] || echo "  keys-to-box: on (SUPER keys go to it while its window has focus and the pointer)"
-    # Its GPU (#118), on a machine with more than one: the driver and slot, and when it is a fallback.
-    [ "$gpus" -lt 2 ] || jq -r '.render // empty | "  GPU: \(.driver) \(.pci) (\(.node | sub(".*/"; "")))"
-      + (if .fallback then ", the gpu setting'"'"'s GPU was not there" else "" end)' "$D/box.json" 2>/dev/null || true
+    # Its GPU (#118), on a machine with more than one, or when it is a fallback (finding 237: the box
+    # the line matters most for, on a machine with one usable GPU left): the driver and slot, and why.
+    local r; r=$(jq -c --argjson many "$([ "$gpus" -ge 2 ] && echo true || echo false)" '.render // empty | select($many or .fallback)' \
+      "$D/box.json" 2>/dev/null) || r=""
+    [ -z "$r" ] || { printf '  '; render_line <<<"$r" || echo; }
   done
 }
 

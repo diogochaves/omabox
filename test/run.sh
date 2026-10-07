@@ -2372,6 +2372,8 @@ t_main() {
   check_match "gpu first line names the mode" "1280x720@120" "$(ob gpu -b "$B" 1 | head -1)"
   check_eq "gpu --json names the box's aquamarine (#47)" "$(jq -c .aquamarine "$D/box.json")" "$(jq -c .aquamarine <<<"$gpu")"
   check "...and so does its text" grep -qF "aquamarine: " <<<"$(ob gpu -b "$B" 1 | sed -n 2p | grep -F -- "$(jq -r .aquamarine.version "$D/box.json")")"
+  check_eq "gpu --json names the box's GPU (finding 237)" "$(jq -c .render "$D/box.json")" "$(jq -c .render <<<"$gpu")"
+  check_match "...and so does its text" "$(jq -r '.render | "\nGPU: \(.driver) \(.pci) \\(\(.node | sub(".*/"; ""))\\)"' "$D/box.json")" "$(ob gpu -b "$B" 1)"
   check_eq "mode @60.0 is accepted and kept as @60" "$screen_name 1280x720@60" "$(ob mode -b "$B" 1280x720@60.0)"
   check_eq "box.json keeps the normalised mode" "1280x720@60" "$(jq -r .size "$D/box.json")"
   check_eq "shot into a missing dir makes it (#27)" "$TMP/nope/x.png" "$(ob shot -b "$B" -o "$TMP/nope/x.png" 2>/dev/null)"
@@ -4363,14 +4365,14 @@ t_widget_list() {
   check "with two boxes the list is as tall as its rows" test "$(q '.list.height == .list.contentHeight and (.rows | length) == 2')" = true
   # #118: Settings has a GPU picker on a machine with two GPUs: Auto naming its GPU, each GPU (one bound
   # to vfio-pci: unavailable), the fallback said when the chosen one is not there; a pick runs config.
-  local gpus='[{"pci":"0000:01:00.0","driver":"vfio-pci","name":"GeForce RTX 5070 Ti","node":null,"available":false,"why":"bound to vfio-pci"},
-    {"pci":"0000:7a:00.0","driver":"amdgpu","name":"Radeon Graphics","node":"/dev/dri/renderD128","available":true}]'
+  local gpus='[{"pci":"0000:01:00.0","driver":"vfio-pci","kind":"nvidia","name":"GeForce RTX 5070 Ti","node":null,"available":false,"why":"bound to vfio-pci"},
+    {"pci":"0000:7a:00.0","driver":"amdgpu","kind":"amd","name":"Radeon Graphics","node":"/dev/dri/renderD128","available":true}]'
   jq -n --argjson g "$gpus" '{gpu: "0000:01:00.0", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
   ob keys -b "$B" Escape >/dev/null
   ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
   until_ok 3 panel_takes_keys "$B"
   check_eq "Settings shows the GPU picker with two GPUs (#118)" \
-    '["Auto (now: Radeon Graphics)","GeForce RTX 5070 Ti · unavailable","Radeon Graphics · amdgpu"]' \
+    '["Auto (now: Radeon Graphics)","GeForce RTX 5070 Ti · unavailable (bound to vfio-pci)","Radeon Graphics · amdgpu"]' \
     "$(until_ok 3 bash -c "'$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -e '.gpu.shown' >/dev/null"; q '.gpu.options | tojson')"
   check_match "...the chosen one is not there: the fallback said" "^Not there now \(bound to vfio-pci\): new boxes render on Radeon Graphics" "$(q .gpu.line)"
   : > "$H/actions"
@@ -4379,6 +4381,19 @@ t_widget_list() {
   ob pointer -b "$B" -- move 10 1000 >/dev/null
   ob keys -b "$B" Down Return >/dev/null   # from the chosen one to the next: Radeon
   check "...a pick runs omabox config gpu SLOT" until_ok 3 grep -qx "config gpu 0000:7a:00.0" "$H/actions"
+  # Finding 237: with gpu nvidia (a kind) the amber line gives the reason too, the vfio-bound card's kind
+  # being NVIDIA's; a row's caption names its GPU as `ls` does: with one render node (the other GPU on
+  # vfio-pci), only a fallback's, with its slot.
+  local rr='{"node":"/dev/dri/renderD128","pci":"0000:7a:00.0","driver":"amdgpu"}'
+  jq -n "[$row + {name: \"a\", render: ($rr + {fallback: true, wanted: \"nvidia\"})}, $row + {name: \"c\", render: ($rr + {fallback: false})}]" > "$H/list.json"
+  jq -n --argjson g "$gpus" '{gpu: "nvidia", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
+  ob keys -b "$B" Escape Escape >/dev/null
+  ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
+  until_ok 3 bash -c "'$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -e '.gpu.value == \"nvidia\"' >/dev/null"
+  check_match "...gpu nvidia, its card on vfio-pci: the reason said too (finding 237)" "^Not there now \(bound to vfio-pci\): new boxes render on Radeon" "$(q .gpu.line)"
+  ob keys -b "$B" Escape >/dev/null; wl_polled
+  check_eq "a row names its GPU as ls does: with one render node a fallback's only, its slot too (finding 237)" "true false" \
+    "$(q '[.rows[] | {(.name): .caption}] | add | "\(.a | test("^headless · amdgpu 7a:00.0 \\(fallback\\) · ")) \(.c | test("amdgpu"))"')"
   jq -n --argjson g "[$(jq -c '.[1]' <<<"$gpus")]" '{gpu: "auto", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
   ob keys -b "$B" Escape Escape >/dev/null
   ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
@@ -5987,20 +6002,41 @@ t_unit_gpu() {
   : > "$f/dri/renderD128"; : > "$f/dri/renderD129"
   ln -sfn "$f/pci/0000:0a:00.0" "$f/drm/renderD128/device"; ln -sfn "$f/pci/0000:01:00.0" "$f/drm/renderD129/device"
   ln -sfn "$f/drivers/amdgpu" "$f/pci/0000:0a:00.0/driver"; ln -sfn "$f/drivers/nvidia" "$f/pci/0000:01:00.0/driver"
+  echo 0x030000 > "$f/pci/0000:0a:00.0/class"; echo 0x030200 > "$f/pci/0000:01:00.0/class"
+  echo 0x1002 > "$f/pci/0000:0a:00.0/vendor"; echo 0x10de > "$f/pci/0000:01:00.0/vendor"
   # gpu VALUE: render_node with that setting in a config of its own (and no OMABOX_RENDER_NODE).
-  pick() { HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; unset OMABOX_RENDER_NODE; printf 'gpu=%s\n' '$1' > \$CONFIG; render_node" 2>&1; }
+  pick() { HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' SYSPCI='$f/pci' CONFIG='$f/config'; unset OMABOX_RENDER_NODE; printf 'gpu=%s\n' '$1' > \$CONFIG; render_node" 2>&1; }
   check_eq "gpu auto: the first GPU" "$f/dri/renderD128" "$(pick auto)"
   check_eq "gpu nvidia: its render node" "$f/dri/renderD129" "$(pick nvidia)"
   check_eq "gpu amd" "$f/dri/renderD128" "$(pick amd)"
   check_eq "gpu by PCI slot" "$f/dri/renderD129" "$(pick 0000:01:00.0)"
-  check_eq "gpu intel, none here: the first GPU, said" "omabox: gpu intel (omabox config gpu): none usable here, so the first GPU: $f/dri/renderD128"$'\n'"$f/dri/renderD128" "$(pick intel)"
-  rm "$f/dri/renderD129"
-  check_match "gpu nvidia, its node gone (vfio-pci): the first GPU, said" "none usable here.*"$'\n'"$f/dri/renderD128$" "$(pick nvidia)"
+  check_eq "gpu intel, none here: the first GPU, said, with why and which (finding 237)" \
+    "omabox: gpu intel (omabox config gpu): none usable here (no intel GPU on this machine), so the first GPU: amdgpu 0000:0a:00.0 (renderD128)"$'\n'"$f/dri/renderD128" "$(pick intel)"
+  rm "$f/dri/renderD129"; mkdir -p "$f/drivers/vfio-pci"; ln -sfn "$f/drivers/vfio-pci" "$f/pci/0000:01:00.0/driver"
+  check_eq "gpu nvidia, the card on vfio-pci (no node): the first GPU, said, the card's reason given (finding 237)" \
+    "omabox: gpu nvidia (omabox config gpu): none usable here (0000:01:00.0: bound to vfio-pci), so the first GPU: amdgpu 0000:0a:00.0 (renderD128)"$'\n'"$f/dri/renderD128" "$(pick nvidia)"
+  check_match "...a slot that is no GPU: said" "none usable here \(no GPU at 0000:05:00.0\)" "$(pick 0000:05:00.0)"
+  # The record a fallback leaves (box.json's render, as up writes it) and `ls`'s line for it on a
+  # machine with one usable GPU, where the GPU line was shown only with two (finding 237).
+  local lb=$TMP/gpu-ls; mkdir -p "$lb/fb" "$lb/plain"
+  jq -n '{mode: "headless", size: "1x1@60", net: "none", idle: 0, render: {node: "/dev/dri/renderD128", pci: "0000:0a:00.0", driver: "amdgpu", fallback: true, wanted: "nvidia", why: "0000:01:00.0: bound to vfio-pci"}}' > "$lb/fb/box.json"
+  jq -n '{mode: "headless", size: "1x1@60", net: "none", idle: 0, render: {node: "/dev/dri/renderD128", pci: "0000:0a:00.0", driver: "amdgpu", fallback: false}}' > "$lb/plain/box.json"
+  local lsout; lsout=$(lib eval "BOXES='$lb' DRI='$f/dri' SYSDRM='$f/drm'; cmd_ls" 2>&1)
+  check_match "ls with one usable GPU: a fallback box's GPU line, with why" \
+    $'\nfb [^\n]*\n  GPU: amdgpu 0000:0a:00.0 \\(renderD128\\), a fallback: gpu nvidia was not usable \\(0000:01:00.0: bound to vfio-pci\\)' "$lsout"
+  check_eq "...none for a box that is not one" "" "$(grep -A1 '^plain ' <<<"$lsout" | sed -n 2p | grep GPU)"
+  local rec; rec=$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' SYSPCI='$f/pci' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
+    printf 'gpu=nvidia\n' > \$CONFIG; render_fallback '$f/dri/renderD128' && gpu_why_not nvidia" 2>&1)
+  check_eq "gpu_why_not: the reason up records" "0000:01:00.0: bound to vfio-pci" "$rec"
+  ln -sfn "$f/drivers/nvidia" "$f/pci/0000:01:00.0/driver"
   check_eq "OMABOX_RENDER_NODE still first" "$f/dri/renderD128" \
     "$(HOME=$f/home OMABOX_RENDER_NODE=$f/dri/renderD128 lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; printf 'gpu=nvidia\n' > \$CONFIG; render_node" 2>&1)"
   check_eq "config gpu: a slot written short is stored whole" "0000:03:00.0" "$(lib conf_check gpu 03:00.0)"
   check_eq "...a kind in any case" "nvidia" "$(lib conf_check gpu NVIDIA)"
   check_fails "...junk refused" lib conf_check gpu geforce
+  check_eq "...a driver's name, as the list prints it, is its kind (finding 237)" "nvidia amd amd intel intel" \
+    "$(for d in nouveau amdgpu Radeon i915 xe; do lib conf_check gpu "$d"; done | xargs)"
+  check_eq "config gpu amdgpu: stored as amd" "gpu=amd" "$(HOME=$f/home ob config gpu amdgpu 2>/dev/null; rm -f "$f/home/.config/omabox/config")"
   check_match "config gpu junk: refused, saying what it takes" "bad gpu: geforce \(auto .*PCI slot" "$(HOME=$f/home ob config gpu geforce 2>&1)"
   check "...and nothing written" test ! -e "$f/home/.config/omabox/config"
   HOME=$f/home ob config gpu amd >/dev/null
@@ -6022,7 +6058,7 @@ t_unit_gpu() {
   mkdir -p "$f/pci/0000:02:00.0" "$f/pci/0000:00:1f.0" "$f/drivers/vfio-pci"
   echo 0x030000 > "$f/pci/0000:0a:00.0/class"; echo 0x030200 > "$f/pci/0000:01:00.0/class"
   echo 0x030000 > "$f/pci/0000:02:00.0/class"; echo 0x060100 > "$f/pci/0000:00:1f.0/class"
-  ln -sfn "$f/drivers/vfio-pci" "$f/pci/0000:02:00.0/driver"
+  ln -sfn "$f/drivers/vfio-pci" "$f/pci/0000:02:00.0/driver"; echo 0x8086 > "$f/pci/0000:02:00.0/vendor"
   printf '#!/bin/sh\ncase "$3" in\n  0000:01:00.0) echo "01:00.0 \\"3D controller\\" \\"NVIDIA Corporation\\" \\"GB203 [GeForce RTX 5070 Ti]\\" -ra1" ;;\n  0000:02:00.0) echo "02:00.0 \\"VGA compatible controller\\" \\"Vendor\\" \\"Plain Model\\"" ;;\nesac\n' > "$f/lspci"
   chmod +x "$f/lspci"
   local gj; gj=$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' SYSPCI='$f/pci' LSPCI='$f/lspci' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
@@ -6031,6 +6067,7 @@ t_unit_gpu() {
   check_eq "...with lspci's bracketed name, or the whole model" "GeForce RTX 5070 Ti|Plain Model|" "$(jq -r '[.gpus[].name] | join("|")' <<<"$gj")"
   check_eq "...one bound to vfio-pci: no node, unavailable, why" 'null false "bound to vfio-pci"' \
     "$(jq -r '.gpus[] | select(.pci == "0000:02:00.0") | "\(.node) \(.available) \(.why | tojson)"' <<<"$gj")"
+  check_eq "...each one's kind: by its driver, or its vendor when bound to vfio-pci (finding 237)" "nvidia intel amd" "$(jq -r '[.gpus[].kind] | join(" ")' <<<"$gj")"
   check_eq "...a usable one: its node" "$f/dri/renderD129 true" "$(jq -r '.gpus[] | select(.pci == "0000:01:00.0") | "\(.node) \(.available)"' <<<"$gj")"
   check_eq "...gpu-auto, and gpu-now (the vfio one asked for: the fallback)" "0000:0a:00.0 0000:0a:00.0" "$(jq -r '"\(.["gpu-auto"]) \(.["gpu-now"])"' <<<"$gj")"
   fb() { HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
@@ -6055,6 +6092,15 @@ t_unit_gpu() {
   check_match "...none on it: said, exit 0" "no headless box renders on intel" "$(rel intel)"
   check_match "...junk refused" "not a GPU: geforce" "$(rel geforce)"
   check_match "...refused to a jailed agent" "not a jailed agent's" "$(OMABOX_JAIL='{"id":"x"}' lib eval "gpu_release nvidia" 2>&1)"
+  # An `up` in progress (its lock held, no box.json yet) is waited for (finding 237): here box f's up
+  # writes its box.json, on nvidia, and lets go of the lock a second on.
+  : > "$bx/.lock-f"
+  flock "$bx/.lock-f" bash -c "sleep 1; mkdir -p '$bx/f'; jq -n '{mode: \"headless\", render: {node: \"/dev/dri/renderD129\", pci: \"0000:01:00.0\", driver: \"nvidia\", fallback: false}}' > '$bx/f/box.json'" &
+  local holder=$!
+  until_ok 5 bash -c "! flock -n '$bx/.lock-f' true"
+  local out; out=$(rel nvidia | paste -sd '|'); wait "$holder"
+  check_match "gpu release waits for an up in progress, said" "waiting for box 'f' \(an up or down in progress\)" "$out"
+  check_match "...and takes its box down too" "\|down a d f$" "$out"
 }
 
 # Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before

@@ -102,14 +102,23 @@ Panel {
   readonly property var gpuOptions: {
     var o = [{ value: "auto", label: "Auto (now: " + (gpuName(gpuBySlot(cliConfig["gpu-auto"])) || "none") + ")" }]
     gpus.forEach(function(g) {
-      o.push({ value: g.pci, label: gpuName(g) + " · " + (g.available ? g.driver : "unavailable") })
+      o.push({ value: g.pci, label: gpuName(g) + " · " + (g.available ? g.driver : "unavailable" + (g.why ? " (" + g.why + ")" : "")) })
     })
     var cur = gpuSetting
     if (!o.some(function(x) { return x.value === cur }))   // a kind, or a slot set by hand: shown as it is
       o.push({ value: cur, label: cur === "nvidia" ? "Any NVIDIA GPU" : cur === "amd" ? "Any AMD GPU" : cur === "intel" ? "Any Intel GPU" : cur })
     return o
   }
-  readonly property string gpuWhy: { var g = gpuBySlot(gpuSetting); return g && g.why ? g.why : "" }
+  // Why the setting's GPU is not there: the one at its slot, or (a kind, as `gpu nvidia`) each GPU of
+  // that kind that is not usable, as `config --json` gives each one's kind (finding 237).
+  readonly property string gpuWhy: {
+    var s = gpuSetting
+    var off = gpus.filter(function(g) { return (g.pci === s || g.kind === s) && !g.available && g.why })
+    if (off.length === 1) return off[0].why
+    return off.map(function(g) { return g.pci + ": " + g.why }).join("; ")
+  }
+  // More than one GPU a box can render on (a render node each), as `ls` counts them for its GPU line.
+  readonly property bool gpuNodes: gpus.filter(function(g) { return !!g.node }).length > 1
   // The setting names a GPU and new boxes render elsewhere: it is not there now (vfio-pci, gone).
   readonly property bool gpuFallback: {
     if (gpuSetting === "auto") return false
@@ -287,8 +296,10 @@ Panel {
     if (armedDown === b.name) return "Press again to shut it down"
     if (b.state !== "up") return "dead · Down cleans it up"
     var parts = [b.mode || "?"]
-    // Its GPU (#118), on a machine with more than one: next to the mode, before what elides.
-    if (b.render && gpus.length > 1) parts.push(b.render.driver + (b.render.fallback ? " (fallback)" : ""))
+    // Its GPU (#118), next to the mode, before what elides: as `ls` has it (finding 237), with more than
+    // one render node or when it is a fallback; its driver and slot, two GPUs of one kind told apart.
+    if (b.render && (gpuNodes || b.render.fallback))
+      parts.push(b.render.driver + " " + String(b.render.pci || "").replace(/^0000:/, "") + (b.render.fallback ? " (fallback)" : ""))
     if (b.mode !== "interactive" && b.size) parts.push(b.size)
     var a = age(b.created); if (a) parts.push(a)
     if (b.plugins && b.plugins.length) parts.push(b.plugins.join(", "))
@@ -1115,7 +1126,7 @@ Panel {
       var p = r.mapToItem(null, 0, 0)
       var slotsOut = {}
       collect(r, slotsOut)
-      out.rows.push({ name: r.box.name, index: r.rowIndex, gone: r.gone, x: p.x, y: p.y, w: r.width, h: r.height,
+      out.rows.push({ name: r.box.name, index: r.rowIndex, gone: r.gone, caption: caption(r.box), x: p.x, y: p.y, w: r.width, h: r.height,
         visible: p.y >= vis.y - 1 && p.y + r.height <= vis.y + boxList.height + 1, slots: slotsOut })
     }
     out.rows.sort(function(a, b) { return a.index - b.index })
