@@ -1752,6 +1752,8 @@ t_unit_cli() {
   check_match "...a fraction of the full help" "^yes$" "$( (( $(ob help shot | wc -c) * 5 < ${#full} )) && echo yes)"
   check_match "...run's has up's options" "omabox up .*--net isolated" "$(ob help run | tr '\n' ' ')"
   check_match "...ports' names its states (#94)" "this-resets .*shared " "$(ob help ports | tr '\n' ' ')"
+  check_match "...down's says the session's box is taken from outside any repo too (#136, finding 237)" \
+    "\`down\` too, so \`omabox down\` there takes that box down" "$(ob help down | tr '\n' ' ')"
   check_match "...drag's: --hold is a duration, a bare number seconds, as ms_duration reads it (#103)" \
     "--hold DURATION.*like 300ms or 2s: a bare number is seconds" "$(ob help drag | tr '\n' ' ')"
   check_eq "...which it does" 2000 "$(lib ms_duration 2)"

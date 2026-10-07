@@ -3375,7 +3375,11 @@ from them.
     mount namespace (a link the box put there resolves in the box) and reloads once. The docs
     already said Omarchy edits under `--omarchy` show after `hyprctl reload`. Boxes started before
     this still follow the live file: fixing it here reloaded one (the maintainer's `host-base`, at
-    the edit). t_config_kept; on the old code its checks failed (worktree).
+    the edit). t_config_kept; on the old code its checks failed (worktree). Only the config is kept
+    (finding 237, as Diogo's decision on #140 asked it said): the other `share/` scripts are still the
+    live mount, so a pull or an upgrade reaches a running box at their next exec (shell.sh at a
+    `restart-shell`, the wait and input helpers at the next command): version skew between what the
+    box started with and what it runs next, not lost state.
 194. **A box runs its shell as Omarchy does, under `omarchy-launch-shell`** (2026-10-06, #151).
     share/shell.sh exec'd quickshell itself. Since 4.0.4 Omarchy starts the shell with that launcher,
     which starts it again when it exits non-zero (after 1 s, at most 5 times a minute, not once the
@@ -3449,7 +3453,8 @@ from them.
     does not apply (another repo's name, two such boxes), "no box" names the session's box(es) first;
     `up` from outside a repo still starts a box and names the existing one. Checks in
     t_unit_agent_session (stubbed boxes) and t_agent_session (a `run` from $TMP reaches the session's
-    box); they failed on the old code.
+    box); they failed on the old code. It applies to `down` as well (`omabox down` from a scratch dir
+    takes the session's repo box down), which `help` did not say: it does now (finding 237).
 201. **In-box scripts: a stub cannot end a box; the stand-ins parse what they missed** (2026-10-06,
     #113). confirm-close.sh called `hyprctl` and `jq` through PATH, where a test's stub in the box
     HOME's `~/.local/bin` comes first: a stub `hyprctl` that fails ended an interactive box without
@@ -4313,6 +4318,13 @@ from them.
     (omabox's touch cannot be told from it by its time); the window was the whole of the reads.
     t_unit_evidence: a stand-in omabox whose shot is followed 1.5 s on by another use (a time an hour
     ahead): kept (failed on the old code); with none, the time from before (as before).
+    (7) #140: finding 193 now says, as Diogo's decision asked, that only the config is kept: the other
+    `share/` scripts change under a running box at their next exec (version skew, not lost state), and
+    `help reload` says so where it said an update "leaves running boxes as they are". cmd_reload sat
+    under cmd_restart_shell's comment (shell.sh's pid file): moved to its function. (8) #136: the
+    session-box fallback (finding 200) applies to `down` too, so `omabox down` from a scratch dir takes
+    the session's repo box down; `help` (the names section, shown by `help down`, `up`, `run`, `ls`,
+    `path`) did not mention the fallback at all: it does, `down` named. t_unit_cli checks `help down`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

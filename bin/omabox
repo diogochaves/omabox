@@ -133,7 +133,9 @@ NAME defaults to \$OMABOX, else the current git repo's name, else "default". In 
 (Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
 session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off. A git worktree is named
 by its own folder, so each worktree has its own box. -b NAME also goes before the command
-(omabox -b NAME windows), for every command that takes it.
+(omabox -b NAME windows), for every command that takes it. Outside any repo (a scratch dir) the name
+is default-SESSION; with no box of that name, every command but \`up\` uses the session's one box
+started from its repo, said once: \`down\` too, so \`omabox down\` there takes that box down.
 @ run
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
@@ -253,7 +255,8 @@ Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
 @ reload
 A box's Hyprland runs a copy of omabox's config made at \`up\`, with autoreload off (unless
-\`up --autoreload\`): updating omabox (a pull, an upgrade) leaves running boxes as they are. \`reload\`
+\`up --autoreload\`): updating omabox (a pull, an upgrade) leaves running boxes' config as it is (its
+other scripts in a box are the new ones from their next start: shell.sh at \`restart-shell\`). \`reload\`
 copies this omabox's config in (only when it differs) and reloads it; like any config reload, binds,
 rules and Lua state added since are gone.
 @ lua
@@ -6257,8 +6260,6 @@ name_arg() {
   printf '%s' "$name"
 }
 
-# share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: the new pid appearing there is
-# the restart (a project's own quickshell in the box is not the Omarchy shell, finding 63).
 # `omabox reload` (#140): the box's copy of the config, from this omabox's share/, reloaded once. Written
 # in the box's mount namespace, as a new file renamed over the old: the runtime dir is the box's to
 # change, and a link it put there resolves inside the box.
@@ -6280,6 +6281,8 @@ cmd_reload() {
   say "box '$NAME': config reloaded from $ROOT/share/hyprland.lua (binds, rules and Lua state added since are gone)"
 }
 
+# share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: the new pid appearing there is
+# the restart (a project's own quickshell in the box is not the Omarchy shell, finding 63).
 cmd_restart_shell() {
   local name; name=$(name_arg restart-shell "$@") || exit 1
   select_box "$name"; need_box
