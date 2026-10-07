@@ -40,9 +40,11 @@ real desktop saw no window at all.
   until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415) (a system copy
   patched with it counts: omabox looks for the fix, not the version). Everything else
   runs on your system's aquamarine. `install.sh` builds it privately into `build/prefix`
-  (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries two
-  fixes of omabox's for interactive boxes: a key held when the box's window loses focus is
-  released, and your pointer in a monitor's window lands on that monitor.
+  (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries fixes
+  of omabox's for interactive boxes: a key held when the box's window loses focus is released, and
+  in a monitor's window your pointer lands on that monitor and your cursor stays shown (next
+  release). With a system aquamarine that has PR #415, `omabox setup --aquamarine` builds nothing
+  unless `--force`: for those fixes, force it.
 
 ## Install
 
@@ -97,6 +99,7 @@ omabox shot                            # screenshot; prints the PNG path (--fit 
 omabox windows                         # the box's windows, where they are, what covers them
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail (next release)
+omabox shot --changed --window myapp   # only what changed since its last shot, cropped (next release)
 omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames (next release)
 omabox output drop [NAME] --for 300ms  # a screen gone and back, as a monitor waking up (next release)
 omabox gdb [--watch]                   # backtraces of the box's Hyprland: a hang, or a crash (next release)
@@ -115,7 +118,7 @@ omabox log shell --grep qml -n 20      # the box's logs (Hyprland's by default; 
 omabox events --since 30s --grep urgent   # Hyprland's events, stamped; --mark, --until RE, -f
 omabox down                            # kill everything in the box
 omabox ls                              # boxes, mode, size, state, plugins
-omabox which 12345                     # the box a host pid is in (a box's bar looks like yours in pgrep)
+omabox which 12345                     # the box a host pid is in, a bar like yours in pgrep (next release)
 ```
 
 - **Names**: a box is named after the current git repo. Inside a Claude Code or Codex session (or
@@ -160,7 +163,10 @@ omabox up --plugin ~/code/myplugin          # or an id from ~/.config/omarchy/pl
 omabox restart-shell                          # after editing the plugin
 ```
 
-The plugin is mounted read-only and turned on in the box's `shell.json` where its manifest says.
+The plugin is mounted read-only and turned on in the box's `shell.json` where its manifest says. One
+inside the repo you run `up` from (or a same-path `--ro-bind` or `--overlay`) is a link to where it
+is instead, as on your desk, so a helper that finds the rest of its repo through `readlink -f` works
+(next release).
 The box's bar has the built-in widgets plus the plugins you mount, nothing else. When that leaves it
 with no workspace numbers, it gets Omarchy's: where your plugin's were, or after the menu.
 When the shell does not load a plugin (a manifest it refuses, a QML error), `up` and `restart-shell`
@@ -385,10 +391,10 @@ blocks the network and every other socket, omabox's included), or see
 
 - **Your files**: the repo you run `omabox up` from, **read-only** at the same path, plus the dirs
   in `~/.config/omabox/ro-bind` (one per line) or `--ro-bind`; mise's toolchains (so `omabox run`
-  finds node, python, uv as on the host), the `--plugin` dirs, and your git `user.name` and
-  `user.email`. Nothing else of your HOME. Refused whatever you pass: anything that is or contains
-  HOME, `~/.config/omarchy` or `/tmp`, anything inside `~/.config/omarchy` but `plugins/` and
-  `themes/` (`api-keys.env`, your hooks), the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
+  finds node, python, uv as on the host), the `--plugin` and `--theme-dir` dirs, and your git
+  `user.name` and `user.email`. Nothing else of your HOME. Refused whatever you pass: anything that
+  is or contains HOME, `~/.config/omarchy` or `/tmp`, anything inside `~/.config/omarchy` but
+  `plugins/` and `themes/` (`api-keys.env`, your hooks), the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
   `~/.password-store`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, gh's,
   gcloud's, azure's and 1Password's `op` config), omabox's own saves and box HOMEs
   (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys`.
@@ -497,7 +503,8 @@ by default, and each SPEC), drawn at the window's scale (0.525 here), so text is
 and `remove` lay the picture out again. Resizing a window changes its view's scale, not the
 monitor; closing it unplugs it. For an exact large resolution at full size use a headless box and
 `peek --monitor`. This needs aquamarine's fix, and the pointer lands on the monitor whose window it
-is in only with omabox's build of it (`omabox setup --aquamarine` makes both).
+is in, and your cursor stays shown from one window to the next, only with omabox's build of it
+(`omabox setup --aquamarine` makes both; `monitor add` says when a box lacks them).
 
 </details>
 
@@ -592,9 +599,9 @@ dir), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, 
   Code and OpenCode were checked end to end; Codex, pi and Hermes find the skill, but no run of
   theirs reached a model here.
 - Headless boxes on NVIDIA and confirm-close need aquamarine's fix (PR #415, built into
-  `build/prefix` by `install.sh`, `omabox setup --aquamarine`) until a release ships it; without it
-  `up` refuses them, saying what to run. What omabox carries until upstream releases land, and what
-  to drop then: `UPSTREAM.md`.
+  `build/prefix` by `install.sh`, `omabox setup --aquamarine`) until a release ships it (or your
+  system's package is patched with it); without it `up` refuses them, saying what to run. What
+  omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
 - A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
   `omabox shot` works with its window off screen, just at that rate. Not after you closed its window
   and kept the box running (`confirm-close`): the new window is only drawn while it is on screen.

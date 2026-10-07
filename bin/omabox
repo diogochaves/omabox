@@ -176,17 +176,18 @@ for a secret: the process list shows it). \`keys -t\` and \`keys --pass\` type n
 --env KEY=VAL is the box session's, on \`up\` (and a throwaway \`run\`'s box); \`run --env\` on a box
 that is up hands it to the command, as --env-file does (--pass wins). Never what the session sets
 itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, DISPLAY, HYPRLAND_INSTANCE_SIGNATURE,
-LD_PRELOAD...), by any of them.
+LD_PRELOAD, OMABOX_BOX...), by any of them.
 @ up run
 --seed SRC:DEST: a file or folder of yours copied into the box HOME at DEST (.config/x or ~/.config/x)
 before its session starts, for a plugin that reads its config once at start; the same refusals as
 --ro-bind (no secret stores; nothing in ~/.config/omarchy but plugins/ and themes/). A copy: the
 box's changes stay in the box; a link already in DEST is replaced, never written through.
 @ up run
---theme-dir DIR: a theme you are editing, live: DIR stays where it is (the repo you run from is in the
-box at its own path; a DIR elsewhere is mounted read-only at its own path, refused as --ro-bind's are)
-and the box HOME's ~/.config/omarchy/themes/NAME (DIR's name) is a link to it, in place of the copy
-\`up\` makes of each of your themes. omarchy-theme-set NAME in the box applies it, as it is then.
+--theme-dir DIR: a theme you are editing, live: the box HOME's ~/.config/omarchy/themes/NAME (DIR's
+name) is a link to DIR at its own path, in place of the copy \`up\` makes of each of your themes. The
+box has DIR there when it is in the repo you run from, a same-path --ro-bind or an --overlay; any
+other DIR is mounted read-only there, refused as --ro-bind's are. omarchy-theme-set NAME in the box
+applies it, as it is then.
 @ up run
 --theme NAME: the box starts on that theme (Omarchy's, one of yours or a --theme-dir one; checked
 before anything is made), not your desktop's current one: omarchy-theme-set NAME runs in the box
@@ -202,8 +203,9 @@ reloads for ever). Its config is still the box's own copy; an Omarchy update rel
 @ up run restart-shell
 --plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; \`up\` and
 \`restart-shell\` warn when Omarchy's validator or the shell refuses it (\`ls --json\`: plugin_status).
-One the box has at its own path (in the repo \`up\` runs from, a same-path --ro-bind or an --overlay) is linked
-to there, as on a desk, so readlink -f leads into its repo; any other is mounted (plugin_status: via).
+One the box has at its own path (in the repo \`up\` runs from, a same-path --ro-bind or an --overlay)
+is linked to there, as on a desk, so readlink -f leads into its repo; any other is mounted
+(plugin_status: via).
 @ up run
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
 box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
@@ -332,7 +334,12 @@ uses, whatever the setting.
 aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until the system's has it: a
 release, or a package patched with it; omabox looks for what the fix added, not the version): a
 headless box on an NVIDIA render node and confirm-close need it, and \`up\` refuses them without it;
-\`omabox setup --aquamarine\` builds it (a checkout's build/prefix, else ~/.local/share/omabox).
+\`omabox setup --aquamarine\` builds it (a checkout's build/prefix, else ~/.local/share/omabox), with
+omabox's own fixes for interactive boxes on top: a key held when the window loses focus is released,
+and in a monitor's window your pointer lands on that monitor and your cursor stays shown. It builds
+nothing when boxes already use this omabox's build, or a system one with the fix, which lacks
+omabox's own (--force builds them all the same). \`omabox --version\` says which one new boxes use: a
+private build, or the system's (with the fix, patched with it, or without it).
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
 @ up keys-to-box
 $PASS_KEY toggles sending SUPER keys to an interactive box, once:
@@ -385,8 +392,8 @@ the monitor's size in the layout, which the bar and apps see, is the one asked f
 screen's --size, a SPEC's), its mode its window's pixels at a scale of at most 1 (\`monitor list\`).
 Resizing a window changes its view's scale, not the monitor (a window of another shape shows it
 smaller along one side); closing one unplugs it. They need aquamarine's fix, as NVIDIA boxes do, and
-omabox's build of it puts your pointer on the monitor whose window it is in (another puts it over the
-whole layout: said).
+omabox's build of it puts your pointer on the monitor whose window it is in and keeps your cursor
+shown from one window to the next (\`monitor add\` says when a box's aquamarine does neither).
 @ gpu
 \`gpu release GPU\` (a PCI slot, or nvidia, amd, intel: \`omabox config gpu\` lists them) takes down every
 headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
@@ -424,7 +431,7 @@ for anything else, another user's processes too (boxes run as you); exit 2 for a
 @ save saves up run
 A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOME without .cache and
 its logs, keyring included, paused for the copy. \`up --from\` starts with it, then seeds your Omarchy
-look on top as for any box (theme, bar, terminals: today's, not the save's). Close an app first for a
+look on top as for any box (theme, bar, terminals: today's, or --theme's, not the save's). Close an app first for a
 clean save. Saves live in ~/.local/share/omabox/saves until \`saves rm\`.
 EOF
 }
@@ -2675,7 +2682,7 @@ setup_user() {
       echo "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs: omabox setup --aquamarine"
     elif [ "$AQ_KIND" = private ] && [ "${AQ_VER#*@}" != "$AQ_BUILD" ]; then
       # Built by an older omabox (finding 132): it lacks a patch omabox carries now.
-      echo "note: the aquamarine build in ${AQ_LIB%/lib} is older than this omabox's (it lacks a fix omabox carries now: keys held when an interactive box loses focus, the pointer in its monitors' windows): omabox setup --aquamarine"
+      echo "note: the aquamarine build in ${AQ_LIB%/lib} is older than this omabox's (it lacks a fix omabox carries now: keys held when an interactive box loses focus, the pointer and cursor in its monitors' windows): omabox setup --aquamarine"
     fi
   fi
 }

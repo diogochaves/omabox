@@ -86,8 +86,9 @@ No `sleep`: `--wait` and `omabox wait` (0 yes, 124 not in time, 1 cannot tell). 
 `/dev/null`. An animation that never stops: the 124 names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your own arithmetic. **Shots are most of a session's
-context**: the smallest that shows it (`--window`, `-g`, `--fit 1280`), text first; a colour is
-`omabox pixel`, a transition `shot --burst N --sheet`. ref: Shots. **The pointer is test state**
+context**: the smallest that shows it (`--window`, `-g`, `--fit 1280`), text first; what an action
+changed `shot --changed` (nothing changed: no image); a colour `omabox pixel`, a transition `shot
+--burst N --sheet`. ref: Shots. **The pointer is test state**
 (focus follows it; it stays where the last command left it): ref: Pointer, in detail.
 
 | Symptom | Next step |
@@ -134,10 +135,10 @@ checkout; never `omarchy dev link` on the host: ref: Reviewing an Omarchy change
 
 ## What is and is not in a box
 
-Read-only in it: the repo (same path), `--ro-bind` and `--plugin` dirs, mise's toolchains; nothing else
-of the user's HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret stores or the runtime dir is
-refused: do not work around it. The box HOME is fake (`/home/sbx`; `omabox path` → `<dir>/home` on
-the host). Private session bus and keyring; no system bus, devices or audio; `/sys` is the host's.
+Read-only in it: the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir` dirs, mise's
+toolchains; nothing else of the user's HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret
+stores or the runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`;
+`omabox path` → `<dir>/home` on the host). Private session bus and keyring; no system bus, devices or audio; `/sys` is the host's.
 ref: Mounts, HOME and the session.
 
 ## Showing the user
