@@ -879,6 +879,40 @@ t_unit_seed_copy() {
 # The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left
 # with no omarchy.workspaces gets one where a left-out plugin's workspace widget was, else after the
 # menu; never a second one, nor next to a mounted plugin that shows workspaces.
+# finding 241: a --plugin the box has at its own path (the repo `up` runs from, a same-path --ro-bind)
+# is linked to, not mounted; own_path_visible decides, home_link makes the link.
+t_unit_plugin_link() {
+  local d=$TMP/upl J
+  mkdir -p "$d/repo/sub/plug" "$d/repo/hid/plug" "$d/other/plug" "$d/h/.config" "$d/out/cfg"
+  git -C "$d/repo" init -q
+  # opv CWD ROBINDS PATH: own_path_visible from CWD, with `up`'s robinds as lines of "src<TAB>dest".
+  opv() {
+    (cd "$1" && bash -c 'source "$1"; robinds=(); [ -z "$2" ] || mapfile -t robinds <<<"$2"; own_path_visible "$3"' \
+      _ "$TMP/lib/bin/omabox" "$2" "$3")
+  }
+  local T=$'\t'
+  check "inside the repo up runs from: visible at its own path" opv "$d/repo" "" "$d/repo/sub/plug"
+  check_fails "outside it, nothing else mounted: not" opv "$d/repo" "" "$d/other/plug"
+  check "inside a same-path --ro-bind" opv / "$d/other$T$d/other" "$d/other/plug"
+  check_fails "inside a --ro-bind mounted elsewhere (DIR:DEST): not" opv / "$d/other$T/opt/other" "$d/other/plug"
+  check_fails "in the repo, under another folder mounted over it: not" opv "$d/repo" "$d/other$T$d/repo/hid" "$d/repo/hid/plug"
+  check_fails "a path that does not exist: not" opv "$d/repo" "" "$d/repo/none"
+  # Under ai-jail the repo is the jail's project (its cwd), never git's from where the broker runs.
+  ln -sfn "$d/other/plug" "$d/repo/out"
+  J=$(jq -nc --arg p "$d/repo" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}]}')
+  opvj() { OMABOX_JAIL=$J opv "$@"; }
+  check "ai-jail: inside the jail's project" opvj / "" "$d/repo/sub/plug"
+  check_fails "ai-jail: not through a link out of it" opvj / "$d/other$T$d/other" "$d/repo/out"
+  # home_link: whatever is at REL goes (a save's dir), links on the way are cleared, never followed.
+  mkdir -p "$d/h/.config/omarchy/plugins/x"; echo old > "$d/h/.config/omarchy/plugins/x/f"
+  lib home_link "$d/h" .config/omarchy/plugins/x "$d/repo/sub/plug"
+  check_eq "home_link: a link to TARGET in place of a dir" "$d/repo/sub/plug" "$(readlink "$d/h/.config/omarchy/plugins/x")"
+  rm -rf "$d/h/.config"; ln -s "$d/out/cfg" "$d/h/.config"
+  lib home_link "$d/h" .config/omarchy/plugins/y "$d/repo/sub/plug"
+  check "...a link on the way is replaced by a dir" test -d "$d/h/.config/omarchy/plugins" -a ! -L "$d/h/.config"
+  check_eq "...and nothing written where it led" "" "$(ls -A "$d/out/cfg")"
+}
+
 t_unit_bar_filter() {
   # shellcheck disable=SC2329 # called below
   bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
@@ -2761,6 +2795,45 @@ t_plugin_hosted() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# finding 241: a plugin inside a larger repo, linked into the plugins dir on a desk, whose helper finds
+# a sibling file of the repo through readlink -f "$0". In a box the plugin is a link to its own path
+# when the box has that path (the repo `up` runs from, a same-path --ro-bind), else a mount.
+t_plugin_link() {
+  local B=$P-pl R O=$TMP/pl-out M=$TMP/pl-rb H out f=/home/sbx/.config/omarchy/plugins
+  R=$(tmp_repo pl)
+  lfix() {   # DIR ID: a bar widget with a helper that reads ../../tools/sibling.txt from its real path
+    mkdir -p "$1/helpers"
+    jq -n --arg id "$2" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
+      entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$1/manifest.json"
+    printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$2" > "$1/W.qml"
+    printf '#!/bin/bash\nhere=$(dirname "$(readlink -f "$0")")\ncat "$here/../../tools/sibling.txt"\n' > "$1/helpers/find.sh"
+  }
+  lfix "$R/widget" "$P.lw"; lfix "$O/widget" "$P.lo"; lfix "$M/widget" "$P.lm"
+  mkdir -p "$R/tools" "$M/tools"; echo sibling > "$R/tools/sibling.txt"; echo sibling > "$M/tools/sibling.txt"
+  out=$(cd "$R" && ob up "$B" --net isolated --ro-bind "$M" --plugin "$R/widget" --plugin "$O/widget" --plugin "$M/widget" 2>&1) ||
+    { no "up with a plugin in its repo, one outside, one in a --ro-bind" "$out"; return; }
+  H=$(ob path "$B")/home
+  check_eq "a plugin inside the repo up runs from: its helper reaches the repo through readlink -f" sibling \
+    "$(ob run -b "$B" -- bash "$f/$P.lw/helpers/find.sh" 2>&1)"
+  check_eq "...a link in the box HOME to its own path, as on a desk" "$R/widget" "$(readlink "$H/.config/omarchy/plugins/$P.lw")"
+  check_eq "one inside a same-path --ro-bind: the same" sibling "$(ob run -b "$B" -- bash "$f/$P.lm/helpers/find.sh" 2>&1)"
+  check_fails "one outside anything mounted: no link" test -L "$H/.config/omarchy/plugins/$P.lo"
+  check "...mounted there" ob run -b "$B" -- sh -c "test -f $f/$P.lo/manifest.json && mountpoint -q $f/$P.lo"
+  check_eq "ls --json: linked, mounted, linked" "linked mounted linked" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".lw", $p + ".lo", $p + ".lm"] | .via] | join(" ")')"
+  check_eq "...and all three loaded through it" "loaded loaded loaded" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".lw", $p + ".lo", $p + ".lm"] | .state] | join(" ")')"
+  # #129 through a link: the registry's watch is still the box's idle stand-in, and restart-shell
+  # reads the plugin's files as they are now.
+  check_match "the registry's watch is the box's stand-in" "/opt/omabox/share/bin/inotifywait -m -r -q" \
+    "$(ob run -b "$B" -- pgrep -af '[i]notifywait')"
+  cp "$R/widget/W.qml" "$TMP/pl-W.qml"; echo 'BarWidget {' >> "$R/widget/W.qml"
+  check_match "an edit in the repo, restart-shell: the linked plugin as edited" "plugin $P.lw failed" "$(ob restart-shell -b "$B" 2>&1)"
+  cp "$TMP/pl-W.qml" "$R/widget/W.qml"
+  check_fails "...fixed, restart-shell: loaded again" grep -q "$P.lw" <<<"$(ob restart-shell -b "$B" 2>&1)"
+  ob down "$B" >/dev/null
+}
+
 t_plugin_check() {
   local B=$P-pc F=$TMP/plugins out
   pfix() {   # DIR ID JQ: a bar widget that draws its dir's name
@@ -2774,7 +2847,9 @@ t_plugin_check() {
   cp "$F/qml/W.qml" "$F/W.qml.fixed"; echo 'BarWidget {' >> "$F/qml/W.qml"
   git -C "$F/good" init -q && git -C "$F/good" add . && git -C "$F/good" -c user.name=t -c user.email=t@t commit -qm t && touch "$F/good/new"
   pfix inst "$P.inst" .; git -C "$F/inst" init -q && git -C "$F/inst" add . && git -C "$F/inst" -c user.name=t -c user.email=t@t commit -qm t
-  out=$(ob up "$B" --net isolated --ro-bind "$F" --plugin "$F/good" --plugin "$F/schema" --plugin "$F/entry" --plugin "$F/qml" 2>&1) ||
+  # Only the checkout `omarchy plugin add` reads below is in the box at its own path: with all of $F
+  # mounted, these would be linked to, not mounted (finding 241; t_plugin_link has that case).
+  out=$(ob up "$B" --net isolated --ro-bind "$F/inst" --plugin "$F/good" --plugin "$F/schema" --plugin "$F/entry" --plugin "$F/qml" 2>&1) ||
     { no "up with plugins the shell refuses still comes up (warnings, not a refusal)" "$out"; return; }
   ok "up with plugins the shell refuses still comes up (warnings, not a refusal)"
   check_match "a bad manifest: the validator's message" "plugin $P.schema: omarchy-plugin-validate: unsupported or missing schemaVersion" "$out"
@@ -2869,7 +2944,7 @@ t_saves() {
   local B3=$P-sv3 S2=$P-s2 hf=$TMP/sv-host-file hd=$TMP/sv-host-dir H
   echo "the host's line" > "$hf"; mkdir -p "$hd/theme"; echo sentinel > "$hd/theme/keep"
   ob run -b "$B2" -- sh -c 'ln -sfn "$1" ~/.config/omarchy/shell.json && rm -rf ~/.local/state/omarchy/current &&
-    ln -s "$2" ~/.local/state/omarchy/current' _ "$hf" "$hd" >/dev/null 2>&1
+    ln -s "$2" ~/.local/state/omarchy/current && ln -s "$2" ~/.config/omarchy/plugins/stale' _ "$hf" "$hd" >/dev/null 2>&1
   check "a save of a box with links where seed_home writes" sv save "$S2" -b "$B2"
   check "...starts" sv up "$B3" --from "$S2" --no-shell
   check_eq "...the file a link pointed at untouched" "the host's line" "$(cat "$hf")"
@@ -2877,6 +2952,8 @@ t_saves() {
   H=$(ob path "$B3")/home
   check "...its shell.json a real file" test -f "$H/.config/omarchy/shell.json" -a ! -L "$H/.config/omarchy/shell.json"
   check "...its current theme a real dir, seeded" test -d "$H/.local/state/omarchy/current/theme" -a ! -L "$H/.local/state/omarchy/current"
+  # finding 241: a linked --plugin's link stays in a save; without that plugin asked for, it would load.
+  check_fails "...no link of the save's left in its plugins dir" test -L "$H/.config/omarchy/plugins/stale"
   check "...and the box runs" ob run -b "$B3" -- test -s /home/sbx/.local/state/omarchy/current/theme.name
   check "down" ob down "$B3"
   check "...saves rm" sv saves rm "$S2"
@@ -6867,10 +6944,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

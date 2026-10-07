@@ -72,6 +72,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **A `--plugin` inside the repo you run `omabox up` from (or a same-path `--ro-bind`) is a link in
+  the box, as on your desk.** It was mounted at `~/.config/omarchy/plugins/<id>`, so a helper that
+  finds the rest of its repo through `readlink -f` failed in a box and worked on the desk. Any other
+  plugin is still mounted; `ls --json`'s `plugin_status` says which (`via`: `linked` or `mounted`)
+  (#171).
 - **A running box keeps the Hyprland config it started with.** Every box loaded omabox's config
   live, so a pull, a branch switch or an upgrade of omabox reloaded every running box at once and
   wiped the binds, rules and Lua state an agent had added; an Omarchy upgrade could do the same.

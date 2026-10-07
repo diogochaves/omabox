@@ -182,6 +182,8 @@ reloads for ever). Its config is still the box's own copy; an Omarchy update rel
 @ up run restart-shell
 --plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; \`up\` and
 \`restart-shell\` warn when Omarchy's validator or the shell refuses it (\`ls --json\`: plugin_status).
+One the box has at its own path (in the repo \`up\` runs from, or a same-path --ro-bind) is linked
+to there, as on a desk, so readlink -f leads into its repo; any other is mounted (plugin_status: via).
 @ up run
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
 box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
@@ -1474,7 +1476,7 @@ place_plugin() {
 # default shell.json instead, without the user's shell.toml: the bar most people have (finding 60). Idle times out after ~11 days
 # (no screensaver or lock without real input, finding 10) while Stay Awake still reads off (51).
 seed_home() {
-  local h=$D/home state=$HOME/.local/state/omarchy/current bg id dir kinds section
+  local h=$D/home state=$HOME/.local/state/omarchy/current bg id dir kinds section p
   # First the HOME a new Omarchy user starts with (/etc/skel, finding 69): Omarchy's configs, desktop
   # entries, menu extension, toggles, migrations marked done. Not nvim's 85 MB of plugins, nor the
   # XDG autostart entries (what starts in a box is omabox's choice). The user's look goes on top.
@@ -1491,6 +1493,14 @@ seed_home() {
     .local/state/omarchy/current/theme .local/state/omarchy/current/theme.name .local/state/omarchy/current/background \
     .local/state/omarchy/toggles .local/share/applications .gitconfig .gitconfig.lock
   mkdir -p "$h/.config/omarchy/plugins" "$h/.config/omabox" "$h/.local/state/omarchy/current" "$h/.local/state/omarchy/indicators"
+  # Each --plugin: a link to its own path when the box sees it there (LINKED_PLUGINS, finding 241), as
+  # a dev-linked desk has it; else a dir for its mount. A save's links in there go first: one to a
+  # plugin not asked for this time would load it, and a mount onto a link would follow it.
+  find "$h/.config/omarchy/plugins" -mindepth 1 -maxdepth 1 -type l -delete
+  for p in "${PLUGINS[@]}"; do
+    id=${p%%$'\t'*}
+    if [[ " ${LINKED_PLUGINS[*]:-} " == *" $id "* ]]; then home_link "$h" ".config/omarchy/plugins/$id" "${p#*$'\t'}"; fi
+  done
   # The bus watches only the service dirs that exist when it starts: one made later lists its services
   # after their first activation (finding 87).
   mkdir -p "$h/.local/share/dbus-1/services"
@@ -1504,7 +1514,7 @@ seed_home() {
   local ids; ids=$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R . | jq -s .)
   # A user who swapped the built-in notifications for a plugin (e.g. njpatel.omapager) has it disabled, and that
   # plugin is not in the box: turn the built-in back on unless a mounted plugin serves them itself.
-  local notify=true p
+  local notify=true
   for p in "${PLUGINS[@]}"; do grep -rqs --include='*.qml' NotificationServer "${p#*$'\t'}" && notify=false; done
   local pagers; pagers=$(printf '%s\n' "${PLUGINS[@]}" | workspace_widgets) || pagers='[]'
   shell_json_filter "$ids" $notify "$pagers" < "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
@@ -1603,6 +1613,35 @@ home_unlink() {
       [ -d "$p" ] || break
     done
   done
+}
+
+# home_link HOME REL TARGET: a link at HOME/REL to TARGET (a path as the box sees it), in place of
+# whatever is there; links on the way cleared first (finding 168), parents made.
+home_link() {
+  home_unlink "$1" "$2"
+  mkdir -p -- "$(dirname -- "$1/$2")"
+  rm -rf -- "${1:?}/$2"
+  ln -s -- "$3" "$1/$2"
+}
+
+# own_path_visible PATH: PATH is in the box at its own host path by a read-only mount `up` makes
+# anyway (finding 241): under the repo `up` runs from (repo_top, unless refuse_src keeps it out) or a
+# same-path --ro-bind (`up`'s robinds, which --hyprland, --omarchy and mise's add to), with no mount
+# from elsewhere at or above it. Under ai-jail repo_top is the jail's project, and the jail must see
+# PATH (jail_sees: not through a link out of its folders).
+own_path_visible() {
+  local p top x src dest seen=1 specs=()
+  p=$(readlink -e -- "$1" 2>/dev/null) || return 1
+  if in_jail; then jail_sees "$p" >/dev/null || return 1; fi
+  if top=$(repo_top) && ! refuse_src "$top" >/dev/null; then specs+=("$top"$'\t'"$top"); fi
+  specs+=("${robinds[@]}")
+  for x in "${specs[@]}"; do
+    src=${x%%$'\t'*} dest=${x#*$'\t'}
+    [ "$p" = "$dest" ] || [[ $p == "$dest"/* ]] || continue
+    [ "$src" = "$dest" ] || return 1
+    seen=0
+  done
+  return $seen
 }
 
 # up --seed SRC:DEST (#80): a file or folder of the host's, copied into the box HOME at DEST before the
@@ -1844,8 +1883,14 @@ cmd_up() {
       net=isolated
     fi
     local x
-    for x in "${overlays[@]}" "${plugin_args[@]}"; do
+    for x in "${overlays[@]}"; do
       jail_root "$x" >/dev/null || die "up: $x is not a folder this jail was given whole (its project, or one of its maps), so it does not go into the box"
+    done
+    # A plugin inside the jail's project (or a folder it was given whole and --ro-bind mounts) needs no
+    # mount of its own: it is linked to, at its own path (finding 241).
+    for x in "${plugin_args[@]}"; do
+      jail_root "$x" >/dev/null || own_path_visible "$x" ||
+        die "up: $x is not a folder this jail was given whole (its project, or one of its maps), nor inside one the box has, so it does not go into the box"
     done
     for x in "${robinds[@]}"; do
       jail_root "${x%%$'\t'*}" >/dev/null || die "up: ${x%%$'\t'*} is not a folder this jail was given whole (its project, or one of its maps), so it does not go into the box"
@@ -2011,6 +2056,15 @@ cmd_up() {
     why=$(refuse_dest "$dest") && die "refusing to mount $src at $dest in a box: $why"
     ro_args+=(--ro-bind "$src" "$dest")
   done
+  # A plugin the box sees at its own path anyway (inside the repo `up` runs from, or a same-path
+  # --ro-bind) is linked to it from the box HOME, as a plugin developed in a larger repo is linked
+  # into ~/.config/omarchy/plugins on a desk, not mounted a second time at the link's place (finding
+  # 241): a helper that finds the rest of its repo through readlink -f "$0" reaches it. Any other is
+  # mounted there.
+  LINKED_PLUGINS=()
+  for p in "${PLUGINS[@]}"; do
+    if own_path_visible "${p#*$'\t'}"; then LINKED_PLUGINS+=("${p%%$'\t'*}"); fi
+  done
   for p in "${seeds[@]}"; do
     why=$(refuse_src "${p%%$'\t'*}") && die "refusing to seed ${p%%$'\t'*} into a box: $why"
   done
@@ -2078,6 +2132,7 @@ cmd_up() {
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson plugin_dirs "$(printf '%s\n' "${PLUGINS[@]}" | jq -R 'select(. != "") | split("\t") | {(.[0]): .[1]}' | jq -s 'add // {}')" \
+    --argjson linked "$(printf '%s\n' "${LINKED_PLUGINS[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
     --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg omarchy "$omarchy" \
@@ -2085,7 +2140,8 @@ cmd_up() {
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
-    '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs, net: $net, allow: $allow,
+    '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
+      plugin_via: (reduce $plugins[] as $i ({}; .[$i] = (if $linked | index($i) then "linked" else "mounted" end))), net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
       xwayland: ($xwayland == 1), autoreload: ($autoreload == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
       aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
@@ -2143,7 +2199,9 @@ cmd_up() {
   # (A link whose directory is missing makes readlink -f fail: no file to bind, not a silent exit.)
   local resolv; resolv=$(readlink -f /etc/resolv.conf) || resolv=""
   if [ "$net" = connected ] && [[ $resolv = /run/* ]] && [ -f "$resolv" ]; then args+=(--ro-bind "$resolv" "$resolv"); fi
-  for p in "${PLUGINS[@]}"; do args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}"); done
+  for p in "${PLUGINS[@]}"; do
+    [[ " ${LINKED_PLUGINS[*]} " == *" ${p%%$'\t'*} "* ]] || args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}")
+  done
   for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
   # The XDG base dirs, as an Omarchy session has them: dbus-daemon reads the box HOME's D-Bus services
@@ -7103,7 +7161,8 @@ box_json() {
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
     --arg sh "$sh" --argjson crashes "$crashes" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
-      plugin_status: (.plugin_status // {}), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
+      plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
+        | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes}' "$D/box.json" 2>/dev/null ||
