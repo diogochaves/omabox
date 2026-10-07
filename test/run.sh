@@ -933,6 +933,18 @@ t_unit_theme_dir() {
   check_match "...or DIR, when this checkout has no such theme" "up --theme-dir DIR gives" "$(note "$h/.config/omarchy/themes/lx/" "$w")"
   ln -s "$d/elsewhere/y" "$h/.config/omarchy/themes/ly"
   check_eq "...nothing for a theme linked from elsewhere" "" "$(note "$h/.config/omarchy/themes/ly/" "$r")"
+  # up --theme NAME (finding 245): named as omarchy-theme-set names it, and there.
+  local om=$d/om th=$d/th
+  mkdir -p "$om/themes/tokyo-night" "$th/.config/omarchy/themes/mine" "$d/dev/wip"
+  # shellcheck disable=SC2329 # called below
+  tn() { HOME=$th lib theme_named "$1" "$om" "${@:2}" 2>&1; }
+  check_eq "theme_named: Omarchy's, named as omarchy-theme-set does" tokyo-night "$(tn '<b>Tokyo Night</b>')"
+  check_eq "...one of the user's" mine "$(tn Mine)"
+  check_eq "...a --theme-dir's, by its dir's name" wip "$(tn wip "$d/dev/wip")"
+  check_match "...an unknown one: refused, saying which there are" \
+    "no theme zz in $om/themes, ~/.config/omarchy/themes or --theme-dir \(there are: mine tokyo-night wip\)" "$(tn zz "$d/dev/wip")"
+  check_match "...a path: refused" "not a theme's name: ../tokyo-night" "$(tn ../tokyo-night)"
+  check_match "...a dot name: refused" "not a theme's name: .mine" "$(tn .mine)"
   mkdir -p "$h/.config/omarchy/themes/z"
   check_eq "...nor for a theme that is a dir of its own" "" "$(note "$h/.config/omarchy/themes/z/" "$r")"
   check_eq "...nor outside a repo" "" "$(note "$h/.config/omarchy/themes/lx/" "")"
@@ -1185,6 +1197,9 @@ omarchy_contract() {
   oc "omarchy-version (share/bin's stand-in for it)" "not in bin/" test -x "$o/bin/omarchy-version"
   oc "omarchy-menu-select (share/confirm-close.sh)" "not in bin/" test -x "$o/bin/omarchy-menu-select"
   oc "omarchy-theme-set-gnome (share/session.sh: the theme's colour mode, finding 148)" "not in bin/" test -x "$o/bin/omarchy-theme-set-gnome"
+  oc "omarchy-theme-set honours OMARCHY_THEME_HEADLESS (share/session.sh runs it so for up --theme, finding 245)" \
+    "not named in bin/omarchy-theme-set: it would talk to a shell and restart apps that are not there yet" \
+    oc_has "$o/bin/omarchy-theme-set" OMARCHY_THEME_HEADLESS
   for e in current/theme current/theme.name current/background; do
     oc "omarchy-theme-set writes ~/.local/state/omarchy/$e (seed_home copies it)" "not named in bin/omarchy-theme-set" \
       oc_has "$o/bin/omarchy-theme-set" ".local/state/omarchy/$e"
@@ -3391,6 +3406,15 @@ t_unit_no_theme() {
   check_match "...saying why and what to do" "has not set a theme for you yet .*log into Omarchy once" "$out"
   check_fails "...before the box's dirs are made" test -e "$h/.cache/omabox/nt"
   check_fails "...or its runtime dir" test -e "$rt/omabox/nt"
+  # up --theme (finding 245) needs no theme of the user's: past that check, it stops at the next one
+  # (more monitors on an interactive box, which the system's aquamarine cannot have), before anything is made.
+  out=$(HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
+    OMABOX_AQUAMARINE=system "$CLI" up nt --theme tokyo-night --interactive --monitor 800x600 2>&1)
+  check_match "with --theme: not refused for want of a theme of the user's" "up: --monitor on an interactive box" "$out"
+  out=$(HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
+    OMABOX_AQUAMARINE=system "$CLI" up nt --theme nope 2>&1)
+  check_match "...one that is not there refused" "--theme: no theme nope in " "$out"
+  check_fails "...neither makes the box's dirs" test -e "$h/.cache/omabox/nt" -o -e "$rt/omabox/nt"
 }
 
 # finding 125 (issue #47): which aquamarine a box runs (aq_pick), and what is refused without the fix.
@@ -5698,6 +5722,57 @@ t_theme_dir() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# up --theme NAME (finding 245): the box on that theme, not the desk's current one (a theme the desk is
+# not on: tokyo-night, or nord on a desk on tokyo-night); over a save's look; refused when there is no
+# such theme, before anything is made; a box whose omarchy-theme-set fails ends, saying why.
+t_theme() {
+  local B=$P-th B2=$P-th2 B3=$P-th3 S=$P-ths t=tokyo-night o=nord desk D H bg c T=$TMP/$P-th-tree
+  desk=$(head -n 1 "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null) || desk=""
+  [ "$desk" != "$t" ] || { t=nord; o=tokyo-night; }
+  local cur=/home/sbx/.local/state/omarchy/current
+  check_match "an unknown theme: refused" "--theme: no theme $P-nope in " "$(ob up "$B" --theme "$P-nope" 2>&1)"
+  check_fails "...before the box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+  ob up "$B" --net isolated --stock-bar --theme "$t" >/dev/null 2>&1 || { no "up --theme $t" "failed"; return; }
+  check_box_safety "$B"
+  D=$(ob path -b "$B"); H=$D/home
+  check_eq "box.json has the theme" "$t" "$(jq -r .theme "$D/box.json")"
+  check_eq "...the box's theme.name is it, not the desk's ($desk)" "$t" "$(cat "$H/.local/state/omarchy/current/theme.name")"
+  check "...its colors.toml the theme's" cmp "$H/.local/state/omarchy/current/theme/colors.toml" "/usr/share/omarchy/themes/$t/colors.toml"
+  check "...its templates made (hyprland.lua)" test -s "$H/.local/state/omarchy/current/theme/hyprland.lua"
+  c=$(cd "/usr/share/omarchy/themes/$t/backgrounds" && find . -maxdepth 1 -type f | sort | head -n 1)
+  check_eq "...its background the theme's first" "$cur/theme/backgrounds/${c#./}" "$(readlink "$H/.local/state/omarchy/current/background")"
+  bg=$(sed -n 's/^background *= *"\(#[0-9a-fA-F]\{6\}\)".*/\1/p' "/usr/share/omarchy/themes/$t/colors.toml" | tr 'A-F' 'a-f')
+  check "...the bar in the theme's background ($bg)" until_ok 15 bash -c "[ \"\$('$CLI' pixel -b '$B' 400 12)\" = '$bg' ]"
+  check_eq "...ls --json says so" "$t" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .theme')"
+  check_match "up again with another theme: refused, saying which it has" "already up, without what you asked for: --theme $o \(it started on $t\)" \
+    "$(ob up "$B" --theme "$o" 2>&1)"
+  check "...with the same one: fine" ob up "$B" --theme "${t^}"
+  # --from SAVE: the flag wins over the save's look.
+  check "a save of it" sv save "$S" -b "$B"
+  ob down "$B" >/dev/null 2>&1
+  sv up "$B2" --from "$S" --net isolated --no-shell --theme "$o" >/dev/null 2>&1 || { no "up --from with --theme" "failed"; sv saves rm "$S" >/dev/null 2>&1; return; }
+  H=$(ob path -b "$B2")/home
+  check_eq "up --from a save on $t with --theme $o: on $o" "$o" "$(cat "$H/.local/state/omarchy/current/theme.name")"
+  check "...its colors.toml $o's" cmp "$H/.local/state/omarchy/current/theme/colors.toml" "/usr/share/omarchy/themes/$o/colors.toml"
+  c=$(cd "/usr/share/omarchy/themes/$o/backgrounds" && find . -maxdepth 1 -type f | sort | head -n 1)
+  check_eq "...its background $o's first" "$cur/theme/backgrounds/${c#./}" "$(readlink "$H/.local/state/omarchy/current/background")"
+  ob down "$B2" >/dev/null 2>&1
+  # Without the flag nothing changes: the desk's theme, from a save too.
+  sv up "$B2" --from "$S" --net isolated --no-shell >/dev/null 2>&1 || { no "up --from without --theme" "failed"; sv saves rm "$S" >/dev/null 2>&1; return; }
+  D=$(ob path -b "$B2")
+  check_eq "up --from without --theme: the desk's theme, as before" "$desk" "$(cat "$D/home/.local/state/omarchy/current/theme.name")"
+  check "...its colors.toml the desk's" cmp "$D/home/.local/state/omarchy/current/theme/colors.toml" "$HOME/.local/state/omarchy/current/theme/colors.toml"
+  check_eq "...no theme in box.json" null "$(jq .theme "$D/box.json")"
+  ob down "$B2" >/dev/null 2>&1
+  sv saves rm "$S" >/dev/null 2>&1
+  # An omarchy-theme-set that fails in the box ends it, saying why.
+  copy_omarchy "$T"
+  rm -f "$T/bin/omarchy-theme-set"; printf '#!/bin/sh\necho "broken on purpose" >&2\nexit 3\n' > "$T/bin/omarchy-theme-set"; chmod +x "$T/bin/omarchy-theme-set"
+  check_match "a failing omarchy-theme-set: up fails, saying why" "died while starting \(up --theme: omarchy-theme-set $t failed: broken on purpose" \
+    "$(ob up "$B3" --net isolated --no-shell --omarchy "$T" --theme "$t" 2>&1)"
+  ob down "$B3" >/dev/null 2>&1
+}
+
 # The host's submap after the last interactive box goes (finding 134), in a stand-in host (finding
 # 26): a config reload there drops passthrough's hooks and keeps the submap, and only a box's reaper
 # puts the hooks back. With that reaper gone too, `down` resets the submap, or the host's binds
@@ -7203,7 +7278,7 @@ t_inspect() {
 UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

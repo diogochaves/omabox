@@ -451,6 +451,9 @@ blocks the network and every other socket, omabox's included), or see
 - `--theme-dir DIR` (next release) puts a theme you are editing in the box live: the box's
   `~/.config/omarchy/themes/NAME` links to DIR, which the box sees at its own path (the repo, or a
   read-only mount). Your other themes are copies made at `up`, a linked one too.
+- `--theme NAME` (next release) starts the box on that theme (Omarchy's, one of yours or a
+  `--theme-dir` one) instead of your desktop's current one, so a test's start does not depend on
+  what your desktop is on that day.
 
 </details>
 
