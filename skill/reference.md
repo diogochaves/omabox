@@ -262,8 +262,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   that is a link to a working copy too: edits after `up` do not reach the box, and from a git
   worktree that copy is the link's checkout (usually main), not yours; `up` notes it. `omabox up
   --theme-dir PATH` (repeatable) gives one live: the box's `themes/NAME` (PATH's name) links to PATH,
-  which the box sees at its own path (inside the repo; anywhere else it is mounted read-only there,
-  refused as `--ro-bind`'s are). `omabox run -- omarchy-theme-set NAME` applies it as it is then;
+  which the box sees at its own path (inside the repo, a same-path `--ro-bind` or an `--overlay`;
+  anywhere else it is mounted read-only there, refused as `--ro-bind`'s are). `omabox run -- omarchy-theme-set NAME` applies it as it is then;
   run it again after an edit. `--ro-bind` into the box HOME is refused, and `--seed` is a copy.
 - A box starts on your desktop's current theme. `omabox up --theme NAME` starts it on NAME instead
   (Omarchy's, one of yours or a `--theme-dir` one; named as `omarchy-theme-set` takes it, `"Tokyo
@@ -407,7 +407,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 
 The checks a plugin's own checklist asks for "on a live desktop", in a box. `omabox up --plugin
 PATH` (add `--stock-bar` for Omarchy's default bar, `--net isolated` when it starts or probes local
-servers), then `omabox restart-shell` after each edit (the mount is live, read-only). The box's
+servers), then `omabox restart-shell` after each edit (the plugin is live in the box, read-only). The box's
 `shell.json` has only built-in widgets plus the plugins you mount, each enabled where its manifest
 says, in a copy of the user's bar layout (Omarchy's workspace numbers in place of a plugin's left out);
 `--stock-bar` uses Omarchy's default bar (workspaces, clock, the stock right side), to see a plugin as
@@ -418,11 +418,12 @@ most people will. Then:
   menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`. A
   widget placed in another mounted plugin's layout is `hosted` (`plugin_status`'s `host` names that
   plugin), with no warning: check it with that plugin's IPC.
-- **Linked or mounted**: a plugin inside the repo `up` runs from (or a same-path `--ro-bind`, or an `--overlay`) is a
-  link in the box HOME to its own path, as a plugin linked from its repo is on a desk, so a helper
-  that finds the rest of its repo through `readlink -f "$0"` works; any other PATH is mounted there.
+- **Linked or mounted**: a plugin inside the repo `up` runs from (or a same-path `--ro-bind`, or an
+  `--overlay`) is a link in the box HOME to its own path, as a plugin linked from its repo is on a
+  desk, so a helper that finds the rest of its repo through `readlink -f "$0"` works; any other PATH
+  is mounted there.
   `plugin_status`'s `via` says which (`linked`, `mounted`).
-- **Edits**: `omabox restart-shell` (the mount is live). Nothing reloads by itself in a box (neither
+- **Edits**: `omabox restart-shell` (linked or mounted, the plugin is live). Nothing reloads by itself in a box (neither
   Quickshell's watcher nor Omarchy's plugin registry's), so a shot never catches a half-reloaded
   plugin: `restart-shell` after edits, then `wait still`, before a shot. A `keepLoaded` plugin or a service needs a restart on any
   desktop: Omarchy keeps the loaded instance across its hot reload.
