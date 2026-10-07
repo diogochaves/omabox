@@ -2766,7 +2766,7 @@ cmd__reap() {
     local human; human=$(human_duration "$idle")
     say "$(date -Is) box '$NAME' idle for $human: taking it down"
     DOWN_IF_CREATED=$created cmd_down "$NAME" || true
-    [ -d "$D" ] || { echo "$human" > "$BOXES/.expired-$NAME"; return 0; }
+    [ -d "$D" ] || { echo "$human" > "$BOXES/.expired-$NAME"; prune_marks; return 0; }
     reap_retry || return 0
   done
 }
@@ -6782,11 +6782,17 @@ write_confirm_flag() {
 # started before it that has no lock yet: they compare starts, not when each got to its check, which
 # load reorders (finding 147). The runtime dir that keeps it goes with a reboot, as the ticks do. Only
 # an `up` that has not reached its lock yet reads it, a minute at most (its flock -w 60): one older
-# than 10 minutes is read by nobody, and goes (#158).
-down_none() {
+# than 10 minutes is read by nobody, and goes (#158). Written before the down lets go of the name's
+# lock (finding 237): an `up` waiting on it reads it as soon as it has the lock.
+down_mark() {
   [ -n "${DOWN_IF_CREATED:-}" ] || { mkdir -p "$BOXES" && proc_start $$ > "$BOXES/.down-$NAME"; } 2>/dev/null || true
-  find "$BOXES" -maxdepth 1 -name '.down-*' -type f -mmin +10 -delete 2>/dev/null || true
-  say "no box '$NAME'"
+  prune_marks
+}
+# The markers nobody reads any more: a down's after 10 minutes (above), and an idle box's note
+# (.expired-NAME, need_box's "went down after 2h idle") after a day: a session's box has a name of
+# its own, and each one that idled out left its note for good (finding 237).
+prune_marks() {
+  find "$BOXES" -maxdepth 1 \( -name '.down-*' -mmin +10 -o -name '.expired-*' -mmin +1440 \) -type f -delete 2>/dev/null || true
 }
 cmd_down() {
   local names=() n all=0
@@ -6810,8 +6816,13 @@ cmd_down() {
     rm -f "$BOXES/.expired-$NAME"
     # No dir and no lock: no box. A lock without a dir can be an `up` in its first ~40 ms (it makes the
     # dir after taking the lock, finding 147): wait for it below, and take down the box it made.
-    # The time it found none, for an `up` of the name that started before but has no lock yet.
-    [ -d "$D" ] || [ -e "$BOXES/.lock-$NAME" ] || { down_none; continue; }
+    # The time it found none, for an `up` of the name that started before but has no lock yet: written
+    # before the name's lock is looked at again (finding 237), so an `up` that opened it after the first
+    # look and read no marker is waited for below.
+    if [ ! -d "$D" ] && [ ! -e "$BOXES/.lock-$NAME" ]; then
+      down_mark
+      [ -d "$D" ] || [ -e "$BOXES/.lock-$NAME" ] || { say "no box '$NAME'"; continue; }
+    fi
     mkdir -p "$BOXES"
     local lock lk=$BOXES/.lock-$NAME
     # The reaper takes a box down through here while holding nothing; anyone else waits for an `up`.
@@ -6819,7 +6830,8 @@ cmd_down() {
       { say "box '$NAME' is busy (an up in progress?); not taken down"; rc=1; continue; }
     # A box gone takes its lock file with it, removed while held (#158): names are seldom used twice
     # (the suite's t<pid>-…, a session's …-run<N>), and each kept one a file in the runtime dir.
-    [ -d "$D" ] || { rm -f "$lk"; exec {lock}>&-; down_none; continue; }
+    # Its marker before the lock goes (finding 237): an `up` waiting on it then reads it.
+    [ -d "$D" ] || { down_mark; rm -f "$lk"; exec {lock}>&-; say "no box '$NAME'"; continue; }
     # The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
     # started a new box under the name (finding 74). Not that one.
     if [ -n "${DOWN_IF_CREATED:-}" ] && [ "$(meta created)" != "$DOWN_IF_CREATED" ]; then exec {lock}>&-; continue; fi

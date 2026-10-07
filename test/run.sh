@@ -697,7 +697,7 @@ t_unit_box_gone() {
 
 # #158: the runtime dir kept a .lock- per box name ever used and a .down- per down that found none.
 # down removes the lock it holds once the box is gone; lock_file opens again a lock file removed
-# while it waited, so it and a newcomer never both hold one; down_none sweeps markers past 10 min.
+# while it waited, so it and a newcomer never both hold one; a down sweeps markers past 10 min.
 t_unit_lock_markers() {
   local b=$TMP/lockm out; mkdir -p "$b/gone"; echo '{"mode":"headless"}' > "$b/gone/box.json"
   : > "$b/.lock-gone"; : > "$b/.lock-nodir"
@@ -707,10 +707,29 @@ t_unit_lock_markers() {
   check_fails "...and removes its lock file" test -e "$b/.lock-gone"
   check_fails "a lock file with no box: down removes it too" test -e "$b/.lock-nodir"
   : > "$b/.down-old"; touch -d '-11 min' "$b/.down-old"; : > "$b/.down-new"
-  bash -c 'source "$1"; BOXES=$2; NAME=none; down_none' _ "$TMP/lib/bin/omabox" "$b" >/dev/null 2>&1
-  check_fails "down_none sweeps a .down- marker older than 10 minutes" test -e "$b/.down-old"
+  : > "$b/.expired-old"; touch -d '-25 hours' "$b/.expired-old"; : > "$b/.expired-new"; touch -d '-23 hours' "$b/.expired-new"
+  bash -c 'source "$1"; BOXES=$2; cmd_down none' _ "$TMP/lib/bin/omabox" "$b" >/dev/null 2>&1
+  check_fails "a down that finds no box sweeps a .down- marker older than 10 minutes" test -e "$b/.down-old"
   check "...keeps a fresh one" test -e "$b/.down-new"
   check "...and writes its own" test -s "$b/.down-none"
+  check_fails "...and an idle box's .expired- note older than a day (finding 237)" test -e "$b/.expired-old"
+  check "...keeping a younger one" test -e "$b/.expired-new"
+  # Finding 237: a down that finds the lock but no box writes its marker before it lets go of the lock,
+  # so an `up` waiting on the lock reads it. Here the down holds it a second (its rm of the lock file
+  # slowed) and its marker takes half a second to write: a waiter that gets the lock reads it, or not.
+  out=$(timeout 30 bash -c 'source "$1"; BOXES=$2; f=$BOXES/.lock-raced; : > "$f"
+    rm() { [ "${!#}" != "$f" ] || sleep 1; command rm "$@"; }
+    proc_start() { sleep 0.5; echo 12345; }
+    ( cmd_down raced ) >/dev/null 2>&1 &
+    until ! flock -n "$f" true; do sleep 0.02; done
+    ( lock_file w "$f" -w 10; cat "$BOXES/.down-raced" 2>/dev/null || echo "no marker" )
+    wait' _ "$TMP/lib/bin/omabox" "$b" 2>&1)
+  check_eq "an up waiting on the lock of a down that finds no box reads its marker once it has the lock" 12345 "$out"
+  # ...and one that finds neither box nor lock looks for the lock again once its marker is written: an
+  # `up` that opened it between the two read no marker, and the down goes through the lock (here the
+  # lock appears as the marker is written; the down removes it once it holds it).
+  bash -c 'source "$1"; BOXES=$2; proc_start() { : > "$BOXES/.lock-late"; echo 12345; }; cmd_down late' _ "$TMP/lib/bin/omabox" "$b" >/dev/null 2>&1
+  check_fails "a lock that appears as a down writes its marker: the down goes through it" test -e "$b/.lock-late"
   # A holder removes the file while a waiter waits on it, as down does: the waiter must end up on
   # the path's file, so a newcomer's -n fails while it holds it.
   out=$(timeout 20 bash -c 'source "$1"; f=$2/.lock-x

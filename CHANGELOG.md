@@ -112,6 +112,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   prints a process name the box set with escapes or newlines as `?` (#160).
 - **`omabox ports` inside ai-jail no longer calls a port the jail's box's when a box outside the
   jail serves on it too**: it reads as taken (`host`), without naming that box (#168).
+- **An `omabox down` that comes while an `up` of the same box is starting always wins**: two narrow
+  gaps let the `up` start the box anyway. The runtime dir no longer keeps an "went down after 2h
+  idle" note per box for good: a day (#168).
 
 ## 0.4.8 — 2026-10-03
 

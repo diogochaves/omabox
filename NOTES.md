@@ -2693,7 +2693,8 @@ from them.
     later cancels itself once it has the lock
     ("up: cancelled: omabox down NAME came while it was starting", exit 1); a `down` before an `up` leaves it alone. Six `up X & down X` races, fresh names: no box left
     (before: every time). `t_race` holds the lock itself for the first (it failed on the old code)
-    and races a real `up` for the second.
+    and races a real `up` for the second. (Two gaps left, closed in finding 237: the marker was
+    written after the down let go of the lock, and a lock opened just after the down's first look.)
 148. **Portals in a box** (2026-10-01, finding 12 followed up, #84's list). Checked in a box (portal
     1.22.1, -gtk 1.15.3, -hyprland 1.4.1; `hyprland-portals.conf`: hyprland, then gtk): FileChooser
     (open, save, cancel), OpenURI and its app chooser (a `file://` URI is refused by the portal, by
@@ -3733,7 +3734,7 @@ from them.
     lock file held it while a newcomer locked a new one. So `down` removes the name's lock while
     holding it, once the box is gone (and when it finds a lock with no box). A `.down-` marker is read
     only by an `up` not yet at its lock, a minute at most: `down_none` sweeps those older than 10
-    minutes. The suite removes its `t<pid>-*` markers on exit. t_unit_lock_markers (five of its
+    minutes (`prune_marks` now, which takes `.expired-` notes past a day too: finding 237). The suite removes its `t<pid>-*` markers on exit. t_unit_lock_markers (five of its
     checks failed on the old code); t_race and t_reap_race pass unchanged.
 219. **The widget reads its bar only where the bar may be null** (2026-10-06, #155). On the desk a
     `bar.layout` edit logged 86 `TypeError: Cannot read property 'foreground' of null` (also
@@ -4241,6 +4242,18 @@ from them.
     said so. A port no box outside serves on stays `this`. t_unit_jail_policy (stubbed: a box outside
     the jail on the port; the port's holder unreadable): host, said, the outside box unnamed; failed
     on the old code.
+    (2) A `down` that took the lock and found no box let go of the lock, then wrote its `.down-NAME`
+    marker (finding 147): an `up` waiting on the lock could take it in between, read no marker and
+    start the box that down asked to have gone. The marker is written while the lock is held now. A
+    `down` that found neither box nor lock had the same gap at its first look (an `up` opening the
+    lock just after it): it writes its marker, then looks for the lock again, and goes through the
+    lock (waiting for that `up`, taking its box down) when there is one. And `.expired-NAME`, the note
+    need_box gives once an idle box went, was never removed but by an `up` or `down` of that name:
+    a session's box has a name of its own, so each one that idled out left one. `prune_marks` (every
+    `down` that finds no box, every expiry) takes those past a day, as #158 took `.down-` markers past
+    10 minutes. t_unit_lock_markers: a waiter on the lock of a down slowed while it holds it reads the
+    marker; a lock that appears as the marker is written is gone through; an old note swept, a younger
+    one kept. All three failed on the old code.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
