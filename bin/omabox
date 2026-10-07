@@ -5808,6 +5808,18 @@ monitor_add() {
   monitors_record
   echo "$line"
 }
+# aq_monitor_note VERSION: what an interactive box's monitor windows lack on the aquamarine VERSION
+# (box.json's). Your pointer lands on the monitor whose window it is in only with omabox's aquamarine
+# build (finding 238): any other puts a point of any window over the whole layout. And only a build
+# with +cursor keeps your cursor shown when it goes from one monitor's window to another (finding
+# 239). A system aquamarine, #415 or not, has neither; `setup --aquamarine` builds them (finding 247).
+aq_monitor_note() {
+  if [[ $1 != *+layout* ]]; then
+    say "monitor add: box '$NAME''s aquamarine ($1) puts your pointer in a monitor's window in the wrong place, over the whole layout (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+  elif [[ $1 != *+cursor* ]]; then
+    say "monitor add: box '$NAME''s aquamarine ($1) hides your cursor when it goes from one monitor's window to another (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+  fi
+}
 # An interactive box's monitor (#123): a window on the user's desktop, as its first one is. The box's
 # Hyprland makes it (`output create wayland NAME`); the host would put it on the user's active
 # workspace, focused (finding 70: an exec rule holds for the first window only, and no window rule
@@ -5822,18 +5834,6 @@ monitor_add() {
 # picture out again.
 # A subshell: its EXIT trap (the host rule off) is its own. In `up`'s shell it took the place of up's,
 # and an up failing after it left the box running (#161).
-# aq_monitor_note VERSION: what an interactive box's monitor windows lack on the aquamarine VERSION
-# (box.json's). Your pointer lands on the monitor whose window it is in only with omabox's aquamarine
-# build (finding 238): any other puts a point of any window over the whole layout. And only a build
-# with +cursor keeps your cursor shown when it goes from one monitor's window to another (finding
-# 239). A system aquamarine, #415 or not, has neither; `setup --aquamarine` builds them (finding 247).
-aq_monitor_note() {
-  if [[ $1 != *+layout* ]]; then
-    say "monitor add: box '$NAME''s aquamarine ($1) puts your pointer in a monitor's window in the wrong place, over the whole layout (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
-  elif [[ $1 != *+cursor* ]]; then
-    say "monitor add: box '$NAME''s aquamarine ($1) hides your cursor when it goes from one monitor's window to another (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
-  fi
-}
 monitor_add_window() (
   local spec mode scale place ws pid n0 name end m res i rest line clients addr rect
   spec=$(monitor_spec "$1") || exit 1
