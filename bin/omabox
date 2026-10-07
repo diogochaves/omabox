@@ -77,6 +77,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N]
+              [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
@@ -239,6 +240,15 @@ the frame before ("changed X,Y WxH", in the screen's coordinates as wait says th
 without -o, a new folder each time. --after -- ACTION takes the first frame, then runs \`omabox
 ACTION\` (keys, click, scroll, run -d, monitor add ...) beside the rest: a transition from its start.
 --sheet adds one contact sheet of them all, labelled with their times: one image to read instead of N.
+@ shot
+\`shot --changed\` (or \`--window SEL --changed\`) is a crop of what changed since the last whole shot of
+the same screen or window (\`shot\` without -g, --fit, --zoom or --monitor, or --changed), 16 px
+around it; stderr says where it is (\`click --in\` maps it) and, when it changed in places far apart,
+each. Nothing changed: no image, nothing on stdout, exit 0, said on stderr. No earlier shot of it (or
+another size or mode since): a whole shot, said why. A caret blinking alone (4 px thin, 40 long at
+most) and where the pointer was before it moved are not changes; --ignore "X,Y WxH" (up to 16, in
+the shot's coordinates: the window's with --window) leaves out an animation or a caret elsewhere.
+--since SHOT compares with that whole shot instead (not from a jail).
 @ pixel
 \`pixel X Y\` reads the box's own pixel (#rrggbb), with no shot: a colour off a scaled shot, or one read
 by eye, is not the one drawn. Several points in one call print "X,Y #rrggbb" each. The screen's pixels
@@ -3555,6 +3565,62 @@ shot_record() {
   if [ "$(wc -l < "$f")" -gt 500 ]; then tail -n 200 "$f" > "$f.new" && mv "$f.new" "$f"; fi
 }
 
+# The box around the pixels that differ between two images of one size, "X Y W H" in image pixels;
+# nothing when none do. Each MASK (X,Y,W,H in image pixels) is painted black in both first, so it is
+# left out (drawn on the difference, it spoilt it). A black border before the trim: %@
+# trims the colour of the image's corners, and a corner may have changed too (finding 243: a change
+# there read as none). diff_box A B [MASK]...
+diff_box() {
+  local fa=$1 fb=$2 mk x y w h draw=() g; shift 2
+  for mk in "$@"; do
+    IFS=, read -r x y w h <<<"$mk"
+    draw+=(-draw "rectangle $x,$y $((x + w - 1)),$((y + h - 1))")
+  done
+  g=$(magick "$fa" "$fb" -fill black "${draw[@]}" -compose difference -composite -alpha off -grayscale Brightness -threshold 0 \
+    -bordercolor black -border 1 -format '%@' info: 2>/dev/null) || return 1
+  [[ $g =~ ^([0-9]+)x([0-9]+)\+(-?[0-9]+)\+(-?[0-9]+)$ ]] || return 1
+  [ "${BASH_REMATCH[1]}" = 0 ] || [ "${BASH_REMATCH[2]}" = 0 ] ||
+    echo "$((BASH_REMATCH[3] - 1)) $((BASH_REMATCH[4] - 1)) ${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+}
+# The separate places two images differ (changes 32 px or more apart), "X Y W H" a line in image
+# pixels, to the nearest 8 px outwards: the difference shrunk 8 times (a cell that changed at all is
+# lit), grown 2 cells (inside a border as wide), and each connected part's box less that growth.
+# MASKs as diff_box's.
+# diff_parts A B [MASK]...
+diff_parts() {
+  local fa=$1 fb=$2 mk x y w h draw=(); shift 2
+  for mk in "$@"; do
+    IFS=, read -r x y w h <<<"$mk"
+    draw+=(-draw "rectangle $x,$y $((x + w - 1)),$((y + h - 1))")
+  done
+  magick "$fa" "$fb" -fill black "${draw[@]}" -compose difference -composite -alpha off -grayscale Brightness -threshold 0 \
+    -scale 12.5% -threshold 0 -bordercolor black -border 2 -morphology Dilate Square:2 -define connected-components:verbose=true \
+    -connected-components 8 null: 2>/dev/null |
+    awk 'NR > 1 && $NF == "gray(255)" { split($2, g, /[x+]/)
+      x = g[3]; y = g[4]; w = g[1] - 4; h = g[2] - 4
+      if (w < 1) w = 1; if (h < 1) h = 1
+      print x * 8, y * 8, w * 8, h * 8 }'
+}
+
+# shot --changed (#145, finding 243): the last whole frame of each thing shot, $D/changed/KEY.png (KEY:
+# screen, or a window's address) with KEY.tsv: the shot it was, the box's mode, "LWxLH IWxIH" (what
+# it covers, the image's size), the pointer then ("X Y"; - for a window) and when (ms). Every
+# whole shot (no -g, --fit, --zoom or --monitor) leaves one; the 8 latest are kept.
+# shot_ref_save FILE KEY SHOT MODE GEOMETRY POINTER
+shot_ref_save() {
+  local dir=$D/changed old f
+  mkdir -p "$dir" || return 0
+  if ! cp -- "$1" "$dir/.$2.png" 2>/dev/null || ! mv -f -- "$dir/.$2.png" "$dir/$2.png"; then rm -f -- "$dir/.$2.png"; return 0; fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$3" "$4" "$5" "$6" "$(date +%s%3N)" > "$dir/$2.tsv"
+  # The pointer of a screen shot by its path too, for a later --since it.
+  if [ "$6" != - ]; then
+    printf '%s\t%s\n' "$3" "$6" >> "$dir/pointers.tsv"
+    if [ "$(wc -l < "$dir/pointers.tsv")" -gt 200 ]; then tail -n 100 "$dir/pointers.tsv" > "$dir/pointers.new" && mv "$dir/pointers.new" "$dir/pointers.tsv"; fi
+  fi
+  old=$(find "$dir" -maxdepth 1 -name '*.png' ! -name '.*' -printf '%T@ %f\n' | sort -rn | tail -n +9 | cut -d' ' -f2)
+  for f in $old; do rm -f -- "$dir/$f" "$dir/${f%.png}.tsv"; done
+}
+
 # The screen pixel (from the image's origin) under the centre of image pixel P, for an image of
 # IMAGE pixels covering SCREEN pixels: P itself at scale 1. img_px P IMAGE SCREEN
 img_px() { echo $(((2 * $1 + 1) * $3 / (2 * $2))); }
@@ -3611,6 +3677,7 @@ shot_path() {
 
 cmd_shot() {
   local name="" out="" geom="" sels=() fit="" tofd="" as="" zoom="" burst="" every=0 sheet=0 bdiff=0 after=() monitor=""
+  local changed=0 since="" masks=()
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -3629,6 +3696,9 @@ cmd_shot() {
       --every) optarg "$@"; every=$(ms_duration "$2") && [ "$every" -le 60000 ] || die "shot: --every takes a duration up to 60s, like 100ms, got $2"; shift ;;
       --sheet) sheet=1 ;;
       --diff) bdiff=1 ;;
+      --changed) changed=1 ;;
+      --since) optarg "$@"; since=$2 changed=1; shift ;;
+      --ignore) optarg "$@"; mask_arg "$2"; masks+=("$MASK"); shift ;;
       --after) [ "${2:-}" = -- ] && [ $# -ge 3 ] || die "shot: --after -- ACTION... (an omabox command: keys super+space, click X Y, run -d -- CMD)"
         shift 2; after=("$@"); break ;;
       -*) die "shot: unknown option $1" ;;
@@ -3646,6 +3716,13 @@ cmd_shot() {
     [[ " ${after[*]} " != *" -b "* && " ${after[*]} " != *" --box "* ]] || die "shot --after: the action runs on the burst's box (no -b)"
   else
     [ "$every$sheet$bdiff" = 000 ] && [ ${#after[@]} = 0 ] || die "shot: --every, --sheet, --diff and --after go with --burst N"
+  fi
+  # --changed (#145, finding 243): the whole window or screen is compared, and the crop is its own.
+  if [ $changed = 1 ]; then
+    [ -z "$g$monitor$zoom$fit$burst" ] || die "shot: --changed crops by itself: not with -g, --monitor, --zoom, --fit or --burst"
+    command -v magick >/dev/null || die "shot: --changed needs ImageMagick's magick (package imagemagick, part of Omarchy)"
+  else
+    [ ${#masks[@]} = 0 ] || die "shot: --ignore goes with --changed (and wait still)"
   fi
   # --zoom (#133): a small crop with each pixel N x N (nearest neighbour: grim's -s blends neighbours),
   # for a 1 px border or a glyph's edge. ImageMagick's -scale by a whole number repeats pixels.
@@ -3677,6 +3754,25 @@ cmd_shot() {
       "\(.x) \(.y) \(.width / .scale | floor) \(.height / .scale | floor)"' <<<"$mons")
     [ -n "$g" ] || die "shot: box '$NAME' has no monitor $monitor ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
   fi
+  # --since FILE: a whole shot of this box, unchanged, to compare with; what it is of is the target
+  # unless --window names one (which must be the same window).
+  local sref=()
+  if [ -n "$since" ]; then
+    local sf rec stamp smode skind sgeo sptr
+    ! in_jail || die "shot --since: a jailed agent's paths are never opened here"
+    sf=$(readlink -f -- "$since" 2>/dev/null) && [ -f "$sf" ] || die "shot --since: no such file: $since"
+    rec=$(P=$sf awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" 2>/dev/null | tail -n 1)
+    [ -n "$rec" ] || die "shot --since: $since is not a shot of box '$NAME' (take one with omabox shot)"
+    IFS=$'\t' read -r _ stamp smode skind sgeo <<<"$rec"
+    [ "$(stat -L -c '%s %.9Y' -- "$sf")" = "$stamp" ] || die "shot --since: $since changed since the shot"
+    case $skind in
+      "screen 0,0") [ ${#sels[@]} = 0 ] || die "shot --since: $since is a shot of the screen, not of a window" ;;
+      window\ *\ *|screen\ *) die "shot --since: $since is a crop (-g or --monitor); --since takes a whole shot" ;;
+      window\ *) [ ${#sels[@]} -gt 0 ] || sels=("${skind#window }") ;;
+    esac
+    sptr=$(P=$sf awk -F'\t' '$1 == ENVIRON["P"] { p = $2 } END { print p }' "$D/changed/pointers.tsv" 2>/dev/null) || sptr=""
+    sref=("$sf" "$since" "$smode" "$skind" "$sgeo" "${sptr:--}" "$(awk -v t="${stamp#* }" 'BEGIN { printf "%d", t * 1000 }')")
+  fi
   if [ -z "$tofd" ] && [ -z "$out" ] && [ -z "$burst" ]; then shot_path "${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S-%N | cut -c1-10).png"; fi
   # What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
   # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
@@ -3707,10 +3803,17 @@ cmd_shot() {
   fi
   # --fit: grim scales the capture (-s); it truncates the size, so the factor is rounded up.
   local long=$((lw > lh ? lw : lh))
+  local scaled=0
   if [ -n "$fit" ] && [ "$long" -gt "$fit" ]; then
+    scaled=1
     grim+=(-s "$(awk -v n="$fit" -v l="$long" 'BEGIN { printf "%.6f", int(n / l * 1e6 + 1) / 1e6 }')")
   fi
   if [ -n "$burst" ]; then shot_burst "$burst" "$every" "$sheet" "$bdiff" "${after[@]}"; return; fi
+  # --changed captures the whole of it beside the references, to compare; the crop is written after.
+  if [ $changed = 1 ]; then
+    mkdir -p "$D/changed" || die "shot: cannot write in $D/changed"
+    file=$(mktemp "$D/changed/.new-XXXXXX") || die "shot: cannot write in $D/changed"
+  fi
   # grim runs in the box (on_box) and writes to stdout; the file is ours. Renamed into place, so a
   # failed capture never leaves a half-written or empty PNG at $out. A window's first capture can be
   # a frame from long ago: one that is off screen gets no frame callbacks, so it stops rendering, and
@@ -3722,7 +3825,8 @@ cmd_shot() {
   }
   # A jailed caller's file through its own fd, never reopened by name: /dev/fd/N opened for writing
   # would give the broker more than the caller passed (a read-only fd of a file it may not write).
-  put() { if [ -n "$tofd" ]; then grab >&"$tofd"; else grab > "$file"; fi; }
+  put() { if [ -n "$tofd" ] && [ $changed = 0 ]; then grab >&"$tofd"; else grab > "$file"; fi; }
+  unput() { if [ -z "$tofd" ] || [ $changed = 1 ]; then rm -f -- "$file"; fi; }
   # The capture runs beside this shell (#125, finding 182): one still going after 2 s is a big one, or
   # a Hyprland that stopped answering, where grim waited out its 10 s and said only "grim failed".
   # Then the box is asked once: no answer is said in words, and the capture stopped.
@@ -3731,7 +3835,7 @@ cmd_shot() {
   cap=$!
   if ! read -r -t 2 -u "$capfd" grc; then
     if ! hypr_answers; then
-      exec {capfd}<&-; kill_tree "$cap"; rm -f "$gerr"; [ -n "$tofd" ] || rm -f "$file"
+      exec {capfd}<&-; kill_tree "$cap"; rm -f "$gerr"; unput
       box_alive || die "shot: box '$NAME' went down (why: omabox log -b $NAME all)"
       die "shot: $(hung_text)"
     fi
@@ -3741,10 +3845,10 @@ cmd_shot() {
   local why; why=$(tr '\n' ' ' < "$gerr" | sed 's/ *$//'); rm -f "$gerr"
   # grim's own timeout: asked again, in case the box stopped answering during it.
   if [ "$grc" = 124 ] && [ "$(meta mode)" != interactive ] && ! hypr_answers; then
-    [ -n "$tofd" ] || rm -f "$file"; die "shot: $(hung_text)"
+    unput; die "shot: $(hung_text)"
   fi
   if [ "$grc" != 0 ] || [ ! -s "$file" ]; then
-    [ -n "$tofd" ] || rm -f "$file"
+    unput
     # Never tell an agent to show the window: switching the user's workspace for a frame is what the
     # box exists to avoid. A restart is the user's to do: a box from before drawn_hidden needs one, and
     # so does one whose window confirm-close replaced (the new window has no render_unfocused).
@@ -3760,11 +3864,18 @@ cmd_shot() {
     fi
     die "shot: grim failed${why:+: $why}"
   fi
+  if [ $changed = 1 ]; then shot_changed; return; fi
   [ -n "$tofd" ] || { mv "$file" "$out"; file=$out; }
   local iw ih screen
   read -r iw ih < <(png_size "$file") || die "shot: $out is not a PNG"
   screen=$(box_screen)
   shot_record "$out" "${screen#* }" "$where" "${lw}x$lh ${iw}x$ih" "$file"
+  # A whole shot is what a later --changed compares with (finding 243).
+  if [ -z "$g$zoom" ] && [ $scaled = 0 ]; then
+    local key=screen ptr=-
+    if [ -n "$win" ]; then key=${where#window }; else ptr=$(cursor_now 2>/dev/null) && [ -n "$ptr" ] || ptr=-; fi
+    shot_ref_save "$file" "$key" "$out" "${screen#* }" "${lw}x$lh ${iw}x$ih" "$ptr"
+  fi
   # One line on stderr when image pixels are not screen pixels (cropped or scaled); stdout is the path.
   local k=""
   [ "$iw" = "$lw" ] || k=" (x$(awk -v a="$lw" -v b="$iw" 'BEGIN { s = sprintf("%.2f", a / b); sub(/\.?0+$/, "", s); print s }'))"
@@ -3779,6 +3890,116 @@ cmd_shot() {
   elif [ "$where $lw $iw" != "screen 0,0 $lw $lw" ] || [ "$lh" != "$ih" ]; then
     say "${iw}x$ih image of the screen's ${lw}x$lh at ${where#screen }$k; click with --in $out"
   fi
+  echo "$out"
+}
+
+# shot --changed (#145, finding 243): the whole frame just taken ($file) against the last whole shot
+# of the same window or screen (shot_ref_save's), or --since's; the image is the box around what
+# differs, 16 px more each side, recorded as a -g crop for --in. Not changes: where the pointer was
+# (a screen shot draws it; 64x64 as wait leaves it out, when it moved since), --ignore's regions, and
+# a caret alone (4 px thin, 40 long at most). Nothing changed: said, no image, nothing on stdout,
+# exit 0. Nothing to compare with (or another size or mode since): the whole shot, said why.
+# Uses cmd_shot's file, out, tofd, where, lw, lh, win, sref and masks.
+shot_changed() {
+  local dir=$D/changed key iw ih screen mode ptr=- what why=""
+  local rfile="" rshot="" rmode="" rkind="" rgeo="" rptr=- rt=0
+  read -r iw ih < <(png_size "$file") || { rm -f -- "$file"; die "shot: grim's image is not a PNG"; }
+  screen=$(box_screen) mode=${screen#* }
+  if [ -n "$win" ]; then
+    key=${where#window } what="window $(win_desc "$win")"
+  else
+    key=screen what="the screen"
+    ptr=$(cursor_now 2>/dev/null) && [ -n "$ptr" ] || ptr=-
+  fi
+  if [ ${#sref[@]} -gt 0 ]; then
+    rfile=${sref[0]} rshot=${sref[1]} rmode=${sref[2]} rkind=${sref[3]} rgeo=${sref[4]} rptr=${sref[5]} rt=${sref[6]}
+    [ "$rkind" = "$where" ] || { rm -f -- "$file"; die "shot --since: $rshot is a shot of $rkind, not of $what"; }
+    [ "$rmode" = "$mode" ] || { rm -f -- "$file"; die "shot --since: $rshot was taken at $rmode, the box's mode is $mode now"; }
+    [ "$rgeo" = "${lw}x$lh ${iw}x$ih" ] ||
+      { rm -f -- "$file"; die "shot --since: $rshot is ${rgeo%% *} as a ${rgeo#* } image; $what is ${lw}x$lh as ${iw}x$ih now (--since takes a whole shot of it: no -g or --fit)"; }
+  elif [ -f "$dir/$key.png" ] && [ -f "$dir/$key.tsv" ]; then
+    IFS=$'\t' read -r rshot rmode rgeo rptr rt < "$dir/$key.tsv"
+    rfile=$dir/$key.png
+    if [ "$rmode" != "$mode" ]; then why="the box's mode was $rmode at the last shot of it"
+    elif [ "$rgeo" != "${lw}x$lh ${iw}x$ih" ]; then why="it was ${rgeo%% *} at the last shot of it"; fi
+  else
+    why="no earlier shot of it to compare with"
+  fi
+  # The image to the caller: renamed into place, or into a jailed caller's fd. put_image SRC
+  put_image() {
+    if [ -n "$tofd" ]; then cat -- "$1" >&"$tofd"
+    else cp -- "$1" "$out.part" && mv -f -- "$out.part" "$out"; fi || { rm -f -- "$file" "$out.part"; die "shot: cannot write $out"; }
+  }
+  local rec=$out; [ -z "$tofd" ] || rec=/dev/fd/$tofd
+  if [ -n "$why" ]; then
+    put_image "$file"
+    shot_record "$out" "$mode" "$where" "${lw}x$lh ${iw}x$ih" "$rec"
+    shot_ref_save "$file" "$key" "$out" "$mode" "${lw}x$lh ${iw}x$ih" "$ptr"; rm -f -- "$file"
+    say "--changed: $why: a whole shot of $what (${lw}x$lh); click with --in $out"
+    echo "$out"; return
+  fi
+  # What is left out, in image pixels (the target's pixels scaled as the image is).
+  # The pointer where it was, when it moved since (where it is now is drawn: a change under it shows).
+  local m=() rs=("${masks[@]}") r x y w h
+  [ "$rptr" = - ] || [ "$rptr" = "$ptr" ] || rs+=("$(cursor_rect "$rptr")")
+  for r in "${rs[@]}"; do
+    IFS=, read -r x y w h <<<"$r"
+    m+=("$((x * iw / lw)),$((y * ih / lh)),$(((w * iw + lw - 1) / lw)),$(((h * ih + lh - 1) / lh))")
+  done
+  local box ago; box=$(diff_box "$rfile" "$file" "${m[@]}") || { rm -f -- "$file"; die "shot: --changed could not compare the frames (magick)"; }
+  ago=$(ms_s $(($(date +%s%3N) - rt)))
+  local dx dy dw dh x0 y0 x1 y1 caret=""
+  if [ -n "$box" ]; then
+    read -r dx dy dw dh <<<"$box"
+    x0=$((dx * lw / iw)) y0=$((dy * lh / ih))
+    x1=$((((dx + dw) * lw + iw - 1) / iw)) y1=$((((dy + dh) * lh + ih - 1) / ih))
+    w=$((x1 - x0)) h=$((y1 - y0))
+    if { [ $w -le 4 ] && [ $h -le 40 ]; } || { [ $h -le 4 ] && [ $w -le 40 ]; }; then caret="; a caret? ${w}x$h at $x0,$y0 left out"; box=""; fi
+  fi
+  # All of it where the pointer is now, which moved there: perhaps the pointer alone.
+  local alone=""
+  if [ -n "$box" ] && [ "$ptr" != - ] && [ "$ptr" != "$rptr" ]; then
+    IFS=, read -r x y w h <<<"$(cursor_rect "$ptr")"
+    [ "$x0" -lt "$x" ] || [ "$y0" -lt "$y" ] || [ "$x1" -gt $((x + w)) ] || [ "$y1" -gt $((y + h)) ] ||
+      alone="; all of it around the pointer, which moved there: perhaps the pointer alone"
+  fi
+  if [ -z "$box" ]; then
+    rm -f -- "$file"
+    say "--changed: nothing changed in $what since $rshot ($ago ago)$caret: no image"
+    return 0
+  fi
+  # The crop: 16 px around it, inside the target; in image pixels as the image is scaled.
+  x0=$((x0 > 16 ? x0 - 16 : 0)) y0=$((y0 > 16 ? y0 - 16 : 0))
+  x1=$((x1 + 16 < lw ? x1 + 16 : lw)) y1=$((y1 + 16 < lh ? y1 + 16 : lh))
+  local cw=$((x1 - x0)) ch=$((y1 - y0)) ix iy ciw cih
+  ix=$((x0 * iw / lw)) iy=$((y0 * ih / lh))
+  ciw=$(((x1 * iw + lw - 1) / lw - ix)) cih=$(((y1 * ih + lh - 1) / lh - iy))
+  [ $((ix + ciw)) -le "$iw" ] || ciw=$((iw - ix))
+  [ $((iy + cih)) -le "$ih" ] || cih=$((ih - iy))
+  local crop; crop=$(mktemp "$dir/.crop-XXXXXX")
+  magick "$file" -crop "${ciw}x$cih+$ix+$iy" +repage -define png:compression-level=1 "png:$crop" 2>/dev/null ||
+    { rm -f -- "$file" "$crop"; die "shot: --changed could not crop the frame (magick)"; }
+  put_image "$crop"; rm -f -- "$crop"
+  local rwhere
+  if [ -n "$win" ]; then rwhere="$where $x0,$y0 ${lw}x$lh"; else rwhere="screen $x0,$y0"; fi
+  shot_record "$out" "$mode" "$rwhere" "${cw}x$ch ${ciw}x$cih" "$rec"
+  shot_ref_save "$file" "$key" "$out" "$mode" "${lw}x$lh ${iw}x$ih" "$ptr"
+  # Changes far apart make one big box: each named when they would be much smaller, for a -g of one.
+  local places="" n=0 area=0
+  if [ $((cw * ch)) -gt 40000 ]; then
+    local px py pw ph
+    while read -r px py pw ph; do
+      n=$((n + 1)) area=$((area + pw * ph))
+      [ $n -gt 4 ] || places+="${places:+, }$((px * lw / iw)),$((py * lh / ih)) $((pw * lw / iw))x$((ph * lh / ih))"
+    done < <(diff_parts "$rfile" "$file" "${m[@]}")
+    [ $n -ge 2 ] && [ $((area * 2 * lw * lh / (iw * ih))) -lt $((cw * ch)) ] || places=""
+    [ -z "$places" ] || [ $n -le 4 ] || places+=" and $((n - 4)) more"
+  fi
+  rm -f -- "$file"
+  local k="" coords=""
+  [ "$ciw" = "$cw" ] || k="; image ${ciw}x$cih (x$(awk -v a="$cw" -v b="$ciw" 'BEGIN { s = sprintf("%.2f", a / b); sub(/\.?0+$/, "", s); print s }'))"
+  [ -z "$win" ] || coords=" (its coordinates)"
+  say "--changed since $rshot ($ago ago): ${cw}x$ch at $x0,$y0 of $what$coords$k${places:+; it changed in $n places: $places}$alone; click with --in $out"
   echo "$out"
 }
 
@@ -3950,10 +4171,11 @@ shot_burst() {
   for i in "${!files[@]}"; do
     line="${files[i]} $(ms_s "${ts[i]}")"
     if [ "$bd" = 1 ] && [ -n "$prev" ]; then
-      # The box around every pixel that differs ("WxH+X+Y" of the trimmed difference); 0x0 when none.
-      g=$(magick "$prev" "${files[i]}" -compose difference -composite -threshold 0 -format '%@' info: 2>/dev/null) || g=""
-      if [[ $g =~ ^([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" != 0 ]; then
-        local dw=${BASH_REMATCH[1]} dh=${BASH_REMATCH[2]} dx=${BASH_REMATCH[3]} dy=${BASH_REMATCH[4]} x0 y0 x1 y1
+      # The box around every pixel that differs, in image pixels; nothing when none.
+      g=$(diff_box "$prev" "${files[i]}") || g=""
+      if [ -n "$g" ]; then
+        local dw dh dx dy x0 y0 x1 y1
+        read -r dx dy dw dh <<<"$g"
         x0=$((dx * lw / iw)) y0=$((dy * lh / ih))
         x1=$((((dx + dw) * lw + iw - 1) / iw)) y1=$((((dy + dh) * lh + ih - 1) / ih))
         line+=" changed $((ox + x0)),$((oy + y0)) $((x1 - x0))x$((y1 - y0))"
@@ -7560,8 +7782,11 @@ relay_shot() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; args+=("$1" "$2"); shift ;;
-      -g|-w|--window|--fit|--zoom|--burst|--every) optarg "$@"; args+=("$1" "$2"); shift ;;
+      -g|-w|--window|--fit|--zoom|--burst|--every|--ignore) optarg "$@"; args+=("$1" "$2"); shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
+      # A path of the jail's, which the broker never opens (finding 243): --changed compares with the
+      # last shot of the same window or screen instead.
+      --since) die "shot --since: not for a jailed agent (--changed compares with the last shot of it)" ;;
       -*) args+=("$1") ;;
       *) out=$1 ;;
     esac
@@ -7576,7 +7801,8 @@ relay_shot() {
   exec {fd}<>"$tmp"
   "$relay" call "$BROKER_SOCK" --fd "$fd" "${env[@]}" -- shot "${args[@]}" --to-fd 3 --as "$out" || rc=$?
   exec {fd}>&-
-  if [ $rc = 0 ]; then mv -f -- "$tmp" "$out"; else rm -f -- "$tmp"; fi
+  # --changed with nothing changed writes no image: nothing at $out either.
+  if [ $rc = 0 ] && [ -s "$tmp" ]; then mv -f -- "$tmp" "$out"; else rm -f -- "$tmp"; fi
   exit $rc
 }
 

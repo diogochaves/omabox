@@ -1769,6 +1769,8 @@ r pwd \$O run -- sh -c 'pwd; cat README'
 r shot \$O shot
 r shotfile sh -c 'f=\$(ls /tmp/omabox-*.png); head -c 8 "\$f" | od -An -c | tr -d " \n"'
 r shot-o \$O shot -o ./out.png
+r changed \$O shot --changed -o ./changed.png
+r since \$O shot --since ./out.png
 r travel-mod \$O click --steps 3 --mod ctrl 960 600
 r pointer-mod \$O pointer --steps 2 --mod shift -- move 900 500 move 960 540 --steps 3
 r relay-o $R call $br/sock -- shot -b $P-jail -o $br/pwned.png
@@ -1796,6 +1798,10 @@ EOF
   check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
   check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
   check "...there, on the host too" test -s "$repo/out.png"
+  # #145, finding 243: the broker keeps the last frame; nothing changed is no file in the jail.
+  check_match "shot --changed through the broker, nothing changed since: said, rc 0" "nothing changed in the screen since $repo/out\.png .*rc=0" "$(sect changed)"
+  check_fails "...no image written" test -e "$repo/changed.png"
+  check_match "...--since refused there (a path of the jail's)" "not for a jailed agent.* rc=1" "$(sect since)"
   check_match "click --steps --mod through the broker (#38, #25)" "^rc=0 $" "$(sect travel-mod)"
   check_match "...pointer --steps --mod, and move's own --steps" "^rc=0 $" "$(sect pointer-mod)"
   check_match "a path of the broker's never written" "never at a path here rc=1" "$(sect relay-o)"
@@ -6099,6 +6105,29 @@ t_unit_pixel() {
   check_match "...scroll and monitor are (#167)" "no box '$P-x' is up.*"$'\n'"omabox: no box '$P-x' is up" "$(ob shot -b "$P-x" --burst 3 --after -- scroll 1 1 15 2>&1; ob shot -b "$P-x" --burst 3 --after -- monitor add 800x600 2>&1)"
   check_match "...on the burst's box" "no -b" "$(ob shot -b "$P-x" --burst 3 --after -- keys -b other a 2>&1)"
   check_match "shot --after needs --" "--after -- ACTION" "$(ob shot -b "$P-x" --burst 3 --after keys a 2>&1)"
+  # shot --changed (#145, finding 243): what it refuses before any box is asked.
+  local a
+  for a in '-g 0,0,9,9' '--fit 100' '--zoom 4' '--burst 3' '--monitor HEADLESS-2'; do
+    # shellcheck disable=SC2086 # the option and its value
+    check_match "shot --changed with $a refused" "crops by itself" "$(ob shot -b "$P-x" --changed $a 2>&1)"
+  done
+  check_match "...--since is --changed" "crops by itself" "$(ob shot -b "$P-x" --since x.png -g 0,0,9,9 2>&1)"
+  check_match "shot --ignore without --changed refused" "goes with --changed" "$(ob shot -b "$P-x" --ignore "0,0 9x9" 2>&1)"
+  check_match "shot --ignore takes a region" 'is "X,Y WxH"' "$(ob shot -b "$P-x" --changed --ignore 9 2>&1)"
+  check_match "shot --since from a jail refused (a path of the jail's)" "not for a jailed agent" "$(lib relay_shot x -- --since a.png 2>&1)"
+  # diff_box: the box around what differs, a corner too (--burst --diff read a change there as none,
+  # or as the box of what did not change); none when the same; a mask leaves a change out.
+  local d=$TMP/diffbox; mkdir -p "$d"
+  magick -size 100x80 xc:'#102030' "$d/a.png"
+  magick "$d/a.png" -fill '#102031' -draw 'point 0,0' "$d/corner.png"
+  magick "$d/a.png" -fill white -draw 'rectangle 0,0 99,40' "$d/half.png"
+  magick "$d/a.png" -fill white -draw 'rectangle 10,10 19,19' -draw 'rectangle 80,60 89,69' "$d/two.png"
+  check_eq "diff_box: the same image: nothing" "" "$(lib diff_box "$d/a.png" "$d/a.png")"
+  check_eq "...one corner pixel, one level of blue" "0 0 1 1" "$(lib diff_box "$d/a.png" "$d/corner.png")"
+  check_eq "...the top half" "0 0 100 41" "$(lib diff_box "$d/a.png" "$d/half.png")"
+  check_eq "...two squares apart: one box around both" "10 10 80 60" "$(lib diff_box "$d/a.png" "$d/two.png")"
+  check_eq "...one masked: the other" "10 10 10 10" "$(lib diff_box "$d/a.png" "$d/two.png" 75,55,20,20)"
+  check_eq "diff_parts: each square, to 8 px outwards" $'8 8 16 16\n80 56 16 16' "$(lib diff_parts "$d/a.png" "$d/two.png" | sort -n)"
 }
 
 # shot --burst (#132, finding 212) in a box: frames at their times, a contact sheet, an action after the
@@ -6143,6 +6172,82 @@ t_burst() {
   wait "$b1"
   check_eq "two bursts started together: two folders of 2 frames" "2 2 2" \
     "$(find "$o/tmp" -mindepth 1 -maxdepth 1 -type d | wc -l) $(for d in "$o"/tmp/*/; do find "$d" -name 'frame-*.png' | wc -l; done | xargs)"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# shot --changed (#145, finding 243) in a box: the first one whole, then nothing changed (no image,
+# nothing on stdout, exit 0), typed text cropped and `click --in` mapping the crop, the pointer's old
+# place on the screen left out, --since, a resized window shot whole, a blinking block cursor left out
+# by --ignore, a blinking beam caret alone not a change.
+t_changed() {
+  local B=$P-chg o=$TMP/chg out err rc W='title:^C$'
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  mkdir -p "$o"
+  ob run -b "$B" -d -q --wait -- foot -T C -o cursor.blink=no cat >/dev/null 2>&1
+  local wx wy ww wh
+  read -r wx wy ww wh < <(ob windows -b "$B" --json | jq -r '.[] | select(.title == "C") | "\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1])"')
+  shoot() { out=$(ob shot -b "$B" "$@" 2>"$o/err"); rc=$?; err=$(cat "$o/err"); }
+  shoot --changed -w "$W" -o "$o/a.png"
+  check_eq "the first --changed: a whole shot, its path" "0 $o/a.png" "$rc $out"
+  check_match "...said why" "no earlier shot of it to compare with: a whole shot of window" "$err"
+  check_match "...the window's size" "$ww x $wh," "$(file "$o/a.png")"
+  shoot --changed -w "$W" -o "$o/b.png"
+  check_eq "nothing changed: exit 0, nothing on stdout, no image" "0||no" "$rc|$out|$([ -e "$o/b.png" ] && echo yes || echo no)"
+  check_match "...said, since the last shot" "nothing changed in window .* since $o/a\.png \([0-9.]+s ago\): no image" "$err"
+  ob keys -b "$B" --wait -t "hello" >/dev/null 2>&1
+  shoot --changed -w "$W" -o "$o/c.png"
+  check_eq "typed text: a crop" "0 $o/c.png" "$rc $out"
+  local cw=0 ch=0 cx=-1 cy=-1
+  [[ $err =~ since\ $o/a\.png\ .*:\ ([0-9]+)x([0-9]+)\ at\ ([0-9]+),([0-9]+)\ of\ window\ .*\(its\ coordinates\).*click\ with\ --in ]] &&
+    cw=${BASH_REMATCH[1]} ch=${BASH_REMATCH[2]} cx=${BASH_REMATCH[3]} cy=${BASH_REMATCH[4]}
+  check "...said where, in the window's coordinates: its top left, a tenth of it at most" \
+    test "$cx" -ge 0 -a "$cx" -lt 60 -a "$cy" -ge 0 -a "$cy" -lt 60 -a "$((cw * ch * 10))" -lt "$((ww * wh))"
+  check_match "...the image that size" "$cw x $ch," "$(file "$o/c.png")"
+  ob click -b "$B" --in "$o/c.png" 5 6 >/dev/null 2>&1
+  check_eq "click --in the crop: that point of the window" "$((wx + cx + 5)), $((wy + cy + 6))" "$(ob hyprctl -b "$B" cursorpos)"
+  # The screen: where the pointer was is not a change, where it is now is drawn.
+  shoot --changed -o "$o/s1.png"
+  check_match "the screen's first --changed: whole" "no earlier shot of it.*a whole shot of the screen" "$err"
+  ob pointer -b "$B" -- move $((wx + 300)) $((wy + 300)) >/dev/null 2>&1
+  shoot --changed -o "$o/s2.png"
+  local px=-1 py=-1 pw=0 ph=0
+  [[ $err =~ :\ ([0-9]+)x([0-9]+)\ at\ ([0-9]+),([0-9]+)\ of\ the\ screen ]] &&
+    pw=${BASH_REMATCH[1]} ph=${BASH_REMATCH[2]} px=${BASH_REMATCH[3]} py=${BASH_REMATCH[4]}
+  check "the pointer moved: a crop around where it is now, not where it was" \
+    test "$px" -le $((wx + 300)) -a $((px + pw)) -gt $((wx + 300)) -a "$py" -le $((wy + 300)) -a $((py + ph)) -gt $((wy + 300)) -a "$pw" -lt 120 -a "$ph" -lt 120
+  check_match "...said: perhaps the pointer alone" "perhaps the pointer alone" "$err"
+  # --since: an earlier whole shot; never a crop, nor the screen's for a window.
+  shoot --since "$o/a.png" -o "$o/d.png"
+  check_match "--since a whole shot of the window: what changed since it" "^0 $o/d\.png .*--changed since $o/a\.png .* of window .*\(its coordinates\)" "$rc $out $err"
+  check_match "--since a crop refused" "is a crop" "$(ob shot -b "$B" --since "$o/c.png" 2>&1)"
+  check_match "--since the screen's for a window refused" "is a shot of the screen, not of a window" "$(ob shot -b "$B" --since "$o/s1.png" -w "$W" 2>&1)"
+  # A blinking block cursor in a second window (C is resized: its next --changed is whole, said why).
+  ob run -b "$B" -d -q --wait -- foot -T K -o cursor.blink=yes cat >/dev/null 2>&1
+  shoot --changed -w "$W" -o "$o/e.png"
+  check_match "a resized window: a whole shot, said why" "^0 $o/e\.png .*it was ${ww}x$wh at the last shot of it: a whole shot" "$rc $out $err"
+  ob shot -b "$B" -w 'title:^K$' -o "$o/k.png" >/dev/null 2>&1
+  local i crops=0 none=0
+  for i in 1 2 3 4 5 6; do
+    sleep 0.35; shoot --changed -w 'title:^K$' -o "$o/k$i.png"
+    if [ -n "$out" ]; then crops=$((crops + 1)); fi
+  done
+  check "a blinking block cursor: a change (crops: $crops of 6)" test "$crops" -ge 1
+  for i in 1 2 3 4 5 6; do
+    sleep 0.35; shoot --changed -w 'title:^K$' --ignore "0,0 80x80" -o "$o/ki$i.png"
+    if [ -z "$out" ] && [ "$rc" = 0 ]; then none=$((none + 1)); fi
+  done
+  check_eq "...left out by --ignore (the window's coordinates): nothing changed each time" 6 "$none"
+  # A blinking beam: a caret alone, not a change.
+  ob run -b "$B" -d -q --wait -- foot -T L -o cursor.blink=yes -o cursor.style=beam cat >/dev/null 2>&1
+  ob shot -b "$B" -w 'title:^L$' -o "$o/l.png" >/dev/null 2>&1
+  local carets=0; none=0
+  for i in 1 2 3 4 5 6; do
+    sleep 0.35; shoot --changed -w 'title:^L$' -o "$o/l$i.png"
+    if [ -z "$out" ] && [ "$rc" = 0 ]; then none=$((none + 1)); fi
+    if [[ $err == *"a caret? "*" left out: no image"* ]]; then carets=$((carets + 1)); fi
+  done
+  check_eq "a blinking beam caret alone: nothing changed each time" 6 "$none"
+  check "...the caret said (at least once: $carets of 6)" test "$carets" -ge 1
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -7086,7 +7191,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

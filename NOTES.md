@@ -4539,6 +4539,94 @@ from them.
     -Urpf` sleep in a box (its own pid namespace) gave the box; a non-dumpable python in a box too;
     `uwsm-app -- sleep` from the box carried the name. t_which, t_unit_which (the old code: 15 of 17
     checks failed), t_systemd's new check.
+243. **`shot --changed`: what changed since the last shot of it, measured first** (2026-10-07, #145).
+    About half of an agent's looks after an action check how something looks (a menu opened, a fill
+    changed), and it takes a `--window` shot, ~1.5k image tokens, where little changed. **Measured**
+    in boxes before building (`spike/changed/`: `probe-app.py`, a GTK4 window with a header menu, a
+    switch, a check box, a field, a progress bar and a drag source; `cases.sh` scripts 17 cases in
+    three boxes, a frame before and after each; `measure.sh` compares them offline): the box around
+    every pixel that differs, 16 px of margin, against the shot an agent takes now. Image tokens as
+    Claude counts them, w x h / 750 after scaling to 1568 px a side and ~1.15 MP: a 1854x1056
+    window or a 1920x1080 screen is 1532.
+
+    | case | changed box + 16 px | tokens (vs 1532) | as separate crops |
+    |---|---|---|---|
+    | probe: header menu opens (popover) | 184x263 | 65 | 65 |
+    | probe: switch flips | 1535x107 | 219 | 12 (2 parts) |
+    | probe: check box ticks | 89x56 | 7 | 7 |
+    | probe: click a field, type 12 chars | 1622x100 | 201 | 201 |
+    | probe: 6 more chars | 81x50 | 6 | 6 |
+    | probe: progress bar steps | 1622x113 | 228 | 228 |
+    | probe: drag ghost mid-drag (screen) | 54x46 | 4 | 4 |
+    | probe: dropped, the target's label | 165x46 | 11 | 11 |
+    | probe: three clicks since the last shot | 1172x298 | 466 | 75 (4) |
+    | nautilus: a file's context menu | 1134x1008 | 1525 | 266 (2) |
+    | nautilus: another file selected | 1134x1008 | 1525 | 99 (3) |
+    | nautilus: main menu | 1299x375 | 650 | 186 (2) |
+    | nautilus: file drag ghost (screen) | 1682x1078 | 1532 | 117 (5) |
+    | nautilus: grid to list view | 1598x827 | 1532 | 1532 |
+    | shell: a notification (screen) | 464x87 | 54 | 54 |
+    | shell: Omarchy menu opens (screen) | 1920x1080 | 1532 | 1532 |
+    | shell: a query typed into it | 382x703 | 359 | 343 |
+
+    One box: 9,916 tokens for the 17 against 26,044 (38%), median 228 against 1532 (6.7x less);
+    two-thirds of the cases at 466 or less. What makes a box big: two changes far apart (nautilus's
+    "selected" toast at the bottom right beside a menu or a selection; focus leaving the header's
+    menu button when the switch is clicked), a change of everything (list view; the Omarchy menu dims
+    the whole screen by ~4 levels: a 3% tolerance still left 1132 tokens, so pixels count exactly),
+    and **the pointer**: a screen shot draws it, so where it was and where it is are changes (the
+    drag ghost's box was 1329x664, 1177 tokens, before both 64x64 pointer boxes were left out, as
+    `wait` leaves them). A GTK caret blinks every 0.6 s for 10 s after a key (a `--burst` of a
+    focused field: 1x18 each frame), so two shots of an idle window can differ by a caret alone.
+    A drag's ghost is a drag-icon surface: never in a `--window` shot. Separate crops per part would
+    take the 17 to 4,738 tokens (18%), but as several images, each its own `--in`: not built; one
+    box, and the parts named on stderr when it spans several, so a `-g` of one is a step away.
+    Call: **build** (a crop is 6.7x smaller in the median case and never bigger than the shot it
+    replaces). `measure.sh` found a `--burst --diff` bug on the way: `%@` trims the colour of the
+    image's corners, so a difference that reaches a corner (or covers everything) read as `same` or
+    as the box of what did not change; a black border first fixes it.
+
+    **Built.** `shot --changed [--window SEL | --active]`: the whole window or screen is captured
+    (into the box dir's `changed/`, never the caller's path) and compared with the last whole frame
+    of the same thing: every whole shot (no -g, --fit, --zoom or --monitor; --changed itself) leaves a
+    copy at `$D/changed/KEY.png` (KEY `screen` or the window's address) with what it was (`KEY.tsv`:
+    the shot, the mode, its geometry, the pointer then: one `cursorpos` more per whole screen shot);
+    the 8 latest are kept (in the runtime dir, RAM: ~170 KB a frame). The image is the box around
+    what differs plus 16 px, inside the target, recorded in `shots.tsv` as a -g crop is (`screen
+    X,Y`; `window ADDR X,Y WxH`), so `click --in`, `pixel --in` and `pointer --in` map it; stderr:
+    `WxH at X,Y of window ... (its coordinates)`, and for a crop over 200x200 that is mostly unchanged between parts (`diff_parts`: the difference
+    shrunk 8 times, each lit cell one, parts 32 px apart; under 50 ms), each part, so a `-g` of one is
+    a step away. **Nothing changed**: no image, nothing on stdout, exit 0, `nothing changed in ...
+    since SHOT (Ns ago): no image` on stderr; exit 0 because nothing failed (a non-zero exit reads as
+    an error to an agent, which retries) and an empty stdout leaves nothing to read. The reference
+    stays. **No reference** (or another size or mode since): the whole shot, said why. **The
+    pointer** (screen): where it was at the reference is left out when it moved since (64x64, as
+    `wait` does); where it is now is not, so a check box ticked under it still counts (leaving out
+    both, as first built, read a click on a check box as "nothing changed"); a change only around it
+    says "perhaps the pointer alone". **A caret** alone (the whole box 4 px thin and 40 long at most:
+    longer is a tab's underline, not a caret) is not a change, said `a caret? WxH at X,Y`; a caret
+    blinking beside a real change, or an animation, takes `--ignore "X,Y WxH"` (mask_arg's, up to 16,
+    in the shot's coordinates: the window's with --window, as -g is there, where `wait`'s are the
+    screen's). Masks are painted black in both frames before the difference: drawn on the difference,
+    `-draw` turned it into noise (0.5 mean) and every masked compare read as all changed.
+    `--since SHOT` (the issue's other option, kept beside the default): compares with that whole shot
+    of this box, unchanged since (as `--in` checks it); its target is the shot's unless `--window`
+    names one, which must be the same; a crop, or the screen's for a window, refused. Not from a jail:
+    it is a path of the jail's, which the broker never opens; `relay_shot` refuses it and moves no
+    empty file into place when nothing changed. Refused with --changed: -g, --monitor, --zoom, --fit,
+    --burst (it crops by itself). `--burst --diff` uses the same `diff_box`.
+    Checked: t_changed (foot: the first whole and said why; nothing changed: exit 0, no stdout, no
+    file; typed text a crop at the window's top left under a tenth of it, its image that size, `click
+    --in` it landing on that point of the window; the screen's pointer moved: a crop around where it
+    is, "perhaps the pointer alone"; --since a whole shot, a crop and the screen's refused; a resized
+    window whole, said why; a blinking block cursor a change, gone with --ignore over it in 6 of 6; a
+    blinking beam a caret, "nothing changed" 6 of 6), t_unit_pixel (refusals; `diff_box` on a corner
+    pixel one level of blue, the top half, two squares, one masked; `diff_parts`), t_jail (through the
+    broker: nothing changed, no file in the jail; --since refused), t_burst, t_main, t_window,
+    t_pixel, t_monitors, on AMD and NVIDIA. In boxes by hand: the probe's switch (84x60 at 280,47,
+    `click --in` 10,10 landing at 344,69), a check box under the pointer, a GTK caret (`a caret? 1x18`)
+    and nautilus's menu with its toast. Not checked: an output scale over 1 (the crop's image pixels
+    are scaled from the layout's as --diff's are), a window's shot while it is off screen.
 244. **Spike: an app's accessibility tree as text instead of a shot** (2026-10-07, #144; probes in
     `spike/tree/`, numbers from `spike/tree/measure.sh` in one fresh headless box, 1920x1080, AMD
     iGPU). **The box's AT-SPI bus did not start**: the box's dbus-daemon finds `org.a11y.Bus` in
