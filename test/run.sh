@@ -4307,6 +4307,22 @@ t_widget_list() {
   local x y; read -r x y < <(q '.rows[4] | "\(.x + 100) \(.y + 10)"')
   ob scroll -b "$B" "$x" "$y" 300 --source wheel >/dev/null
   check "the wheel over the list brings the last row into view" until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r '.rows[-1].visible')\" = true ]"
+  # Finding 237: a list scrolled with the wheel stays there once the pointer leaves the card; every poll
+  # scrolled back to the selected row. Here the first row, selected by the pointer on it, then scrolled
+  # out of view under the pointer.
+  ob scroll -b "$B" "$x" "$y" -300 --source wheel >/dev/null
+  until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r '.list.contentY | round')\" = 0 ]"
+  read -r x y < <(q '.rows[0] | "\(.x + 100 | round) \(.y + 10 | round)"')
+  ob pointer -b "$B" -- move "$x" "$y" >/dev/null
+  ob scroll -b "$B" "$x" "$y" 300 --source wheel >/dev/null
+  until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r '.list.contentY | round')\" != 0 ]"
+  sleep 0.5   # (the wheel's scroll ends)
+  local cy; cy=$(q '"\(.list.contentY | round) \(.selected as $s | .rows[] | select(.name == $s) | .visible)"')
+  ob pointer -b "$B" -- move 10 1000 >/dev/null
+  wl_polled; wl_polled
+  check_eq "...scrolled away from the selected row, it stays there once the pointer leaves the card (finding 237)" "$cy" \
+    "$(q '"\(.list.contentY | round) \(.selected as $s | .rows[] | select(.name == $s) | .visible)"')"
+  check_match "...(the selected row was out of view)" " false$" "$cy"
   # #120: the same six slots on every row, in the same place; empty where they do not apply.
   check_eq "a headless and an interactive row have their slots at the same x (#120)" \
     "$(q '.rows[0].slots | [.[] | .x] | @text')" "$(q '.rows[2].slots | [.[] | .x] | @text')"

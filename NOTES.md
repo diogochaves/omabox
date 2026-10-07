@@ -3764,7 +3764,8 @@ from them.
     the box that slid under the pointer (worst after the widget's own Down). The list now shows `rows`
     (names, in order) with each row's data looked up by name: the rows are built again only when the
     names change, and a row's state, age and caption update in place. While the pointer is over the
-    card (one HoverHandler on it, `held`), the names stay: a box gone from `ls` keeps its slot, greyed,
+    card (one HoverHandler, `held`: on the key catcher, which fills the card's content but not its
+    padding, where nothing is clickable; finding 237), the names stay: a box gone from `ls` keeps its slot, greyed,
     "gone", every action off (a `d` armed on it disarms); a new one is only counted in the header
     (`20 BOXES UP · 1 NEW`). The pointer leaving, or the panel closing, puts the list as it is. The
     icon, its count and the header's counts read the list itself; three failed polls still empty it
@@ -4294,6 +4295,14 @@ from them.
     lock and taking that box down too: all failed on the old code); t_main (`gpu` and `gpu --json`
     name the box's GPU); t_widget_list in a box (the picker's reason, the amber line under `gpu
     nvidia`, the captions; each failed with the old Panel.qml, given `caption` in inspect).
+    (5) The widget's list, not held, called showSelected() on every poll: a list scrolled with the
+    wheel jumped back to the selected row once the pointer left the card. Seen in a box: the pointer on
+    the first row, the wheel down 300 (the row under the pointer, partly hidden, selected as the
+    content moved under it), the pointer off: the old Panel.qml moved contentY 64 to 47 at the next
+    poll. Now a poll scrolls to the selection only when the rows or the selection's place changed,
+    and opening the panel shows it. (Finding 221 said the hold's HoverHandler is on the card: it is
+    on the key catcher, which fills the card's content, not its padding; harmless, nothing there to
+    click.) t_widget_list (failed with the old Panel.qml).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

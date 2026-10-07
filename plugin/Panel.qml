@@ -193,6 +193,8 @@ Panel {
     now = Date.now()
     refresh()
     configProc.running = true
+    // The selection in view as the panel opens (polls no longer scroll to it: finding 237).
+    Qt.callLater(showSelected)
   }
 
   function openFace(name) {
@@ -247,20 +249,22 @@ Panel {
   function syncRows(force) {
     var live = {}, names = []
     boxes.forEach(function(b) { live[b.name] = b; names.push(b.name) })
-    var data = {}, fresh = 0
+    var data = {}, fresh = 0, before = selectedIndex, moved = false
     if (held && !force) {
       rows.forEach(function(n) { data[n] = live[n] || Object.assign({}, rowData[n], { gone: true }) })
       fresh = names.filter(function(n) { return rows.indexOf(n) < 0 }).length
       if (armedDown !== "" && data[armedDown] && data[armedDown].gone) armedDown = ""
     } else {
       data = live
-      if (JSON.stringify(names) !== JSON.stringify(rows)) rows = names
+      if (JSON.stringify(names) !== JSON.stringify(rows)) { rows = names; moved = true }
     }
     if (JSON.stringify(data) !== JSON.stringify(rowData)) rowData = data
     newCount = fresh
     var i = rows.indexOf(selectedName)
     select(i >= 0 ? i : Math.min(selectedIndex, Math.max(0, rows.length - 1)))
-    if (!held) showSelected()
+    // Into view only when the rows or the selection's place changed (finding 237): every poll did it,
+    // so a list scrolled with the wheel jumped back to the selected row once the pointer left the card.
+    if (!held && (moved || selectedIndex !== before)) showSelected()
   }
 
   function showSelected() {
@@ -577,7 +581,8 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
 
-      // The pointer anywhere over the card holds the list still (#117).
+      // The pointer over the card's content holds the list still (#117): the key catcher fills the
+      // content, not the card's padding, where there is nothing to click (finding 237).
       HoverHandler { id: holdHover }
       onMoveRequested: function(dx, dy) {
         if (root.face !== "list") return
