@@ -4500,6 +4500,48 @@ from them.
     image's corners, so a difference that reaches a corner (or covers everything) read as `same` or
     as the box of what did not change; a black border first fixes it.
 
+    **Built.** `shot --changed [--window SEL | --active]`: the whole window or screen is captured
+    (into the box dir's `changed/`, never the caller's path) and compared with the last whole frame
+    of the same thing: every whole shot (no -g, --fit, --zoom or --monitor; --changed itself) leaves a
+    copy at `$D/changed/KEY.png` (KEY `screen` or the window's address) with what it was (`KEY.tsv`:
+    the shot, the mode, its geometry, the pointer then: one `cursorpos` more per whole screen shot);
+    the 8 latest are kept (in the runtime dir, RAM: ~170 KB a frame). The image is the box around
+    what differs plus 16 px, inside the target, recorded in `shots.tsv` as a -g crop is (`screen
+    X,Y`; `window ADDR X,Y WxH`), so `click --in`, `pixel --in` and `pointer --in` map it; stderr:
+    `WxH at X,Y of window ... (its coordinates)`, and for a crop over 200x200 that is mostly unchanged between parts (`diff_parts`: the difference
+    shrunk 8 times, each lit cell one, parts 32 px apart; under 50 ms), each part, so a `-g` of one is
+    a step away. **Nothing changed**: no image, nothing on stdout, exit 0, `nothing changed in ...
+    since SHOT (Ns ago): no image` on stderr; exit 0 because nothing failed (a non-zero exit reads as
+    an error to an agent, which retries) and an empty stdout leaves nothing to read. The reference
+    stays. **No reference** (or another size or mode since): the whole shot, said why. **The
+    pointer** (screen): where it was at the reference is left out when it moved since (64x64, as
+    `wait` does); where it is now is not, so a check box ticked under it still counts (leaving out
+    both, as first built, read a click on a check box as "nothing changed"); a change only around it
+    says "perhaps the pointer alone". **A caret** alone (the whole box 4 px thin and 40 long at most:
+    longer is a tab's underline, not a caret) is not a change, said `a caret? WxH at X,Y`; a caret
+    blinking beside a real change, or an animation, takes `--ignore "X,Y WxH"` (mask_arg's, up to 16,
+    in the shot's coordinates: the window's with --window, as -g is there, where `wait`'s are the
+    screen's). Masks are painted black in both frames before the difference: drawn on the difference,
+    `-draw` turned it into noise (0.5 mean) and every masked compare read as all changed.
+    `--since SHOT` (the issue's other option, kept beside the default): compares with that whole shot
+    of this box, unchanged since (as `--in` checks it); its target is the shot's unless `--window`
+    names one, which must be the same; a crop, or the screen's for a window, refused. Not from a jail:
+    it is a path of the jail's, which the broker never opens; `relay_shot` refuses it and moves no
+    empty file into place when nothing changed. Refused with --changed: -g, --monitor, --zoom, --fit,
+    --burst (it crops by itself). `--burst --diff` uses the same `diff_box`.
+    Checked: t_changed (foot: the first whole and said why; nothing changed: exit 0, no stdout, no
+    file; typed text a crop at the window's top left under a tenth of it, its image that size, `click
+    --in` it landing on that point of the window; the screen's pointer moved: a crop around where it
+    is, "perhaps the pointer alone"; --since a whole shot, a crop and the screen's refused; a resized
+    window whole, said why; a blinking block cursor a change, gone with --ignore over it in 6 of 6; a
+    blinking beam a caret, "nothing changed" 6 of 6), t_unit_pixel (refusals; `diff_box` on a corner
+    pixel one level of blue, the top half, two squares, one masked; `diff_parts`), t_jail (through the
+    broker: nothing changed, no file in the jail; --since refused), t_burst, t_main, t_window,
+    t_pixel, t_monitors, on AMD and NVIDIA. In boxes by hand: the probe's switch (84x60 at 280,47,
+    `click --in` 10,10 landing at 344,69), a check box under the pointer, a GTK caret (`a caret? 1x18`)
+    and nautilus's menu with its toast. Not checked: an output scale over 1 (the crop's image pixels
+    are scaled from the layout's as --diff's are), a window's shot while it is off screen.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

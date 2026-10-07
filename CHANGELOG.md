@@ -45,6 +45,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (`keys`, `click`, `scroll`, `monitor add` ...) sent after the first frame, and one contact sheet of
   them all. A folder of its own each time, or `-o DIR`, cleared of an earlier burst's frames
   (#132, #167).
+- **`shot --changed [--window SEL]`**: only what changed since the last whole shot of that window or
+  screen, cropped with a margin and `click --in`-able: a menu opening is ~65 image tokens instead of
+  ~1.5k (a median 6.7x less over 17 measured actions). Nothing changed: no image, said so. A caret
+  blinking alone and where the pointer was are not changes; `--ignore "X,Y WxH"` leaves out an
+  animation; `--since SHOT` compares with an earlier shot (#145).
 - **`omabox scroll X Y DY [DX] [--source wheel|finger|continuous|tilt] [--mod MODS]`** and `pointer --
   hscroll DX`: horizontal scrolling, a mouse wheel's notches (a DY that is not whole notches said) or a
   touchpad's smooth scroll with its stop, and Omarchy's SUPER+wheel binds with `--mod super`, where

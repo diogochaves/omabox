@@ -44,6 +44,13 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   SEL` for one app, `-g "X,Y WxH"` for the part under test (a menu, a field, a bar widget), `--fit
   1280` for a whole screen's layout (full size to read small text). `--wait`'s `at X,Y WxH` is the
   last change only: where to look, not everything that changed.
+- After an action, to see what it did: `shot --changed --window SEL` (or the screen's) is a crop of
+  what changed since the last whole shot of it, 16 px around (a menu opening: ~65 image tokens
+  against ~1.5k), `click --in` it as any crop. Nothing changed: no image and nothing on stdout (exit
+  0; stderr says so): do not look for one. The first time, or after a resize, it is a whole shot (said
+  why). Changes far apart make one big crop: stderr names each place, for a `-g` of one. A spinner or
+  a caret blinking beside the change: `--ignore "X,Y WxH"` (the window's coordinates with --window).
+  `--since SHOT` compares with an earlier whole shot instead of the last.
 - A colour: `omabox pixel X Y` (several points in one call; `--window SEL` reads the app's own pixels,
   before Omarchy's window opacity blends it and with no pointer over it). `shot -g "X,Y 40x30" --zoom
   8` shows a 1 px border or a glyph's edge unblended. Never read a colour off a scaled shot.
