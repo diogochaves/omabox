@@ -3710,8 +3710,8 @@ t_peek() {
 # made the marks file anew, lost to the first); `down` closes every one (it closed the first).
 t_peek_monitors() {
   local n S=$P-pkm C=$P-pkmc
-  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
-  [ -n "$n" ] || { skip "peek with monitors" "no render node here but NVIDIA's, whose boxes refuse monitors"; return; }
+  n=$(gpu_node other)
+  [ -n "$n" ] || { skip "peek with monitors" "no render node here but NVIDIA's (a stand-in there is not tried; finding 234)"; return; }
   env OMABOX_RENDER_NODE="$n" "$CLI" up "$S" --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
   local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
   # (The stand-in renders on that node, and so does a box in it.) The second monitor is 1280x720
@@ -4331,61 +4331,90 @@ t_widget_list() {
 }
 
 # Monitors beyond the first in a headless box (#122): up --monitor, monitor add/remove/list, kept over a
-# reload, the shell's bar on each, the pointer and clicks across them, a shot of one. A box on NVIDIA
-# draws on labwc's one Wayland output and refuses them: this runs on another GPU, or is skipped.
+# reload, the shell's bar on each, the pointer and clicks across them, a shot of one. On a GPU other
+# than NVIDIA's (headless outputs), and on NVIDIA's (Wayland outputs, #165) in t_monitors_nvidia.
+# gpu_node other|nvidia: the first render node not on the nvidia driver, or the first on it.
+gpu_node() {
+  local n d
+  for n in $(lib render_nodes); do
+    d=$(lib render_driver "$n")
+    if [ "$1" = nvidia ]; then [ "$d" != nvidia ] || { echo "$n"; return; }
+    else [ "$d" = nvidia ] || { echo "$n"; return; }; fi
+  done
+}
+# nvidia_ready: NVIDIA's render node, for the tests of what a box on it does; else why not, exit 1.
+nvidia_ready() {
+  local n; n=$(gpu_node nvidia)
+  [ -n "$n" ] || { echo "no render node on the nvidia driver here"; return 1; }
+  ! aq_unfixed "$CLI" || { echo "a headless box on NVIDIA needs aquamarine's fix (omabox setup --aquamarine)"; return 1; }
+  echo "$n"
+}
 t_monitors() {
-  local B=$P-mon n
-  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
-  [ -n "$n" ] || { skip "monitors" "no render node here but NVIDIA's, whose boxes refuse them"; return; }
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "monitors" "no render node here but NVIDIA's (t_monitors_nvidia runs there)"; return; }
+  monitors_on "$n" "$P-mon" HEADLESS-2 HEADLESS-3 HEADLESS-4
+}
+# The same on NVIDIA (#165, finding 234): Wayland outputs, windows on the box's labwc, WAYLAND-N.
+t_monitors_nvidia() {
+  local n; n=$(nvidia_ready) || { skip "monitors on NVIDIA" "$n"; return; }
+  monitors_on "$n" "$P-monnv" WAYLAND-1 WAYLAND-2 WAYLAND-3
+}
+# monitors_on NODE BOX MAIN SECOND THIRD: a box on NODE with two more monitors, by their names there.
+monitors_on() {
+  local n=$1 B=$2 m0=$3 m1=$4 m2=$5
   check "up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below" env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --stock-bar \
     --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below
   local ml; ml=$(ob monitor -b "$B" list --json)
   check_eq "three monitors: modes, scales, positions" \
-    "HEADLESS-2 1920x1080@60 1 0 0|HEADLESS-3 1080x1920@60 1 1920 0|HEADLESS-4 2560x1440@60 1.6 1920 1920" \
+    "$m0 1920x1080@60 1 0 0|$m1 1080x1920@60 1 1920 0|$m2 2560x1440@60 1.6 1920 1920" \
     "$(jq -r 'map("\(.name) \(.mode) \(.scale) \(.x) \(.y)") | join("|")' <<<"$ml")"
   check_eq "ls --json has them" 3 "$("$CLI" ls --json | jq --arg b "$B" '.[] | select(.name == $b) | .monitors | length')"
   check_match "ls says 3 monitors" "^$B +headless +3 monitors " "$("$CLI" ls | grep "^$B ")"
-  check "the shell has a bar on each" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq -r '[to_entries[] | select([.value.levels[][] | .namespace] | index(\"omarchy-bar\")) | .key] | sort | join(\" \")')\" = 'HEADLESS-2 HEADLESS-3 HEADLESS-4' ]"
+  check "the shell has a bar on each" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq -r '[to_entries[] | select([.value.levels[][] | .namespace] | index(\"omarchy-bar\")) | .key] | sort | join(\" \")')\" = '$m0 $m1 $m2' ]"
   check_eq "-b NAME before monitor (#161)" "$ml" "$(ob -b "$B" monitor list --json 2>&1)"
   # A point in the gap below the main screen, left of the others (#161): grim alone failed, and beside
   # a point on a monitor it read black.
-  check_match "pixel in a gap between monitors: refused, saying so" "100,1500 is not on any monitor \(.*HEADLESS-3 1920,0 1080x1920" "$(ob pixel -b "$B" 100 1500 2>&1)"
+  check_match "pixel in a gap between monitors: refused, saying so" "100,1500 is not on any monitor \(.*$m1 1920,0 1080x1920" "$(ob pixel -b "$B" 100 1500 2>&1)"
   check_match "...with a point on a monitor too" "100,1500 is not on any monitor" "$(ob pixel -b "$B" 10 10 100 1500 2>&1)"
   check_match "...a point on the third: its colour" "^#[0-9a-f]{6}$" "$(ob pixel -b "$B" 2000 2000 2>&1)"
   ob pointer -b "$B" -- move 2500 2400 >/dev/null
-  check_eq "the pointer onto the third: its workspace is the active one" HEADLESS-4 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .monitor)"
+  check_eq "the pointer onto the third: its workspace is the active one" "$m2" "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .monitor)"
   ob click -b "$B" 2400 900 >/dev/null
   check_eq "a click on the second lands there" "2400, 900" "$(ob hyprctl -b "$B" cursorpos)"
-  check_eq "...and its workspace is active" HEADLESS-3 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .monitor)"
-  ob shot -b "$B" --monitor HEADLESS-3 -o "$TMP/mon3.png" >/dev/null 2>&1
-  check_match "shot --monitor HEADLESS-3: that monitor, 1080x1920" "1080 x 1920" "$(file "$TMP/mon3.png")"
-  check_match "...said, for --in" "screen's 1080x1920 at 1920,0|^omabox: .*1920,0" "$(ob shot -b "$B" --monitor HEADLESS-3 -o "$TMP/mon3b.png" 2>&1 >/dev/null)"
+  check_eq "...and its workspace is active" "$m1" "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .monitor)"
+  ob shot -b "$B" --monitor "$m1" -o "$TMP/mon3.png" >/dev/null 2>&1
+  check_match "shot --monitor $m1: that monitor, 1080x1920" "1080 x 1920" "$(file "$TMP/mon3.png")"
+  check_match "...said, for --in" "screen's 1080x1920 at 1920,0|^omabox: .*1920,0" "$(ob shot -b "$B" --monitor "$m1" -o "$TMP/mon3b.png" 2>&1 >/dev/null)"
   check_match "shot --monitor of one it does not have: refused" "has no monitor HEADLESS-9" "$(ob shot -b "$B" --monitor HEADLESS-9 2>&1)"
   ob hyprctl -b "$B" reload >/dev/null
   sleep 1
   check_eq "a config reload keeps them" "$(jq -c 'map({name, mode, scale, x, y})' <<<"$ml")" "$(ob monitor -b "$B" list --json | jq -c 'map({name, mode, scale, x, y})')"
   # mode (#161): the ones placed right of (and below) it move with it, out of the larger main screen.
   local out; out=$(ob mode -b "$B" 2560x1440 2>&1 >/dev/null)
-  check_eq "mode 2560x1440: the monitor right of it moves, and the one below that" "HEADLESS-2 0 0|HEADLESS-3 2560 0|HEADLESS-4 2560 1920" \
+  check_eq "mode 2560x1440: the monitor right of it moves, and the one below that" "$m0 0 0|$m1 2560 0|$m2 2560 1920" \
     "$(ob monitor -b "$B" list --json | jq -r 'map("\(.name) \(.x) \(.y)") | join("|")')"
-  check_match "...said" "moved the monitors placed next to it: HEADLESS-3 to 2560,0, HEADLESS-4 to 2560,1920" "$out"
+  check_match "...said" "moved the monitors placed next to it: $m1 to 2560,0, $m2 to 2560,1920" "$out"
   ob mode -b "$B" 1920x1080 >/dev/null 2>&1
-  check_eq "...and back with mode 1920x1080" "$(jq -c 'map({name, x, y})' <<<"$ml")" "$(ob monitor -b "$B" list --json | jq -c 'map({name, x, y})')"
+  check_eq "...and back with mode 1920x1080, every mode as it was" "$(jq -c 'map({name, mode, scale, x, y})' <<<"$ml")" "$(ob monitor -b "$B" list --json | jq -c 'map({name, mode, scale, x, y})')"
   local ev0; ev0=$(ob log -b "$B" events -n all | grep -c monitorremoved)
-  check "monitor remove HEADLESS-3" ob monitor -b "$B" remove HEADLESS-3
-  check_eq "...gone from the list; the one placed below it goes below the main screen now" "HEADLESS-2 0 0|HEADLESS-4 0 1080" \
+  check "monitor remove $m1" ob monitor -b "$B" remove "$m1"
+  check_eq "...gone from the list; the one placed below it goes below the main screen now" "$m0 0 0|$m2 0 1080" \
     "$(ob monitor -b "$B" list --json | jq -r 'map("\(.name) \(.x) \(.y)") | join("|")')"
-  check "...an unplug the box's events saw" until_ok 3 bash -c "[ \$('$CLI' log -b '$B' events -n all | grep -c 'monitorremoved>>HEADLESS-3') -gt $ev0 ]"
-  check_eq "monitor add again: the free name" HEADLESS-3 "$(ob monitor -b "$B" add 800x600,0,3000 2>/dev/null)"
-  check_eq "...at X,Y" "800x600@60 0 3000" "$(ob monitor -b "$B" list --json | jq -r '.[] | select(.name == "HEADLESS-3") | "\(.mode) \(.x) \(.y)"')"
+  check "...an unplug the box's events saw" until_ok 3 bash -c "[ \$('$CLI' log -b '$B' events -n all | grep -c 'monitorremoved>>$m1') -gt $ev0 ]"
+  check_eq "monitor add again: the free name" "$m1" "$(ob monitor -b "$B" add 800x600,0,3000 2>/dev/null)"
+  check_eq "...at X,Y" "800x600@60 0 3000" "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" '.[] | select(.name == $n) | "\(.mode) \(.x) \(.y)"')"
+  check_eq "...the others' modes as they were" "$m0 1920x1080@60|$m2 2560x1440@60" \
+    "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" 'map(select(.name != $n) | "\(.name) \(.mode)") | join("|")')"
   check_match "output drop with other monitors: the main screen off, the others on (#161)" \
-    "has its main screen \(HEADLESS-2\) off now, (HEADLESS-4, HEADLESS-3|HEADLESS-3, HEADLESS-4) still on" "$(ob output -b "$B" drop 2>&1)"
+    "has its main screen \($m0\) off now, ($m2, $m1|$m1, $m2) still on" "$(ob output -b "$B" drop 2>&1)"
   ob output -b "$B" back >/dev/null 2>&1
-  check_match "the main screen is not removed" "is the box's main screen" "$(ob monitor -b "$B" remove HEADLESS-2 2>&1)"
+  check_match "the main screen is not removed" "is the box's main screen" "$(ob monitor -b "$B" remove "$m0" 2>&1)"
   check_match "a monitor it does not have" "has no monitor HEADLESS-9" "$(ob monitor -b "$B" remove HEADLESS-9 2>&1)"
-  # On NVIDIA (the gpu setting's GPU, when it is that) up refuses before it gets to the box.
-  [ "$(lib eval 'render_driver "$(render_node 2>/dev/null)"')" != nvidia ] ||
-    check_match "--monitor on an NVIDIA box: refused, saying why" "draws on labwc's one Wayland output" "$(ob up "$P-monnv" --monitor 800x600 2>&1)"
+  if [ "$m0" = WAYLAND-1 ]; then
+    check_match "NVIDIA: monitor add --name refused, saying why" "WAYLAND-N as its screen is: no --name" "$(ob monitor -b "$B" add 800x600 --name X 2>&1)"
+    check_match "...labwc's config has each monitor's window size" "title=\"aquamarine - $m2\"><action name=\"ResizeTo\" width=\"2560\" height=\"1440\"/>" \
+      "$(cat "$(ob path "$B")/run/labwc/rc.xml")"
+  fi
   check_match "up again without them: already up, said" "is already up, without what you asked for: --monitor" "$(OMABOX_RENDER_NODE=$n ob up "$B" --monitor 800x600 2>&1)"
   ob down "$B" >/dev/null
 }
@@ -4395,9 +4424,17 @@ t_monitors() {
 # into is on the third; the same again after the main screen is dropped and back (it is advertised
 # last then: the old tool watched the first output advertised, and named its pixels as the screen's).
 t_monitors_wait() {
-  local B=$P-monw n out rc g w when
-  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
-  [ -n "$n" ] || { skip "monitors wait" "no render node here but NVIDIA's, whose boxes refuse monitors"; return; }
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "monitors wait" "no render node here but NVIDIA's (t_monitors_wait_nvidia runs there)"; return; }
+  monitors_wait_on "$n" "$P-monw"
+}
+# The same on NVIDIA (#165, finding 234): its monitors are windows on the box's labwc.
+t_monitors_wait_nvidia() {
+  local n; n=$(nvidia_ready) || { skip "monitors wait on NVIDIA" "$n"; return; }
+  monitors_wait_on "$n" "$P-monwnv"
+}
+monitors_wait_on() {
+  local n=$1 B=$2 out rc g w when
   env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
     --monitor 1080x1920,below >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
   ob pointer -b "$B" -- move 2300 200 >/dev/null
@@ -5726,7 +5763,7 @@ t_pixel() {
 # back; the shell sees it go (its log) and survives; the refusals. On a box with a monitor below the
 # main screen at scale 1.6, on a GPU other than NVIDIA's (its boxes refuse both).
 t_output() {
-  local B=$P-out out rc n ml before
+  local B=$P-out n
   check_match "output: drop or back" "drop or back" "$(ob output -b "$P-x" 2>&1)"
   check_match "output back takes no --for" "takes no --for" "$(ob output -b "$P-x" back --for 1s 2>&1)"
   check_match "output --for junk" "takes a duration" "$(ob output -b "$P-x" drop --for soon 2>&1)"
@@ -5734,71 +5771,80 @@ t_output() {
   check_match "output drop of two names" "one output's name, got A and B" "$(ob output -b "$P-x" drop A B 2>&1)"
   check_match "output drop of a name that is none" "not an output's name" "$(ob output -b "$P-x" drop 'a b' 2>&1)"
   check "output is a jailed agent's" lib broker_check output
-  # A headless box on NVIDIA draws on a private Wayland output (finding 125): refused, said.
-  if [ "$(lib eval 'render_driver "$(render_node 2>/dev/null)"')" = nvidia ]; then
-    if ob up "$B-nv" --no-shell --net isolated >/dev/null 2>&1; then
-      check_match "output drop on a Wayland-screen (NVIDIA) box: refused, said" "private Wayland output" "$(ob output -b "$B-nv" drop 2>&1)"
-      ob down "$B-nv" >/dev/null 2>&1
-    else no "up on NVIDIA" "failed"; fi
-  fi
-  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
-  [ -n "$n" ] || { skip "output drop and back" "no render node here but NVIDIA's, whose boxes draw on a private Wayland output"; return; }
+  n=$(gpu_node other)
+  [ -n "$n" ] || { skip "output drop and back" "no render node here but NVIDIA's (t_output_nvidia runs there)"; return; }
+  output_on "$n" "$B" HEADLESS-2 HEADLESS-3
+}
+# The same on NVIDIA (#165, finding 234), whose screens are Wayland outputs, windows on its labwc: one
+# dropped is that window closed, one back a window again, sized by labwc's rule for it.
+t_output_nvidia() {
+  local n; n=$(nvidia_ready) || { skip "output drop and back on NVIDIA" "$n"; return; }
+  output_on "$n" "$P-outnv" WAYLAND-1 WAYLAND-2
+}
+# output_on NODE BOX MAIN MONITOR: drop and back on a box on NODE with a monitor below the main screen.
+output_on() {
+  local n=$1 B=$2 m0=$3 m1=$4 out rc ml before
   env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below >/dev/null 2>&1 ||
     { no "up with a monitor" "failed"; return; }
   local list='map({name, mode, scale, x, y}) | sort_by(.name)'
   ml=$(ob monitor -b "$B" list --json | jq -c "$list")
-  check_eq "two monitors, the second below at 1.6" '[{"name":"HEADLESS-2","mode":"1280x720@60","scale":1,"x":0,"y":0},{"name":"HEADLESS-3","mode":"1280x800@60","scale":1.6,"x":0,"y":720}]' "$ml"
+  check_eq "two monitors, the second below at 1.6" "[{\"name\":\"$m0\",\"mode\":\"1280x720@60\",\"scale\":1,\"x\":0,\"y\":0},{\"name\":\"$m1\",\"mode\":\"1280x800@60\",\"scale\":1.6,\"x\":0,\"y\":720}]" "$ml"
   before=$(ob mode -b "$B")
   check_match "output back with nothing dropped: refused" "has its screen" "$(ob output -b "$B" back 2>&1)"
   out=$(ob output -b "$B" drop 2>&1); rc=$?
   check_eq "output drop: exit 0" 0 "$rc"
-  check_match "...the main screen off, the monitor still on, said" "has its main screen \(HEADLESS-2\) off now, HEADLESS-3 still on: omabox output back HEADLESS-2" "$out"
-  check_eq "...the box lists the monitor only" '["HEADLESS-3"]' "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | .name]')"
-  check_match "mode while the main screen is away: said, not the monitor's mode (#163)" "main screen \(HEADLESS-2\) is away" "$(ob mode -b "$B" 2>&1)"
-  check_match "...nor set on the monitor" "main screen \(HEADLESS-2\) is away" "$(ob mode -b "$B" 1024x768 2>&1)"
-  check_match "a second drop: refused, the main screen is away already (#163)" "main screen \(HEADLESS-2\) is dropped already" "$(ob output -b "$B" drop 2>&1)"
-  check_eq "...the monitor still on, as it was" '["HEADLESS-3 1280x800 0 720"]' \
+  check_match "...the main screen off, the monitor still on, said" "has its main screen \($m0\) off now, $m1 still on: omabox output back $m0" "$out"
+  check_eq "...the box lists the monitor only" "[\"$m1\"]" "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | .name]')"
+  check_match "mode while the main screen is away: said, not the monitor's mode (#163)" "main screen \($m0\) is away" "$(ob mode -b "$B" 2>&1)"
+  check_match "...nor set on the monitor" "main screen \($m0\) is away" "$(ob mode -b "$B" 1024x768 2>&1)"
+  check_match "a second drop: refused, the main screen is away already (#163)" "main screen \($m0\) is dropped already" "$(ob output -b "$B" drop 2>&1)"
+  check_eq "...the monitor still on, as it was" "[\"$m1 1280x800 0 720\"]" \
     "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | "\(.name) \(.width)x\(.height) \(.x) \(.y)"]')"
-  check_match "monitor list: the main screen there, marked dropped" "HEADLESS-2 +1280x720@60 +1 +0,0 +\(dropped\)" "$(ob monitor -b "$B" list)"
+  check_match "monitor list: the main screen there, marked dropped" "$m0 +1280x720@60 +1 +0,0 +\(dropped\)" "$(ob monitor -b "$B" list)"
   ob hyprctl -b "$B" reload >/dev/null; sleep 1
-  check_eq "a config reload while it is away: not made again, the monitor where it was" '["HEADLESS-3 1280x800 0 720"]' \
+  check_eq "a config reload while it is away: not made again, the monitor where it was" "[\"$m1 1280x800 0 720\"]" \
     "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | "\(.name) \(.width)x\(.height) \(.x) \(.y)"]')"
   out=$(ob output -b "$B" back); rc=$?
   check_eq "output back: the same name and mode ($before)" "0 $before" "$rc $out"
   check_eq "...every monitor as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
   # A monitor by its name (#163): its mode, place and scale kept, its omabox.monitors line too.
-  out=$(ob output -b "$B" drop HEADLESS-3 2>&1); rc=$?
-  check_eq "output drop HEADLESS-3: exit 0" 0 "$rc"
-  check_match "...said" "has its monitor HEADLESS-3 off now, HEADLESS-2 still on: omabox output back HEADLESS-3" "$out"
+  out=$(ob output -b "$B" drop "$m1" 2>&1); rc=$?
+  check_eq "output drop $m1: exit 0" 0 "$rc"
+  check_match "...said" "has its monitor $m1 off now, $m0 still on: omabox output back $m1" "$out"
   check_eq "...the main screen on, its mode as before" "$before" "$(ob mode -b "$B" 2>&1)"
-  check_match "...dropped again: refused" "HEADLESS-3 is dropped already" "$(ob output -b "$B" drop HEADLESS-3 2>&1)"
-  check_match "...monitor remove of it: refused, said" "HEADLESS-3 is dropped" "$(ob monitor -b "$B" remove HEADLESS-3 2>&1)"
-  check_match "...monitor add under its name: refused" "already has a monitor HEADLESS-3, dropped" "$(ob monitor -b "$B" add 800x600 --name HEADLESS-3 2>&1)"
-  check_match "output back of one not dropped: refused" "HEADLESS-2 is not dropped \(dropped: HEADLESS-3\)" "$(ob output -b "$B" back HEADLESS-2 2>&1)"
+  check_match "...dropped again: refused" "$m1 is dropped already" "$(ob output -b "$B" drop "$m1" 2>&1)"
+  check_match "...monitor remove of it: refused, said" "$m1 is dropped" "$(ob monitor -b "$B" remove "$m1" 2>&1)"
+  if [ "$m0" = HEADLESS-2 ]; then
+    check_match "...monitor add under its name: refused" "already has a monitor $m1, dropped" "$(ob monitor -b "$B" add 800x600 --name "$m1" 2>&1)"
+  else
+    check_match "...monitor add: not under its name, the next free one" "^WAYLAND-3$" "$(ob monitor -b "$B" add 800x600 2>/dev/null)"
+    ob monitor -b "$B" remove WAYLAND-3 >/dev/null 2>&1
+  fi
+  check_match "output back of one not dropped: refused" "$m0 is not dropped \(dropped: $m1\)" "$(ob output -b "$B" back "$m0" 2>&1)"
   check_match "output drop of one it does not have" "has no monitor HEADLESS-9" "$(ob output -b "$B" drop HEADLESS-9 2>&1)"
   ob hyprctl -b "$B" reload >/dev/null; sleep 1
-  check_eq "a config reload while it is away: not made again" '["HEADLESS-2"]' "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | .name]')"
-  out=$(ob output -b "$B" back HEADLESS-3); rc=$?
-  check_eq "output back HEADLESS-3: its name and mode" "0 HEADLESS-3 1280x800@60" "$rc $out"
+  check_eq "a config reload while it is away: not made again" "[\"$m0\"]" "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | .name]')"
+  out=$(ob output -b "$B" back "$m1"); rc=$?
+  check_eq "output back $m1: its name and mode" "0 $m1 1280x800@60" "$rc $out"
   check_eq "...its place and scale as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
   # Both away: no screen; back brings both, the main screen first.
-  ob output -b "$B" drop HEADLESS-3 >/dev/null 2>&1
-  check_match "both dropped: no screen, said" "has no screen now \(HEADLESS-3, HEADLESS-2 dropped\)" "$(ob output -b "$B" drop 2>&1)"
+  ob output -b "$B" drop "$m1" >/dev/null 2>&1
+  check_match "both dropped: no screen, said" "has no screen now \($m1, $m0 dropped\)" "$(ob output -b "$B" drop 2>&1)"
   check_eq "...none listed" "[]" "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK")]')"
   out=$(ob output -b "$B" back); rc=$?
-  check_eq "output back: both, the main screen first" "0 $before"$'\n'"HEADLESS-3 1280x800@60" "$rc $out"
+  check_eq "output back: both, the main screen first" "0 $before"$'\n'"$m1 1280x800@60" "$rc $out"
   check_eq "...modes, places and scales as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
   check_match "...and nothing left to bring back" "nothing to bring back" "$(ob output -b "$B" back 2>&1)"
-  out=$(ob output -b "$B" drop HEADLESS-3 --for 200ms --cycles 2); rc=$?
-  check_eq "drop HEADLESS-3 --for 200ms --cycles 2: that one, back each time" \
-    "0 $(for i in 1 2; do echo "cycle $i/2: gone for 0.20s, back as HEADLESS-3 1280x800@60; shell running"; done)" "$rc $out"
+  out=$(ob output -b "$B" drop "$m1" --for 200ms --cycles 2); rc=$?
+  check_eq "drop $m1 --for 200ms --cycles 2: that one, back each time" \
+    "0 $(for i in 1 2; do echo "cycle $i/2: gone for 0.20s, back as $m1 1280x800@60; shell running"; done)" "$rc $out"
   check_eq "...every monitor as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
   # One back while the main screen is away goes below it by its mode as `mode` set it, not as the
   # config was loaded with (1280x720: it went to 0,720, inside the main screen once that was back).
   ob mode -b "$B" 1600x900 >/dev/null 2>&1
-  ob output -b "$B" drop >/dev/null 2>&1; ob output -b "$B" drop HEADLESS-3 >/dev/null 2>&1; ob output -b "$B" back HEADLESS-3 >/dev/null 2>&1
+  ob output -b "$B" drop >/dev/null 2>&1; ob output -b "$B" drop "$m1" >/dev/null 2>&1; ob output -b "$B" back "$m1" >/dev/null 2>&1
   check_eq "after mode 1600x900, both dropped, the monitor back alone: below the main screen's 900" "0,900" \
-    "$(ob monitor -b "$B" list --json | jq -r '.[] | select(.name == "HEADLESS-3") | "\(.x),\(.y)"')"
+    "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" '.[] | select(.name == $n) | "\(.x),\(.y)"')"
   ob output -b "$B" back >/dev/null 2>&1; ob mode -b "$B" 1280x720 >/dev/null 2>&1
   check_eq "...the main screen back, mode 1280x720: all as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
   out=$(ob output -b "$B" drop --for 300ms --cycles 3); rc=$?
@@ -5807,7 +5853,7 @@ t_output() {
     "$(for i in 1 2 3; do echo "cycle $i/3: gone for 0.30s, back as $before; shell running"; done)" "$out"
   check_eq "...the box's mode as before" "$before" "$(ob mode -b "$B")"
   check "...the shell saw the screen go (its log)" until_ok 5 bash -c "'$CLI' log -b '$B' shell | grep -q 'There are no outputs'"
-  check "...a shot of the main screen is the size it was" bash -c "'$CLI' shot -b '$B' --monitor HEADLESS-2 -o '$TMP/out.png' >/dev/null 2>&1 && file '$TMP/out.png' | grep -q '1280 x 720,'"
+  check "...a shot of the main screen is the size it was" bash -c "'$CLI' shot -b '$B' --monitor '$m0' -o '$TMP/out.png' >/dev/null 2>&1 && file '$TMP/out.png' | grep -q '1280 x 720,'"
   # A shell crash ends the cycles, its report named (a SIGSEGV stands in for a plugin's crash).
   ( sleep 2.5; ob run -b "$B" -- pkill -SEGV -x quickshell ) & local k=$!
   out=$(ob output -b "$B" drop --for 1s --cycles 8 2>&1); rc=$?
@@ -6592,7 +6638,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_window t_monitors_wait t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

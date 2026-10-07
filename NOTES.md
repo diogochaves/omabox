@@ -3845,12 +3845,11 @@ from them.
     and positions, a bar on each, the pointer and a click on the second and third moving the active
     workspace there, `shot --monitor` 1080x1920, a reload keeping all three, remove and add again.
     (`wait` and `--wait` still watched only the first output advertised: finding 231.)
-    **NVIDIA boxes refuse it.** Their screen is labwc's Wayland output (finding 77), and a headless
-    output there fails as the first did (GBM cannot allocate: "REJECTED preferred mode"). A second
-    `output create wayland` does come up, takes a mode and scale (1080x1920, 2560x1440 at 1.6), but it
-    is another window on labwc's one output, under the main one: it gets no frames, and grim on it
-    waits for ever. Making that work needs labwc outputs of their own per monitor; refused for now,
-    saying why. Interactive boxes: finding 227.
+    **NVIDIA boxes refused it** (until finding 234). Their screen is labwc's Wayland output (finding
+    77), and a headless output there fails as the first did (GBM cannot allocate: "REJECTED preferred
+    mode"). A second `output create wayland` does come up, takes a mode and scale (1080x1920, 2560x1440
+    at 1.6), but it is another window on labwc's one output, under the main one: it gets no frames,
+    and grim on it waits for ever. Finding 234 makes those windows draw. Interactive boxes: finding 227.
 227. **An interactive box's monitors: a window each on the desktop** (2026-10-06, #123). `up
     --interactive --monitor SPEC` and `monitor add` on an interactive box make another Wayland output in
     the box (`output create wayland`), which aquamarine opens as a second window on the host. Left alone
@@ -4096,6 +4095,62 @@ from them.
     `down` of the box closes both windows and a third process named as its peek. With 950110b's CLI
     and peek those four checks fail: the main screen's window drew nothing, and HEADLESS-3's drew the
     click on the main screen, at 1140,733 (seen in a shot). t_peek (one monitor) unchanged.
+234. **More monitors on NVIDIA: Wayland outputs, each a window on the box's labwc** (2026-10-06, #165;
+    finding 226 refused them). A box rendering on NVIDIA draws on aquamarine's Wayland output, a window
+    on the private labwc (finding 77); a monitor is another one (`output create wayland NAME`). Two
+    things of labwc's were in the way, both read in labwc 0.20.2's and wlroots 0.20's code and seen
+    in a box. (1) Frames: wlroots sends frame callbacks only to a buffer with a *visible* part on an
+    output, visibility being what opaque windows above leave; a monitor's window wholly under the main
+    one (or centred inside it, at labwc's output of the main screen's size) never drew. The issue's
+    by-hand proof grew labwc's output to the layout's bounding box and moved each window apart.
+    `WLR_SCENE_DISABLE_VISIBILITY=1` (a documented wlroots variable) instead: every window on an
+    output gets its frames wherever the others are, so the windows overlap at 0,0 and labwc's output
+    stays the main screen's size (no output growing to the bounding box in physical pixels, no
+    placement to keep apart across `mode`, `remove` and scale: labwc's picture is never looked at;
+    the cost is labwc compositing what is covered, a few full-screen buffers). (2) Sizes: aquamarine
+    makes every size labwc configures its window with the output's mode (a 0x0 configure as 1280x720,
+    finding 77's first configure), and labwc configures a window again on a focus change (each new
+    window takes focus), a reload (SIGHUP) and an output resize, with the size it last set itself: a
+    window whose size only Hyprland set reverted (seen: WAYLAND-2 back to 1280x720 on a reload, the
+    main screen to 1920x1080 after `mode 2560x1440`; on an output resize labwc moves a window back to
+    its last placement, size included). So labwc sets every size itself: its config is omabox's own
+    (`labwc -C $XDG_RUNTIME_DIR/labwc`, not the box HOME), with a rule per window by its title
+    (aquamarine's is "aquamarine - NAME"): the main window (WAYLAND-1) is maximized, so its size is
+    labwc's output's, which `mode` already resizes first (wlr-randr), and labwc's own configure then
+    carries the new mode; each monitor's window gets `ResizeTo` its mode's pixels and `MoveTo 0,0` (on
+    the output whatever its size: labwc shrinks a window only when it is first placed, before the rule)
+    when it maps. A rule acts once, on the map, so it must be there before: `monitor add` writes the
+    omabox.monitors line, then the config from it (labwc_rc: session.sh's lines and a rule per line,
+    dropped ones included), written in the box's mount namespace as `reload` writes; SIGHUP through
+    `labwc -r` in the box's pid namespace; a wlr-randr round trip, which labwc answers only after the
+    signal it had first; then `output create wayland NAME`. omabox picks the name (the first
+    WAYLAND-N from 2 that is not live, dropped or in omabox.monitors; Hyprland passes it to the patched
+    aquamarine), so the rule names it beforehand; no `--name`, as in an interactive box. Hyprland's
+    rule (omabox_place_monitors) sets the same mode, position and scale as on AMD. `monitor remove`
+    leaves the rule (a name made again gets its new one first). `output drop`/`back` fell out: a
+    dropped screen is its window closed, one back a window opened again under its name, which its
+    rule sizes (the main one maximized on labwc's output, which kept its size meanwhile); the refusal
+    is gone. The main screen is now exactly HEADLESS-2 or WAYLAND-1 in a headless box (`main_screen`;
+    an interactive box's stays its first WAYLAND-N): with the main screen dropped, the first WAYLAND-*
+    had been a monitor (#163's bug again, on NVIDIA). Reloads keep them (outputs persist, the config
+    sets their rules again; labwc is not reloaded). A box started before this has no labwc config of
+    omabox's: `monitor add` there is refused ("start a new box"). Checked on the RTX 5070 Ti (driver
+    nvidia, renderD129), in t_monitors_nvidia, t_monitors_wait_nvidia and t_output_nvidia, the AMD
+    tests' checks with WAYLAND-N names: three monitors (1080x1920, 2560x1440 at 1.6 below it, bigger
+    than labwc's output), a bar on each, the pointer and a click on each, `shot --monitor` and `pixel`
+    on them, a config reload, `mode 2560x1440` and back with every mode kept, remove and add again
+    (a labwc reload with monitors up: modes kept), `wait`/`--wait` across them before and after a
+    drop (finding 231), drop and back of the main screen and of a monitor (`--cycles` too), the
+    refusals; and by hand a terminal drawing live on the 2560x1440 one while labwc's output was
+    1280x720. On 254a24e 31 of the three NVIDIA tests' checks fail (`up --monitor` refused). Peek
+    (finding 233) on them, reasoned and not run (a host window): it is always given `--output NAME`,
+    the main screen's by `main_screen` (WAYLAND-1), takes any output by its wl_output name, and
+    screencopies it as `shot` does, which works on them; xdg-output places it in the layout as on AMD.
+    Doubts kept for later: `WLR_SCENE_DISABLE_VISIBILITY` is a debugging switch of wlroots, documented
+    but not a promise (the alternative, the issue's bounding box with windows kept apart, needs them
+    moved on every layout change, and labwc moves a window only by a rule at its first map); the
+    explicit `output create wayland NAME` relies on the patched aquamarine taking a name, which a
+    headless NVIDIA box needs anyway (finding 125).
 235. **A hung box's first `hyprctl`, the guard's bundled `qs` options, a box gone mid-call** (2026-10-06,
     #166; review of 187, 190 and 192). (1) After `pkill -STOP -x Hyprland`, `omabox hyprctl clients`
     printed hyprctl's own "Hyprland IPC didn't respond in time / Couldn't read (6)" after 5 s, exit 6:

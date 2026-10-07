@@ -13,10 +13,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   one before it (`omabox mode`, an unplug). `shot --monitor NAME`; `peek --monitor NAME`, a peek
   window per monitor, each marking the clicks and pointer on its own monitor, `down` closing them all
   (#164); `drag --shot` takes `--shot-fit`, `--shot-g`, `--shot-monitor`; `pixel` refuses a point in a
-  gap between monitors. Not yet on NVIDIA boxes (#122). In an interactive box each monitor is a window on your
-  desktop, on the box's workspace without focus, side by side with the others as the box lays them
-  out (its main window made smaller for them, or said when your screen has no room); closing it
-  unplugs it (#123, #161).
+  gap between monitors. On a box rendering on NVIDIA too, where they are named WAYLAND-1, WAYLAND-2,
+  ... (#122, #165). In an interactive box each monitor is a window on your desktop, on the box's
+  workspace without focus, side by side with the others as the box lays them out (its main window
+  made smaller for them, or said when your screen has no room); closing it unplugs it (#123, #161).
 - **`omabox up --seed SRC:DEST`** (and `run --seed`): a file or folder copied into the box HOME before
   its session starts, for a plugin that reads its config once at start, where a box needed a second
   shell start after writing it in (#80).
@@ -54,7 +54,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   off on wake does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
   With `--monitor`s, the main screen by default or a monitor by its name, each kept apart until it
   is back (`back` alone brings back all of them); while the main screen is away `mode` says so and a
-  second `drop` is refused, where they took another monitor for it (#163).
+  second `drop` is refused, where they took another monitor for it (#163). On NVIDIA boxes too (#165).
 - **`omabox gdb [--shell | --pid PID] [--watch]`**: every thread's backtrace of the box's Hyprland
   (or shell, or any process of the box), hung or stopped too; `--watch` catches a crash into `omabox
   log gdb`. A gdb started in the box was refused by the kernel's ptrace rules (#135).

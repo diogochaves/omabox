@@ -114,8 +114,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   layout's (`pixel` refuses one in a gap between monitors);
   `shot --monitor NAME` (`--fit` for a mixed-scale layout, which comes out at the highest scale),
   `drag --shot F --shot-monitor NAME`; `peek --monitor NAME` for the user, one window per monitor
-  (`shot` is the whole layout). Not on NVIDIA headless boxes (`up` says so). In an interactive
-  box (the user's) each monitor is a window on their desktop: only when they ask for it.
+  (`shot` is the whole layout). Names: HEADLESS-2 (the first), HEADLESS-3, ...; on NVIDIA WAYLAND-1,
+  WAYLAND-2, ... (`monitor list`). In an interactive box (the user's) each monitor is a window on their
+  desktop: only when they ask for it.
 - **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
   put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
   only; `--json`). Never read host-wide tools (nvtop, radeontop, scripts summing `/proc/*/fdinfo` by
@@ -432,9 +433,9 @@ most people will. Then:
   300ms --cycles 20`. Per-screen windows (a bar, a panel, an app's) are torn down and rebuilt; the
   cycles stop at the first shell crash, naming its report. `output drop` and `output back` by hand
   to look at the box in between (`omabox log shell`: "There are no outputs"). With `--monitor`s,
-  `output drop` takes the main screen (the others stay on) and `output drop HEADLESS-3` that monitor
-  (`--for`/`--cycles` too); each comes back under its name, mode, place and scale, and `output back`
-  alone brings back every one dropped.
+  `output drop` takes the main screen (the others stay on) and `output drop HEADLESS-3` (on NVIDIA
+  `WAYLAND-2`) that monitor (`--for`/`--cycles` too); each comes back under its name, mode, place and
+  scale, and `output back` alone brings back every one dropped.
 - **Theme switch while it is open**: `omabox run -- omarchy-theme-set NAME`, `omabox wait still`,
   `omabox shot --window myapp`, `omabox pixel --window myapp X Y` for a colour. The colours are in the box's
   `~/.local/state/omarchy/current/theme/colors.toml`; `omarchy-theme-set` replaces that whole

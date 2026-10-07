@@ -328,19 +328,20 @@ More monitors (headless boxes): \`up --monitor SPEC\` (repeatable) or \`monitor 
 SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one made by default, or below
 it, or at X,Y in the layout (which starts at 0,0 on the main screen: no left or above). Scale 1 to 4;
 Hyprland may round it to a whole-pixel size (2560x1440 at 1.5 becomes 1.6). The main screen (--size,
-\`mode\`) is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name). \`monitor remove NAME\` unplugs one:
+\`mode\`) is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name); on NVIDIA, where a box draws on
+Wayland outputs, WAYLAND-1 and WAYLAND-2, -3, ... (no --name). \`monitor remove NAME\` unplugs one:
 Hyprland moves its workspaces to the others. They survive a config reload, and one placed right or
 below moves when the one before it changes size (\`mode\`, said) or goes; an X,Y one stays. Coordinates
 (click, drag, pointer, pixel, -g) are the layout's (\`pixel\` refuses a point in a gap between them);
 \`shot --monitor NAME\` takes one monitor (a shot of a mixed-scale layout comes out at the highest
 scale: --fit). \`peek\` shows the main screen, \`peek --monitor NAME\` another: a window per monitor, tiled
 on the workspace, each marking the clicks and pointer on its own monitor (keys on all); the whole
-layout at once is \`shot\`. Not on an NVIDIA box (it draws on one Wayland output). An interactive
-box's monitors are windows on your desktop, on its workspace,
-floating at the SPEC's size (within your screen, aspect kept; a resize changes the mode), placed in
-the box as a headless box's; closing one unplugs it. On your screen they go side by side as the box
-lays them out, its main window floated and made smaller for them; without room for that (it would
-keep under a third of the screen), said, the new one opens centred over them. They need aquamarine's fix.
+layout at once is \`shot\`. An interactive box's monitors are windows on your desktop, on its
+workspace, floating at the SPEC's size (within your screen, aspect kept; a resize changes the mode),
+placed in the box as a headless box's; closing one unplugs it. On your screen they go side by side as
+the box lays them out, its main window floated and made smaller for them; without room for that (it
+would keep under a third of the screen), said, the new one opens centred over them. They need
+aquamarine's fix, as NVIDIA boxes do.
 @ gpu
 \`gpu release GPU\` (a PCI slot, or nvidia, amd, intel: \`omabox config gpu\` lists them) takes down every
 headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
@@ -357,7 +358,7 @@ position and scale (a monitor's place is kept while it is away: a config reload 
 back, and the others stay where they are). --for DURATION does both, the screen gone that long;
 --cycles N repeats, with gaps from 50ms to 2s without --for (a second after each return), and stops
 at the first shell crash (exit 1, its report named). Not in an interactive box (its screens are its
-windows on your desktop: one dropped could not come back) or one drawing on NVIDIA's Wayland output.
+windows on your desktop: one dropped could not come back).
 @ guard host
 The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
 exist, so a window, hyprctl or grim outside a box fails instead of reaching your desktop; omabox
@@ -1881,14 +1882,10 @@ cmd_up() {
   [ -d "$HOME/.local/state/omarchy/current/theme" ] ||
     die "Omarchy has not set a theme for you yet ($HOME/.local/state/omarchy/current/theme), and a box" \
       "starts from your Omarchy look: log into Omarchy once, or set one: omarchy-theme-set \"Tokyo Night\""
-  # More monitors (#122): headless boxes on a headless output; an interactive box's are windows (#123),
-  # and an NVIDIA box draws on labwc's one Wayland output (finding 77).
-  if [ ${#monitors[@]} -gt 0 ]; then
-    if [ $interactive = 1 ]; then
-      [ "$AQ_FIXED" = 1 ] || die "up: --monitor on an interactive box opens a window per monitor, which needs $(aq_lacks): $AQ_HOWTO"
-    else
-      [ "$(render_driver "$render")" != nvidia ] || die "up: --monitor: $(monitor_nvidia_text)"
-    fi
+  # More monitors (#122): headless boxes on a headless output (on NVIDIA a Wayland output, #165, which
+  # needs aquamarine's fix as its screen does: refused below); an interactive box's are windows (#123).
+  if [ ${#monitors[@]} -gt 0 ] && [ $interactive = 1 ]; then
+    [ "$AQ_FIXED" = 1 ] || die "up: --monitor on an interactive box opens a window per monitor, which needs $(aq_lacks): $AQ_HOWTO"
   fi
   # What needs aquamarine's fix (finding 125), refused before anything is made: a headless box on an
   # NVIDIA render node (its screen is labwc's Wayland output) and confirm-close asked for on `up`.
@@ -5064,23 +5061,37 @@ cmd_events() {
 # The box's screen: output name and mode (WxH@HZ as Hyprland reports it).
 box_screen() {
   local m; m=$(hypr_json monitors) || exit $?
-  jq -r <<<"$m" "$MAIN_SCREEN"' // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
+  jq -r <<<"$m" "$(main_screen)"' // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
 }
-# The box's main screen in `hyprctl -j monitors` (jq): HEADLESS-2 or WAYLAND-1 (an NVIDIA box's, or an
-# interactive box's window); never one of `monitor add`'s (#122), not even while the main one is
-# dropped (#163: it fell back to the first enabled one then, and `mode`, a second `output drop` and its
-# wording took a monitor for the main screen). null while it is away.
-MAIN_SCREEN='map(select((.disabled | not) and (.name == "HEADLESS-2" or (.name | startswith("WAYLAND-"))))) | .[0]'
+# The box's main screen in `hyprctl -j monitors` (jq): a headless box's HEADLESS-2, or WAYLAND-1 on
+# NVIDIA (finding 77); an interactive box's first window (WAYLAND-N: after a close with confirm-close
+# the one it opened again, finding 70). Never one of `monitor add`'s (#122), not even while the main
+# one is dropped (#163: it fell back to the first enabled one then, and `mode`, a second `output drop`
+# and its wording took a monitor for the main screen; on NVIDIA its monitors are WAYLAND-N too, #165).
+# null while it is away.
+main_screen() {
+  if [ "$(meta mode)" = interactive ]; then
+    echo 'map(select((.disabled | not) and (.name | startswith("WAYLAND-")))) | .[0]'
+  else echo 'map(select((.disabled | not) and (.name == "HEADLESS-2" or .name == "WAYLAND-1"))) | .[0]'; fi
+}
 # The outputs `output drop` took away (#163), in the box dir (host side, out of the box's reach):
 # "NAME MODE XxY SCALE" a line, in the order dropped. dropped_rec NAME: its line; main_away: the main
-# screen's line while it is away.
+# screen's line while it is away (only a headless box drops one).
 dropped_file() { cat "$D/output.dropped" 2>/dev/null || true; }
 dropped_rec() { dropped_file | awk -v n="$1" '$1 == n { print; exit }'; }
-main_away() { dropped_file | awk '$1 == "HEADLESS-2" || $1 ~ /^WAYLAND-/ { print; exit }'; }
+main_away() { dropped_file | awk '$1 == "HEADLESS-2" || $1 == "WAYLAND-1" { print; exit }'; }
 # dropped_set LINES: the record is LINES now (none: no file).
 dropped_set() {
   if [ -z "$1" ]; then rm -f -- "$D/output.dropped"; return; fi
   printf '%s\n' "$1" > "$D/output.dropped.tmp" && mv -- "$D/output.dropped.tmp" "$D/output.dropped"
+}
+
+# An NVIDIA box's parent display (finding 77): labwc's socket in the box's runtime dir, by the name
+# share/start-hyprland.sh wrote there (the box's to change: checked).
+parent_display() {
+  local p; p=$(cat "$D/run/omabox-parent-display" 2>/dev/null) || return 1
+  [[ $p =~ ^wayland-[0-9]+$ ]] && [ -S "$D/run/$p" ] && [ ! -L "$D/run/$p" ] || return 1
+  echo "$p"
 }
 
 # Change a headless box's mode live. `hyprctl keyword monitor` fails under the Lua config ("keyword
@@ -5104,11 +5115,9 @@ cmd_mode() {
   [ -n "$want" ] || { echo "$screen"; return; }
   [ "$(meta mode)" = headless ] || die "mode: box '$NAME' is interactive: its window's size is its mode"
   want=$(parse_mode "$want")
+  # On NVIDIA labwc's output first: the main window, maximized there, follows it (finding 234).
   if [ "$(meta wayland_screen)" = true ]; then
-    local parent
-    parent=$(cat "$D/run/omabox-parent-display" 2>/dev/null) || die "mode: no parent Wayland display"
-    [[ $parent =~ ^wayland-[0-9]+$ ]] && [ -S "$D/run/$parent" ] && [ ! -L "$D/run/$parent" ] ||
-      die "mode: invalid parent Wayland display"
+    local parent; parent=$(parent_display) || die "mode: no usable parent Wayland display"
     on_box env WAYLAND_DISPLAY="$parent" /usr/bin/wlr-randr --output HEADLESS-1 --custom-mode "${want}Hz" ||
       die "mode: could not resize the private parent output to $want"
   fi
@@ -5172,8 +5181,40 @@ monitor_spec() {
   [ -z "$x" ] && [ -n "$place" ] || { say "--monitor: a position is X,Y, got $x alone ($1)"; return 1; }
   echo "$mode $scale $place"
 }
-monitor_nvidia_text() {
-  echo "a headless box on NVIDIA draws on labwc's one Wayland output (finding 77), and a box's monitors are headless outputs: render it on another GPU (OMABOX_RENDER_NODE, or omabox config gpu)"
+# On NVIDIA (#165, finding 234) a monitor is a Wayland output, as the box's screen is (finding 77): a
+# window on the box's private labwc, which aquamarine opens for `output create wayland NAME`. Two
+# things of labwc's are in the way, and share/session.sh starts it for them: a window wholly under
+# another gets no frames (WLR_SCENE_DISABLE_VISIBILITY: every window on its output gets them, so the
+# windows may overlap and labwc's output stays the main screen's size), and aquamarine makes every size
+# labwc configures its window with its mode (0x0 as 1280x720), while labwc configures it again on a
+# focus change, a reload or an output resize with the size it last set itself. So labwc is given each
+# monitor's size, by a rule of its config (-C, in the box's runtime dir) matching the window's title
+# ("aquamarine - NAME") when it maps: ResizeTo the mode's pixels, MoveTo 0,0 (on its output whatever
+# its size). The main window is maximized there (session.sh), so `mode`, which resizes labwc's output,
+# resizes it. labwc_rc prints that config: session.sh's lines, then a rule per monitor of
+# omabox.monitors (dropped ones too: `output back` makes the window again under its name).
+labwc_rc() {
+  local n m w h
+  printf '%s\n' '<?xml version="1.0"?>' '<labwc_config>' '  <windowRules>' \
+    '    <windowRule identifier="aquamarine" serverDecoration="no"/>' \
+    '    <windowRule title="aquamarine - WAYLAND-1"><action name="Maximize"/></windowRule>'
+  while read -r n m _; do
+    [[ $n =~ ^[A-Za-z0-9_-]+$ ]] && [[ $m =~ ^([0-9]+)x([0-9]+)@ ]] || continue
+    w=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]}
+    printf '    <windowRule title="aquamarine - %s"><action name="ResizeTo" width="%s" height="%s"/><action name="MoveTo" x="0" y="0"/></windowRule>\n' "$n" "$w" "$h"
+  done < <(monitors_file)
+  printf '%s\n' '  </windowRules>' '</labwc_config>'
+}
+# The rules in place before a monitor's window maps: the config written in the box's mount namespace,
+# a new file renamed over the old (a link the box put there resolves inside it, as `reload` writes),
+# labwc told to read it again (SIGHUP, as `labwc -r` sends it, in the box's pid namespace), then a
+# round trip to labwc (wlr-randr), which it answers only after the signal it had first.
+labwc_apply() {
+  local parent; parent=$(parent_display) || return 1
+  # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
+  labwc_rc | on_box sh -c 'd=$XDG_RUNTIME_DIR/labwc; [ -d "$d" ] && cat > "$d/rc.xml.new" && mv -f "$d/rc.xml.new" "$d/rc.xml"' || return 1
+  box_exec /usr/bin/labwc --reconfigure >/dev/null 2>&1 || return 1
+  on_box env WAYLAND_DISPLAY="$parent" /usr/bin/wlr-randr >/dev/null 2>&1
 }
 # The monitors `monitor add` made, as the box's config reads them.
 monitors_file() { cat "$D/run/omabox.monitors" 2>/dev/null || true; }
@@ -5200,16 +5241,17 @@ monitors_place() {
 }
 # omabox.monitors' PLACE for a SPEC's: right, below, or X,Y as XxY.
 monitor_place() { case $1 in right|below) echo "$1" ;; *) echo "${1/,/x}" ;; esac; }
-# monitor_add SPEC NAME: a new monitor (NAME, or the next free HEADLESS-N), placed and made; prints
-# its line as Hyprland made it ("NAME MODE XxY SCALE").
+# monitor_add SPEC NAME: a new monitor (NAME, or the next free HEADLESS-N; on NVIDIA WAYLAND-N, a
+# Wayland output: labwc_rc), placed and made; prints its line as Hyprland made it ("NAME MODE XxY SCALE").
 monitor_add() {
-  local spec mode scale place name=$2 m res end line rest
+  local spec mode scale place name=$2 m res end line rest kind=headless prefix=HEADLESS- i=3
   spec=$(monitor_spec "$1") || exit 1
   read -r mode scale place <<<"$spec"
+  [ "$(meta wayland_screen)" != true ] || kind=wayland prefix=WAYLAND- i=2
   m=$(hypr_json monitors)
   if [ -z "$name" ]; then
-    local i=3; while jq -e --arg n "HEADLESS-$i" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || grep -q "^HEADLESS-$i " <(monitors_file; dropped_file); do i=$((i + 1)); done
-    name=HEADLESS-$i
+    while jq -e --arg n "$prefix$i" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || grep -q "^$prefix$i " <(monitors_file; dropped_file); do i=$((i + 1)); done
+    name=$prefix$i
   else
     [[ $name =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor add: --name is letters, digits, - and _, got $name"
     ! jq -e --arg n "$name" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor add: box '$NAME' already has a monitor $name"
@@ -5221,7 +5263,10 @@ monitor_add() {
   rest=$(monitors_file)
   box_file "$D/run/omabox.monitors" "$( { echo "$rest"; echo "$name $mode $(monitor_place "$place") $scale"; } | grep .)" ||
     die "monitor add: could not record $name for the box's config reloads"
-  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create headless "$name" 2>&1) || true
+  # On NVIDIA labwc's rule for its window first, to be there when it maps.
+  [ $kind = headless ] || labwc_apply || { box_file "$D/run/omabox.monitors" "$rest" || true
+    die "monitor add: could not give box '$NAME''s labwc the size of $name's window"; }
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create "$kind" "$name" 2>&1) || true
   [ "$res" = ok ] || { box_file "$D/run/omabox.monitors" "$rest" || true; die "monitor add: creating $name failed: $res"; }
   monitors_place >/dev/null || { on_box hyprctl output remove "$name" >/dev/null 2>&1 || true; box_file "$D/run/omabox.monitors" "$rest" || true
     die "monitor add: $name was made, but setting its mode failed"; }
@@ -5415,8 +5460,12 @@ cmd_monitor() {
   if [ "$(meta mode)" = interactive ]; then
     [ "$(jq -r '.aquamarine.fixed' "$D/box.json")" != false ] ||
       die "monitor: box '$NAME' opens a window per monitor, which needs aquamarine's fix (hyprwm/aquamarine#415): omabox setup --aquamarine, then a new box"
-  else
-    [ "$(meta wayland_screen)" != true ] || die "monitor: box '$NAME': $(monitor_nvidia_text)"
+  elif [ "$act" = add ] && [ "$(meta wayland_screen)" = true ]; then
+    # A box started before #165 runs labwc with no config of omabox's: a window it opened for a
+    # monitor would come up at 1280x720, and lose its frames under the main one.
+    [ -f "$D/run/labwc/rc.xml" ] ||
+      die "monitor add: box '$NAME' draws on NVIDIA and was started by an omabox without monitors there (finding 234): start a new box"
+    [ -z "$mname" ] || die "monitor add: an NVIDIA box's monitors are Wayland outputs, WAYLAND-N as its screen is: no --name"
   fi
   if [ "$act" = add ]; then
     [ ${#args[@]} = 1 ] || die "monitor add SPEC (WxH[@HZ][,scale=S][,right|below|X,Y])"
@@ -5433,7 +5482,7 @@ cmd_monitor() {
   local out=${args[0]} res end m
   [[ $out =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor remove: not a monitor's name: $out"
   [ -z "$(dropped_rec "$out")" ] || die "monitor remove: $out is dropped (omabox output back $out -b $NAME, then remove it)"
-  [ "$out" != "$(hypr_json monitors | jq -r "$MAIN_SCREEN"'.name')" ] || die "monitor remove: $out is the box's main screen (omabox output drop takes it away for a while)"
+  [ "$out" != "$(hypr_json monitors | jq -r "$(main_screen)"'.name')" ] || die "monitor remove: $out is the box's main screen (omabox output drop takes it away for a while)"
   m=$(hypr_json monitors)
   jq -e --arg n "$out" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor remove: box '$NAME' has no monitor $out ($(jq -r 'map(.name) | join(", ")' <<<"$m"))"
   box_file "$D/run/omabox.monitors" "$(monitors_file | grep -v "^$out ")" || die "monitor remove: could not update the box's record"
@@ -5484,7 +5533,6 @@ cmd_output() {
   [ "$act" = drop ] || { [ -z "$gap$cycles" ]; } || die "output back takes no --for or --cycles"
   select_box "$name"; need_box
   [ "$(meta mode)" = headless ] || die "output: box '$NAME' is interactive: its screens are its windows on your desktop, and a dropped one could not come back (its window closes: the last one ends the box, or asks with confirm-close; a window opened again has another name)"
-  [ "$(meta wayland_screen)" != true ] || die "output: box '$NAME' draws on a private Wayland output (NVIDIA): only a headless output is dropped"
   if [ "$act" = back ]; then output_back "$out"; monitors_record; return; fi
   if [ -z "$gap$cycles" ]; then
     output_drop "$out"
@@ -5533,7 +5581,7 @@ output_drop() {
     away=$(main_away)
     [ -z "$away" ] || { read -r away _ <<<"$away"
       die "output: box '$NAME''s main screen ($away) is dropped already: omabox output back $away -b $NAME"; }
-    out=$(jq -r "$MAIN_SCREEN"'.name // empty' <<<"$m")
+    out=$(jq -r "$(main_screen)"'.name // empty' <<<"$m")
     [ -n "$out" ] || die "output: box '$NAME' has no main screen to drop ($(jq -r 'map(.name) | join(", ")' <<<"$m"))"
   else
     [ -z "$(dropped_rec "$out")" ] || die "output: $out is dropped already: omabox output back $out -b $NAME"
@@ -5579,12 +5627,15 @@ output_back() {
 # output_back_one "NAME MODE XxY SCALE": that output made again under its name. A monitor of
 # omabox.monitors is placed by the box's config (omabox_place_monitors, the one place that places);
 # the main screen, or one made by hand, by its line here. Done when `monitors` has it at that mode.
+# On NVIDIA (#165) a Wayland output, a window on labwc again: its rule (labwc_rc) sizes a monitor's,
+# and maximizes the main one on labwc's output, which kept the main screen's size meanwhile.
 output_back_one() {
-  local rec=$1 out mode pos scale res m line
+  local rec=$1 out mode pos scale res m line kind=headless
   read -r out mode pos scale <<<"$rec"
   [[ $out =~ ^[A-Za-z0-9_-]+$ && $mode =~ ^[0-9]+x[0-9]+@[0-9.]+$ && $pos =~ ^-?[0-9]+x-?[0-9]+$ && $scale =~ ^[0-9.]+$ ]] ||
     die "output: $D/output.dropped has a line omabox did not write: $rec"
-  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create headless "$out" 2>&1) || true
+  [ "$(meta wayland_screen)" != true ] || kind=wayland
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create "$kind" "$out" 2>&1) || true
   [ "$res" = ok ] || die "output: creating $out again failed: $res"
   if grep -q "^$out " <(monitors_file); then
     monitors_place >/dev/null || die "output: $out is back, but placing it failed"
@@ -6007,7 +6058,7 @@ cmd_peek() {
   fi
   # The screen it shows (#122): the main one, or --monitor's; one peek window each.
   local mons output; mons=$(hypr_json monitors)
-  output=$(jq -r "$MAIN_SCREEN"'.name // empty' <<<"$mons")
+  output=$(jq -r "$(main_screen)"'.name // empty' <<<"$mons")
   if [ -n "$monitor" ]; then
     jq -e --arg n "$monitor" 'any(.[]; .name == $n and (.disabled | not))' <<<"$mons" >/dev/null ||
       die "peek: box '$NAME' has no monitor $monitor ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
