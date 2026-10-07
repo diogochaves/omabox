@@ -4776,8 +4776,10 @@ from them.
     the user would have to know to set. What the symbol cannot see: a package fixing the bug another
     way (refused as before, as now), or a library with the method and the bug back (none known).
     `t_unit_aquamarine` checks a stub 0.15.0 exporting the name, omabox's build copied in as the
-    system's 0.15.0, the stock one, and `config --json` and `up` of a headless box on a fake NVIDIA
-    GPU (`t_unit_gpu`'s fake sysfs, `up` stopped at the box's lock) following each answer.
+    system's 0.15.0, the system's own (any package revision: a stock one up to `AQ_FIXED_AFTER` must
+    lack the fix; one patched or later passes with a note, time for UPSTREAM.md's drop list, so an
+    Arch rebuild is no skip), and `config --json` and `up` of a headless box on a fake NVIDIA GPU
+    (`t_unit_gpu`'s fake sysfs, `up` stopped at the box's lock) following each answer.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -3516,13 +3516,24 @@ aq_symbol_checks() {
   else
     skip "omabox's aquamarine build has the fix by its symbol" "no build (omabox setup --aquamarine)"
   fi
-  # The stock one, as this was checked against (a patched package or a later release would have it).
-  if [ "$(pacman -Q aquamarine 2>/dev/null)" = "aquamarine 0.15.0-2" ] && [ -e "/usr/lib/$so" ]; then
-    check_fails "the system's stock 0.15.0 lacks #415's symbol" lib aq_has_fix "/usr/lib/$so"
-    cp "$(readlink -f "/usr/lib/$so")" "$d/stock/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/stock/$so"
-    check_match "...so unfixed, said so" "^system\|0\.15\.0\|0\|.*without the fix" "$(sys "$d/stock")"
+  # The system's own, whatever its package revision: a release up to AQ_FIXED_AFTER lacks the fix unless
+  # a package patched it in, which is news (UPSTREAM.md's drop list), not a failure; a later release
+  # has it by its version, the symbol or not.
+  local sysv=""
+  if [ -e "/usr/lib/$so" ]; then
+    sysv=$(readlink -f "/usr/lib/$so"); sysv=${sysv##*.so.}
+    cp "$(readlink -f "/usr/lib/$so")" "$d/stock/libaquamarine.so.$sysv"; ln -s "libaquamarine.so.$sysv" "$d/stock/$so"
+    if lib aq_ver_fixed "$sysv"; then
+      note "the system's aquamarine is $sysv: time for UPSTREAM.md's drop list"
+      check_match "the system's $sysv, a release after $(lib eval 'echo $AQ_FIXED_AFTER'): fixed by its version" "^system\|[^|]*\|1\|" "$(sys "$d/stock")"
+    elif lib aq_has_fix "/usr/lib/$so"; then
+      note "the system's aquamarine $sysv exports #415's symbol (a patched package): time for UPSTREAM.md's drop list"
+      check_match "the system's $sysv, patched with #415: fixed, said patched" "^system\|[^|]*\|1\|.*patched with the fix" "$(sys "$d/stock")"
+    else
+      check_match "the system's stock $sysv lacks #415's symbol, so unfixed, said so" "^system\|[^|]*\|0\|.*without the fix" "$(sys "$d/stock")"
+    fi
   else
-    skip "the system's stock aquamarine lacks the fix" "not aquamarine 0.15.0-2 here: $(pacman -Q aquamarine 2>&1)"
+    skip "the system's aquamarine has the fix as its library says" "no /usr/lib/$so here"
   fi
   # What follows the answer: confirm-close in the settings (the widget's switch), and `up` of a headless
   # box on NVIDIA (t_unit_gpu's fake GPU), stopped at the box's lock, which comes after the refusals.
