@@ -4611,11 +4611,27 @@ cmd_hyprctl() {
   for a; do case $a in -f|--follow) [[ " $* " != *" rollinglog "* ]] || follow=1 ;; esac; done
   [ "${!#}" != repl ] || follow=1
   if [ $follow = 1 ]; then on_box hyprctl "$@"; return; fi
-  local rc=0
-  on_box timeout "$HYPR_LIMIT" hyprctl "$@" || rc=$?
-  [ $rc = 124 ] || return $rc
-  box_alive || die "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
-  die "$(hung_text "$HYPR_LIMIT s")"
+  # hyprctl says its own errors on stdout ("Hyprland IPC didn't respond in time", exit 6, after its own
+  # 5 s on a Hyprland stopped before its backlog filled: #166), so its answer is held in an unlinked
+  # file, byte for byte, and printed only once it is not that. Any failure is looked at: the box gone,
+  # or not answering a ping, is said in words; a failure of a box that answers (a bad dispatcher, a
+  # usage error) is hyprctl's own, printed as it came.
+  local rc=0 f o i
+  f=$(mktemp) || die "hyprctl: no temporary file"
+  # shellcheck disable=SC2094 # on purpose: written through one fd, read back through the other
+  exec {o}>"$f" {i}<"$f"
+  rm -f -- "$f"
+  on_box timeout "$HYPR_LIMIT" hyprctl "$@" >&"$o" {o}>&- {i}<&- || rc=$?
+  exec {o}>&-
+  if [ $rc != 0 ]; then
+    box_alive || { exec {i}<&-; [ -n "${BOX_GONE_SAID:-}" ] && exit 1
+      die "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"; }
+    [ $rc = 124 ] && { exec {i}<&-; die "$(hung_text "$HYPR_LIMIT s")"; }
+    hypr_answers || { exec {i}<&-; die "$(hung_text)"; }
+  fi
+  cat <&"$i"
+  exec {i}<&-
+  return $rc
 }
 
 # Lua in the box's Hyprland, and what it returns (issue #40, finding 106): `hyprctl eval` answers only

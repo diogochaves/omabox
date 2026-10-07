@@ -3433,6 +3433,13 @@ t_hung() {
   ob run -b "$B" -d -q -- foot -T F sleep 600
   ob wait -b "$B" window 'title:^F$' >/dev/null
   ob run -b "$B" -- pkill -STOP -x Hyprland
+  # #166: the first call to a Hyprland just stopped, its listen backlog still empty, is not left
+  # waiting in connect: hyprctl gives up by itself after 5 s, exit 6, and printed its own "IPC didn't
+  # respond in time" on stdout (#139 caught only the 124 of a full backlog, which the calls below fill).
+  t0=$(now_ms); out=$(timeout 40 "$CLI" hyprctl -b "$B" clients 2>&1); rc=$?; took=$(($(now_ms) - t0))
+  check_eq "hyprctl clients, the first call to a stopped Hyprland: exit 1 (#166)" 1 "$rc"
+  check_match "...said in words" "^omabox: box '$B': its Hyprland did not answer( in 10 s)? \(hung\? omabox log -b $B; omabox down $B\)$" "$out"
+  check "...within 12 s ($took ms)" test "$took" -lt 12000
   # The tool `wait` runs, in the box: its first round trip has a deadline (on 0.4.8 it never returned).
   t0=$(now_ms); out=$(timeout 40 "$CLI" run -b "$B" -- /opt/omabox/bin/omabox-still still --timeout 3000 2>&1); rc=$?
   took=$(($(now_ms) - t0))
