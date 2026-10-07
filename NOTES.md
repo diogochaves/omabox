@@ -4513,6 +4513,33 @@ from them.
     `uwsm-app -- sleep` from the box carried the name. t_which, t_unit_which (the old code: 15 of 17
     checks failed), t_systemd's new check.
 
+241. **A `--plugin` the box has at its own path is linked to, not mounted** (2026-10-07, #171). A
+    plugin developed inside a larger repo is linked into `~/.config/omarchy/plugins/<id>` on a desk,
+    and a helper of its that finds the rest of the repo with `here=$(dirname "$(readlink -f "$0")")`
+    and `$here/../../<sibling>` worked there. In a box `--plugin` bind-mounted the plugin's dir at
+    `/home/sbx/.config/omarchy/plugins/<id>` (a mount, not a link), `readlink -f` stopped there, and the
+    sibling was not found, though the repo was in the box read-only at its own path. Now, when the
+    plugin's real path is visible in the box at that same path (`own_path_visible`: under the repo `up`
+    runs from, `repo_top`, or a same-path `--ro-bind`, with no mount from elsewhere at or above it),
+    seed_home makes `plugins/<id>` a link to it (`home_link`) and no mount is added; any other PATH is
+    mounted as before. box.json has `plugin_via`, and `ls --json`'s `plugin_status` gives each plugin
+    `via: linked|mounted` (`mounted` for a box from before). The shell's registry lists a linked
+    plugin as it does on a desk; Omarchy's validator and `git_rev` still get the real path
+    (`plugin_dirs`); the registry's watch is still the idle stand-in (196) and `restart-shell` reads
+    the files as they are. A save keeps the link; seed_home now removes every link directly in the box
+    HOME's plugins dir before placing this box's (one to a plugin not asked for would load it, and a
+    mount onto a link would follow it). Under ai-jail, `repo_top` is the jail's project and the path
+    must be one the jail sees (`jail_sees`); a plugin inside the project is now accepted without being
+    a folder given whole (`jail_root`), since it needs no mount of its own. t_plugin_check's
+    `--ro-bind` narrowed to the one checkout it reads, so its plugins stay mounted. Checked: t_plugin_link
+    (in its repo, in a same-path `--ro-bind`: the helper reads the sibling, a link in the HOME, `via`
+    linked, loaded; one outside: a mount; an edit in the repo shows at `restart-shell`; the
+    registry's watch the stand-in), on the old code: the helper's `No such file`, no link, no `via`;
+    t_unit_plugin_link (own_path_visible's cases, a mount from elsewhere over the repo, ai-jail's
+    project and a link out of it; home_link over a dir and through a link); t_saves (a save's link
+    in plugins/ gone; on the old code it stayed), t_plugin_check, t_plugin_hosted. Not checked: a
+    jailed agent end to end (unit only).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
