@@ -34,8 +34,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   in one call, `--json`, `--in SHOT`), and **`shot -g … --zoom N`** shows a small crop with each
   pixel N x N, unblended: colours and 1 px details without an image tool of your own (#133).
 - **`shot --burst N [--every DURATION] [--diff] [--sheet] [--after -- ACTION]`**: frames of a
-  transition into a folder, each with its time and (`--diff`) what changed from the one before, the
-  action sent after the first frame, and one contact sheet of them all (#132).
+  transition into a folder, each with its time and (`--diff`) what changed from the one before, in
+  the screen's coordinates (the window's with `--window`) whatever the crop or `--fit`, the action
+  (`keys`, `click`, `scroll`, `monitor add` ...) sent after the first frame, and one contact sheet of
+  them all. A folder of its own each time, or `-o DIR`, cleared of an earlier burst's frames
+  (#132, #167).
 - **`omabox scroll X Y DY [DX] [--source wheel|finger|continuous|tilt]`** and `pointer -- hscroll DX`:
   horizontal scrolling, and a mouse wheel's notches or a touchpad's smooth scroll with its stop,
   where `pointer -- scroll DY` was one vertical event only (#134).

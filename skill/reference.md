@@ -444,7 +444,10 @@ most people will. Then:
 - **A transition or an animation** (a panel sliding in, a hover fading): `omabox shot -g "X,Y WxH"
   --burst 12 --sheet --diff --after -- keys super+space`: the first frame, then the keys, the rest as
   fast as they come (~16 ms a crop; `--every 100ms` for a slower one), each frame's time and what
-  changed from the one before, and one contact sheet to read instead of twelve shots.
+  changed from the one before (`changed X,Y WxH` in the screen's coordinates, as `wait` says them and
+  `click` takes them, whatever the crop or `--fit`; with `--window` the window's own), and one contact
+  sheet to read instead of twelve shots. `-o DIR` again clears the frames and sheet an earlier burst
+  left there (nothing else); without `-o` each burst gets a folder of its own.
 - **A demo or README capture**: shots of a box are clean (a fresh HOME, no notifications of the
   user's). Video: `omabox run -- sh -c 'setsid wf-recorder -y -f ~/demo.mp4 >~/wf.log 2>&1 &'`, act,
   then `omabox run -- pkill -INT -x wf-recorder`. It finishes on its next frame, and a still screen

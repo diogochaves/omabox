@@ -3629,7 +3629,9 @@ from them.
     when missing. Jailed agents: refused (each frame would need a file of the jail's, as relay_shot
     passes one). Checks: t_unit_pixel (refusals), t_burst (5 frames 100 ms apart at 200x200, the
     summary, --after keys with --diff showing a change after the first frame, the sheet, click --in a
-    frame).
+    frame). Since finding 236: `--after` takes scroll and monitor, `-o DIR` again clears the frames
+    and sheet a burst left there, the default folder is a new one each time, and `--diff` says the
+    change in the screen's coordinates (the window's with --window).
 213. **Horizontal scroll and scroll sources: `omabox scroll X Y DY [DX] [--source ...]`, `pointer --
     hscroll DX`, `source S`** (2026-10-06, #134). The pointer tool sent one vertical axis event with no
     source, so a scrolling layout, a carousel or a plugin's overview could not be scrolled sideways (an
@@ -4088,6 +4090,29 @@ from them.
     `down` of the box closes both windows and a third process named as its peek. With 950110b's CLI
     and peek those four checks fail: the main screen's window drew nothing, and HEADLESS-3's drew the
     click on the main screen, at 1140,733 (seen in a shot). t_peek (one monitor) unchanged.
+236. **`shot --burst` edges** (2026-10-06, #167; review of finding 212). (1) `--after`'s list of
+    commands that act lacked `scroll` (added a commit later) and `monitor` (a hotplug is a
+    transition): `shot --burst 2 --after -- scroll 500 500 15` was refused. Both are taken now
+    (`monitor list` too: the list is of commands, not subcommands). (2) `-o DIR` used again kept what
+    the last burst left: a 6-frame burst then a 2-frame one left frame-003...006 and the old sheet.png
+    beside the new frames. Now a burst removes the `frame-NNN.png` and `sheet.png` there before its
+    first frame (those names only: anything else in the folder is the caller's, and stays; omabox
+    writes no index there), refusing when it cannot. (3) The default folder `omabox-NAME-burst-HHMMSS`
+    was one for two bursts in the same second, each writing over the other's frames. Now it is to the
+    millisecond (`HHMMSS-mmm`, as a shot's name) and made with a plain `mkdir`, so a second burst that
+    finds it taken uses `-2`, `-3`...: never a folder another burst made. (4) `--diff`'s `changed X,Y
+    WxH` was the frame image's pixels: with `-g "60,30 400x80"` a change on screen at 104,86 read
+    "44,56". Now it is mapped as `--in` maps a frame: the image's box scaled back to the capture's
+    size (`--fit`, a monitor's scale; rounded outwards) and moved by where the capture starts, so it
+    is in the screen's (layout) coordinates as wait's messages are, for -g, --monitor and the whole
+    screen; with `--window` it is the window's own (where its -g starts added), the coordinates `click
+    --window` and `--in` give, since the window may be covered or on another workspace. Checks:
+    t_unit_pixel (`--after` takes scroll and monitor), t_burst (`--diff` with `-g` and `--fit 200`
+    holding the pointer moved to 400,90, not the frame's 170,30; `--after -- scroll`; a folder used
+    again keeping only the new frames and a file of the caller's; two bursts started together with no
+    `-o` getting a folder each), all failing with b065a05's CLI. With it: t_burst's "about 100 ms
+    apart" check could not fail (awk's `exit 1` in a rule runs END, whose own exit replaced it); a
+    flag now.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

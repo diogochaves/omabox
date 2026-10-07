@@ -214,10 +214,13 @@ again) holds modifiers down across a click, drag or pointer run, released after 
 to omabox. SUPER with the left or right button is Hyprland's move or resize window, not the app's.
 @ shot
 \`shot --burst N\` takes N frames (2-200) of the same capture as fast as they come (--every 100ms:
-that far apart) into a folder (-o DIR), one line each: its path and time, with --diff where it
-differs from the frame before. --after -- ACTION takes the first frame, then runs \`omabox ACTION\`
-(keys, click, run -d ...) beside the rest: a transition from its start. --sheet adds one contact
-sheet of them all, labelled with their times: one image to read instead of N.
+that far apart) into a folder, one line each: its path and time, with --diff where it differs from
+the frame before ("changed X,Y WxH", in the screen's coordinates as wait says them, whatever -g,
+--monitor or --fit took; with --window in the window's own, as \`click --window\` takes them).
+-o DIR: a folder used before loses the frame-NNN.png and sheet.png a burst left there, nothing else;
+without -o, a new folder each time. --after -- ACTION takes the first frame, then runs \`omabox
+ACTION\` (keys, click, scroll, run -d, monitor add ...) beside the rest: a transition from its start.
+--sheet adds one contact sheet of them all, labelled with their times: one image to read instead of N.
 @ pixel
 \`pixel X Y\` reads the box's own pixel (#rrggbb), with no shot: a colour off a scaled shot, or one read
 by eye, is not the one drawn. Several points in one call print "X,Y #rrggbb" each. The screen's pixels
@@ -3367,8 +3370,8 @@ cmd_shot() {
   if [ -n "$burst" ]; then
     [ -z "$zoom" ] || die "shot: --burst or --zoom, not both"
     case ${after[0]:-} in
-      ""|keys|click|drag|pointer|run|hyprctl|lua|output|mode|restart-shell) ;;
-      *) die "shot --after: an omabox command that acts (keys, click, drag, pointer, run, hyprctl, lua, output, mode, restart-shell), got ${after[0]}" ;;
+      ""|keys|click|scroll|drag|pointer|run|hyprctl|lua|output|monitor|mode|restart-shell) ;;
+      *) die "shot --after: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell), got ${after[0]}" ;;
     esac
     [[ " ${after[*]} " != *" -b "* && " ${after[*]} " != *" --box "* ]] || die "shot --after: the action runs on the burst's box (no -b)"
   else
@@ -3616,9 +3619,25 @@ shot_burst() {
   [ -z "$tofd" ] || die "shot --burst: not for a jailed agent yet (its frames would each need a file of the jail's)"
   [ "$sheet$bd" = 00 ] || command -v magick >/dev/null ||
     die "shot: --sheet and --diff need ImageMagick's magick (package imagemagick, part of Omarchy)"
-  [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-burst-$(date +%H%M%S)
-  [ ! -e "$out" ] || [ -d "$out" ] || die "shot --burst: $out is a file; -o names a folder for the frames"
-  mkdir -p -- "$out" || die "shot --burst: cannot make $out"
+  if [ -z "$out" ]; then
+    # A folder of its own (#167): to the millisecond, and made here (no -p), so two bursts started
+    # together never share one: the second takes the next free -2, -3...
+    local base k=1
+    base=${TMPDIR:-/tmp}/omabox-$NAME-burst-$(date +%H%M%S-%N | cut -c1-10)
+    out=$base
+    until mkdir -- "$out" 2>/dev/null; do
+      [ -e "$out" ] || die "shot --burst: cannot make $out"
+      k=$((k + 1)) out=$base-$k
+    done
+  else
+    [ ! -e "$out" ] || [ -d "$out" ] || die "shot --burst: $out is a file; -o names a folder for the frames"
+    mkdir -p -- "$out" || die "shot --burst: cannot make $out"
+    # A folder used before (#167): the frames and sheet a burst wrote there go, so a shorter burst
+    # leaves none of a longer one's (frame-003.png of another run read as this one's). Only those
+    # names: anything else in the folder is the caller's.
+    rm -f -- "$out"/frame-[0-9][0-9][0-9].png "$out"/sheet.png 2>/dev/null ||
+      die "shot --burst: cannot clear the frames an earlier burst left in $out (frame-NNN.png, sheet.png)"
+  fi
   out=$(readlink -f -- "$out")
   local f err rc t0 t ts=() files=() act="" arc=0
   err=$(mktemp)
@@ -3649,14 +3668,25 @@ shot_burst() {
   local iw ih screen; screen=$(box_screen)
   read -r iw ih < <(png_size "${files[0]}") || die "shot --burst: frame 1 is not a PNG"
   for f in "${files[@]}"; do shot_record "$f" "${screen#* }" "$where" "${lw}x$lh ${iw}x$ih"; done
-  local line prev="" g
+  local line prev="" g org ox oy
+  # --diff's box in the coordinates a click takes for this capture (#167), as --in maps a frame: the
+  # screen's (layout pixels, as wait says them), or with --window the window's own; the image's
+  # pixels scaled back (--fit, a monitor's scale) outwards, from where the capture starts.
+  case $where in
+    screen*) org=${where#screen } ;;
+    *) read -r _ _ org _ <<<"$where"; org=${org:-0,0} ;;
+  esac
+  ox=${org%,*} oy=${org#*,}
   for i in "${!files[@]}"; do
     line="${files[i]} $(ms_s "${ts[i]}")"
     if [ "$bd" = 1 ] && [ -n "$prev" ]; then
       # The box around every pixel that differs ("WxH+X+Y" of the trimmed difference); 0x0 when none.
       g=$(magick "$prev" "${files[i]}" -compose difference -composite -threshold 0 -format '%@' info: 2>/dev/null) || g=""
       if [[ $g =~ ^([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" != 0 ]; then
-        line+=" changed ${BASH_REMATCH[3]},${BASH_REMATCH[4]} ${BASH_REMATCH[1]}x${BASH_REMATCH[2]}"
+        local dw=${BASH_REMATCH[1]} dh=${BASH_REMATCH[2]} dx=${BASH_REMATCH[3]} dy=${BASH_REMATCH[4]} x0 y0 x1 y1
+        x0=$((dx * lw / iw)) y0=$((dy * lh / ih))
+        x1=$((((dx + dw) * lw + iw - 1) / iw)) y1=$((((dy + dh) * lh + ih - 1) / ih))
+        line+=" changed $((ox + x0)),$((oy + y0)) $((x1 - x0))x$((y1 - y0))"
       else line+=" same"; fi
     fi
     prev=${files[i]}

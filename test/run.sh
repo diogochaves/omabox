@@ -5586,6 +5586,7 @@ t_unit_pixel() {
   check_match "shot --burst 1 refused" "takes 2-200" "$(ob shot -b "$P-x" --burst 1 2>&1)"
   check_match "shot --burst with --zoom refused" "--burst or --zoom" "$(ob shot -b "$P-x" --burst 3 --zoom 2 -g "0,0 9x9" 2>&1)"
   check_match "shot --after: an omabox command that acts" "got ls" "$(ob shot -b "$P-x" --burst 3 --after -- ls 2>&1)"
+  check_match "...scroll and monitor are (#167)" "no box '$P-x' is up.*"$'\n'"omabox: no box '$P-x' is up" "$(ob shot -b "$P-x" --burst 3 --after -- scroll 1 1 15 2>&1; ob shot -b "$P-x" --burst 3 --after -- monitor add 800x600 2>&1)"
   check_match "...on the burst's box" "no -b" "$(ob shot -b "$P-x" --burst 3 --after -- keys -b other a 2>&1)"
   check_match "shot --after needs --" "--after -- ACTION" "$(ob shot -b "$P-x" --burst 3 --after keys a 2>&1)"
 }
@@ -5599,7 +5600,7 @@ t_burst() {
   out=$(ob shot -b "$B" --burst 5 --every 100ms -g "0,0 200x200" -o "$o/a" 2>"$TMP/burst.err"); rc=$?; err=$(cat "$TMP/burst.err")
   check_eq "shot --burst 5 --every 100ms: exit 0, a line a frame" "0 5" "$rc $(grep -c "^$o/a/frame-00[1-5]\.png [0-9.]*s$" <<<"$out")"
   check_eq "...five 200x200 PNGs" 5 "$(file "$o"/a/frame-*.png | grep -c '200 x 200,')"
-  check "...about 100 ms apart, in order" awk '{ t = $2 + 0; if (NR > 1 && (t - p < 0.08 || t - p > 0.5)) exit 1; p = t } END { exit NR != 5 }' <<<"$out"
+  check "...about 100 ms apart, in order" awk '{ t = $2 + 0; if (NR > 1 && (t - p < 0.08 || t - p > 0.5)) bad = 1; p = t } END { exit bad || NR != 5 }' <<<"$out"
   check_match "...said, with --in" "5 frames of 200x200 \(screen 0,0\) over .*click with --in a frame" "$err"
   out=$(ob shot -b "$B" --burst 12 --diff --sheet -g "0,0 600x200" -o "$o/b" --after -- keys -t xyz 2>/dev/null); rc=$?
   check_eq "--after -- keys, --diff, --sheet: exit 0" 0 "$rc"
@@ -5608,6 +5609,30 @@ t_burst() {
   check_match "...a PNG" "PNG image data" "$(file "$o/b/sheet.png")"
   ob click -b "$B" --in "$o/a/frame-003.png" 10 20 >/dev/null 2>&1
   check_eq "click --in a frame" "10, 20" "$(ob hyprctl -b "$B" cursorpos)"
+  # #167, finding 236. --diff in the screen's coordinates: a crop at 60,30, halved by --fit, and the
+  # pointer moved into it after the first frame (screen shots show it): its box holds 400,90 (its
+  # tip; a few pixels' slack for the rounding), not the frame's 170,30.
+  out=$(ob shot -b "$B" --burst 6 --every 100ms --diff -g "60,30 400x80" --fit 200 -o "$o/d" --after -- pointer -- move 400 90 2>/dev/null)
+  check "--diff with -g and --fit: the change in screen coordinates, inside the crop" awk '
+    $3 == "changed" { split($4, p, ","); split($5, s, "x"); n++
+      if (p[1] < 60 || p[2] < 30 || p[1] + s[1] > 460 || p[2] + s[2] > 110) bad = 1
+      if (p[1] > 403 || p[1] + s[1] < 397 || p[2] > 93 || p[2] + s[2] < 87) bad = 1 }
+    END { exit bad || n < 1 }' <<<"$out"
+  # --after -- scroll (and monitor) are actions; scroll was refused.
+  ob shot -b "$B" --burst 3 -g "0,0 200x200" -o "$o/s" --after -- scroll 500 95 15 >/dev/null 2>&1; rc=$?
+  check_eq "--after -- scroll: taken, the pointer there" "0 500, 95" "$rc $(ob hyprctl -b "$B" cursorpos)"
+  # A folder used again: the 12 frames and sheet of $o/b go, a file of the caller's stays.
+  echo mine > "$o/b/notes.txt"
+  ob shot -b "$B" --burst 2 -g "0,0 200x200" -o "$o/b" >/dev/null 2>&1
+  check_eq "-o a folder used before: only this burst's frames, the caller's file kept" "frame-001.png frame-002.png notes.txt" \
+    "$(cd "$o/b" && echo *)"
+  # Two bursts at once with no -o: a folder each (the default was the second's name).
+  mkdir -p "$o/tmp"
+  TMPDIR=$o/tmp ob shot -b "$B" --burst 2 -g "0,0 200x200" >/dev/null 2>"$TMP/burst1.err" & local b1=$!
+  TMPDIR=$o/tmp ob shot -b "$B" --burst 2 -g "0,0 200x200" >/dev/null 2>"$TMP/burst2.err"
+  wait "$b1"
+  check_eq "two bursts started together: two folders of 2 frames" "2 2 2" \
+    "$(find "$o/tmp" -mindepth 1 -maxdepth 1 -type d | wc -l) $(for d in "$o"/tmp/*/; do find "$d" -name 'frame-*.png' | wc -l; done | xargs)"
   ob down "$B" >/dev/null 2>&1
 }
 
