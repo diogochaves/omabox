@@ -161,9 +161,9 @@ do not report it as tested. (`systemctl --user`: `omabox up --systemd`.)
 
 ## Reporting what a box showed
 
-Say "in an omabox box (Omarchy VERSION, Hyprland VERSION, WxH, scale 1, theme NAME)" with the commit
-you tested (`omabox ls --json`). Layout, focus, input routing, the launcher, theme switches,
-notifications, the tray and the keyring were tested for real; monitors, scale, the system bus,
+Say "in an omabox box (Omarchy VERSION, Hyprland VERSION, WxH and any `--monitor`s, theme NAME)" with
+the commit you tested (`omabox ls --json`). Layout, focus, input routing, the launcher, theme switches,
+notifications, the tray and the keyring were tested for real; real monitors, the system bus,
 devices, the installed package and the user's HOME were not: say so. Never "tested on the desktop"
 for a box result. A box idle for 2h goes down by itself (`up --idle 0` keeps one). Quirks: `NOTES.md`
 (`readlink -f $(command -v omabox)` → `../NOTES.md`).

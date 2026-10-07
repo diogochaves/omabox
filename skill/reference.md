@@ -68,10 +68,10 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
 | "went down while this command ran", or "box is dead" after `omabox run -- pkill -x Hyprland` (or quickshell, omabox-labwc) | Those are the box itself (`pkill -x labwc` no longer matches its own): kill your own process by PID; `omabox down` then `up` to recover. |
 | "box … has no shell", or `ls` says `gone` under SHELL (bar gone mid-test) | It crashed past what Omarchy's launcher restarts: `omabox log shell`, then `restart-shell`. "the shell crashed since the last command": it came back, but what you see changed (a shot may show it starting). |
-| "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`; `restart-shell` once fixed. For its stack: `omabox gdb --shell --watch`, the crash again, `omabox log gdb`. As on a desktop, Omarchy's launcher starts it again (up to 5 times a minute), so the bar may be back: the crash still happened. |
+| "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`. From `up` before the bar came, the box is gone: `up` again once fixed; after it (the box up), `restart-shell` once fixed. For its stack: `omabox gdb --shell --watch`, the crash again, `omabox log gdb`. As on a desktop, Omarchy's launcher starts it again (up to 5 times a minute), so the bar may be back: the crash still happened. |
 | `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
 | "its Hyprland did not answer (hung? …)", `ls` says `hung` | The box's Hyprland is stuck (a plugin under test?): `omabox gdb` for where, `omabox log`, then `omabox down`. |
-| "no box 'default-…' is up" | The box is named after the directory you run omabox from: run it from the repo, or pass `-b NAME` (`omabox ls`). |
+| "no box 'default-…' is up" | Run from outside any repo, where your session's box is used only when it has exactly one up: run it from the repo, or pass `-b NAME` (`omabox ls`). |
 | A box went down by itself ("idle") | 2h with no omabox command against it (`up --idle 0` keeps one, `--idle 30m`); your session's box still goes when your agent exits; a `run -d` job is not use: a server you only poll over HTTP needs `--idle 0`. `down --all` takes other agents' and the user's boxes too. |
 
 ## Tests that touch the desktop
@@ -230,9 +230,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
   `--systemd`), `events` (Hyprland's events, which `omabox events` reads), `box` (bwrap), `reap` (the
   reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
-  `-f` follows until the box goes down (exit 0). `-i` goes before `--grep RE`, not between them:
-  `--grep -i RE` greps for `-i` and reads RE as a log's name. Hyprland writes its log in pieces: a line about
-  what just happened can come a moment (or many lines) later; `-f` shows it when it does.
+  `-f` follows until the box goes down (exit 0). `-i` (ignore case) goes anywhere, `--grep -i RE`
+  too. Hyprland writes its log in pieces: a line about what just happened can come a moment (or
+  many lines) later; `-f` shows it when it does.
 - `omabox events`: Hyprland's event stream (`activewindow>>`, `urgent>>`, `openlayer>>`,
   `workspace>>`, ...) as the box recorded it from its start, one stamped line each (`--json`:
   `{time, event, data}`). Never hand-roll a socat on `.socket2.sock`, and never truncate a log
@@ -417,8 +417,8 @@ most people will. Then:
   in the box's bar. Not in a box that mounts it with `--plugin`: there its id is taken. Then
   `omabox run -- omarchy plugin remove ID --yes`, and nothing of it should be left in the box's
   `shell.json` or plugins dir.
-- **Not in a box**: several monitors, a scale other than 1, a real password at the lock screen (the
-  lock itself runs: "Testing the lock screen"), real devices.
+- **Not in a box**: real monitors (virtual ones, several and at any scale, are: `--monitor`), a
+  real password at the lock screen (the lock itself runs: "Testing the lock screen"), real devices.
 
 ## Testing an app as a desktop app
 
@@ -459,9 +459,7 @@ most people will. Then:
   sends none: `omabox pointer -- move X Y`, then `omabox wait cmd -- sh -c '! pgrep -x wf-recorder'`.
   The file is `$(omabox path)/home/demo.mp4`; frames come only when the screen changes, so `ffmpeg -i
   demo.mp4 -vf fps=30 out.mp4` for a steady rate. Frames to compare instead (an animation's steps):
-  `omabox run -d -- sh -c 'mkdir -p ~/cap; while :; do grim -t ppm ~/cap/$(date +%s%3N).ppm; done'`,
-  act, then `omabox run -- pkill -f 'grim -t ppm'`; they are in `$(omabox path)/home/cap`. `magick` is
-  on the host (a contact sheet: `magick montage`); Python PIL is not.
+  `omabox shot --burst N --sheet` (above), never a loop of `grim` in the box.
 - **The package itself** (install, upgrade, removal, pacman hooks): not in a box (a read-only `/usr`,
   no pacman). A VM, or ask the user.
 

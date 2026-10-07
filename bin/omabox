@@ -64,7 +64,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
   omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
-            [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors (headless)
+            [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
@@ -186,7 +186,7 @@ box's aquamarine, so a build must link a libaquamarine soname the box has (check
 starts); hyprctl and hyprpm stay the installed ones (a warning when the versions differ). \`ls\` and
 \`windows\` name it. Compositor logic runs for real (layouts, focus, input routing, the Lua config,
 IPC, protocols); DRM/KMS, real monitors, HDR/VRR, multi-GPU, libinput with real devices and the
-session/suspend/lock paths never run in a box.
+session and suspend paths never run in a box (the lock screen does, without a real password).
 @ shot windows keys click drag pointer wait pixel
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
@@ -237,9 +237,10 @@ that window's own pixels (its coordinates, covered or not). --in SHOT maps that 
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
 number is seconds, as for --quiet and --timeout (\`keys -s\` and \`pointer sleep\` take milliseconds).
---shot FILE takes a shot while the button is still down: the whole layout at the highest output
-scale (no --fit yet). --wait ignores the cursor along the drag's path (it is in every frame): what
-the drag changes beside it counts, a change wholly under it may not.
+--shot FILE takes a shot while the button is still down, as \`shot\` takes one: the whole layout
+(--shot-fit N, --shot-g "X,Y WxH" and --shot-monitor NAME are shot's --fit, -g and --monitor; a
+scaled or cropped one says so, for \`click --in\`). --wait ignores the cursor along the drag's path
+(it is in every frame): what the drag changes beside it counts, a change wholly under it may not.
 @ wait keys click run scroll drag
 \`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
 count, and are said (--strict counts them). \`keys\`, \`click\`, \`scroll\`, \`drag\` and \`run -d\` take --wait
@@ -290,9 +291,10 @@ click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); nev
 Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
 second close is a yes).
 A headless box renders on the first GPU; \`omabox config gpu\` lists them, and \`omabox config gpu
-nvidia\` (amd, intel, or a PCI slot: two GPUs of one kind) picks another, and \`up\` falls back to the first, saying so, when that one is
-not there (a card handed to a VM). \$OMABOX_RENDER_NODE overrides it. An interactive box renders on
-the GPU your desktop's compositor uses, whatever the setting.
+nvidia\` (amd, intel, a driver's name, or a PCI slot: two GPUs of one kind) picks another; \`up\`
+falls back to the first, saying so and why, when that one is not there (a card handed to a VM).
+\$OMABOX_RENDER_NODE overrides it. An interactive box renders on the GPU your desktop's compositor
+uses, whatever the setting.
 @ up setup --version
 aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until a release has it): a
 headless box on an NVIDIA render node and confirm-close need it, and \`up\` refuses them without it;
@@ -328,7 +330,7 @@ At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
 @ up monitor shot peek
-More monitors (headless boxes): \`up --monitor SPEC\` (repeatable) or \`monitor add SPEC\` on a running box.
+More monitors: \`up --monitor SPEC\` (repeatable) or \`monitor add SPEC\` on a running box.
 SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one made by default, or below
 it, or at X,Y in the layout (which starts at 0,0 on the main screen: no left or above). Scale 1 to 4;
 Hyprland may round it to a whole-pixel size (2560x1440 at 1.5 becomes 1.6). The main screen (--size,
