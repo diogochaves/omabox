@@ -114,6 +114,7 @@ omabox log shell --grep qml -n 20      # the box's logs (Hyprland's by default; 
 omabox events --since 30s --grep urgent   # Hyprland's events, stamped; --mark, --until RE, -f
 omabox down                            # kill everything in the box
 omabox ls                              # boxes, mode, size, state, plugins
+omabox which 12345                     # the box a host pid is in (a box's bar looks like yours in pgrep)
 ```
 
 - **Names**: a box is named after the current git repo. Inside a Claude Code or Codex session (or

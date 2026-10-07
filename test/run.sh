@@ -1891,6 +1891,33 @@ t_unit_cli() {
 # `omabox clip` (issue #23, finding 119): never for an agent, and what it hands over. Only refusals and
 # pure functions here: whoever runs the suite may be an agent, which clip refuses whatever else holds
 # (t_clip runs the rest in a box standing in for the host, where no agent is).
+# omabox which PID (#172), with no box: what is not in one, and what cannot be told.
+t_unit_which() {
+  local out rc
+  out=$(ob which $$ 2>&1); rc=$?
+  check_eq "which: a host shell is not in a box, exit 1" "not in a box 1" "$out $rc"
+  out=$(ob which 1 2>/dev/null); rc=$?
+  check_eq "...nor another user's process (pid 1, root's)" "not in a box 1" "$out $rc"
+  check_match "...said whose it is" "process 1 is root's" "$(ob which 1 2>&1 >/dev/null)"
+  sh -c 'exit 0' & local gone=$!; wait "$gone"
+  out=$(ob which "$gone" 2>&1); rc=$?
+  check_match "...a pid that is gone: said, exit 2" "no process $gone .* 2\$" "$out $rc"
+  out=$(ob which x 2>&1); rc=$?
+  check_match "...not a pid: exit 2" "one PID .* 2\$" "$out $rc"
+  # A box this omabox does not list (another state dir, user namespace): by OMABOX_BOX, said so.
+  env OMABOX_BOX=elsewhere sleep 30 & local e=$!
+  until_ok 5 grep -qa OMABOX_BOX=elsewhere "/proc/$e/environ"
+  check_eq "...by OMABOX_BOX when no listed box has it" elsewhere "$(ob which "$e" 2>/dev/null)"
+  check_match "...said as only its environment" "by its environment" "$(ob which "$e" 2>&1 >/dev/null)"
+  kill "$e" 2>/dev/null
+  env OMABOX_BOX='../x y' sleep 30 & e=$!
+  until_ok 5 grep -qa OMABOX_BOX= "/proc/$e/environ"
+  check_eq "...but not a name a box cannot have" "not in a box" "$(ob which "$e" 2>/dev/null)"
+  kill "$e" 2>/dev/null
+  check_match "up --env OMABOX_BOX refused: it names the box" "--env cannot set OMABOX_BOX" "$(ob up "$P-w0" --env OMABOX_BOX=x 2>&1)"
+  check_match "...run --env too" "--env cannot set OMABOX_BOX" "$(ob run -b "$P-x" --env OMABOX_BOX=x -- true 2>&1)"
+}
+
 t_unit_clip() {
   # A clean environment but for the mark tested (the caller's own PATH may be the guard's). Should a
   # refusal ever break, clip must still reach no clipboard: an empty runtime dir (no Hyprland session
@@ -2985,6 +3012,7 @@ t_systemd() {
   check_eq "only the document portal may fail" "" \
     "$(ob run -b "$B" -- systemctl --user --failed --no-legend --plain | awk '{print $1}' | grep -v '^xdg-document-portal.service$')"
   check "manager has the session environment" bash -c "'$CLI' run -b '$B' -- systemctl --user show-environment | grep -q '^WAYLAND_DISPLAY='"
+  check "...with the box's name, for what its units start (#172)" bash -c "'$CLI' run -b '$B' -- systemctl --user show-environment | grep -qx 'OMABOX_BOX=$B'"
   ob run -b "$B" -- systemd-run --user --on-active=1 --timer-property=AccuracySec=100ms --unit t1 touch /tmp/fired >/dev/null 2>&1
   check "a timer fires" until_ok 10 ob run -b "$B" -- test -e /tmp/fired
   check "notify-send works" ob run -b "$B" -- notify-send omabox-test
@@ -4170,6 +4198,28 @@ t_own_processes() {
   check "...not exit 0" test "$rc" != 0
   # #166: instead of nsenter's line or bash's "Killed" one for it, not after them.
   check_eq "...in those words alone" 1 "$(grep -c . <<<"$out")"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# omabox which PID (#172): a box's shell has the desktop's command line on the host; OMABOX_BOX in
+# every process of its session and `which` tell them apart.
+t_which() {
+  local B=$P-which out rc sp="" p ns
+  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
+  for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
+  [ -n "$sp" ] || { no "the box's shell on the host" "no quickshell in $ns"; ob down "$B" >/dev/null 2>&1; return; }
+  check "the box shell's environment names its box" grep -qaFx "OMABOX_BOX=$B" <(tr '\0' '\n' < "/proc/$sp/environ")
+  out=$(ob which "$sp" 2>&1); rc=$?
+  check_eq "which: the box shell's host pid gives the box, exit 0" "$B 0" "$out $rc"
+  check_eq "...what run starts in it carries the name too" "$B" "$(ob run -b "$B" -- sh -c 'echo "$OMABOX_BOX"')"
+  # A pid namespace of its own inside the box (Chromium's sandbox, a nested box): its ancestor's.
+  ob run -b "$B" -d -q -- unshare -Urpf --mount-proc sleep 61.72 >/dev/null 2>&1
+  check "...a process in a pid namespace of its own in the box" until_ok 5 pgrep -fx 'sleep 61.72'
+  p=$(pgrep -fx 'sleep 61.72' | head -1)
+  check_eq "...is in the box, by its ancestors" "$B" "$(ob which "${p:-0}" 2>/dev/null)"
+  check_fails "...not by its own pid namespace" test "$(readlink "/proc/${p:-0}/ns/pid" 2>/dev/null)" = "$ns"
+  check_eq "...the host shell is not in it" "not in a box" "$(ob which $$ 2>/dev/null)"
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -6958,9 +7008,9 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
+  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

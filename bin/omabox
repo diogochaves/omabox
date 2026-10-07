@@ -119,6 +119,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox path [NAME | -b NAME] [--logs]                  the box dir (HOME is <dir>/home); --logs: each log's file
   omabox down [NAME | -b NAME | --all]
   omabox ls [--json]
+  omabox which PID                                       the box a host process is in, or "not in a box" (exit 1)
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
   omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu
@@ -390,6 +391,11 @@ omabox hand commands to omabox outside, which keeps the jail's boxes to what the
 project, its network or none) and to themselves. It prints the lines to add to ~/.ai-jail.
 @ up run
 Crashes in a box skip the desktop's crash notifications (core limit 1 byte; raise it inside for a core).
+@ which
+A box's processes look like the desktop's in a host process list (its shell has the same command
+line): \`omabox which PID\` names the box a host pid is in, by its pid namespace or an ancestor's, else
+by OMABOX_BOX, which every process a box's session starts carries (said so); \`not in a box\`, exit 1,
+for anything else, another user's processes too (boxes run as you); exit 2 for a pid that is gone.
 @ save saves up run
 A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOME without .cache and
 its logs, keyring included, paused for the copy. \`up --from\` starts with it, then seeds your Omarchy
@@ -813,11 +819,13 @@ running() { local s; s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1; s=${s##*)
 
 # A variable the box session sets, or that changes how every program in it runs (finding 175):
 # --env, run --pass and --env-file refuse it, which only broke the box late ("Hyprland not up after
-# 30s"). Not OMABOX_*: those are the box's own switches, and the suite sets some on purpose.
+# 30s"). Not OMABOX_*: those are the box's own switches, and the suite sets some on purpose; but
+# OMABOX_BOX, which names the box rather than switch anything.
 env_reserved() {
   case $1 in
     PATH|HOME|XDG_RUNTIME_DIR|XDG_DATA_HOME|XDG_CONFIG_HOME|XDG_CACHE_HOME|XDG_STATE_HOME) return 0 ;;
     WAYLAND_DISPLAY|WAYLAND_SOCKET|DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|LD_PRELOAD|LD_LIBRARY_PATH|BASH_ENV|ENV) return 0 ;;
+    OMABOX_BOX) return 0 ;;   # the box's name (#172): what `which` and a host process list go by
   esac
   return 1
 }
@@ -2237,6 +2245,8 @@ cmd_up() {
   # OMABOX_OMARCHY: the tree share/start-hyprland.sh and session.sh run instead of /usr/share/omarchy.
   [ -z "$omarchy" ] || hypr_env+=(--setenv OMABOX_OMARCHY "$omarchy")
   # OMABOX_AQUAMARINE=system (finding 125) holds for the boxes a box starts too (the suite's stand-in hosts).
+  # OMABOX_BOX (#172): the box's name in every process of its session, so a host process list tells a
+  # box's shell from the desktop's (/proc/PID/environ; `omabox which PID`).
   [ -z "${OMABOX_AQUAMARINE:-}" ] || hypr_env+=(--setenv OMABOX_AQUAMARINE "$OMABOX_AQUAMARINE")
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
@@ -2247,6 +2257,7 @@ cmd_up() {
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
     --setenv OMABOX_AUTORELOAD "$autoreload"
     --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell" --setenv OMABOX_OMARCHY_VERSION "$(omarchy_version)"
+    --setenv OMABOX_BOX "$NAME"
     "${hypr_env[@]}" "${envs[@]}" /opt/omabox/share/session.sh)
 
   local launch=(bwrap)
@@ -7246,6 +7257,53 @@ cmd_ls() {
   done
 }
 
+# omabox which PID (#172): the box a host process is in. A box's shell has the desktop's command line
+# (/usr/bin/quickshell -n -p /usr/share/omarchy/shell), so a host pgrep shows two "desktop shells"
+# while a box runs. By pid namespace: the process's, or the first readable one of its ancestors' (a
+# sandbox in the box, Chromium's or a nested box, has a pid namespace of its own), against each live
+# box's (box_pid checks its recorded `pidns`). The walk stops at this omabox's own pid namespace: the
+# host's. Then OMABOX_BOX in its environment, which `up` gives the whole session (a box this omabox
+# does not list: another state dir or user namespace), said as such. Exit 0 in a box, 1 not in one, 2
+# cannot tell.
+cmd_which() {
+  [ $# = 1 ] && [[ $1 =~ ^[0-9]+$ ]] || { say "which: one PID (omabox which PID)"; exit 2; }
+  local pid=$1 uid n bpid self p ns names=() nss=() i
+  uid=$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null) && [ -n "$uid" ] ||
+    { say "which: no process $pid (gone, or not in this pid namespace)"; exit 2; }
+  # A box runs as the user who started it (its user namespace maps that uid alone), so another user's
+  # process is in none of theirs; its namespaces are not ours to read anyway.
+  if [ "$uid" != "$(id -u)" ]; then
+    echo "not in a box"
+    say "which: process $pid is $(id -nu "$uid" 2>/dev/null || echo "uid $uid")'s; boxes run as the user who started them"
+    exit 1
+  fi
+  for n in $(list_names); do
+    select_box "$n"
+    bpid=$(box_pid) || bpid=""
+    if [ -z "$bpid" ] || ! running "$bpid" || ! ns=$(readlink "/proc/$bpid/ns/pid" 2>/dev/null); then continue; fi
+    names+=("$n") nss+=("$ns")
+  done
+  self=$(readlink /proc/self/ns/pid)
+  p=$pid
+  while [ -n "$p" ] && [ "$p" -gt 0 ]; do
+    if ns=$(readlink "/proc/$p/ns/pid" 2>/dev/null); then
+      for i in "${!nss[@]}"; do [ "$ns" != "${nss[i]}" ] || { echo "${names[i]}"; exit 0; }; done
+      [ "$ns" != "$self" ] || break
+    fi
+    p=$(awk '/^PPid:/ {print $2; exit}' "/proc/$p/status" 2>/dev/null) || p=""
+  done
+  # Only a name a box can have: the environment is the process's own to set.
+  n=$({ tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null | sed -n 's/^OMABOX_BOX=//p' | head -1) || n=""
+  if [[ $n =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "$n"
+    say "which: by its environment (OMABOX_BOX) only: no box this omabox lists has its pid namespace"
+    exit 0
+  fi
+  [ -d "/proc/$pid" ] || { say "which: process $pid is gone"; exit 2; }
+  echo "not in a box"
+  exit 1
+}
+
 # --- ai-jail: the broker ---------------------------------------------------------------------------
 # An agent inside ai-jail cannot enter a box (the jail's seccomp filter refuses setns and unshare), so
 # its omabox hands each command to the broker outside, over a socket its ~/.ai-jail maps in
@@ -7684,7 +7742,7 @@ global_box() {
   esac
   if [[ $BOX_CMDS != *" $1 "* ]]; then
     case $1 in
-      ls|list|saves|config|guard|host|broker) say "$1 takes no -b: it is not about one box" ;;
+      ls|list|which|saves|config|guard|host|broker) say "$1 takes no -b: it is not about one box" ;;
       *) say "unknown command: $1 (omabox help lists the commands and their options)" ;;
     esac
     exit 2
@@ -7744,6 +7802,7 @@ main() {
     path) cmd_path "$@" ;;
     down) cmd_down "$@" ;;
     ls|list) cmd_ls "$@" ;;
+    which) cmd_which "$@" ;;
     save) cmd_save "$@" ;;
     saves) cmd_saves "$@" ;;
     config) cmd_config "$@" ;;
