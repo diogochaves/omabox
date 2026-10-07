@@ -252,6 +252,12 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   user's HOME. Outside a repo a throwaway `run` mounts nothing of the current dir.
 - The box HOME is `omabox path` → `<dir>/home`, readable and writable from the host: put outputs there
   or in `/tmp` inside, and seed a widget's data files (a usage record, a store) there while the box runs.
+  Inside the box it is `/home/sbx`, which does not exist on the host: a path under it passed to a
+  service running on the host (a download dir sent to a local server) fails there. Use a path both
+  can see.
+- `/sys` and system-wide `/proc` files are the host's (read-only): CPU, temperatures, memory, disks,
+  USB devices and DRM connectors read as the real machine's. A widget reading those shows the host's
+  hardware state, not the box's.
 - The box has the host's programs, not more: an app the host does not have fails in the box too
   (`setsid: failed to execute alacritty`); Omarchy's terminal is `foot` or what the host has.
 - The session's PATH is yours (mise's tools, as in `omabox run`) after omabox's stand-ins and the box

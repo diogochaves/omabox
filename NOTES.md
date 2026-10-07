@@ -3597,7 +3597,8 @@ from them.
     `monitors` says so. `--for` does both; `--cycles N` repeats (gaps from 50 ms to 2 s in turn without
     --for, a second after each return) and stops at the first shell crash (Quickshell's report folders,
     shell_crashes): exit 1, the report's path. Headless boxes only: an interactive box's screen is its
-    window, an NVIDIA box's a private Wayland output (not tried). The stock shell logs "There are no
+    window, an NVIDIA box's a private Wayland output (not tried; NVIDIA boxes have it since finding
+    234). The stock shell logs "There are no
     outputs - creating placeholder screen" and `Got removal for monitor "FALLBACK"` and survives 4
     cycles at 50 ms-2 s here. Checks in t_output (the refusals, drop and back by hand, three 300 ms
     cycles under the same name and mode, the shell's log, a shot of the old size, a SIGSEGV to the shell
@@ -3678,8 +3679,8 @@ from them.
     a kind not there and the NVIDIA node gone fall back said, OMABOX_RENDER_NODE first, `config gpu`
     normalises and refuses junk. Live, the full suite with `config gpu nvidia` on the RTX 5070 Ti
     (every box on renderD129): 1983/18/1. 17 were t_output: a headless NVIDIA box draws on labwc's
-    Wayland output, which `output drop` refuses by design (finding 210); t_output now checks that
-    refusal there and skips the rest. One, t_throwaway_dead's 15 s (the reaper clearing a throwaway
+    Wayland output, which `output drop` refused by design (finding 210; until finding 234); t_output
+    then checked that refusal there and skipped the rest. One, t_throwaway_dead's 15 s (the reaper clearing a throwaway
     found dead), timed out under the full run's load, and again in the next full run with `gpu
     nvidia` (2 of 2 full runs on the RTX, none of the day's on the AMD). Not found: it passes alone,
     and by hand the dead box went in 3.4 s alone and 5.0 s with six boxes starting on the RTX. On the real card (Diogo's sudo, 2026-10-06), with `gpu nvidia`
@@ -3831,10 +3832,12 @@ from them.
     what seed_home put there. DEST is in the box HOME however written (`.config/x`, `~/.config/x`,
     `/home/sbx/.config/x`), never the HOME itself or above it; links on its way are cleared first, as
     seed_home does for a save's HOME (finding 168), and a folder's copy never writes through a link
-    already inside DEST (finding 228). SRC gets --ro-bind's refusals (refuse_src: secret stores,
-    anything in `~/.config/omarchy` but `plugins/` and `themes/`, HOME, the runtime dir...), and a
-    jailed agent's must be something its jail sees (a relative one is sent absolute, finding 228). A box up without the same seeds is "already up, without what you asked for" (box.json
-    keeps them). Checked in t_main (a file and a folder), t_unit_mount_rules (DEST shapes),
+    already inside DEST (finding 228). SRC gets --ro-bind's refusals (refuse_src: secret stores, HOME,
+    the runtime dir...). As first built those let `~/.config/omarchy/api-keys.env` (any file or dir
+    inside it) through, and checked only where a path's links lead: finding 228 refuses anything in
+    `~/.config/omarchy` but `plugins/` and `themes/`, and a path as named too. A jailed agent's SRC
+    must be something its jail sees (a relative one is sent absolute, finding 228). A box up without
+    the same seeds is "already up, without what you asked for" (box.json keeps them). Checked in t_main (a file and a folder), t_unit_mount_rules (DEST shapes),
     t_unit_refusals.
 226. **More monitors in a headless box: `up --monitor`, `omabox monitor add/remove/list`** (2026-10-06,
     #122). A box had one screen; a second one could be made by hand (`hyprctl output create headless`)
