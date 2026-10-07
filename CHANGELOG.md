@@ -13,9 +13,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   An unknown name is refused before anything is made (#173).
 - **A theme you are editing, live in a box**: `omabox up --theme-dir DIR` links the box's
   `~/.config/omarchy/themes/NAME` to DIR, so edits after `up` reach the box and `omarchy-theme-set
-  NAME` there applies the theme as it is then; a DIR outside the repo is mounted read-only at its own
-  path. Your other themes are still copies made at `up`, and `up` now says so when one is a link into
-  the repo you run it from, or into another checkout of it (a worktree's main one) (#170).
+  NAME` there applies the theme as it is then. A DIR the box already has at its own path (in the
+  repo, a same-path `--ro-bind` or an `--overlay`) is linked to there; any other is mounted
+  read-only at its own path. Your other themes are still copies made at `up`, and `up` now says so
+  when one is a link into the repo you run it from, or into another checkout of it (a worktree's main
+  one) (#170).
 - **More monitors in a headless box**: `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below`,
   and `omabox monitor add SPEC | remove NAME | list` on a running one: any size, scale and place, a bar
   on each, kept over a config reload, `remove` as an unplug; one placed right or below moves with the
@@ -28,7 +30,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   draw it, laid out again at each `monitor add` and `remove`, and each window is a view of its
   monitor, which keeps the size asked for (the main screen `--size`'s) at the window's scale: resizing
   a window scales its view. Closing one unplugs it. Your pointer in a monitor's window lands on that
-  monitor (with omabox's aquamarine build: `omabox setup --aquamarine`) (#123, #161, #174).
+  monitor, and your cursor stays shown as it goes from one window to another, with omabox's
+  aquamarine build (`omabox setup --aquamarine`, then a new box); `monitor add` says when a box's
+  build lacks either (#123, #161, #174, #175).
 - **`omabox output drop [NAME] [--for DURATION] [--cycles N]` and `output back [NAME]`**: a headless
   box's screen goes and comes back under its own name, mode and position, as a monitor that drops
   off on wake does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
@@ -81,7 +85,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox which PID`: the box a host process is in**, or `not in a box` (exit 1). A box's bar has
   your desktop's command line, so a host `pgrep quickshell` showed what looked like two desktop
   shells. Every process a box's session starts also carries `OMABOX_BOX=<name>` in its environment
-  (#172).
+  (`--env` cannot set it) (#172).
 - **The bar widget says whether a box is up, for a rail that hosts bar widgets.** It exposes
   `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
   widget's own box count.
@@ -90,16 +94,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
-- **A system aquamarine patched with the fix for nested Wayland outputs is used as fixed.** omabox
-  told the fix (hyprwm/aquamarine#415) by the version, so a package that patched it into 0.15.0 would
-  still have refused headless NVIDIA boxes and turned confirm-close off. It now looks for what the fix
-  added to the library; `omabox --version` says "patched with the fix" for such a one, and `omabox
-  setup --aquamarine` builds nothing (#48).
-- **A `--plugin` inside the repo you run `omabox up` from (or a same-path `--ro-bind`, or an `--overlay`) is a link in
-  the box, as on your desk.** It was mounted at `~/.config/omarchy/plugins/<id>`, so a helper that
-  finds the rest of its repo through `readlink -f` failed in a box and worked on the desk. Any other
-  plugin is still mounted; `ls --json`'s `plugin_status` says which (`via`: `linked` or `mounted`)
-  (#171).
+- **A `--plugin` inside the repo you run `omabox up` from (or a same-path `--ro-bind`, or an
+  `--overlay`) is a link in the box, as on your desk.** It was mounted at
+  `~/.config/omarchy/plugins/<id>`, so a helper that finds the rest of its repo through `readlink -f`
+  failed in a box and worked on the desk. Any other plugin is still mounted; `ls --json`'s
+  `plugin_status` says which (`via`: `linked` or `mounted`). From ai-jail, a plugin inside the jail's
+  project no longer has to be a folder the jail was given whole (#171).
 - **A running box keeps the Hyprland config it started with.** Every box loaded omabox's config
   live, so a pull, a branch switch or an upgrade of omabox reloaded every running box at once and
   wiped the binds, rules and Lua state an agent had added; an Omarchy upgrade could do the same.
@@ -122,6 +122,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (#104).
 - **`omabox host` shortens only long arguments in the line it prints** before it runs a command
   (`env PATH=$PATH` printed ~900 characters ahead of what mattered); the record stays (#150).
+- **A system aquamarine patched with the fix for nested Wayland outputs is used as fixed.** omabox
+  told the fix (hyprwm/aquamarine#415) by the version, so a package that patched it into 0.15.0 would
+  still have refused headless NVIDIA boxes and turned confirm-close off. It now looks for what the fix
+  added to the library; `omabox --version` says "patched with the fix" for such a one, and `omabox
+  setup --aquamarine` builds nothing unless `--force` (omabox's own build still carries its fixes for
+  interactive boxes) (#48).
 - **The bar widget's list holds still while the pointer is over it**: a box that goes stays in its
   row, greyed and marked gone, and a new one is counted in the header until the pointer leaves, so a
   click never lands on a box that slid under it (#117). **A list taller than the screen scrolls**,
@@ -142,9 +148,6 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
-- **Your cursor stays shown when it goes from one of an interactive box's monitor windows to
-  another.** It vanished until it left the box's windows and came back. Fixed in omabox's aquamarine
-  build (`omabox setup --aquamarine`, then a new box) (#175).
 - **An interactive box's window resized just after a config reload is followed.** The box's bar and
   wallpaper kept the old size when the resize came in the quarter second after a reload (#174).
 - **A link inside your current theme no longer brings the file it names into a box.** omabox copied
