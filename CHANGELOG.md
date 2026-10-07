@@ -64,7 +64,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   mid-test), `+N` for the crashes since `up` (`shell_state` and `shell_crashes` in `ls --json`), and
   `shot`, `wait`, `windows`, `keys` and `click` say when the shell is gone, and once when it crashed
   since the last command, where a box with no bar read as up (#147).
-- **The bar widget says whether a box is up, for omarchy-console's rail.** It exposes
+- **The bar widget says whether a box is up, for a rail that hosts bar widgets.** It exposes
   `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
   widget's own box count.
 - The README says how to open a box's server from another machine on your tailnet (`tailscale serve`

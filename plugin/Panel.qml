@@ -168,7 +168,7 @@ Panel {
     : 100000
   readonly property int upCount: boxes.filter(function(b) { return b.state === "up" }).length
   readonly property int deadCount: boxes.length - upCount
-  // The console convention (omarchy-console DESIGN.md §6), read by its rail: running while a box is up.
+  // A rail's convention for a hosted widget's state, read off its root: running while a box is up.
   readonly property bool consoleAwake: upCount > 0
   readonly property string consoleState: consoleAwake ? "running" : ""
   // One wording for the tooltip and the panel: the icon shows while any box exists, dead ones too.

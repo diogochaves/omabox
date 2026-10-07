@@ -1658,7 +1658,7 @@ the designs here were measured in boxes and built for a contained desktop, and n
     (`naut` does not); none or several is still exit 2. Checked with Files in a box;
     `t_unit_window_select`.
 98. **A Qt app's log reaches `run -d`'s log file** (2026-09-29, issue #26, found by an agent
-    debugging omaseed). Without a terminal Qt sends its logging to the journal, and a box has none, so
+    debugging a Qt app). Without a terminal Qt sends its logging to the journal, and a box has none, so
     `qWarning`, QML errors and an abort's reason went nowhere: `run-*.log` stayed empty (a foreground
     `run` printed nothing either). Boxes now set `QT_FORCE_STDERR_LOGGING=1` for the session, so
     everything in them, `run` included, logs to stderr, as the guard already does on the host (finding
@@ -1742,7 +1742,7 @@ the designs here were measured in boxes and built for a contained desktop, and n
     there, since a save holds the user's keyring secrets and apps signed in as them, which the jail
     never had (`t_unit_jail_policy`).
 101. **Pointer: `drag`, `pointer --window`, a default button** (2026-09-29, issue #25, from agents
-    driving omaseed). `omabox drag X1 Y1 X2 Y2` presses, moves in `--steps` (10), holds `--hold`,
+    driving an app). `omabox drag X1 Y1 X2 Y2` presses, moves in `--steps` (10), holds `--hold`,
     releases; `--window`/`--in` map both points as for `click`. `--shot FILE` shoots with the button
     still down: the pointer tool's new `pause` step prints "paused" and waits for a line on stdin, and
     `drag` runs it as a coproc and takes the shot there (a shot that fails still releases). Not with
@@ -1764,7 +1764,7 @@ the designs here were measured in boxes and built for a contained desktop, and n
     `wait -g`). `-o DIR/F` makes DIR. The pointer "drawn in some shots, missing in others": screen
     shots (whole or `-g`) always have the box's software cursor, window shots never do; said in the
     help and the skill rather than a `--pointer` flag. `t_window`, `t_main`, `t_unit_wait`.
-103. **`run --env-file FILE`** (2026-09-29, issue #30; BOX-5 in omaseed's review of 2026-09-24).
+103. **`run --env-file FILE`** (2026-09-29, issue #30; first noted in a project's review of 2026-09-24).
     KEY=VAL lines (`export `, `#` lines, matching quotes) read as data, nothing expanded, handed to the
     command through `--pass`'s pipe, never a command line; `--pass` of the same name wins. A bad line
     fails with its number, not its text. From a jail the caller's omabox reads the file and sends its
@@ -1860,8 +1860,8 @@ the designs here were measured in boxes and built for a contained desktop, and n
     detector's watcher (finding 80) keeps its own `run/events.log` in its stand-in box: it asks who
     has focus on every change, which this does not. `t_unit_inspect`, `t_inspect`.
 109. **`run -d -q` and `--print-log`** (2026-09-30, issue #42, from an agent session that started a
-    dozen windows and filtered `grep -v '^omabox: started'` in almost every command; omaseed's
-    `scripts/dev/app-box.sh` parsed `(log: PATH)` out of stderr). `-q` drops `run -d`'s own lines
+    dozen windows and filtered `grep -v '^omabox: started'` in almost every command; a project's
+    app-box script parsed `(log: PATH)` out of stderr). `-q` drops `run -d`'s own lines
     (started, `--replace`'s); errors and `--wait`'s answer stay. `--print-log` prints the log's path
     on stdout, the first line (before `--wait`'s), so a script takes it without parsing a message;
     the stderr line is worded as before. The long `--quiet` stays `--wait`'s quiet period (a
@@ -1870,7 +1870,7 @@ the designs here were measured in boxes and built for a contained desktop, and n
     No `--log FILE` either: from ai-jail the broker writes no path of the caller's (finding 99), and
     `--print-log` covers the script. All three go with `-d` only (refused otherwise). `t_unit_cli`,
     `t_replace`, `t_jail` (through the broker).
-110. **`run -d --replace`: jobs are recorded** (2026-09-30, issue #29; agents restarting omaseed
+110. **`run -d --replace`: jobs are recorded** (2026-09-30, issue #29; agents restarting an app
     after a rebuild did kill, `run -d`, wait ~10 times a session, and once the old window was still
     starting, so the single-instance app only raised it and the agent looked at the old build).
     `run -d` no longer launches with `setsid -f` (it forks and never says the pid): a shell in the
@@ -3256,7 +3256,7 @@ from them.
     scroll, where `log -i` goes, a widget hosted by another plugin, frame grabs; `help drag`: `--shot`
     is not fitted. Lines for open issues (#122, #127-#136) say what is true today: shorten each when
     it lands.
-185. **The widget speaks omarchy-console's convention** (2026-10-02). The console's rail hosts bar
+185. **The widget speaks a rail's convention** (2026-10-02). A rail plugin hosts bar
     widgets and slides a running one up; it reads a widget's own `consoleAwake` (bool) and
     `consoleState` (`starting`, `running`, `failed`) off its root, and only falls back to a built-in
     reading of the widget's private properties (here `upCount > 0`). The widget now says it itself:
