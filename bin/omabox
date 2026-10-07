@@ -431,8 +431,8 @@ for anything else, another user's processes too (boxes run as you); exit 2 for a
 @ save saves up run
 A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOME without .cache and
 its logs, keyring included, paused for the copy. \`up --from\` starts with it, then seeds your Omarchy
-look on top as for any box (theme, bar, terminals: today's, or --theme's, not the save's). Close an app first for a
-clean save. Saves live in ~/.local/share/omabox/saves until \`saves rm\`.
+look on top as for any box (theme, bar, terminals: today's, or --theme's, not the save's). Close an
+app first for a clean save. Saves live in ~/.local/share/omabox/saves until \`saves rm\`.
 EOF
 }
 
