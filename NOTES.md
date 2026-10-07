@@ -4703,6 +4703,36 @@ from them.
     shell, plugins and terminals have no tree". Not measured: GTK3 (gtk3 has at-spi2-core's ATK
     bridge, assumed to export), Firefox, VTE terminals, the share of real sessions' shots that are
     of GTK/Qt apps rather than the shell.
+245. **The system's aquamarine has the fix when it exports what #415 added, whatever its version**
+    (2026-10-07, #48). A package patched with #415 keeps the version it patched (0.15.0), so
+    `AQ_FIXED_AFTER` alone would still refuse headless NVIDIA boxes and turn confirm-close off on it
+    (finding 125). #415 (`7bb8bdf4`) adds a method, `Aquamarine::CWaylandOutput::applyConfigure()`,
+    and aquamarine exports all its symbols: `nm -D` lists it in a library with the fix and not in one
+    without. Checked on five builds, the last four run as a headless box on the RTX 5070 Ti (on the
+    `nvidia` driver that day; its screen is labwc's Wayland output, the case that needs the fix; each
+    a private build in a worktree's `build/prefix`): the stock 0.15.0 (Arch's `0.15.0-2`, stripped):
+    no symbol (finding 125 saw such a box fail on it; `up` refuses it); plain upstream v0.15.1, built
+    here: no symbol, `Output WAYLAND-1:
+    initialized`, then only `FALLBACK`, `Hyprland not up after 20s`; plain upstream `7bb8bdf4`: symbol,
+    box up on `WAYLAND-1`; omabox's build (`7bb8bdf4+keys+layout+cursor`): symbol, up; v0.15.0 with
+    #415 cherry-picked (it applies cleanly), stripped as a package is (the symbol is in `.dynsym`,
+    which `strip` keeps), as a package patching 0.15.0 would make it: symbol, box up on `WAYLAND-1`
+    (the box Hyprland's maps showed that library each time). So the symbol tells the fix apart where
+    the version cannot: plain v0.15.1 and omabox's build both say 0.15.1. `aq_pick` now says a
+    system aquamarine has the fix when the library has the symbol's name (`aq_has_fix`, a `grep -F`
+    of the file, read, never loaded: no binutils needed) or is a release after `AQ_FIXED_AFTER` (kept
+    as the fallback should a later release rename the method). Everything that read `AQ_FIXED` follows:
+    the refusals, the confirm-close downgrade, `config confirm-close-available` (the widget's
+    switch), `setup --aquamarine` building nothing, `--version` saying "the system's, 0.15.0, patched
+    with the fix ...". Private builds are untouched (still fixed by being omabox's). No cache: the
+    grep takes half a millisecond on the 1.5 MB library, what reading a cache keyed on the file's
+    path and mtime would cost. Not a behaviour probe (Hyprland in a headless labwc, in a sandbox):
+    seconds, a sandbox of its own, and it would answer for the GPU it ran on; nor a setting, which
+    the user would have to know to set. What the symbol cannot see: a package fixing the bug another
+    way (refused as before, as now), or a library with the method and the bug back (none known).
+    `t_unit_aquamarine` checks a stub 0.15.0 exporting the name, omabox's build copied in as the
+    system's 0.15.0, the stock one, and `config --json` and `up` of a headless box on a fake NVIDIA
+    GPU (`t_unit_gpu`'s fake sysfs, `up` stopped at the box's lock) following each answer.
 
 245. **A box's look followed whatever theme the desk was on that day** (2026-10-07, #173). A box
     starts on the user's current theme by design (finding 69), so a test whose result depends on the
@@ -4770,9 +4800,7 @@ of them, nor wayvnc (finding 34). It needs labwc.
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
-  aquamarine patched downstream cannot be told from its version: it would still be refused for
-  headless NVIDIA boxes and confirm-close until omabox learns how to recognise it (finding 125;
-  → #48's comment).
+  aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 245).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
   `--omarchy DIR` is done, finding 135): `--quickshell PATH` and `--lib DIR` (library dirs ahead of
   the system's; `/opt/omabox/lib` comes first now) are parked until a project needs them (→ #81). A

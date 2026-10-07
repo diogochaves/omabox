@@ -90,6 +90,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **A system aquamarine patched with the fix for nested Wayland outputs is used as fixed.** omabox
+  told the fix (hyprwm/aquamarine#415) by the version, so a package that patched it into 0.15.0 would
+  still have refused headless NVIDIA boxes and turned confirm-close off. It now looks for what the fix
+  added to the library; `omabox --version` says "patched with the fix" for such a one, and `omabox
+  setup --aquamarine` builds nothing (#48).
 - **A `--plugin` inside the repo you run `omabox up` from (or a same-path `--ro-bind`, or an `--overlay`) is a link in
   the box, as on your desk.** It was mounted at `~/.config/omarchy/plugins/<id>`, so a helper that
   finds the rest of its repo through `readlink -f` failed in a box and worked on the desk. Any other

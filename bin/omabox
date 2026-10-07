@@ -28,7 +28,13 @@ RELAY=$ROOT/tools/relay/omabox-relay
 AQ_COMMIT=7bb8bdf4
 AQ_BUILD=$AQ_COMMIT+keys+layout+cursor
 AQ_FIXED_AFTER=0.15.1
+# What #415 added that the library exports: CWaylandOutput::applyConfigure. A system aquamarine with
+# it has the fix whatever its version says (a package patched with #415 keeps the version it patched;
+# finding 245): aq_has_fix.
+AQ_FIX_SYMBOL=_ZN10Aquamarine14CWaylandOutput14applyConfigureEv
 AQ_USER=${XDG_DATA_HOME:-$HOME/.local/share}/omabox/aquamarine
+# Where the system's aquamarine is (a variable for the suite, as DRI and SYSDRM are).
+AQ_SYSDIR=/usr/lib
 PASS_KEY="SUPER + ALT + ESCAPE"
 READY_TIMEOUT=${OMABOX_READY_TIMEOUT:-30}
 HOST_SIG="" HOST_WL=""   # host_session's, never the caller's
@@ -323,7 +329,8 @@ falls back to the first, saying so and why, when that one is not there (a card h
 \$OMABOX_RENDER_NODE overrides it. An interactive box renders on the GPU your desktop's compositor
 uses, whatever the setting.
 @ up setup --version
-aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until a release has it): a
+aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until the system's has it: a
+release, or a package patched with it; omabox looks for what the fix added, not the version): a
 headless box on an NVIDIA render node and confirm-close need it, and \`up\` refuses them without it;
 \`omabox setup --aquamarine\` builds it (a checkout's build/prefix, else ~/.local/share/omabox).
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
@@ -2544,8 +2551,10 @@ hypr_aq_soname() {
 # The first private build (a checkout's build/prefix, then the user's) that has SONAME, else the
 # system's in SYSDIR; one with another soname is stale (built before an aquamarine upgrade): skipped,
 # said so. FIXED is 1 when it has the fix: every private build (only omabox makes them, at AQ_COMMIT
-# or before), a system one after AQ_FIXED_AFTER. OMABOX_AQUAMARINE=system skips the private builds
-# (the suite on stock, finding 125). LIBDIR is empty for the system's: the box's loader finds it.
+# or before), a system one that exports #415's symbol (aq_has_fix: a release with it, or a package
+# patched with it, finding 245) or is after AQ_FIXED_AFTER (should a later release rename the
+# symbol). OMABOX_AQUAMARINE=system skips the private builds (the suite on stock, finding 125).
+# LIBDIR is empty for the system's: the box's loader finds it.
 aq_pick() {
   local want=$1 sys=$2 d f v commit; shift 2
   [ -n "$want" ] || return 1
@@ -2566,8 +2575,17 @@ aq_pick() {
   f=$(readlink -f "$sys/$want"); v=${f##*.so.}
   [[ $v =~ ^[0-9]+(\.[0-9]+)*$ ]] || v=unknown
   local fixed=0
-  [ "$v" = unknown ] || [ "$(printf '%s\n%s\n' "$AQ_FIXED_AFTER" "$v" | sort -V | tail -1)" = "$AQ_FIXED_AFTER" ] || fixed=1
+  if aq_has_fix "$f" || aq_ver_fixed "$v"; then fixed=1; fi
   printf 'system||%s|%s\n' "$v" "$fixed"
+}
+# aq_has_fix FILE: the library exports #415's CWaylandOutput::applyConfigure (AQ_FIX_SYMBOL): its
+# name in the file, read, never loaded. A grep, not nm: no binutils needed, and half a millisecond on
+# a 1.5 MB library, which is what reading a cache of the answer would cost (finding 245).
+aq_has_fix() { LC_ALL=C grep -qaF -- "$AQ_FIX_SYMBOL" "$1" 2>/dev/null; }
+# aq_ver_fixed VERSION: a release after AQ_FIXED_AFTER (the release after that one comes from a main
+# that has #415).
+aq_ver_fixed() {
+  [ "$1" != unknown ] && [ "$(printf '%s\n%s\n' "$AQ_FIXED_AFTER" "$1" | sort -V | tail -1)" != "$AQ_FIXED_AFTER" ]
 }
 
 # aq_resolve SONAME: aq_pick's answer for a box, in AQ_KIND, AQ_LIB, AQ_VER and AQ_FIXED.
@@ -2576,12 +2594,13 @@ aq_resolve() {
   # `up` binds a private build at /opt/omabox/lib, and the user's data dir is not in reach there
   # (a system install has no checkout build/prefix to find instead; finding 130).
   local here=(); [ ! -f /opt/omabox/share/session.sh ] || here=(/opt/omabox/lib)
-  local r; r=$(aq_pick "$1" /usr/lib "$ROOT/build/prefix/lib" "$AQ_USER/lib" "${here[@]}") || return 1
+  local r; r=$(aq_pick "$1" "$AQ_SYSDIR" "$ROOT/build/prefix/lib" "$AQ_USER/lib" "${here[@]}") || return 1
   IFS='|' read -r AQ_KIND AQ_LIB AQ_VER AQ_FIXED <<<"$r"
 }
 aq_desc() {
   if [ "$AQ_KIND" = private ]; then echo "a private build, $AQ_VER (${AQ_LIB%/lib})"
-  elif [ "$AQ_FIXED" = 1 ]; then echo "the system's, $AQ_VER"
+  elif [ "$AQ_FIXED" = 1 ] && aq_ver_fixed "$AQ_VER"; then echo "the system's, $AQ_VER"
+  elif [ "$AQ_FIXED" = 1 ]; then echo "the system's, $AQ_VER, patched with the fix for nested Wayland outputs (hyprwm/aquamarine#415)"
   else echo "the system's, $AQ_VER, without the fix for nested Wayland outputs (hyprwm/aquamarine#415): headless NVIDIA boxes and confirm-close need omabox setup --aquamarine"; fi
 }
 # What a refusal says when AQ_FIXED is 0 (only the system's can lack the fix).
@@ -2797,8 +2816,8 @@ setup_remove() {
 }
 
 # `omabox setup --aquamarine` (issues #47, #49): build the fix where aq_resolve looks for it. A no-op
-# while the box's aquamarine has it (a private build of AQ_BUILD, or a system release after
-# AQ_FIXED_AFTER) unless --force. Its tools are the package's optional dependencies.
+# while the box's aquamarine has it (a private build of AQ_BUILD, or a system one with the fix:
+# aq_pick) unless --force. Its tools are the package's optional dependencies.
 setup_aquamarine() {
   local force=$1
   local want; want=$(hypr_aq_soname)

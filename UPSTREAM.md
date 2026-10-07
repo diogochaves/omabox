@@ -14,12 +14,15 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   `install.sh` calls it; else `~/.local/share/omabox/aquamarine`); without one, `up` refuses what
   needs it, saying so.
 - **Check:** `git -C build/aquamarine fetch -q --tags && git -C build/aquamarine tag --contains 7bb8bdf4`,
-  then `pacman -Q aquamarine` at or past that tag. Once it is, `omabox --version` names the system's
-  copy with no warning and `setup --aquamarine` builds nothing (`AQ_FIXED_AFTER` in `bin/omabox`,
-  0.15.1: correct it if that release lacks the fix).
+  then `pacman -Q aquamarine` at or past that tag, or a package patched with #415 (`OMABOX_AQUAMARINE=system
+  omabox --version` says "patched with the fix": `AQ_FIX_SYMBOL`, finding 245). Once it is, `omabox
+  --version` names the system's copy with no warning and `setup --aquamarine` builds nothing
+  (`AQ_FIXED_AFTER` in `bin/omabox`, 0.15.1: correct it if that release lacks the fix).
 - **Then drop:** `cmd_setup`'s build (or all of `setup`, if #49 has not given it other parts), the
   private-build half of `aq_pick` (`AQ_COMMIT`, `AQ_USER`, the stale-soname note), the refusals and
-  the confirm-close downgrade in `cmd_up`/`cmd_config` with `aq_lacks`/`AQ_HOWTO`, the
+  the confirm-close downgrade in `cmd_up`/`cmd_config` with `aq_lacks`/`AQ_HOWTO`, the fix's
+  detection (`AQ_FIX_SYMBOL`, `aq_has_fix`, `aq_ver_fixed`, `AQ_SYSDIR` and their checks in
+  `t_unit_aquamarine`), the
   `/opt/omabox/lib` bind and `LD_LIBRARY_PATH` in `share/start-hyprland.sh`, the aquamarine step and
   its build packages in `install.sh` (cmake, ninja, hyprwayland-scanner, ...), `OMABOX_AQUAMARINE`
   and `aq_unfixed` in the suite, and the mentions in README.md, CONTRIBUTING.md, NOTES "Reproduce",
