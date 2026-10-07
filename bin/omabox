@@ -23,9 +23,10 @@ RELAY=$ROOT/tools/relay/omabox-relay
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
 # and where: a checkout's build/prefix, else the user's data dir (aq_resolve). With omabox's own patches
 # on top (patches/aquamarine: keys held when focus leaves, finding 132; the pointer in a monitor's
-# window, finding 238): AQ_BUILD names the lot, as a build records it.
+# window, finding 238; the cursor over a monitor's window, finding 239): AQ_BUILD names the lot, as a
+# build records it.
 AQ_COMMIT=7bb8bdf4
-AQ_BUILD=$AQ_COMMIT+keys+layout
+AQ_BUILD=$AQ_COMMIT+keys+layout+cursor
 AQ_FIXED_AFTER=0.15.1
 AQ_USER=${XDG_DATA_HOME:-$HOME/.local/share}/omabox/aquamarine
 PASS_KEY="SUPER + ALT + ESCAPE"
@@ -2630,7 +2631,7 @@ setup_aquamarine() {
   # data dir, its source in the cache (not in HOMES: sweep_homes would take it for a box's).
   local prefix=$AQ_USER src=${XDG_CACHE_HOME:-$HOME/.cache}/omabox-aquamarine
   if [ -e "$ROOT/.git" ]; then prefix=$ROOT/build/prefix src=$ROOT/build/aquamarine; fi
-  say "building aquamarine $AQ_BUILD (hyprwm/aquamarine#415, keys held when focus leaves, the pointer in a monitor's window) into $prefix"
+  say "building aquamarine $AQ_BUILD (hyprwm/aquamarine#415, keys held when focus leaves, the pointer and cursor in a monitor's window) into $prefix"
   [ -d "$src/.git" ] || git clone -q https://github.com/hyprwm/aquamarine "$src" || die "could not clone aquamarine into $src"
   git -C "$src" cat-file -e "$AQ_COMMIT^{commit}" 2>/dev/null || git -C "$src" fetch -q origin || die "could not fetch aquamarine in $src"
   git -C "$src" checkout -q -f "$AQ_COMMIT" || die "could not check out aquamarine $AQ_COMMIT in $src"
@@ -5395,10 +5396,14 @@ monitor_add_window() (
   pid=$(ps -o ppid= -p "$(box_pid)" | tr -d ' ')
   [[ $pid =~ ^[0-9]+$ ]] || die "monitor add: cannot find box '$NAME''s windows on your desktop"
   # Your pointer lands on the monitor whose window it is in only with omabox's aquamarine build
-  # (finding 238): any other puts a point of any window over the whole layout.
+  # (finding 238): any other puts a point of any window over the whole layout. And only a build with
+  # +cursor keeps your cursor shown when it goes from one monitor's window to another (finding 239).
   local aq; aq=$(jq -r '.aquamarine.version // "?"' "$D/box.json")
-  [[ $aq == *+layout* ]] ||
+  if [[ $aq != *+layout* ]]; then
     say "monitor add: box '$NAME''s aquamarine ($aq) puts your pointer in a monitor's window in the wrong place, over the whole layout (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+  elif [[ $aq != *+cursor* ]]; then
+    say "monitor add: box '$NAME''s aquamarine ($aq) hides your cursor when it goes from one monitor's window to another (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+  fi
   desk_prune
   # Named here (the next free WAYLAND-N), so its line, and so its place and scale, are there before it is.
   m=$(hypr_json monitors); i=2

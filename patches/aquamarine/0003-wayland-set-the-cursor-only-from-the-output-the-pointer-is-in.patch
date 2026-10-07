@@ -1,0 +1,30 @@
+diff --git a/src/backend/Wayland.cpp b/src/backend/Wayland.cpp
+index 871ac82..f2a812b 100644
+--- a/src/backend/Wayland.cpp
++++ b/src/backend/Wayland.cpp
+@@ -879,7 +879,10 @@ bool Aquamarine::CWaylandOutput::setCursor(Hyprutils::Memory::CSharedPointer<IBu
+     if (!buffer) {
+         cursorState.cursorBuffer.reset();
+         cursorState.cursorWlBuffer.reset();
+-        if (!backend->pointers.empty())
++        // Only from the output the pointer is in, as below: every output shares one wl_pointer, and
++        // the parent takes a set_cursor from the client that has pointer focus whatever its serial,
++        // so hiding the cursor on the output the pointer just left hid it over the one it entered.
++        if (!backend->pointers.empty() && cursorState.serial)
+             backend->pointers.at(0)->pointer->sendSetCursor(cursorState.serial, nullptr, cursorState.hotspot.x, cursorState.hotspot.y);
+         return true;
+     }
+@@ -957,8 +960,12 @@ void Aquamarine::CWaylandOutput::moveCursor(const Hyprutils::Math::Vector2D& coo
+ void Aquamarine::CWaylandOutput::onEnter(SP<CCWlPointer> pointer, uint32_t serial) {
+     cursorState.serial = serial;
+ 
+-    if (!cursorState.cursorSurface)
++    // No cursor on this output (none set yet, or hidden since): none over its window either, rather
++    // than the parent's own cursor or the surface's last image.
++    if (!cursorState.cursorSurface || !cursorState.cursorWlBuffer) {
++        pointer->sendSetCursor(serial, nullptr, 0, 0);
+         return;
++    }
+ 
+     pointer->sendSetCursor(serial, cursorState.cursorSurface.get(), cursorState.hotspot.x, cursorState.hotspot.y);
+ }

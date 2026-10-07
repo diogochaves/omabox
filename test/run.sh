@@ -4651,18 +4651,33 @@ t_monitors_window() {
   # 0.56 placed it over the whole layout, so every middle was (1600, 1079); omabox's build places it.
   ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '9' })" >/dev/null
   if ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+layout'; then
-    local at=""
-    for p in "1378 304" "2177 525" "2230 1230"; do
+    local at="" shown="" x y
+    # Each window, then back to the first two: a window entered again is where the cursor went (a
+    # first visit gets a cursor set a frame later, which showed it again).
+    for p in "1378 304" "2177 525" "2230 1230" "2177 525" "1378 304"; do
       # shellcheck disable=SC2086 # X Y
       ob pointer -b "$S" -- move $p >/dev/null 2>&1
       sleep 0.4
       at+="$("${in[@]}" hyprctl -b wm cursorpos 2>/dev/null)|"
+      # The stand-in's cursor there (its headless screen draws it into its frames): more than the
+      # box's plain background in a crop at the pointer.
+      read -r x y <<<"$p"
+      ob shot -b "$S" -g "$((x - 4)),$((y - 4)) 24x24" -o "$TMP/monh-cursor.png" >/dev/null 2>&1
+      shown+="$(magick "$TMP/monh-cursor.png" -unique-colors -format %w info: 2>/dev/null || echo 0) "
     done
     # Each within a pixel of the middle (the window's pixel rounds).
     check_eq "the pointer in a monitor's window: on that monitor, where it is in the window (finding 238; $at)" ok \
       "$(awk -F'|' '{ split("960 540 2460 960 2560 2280", w, " "); bad = 0
         for (i = 1; i <= 3; i++) { split($i, p, ", "); if ((p[1] - w[2 * i - 1]) ^ 2 > 1 || (p[2] - w[2 * i]) ^ 2 > 1) bad = 1 }
         print bad ? "off" : "ok" }' <<<"$at")"
+    # Crossing into another monitor's window hid the cursor: aquamarine hid it for the window the
+    # pointer had left with a set_cursor the stand-in took for the one it entered (#175, finding 239).
+    if ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+cursor'; then
+      check_eq "...and the cursor shown in each window, crossing from one to another and back (finding 239; colours at it: $shown)" ok \
+        "$(awk '{ for (i = 1; i <= 5; i++) if ($i < 2) { print "hidden"; exit } print "ok" }' <<<"$shown")"
+    else
+      skip "the cursor shown after crossing monitor windows" "not omabox's aquamarine build with +cursor (omabox setup --aquamarine)"
+    fi
   else
     skip "the pointer in a monitor's window lands on that monitor" "not omabox's aquamarine build (omabox setup --aquamarine)"
   fi

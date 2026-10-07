@@ -4424,6 +4424,36 @@ from them.
     host at a scale above 1 (the window's buffer is its logical size, and so the view's pixels:
     untried), an X11 app at a scale below 1.
 
+239. **An interactive box's cursor vanished between its monitors' windows** (2026-10-07, #175). On a
+    3440x1440 desktop, #174's box: the pointer going from one monitor's window into another's lost
+    its cursor until it left the box's windows and came back. All of a box's windows are surfaces of
+    one Wayland client, its aquamarine, with one `wl_pointer`. In a stand-in (finding 26) with
+    `WAYLAND_DEBUG=client` on the inner box's Hyprland, crossing from WAYLAND-2's window into
+    WAYLAND-1's sent: `leave(25, surface#20)`, `enter(26, surface#10)`, `set_cursor(26, surface#17)`
+    (aquamarine's `onEnter`), `set_cursor(0, nil)` (Hyprland hiding its cursor on WAYLAND-2, the
+    output its pointer left: `CWaylandOutput::setCursor(nullptr)` sends `set_cursor` whatever the
+    output's serial, 0 since `leave`), `set_cursor(26, surface#17)`, `set_cursor(0, nil)`, and
+    nothing more: the parent (Hyprland 0.56) takes a `set_cursor` from the client with pointer focus
+    whatever its serial, so the cursor was hidden over WAYLAND-1's window; a crop of the stand-in's
+    screen at its pointer was the box's background alone. A window's first visit got one more
+    `set_cursor` on a later frame (Hyprland setting its cursor anew there), so it showed only on a
+    return to a window. Fixed in omabox's aquamarine build, patch 0003 (`AQ_BUILD`
+    `7bb8bdf4+keys+layout+cursor`): the hide is sent only by the output with a serial (the pointer's,
+    as the path that shows a cursor already did), and `onEnter` on an output with no cursor sends
+    `set_cursor(serial, nil)`, not nothing (the parent's own cursor stayed) or the surface's last
+    image. After it, the same crossing sends `enter(53, surface#10)`, `set_cursor(53, nil)`,
+    `set_cursor(53, surface#17)`: shown. An aquamarine bug for any nested compositor with more than
+    one Wayland output, worth reporting (UPSTREAM.md); `monitor add` on a box without `+cursor` says
+    the cursor hides. **Software cursors instead** (`cursor:no_hardware_cursors`), tried first in the
+    user's box: no vanishing, but over a terminal the box's I-beam had an arrow on it, the stale
+    image `onEnter` gave the parent; with patch 0003 the stand-in showed the I-beam alone. Not
+    chosen: hardware cursors need no change in the box and do not lag a frame.
+    Checked: t_monitors_window in a stand-in at 3440x1440, the pointer in each window and back into
+    the second and first: a crop at the pointer more than one colour each time (41; the old build,
+    marked `+cursor` to run the check: 41 41 41 1 1, failed); t_held_keys, t_window,
+    t_peek_monitors, t_monitors; a lone interactive window in a stand-in shows the cursor on entering
+    and on entering again. Not checked: the real desktop (by rule: the stand-in only).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

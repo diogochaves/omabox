@@ -34,7 +34,7 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Until then:** `patches/aquamarine/0001-*.patch`, applied by `setup --aquamarine` on top of
   `AQ_COMMIT` (`AQ_BUILD` names the result). Boxes on the system's aquamarine keep the bug.
 - **Then drop:** the patch, `+keys` in `AQ_BUILD` (and the suite's checks for it); with no other
-  patch left (the pointer's, below), the `git apply` loop in `setup_aquamarine`, `AQ_BUILD` (back to
+  patch left (the pointer's and the cursor's, below), the `git apply` loop in `setup_aquamarine`, `AQ_BUILD` (back to
   `AQ_COMMIT`) and the stale-build note in `setup_user`; `t_held_keys` then checks any aquamarine
   that has the fix.
 
@@ -81,6 +81,26 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Then drop:** the patch, `AQ_WAYLAND_LAYOUT` and `write_layout` in `share/hyprland.lua`,
   `+layout` in `AQ_BUILD` and in `monitor_add_window`'s note; `t_monitors_window`'s pointer check
   then checks any build.
+
+## aquamarine: the cursor hidden over one output's window by another's (not reported yet)
+
+- **Needed for:** an interactive box with more monitors: your cursor going from one monitor's window
+  into another's (NOTES finding 239).
+- **Waiting for:** an aquamarine whose Wayland backend sets the cursor only from the output the
+  pointer is in; not reported yet. In `src/backend/Wayland.cpp` (at `7bb8bdf4`),
+  `CWaylandOutput::setCursor(nullptr)` sends `wl_pointer.set_cursor(serial, NULL)` even from an
+  output whose window the pointer has left (its serial 0 since `leave`). All outputs share one
+  `wl_pointer`, and the parent takes the request from the client that has pointer focus, so when the
+  nested compositor hides its cursor on the output the pointer left, the parent hides it over the
+  window it entered. Showing a cursor already checks the serial; hiding does not. Any nested
+  compositor with more than one Wayland output can hit it, so this one is worth reporting, with the
+  patch as a PR.
+- **Until then:** `patches/aquamarine/0003-*.patch` (`AQ_BUILD` `+cursor`): the hide only from the
+  output with a serial, and `onEnter` on an output with no cursor sends `set_cursor(serial, NULL)`
+  (before, it sent nothing, and the parent's cursor or the surface's last image stayed). Boxes on
+  another aquamarine keep the bug; `monitor add` says so.
+- **Then drop:** the patch, `+cursor` in `AQ_BUILD` and its note in `monitor_add_window`;
+  `t_monitors_window`'s cursor check then checks any build.
 
 ## Omarchy: the shell's crash dialog takes focus (not reported yet)
 

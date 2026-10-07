@@ -114,6 +114,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **Your cursor stays shown when it goes from one of an interactive box's monitor windows to
+  another.** It vanished until it left the box's windows and came back. Fixed in omabox's aquamarine
+  build (`omabox setup --aquamarine`, then a new box) (#175).
 - **An interactive box's window resized just after a config reload is followed.** The box's bar and
   wallpaper kept the old size when the resize came in the quarter second after a reload (#174).
 - **A link inside your current theme no longer brings the file it names into a box.** omabox copied
