@@ -3586,7 +3586,8 @@ from them.
     outputs - creating placeholder screen" and `Got removal for monitor "FALLBACK"` and survives 4
     cycles at 50 ms-2 s here. Checks in t_output (the refusals, drop and back by hand, three 300 ms
     cycles under the same name and mode, the shell's log, a shot of the old size, a SIGSEGV to the shell
-    mid-cycles ending them with exit 1 and its report).
+    mid-cycles ending them with exit 1 and its report). Since finding 232 `drop [NAME]` and `back
+    [NAME]`: the main screen or a monitor by name, a line per output dropped in $D/output.dropped.
 211. **`omabox gdb`: backtraces of a box's Hyprland, shell or process; `--watch` for a crash** (2026-10-06,
     #135). A box is where a Hyprland plugin or build gets broken, but a gdb started there (`omabox
     run -- gdb -p`) got `ptrace: Operation not permitted` and a crash left no core (limit 1 byte,
@@ -3980,7 +3981,7 @@ from them.
     window leaves its tile to them and may then cover them; a size the user gave the main window is
     replaced at the next `monitor add`. (7) `output drop` said "has no screen now" with other monitors
     still on: it names them now; the rest of a drop with monitors (MAIN_SCREEN then picks another, and
-    a second drop takes it) is #163. Checked: t_monitors (`-b NAME monitor list`; `mode 2560x1440`
+    a second drop takes it) is #163, finding 232. Checked: t_monitors (`-b NAME monitor list`; `mode 2560x1440`
     moving the one right of it and the one below that, said, and back; after removing the middle one,
     the one below it under the main screen; `pixel` in the gap alone and with another point; the
     drop's wording), t_monitors_window in a stand-in (finding 26: `--monitor 800x600 --monitor
@@ -4021,6 +4022,38 @@ from them.
     the --ignore note, the help); t_wait unchanged on NVIDIA's WAYLAND-1. By hand in a box: a monitor
     removed and one added mid-wait, a drop mid-wait (with `-g` on the main screen: unknown, its only
     output gone).
+232. **`output drop [NAME]` / `back [NAME]` with several monitors; the main screen never another
+    one** (2026-10-06, #163; review of findings 210 and 226). On a box with `--monitor 1280x720`, after
+    `output drop` MAIN_SCREEN fell back to "the first enabled" output, so `omabox mode` reported (and
+    would set) HEADLESS-3 as the screen, a second `drop` removed HEADLESS-3 and overwrote
+    `output.dropped`, and `back` then brought back HEADLESS-3 only: the main screen had to be made by
+    hand. Now MAIN_SCREEN is HEADLESS-2 or a WAYLAND-* output, or nothing (null) while it is away:
+    `mode` says "main screen (HEADLESS-2) is away" and refuses a new mode, and a second `drop` is
+    refused ("dropped already"); `box_screen` is empty then, as with no screen (shots record no mode;
+    `peek` without `--monitor` says the box reports no usable output: read from the code, not run). `drop [NAME]`: the main screen, or the monitor NAME; `back [NAME]`:
+    NAME, or every one dropped, the main screen first, then in the order dropped. `$D/output.dropped`
+    holds a line per output ("NAME MODE XxY SCALE", the old one-line format read as it was), each
+    removed once it is back. A monitor of `omabox.monitors` keeps its line while dropped and comes back
+    placed by the config (`omabox_place_monitors`, finding 230); the main screen (or one made by hand)
+    by its record's `hl.monitor`. A config reload while one is away does not make it again: the config
+    only sets its rule (`hl.monitor` makes no output; only `hyprland.start`, not run on a reload,
+    creates HEADLESS-2), and a dropped monitor's line keeps its place, so the ones after it stay where
+    they were. One fix there: with the main screen away, its size was the mode the config loaded with
+    (`main_mode`, a Lua upvalue), so after `omabox mode 1600x900` a monitor brought back below it went
+    to 0,720, inside it once it was back; `omabox.mode` is read again now. `--for`/`--cycles` take a
+    NAME (the cycles bring back the one they dropped, not every one). `monitor list` lists the dropped
+    ones, marked (`dropped: true` in `--json`); `monitor remove` of a dropped one and `monitor add
+    --name` of a dropped name are refused, and the free name `add` picks skips dropped ones. Drop's
+    wording: "has its main screen (HEADLESS-2) off now, HEADLESS-3 still on", "has its monitor
+    HEADLESS-3 off now, ...", or "has no screen now (HEADLESS-3, HEADLESS-2 dropped)", each with the
+    `back` to run. Interactive boxes are still refused, now saying why: a dropped screen is its window
+    closed (the last one ends the box, or asks with confirm-close), and a window made again has another
+    name (finding 70). Checked in t_output, which now runs on a GPU other than NVIDIA's (as t_monitors
+    does; the NVIDIA refusal on its own box first) with a 1280x800 monitor at 1.6 below the main screen:
+    the wording, `mode` refused, a second drop refused, `monitor list`, a reload with each one away,
+    HEADLESS-3 by name and back, its refusals, both away and `back` restoring both with their modes,
+    places and scales, `--cycles 2` on HEADLESS-3, the Lua fix. On 950110b 31 of the other checks
+    fail; the Lua one fails with the old config and the new CLI.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

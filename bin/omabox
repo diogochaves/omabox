@@ -99,7 +99,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
   omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
-  omabox output [-b NAME] (drop [--for DURATION] [--cycles N] | back)   the screen gone (a monitor off), and back
+  omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
   omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
@@ -338,12 +338,17 @@ headless box rendering on that GPU, naming each, so it can be handed elsewhere (
 render node, and on NVIDIA its /dev/nvidia*). Interactive boxes are left alone (they render on the
 desktop's GPU), and so are boxes on other GPUs. Each box's GPU is in \`ls\` and \`ls --json\` (render).
 @ output
-\`output drop\` removes a headless box's screen (its main one: other monitors stay), as a monitor that
-drops off on wake (standby, a KVM, a dock) does: the shell and apps lose their per-screen windows and
-rebuild them on its return.
-\`output back\` brings it back with the same name, mode and position. --for DURATION does both, the
-screen gone that long; --cycles N repeats, with gaps from 50ms to 2s without --for (a second after
-each return), and stops at the first shell crash (exit 1, its report named).
+\`output drop [OUT]\` removes one of a headless box's screens, as a monitor that drops off on wake
+(standby, a KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on
+its return. Without OUT the main screen (\`mode\`'s; other monitors stay on, and while it is away
+\`mode\` says so); OUT is a monitor's name (\`monitor list\`, which lists the dropped ones too). Both,
+one after the other, leave the box with no screen. Dropping one twice is refused.
+\`output back [OUT]\` brings OUT back, without it every one dropped, each with the same name, mode,
+position and scale (a monitor's place is kept while it is away: a config reload does not bring it
+back, and the others stay where they are). --for DURATION does both, the screen gone that long;
+--cycles N repeats, with gaps from 50ms to 2s without --for (a second after each return), and stops
+at the first shell crash (exit 1, its report named). Not in an interactive box (its screens are its
+windows on your desktop: one dropped could not come back) or one drawing on NVIDIA's Wayland output.
 @ guard host
 The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
 exist, so a window, hyprctl or grim outside a box fails instead of reaching your desktop; omabox
@@ -4933,8 +4938,21 @@ box_screen() {
   jq -r <<<"$m" "$MAIN_SCREEN"' // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
 }
 # The box's main screen in `hyprctl -j monitors` (jq): HEADLESS-2 or WAYLAND-1 (an NVIDIA box's, or an
-# interactive box's window), or the first enabled one; never one of `monitor add`'s (#122).
-MAIN_SCREEN='map(select(.disabled | not)) | (map(select(.name == "HEADLESS-2" or (.name | startswith("WAYLAND-")))) + .) | .[0]'
+# interactive box's window); never one of `monitor add`'s (#122), not even while the main one is
+# dropped (#163: it fell back to the first enabled one then, and `mode`, a second `output drop` and its
+# wording took a monitor for the main screen). null while it is away.
+MAIN_SCREEN='map(select((.disabled | not) and (.name == "HEADLESS-2" or (.name | startswith("WAYLAND-"))))) | .[0]'
+# The outputs `output drop` took away (#163), in the box dir (host side, out of the box's reach):
+# "NAME MODE XxY SCALE" a line, in the order dropped. dropped_rec NAME: its line; main_away: the main
+# screen's line while it is away.
+dropped_file() { cat "$D/output.dropped" 2>/dev/null || true; }
+dropped_rec() { dropped_file | awk -v n="$1" '$1 == n { print; exit }'; }
+main_away() { dropped_file | awk '$1 == "HEADLESS-2" || $1 ~ /^WAYLAND-/ { print; exit }'; }
+# dropped_set LINES: the record is LINES now (none: no file).
+dropped_set() {
+  if [ -z "$1" ]; then rm -f -- "$D/output.dropped"; return; fi
+  printf '%s\n' "$1" > "$D/output.dropped.tmp" && mv -- "$D/output.dropped.tmp" "$D/output.dropped"
+}
 
 # Change a headless box's mode live. `hyprctl keyword monitor` fails under the Lua config ("keyword
 # can't work with non-legacy parsers"), so it goes through eval; omabox.mode keeps it over a reload.
@@ -4949,6 +4967,10 @@ cmd_mode() {
     shift
   done
   select_box "$name"; need_box
+  # Never another monitor's mode while the main screen is away (#163): HEADLESS-3's was printed, and set.
+  local away; away=$(main_away)
+  [ -z "$away" ] || { read -r away _ <<<"$away"
+    die "mode: box '$NAME''s main screen ($away) is away (omabox output drop): omabox output back $away -b $NAME"; }
   local screen; screen=$(box_screen)
   [ -n "$want" ] || { echo "$screen"; return; }
   [ "$(meta mode)" = headless ] || die "mode: box '$NAME' is interactive: its window's size is its mode"
@@ -5057,11 +5079,12 @@ monitor_add() {
   read -r mode scale place <<<"$spec"
   m=$(hypr_json monitors)
   if [ -z "$name" ]; then
-    local i=3; while jq -e --arg n "HEADLESS-$i" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || grep -q "^HEADLESS-$i " <(monitors_file); do i=$((i + 1)); done
+    local i=3; while jq -e --arg n "HEADLESS-$i" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || grep -q "^HEADLESS-$i " <(monitors_file; dropped_file); do i=$((i + 1)); done
     name=HEADLESS-$i
   else
     [[ $name =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor add: --name is letters, digits, - and _, got $name"
     ! jq -e --arg n "$name" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor add: box '$NAME' already has a monitor $name"
+    [ -z "$(dropped_rec "$name")" ] || die "monitor add: box '$NAME' already has a monitor $name, dropped (omabox output back $name -b $NAME)"
   fi
   # Written first, as asked: the box's config places it from there, right of (or below) the last one
   # made, by the size Hyprland gave that one. The scale always set, never left to Hyprland: a new
@@ -5245,13 +5268,17 @@ cmd_monitor() {
   select_box "$name"; need_box
   if [ "$act" = list ]; then
     [ ${#args[@]} = 0 ] || die "monitor list takes no arguments"
-    local m ws; m=$(hypr_json monitors)
+    local m ws dr; m=$(hypr_json monitors)
+    # The ones `output drop` took away too, as they were, marked dropped (#163).
+    dr=$(dropped_file | jq -Rn '[inputs | split(" ") | select(length == 4) | {name: .[0], mode: .[1],
+      scale: (.[3] | tonumber? // .), x: (.[2] | split("x")[0] | tonumber? // 0), y: (.[2] | split("x")[1] | tonumber? // 0), dropped: true}]')
     if [ $json = 1 ]; then
-      jq -c 'map(select(.disabled | not)) | map({name, mode: "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)", scale, x, y,
-        workspace: .activeWorkspace.name})' <<<"$m"
+      jq -c --argjson dr "$dr" 'map(select(.disabled | not)) | map({name, mode: "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)", scale, x, y,
+        workspace: .activeWorkspace.name}) + $dr' <<<"$m"
     else
       printf '%-14s %-16s %-6s %-11s %s\n' NAME MODE SCALE POSITION WORKSPACE
-      jq -r 'map(select(.disabled | not))[] | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.scale) \(.x),\(.y) \(.activeWorkspace.name)"' <<<"$m" |
+      jq -r --argjson dr "$dr" '(map(select(.disabled | not))[] | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.scale) \(.x),\(.y) \(.activeWorkspace.name)"),
+        ($dr[] | "\(.name) \(.mode) \(.scale) \(.x),\(.y) (dropped)")' <<<"$m" |
         while read -r a b c d ws; do printf '%-14s %-16s %-6s %-11s %s\n' "$a" "$b" "$c" "$d" "$ws"; done
     fi
     return
@@ -5276,6 +5303,7 @@ cmd_monitor() {
   [ ${#args[@]} = 1 ] && [ -z "$mname" ] || die "monitor remove NAME"
   local out=${args[0]} res end m
   [[ $out =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor remove: not a monitor's name: $out"
+  [ -z "$(dropped_rec "$out")" ] || die "monitor remove: $out is dropped (omabox output back $out -b $NAME, then remove it)"
   [ "$out" != "$(hypr_json monitors | jq -r "$MAIN_SCREEN"'.name')" ] || die "monitor remove: $out is the box's main screen (omabox output drop takes it away for a while)"
   m=$(hypr_json monitors)
   jq -e --arg n "$out" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor remove: box '$NAME' has no monitor $out ($(jq -r 'map(.name) | join(", ")' <<<"$m"))"
@@ -5294,14 +5322,20 @@ cmd_monitor() {
   say "box '$NAME': $out removed (its workspaces moved to the other monitors, as on an unplug)${moved:+; moved $moved}"
 }
 
-# output drop / back (#146, finding 210): the box's only screen gone and back, as a monitor dropping
-# off on wake (deep standby, a KVM, a dock) is: per-screen windows torn down and rebuilt, where shell
-# plugins and apps crash (a real one was found this way). back re-creates it under the same name, mode,
-# position and scale: a plain `output create headless` named it HEADLESS-3, -4, ... at 960x540.
-# What was dropped is kept in $D/output.dropped ("NAME MODE XxY SCALE").
+# output drop / back (#146, finding 210): a screen gone and back, as a monitor dropping off on wake
+# (deep standby, a KVM, a dock) is: per-screen windows torn down and rebuilt, where shell plugins and
+# apps crash (a real one was found this way). back re-creates it under the same name, mode, position
+# and scale: a plain `output create headless` named it HEADLESS-3, -4, ... at 960x540.
+# `drop [NAME]` takes the main screen, or the monitor NAME (#163); `back [NAME]` brings back NAME, or
+# every one dropped. Each is kept in $D/output.dropped (dropped_file) until it is back; a monitor's
+# line in omabox.monitors stays meanwhile (a reload only sets its rule: nothing makes an output), so
+# the others keep their places and it comes back to its own.
 OUTPUT_GAPS=(50 300 1000 2000 100 600 1500 200)
+OUTPUT_DROPPED=""
+# The names in $D/output.dropped, "A, B".
+dropped_names() { dropped_file | cut -d' ' -f1 | paste -sd, - | sed 's/,/, /g'; }
 cmd_output() {
-  local name="" act="" gap="" cycles=""
+  local name="" act="" out="" gap="" cycles=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -5310,23 +5344,30 @@ cmd_output() {
       -h|--help) usage output; return ;;
       drop|back) [ -z "$act" ] || die "output: drop or back, not both"; act=$1 ;;
       -*) die "output: unknown option $1" ;;
-      *) die "output: drop or back, got $1" ;;
+      *) [ -n "$act" ] || die "output: drop or back, got $1"
+         [ -z "$out" ] || die "output: one output's name, got $out and $1"
+         [[ $1 =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "output: not an output's name: $1 (omabox monitor list)"
+         out=$1 ;;
     esac
     shift
   done
   [ -n "$act" ] || die "output: drop or back (omabox output drop --for 300ms: gone, then back)"
   [ "$act" = drop ] || { [ -z "$gap$cycles" ]; } || die "output back takes no --for or --cycles"
   select_box "$name"; need_box
-  [ "$(meta mode)" = headless ] || die "output: box '$NAME' is interactive: its screen is its window on your desktop"
+  [ "$(meta mode)" = headless ] || die "output: box '$NAME' is interactive: its screens are its windows on your desktop, and a dropped one could not come back (its window closes: the last one ends the box, or asks with confirm-close; a window opened again has another name)"
   [ "$(meta wayland_screen)" != true ] || die "output: box '$NAME' draws on a private Wayland output (NVIDIA): only a headless output is dropped"
-  if [ "$act" = back ]; then output_back; return; fi
+  if [ "$act" = back ]; then output_back "$out"; monitors_record; return; fi
   if [ -z "$gap$cycles" ]; then
-    output_drop
-    # With other monitors one is still there (#161).
+    output_drop "$out"
+    monitors_record
+    # With other monitors one is still there (#161); the main screen is never one of them (#163).
     local left gone; left=$(hypr_json monitors | jq -r 'map(select((.disabled | not) and .name != "FALLBACK") | .name) | join(", ")') || left=""
-    gone=$(cut -d' ' -f1 "$D/output.dropped") || gone=""
-    if [ -n "$left" ]; then say "box '$NAME' has its main screen ($gone) off now, $left still on: omabox output back -b $NAME"
-    else say "box '$NAME' has no screen now: omabox output back -b $NAME"; fi
+    gone=$OUTPUT_DROPPED
+    if [ -z "$left" ]; then
+      say "box '$NAME' has no screen now ($(dropped_names) dropped): omabox output back -b $NAME"
+    elif [ "$gone" = "$(main_away | cut -d' ' -f1)" ]; then
+      say "box '$NAME' has its main screen ($gone) off now, $left still on: omabox output back $gone -b $NAME"
+    else say "box '$NAME' has its monitor $gone off now, $left still on: omabox output back $gone -b $NAME"; fi
     return
   fi
   # Cycles: gone for --for (or, without it, gaps from 50 ms to 2 s in turn: one of them found the crash
@@ -5336,9 +5377,9 @@ cmd_output() {
   n0=$(shell_crashes)
   for ((i = 1; i <= ${cycles:-1}; i++)); do
     g=${gap:-${OUTPUT_GAPS[(i - 1) % ${#OUTPUT_GAPS[@]}]}}
-    output_drop
+    output_drop "$out"
     sleep "$(awk -v m="$g" 'BEGIN { printf "%.3f", m / 1000 }')"
-    screen=$(output_back)
+    screen=$(output_back "$OUTPUT_DROPPED")
     sleep 1
     box_alive || die "output: box '$NAME' went down in cycle $i (its Hyprland: omabox log -b $NAME hyprland)"
     n=0; [ $sh = 0 ] || n=$(shell_crashes)
@@ -5353,45 +5394,83 @@ cmd_output() {
     echo "cycle $i/${cycles:-1}: gone for $(ms_s "$g"), back as $screen$([ $sh = 0 ] || echo "; shell $(shell_state)")"
   done
 }
-# The screen away: kept in $D/output.dropped, removed, gone from `monitors` within 5 s.
+# output_drop [NAME]: NAME (without one, the main screen) kept in $D/output.dropped, removed, gone from
+# `monitors` within 5 s; its name in OUTPUT_DROPPED. The main screen is never taken from another
+# monitor (#163): dropping it twice is refused, not a drop of the next one listed.
 output_drop() {
-  local m; m=$(hypr_json monitors) || exit $?
-  local rec; rec=$(jq -r "$MAIN_SCREEN"' // empty |
+  local out=${1:-} m rec away res before
+  m=$(hypr_json monitors) || exit $?
+  if [ -z "$out" ]; then
+    away=$(main_away)
+    [ -z "$away" ] || { read -r away _ <<<"$away"
+      die "output: box '$NAME''s main screen ($away) is dropped already: omabox output back $away -b $NAME"; }
+    out=$(jq -r "$MAIN_SCREEN"'.name // empty' <<<"$m")
+    [ -n "$out" ] || die "output: box '$NAME' has no main screen to drop ($(jq -r 'map(.name) | join(", ")' <<<"$m"))"
+  else
+    [ -z "$(dropped_rec "$out")" ] || die "output: $out is dropped already: omabox output back $out -b $NAME"
+  fi
+  [[ $out =~ ^[A-Za-z0-9_-]+$ ]] && [ "$out" != FALLBACK ] || die "output: not an output to drop: $out (Hyprland's stand-in while none is there)"
+  rec=$(jq -r --arg n "$out" 'first(.[] | select(.name == $n and (.disabled | not))) |
     "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"' <<<"$m")
-  [ -n "$rec" ] && [ "${rec%% *}" != FALLBACK ] || die "output: box '$NAME' has no screen to drop (omabox output back -b $NAME)"
-  local out=${rec%% *} res
-  [[ $out =~ ^[A-Za-z0-9_-]+$ ]] || die "output: the screen's name is not one to pass on: $out"
-  echo "$rec" > "$D/output.dropped"
+  [ -n "$rec" ] || die "output: box '$NAME' has no monitor $out ($(jq -r 'map(select(.name != "FALLBACK") | .name) | join(", ")' <<<"$m"))"
+  before=$(dropped_file)
+  dropped_set "$( { echo "$before"; echo "$rec"; } | grep .)" || die "output: could not record $out in $D/output.dropped"
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output remove "$out" 2>&1) || true
-  [ "$res" = ok ] || die "output: removing $out failed: $res"
+  [ "$res" = ok ] || { dropped_set "$before" || true; die "output: removing $out failed: $res"; }
   local end=$((SECONDS + 5))
   until m=$(hypr_json monitors) && ! jq -e --arg n "$out" 'any(.[]; .name == $n)' <<<"$m" >/dev/null; do
     [ $SECONDS -lt $end ] || die "output: $out still listed 5 s after its removal"
     sleep 0.05
   done
+  OUTPUT_DROPPED=$out
 }
-# The screen back as it was: same name (the box's config rule names it), mode, position and scale.
+# output_back [NAME]: NAME, or every one dropped (the main screen first, then in the order dropped),
+# back as it was; prints "NAME MODE" for each.
 output_back() {
-  local rec out mode pos scale res screen
-  rec=$(cat "$D/output.dropped" 2>/dev/null) || {
+  local want=${1:-} recs rec screen
+  recs=$(dropped_file)
+  if [ -z "$recs" ]; then
+    [ -z "$want" ] || die "output: $want is not dropped: nothing is (omabox monitor list -b $NAME)"
     screen=$(box_screen)
     [ -z "$screen" ] || die "output: box '$NAME' has its screen ($screen): nothing to bring back"
     die "output: box '$NAME' has no screen and no record of the one it had: omabox down $NAME"
-  }
+  fi
+  if [ -n "$want" ]; then
+    rec=$(dropped_rec "$want")
+    [ -n "$rec" ] || die "output: $want is not dropped (dropped: $(dropped_names))"
+    output_back_one "$rec"
+    return
+  fi
+  local main; main=$(main_away)
+  [ -z "$main" ] || output_back_one "$main"
+  while read -r rec; do
+    [ -z "$rec" ] || [ "$rec" = "$main" ] || output_back_one "$rec"
+  done <<<"$recs"
+}
+# output_back_one "NAME MODE XxY SCALE": that output made again under its name. A monitor of
+# omabox.monitors is placed by the box's config (omabox_place_monitors, the one place that places);
+# the main screen, or one made by hand, by its line here. Done when `monitors` has it at that mode.
+output_back_one() {
+  local rec=$1 out mode pos scale res m line
   read -r out mode pos scale <<<"$rec"
   [[ $out =~ ^[A-Za-z0-9_-]+$ && $mode =~ ^[0-9]+x[0-9]+@[0-9.]+$ && $pos =~ ^-?[0-9]+x-?[0-9]+$ && $scale =~ ^[0-9.]+$ ]] ||
-    die "output: $D/output.dropped is not one omabox wrote: $rec"
+    die "output: $D/output.dropped has a line omabox did not write: $rec"
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create headless "$out" 2>&1) || true
   [ "$res" = ok ] || die "output: creating $out again failed: $res"
-  res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$out', mode = '$mode', position = '$pos', scale = $scale })" 2>&1) || true
-  [ "$res" = ok ] || die "output: $out is back, but setting its mode failed: $res"
+  if grep -q "^$out " <(monitors_file); then
+    monitors_place >/dev/null || die "output: $out is back, but placing it failed"
+  else
+    res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$out', mode = '$mode', position = '$pos', scale = $scale })" 2>&1) || true
+    [ "$res" = ok ] || die "output: $out is back, but setting its mode failed: $res"
+  fi
   local end=$((SECONDS + 5))
-  until screen=$(box_screen) && [ "$screen" = "$out $mode" ]; do
-    [ $SECONDS -lt $end ] || die "output: $out came back as ${screen:-nothing}, not $mode"
+  until m=$(hypr_json monitors) && line=$(jq -r --arg n "$out" 'first(.[] | select(.name == $n and (.disabled | not))) |
+      "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"' <<<"$m") && [ "$line" = "$out $mode" ]; do
+    [ $SECONDS -lt $end ] || die "output: $out came back as ${line:-nothing}, not $mode"
     sleep 0.05
   done
-  rm -f -- "$D/output.dropped"
-  echo "$screen"
+  dropped_set "$(dropped_file | awk -v n="$out" '$1 != n')" || die "output: $out is back, but $D/output.dropped still has it"
+  echo "$line"
 }
 
 # gdb on a box's Hyprland, shell or any of its processes (#135, finding 211). A gdb started beside

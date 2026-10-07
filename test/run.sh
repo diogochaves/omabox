@@ -5569,37 +5569,94 @@ t_pixel() {
   ob down "$B" >/dev/null 2>&1
 }
 
-# output drop/back (#146, finding 210): the box's only screen gone and back, under its name and mode;
-# the shell sees it go (its log) and survives; the refusals.
+# output drop/back (#146, finding 210; #163, finding 232): a screen gone and back, under its name,
+# mode, place and scale: the main screen, or a monitor by name, never one taken for the other (a
+# second drop took the monitor, `mode` named it); a config reload while one is away does not bring it
+# back; the shell sees it go (its log) and survives; the refusals. On a box with a monitor below the
+# main screen at scale 1.6, on a GPU other than NVIDIA's (its boxes refuse both).
 t_output() {
-  local B=$P-out out rc
+  local B=$P-out out rc n ml before
   check_match "output: drop or back" "drop or back" "$(ob output -b "$P-x" 2>&1)"
   check_match "output back takes no --for" "takes no --for" "$(ob output -b "$P-x" back --for 1s 2>&1)"
   check_match "output --for junk" "takes a duration" "$(ob output -b "$P-x" drop --for soon 2>&1)"
   check_match "output --cycles 0" "takes 1-999" "$(ob output -b "$P-x" drop --cycles 0 2>&1)"
+  check_match "output drop of two names" "one output's name, got A and B" "$(ob output -b "$P-x" drop A B 2>&1)"
+  check_match "output drop of a name that is none" "not an output's name" "$(ob output -b "$P-x" drop 'a b' 2>&1)"
   check "output is a jailed agent's" lib broker_check output
-  ob up "$B" --size 1280x720 --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
   # A headless box on NVIDIA draws on a private Wayland output (finding 125): refused, said.
-  if [ "$(jq -r .wayland_screen "$(ob path "$B")/box.json")" = true ]; then
-    check_match "output drop on a Wayland-screen (NVIDIA) box: refused, said" "private Wayland output" "$(ob output -b "$B" drop 2>&1)"
-    skip "output drop and back" "box $B renders on NVIDIA through a private Wayland output"
-    ob down "$B" >/dev/null 2>&1; return
+  if [ "$(lib eval 'render_driver "$(render_node 2>/dev/null)"')" = nvidia ]; then
+    if ob up "$B-nv" --no-shell --net isolated >/dev/null 2>&1; then
+      check_match "output drop on a Wayland-screen (NVIDIA) box: refused, said" "private Wayland output" "$(ob output -b "$B-nv" drop 2>&1)"
+      ob down "$B-nv" >/dev/null 2>&1
+    else no "up on NVIDIA" "failed"; fi
   fi
-  local before; before=$(ob mode -b "$B")
-  check_match "output back with the screen there: refused" "has its screen" "$(ob output -b "$B" back 2>&1)"
-  ob output -b "$B" drop >/dev/null 2>&1; rc=$?
+  n=$(lib eval 'for n in $(render_nodes); do [ "$(render_driver "$n")" = nvidia ] || { echo "$n"; break; }; done')
+  [ -n "$n" ] || { skip "output drop and back" "no render node here but NVIDIA's, whose boxes draw on a private Wayland output"; return; }
+  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below >/dev/null 2>&1 ||
+    { no "up with a monitor" "failed"; return; }
+  local list='map({name, mode, scale, x, y}) | sort_by(.name)'
+  ml=$(ob monitor -b "$B" list --json | jq -c "$list")
+  check_eq "two monitors, the second below at 1.6" '[{"name":"HEADLESS-2","mode":"1280x720@60","scale":1,"x":0,"y":0},{"name":"HEADLESS-3","mode":"1280x800@60","scale":1.6,"x":0,"y":720}]' "$ml"
+  before=$(ob mode -b "$B")
+  check_match "output back with nothing dropped: refused" "has its screen" "$(ob output -b "$B" back 2>&1)"
+  out=$(ob output -b "$B" drop 2>&1); rc=$?
   check_eq "output drop: exit 0" 0 "$rc"
-  check_eq "...the box lists no screen of its own" "[]" "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK")]')"
-  check_match "...a second drop: nothing to drop" "no screen to drop" "$(ob output -b "$B" drop 2>&1)"
+  check_match "...the main screen off, the monitor still on, said" "has its main screen \(HEADLESS-2\) off now, HEADLESS-3 still on: omabox output back HEADLESS-2" "$out"
+  check_eq "...the box lists the monitor only" '["HEADLESS-3"]' "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | .name]')"
+  check_match "mode while the main screen is away: said, not the monitor's mode (#163)" "main screen \(HEADLESS-2\) is away" "$(ob mode -b "$B" 2>&1)"
+  check_match "...nor set on the monitor" "main screen \(HEADLESS-2\) is away" "$(ob mode -b "$B" 1024x768 2>&1)"
+  check_match "a second drop: refused, the main screen is away already (#163)" "main screen \(HEADLESS-2\) is dropped already" "$(ob output -b "$B" drop 2>&1)"
+  check_eq "...the monitor still on, as it was" '["HEADLESS-3 1280x800 0 720"]' \
+    "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | "\(.name) \(.width)x\(.height) \(.x) \(.y)"]')"
+  check_match "monitor list: the main screen there, marked dropped" "HEADLESS-2 +1280x720@60 +1 +0,0 +\(dropped\)" "$(ob monitor -b "$B" list)"
+  ob hyprctl -b "$B" reload >/dev/null; sleep 1
+  check_eq "a config reload while it is away: not made again, the monitor where it was" '["HEADLESS-3 1280x800 0 720"]' \
+    "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | "\(.name) \(.width)x\(.height) \(.x) \(.y)"]')"
   out=$(ob output -b "$B" back); rc=$?
   check_eq "output back: the same name and mode ($before)" "0 $before" "$rc $out"
+  check_eq "...every monitor as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
+  # A monitor by its name (#163): its mode, place and scale kept, its omabox.monitors line too.
+  out=$(ob output -b "$B" drop HEADLESS-3 2>&1); rc=$?
+  check_eq "output drop HEADLESS-3: exit 0" 0 "$rc"
+  check_match "...said" "has its monitor HEADLESS-3 off now, HEADLESS-2 still on: omabox output back HEADLESS-3" "$out"
+  check_eq "...the main screen on, its mode as before" "$before" "$(ob mode -b "$B" 2>&1)"
+  check_match "...dropped again: refused" "HEADLESS-3 is dropped already" "$(ob output -b "$B" drop HEADLESS-3 2>&1)"
+  check_match "...monitor remove of it: refused, said" "HEADLESS-3 is dropped" "$(ob monitor -b "$B" remove HEADLESS-3 2>&1)"
+  check_match "...monitor add under its name: refused" "already has a monitor HEADLESS-3, dropped" "$(ob monitor -b "$B" add 800x600 --name HEADLESS-3 2>&1)"
+  check_match "output back of one not dropped: refused" "HEADLESS-2 is not dropped \(dropped: HEADLESS-3\)" "$(ob output -b "$B" back HEADLESS-2 2>&1)"
+  check_match "output drop of one it does not have" "has no monitor HEADLESS-9" "$(ob output -b "$B" drop HEADLESS-9 2>&1)"
+  ob hyprctl -b "$B" reload >/dev/null; sleep 1
+  check_eq "a config reload while it is away: not made again" '["HEADLESS-2"]' "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | .name]')"
+  out=$(ob output -b "$B" back HEADLESS-3); rc=$?
+  check_eq "output back HEADLESS-3: its name and mode" "0 HEADLESS-3 1280x800@60" "$rc $out"
+  check_eq "...its place and scale as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
+  # Both away: no screen; back brings both, the main screen first.
+  ob output -b "$B" drop HEADLESS-3 >/dev/null 2>&1
+  check_match "both dropped: no screen, said" "has no screen now \(HEADLESS-3, HEADLESS-2 dropped\)" "$(ob output -b "$B" drop 2>&1)"
+  check_eq "...none listed" "[]" "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK")]')"
+  out=$(ob output -b "$B" back); rc=$?
+  check_eq "output back: both, the main screen first" "0 $before"$'\n'"HEADLESS-3 1280x800@60" "$rc $out"
+  check_eq "...modes, places and scales as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
+  check_match "...and nothing left to bring back" "nothing to bring back" "$(ob output -b "$B" back 2>&1)"
+  out=$(ob output -b "$B" drop HEADLESS-3 --for 200ms --cycles 2); rc=$?
+  check_eq "drop HEADLESS-3 --for 200ms --cycles 2: that one, back each time" \
+    "0 $(for i in 1 2; do echo "cycle $i/2: gone for 0.20s, back as HEADLESS-3 1280x800@60; shell running"; done)" "$rc $out"
+  check_eq "...every monitor as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
+  # One back while the main screen is away goes below it by its mode as `mode` set it, not as the
+  # config was loaded with (1280x720: it went to 0,720, inside the main screen once that was back).
+  ob mode -b "$B" 1600x900 >/dev/null 2>&1
+  ob output -b "$B" drop >/dev/null 2>&1; ob output -b "$B" drop HEADLESS-3 >/dev/null 2>&1; ob output -b "$B" back HEADLESS-3 >/dev/null 2>&1
+  check_eq "after mode 1600x900, both dropped, the monitor back alone: below the main screen's 900" "0,900" \
+    "$(ob monitor -b "$B" list --json | jq -r '.[] | select(.name == "HEADLESS-3") | "\(.x),\(.y)"')"
+  ob output -b "$B" back >/dev/null 2>&1; ob mode -b "$B" 1280x720 >/dev/null 2>&1
+  check_eq "...the main screen back, mode 1280x720: all as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
   out=$(ob output -b "$B" drop --for 300ms --cycles 3); rc=$?
   check_eq "drop --for 300ms --cycles 3: exit 0" 0 "$rc"
   check_eq "...three cycles, each back as before, the shell running" \
     "$(for i in 1 2 3; do echo "cycle $i/3: gone for 0.30s, back as $before; shell running"; done)" "$out"
   check_eq "...the box's mode as before" "$before" "$(ob mode -b "$B")"
   check "...the shell saw the screen go (its log)" until_ok 5 bash -c "'$CLI' log -b '$B' shell | grep -q 'There are no outputs'"
-  check "...a shot is the size it was" bash -c "'$CLI' shot -b '$B' -o '$TMP/out.png' >/dev/null 2>&1 && file '$TMP/out.png' | grep -q '1280 x 720,'"
+  check "...a shot of the main screen is the size it was" bash -c "'$CLI' shot -b '$B' --monitor HEADLESS-2 -o '$TMP/out.png' >/dev/null 2>&1 && file '$TMP/out.png' | grep -q '1280 x 720,'"
   # A shell crash ends the cycles, its report named (a SIGSEGV stands in for a plugin's crash).
   ( sleep 2.5; ob run -b "$B" -- pkill -SEGV -x quickshell ) & local k=$!
   out=$(ob output -b "$B" drop --for 1s --cycles 8 2>&1); rc=$?

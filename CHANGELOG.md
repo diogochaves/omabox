@@ -44,9 +44,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `omabox config gpu` lists the GPUs, their slots and the one in use (#156). The widget's Settings
   has it as a picker, `ls` shows each box's GPU (`render` in `ls --json`), and **`omabox gpu release
   GPU`** takes down the headless boxes on a GPU before it goes to a VM (#118).
-- **`omabox output drop [--for DURATION] [--cycles N]` and `output back`**: a headless box's screen
-  goes and comes back under its own name, mode and position, as a monitor that drops off on wake
-  does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
+- **`omabox output drop [NAME] [--for DURATION] [--cycles N]` and `output back [NAME]`**: a headless
+  box's screen goes and comes back under its own name, mode and position, as a monitor that drops
+  off on wake does; cycles stop at the first shell crash. It found a real shell plugin crash (#146).
+  With `--monitor`s, the main screen by default or a monitor by its name, each kept apart until it
+  is back (`back` alone brings back all of them); while the main screen is away `mode` says so and a
+  second `drop` is refused, where they took another monitor for it (#163).
 - **`omabox gdb [--shell | --pid PID] [--watch]`**: every thread's backtrace of the box's Hyprland
   (or shell, or any process of the box), hung or stopped too; `--watch` catches a crash into `omabox
   log gdb`. A gdb started in the box was refused by the kernel's ptrace rules (#135).

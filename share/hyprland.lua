@@ -29,7 +29,8 @@ local interactive = os.getenv("OMABOX_INTERACTIVE") == "1"
 -- reload keeps them) and whenever omabox asks (omabox_place_monitors(), after `mode`, `monitor add`
 -- and `monitor remove`): a main screen of another size, or a window resized, moves the ones placed
 -- next to it; an XxY one stays. One that is not there (an interactive box's window closed) is skipped: the next goes
--- next to the one before it. Read after the box's own screen rule, which they override for their output.
+-- next to the one before it; but a headless one `omabox output drop` took away (#163) keeps its place
+-- by its line, so the others stay and it comes back to it (its rule set here makes no output). Read after the box's own screen rule, which they override for their output.
 local main_screen, main_mode -- set below: the main screen's name (nil: the first other), its mode before it exists
 function omabox_place_monitors()
   local mf = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.monitors")
@@ -47,8 +48,13 @@ function omabox_place_monitors()
     live[m.name] = m
     if not prev and not extra[m.name] and m.name ~= "FALLBACK" and (not main_screen or m.name == main_screen) then prev = rect(m) end
   end
+  -- No main screen yet, or dropped (`omabox output drop`, #163): its mode as the config sets it,
+  -- omabox.mode read again (an `omabox mode` since this load set it live, and the next load reads it).
   if not prev and main_mode then
-    local w, h = main_mode:match("^(%d+)x(%d+)")
+    local mode = main_mode
+    local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.mode")
+    if f then mode = f:read("l") or mode; f:close() end
+    local w, h = mode:match("^(%d+)x(%d+)")
     if w then prev = { x = 0, y = 0, w = tonumber(w), h = tonumber(h) } end
   end
   for _, l in ipairs(lines) do

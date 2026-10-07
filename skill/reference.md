@@ -427,7 +427,10 @@ most people will. Then:
 - **The monitor dropping off and back** (wake from standby, a KVM, a dock): `omabox output drop --for
   300ms --cycles 20`. Per-screen windows (a bar, a panel, an app's) are torn down and rebuilt; the
   cycles stop at the first shell crash, naming its report. `output drop` and `output back` by hand
-  to look at the box in between (`omabox log shell`: "There are no outputs").
+  to look at the box in between (`omabox log shell`: "There are no outputs"). With `--monitor`s,
+  `output drop` takes the main screen (the others stay on) and `output drop HEADLESS-3` that monitor
+  (`--for`/`--cycles` too); each comes back under its name, mode, place and scale, and `output back`
+  alone brings back every one dropped.
 - **Theme switch while it is open**: `omabox run -- omarchy-theme-set NAME`, `omabox wait still`,
   `omabox shot --window myapp`, `omabox pixel --window myapp X Y` for a colour. The colours are in the box's
   `~/.local/state/omarchy/current/theme/colors.toml`; `omarchy-theme-set` replaces that whole
@@ -500,8 +503,8 @@ login screen and the disk passphrase stay a VM's to test.
 
 - The screens: any size, refresh rate, number (`--monitor`) and scale for the extra ones; no real
   modes, HDR, VRR, 10-bit, colour management or DPMS. The screen going and coming back (a monitor
-  dropping off on wake, a KVM, a dock) can be tested: `omabox output drop --for 300ms --cycles 20`,
-  which stops at the first shell crash; an unplug for good: `omabox monitor remove NAME`.
+  dropping off on wake, a KVM, a dock) can be tested: `omabox output drop [NAME] --for 300ms
+  --cycles 20`, which stops at the first shell crash; an unplug for good: `omabox monitor remove NAME`.
 - No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit. No
   devices: no audio (PipeWire), no `/dev/i2c` (DDC/CI brightness), no backlight, no real keyboards,
   mice, touchpads, tablets, cameras, USB or printers. No systemd user manager unless `up --systemd`
