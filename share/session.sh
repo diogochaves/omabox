@@ -125,9 +125,26 @@ fi
 # otherwise a box whose Hyprland died reads `up` while nothing in it works (finding 63).
 # Started through a link named omabox-labwc (#128): a process's name (comm, what pkill -x matches) is
 # the name of the path it was started by, so a test's own `pkill -x labwc` no longer ends the box.
-export WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDER_DRM_DEVICE=$OMABOX_RENDER_NODE
+# More monitors on NVIDIA (#165, finding 234), where every screen of the box is a window on labwc:
+# - WLR_SCENE_DISABLE_VISIBILITY: a window wholly under another got no frame callbacks (wlroots sends
+#   them to what is visible on an output), so a monitor's window under the main one never drew. With
+#   it every window on labwc's one output gets them, wherever the others are.
+# - labwc's config is omabox's own, in the runtime dir (-C; not the box HOME's ~/.config/labwc), as
+#   `omabox monitor add` rewrites it (bin/omabox labwc_rc, which keeps these lines): aquamarine takes
+#   every size labwc configures its window with as its mode (0x0 as 1280x720), and labwc configures it
+#   again on a focus change, a reload or an output resize, with the size it last set itself. So the
+#   main window is maximized (its size is labwc's output's: `omabox mode` resizes that), and each
+#   monitor's window is given its mode's size when it maps (ResizeTo, by its title).
+lw=$XDG_RUNTIME_DIR/labwc
+mkdir -p "$lw"
+printf '%s\n' '<?xml version="1.0"?>' '<labwc_config>' '  <windowRules>' \
+  '    <windowRule identifier="aquamarine" serverDecoration="no"/>' \
+  '    <windowRule title="aquamarine - WAYLAND-1"><action name="Maximize"/></windowRule>' \
+  '  </windowRules>' '</labwc_config>' > "$lw/rc.xml"
+export WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDER_DRM_DEVICE=$OMABOX_RENDER_NODE \
+  WLR_SCENE_DISABLE_VISIBILITY=1
 ln -sf /usr/bin/labwc "$XDG_RUNTIME_DIR/omabox-labwc"
-"$XDG_RUNTIME_DIR/omabox-labwc" -S /opt/omabox/share/start-hyprland.sh > "$HOME/labwc.log" 2>&1
+"$XDG_RUNTIME_DIR/omabox-labwc" -C "$lw" -S /opt/omabox/share/start-hyprland.sh > "$HOME/labwc.log" 2>&1
 kill -KILL -1
 exit 0
 }

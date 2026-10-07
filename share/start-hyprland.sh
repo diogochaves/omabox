@@ -17,6 +17,6 @@ lib=(); [ ! -d /opt/omabox/lib ] || lib=(LD_LIBRARY_PATH=/opt/omabox/lib)
 # Autoreload is off too (hyprland.lua); `omabox reload` refreshes the copy and reloads it.
 cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua
 cp /opt/omabox/share/hyprland.lua "$cfg.new" && mv -f "$cfg.new" "$cfg"
-exec env -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u DISPLAY -u OMABOX_HYPRLAND \
+exec env -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u WLR_SCENE_DISABLE_VISIBILITY -u DISPLAY -u OMABOX_HYPRLAND \
   OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
   "${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --config "$cfg"
