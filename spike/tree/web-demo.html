@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- Spike #144: the GTK4/Qt demos' twin as a page, for Chromium and Electron. -->
+<html><head><meta charset="utf-8"><title>Tree demo web</title></head>
+<body style="font-family: sans-serif">
+<p id="status">Clicked 0 times</p>
+<button onclick="document.getElementById('status').textContent = 'Clicked ' + (++window.n) + ' times'">Click me</button>
+<script>window.n = 0</script>
+<p><input type="text" value="hello box" aria-label="Entry"></p>
+<p><label><input type="checkbox" checked> Enable sync</label></p>
+<p><label><input type="checkbox"> Dark mode</label></p>
+<p><label>Size <input type="number" value="42"></label></p>
+<p><label>Volume <input type="range" value="70"></label></p>
+<p><select aria-label="Size"><option>Small</option><option selected>Medium</option><option>Large</option></select></p>
+<ul role="listbox" aria-label="Items">
+  <li role="option">Alpha</li><li role="option" aria-selected="true">Beta</li><li role="option">Gamma</li>
+</ul>
+</body></html>

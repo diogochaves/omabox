@@ -4539,6 +4539,79 @@ from them.
     -Urpf` sleep in a box (its own pid namespace) gave the box; a non-dumpable python in a box too;
     `uwsm-app -- sleep` from the box carried the name. t_which, t_unit_which (the old code: 15 of 17
     checks failed), t_systemd's new check.
+244. **Spike: an app's accessibility tree as text instead of a shot** (2026-10-07, #144; probes in
+    `spike/tree/`, numbers from `spike/tree/measure.sh` in one fresh headless box, 1920x1080, AMD
+    iGPU). **The box's AT-SPI bus did not start**: the box's dbus-daemon finds `org.a11y.Bus` in
+    `/usr/share/dbus-1/services` and activates `at-spi-bus-launcher`, which starts the a11y bus with
+    `dbus-broker-launch`, and that exits at once without a journal socket (`launcher_open_journal
+    ... No such file or directory`; a box has no `/run/systemd/journal`). GTK apps then run without a
+    tree, and an AT-SPI client aborts (`dbind-ERROR`, SIGABRT). The launcher reads
+    `ATSPI_DBUS_IMPLEMENTATION`: with `dbus-daemon` (`up --env ATSPI_DBUS_IMPLEMENTATION=dbus-daemon`, or
+    `dbus-update-activation-environment` in a running box; the launcher is then started again on the
+    next request) the bus comes up in the box's own runtime dir (`/run/user/1000/at-spi/bus`, on the
+    host under the box's run dir), `at-spi2-registryd` activates from the a11y bus's own service dir,
+    nothing comes from the host's bus, and the three processes cost 18 MB RSS. An app asks for the bus
+    once, at start: one started before the fix stays out of the tree. **Who exports a tree**, each
+    tested with a twin demo window (a label, a button, an entry, two check boxes, a switch, a spin
+    button, a slider, a combo box, a list with one row selected): GTK4 always (the demo; nautilus);
+    Qt widgets and Qt Quick once `org.a11y.Status.IsEnabled` is true, set live with `busctl --user
+    set-property` (a running Qt app follows it; `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` is not needed;
+    the demo, Qt Designer, `qml6`); Chromium and VS Code (Electron) only when started with
+    `--force-renderer-accessibility` (without it: the frame and its title; `ScreenReaderEnabled` true
+    does not turn them on). **Nothing from Quickshell** (0.3.1): Omarchy's shell, restarted with
+    IsEnabled true and its menu open, and a config of our own with a `FloatingWindow` and a
+    `PanelWindow` holding Qt Quick Controls, run with `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1`: the
+    application object and no window under it. **foot**: not on the bus (Alacritty, Ghostty and VTE
+    terminals are not installed here: not measured). **What the tree says**: GTK4, Qt widgets and
+    Chromium name every label, the entry's text, checked/unchecked (the switch too), the spin
+    button's and slider's values, the combo box's choice, the selected row and the focused widget.
+    Qt Quick: the same, but a `Switch` is a check box and a `ListView`'s current row is not
+    `selected` (the app has to set `Accessible.selected`). **Bounds** (`Component.GetExtents`,
+    window coordinates; screen coordinates are 0,0 on Wayland or equal the window's) are the
+    coordinates `click --window` takes: fourteen clicks at an element's centre (GTK4 tiled and floating,
+    Qt widgets, Qt Quick, Chromium) each did what the tree then showed (a check box toggled, a
+    button's count went up, a row selected). One exception: widgets in a Qt `QDockWidget` are
+    placed relative to the dock (Designer's filter field said `@4,4`, drawn near 4,88). **Size**
+    (the probe's compact form: anonymous containers, a control's own label, scrolled-out and hidden
+    nodes left out; ~3 bytes a token) against a `shot --window` (w x h / 750 after the 1568 px cap):
+
+    | window | tree | shot | OCR text |
+    |---|---|---|---|
+    | GTK4 / Qt widgets / Qt Quick demo, floating 480x420 | 217 / 200 / 225 | 268 | 28-32 |
+    | GTK4 demo, tiled 1854x1056 | 221 | 1867 | 31 |
+    | nautilus, a folder of 16 | 822 | 1867 | 93 |
+    | Qt Designer (main window and its New Form dialog) | 1706 | 1867 + 369 | 268 |
+    | Chromium, the demo page (browser chrome included) | 625 | 1867 | 89 |
+    | Chromium, a long text page (bash.html) | 2912 | 1867 | 1105 |
+    | VS Code, a folder and its welcome page | 2841 | 1867 | 345 |
+
+    A whole tree is 8x cheaper than a shot for a sparse full-size window, about the same for a small
+    one, and larger than the shot for a dense one (an editor, a page of text). The saving is the
+    question asked: the line that answers "is Dark mode checked?" is 51 bytes (~17 tokens), and it
+    is the state itself, not pixels read. A dump takes 5-220 ms. **OCR** (`spike/tree/ocr.sh`:
+    tesseract 5.5 on the shot scaled 2x, grey, negated; 0.1-3.7 s) reads the plain labels, but not
+    what a look after an action is for: no checked/unchecked (a check is `«` or `v`, or nothing),
+    no switch, slider or selected row, the selected item of Omarchy's menu (light on dark) missed
+    altogether, icon glyphs read as `@`, `7`, `]`, and `ls -la` in foot split into one word a line.
+    **Decision: build `omabox tree`, for GTK and Qt apps and for Chromium/Electron started with the
+    flag; not for the shell or terminals; no `shot --text`.** Query-first: `tree [--window SEL]
+    [--find TEXT]` printing the matching lines with their parents, the whole tree only when asked
+    (a dense window's tree costs more than its shot). Quickshell plugins and bar widgets, a large
+    share of what boxes are used for, stay on shots (and on what `qs ipc`, logs and `events` say)
+    until Quickshell exports a tree. What a build needs: (1) `ATSPI_DBUS_IMPLEMENTATION=dbus-daemon`
+    in the session's environment from `up` (bwrap's `--setenv`), so apps started before the first
+    `tree` register; (2) `IsEnabled` set true by `tree` (or at `up`) for Qt; (3) the verb, mapping
+    a window to its AT-SPI application by pid (Hyprland's pid was the application's in every case)
+    and its frame by title, skipping the empty application Qt leaves registered from before it was
+    enabled, keeping only nodes inside the window (a long page is otherwise 66k tokens), in window
+    coordinates; the probe uses python-gobject's `Atspi` (python-gobject is not a dependency of
+    omabox; at-spi2-core comes with gtk3/gtk4), a C helper against libatspi would avoid it;
+    (4) later, `click --name TEXT` at an element's centre, refusing an element whose bounds lie
+    outside its parent's (the dock case); (5) skill text: "a label, a value, a checked box: `tree
+    --find` before a shot; Chromium/Electron need `--force-renderer-accessibility` at launch; the
+    shell, plugins and terminals have no tree". Not measured: GTK3 (gtk3 has at-spi2-core's ATK
+    bridge, assumed to export), Firefox, VTE terminals, the share of real sessions' shots that are
+    of GTK/Qt apps rather than the shell.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
