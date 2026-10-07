@@ -284,6 +284,13 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
   `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.
   To test with another HOME (`env HOME=$(mktemp -d) app`), set the `XDG_*_HOME` vars too.
+- Every process of the box's session has `OMABOX_BOX=<name>` in its environment (the bar, what
+  Hyprland, `uwsm-app`, D-Bus or `--systemd` units start, `omabox run`'s commands), and `--env` cannot
+  set it. On the host a box's processes are yours and look like the desktop's (its shell is
+  `/usr/bin/quickshell -n -p /usr/share/omarchy/shell` too): `omabox which PID` prints the box a host
+  pid is in (by its pid namespace, or an ancestor's for a sandbox inside the box; else by
+  `OMABOX_BOX`, said so), or `not in a box` with exit 1 (another user's process too); exit 2 for a
+  pid that is gone. `grep -z OMABOX_BOX /proc/PID/environ` says the same by hand.
 - `--no-shell` starts Hyprland only (no bar, tray or notifications): faster for plain app work.
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.

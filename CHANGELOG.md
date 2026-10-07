@@ -64,6 +64,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   mid-test), `+N` for the crashes since `up` (`shell_state` and `shell_crashes` in `ls --json`), and
   `shot`, `wait`, `windows`, `keys` and `click` say when the shell is gone, and once when it crashed
   since the last command, where a box with no bar read as up (#147).
+- **`omabox which PID`: the box a host process is in**, or `not in a box` (exit 1). A box's bar has
+  your desktop's command line, so a host `pgrep quickshell` showed what looked like two desktop
+  shells. Every process a box's session starts also carries `OMABOX_BOX=<name>` in its environment
+  (#172).
 - **The bar widget says whether a box is up, for omarchy-console's rail.** It exposes
   `consoleAwake` and `consoleState` (`running` while a box is up), so the rail no longer reads the
   widget's own box count.

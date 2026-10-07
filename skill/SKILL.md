@@ -158,6 +158,8 @@ do not report it as tested. (`systemctl --user`: `omabox up --systemd`.)
 - **Ask once before touching the real desktop**: say exactly what will change ("your monitor at 120
   Hz for 15 s, then back"), wait for a yes (it covers this task, not the next), use `omabox host --
   CMD` under the guard, follow the project's own safety rules and put everything back.
+- **A host `pgrep` sees boxes too**: a box's shell has the desktop's command line. Before reading two
+  `quickshell`s as two desktop shells, `omabox which PID` names each one's box (or `not in a box`).
 
 ## Reporting what a box showed
 

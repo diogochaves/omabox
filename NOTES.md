@@ -4454,6 +4454,36 @@ from them.
     t_peek_monitors, t_monitors; a lone interactive window in a stand-in shows the cursor on entering
     and on entering again. Not checked: the real desktop (by rule: the stand-in only).
 
+242. **A host process list could not tell a box's processes from the desktop's** (2026-10-07, #172).
+    After restarting the desktop's shell, a host `pgrep -a quickshell` showed what looked like two
+    desktop shells, a stuck relaunch: one was another session's box, whose shell is
+    `/usr/bin/quickshell -n -p /usr/share/omarchy/shell` like the desktop's, run as the same user. Only
+    `HOME=/home/sbx` in its `/proc/PID/environ` gave it away. omabox's own variables did reach the
+    session (bwrap's `--setenv`s go through session.sh, labwc and Hyprland to everything it execs: the
+    box shell had `OMABOX_SIZE`, `OMABOX_SHELL`, `OMABOX_RENDER_NODE`...), but none named the box;
+    `run` marks its commands with `OMABOX_NAME`, nothing else did. Now `up` sets `OMABOX_BOX=NAME` for
+    the whole session (the bar, Hyprland's execs, uwsm-app's apps, D-Bus activation, a `--systemd`
+    manager's units through shell.sh's import, and `run`, by omabox.env), and `--env`, `--pass` and
+    `--env-file` refuse it (env_reserved): it names the box rather than switch anything. Not
+    `OMABOX_NAME` for the session too: with `OMABOX=1` it marks a `run` command (finding 96,
+    #19; the suite's leak scan reads it as "a command of this run's"). **`omabox which PID`** goes by
+    pid namespace first, as `box_pid` already trusts it (`pidns` in box.json): the process's, else the
+    first readable one up its parents (`PPid` in /proc/PID/status, always readable), against each live
+    box's; a sandbox inside the box (`unshare -p`, Chromium's, a nested box) has a pid namespace of
+    its own under the box's, which a namespace check alone missed. The walk stops at omabox's own pid
+    namespace. Then `OMABOX_BOX` in the environ (only a name a box can have), said as "by its
+    environment only": a box this omabox does not list (another runtime dir or user namespace).
+    Another user's process is `not in a box` (exit 1, said whose): a box maps only its user's uid. A
+    gone pid: exit 2. A process of a box's that is non-dumpable still has a readable ns from the
+    host (we own the box's user namespace). Not for a jailed agent (the broker refuses it): the
+    jail's /proc is its own pid namespace, its pids are not the host's. The first slice of #81's
+    ownership table.
+    Checked in boxes: the box shell's environ has `OMABOX_BOX`; `which` on each host `quickshell`
+    gave five boxes by name and the desktop's shell and a dashboard's `not in a box`; an `unshare
+    -Urpf` sleep in a box (its own pid namespace) gave the box; a non-dumpable python in a box too;
+    `uwsm-app -- sleep` from the box carried the name. t_which, t_unit_which (the old code: 15 of 17
+    checks failed), t_systemd's new check.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
