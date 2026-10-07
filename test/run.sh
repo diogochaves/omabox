@@ -1498,6 +1498,26 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   check_match "...nor in the text" "not this box: a process of the user's holds it" "$(jports 1 "$(id -u)")"
   check_eq "...another user's: no uid" '{"state":"other-user"}' "$(jports 1 4242 --json | jq -c '.[0].host')"
   check_match "...said so" "not this box: another user's process holds it" "$(jports 1 4242)"
+  # Finding 237: the port held by a socket no readable process has (a pasta's), with a box outside the
+  # jail ($P-jo, socket 434343) serving on it too: taken, not `this`; with none, `this` as before.
+  mkdir -p "$pr/$P-jo"; echo '{"net":"connected","jail":"j2"}' > "$pr/$P-jo/box.json"
+  jports_out() {   # OUTSIDE(0|1) ARGS...: jailed, the port's holder unreadable
+    local o=$1; shift
+    env -u OMABOX_JAIL XDG_RUNTIME_DIR="$TMP/rt-jports" bash -c 'source "$1"; P=$2 o=$3; OMABOX_JAIL={\"id\":\"j1\"}; shift 3
+      list_names() { echo "$P-jp"; [ "${1:-}" != all ] || echo "$P-jo"; }
+      box_state() { echo up; }; box_pid() { echo $$; }; box_pids() { echo $$; }
+      sock_owners() { if [ "$NAME" = "$P-jo" ]; then echo "434343 $$"; else echo "424242 $$"; fi; }
+      tcp_listeners() {
+        if [ "$1" = /proc/self/net ]; then echo "40001 0.0.0.0 $(id -u) 515151"
+        elif [ "$NAME" = "$P-jo" ]; then [ "$o" = 0 ] || echo "40001 0.0.0.0 0 434343"
+        else echo "40001 0.0.0.0 0 424242"; fi; }
+      cmd_ports "$@"' lib "$TMP/lib/bin/omabox" "$P" "$o" "$@" 2>&1
+  }
+  check_eq "ports, jailed: a port a box outside the jail serves on too reads as host, not this (finding 237)" \
+    '{"state":"host"}' "$(jports_out 1 --json | jq -c '.[0].host')"
+  check_match "...said, without naming that box" "taken: a box outside this jail serves on it too" "$(jports_out 1)"
+  check_fails "...whose name is not in it" grep -q "$P-jo" <<<"$(jports_out 1; jports_out 1 --json)"
+  check_eq "...with no box outside on it: this, as before" "this" "$(jports_out 0 --json | jq -r '.[0].host.state')"
 }
 
 # omabox broker on/off writes a socket and a service for the user manager (systemctl stubbed: the real

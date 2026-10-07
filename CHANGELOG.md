@@ -110,6 +110,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the box's `gdb.log` linked to; the header is now written from inside the box, as the rest of the
   log is, and `run -d`'s log is opened in the box too. `gdb` runs in the box's network namespace, and
   prints a process name the box set with escapes or newlines as `?` (#160).
+- **`omabox ports` inside ai-jail no longer calls a port the jail's box's when a box outside the
+  jail serves on it too**: it reads as taken (`host`), without naming that box (#168).
 
 ## 0.4.8 — 2026-10-03
 

@@ -3522,8 +3522,9 @@ from them.
     (156), so a jailed agent's dev server on a shared port, the case `ports` is for, got "not for an
     agent inside ai-jail". Allowed now (Diogo's call, 2026-10-06), listing the jail's own boxes
     (list_names), with the host side by state only: `host` and `other-user` without the pid, process
-    name or uid (the user's desktop, which the jail keeps the agent from); known gap: another jail's
-    box holding the port reads as `host` (its pasta). `config KEY` (a read) was refused with "does not
+    name or uid (the user's desktop, which the jail keeps the agent from). (Said here as a known gap:
+    another jail's box holding the port reads as `host`. It read as `this` when the jail's box served
+    on it too, and `host` now: finding 237.) `config KEY` (a read) was refused with "does not
     change omabox's settings": one known key is allowed now, `KEY VALUE` and `KEY default` still
     refused. And a caller not in a jail lands on the broker only when its omabox cannot make a user
     namespace (relay_wanted): the refusal says so and names the sysctls. Checks in
@@ -4229,6 +4230,17 @@ from them.
     Checks: t_unit_pointer (`scroll --mod` refusal, wheel_note), t_pointer (a tilt reaching foot;
     `scroll --mod super` firing a `SUPER + mouse_down` bind twice for two notches and not the plain
     `mouse_down`; the rounding said), all but the tilt check failing with b065a05's CLI.
+237. **Small items from the 2026-10-06 review** (#168; corrects 147, 180, 193, 200, 203, 206, 214,
+    221, 224). (1) Finding 206 said another jail's box (or the user's) holding a port reads as `host`
+    in a jail. It read as `this`: pasta is non-dumpable, so its socket is in no readable process and
+    the port went to the boxes serving on it, which in a jail are the jail's own: the agent was told
+    its box had a port that another box's pasta held. In a jail, `ports` now reads the connected boxes
+    outside it too (`list_names all`), for their ports only, and a port one of them serves on reads
+    as `host` (taken), "a box outside this jail serves on it too, and only one gets it", never naming
+    it. Which pasta has the port still cannot be read, so the jail's box may be the one that got it:
+    said so. A port no box outside serves on stays `this`. t_unit_jail_policy (stubbed: a box outside
+    the jail on the port; the port's holder unreadable): host, said, the outside box unnamed; failed
+    on the old code.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

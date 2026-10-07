@@ -150,7 +150,8 @@ fails to start, address in use; of two started within a second, only one gets it
 ON 127.0.0.1:PORT HERE, by its --json host.state: this (this box); this-resets (this box's pasta
 holds it, but the server is on ::1 or a 127.x other than 127.0.0.1 only, so connections are reset);
 shared (several boxes serve on it and one of them holds it, which cannot be read; one on ::1 only is
-named as resetting); host (a process of yours, named); other-user; nothing (yet: a port comes about
+named as resetting); host (a process of yours, named; from inside ai-jail, unnamed, and also a box
+outside the jail serving on it too); other-user; nothing (yet: a port comes about
 a second after its server listens); isolated, no-network (the box's net: nothing is forwarded).
 @ run keys up
 \`run\` starts the command with the box's environment, not yours: --pass VAR hands it one of your
@@ -673,9 +674,10 @@ need_box() {
 }
 
 # A dir with box.json (written by `up` before the launch) or info.json (bwrap's): one that `up` left
-# behind is listed (dead), so `down --all` clears it (finding 163).
+# behind is listed (dead), so `down --all` clears it (finding 163). In a jail, the jail's own boxes;
+# `list_names all`: every box (for `ports`, which tells a jailed agent a port is not its box's).
 list_names() {
-  local d id=""; ! in_jail || id=$(jail_get .id)
+  local d id=""; ! in_jail || [ "${1:-}" = all ] || id=$(jail_get .id)
   for d in "$BOXES"/*/; do
     [ -f "$d/box.json" ] || [ -f "$d/info.json" ] || continue
     [ -z "$id" ] || [ "$(jq -r '.jail // empty' "$d/box.json" 2>/dev/null)" = "$id" ] || continue
@@ -5919,6 +5921,24 @@ cmd_ports() {
   for key in "${pkeys[@]}"; do
     [ "${pnet[$key]}" = connected ] && serving[${key#* }]+=" ${key%% *}"
   done
+  # In a jail list_names is the jail's boxes only, so a port that another jail's box or one of the
+  # user's holds (its pasta: unreadable) was put down to the jail's box serving on it too: `this`
+  # (finding 237). The ports the connected boxes outside the jail serve on, so such a port reads as
+  # taken; their names stay out of it, as the user's processes do.
+  local -A outside=()
+  if in_jail; then
+    local mine; mine=" $(list_names | tr '\n' ' ') "
+    for n in $(list_names all); do
+      [[ $mine != *" $n "* ]] || continue
+      NAME=$n D=$BOXES/$n   # (not select_box: it refuses a box not the jail's)
+      [ "$(box_state)" = up ] && pid=$(box_pid) && [ -n "$pid" ] || continue
+      net=$(meta net) || net=""
+      [ "$net" = connected ] || continue
+      own=(); mapfile -t pids < <(box_pids)
+      while read -r ino p; do own[$ino]=$p; done < <(sock_owners "${pids[@]}")
+      while read -r port addr uid ino; do [ -z "${own[$ino]:-}" ] || outside[$port]=1; done < <(tcp_listeners "/proc/$pid/net")
+    done
+  fi
   # What holds each port on 127.0.0.1 here: a listener on 127.0.0.1, 0.0.0.0 or :: (or their mapped
   # forms) keeps pasta from binding it.
   local -A held=() hostpid=()
@@ -5939,6 +5959,9 @@ cmd_ports() {
     elif [ -z "${held[$port]:-}" ]; then state=nothing
     elif uid=${held[$port]%% *}; [ "$uid" != "$me" ]; then state=other-user who=$uid
     elif ino=${held[$port]#* }; [ -n "${hostpid[$ino]:-}" ]; then state=host who=${hostpid[$ino]}
+    # Which pasta has it cannot be read (as for two boxes: `shared`): taken, which a jailed agent can
+    # act on (another port), where `this` told it the port was its own.
+    elif [ -n "${outside[$port]:-}" ]; then state=host boxes=outside
     else
       boxes=${serving[$port]# }
       for b in $boxes; do ! local_only "${addrs[$b $port]}" || resets+=" $b"; done
@@ -5981,7 +6004,8 @@ cmd_ports() {
         why=""
         for r in ${f[7]}; do why+="${why:+; }$r's server is on ${addrs[$r ${f[1]}]} only and would reset"; done
         says="one of ${f[6]// /, }: only one of them gets it, omabox cannot tell which${why:+ ($why)}" ;;
-      host) if [ -z "${f[5]}" ]; then says="not this box: a process of the user's holds it"
+      host) if [ "${f[6]}" = outside ]; then says="taken: a box outside this jail serves on it too, and only one of them gets it (which, omabox cannot tell from here): use another port"
+            elif [ -z "${f[5]}" ]; then says="not this box: a process of the user's holds it"
             else says="not this box: $(cat "/proc/${f[5]}/comm" 2>/dev/null || echo "a process") (pid ${f[5]}) holds it"; fi ;;
       other-user) if [ -z "${f[5]}" ]; then says="not this box: another user's process holds it"
                   else says="not this box: a process of uid ${f[5]} holds it"; fi ;;
