@@ -4453,6 +4453,52 @@ from them.
     marked `+cursor` to run the check: 41 41 41 1 1, failed); t_held_keys, t_window,
     t_peek_monitors, t_monitors; a lone interactive window in a stand-in shows the cursor on entering
     and on entering again. Not checked: the real desktop (by rule: the stand-in only).
+243. **`shot --changed`: what changed since the last shot of it, measured first** (2026-10-07, #145).
+    About half of an agent's looks after an action check how something looks (a menu opened, a fill
+    changed), and it takes a `--window` shot, ~1.5k image tokens, where little changed. **Measured**
+    in boxes before building (`spike/changed/`: `probe-app.py`, a GTK4 window with a header menu, a
+    switch, a check box, a field, a progress bar and a drag source; `cases.sh` scripts 17 cases in
+    three boxes, a frame before and after each; `measure.sh` compares them offline): the box around
+    every pixel that differs, 16 px of margin, against the shot an agent takes now. Image tokens as
+    Claude counts them, w x h / 750 after scaling to 1568 px a side and ~1.15 MP: a 1854x1056
+    window or a 1920x1080 screen is 1532.
+
+    | case | changed box + 16 px | tokens (vs 1532) | as separate crops |
+    |---|---|---|---|
+    | probe: header menu opens (popover) | 184x263 | 65 | 65 |
+    | probe: switch flips | 1535x107 | 219 | 12 (2 parts) |
+    | probe: check box ticks | 89x56 | 7 | 7 |
+    | probe: click a field, type 12 chars | 1622x100 | 201 | 201 |
+    | probe: 6 more chars | 81x50 | 6 | 6 |
+    | probe: progress bar steps | 1622x113 | 228 | 228 |
+    | probe: drag ghost mid-drag (screen) | 54x46 | 4 | 4 |
+    | probe: dropped, the target's label | 165x46 | 11 | 11 |
+    | probe: three clicks since the last shot | 1172x298 | 466 | 75 (4) |
+    | nautilus: a file's context menu | 1134x1008 | 1525 | 266 (2) |
+    | nautilus: another file selected | 1134x1008 | 1525 | 99 (3) |
+    | nautilus: main menu | 1299x375 | 650 | 186 (2) |
+    | nautilus: file drag ghost (screen) | 1682x1078 | 1532 | 117 (5) |
+    | nautilus: grid to list view | 1598x827 | 1532 | 1532 |
+    | shell: a notification (screen) | 464x87 | 54 | 54 |
+    | shell: Omarchy menu opens (screen) | 1920x1080 | 1532 | 1532 |
+    | shell: a query typed into it | 382x703 | 359 | 343 |
+
+    One box: 9,916 tokens for the 17 against 26,044 (38%), median 228 against 1532 (6.7x less);
+    two-thirds of the cases at 466 or less. What makes a box big: two changes far apart (nautilus's
+    "selected" toast at the bottom right beside a menu or a selection; focus leaving the header's
+    menu button when the switch is clicked), a change of everything (list view; the Omarchy menu dims
+    the whole screen by ~4 levels: a 3% tolerance still left 1132 tokens, so pixels count exactly),
+    and **the pointer**: a screen shot draws it, so where it was and where it is are changes (the
+    drag ghost's box was 1329x664, 1177 tokens, before both 64x64 pointer boxes were left out, as
+    `wait` leaves them). A GTK caret blinks every 0.6 s for 10 s after a key (a `--burst` of a
+    focused field: 1x18 each frame), so two shots of an idle window can differ by a caret alone.
+    A drag's ghost is a drag-icon surface: never in a `--window` shot. Separate crops per part would
+    take the 17 to 4,738 tokens (18%), but as several images, each its own `--in`: not built; one
+    box, and the parts named on stderr when it spans several, so a `-g` of one is a step away.
+    Call: **build** (a crop is 6.7x smaller in the median case and never bigger than the shot it
+    replaces). `measure.sh` found a `--burst --diff` bug on the way: `%@` trims the colour of the
+    image's corners, so a difference that reaches a corner (or covers everything) read as `same` or
+    as the box of what did not change; a black border first fixes it.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
