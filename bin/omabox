@@ -24,7 +24,8 @@ RELAY=$ROOT/tools/relay/omabox-relay
 # and where: a checkout's build/prefix, else the user's data dir (aq_resolve). With omabox's own patches
 # on top (patches/aquamarine: keys held when focus leaves, finding 132; the pointer in a monitor's
 # window, finding 238; the cursor over a monitor's window, finding 239): AQ_BUILD names the lot, as a
-# build records it.
+# build records it. No system aquamarine carries those patches, and none of them adds an exported
+# symbol to tell them by: a system copy, #415 or not, lacks them (finding 247).
 AQ_COMMIT=7bb8bdf4
 AQ_BUILD=$AQ_COMMIT+keys+layout+cursor
 AQ_FIXED_AFTER=0.15.1
@@ -137,7 +138,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back
   omabox broker [on|off]                                 let agents inside ai-jail drive their own boxes
   omabox setup [--remove]                                your links (skill, bar widget), settings dir, agent guard
-  omabox setup --aquamarine [--force]                    build aquamarine's fix (headless NVIDIA boxes, confirm-close)
+  omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
   omabox --version                                       and which aquamarine new boxes use
 
 @ up run ls down path
@@ -336,10 +337,10 @@ release, or a package patched with it; omabox looks for what the fix added, not 
 headless box on an NVIDIA render node and confirm-close need it, and \`up\` refuses them without it;
 \`omabox setup --aquamarine\` builds it (a checkout's build/prefix, else ~/.local/share/omabox), with
 omabox's own fixes for interactive boxes on top: a key held when the window loses focus is released,
-and in a monitor's window your pointer lands on that monitor and your cursor stays shown. It builds
-nothing when boxes already use this omabox's build, or a system one with the fix, which lacks
-omabox's own (--force builds them all the same). \`omabox --version\` says which one new boxes use: a
-private build, or the system's (with the fix, patched with it, or without it).
+and in a monitor's window your pointer lands on that monitor and your cursor stays shown. No system
+aquamarine has those, so it builds even when the system's has the fix; it builds nothing only when
+boxes already use this omabox's build (--force rebuilds it). \`omabox --version\` says which one new
+boxes use: a private build, or the system's (with the fix, patched with it, or without it).
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
 @ up keys-to-box
 $PASS_KEY toggles sending SUPER keys to an interactive box, once:
@@ -2575,7 +2576,7 @@ aq_pick() {
     fi
     f=$(compgen -G "$d/libaquamarine.so.*" | head -1) || continue
     say "skipping the aquamarine in $d: Hyprland links $want, it has $(elf_needed "$f" SONAME || echo "another")" \
-      "(built before an aquamarine upgrade; omabox setup --aquamarine makes a new one when one is needed)"
+      "(built before an aquamarine upgrade; omabox setup --aquamarine makes a new one)"
   done
   [ -e "$sys/$want" ] || die "Hyprland links $want, which is not in $sys"
   f=$(readlink -f "$sys/$want"); v=${f##*.so.}
@@ -2612,6 +2613,8 @@ aq_desc() {
 # What a refusal says when AQ_FIXED is 0 (only the system's can lack the fix).
 aq_lacks() { echo "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415), which the system's aquamarine $AQ_VER lacks"; }
 AQ_HOWTO="omabox setup --aquamarine builds it for you (a minute or two)"
+# What omabox's own patches fix (patches/aquamarine), which no system aquamarine has (finding 247).
+AQ_OWN="keys held when an interactive box's window loses focus, the pointer and cursor in its monitors' windows"
 
 # `omabox setup` (issue #49, finding 126): what each user of this omabox needs, apart from what a
 # package or install.sh puts on the system. Idempotent; --remove undoes it; --aquamarine is the
@@ -2677,13 +2680,21 @@ setup_user() {
   setup_widget
   setup_guard
   local want
-  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then
-    if [ "$AQ_FIXED" = 0 ]; then
-      echo "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs: omabox setup --aquamarine"
-    elif [ "$AQ_KIND" = private ] && [ "${AQ_VER#*@}" != "$AQ_BUILD" ]; then
-      # Built by an older omabox (finding 132): it lacks a patch omabox carries now.
-      echo "note: the aquamarine build in ${AQ_LIB%/lib} is older than this omabox's (it lacks a fix omabox carries now: keys held when an interactive box loses focus, the pointer and cursor in its monitors' windows): omabox setup --aquamarine"
-    fi
+  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then aq_note; fi
+}
+
+# What the boxes' aquamarine (aq_resolve's) lacks that `omabox setup --aquamarine` builds: #415, and
+# omabox's own patches for interactive boxes, which only this omabox's build has (finding 247). Nothing
+# for a current build.
+aq_note() {
+  if [ "$AQ_KIND" = private ]; then
+    # Built by an older omabox (finding 132): it lacks a patch omabox carries now.
+    [ "${AQ_VER#*@}" = "$AQ_BUILD" ] ||
+      echo "note: the aquamarine build in ${AQ_LIB%/lib} is older than this omabox's (it lacks a fix omabox carries now: $AQ_OWN): omabox setup --aquamarine"
+  elif [ "$AQ_FIXED" = 0 ]; then
+    echo "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs, and interactive boxes omabox's own fixes ($AQ_OWN): omabox setup --aquamarine"
+  else
+    echo "note: the system's aquamarine has the fix for nested Wayland outputs, but not omabox's own fixes ($AQ_OWN): omabox setup --aquamarine"
   fi
 }
 
@@ -2821,16 +2832,20 @@ setup_remove() {
   echo "kept: your settings (~/.config/omabox) and saves (~/.local/share/omabox/saves); delete them yourself if you want them gone"
 }
 
-# `omabox setup --aquamarine` (issues #47, #49): build the fix where aq_resolve looks for it. A no-op
-# while the box's aquamarine has it (a private build of AQ_BUILD, or a system one with the fix:
-# aq_pick) unless --force. Its tools are the package's optional dependencies.
+# `omabox setup --aquamarine` (issues #47, #49): build the fix where aq_resolve looks for it, with
+# omabox's own patches. A no-op only while boxes use this omabox's build (AQ_BUILD), unless --force: a
+# system aquamarine with #415 still lacks omabox's patches (#186, finding 247), so it is built over too.
+# Its tools are the package's optional dependencies.
 setup_aquamarine() {
   local force=$1
   local want; want=$(hypr_aq_soname)
   OMABOX_AQUAMARINE="" aq_resolve "$want" || exit 1
-  if [ "$force" = 0 ] && [ "$AQ_FIXED" = 1 ] && { [ "$AQ_KIND" = system ] || [ "${AQ_VER#*@}" = "$AQ_BUILD" ]; }; then
-    say "boxes use $(aq_desc), which has the fix: nothing to build"
+  if [ "$force" = 0 ] && [ "$AQ_KIND" = private ] && [ "${AQ_VER#*@}" = "$AQ_BUILD" ]; then
+    say "boxes use $(aq_desc), this omabox's build: nothing to build"
     return 0
+  fi
+  if [ "$AQ_KIND" = system ] && [ "$AQ_FIXED" = 1 ]; then
+    say "boxes use $(aq_desc), which has the fix for nested Wayland outputs but not omabox's own ($AQ_OWN)"
   fi
   local t missing=()
   for t in git cmake ninja hyprwayland-scanner pkg-config c++; do command -v "$t" >/dev/null || missing+=("$t"); done
@@ -5807,6 +5822,18 @@ monitor_add() {
 # picture out again.
 # A subshell: its EXIT trap (the host rule off) is its own. In `up`'s shell it took the place of up's,
 # and an up failing after it left the box running (#161).
+# aq_monitor_note VERSION: what an interactive box's monitor windows lack on the aquamarine VERSION
+# (box.json's). Your pointer lands on the monitor whose window it is in only with omabox's aquamarine
+# build (finding 238): any other puts a point of any window over the whole layout. And only a build
+# with +cursor keeps your cursor shown when it goes from one monitor's window to another (finding
+# 239). A system aquamarine, #415 or not, has neither; `setup --aquamarine` builds them (finding 247).
+aq_monitor_note() {
+  if [[ $1 != *+layout* ]]; then
+    say "monitor add: box '$NAME''s aquamarine ($1) puts your pointer in a monitor's window in the wrong place, over the whole layout (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+  elif [[ $1 != *+cursor* ]]; then
+    say "monitor add: box '$NAME''s aquamarine ($1) hides your cursor when it goes from one monitor's window to another (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+  fi
+}
 monitor_add_window() (
   local spec mode scale place ws pid n0 name end m res i rest line clients addr rect
   spec=$(monitor_spec "$1") || exit 1
@@ -5815,15 +5842,7 @@ monitor_add_window() (
   # The box's windows are the outer bwrap's on the host (omabox-wlfd connects, then execs it).
   pid=$(ps -o ppid= -p "$(box_pid)" | tr -d ' ')
   [[ $pid =~ ^[0-9]+$ ]] || die "monitor add: cannot find box '$NAME''s windows on your desktop"
-  # Your pointer lands on the monitor whose window it is in only with omabox's aquamarine build
-  # (finding 238): any other puts a point of any window over the whole layout. And only a build with
-  # +cursor keeps your cursor shown when it goes from one monitor's window to another (finding 239).
-  local aq; aq=$(jq -r '.aquamarine.version // "?"' "$D/box.json")
-  if [[ $aq != *+layout* ]]; then
-    say "monitor add: box '$NAME''s aquamarine ($aq) puts your pointer in a monitor's window in the wrong place, over the whole layout (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
-  elif [[ $aq != *+cursor* ]]; then
-    say "monitor add: box '$NAME''s aquamarine ($aq) hides your cursor when it goes from one monitor's window to another (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
-  fi
+  aq_monitor_note "$(jq -r '.aquamarine.version // "?"' "$D/box.json")"
   desk_prune
   # Named here (the next free WAYLAND-N), so its line, and so its place and scale, are there before it is.
   m=$(hypr_json monitors); i=2

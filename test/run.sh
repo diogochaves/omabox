@@ -3499,6 +3499,7 @@ aq_symbol_checks() {
     ln -s libaquamarine.so.0.15.0 "$d/stub/$so"
     check_match "a system 0.15.0 exporting #415's applyConfigure: fixed, said patched" \
       "^system\|0\.15\.0\|1\|the system's, 0\.15\.0, patched with the fix" "$(sys "$d/stub")"
+    aq_setup_checks "$d" "$so"
   else
     skip "a stub 0.15.0 exporting #415's symbol has the fix" "no C compiler"
   fi
@@ -3556,6 +3557,59 @@ aq_symbol_checks() {
     fi
   done
   check_fails "...no box made" test -e "$d/boxes/$P-aqs"
+}
+
+# finding 247 (issue #186): `setup --aquamarine` builds whenever boxes would run without omabox's own
+# patches, a system aquamarine with #415 (aq_symbol_checks's stub) included; only this omabox's build
+# is a no-op. Stopped at the clone: the build tools on PATH are stubs that log and fail, and the copy
+# of the CLI `lib` runs has no .git, so it would build into the scratch data dir, never a real one.
+aq_setup_checks() {
+  local d=$1 so=$2 t out build
+  local tools=$d/setup-tools data=$d/setup-data cache=$d/setup-cache
+  mkdir -p "$tools" "$data" "$cache"
+  for t in git cmake ninja hyprwayland-scanner pkg-config c++; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/log"\nexit 1\n' "$t" "$tools" > "$tools/$t"; chmod +x "$tools/$t"
+  done
+  # setup_aq [FORCE]: setup --aquamarine with the stub as the system's 0.15.0, on stub build tools.
+  setup_aq() {
+    : > "$tools/log"
+    XDG_DATA_HOME=$data XDG_CACHE_HOME=$cache PATH=$tools:$PATH \
+      lib eval "AQ_SYSDIR='$d/stub'; setup_aquamarine ${1:-0}" 2>&1
+  }
+  out=$(setup_aq)
+  check_fails "setup --aquamarine over a system aquamarine with #415: not \"nothing to build\"" grep -q "nothing to build" <<<"$out"
+  check_match "...says it lacks omabox's own fixes, and builds them" \
+    "has the fix for nested Wayland outputs but not omabox's own \(keys held .*\).*building aquamarine [^ ]+ .* into $data/omabox/aquamarine" "$out"
+  check_match "...as far as the clone (the stub git), into the scratch cache" \
+    "^git clone -q https://github.com/hyprwm/aquamarine $cache/omabox-aquamarine$" "$(cat "$tools/log")"
+  # A build of this omabox's (AQ_BUILD) in the data dir: the only no-op, and --force builds all the same.
+  build=$(lib eval 'echo $AQ_BUILD')
+  mkdir -p "$data/omabox/aquamarine/lib"
+  cp "$d/stub/libaquamarine.so.0.15.0" "$data/omabox/aquamarine/lib/libaquamarine.so.0.15.1"
+  ln -s libaquamarine.so.0.15.1 "$data/omabox/aquamarine/lib/$so"
+  echo "$build" > "$data/omabox/aquamarine/.omabox-commit"
+  out=$(setup_aq)
+  check_match "...over this omabox's build ($build): nothing to build" "this omabox's build: nothing to build" "$out"
+  check_eq "...no tool run" "" "$(cat "$tools/log")"
+  out=$(setup_aq 1)
+  check_match "...--force builds it all the same" "building aquamarine .*could not clone" "$(tr '\n' ' ' <<<"$out")"
+  echo 7bb8bdf4+keys > "$data/omabox/aquamarine/.omabox-commit"
+  out=$(setup_aq)
+  check_match "...over an older build of omabox's: builds" "building aquamarine .*could not clone" "$(tr '\n' ' ' <<<"$out")"
+  rm -rf "$data/omabox/aquamarine"
+  # What `setup` says of each (aq_note), and `monitor add` of a box's aquamarine (aq_monitor_note).
+  note_of() { lib eval "AQ_KIND='$1' AQ_LIB='$data/lib' AQ_VER='$2' AQ_FIXED='$3'; aq_note" 2>&1; }
+  check_match "setup's note on a system aquamarine with #415: omabox's own fixes, setup --aquamarine" \
+    "^note: the system's aquamarine has the fix .*, but not omabox's own fixes \(keys held .*\): omabox setup --aquamarine$" "$(note_of system 0.15.0 1)"
+  check_match "...without #415: both" "^note: headless boxes on NVIDIA and confirm-close need .*, and interactive boxes omabox's own fixes .*: omabox setup --aquamarine$" \
+    "$(note_of system 0.15.0 0)"
+  check_match "...an older build of omabox's: older" "^note: the aquamarine build in $data is older than this omabox's" "$(note_of private 0.15.1@7bb8bdf4+keys 1)"
+  check_eq "...this omabox's build: nothing" "" "$(note_of private "0.15.1@$build" 1)"
+  mnote() { lib eval "NAME=b; aq_monitor_note '$1'" 2>&1; }
+  check_match "monitor add on a system aquamarine (#415 or not): the pointer's note, sending to setup --aquamarine" \
+    "aquamarine \(0\.15\.0\) puts your pointer in a monitor's window in the wrong place.*: omabox setup --aquamarine, then a new box$" "$(mnote 0.15.0)"
+  check_match "...on a build without +cursor: the cursor's" "hides your cursor .*: omabox setup --aquamarine, then a new box$" "$(mnote 0.15.1@7bb8bdf4+keys+layout)"
+  check_eq "...on this omabox's build: none" "" "$(mnote "0.15.1@$build")"
 }
 
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.

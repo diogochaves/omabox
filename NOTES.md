@@ -2372,8 +2372,9 @@ the designs here were measured in boxes and built for a contained desktop, and n
     --aquamarine` builds `AQ_COMMIT` (into `build/prefix` in a checkout, which `install.sh` now calls,
     else into the user's data dir, its source in `~/.cache/omabox-aquamarine`, not under the box HOMEs
     `sweep_homes` clears), installed beside the old one and swapped in; a no-op while the box's
-    aquamarine has the fix. Its tools (git, cmake, ninja, hyprwayland-scanner, base-devel) are what a
-    package lists as optional. `--version` says which aquamarine new boxes use, `ls --json` each
+    aquamarine has the fix (since finding 247 only while it is this omabox's build). Its tools (git,
+    cmake, ninja, hyprwayland-scanner, base-devel) are what a package lists as optional. `--version`
+    says which aquamarine new boxes use, `ls --json` each
     box's. `OMABOX_AQUAMARINE=system` skips the private builds, for this box and the boxes it starts
     (the suite's stand-in hosts): `OMABOX_AQUAMARINE=system test/run.sh` is the suite on stock.
     Verified: from a copy of the tree without `.git` (as a package), `setup --aquamarine` cloned and
@@ -4768,8 +4769,8 @@ from them.
     of the file, read, never loaded: no binutils needed) or is a release after `AQ_FIXED_AFTER` (kept
     as the fallback should a later release rename the method). Everything that read `AQ_FIXED` follows:
     the refusals, the confirm-close downgrade, `config confirm-close-available` (the widget's
-    switch), `setup --aquamarine` building nothing, `--version` saying "the system's, 0.15.0, patched
-    with the fix ...". Private builds are untouched (still fixed by being omabox's). No cache: the
+    switch), `setup --aquamarine` building nothing (no longer: finding 247), `--version` saying "the
+    system's, 0.15.0, patched with the fix ...". Private builds are untouched (still fixed by being omabox's). No cache: the
     grep takes half a millisecond on the 1.5 MB library, what reading a cache keyed on the file's
     path and mtime would cost. Not a behaviour probe (Hyprland in a headless labwc, in a sandbox):
     seconds, a sandbox of its own, and it would answer for the GPU it ran on; nor a setting, which
@@ -4780,6 +4781,36 @@ from them.
     lack the fix; one patched or later passes with a note, time for UPSTREAM.md's drop list, so an
     Arch rebuild is no skip), and `config --json` and `up` of a headless box on a fake NVIDIA GPU
     (`t_unit_gpu`'s fake sysfs, `up` stopped at the box's lock) following each answer.
+
+247. **`setup --aquamarine` builds whenever boxes would run without omabox's own patches** (2026-10-07,
+    #186; corrects 246). Since finding 246 a system aquamarine with #415 counted as "has the fix", and
+    `setup --aquamarine` then built nothing, as it already did for any release after `AQ_FIXED_AFTER`.
+    But omabox's build carries more than #415: its own patches for interactive boxes (a key held when
+    the window loses focus is released, finding 132; in a monitor's window the pointer lands on that
+    monitor, 238; the cursor stays shown between monitor windows, 239). No package has them, so once
+    a system copy had #415 interactive boxes lost all three and nothing built them back short of
+    `--force`, while `monitor add`'s notes still sent the user to `omabox setup --aquamarine`, which
+    did nothing. Diogo chose (a) on the issue: `setup --aquamarine` now builds unless boxes already
+    use this omabox's build (`AQ_BUILD`), `--force` rebuilding that one too; over a system copy with
+    #415 it first says the copy has the fix but not omabox's own. `AQ_FIXED` keeps its meaning, #415
+    only: the NVIDIA and `--confirm-close` refusals, the confirm-close downgrade and
+    `confirm-close-available` still accept a system copy with it. `setup` notes what the boxes'
+    aquamarine lacks (`aq_note`): an older build of omabox's (as before), a system copy without #415
+    (now also naming omabox's own fixes), and a system copy with it (new: its note had been none).
+    `monitor add`'s two notes (`aq_monitor_note`, out of `monitor_add_window` so the suite reaches
+    it) keep their words; what they send the user to now builds. Can a system copy be seen to carry
+    omabox's patches, as #415 is by its symbol? No. `nm -D --defined-only` of omabox's build against
+    plain `7bb8bdf4` built here: 0003 adds no exported symbol, 0001 and 0002 only weak template
+    instantiations their code happens to need (`CSharedPointer<std::pair<unsigned, unsigned>>`,
+    `CSharedPointer<std::vector<unsigned>>`, `std::vector<std::pair<std::string, CBox>>::~vector`),
+    which any other code could export too; 0002's static `layoutAbsolute` is not exported, and its
+    `AQ_WAYLAND_LAYOUT` string is in omabox's build (not in plain `7bb8bdf4` nor the system's
+    0.15.0) but would answer for one patch of three. So a system copy is taken to lack them all.
+    `t_unit_aquamarine` (`aq_setup_checks`): over the stub 0.15.0 exporting #415's symbol, `setup
+    --aquamarine` says what it lacks and builds, stopped at the clone by stub build tools on PATH,
+    into a scratch data dir and cache (the suite's copy of the CLI has no `.git`); over a build of
+    this omabox's, nothing to build and no tool run, `--force` building it all the same; over an older
+    one, a build. Plus each `setup` note and `monitor add`'s two. Fails on the old code (11 checks).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
