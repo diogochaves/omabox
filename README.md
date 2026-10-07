@@ -43,8 +43,8 @@ real desktop saw no window at all.
   (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries fixes
   of omabox's for interactive boxes: a key held when the box's window loses focus is released, and
   in a monitor's window your pointer lands on that monitor and your cursor stays shown (next
-  release). With a system aquamarine that has PR #415, `omabox setup --aquamarine` builds nothing
-  unless `--force`: for those fixes, force it.
+  release). No system aquamarine has those, so `omabox setup --aquamarine` builds them even when
+  yours has PR #415 (enough on its own for headless NVIDIA boxes and confirm-close, not for those).
 
 ## Install
 
@@ -504,7 +504,8 @@ and `remove` lay the picture out again. Resizing a window changes its view's sca
 monitor; closing it unplugs it. For an exact large resolution at full size use a headless box and
 `peek --monitor`. This needs aquamarine's fix, and the pointer lands on the monitor whose window it
 is in, and your cursor stays shown from one window to the next, only with omabox's build of it
-(`omabox setup --aquamarine` makes both; `monitor add` says when a box lacks them).
+(`omabox setup --aquamarine` makes both, whatever your system's aquamarine has; `monitor add` says
+when a box lacks them).
 
 </details>
 
@@ -600,8 +601,10 @@ dir), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, 
   theirs reached a model here.
 - Headless boxes on NVIDIA and confirm-close need aquamarine's fix (PR #415, built into
   `build/prefix` by `install.sh`, `omabox setup --aquamarine`) until a release ships it (or your
-  system's package is patched with it); without it `up` refuses them, saying what to run. What
-  omabox carries until upstream releases land, and what to drop then: `UPSTREAM.md`.
+  system's package is patched with it); without it `up` refuses them, saying what to run. omabox's
+  own fixes for interactive boxes (held keys, the pointer and cursor in monitor windows) are in that
+  build only: no system aquamarine has them. What omabox carries until upstream releases land, and
+  what to drop then: `UPSTREAM.md`.
 - A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
   `omabox shot` works with its window off screen, just at that rate. Not after you closed its window
   and kept the box running (`confirm-close`): the new window is only drawn while it is on screen.

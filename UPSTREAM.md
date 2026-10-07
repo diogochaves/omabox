@@ -16,17 +16,22 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Check:** `git -C build/aquamarine fetch -q --tags && git -C build/aquamarine tag --contains 7bb8bdf4`,
   then `pacman -Q aquamarine` at or past that tag, or a package patched with #415 (`OMABOX_AQUAMARINE=system
   omabox --version` says "patched with the fix": `AQ_FIX_SYMBOL`, finding 246). Once it is, `omabox
-  --version` names the system's copy with no warning and `setup --aquamarine` builds nothing
-  (`AQ_FIXED_AFTER` in `bin/omabox`, 0.15.1: correct it if that release lacks the fix).
-- **Then drop:** `cmd_setup`'s build (or all of `setup`, if #49 has not given it other parts), the
-  private-build half of `aq_pick` (`AQ_COMMIT`, `AQ_USER`, the stale-soname note), the refusals and
-  the confirm-close downgrade in `cmd_up`/`cmd_config` with `aq_lacks`/`AQ_HOWTO`, the fix's
-  detection (`AQ_FIX_SYMBOL`, `aq_has_fix`, `aq_ver_fixed`, `AQ_SYSDIR` and their checks in
-  `t_unit_aquamarine`), the
-  `/opt/omabox/lib` bind and `LD_LIBRARY_PATH` in `share/start-hyprland.sh`, the aquamarine step and
-  its build packages in `install.sh` (cmake, ninja, hyprwayland-scanner, ...), `OMABOX_AQUAMARINE`
-  and `aq_unfixed` in the suite, and the mentions in README.md, CONTRIBUTING.md, NOTES "Reproduce",
-  the skill's `reference.md` and AGENTS.md's "Developed against". Keep `confirm-close.sh`'s fallback.
+  --version` names the system's copy with no warning and `up` refuses nothing for want of it
+  (`AQ_FIXED_AFTER` in `bin/omabox`, 0.15.1: correct it if that release lacks the fix). The private
+  build stays all the same while omabox carries patches of its own (held keys, the pointer's and the
+  cursor's entries below: `setup --aquamarine` builds them whatever the system's copy has, finding
+  247), on that release's commit instead of `AQ_COMMIT`.
+- **Then drop:** what is #415's alone: the refusals and the confirm-close downgrade in
+  `cmd_up`/`cmd_config` with `aq_lacks`/`AQ_HOWTO`, the fix's detection (`AQ_FIX_SYMBOL`,
+  `aq_has_fix`, `aq_ver_fixed`, `AQ_SYSDIR` and their checks in `t_unit_aquamarine`), `aq_unfixed`
+  in the suite, and #415's mentions in README.md and AGENTS.md's "Developed against". Keep
+  `confirm-close.sh`'s fallback. Only once omabox's own patches are gone too (below), the
+  private build itself: `setup_aquamarine` (or all of `setup`, if #49 has not given it other parts),
+  the private-build half of `aq_pick` (`AQ_COMMIT`, `AQ_BUILD`, `AQ_USER`, the stale-soname note,
+  `aq_note`), the `/opt/omabox/lib` bind and `LD_LIBRARY_PATH` in `share/start-hyprland.sh`, the
+  aquamarine step and its build packages in `install.sh` (cmake, ninja, hyprwayland-scanner, ...),
+  `OMABOX_AQUAMARINE` in the suite, and the mentions in README.md, CONTRIBUTING.md, NOTES
+  "Reproduce" and the skill's `reference.md`.
 
 ## aquamarine: keys held when keyboard focus leaves (not submitted)
 
@@ -35,7 +40,8 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Waiting for:** an aquamarine release that releases held keys on `leave`. omabox does not plan to
   submit the patch itself; if someone fixes it upstream, check the fix with `t_held_keys`.
 - **Until then:** `patches/aquamarine/0001-*.patch`, applied by `setup --aquamarine` on top of
-  `AQ_COMMIT` (`AQ_BUILD` names the result). Boxes on the system's aquamarine keep the bug.
+  `AQ_COMMIT` (`AQ_BUILD` names the result). Boxes on the system's aquamarine keep the bug, #415 or
+  not (no system copy can be seen to carry the patch: finding 247).
 - **Then drop:** the patch, `+keys` in `AQ_BUILD` (and the suite's checks for it); with no other
   patch left (the pointer's and the cursor's, below), the `git apply` loop in `setup_aquamarine`, `AQ_BUILD` (back to
   `AQ_COMMIT`) and the stale-build note in `setup_user`; `t_held_keys` then checks any aquamarine

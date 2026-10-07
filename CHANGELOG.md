@@ -125,9 +125,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A system aquamarine patched with the fix for nested Wayland outputs is used as fixed.** omabox
   told the fix (hyprwm/aquamarine#415) by the version, so a package that patched it into 0.15.0 would
   still have refused headless NVIDIA boxes and turned confirm-close off. It now looks for what the fix
-  added to the library; `omabox --version` says "patched with the fix" for such a one, and `omabox
-  setup --aquamarine` builds nothing unless `--force` (omabox's own build still carries its fixes for
-  interactive boxes) (#48).
+  added to the library; `omabox --version` says "patched with the fix" for such a one. `omabox setup
+  --aquamarine` still builds with such a one, for omabox's own fixes for interactive boxes, which no system
+  aquamarine has (held keys, the pointer and cursor in monitor windows); it builds nothing only when
+  boxes already use this omabox's build, and `omabox setup` says what yours lacks (#48, #186).
 - **The bar widget's list holds still while the pointer is over it**: a box that goes stays in its
   row, greyed and marked gone, and a new one is counted in the header until the pointer leaves, so a
   click never lands on a box that slid under it (#117). **A list taller than the screen scrolls**,
