@@ -4453,6 +4453,35 @@ from them.
     marked `+cursor` to run the check: 41 41 41 1 1, failed); t_held_keys, t_window,
     t_peek_monitors, t_monitors; a lone interactive window in a stand-in shows the cursor on entering
     and on entering again. Not checked: the real desktop (by rule: the stand-in only).
+240. **A theme under development went into a box as a copy made at `up`** (2026-10-07, #170).
+    The usual way to develop an Omarchy theme is a folder in `~/.config/omarchy/themes/` that is a
+    link to a git working copy. `seed_home` copies each theme with `seed_copy`, following that link
+    (findings 74, 171: links *inside* a theme stay links), so the box had the theme as it was at
+    `up`: later edits never reached it, and from a git worktree the link led to the main checkout,
+    so the box tested main's theme, not the worktree's, without a word. `--ro-bind SRC:DEST` into
+    the box HOME is refused (`refuse_dest`: nothing is mounted over `/home/sbx`), and `--seed` is a
+    copy too. **`up --theme-dir DIR`** (repeatable): DIR stays where it is and the box HOME's
+    `themes/NAME` (DIR's name) is a link to it. DIR must be in the box at its own path
+    (`own_path_visible`: under the repo `up` runs from, which is mounted there already, or a
+    same-path mount); a DIR elsewhere is mounted read-only at its own path, refused as `--ro-bind`'s
+    are (as named and where it leads; from ai-jail, a folder the jail was given whole). Two of one
+    name and a name with a leading dot (`omarchy-theme-set` refuses it) are refused. The link
+    replaces seed_home's copy of a theme of the same name (`home_link`, which clears links on the
+    way first: finding 168). `omarchy-theme-set NAME` in the box applies it as it is then: it copies
+    a user theme with `cp -r DIR/*`, through a top-level link, and treats a link as the user's own
+    theme, not an installed one (no files dropped). `box.json` has `theme_dirs`; `up` again with
+    other ones says which the box has. And `up` notes a theme it copies from a link into the repo it
+    runs from, or into another checkout of it (the same git common dir; asked only outside ai-jail,
+    for `repo_top`'s reason): a copy made now, and `up --theme-dir` naming this checkout's own copy
+    of it when it has one. `own_path_visible` and `home_link` are meant for plugins too (#171).
+    Checked: `t_theme_dir` (a box: a theme in the repo and one outside it, linked, the outside one at
+    its own path and read-only, edits on the host after `up` seen in the box, `omarchy-theme-set`
+    applying the linked theme as edited, `up` again with fewer refused); `t_unit_theme_dir`
+    (`own_path_visible`, `home_link` over a save's link, the note in a repo and from a real
+    worktree, none for other themes); `t_unit_refusals` (a hook's folder, a secret store, a link to
+    one, `~/.config/omarchy`, a file, a missing dir, two of one name, a dot name). All fail on the
+    old code (no `--theme-dir`). Not checked: the note from a full `up` (no box was started with a
+    fake HOME holding such a link); its function is checked, and seed_home only calls it.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

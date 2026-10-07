@@ -543,6 +543,8 @@ t_unit_mount_rules() {
   local out; out=$(cd "$fh/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --seed fixtures:.config/x --seed nowhere:y' _ "$TMP/lib/bin/omabox" "$TMP/mr-relay")
   check_match "relay: a relative --seed SRC goes absolute, DEST as given" "\|--seed\|$fh/proj/fixtures:\.config/x\|" "$out"
   check_match "...one that is not there as given, for the broker to say so" "\|--seed\|nowhere:y\|" "$out"
+  out=$(cd "$fh" && bash -c 'source "$1"; RELAY=$2; relay_call up --theme-dir proj' _ "$TMP/lib/bin/omabox" "$TMP/mr-relay")
+  check_match "relay: a relative --theme-dir goes absolute (#170)" "\|--theme-dir\|$fh/proj\|" "$out"
   # #98: omabox's own saves and box HOMEs, and other tools' tokens
   local x
   for x in .local/share/omabox .local/share/omabox/saves .cache/omabox .config/gh .config/gcloud .azure \
@@ -610,6 +612,22 @@ t_unit_refusals() {
     "$(HOME=$fh ob up "$P-r30" --no-shell --seed "$fh/.ssh/id_linked:x" 2>&1)"
   check_match "--ro-bind of a hook's folder refused" "refusing to mount $fh/.config/omarchy/hooks into a box: it is inside" \
     "$(HOME=$fh ob up "$P-r30" --no-shell --ro-bind "$fh/.config/omarchy/hooks:/mnt/h" 2>&1)"
+  # --theme-dir (#170): refused as --ro-bind is, as named and where it leads; a theme's own name.
+  mkdir -p "$fh/.config/omarchy/themes/t" "$fh/.gnupg/t" "$TMP/rf-td/a/t" "$TMP/rf-td/b/t" "$TMP/rf-td/.hidden"
+  ln -s "$fh/.gnupg/t" "$TMP/rf-td/linked"
+  check_match "--theme-dir of a hook's folder refused" "refusing to mount $fh/.config/omarchy/hooks into a box: it is inside" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$fh/.config/omarchy/hooks" 2>&1)"
+  check_match "...of a dir in a secret store" "refusing to mount $fh/.gnupg/t into a box: it is inside $fh/.gnupg/" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$fh/.gnupg/t" 2>&1)"
+  check_match "...of a link to one" "refusing to mount $TMP/rf-td/linked into a box: it is inside $fh/.gnupg/" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$TMP/rf-td/linked" 2>&1)"
+  check_match "...of ~/.config/omarchy itself" "refusing to mount $fh/.config/omarchy into a box: it contains" \
+    "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$fh/.config/omarchy" 2>&1)"
+  check_match "...of a dir that is not there" "--theme-dir: no such directory: $TMP/rf-td/none" "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/none" 2>&1)"
+  check_match "...of a file" "--theme-dir: no such directory" "$(ob up "$P-r30" --theme-dir "$fh/.ssh/id_test" 2>&1)"
+  check_match "...two of one name" "--theme-dir: two themes named t" "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --theme-dir "$TMP/rf-td/b/t" 2>&1)"
+  check_match "...a name omarchy-theme-set refuses" "cannot start with a dot" "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/.hidden" 2>&1)"
+  check_fails "...no box dir for any of them" test -e "$XDG_RUNTIME_DIR/omabox/$P-r30"
   # (#123) Only where it is refused: with the fix it would open a window on the real desktop.
   if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
     check_match "--monitor on an interactive box without aquamarine's fix: refused" "opens a window per monitor, which needs aquamarine's fix" \
@@ -874,6 +892,51 @@ t_unit_seed_copy() {
   check "seed: a save's links under DEST" seed_in "$s/b3" "$sd/C"
   check_eq "...nothing written outside the HOME" "dir dir/g file victim victim" "$(find "$v" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$v/file" "$v/dir/g" | xargs)"
   check_eq "...merged with what DEST had (finding 229)" "own seeded" "$(cat "$s/b3/home/.cfg/kept" "$s/b3/home/.cfg/f" | xargs)"
+}
+
+# up --theme-dir's pieces (#170, finding 240): where a dir is in the box at its own path, the link in
+# the box HOME, and the note for a theme seed_home copies from a link into this repo or another
+# checkout of it (a worktree's main one).
+t_unit_theme_dir() {
+  local d=$TMP/$P-td r w out
+  r=$(tmp_repo td-main); mkdir -p "$r/themes/x" "$d/elsewhere/y" "$d/home/.config/omarchy/themes" "$d/victim"
+  echo c > "$r/themes/x/colors.toml"
+  # shellcheck disable=SC2329 # called below
+  vis() { (cd "$1" && bash -c 'source "$1"; robinds=("${@:3}"); own_path_visible "$2"' lib "$TMP/lib/bin/omabox" "$2" "${@:3}"); }
+  check "own_path_visible: under the repo up runs from" vis "$r" "$r/themes/x"
+  check_fails "...not a dir outside it" vis "$r" "$d/elsewhere/y"
+  check "...one under a same-path mount" vis "$r" "$d/elsewhere/y" "$d/elsewhere"$'\t'"$d/elsewhere"
+  check_fails "...not one mounted at another path" vis "$r" "$d/elsewhere/y" "$d/elsewhere"$'\t'/mnt/e
+  check_fails "...nor a dir whose name only starts like the mount's" vis "$r" "$d/elsewhere-not" "$d/elsewhere"$'\t'"$d/elsewhere"
+  check_fails "...nor the repo, from outside a repo" vis "$d" "$r/themes/x"
+  # home_link: a link in place of seed_home's copy; a link on the way (a save's) cleared, not followed.
+  local h=$d/home; mkdir -p "$h/.config/omarchy/themes/x"; echo copy > "$h/.config/omarchy/themes/x/colors.toml"
+  lib home_link "$h" .config/omarchy/themes/x "$r/themes/x"
+  check_eq "home_link: a link in place of the copy" "$r/themes/x" "$(readlink "$h/.config/omarchy/themes/x")"
+  mkdir -p "$d/h2"; ln -s "$d/victim" "$d/h2/.config"
+  lib home_link "$d/h2" .config/omarchy/themes/x "$r/themes/x"
+  check "...a link on the way cleared: a real dir now" test -d "$d/h2/.config" -a ! -L "$d/h2/.config" -a -L "$d/h2/.config/omarchy/themes/x"
+  check_eq "...nothing written through it" "" "$(ls -A "$d/victim")"
+  # The note: a theme linked into the repo up runs from; from a worktree, into the main checkout.
+  # shellcheck disable=SC2329 # called below
+  note() { bash -c 'source "$1"; theme_snapshot_note "$2" "$3"' lib "$TMP/lib/bin/omabox" "$@" 2>&1; }
+  ln -s "$r/themes/x" "$h/.config/omarchy/themes/lx"
+  check_match "note: a theme linked into this repo is a copy made now" \
+    "note: theme lx is a copy of $r/themes/x made now: edits after this do not reach the box. up --theme-dir $r/themes/x gives a live one" \
+    "$(note "$h/.config/omarchy/themes/lx/" "$r")"
+  git -C "$r" add -A && git -C "$r" -c user.name=t -c user.email=t@t commit -qm t
+  w=$TMP/$P-td-wt; git -C "$r" worktree add -q "$w" 2>/dev/null
+  out=$(note "$h/.config/omarchy/themes/lx/" "$w")
+  check_match "...from a worktree: the main checkout's, not this one's" "copy of $r/themes/x, in another checkout \($r\), not this one \($w\)" "$out"
+  check_match "...and this checkout's own for a live one" "up --theme-dir $w/themes/x gives a live one" "$out"
+  rm -rf "$w/themes"
+  check_match "...or DIR, when this checkout has no such theme" "up --theme-dir DIR gives" "$(note "$h/.config/omarchy/themes/lx/" "$w")"
+  ln -s "$d/elsewhere/y" "$h/.config/omarchy/themes/ly"
+  check_eq "...nothing for a theme linked from elsewhere" "" "$(note "$h/.config/omarchy/themes/ly/" "$r")"
+  mkdir -p "$h/.config/omarchy/themes/z"
+  check_eq "...nor for a theme that is a dir of its own" "" "$(note "$h/.config/omarchy/themes/z/" "$r")"
+  check_eq "...nor outside a repo" "" "$(note "$h/.config/omarchy/themes/lx/" "")"
+  git -C "$r" worktree remove --force "$w" 2>/dev/null
 }
 
 # The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left
@@ -5464,6 +5527,33 @@ t_up_again() {
   ob down "$B" >/dev/null
 }
 
+# up --theme-dir (#170, finding 240): a theme under development goes in live, not as a copy made at
+# `up`. One in the repo up runs from (in the box at its own path already), one elsewhere (mounted
+# read-only at its own path); the box HOME's themes/ links to each, and omarchy-theme-set applies one.
+t_theme_dir() {
+  local B=$P-td r o=$TMP/$P-td-out/b D
+  r=$(tmp_repo td-repo); mkdir -p "$r/themes/td-a" "$o"
+  cp "$HOME/.local/state/omarchy/current/theme/colors.toml" "$r/themes/td-a/colors.toml"
+  echo one > "$o/marker"
+  (cd "$r" && ob up "$B" --no-shell --theme-dir themes/td-a --theme-dir "$o") >/dev/null 2>&1 || { no "up --theme-dir" "failed"; return; }
+  D=$(ob path -b "$B")
+  check_eq "box.json has the theme dirs, resolved" "[\"$r/themes/td-a\",\"$o\"]" "$(jq -c .theme_dirs "$D/box.json")"
+  check_eq "the box HOME's themes/ links to the one in the repo" "$r/themes/td-a" "$(ob run -b "$B" -- readlink /home/sbx/.config/omarchy/themes/td-a)"
+  check_eq "...and to the one elsewhere" "$o" "$(ob run -b "$B" -- readlink /home/sbx/.config/omarchy/themes/b)"
+  check_eq "...which is in the box at its own path" one "$(ob run -b "$B" -- cat "$o/marker")"
+  echo two > "$o/marker"; echo '# edited after up' >> "$r/themes/td-a/colors.toml"
+  check_eq "an edit after up reaches the box: live" two "$(ob run -b "$B" -- cat /home/sbx/.config/omarchy/themes/b/marker)"
+  check_eq "...in the repo's too" "# edited after up" "$(ob run -b "$B" -- tail -1 /home/sbx/.config/omarchy/themes/td-a/colors.toml)"
+  check_fails "...read-only there" ob run -b "$B" -- sh -c "echo x > '$o/marker'"
+  check "omarchy-theme-set applies the linked theme" ob run -b "$B" -- sh -c 'omarchy-theme-set td-a >/dev/null 2>&1'
+  check_eq "...as it is now" "td-a # edited after up" \
+    "$(ob run -b "$B" -- sh -c 'echo "$(cat ~/.local/state/omarchy/current/theme.name) $(tail -1 ~/.local/state/omarchy/current/theme/colors.toml)"')"
+  check_match "up again with other theme dirs: refused, saying which it has" "already up, without what you asked for: --theme-dir \(it has $r/themes/td-a, $o\)" \
+    "$(cd "$r" && ob up "$B" --theme-dir themes/td-a 2>&1)"
+  check "...with the same ones: fine" bash -c "cd '$r' && '$CLI' up '$B' --theme-dir themes/td-a --theme-dir '$o'"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # The host's submap after the last interactive box goes (finding 134), in a stand-in host (finding
 # 26): a config reload there drops passthrough's hooks and keeps the submap, and only a box's reaper
 # puts the hooks back. With that reaper gone too, `down` resets the submap, or the host's binds
@@ -6867,10 +6957,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_plugin_check t_plugin_hosted t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

@@ -447,6 +447,9 @@ blocks the network and every other socket, omabox's included), or see
 - `--seed SRC:DEST` (next release) copies a file or folder into the box HOME before the session
   starts (`--seed ./fixture.json:.config/myplugin/config.json`), for a plugin that reads its config
   once at start; the same sources are refused as for `--ro-bind`.
+- `--theme-dir DIR` (next release) puts a theme you are editing in the box live: the box's
+  `~/.config/omarchy/themes/NAME` links to DIR, which the box sees at its own path (the repo, or a
+  read-only mount). Your other themes are copies made at `up`, a linked one too.
 
 </details>
 
