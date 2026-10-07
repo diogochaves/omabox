@@ -39,9 +39,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (`keys`, `click`, `scroll`, `monitor add` ...) sent after the first frame, and one contact sheet of
   them all. A folder of its own each time, or `-o DIR`, cleared of an earlier burst's frames
   (#132, #167).
-- **`omabox scroll X Y DY [DX] [--source wheel|finger|continuous|tilt]`** and `pointer -- hscroll DX`:
-  horizontal scrolling, and a mouse wheel's notches or a touchpad's smooth scroll with its stop,
-  where `pointer -- scroll DY` was one vertical event only (#134).
+- **`omabox scroll X Y DY [DX] [--source wheel|finger|continuous|tilt] [--mod MODS]`** and `pointer --
+  hscroll DX`: horizontal scrolling, a mouse wheel's notches (a DY that is not whole notches said) or a
+  touchpad's smooth scroll with its stop, and Omarchy's SUPER+wheel binds with `--mod super`, where
+  `pointer -- scroll DY` was one vertical event only (#134, #167).
 - **`omabox config gpu auto|nvidia|amd|intel|SLOT`**: the GPU headless boxes render on, kept in the
   settings (a jailed agent's `up` and every terminal get it), falling back to the first GPU when
   that one is gone, where `OMABOX_RENDER_NODE` named a node that could vanish or change number;

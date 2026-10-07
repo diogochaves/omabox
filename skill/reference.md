@@ -151,12 +151,15 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   one run: raw, it raises nothing (a `--window` must be on screen and uncovered). The button defaults to left. A button pressed with `down` stays
   down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
   box's next clicks are drags.
-- `omabox scroll [--window SEL | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger]`: the pointer
-  there, then a scroll; DY down, DX right (negative: up, left), 15 a wheel notch. `--source wheel` is a
-  mouse's notches (one per frame: apps counting them see each), `finger` a touchpad's smooth scroll
-  ending in a stop (kinetic scrolling); none is one plain event. Hyprland binds see the wheel as
-  `mouse_down`/`mouse_up`/`mouse_left`/`mouse_right`, at most one per `binds.scroll_event_delay`
-  (300 ms) as from a real wheel.
+- `omabox scroll [--window SEL | --in SHOT] [--wait] [--mod MODS] X Y DY [DX] [--source wheel|finger]`:
+  the pointer there, then a scroll; DY down, DX right (negative: up, left), 15 a wheel notch. `--source
+  wheel` is a mouse's notches (one per frame: apps counting them see each; a DY that is not whole
+  notches is rounded to the nearest, at least one, and said: 20 scrolls 15), `finger` a touchpad's
+  smooth scroll ending in a stop (kinetic scrolling); none is one plain event. Hyprland binds see the
+  wheel as `mouse_down`/`mouse_up`/`mouse_left`/`mouse_right`, at most one per
+  `binds.scroll_event_delay` (300 ms) as from a real wheel; `--mod super` reaches Omarchy's
+  SUPER+wheel binds (workspaces, groups). `--source tilt` (a wheel pushed sideways) reaches apps, but
+  Hyprland's binds see few of its notches (3 notches: 0 or 1 binds): test binds with `wheel`.
 - `keys -t TEXT` and `--pass VAR` type a newline as Return and a tab as Tab; any other control
   character (backspace, escape, a carriage return) is refused, exit 2, before anything is typed. A
   `--pass` value's one trailing `\r` (a Windows line ending) is dropped.

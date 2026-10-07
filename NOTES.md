@@ -3647,7 +3647,8 @@ from them.
     are 10 binds; `binds.scroll_event_delay` (300 ms) drops scroll events closer than that, so the
     check sets it to 0. foot reports each notch as several mouse lines (its multiplier). Checks:
     t_unit_pointer (refusals, pointer_marks), t_pointer (foot's reports: right, left, down with a
-    wheel, `pointer hscroll`, up with a finger; binds counting 2, 1 and 3 events).
+    wheel, `pointer hscroll`, up with a finger; binds counting 2, 1 and 3 events). Since finding 236:
+    `scroll --mod MODS`, a wheel's rounding said, tilt's dropped binds documented.
 214. **`omabox config gpu auto|nvidia|amd|intel|SLOT`: the GPU a headless box renders on** (2026-10-06,
     #156). Boxes took the first usable render node (the iGPU on this desk); OMABOX_RENDER_NODE moved
     them, but named a node that vanishes when the RTX goes to vfio-pci for the VM (every `up` died),
@@ -4090,7 +4091,8 @@ from them.
     `down` of the box closes both windows and a third process named as its peek. With 950110b's CLI
     and peek those four checks fail: the main screen's window drew nothing, and HEADLESS-3's drew the
     click on the main screen, at 1140,733 (seen in a shot). t_peek (one monitor) unchanged.
-236. **`shot --burst` edges** (2026-10-06, #167; review of finding 212). (1) `--after`'s list of
+236. **`shot --burst` edges; `scroll --mod`, a wheel's rounding, tilt** (2026-10-06, #167; review of
+    findings 212 and 213). (1) `--after`'s list of
     commands that act lacked `scroll` (added a commit later) and `monitor` (a hotplug is a
     transition): `shot --burst 2 --after -- scroll 500 500 15` was refused. Both are taken now
     (`monitor list` too: the list is of commands, not subcommands). (2) `-o DIR` used again kept what
@@ -4113,6 +4115,19 @@ from them.
     `-o` getting a folder each), all failing with b065a05's CLI. With it: t_burst's "about 100 ms
     apart" check could not fail (awk's `exit 1` in a rule runs END, whose own exit replaced it); a
     flag now.
+    (5) `scroll --mod MODS`, as click and drag (`with_mods`; the peek mark `combo MODS+scroll`):
+    Omarchy's SUPER+wheel binds (workspace and group cycling) needed raw `pointer --mod super --
+    source wheel scroll 15`. (6) A wheel (and tilt) sends whole notches of 15, the nearest and at least
+    one (the pointer tool's rounding): DY 20 scrolled 15 in silence. `scroll` says so now on stderr
+    ("a wheel turns in notches of 15: DY 20 is 1 notch (15)", `wheel_note`); without a source, or with
+    finger/continuous, the distance is sent as given. (7) Seen in a box (Hyprland 0.56.2): `--source
+    tilt` reaches apps (foot reports it, fewer lines than a wheel's), but Hyprland's binds see few of
+    its notches: three notches of tilt fired a `SUPER + mouse_right` bind once and a vertical tilt
+    never fired `mouse_down`, which then let those events through to the app, where a wheel fired the
+    bind for each notch (and the app saw none). Said in help and reference: test binds with a wheel.
+    Checks: t_unit_pointer (`scroll --mod` refusal, wheel_note), t_pointer (a tilt reaching foot;
+    `scroll --mod super` firing a `SUPER + mouse_down` bind twice for two notches and not the plain
+    `mouse_down`; the rounding said), all but the tilt check failing with b065a05's CLI.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
