@@ -960,6 +960,10 @@ t_unit_plugin_link() {
   check_fails "inside a --ro-bind mounted elsewhere (DIR:DEST): not" opv / "$d/other$T/opt/other" "$d/other/plug"
   check_fails "in the repo, under another folder mounted over it: not" opv "$d/repo" "$d/other$T$d/repo/hid" "$d/repo/hid/plug"
   check_fails "a path that does not exist: not" opv "$d/repo" "" "$d/repo/none"
+  # An --overlay is at its own path too (writable there): a plugin in one is linked to it.
+  opvo() { (cd / && bash -c 'source "$1"; robinds=(); overlays=("$2"); own_path_visible "$3"' _ "$TMP/lib/bin/omabox" "$1" "$2"); }
+  check "inside an --overlay" opvo "$d/other" "$d/other/plug"
+  check_fails "...not one beside it" opvo "$d/other/plug/x" "$d/other/plug"
   # Under ai-jail the repo is the jail's project (its cwd), never git's from where the broker runs.
   ln -sfn "$d/other/plug" "$d/repo/out"
   J=$(jq -nc --arg p "$d/repo" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}]}')
@@ -2895,7 +2899,7 @@ t_plugin_hosted() {
 # a sibling file of the repo through readlink -f "$0". In a box the plugin is a link to its own path
 # when the box has that path (the repo `up` runs from, a same-path --ro-bind), else a mount.
 t_plugin_link() {
-  local B=$P-pl R O=$TMP/pl-out M=$TMP/pl-rb H out f=/home/sbx/.config/omarchy/plugins
+  local B=$P-pl R O=$TMP/pl-out M=$TMP/pl-rb V=$TMP/pl-ov H out f=/home/sbx/.config/omarchy/plugins
   R=$(tmp_repo pl)
   lfix() {   # DIR ID: a bar widget with a helper that reads ../../tools/sibling.txt from its real path
     mkdir -p "$1/helpers"
@@ -2904,10 +2908,11 @@ t_plugin_link() {
     printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$2" > "$1/W.qml"
     printf '#!/bin/bash\nhere=$(dirname "$(readlink -f "$0")")\ncat "$here/../../tools/sibling.txt"\n' > "$1/helpers/find.sh"
   }
-  lfix "$R/widget" "$P.lw"; lfix "$O/widget" "$P.lo"; lfix "$M/widget" "$P.lm"
-  mkdir -p "$R/tools" "$M/tools"; echo sibling > "$R/tools/sibling.txt"; echo sibling > "$M/tools/sibling.txt"
-  out=$(cd "$R" && ob up "$B" --net isolated --ro-bind "$M" --plugin "$R/widget" --plugin "$O/widget" --plugin "$M/widget" 2>&1) ||
-    { no "up with a plugin in its repo, one outside, one in a --ro-bind" "$out"; return; }
+  lfix "$R/widget" "$P.lw"; lfix "$O/widget" "$P.lo"; lfix "$M/widget" "$P.lm"; lfix "$V/widget" "$P.lv"
+  mkdir -p "$R/tools" "$M/tools" "$V/tools"; echo sibling > "$R/tools/sibling.txt"; echo sibling > "$M/tools/sibling.txt"; echo sibling > "$V/tools/sibling.txt"
+  out=$(cd "$R" && ob up "$B" --net isolated --ro-bind "$M" --overlay "$V" --plugin "$R/widget" --plugin "$O/widget" --plugin "$M/widget" \
+    --plugin "$V/widget" 2>&1) ||
+    { no "up with a plugin in its repo, one outside, one in a --ro-bind, one in an --overlay" "$out"; return; }
   H=$(ob path "$B")/home
   check_eq "a plugin inside the repo up runs from: its helper reaches the repo through readlink -f" sibling \
     "$(ob run -b "$B" -- bash "$f/$P.lw/helpers/find.sh" 2>&1)"
@@ -2915,10 +2920,16 @@ t_plugin_link() {
   check_eq "one inside a same-path --ro-bind: the same" sibling "$(ob run -b "$B" -- bash "$f/$P.lm/helpers/find.sh" 2>&1)"
   check_fails "one outside anything mounted: no link" test -L "$H/.config/omarchy/plugins/$P.lo"
   check "...mounted there" ob run -b "$B" -- sh -c "test -f $f/$P.lo/manifest.json && mountpoint -q $f/$P.lo"
-  check_eq "ls --json: linked, mounted, linked" "linked mounted linked" \
-    "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".lw", $p + ".lo", $p + ".lm"] | .via] | join(" ")')"
-  check_eq "...and all three loaded through it" "loaded loaded loaded" \
-    "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".lw", $p + ".lo", $p + ".lm"] | .state] | join(" ")')"
+  # An --overlay is at its own path, writable: the plugin is linked to the overlay's view, which the
+  # box's writes reach (mounted from the host's copy, they did not).
+  check_eq "one inside an --overlay: a link to its own path" "$V/widget" "$(readlink "$H/.config/omarchy/plugins/$P.lv")"
+  ob run -b "$B" -- sh -c "echo written-in-box > $V/tools/sibling.txt"
+  check_eq "...its helper reads the overlay as the box wrote it" written-in-box "$(ob run -b "$B" -- bash "$f/$P.lv/helpers/find.sh" 2>&1)"
+  check_eq "...the host's copy untouched" sibling "$(cat "$V/tools/sibling.txt")"
+  check_eq "ls --json: linked, mounted, linked, linked" "linked mounted linked linked" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".lw", $p + ".lo", $p + ".lm", $p + ".lv"] | .via] | join(" ")')"
+  check_eq "...and all four loaded through it" "loaded loaded loaded loaded" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".lw", $p + ".lo", $p + ".lm", $p + ".lv"] | .state] | join(" ")')"
   # #129 through a link: the registry's watch is still the box's idle stand-in, and restart-shell
   # reads the plugin's files as they are now.
   check_match "the registry's watch is the box's stand-in" "/opt/omabox/share/bin/inotifywait -m -r -q" \

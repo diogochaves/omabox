@@ -412,7 +412,7 @@ most people will. Then:
   menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`. A
   widget placed in another mounted plugin's layout is `hosted` (`plugin_status`'s `host` names that
   plugin), with no warning: check it with that plugin's IPC.
-- **Linked or mounted**: a plugin inside the repo `up` runs from (or a same-path `--ro-bind`) is a
+- **Linked or mounted**: a plugin inside the repo `up` runs from (or a same-path `--ro-bind`, or an `--overlay`) is a
   link in the box HOME to its own path, as a plugin linked from its repo is on a desk, so a helper
   that finds the rest of its repo through `readlink -f "$0"` works; any other PATH is mounted there.
   `plugin_status`'s `via` says which (`linked`, `mounted`).

@@ -4508,7 +4508,10 @@ from them.
     t_unit_plugin_link (own_path_visible's cases, a mount from elsewhere over the repo, ai-jail's
     project and a link out of it; home_link over a dir and through a link); t_saves (a save's link
     in plugins/ gone; on the old code it stayed), t_plugin_check, t_plugin_hosted. Not checked: a
-    jailed agent end to end (unit only).
+    jailed agent end to end (unit only). Later the same day an `--overlay` dir counts too (it is at its
+    own path, writable): a plugin in one was mounted from the host's copy, a second view beside the
+    overlay's that in-box writes did not reach; now it is linked to the overlay's. t_unit_plugin_link,
+    t_plugin_link (a plugin in an overlay linked, a write in the box seen through the link).
 
 242. **A host process list could not tell a box's processes from the desktop's** (2026-10-07, #172).
     After restarting the desktop's shell, a host `pgrep -a quickshell` showed what looked like two

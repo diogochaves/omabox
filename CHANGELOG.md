@@ -86,7 +86,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
-- **A `--plugin` inside the repo you run `omabox up` from (or a same-path `--ro-bind`) is a link in
+- **A `--plugin` inside the repo you run `omabox up` from (or a same-path `--ro-bind`, or an `--overlay`) is a link in
   the box, as on your desk.** It was mounted at `~/.config/omarchy/plugins/<id>`, so a helper that
   finds the rest of its repo through `readlink -f` failed in a box and worked on the desk. Any other
   plugin is still mounted; `ls --json`'s `plugin_status` says which (`via`: `linked` or `mounted`)

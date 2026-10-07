@@ -190,7 +190,7 @@ reloads for ever). Its config is still the box's own copy; an Omarchy update rel
 @ up run restart-shell
 --plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; \`up\` and
 \`restart-shell\` warn when Omarchy's validator or the shell refuses it (\`ls --json\`: plugin_status).
-One the box has at its own path (in the repo \`up\` runs from, or a same-path --ro-bind) is linked
+One the box has at its own path (in the repo \`up\` runs from, a same-path --ro-bind or an --overlay) is linked
 to there, as on a desk, so readlink -f leads into its repo; any other is mounted (plugin_status: via).
 @ up run
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
@@ -1680,10 +1680,11 @@ home_link() {
   ln -s -- "$3" "$1/$2"
 }
 
-# own_path_visible PATH: PATH is in the box at its own host path by a read-only mount `up` makes
-# anyway (findings 240, 241: --theme-dir, --plugin): under the repo `up` runs from (repo_top, unless refuse_src keeps it out) or a
-# same-path --ro-bind (`up`'s robinds, which --hyprland, --omarchy and mise's add to), with no mount
-# from elsewhere at or above it. Under ai-jail repo_top is the jail's project, and the jail must see
+# own_path_visible PATH: PATH is in the box at its own host path by a mount `up` makes anyway
+# (findings 240, 241: --theme-dir, --plugin): under the repo `up` runs from (repo_top, unless
+# refuse_src keeps it out), a same-path --ro-bind (`up`'s robinds, which --hyprland, --omarchy and
+# mise's add to) or an --overlay (`up`'s overlays: at its own path, writable, so a plugin in one is
+# what the box's writes there make it), with no mount from elsewhere at or above it. Under ai-jail repo_top is the jail's project, and the jail must see
 # PATH (jail_sees: not through a link out of its folders).
 own_path_visible() {
   local p top x src dest seen=1 specs=()
@@ -1691,6 +1692,7 @@ own_path_visible() {
   if in_jail; then jail_sees "$p" >/dev/null || return 1; fi
   if top=$(repo_top) && ! refuse_src "$top" >/dev/null; then specs+=("$top"$'\t'"$top"); fi
   specs+=(${robinds[@]+"${robinds[@]}"})   # unset outside cmd_up
+  for x in ${overlays[@]+"${overlays[@]}"}; do specs+=("$x"$'\t'"$x"); done
   for x in "${specs[@]}"; do
     src=${x%%$'\t'*} dest=${x#*$'\t'}
     [ "$p" = "$dest" ] || [[ $p == "$dest"/* ]] || continue
@@ -2130,8 +2132,8 @@ cmd_up() {
     why=$(refuse_dest "$dest") && die "refusing to mount $src at $dest in a box: $why"
     ro_args+=(--ro-bind "$src" "$dest")
   done
-  # A plugin the box sees at its own path anyway (inside the repo `up` runs from, or a same-path
-  # --ro-bind) is linked to it from the box HOME, as a plugin developed in a larger repo is linked
+  # A plugin the box sees at its own path anyway (inside the repo `up` runs from, a same-path
+  # --ro-bind or an --overlay) is linked to it from the box HOME, as a plugin developed in a larger repo is linked
   # into ~/.config/omarchy/plugins on a desk, not mounted a second time at the link's place (finding
   # 241): a helper that finds the rest of its repo through readlink -f "$0" reaches it. Any other is
   # mounted there.
