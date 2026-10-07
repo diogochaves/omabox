@@ -119,7 +119,8 @@ the user the link. `quickshell kill`, `qs ipc`: the box's is `omabox run -- qs i
 
 Only when the user asked for their **real** desktop in this task ("switch my theme", reload my
 config), run that one command as `omabox host -- CMD`. Never hand them a `! CMD` that touches their
-desktop (their `!` is guarded too). Never use `host` to switch their workspace or focus to see a box.
+desktop (their `!` is guarded too): their own terminal is the place for it. Never use `host` to switch
+their workspace or focus to see a box.
 
 ## Plugins, a Hyprland build, an Omarchy checkout
 

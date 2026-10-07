@@ -4658,6 +4658,19 @@ t_unit_guard_exec_host() {
     check_eq "...list goes on, its arguments whole" "real quickshell reached: list --all --json" "$("${gx[@]}" qs list --all --json 2>&1)"
     check_eq "...so does --version" "real quickshell reached: --version" "$("${gx[@]}" quickshell --version 2>&1)"
     check_eq "...and a config whose path is a subcommand's name" "real quickshell reached: -p /tmp/kill log" "$("${gx[@]}" qs -p /tmp/kill log 2>&1)"
+    # #166: quickshell's parser bundles short options (`quickshell -np PATH list` runs), and the guard
+    # read -np as a flag and PATH as the subcommand, so kill and ipc after it reached the real one.
+    local f a
+    for f in -np -dp -pn -vnp -npX --path=/x; do
+      a=("$f"); case $f in -npX|--path=*) ;; *) a+=(/usr/share/omarchy/shell) ;; esac
+      check_match "...qs ${a[*]} kill refused (bundled options)" "not running quickshell kill here" "$("${gx[@]}" qs "${a[@]}" kill --any-display 2>&1)"
+      check_match "...qs ${a[*]} ipc refused" "not running quickshell ipc here" "$("${gx[@]}" qs "${a[@]}" ipc --any-display call shell ping 2>&1)"
+      check_eq "...qs ${a[*]} list goes on, whole" "real quickshell reached: ${a[*]} list --all" "$("${gx[@]}" qs "${a[@]}" list --all 2>&1)"
+    done
+    check_eq "...exit 4 for a bundled kill" 4 "$("${gx[@]}" quickshell -dp /x kill >/dev/null 2>&1; echo $?)"
+    check_eq "...a value that is a subcommand's name, bundled, is a value" "real quickshell reached: -np kill list" \
+      "$("${gx[@]}" qs -np kill list 2>&1)"
+    check_match "...an unknown word before kill does not hide it" "not running quickshell kill here" "$("${gx[@]}" qs --unknown-opt value kill 2>&1)"
   else
     no "...which refuse kill and ipc" "not run: quickshell under guard exec is [$qs], not the guard's"
   fi

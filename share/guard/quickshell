@@ -6,13 +6,27 @@
 # (hyprctl) is guarded, so the user was left with no bar. Without those options they find nothing from
 # here (instances are matched by display), so no use is lost: refuse kill, ipc and msg (ipc call's old
 # name) outright. list and log only read; running a config fails for want of a display, as any app.
-# In a box, and for `omabox host`, the guard's directory is off PATH and this is not reached.
+# In a box, and for `omabox host`, the guard's directory is off PATH and this is not reached. Nor is it
+# by a caller that names the binary by its path (/usr/bin/quickshell): Omarchy 4.0.4 calls it by name.
+# The subcommand, found as quickshell's parser (CLI11) finds it (#166): the first of their names that is
+# no option's value. The options before it are the top level's: -p/--path, -c/--config, -m/--manifest,
+# --log-rules and --debug take a value (the next word, or after = for a long one); -h -V -n -d -v are
+# flags. Short ones bundle: in `-np PATH` or `-dpPATH` a letter that takes a value takes the rest of its
+# word, or the next word when it is the last. A word that names no subcommand (the value of an option
+# not known here, a stray word) is passed over, not taken for the subcommand, so a misreading leads on
+# to the real one: kill or ipc after it is still refused.
 subcommand() {   # (its own "$@": the command's stays whole for exec)
   while [ $# -gt 0 ]; do
     case $1 in
-      -p|--path|-c|--config|-m|--manifest|--log-rules|--debug) shift ;;   # an option's value, not a subcommand
-      -*) ;;
-      *) echo "$1"; return ;;
+      --path|--config|--manifest|--log-rules|--debug) shift ;;   # an option's value, not a subcommand
+      --*) ;;
+      -?*)
+        g=${1#-}
+        while [ -n "$g" ]; do
+          l=${g%"${g#?}"} g=${g#?}
+          case $l in p|c|m) [ -n "$g" ] || shift; break ;; esac
+        done ;;
+      log|list|kill|ipc|msg) echo "$1"; return ;;
     esac
     [ $# = 0 ] || shift
   done

@@ -6098,11 +6098,12 @@ GUARD_PATH=$ROOT/share/guard
 GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
   BROWSER="$GUARD_PATH/xdg-open" GH_BROWSER="$GUARD_PATH/xdg-open")
 GUARD_NOTE="omabox guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). Anything that may open a \
-window (apps, test binaries run outside ctest), hyprctl, grim, qs and keyring checks go through omabox (load the omabox \
-skill). Opening a link or file there (xdg-open, gh --web) is refused too: give the user the link. Never point \
-WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real session. The ! commands the \
-user runs are under this guard too: never suggest one that touches their desktop. Only when the \
-user asked for their real desktop in this task, run that command with: omabox host -- CMD"
+window (apps, test binaries run outside ctest), hyprctl, grim, quickshell/qs and keyring checks go through \
+omabox (load the omabox skill). Opening a link or file there (xdg-open, gh --web) is refused too: give the \
+user the link. Never point WAYLAND_DISPLAY, DISPLAY or HYPRLAND_INSTANCE_SIGNATURE back at the real \
+session. The ! commands the user runs are under this guard too: never suggest one that touches their \
+desktop; tell them to run it in their own terminal. Only when the user asked for their real desktop in \
+this task, run that command with: omabox host -- CMD"
 # Claude Code: a SessionStart hook writes the exports to $CLAUDE_ENV_FILE, which Claude Code sources
 # before every shell command of the session, subagents' included, and prints the note into the
 # context. Not the settings' `env` block: that also changes Claude Code's own process (clipboard
