@@ -2671,7 +2671,7 @@ from them.
     checks the 1024-character cap. None of Codex, pi or Hermes is logged in here, so whether they
     follow the skill is still untested (#84).
 146. **`--omarchy` on a real Omarchy checkout; hidden 1x1 layers** (2026-10-01, #84's list). Run on a
-    clone of basecamp/omarchy at v4.0.4 (no file differs from `/usr/share/omarchy`; git has docs,
+    clone of omacom/omarchy at v4.0.4 (no file differs from `/usr/share/omarchy`; git has docs,
     tests, `etc/` and three debug scripts more; no build step) and at the head of `quattro`
     (821ae589), on Hyprland 0.56.2 and quickshell 0.3.1: `up` and the bar, `OMARCHY_PATH` and bin
     first, the launcher bind, an edit to a bar widget (after `restart-shell`) and to a Lua file
