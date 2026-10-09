@@ -7007,8 +7007,11 @@ this task, run that command with: omabox host -- CMD"
 # context. Not the settings' `env` block: that also changes Claude Code's own process (clipboard
 # paste, opening the browser). The hook is ours if its command mentions $GUARD. It does nothing but
 # say so once omabox is gone (issue #51: deleted without `guard off`, nothing is left to undo it).
+# Gone means no omabox on PATH either: ai-jail sees ours at ~/.local/bin/omabox (the broker's maps),
+# never at this path, and a jailed agent told the hook could go offered to remove it (#203).
+GUARD_HERE="{ [ -x '$ROOT/bin/omabox' ] || command -v omabox >/dev/null 2>&1; }"
 GUARD_GONE="omabox guard: omabox is gone ($ROOT/bin/omabox)"
-GUARD_HOOK="if [ ! -x '$ROOT/bin/omabox' ]; then echo '$GUARD_GONE, so the guard is not applied: shell commands here reach the real desktop. Its SessionStart hook (the one naming $GUARD) can go from settings.json'; \
+GUARD_HOOK="if ! $GUARD_HERE; then echo '$GUARD_GONE, so the guard is not applied: shell commands here reach the real desktop. Its SessionStart hook (the one naming $GUARD) can go from settings.json'; \
 elif [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi"
 # shellcheck disable=SC2016 # jq, not shell
@@ -7022,7 +7025,7 @@ GUARD_JQ='def ours: (.command? // "") | contains($g);
 # Codex sets variables, not limits. Those are fixed values, so they stay when omabox is gone: a
 # SessionStart hook in its hooks.json (issue #51; the same format as Claude Code's settings) gives the
 # note while omabox is there, and says how to take the guard out once it is not.
-GUARD_CODEX_HOOK="if [ -x '$ROOT/bin/omabox' ]; then echo '$GUARD_NOTE'; \
+GUARD_CODEX_HOOK="if $GUARD_HERE; then echo '$GUARD_NOTE'; \
 else echo '$GUARD_GONE, but Codex still applies its guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). To end it, delete the lines from # >>> omabox guard to # <<< omabox guard in Codex config.toml, and this hook from its hooks.json'; fi"
 GUARD_CODEX="# >>> omabox guard (\`omabox guard off\` removes this block)
 [shell_environment_policy.set]

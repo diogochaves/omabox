@@ -5112,6 +5112,21 @@ from them.
     wanted `wait change -g`'s one digit-to-digit change to equal the cell `wait still` named (all the
     digits over 2 s), and a narrow pair came out a pixel narrower; it checks the change is inside it now.
 
+263. **Inside ai-jail the guard's hook said omabox was gone** (2026-10-09, re-testing /compare's
+    recipes with ai-jail 2.8.1, #203). The SessionStart hook tested `$ROOT/bin/omabox`, the checkout,
+    and the broker maps omabox into a jail at `~/.local/bin/omabox` only. So a jailed agent read
+    "omabox is gone … shell commands here reach the real desktop … the hook can go from settings.json",
+    false on every count, and the agent (`claude -p`, haiku) offered to remove the hook. Gone now means
+    that path missing **and** no `omabox` on PATH, for Claude Code's and Codex's hooks. In a jail the
+    guard then applies as outside: its share/guard dir on PATH does not exist there and `caller_path`
+    drops it from what the relay sends; the relay sends no display variables. A checkout removed
+    with its `~/.local/bin` link left dangling still reads gone (a dangling link is not found).
+    t_unit_guard_settings runs the gone checks with an empty PATH and adds an omabox on PATH, not at
+    the checkout's path (fails on the old hook). Hooks written before this read outdated:
+    `omabox guard on` rewrites them. Same run: ai-jail 2.8.1 changed nothing the broker reads. 2.7.0's
+    `--symlink` hops were already parsed (a destination, masked). 2.8.0 gives a bare `ai-jail claude`
+    filtered egress to its API host and keeps `--unshare-net`, so its boxes stay `isolated`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

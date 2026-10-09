@@ -3,6 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **Inside ai-jail, the guard's hook no longer says omabox is gone** and that it can be removed
+  from settings.json (#203). It looked for omabox only in its checkout, which a jail sees only as
+  the `~/.local/bin/omabox` the broker maps in. A jailed agent got the guard's usual note instead.
+  Run `omabox guard on` once to update the hook.
+
 ## 0.5.2 — 2026-10-09
 
 `omabox shot` works again from a directory you cannot read, as `up` does since 0.5.1.

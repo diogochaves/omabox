@@ -5439,11 +5439,22 @@ t_unit_guard_settings() {
   check_match "...and so does Claude Code's" "! commands the user runs are under this guard too.*omabox host -- CMD$" \
     "$(CLAUDE_ENV_FILE=$f sh -c "$hook")"
   # Issue #51: omabox deleted without `guard off` (a checkout removed, a package uninstalled).
-  rm -rf "$co" "$f"
-  check_match "omabox gone: the hook says so, in one line" "^omabox guard: omabox is gone \($co/bin/omabox\), so the guard is not applied" "$(CLAUDE_ENV_FILE=$f sh -c "$hook")"
-  check_eq "...one line" 1 "$(CLAUDE_ENV_FILE=$f sh -c "$hook" | wc -l)"
+  # Gone means no omabox on PATH either (#203), so these run with none there.
+  rm -rf "$co" "$f"; mkdir -p "$TMP/guard-nopath"
+  hk() { env PATH="$TMP/guard-nopath" /bin/sh -c "$1"; }
+  check_match "omabox gone: the hook says so, in one line" "^omabox guard: omabox is gone \($co/bin/omabox\), so the guard is not applied" "$(CLAUDE_ENV_FILE=$f hk "$hook")"
+  check_eq "...one line" 1 "$(CLAUDE_ENV_FILE=$f hk "$hook" | wc -l)"
   check_fails "...and leaves the session's environment untouched" test -e "$f"
-  check_match "...Codex's says how to take its guard out" "omabox is gone .*Codex still applies its guard.*# >>> omabox guard" "$(sh -c "$chook")"
+  check_match "...Codex's says how to take its guard out" "omabox is gone .*Codex still applies its guard.*# >>> omabox guard" "$(hk "$chook")"
+  # #203: in ai-jail the broker maps omabox to ~/.local/bin/omabox, never at the checkout's path. The
+  # agent there was told omabox was gone and the hook could go, and offered to remove it.
+  local jb=$TMP/guard-jailbin; mkdir -p "$jb"; printf '#!/bin/sh
+' > "$jb/omabox"; chmod +x "$jb/omabox"
+  check_match "an omabox on PATH, not at the checkout's path (ai-jail): the note, not gone (#203)" \
+    "^omabox guard: shell commands here have no display" "$(CLAUDE_ENV_FILE=$f env PATH="$jb" /bin/sh -c "$hook")"
+  check_eq "...and the guard applied" 1 "$(grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
+  check_match "...Codex's gives the note too" "^omabox guard: shell commands here have no display" "$(env PATH="$jb" /bin/sh -c "$chook")"
+  rm -f "$f"
   check_fails "guard junk refused" g maybe
   check_fails "guard on for an unknown agent refused" g on vim
   # Codex (finding 67): a marked block in config.toml, checked as TOML; only when Codex is installed.
