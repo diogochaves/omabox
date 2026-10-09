@@ -3650,7 +3650,9 @@ from them.
     summary, --after keys with --diff showing a change after the first frame, the sheet, click --in a
     frame). Since finding 236: `--after` takes scroll and monitor, `-o DIR` again clears the frames
     and sheet a burst left there, the default folder is a new one each time, and `--diff` says the
-    change in the screen's coordinates (the window's with --window).
+    change in the screen's coordinates (the window's with --window). Since finding 249 frames are 100
+    ms apart by default (`--every 0`: as fast as they come), and frames identical to the one before
+    are counted on stderr.
 213. **Horizontal scroll and scroll sources: `omabox scroll X Y DY [DX] [--source ...]`, `pointer --
     hscroll DX`, `source S`** (2026-10-06, #134). The pointer tool sent one vertical axis event with no
     source, so a scrolling layout, a carousel or a plugin's overview could not be scrolled sideways (an
@@ -4847,6 +4849,58 @@ from them.
     the old code (worktree: 12 checks). 0 failures in 35 rounds of the KILL loop after the fix (15 of
     them KILLed 0.85-1.15 s before, around the relaunch). Not settled: what made the shell die in the
     issue's session; the issue kept no log of it.
+
+249. **A fast `shot --burst` held up what it recorded: each grab is four Hyprland events** (2026-10-09,
+    #191). A box shell's item stepped by a 40 ms QML Timer came out identical in every frame of a
+    burst at its default pace (back to back) or 20 ms, and slowed at 40-80 ms. Either the burst reused
+    one capture or the grabs starved the box. Measured on a 1920x1080 headless box (amdgpu): a square
+    whose colour is the Timer's count (red + 256 green), so each frame says which step it shows, and
+    the client logs each tick and `frameSwapped` with `Date.now()`. **Not a reused capture**: with
+    nothing in the box acting on Hyprland's events (a plain `qs` beside the Timer, or the stock Omarchy
+    shell with the square as a bar widget of its own), every frame shows the step drawn at its grab:
+    back to back (~17 ms apart for a crop, ~40-45 ms for the whole screen) about half the frames repeat
+    only because the grabs outpace the 40 ms steps; 40, 80, 100 ms apart all distinct; ticks and swaps
+    at 25 a second throughout. A `NumberAnimation` (the render loop's clock) the same. A window's
+    capture (`-T`, grim's toplevel path) comes 40 ms apart however fast it is asked: it waits for the
+    window's next frame. The box's Hyprland used 11% of a CPU in a 100-frame back-to-back burst, the
+    shell's quickshell 2% (0% idle). **What does hold it up**: every grab is a screencopy client of
+    its own, and Hyprland posts four events on its socket2 for each (`screencast>>1,monitor`,
+    `screencastv2>>1,monitor,HEADLESS-2`, then both `>>0`; a window grab `,window` and its class). One
+    long-lived client (omabox-still in `wait still`) posts them once: grabbing beside it still posts
+    four per grab (42 for a 10-frame burst). A client that works on each event (quickshell's
+    `Hyprland.onRawEvent`, as widgets do to refresh) does it on its GUI thread, where its Timers run;
+    four events at once block it 4 x its work, and a blocked repeating QML Timer drops the ticks it
+    missed instead of catching up. The same square in a `qs` with a handler that works C ms on each
+    event, 30-frame bursts, the share of the Timer's steps the frames show over their span:
+
+    | C \ apart | 0 | 20 ms | 40 | 60 | 80 | 100 | 150 | 250 |
+    |---|---|---|---|---|---|---|---|---|
+    | 0 ms | 100% | 107 | 100 | 102 | 100 | 101 | 100 | 100 |
+    | 5 | 41 | 92 | 100 | 100 | 100 | 101 | 99 | 100 |
+    | 10 | 8 | 14 | 48 | 100 | 100 | 101 | 100 | 100 |
+    | 15 | 0 | 7 | 10 | 39 | 89 | 61 | 81 | 87 |
+    | 25 | 0 | 0 | 3 | 4 | 8 | 31 | 53 | 71 |
+
+    Distinct frames at 10 ms: 2 of 30 back to back, 15 at 40 ms, 30 from 80. Past ~10 ms an event the
+    four together outlast the 40 ms interval and no pace keeps the Timer whole (15 ms's row is noisy:
+    a backlog of events from one burst runs into the next). The issue's numbers fit a handler of 10-15
+    ms. Handlers that only start something (`Hyprland.refreshToplevels()` and the like, or a `Process`
+    running `hyprctl` per event) cost the Timer nothing even back to back; a backlog of events drains
+    after the burst (a frozen client logged 139 of 240 events by its end). The stock Omarchy shell's
+    handlers (keyboard layout, idle) are cheap: the issue's box shell presumably had a costlier one
+    (a plugin's; not seen, assumed from the numbers).
+    **Changed**: `--every` defaults to 100 ms (`--every 0`: back to back, as before), where 10 ms of work
+    an event keeps a 40 ms timer whole; and after the frames, stderr says `N of M frames identical to
+    the one before` (md5 of the PNGs: grim -l 1 writes the same bytes for the same pixels), under 100 ms
+    adding that it may be the grabs and to take it at `--every 100ms` or slower. Frames are kept, not
+    deduplicated (each is a time and a `click --in`). Not built: one capture client for a whole burst
+    (four events a burst, not a frame), which would need grim's work (outputs, scale, -g across
+    monitors, window capture, --fit, PNG) in a tool of ours. `help shot` and the skill's Shots say how
+    fast is safe. Checks: t_unit_pixel (`--every 0` is a pace, so refused without --burst; `0x`
+    refused), t_burst (a `qs` square on a 40 ms Timer beside a 10 ms handler of Hyprland's events: a
+    default 20-frame burst spans at least a second and shows at least one step per 80 ms of it, 48 in
+    1.9 s; `--every 0` says the frames that repeat and `--every 100ms`). On the old code all four fail
+    (a default burst: 1 step in 310 ms).
 
 250. **A box started from a git worktree had no git there** (2026-10-09, #183). `up` mounts the repo
     it runs from (`repo_top`, git's top level) read-only at its own path. A linked worktree's `.git`

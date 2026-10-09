@@ -66,7 +66,13 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   before Omarchy's window opacity blends it and with no pointer over it). `shot -g "X,Y 40x30" --zoom
   8` shows a 1 px border or a glyph's edge unblended. Never read a colour off a scaled shot.
 - Frames over time (a transition): `shot --burst N --sheet --diff --after -- ACTION` ("Testing an app
-  as a desktop app"), one contact sheet, never a loop of shots.
+  as a desktop app"), one contact sheet, never a loop of shots. 100 ms apart by default: every grab is
+  four Hyprland events (`screencast`), so a shell or widget that works on each event is held up by a
+  fast burst and its own timers and animations freeze or slow: frames of a stalled animation, not of
+  the real one. 100 ms keeps a 40 ms timer whole beside up to ~10 ms of work an event (back to back,
+  `--every 0`, ~16 ms a crop: 8% of its speed); use faster only for what reacts to no Hyprland
+  event. `N of M frames identical to the one before` on stderr: nothing new drawn between them, or
+  under 100 ms perhaps the grabs: take it again at `--every 100ms` or slower.
 
 ## Symptoms
 
@@ -499,8 +505,8 @@ most people will. Then:
 - **Focus loss**: open another window (`omabox run -d -- foot`) or the Omarchy menu (`keys
   super+space`) while the app holds a drag (`pointer -- down`, ..., `up`), then come back.
 - **A transition or an animation** (a panel sliding in, a hover fading): `omabox shot -g "X,Y WxH"
-  --burst 12 --sheet --diff --after -- keys super+space`: the first frame, then the keys, the rest as
-  fast as they come (~16 ms a crop; `--every 100ms` for a slower one), each frame's time and what
+  --burst 12 --sheet --diff --after -- keys super+space`: the first frame, then the keys, the rest
+  100 ms apart (`--every`; faster can stall what it records: Shots), each frame's time and what
   changed from the one before (`changed X,Y WxH` in the screen's coordinates, as `wait` says them and
   `click` takes them, whatever the crop or `--fit`; with `--window` the window's own), and one contact
   sheet to read instead of twelve shots. `-o DIR` again clears the frames and sheet an earlier burst

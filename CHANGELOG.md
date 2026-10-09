@@ -57,7 +57,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the screen's coordinates (the window's with `--window`) whatever the crop or `--fit`, the action
   (`keys`, `click`, `scroll`, `monitor add` ...) sent after the first frame, and one contact sheet of
   them all. A folder of its own each time, or `-o DIR`, cleared of an earlier burst's frames
-  (#132, #167).
+  (#132, #167). Frames are 100 ms apart unless `--every` says otherwise (`--every 0`: back to back):
+  each grab is four Hyprland events, and faster grabs froze the animation of a shell or widget that
+  works on each event, so frames identical to the one before are now counted on stderr (#191).
 - **`shot --changed [--window SEL]`**: only what changed since the last whole shot of that window or
   screen, cropped with a margin and `click --in`-able: a menu opening is ~65 image tokens instead of
   ~1.5k (a median 6.7x less over 17 measured actions). Nothing changed: no image, said so. A caret
