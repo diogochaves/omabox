@@ -72,10 +72,11 @@ Then: `omabox up && omabox shot`. It also links the bar widget (`plugin/`) as
 
 What it does, step by step (each is safe to repeat; `install.sh` is the source of truth):
 
-1. Packages (`PKGS` in install.sh): labwc, bubblewrap, passt, jq, grim, gnome-keyring, the tools'
-   build deps (wayland, libxkbcommon, base-devel), aquamarine's build deps, and what the box runs
-   that Omarchy already has (quickshell, gtk3, xdg-terminal-exec, dbus). `sudo pacman -S --needed`
-   only for the missing ones.
+1. Packages (`PKGS` in install.sh): labwc, wlr-randr, bubblewrap, util-linux, iproute2, passt, jq,
+   grim, gnome-keyring, libsecret, python (the guard's Codex check), the tools' build deps (wayland,
+   libxkbcommon, base-devel, pkgconf), aquamarine's build deps, and what the box runs that Omarchy
+   already has (quickshell, gtk3, xdg-terminal-exec, dbus). `sudo pacman -S --needed` only for the
+   missing ones.
 2. aquamarine's fix into a private prefix, `omabox setup --aquamarine` (only headless NVIDIA boxes
    and confirm-close need it, finding 125; a no-op once the system's aquamarine is past 0.15.1):
    ```

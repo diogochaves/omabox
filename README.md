@@ -34,8 +34,8 @@ real desktop saw no window at all.
 - **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config).
 - **A GPU render node** (`/dev/dri/renderD*`). Tested on AMD and Intel iGPUs, an NVIDIA RTX 4070
   SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
-  the first usable node, or the GPU `omabox config gpu` names (next release; `OMABOX_RENDER_NODE`
-  overrides); an interactive box renders on the GPU your desktop renders on.
+  the first usable node, or the GPU `omabox config gpu` names (`OMABOX_RENDER_NODE` overrides); an
+  interactive box renders on the GPU your desktop renders on.
 - For headless boxes on NVIDIA and for confirm-close: aquamarine's fix (Hyprland's backend library),
   until a release ships [PR #415](https://github.com/hyprwm/aquamarine/pull/415) (a system copy
   patched with it counts: omabox looks for the fix, not the version). Everything else
@@ -135,8 +135,8 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
 - **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours), `--systemd` (a real
   systemd user manager, for plugins that manage a service or schedule alarms), `--from SAVE` (start
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
-  the whole box session), `--xwayland`, `--autoreload` (next release: Hyprland reloads its config
-  when a file it loaded changes, as on your desktop), and `omabox gpu 10` (GPU time of one box's
+  the whole box session), `--xwayland`, `--autoreload` (Hyprland reloads its config when a file it
+  loaded changes, as on your desktop), and `omabox gpu 10` (GPU time of one box's
   processes, where the driver reports per-process counters). `omabox help` lists every flag,
   `omabox help CMD` (or `omabox CMD --help`) one command's.
 
