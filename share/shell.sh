@@ -58,6 +58,10 @@ kill -KILL $(launchers) $(shells) 2>/dev/null
 # left with no bar where a user's desktop gets one back. Its systemd-cat, the box's stand-in, sends the
 # shell's output here and writes each new shell's pid (it execs quickshell), followed across relaunches.
 rm -f "$pidfile"
+# The box's newest pid now, for `restart-shell`: everything of this start comes after it (a pid
+# namespace hands pids out in order), and a crash below it is an old shell's, stopped as it loaded (an
+# old launcher's relaunch: a SEGV when stopped mid-load on a slow GPU), not this start failing (255).
+sh -c 'echo $$' > "$XDG_RUNTIME_DIR/omabox-shell.mark"
 # `restart-shell` passes a token and waits for it here: a pid written after it is this start's, not
 # one an old launcher's relaunch wrote while the old shell was being stopped (finding 248).
 echo "${1:-}" > "$XDG_RUNTIME_DIR/omabox-shell.start"

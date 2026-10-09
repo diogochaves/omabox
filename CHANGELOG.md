@@ -272,8 +272,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   to the new one, which exited with "An instance of this configuration is already running":
   `restart-shell` reported a failed start (exit 1), and every restart after failed the same way.
   `restart-shell` now stops every running copy of the shell and its launcher before starting one. If
-  something else starts the shell at the same moment, it reports that shell as the running one (exit 0)
-  (#192).
+  something else starts the shell at the same moment, it reports that shell as the running one (exit 0),
+  and a crash of an old copy it stopped is not taken for the new shell's (#192).
 
 ## 0.4.8 — 2026-10-03
 

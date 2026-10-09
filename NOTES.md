@@ -5013,6 +5013,23 @@ from them.
     control node asked for as 255, made, both missing named and asked for (6 checks fail on the old
     code).
 
+255. **restart-shell blamed the new shell for an old one's crash** (2026-10-09, #192's fix on an NVIDIA
+    box). The full suite on the RTX failed t_shell_restart_race's 1.1 s round 3 of 3 (passed on the
+    AMD iGPU): `restart-shell` exit 1, "the shell crashed while starting", with the new shell up and
+    recorded. The report was another process's (pid 1042; the shell up 1328). The old launcher's
+    relaunch, a second after the kill, was still loading when shell.sh stopped it, and Quickshell
+    SEGVs when stopped there (in `QQmlObjectCreator::finalize`); on the RTX the load takes long
+    enough to be caught mid-way. `shell_crash_report` took any new report folder as this start's. A
+    list of the pids shell.sh stopped missed it (it started and crashed between two of the stop
+    loop's looks: 818, 1042, 1084 stopped/seen, 1328 the new one). Now shell.sh writes the box's
+    newest pid as it starts the shell (`omabox-shell.mark`, after the stop phase, which leaves no old
+    launcher to start another): a pid namespace hands pids out in order, so a report whose
+    "Crashed process ID" is at or below it is an old shell's and skipped. A box whose shell.sh writes
+    no mark counts every report, as before. A real crash of the new shell is still said
+    (t_shell_crash, 3 of 3 on the RTX). t_unit_shell_crash: below the mark no crash, above it
+    crashed, no mark crashed (the first fails on the old code). t_shell_restart_race,
+    t_shell_restart_dup and t_shell_crash together, 3 of 3 runs clean on the RTX.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -1106,10 +1106,20 @@ shell_crash() {
   for ((i = 0; i < 10; i++)); do sleep 0.1; shell_crash_report && return 0; done
   if shell_crash_logged; then echo "crashed -"; else echo exited; fi
 }
-# A new report folder since SHELL_BEFORE: "crashed REPORT" ("crashed -" for a name not plain).
+# A new report folder since SHELL_BEFORE: "crashed REPORT" ("crashed -" for a name not plain). Not one
+# of a process older than this start (its pid below omabox-shell.mark, which shell.sh writes as it
+# starts the shell): an old shell stopped as it loaded can crash, and that is not this start (finding
+# 255). A box whose shell.sh writes no mark (an older omabox's) counts every report, as before.
 shell_crash_report() {
-  local new
-  new=$(comm -13 <(sort <<<"$SHELL_BEFORE") <(shell_crash_dirs | sort) | tail -n 1)
+  local new f c mark
+  mark=$(cat "$D/run/omabox-shell.mark" 2>/dev/null) && [[ $mark =~ ^[0-9]+$ ]] || mark=0
+  new=$(comm -13 <(sort <<<"$SHELL_BEFORE") <(shell_crash_dirs | sort) | while IFS= read -r rep; do
+    if [ "$mark" -gt 0 ] && [[ $rep =~ ^[A-Za-z0-9_.-]+$ ]] && f=$(box_home_file ".cache/quickshell/crashes/$rep/report.txt"); then
+      c=$(sed -n 's/^Crashed process ID: \([0-9]*\)$/\1/p' "$f" | head -n 1)
+      [ -z "$c" ] || [ "$c" -gt "$mark" ] || continue
+    fi
+    echo "$rep"
+  done | tail -n 1)
   [ -n "$new" ] || return 1
   # (The box names it: only a plain name goes into the message.)
   if [[ $new =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "crashed $D/home/.cache/quickshell/crashes/$new/report.txt"

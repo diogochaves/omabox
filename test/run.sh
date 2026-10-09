@@ -4060,6 +4060,17 @@ t_unit_shell_crash() {
   check_eq "...said as exited" "warning: the shell exited after starting (omabox log -b u shell)" \
     "$(bash -c 'source "$1"; NAME=u; shell_crash_text after exited' _ "$TMP/lib/bin/omabox")"
   check_eq "the report folders before a restart are not a crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
+  # finding 255: a report of a process older than this start (its pid below shell.sh's mark) is an old
+  # shell's, stopped as it loaded, not this start's crash.
+  local m=$d/home/.cache/quickshell/crashes/m1
+  mkdir "$m"; printf 'Signal: Segmentation fault (11)\nCrashed process ID: 30\n' > "$m/report.txt"
+  echo 40 > "$d/run/omabox-shell.mark"
+  check_eq "a report of a process older than this start (below shell.sh's mark): no crash (finding 255)" "rc 1 " "$(sc "42 (quickshell) S 1")"
+  printf 'Crashed process ID: 41\n' > "$m/report.txt"
+  check_eq "...one of this start's (above it): crashed" "crashed $m/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
+  rm "$d/run/omabox-shell.mark"; printf 'Crashed process ID: 30\n' > "$m/report.txt"
+  check_eq "...no mark (a box an older omabox started): every report counts, as before" "crashed $m/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
+  rm -r "$m"
   # finding 248: its pid gone as a duplicate of a shell another start brought up meanwhile.
   dup() {   # LIST: what `quickshell list -j` says in the box; pid 77 is up, 42 gone
     QSL=$1 bash -c 'source "$1"; NAME=u D=$2; SHELL_BEFORE=old
