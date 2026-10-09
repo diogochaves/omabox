@@ -261,9 +261,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   git there failed with "not a git repository". That `.git` is now mounted too, read-only at its own
   path (not the rest of the main checkout): git reads work, writes (a commit, a tag) fail. The same
   for a submodule (#183).
-- **A GPU switched to the nvidia driver while the machine runs gets both its device nodes.** omabox
-  asked NVIDIA's helper for the GPU's node only, so `/dev/nvidiactl` stayed missing, every headless
-  box on that GPU was refused, and the error suggested a command that could not make it. Each missing
+- **A GPU moved to the nvidia driver while the machine runs (from vfio-pci, after a VM) gets both its
+  device nodes.** omabox asked NVIDIA's helper for the GPU's node only, so `/dev/nvidiactl` stayed
+  missing, every headless box on that GPU was refused, and the error suggested a command that could
+  not make it. A GPU on nvidia from boot is not affected (its udev rule makes both). Each missing
   node is now made, and the error names the right command for each (`nvidia-modprobe -c 255` for
   `/dev/nvidiactl`).
 - **`restart-shell` no longer says the shell exited when it is running.** When the shell had just
