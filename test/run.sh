@@ -3987,6 +3987,29 @@ t_unit_shell_crash() {
   check_eq "...said as exited" "warning: the shell exited after starting (omabox log -b u shell)" \
     "$(bash -c 'source "$1"; NAME=u; shell_crash_text after exited' _ "$TMP/lib/bin/omabox")"
   check_eq "the report folders before a restart are not a crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
+  # finding 248: its pid gone as a duplicate of a shell another start brought up meanwhile.
+  dup() {   # LIST: what `quickshell list -j` says in the box; pid 77 is up, 42 gone
+    QSL=$1 bash -c 'source "$1"; NAME=u D=$2; SHELL_BEFORE=old
+      on_box() {
+        case "$1 ${2:-}" in
+          "/usr/bin/quickshell list") echo "$QSL" ;;
+          "cat /proc/77/stat") echo "77 (quickshell) S 1" ;;
+          "sh -c") echo "$5" > "$D/run/omabox-shell.pid" ;;
+          *) return 1 ;;
+        esac
+      }
+      shell_crash "$(shell_pid)" && echo "rc 0" || echo "rc $?"' _ "$TMP/lib/bin/omabox" "$d" 2>&1 | tr '\n' ' '
+  }
+  printf 'An instance of this configuration is already running.\n' > "$d/home/shell.log"
+  check_eq "a duplicate, no shell of its config up: exited" "exited rc 0 " "$(dup '[]')"
+  check_eq "...one up (#192): no failure, it is the box's shell now" \
+    "omabox: box 'u': another start of the shell came first; that one (pid 77) is up, started after the old one was stopped: the box's shell now rc 1 " \
+    "$(dup '[{"pid": 77}]')"
+  check_eq "...its pid recorded where shell.sh keeps it" 77 "$(cat "$d/run/omabox-shell.pid")"
+  echo 42 > "$d/run/omabox-shell.pid"
+  check_eq "...not one whose pid is gone too" "exited rc 0 " "$(dup '[{"pid": 78}]')"
+  : > "$d/home/shell.log"
+  check_eq "no duplicate line: exited, whatever runs" "exited rc 0 " "$(dup '[{"pid": 77}]')"
 }
 
 # A shell that crashes as restart-shell starts it (#126, finding 183): no "restarted", exit 1, the
@@ -4047,6 +4070,74 @@ t_shell_crash() {
   check "restart-shell brings it back" ob restart-shell -b "$B"
   check "...running" shell_is running
   check_fails "...shot warns no more" grep -q shell <<<"$(ob shot -b "$B" -o "$TMP/back.png" 2>&1 >/dev/null)"
+  ob down "$B" >/dev/null
+}
+
+# finding 248 (#192): restart-shell right after edits to shell.json and a plugin, the shell having died
+# of a signal as they landed (a crash, a kill): Omarchy's launcher starts it again a second later.
+# shell.sh stopped only the recorded shell, so the new one met that relaunch ("An instance of this
+# configuration is already running"), or the relaunch met it, and restart-shell said the shell exited
+# (exit 1) with one up; the pid it then recorded was a dead one, and every restart after failed alike.
+# Rounds with the kill 0-1.3 s before restart-shell (on the old code each failed), then plain ones.
+t_shell_restart_race() {
+  local B=$P-rr F=$TMP/rr D H S d out rc pids rec side=left badrc="" badone="" baddup=""
+  mkdir -p "$F/w"
+  jq -n --arg id "$P.rr" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
+    entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$F/w/manifest.json"
+  printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "rr" }\n}\n' > "$F/w/W.qml"
+  ob up "$B" --net isolated --plugin "$F/w" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home; S=$H/.config/omarchy/shell.json
+  for d in 0 0.3 0.6 0.9 1.0 1.1 1.3 - - -; do   # (-: no kill)
+    side=$([ "$side" = left ] && echo right || echo left)
+    jq --arg s "$side" --arg id "$P.rr" '.bar.layout.left = [] | .bar.layout.right = [] | .bar.layout[$s] = [{id: $id}]' "$S" > "$TMP/rr.json" &&
+      cp "$TMP/rr.json" "$S"
+    echo "// $d" >> "$F/w/W.qml"
+    if [ "$d" != - ]; then ob run -b "$B" -- kill -KILL "$(cat "$D/run/omabox-shell.pid")" 2>/dev/null; sleep "$d"; fi
+    out=$(ob restart-shell -b "$B" 2>&1); rc=$?
+    sleep 1.5   # (past the old launcher's relaunch, had one been left)
+    pids=$(ob run -b "$B" -- pgrep -x quickshell | tr '\n' ' ') rec=$(cat "$D/run/omabox-shell.pid" 2>/dev/null)
+    { [ "$rc" = 0 ] && grep -q "shell restarted" <<<"$out"; } || badrc+="[$d: exit $rc, ${out:0:100}] "
+    [ "$pids" = "$rec " ] || badone+="[$d: running $pids, recorded $rec] "
+    ! grep -aq "already running" "$H/shell.log" || baddup+="[$d] "
+  done
+  check_eq "edits, the shell killed 0-1.3 s before restart-shell (or not): exit 0, \"restarted\", every time (#192)" "" "$badrc"
+  check_eq "...one shell after each, the one recorded" "" "$badone"
+  check_eq "...none started as a duplicate" "" "$baddup"
+  check_eq "...ls: running, the plugin loaded" "running loaded" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.rr" '.[] | select(.name == $n) | "\(.shell_state) \(.plugin_status[$i].state)"')"
+  ob down "$B" >/dev/null
+}
+
+# finding 248: a shell something else starts just as restart-shell starts its own (an `omarchy restart
+# shell` at the same moment) is the box's shell, and restart-shell's own exits as its duplicate: it
+# said the shell exited (exit 1) with that one up. Made certain here: the tree's launcher starts its
+# shell a second late, and a racer in the box starts one as soon as shell.sh has stopped the old one.
+t_shell_restart_dup() {
+  local B=$P-rd T=$TMP/rd-tree D H out rc rec
+  copy_omarchy "$T"
+  rm -f "$T/bin/omarchy-launch-shell"
+  # shellcheck disable=SC2016 # the launcher's
+  printf '#!/bin/bash\n[ ! -e "$HOME/rd-late" ] || sleep 1\nexec /usr/bin/omarchy-launch-shell "$@"\n' > "$T/bin/omarchy-launch-shell"
+  chmod +x "$T/bin/omarchy-launch-shell"
+  ob up "$B" --net isolated --omarchy "$T" >/dev/null 2>&1 || { no "up --omarchy" "failed"; return; }
+  D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home
+  # (shell.sh removes the old pid once that shell is stopped, before it starts the launcher.)
+  # shellcheck disable=SC2016 # the box's
+  ob run -b "$B" -d -- bash -c 'f=$XDG_RUNTIME_DIR/omabox-shell.pid; while [ -e "$f" ]; do sleep 0.01; done
+    QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 exec systemd-cat -t omarchy-shell -- quickshell -n -p "$OMARCHY_PATH/shell"' >/dev/null 2>&1
+  touch "$H/rd-late"
+  out=$(ob restart-shell -b "$B" 2>&1); rc=$?
+  check_eq "restart-shell, another start's shell up first, its own a duplicate: exit 0 (was 1)" 0 "$rc"
+  check_match "...says so" "another start of the shell came first; that one \(pid [0-9]+\) is up" "$out"
+  check_match "...and restarted" "shell restarted in box '$B'" "$out"
+  check "...its own did exit as a duplicate" grep -aq "An instance of this configuration is already running" "$H/shell.log"
+  sleep 1
+  rec=$(cat "$D/run/omabox-shell.pid" 2>/dev/null)
+  check_eq "...one shell, the one now recorded" "$rec" "$(ob run -b "$B" -- pgrep -x quickshell)"
+  check_eq "...ls: running" running "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state')"
+  rm -f "$H/rd-late"
+  check "a restart after it: as usual" ob restart-shell -b "$B"
+  check_eq "...one shell" 1 "$(ob run -b "$B" -- pgrep -cx quickshell)"
   ob down "$B" >/dev/null
 }
 
@@ -7409,7 +7500,7 @@ t_inspect() {
 UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

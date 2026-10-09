@@ -4811,6 +4811,40 @@ from them.
     into a scratch data dir and cache (the suite's copy of the CLI has no `.git`); over a build of
     this omabox's, nothing to build and no tool run, `--force` building it all the same; over an older
     one, a build. Plus each `setup` note and `monitor add`'s two. Fails on the old code (11 checks).
+248. **restart-shell met a shell its old launcher was starting again** (2026-10-09, #192). Seen once:
+    after edits to the box HOME's shell.json and plugin files, `restart-shell` said the shell exited
+    after starting (exit 1), shell.log said "An instance of this configuration is already running", and
+    the box had a shell. Not Quickshell's hot reload, as the issue guessed: the launcher runs the shell
+    with its file watcher off, and the shell applies a shell.json edit itself, in the same process.
+    Edits then `restart-shell` 0-500 ms later, with nothing else happening: 0 failures in 35 (shell.json
+    renamed into place and written in place, a plugin file appended to). What does it every time: the
+    shell dying of a signal just before (a crash an edit caused, a kill). Its launcher (194) starts it
+    again 1 s later, and shell.sh stopped only the recorded pid, so the new shell and that relaunch met:
+    whichever came second exited at once as a duplicate (with exit 0, so no relaunch loop). Both write
+    the pid file, so the one recorded was often the dead duplicate: `restart-shell` said "exited" (a
+    KILL leaves no crash report, and one from before it began is not counted), `ls` said `restarting`,
+    and every restart after left the real shell alone and failed the same way. With the shell KILLed
+    0-1.5 s before `restart-shell`: 10 of 10 failed on the old code. Now shell.sh stops every instance
+    of the Omarchy config (`quickshell list -j -p CONFIG`: the same check `-n` makes), the recorded one
+    too, each asked to quit first as before. Then it stops any Omarchy launcher still there, its trap
+    ending it at its next turn without a relaunch. It waits until neither is left (5 s, then SIGKILL).
+    The pid file alone could not tell `restart-shell` the restart had happened: the old launcher's
+    relaunch wrote a new pid while shell.sh was stopping things, and was taken for the restart (2
+    failures in 12 with only the stop changed). `restart-shell` passes a token, shell.sh writes it back
+    after removing the old pid, and the pid that comes after it is this start's. A box whose shell.sh
+    writes no token (one `up` by an older omabox) is waited for by a new pid, as before. Something else
+    can still start the shell between the stop and ours (an `omarchy restart shell` at that moment). If
+    our shell then exits as a duplicate and that one is up, `restart-shell` takes its pid as the box's
+    shell. It says so and exits 0, never "exited": that shell started after the old one was stopped, so
+    it read the files as edited (`shell_adopt`, through `shell_crash`, so `up` too). Checks:
+    `t_shell_restart_race` (10 rounds: edit shell.json and the plugin, KILL the shell 0-1.3 s before
+    `restart-shell` or not at all; every round exit 0 with one shell, the recorded one, and no
+    duplicate). `t_shell_restart_dup` (an `--omarchy` tree whose launcher starts a second late, a racer
+    in the box starting the shell as soon as the old pid goes: exit 0, its pid recorded, `ls` running).
+    `t_unit_shell_crash` (adopted only with the duplicate's line and a live instance). All three fail on
+    the old code (worktree: 12 checks). 0 failures in 35 rounds of the KILL loop after the fix (15 of
+    them KILLed 0.85-1.15 s before, around the relaunch). Not settled: what made the shell die in the
+    issue's session; the issue kept no log of it.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
