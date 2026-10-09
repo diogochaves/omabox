@@ -6316,6 +6316,9 @@ t_unit_pixel() {
   check_match "shot --zoom past 2000 px refused" "is 2400x80: at most 2000 px" "$(ob shot -b "$P-x" -g "0,0 300x10" --zoom 8 2>&1)"
   # shot --burst (#132, finding 212)
   check_match "shot --every without --burst refused" "go with --burst" "$(ob shot -b "$P-x" --every 1s 2>&1)"
+  # #191, finding 249: --every 0 is back to back (the default is 100 ms apart); a stray unit is not 0.
+  check_match "...--every 0 too (it is a pace: back to back)" "go with --burst" "$(ob shot -b "$P-x" --every 0 2>&1)"
+  check_match "shot --every 0x refused" "takes a duration .*0: back to back" "$(ob shot -b "$P-x" --burst 3 --every 0x 2>&1)"
   check_match "shot --burst 1 refused" "takes 2-200" "$(ob shot -b "$P-x" --burst 1 2>&1)"
   check_match "shot --burst with --zoom refused" "--burst or --zoom" "$(ob shot -b "$P-x" --burst 3 --zoom 2 -g "0,0 9x9" 2>&1)"
   check_match "shot --after: an omabox command that acts" "got ls" "$(ob shot -b "$P-x" --burst 3 --after -- ls 2>&1)"
@@ -6389,6 +6392,52 @@ t_burst() {
   wait "$b1"
   check_eq "two bursts started together: two folders of 2 frames" "2 2 2" \
     "$(find "$o/tmp" -mindepth 1 -maxdepth 1 -type d | wc -l) $(for d in "$o"/tmp/*/; do find "$d" -name 'frame-*.png' | wc -l; done | xargs)"
+  # #191, finding 249: each grab is four Hyprland events (screencast), so back-to-back grabs held up a
+  # client that works on each one, its timers with it: a 40 ms Timer beside a 10 ms handler of
+  # Hyprland's events showed a step or two in a whole default burst. The square's colour is the Timer's
+  # count (red + 256 green); over a burst it moves about one step per 40 ms of the burst's span.
+  local D st sp; D=$(ob path -b "$B")
+  cat > "$D/home/t191.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+import Quickshell.Hyprland
+ShellRoot {
+  PanelWindow {
+    anchors { top: true; left: true }
+    implicitWidth: 100; implicitHeight: 100
+    WlrLayershell.layer: WlrLayer.Overlay
+    Rectangle {
+      id: r; anchors.fill: parent
+      property int n: 0
+      color: Qt.rgba((n % 256) / 255, (Math.floor(n / 256) % 256) / 255, 0.5, 1)
+    }
+    Timer { interval: 40; running: true; repeat: true; onTriggered: r.n++ }
+    Connections {
+      target: Hyprland
+      function onRawEvent(e) { var t = Date.now(); while (Date.now() - t < 10) {} }
+    }
+  }
+}
+QML
+  ob run -b "$B" -d -q -- qs -p /home/sbx/t191.qml >/dev/null 2>&1
+  until_ok 10 sh -c '"$1" pixel -b "$2" 50 50 | grep -qiE "(7f|80)$"' _ "$CLI" "$B" >/dev/null
+  # The Timer's steps between a burst's first and last frame (DIR), and the burst's span in ms (DIR.out).
+  burst_steps() {
+    local f v first="" last=""
+    for f in "$1"/frame-*.png; do
+      v=$(magick "$f" -format '%[fx:int(p{50,50}.r*255+0.5)+256*int(p{50,50}.g*255+0.5)]' info: 2>/dev/null) || v=0
+      first=${first:-$v} last=$v
+    done
+    echo "$(((last - first + 65536) % 65536)) $(awk 'END { sub(/s$/, "", $2); printf "%d", $2 * 1000 }' "$1.out")"
+  }
+  ob shot -b "$B" --burst 20 -g "0,0 100x100" -o "$o/t" >"$o/t.out" 2>/dev/null
+  read -r st sp < <(burst_steps "$o/t")
+  check "a default burst beside a client busy on each Hyprland event: its 40 ms Timer moves ($st steps in $sp ms)" \
+    test "$((st * 80))" -ge "$sp" -a "$sp" -ge 1000
+  out=$(ob shot -b "$B" --burst 20 --every 0 -g "0,0 100x100" -o "$o/t0" 2>&1 >"$o/t0.out")
+  check_match "--every 0: back to back, the frames that repeat said, with the pace to use" \
+    "[0-9]+ of 19 frames identical to the one before: .*held the box up.*--every 100ms or slower" "$out"
   ob down "$B" >/dev/null 2>&1
 }
 
