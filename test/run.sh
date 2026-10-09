@@ -3371,7 +3371,15 @@ t_up_cwd_unreadable() {
   check_eq "up from a dir the user cannot read: exit 0" "0" "$rc"
   check_eq "...no find (or other) complaint about it" "" "$(grep -i -e 'find:' -e 'permission denied' <<<"$out")"
   check "...the box is up" bash -c "'$CLI' ls --json | jq -e --arg n '$B' '.[] | select(.name == \$n and .state == \"up\")' >/dev/null"
-  ob down "$B" >/dev/null
+  # Every find runs from / there, not only up's (finding 262: shot's pruning of its references ended it).
+  out=$(cd "$d" && chmod 000 "$d" && "$CLI" shot -b "$B" -o "$TMP/$B.png" 2>&1); rc=$?
+  chmod 700 "$d"
+  check_eq "shot from there: exit 0, no complaint" "0 " "$rc $(grep -i -e 'find:' -e 'permission denied' <<<"$out")"
+  check "...the shot written" test -s "$TMP/$B.png"
+  out=$(cd "$d" && chmod 000 "$d" && "$CLI" down "$B" 2>&1); rc=$?
+  chmod 700 "$d"
+  check_eq "down from there: exit 0, no complaint" "0 " "$rc $(grep -i -e 'find:' -e 'permission denied' <<<"$out")"
+  ob down "$B" >/dev/null 2>&1 || true
 }
 
 # --no-shell is a bare compositor.
@@ -5171,7 +5179,7 @@ t_monitors_wait_nvidia() {
   monitors_wait_on "$n" "$P-monwnv"
 }
 monitors_wait_on() {
-  local n=$1 B=$2 out rc g w when
+  local n=$1 B=$2 out rc g w when c gx gy gw gh
   env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
     --monitor 1080x1920,below >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
   ob pointer -b "$B" -- move 2300 200 >/dev/null
@@ -5186,9 +5194,12 @@ monitors_wait_on() {
     check_eq "...--ignore it: still$when" 0 "$(ob wait -b "$B" still --ignore "$g" >/dev/null; echo $?)"
     check_eq "...--window on it: 124, and still with --ignore$when" "124 0" \
       "$(ob wait -b "$B" still --window 'title:^N$' --timeout 1500ms >/dev/null; echo $?) $(ob wait -b "$B" still --window 'title:^N$' --ignore "$g" >/dev/null; echo $?)"
+    # One digit to the next, inside $g (all the digits over 2 s): a narrow pair is a pixel narrower.
     out=$(ob wait -b "$B" change -g "1920,0 800x450" --json)
-    check_eq "...wait change -g on that monitor: changed there$when" "satisfied $g" \
-      "$(jq -r '"\(.result) \(.change.x),\(.change.y) \(.change.w)x\(.change.h)"' <<<"$out")"
+    c=$(jq -r '"\(.result) \(.change.x),\(.change.y) \(.change.w)x\(.change.h)"' <<<"$out")
+    read -r gx gy gw gh <<<"${g//[,x]/ }"
+    check "...wait change -g on that monitor: changed there, in $g ($c)$when" \
+      cell_in "${c#satisfied }" "$gx $gy $((gx + gw)) $((gy + gh))"
     check_eq "...-g on the main screen only: still$when" 0 "$(ob wait -b "$B" still -g "0,0 1920x1080" >/dev/null; echo $?)"
     check_eq "...-g across the main screen and that one: 124$when" 124 "$(ob wait -b "$B" still -g "1800,0 300x300" --timeout 1s >/dev/null; echo $?)"
     if [ -z "$when" ]; then

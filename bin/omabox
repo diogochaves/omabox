@@ -444,6 +444,11 @@ EOF
 die() { echo "omabox: $*" >&2; exit 1; }
 optarg() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"; }   # optarg "$@" before reading $2
 say() { echo "omabox: $*" >&2; }
+# GNU find goes back to the dir it started in when it ends, and exits 1 when that is one the user
+# cannot read (an su or runuser that kept root's): with set -e, `up` and `shot` ended there with only
+# its "Failed to restore initial working directory". From such a dir every find here runs from /
+# (all take absolute paths); findings 256, 262.
+find() { if [ -r . ]; then command find "$@"; else (cd / && command find "$@"); fi; }
 
 # --- settings ------------------------------------------------------------------------------------
 # ~/.config/omabox/config, KEY=VALUE lines: what `omabox config` and the bar widget change (finding
@@ -1598,9 +1603,7 @@ seed_home() {
   # Each --plugin: a link to its own path when the box sees it there (LINKED_PLUGINS, finding 241), as
   # a dev-linked desk has it; else a dir for its mount. A save's links in there go first: one to a
   # plugin not asked for this time would load it, and a mount onto a link would follow it.
-  # (From inside it: -delete goes back to the caller's dir after, which fails when that cannot be read,
-  # `cd` from a dir the user cannot list, and `up` ended there; finding 256.)
-  (cd "$h/.config/omarchy/plugins" && find . -mindepth 1 -maxdepth 1 -type l -delete)
+  find "$h/.config/omarchy/plugins" -mindepth 1 -maxdepth 1 -type l -delete
   for p in "${PLUGINS[@]}"; do
     id=${p%%$'\t'*}
     if [[ " ${LINKED_PLUGINS[*]:-} " == *" $id "* ]]; then home_link "$h" ".config/omarchy/plugins/$id" "${p#*$'\t'}"; fi
@@ -5855,7 +5858,7 @@ monitors_place() {
   lay=$(box_layout) || lay=""
   for ((i = 0; i < 15; i++)); do
     m=$(hypr_json monitors) || return 1
-    [ -n "$lay" ] && ! placed_as "$m" "$lay" || break
+    if [ -z "$lay" ] || placed_as "$m" "$lay"; then break; fi
     sleep 0.1
   done
   jq -r --argjson a "$m0" 'map(. as $n | select(any($a[]; .name == $n.name and (.x != $n.x or .y != $n.y)))
@@ -5865,7 +5868,7 @@ monitors_place() {
 # `main`) is at its X,Y in MONITORS (Hyprland's JSON).
 placed_as() {
   local main rows; main=$(jq -r "$(main_screen) | .name // empty" <<<"$1")
-  rows=$(sed "s/^main /${main:-main} /" <<<"$2" | awk '{ print $1, $2, $3 }')
+  rows=$(awk -v m="${main:-main}" '$1 == "main" { $1 = m } { print $1, $2, $3 }' <<<"$2")
   jq -e --arg rows "$rows" '[.[] | "\(.name) \(.x) \(.y)"] as $live
     | all($rows | split("\n")[] | select(. != ""); . as $r | $live | index($r) != null)' <<<"$1" >/dev/null
 }
@@ -7559,7 +7562,7 @@ down_mark() {
 # (.expired-NAME, need_box's "went down after 2h idle") after a day: a session's box has a name of
 # its own, and each one that idled out left its note for good (finding 237).
 prune_marks() {
-  (cd "$BOXES" && find . -maxdepth 1 \( -name '.down-*' -mmin +10 -o -name '.expired-*' -mmin +1440 \) -type f -delete) 2>/dev/null || true   # (from inside: finding 256)
+  find "$BOXES" -maxdepth 1 \( -name '.down-*' -mmin +10 -o -name '.expired-*' -mmin +1440 \) -type f -delete 2>/dev/null || true
 }
 cmd_down() {
   local names=() n all=0

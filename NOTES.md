@@ -5098,6 +5098,20 @@ from them.
     SIGPIPE, exit 141): `omabox-relay call` ignores SIGPIPE now and says "turned the call away (too
     many callers at once)", exit 1 (t_unit_relay, three runs clean).
 
+262. **Every GNU `find` fails from a directory the user cannot read, not only `-delete`** (2026-10-09,
+    the 0.5.1 package test). From /root (`omavm user`), 0.5.1's `up` worked (finding 256) but `shot`
+    exited 1 after writing its image, the only output `find: Failed to restore initial working
+    directory /root: Permission denied`: GNU find goes back to its starting dir at the end whatever it
+    did, so `shot_ref_save`'s pruning of `--changed` references (a `$()` under set -e) ended `shot`; the
+    other finds printed their output and were guarded. A cwd with only `x` is fine. Finding 256 was
+    checked with a find that is not GNU's in the checking shell (Claude Code puts a `bfs` function
+    named `find` in its shells; scripts get /usr/bin/find), so it read as `-delete` only. Now one
+    `find` function in the CLI runs every find from / when `.` cannot be read (all take absolute
+    paths), and finding 256's two `cd`s are gone. t_up_cwd_unreadable also runs `shot` and `down`
+    from there (the `shot` check fails on 0.5.1). The same VM run's one suite failure was t_monitors_wait's: it
+    wanted `wait change -g`'s one digit-to-digit change to equal the cell `wait still` named (all the
+    digits over 2 s), and a narrow pair came out a pixel narrower; it checks the change is inside it now.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

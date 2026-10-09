@@ -3,6 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`omabox shot` works from a directory you cannot read** too (an `su` or `runuser` that kept
+  root's): it wrote the image, then exited 1 with only `find: Failed to restore initial working
+  directory`, as `up` did in 0.5.0.
+
 ## 0.5.1 — 2026-10-09
 
 Fixes from a review of 0.5.0. Security: a jailed agent's `up --seed` could have copied a file it
