@@ -2143,10 +2143,17 @@ cmd_up() {
   # Host code, read-only (at the same path unless DIR:DEST): the repo `up` runs from, mise's
   # toolchains, ~/.config/omabox/ro-bind, --ro-bind. Checked before anything is created: a refusal
   # leaves no box dir. What the user named is refused loudly; what omabox adds by itself is skipped.
-  local top
+  local top gd
   if top=$(repo_top); then
     if why=$(refuse_src "$top"); then say "not mounting the repo $top: $why"
-    else robinds=("$top"$'\t'"$top" "${robinds[@]}"); fi
+    else
+      robinds=("$top"$'\t'"$top" "${robinds[@]}")
+      # A linked worktree's git dir (finding 250), before the repo: mounted after, one that held it would hide it.
+      while IFS= read -r gd; do
+        if why=$(refuse_src "$gd") || why=$(refuse_dest "$gd"); then say "not mounting $gd, the git dir of $top: $why"
+        else robinds=("$gd"$'\t'"$gd" "${robinds[@]}"); fi
+      done < <(repo_git_dirs "$top")
+    fi
   fi
   # Language toolchains mise installed (node, python, ...): interpreters and compilers, no secrets.
   # Mounted so `omabox run` finds the same ones as the host (finding 47); rustup's ~/.cargo is not.
@@ -7683,6 +7690,26 @@ repo_top() {
   r=$(jq -r --arg p "$cwd" '[.roots[] | select(.masked | not) | .path as $r | select($p == $r or ($p | startswith($r + "/"))) | $r]
     | max_by(length) // empty' <<<"$OMABOX_JAIL")
   [ -n "$r" ] && [ -e "$r/.git" ] && echo "$r"
+}
+
+# The dirs outside its top level TOP that a repo's git data lives in, one per line, for `up` to mount
+# read-only at their own paths (finding 250). A linked worktree's .git is a file naming its gitdir,
+# <common>/worktrees/NAME, inside the main checkout's .git (the common dir: objects, refs, config); a
+# submodule's names one in the superproject's .git/modules. The common dir holds the gitdir, so it
+# goes alone: the main checkout's .git, not the rest of it. Nothing for a main checkout (its .git is in
+# TOP), one whose gitdir is gone (git fails), or a jailed caller (repo_top runs no git for one).
+repo_git_dirs() {
+  ! in_jail || return 0
+  local out d top prev=""
+  top=$(readlink -e -- "$1" 2>/dev/null) || top=$1
+  out=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir --git-dir 2>/dev/null) || return 0
+  while IFS= read -r d; do
+    d=$(readlink -e -- "$d" 2>/dev/null) || continue
+    [ -d "$d" ] || continue
+    [[ $d/ != "${top%/}"/* ]] || continue                  # in TOP: mounted with it
+    [ -z "$prev" ] || [[ $d/ != "$prev"/* ]] || continue   # in the common dir: mounted with it
+    echo "$d"; prev=$d
+  done <<<"$out"
 }
 
 # bwrap's options and how many arguments each takes: the jail's policy is read from its bwrap's command

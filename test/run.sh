@@ -3692,6 +3692,48 @@ t_no_git_identity() {
   check "down" ob down "$B"
 }
 
+# finding 250 (#183): what of a repo's git data `up` mounts besides its top level. A scratch main
+# checkout, a linked worktree (a space in its path), a submodule, a worktree of that submodule, a
+# worktree whose main checkout is gone, and a dir that is no repo.
+t_unit_git_dirs() {
+  local M=$TMP/$P-gd-main S=$TMP/$P-gd-sub W="$TMP/$P-gd wt" SW="$TMP/$P-gd subwt" X=$TMP/$P-gd-gone N=$TMP/$P-gd-none r
+  gd() { git -c user.name=t -c user.email=t@t -c protocol.file.allow=always "$@" >/dev/null 2>&1; }
+  gdirs() { (cd "$1" && bash -c 'source "$1"; top=$(repo_top) && repo_git_dirs "$top"' lib "$TMP/lib/bin/omabox"); }
+  for r in "$M" "$S" "$X"; do mkdir -p "$r" && gd -C "$r" init -q && echo x > "$r/f" && gd -C "$r" add f && gd -C "$r" commit -qm one; done
+  gd -C "$M" worktree add -q -b "$P-gd" "$W"
+  gd -C "$M" submodule add -q "$S" sm
+  gd -C "$M/sm" worktree add -q -b "$P-gd-sub" "$SW"
+  gd -C "$X" worktree add -q -b "$P-gd-gone" "$X-wt"; rm -rf "$X"
+  mkdir -p "$N"
+  check_eq "a main checkout: nothing (its .git is in it)" "" "$(gdirs "$M")"
+  check_eq "a linked worktree: the main checkout's .git alone, which holds its gitdir" "$M/.git" "$(gdirs "$W")"
+  check_eq "a submodule: its git dir in the superproject's .git/modules" "$M/.git/modules/sm" "$(gdirs "$M/sm")"
+  check_eq "a submodule's worktree: the same" "$M/.git/modules/sm" "$(gdirs "$SW")"
+  check_eq "a worktree whose main checkout is gone: nothing, quietly" "" "$(gdirs "$X-wt" 2>&1)"
+  check_eq "no repo: nothing" "" "$(gdirs "$N" 2>&1)"
+  check_eq "a jailed caller: nothing (no git run for one)" "" \
+    "$(cd "$W" && OMABOX_JAIL='{"roots":[]}' lib repo_git_dirs "$W" 2>&1)"
+}
+
+# finding 250 (#183): a box started from a linked worktree has git there. Its gitdir and the main
+# checkout's .git are mounted read-only at their own paths; the main checkout's files are not.
+t_git_worktree() {
+  local B=$P-gitwt M W out
+  M=$(tmp_repo gitwt-main)
+  echo main-file > "$M/f"
+  git -C "$M" add f && git -C "$M" -c user.name=t -c user.email=t@t commit -qm one
+  W="$TMP/$P-gitwt wt"   # a space in its path
+  git -C "$M" worktree add -q -b "$P-gitwt" "$W" 2>/dev/null
+  out=$(cd "$W" && ob up "$B" --no-shell 2>&1) || { no "up from a linked worktree" "$out"; return; }
+  check "git status in the box, on the worktree" ob run -b "$B" -- git -C "$W" status
+  check_eq "git describe --always: the host's" "$(git -C "$W" describe --always)" "$(ob run -b "$B" -- git -C "$W" describe --always 2>&1)"
+  check_eq "git log: the host's" "$(git -C "$W" log --oneline -1)" "$(ob run -b "$B" -- git -C "$W" log --oneline -1 2>&1)"
+  check_eq "git rev-parse --show-toplevel" "$W" "$(ob run -b "$B" -- git -C "$W" rev-parse --show-toplevel 2>&1)"
+  check_fails "the main checkout's files outside .git are not in the box" ob run -b "$B" -- test -e "$M/f"
+  check_fails "...its .git is read-only: git cannot commit (intended)" ob run -b "$B" -- git -C "$W" commit --allow-empty -qm x
+  check "down" ob down "$B"
+}
+
 # A stale pid (the box died, the pid now belongs to someone else) is never killed or entered.
 t_stale_pid() {
   local B=$P-stale D=$XDG_RUNTIME_DIR/omabox/$P-stale
@@ -7406,10 +7448,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

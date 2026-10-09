@@ -253,7 +253,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 
 ## Mounts, HOME and the session
 
-- The repo you ran `omabox up` from is visible **read-only** at the same path, plus any dirs listed in
+- The repo you ran `omabox up` from is visible **read-only** at the same path (from a linked worktree
+  or a submodule, the main checkout's `.git` too: git reads work there, writes fail), plus any dirs listed in
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
   path mapping with `--ro-bind ~/nas:/mnt/nas`), mise's toolchains (`omabox run` keeps your PATH, so
   node/python/uv are the host's), `--plugin` dirs and the user's git name/email; nothing else of the
