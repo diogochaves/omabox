@@ -27,7 +27,8 @@
 # marks its window as yours (finding 121), and a check it holds up (a box you watch is not reaped) is
 # skipped, saying so. A peek from an omabox older than this suite has no mark and fails the run, as
 # does one any command of the suite's opens. Pointer motion
-# has no event: it is only seen when it moves focus. Needs a Hyprland session and python3. The
+# has no event: it is only seen when it moves focus. Needs a Hyprland session and python3; builds the
+# checkout's tools first when one is missing or older than its sources (make, as install.sh does). The
 # network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
 # connection from a box to its gateway, the router.
 # A test that runs no check fails, and so does a full run with fewer checks than MIN_CHECKS.
@@ -42,6 +43,26 @@ unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID CLAUDE_PID OMABOX_AG
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+# tools_ready [installed]: this omabox's tools (tools/*) are there before any test starts (#187, finding
+# 253). A checkout's are built here, each one missing or older than its sources (make -q), under a lock
+# on tools/ (a second suite starting in this checkout waits for the build): a fresh checkout's first run
+# is a real one, and no tool is built while tests use it (t_unit_install builds into a copy of its
+# own). An installed omabox's came with it: one missing stops the run.
+tools_ready() {
+  local m t out
+  for m in "$ROOT"/tools/*/Makefile; do
+    t=${m%/Makefile}; t=${t##*/}
+    if [ "${1:-}" = installed ]; then
+      [ -x "$ROOT/tools/$t/omabox-$t" ] || { echo "tools/$t/omabox-$t is missing from this install"; return 1; }
+      continue
+    fi
+    make -q -C "$ROOT/tools/$t" >/dev/null 2>&1 && continue
+    out=$(flock "$ROOT/tools" make -s -C "$ROOT/tools/$t" 2>&1) ||
+      { printf 'building tools/%s failed (./install.sh installs what it needs):\n%s\n' "$t" "$out"; return 1; }
+    echo "built tools/$t (it was missing or older than its sources)"
+  done
+}
+
 # --installed (issue #50, finding 128): the suite against omabox as a package installs it. This
 # checkout's tracked files and built tools, read-only at /usr/lib/omabox with /usr/bin/omabox linking
 # to it, in a throwaway mount namespace: overlays on /usr/lib and /usr/bin made as root of a user
@@ -52,6 +73,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 if [ "${1:-}" = --installed ]; then
   shift
   [ ! -e /usr/lib/omabox ] || { echo "--installed: /usr/lib/omabox exists here already (a real install?): run its own test/run.sh"; exit 2; }
+  tools_ready || exit 2   # (the install's copies are this checkout's)
   inst=$(mktemp -d) || exit 2
   trap 'chmod -R u+w "$inst" 2>/dev/null; rm -rf "$inst"' EXIT
   mkdir -p "$inst/tree" "$inst/up/lib" "$inst/up/bin" "$inst/work/lib" "$inst/work/bin"
@@ -223,7 +245,8 @@ until_ok() {
     sleep 0.2
   done
   now=$((($(now_ms) - t0) / 100))
-  [ $((now * 200)) -le "$lim" ] || note "slow wait: $((now / 10)).$((now % 10))s of ${t}s for: $*"
+  # (The wait succeeded: the note is not the point, its failure is not the check's. Finding 252.)
+  [ $((now * 200)) -le "$lim" ] || note "slow wait: $((now / 10)).$((now % 10))s of ${t}s for: $*" || true
 }
 # holds T CMD...: the command succeeds now and keeps succeeding for T seconds (a "stays so" check: one
 # look after a sleep misses a state that changed and came back).
@@ -918,21 +941,23 @@ t_unit_theme_dir() {
   check "...a link on the way cleared: a real dir now" test -d "$d/h2/.config" -a ! -L "$d/h2/.config" -a -L "$d/h2/.config/omarchy/themes/x"
   check_eq "...nothing written through it" "" "$(ls -A "$d/victim")"
   # The note: a theme linked into the repo up runs from; from a worktree, into the main checkout.
+  # (snap_note, not note: that is the suite's own, and a unit test's helper redefines it for every test
+  # after it; finding 252.)
   # shellcheck disable=SC2329 # called below
-  note() { bash -c 'source "$1"; theme_snapshot_note "$2" "$3"' lib "$TMP/lib/bin/omabox" "$@" 2>&1; }
+  snap_note() { bash -c 'source "$1"; theme_snapshot_note "$2" "$3"' lib "$TMP/lib/bin/omabox" "$@" 2>&1; }
   ln -s "$r/themes/x" "$h/.config/omarchy/themes/lx"
   check_match "note: a theme linked into this repo is a copy made now" \
     "note: theme lx is a copy of $r/themes/x made now: edits after this do not reach the box. up --theme-dir $r/themes/x gives a live one" \
-    "$(note "$h/.config/omarchy/themes/lx/" "$r")"
+    "$(snap_note "$h/.config/omarchy/themes/lx/" "$r")"
   git -C "$r" add -A && git -C "$r" -c user.name=t -c user.email=t@t commit -qm t
   w=$TMP/$P-td-wt; git -C "$r" worktree add -q "$w" 2>/dev/null
-  out=$(note "$h/.config/omarchy/themes/lx/" "$w")
+  out=$(snap_note "$h/.config/omarchy/themes/lx/" "$w")
   check_match "...from a worktree: the main checkout's, not this one's" "copy of $r/themes/x, in another checkout \($r\), not this one \($w\)" "$out"
   check_match "...and this checkout's own for a live one" "up --theme-dir $w/themes/x gives a live one" "$out"
   rm -rf "$w/themes"
-  check_match "...or DIR, when this checkout has no such theme" "up --theme-dir DIR gives" "$(note "$h/.config/omarchy/themes/lx/" "$w")"
+  check_match "...or DIR, when this checkout has no such theme" "up --theme-dir DIR gives" "$(snap_note "$h/.config/omarchy/themes/lx/" "$w")"
   ln -s "$d/elsewhere/y" "$h/.config/omarchy/themes/ly"
-  check_eq "...nothing for a theme linked from elsewhere" "" "$(note "$h/.config/omarchy/themes/ly/" "$r")"
+  check_eq "...nothing for a theme linked from elsewhere" "" "$(snap_note "$h/.config/omarchy/themes/ly/" "$r")"
   # up --theme NAME (finding 245): named as omarchy-theme-set names it, and there.
   local om=$d/om th=$d/th
   mkdir -p "$om/themes/tokyo-night" "$th/.config/omarchy/themes/mine" "$d/dev/wip"
@@ -946,8 +971,8 @@ t_unit_theme_dir() {
   check_match "...a path: refused" "not a theme's name: ../tokyo-night" "$(tn ../tokyo-night)"
   check_match "...a dot name: refused" "not a theme's name: .mine" "$(tn .mine)"
   mkdir -p "$h/.config/omarchy/themes/z"
-  check_eq "...nor for a theme that is a dir of its own" "" "$(note "$h/.config/omarchy/themes/z/" "$r")"
-  check_eq "...nor outside a repo" "" "$(note "$h/.config/omarchy/themes/lx/" "")"
+  check_eq "...nor for a theme that is a dir of its own" "" "$(snap_note "$h/.config/omarchy/themes/z/" "$r")"
+  check_eq "...nor outside a repo" "" "$(snap_note "$h/.config/omarchy/themes/lx/" "")"
   git -C "$r" worktree remove --force "$w" 2>/dev/null
 }
 
@@ -4308,6 +4333,17 @@ t_unit_install() {
   # The XDG dirs too: the session sets them, and install.sh's `setup --aquamarine` builds under the
   # data dir when ROOT is no checkout (it once did so in the user's own, from an --installed run).
   local -x XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state
+  # install.sh builds into its ROOT: here a copy of this checkout's tracked files, never the checkout
+  # under test, whose tools the other tests use (#187, finding 253: built there, the tests before this
+  # one had failed on a fresh checkout). Its aquamarine step finds this omabox's build there, a
+  # stand-in (the soname Hyprland links, the commit omabox builds), as in a checkout that has run
+  # install.sh: nothing to build, no clone (the copy is no checkout: it would build into $h).
+  local c=$TMP/ic-root so tools0
+  mkdir -p "$c/build/prefix/lib"
+  git -C "$ROOT" ls-files -z | (cd "$ROOT" && tar --null -cf - -T -) | tar -xf - -C "$c"
+  so=$(lib hypr_aq_soname) && : > "$c/build/prefix/lib/$so"
+  lib eval 'echo "$AQ_BUILD"' > "$c/build/prefix/.omabox-commit"
+  tools0=$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)
   mkdir -p "$h" "$stub"
   printf '#!/bin/sh\nexit 1\n' > "$stub/sudo"
   printf '#!/bin/sh\ncase "$*" in *tools/keyboard*) exit 1 ;; esac\nexec /usr/bin/make "$@"\n' > "$stub/make"
@@ -4317,26 +4353,30 @@ t_unit_install() {
   cp "$stub/omarchy" "$stub/omarchy-shell"
   mkdir -p "$h/.config/omabox"; date -Is > "$h/.config/omabox/widget-declined"
   chmod +x "$stub/sudo" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell"
-  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1); local rc=$?
+  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); local rc=$?
   check_match "a failed tool build stops install.sh" "building tools/keyboard failed" "$out"
   check_eq "...with a failure" 1 "$rc"
+  check_match "...its aquamarine step before that built nothing (the stand-in build)" "boxes use a private build.*: nothing to build" "$out"
   rm "$stub/make"
   mkdir -p "$h/.claude/skills/omabox"
-  check_match "a real dir where a link goes is refused" "is not a link" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
+  check_match "a real dir where a link goes is refused" "is not a link" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
   rmdir "$h/.claude/skills/omabox"
-  check "install.sh in a clean HOME" env HOME="$h" PATH="$stub:$PATH" "$ROOT/install.sh"
-  check_eq "the skill is a link" "$ROOT/skill" "$(readlink "$h/.claude/skills/omabox")"
+  check "install.sh in a clean HOME" env HOME="$h" PATH="$stub:$PATH" "$c/install.sh"
+  check_eq "...built every tool in its own ROOT" "$(cd "$c/tools" && printf '%s\n' */Makefile | sed 's|\(.*\)/Makefile|\1/omabox-\1|')" \
+    "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "$f"; done)"
+  check_eq "...and nothing in the checkout under test (#187)" "$tools0" "$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)"
+  check_eq "the skill is a link" "$c/skill" "$(readlink "$h/.claude/skills/omabox")"
   check "...of the directory: the reference SKILL.md points to comes with it, for every agent" \
     bash -c "grep -q 'reference.md' '$h/.agents/skills/omabox/SKILL.md' && test -f '$h/.agents/skills/omabox/reference.md' && test -f '$h/.claude/skills/omabox/reference.md'"
   check_fails "no dir for an agent that is not installed" test -e "$h/.codex"
   check_fails "the agent guard is never turned on without asking" test -e "$h/.claude/settings.json"
   printf '#!/bin/sh\necho "  -g <geometry>   Set the region to capture."\n' > "$stub/grim"; chmod +x "$stub/grim"
-  check_match "a grim with no -T (window capture, finding 81) stops it" "no -T" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
+  check_match "a grim with no -T (window capture, finding 81) stops it" "no -T" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
   rm "$stub/grim"
   # finding 92: an older hook of ours is an update to offer, even after a "no" to turning it on.
   jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]}}' > "$h/.claude/settings.json"
   date -Is > "$h/.config/omabox/guard-declined"
-  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)
   check_match "an outdated guard: install.sh offers to update it" "guard there is outdated.*not asked \(no terminal\)" "$(tr '\n' ' ' <<<"$out")"
   check_eq "...and changes nothing without a terminal" "echo old omabox-guard" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$h/.claude/settings.json")"
   # One from a checkout that is gone reads outdated too, though no older omabox wrote it.
@@ -4345,17 +4385,17 @@ t_unit_install() {
     <<<"$old" > "$h/.claude/settings.json"
   check_match "...and one from a checkout that is gone, in words that fit it too" \
     "/nonexistent/co/share/guard is gone.*The guard there is outdated.*not asked \(no terminal\): omabox guard on claude" \
-    "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1 | tr '\n' ' ')"
+    "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 | tr '\n' ' ')"
   printf '%s\n' "$old" > "$h/.claude/settings.json"
   # ...for the agents that have it, whatever the others' guard (Codex off here) and an earlier "no".
   # "Turn it on?" is for the others, and only a "no" to that is remembered.
-  local guard=(env HOME="$h" "$CLI" guard) tty=(env SHELL=/bin/bash script -qec "$(printf %q "$ROOT/install.sh")" /dev/null)
+  local guard=(env HOME="$h" "$c/bin/omabox" guard) tty=(env SHELL=/bin/bash script -qec "$(printf %q "$c/install.sh")" /dev/null)
   mkdir -p "$h/.codex"; rm "$h/.config/omabox/guard-declined"
-  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)
   check_match "Claude Code outdated, Codex off: an update for Claude Code, turning it on for Codex" \
     "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*not asked \(no terminal\): omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
   date -Is > "$h/.config/omabox/guard-declined"
-  out=$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)
+  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)
   check_match "...the update even after a no to turning it on" \
     "guard there is outdated.*not asked \(no terminal\): omabox guard on claude .*you said no before.*: omabox guard on codex" "$(tr '\n' ' ' <<<"$out")"
   printf 'y\n' | HOME=$h PATH=$stub:$PATH "${tty[@]}" >/dev/null 2>&1
@@ -4369,7 +4409,7 @@ t_unit_install() {
   rm -rf "$h/.codex"
   rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
-  check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$ROOT/install.sh" 2>&1)"
+  check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
   check_fails "...and none of it reached a shell (omarchy, omarchy-shell)" test -e "$stub/shell-called"
 }
 
@@ -7570,6 +7610,7 @@ main() {
   fi
 
   hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
+  if [ "$INSTALLED" = 1 ]; then tools_ready installed; else tools_ready; fi || exit 2
   ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
   # omabox's workspace coming up is a leak (from #13's watch), unless you were on it already.
   # (A special one, special:NAME, is shown over the focused monitor's workspace.)
@@ -7608,12 +7649,25 @@ main() {
   for _t in "${tests[@]}"; do
     if [ "$_jobs" = 1 ] || [[ $_t == t_unit_* ]] || [[ " ${SERIAL[*]} " == *" $_t "* ]]; then _one+=("$_t"); else _par+=("$_t"); fi
   done
-  local _t0
+  # The suite's own functions as they are now. These tests run in this shell, so a helper of a test's
+  # under a name the suite uses (note, check, ...) stays redefined for every test after it, the parallel
+  # ones forked later too (#189, finding 252: t_unit_theme_dir's note() failed every slow wait after it).
+  # Each such test fails, and the suite's are put back.
+  local _t0 _fns _fdefs _f _was _chg
+  mapfile -t _fns < <(compgen -A function)
+  _fdefs=$(declare -f "${_fns[@]}")
   for CUR in "${_one[@]}"; do
     _n=$((pass + fail + ${#skips[@]})) _t0=$SECONDS
     rm -f "$UNTIL"
     printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
     echo "${CUR#t_}"; HELD=""; "$CUR"; notes
+    if [ "$(declare -f "${_fns[@]}")" != "$_fdefs" ]; then
+      _was=() _chg=()
+      for _f in "${_fns[@]}"; do _was+=("$(declare -f "$_f")"); done
+      eval "$_fdefs"
+      for _f in "${!_fns[@]}"; do [ "${_was[_f]}" = "$(declare -f "${_fns[_f]}")" ] || _chg+=("${_fns[_f]}"); done
+      no "the test leaves the suite's functions as they were" "it redefined ${_chg[*]} (put back for the tests after it)"
+    fi
     [[ $CUR == t_unit_* ]] || echo "       (${CUR#t_}: $((SECONDS - _t0))s)"
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))

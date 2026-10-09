@@ -4869,6 +4869,47 @@ from them.
     goes: 1456 is under Claude Code's 2000 px too. Not built yet (#188 stays open for them): a default
     shot size per user (`config shot-fit`), and `omabox calibrate`, a test card whose marks the model
     reports so omabox can name the `--fit` for any model and harness.
+252. **A unit test's helper named `note` failed every slow wait after it** (2026-10-09, #189). A full
+    run failed t_agent_session's "...and the box goes with the new agent", its output only `lib: line
+    1: $3: unbound variable`. No timeout: `until_ok` says "timed out after" when it gives up, and that
+    was not there. The wait succeeded after over half its 10 s, so `until_ok` called `note` for a
+    slow wait, and `note` was no longer the suite's: t_unit_theme_dir (since f614b8d, 2026-10-07)
+    defines its own `note() { bash -c '... theme_snapshot_note "$2" "$3"' lib ...; }` for its checks.
+    Unit tests run in the runner's shell, so a function a test defines stays defined for every test
+    after it, and the parallel box tests are forked from that shell later. Each later `note "slow
+    wait..."` ran that helper with one argument (`$3` unbound under `set -u`, "line 1" of its `bash -c`
+    script), and its failure was `until_ok`'s last status: every slow wait of a full run failed as
+    this one did. A run of `test/run.sh agent_session` alone has no t_unit_theme_dir, so it passed.
+    The box outliving the agent was a red herring: with `--idle 20s` the reaper polls every 5 s, so
+    5-10 s from the agent's exit to `gone` is how it works. Fixed: the helper is `snap_note`; a note that
+    fails no longer fails its wait; and the runner records the suite's own functions (`declare -f`)
+    before the tests it runs in its shell and compares them after each: a test that redefines one
+    fails ("the test leaves the suite's functions as they were", naming them) and they are put back
+    for the tests after it. A unit test of a wait that takes 0.7 s of 1 s, run after
+    t_unit_theme_dir from a copy of the suite: on the old code it fails with this very line; on the
+    new one it passes with its slow-wait note; with the old `note()` put back in t_unit_theme_dir,
+    that test fails naming `note` and the wait after it still passes. Loaded runs of
+    `unit_theme_dir agent_session t_wait t_widget t_clip t_pointer t_replace` (load ~4): 3 of 3 passed
+    on the old code too (no wait there took over half its time), 3 of 3 on the new, where this very
+    wait was noted slow in 2 of them (5.5 s and 5.3 s of 10 s; 5.5 and 5.2 in two more runs from a
+    copy): each of those a failure on the old code.
+253. **The suite builds the tools before its tests; `t_unit_install` builds into a copy** (2026-10-09,
+    #187). In a fresh checkout (tools/*/omabox-* not built yet) the first `test/run.sh unit` failed 23
+    checks: t_unit_wait's and t_unit_pointer's "refuses outside a box" ran tools that were not there,
+    and t_unit_refusals' `up` refusals met "missing ... run install.sh" before the refusal they check.
+    Not a race (unit tests run one at a time): t_unit_install runs install.sh, which built the tools
+    into the checkout under test, so the tests after it passed and those before it did not, and a
+    second run was clean. Its `setup --aquamarine` step also cloned and built aquamarine into that
+    checkout's build/, which every box it starts then uses. Now `test/run.sh` builds each tool that
+    is missing or older than its sources (`make -q`) before any test starts, under a lock on tools/,
+    saying so; a build that fails stops the run (exit 2) with make's output. `--installed` builds the
+    checkout's before copying them; an installed omabox's missing tool stops the run. t_unit_install
+    runs install.sh from a copy of the checkout's tracked files in its temp dir, with a stand-in for
+    this omabox's aquamarine build there (the soname Hyprland links, `AQ_BUILD`), so its aquamarine
+    step builds nothing and clones nothing, as in a checkout that ran install.sh; new checks: every
+    tool built in the copy, the checkout's tools untouched (their mtimes), and the stand-in found
+    ("nothing to build"). A fresh `git worktree add` runs `test/run.sh unit` with no failure (the
+    tools built first, ~1 s); on the old code, 23 failures.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
