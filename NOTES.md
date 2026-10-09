@@ -1169,6 +1169,8 @@ the designs here were measured in boxes and built for a contained desktop, and n
       2560x1440 and 3440x1440 are downscaled by Claude Code to 2000 px wide with a "multiply by
       1.28/1.72" note: with the factor max 1.5 px off, without it 544/1364 px. So full resolution
       stays the default; `--fit N` caps the longest side (grim `-s`, rounded up since grim truncates).
+      (Opus only: Haiku 4.5 reads points in the image it is shown, 0.76x of a 1920x1080 shot, and
+      the skill now says `--fit 1456` and `click --in` for every model: finding 251.)
       The likelier miss was cropped shots (`--active`, `-g`): the image starts at the crop's origin
       but `click` takes screen pixels.
     - So every shot is recorded in `$D/shots.tsv` (the box cannot see it): path, size and mtime, the
@@ -4811,6 +4813,35 @@ from them.
     into a scratch data dir and cache (the suite's copy of the CLI has no `.git`); over a build of
     this omabox's, nothing to build and no tool run, `--force` building it all the same; over an older
     one, a build. Plus each `setup` note and `monitor add`'s two. Fails on the old code (11 checks).
+
+251. **Some models read click points in the downscaled image they see** (2026-10-09, #188; corrects
+    the screenshot-scale part of 81). The model API scales an image bigger than the model sees down
+    before the model looks (Claude: 1568 px a side and about 1.2 MP, so a 1920x1080 shot is seen at
+    ~1456x819). Opus and Sonnet map their answer back to the image's own pixels; Haiku 4.5 does not:
+    every point it read off a 1920x1080 shot was ~0.76x the real one, so `click X Y` landed hundreds
+    of pixels up and to the left, and nothing tells the agent. Finding 81 measured Opus only, and the
+    skill said "1920x1080 is read 1:1". The skill is linked for agents running other providers'
+    models too, which scale with limits of their own. **Measured** (2026-10-07): 112 targets with
+    hand-checked clickable rects in 12 box shots (1920x1080, 2560x1440, 3840x2160; the launcher,
+    Nautilus, Calc, Chromium settings, a web table, btop, Xournal++, notifications); a hit is a point
+    inside the rect.
+
+    | shot given to the model | Opus 5.5 | Sonnet 5.5 | Haiku 4.5 |
+    |---|---|---|---|
+    | full size (the default) | 100% | 99% | 0% (median 347 px off; x and y both 0.758x) |
+    | `--fit 1280`, `click --in` | 98% | 96% | 62% |
+    | `--fit 1456` (under the limit), `click --in` | not run | 95% (4K) | 67% (95% of large targets) |
+
+    Two other aids failed. A pixel ruler drawn on the shot (a line every 100 px labelled in screen
+    pixels): Haiku ignored the labels (0-2%). A grid of labelled cells to drill into, clicking at the
+    chosen cell's centre: no model gained (Opus the same hits at ~14x the time; Sonnet 25%, cells too
+    coarse for 20 px targets; Haiku 2%). So the skill now says the reading depends on the model, and
+    that a shot no bigger than what the model sees, `--fit 1456` for 16:9 on Claude, plus `click
+    --in` is right for every model measured (SKILL.md in one sentence; reference.md's Shots the
+    detail, and a Symptoms row for clicks off by a factor). The `--fit 2000` advice for bigger screens
+    goes: 1456 is under Claude Code's 2000 px too. Not built yet (#188 stays open for them): a default
+    shot size per user (`config shot-fit`), and `omabox calibrate`, a test card whose marks the model
+    reports so omabox can name the `--fit` for any model and harness.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
