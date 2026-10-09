@@ -254,6 +254,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   instead; `install.sh` lists `python` (#152).
 - **The bar widget no longer logs `TypeError`s while a bar rebuilds** (a `bar.layout` edit with the
   widget inside another plugin): it falls back to the theme's colours while its bar is gone (#155).
+- **git works in a box started from a git worktree.** The box mounted the worktree but not its git
+  dir, inside the main checkout's `.git`, so `git status`, `git describe` and an installer that runs
+  git there failed with "not a git repository". That `.git` is now mounted too, read-only at its own
+  path (not the rest of the main checkout): git reads work, writes (a commit, a tag) fail. The same
+  for a submodule (#183).
 
 ## 0.4.8 — 2026-10-03
 

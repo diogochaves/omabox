@@ -4813,6 +4813,33 @@ from them.
     into a scratch data dir and cache (the suite's copy of the CLI has no `.git`); over a build of
     this omabox's, nothing to build and no tool run, `--force` building it all the same; over an older
     one, a build. Plus each `setup` note and `monitor add`'s two. Fails on the old code (11 checks).
+250. **A box started from a git worktree had no git there** (2026-10-09, #183). `up` mounts the repo
+    it runs from (`repo_top`, git's top level) read-only at its own path. A linked worktree's `.git`
+    is a file, `gitdir: <main>/.git/worktrees/NAME`, and that gitdir and the common dir it names
+    (`<main>/.git`: objects, refs, config) were not mounted, so in the box every git command there
+    failed, `fatal: not a git repository: (null)`, exit 128: an installer that clones or describes the
+    repo (`omarchy plugin add file://<worktree>`), a version stamp, a build's `git describe`. Finding
+    91 saw the same in the suite's stand-in host. `repo_git_dirs` asks git (`rev-parse
+    --path-format=absolute --git-common-dir --git-dir`, from the top level) and `up` mounts what is
+    outside the top level, read-only at its own path: the common dir alone, which holds the gitdir.
+    Not the rest of the main checkout: its working files are not in the box. They go before the repo
+    in the mount list (a git dir that held the repo would otherwise hide it) and through `refuse_src`
+    and `refuse_dest`, skipped with a note when refused, as the repo is. A submodule (`.git` naming
+    the superproject's `.git/modules/NAME`; its own common dir) and a submodule's worktree get the
+    same. Nothing for a main checkout (its `.git` is inside), a dir that is no repo, or a worktree
+    whose main checkout is gone (git fails: no `repo_top` either, quietly, as before), nor for a
+    jailed caller: `repo_top` runs no git for one (its `.git/config` is the jail's to write), so its
+    worktree's git dir is still not mounted. Paths with spaces work (one per line). The main
+    checkout's `.git/config` and `hooks/` become readable in the box, as a main checkout's already
+    are; nothing is copied into the box HOME, and the box safety invariant holds (`refuse_src` keeps
+    out `/dev`, `/run`, the runtime dir). Read-only by design: in the box `git status` (a dirty tree
+    too), `log`, `diff`, `describe` and `rev-parse` work (status refreshes the index only when it can
+    take `index.lock`); a commit or a tag fails, "Unable to create .../index.lock: Read-only file
+    system", as a write into the repo itself already did. Verified in a box from a scratch worktree
+    whose path has a space. `t_unit_git_dirs` (each layout above, and a jailed caller) and
+    `t_git_worktree` (a box from a linked worktree: `git status`, `describe --always`, `log` and
+    `rev-parse --show-toplevel` as on the host, the main checkout's files absent, a commit refused)
+    fail on the old code (8 checks).
 
 251. **Some models read click points in the downscaled image they see** (2026-10-09, #188; corrects
     the screenshot-scale part of 81). The model API scales an image bigger than the model sees down
