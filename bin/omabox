@@ -1089,9 +1089,14 @@ shell_running() { local st; st=$(on_box cat "/proc/$1/stat" 2>/dev/null) && [[ $
 # How the shell went since SHELL_BEFORE, or a failure when it did not: "crashed REPORT" (the report's
 # path here; - when there is none yet) or "exited" (its pid gone, no crash). shell_crash [PID]
 shell_crash() {
-  local pid=${1:-} i
+  local pid=${1:-} i p
   shell_crash_report && return 0
   shell_crash_logged || { [ -n "$pid" ] && ! shell_running "$pid"; } || return 1
+  # Gone as a duplicate of a shell another start brought up meanwhile (finding 248): not a failed start.
+  if ! shell_crash_logged && p=$(shell_adopt); then
+    say "box '$NAME': another start of the shell came first; that one (pid $p) is up, started after the old one was stopped: the box's shell now"
+    return 1
+  fi
   # The crash handler, another process, writes the report just after the shell's pid goes and its log
   # line (seen: "exited" said for a SEGV, its report there a moment later). A second for it.
   for ((i = 0; i < 10; i++)); do sleep 0.1; shell_crash_report && return 0; done
@@ -1107,6 +1112,20 @@ shell_crash_report() {
   else echo "crashed -"; fi
 }
 shell_crash_logged() { local f; f=$(box_home_file shell.log) && grep -aq 'Quickshell has crashed' "$f" 2>/dev/null; }
+# This start's shell exited at once as a duplicate ("An instance of this configuration is already
+# running": quickshell -n) of one that something else started after shell.sh stopped the old one (an
+# `omarchy restart shell` at the same time), and that one is up: its pid goes where shell.sh keeps the
+# shell's, written in the box (its runtime dir is the box's), and is printed (finding 248).
+shell_adopt() {
+  local f cfg p
+  f=$(box_home_file shell.log) && grep -aq 'An instance of this configuration is already running' "$f" 2>/dev/null || return 1
+  cfg=$(meta omarchy); cfg=${cfg:-/usr/share/omarchy}/shell
+  p=$(on_box /usr/bin/quickshell list -j -p "$cfg" --any-display 2>/dev/null | jq -r 'first(.[].pid) // empty' 2>/dev/null) || p=""
+  [[ $p =~ ^[0-9]+$ ]] && shell_running "$p" || return 1
+  # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
+  on_box sh -c 'f=$XDG_RUNTIME_DIR/omabox-shell.pid; echo "$1" > "$f.new" && mv -f "$f.new" "$f"' sh "$p" || return 1
+  echo "$p"
+}
 # The shell mid-session (#147). Omarchy's launcher starts a crashed shell again, up to 5 times a minute
 # (finding 194); past that, or once something stopped the launcher, the box has no shell while every
 # command treated it as healthy. shell_state: none (--no-shell), running, restarting (gone, its launcher
@@ -6831,16 +6850,24 @@ cmd_reload() {
   say "box '$NAME': config reloaded from $ROOT/share/hyprland.lua (binds, rules and Lua state added since are gone)"
 }
 
-# share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: the new pid appearing there is
-# the restart (a project's own quickshell in the box is not the Omarchy shell, finding 63).
+# share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: a pid there once shell.sh wrote
+# back this restart's token is the restart (a project's own quickshell in the box is not the Omarchy
+# shell, finding 63). Not any new pid: while shell.sh stops the old shell, an old launcher's relaunch
+# writes one too, and that shell is stopped with the rest (finding 248).
 cmd_restart_shell() {
   local name; name=$(name_arg restart-shell "$@") || exit 1
   select_box "$name"; need_box
   local old; old=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) || old=""
   SHELL_BEFORE=$(shell_crash_dirs)
-  on_box hyprctl dispatch "hl.dsp.exec_cmd('/opt/omabox/share/shell.sh')" >/dev/null
+  # (A box whose shell.sh writes no token, one `up` by an omabox from before: a new pid, as then.)
+  local tok="" got
+  ! on_box grep -q omabox-shell.start /opt/omabox/share/shell.sh 2>/dev/null || tok=$$.$RANDOM
+  on_box hyprctl dispatch "hl.dsp.exec_cmd('/opt/omabox/share/shell.sh $tok')" >/dev/null
   local deadline=$((SECONDS + 15)) new
-  until new=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [ -n "$new" ] && [ "$new" != "$old" ]; do
+  # (The token read first: shell.sh writes it after removing the old pid, so a pid read after it is new.)
+  until if [ -n "$tok" ]; then got=$(cat "$D/run/omabox-shell.start" 2>/dev/null) && [ "$got" = "$tok" ] &&
+          new=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [ -n "$new" ]
+        else new=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [ -n "$new" ] && [ "$new" != "$old" ]; fi; do
     [ $SECONDS -lt $deadline ] || die "shell did not restart; see $D/home/shell.log"
     sleep 0.1
   done

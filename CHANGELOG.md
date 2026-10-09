@@ -259,6 +259,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   git there failed with "not a git repository". That `.git` is now mounted too, read-only at its own
   path (not the rest of the main checkout): git reads work, writes (a commit, a tag) fail. The same
   for a submodule (#183).
+- **`restart-shell` no longer says the shell exited when it is running.** When the shell had just
+  died (a plugin edit crashing it, a kill), Omarchy's launcher started it again a second later next
+  to the new one, which exited with "An instance of this configuration is already running":
+  `restart-shell` reported a failed start (exit 1), and every restart after failed the same way.
+  `restart-shell` now stops every running copy of the shell and its launcher before starting one. If
+  something else starts the shell at the same moment, it reports that shell as the running one (exit 0)
+  (#192).
 
 ## 0.4.8 — 2026-10-03
 
