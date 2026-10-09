@@ -150,7 +150,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   Sonnet; Haiku 4.5 reads points in the smaller image the model API shows it (0.76x of a 1920x1080
   shot), so its clicks landed hundreds of pixels off, and other providers' models scale images with
   limits of their own. To click off a whole screen or a big window the skill now says `shot --fit
-  1456` (16:9 on Claude) and `click --in` it, which worked for every model measured (#188).
+  1456` (16:9 on Claude) and `click --in` it, which worked for every model measured (#188). It also
+  names `omabox gpu` for a box's rendering cost, which agents had been summing by hand (#190).
 
 ### Fixed
 
