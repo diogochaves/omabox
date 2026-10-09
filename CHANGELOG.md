@@ -3,7 +3,11 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.5.1 — 2026-10-09
+
+Fixes from a review of 0.5.0. Security: a jailed agent's `up --seed` could have copied a file it
+swapped in after the check, and a box could hang `omabox ls --json` (so the bar widget) with a FIFO
+in its runtime dir. `up` works again from a directory you cannot read. Update.
 
 ### Fixed
 
