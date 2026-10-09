@@ -1592,7 +1592,9 @@ seed_home() {
   # Each --plugin: a link to its own path when the box sees it there (LINKED_PLUGINS, finding 241), as
   # a dev-linked desk has it; else a dir for its mount. A save's links in there go first: one to a
   # plugin not asked for this time would load it, and a mount onto a link would follow it.
-  find "$h/.config/omarchy/plugins" -mindepth 1 -maxdepth 1 -type l -delete
+  # (From inside it: -delete goes back to the caller's dir after, which fails when that cannot be read,
+  # `cd` from a dir the user cannot list, and `up` ended there; finding 256.)
+  (cd "$h/.config/omarchy/plugins" && find . -mindepth 1 -maxdepth 1 -type l -delete)
   for p in "${PLUGINS[@]}"; do
     id=${p%%$'\t'*}
     if [[ " ${LINKED_PLUGINS[*]:-} " == *" $id "* ]]; then home_link "$h" ".config/omarchy/plugins/$id" "${p#*$'\t'}"; fi
@@ -7518,7 +7520,7 @@ down_mark() {
 # (.expired-NAME, need_box's "went down after 2h idle") after a day: a session's box has a name of
 # its own, and each one that idled out left its note for good (finding 237).
 prune_marks() {
-  find "$BOXES" -maxdepth 1 \( -name '.down-*' -mmin +10 -o -name '.expired-*' -mmin +1440 \) -type f -delete 2>/dev/null || true
+  (cd "$BOXES" && find . -maxdepth 1 \( -name '.down-*' -mmin +10 -o -name '.expired-*' -mmin +1440 \) -type f -delete) 2>/dev/null || true   # (from inside: finding 256)
 }
 cmd_down() {
   local names=() n all=0

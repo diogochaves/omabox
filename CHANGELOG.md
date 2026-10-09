@@ -3,6 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`omabox up` works again from a directory you cannot read** (an `su` or `runuser` that kept
+  root's), where 0.5.0's ended with only `find: Failed to restore initial working directory`.
+
 ## 0.5.0 — 2026-10-09
 
 Several monitors in one box, a box on the theme you name or the one you are editing, and new ways

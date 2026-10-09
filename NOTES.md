@@ -5030,6 +5030,17 @@ from them.
     crashed, no mark crashed (the first fails on the old code). t_shell_restart_race,
     t_shell_restart_dup and t_shell_crash together, 3 of 3 runs clean on the RTX.
 
+256. **`up` from a directory the user cannot read ended at a `find -delete`** (2026-10-09, the 0.5.0
+    package test). From a cwd the user cannot list (`omavm user` runs in /root; an `su`/`runuser`
+    that keeps root's), 0.5.0's `up` exited 1, its only output `find: Failed to restore initial
+    working directory /root: Permission denied`: `find -delete` (from b9a0f32, finding 241's link
+    sweep in a box HOME's plugins dir) goes back to where it started after deleting, cannot, fails, and
+    `set -e` ends `up`. 0.4.8's `up` from there worked. Both `find -delete` in the CLI now run from
+    inside the dir they sweep (`down`'s marker sweep swallowed the error, so it only never swept from
+    there). t_up_cwd_unreadable (a cwd made mode 000 under the caller: exit 0, no complaint, the box
+    up; 3 checks fail on 0.5.0). The 0.4.8 round's 7 t_unit_omarchy_contract failures from /root were
+    the same cause in the suite (`find -exec +`), not omabox's.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
