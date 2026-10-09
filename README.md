@@ -63,7 +63,7 @@ skipped for the system's (`omabox --version` says which one boxes use). **From a
 package** (once Omarchy's repository has it): `omabox setup --remove` in the checkout first; if you
 forget, the package's `omabox setup` finds the checkout's `~/.local/bin/omabox` and offers to remove
 it. After an upgrade the bar runs the old widget until the shell restarts; its panel says so. Boxes
-already up keep the Hyprland config they started with: `omabox reload` (next release) gives one
+already up keep the Hyprland config they started with: `omabox reload` gives one
 the new one, or `down` and `up`.
 
 <details>
@@ -98,17 +98,17 @@ omabox run -d -- ./build/src/myapp     # launch an app inside (detached; prints 
 omabox shot                            # screenshot; prints the PNG path (--fit 2000: scaled down)
 omabox windows                         # the box's windows, where they are, what covers them
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
-omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail (next release)
-omabox shot --changed --window myapp   # only what changed since its last shot, cropped (next release)
-omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames (next release)
-omabox output drop [NAME] --for 300ms  # a screen gone and back, as a monitor waking up (next release)
-omabox gdb [--watch]                   # backtraces of the box's Hyprland: a hang, or a crash (next release)
+omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail
+omabox shot --changed --window myapp   # only what changed since its last shot, cropped
+omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames
+omabox output drop [NAME] --for 300ms  # a screen gone and back, as a monitor waking up
+omabox gdb [--watch]                   # backtraces of the box's Hyprland: a hang, or a crash
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
 omabox keys -t 'hello world' Return    # type text, then press a key
 omabox keys --wait super+space         # ...and return once the screen has settled (no sleeps)
 omabox wait window myapp               # or: still, change, layer NAMESPACE, cmd -- CMD (--gone too)
 omabox click 960 540 [right] [--double]
-omabox scroll 960 540 0 30 --source wheel   # sideways (DX), a wheel's notches or a touchpad's (next release)
+omabox scroll 960 540 0 30 --source wheel   # sideways (DX), a wheel's notches or a touchpad's
 omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
 omabox drag --window myapp 10 10 200 80   # press, move, release; --shot FILE while it is held
 omabox hyprctl -j clients              # the box's Hyprland, never yours
@@ -118,7 +118,7 @@ omabox log shell --grep qml -n 20      # the box's logs (Hyprland's by default; 
 omabox events --since 30s --grep urgent   # Hyprland's events, stamped; --mark, --until RE, -f
 omabox down                            # kill everything in the box
 omabox ls                              # boxes, mode, size, state, plugins
-omabox which 12345                     # the box a host pid is in, a bar like yours in pgrep (next release)
+omabox which 12345                     # the box a host pid is in, a bar like yours in pgrep
 ```
 
 - **Names**: a box is named after the current git repo. Inside a Claude Code or Codex session (or
@@ -126,7 +126,7 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   so two agents in one repo each get their own box, and it goes down when its agent exits (not while
   you peek at it or an `omabox run` is going). An agent does not pick up a box you started yourself
   unless told `-b myrepo`. A command the agent runs outside any repo uses its session's box when it
-  has one, `omabox down` included (next release). `-b NAME` or `OMABOX=NAME` picks a box; `OMABOX_SESSION=` (empty) turns
+  has one, `omabox down` included. `-b NAME` or `OMABOX=NAME` picks a box; `OMABOX_SESSION=` (empty) turns
   the per-session names off. Two repos with the same directory name need `-b`.
 - **Screen**: `--size 3440x1440`, `3440x1440@144`, or `host` for your focused monitor;
   `omabox mode` changes it live.
@@ -165,8 +165,7 @@ omabox restart-shell                          # after editing the plugin
 
 The plugin is mounted read-only and turned on in the box's `shell.json` where its manifest says. One
 inside the repo you run `up` from (or a same-path `--ro-bind` or `--overlay`) is a link to where it
-is instead, as on your desk, so a helper that finds the rest of its repo through `readlink -f` works
-(next release).
+is instead, as on your desk, so a helper that finds the rest of its repo through `readlink -f` works.
 The box's bar has the built-in widgets plus the plugins you mount, nothing else. When that leaves it
 with no workspace numbers, it gets Omarchy's: where your plugin's were, or after the menu.
 When the shell does not load a plugin (a manifest it refuses, a QML error), `up` and `restart-shell`
@@ -250,7 +249,7 @@ them, and `omabox config KEY default` puts one back.
   the bar widget greys its switch out.
 - `bar-icon`: `always` (the default) keeps the widget's icon in the bar with no box up, dimmed, so
   its settings are a click away; `auto` shows it only while boxes exist.
-- `gpu` (next release): the GPU headless boxes render on: `auto` (the default: the first usable
+- `gpu`: the GPU headless boxes render on: `auto` (the default: the first usable
   render node), `nvidia`, `amd`, `intel` (or a driver's name: `amdgpu`, `i915`, ...), or a PCI slot
   (`0000:01:00.0`: for two GPUs of one kind). `omabox config gpu` lists the GPUs with the values that
   name each, and marks the one in use. When that GPU is not there (an NVIDIA card handed to a VM), `up`
@@ -453,13 +452,13 @@ blocks the network and every other socket, omabox's included), or see
   mapping); DEST cannot be `/`, a system dir, `/run`, `/tmp` itself, `/opt/omabox`, the box HOME, or
   a dir above those. A plugin dir inside `~/.config/omarchy/plugins` is fine (a theme in `themes/` too). A throwaway `run`
   outside a repo mounts nothing of the current dir.
-- `--seed SRC:DEST` (next release) copies a file or folder into the box HOME before the session
+- `--seed SRC:DEST` copies a file or folder into the box HOME before the session
   starts (`--seed ./fixture.json:.config/myplugin/config.json`), for a plugin that reads its config
   once at start; the same sources are refused as for `--ro-bind`.
-- `--theme-dir DIR` (next release) puts a theme you are editing in the box live: the box's
+- `--theme-dir DIR` puts a theme you are editing in the box live: the box's
   `~/.config/omarchy/themes/NAME` links to DIR, which the box sees at its own path (the repo, or a
   read-only mount). Your other themes are copies made at `up`, a linked one too.
-- `--theme NAME` (next release) starts the box on that theme (Omarchy's, one of yours or a
+- `--theme NAME` starts the box on that theme (Omarchy's, one of yours or a
   `--theme-dir` one) instead of your desktop's current one, so a test's start does not depend on
   what your desktop is on that day.
 
@@ -471,7 +470,7 @@ never with journald or logind), real monitors (their modes, HDR, VRR, a real hot
 suspend, a real password at the lock screen, and final release acceptance.
 
 <details>
-<summary><b>Several monitors with one (next release)</b></summary>
+<summary><b>Several monitors with one</b></summary>
 
 A headless box can have as many virtual monitors as a test needs, at any size, scale and place, so a
 plugin or app can be tried on a desk you do not have: a bar on each screen, windows moving between

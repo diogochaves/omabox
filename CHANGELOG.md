@@ -3,7 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.5.0 — 2026-10-09
+
+Several monitors in one box, a box on the theme you name or the one you are editing, and new ways
+to see what a box did (`shot --changed`, `shot --burst`, `pixel`, `gdb`, `which`). Security fixes:
+files from `~/.config/omarchy`, such as `api-keys.env`, could reach a box through links in your
+current theme or a `--ro-bind` inside that folder, and a box started without pasta inherited its
+caller's open files. Update.
 
 ### Added
 
