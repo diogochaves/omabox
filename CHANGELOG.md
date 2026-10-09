@@ -146,6 +146,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - The test suite checks the box safety rules on every kind of box it starts, not one, covers
   fourteen flags no check used, and no longer passes checks that could not fail or fails ones that
   ran late under load (#91, #110, #111, #116).
+- **The agent skill no longer says a full-size screen shot is read 1:1.** That held for Opus and
+  Sonnet; Haiku 4.5 reads points in the smaller image the model API shows it (0.76x of a 1920x1080
+  shot), so its clicks landed hundreds of pixels off, and other providers' models scale images with
+  limits of their own. To click off a whole screen or a big window the skill now says `shot --fit
+  1456` (16:9 on Claude) and `click --in` it, which worked for every model measured (#188).
 
 ### Fixed
 

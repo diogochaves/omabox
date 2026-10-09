@@ -35,11 +35,22 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   satisfied by any window it matches. `shot --window SEL -g "X,Y WxH"` crops the window in its own
   coordinates.
 - Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
-  --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. 1920x1080
-  is read 1:1; on a bigger screen (a "multiply by" note, or over 2000 px) `shot --fit 2000` and
-  `click --in` it. Screen shots show the pointer (hover evidence: a `-g` crop of the screen); window
-  shots never do. A shot right after a `click` or `keys` without `--wait` can show the frame before
-  the redraw: `--wait`, or `omabox wait still`, first.
+  --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. Screen
+  shots show the pointer (hover evidence: a `-g` crop of the screen); window shots never do. A shot
+  right after a `click` or `keys` without `--wait` can show the frame before the redraw: `--wait`, or
+  `omabox wait still`, first.
+- How a model reads points off a shot depends on the model. An image bigger than the model sees is
+  scaled down before it looks (Claude: 1568 px a side and about 1.2 MP, so 1920x1080 is seen at
+  ~1456x819; other providers have their own limits). Some models map what they read back to the
+  file's pixels (Opus 5.5, Sonnet 5.5: full size read 1:1); others answer in the smaller image they
+  saw (Haiku 4.5: every point 0.76x the real one, a median 347 px off, no click on target), and
+  nothing says the click went elsewhere. A shot no bigger than what the model sees, plus `click
+  --in`, worked for every model measured: **to click off a whole screen or a big window, `shot --fit
+  1456`** (16:9 on Claude; a squarer screen a little less, the limit is an area) **and `click --in`
+  it**, whatever the screen size (it also stays under the 2000 px past which Claude Code downscales
+  with a "multiply by" note). A `-g` crop, a `--changed` crop or a window already that small needs no
+  `--fit`. Full size reads small text; do not click off it. A small model still missed about a third
+  of small targets at 1456: a `-g` crop around one is the next step (not measured). NOTES finding 251.
 - One image outweighs anything omabox prints as text. Take the smallest that shows it: `shot --window
   SEL` for one app, `-g "X,Y WxH"` for the part under test (a menu, a field, a bar widget), `--fit
   1280` for a whole screen's layout (full size to read small text). `--wait`'s `at X,Y WxH` is the
@@ -68,6 +79,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 | Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
+| Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it (Shots). |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
 | `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new` with those options (it starts the box), then `-b box-N` as it printed. |
