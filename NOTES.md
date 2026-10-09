@@ -4835,6 +4835,23 @@ from them.
     on the old code too (no wait there took over half its time), 3 of 3 on the new, where this very
     wait was noted slow in 2 of them (5.5 s and 5.3 s of 10 s; 5.5 and 5.2 in two more runs from a
     copy): each of those a failure on the old code.
+253. **The suite builds the tools before its tests; `t_unit_install` builds into a copy** (2026-10-09,
+    #187). In a fresh checkout (tools/*/omabox-* not built yet) the first `test/run.sh unit` failed 23
+    checks: t_unit_wait's and t_unit_pointer's "refuses outside a box" ran tools that were not there,
+    and t_unit_refusals' `up` refusals met "missing ... run install.sh" before the refusal they check.
+    Not a race (unit tests run one at a time): t_unit_install runs install.sh, which built the tools
+    into the checkout under test, so the tests after it passed and those before it did not, and a
+    second run was clean. Its `setup --aquamarine` step also cloned and built aquamarine into that
+    checkout's build/, which every box it starts then uses. Now `test/run.sh` builds each tool that
+    is missing or older than its sources (`make -q`) before any test starts, under a lock on tools/,
+    saying so; a build that fails stops the run (exit 2) with make's output. `--installed` builds the
+    checkout's before copying them; an installed omabox's missing tool stops the run. t_unit_install
+    runs install.sh from a copy of the checkout's tracked files in its temp dir, with a stand-in for
+    this omabox's aquamarine build there (the soname Hyprland links, `AQ_BUILD`), so its aquamarine
+    step builds nothing and clones nothing, as in a checkout that ran install.sh; new checks: every
+    tool built in the copy, the checkout's tools untouched (their mtimes), and the stand-in found
+    ("nothing to build"). A fresh `git worktree add` runs `test/run.sh unit` with no failure (the
+    tools built first, ~1 s); on the old code, 23 failures.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
