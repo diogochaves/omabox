@@ -223,7 +223,8 @@ until_ok() {
     sleep 0.2
   done
   now=$((($(now_ms) - t0) / 100))
-  [ $((now * 200)) -le "$lim" ] || note "slow wait: $((now / 10)).$((now % 10))s of ${t}s for: $*"
+  # (The wait succeeded: the note is not the point, its failure is not the check's. Finding 252.)
+  [ $((now * 200)) -le "$lim" ] || note "slow wait: $((now / 10)).$((now % 10))s of ${t}s for: $*" || true
 }
 # holds T CMD...: the command succeeds now and keeps succeeding for T seconds (a "stays so" check: one
 # look after a sleep misses a state that changed and came back).
@@ -918,21 +919,23 @@ t_unit_theme_dir() {
   check "...a link on the way cleared: a real dir now" test -d "$d/h2/.config" -a ! -L "$d/h2/.config" -a -L "$d/h2/.config/omarchy/themes/x"
   check_eq "...nothing written through it" "" "$(ls -A "$d/victim")"
   # The note: a theme linked into the repo up runs from; from a worktree, into the main checkout.
+  # (snap_note, not note: that is the suite's own, and a unit test's helper redefines it for every test
+  # after it; finding 252.)
   # shellcheck disable=SC2329 # called below
-  note() { bash -c 'source "$1"; theme_snapshot_note "$2" "$3"' lib "$TMP/lib/bin/omabox" "$@" 2>&1; }
+  snap_note() { bash -c 'source "$1"; theme_snapshot_note "$2" "$3"' lib "$TMP/lib/bin/omabox" "$@" 2>&1; }
   ln -s "$r/themes/x" "$h/.config/omarchy/themes/lx"
   check_match "note: a theme linked into this repo is a copy made now" \
     "note: theme lx is a copy of $r/themes/x made now: edits after this do not reach the box. up --theme-dir $r/themes/x gives a live one" \
-    "$(note "$h/.config/omarchy/themes/lx/" "$r")"
+    "$(snap_note "$h/.config/omarchy/themes/lx/" "$r")"
   git -C "$r" add -A && git -C "$r" -c user.name=t -c user.email=t@t commit -qm t
   w=$TMP/$P-td-wt; git -C "$r" worktree add -q "$w" 2>/dev/null
-  out=$(note "$h/.config/omarchy/themes/lx/" "$w")
+  out=$(snap_note "$h/.config/omarchy/themes/lx/" "$w")
   check_match "...from a worktree: the main checkout's, not this one's" "copy of $r/themes/x, in another checkout \($r\), not this one \($w\)" "$out"
   check_match "...and this checkout's own for a live one" "up --theme-dir $w/themes/x gives a live one" "$out"
   rm -rf "$w/themes"
-  check_match "...or DIR, when this checkout has no such theme" "up --theme-dir DIR gives" "$(note "$h/.config/omarchy/themes/lx/" "$w")"
+  check_match "...or DIR, when this checkout has no such theme" "up --theme-dir DIR gives" "$(snap_note "$h/.config/omarchy/themes/lx/" "$w")"
   ln -s "$d/elsewhere/y" "$h/.config/omarchy/themes/ly"
-  check_eq "...nothing for a theme linked from elsewhere" "" "$(note "$h/.config/omarchy/themes/ly/" "$r")"
+  check_eq "...nothing for a theme linked from elsewhere" "" "$(snap_note "$h/.config/omarchy/themes/ly/" "$r")"
   # up --theme NAME (finding 245): named as omarchy-theme-set names it, and there.
   local om=$d/om th=$d/th
   mkdir -p "$om/themes/tokyo-night" "$th/.config/omarchy/themes/mine" "$d/dev/wip"
@@ -946,8 +949,8 @@ t_unit_theme_dir() {
   check_match "...a path: refused" "not a theme's name: ../tokyo-night" "$(tn ../tokyo-night)"
   check_match "...a dot name: refused" "not a theme's name: .mine" "$(tn .mine)"
   mkdir -p "$h/.config/omarchy/themes/z"
-  check_eq "...nor for a theme that is a dir of its own" "" "$(note "$h/.config/omarchy/themes/z/" "$r")"
-  check_eq "...nor outside a repo" "" "$(note "$h/.config/omarchy/themes/lx/" "")"
+  check_eq "...nor for a theme that is a dir of its own" "" "$(snap_note "$h/.config/omarchy/themes/z/" "$r")"
+  check_eq "...nor outside a repo" "" "$(snap_note "$h/.config/omarchy/themes/lx/" "")"
   git -C "$r" worktree remove --force "$w" 2>/dev/null
 }
 
@@ -7566,12 +7569,25 @@ main() {
   for _t in "${tests[@]}"; do
     if [ "$_jobs" = 1 ] || [[ $_t == t_unit_* ]] || [[ " ${SERIAL[*]} " == *" $_t "* ]]; then _one+=("$_t"); else _par+=("$_t"); fi
   done
-  local _t0
+  # The suite's own functions as they are now. These tests run in this shell, so a helper of a test's
+  # under a name the suite uses (note, check, ...) stays redefined for every test after it, the parallel
+  # ones forked later too (#189, finding 252: t_unit_theme_dir's note() failed every slow wait after it).
+  # Each such test fails, and the suite's are put back.
+  local _t0 _fns _fdefs _f _was _chg
+  mapfile -t _fns < <(compgen -A function)
+  _fdefs=$(declare -f "${_fns[@]}")
   for CUR in "${_one[@]}"; do
     _n=$((pass + fail + ${#skips[@]})) _t0=$SECONDS
     rm -f "$UNTIL"
     printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
     echo "${CUR#t_}"; HELD=""; "$CUR"; notes
+    if [ "$(declare -f "${_fns[@]}")" != "$_fdefs" ]; then
+      _was=() _chg=()
+      for _f in "${_fns[@]}"; do _was+=("$(declare -f "$_f")"); done
+      eval "$_fdefs"
+      for _f in "${!_fns[@]}"; do [ "${_was[_f]}" = "$(declare -f "${_fns[_f]}")" ] || _chg+=("${_fns[_f]}"); done
+      no "the test leaves the suite's functions as they were" "it redefined ${_chg[*]} (put back for the tests after it)"
+    fi
     [[ $CUR == t_unit_* ]] || echo "       (${CUR#t_}: $((SECONDS - _t0))s)"
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))

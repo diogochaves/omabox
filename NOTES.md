@@ -4811,6 +4811,30 @@ from them.
     into a scratch data dir and cache (the suite's copy of the CLI has no `.git`); over a build of
     this omabox's, nothing to build and no tool run, `--force` building it all the same; over an older
     one, a build. Plus each `setup` note and `monitor add`'s two. Fails on the old code (11 checks).
+252. **A unit test's helper named `note` failed every slow wait after it** (2026-10-09, #189). A full
+    run failed t_agent_session's "...and the box goes with the new agent", its output only `lib: line
+    1: $3: unbound variable`. No timeout: `until_ok` says "timed out after" when it gives up, and that
+    was not there. The wait succeeded after over half its 10 s, so `until_ok` called `note` for a
+    slow wait, and `note` was no longer the suite's: t_unit_theme_dir (since f614b8d, 2026-10-07)
+    defines its own `note() { bash -c '... theme_snapshot_note "$2" "$3"' lib ...; }` for its checks.
+    Unit tests run in the runner's shell, so a function a test defines stays defined for every test
+    after it, and the parallel box tests are forked from that shell later. Each later `note "slow
+    wait..."` ran that helper with one argument (`$3` unbound under `set -u`, "line 1" of its `bash -c`
+    script), and its failure was `until_ok`'s last status: every slow wait of a full run failed as
+    this one did. A run of `test/run.sh agent_session` alone has no t_unit_theme_dir, so it passed.
+    The box outliving the agent was a red herring: with `--idle 20s` the reaper polls every 5 s, so
+    5-10 s from the agent's exit to `gone` is how it works. Fixed: the helper is `snap_note`; a note that
+    fails no longer fails its wait; and the runner records the suite's own functions (`declare -f`)
+    before the tests it runs in its shell and compares them after each: a test that redefines one
+    fails ("the test leaves the suite's functions as they were", naming them) and they are put back
+    for the tests after it. A unit test of a wait that takes 0.7 s of 1 s, run after
+    t_unit_theme_dir from a copy of the suite: on the old code it fails with this very line; on the
+    new one it passes with its slow-wait note; with the old `note()` put back in t_unit_theme_dir,
+    that test fails naming `note` and the wait after it still passes. Loaded runs of
+    `unit_theme_dir agent_session t_wait t_widget t_clip t_pointer t_replace` (load ~4): 3 of 3 passed
+    on the old code too (no wait there took over half its time), 3 of 3 on the new, where this very
+    wait was noted slow in 2 of them (5.5 s and 5.3 s of 10 s; 5.5 and 5.2 in two more runs from a
+    copy): each of those a failure on the old code.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
