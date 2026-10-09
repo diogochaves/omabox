@@ -3,7 +3,9 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.5.2 — 2026-10-09
+
+`omabox shot` works again from a directory you cannot read, as `up` does since 0.5.1.
 
 ### Fixed
 
