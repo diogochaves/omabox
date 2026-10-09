@@ -3342,20 +3342,21 @@ t_no_shell() {
 }
 
 # finding 122: an NVIDIA GPU whose /dev/nvidiaN is missing (switched to the driver at runtime) gets it
-# from nvidia-modprobe -c MINOR; still missing, the error says what to run. A fake /proc/driver/nvidia
+# from nvidia-modprobe -c MINOR, and /dev/nvidiactl from -c 255 (finding 254); still missing, the error
+# says what to run. A fake /proc/driver/nvidia
 # and /dev (a link to /dev/null is a character device to `test -c`), and a stub nvidia-modprobe.
 t_unit_nvidia() {
   local d=$TMP/$P-nv slot=0000:01:00.0 out
   mkdir -p "$d/proc/gpus/$slot" "$d/dev" "$d/stub" "$d/none"
   printf 'Model: \t\t NVIDIA GeForce RTX 5070 Ti\nIRQ:   \t\t 180\nDevice Minor: \t 3\n' > "$d/proc/gpus/$slot/information"
   ln -s /dev/null "$d/dev/nvidiactl"
-  printf '#!/bin/sh\necho "$*" >> "%s/calls"\n[ "$NV_STUB" = fail ] || ln -sf /dev/null "%s/dev/nvidia$2"\n' "$d" "$d" > "$d/stub/nvidia-modprobe"
+  printf '#!/bin/sh\necho "$*" >> "%s/calls"\nn=nvidia$2; [ "$2" != 255 ] || n=nvidiactl\n[ "$NV_STUB" = fail ] || ln -sf /dev/null "%s/dev/$n"\n' "$d" "$d" > "$d/stub/nvidia-modprobe"
   chmod +x "$d/stub/nvidia-modprobe"
   # (Always with the stub first in PATH: the real nvidia-modprobe is setuid root and makes /dev nodes.)
   nv() { PATH=$1:$PATH lib nvidia_node "$slot" "$2" "$d/proc" "$d/dev" 2>&1; }
   export NV_STUB=fail
   out=$(nv "$d/stub" 1)
-  check_match "a missing node the helper does not create: what to run" "no usable $d/dev/nvidia3 .*run \`nvidia-modprobe -c 3\`" "$out"
+  check_match "a missing node the helper does not create: what to run" "no usable $d/dev/nvidia3 \(run \`nvidia-modprobe -c 3\`," "$out"
   check_eq "...after asking it once, for that minor" "-c 3" "$(cat "$d/calls" 2>&1)"
   rm -f "$d/calls"
   check_match "CREATE 0 (an interactive box's other GPUs): not asked" "no usable" "$(nv "$d/stub" 0)"
@@ -3365,8 +3366,13 @@ t_unit_nvidia() {
   check_eq "...one call" "-c 3" "$(cat "$d/calls" 2>&1)"
   check_eq "a node there: used, the helper not asked" "$d/dev/nvidia3|-c 3" "$(nv "$d/stub" 1)|$(cat "$d/calls")"
   rm "$d/dev/nvidiactl" "$d/calls"
-  check_match "a missing control node asks too" "no usable .*nvidiactl" "$(NV_STUB=fail nv "$d/stub" 1)"
-  check_eq "...(for the GPU's minor)" "-c 3" "$(cat "$d/calls" 2>&1)"
+  check_match "a missing control node asks too, and says what makes it" "no usable $d/dev/nvidiactl \(run \`nvidia-modprobe -c 255\`," "$(NV_STUB=fail nv "$d/stub" 1)"
+  check_eq "...for minor 255, the control node's, not the GPU's" "-c 255" "$(cat "$d/calls" 2>&1)"
+  rm -f "$d/calls"
+  check_eq "...which makes it" "$d/dev/nvidia3|-c 255" "$(NV_STUB=ok nv "$d/stub" 1)|$(cat "$d/calls" 2>&1)"
+  rm -f "$d/dev/nvidiactl" "$d/dev/nvidia3" "$d/calls"
+  check_match "both missing: both named, both asked for" "no usable $d/dev/nvidia3 $d/dev/nvidiactl \(run \`nvidia-modprobe -c 3\` \`nvidia-modprobe -c 255\`," "$(NV_STUB=fail nv "$d/stub" 1)"
+  check_eq "...one call each" "-c 3 -c 255" "$(tr '\n' ' ' < "$d/calls" | sed 's/ $//')"
   unset NV_STUB
   check_match "no device minor in the driver's file" "no device minor" \
     "$(printf 'Model: x\n' > "$d/proc/gpus/$slot/information"; nv "$d/none" 1)"

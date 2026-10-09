@@ -5001,6 +5001,18 @@ from them.
     ("nothing to build"). A fresh `git worktree add` runs `test/run.sh unit` with no failure (the
     tools built first, ~1 s); on the old code, 23 failures.
 
+254. **A GPU switched to nvidia had `/dev/nvidia0` made, never `/dev/nvidiactl`** (2026-10-09). On this
+    machine the RTX went from vfio-pci to nvidia at runtime (finding 122's case) and nothing made its
+    nodes. `nvidia_node` asked `nvidia-modprobe -c MINOR` when either node was missing, but `-c` makes
+    only the node of that minor: `/dev/nvidia0` appeared (a box's start, 08:54), `/dev/nvidiactl`
+    never did, every box was refused, and the error told the user to run that same `-c 0`, which
+    changes nothing. nvidiactl is minor 255 (`nvidia-modprobe -c 255` made it, 195,255, VERIFIED here).
+    Now each missing node is asked for by its own minor, and the error names the missing ones and the
+    command for each. A whole suite run in that state: every box test refused (the probe), and with the
+    AMD node pinned, the NVIDIA tests and t_jail (its broker picks the GPU itself). t_unit_nvidia: the
+    control node asked for as 255, made, both missing named and asked for (6 checks fail on the old
+    code).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

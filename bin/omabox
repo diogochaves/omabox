@@ -1393,21 +1393,34 @@ nvidia_device() {
 
 # nvidia_node SLOT [CREATE [PROC DEV]]: the /dev/nvidiaN of the GPU at PCI SLOT (PROC and DEV stand in
 # for /proc/driver/nvidia and /dev in t_unit_nvidia). A GPU switched to the nvidia driver at runtime
-# (from vfio-pci) can lack its node until something creates it (finding 122): NVIDIA's own setuid
-# helper, nvidia-modprobe, does that for an unprivileged user, so it is asked once, unless CREATE is 0.
+# (from vfio-pci) can lack its nodes until something creates them (finding 122): NVIDIA's own setuid
+# helper, nvidia-modprobe, does that for an unprivileged user, so it is asked once for each missing one,
+# unless CREATE is 0. /dev/nvidiactl is minor 255: `-c MINOR` makes only /dev/nvidiaMINOR (finding 254).
 nvidia_node() {
-  local slot=$1 create=${2:-1} proc=${3:-/proc/driver/nvidia} dev=${4:-/dev} info minor
+  local slot=$1 create=${2:-1} proc=${3:-/proc/driver/nvidia} dev=${4:-/dev} info minor m miss
   info=$proc/gpus/$slot/information
   [ -r "$info" ] || die "NVIDIA GPU $slot has no $info"
   minor=$(awk -F: '/^Device Minor:/ {gsub(/[[:space:]]/, "", $2); print $2}' "$info")
   [[ $minor =~ ^[0-9]+$ ]] || die "NVIDIA GPU $slot: no device minor in $info"
-  if [ "$create" = 1 ] && { [ ! -c "$dev/nvidia$minor" ] || [ ! -c "$dev/nvidiactl" ]; } && command -v nvidia-modprobe >/dev/null; then
-    nvidia-modprobe -c "$minor" >/dev/null 2>&1 || true
+  miss=$(nvidia_missing "$dev" "$minor")
+  if [ "$create" = 1 ] && [ -n "$miss" ] && command -v nvidia-modprobe >/dev/null; then
+    for m in $miss; do nvidia-modprobe -c "$m" >/dev/null 2>&1 || true; done
+    miss=$(nvidia_missing "$dev" "$minor")
   fi
-  [ -c "$dev/nvidia$minor" ] && [ -c "$dev/nvidiactl" ] ||
-    die "NVIDIA GPU $slot has no usable $dev/nvidia$minor or $dev/nvidiactl: run \`nvidia-modprobe -c $minor\` (NVIDIA's helper, from nvidia-utils; no root needed), then try again"
+  if [ -n "$miss" ]; then
+    local what="" run=""
+    for m in $miss; do
+      if [ "$m" = 255 ]; then what+=" $dev/nvidiactl"; else what+=" $dev/nvidia$m"; fi
+      run+=" \`nvidia-modprobe -c $m\`"
+    done
+    die "NVIDIA GPU $slot has no usable$what (run$run, NVIDIA's helper from nvidia-utils, no root needed), then try again"
+  fi
   echo "$dev/nvidia$minor"
 }
+
+# nvidia_missing DEV MINOR: the minors of the nodes nvidia_node needs that DEV lacks, the GPU's and 255
+# (nvidiactl).
+nvidia_missing() { [ -c "$1/nvidia$2" ] || echo "$2"; [ -c "$1/nvidiactl" ] || echo 255; }
 
 # Resolve --plugin PATH|ID to "id<TAB>realpath".
 resolve_plugin() {
