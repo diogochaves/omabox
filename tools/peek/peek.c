@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <wayland-client.h>
 
+#include "../common/roundtrip.h"
 #include "font8x8.h"
 #include "wlr-screencopy-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
@@ -803,8 +804,12 @@ int main(int argc, char **argv) {
     box.display = wl_display_connect(box_socket);
     if (!box.display) { fprintf(stderr, "omabox-peek: cannot connect to the box at %s\n", box_socket); return 1; }
     wl_registry_add_listener(wl_display_get_registry(box.display), &box_registry, NULL);
-    if (wl_display_roundtrip(box.display) < 0 || wl_display_roundtrip(box.display) < 0) {  // globals, output names
-        fprintf(stderr, "omabox-peek: lost the box\n");
+    // With a deadline (finding 181): a box whose compositor is stopped accepts the connection and never
+    // answers, and a peek hung here with no window, which the next `omabox peek` took for the window.
+    int rt = omabox_roundtrip(box.display, 10000);   // globals
+    if (rt == 0) rt = omabox_roundtrip(box.display, 10000);   // output names
+    if (rt < 0) {
+        fprintf(stderr, rt == -2 ? "omabox-peek: the box did not answer in 10 s (its Hyprland stopped?)\n" : "omabox-peek: lost the box\n");
         return 1;
     }
     if (!box.shm || !box.manager || !box.output) {
@@ -815,7 +820,7 @@ int main(int argc, char **argv) {
     if (box.xdg_manager) {   // the output's place in the layout, for the marks
         struct zxdg_output_v1 *x = zxdg_output_manager_v1_get_xdg_output(box.xdg_manager, box.output);
         zxdg_output_v1_add_listener(x, &xdg_listener, NULL);
-        if (wl_display_roundtrip(box.display) < 0) { fprintf(stderr, "omabox-peek: lost the box\n"); return 1; }
+        if (omabox_roundtrip(box.display, 10000) < 0) { fprintf(stderr, "omabox-peek: the box did not answer\n"); return 1; }
     }
 
     host.display = wl_display_connect(NULL);

@@ -5042,6 +5042,62 @@ from them.
     up; 3 checks fail on 0.5.0). The 0.4.8 round's 7 t_unit_omarchy_contract failures from /root were
     the same cause in the suite (`find -exec +`), not omabox's.
 
+257. **A jailed `up --seed` copied by a path checked earlier** (2026-10-09, the 0.5.0 review). seed_spec
+    resolves SRC once (`readlink -f`), jail_sees and refuse_src judge that path, and seed_copy_in read it
+    by name later (`tar -C SRC`, `cp -a SRC`): a jailed agent swapping a component of its project path
+    for a link to `~/.ssh` between the check and the copy (one `up --new --seed` in a loop while the
+    link flips) would have had the keys in a box HOME it reads. Now the copy reads from inside SRC (a
+    file: its folder), after `pwd -P` equals the path checked, and a file now a link is refused: a dir
+    held open cannot be moved from under its reader. Said as "not what it was when checked".
+    t_unit_seed_copy (a folder, a file's folder and a file swapped for links: refused, the target
+    untouched). Read in the review, not reproduced as a race.
+258. **The box's runtime dir read with a bare `cat`** (2026-10-09, the review). `shell_pid`,
+    `monitors_file`, `box_env`, `parent_display` and `restart-shell` read `<box dir>/run/*`, which the
+    box writes, as box_file's comment warns against writing: a FIFO planted there would have hung
+    the host's read, and shell_pid runs for every box in `ls --json`, which the bar widget polls (one
+    rogue box, the widget's whole list hung); a link would have read a host file (omabox.monitors
+    took any content). `run_read NAME` now: a regular file that is not a link, 64 KB at most, else
+    nothing, as box_home_file does for the HOME (and with the same caveat: a swap between the check
+    and the read is not caught). t_unit_shell_crash (a link: nothing; a FIFO: nothing, at once).
+259. **`omabox down` outside any repo never took the session's box** (2026-10-09, the review). The
+    help, finding 237 and commit 6c860a3 said `down` falls back as the other commands do (finding
+    200), but cmd_down passed default_name's result to select_box as if the caller had typed it
+    (NAME_DERIVED=0), so session_fallback never ran: "no box 'default-SESSION'", the repo's box left
+    up. 6c860a3 changed the help only. Now no name reaches select_box empty, as every other command
+    does. t_unit_agent_session (cmd_down calls select_box with no name).
+260. **`mode` and `monitor remove` read the monitors before Hyprland moved them** (2026-10-09, the
+    review, seen once in a box: `mode 1920x1080` after `mode 1280x720` printed no "moved" line while
+    `hyprctl monitors` showed them moved). monitors_place read `hyprctl monitors` right after the
+    `omabox_place_monitors()` eval, and Hyprland applies the rules on its next tick. It now reads
+    until each monitor is where omabox_monitor_layout puts it (placed_as, 1.5 s at most), then diffs.
+    The suite's "moved" checks (t_monitors, t_output) were the same race; their reload checks too,
+    which slept 1 s after `hyprctl reload`: reload_landed waits for the box's ` configreloaded` event.
+261. **Small ones from the review** (2026-10-09): `pixel` skipped its "not on any monitor" check with
+    fewer than two monitors enabled (a lone one away from 0,0 gave "no frame from box"; a point past
+    the layout's extent is still "outside the screen"); `monitor add
+    --name` took the main screen's names (HEADLESS-1/2, WAYLAND-1) and Hyprland's FALLBACK, which
+    main_screen would then return (#163 again): refused; `up --owner` was not checked (a word ended
+    `up` at jq, after the box dir existed); `shot --burst --after` scanned the words after `--` for
+    `-b` (`run -d -- grep -b x` refused); `output drop NAME` with another one dropped did not name it;
+    a jailed agent could `up --monitor` and `output` but not `monitor` (broker_check lacked it);
+    `write_layout` in share/hyprland.lua formatted a monitor's position with `%d`, which Lua 5.4
+    raises on for a float with a fraction (`disable_scale_checks` can give one), killing the handler
+    with the layout file stale: rounded now; omabox-still took an output moved out of `-g`'s region
+    (another monitor's add or remove re-laid it out) as a change of the whole output; omabox-peek's
+    three roundtrips to the box had no deadline (finding 181: a stopped compositor left a peek with
+    no window that the next `omabox peek` took for the window): omabox_roundtrip, 10 s. In the suite:
+    t_unit_no_theme's second `up` expected the `--monitor` on an interactive box refusal, which only a
+    system aquamarine without #415's fix gives; with the fix a *unit* test would have started an
+    interactive box (a window on the desktop): it stops at a `down` marker from the future now. Also
+    t_plugin_link's "loaded again" passed on any failed restart, t_unit_relay slept for the flood's 64
+    connections (now waits for 64 handlers), t_gdb took a pid before the sleep was up, t_peek_monitors
+    waited for its third peek without checking, t_git_worktree's commit could fail for a missing git
+    identity, t_run_options' servers were not in SERVERS, and MIN_CHECKS/MIN_UNIT (1100/580) were half
+    the suite: 2200/1070. Waiting for the relay's 64 handlers made #197 reproduce every time (the
+    broker at its cap closes the 65th connection as it accepts it; the caller wrote after and died of
+    SIGPIPE, exit 141): `omabox-relay call` ignores SIGPIPE now and says "turned the call away (too
+    many callers at once)", exit 1 (t_unit_relay, three runs clean).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

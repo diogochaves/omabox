@@ -9,6 +9,27 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 - **`omabox up` works again from a directory you cannot read** (an `su` or `runuser` that kept
   root's), where 0.5.0's ended with only `find: Failed to restore initial working directory`.
+- **Security: a jailed agent's `up --seed` copies what was checked.** The source was resolved and
+  checked once and copied by path later; a path swapped for a link out in between (one the agent
+  can make in its own project) would have been followed. The copy now reads from inside the folder
+  checked and refuses one that is not what it was.
+- **Security: a box cannot hang the host's reads of its runtime dir.** The shell's pid, the monitor
+  list, the box environment and the parent display are read only as regular files: a FIFO a box
+  planted there would have hung `omabox ls --json` (so the bar widget) and `restart-shell`; a link
+  would have read a host file.
+- **`omabox down` outside any repo takes the session's box**, as the help said and the other commands
+  do; it said `no box 'default-…'` and left the box up.
+- **`mode` and `monitor remove` wait for Hyprland to move the monitors** before saying which moved;
+  the line was empty when read too soon.
+- **`pixel` names a point in a gap with one monitor left**, instead of "no frame from box";
+  `monitor add --name` refuses the main screen's names and `FALLBACK`; `up --owner` must be a pid;
+  `shot --burst --after run -d -- CMD -b …` passes `-b` to CMD; `output drop NAME` names the ones
+  dropped before it; a jailed agent may run `omabox monitor` (it could `up --monitor` already).
+- **A jailed agent's call turned away by a busy broker says so** (exit 1) instead of dying of
+  SIGPIPE (#197).
+- **Interactive multi-monitor boxes keep their layout file** when a monitor lands on a fractional
+  position; **`wait -g` ignores a monitor moved out of the region**; **`omabox peek` on a stopped box
+  gives up after 10 s** instead of hanging with no window.
 
 ## 0.5.0 — 2026-10-09
 

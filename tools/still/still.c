@@ -350,7 +350,10 @@ static int compare(struct output *o) {
     int cur = !o->prev;
     if (!o->have_prev) {
         sig_box = out_rect(o);
-        if (have_region && meets(&sig_box, &region)) {
+        // Moved out of the region watched (another monitor's add or remove re-laid it out): nothing of
+        // the region changed, so not a change of it.
+        if (have_region && !meets(&sig_box, &region)) return 0;
+        if (have_region) {
             struct rect r = region, s = sig_box;
             int x1 = s.x + s.w < r.x + r.w ? s.x + s.w : r.x + r.w, y1 = s.y + s.h < r.y + r.h ? s.y + s.h : r.y + r.h;
             sig_box.x = s.x > r.x ? s.x : r.x; sig_box.y = s.y > r.y ? s.y : r.y;

@@ -105,9 +105,9 @@ TMP=$(mktemp -d)
 pass=0 fail=0 failed=() skips=()
 STRICT=${OMABOX_TEST_STRICT:-0}
 # A full run's floor: a test that silently stops checking shows up here even when everything that
-# did run passed. About 90% of the fewest seen (2026-10-01: 1217 checks in --installed on a VM, 1350
-# from a checkout; 651 unit), so skips on another machine still clear it. Raise it as tests grow.
-MIN_CHECKS=1100 MIN_UNIT=580
+# did run passed. About 90% of the fewest seen (2026-10-09: 2468 checks in --installed on a VM, 2657
+# from a checkout; 1193 unit), so skips on another machine still clear it. Raise it as tests grow.
+MIN_CHECKS=2200 MIN_UNIT=1070
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -233,6 +233,14 @@ to_ms() { local s=${1%.*} f=0; [[ $1 != *.* ]] || f=${1#*.}000; echo $((10#$s * 
 # until_ok T CMD...: poll the command until it succeeds, T seconds at most. Timing out, it says so with
 # the command's last output (kept for the evidence too); a wait that needed over half of T is noted:
 # a slower machine may need more.
+# reload_landed EVENTS CMD...: run CMD (a box's `hyprctl reload`) and wait for EVENTS (the box's
+# events.log, a path readable here) to gain a ` configreloaded` line, as t_config_kept counts them: a
+# fixed sleep after the reload read the state before it under load.
+reload_landed() {
+  local e=$1; shift; local n0; n0=$(grep -c ' configreloaded' "$e" 2>/dev/null) || n0=0
+  "$@" >/dev/null 2>&1 || true
+  until_ok 5 bash -c "[ \"\$(grep -c ' configreloaded' '$e' 2>/dev/null)\" -gt $n0 ]" >/dev/null
+}
 until_ok() {
   local t=$1; shift; local t0 now out lim; t0=$(now_ms) lim=$(to_ms "$t")
   until out=$("$@" 2>&1); do
@@ -854,7 +862,7 @@ t_unit_config() {
 # seed_home's copies of the user's config dirs (finding 74): a link inside is kept as a link, never
 # followed (a theme linked from its repo, a link to api-keys.env); no .git, no hidden files.
 t_unit_seed_copy() {
-  local s=$TMP/seed; mkdir -p "$s/repo/.git" "$s/term" "$s/out"
+  local s; s=$(readlink -f "$TMP")/seed; mkdir -p "$s/repo/.git" "$s/term" "$s/out"   # (physical: seed_copy_in checks the path it reads)
   echo secret > "$s/api-keys.env"; echo token > "$s/repo/.env"; echo url > "$s/repo/.git/config"
   echo colors > "$s/repo/colors.toml"; echo conf > "$s/term/foot.ini"
   ln -s "$s/api-keys.env" "$s/term/keys"; ln -s "$s/repo" "$s/theme"
@@ -915,6 +923,19 @@ t_unit_seed_copy() {
   check "seed: a save's links under DEST" seed_in "$s/b3" "$sd/C"
   check_eq "...nothing written outside the HOME" "dir dir/g file victim victim" "$(find "$v" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$v/file" "$v/dir/g" | xargs)"
   check_eq "...merged with what DEST had (finding 229)" "own seeded" "$(cat "$s/b3/home/.cfg/kept" "$s/b3/home/.cfg/f" | xargs)"
+  # finding 257: SRC (the path as `up` resolved and checked it) swapped for a link out before the
+  # copy, as a jailed caller could do with its project path: refused, nothing of the target copied.
+  mkdir -p "$sd/D" "$s/b5/home" "$s/b6/home" "$s/b7/home"; echo seeded > "$sd/D/f"
+  rm -r "$sd/D"; ln -s "$v/dir" "$sd/D"
+  check_match "seed: a folder swapped for a link since checked: refused" "not what it was when checked" "$(seed_in "$s/b5" "$sd/D" 2>&1)"
+  check "...nothing copied" test ! -e "$s/b5/home/.cfg/g"
+  ln -s "$v" "$sd/P"
+  check_match "...a file's folder swapped: refused" "not what it was when checked" "$(seed_in "$s/b6" "$sd/P/file" 2>&1)"
+  check "...nothing copied" test ! -e "$s/b6/home/.cfg"
+  ln -s "$v/file" "$sd/E"
+  check_match "...a file swapped for a link: refused" "not what it was when checked" "$(seed_in "$s/b7" "$sd/E" 2>&1)"
+  check "...nothing copied" test ! -e "$s/b7/home/.cfg"
+  check_eq "...the target untouched" "victim victim" "$(cat "$v/file" "$v/dir/g" | xargs)"
 }
 
 # up --theme-dir's pieces (#170, finding 240): where a dir is in the box at its own path, the link in
@@ -1495,8 +1516,8 @@ t_run_options() {
   read -r port other < <(python3 -c 'import socket
 a, b = socket.socket(), socket.socket(); a.bind(("127.0.0.1", 0)); b.bind(("127.0.0.1", 0))
 print(a.getsockname()[1], b.getsockname()[1])')
-  python3 -m http.server --bind 127.0.0.1 "$port" --directory "$ov" >/dev/null 2>&1 & s1=$!
-  python3 -m http.server --bind 127.0.0.1 "$other" --directory "$ov" >/dev/null 2>&1 & s2=$!
+  python3 -m http.server --bind 127.0.0.1 "$port" --directory "$ov" >/dev/null 2>&1 & s1=$!; SERVERS+=("$s1")
+  python3 -m http.server --bind 127.0.0.1 "$other" --directory "$ov" >/dev/null 2>&1 & s2=$!; SERVERS+=("$s2")
   until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$port/" >/dev/null; until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$other/" >/dev/null
   # shellcheck disable=SC2016 # expanded in the box
   out=$(cd "$repo" && env -u OMABOX "$CLI" run --overlay "$ov" --net isolated --allow "$port" --size 800x600 --plugin "$ROOT/plugin" -- sh -c '
@@ -1781,7 +1802,8 @@ sys.stdout.write(subprocess.run(sys.argv[1:], stdin=a, capture_output=True, text
 s = [socket.socket(socket.AF_UNIX) for _ in range(64)]
 for c in s: c.connect(sys.argv[1])
 time.sleep(4)' "$d/sock" & local flood=$!
-  sleep 1
+  # (Once the relay has a handler for each: under load a fixed wait saw fewer, and the 65th was served.)
+  until_ok 3 bash -c "[ \"\$(pgrep -c -P ${SERVERS[-1]})\" -ge 64 ]" >/dev/null
   check_match "...a call past 64 held connections is turned away (not served: 7; nor left waiting: 124)" '^[1-9]$|^[1-9][0-9]$' \
     "$(timeout 3 "$R" call "$d/sock" -- x >/dev/null 2>&1; rc=$?; [ "$rc" != 7 ] && [ "$rc" != 124 ] && echo "$rc")"
   wait "$flood"
@@ -2177,6 +2199,10 @@ t_unit_agent_session() {
   check_eq "up there: the session's box named, the new one still starts"     "omabox: note: this session already has box $P-r-$sid (started from another directory); -b NAME to use it"     "$(sel "$P-r-$sid" up up_session_note)"
   check_eq "...nothing when it has none" "" "$(sel "$P-r-0000beef" up up_session_note)"
   check_match "...a name given: as before" "no box 'nope' is up \(up: " "$(sel "$P-r-$sid" wait select_box nope \; need_box)"
+  # finding 259: `down` with no name lets select_box derive it, so the fallback above applies to it
+  # too (it passed the derived name as if given, and `omabox down` outside a repo found no box).
+  check_eq "down with no name: select_box derives it (gets none)" "got:[]" \
+    "$(sel "$P-r-$sid" down 'select_box() { echo "got:[${1-}]"; exit 0; }; cmd_down' | tail -1)"
 }
 
 # findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the
@@ -2565,7 +2591,7 @@ t_main() {
   check "wait layer omarchy-menu --gone" ob wait -b "$B" layer omarchy-menu --gone
   # mode and gpu (finding 56)
   check_eq "mode changes live" "$screen_name 1280x720@120" "$(ob mode -b "$B" 1280x720@120)"
-  ob hyprctl -b "$B" reload >/dev/null; sleep 1
+  reload_landed "$D/home/events.log" ob hyprctl -b "$B" reload
   check_eq "mode survives a reload" "$screen_name 1280x720@120" "$(ob mode -b "$B")"
   check_eq "box.json follows mode" "1280x720@120" "$(jq -r .size "$D/box.json")"
   local gpu; gpu=$(ob gpu -b "$B" 1 --json)
@@ -2977,7 +3003,9 @@ t_plugin_link() {
   cp "$R/widget/W.qml" "$TMP/pl-W.qml"; echo 'BarWidget {' >> "$R/widget/W.qml"
   check_match "an edit in the repo, restart-shell: the linked plugin as edited" "plugin $P.lw failed" "$(ob restart-shell -b "$B" 2>&1)"
   cp "$TMP/pl-W.qml" "$R/widget/W.qml"
-  check_fails "...fixed, restart-shell: loaded again" grep -q "$P.lw" <<<"$(ob restart-shell -b "$B" 2>&1)"
+  out=$(ob restart-shell -b "$B" 2>&1)
+  check_match "...fixed, restart-shell: the shell up again" "shell restarted" "$out"
+  check_fails "...the plugin loaded (not named as failed)" grep -q "$P.lw" <<<"$out"
   ob down "$B" >/dev/null
 }
 
@@ -3450,11 +3478,16 @@ t_unit_no_theme() {
   check_match "...saying why and what to do" "has not set a theme for you yet .*log into Omarchy once" "$out"
   check_fails "...before the box's dirs are made" test -e "$h/.cache/omabox/nt"
   check_fails "...or its runtime dir" test -e "$rt/omabox/nt"
-  # up --theme (finding 245) needs no theme of the user's: past that check, it stops at the next one
-  # (more monitors on an interactive box, which the system's aquamarine cannot have), before anything is made.
+  # up --theme (finding 245) needs no theme of the user's: past that check, it stops at a `down`'s
+  # marker from the future (finding 147: "cancelled"), the first check after it that needs no
+  # aquamarine without #415's fix (the earlier stop, `--monitor` on an interactive box, is only
+  # refused without that fix; with it a unit test would have started an interactive box).
+  mkdir -p "$rt/omabox"; echo 9999999999999 > "$rt/omabox/.down-nt"
   out=$(HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
-    OMABOX_AQUAMARINE=system "$CLI" up nt --theme tokyo-night --interactive --monitor 800x600 2>&1)
-  check_match "with --theme: not refused for want of a theme of the user's" "up: --monitor on an interactive box" "$out"
+    OMABOX_AQUAMARINE=system "$CLI" up nt --theme tokyo-night 2>&1)
+  check_match "with --theme: not refused for want of a theme of the user's" "up: cancelled: omabox down nt came|a headless box on NVIDIA" "$out"
+  check_fails "...(and not for the theme)" grep -q "has not set a theme" <<<"$out"
+  rm -f "$rt/omabox/.down-nt"
   out=$(HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
     OMABOX_AQUAMARINE=system "$CLI" up nt --theme nope 2>&1)
   check_match "...one that is not there refused" "--theme: no theme nope in " "$out"
@@ -3774,7 +3807,9 @@ t_git_worktree() {
   check_eq "git log: the host's" "$(git -C "$W" log --oneline -1)" "$(ob run -b "$B" -- git -C "$W" log --oneline -1 2>&1)"
   check_eq "git rev-parse --show-toplevel" "$W" "$(ob run -b "$B" -- git -C "$W" rev-parse --show-toplevel 2>&1)"
   check_fails "the main checkout's files outside .git are not in the box" ob run -b "$B" -- test -e "$M/f"
-  check_fails "...its .git is read-only: git cannot commit (intended)" ob run -b "$B" -- git -C "$W" commit --allow-empty -qm x
+  # (An identity given: without one git fails for that, on a host that set none.)
+  check_fails "...its .git is read-only: git cannot commit (intended)" ob run -b "$B" -- env GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
+    GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git -C "$W" commit --allow-empty -qm x
   check "down" ob down "$B"
 }
 
@@ -4050,6 +4085,15 @@ t_hung() {
 t_unit_shell_crash() {
   local d=$TMP/sc
   mkdir -p "$d/home/.cache/quickshell/crashes/old" "$d/run"; : > "$d/home/shell.log"; echo 42 > "$d/run/omabox-shell.pid"
+  # finding 258: the pid file is in the box's runtime dir, which the box writes: read as a regular
+  # file only. A FIFO there hung the host's read (`ls --json`, the widget's poll); a link read a host file.
+  rp() { timeout 5 bash -c 'source "$1"; NAME=u D=$2; shell_pid && echo "rc 0" || echo "rc $?"' _ "$TMP/lib/bin/omabox" "$d" 2>&1 | tr '\n' ' '; }
+  check_eq "shell_pid: the file's number" "42 rc 0 " "$(rp)"
+  mv "$d/run/omabox-shell.pid" "$d/run/pid.real"; ln -s "$d/run/pid.real" "$d/run/omabox-shell.pid"
+  check_eq "...a link to it: nothing" "rc 1 " "$(rp)"
+  rm "$d/run/omabox-shell.pid"; mkfifo "$d/run/omabox-shell.pid"
+  check_eq "...a FIFO: nothing, at once (not hung)" "rc 1 " "$(rp)"
+  rm "$d/run/omabox-shell.pid"; mv "$d/run/pid.real" "$d/run/omabox-shell.pid"
   sc() {   # STAT: what /proc/PID/stat says in the box ("" for no such process)
     STAT=$1 bash -c 'source "$1"; NAME=u D=$2; SHELL_BEFORE=old
       on_box() { [ -n "$STAT" ] && echo "$STAT"; }
@@ -4391,7 +4435,7 @@ t_peek_monitors() {
   # two) goes too, though nothing ties it to the box's socket.
   local d; d=$("${in[@]}" path "$C")
   ob run -b "$S" -d -- bash -c 'exec -a "$1" sleep 300' _ "$ROOT/tools/peek/omabox-peek --box $d/run/x --output HEADLESS-9 --fps 1" >/dev/null 2>&1
-  until_ok 5 ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/run/x "
+  check "a process named as a third peek of the box: there" until_ok 5 ob run -b "$S" -- pgrep -f "^$ROOT/tools/peek/omabox-peek --box $d/run/x "
   "${in[@]}" down "$C" >/dev/null 2>&1
   check "down closes both peek windows" until_ok 5 peeks 0
   # shellcheck disable=SC2329 # called through until_ok
@@ -5080,8 +5124,7 @@ monitors_on() {
   check_match "shot --monitor $m1: that monitor, 1080x1920" "1080 x 1920" "$(file "$TMP/mon3.png")"
   check_match "...said, for --in" "screen's 1080x1920 at 1920,0|^omabox: .*1920,0" "$(ob shot -b "$B" --monitor "$m1" -o "$TMP/mon3b.png" 2>&1 >/dev/null)"
   check_match "shot --monitor of one it does not have: refused" "has no monitor HEADLESS-9" "$(ob shot -b "$B" --monitor HEADLESS-9 2>&1)"
-  ob hyprctl -b "$B" reload >/dev/null
-  sleep 1
+  reload_landed "$(ob path -b "$B")/home/events.log" ob hyprctl -b "$B" reload
   check_eq "a config reload keeps them" "$(jq -c 'map({name, mode, scale, x, y})' <<<"$ml")" "$(ob monitor -b "$B" list --json | jq -c 'map({name, mode, scale, x, y})')"
   # mode (#161): the ones placed right of (and below) it move with it, out of the larger main screen.
   local out; out=$(ob mode -b "$B" 2560x1440 2>&1 >/dev/null)
@@ -5271,7 +5314,7 @@ t_monitors_window() {
   ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$a', x = 700, y = 700 })" >/dev/null
   check "...to 700x700: at 0.64815, the monitor 1080x1080" until_ok 3 mons '.[] | select(.name == "WAYLAND-2") | "\(.mode) \(.scale)"' "700x700@60 0.64815"
   check_eq "...its size in the layout" "1080x1080" "$(layout | tr '|' '\n' | awk '$1 == "WAYLAND-2" { print $4 }')"
-  "${in[@]}" hyprctl -b wm reload >/dev/null 2>&1; sleep 1
+  reload_landed "$(ob path -b "$S")/home/.cache/omabox/wm/home/events.log" "${in[@]}" hyprctl -b wm reload
   check_eq "a config reload keeps its monitors and views" "WAYLAND-1 0.725 WAYLAND-2 0.64815 WAYLAND-4 0.725" \
     "$("${in[@]}" monitor -b wm list --json | jq -r 'map("\(.name) \(.scale)") | join(" ")')"
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$a' })" >/dev/null
@@ -6792,7 +6835,7 @@ output_on() {
   check_eq "...the monitor still on, as it was" "[\"$m1 1280x800 0 720\"]" \
     "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | "\(.name) \(.width)x\(.height) \(.x) \(.y)"]')"
   check_match "monitor list: the main screen there, marked dropped" "$m0 +1280x720@60 +1 +0,0 +\(dropped\)" "$(ob monitor -b "$B" list)"
-  ob hyprctl -b "$B" reload >/dev/null; sleep 1
+  reload_landed "$(ob path -b "$B")/home/events.log" ob hyprctl -b "$B" reload
   check_eq "a config reload while it is away: not made again, the monitor where it was" "[\"$m1 1280x800 0 720\"]" \
     "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | "\(.name) \(.width)x\(.height) \(.x) \(.y)"]')"
   out=$(ob output -b "$B" back); rc=$?
@@ -6813,7 +6856,7 @@ output_on() {
   fi
   check_match "output back of one not dropped: refused" "$m0 is not dropped \(dropped: $m1\)" "$(ob output -b "$B" back "$m0" 2>&1)"
   check_match "output drop of one it does not have" "has no monitor HEADLESS-9" "$(ob output -b "$B" drop HEADLESS-9 2>&1)"
-  ob hyprctl -b "$B" reload >/dev/null; sleep 1
+  reload_landed "$(ob path -b "$B")/home/events.log" ob hyprctl -b "$B" reload
   check_eq "a config reload while it is away: not made again" "[\"$m0\"]" "$(ob hyprctl -b "$B" -j monitors | jq -c '[.[] | select(.name != "FALLBACK") | .name]')"
   out=$(ob output -b "$B" back "$m1"); rc=$?
   check_eq "output back $m1: its name and mode" "0 $m1 1280x800@60" "$rc $out"
@@ -6877,7 +6920,7 @@ t_gdb() {
   ob run -b "$B" -- pkill -CONT -xo Hyprland
   check "...it answers again" until_ok 5 ob hyprctl -b "$B" version
   ob run -b "$B" -d -q -- sleep 600
-  local sp; sp=$(ob run -b "$B" -- pgrep -xn sleep)
+  local sp="" i; for i in $(seq 50); do sp=$(ob run -b "$B" -- pgrep -xn sleep 2>/dev/null) && [ -n "$sp" ] && break; sleep 0.1; done
   check_match "gdb --pid: a process of the box" "in (clock_nanosleep|__GI___clock_nanosleep|nanosleep)|#0 " "$(ob gdb -b "$B" --pid "$sp" 2>&1)"
   check_match "...one it has not: refused" "has no process 99999" "$(ob gdb -b "$B" --pid 99999 2>&1)"
   check_match "gdb --shell with no shell: refused" "has no shell running" "$(ob gdb -b "$B" --shell 2>&1)"

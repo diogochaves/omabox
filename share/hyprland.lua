@@ -187,7 +187,9 @@ if interactive then
     for _, m in ipairs(hl.get_monitors()) do
       local w, h = m.width / m.scale, m.height / m.scale
       if m.transform % 2 == 1 then w, h = h, w end
-      table.insert(rows, string.format("%s %d %d %d %d", m.name, m.x, m.y, math.floor(w + 0.5), math.floor(h + 0.5)))
+      -- (Positions rounded too: `%d` raises on a float with a fraction, which `disable_scale_checks`
+      -- can give an auto-placed monitor, and the handler would die with the file left stale.)
+      table.insert(rows, string.format("%s %d %d %d %d", m.name, math.floor(m.x + 0.5), math.floor(m.y + 0.5), math.floor(w + 0.5), math.floor(h + 0.5)))
     end
     local f = io.open(run .. "/omabox.layout.new", "w")
     if not f then return end

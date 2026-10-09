@@ -763,9 +763,15 @@ box_pids() {
 # One value from the environment Hyprland's children get (share/hyprland.lua writes it at start). The
 # file is in the box's runtime dir, which the box can write: only a tame name is taken (finding 63).
 box_env() {
-  local v; v=$(tr '\0' '\n' < "$D/run/omabox.env" | sed -n "s/^$1=//p" | head -1)
+  local v; v=$(run_read omabox.env | tr '\0' '\n' | sed -n "s/^$1=//p" | head -1)
   [[ $v =~ ^[A-Za-z0-9_.-]+$ ]] && echo "$v"
 }
+# File NAME of the box's runtime dir (<box dir>/run/NAME), read for the host: its content when it is a
+# regular file and not a link, nothing (1) otherwise. The box writes that dir: a FIFO there would hang
+# the host's read (shell_pid's in `ls --json`, which the bar widget polls: one box hanging the
+# widget's list of every box), a link would read a host file (finding 258). As box_home_file: a file
+# swapped between the check and the read is not caught.
+run_read() { local f=$D/run/$1; [ ! -L "$f" ] && [ -f "$f" ] && head -c 65536 -- "$f"; }
 
 # Tools the box has at /opt/omabox/bin (bound read-only by `up`).
 BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
@@ -924,7 +930,7 @@ caller_path() {
 box_exec() {
   local env=() cwd=/home/sbx pid
   pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
-  mapfile -d '' env < "$D/run/omabox.env"
+  mapfile -d '' env < <(run_read omabox.env)
   local here there wd=$PWD
   ! in_jail || wd=$(jail_get '.cwd // empty')   # a jailed caller's, when its jail and the host agree on it
   if [ -n "$wd" ]; then
@@ -1087,7 +1093,7 @@ wait_hyprland() {
 SHELL_BEFORE="" BAR_AT=0
 shell_crash_dirs() { ls -1 -- "$D/home/.cache/quickshell/crashes" 2>/dev/null || true; }
 # The Omarchy shell's pid in the box (share/shell.sh writes it), or nothing.
-shell_pid() { local p; p=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [[ $p =~ ^[0-9]+$ ]] && echo "$p"; }
+shell_pid() { local p; p=$(run_read omabox-shell.pid) && [[ $p =~ ^[0-9]+$ ]] && echo "$p"; }
 # Box pid PID is a process, and not one that exited and was not reaped yet.
 shell_running() { local st; st=$(on_box cat "/proc/$1/stat" 2>/dev/null) && [[ $st != *") Z "* ]]; }
 # How the shell went since SHELL_BEFORE, or a failure when it did not: "crashed REPORT" (the report's
@@ -1112,7 +1118,7 @@ shell_crash() {
 # 255). A box whose shell.sh writes no mark (an older omabox's) counts every report, as before.
 shell_crash_report() {
   local new f c mark
-  mark=$(cat "$D/run/omabox-shell.mark" 2>/dev/null) && [[ $mark =~ ^[0-9]+$ ]] || mark=0
+  mark=$(run_read omabox-shell.mark) && [[ $mark =~ ^[0-9]+$ ]] || mark=0
   new=$(comm -13 <(sort <<<"$SHELL_BEFORE") <(shell_crash_dirs | sort) | while IFS= read -r rep; do
     if [ "$mark" -gt 0 ] && [[ $rep =~ ^[A-Za-z0-9_.-]+$ ]] && f=$(box_home_file ".cache/quickshell/crashes/$rep/report.txt"); then
       c=$(sed -n 's/^Crashed process ID: \([0-9]*\)$/\1/p' "$f" | head -n 1)
@@ -1825,8 +1831,16 @@ seed_copy_in() {
   local h=$D/home
   home_unlink "$h" "$2"
   mkdir -p -- "$(dirname -- "$h/$2")"
-  if [ -d "$1" ]; then mkdir -p -- "$h/$2" && tar -C "$1" -cf - . | tar -C "$h/$2" -xpf -
-  else rm -rf -- "${h:?}/$2" && cp -a --reflink=auto -- "$1" "$h/$2"; fi || die "--seed: could not copy $1 to ~/$2 in the box"
+  # Read from inside SRC (its folder, for a file), checked to be the path resolved when the option was
+  # read (seed_spec's readlink -f, what jail_sees and refuse_src saw): a jailed caller could swap a
+  # component of its project path for a link out between that check and this copy, and `tar -C`
+  # or `cp` would follow it; a dir held open cannot be moved from under its reader (finding 257).
+  if [ -d "$1" ]; then
+    mkdir -p -- "$h/$2" && (cd -- "$1" && [ "$(pwd -P)" = "$1" ] && tar -cf - .) | tar -C "$h/$2" -xpf -
+  else
+    rm -rf -- "${h:?}/$2" && (cd -- "$(dirname -- "$1")" && [ "$(pwd -P)" = "$(dirname -- "$1")" ] &&
+      [ ! -L "$(basename -- "$1")" ] && cp -a --reflink=auto -- "$(basename -- "$1")" "$h/$2")
+  fi || die "--seed: could not copy $1 to ~/$2 in the box (gone, or not what it was when checked)"
 }
 
 # A read-only mount spec, DIR or DIR:DEST (DEST absolute, e.g. ~/nas:/mnt/nas to test path mapping):
@@ -2000,7 +2014,7 @@ cmd_up() {
       --from) optarg "$@"; FROM=$2; shift ;;
       --hyprland) optarg "$@"; hyprland=$(hypr_bin "$2") || exit 1; shift ;;
       --omarchy) optarg "$@"; omarchy=$(omarchy_tree "$2") || exit 1; shift ;;
-      --owner) optarg "$@"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
+      --owner) optarg "$@"; [[ $2 =~ ^[1-9][0-9]*$ ]] || die "up: --owner is a pid, got $2"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
       --stock-bar) STOCK_BAR=1 ;;
       --systemd) systemd=1 ;;
       --xwayland) xwayland=1 ;;
@@ -3858,7 +3872,9 @@ cmd_shot() {
       ""|keys|click|scroll|drag|pointer|run|hyprctl|lua|output|monitor|mode|restart-shell) ;;
       *) die "shot --after: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell), got ${after[0]}" ;;
     esac
-    [[ " ${after[*]} " != *" -b "* && " ${after[*]} " != *" --box "* ]] || die "shot --after: the action runs on the burst's box (no -b)"
+    # (Only the action's own words, before a `--`: `run -d -- grep -b x` passes its -b to grep.)
+    local act_own=() w; for w in "${after[@]}"; do [ "$w" != -- ] || break; act_own+=("$w"); done
+    [[ " ${act_own[*]} " != *" -b "* && " ${act_own[*]} " != *" --box "* ]] || die "shot --after: the action runs on the burst's box (no -b)"
   else
     [ -z "$every" ] && [ "$sheet$bdiff" = 00 ] && [ ${#after[@]} = 0 ] || die "shot: --every, --sheet, --diff and --after go with --burst N"
   fi
@@ -4196,10 +4212,11 @@ cmd_pixel() {
     # fails alone, and reads black beside a point on one.
     local mons off
     mons=$(hypr_json monitors) || exit $?
-    off=$(jq -r --argjson p "$(printf '%s\n' "${pts[@]}" | jq -s .)" '[.[] | select(.disabled | not)] as $m |
-      [range(0; $p | length; 2) | [$p[.], $p[. + 1]] | select(. as [$x, $y] | $m | all(.[];
-        $x < .x or $y < .y or $x >= .x + (.width / .scale | floor) or $y >= .y + (.height / .scale | floor)))] |
-      if length == 0 or ($m | length) < 2 then empty
+    # (A point past the layout's extent is "outside the screen", below; one inside it is in a gap.)
+    off=$(jq -r --argjson p "$(printf '%s\n' "${pts[@]}" | jq -s .)" --argjson lw "$lim_w" --argjson lh "$lim_h" '[.[] | select(.disabled | not)] as $m |
+      [range(0; $p | length; 2) | [$p[.], $p[. + 1]] | select(. as [$x, $y] | $x < $lw and $y < $lh and ($m | all(.[];
+        $x < .x or $y < .y or $x >= .x + (.width / .scale | floor) or $y >= .y + (.height / .scale | floor))))] |
+      if length == 0 or ($m | length) == 0 then empty
       else "\(.[0][0]),\(.[0][1]) is not on any monitor (\($m | map("\(.name) \(.x),\(.y) \(.width / .scale | floor)x\(.height / .scale | floor)") | join(", ")))" end' <<<"$mons") || off=""
     [ -z "$off" ] || die "pixel: $off"
   fi
@@ -4846,7 +4863,8 @@ ms_s() { awk -v m="$1" 'BEGIN { printf "%.2fs", m / 1000 }'; }
 # the box starts reaches ~40 px down.
 cursor_rect() { echo "$((${1% *} - 16)),$((${1#* } - 16)),64,64"; }
 # The cursor_rects of a path, X Y then steps_to's SEQ (`move X Y` each), at most 30 (omabox-still
-# takes 32 --ignore): beyond that, consecutive points share one rectangle around them all.
+# takes 48 --ignore: these, 2 for the cursor, 16 of --mask): beyond that, consecutive points share one
+# rectangle around them all.
 # path_rects X Y [move X Y]...
 path_rects() {
   local xs=("$1") ys=("$2") n per i j x0 y0 x1 y1; shift 2
@@ -5685,7 +5703,7 @@ dropped_set() {
 # An NVIDIA box's parent display (finding 77): labwc's socket in the box's runtime dir, by the name
 # share/start-hyprland.sh wrote there (the box's to change: checked).
 parent_display() {
-  local p; p=$(cat "$D/run/omabox-parent-display" 2>/dev/null) || return 1
+  local p; p=$(run_read omabox-parent-display) || return 1
   [[ $p =~ ^wayland-[0-9]+$ ]] && [ -S "$D/run/$p" ] && [ ! -L "$D/run/$p" ] || return 1
   echo "$p"
 }
@@ -5813,7 +5831,7 @@ labwc_apply() {
   on_box env WAYLAND_DISPLAY="$parent" /usr/bin/wlr-randr >/dev/null 2>&1
 }
 # The monitors `monitor add` made, as the box's config reads them.
-monitors_file() { cat "$D/run/omabox.monitors" 2>/dev/null || true; }
+monitors_file() { run_read omabox.monitors 2>/dev/null || true; }
 # box.json's list of every monitor (for ls --json), from Hyprland, under the box's lock as mode writes it.
 monitors_record() {
   # Not an interactive box's: the user closes and resizes its windows without omabox (monitor list).
@@ -5829,11 +5847,27 @@ monitors_record() {
 # The box's config places the monitors in omabox.monitors as they are now (its omabox_place_monitors);
 # prints the ones that moved, "NAME to X,Y, ...".
 monitors_place() {
-  local m0 res; m0=$(hypr_json monitors) || return 1
+  local m0 m res lay i; m0=$(hypr_json monitors) || return 1
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "omabox_place_monitors()" 2>&1) || true
   [ "$res" = ok ] || { say "placing box '$NAME''s monitors failed: $res"; return 1; }
-  hypr_json monitors | jq -r --argjson a "$m0" 'map(. as $n | select(any($a[]; .name == $n.name and (.x != $n.x or .y != $n.y)))
-    | "\(.name) to \(.x),\(.y)") | join(", ")'
+  # Hyprland moves them on its next tick, and a read right after the eval once still had the old
+  # places (no "moved" line, finding 260): read until each is where the layout puts it, 1.5 s at most.
+  lay=$(box_layout) || lay=""
+  for ((i = 0; i < 15; i++)); do
+    m=$(hypr_json monitors) || return 1
+    [ -n "$lay" ] && ! placed_as "$m" "$lay" || break
+    sleep 0.1
+  done
+  jq -r --argjson a "$m0" 'map(. as $n | select(any($a[]; .name == $n.name and (.x != $n.x or .y != $n.y)))
+    | "\(.name) to \(.x),\(.y)") | join(", ")' <<<"$m"
+}
+# placed_as MONITORS LAYOUT: every monitor of the layout's rows ("NAME X Y W H", the main screen as
+# `main`) is at its X,Y in MONITORS (Hyprland's JSON).
+placed_as() {
+  local main rows; main=$(jq -r "$(main_screen) | .name // empty" <<<"$1")
+  rows=$(sed "s/^main /${main:-main} /" <<<"$2" | awk '{ print $1, $2, $3 }')
+  jq -e --arg rows "$rows" '[.[] | "\(.name) \(.x) \(.y)"] as $live
+    | all($rows | split("\n")[] | select(. != ""); . as $r | $live | index($r) != null)' <<<"$1" >/dev/null
 }
 # omabox.monitors' PLACE for a SPEC's: right, below, or X,Y as XxY.
 monitor_place() { case $1 in right|below) echo "$1" ;; *) echo "${1/,/x}" ;; esac; }
@@ -5850,6 +5884,9 @@ monitor_add() {
     name=$prefix$i
   else
     [[ $name =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor add: --name is letters, digits, - and _, got $name"
+    # The main screen's names (main_screen: a monitor so named would be taken for it once the main is
+    # dropped, #163 again) and Hyprland's stand-in output's.
+    case $name in HEADLESS-1|HEADLESS-2|WAYLAND-1|FALLBACK) die "monitor add: $name is a name of the box's main screen (or Hyprland's stand-in output), not for a monitor" ;; esac
     ! jq -e --arg n "$name" 'any(.[]; .name == $n)' <<<"$m" >/dev/null || die "monitor add: box '$NAME' already has a monitor $name"
     [ -z "$(dropped_rec "$name")" ] || die "monitor add: box '$NAME' already has a monitor $name, dropped (omabox output back $name -b $NAME)"
   fi
@@ -6235,11 +6272,13 @@ cmd_output() {
     # With other monitors one is still there (#161); the main screen is never one of them (#163).
     local left gone; left=$(hypr_json monitors | jq -r 'map(select((.disabled | not) and .name != "FALLBACK") | .name) | join(", ")') || left=""
     gone=$OUTPUT_DROPPED
+    # (The ones dropped before it named too: `output back` alone brings every one back.)
+    local before; before=$(dropped_file | awk -v n="$gone" '$1 != n { print $1 }' | paste -sd, - | sed 's/,/, /g')
     if [ -z "$left" ]; then
       say "box '$NAME' has no screen now ($(dropped_names) dropped): omabox output back -b $NAME"
     elif [ "$gone" = "$(main_away | cut -d' ' -f1)" ]; then
-      say "box '$NAME' has its main screen ($gone) off now, $left still on: omabox output back $gone -b $NAME"
-    else say "box '$NAME' has its monitor $gone off now, $left still on: omabox output back $gone -b $NAME"; fi
+      say "box '$NAME' has its main screen ($gone) off now, $left still on${before:+ ($before dropped before)}: omabox output back $gone -b $NAME"
+    else say "box '$NAME' has its monitor $gone off now, $left still on${before:+ ($before dropped before)}: omabox output back $gone -b $NAME"; fi
     return
   fi
   # Cycles: gone for --for (or, without it, gaps from 50 ms to 2 s in turn: one of them found the crash
@@ -6903,7 +6942,7 @@ cmd_reload() {
 cmd_restart_shell() {
   local name; name=$(name_arg restart-shell "$@") || exit 1
   select_box "$name"; need_box
-  local old; old=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) || old=""
+  local old; old=$(run_read omabox-shell.pid) || old=""
   SHELL_BEFORE=$(shell_crash_dirs)
   # (A box whose shell.sh writes no token, one `up` by an omabox from before: a new pid, as then.)
   local tok="" got
@@ -6911,9 +6950,9 @@ cmd_restart_shell() {
   on_box hyprctl dispatch "hl.dsp.exec_cmd('/opt/omabox/share/shell.sh $tok')" >/dev/null
   local deadline=$((SECONDS + 15)) new
   # (The token read first: shell.sh writes it after removing the old pid, so a pid read after it is new.)
-  until if [ -n "$tok" ]; then got=$(cat "$D/run/omabox-shell.start" 2>/dev/null) && [ "$got" = "$tok" ] &&
-          new=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [ -n "$new" ]
-        else new=$(cat "$D/run/omabox-shell.pid" 2>/dev/null) && [ -n "$new" ] && [ "$new" != "$old" ]; fi; do
+  until if [ -n "$tok" ]; then got=$(run_read omabox-shell.start) && [ "$got" = "$tok" ] &&
+          new=$(run_read omabox-shell.pid) && [ -n "$new" ]
+        else new=$(run_read omabox-shell.pid) && [ -n "$new" ] && [ "$new" != "$old" ]; fi; do
     [ $SECONDS -lt $deadline ] || die "shell did not restart; see $D/home/shell.log"
     sleep 0.1
   done
@@ -7537,7 +7576,9 @@ cmd_down() {
     [ ${#names[@]} = 0 ] || die "down: --all or names, not both"
     mapfile -t names < <(list_names)
   fi
-  [ $all = 1 ] || [ ${#names[@]} -gt 0 ] || names=("$(default_name)")
+  # No name: select_box derives it, and outside any repo falls back to the session's box (finding
+  # 200); passed the derived name, it would take it as given and not (finding 259).
+  [ $all = 1 ] || [ ${#names[@]} -gt 0 ] || names=("")
   local rc=0
   for n in "${names[@]}"; do
     select_box "$n"
@@ -7901,7 +7942,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|pixel|windows|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|pixel|windows|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|env|path|down|ls|list) ;;
     # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
     ports) ;;
     help|-h|--help|version|-V|--version) ;;

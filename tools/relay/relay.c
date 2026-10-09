@@ -93,6 +93,9 @@ static int good_name(const char *s, size_t n) {
 static int cmd_call(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... -- ARG...\n"); return 2; }
     const char *path = argv[1];
+    // A broker at its cap closes the connection as soon as it accepts it (#197): a write after that
+    // is EPIPE, said below, not a SIGPIPE ending the caller with 141.
+    signal(SIGPIPE, SIG_IGN);
     int fds[MAX_FDS] = {0, 1, 2}, nfds = 3, i = 2;
     char *payload = malloc(MAX_PAYLOAD);
     size_t len = 0;
@@ -153,10 +156,16 @@ static int cmd_call(int argc, char **argv) {
     memcpy(CMSG_DATA(c), fds, sizeof(int) * (size_t)nfds);
     ssize_t w;
     do w = sendmsg(s, &msg, 0); while (w < 0 && errno == EINTR);
-    if (w != (ssize_t)sizeof(h) || write_all(s, payload, len) < 0) die("send");
+    if (w != (ssize_t)sizeof(h) || write_all(s, payload, len) < 0) {
+        if (errno == EPIPE || errno == ECONNRESET) {
+            fprintf(stderr, "omabox: the omabox broker turned the call away (too many callers at once); try again\n");
+            return 1;
+        }
+        die("send");
+    }
     int32_t status;
     if (read_all(s, &status, sizeof(status)) < 0) {
-        fprintf(stderr, "omabox: the omabox broker ended the command without an exit status\n");
+        fprintf(stderr, "omabox: the omabox broker ended the command without an exit status (or turned the call away: too many callers at once)\n");
         return 1;
     }
     return status;
