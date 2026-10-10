@@ -17,6 +17,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **Security: a jailed agent's `up` says nothing of host paths outside its jail** (#198). `up`
+  looked at each path it was given before checking the jail, and its refusal named where the path
+  led: from ai-jail, `up --seed /etc/localtime:x` answered with the zoneinfo file it links to, and
+  "no such path" for one not there, so an agent could learn whether any host file exists, or where a
+  host link leads (nothing was copied or mounted). `--seed`, `--theme-dir`, `--overlay`, `--ro-bind`,
+  `--plugin`, `--hyprland` and `--omarchy` now follow a jailed agent's path only inside the jail's
+  folders, through links in its project too, and refuse one that leaves them with the same words
+  whether anything is there or not, naming the path as written. Outside a jail nothing changes.
 - **A git worktree of omabox runs headless NVIDIA boxes on its main checkout's aquamarine build**
   (#182). A fresh `git worktree add` has no `build/prefix`, so its boxes on NVIDIA were refused for
   lacking aquamarine's fix the main checkout had built. A worktree with none of its own now uses the

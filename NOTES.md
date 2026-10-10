@@ -5261,6 +5261,31 @@ from them.
     t_shot_fit (a box: the setting's 1000 px shot, `click --in` on it landing where it does on a
     `--fit 1000` one, the variable, a `-g` crop and `--burst` scaled, `--fit 800` winning, `--changed`
     full size and saying why, `--fit 0` full size). `omabox calibrate` stays open on #188.
+273. **A jailed `up` told host paths apart before its jail check** (2026-10-10, #198, the 0.4.8..0.5.0
+    review). `up` resolved and tested each host path it was given (`[ -e ]`, `[ -d ]`, `readlink -f`)
+    as it read the options, and checked the jail only after, printing the resolved path: from ai-jail
+    `up --seed /etc/localtime:x` said `--seed /usr/share/zoneinfo/... is not in a folder this jail
+    sees`, and "no such path" for one not there, so a jailed agent learnt whether any host path exists
+    and where a host link leads (nothing was copied or mounted). Same for `--theme-dir`, `--overlay`,
+    `--ro-bind`, `--plugin` (its manifest id printed when not a name), `--hyprland` and `--omarchy`;
+    a link the agent makes in its project to anywhere did the same from inside. Now, from a jail,
+    `jail_path` follows the path as given (made absolute against the cwd) one component at a time,
+    looking at one (is it a link?) only once it is inside one of the jail's folders (one on the way to
+    a folder is taken as the dir it is: jail_policy resolved them), and fails at the first step out,
+    a link out of the project included, without looking further; only then are the existing checks
+    run, on where it leads (jail_root for a mount, jail_sees for a seed, the binary's, the tree's and
+    the manifest's own). Every failure for one option, outside, through a link out, not there or not
+    what the option takes, is one sentence naming the path as written (`jail_refuse`), so a race that
+    swaps a project dir for a link between two checks changes no answer either. What the options read
+    inside what they were given is walked the same way: an `--omarchy` tree's `bin`, its `themes/`
+    and the themes in it (`--theme` listed any host folder's subfolders through a `themes` link), the
+    seed folder's way to a plugin's place (#199's check), and a plugin's manifest, read through an fd
+    whose path is checked (`jail_read`), never by an id lookup in the user's plugins. A `--hyprland`
+    build's libaquamarine NEEDED entry is taken only as a soname (one with a `/` had aq_pick test any
+    host path). Outside a jail nothing changes. t_unit_jail_paths (jail_path in, out, through a link
+    out, `..` out, out and back in by a host link; each of the seven options: a host path there and
+    not there one answer, as given; through a link in the project to outside: refused, the target
+    never named, the same either way; inside: past the checks); t_jail as before.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

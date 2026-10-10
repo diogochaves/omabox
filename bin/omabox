@@ -1459,10 +1459,13 @@ nvidia_missing() { [ -c "$1/nvidia$2" ] || echo "$2"; [ -c "$1/nvidiactl" ] || e
 resolve_plugin() {
   local p=$1 dir id
   if [ -f "$p/manifest.json" ]; then dir=$(readlink -f "$p")
-  elif [ -f "$HOME/.config/omarchy/plugins/$p/manifest.json" ]; then dir=$(readlink -f "$HOME/.config/omarchy/plugins/$p")
+  elif ! in_jail && [ -f "$HOME/.config/omarchy/plugins/$p/manifest.json" ]; then dir=$(readlink -f "$HOME/.config/omarchy/plugins/$p")
   else die "plugin not found: $p (a plugin dir with manifest.json, or an id under ~/.config/omarchy/plugins)"
   fi
-  id=$(jq -r '.id // empty' "$dir/manifest.json")
+  # A jailed caller's manifest (#198) is read only from a file inside the jail's folders (jail_read: a
+  # link swapped in since cmd_up followed it is not read through).
+  if in_jail; then id=$(jail_read "$dir/manifest.json" | jq -r '.id // empty') || id=""
+  else id=$(jq -r '.id // empty' "$dir/manifest.json"); fi
   [ -n "$id" ] || die "no id in $dir/manifest.json"
   # It names the plugin's dir in the box HOME and is split on whitespace (finding 175).
   [[ $id =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || die "plugin $dir: its manifest id '$id' must be letters, digits, . _ - (not starting with . or -)"
@@ -1767,10 +1770,19 @@ theme_named() {
   n=$(sed -E 's/<[^>]+>//g' <<<"$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
   [[ $n =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || die "--theme: not a theme's name: $name"
   for d; do [ "${d##*/}" != "$n" ] || { echo "$n"; return 0; }; done
-  for d in "$o/themes/$n" "$HOME/.config/omarchy/themes/$n"; do [ ! -d "$d" ] || { echo "$n"; return 0; }; done
-  names=$(for d in "$o/themes"/*/ "$HOME/.config/omarchy/themes"/*/; do [ -d "$d" ] && basename "$d"; done; printf '%s\n' "${@##*/}")
+  for d in "$o/themes/$n" "$HOME/.config/omarchy/themes/$n"; do ! tree_dir "$d" "$o" || { echo "$n"; return 0; }; done
+  names=$(for d in "$o/themes"/*/ "$HOME/.config/omarchy/themes"/*/; do tree_dir "$d" "$o" && basename "$d"; done; printf '%s\n' "${@##*/}")
   names=$(grep . <<<"$names" | sort -u | paste -sd ' ') || names=""
   die "--theme: no theme $n in $o/themes, ~/.config/omarchy/themes${*:+ or --theme-dir}${names:+ (there are: $names)}"
+}
+
+# tree_dir DIR TREE: DIR is a folder. One in a jailed caller's --omarchy TREE (not /usr/share/omarchy)
+# only where jail_path leads (#198): its themes/, or a theme in it, linked out of the jail's folders is
+# none, never followed (it would have listed any host folder's subfolders).
+tree_dir() {
+  local q
+  if in_jail && [ "$2" != /usr/share/omarchy ] && [[ $1 == "$2"/* ]]; then q=$(jail_path "$1") && [ -d "$q" ]; return; fi
+  [ -d "$1" ]
 }
 
 # home_unlink HOME REL...: a link or FIFO at HOME/REL, or at any dir on the way to it, is removed (the
@@ -1828,13 +1840,20 @@ own_path_visible() {
 seed_spec() {
   local src=${1%%:*} dest=${1#*:} r
   [[ $1 == *:* ]] && [ -n "$src" ] && [ -n "$dest" ] || { say "--seed: SRC:DEST (a file or folder, and where in the box HOME), got $1"; return 1; }
-  src=${src/#\~/$HOME}
-  [ -e "$src" ] || { say "--seed: no such path: $src"; return 1; }
-  src=$(readlink -f -- "$src")
   # shellcheck disable=SC2088 # a literal ~/ in DEST: the box HOME, not ours
   case $dest in "~/"*) dest=${dest#"~/"} ;; /home/sbx/*) dest=${dest#/home/sbx/} ;; /*) say "--seed: DEST is in the box HOME (.config/x, ~/.config/x), got $dest"; return 1 ;; esac
   r=$(realpath -m --relative-base=/h -- "/h/$dest")
   [[ $r != /* ]] && [ "$r" != . ] || { say "--seed: DEST must be inside the box HOME, got $dest"; return 1; }
+  src=${src/#\~/$HOME}
+  # A jailed caller's SRC (#198): followed only inside its jail's folders, then resolved and checked
+  # there (jail_sees: a link swapped in since is caught); refused as written, one way for all.
+  if in_jail; then
+    { src=$(jail_path "$src") && [ -e "$src" ] && src=$(jail_sees "$src"); } ||
+      { say "up: --seed ${1%%:*} is not a file or folder in a folder this jail sees, so it does not go into the box"; return 1; }
+  else
+    [ -e "$src" ] || { say "--seed: no such path: $src"; return 1; }
+    src=$(readlink -f -- "$src")
+  fi
   printf '%s\t%s\n' "$src" "$r"
 }
 # A --seed that would land on a plugin's or theme's folder in the box HOME (#199): seed_home links
@@ -1848,12 +1867,16 @@ seed_spec() {
 # "in" or "over"; fails when none. Says nothing of where SRC leads (a jailed caller's: finding 257).
 # seed_blocked SRC REL PLACE...
 seed_blocked() {
-  local src=$1 rel=$2 x at; shift 2
+  local src=$1 rel=$2 x at q; shift 2
   for x; do
     at=${x%%$'\t'*}
     if [ "$rel" = "$at" ] || [[ $rel == "$at"/* ]]; then printf '%s\tin\n' "$x"; return 0; fi
     [[ $at == "$rel"/* ]] || continue
-    if [ ! -d "$src" ] || [ -e "$src/${at#"$rel"/}" ] || [ -L "$src/${at#"$rel"/}" ]; then printf '%s\tover\n' "$x"; return 0; fi
+    q=$src/${at#"$rel"/}
+    # A jailed caller's (#198): the dirs on the way followed only inside its jail's folders (one
+    # leading out counts as there, never looked at), and the last one not followed (-L first).
+    if in_jail; then q=$(jail_path "${q%/*}")/${q##*/} || q=""; fi
+    if [ ! -d "$src" ] || [ -z "$q" ] || [ -L "$q" ] || [ -e "$q" ]; then printf '%s\tover\n' "$x"; return 0; fi
   done
   return 1
 }
@@ -1884,8 +1907,9 @@ robind_spec() {
   local src=$1 dest=""
   if [[ $1 == *:/* ]]; then src=${1%%:/*}; dest=/${1#*:/}; fi
   src=${src/#\~/$HOME}
-  [ -e "$src" ] || return 1
-  src=$(readlink -f -- "$src")
+  # A jailed caller's (#198): followed only inside its jail's folders, and one of them, whole.
+  if in_jail; then { src=$(jail_path "$src") && [ -e "$src" ] && src=$(jail_root "$src"); } || return 1
+  else [ -e "$src" ] || return 1; src=$(readlink -f -- "$src"); fi
   [ -z "$dest" ] || dest=$(realpath -m -- "$dest")   # //usr and /a/../usr are /usr
   printf '%s\t%s\n' "$src" "${dest:-$src}"
 }
@@ -2015,6 +2039,15 @@ cmd_up() {
   local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() theme_dirs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
+  # A jailed caller's host paths (#198): each followed only inside the jail's folders (jail_path) before
+  # anything looks at it, and refused as written (jail_refuse), one way whatever the host has there;
+  # the paths as given, for the refusals checked after the options are read.
+  local plugin_given=() theme_given=() hypr_given="" omarchy_given=""
+  local W_WHOLE="a folder this jail was given whole (its project, or one of its maps)"
+  local W_PLUGIN="a plugin's folder (with a manifest.json) this jail was given whole (its project, or one of its maps), nor inside one the box has"
+  local W_THEME="a folder in this jail's project nor one it was given whole"
+  local W_HYPR="in this jail's project nor in a folder it was given whole (or is not a Hyprland build's binary there)"
+  local W_OMARCHY="in this jail's project nor a folder it was given whole (or is not an Omarchy tree there)"
   local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
@@ -2029,16 +2062,23 @@ cmd_up() {
       --confirm-close) confirm=on ;;
       --no-confirm-close) confirm=off ;;
       --interactive|-i) interactive=1 ;;
-      --plugin) optarg "$@"; plugin_args+=("$2"); shift ;;
-      --overlay) optarg "$@"; [ -d "$2" ] || die "--overlay: no such directory: $2"; overlays+=("$(readlink -f -- "$2")"); named+=("overlay $2 in"); shift ;;
-      --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || die "--ro-bind: no such path: ${2%%:/*}"; robinds+=("$spec")
-        g=${2%%:/*}; named+=("mount ${g/#\~/$HOME} into"); shift ;;
+      --plugin) optarg "$@"; g=$2
+        if in_jail; then g=$(jail_path "$2") || jail_refuse --plugin "$2" "$W_PLUGIN"; fi
+        plugin_args+=("$g"); plugin_given+=("$2"); shift ;;
+      --overlay) optarg "$@"
+        if in_jail; then { g=$(jail_path "$2") && [ -d "$g" ] && g=$(jail_root "$g"); } || jail_refuse --overlay "$2" "$W_WHOLE"
+        else [ -d "$2" ] || die "--overlay: no such directory: $2"; g=$(readlink -f -- "$2"); fi
+        overlays+=("$g"); named+=("overlay $2 in"); shift ;;
+      --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || { ! in_jail || jail_refuse --ro-bind "${2%%:/*}" "$W_WHOLE"; die "--ro-bind: no such path: ${2%%:/*}"; }
+        robinds+=("$spec"); g=${2%%:/*}; named+=("mount ${g/#\~/$HOME} into"); shift ;;
       --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); g=${2%%:*}; named+=("seed ${g/#\~/$HOME} into"); shift ;;
       --monitor) optarg "$@"; monitor_spec "$2" >/dev/null || exit 1; monitors+=("$2"); shift ;;
-      --theme-dir) optarg "$@"; [ -d "$2" ] || die "--theme-dir: no such directory: $2"
-        g=$(readlink -f -- "$2"); [[ ${g##*/} != .* ]] || die "--theme-dir: a theme's name (its dir's) cannot start with a dot: $2"
+      --theme-dir) optarg "$@"
+        if in_jail; then { g=$(jail_path "$2") && [ -d "$g" ] && g=$(jail_sees "$g"); } || jail_refuse --theme-dir "$2" "$W_THEME"
+        else [ -d "$2" ] || die "--theme-dir: no such directory: $2"; g=$(readlink -f -- "$2"); fi
+        [[ ${g##*/} != .* ]] || die "--theme-dir: a theme's name (its dir's) cannot start with a dot: $2"
         [[ " ${theme_dirs[*]##*/} " != *" ${g##*/} "* ]] || die "--theme-dir: two themes named ${g##*/}"
-        theme_dirs+=("$g"); named+=("mount ${2/#\~/$HOME} into"); shift ;;
+        theme_dirs+=("$g"); theme_given+=("$2"); named+=("mount ${2/#\~/$HOME} into"); shift ;;
       --theme) optarg "$@"; THEME=$2; shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
@@ -2047,8 +2087,14 @@ cmd_up() {
         envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
       --idle) optarg "$@"; idle=$2; shift ;;
       --from) optarg "$@"; FROM=$2; shift ;;
-      --hyprland) optarg "$@"; hyprland=$(hypr_bin "$2") || exit 1; shift ;;
-      --omarchy) optarg "$@"; omarchy=$(omarchy_tree "$2") || exit 1; shift ;;
+      --hyprland) optarg "$@"; hypr_given=$2
+        if in_jail; then { g=$(jail_path "$2") && hyprland=$(hypr_bin "$g" 2>/dev/null); } || jail_refuse --hyprland "$2" "$W_HYPR"
+        else hyprland=$(hypr_bin "$2") || exit 1; fi
+        shift ;;
+      --omarchy) optarg "$@"; omarchy_given=$2
+        if in_jail; then { g=$(jail_path "$2") && omarchy=$(omarchy_tree "$g" 2>/dev/null); } || jail_refuse --omarchy "$2" "$W_OMARCHY"
+        else omarchy=$(omarchy_tree "$2") || exit 1; fi
+        shift ;;
       --owner) optarg "$@"; [[ $2 =~ ^[1-9][0-9]*$ ]] || die "up: --owner is a pid, got $2"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
       --stock-bar) STOCK_BAR=1 ;;
       --systemd) systemd=1 ;;
@@ -2063,8 +2109,20 @@ cmd_up() {
   done
   # A plugin that cannot be mounted (not there, or a manifest id that is not a name: finding 175) is
   # refused before any lock or box dir is made; PLUGINS ("id<TAB>dir" each) is what the box mounts.
+  # A jailed caller's (finding 99): a folder of the jail's, whole, or one inside a folder the box has
+  # (linked to at its own path: finding 241), its manifest.json followed only inside the jail's folders
+  # (#198); checked before resolve_plugin reads it, and refused as written, however it fails.
   PLUGINS=()
-  local p; for p in "${plugin_args[@]}"; do PLUGINS+=("$(resolve_plugin "$p")") || exit 1; done
+  local p i m
+  for i in "${!plugin_args[@]}"; do
+    p=${plugin_args[i]}
+    if in_jail; then
+      { m=$(jail_path "$p/manifest.json") && [ -f "$m" ] && { jail_root "$p" >/dev/null || own_path_visible "$p"; } &&
+        PLUGINS+=("$(resolve_plugin "$p" 2>/dev/null)"); } || jail_refuse --plugin "${plugin_given[i]}" "$W_PLUGIN"
+    else
+      PLUGINS+=("$(resolve_plugin "$p")") || exit 1
+    fi
+  done
   # --theme NAME (finding 245): a theme there is (Omarchy's, the user's, a --theme-dir's), named as
   # omarchy-theme-set names it, which the box's session runs with it; refused here, as a plugin is.
   [ -z "$THEME" ] || THEME=$(theme_named "$THEME" "${omarchy:-/usr/share/omarchy}" ${theme_dirs[@]+"${theme_dirs[@]}"}) || exit 1
@@ -2100,36 +2158,23 @@ cmd_up() {
       [ -z "$allow" ] || die "up: this jail has no network, so its boxes reach no host port (no --allow)"
       net=isolated
     fi
-    local x
-    for x in "${overlays[@]}"; do
-      jail_root "$x" >/dev/null || die "up: $x is not a folder this jail was given whole (its project, or one of its maps), so it does not go into the box"
-    done
-    # A plugin inside the jail's project (or a folder it was given whole and --ro-bind mounts) needs no
-    # mount of its own: it is linked to, at its own path (finding 241).
-    for x in "${plugin_args[@]}"; do
-      jail_root "$x" >/dev/null || own_path_visible "$x" ||
-        die "up: $x is not a folder this jail was given whole (its project, or one of its maps), nor inside one the box has, so it does not go into the box"
-    done
-    for x in "${robinds[@]}"; do
-      jail_root "${x%%$'\t'*}" >/dev/null || die "up: ${x%%$'\t'*} is not a folder this jail was given whole (its project, or one of its maps), so it does not go into the box"
-    done
-    for x in "${seeds[@]}"; do
-      jail_sees "${x%%$'\t'*}" >/dev/null || die "up: --seed ${x%%$'\t'*} is not in a folder this jail sees, so it is not copied into the box"
-    done
+    # --overlay, --ro-bind and --seed were checked as they were read (#198): one of the jail's folders,
+    # whole, for a mount (none below one, which could be swapped for a link before the mount), a path
+    # it sees for a seed (seed_copy_in checks it again as it copies); --plugin before resolve_plugin.
     # --hyprland's folder is mounted as --ro-bind's are: one of the jail's folders, whole. A build
     # inside the jail's project needs no mount of its own: the project is in the box, and the path
     # resolves there, in the box's view, not the host's.
     if [ -n "$hyprland" ] && ! jail_root "${hyprland%/*}" >/dev/null; then
       local top
       top=$(repo_top) && jail_sees "$hyprland" >/dev/null && [[ $hyprland == "$top"/* ]] ||
-        die "up: --hyprland $hyprland is not in this jail's project nor in a folder it was given whole, so it does not go into the box"
+        jail_refuse --hyprland "$hypr_given" "$W_HYPR"
       hypr_bind=0
     fi
     # --omarchy's tree likewise.
     if [ -n "$omarchy" ] && ! jail_root "$omarchy" >/dev/null; then
       local top
       top=$(repo_top) && jail_sees "$omarchy" >/dev/null && [[ $omarchy == "$top"/* ]] ||
-        die "up: --omarchy $omarchy is not in this jail's project nor a folder it was given whole, so it does not go into the box"
+        jail_refuse --omarchy "$omarchy_given" "$W_OMARCHY"
       omarchy_bind=0
     fi
   fi
@@ -2286,11 +2331,10 @@ cmd_up() {
   # --theme-dir (#170): the dir, at its own path in the box, which seed_home links into the box HOME's
   # themes/: the repo `up` runs from has it there already, or a same-path mount; else it is mounted so.
   # A jailed caller's: in its project, or one of its folders whole (as --ro-bind's).
-  for g in ${theme_dirs[@]+"${theme_dirs[@]}"}; do
+  for i in "${!theme_dirs[@]}"; do
+    g=${theme_dirs[i]}
     own_path_visible "$g" && continue
-    if in_jail && ! jail_root "$g" >/dev/null; then
-      die "up: --theme-dir $g is not in this jail's project nor a folder it was given whole, so it does not go into the box"
-    fi
+    ! in_jail || jail_root "$g" >/dev/null || jail_refuse --theme-dir "${theme_given[i]}" "$W_THEME"
     robinds+=("$g"$'\t'"$g")
   done
   THEME_DIRS=(${theme_dirs[@]+"${theme_dirs[@]}"})
@@ -2651,7 +2695,9 @@ check_install() {
   # soname picks the box's aquamarine as the installed Hyprland's does: a private build with that
   # soname, else the system's; neither has it, and the box's Hyprland would not start.
   local want
-  want=$(elf_needed "$1" | grep -m1 '^libaquamarine\.so') || die "--hyprland $1 links no libaquamarine (readelf -d): not a Hyprland build?"
+  # A soname, nothing else: aq_pick looks for it in library dirs by name, and one with a / in it
+  # (a jailed caller's build can say anything) would have it test any path on the host (#198).
+  want=$(elf_needed "$1" | grep -m1 -xE 'libaquamarine\.so(\.[0-9A-Za-z_]+)*') || die "--hyprland $1 links no libaquamarine (readelf -d): not a Hyprland build?"
   aq_resolve "$want" 2>/dev/null ||
     die "--hyprland $1 links $want, which neither the system nor a private build of omabox's has" \
       "(the system has $(hypr_aq_soname 2>/dev/null || echo "no libaquamarine")): build Hyprland against the installed aquamarine," \
@@ -3049,9 +3095,11 @@ elf_needed() {
 # `up --omarchy DIR` (finding 135): an Omarchy tree, as `omarchy dev link` takes one: what a box
 # runs from it must be there. /usr/share/omarchy itself is the default: none.
 omarchy_tree() {
-  local p f; p=$(readlink -f -- "$1" 2>/dev/null) && [ -d "$p" ] || die "--omarchy: no such directory: $1"
+  local p f q; p=$(readlink -f -- "$1" 2>/dev/null) && [ -d "$p" ] || die "--omarchy: no such directory: $1"
   for f in bin default/hypr/bootstrap.lua shell/shell.qml; do
-    [ -e "$p/$f" ] || die "--omarchy: $p is not an Omarchy tree (no $f)"
+    # A jailed caller's tree (#198): each followed only inside the jail's folders (a link out is none).
+    q=$p/$f; ! in_jail || q=$(jail_path "$q") || q=""
+    [ -n "$q" ] && [ -e "$q" ] || die "--omarchy: $p is not an Omarchy tree (no $f)"
   done
   [ "$p" = /usr/share/omarchy ] || printf '%s\n' "$p"
 }
@@ -7910,6 +7958,62 @@ jail_root() {
   local p; p=$(readlink -e -- "$1" 2>/dev/null) || return 1
   jq -e --arg p "$p" 'any(.roots[]; $p == .path and (.masked | not))' <<<"$OMABOX_JAIL" >/dev/null && echo "$p"
 }
+# jail_path PATH (#198): where a host path a jailed caller named leads, found without looking at
+# anything outside the jail's folders. PATH (made absolute against the cwd) is followed one component
+# at a time, as the kernel would, and a step is looked at (is it a link?) only once it is inside one
+# of them; one on the way to one is taken as the dir it is (jail_policy resolved them, and the jail
+# cannot reach above its folders). Prints where it leads, inside one; fails when a step leaves them,
+# having said nothing of what is there or where a link out goes. Whether anything is at the path is
+# the caller's to ask, of what this prints (inside the jail). jail_sees and jail_root resolve with
+# readlink, which follows a link out, so what they say of a path the jail named is an oracle: this
+# goes first.
+jail_path() {
+  local cur="" c t r in above hops=0 todo=() parts=() roots=()
+  mapfile -d '' roots < <(jq -j '.roots[] | .path + "\u0000"' <<<"$OMABOX_JAIL")
+  t=$1; [[ $t == /* ]] || t=${PWD%/}/$t
+  mapfile -d / -t todo < <(printf %s "$t")
+  while [ ${#todo[@]} -gt 0 ]; do
+    c=${todo[0]}; todo=("${todo[@]:1}")
+    case $c in ''|.) continue ;; ..) cur=${cur%/*}; continue ;; esac
+    cur=$cur/$c in=0 above=0
+    for r in ${roots[@]+"${roots[@]}"}; do
+      if [ "$cur" = "$r" ] || [[ $cur == "$r"/* ]]; then in=1; break; fi
+      [[ $r != "$cur"/* ]] || above=1
+    done
+    if [ $in = 0 ]; then [ $above = 1 ] || return 1; continue; fi
+    [ -L "$cur" ] || continue
+    hops=$((hops + 1)); [ $hops -le 40 ] || return 1   # the kernel's ELOOP
+    t=$(readlink -- "$cur" && echo .) || return 1; t=${t%$'\n.'}   # a target ending in a newline, kept
+    if [[ $t == /* ]]; then cur=""; else cur=${cur%/*}; fi
+    mapfile -d / -t parts < <(printf %s "$t")
+    todo=(${parts[@]+"${parts[@]}"} ${todo[@]+"${todo[@]}"})
+  done
+  for r in ${roots[@]+"${roots[@]}"}; do
+    if [ "${cur:-/}" = "$r" ] || [[ $cur == "$r"/* ]]; then echo "${cur:-/}"; return 0; fi
+  done
+  return 1
+}
+# jail_read FILE: FILE's content, when the file it opens is inside the jail's folders (its path read
+# back from the open fd, so a link swapped in after a check is caught); fails, reading nothing,
+# otherwise (#198).
+jail_read() {
+  local fd p r ok=1 roots=()
+  { exec {fd}<"$1"; } 2>/dev/null || return 1
+  if [ -f "/proc/self/fd/$fd" ] && p=$(readlink "/proc/self/fd/$fd"); then
+    mapfile -d '' roots < <(jq -j '.roots[] | .path + "\u0000"' <<<"$OMABOX_JAIL")
+    for r in ${roots[@]+"${roots[@]}"}; do
+      if [ "$p" = "$r" ] || [[ $p == "$r"/* ]]; then ok=0; break; fi
+    done
+  fi
+  [ $ok = 1 ] || cat <&"$fd" || ok=1
+  exec {fd}<&-
+  return $ok
+}
+# up's refusal of a host path a jailed caller named (#198): the path as written, never where it
+# leads, and the same words whether it is outside the jail's folders, leads out of them through a
+# link, or is not there (or not what OPT takes), so a refusal says nothing of the host.
+# jail_refuse OPT PATH WHAT
+jail_refuse() { die "up: $1 $2 is not $3, so it does not go into the box"; }
 
 # The repo the caller works in (git's top level), or a failure. For a jailed caller not through git: its
 # .git/config is the jail's to write, and settings there (core.fsmonitor and others) run programs, here,

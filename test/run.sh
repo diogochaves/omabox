@@ -1830,6 +1830,73 @@ t_unit_broker_units() {
 }
 
 # The relay itself, host to host: what reaches the command, and what does not.
+# A jailed caller's host paths (#198): each followed only inside the jail's folders before anything
+# looks at it, and refused as written, the same whether the host has something there or not, and never
+# naming where a link leads. Past the checks, --size junk stops `up` before anything starts.
+t_unit_jail_paths() {
+  local d=$TMP/jpath; mkdir -p "$d/proj/th/t1" "$d/proj/plug" "$d/out/dir" "$d/out/back"
+  git -C "$d/proj" init -q; echo x > "$d/proj/f"; echo s > "$d/out/f"; echo '{"id": "plug1"}' > "$d/proj/plug/manifest.json"
+  local J; J=$(jq -nc --arg p "$d/proj" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}]}')
+  ln -sfn "$d/out" "$d/proj/lout"; ln -sfn "$d/proj/f" "$d/proj/fin"; ln -sfn "$d/proj/f" "$d/out/back/f"
+  ln -sfn "$d/out/f" "$d/out/flink"
+  jp() { OMABOX_JAIL=$J lib jail_path "$@"; }
+  check_eq "jail_path: a path inside the jail's folder" "$d/proj/f" "$(jp "$d/proj/f")"
+  check_eq "...one not there yet, inside: where it would be" "$d/proj/none" "$(jp "$d/proj/none")"
+  check_eq "...a link inside, to inside: followed" "$d/proj/f" "$(jp "$d/proj/fin")"
+  check_eq "...relative, against the cwd" "$d/proj/f" "$(cd "$d/proj/th" && OMABOX_JAIL=$J lib jail_path ../f)"
+  check_fails "...not one outside" jp "$d/out/f"
+  check_fails "...not through a link out" jp "$d/proj/lout/f"
+  check_fails "...not .. out of the folder" jp "$d/proj/../out/f"
+  check_fails "...not the dir above the folder" jp "$d"
+  # Out and back in: a host link outside the jail that leads back into it is never looked at.
+  check_fails "...not a link out that a host link leads back in from" jp "$d/proj/lout/back/f"
+  check_eq "jail_read: a file inside" x "$(OMABOX_JAIL=$J lib jail_read "$d/proj/fin")"
+  check_fails "jail_read: not one a link inside leads out to" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_read "$2"' _ "$TMP/lib/bin/omabox" "$d/proj/lout/f"
+  # What each option takes, outside the jail (OUT) and inside it (IN), each a thing the option takes.
+  cp /usr/bin/true "$d/out/Hyprland"; cp /usr/bin/true "$d/proj/Hyprland"; echo '{"id": "o"}' > "$d/out/dir/manifest.json"
+  local t; for t in "$d/out/tree" "$d/proj/tree"; do
+    mkdir -p "$t/bin" "$t/default/hypr" "$t/shell"; touch "$t/default/hypr/bootstrap.lua" "$t/shell/shell.qml"
+  done
+  ju() { (cd / && OMABOX_JAIL=$J "$CLI" up "$P-jpath" "$@" --size huge 2>&1); }
+  local opt out in sfx a b g
+  for opt in --seed --theme-dir --overlay --ro-bind --plugin --hyprland --omarchy; do
+    sfx=""; case $opt in
+      --seed) out=f in=f sfx=:.config/x ;;
+      --hyprland) out=Hyprland in=Hyprland ;;
+      --omarchy) out=tree in=tree ;;
+      --theme-dir) out=dir in=th/t1 ;;
+      --plugin) out=dir in=plug ;;
+      *) out=dir in=. ;;
+    esac
+    # There and not there, outside: one answer, naming the path as given.
+    a=$(ju "$opt" "$d/out/$out$sfx"); b=$(ju "$opt" "$d/out/none$sfx")
+    check_match "jailed $opt: a host path outside the jail refused, as given" "up: $opt $d/out/$out is not .*so it does not go into the box" "$a"
+    check_eq "...the same answer for one that is not there (no oracle)" "${a//"$d/out/$out"/P}" "${b//"$d/out/none"/P}"
+    # Through a link inside the jail that leads out: refused, never naming the target, the same either way.
+    a=$(ju "$opt" "$d/proj/lout/$out$sfx"); b=$(ju "$opt" "$d/proj/lout/none$sfx")
+    check_match "...through a link inside the jail to outside: refused, as given" "up: $opt $d/proj/lout/$out is not " "$a"
+    g=${a//"$d/proj/lout"/L}
+    check_fails "...the link's target not named" grep -qF "$d/out" <<<"$g"
+    check_eq "...the same answer for one not there" "${a//"$d/proj/lout/$out"/P}" "${b//"$d/proj/lout/none"/P}"
+    check_match "...inside the jail: past the checks" "a size is WxH" "$(ju "$opt" "$d/proj/$in$sfx")"
+  done
+  # The issue's own: a host file, and a host link outside, named as given (not /usr/share/zoneinfo/...).
+  a=$(ju --seed "$d/out/flink:x"); b=$(ju --seed "$d/out/nolink:x")
+  check_eq "jailed --seed of a host link: as given, the same as for nothing there" "${a//"$d/out/flink"/P}" "${b//"$d/out/nolink"/P}"
+  check_fails "...its target not named" grep -qF "$d/out/f " <<<"$a"
+  # A seed folder above a plugin's place (#199) holding the way to it through a link out: refused the
+  # same whether the host has the plugin's dir there or not, never looked at.
+  mkdir -p "$d/proj/sd" "$d/out/o/plugins"; ln -sfn "$d/out/o" "$d/proj/sd/omarchy"
+  local place=.config/omarchy/plugins/pid$'\t'plugin$'\t'pid
+  a=$(OMABOX_JAIL=$J lib seed_blocked "$d/proj/sd" .config "$place"); mkdir "$d/out/o/plugins/pid"
+  b=$(OMABOX_JAIL=$J lib seed_blocked "$d/proj/sd" .config "$place")
+  check_eq "jailed seed over a plugin's place through a link out: refused, either way" "$a|$a" "$a|$b"
+  check_match "...as over the plugin" "over$" "$a"
+  # Outside a jail, as before: the host path itself, said not there.
+  check_match "not jailed: --seed of a path not there says so" "no such path: $d/out/none" "$(cd / && "$CLI" up "$P-jpath" --seed "$d/out/none:x" --size huge 2>&1)"
+  check_match "...and --overlay" "no such directory: $d/out/none" "$(cd / && "$CLI" up "$P-jpath" --overlay "$d/out/none" --size huge 2>&1)"
+}
+
 t_unit_relay() {
   local R=$ROOT/tools/relay/omabox-relay d=$TMP/relay
   [ -x "$R" ] || { skip "the relay (tools/relay)" "not built: run install.sh"; return; }
@@ -7973,7 +8040,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
