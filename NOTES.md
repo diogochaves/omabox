@@ -5454,6 +5454,37 @@ from them.
     comes is said ("is back, but as ..."), the output no longer listed as dropped. t_output_nvidia: labwc
     stopped 1.2 s across `back` after `mode 1600x900`: back at 1600x900, `WAYLAND-1` listed once.
 
+280. **Suite hardening: the flakes of a loaded full run, t_burst's clocks, fixed sleeps** (2026-10-10,
+    #200, #191; the reviewers' E12). (1) **t_shell_crash**: `restart-shell` said "shell restarted" and
+    every later check was one crash short. Not restart-shell's watch: the forced crash never finished.
+    A `kill -SEGV` is taken by whichever thread runs, at the shell's start often the main one inside
+    jemalloc; Quickshell's crash handler fork()s, jemalloc's fork handler waits for the arena lock that
+    interrupted thread holds, and the shell hangs for good, its bar still mapped (no report, no dialog,
+    no relaunch: its pid stayed, and the next restart-shell's SIGKILL left no report, hence one crash
+    short). Reproduced under load (20 busy loops, 4 boxes): 1 of 40 restarts hung, `omabox gdb --pid`
+    showing `fork()` in the signal handler over `QQmlBinding::newBinding` inside jemalloc. The suite's
+    crashes (t_shell_crash's two, output's mid-cycle one) are now `shell_segv`: the signal sent with
+    tgkill to a thread of the shell waiting in poll (`wchan` poll_schedule_timeout), which holds no
+    allocator lock: 0 of 72 hung under the same load. A real crash inside the allocator would hang the
+    same way; omabox then reads the shell as running (Open). (2) **t_monitors_wait**: `wait still`
+    named the window's border as well as the cell (`1929,23 782x404`): the window not settled yet. Looked
+    at again until it names a cell, 3 times at most (a note when it had to). (3) **t_output_nvidia**:
+    finding 279. (4) **t_burst** (#191): the 100 ms pace is a schedule (frame N at (N-1) x 100 ms, or as
+    soon as the grab before it ends), so a slow grab shortens the next gap: checked as none ahead of
+    it, in order, the last within 2 s of its time; the first frame of the keys burst at under 0.5 s,
+    not 0.00 s (two `date` calls 10 ms apart under load: the old test failed 2 of 3 runs beside 24 busy
+    loops); the keys and pointer bursts 2.4 s and 2 s long, for actions that start late; the Timer's
+    pace in a default burst at least half its own pace measured just before (two frames 2 s apart),
+    not 1 step in 80 ms, and the `--every 0` repeats, 3 tries each (load comes and goes; the bug showed
+    a step or two in a whole burst). (5) **Fixed sleeps** waiting for a state now poll it: the live-edit
+    pause (the copy's `sleep` running), `down` waiting on a held lock (its line), a killed `up`
+    (`wait`), a crash past 10 s (its report), peek's marks fading, a wheel scroll ending (two reads
+    alike), a `run -d` job ending, `events -f` following (its tail): 8. Kept, 40: those that are the
+    point (nothing happens for N s, a pace, a crash past 10 s, a pause between keys, labwc stopped a
+    while), a settle before a CPU measure, and short settles with nothing to read from outside (the
+    bar widget taking in a poll, a zenity mapped but not taking keys). Under 20 busy loops, two suites
+    of burst, monitors_wait, shell_crash and output at once: 400 of 400.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -5490,3 +5521,7 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
   `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried (→ #81).
+- A shell hung in its crash handler (finding 280: a crash inside jemalloc, Quickshell's handler
+  fork()ing into the lock) reads as running to `ls`, `restart-shell` and every command: its pid lives
+  and its bar stays mapped, frozen. A thread with SIGSEGV blocked for more than a few seconds (`SigBlk`
+  in `/proc/PID/task/*/status`, if the handler masks it while it runs) might tell it; untried.

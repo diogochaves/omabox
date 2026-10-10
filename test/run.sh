@@ -822,7 +822,7 @@ t_unit_live_edit() {
   mkdir -p "$TMP/live/bin"
   sed 's/^main() {$/main() { sleep 1/' "$CLI" > "$TMP/live/bin/omabox"; chmod +x "$TMP/live/bin/omabox"
   "$TMP/live/bin/omabox" help > "$TMP/live/out" 2>&1 & local p=$!
-  sleep 0.3
+  until_ok 5 pgrep -P "$p" -x sleep >/dev/null   # mid-run: in main's pause (a fixed 0.3 s could come first)
   python3 -c 'import sys; p = sys.argv[1]; n = len(open(p).read()); open(p, "w").write("#!/bin/bash\n" + "q\n" * n)' "$TMP/live/bin/omabox"
   wait "$p"; local rc=$?
   check_eq "an in-place edit mid-run does not break the running command" 0 "$rc"
@@ -3453,7 +3453,7 @@ t_race() {
   # for it, not "no box" while the box comes up behind it. The suite holds the lock, standing in for it.
   local lk out; exec {lk}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lk"
   ob down "$B" > "$TMP/race-down" 2>&1 & a=$!
-  sleep 1; out=$(cat "$TMP/race-down")
+  until_ok 5 grep -q "waiting for its up" "$TMP/race-down" >/dev/null; out=$(cat "$TMP/race-down")
   flock -u "$lk"; exec {lk}>&-; wait "$a"
   check_match "a down while an up holds the lock, before its box dir, waits for it" "waiting for its up" "$out"
   check_match "...then says no box when that up made none" "no box '$B'" "$(cat "$TMP/race-down")"
@@ -4185,7 +4185,7 @@ t_up_killed() {
   local B=$P-uk
   "$CLI" up "$B" --idle 20s --net isolated >/dev/null 2>"$TMP/uk.err" & local up=$!   # $!: omabox itself, not a subshell
   until_ok 30 jq -e .pidns "$XDG_RUNTIME_DIR/omabox/$B/box.json" >/dev/null
-  kill -KILL "$up" 2>/dev/null; sleep 0.2
+  kill -KILL "$up" 2>/dev/null; wait "$up" 2>/dev/null
   check_fails "the up killed once its box started, before it was done" grep -q "box '$B' up (" "$TMP/uk.err"
   check "...its box has a reaper all the same (#137)" until_ok 3 pgrep -f "omabox _reap $B "
   # shellcheck disable=SC2329 # called through until_ok
@@ -4534,6 +4534,23 @@ t_unit_shell_crash() {
   check_eq "no duplicate line: exited, whatever runs" "exited rc 0 " "$(dup '[{"pid": 77}]')"
 }
 
+# shell_segv BOX [PID]: a SIGSEGV for box BOX's shell (PID, or the one recorded there), aimed at one of
+# its threads waiting in poll (#200, finding 280). A plain `kill -SEGV` is taken by whichever thread
+# runs, at start-up often the main one inside an allocation: Quickshell's crash handler then fork()s,
+# jemalloc's fork handler waits for the lock that thread holds, and the shell hangs for good (no report,
+# its bar still mapped; 1 in 40 under load, every later check of t_shell_crash failed with it). A
+# thread in poll holds no allocator lock. (None there: the plain kill, said.)
+shell_segv() {
+  ob run -b "$1" -- python3 -c '
+import ctypes, os, signal, sys
+pid = int(sys.argv[1] or open(os.environ["XDG_RUNTIME_DIR"] + "/omabox-shell.pid").read())
+for t in sorted(os.listdir(f"/proc/{pid}/task"), key=int):
+    try: idle = open(f"/proc/{pid}/task/{t}/wchan").read().startswith("poll_schedule")
+    except OSError: continue
+    if t != str(pid) and idle and ctypes.CDLL(None).syscall(234, pid, int(t), signal.SIGSEGV) == 0: sys.exit(0)
+print("shell_segv: no thread of", pid, "in poll: a plain kill", file=sys.stderr)
+os.kill(pid, signal.SIGSEGV)' "${2:-}"
+}
 # A shell that crashes as restart-shell starts it (#126, finding 183): no "restarted", exit 1, the
 # report named; Quickshell's crash dialog, which took the box's keys, closed as it opens (the box's
 # Hyprland does it), the report kept. Also past 10 s, when Quickshell restarts the shell itself.
@@ -4549,7 +4566,7 @@ t_shell_crash() {
     [ -n "$p" ] && [ "$p" != "$old" ] && grep -aq 'Configuration Loaded' "$H/shell.log" 2>/dev/null && break
     sleep 0.05
   done
-  ob run -b "$B" -- kill -SEGV "$p"
+  shell_segv "$B" "$p"
   wait "$rs"; rc=$?; out=$(cat "$TMP/crash.out")
   check_eq "restart-shell, the new shell crashing: exit 1 (was 0)" 1 "$rc"
   check_fails "...never \"shell restarted\"" grep -q "shell restarted" <<<"$out"
@@ -4569,10 +4586,11 @@ t_shell_crash() {
   # Past 10 s Quickshell restarts the shell itself; its dialog came all the same.
   p=$(cat "$D/run/omabox-shell.pid"); sleep 11
   ob windows -b "$B" >/dev/null 2>&1   # (any crash before is said by now)
-  ob run -b "$B" -- kill -SEGV "$p"
+  shell_segv "$B" "$p"
   check "a crash past 10 s: Quickshell restarts the shell" until_ok 15 grep -q "Quickshell has been restarted" "$H/shell.log"
-  # #147: it keeps its pid, so nothing else would tell; the next command says it, once.
-  sleep 1
+  # #147: it keeps its pid, so nothing else would tell; the next command says it, once (its report,
+  # what tells it, written).
+  until_ok 5 bash -c "[ \$(ls '$H/.cache/quickshell/crashes' | wc -l) -ge 2 ]" >/dev/null
   check_match "...the next command says it crashed (#147)" "warning: the shell crashed since the last command and was started again" \
     "$(ob windows -b "$B" 2>&1 >/dev/null)"
   check_fails "...once" grep -q "crashed since" <<<"$(ob windows -b "$B" 2>&1 >/dev/null)"
@@ -4732,8 +4750,7 @@ t_peek() {
   { head -c 70000 /dev/zero | tr '\0' x; echo; } >> "$D/marks"
   ob click -b "$B" 700 400 >/dev/null
   check_eq "past 64 KB the marks file starts over" "ptr 1920x1080 move 700 400 click left" "$(cat "$D/marks")"
-  sleep 3.5
-  check "marks gone ~3 s after the last one" no_accent 940 520 1900 1060
+  check "marks gone ~3 s after the last one" until_ok 10 no_accent 940 520 1900 1060
   # Junk is ignored whole (and does not stop what follows): unknown kinds, out-of-range and bad
   # numbers, control characters, a line too long to be one, then a good line.
   printf '%s\n' 'junk' 'ptr 1920x1080 move 1920 10' 'ptr 1920x1080 move 10' 'ptr 0x1080 click' 'ptr 1920x1080 hover 1 1' \
@@ -5374,7 +5391,10 @@ t_widget_list() {
   ob pointer -b "$B" -- move "$x" "$y" >/dev/null
   ob scroll -b "$B" "$x" "$y" 300 --source wheel >/dev/null
   until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r '.list.contentY | round')\" != 0 ]"
-  sleep 0.5   # (the wheel's scroll ends)
+  # (Until the wheel's scroll has ended: two reads 0.3 s apart the same.)
+  # shellcheck disable=SC2329 # called through until_ok
+  scroll_ended() { local a; a=$(q .list.contentY); sleep 0.3; [ "$a" = "$(q .list.contentY)" ]; }
+  until_ok 5 scroll_ended >/dev/null
   local cy; cy=$(q '"\(.list.contentY | round) \(.selected as $s | .rows[] | select(.name == $s) | .visible)"')
   ob pointer -b "$B" -- move 10 1000 >/dev/null
   wl_polled; wl_polled
@@ -5579,7 +5599,7 @@ t_monitors_wait_nvidia() {
   monitors_wait_on "$n" "$P-monwnv"
 }
 monitors_wait_on() {
-  local n=$1 B=$2 out rc g w when c gx gy gw gh
+  local n=$1 B=$2 out rc g w when c gx gy gw gh i
   env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
     --monitor 1080x1920,below >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
   ob pointer -b "$B" -- move 2300 200 >/dev/null
@@ -5587,9 +5607,16 @@ monitors_wait_on() {
   ob wait -b "$B" window 'title:^N$' >/dev/null
   w=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "N") | "\(.at[0]) \(.at[1]) \(.at[0] + .size[0]) \(.at[1] + .size[1])"')
   for when in "" " (after output drop and back)"; do
-    out=$(ob wait -b "$B" still --timeout 2s); rc=$?
+    # Until the window has settled (its border's colour, its first frames) the change named is more than
+    # the cell: under load a full run once read the window's border too (#200). Looked at again until it
+    # is the cell, 3 times at most.
+    for i in 1 2 3; do
+      out=$(ob wait -b "$B" still --timeout 2s); rc=$?
+      g=$(sed -n 's/.*--ignore "\([^"]*\)".*/\1/p' <<<"$out")
+      [ "$rc" != 124 ] || ! cell_in "$g" "$w" || break
+      [ "$i" = 3 ] || note "wait still named $g (rc $rc): the window not settled yet, looked again"
+    done
     check_eq "a cell changing on the second monitor: wait still 124$when" 124 "$rc"
-    g=$(sed -n 's/.*--ignore "\([^"]*\)".*/\1/p' <<<"$out")
     check "...named as an --ignore in the layout, a cell inside its window ($g in $w)$when" cell_in "$g" "$w"
     check_eq "...--ignore it: still$when" 0 "$(ob wait -b "$B" still --ignore "$g" >/dev/null; echo $?)"
     check_eq "...--window on it: 124, and still with --ignore$when" "124 0" \
@@ -7109,11 +7136,16 @@ t_burst() {
   out=$(ob shot -b "$B" --burst 5 --every 100ms -g "0,0 200x200" -o "$o/a" 2>"$TMP/burst.err"); rc=$?; err=$(cat "$TMP/burst.err")
   check_eq "shot --burst 5 --every 100ms: exit 0, a line a frame" "0 5" "$rc $(grep -c "^$o/a/frame-00[1-5]\.png [0-9.]*s$" <<<"$out")"
   check_eq "...five 200x200 PNGs" 5 "$(file "$o"/a/frame-*.png | grep -c '200 x 200,')"
-  check "...about 100 ms apart, in order" awk '{ t = $2 + 0; if (NR > 1 && (t - p < 0.08 || t - p > 0.5)) bad = 1; p = t } END { exit bad || NR != 5 }' <<<"$out"
+  # The pace is a schedule (frame N at (N-1) x 100 ms, or as soon as the grab before it is done): a slow
+  # grab under load shortens the next gap, so gaps are no measure (#200). None ahead of it, in order, the
+  # last within 2 s of its time.
+  check "...on a 100 ms pace: none ahead of it, in order" awk '{ t = $2 + 0; if (t < (NR - 1) * 0.1 - 0.01 || (NR > 1 && t <= p)) bad = 1; p = t }
+    END { exit bad || NR != 5 || p > 0.4 + 2 }' <<<"$out"
   check_match "...said, with --in" "5 frames of 200x200 \(screen 0,0\) over .*click with --in a frame" "$err"
-  out=$(ob shot -b "$B" --burst 12 --diff --sheet -g "0,0 600x200" -o "$o/b" --after -- keys -t xyz 2>/dev/null); rc=$?
+  # (Frames for 2.4 s: the keys, a command of its own started after the first, land later under load.)
+  out=$(ob shot -b "$B" --burst 25 --diff --sheet -g "0,0 600x200" -o "$o/b" --after -- keys -t xyz 2>/dev/null); rc=$?
   check_eq "--after -- keys, --diff, --sheet: exit 0" 0 "$rc"
-  check_match "...the first frame before the keys, a later one changed" "frame-001\.png 0\.00s"$'\n'".*changed [0-9]+,[0-9]+ [0-9]+x[0-9]+" "$out"
+  check_match "...the first frame before the keys, a later one changed" "frame-001\.png 0\.[0-4][0-9]s"$'\n'".*changed [0-9]+,[0-9]+ [0-9]+x[0-9]+" "$out"
   check_match "...one contact sheet, last" "^$o/b/sheet\.png$" "$(tail -n 1 <<<"$out")"
   check_match "...a PNG" "PNG image data" "$(file "$o/b/sheet.png")"
   ob click -b "$B" --in "$o/a/frame-003.png" 10 20 >/dev/null 2>&1
@@ -7121,7 +7153,7 @@ t_burst() {
   # #167, finding 236. --diff in the screen's coordinates: a crop at 60,30, halved by --fit, and the
   # pointer moved into it after the first frame (screen shots show it): its box holds 400,90 (its
   # tip; a few pixels' slack for the rounding), not the frame's 170,30.
-  out=$(ob shot -b "$B" --burst 6 --every 100ms --diff -g "60,30 400x80" --fit 200 -o "$o/d" --after -- pointer -- move 400 90 2>/dev/null)
+  out=$(ob shot -b "$B" --burst 20 --every 100ms --diff -g "60,30 400x80" --fit 200 -o "$o/d" --after -- pointer -- move 400 90 2>/dev/null)
   check "--diff with -g and --fit: the change in screen coordinates, inside the crop" awk '
     $3 == "changed" { split($4, p, ","); split($5, s, "x"); n++
       if (p[1] < 60 || p[2] < 30 || p[1] + s[1] > 460 || p[2] + s[2] > 110) bad = 1
@@ -7181,11 +7213,26 @@ QML
     done
     echo "$(((last - first + 65536) % 65536)) $(awk 'END { sub(/s$/, "", $2); printf "%d", $2 * 1000 }' "$1.out")"
   }
-  ob shot -b "$B" --burst 20 -g "0,0 100x100" -o "$o/t" >"$o/t.out" 2>/dev/null
-  read -r st sp < <(burst_steps "$o/t")
-  check "a default burst beside a client busy on each Hyprland event: its 40 ms Timer moves ($st steps in $sp ms)" \
-    test "$((st * 80))" -ge "$sp" -a "$sp" -ge 1000
-  out=$(ob shot -b "$B" --burst 20 --every 0 -g "0,0 100x100" -o "$o/t0" 2>&1 >"$o/t0.out")
+  # Measured against the Timer's own pace just before, two frames 2 s apart (#200): under load the client
+  # is slower by itself, and a fixed 1 step in 80 ms failed. The burst's pace at least half of it (the
+  # bug showed a step or two in a whole burst); 3 tries, as load comes and goes.
+  local ist isp i
+  for i in 1 2 3; do
+    ob shot -b "$B" --burst 2 --every 2s -g "0,0 100x100" -o "$o/i" >"$o/i.out" 2>/dev/null
+    read -r ist isp < <(burst_steps "$o/i")
+    ob shot -b "$B" --burst 20 -g "0,0 100x100" -o "$o/t" >"$o/t.out" 2>/dev/null
+    read -r st sp < <(burst_steps "$o/t")
+    [ "$ist" -le 0 ] || [ $((st * isp * 2)) -lt $((ist * sp)) ] || [ "$sp" -lt 1000 ] || break
+    [ "$i" = 3 ] || note "try $i: $st steps in $sp ms, $ist in $isp ms without a burst"
+  done
+  check "a default burst beside a client busy on each Hyprland event: its 40 ms Timer at half its own pace or more ($st steps in $sp ms; $ist in $isp ms with none)" \
+    test "$ist" -gt 0 -a $((st * isp * 2)) -ge $((ist * sp)) -a "$sp" -ge 1000
+  # Back to back, frames repeat when the grabs hold the client up, or outpace its steps; a grab slowed by
+  # load can miss both: 3 tries.
+  for i in 1 2 3; do
+    out=$(ob shot -b "$B" --burst 20 --every 0 -g "0,0 100x100" -o "$o/t0" 2>&1 >"$o/t0.out")
+    [[ ! $out =~ "frames identical to the one before" ]] || break
+  done
   check_match "--every 0: back to back, the frames that repeat said, with the pace to use" \
     "[0-9]+ of 19 frames identical to the one before: .*held the box up.*--every 100ms or slower" "$out"
   ob down "$B" >/dev/null 2>&1
@@ -7449,7 +7496,7 @@ output_on() {
   check "...the shell saw the screen go (its log)" until_ok 5 bash -c "'$CLI' log -b '$B' shell | grep -q 'There are no outputs'"
   check "...a shot of the main screen is the size it was" bash -c "'$CLI' shot -b '$B' --monitor '$m0' -o '$TMP/out.png' >/dev/null 2>&1 && file '$TMP/out.png' | grep -q '1280 x 720,'"
   # A shell crash ends the cycles, its report named (a SIGSEGV stands in for a plugin's crash).
-  ( sleep 2.5; ob run -b "$B" -- pkill -SEGV -x quickshell ) & local k=$!
+  ( sleep 2.5; shell_segv "$B" ) & local k=$!
   out=$(ob output -b "$B" drop --for 1s --cycles 8 2>&1); rc=$?
   wait "$k"
   check_eq "a shell crash during the cycles: exit 1" 1 "$rc"
@@ -8157,7 +8204,8 @@ t_replace() {
   # Nothing to replace: said; a job that ended: its record dropped
   err=$(ob run -b "$B" -d --replace -- sleep 602 2>&1 >/dev/null)
   check_match "no earlier job: said" "no earlier job of this command" "$err"
-  ob run -b "$B" -d -q -- sh -c 'sleep 0.3'; sleep 0.6
+  ob run -b "$B" -d -q -- sh -c 'sleep 0.3'
+  until_ok 5 bash -c "! '$CLI' run -b '$B' -- pgrep -fx '(sh -c )?sleep 0.3'" >/dev/null
   old=$(grep -l '"sleep 0.3"' "$D"/jobs/*)
   err=$(ob run -b "$B" -d --replace -- sh -c 'sleep 0.3' 2>&1 >/dev/null)
   check_match "a job that exited: nothing to replace" "no earlier job of this command" "$err"
@@ -8311,8 +8359,9 @@ t_inspect() {
   check_eq "marks taken during a burst are at line ends" "" "$(for k in "${marks[@]}"; do [ "$k" = 0 ] || [ "$(head -c "$k" "$E" | tail -c 1 | od -An -tx1 | tr -d ' ')" = 0a ] || echo "$k"; done)"
   check_eq "...and the file has no NUL" "$(wc -c < "$E")" "$(tr -d '\0' < "$E" | wc -c)"
   "$CLI" events -b "$B" -f > "$TMP/ev.f" 2>&1 & local ef=$!   # ($CLI: $! is omabox itself, not a subshell running ob)
-  sleep 1; kill -TERM "$ef"; wait "$ef" 2>/dev/null
   local bpid; bpid=$(cat "$(ob path -b "$B")/pid")
+  until_ok 5 pgrep -f "^tail -c [+][0-9]+ -F --pid=$bpid " >/dev/null   # (following)
+  kill -TERM "$ef"; wait "$ef" 2>/dev/null
   check "events -f stopped: its tail goes too" until_ok 3 bash -c "! pgrep -f '^tail -c [+][0-9]+ -F --pid=$bpid '"
   check_match "log events: the file as it is" '^[0-9]+\.[0-9]{3} ' "$(ob log -b "$B" events -n 1)"
   "$CLI" events -b "$B" -f > "$TMP/ev2.f" 2>&1 & ef=$!
