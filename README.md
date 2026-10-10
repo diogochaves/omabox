@@ -400,8 +400,8 @@ blocks the network and every other socket, omabox's included), or see
   (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys`.
 - **Its HOME** is fake, seeded with your theme and shell settings and nothing secret (no API keys,
   keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app changed there.
-- **Its session**: a private session bus and a throwaway keyring (secrets stored and read without
-  prompts), no system bus, no real input devices, no audio, no Xwayland unless `--xwayland`.
+- **Its session**: a private session bus, its own accessibility (AT-SPI) bus and a throwaway keyring
+  (secrets stored and read without prompts), no system bus, no real input devices, no audio, no Xwayland unless `--xwayland`.
   `/usr`, `/etc` and `/sys` are read-only, with no `sudo`, pacman or polkit, so nothing in a box can
   install packages, system config or rules. Your host's processes are not visible from it.
 - **Your seat**: a box never gets `/dev/dri/card*`, `/dev/input`, seatd, the system bus or your real

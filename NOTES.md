@@ -4646,7 +4646,7 @@ from them.
     `dbus-broker-launch`, and that exits at once without a journal socket (`launcher_open_journal
     ... No such file or directory`; a box has no `/run/systemd/journal`). GTK apps then run without a
     tree, and an AT-SPI client aborts (`dbind-ERROR`, SIGABRT). The launcher reads
-    `ATSPI_DBUS_IMPLEMENTATION`: with `dbus-daemon` (`up --env ATSPI_DBUS_IMPLEMENTATION=dbus-daemon`, or
+    `ATSPI_DBUS_IMPLEMENTATION`: with `dbus-daemon` (`up` sets it since finding 264; `up --env ATSPI_DBUS_IMPLEMENTATION=dbus-daemon`, or
     `dbus-update-activation-environment` in a running box; the launcher is then started again on the
     next request) the bus comes up in the box's own runtime dir (`/run/user/1000/at-spi/bus`, on the
     host under the box's run dir), `at-spi2-registryd` activates from the a11y bus's own service dir,
@@ -5129,6 +5129,21 @@ from them.
     `omabox guard on` rewrites them. Same run: ai-jail 2.8.1 changed nothing the broker reads. 2.7.0's
     `--symlink` hops were already parsed (a destination, masked). 2.8.0 gives a bare `ai-jail claude`
     filtered egress to its API host and keeps `--unshare-net`, so its boxes stay `isolated`.
+264. **A box's accessibility bus starts: `up` sets `ATSPI_DBUS_IMPLEMENTATION=dbus-daemon`**
+    (2026-10-10, #177; the cause in finding 244). bwrap's `--setenv`, next to the session's other
+    variables, so systemd --user (`up --systemd`: `show-environment` has it) and every app started in
+    the box see it from the start (an app asks for the bus once, at start). The a11y bus is
+    `/run/user/$UID/at-spi/bus` in the box, `<box dir>/run/at-spi/bus` on the host; `AT_SPI_BUS_ADDRESS`
+    is not set and the host's environment never reaches the session (`env -i`), so nothing in a box
+    reaches the host's a11y bus. Tested in a headless box with and without the shell and with
+    `--systemd --net isolated` (NVIDIA): `GetAddress` answers that socket, a GTK4 window lists on the bus
+    (python-gobject `Atspi`). **Cost**: something in the session (with or without the shell) asks for the bus at
+    `up`, so at-spi-bus-launcher (~7 MB RSS), its dbus-daemon (~4 MB) and at-spi2-registryd (~7.5 MB)
+    run in every box, ~18-19 MB; before, the launcher exited with its broker and none of the three
+    stayed. `--env ATSPI_DBUS_IMPLEMENTATION=dbus-broker` (a later `--setenv` wins) gives the old,
+    bus-less box back. t_dbus_user_app checks the variable, the address and its socket under the box's
+    dir, and a GTK4 window on the bus (skipped without GTK4 or python-gobject's `Atspi`; fails without
+    the fix). Qt apps still need `org.a11y.Status.IsEnabled` true (finding 244); `omabox tree` is #144's.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

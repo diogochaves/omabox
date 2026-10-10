@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A box has an accessibility (AT-SPI) bus** (#177). It never started (its launcher's
+  dbus-broker needs a journal a box lacks), so GTK apps showed no accessibility tree and any AT-SPI
+  client, dogtail or a toolkit's a11y tests aborted. `up` now has it run on dbus-daemon, in the
+  box's own runtime dir; it adds ~18 MB to a box. `up --env ATSPI_DBUS_IMPLEMENTATION=dbus-daemon`
+  is no longer needed.
 - **Inside ai-jail, the guard's hook no longer says omabox is gone** and that it can be removed
   from settings.json (#203). It looked for omabox only in its checkout, which a jail sees only as
   the `~/.local/bin/omabox` the broker maps in. A jailed agent got the guard's usual note instead.

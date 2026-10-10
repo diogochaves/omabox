@@ -2414,6 +2414,9 @@ cmd_up() {
   # only from $XDG_DATA_HOME; without it, it looks in the passwd entry's home, not $HOME (finding 87).
   # QT_FORCE_STDERR_LOGGING (finding 98): a Qt app without a terminal logs to the journal, which a box
   # has none of, so a `run -d` log stayed empty; --env QT_FORCE_STDERR_LOGGING=0 turns it off.
+  # ATSPI_DBUS_IMPLEMENTATION (#177, finding 264): at-spi-bus-launcher starts the a11y bus with
+  # dbus-broker-launch by default, which exits at once without a journal socket, so a box had no a11y
+  # bus. With dbus-daemon it lives in the box's runtime dir. From the start: an app asks for it once.
   # OMABOX_HYPRLAND: the build share/start-hyprland.sh starts instead of /usr/bin/Hyprland (finding 116).
   local hypr_env=(); [ -z "$hyprland" ] || hypr_env=(--setenv OMABOX_HYPRLAND "$hyprland")
   # OMABOX_OMARCHY: the tree share/start-hyprland.sh and session.sh run instead of /usr/share/omarchy.
@@ -2427,7 +2430,7 @@ cmd_up() {
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
     --setenv XDG_DATA_HOME /home/sbx/.local/share --setenv XDG_CONFIG_HOME /home/sbx/.config
     --setenv XDG_CACHE_HOME /home/sbx/.cache --setenv XDG_STATE_HOME /home/sbx/.local/state
-    --setenv QT_FORCE_STDERR_LOGGING 1
+    --setenv QT_FORCE_STDERR_LOGGING 1 --setenv ATSPI_DBUS_IMPLEMENTATION dbus-daemon
     --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path box)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
     --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"

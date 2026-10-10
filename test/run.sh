@@ -3154,6 +3154,32 @@ dbus_user_app() {
   check "it starts from the launcher" until_ok 5 ob run -b "$B" -- test -e /tmp/probe-started
 }
 
+# The accessibility bus (#177, finding 264): at-spi-bus-launcher's default dbus-broker-launch exits at
+# once in a box (no journal), so up sets ATSPI_DBUS_IMPLEMENTATION=dbus-daemon. The bus is a socket
+# in the box's own runtime dir (on the host, under the box's dir: nothing of the host's a11y bus), and
+# a GTK4 window started in the box shows on it.
+a11y_bus() {
+  local B=$1 D addr; D=$(ob path -b "$B")
+  check_eq "the session has ATSPI_DBUS_IMPLEMENTATION=dbus-daemon (#177)" dbus-daemon "$(ob run -b "$B" -- printenv ATSPI_DBUS_IMPLEMENTATION)"
+  addr=$(ob run -b "$B" -- busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress 2>&1) || addr="no answer: $addr"
+  check_match "...the a11y bus starts, in the box's runtime dir" "^s \"unix:path=/run/user/$UID/at-spi/bus[,\"]" "$addr"
+  check "...a socket under the box's dir on the host, not the host's own" test -S "$D/run/at-spi/bus"
+  if ! ob run -b "$B" -- python3 -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("Atspi", "2.0")' >/dev/null 2>&1; then
+    skip "a GTK4 window on the a11y bus" "no GTK4 or python-gobject Atspi"; return
+  fi
+  ob run -b "$B" -d -- python3 -c 'import gi; gi.require_version("Gtk", "4.0"); from gi.repository import Gtk
+app = Gtk.Application(application_id="org.omabox.A11y")
+app.connect("activate", lambda a: Gtk.ApplicationWindow(application=a, title="omabox a11y").present())
+app.run()' >/dev/null 2>&1
+  ob wait -b "$B" window 'title:^omabox a11y$' >/dev/null
+  # Each application on the bus and its windows' names, as an AT-SPI client sees them.
+  check "...a GTK4 window shows on it" until_ok 10 bash -c "'$CLI' run -b '$B' -- python3 -c '
+import gi; gi.require_version(\"Atspi\", \"2.0\"); from gi.repository import Atspi
+d = Atspi.get_desktop(0)
+for a in (d.get_child_at_index(i) for i in range(d.get_child_count())):
+    for j in range(a.get_child_count()): print(a.get_child_at_index(j).get_name())' | grep -qx 'omabox a11y'"
+}
+
 t_dbus_user_app() {
   local B=$P-dbusapp
   check "up" ob up "$B" --no-shell
@@ -3163,6 +3189,7 @@ t_dbus_user_app() {
   check_eq "...the session bus is the socket in it" "unix:path=/run/user/$UID/bus socket" \
     "$(ob run -b "$B" -- sh -c 'echo "${DBUS_SESSION_BUS_ADDRESS%%,*} $(stat -c %F "$XDG_RUNTIME_DIR/bus")"')"
   dbus_user_app "$B"
+  a11y_bus "$B"
   check "down" ob down "$B"
 }
 

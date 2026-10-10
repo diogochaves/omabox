@@ -117,6 +117,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - Check what a keyring or D-Bus test left behind inside the box (`omabox run -- secret-tool …`), never
   with `secret-tool` on the host: that is the user's real keyring, and `search --all` prints the
   secrets themselves.
+- Accessibility (AT-SPI) tests (dogtail, a toolkit's a11y tests, pyatspi) run in a box against its
+  own a11y bus, in its runtime dir: GTK apps register on it; Qt ones once `org.a11y.Status.IsEnabled`
+  is true (`omabox run -- busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true`).
 
 ## The guard, in detail
 
