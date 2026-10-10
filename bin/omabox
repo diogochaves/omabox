@@ -195,7 +195,7 @@ applies it, as it is then.
 --theme NAME: the box starts on that theme (Omarchy's, one of yours or a --theme-dir one; checked
 before anything is made), not your desktop's current one: omarchy-theme-set NAME runs in the box
 before its Hyprland and bar start, so a test gets the same look whatever your desktop is on (its
-background: the theme's first). Over a --from save's look too. \`up\` again with another is refused.
+background: your own first for NAME, else the theme's). Over a --from save's look too. \`up\` again with another is refused.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run reload
@@ -1650,17 +1650,21 @@ seed_home() {
   done
   # The user's current theme, or with `up --theme NAME` none of it (finding 245): the box's session
   # runs omarchy-theme-set NAME before Hyprland starts, which makes all three. A save's go first, so
-  # nothing of its look is left if that fails, and the background is the theme's first, as on a first
-  # set (omarchy-theme-set takes the one after the current background when it is one of the theme's).
+  # nothing of its look is left if that fails, and the background is the first omarchy-theme-set
+  # finds, as on a first set (it takes the one after the current background when it is one of the
+  # theme's): the user's own first for NAME when they have one (seeded below, #184), else the theme's.
+  # Either way the theme's own wallpapers of the user's go in too (seed_backgrounds), and the
+  # background link leads to the box's copy of the desk's (box_background).
   if [ -n "${THEME:-}" ]; then
     rm -rf -- "$h/.local/state/omarchy/current/theme" "$h/.local/state/omarchy/current/theme.name" \
       "$h/.local/state/omarchy/current/background"
+    seed_backgrounds "$THEME" "$h" >/dev/null
   else
     seed_theme "$state/theme" "$h"
     cp "$state/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null || true
-    if bg=$(readlink "$state/background"); then
-      ln -sfn "/home/sbx/.local/state/omarchy/current/theme/${bg#*/current/theme/}" "$h/.local/state/omarchy/current/background"
-    fi
+    id=$(head -n 1 "$state/theme.name" 2>/dev/null) || id=""
+    bg=$(readlink "$state/background") || bg=""
+    box_background "$h" "$id" "$bg"
   fi
   # The rest of the user's look (finding 69), none of it secret: terminal configs (they include the
   # theme's colours) and the terminal choice, branding (About sizes its window from about.txt), the
@@ -1682,6 +1686,11 @@ seed_home() {
     id=$(basename "$dir")
     [[ $live == *" $id "* ]] && continue
     seed_copy "$dir" "$h" ".config/omarchy/themes/$id"
+    # One installed from git (`omarchy theme install` clones it) is someone else's code to
+    # omarchy-theme-set, which then ignores its Lua and app configs (theme_came_from_a_repo: a .git
+    # dir, the theme no link). seed_copy leaves .git out (its config, hooks): an empty one gives the
+    # box's Omarchy the desk's answer (#184).
+    if [ ! -L "${dir%/}" ] && [ -d "${dir}.git" ]; then mkdir -p "$h/.config/omarchy/themes/$id/.git"; fi
     theme_snapshot_note "$dir" "$top"
   done
   for td in ${THEME_DIRS[@]+"${THEME_DIRS[@]}"}; do home_link "$h" ".config/omarchy/themes/${td##*/}" "$td"; done
@@ -1701,6 +1710,58 @@ seed_home() {
     val=$(git -C / config --global "$key" 2>/dev/null) || continue
     git -C / config --file "$h/.gitconfig" "$key" "$val"
   done
+}
+
+# The user's own wallpapers for THEME, ~/.config/omarchy/backgrounds/THEME (where
+# omarchy-theme-bg-install puts them, and omarchy-theme-set and omarchy-theme-bg-next pick from as
+# well as the theme's backgrounds/), into the box HOME at the same place (#184). Images only: regular
+# files named as those pick them (jpg, jpeg, png, gif, bmp, webp; no hidden ones), none a link (it
+# would bring in what it points at), each up to 64 MiB and 256 MiB in all, FIRST (a name in it) before
+# the rest; backgrounds/ and the folder are not followed when they are links. A save's folder of that
+# name goes first, as seed_theme's. Prints the names copied. seed_backgrounds THEME HOME [FIRST]
+seed_backgrounds() {
+  local src=$HOME/.config/omarchy/backgrounds dst=$2/.config/omarchy/backgrounds/$1 f n size total=0
+  [[ $1 =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || return 0
+  home_unlink "$2" ".config/omarchy/backgrounds/$1"
+  rm -rf -- "$dst"
+  [ ! -L "$src" ] && [ ! -L "$src/$1" ] && [ -d "$src/$1" ] || return 0
+  mkdir -p "$dst"
+  for f in ${3:+"$src/$1/$3"} "$src/$1"/*; do
+    n=${f##*/}
+    [ -f "$f" ] && [ ! -L "$f" ] && [ ! -e "$dst/$n" ] && [[ ${n,,} =~ ^[^.].*\.(jpe?g|png|gif|bmp|webp)$ ]] || continue
+    size=$(stat -c %s -- "$f" 2>/dev/null) || continue
+    (( size <= 64 << 20 && total + size <= 256 << 20 )) || continue
+    # -P: a file swapped for a link since the check is copied as that link (dangling in the box).
+    cp -P --reflink=auto -- "$f" "$dst/$n" 2>/dev/null || continue
+    total=$((total + size)); printf '%s\n' "$n"
+  done
+}
+
+# The box's current/background link (#184) for the desk's link BG on theme THEME: a background of the
+# theme leads to the box's copy of the theme (seed_theme), one of the user's for it to the box's copy
+# of their folder (seed_backgrounds), as omarchy-theme-set would have made them in the box. Never to a
+# host path: one set from anywhere else (omarchy-theme-bg-set ~/Pictures/x.png) gives the first
+# background the box has, the one omarchy-theme-set takes when the current one is none of its list;
+# no link on the desk, none in the box. box_background HOME THEME BG
+box_background() {
+  local h=$1 t=$2 bg=$3 o p n="" names="" sbx=/home/sbx cur=.local/state/omarchy/current to=""
+  o=$(readlink -f -- "$HOME/.config/omarchy" 2>/dev/null) || o=$HOME/.config/omarchy
+  for p in "$HOME/.config/omarchy/backgrounds/$t/" "$o/backgrounds/$t/"; do
+    [ -n "$t" ] && [[ $bg == "$p"* ]] && n=${bg#"$p"} && [[ $n != */* ]] && break
+    n=""
+  done
+  if [ -n "$t" ]; then names=$(seed_backgrounds "$t" "$h" "$n"); fi
+  if [ -z "$bg" ]; then rm -f -- "$h/$cur/background"; return 0; fi
+  if [ -n "$n" ] && grep -qxF -- "$n" <<<"$names"; then to=$sbx/.config/omarchy/backgrounds/$t/$n
+  elif [[ $bg == */current/theme/* ]] && { [ -e "$h/$cur/theme/${bg#*/current/theme/}" ] || [ -L "$h/$cur/theme/${bg#*/current/theme/}" ]; }; then to=$sbx/$cur/theme/${bg#*/current/theme/}
+  else
+    # (find fails on a start path not there: the user has no folder for the theme)
+    to=$(cd "$h" && { find ${t:+".config/omarchy/backgrounds/$t/"} "$cur/theme/backgrounds/" -maxdepth 1 -type f \
+      \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.webp' \) \
+      2>/dev/null || true; } | sort | head -n 1) || to=""
+    [ -z "$to" ] || to=$sbx/${to#./}
+  fi
+  if [ -n "$to" ]; then ln -sfn -- "$to" "$h/$cur/background"; else rm -f -- "$h/$cur/background"; fi
 }
 
 # What `up` says of a theme seed_home copied from a link (#170): when the link leads into TOP, the repo

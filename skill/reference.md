@@ -291,10 +291,11 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   which the box sees at its own path (inside the repo, a same-path `--ro-bind` or an `--overlay`;
   anywhere else it is mounted read-only there, refused as `--ro-bind`'s are). `omabox run -- omarchy-theme-set NAME` applies it as it is then;
   run it again after an edit. `--ro-bind` into the box HOME is refused, and `--seed` is a copy.
-- A box starts on your desktop's current theme. `omabox up --theme NAME` starts it on NAME instead
+- A box starts on your desktop's current theme and background (a copy of your own wallpapers for
+  it, from `~/.config/omarchy/backgrounds/THEME/`). `omabox up --theme NAME` starts it on NAME instead
   (Omarchy's, one of yours or a `--theme-dir` one; named as `omarchy-theme-set` takes it, `"Tokyo
   Night"` too): the session runs `omarchy-theme-set NAME` before Hyprland and the bar start, with the
-  theme's first background. For tests whose result depends on the theme. An unknown NAME is refused
+  first background it finds (your own first for NAME, else the theme's). For tests whose result depends on the theme. An unknown NAME is refused
   before anything is made; with `--from SAVE` it wins over the save's look; `up` again with another
   is refused (box.json and `ls --json` have `theme`).
 - The box HOME is `omabox path` → `<dir>/home`, readable and writable from the host: put outputs there

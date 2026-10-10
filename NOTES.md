@@ -5287,6 +5287,45 @@ from them.
     not there one answer, as given; through a link in the project to outside: refused, the target
     never named, the same either way; inside: past the checks); t_jail as before.
 
+274. **A box lost the desk's own wallpaper, and a git-installed theme's rules** (2026-10-10, #184).
+    (1) Omarchy keeps the user's wallpapers in `~/.config/omarchy/backgrounds/<theme>/`
+    (`omarchy-theme-bg-install`), and `omarchy-theme-set` and `omarchy-theme-bg-next` pick from it
+    as well as the theme's `backgrounds/`. With the current background one of those, seed_home cut
+    the link at `/current/theme/`, found none and made `current/theme//home/<user>/...`: a dangling
+    link, a black desktop, and (omacom/omarchy#9639's `omarchy-launch-shell` resolves the link first)
+    a shell started with `OMARCHY_STARTUP_BACKGROUND=` empty. Now `seed_backgrounds` copies the
+    theme's folder to the same place in the box HOME: regular files with the extensions Omarchy's
+    pick takes (jpg, jpeg, png, gif, bmp, webp), no hidden ones, none a link (`cp -P`: one swapped in
+    after the check stays a link, dangling in the box), each up to 64 MiB and 256 MiB in all with
+    the desk's current one first; `backgrounds/` and the theme's folder are not followed when they
+    are links (a dotfiles `~/.config/omarchy` link is: the user's config dir, as for themes); a
+    save's folder of that name is removed first, as seed_theme's. `box_background` makes the link:
+    a background of the theme to the box's theme copy (as before), one of the user's (named through
+    `~/.config/omarchy` or where it leads) to the box's copy, both as `omarchy-theme-set` would have
+    made them in the box (so `omarchy-theme-bg-next` there finds it in its list); one set from
+    anywhere else (`omarchy-theme-bg-set ~/Pictures/x.png`) gives the first background the box has,
+    the one `omarchy-theme-set` takes for a current background not in its list; never a link to a
+    host path. With `up --theme NAME` NAME's folder is seeded, and the box's `omarchy-theme-set`
+    (finding 245) picks as Omarchy does on a first set: the first in sort order, the user's own
+    first when they have one for NAME (`.config` sorts before `.local`), else the theme's first as
+    before; the desk's background is not carried over even when it is in NAME's folder (Omarchy
+    would then take the one after it). (2) `omarchy theme install` clones a theme, and
+    `omarchy-theme-set` holds one with a `.git` dir (and no link: `theme_came_from_a_repo`) to a list,
+    ignoring its Lua, terminal configs and `vscode.json`. seed_copy leaves hidden files out, so in
+    the box it read as the user's own. seed_home now makes an empty `.git` in the box's copy of each
+    such theme (nothing of the real one: its config, hooks); a `--theme-dir` theme is a link, never
+    one. Jailed callers: what is read is the user's look, as for the themes seed_home copies already;
+    the only name a jailed caller gives is `--theme`'s, which theme_named has checked (no slash, no
+    leading dot) and seed_backgrounds checks again. Checked: t_unit_desk_backgrounds (images only,
+    no link, hidden or big file, nothing of a link's target; through a dotfiles link; a theme's
+    background; one from elsewhere and the user's folder missing or a link; a save's link at the
+    folder replaced, its target untouched; a name with a slash); t_desk_backgrounds (a box on a fake
+    desk: the link resolves to the copy, `pixel` shows the wallpaper's colour, the git theme's empty
+    `.git` and `omarchy-theme-set` ignoring its Lua while taking the user's own theme's; `up --theme
+    nord` on the user's nord wallpaper); `OMARCHY_STARTUP_BACKGROUND` is checked when the box's
+    Omarchy has #9639 (seen set to the copy's path with `--omarchy` on a checkout at 26897e0c; the
+    installed 4.0.4 has not). t_theme's background checks now expect Omarchy's pick.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

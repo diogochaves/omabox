@@ -990,6 +990,37 @@ t_unit_seed_copy() {
   check_eq "...the target untouched" "victim victim" "$(cat "$v/file" "$v/dir/g" | xargs)"
 }
 
+# The desk's own wallpapers (#184): seed_backgrounds copies images only, none a link, none too big, a
+# linked folder not at all, a save's link there replaced; box_background leads the box's link to the
+# box's copy of the desk's background, a theme's or the user's, never to a host path.
+t_unit_desk_backgrounds() {
+  local s=$TMP/$P-ub fh h o cur=.local/state/omarchy/current
+  rm -rf "$s"; fh=$s/fh h=$s/h o=$s/victim; mkdir -p "$fh/dot/omarchy/backgrounds/t" "$fh/.config" "$h/$cur/theme/backgrounds" "$o"
+  ln -s ../dot/omarchy "$fh/.config/omarchy"   # dotfiles: ~/.config/omarchy a link
+  local u=$fh/.config/omarchy/backgrounds/t
+  echo secret > "$o/key"; echo a > "$u/a.jpg"; echo c > "$u/c.PNG"; echo n > "$u/notes.txt"; echo x > "$u/.hidden.png"
+  ln -s "$o/key" "$u/link.jpg"; truncate -s 65M "$u/huge.webp"; echo t > "$h/$cur/theme/backgrounds/1-theme.jpg"
+  # shellcheck disable=SC2329 # called below
+  bb() { HOME=$fh lib box_background "$h" "$@"; readlink "$h/$cur/background" || echo none; }
+  check_eq "a background of the user's: the link leads to the box's copy" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t "$u/a.jpg")"
+  check_eq "...images only, none a link, hidden or over 64 MiB" "a.jpg c.PNG" "$(find "$h/.config/omarchy/backgrounds/t" -mindepth 1 -printf "%P\n" | sort | xargs)"
+  check_fails "...nothing of a link's target in the box HOME" grep -rqs secret "$h"
+  check_eq "...named by the folder ~/.config/omarchy leads to" /home/sbx/.config/omarchy/backgrounds/t/c.PNG "$(bb t "$fh/dot/omarchy/backgrounds/t/c.PNG")"
+  check_eq "a background of the theme's: its copy in the box's theme" "/home/sbx/$cur/theme/backgrounds/1-theme.jpg" "$(bb t "/home/x/$cur/theme/backgrounds/1-theme.jpg")"
+  check_eq "one from anywhere else: the first the box has, as omarchy-theme-set picks" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t /home/x/Pictures/p.png)"
+  check_eq "...one of the user's not copied (a link): the same" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t "$u/link.jpg")"
+  check_eq "...no user folder: the theme's first" "/home/sbx/$cur/theme/backgrounds/1-theme.jpg" "$(bb other /home/x/Pictures/p.png)"
+  check_eq "no link on the desk: none in the box" none "$(bb t "")"
+  rm -rf "$h/.config/omarchy/backgrounds/t"; ln -s "$o" "$h/.config/omarchy/backgrounds/t"
+  check_eq "a save's link at the folder: replaced" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t "$u/a.jpg")"
+  check_eq "...its target untouched" key "$(find "$o" -mindepth 1 -printf "%P\n" | xargs)"
+  check "...a real folder now" test -d "$h/.config/omarchy/backgrounds/t" -a ! -L "$h/.config/omarchy/backgrounds/t"
+  mv "$fh/dot/omarchy/backgrounds/t" "$s/real-t"; ln -s "$s/real-t" "$u"
+  check_eq "the user's folder a link: not followed" "/home/sbx/$cur/theme/backgrounds/1-theme.jpg" "$(bb t "$u/a.jpg")"
+  check_fails "...nothing copied" test -e "$h/.config/omarchy/backgrounds/t/a.jpg"
+  check_eq "a theme name with a slash: nothing" "" "$(HOME=$fh lib seed_backgrounds ../t "$h")"
+}
+
 # up --theme-dir's pieces (#170, finding 240): where a dir is in the box at its own path, the link in
 # the box HOME, and the note for a theme seed_home copies from a link into this repo or another
 # checkout of it (a worktree's main one).
@@ -6378,6 +6409,52 @@ t_theme_dir() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# The desk's look as the desk has it (#184), on a fake desk (HOME and the XDG dirs a folder of the
+# test's): a background of the user's own (~/.config/omarchy/backgrounds/THEME) is the box's, as a copy
+# its link leads to, the shell starting on it; with --theme NAME, NAME's own; a theme cloned from git
+# is still one to omarchy-theme-set (its Lua ignored).
+t_desk_backgrounds() {
+  local B=$P-db fh=$TMP/$P-db-home c u cur=/home/sbx/.local/state/omarchy/current D
+  c=$fh/.local/state/omarchy/current u=$fh/.config/omarchy/backgrounds
+  rm -rf "$fh"; mkdir -p "$c" "$u/tokyo-night" "$u/nord" "$fh/.config/omarchy/themes/gitty/.git" "$fh/.config/omarchy/themes/mine"
+  cp -r /usr/share/omarchy/themes/tokyo-night "$c/theme"; echo tokyo-night > "$c/theme.name"
+  magick -size 64x64 xc:'#ff00ff' "$u/tokyo-night/zz-mine.png"; magick -size 64x64 xc:'#00ffff' "$u/nord/zz-mine.png"
+  ln -s "$u/tokyo-night/zz-mine.png" "$c/background"
+  for t in gitty mine; do
+    cp /usr/share/omarchy/themes/nord/colors.toml "$fh/.config/omarchy/themes/$t/"
+    echo 'hl.config({ general = { gaps_out = 77 } })' > "$fh/.config/omarchy/themes/$t/hyprland.lua"
+  done
+  echo '[core]' > "$fh/.config/omarchy/themes/gitty/.git/config"
+  # shellcheck disable=SC2329 # called below
+  fake() { env HOME="$fh" XDG_CONFIG_HOME="$fh/.config" XDG_DATA_HOME="$fh/.local/share" XDG_CACHE_HOME="$fh/.cache" \
+    XDG_STATE_HOME="$fh/.local/state" "$CLI" "$@"; }
+  fake up "$B" --net isolated --stock-bar >/dev/null 2>&1 || { no "up on a fake desk" "failed"; return; }
+  check_eq "the desk's background one of the user's: the box's link leads to its copy" \
+    "/home/sbx/.config/omarchy/backgrounds/tokyo-night/zz-mine.png" "$(ob run -b "$B" -- readlink -e "$cur/background")"
+  check "...which is the user's image" cmp "$u/tokyo-night/zz-mine.png" "$(ob path -b "$B")/home/.config/omarchy/backgrounds/tokyo-night/zz-mine.png"
+  check "...the box shows it" until_ok 15 bash -c "[ \"\$('$CLI' pixel -b '$B' 900 500)\" = '#ff00ff' ]"
+  # Omarchy since omacom/omarchy#9639 starts the shell with the link resolved; an older one does not.
+  if ob run -b "$B" -- sh -c 'grep -qs OMARCHY_STARTUP_BACKGROUND "$OMARCHY_PATH/bin/omarchy-launch-shell"'; then
+    check_eq "...the shell started on it (OMARCHY_STARTUP_BACKGROUND)" "/home/sbx/.config/omarchy/backgrounds/tokyo-night/zz-mine.png" \
+      "$(ob run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -xo quickshell)/environ | sed -n "s/^OMARCHY_STARTUP_BACKGROUND=//p"')"
+  fi
+  check "a theme cloned from git: an empty .git in the box's copy" ob run -b "$B" -- sh -c '[ -d ~/.config/omarchy/themes/gitty/.git ] && [ -z "$(ls -A ~/.config/omarchy/themes/gitty/.git)" ]'
+  check_fails "...none in the user's own" ob run -b "$B" -- test -e /home/sbx/.config/omarchy/themes/mine/.git
+  check_match "...omarchy-theme-set ignores its Lua, as on the desk" "Ignored in /home/sbx/.config/omarchy/themes/gitty: hyprland.lua" \
+    "$(ob run -b "$B" -- omarchy-theme-set gitty 2>&1)"
+  check_fails "...not in the theme it made" ob run -b "$B" -- grep -q gaps_out "$cur/theme/hyprland.lua"
+  ob run -b "$B" -- omarchy-theme-set mine >/dev/null 2>&1
+  check "...the user's own theme's Lua taken" ob run -b "$B" -- grep -q gaps_out "$cur/theme/hyprland.lua"
+  fake down "$B" >/dev/null 2>&1
+  fake up "$B" --net isolated --stock-bar --theme nord >/dev/null 2>&1 || { no "up --theme nord on a fake desk" "failed"; return; }
+  D=$(ob path -b "$B")
+  check_eq "up --theme nord: the user's own for nord, first of what omarchy-theme-set finds" \
+    "/home/sbx/.config/omarchy/backgrounds/nord/zz-mine.png" "$(ob run -b "$B" -- readlink -e "$cur/background")"
+  check_fails "...the desk's theme's not copied" test -e "$D/home/.config/omarchy/backgrounds/tokyo-night"
+  check "...the box shows it" until_ok 15 bash -c "[ \"\$('$CLI' pixel -b '$B' 900 500)\" = '#00ffff' ]"
+  fake down "$B" >/dev/null 2>&1
+}
+
 # up --theme NAME (finding 245): the box on that theme, not the desk's current one (a theme the desk is
 # not on: tokyo-night, or nord on a desk on tokyo-night); over a save's look; refused when there is no
 # such theme, before anything is made; a box whose omarchy-theme-set fails ends, saying why.
@@ -6386,6 +6463,16 @@ t_theme() {
   desk=$(head -n 1 "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null) || desk=""
   [ "$desk" != "$t" ] || { t=nord; o=tokyo-night; }
   local cur=/home/sbx/.local/state/omarchy/current
+  # The first background omarchy-theme-set finds for theme $1: the desk user's own first (seeded, #184),
+  # else the theme's.
+  # shellcheck disable=SC2329 # called below
+  first_bg() {
+    local f; f=$({ find "$HOME/.config/omarchy/backgrounds/$1/" -maxdepth 1 -type f ! -name '.*' \
+      -iregex '.*\.\(jpe?g\|png\|gif\|bmp\|webp\)' 2>/dev/null || true; } | sort | head -n 1)
+    if [ -n "$f" ]; then echo "/home/sbx/.config/omarchy/backgrounds/$1/${f##*/}"; return; fi
+    f=$(cd "/usr/share/omarchy/themes/$1/backgrounds" && find . -maxdepth 1 -type f | sort | head -n 1)
+    echo "$cur/theme/backgrounds/${f#./}"
+  }
   check_match "an unknown theme: refused" "--theme: no theme $P-nope in " "$(ob up "$B" --theme "$P-nope" 2>&1)"
   check_fails "...before the box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
   ob up "$B" --net isolated --stock-bar --theme "$t" >/dev/null 2>&1 || { no "up --theme $t" "failed"; return; }
@@ -6395,8 +6482,7 @@ t_theme() {
   check_eq "...the box's theme.name is it, not the desk's ($desk)" "$t" "$(cat "$H/.local/state/omarchy/current/theme.name")"
   check "...its colors.toml the theme's" cmp "$H/.local/state/omarchy/current/theme/colors.toml" "/usr/share/omarchy/themes/$t/colors.toml"
   check "...its templates made (hyprland.lua)" test -s "$H/.local/state/omarchy/current/theme/hyprland.lua"
-  c=$(cd "/usr/share/omarchy/themes/$t/backgrounds" && find . -maxdepth 1 -type f | sort | head -n 1)
-  check_eq "...its background the theme's first" "$cur/theme/backgrounds/${c#./}" "$(readlink "$H/.local/state/omarchy/current/background")"
+  check_eq "...its background the first omarchy-theme-set finds" "$(first_bg "$t")" "$(readlink "$H/.local/state/omarchy/current/background")"
   bg=$(sed -n 's/^background *= *"\(#[0-9a-fA-F]\{6\}\)".*/\1/p' "/usr/share/omarchy/themes/$t/colors.toml" | tr 'A-F' 'a-f')
   check "...the bar in the theme's background ($bg)" until_ok 15 bash -c "[ \"\$('$CLI' pixel -b '$B' 400 12)\" = '$bg' ]"
   check_eq "...ls --json says so" "$t" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .theme')"
@@ -6410,8 +6496,7 @@ t_theme() {
   H=$(ob path -b "$B2")/home
   check_eq "up --from a save on $t with --theme $o: on $o" "$o" "$(cat "$H/.local/state/omarchy/current/theme.name")"
   check "...its colors.toml $o's" cmp "$H/.local/state/omarchy/current/theme/colors.toml" "/usr/share/omarchy/themes/$o/colors.toml"
-  c=$(cd "/usr/share/omarchy/themes/$o/backgrounds" && find . -maxdepth 1 -type f | sort | head -n 1)
-  check_eq "...its background $o's first" "$cur/theme/backgrounds/${c#./}" "$(readlink "$H/.local/state/omarchy/current/background")"
+  check_eq "...its background $o's first" "$(first_bg "$o")" "$(readlink "$H/.local/state/omarchy/current/background")"
   ob down "$B2" >/dev/null 2>&1
   # Without the flag nothing changes: the desk's theme, from a save too.
   sv up "$B2" --from "$S" --net isolated --no-shell >/dev/null 2>&1 || { no "up --from without --theme" "failed"; sv saves rm "$S" >/dev/null 2>&1; return; }
@@ -8039,10 +8124,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

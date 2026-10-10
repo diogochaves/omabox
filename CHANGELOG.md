@@ -17,6 +17,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A box starts on the wallpaper the desk has, one of your own too** (#184). A wallpaper added with
+  Omarchy's background install (`~/.config/omarchy/backgrounds/THEME/`) gave a box with no wallpaper:
+  its background link led to a path the box does not have, and the shell started with
+  `OMARCHY_STARTUP_BACKGROUND` empty. The box now gets a copy of your wallpapers for its theme
+  (images only, none followed through a link, up to 64 MiB each and 256 MiB in all) and its link
+  leads to the copy; `up --theme NAME` brings NAME's, and the box picks from them as Omarchy does.
+  A background set from elsewhere gives the box's first, never a link to a host path.
+- **A theme installed from git stays one in a box** (#184). The box's copy left out the theme's
+  `.git`, so the box's `omarchy-theme-set` took its Lua and app configs, which the desk ignores. The
+  copy now has an empty `.git` (nothing of the real one), and the box treats the theme as the desk
+  does.
 - **Security: a jailed agent's `up` says nothing of host paths outside its jail** (#198). `up`
   looked at each path it was given before checking the jail, and its refusal named where the path
   led: from ai-jail, `up --seed /etc/localtime:x` answered with the zoneinfo file it links to, and
