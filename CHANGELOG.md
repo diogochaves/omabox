@@ -3,7 +3,10 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.5.3 — 2026-10-10
+
+Security fixes for agents inside ai-jail driving boxes through the broker: update if you use
+`omabox broker on`. Also new: `omabox cpu`, `omabox path --run` and `omabox config shot-fit`.
 
 ### Added
 
