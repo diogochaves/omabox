@@ -16,9 +16,9 @@ workspace switches, no password or keyring prompts, no notifications or tray ico
 
 A box is the real thing, not a mock: Omarchy's own Hyprland config, the Omarchy shell (bar, menu,
 tray, notifications) and your theme, bar layout and terminal settings, on a private screen and a
-private session bus. It starts in 3-4 s and uses about 500 MB. Each agent session gets its own box,
-the way you give each agent a worktree. When you want to look, peek at a box live, or open one as a
-window and use it yourself.
+private session bus. It starts in 3-5 s and uses 400-700 MB, depending on the GPU. Each agent
+session gets its own box, the way you give each agent a worktree. When you want to look, peek at a
+box live, or open one as a window and use it yourself.
 
 omabox keeps an agent's apps off your desktop; it is not a sandbox. To fence the agent itself in,
 pair it with [ai-jail](#related-projects).

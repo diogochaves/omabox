@@ -624,6 +624,9 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     went down 20 s after; `--idle 0` stayed; a manual `down`, and a new box on the same name, ended the
     reaper; `down` clears the note. Not verified: the peek window keeping a box (it would open a window
     on the real workspace 9).
+    Measured with 0.5.2 (#202; default `up`, three starts each, PSS of every process with `OMABOX_BOX`):
+    AMD iGPU up in 4.9-5.2 s, ~409 MB; NVIDIA dGPU 3.1-3.2 s, ~704 MB. README and skill now say
+    3-5 s, 400-700 MB.
 60. **`--stock-bar`** (external test pass idea, 2026-09-24). A box copies the user's bar (their layout
     and `shell.toml`, filtered to built-ins plus mounted plugins); the maintainer's has no workspaces widget or
     clock, so a plugin was never seen next to what most people have. `up`/`run --stock-bar` seeds from

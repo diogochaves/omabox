@@ -3051,7 +3051,7 @@ human_duration() {
 }
 
 # Idle expiry (finding 59), a host process per headless box started by `up`: agents forget `down`, and
-# a box holds ~500 MB and a GPU client. Idle = no omabox command naming the box (need_box and `run`
+# a box holds 400-700 MB and a GPU client. Idle = no omabox command naming the box (need_box and `run`
 # touch $D/used), no peek window on it, and no `omabox run` still running in it. `run`'s throwaway
 # boxes get one too, with no idle limit but an owner: the `omabox run` process; when that is gone
 # (killed with SIGKILL, so its EXIT trap never ran), so is the box. Exits when the box goes, or when a

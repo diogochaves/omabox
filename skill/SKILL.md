@@ -9,7 +9,7 @@ The user's Hyprland session is theirs. Never launch GUI apps on it, never `hyprc
 it, never screenshot it with `grim`, never send input with `wtype`/`ydotool`, never switch its
 workspaces or move its cursor. Do all of that in a **box**: a full Omarchy desktop (its Hyprland
 config, shell, theme, tray, notifications, keyring) on a private screen and session bus, invisible to
-the user. A box starts in ~3-4 s and costs ~500 MB; use one freely.
+the user. A box starts in ~3-5 s and costs ~400-700 MB (depending on the GPU); use one freely.
 
 This page is what every task needs. The rest is in `reference.md` next to it, by section ("ref:
 SECTION" below: read that section when the task needs it), and `omabox help CMD`.
