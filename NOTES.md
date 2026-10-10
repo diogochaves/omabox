@@ -5158,6 +5158,14 @@ from them.
     checked: the suite's widget always runs in a box. Opened while hidden, the widget polls before it
     closes: each open restarts its poll timer (the interval follows `opened`), so t_clip's opens in a
     row, retried until an omabox written mid-test is seen, kept it hidden for good.
+266. **The suite's evidence shots are no box's `--changed` baseline** (2026-10-10, #195). A failing
+    check has `evidence()` shoot every box of the run that is up; that whole shot was saved as the
+    box's last shot (finding 243), so a test using `shot --changed` on its box meanwhile compared with
+    it: t_changed's "the screen's first --changed: whole" got a crop instead when the NVIDIA tests
+    failed in the same run. A shot with `OMABOX_SHOT_NO_BASELINE=1` in its environment saves no
+    baseline (it is still recorded for `--in`); internal, for the suite, not in help. The suite's
+    `ev_shot` sets it, evidence takes its shots through it, and t_changed takes one of its own box
+    just before the screen's first `--changed`, which must still be whole.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

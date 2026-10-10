@@ -4037,8 +4037,10 @@ cmd_shot() {
   read -r iw ih < <(png_size "$file") || die "shot: $out is not a PNG"
   screen=$(box_screen)
   shot_record "$out" "${screen#* }" "$where" "${lw}x$lh ${iw}x$ih" "$file"
-  # A whole shot is what a later --changed compares with (finding 243).
-  if [ -z "$g$zoom" ] && [ $scaled = 0 ]; then
+  # A whole shot is what a later --changed compares with (finding 243). Not one taken with
+  # OMABOX_SHOT_NO_BASELINE=1: internal, for the suite's evidence shots, which looked at a box another
+  # test was using and became its --changed baseline (#195, finding 266). Not documented: not for users.
+  if [ -z "$g$zoom" ] && [ $scaled = 0 ] && [ "${OMABOX_SHOT_NO_BASELINE:-}" != 1 ]; then
     local key=screen ptr=-
     if [ -n "$win" ]; then key=${where#window }; else ptr=$(cursor_now 2>/dev/null) && [ -n "$ptr" ] || ptr=-; fi
     shot_ref_save "$file" "$key" "$out" "${screen#* }" "${lw}x$lh ${iw}x$ih" "$ptr"

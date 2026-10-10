@@ -164,13 +164,16 @@ evidence() {
     # got the older time back, and its box could expire early.
     d=$e/boxes/$b; mkdir -p "$d"; bd=$XDG_RUNTIME_DIR/omabox/$b
     [ ! -e "$bd/used" ] || touch -r "$bd/used" "$d/.used"
-    ev_read "$bd" "$d" timeout 10 "$CLI" shot -b "$b" -o "$d/screen.png" >/dev/null 2>&1
+    ev_read "$bd" "$d" ev_shot -b "$b" -o "$d/screen.png" >/dev/null 2>&1
     for q in clients layers activewindow activeworkspace devices; do ev_read "$bd" "$d" timeout 5 "$CLI" hyprctl -b "$b" -j "$q" > "$d/$q.json" 2>&1; done
     ev_read "$bd" "$d" timeout 5 "$CLI" hyprctl -b "$b" cursorpos > "$d/cursorpos" 2>&1
     for f in "$bd/box.log" "$bd"/home/*.log "$bd"/run/hypr/*/hyprland.log "$bd/run/events.log"; do [ -f "$f" ] && tail -n 100 "$f" > "$d/${f##*/}"; done
   done
   printf '       evidence: %s\n' "$e"
 }
+# ev_shot SHOT-ARGS...: evidence's shot of a box, which a later `shot --changed` does not compare with:
+# a test using that box meanwhile (t_changed) still finds its own last shot, or none (#195, finding 266).
+ev_shot() { timeout 10 env OMABOX_SHOT_NO_BASELINE=1 "$CLI" shot "$@"; }
 # ev_read BOXDIR EVDIR CMD...: one of evidence's reads, then the box's `used` as it was before (kept in
 # EVDIR/.used), if the time there now is the read's own: omabox touches it as it starts (need_box), a
 # second at most into the read here. A later time is another use, a test's meanwhile: kept, and the time
@@ -6779,9 +6782,12 @@ t_changed() {
   check_match "...the image that size" "$cw x $ch," "$(file "$o/c.png")"
   ob click -b "$B" --in "$o/c.png" 5 6 >/dev/null 2>&1
   check_eq "click --in the crop: that point of the window" "$((wx + cx + 5)), $((wy + cy + 6))" "$(ob hyprctl -b "$B" cursorpos)"
-  # The screen: where the pointer was is not a change, where it is now is drawn.
+  # The screen: where the pointer was is not a change, where it is now is drawn. An evidence shot of the
+  # box first (another test failing meanwhile) is not the screen's last shot (#195).
+  ev_shot -b "$B" -o "$o/ev.png" >/dev/null 2>&1
+  check "an evidence shot of the screen taken" test -s "$o/ev.png"
   shoot --changed -o "$o/s1.png"
-  check_match "the screen's first --changed: whole" "no earlier shot of it.*a whole shot of the screen" "$err"
+  check_match "the screen's first --changed: whole, after an evidence shot too" "no earlier shot of it.*a whole shot of the screen" "$err"
   ob pointer -b "$B" -- move $((wx + 300)) $((wy + 300)) >/dev/null 2>&1
   shoot --changed -o "$o/s2.png"
   local px=-1 py=-1 pw=0 ph=0
