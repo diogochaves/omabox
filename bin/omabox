@@ -403,7 +403,8 @@ below moves when the one before it changes size (\`mode\`, said) or goes; an X,Y
 (click, drag, pointer, pixel, -g) are the layout's (\`pixel\` refuses a point in a gap between them);
 \`shot --monitor NAME\` takes one monitor (a shot of a mixed-scale layout comes out at the highest
 scale: --fit). \`peek\` shows the main screen, \`peek --monitor NAME\` another: a window per monitor, tiled
-on the workspace, each marking the clicks and pointer on its own monitor (keys on all); the whole
+on the workspace, each marking the clicks and pointer on its own monitor (keys on all); one whose
+monitor drops (\`output drop\`) says it is gone, and shows it again once it is back; the whole
 layout at once is \`shot\`. An interactive box's monitors are windows on your desktop, on its
 workspace, placed in the box as a headless box's; on your screen the box's layout scaled as a whole,
 as display settings draw it: one scale for every window (at most 1), the picture centred on the

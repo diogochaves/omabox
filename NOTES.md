@@ -5405,6 +5405,38 @@ from them.
     by its host pid and by `--app sh`. t_unit_cpu (a fake /proc and injected samples: the arithmetic,
     a reused pid, the table, refusals) and t_cpu (that box and loop).
 
+278. **A peek whose monitor drops; `write_layout` checked** (2026-10-10, #200; review of findings 232,
+    233, 238, 261). (1) omabox-peek ignored the box's `global_remove`: a `peek --monitor HEADLESS-3`
+    of a monitor `output drop` took away kept asking screencopy for the dead `wl_output`. In a
+    stand-in (t_peek_monitors) the old peek's window died at the drop (the peek gone, the main
+    screen's left alone), and nothing came back with `output back`. Now every `wl_output` bound is
+    kept by its global's name; when the shown one goes, a frame asked for is destroyed unanswered, its
+    `zxdg_output_v1` and `wl_output` released, no capture asked for any more (the loop wakes once a
+    second, for nothing); the window draws a dark view with two captions in the middle, `NAME is
+    gone` and `waiting for it to come back` (font8x8 plates, as the marks' captions, accent-edged),
+    also drawn again at a resize, and its title gets ` (gone)` (the suite's leak detector reads titles
+    by their `omabox peek: NAME` start: unchanged); stderr says so. A `wl_output` whose v4 `name` is
+    the one shown (`--output`, or the first output's once known) is adopted: its xdg-output watched
+    again, the title back, frames from it at the next tick; the gone view stays until the first one.
+    Outputs not shown are released at their `global_remove` too (`output drop --cycles` makes them by
+    the hundred). A drop before the first frame says so and exits, as a refused capture did. Drawing
+    is split: `scale_frame` the frame, `draw_gone` the gone view, `draw` either and the commit.
+    t_peek_monitors: HEADLESS-3 dropped, its peek's title ends ` (gone)`, the captions' accent edge
+    centred in its window, the main screen's peek and title unchanged, both windows there; back, the
+    title as before, the captions gone (a new frame drawn), then the box's background set to the
+    accent colour shows in its window (frames flow). With the old peek 5 of those fail (its window
+    gone). (2) `write_layout` (share/hyprland.lua, finding 238) had no test: t_monitors_window now
+    reads the interactive box's `omabox.layout` in the stand-in after #174's layout (the three views,
+    as placed) and compares it with `hyprctl -j monitors` (pixels over scale, sides swapped for an odd
+    transform, rounded); then WAYLAND-2 at scale 0.53 (1069.81x1901.89 in the layout) and WAYLAND-3
+    turned 90 degrees and auto-placed right of it: the file anew at the layout change, `1920 0 1070
+    1902` and `2990 0 720 1280`, matching `monitors`; then placed back (`omabox_place_monitors()`, the
+    transform reset by hand: a rule without `transform` keeps the one set) before the pointer checks
+    that read the file. Without the transform swap two checks fail. A position with a fraction could
+    not be made: Hyprland 0.56.2 hands Lua whole positions (`math.type(m.x)` integer), an
+    auto-placed one after a fractional width and a `position = '3000.6x10.4'` rule alike (3000, 10):
+    finding 261's rounding guards a later Hyprland, untested.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

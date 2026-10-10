@@ -13,6 +13,9 @@
 // next frame (frame callbacks), so a peek hidden on workspace 9 costs next to nothing.
 // The box is what is being contained, and it can answer on its own socket: every frame's size, stride
 // and format are checked before peek (a host process) reads from the buffer.
+// An output that goes (`omabox output drop`: its global removed) is let go: no capture asks for it
+// any more, and the window says it is gone (a dark view, a caption, " (gone)" in its title) until an
+// output of the same name comes (`output back`), which it then shows (#200).
 // --marks FILE: what omabox click/pointer/keys did, drawn over the view (see "marks" below). Every
 // peek window of a box reads the same file; each draws only what happened on its own output.
 #define _GNU_SOURCE
@@ -81,7 +84,9 @@ static struct {
     struct zwlr_screencopy_manager_v1 *manager;
     uint32_t manager_version;
     struct wl_output *output;
-    const char *want_output;
+    const char *want_output;  // --output, else the name of the first output once it is known
+    int gone;                 // the output shown went (its global removed): nothing to capture
+    int redraw;               // the window's view must be drawn again with no new frame (gone)
     struct zwlr_screencopy_frame_v1 *frame;
     struct shmbuf buf;
     uint32_t format;          // of the frame being captured
@@ -93,12 +98,36 @@ static struct {
     // Where the output shown is in the box's layout, in logical pixels (xdg-output; it follows a move
     // or a new mode). Marks are in layout coordinates: this is what maps them onto the view.
     struct zxdg_output_manager_v1 *xdg_manager;
+    struct zxdg_output_v1 *xdg_output;
     int lx, ly, lw, lh;
 } box;
 
+// Every wl_output bound, by its global's name: the one that goes is let go (and its proxy freed, also
+// one not shown: `output drop --cycles` makes and removes them by the hundred).
+struct out { uint32_t id, version; struct wl_output *o; struct out *next; };
+static struct out *outs;
+
+static const char *title;
+static void set_title(void);
+static void watch_place(void);
+
+// The output of the name shown came (back): show it.
+static void adopt(struct wl_output *o) {
+    box.output = o;
+    if (!box.gone) return;
+    box.gone = 0;
+    watch_place();
+    set_title();
+    fprintf(stderr, "omabox-peek: %s is back\n", box.want_output ? box.want_output : "the output");
+}
+
 static void output_name(void *data, struct wl_output *o, const char *name) {
     (void)data;
-    if (box.want_output && !strcmp(name, box.want_output)) box.output = o;
+    if (!box.want_output) {   // shown since it came first: its name is the one to wait for if it goes
+        if (o == box.output) box.want_output = strdup(name);
+        return;
+    }
+    if (!box.output && !strcmp(name, box.want_output)) adopt(o);
 }
 static void output_geometry(void *d, struct wl_output *o, int32_t x, int32_t y, int32_t pw, int32_t ph, int32_t sp,
                             const char *make, const char *model, int32_t t) {
@@ -123,6 +152,25 @@ static void xdg_name(void *d, struct zxdg_output_v1 *x, const char *n) { (void)d
 static void xdg_description(void *d, struct zxdg_output_v1 *x, const char *s) { (void)d; (void)x; (void)s; }
 static const struct zxdg_output_v1_listener xdg_listener = {xdg_position, xdg_size, xdg_done, xdg_name, xdg_description};
 
+// The shown output's place in the layout, for the marks.
+static void watch_place(void) {
+    if (!box.xdg_manager || !box.output) return;
+    box.xdg_output = zxdg_output_manager_v1_get_xdg_output(box.xdg_manager, box.output);
+    zxdg_output_v1_add_listener(box.xdg_output, &xdg_listener, NULL);
+}
+
+// The shown output went: no capture of it any more (a frame asked for is dropped, unanswered), its
+// proxies freed; the window says so (draw_gone) until one of its name comes.
+static void let_go(void) {
+    if (box.frame) { zwlr_screencopy_frame_v1_destroy(box.frame); box.frame = NULL; }
+    if (box.xdg_output) { zxdg_output_v1_destroy(box.xdg_output); box.xdg_output = NULL; }
+    box.output = NULL;
+    box.have_frame = 0;
+    box.gone = box.redraw = 1;
+    set_title();
+    fprintf(stderr, "omabox-peek: %s is gone; waiting for it to come back\n", box.want_output ? box.want_output : "the output");
+}
+
 static void box_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t version) {
     (void)data;
     if (!strcmp(iface, zxdg_output_manager_v1_interface.name)) {
@@ -133,13 +181,32 @@ static void box_global(void *data, struct wl_registry *reg, uint32_t name, const
         box.manager_version = version < 3 ? version : 3;
         box.manager = wl_registry_bind(reg, name, &zwlr_screencopy_manager_v1_interface, box.manager_version);
     } else if (!strcmp(iface, wl_output_interface.name)) {
-        struct wl_output *o = wl_registry_bind(reg, name, &wl_output_interface, version < 4 ? version : 4);
-        if (version >= 4) wl_output_add_listener(o, &output_listener, NULL);
-        if (!box.output && !box.want_output) box.output = o;
+        struct out *e = malloc(sizeof(*e));
+        if (!e) { fprintf(stderr, "omabox-peek: out of memory\n"); exit(1); }
+        e->id = name;
+        e->version = version < 4 ? version : 4;
+        e->o = wl_registry_bind(reg, name, &wl_output_interface, e->version);
+        e->next = outs;
+        outs = e;
+        if (version >= 4) wl_output_add_listener(e->o, &output_listener, NULL);
+        if (!box.output && !box.want_output) adopt(e->o);
+    }
+}
+static void box_global_remove(void *data, struct wl_registry *reg, uint32_t name) {
+    (void)data; (void)reg;
+    for (struct out **p = &outs; *p; p = &(*p)->next) {
+        struct out *e = *p;
+        if (e->id != name) continue;
+        if (e->o == box.output) let_go();
+        if (e->version >= 3) wl_output_release(e->o);
+        else wl_output_destroy(e->o);
+        *p = e->next;
+        free(e);
+        return;
     }
 }
 static void global_remove(void *data, struct wl_registry *reg, uint32_t name) { (void)data; (void)reg; (void)name; }
-static const struct wl_registry_listener box_registry = {box_global, global_remove};
+static const struct wl_registry_listener box_registry = {box_global, box_global_remove};
 
 static void frame_copy(void) {
     // A new size or format (#109: a buffer of the old format failed every copy, silently): a new buffer.
@@ -194,6 +261,7 @@ static const struct zwlr_screencopy_frame_v1_listener frame_listener = {
     frame_buffer, frame_flags, frame_ready, frame_failed, frame_damage, frame_dmabuf, frame_buffer_done};
 
 static void capture(void) {
+    if (!box.output) return;
     box.frame = zwlr_screencopy_manager_v1_capture_output(box.manager, 1, box.output);
     zwlr_screencopy_frame_v1_add_listener(box.frame, &frame_listener, NULL);
 }
@@ -214,6 +282,15 @@ static struct {
     int waiting;   // a frame callback is pending: the host has not shown the last one yet
     struct shmbuf bufs[2];
 } host;
+
+// The title asked for, and " (gone)" after it while the output is (what a test, or the user's bar, reads).
+static void set_title(void) {
+    if (!host.toplevel) return;
+    if (!box.gone) { xdg_toplevel_set_title(host.toplevel, title); return; }
+    char t[512];
+    snprintf(t, sizeof(t), "%s (gone)", title);
+    xdg_toplevel_set_title(host.toplevel, t);
+}
 
 static void wm_ping(void *data, struct xdg_wm_base *wm, uint32_t serial) { (void)data; xdg_wm_base_pong(wm, serial); }
 static const struct xdg_wm_base_listener wm_listener = {wm_ping};
@@ -248,6 +325,7 @@ static void xdg_surface_configure(void *data, struct xdg_surface *s, uint32_t se
     host.width = host.pending_w > 0 ? host.pending_w : (box.width > 0 ? box.width / 2 : 960);
     host.height = host.pending_h > 0 ? host.pending_h : (box.height > 0 ? box.height / 2 : 540);
     host.configured = 1;
+    if (box.gone) box.redraw = 1;   // no frame comes to draw the new size
 }
 static const struct xdg_surface_listener xdg_surface_listener = {xdg_surface_configure};
 
@@ -271,18 +349,11 @@ static void fit(int W, int H, int sw, int sh, int *dw, int *dh, int *ox, int *oy
     *ox = (W - *dw) / 2; *oy = (H - *dh) / 2;
 }
 
+static void draw_gone(struct shmbuf *b);
+
 // Scale the captured frame into the window, letterboxed, bilinear. Box pixels are XRGB/ARGB8888 or
 // XBGR/ABGR8888 (swapped to XRGB).
-static void draw(void) {
-    struct shmbuf *b = NULL;
-    for (int i = 0; i < 2; i++)
-        if (!host.bufs[i].busy) { b = &host.bufs[i]; break; }
-    if (!b) return;  // both with the compositor: skip this frame
-    if (b->buffer && (b->width != host.width || b->height != host.height)) shmbuf_destroy(b);
-    if (!b->buffer) {
-        if (!shmbuf_create(b, host.shm, host.width, host.height, host.width * 4, WL_SHM_FORMAT_XRGB8888)) exit(1);
-        wl_buffer_add_listener(b->buffer, &buffer_listener, b);
-    }
+static void scale_frame(struct shmbuf *b) {
     // The completed frame's own size and format: box.width etc. may already describe the next one.
     const int W = host.width, H = host.height, sw = box.buf.width, sh = box.buf.height;
     const int swap = box.buf_format == DRM_FORMAT_XBGR8888 || box.buf_format == DRM_FORMAT_ABGR8888;
@@ -332,12 +403,28 @@ static void draw(void) {
             out[x] = px;
         }
     }
+}
+
+// The window's next view: the frame, or with the output gone what draw_gone draws. 0: no free buffer.
+static int draw(void) {
+    struct shmbuf *b = NULL;
+    for (int i = 0; i < 2; i++)
+        if (!host.bufs[i].busy) { b = &host.bufs[i]; break; }
+    if (!b) return 0;  // both with the compositor: skip this frame
+    if (b->buffer && (b->width != host.width || b->height != host.height)) shmbuf_destroy(b);
+    if (!b->buffer) {
+        if (!shmbuf_create(b, host.shm, host.width, host.height, host.width * 4, WL_SHM_FORMAT_XRGB8888)) exit(1);
+        wl_buffer_add_listener(b->buffer, &buffer_listener, b);
+    }
+    if (box.gone) draw_gone(b);
+    else scale_frame(b);
     wl_surface_attach(host.surface, b->buffer, 0, 0);
-    wl_surface_damage_buffer(host.surface, 0, 0, W, H);
+    wl_surface_damage_buffer(host.surface, 0, 0, b->width, b->height);
     wl_callback_add_listener(wl_surface_frame(host.surface), &frame_done_listener, NULL);
     host.waiting = 1;
     wl_surface_commit(host.surface);
     b->busy = 1;
+    return 1;
 }
 
 // ---- main loop -------------------------------------------------------------------------------------
@@ -629,6 +716,25 @@ static void plate(struct shmbuf *b, int x, int y, const char *s, int n, int scal
                 if (g[row] >> col & 1) rect(b, x + px + (i * 8 + col) * scale, y + py + row * scale, scale, scale, 0xffffff, alpha);
     }
 }
+// The view while the output is gone: dark, and two captions in the middle, as the marks draw theirs.
+static void draw_gone(struct shmbuf *b) {
+    for (size_t i = 0; i < (size_t)b->width * (size_t)b->height; i++) b->data[i] = 0xff111111;
+    struct areas none = {0};
+    drawing = &none;   // (plate notes what it drew: nothing to note here)
+    const int scale = b->width >= 640 ? 2 : 1, ph = 14 * scale, gap = 4 * scale;
+    int room = (b->width - 16) / (8 * scale) - 2;
+    char l1[128];
+    snprintf(l1, sizeof(l1), "%s is gone", box.want_output ? box.want_output : "the output");
+    const char *lines[2] = {l1, "waiting for it to come back"};
+    for (int k = 0; k < 2; k++) {
+        int n = (int)strlen(lines[k]);
+        if (n > room) n = room;
+        if (n <= 0) continue;
+        const int w = n * 8 * scale + 10 * scale;
+        plate(b, (b->width - w) / 2, b->height / 2 - ph - gap / 2 + k * (ph + gap), lines[k], n, scale, 255);
+    }
+}
+
 static int fade(int64_t age) {
     return age < MARK_FADE ? 255 : age < MARK_GONE ? (int)(255 * (MARK_GONE - age) / (MARK_GONE - MARK_FADE)) : 0;
 }
@@ -781,7 +887,8 @@ static int pump(int timeout) {
 }
 
 int main(int argc, char **argv) {
-    const char *box_socket = NULL, *title = "omabox peek", *marks_path = NULL;
+    const char *box_socket = NULL, *marks_path = NULL;
+    title = "omabox peek";
     int fps = 10;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--box") && i + 1 < argc) box_socket = argv[++i];
@@ -818,8 +925,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (box.xdg_manager) {   // the output's place in the layout, for the marks
-        struct zxdg_output_v1 *x = zxdg_output_manager_v1_get_xdg_output(box.xdg_manager, box.output);
-        zxdg_output_v1_add_listener(x, &xdg_listener, NULL);
+        watch_place();
         if (omabox_roundtrip(box.display, 10000) < 0) { fprintf(stderr, "omabox-peek: the box did not answer\n"); return 1; }
     }
 
@@ -852,14 +958,17 @@ int main(int argc, char **argv) {
         if (n > 0 && (pf.revents & (POLLERR | POLLHUP))) return 1;
         if (wl_display_dispatch_pending(box.display) < 0) return 1;
     }
-    if (!box.have_frame) { fprintf(stderr, "omabox-peek: the box refused a screen capture\n"); return 1; }
+    if (!box.have_frame) {
+        fprintf(stderr, box.gone ? "omabox-peek: the output went before its first frame\n" : "omabox-peek: the box refused a screen capture\n");
+        return 1;
+    }
 
     host.surface = wl_compositor_create_surface(host.compositor);
     host.xdg_surface = xdg_wm_base_get_xdg_surface(host.wm, host.surface);
     xdg_surface_add_listener(host.xdg_surface, &xdg_surface_listener, NULL);
     host.toplevel = xdg_surface_get_toplevel(host.xdg_surface);
     xdg_toplevel_add_listener(host.toplevel, &toplevel_listener, NULL);
-    xdg_toplevel_set_title(host.toplevel, title);
+    set_title();
     xdg_toplevel_set_app_id(host.toplevel, "omabox-peek");
     marks_surface();
     wl_surface_commit(host.surface);
@@ -867,10 +976,14 @@ int main(int argc, char **argv) {
     const int64_t interval = 1000 / fps;
     int64_t next = 0;
     while (!host.closed) {
-        if (host.configured && box.have_frame) { draw(); box.have_frame = 0; }
+        if (host.configured && (box.have_frame || box.redraw)) {
+            if (draw()) box.redraw = 0;   // (a frame with no free buffer is skipped; the gone view is not)
+            box.have_frame = 0;
+        }
         int64_t t = now_ms();
-        if (!box.frame && !host.waiting && t >= next) { capture(); next = t + interval; }
-        int timeout = box.frame || host.waiting ? 100 : (int)(next - t > 0 ? next - t : 0);
+        if (box.output && !box.frame && !host.waiting && t >= next) { capture(); next = t + interval; }
+        // Gone: nothing to capture; the host's and the box's events (a buffer free, the output back) wake it.
+        int timeout = box.frame || host.waiting ? 100 : !box.output ? 1000 : (int)(next - t > 0 ? next - t : 0);
         // Marks: a frame whenever the last one is shown, while any is on show; then nothing at all.
         if (host.configured && marks.surface && !marks.waiting && (marks.dirty || marks.mapped)) {
             marks.dirty = 0;

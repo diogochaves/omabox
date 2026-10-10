@@ -4812,6 +4812,23 @@ t_peek_monitors() {
   sleep 3.5
   "${in[@]}" keys -b "$C" -t hi >/dev/null
   check "keys: a caption in both peeks" until_ok 3 captions
+  # #200: HEADLESS-3 dropped (its global removed), its peek stays and says so: " (gone)" in its title,
+  # a dark view with a caption (accent-edged, in the middle); the main screen's goes on. Back (a new
+  # global of that name), it shows HEADLESS-3 again: the caption gone, and the box's background made
+  # accent pink after it shows there (frames flow).
+  # shellcheck disable=SC2329 # called through until_ok
+  title_is() { [ "$(ob hyprctl -b "$S" -j clients | jq -r --arg a "$1" '.[] | select(.address == $a) | .title')" = "$2" ]; }
+  until_ok 5 no_accent 20 20 1640 960 >/dev/null   # the captions faded
+  "${in[@]}" output -b "$C" drop HEADLESS-3 >/dev/null 2>&1
+  check "output drop HEADLESS-3: its peek's title says so" until_ok 5 title_is "$a2" "omabox peek: $C · HEADLESS-3 (gone)"
+  check "...its window too: a caption in the middle" until_ok 3 accent_ok 200 1000 600 1640 960 1320 780
+  check "...the peek still there, the main screen's untouched" title_is "$a1" "omabox peek: $C"
+  check "...both windows" peeks 2
+  "${in[@]}" output -b "$C" back HEADLESS-3 >/dev/null 2>&1
+  check "output back: HEADLESS-3's peek titled as before" until_ok 5 title_is "$a2" "omabox peek: $C · HEADLESS-3"
+  check "...shows it again (the caption gone)" until_ok 3 no_accent 1000 600 1640 960
+  "${in[@]}" lua -b "$C" 'hl.config({ misc = { background_color = 0xffff3cc8 } })' >/dev/null 2>&1
+  check "...and what it shows after: frames flow" until_ok 3 accent_ok 150000 1000 600 1640 960
   # down closes every peek window of the box: a process named as a third one (a later pid than the
   # two) goes too, though nothing ties it to the box's socket.
   local d; d=$("${in[@]}" path "$C")
@@ -5648,6 +5665,31 @@ t_monitors_window() {
   check_eq "...each monitor a view: its window's pixels at 0.525, so the size asked for, placed as asked" \
     "WAYLAND-1 1008x567@60 0.525 1920x1080 0,0|WAYLAND-2 567x1008@60 0.525 1080x1920 1920,0|WAYLAND-3 672x378@60 0.525 1280x720 1920,1920" "$(layout)"
   check_eq "...and the host rule is off again" false "$(ob lua -b "$S" 'omabox_monitor_rule:is_enabled()')"
+  # The layout file the box's Lua writes for its aquamarine (finding 238; #200) against `monitors`:
+  # each monitor's place and its size in the layout (its pixels over its scale, the sides swapped by a
+  # 90/270 transform), rounded.
+  local wmd; wmd=$("${in[@]}" path wm)
+  # shellcheck disable=SC2329 # called through until_ok and check
+  layout_file() { ob run -b "$S" -- cat "$wmd/run/omabox.layout" | paste -sd'|'; }
+  # shellcheck disable=SC2329
+  file_matches() { local f w; f=$(layout_file) w=$("${in[@]}" hyprctl -b wm -j monitors | jq -r 'map((.width / .scale | round) as $w
+    | (.height / .scale | round) as $h | "\(.name) \(.x) \(.y) \(if .transform % 2 == 1 then "\($h) \($w)" else "\($w) \($h)" end)") | join("|")')
+    echo "$f"; [ -n "$f" ] && [ "$f" = "$w" ]; }
+  # shellcheck disable=SC2329
+  file_is() { [ "$(layout_file)" = "$1" ]; }
+  local rows="WAYLAND-1 0 0 1920 1080|WAYLAND-2 1920 0 1080 1920|WAYLAND-3 1920 1920 1280 720"
+  check "its layout file: the three views, as placed" until_ok 3 file_is "$rows"
+  check "...as \`monitors\` has them" file_matches
+  # WAYLAND-2 at a scale that gives no whole size (1069.81x1901.89), WAYLAND-3 turned 90 degrees and
+  # auto-placed right of it (at 1920 + 1069.81; Hyprland 0.56.2 hands Lua whole positions).
+  "${in[@]}" hyprctl -b wm eval "hl.monitor({ output = 'WAYLAND-2', mode = 'preferred', position = '1920x0', scale = 0.53 })" >/dev/null 2>&1
+  "${in[@]}" hyprctl -b wm eval "hl.monitor({ output = 'WAYLAND-3', mode = 'preferred', position = 'auto-right', scale = 0.525, transform = 1 })" >/dev/null 2>&1
+  check "...written anew at a layout change: a size rounded, a turned one's sides swapped, a place after a fraction" \
+    until_ok 3 file_is "WAYLAND-1 0 0 1920 1080|WAYLAND-2 1920 0 1070 1902|WAYLAND-3 2990 0 720 1280"
+  check "...as \`monitors\` has them" file_matches
+  "${in[@]}" hyprctl -b wm eval "hl.monitor({ output = 'WAYLAND-3', mode = 'preferred', position = '1920x1920', scale = 0.525, transform = 0 })" >/dev/null 2>&1
+  "${in[@]}" hyprctl -b wm eval "omabox_place_monitors()" >/dev/null 2>&1
+  check "...placed again as before (the rest of this test lays out by it)" until_ok 3 file_is "$rows"
   # The stand-in's pointer in each window, at its middle (on workspace 9 now, where the windows are):
   # the box's pointer in the middle of that monitor. aquamarine reports a point of the window; Hyprland
   # 0.56 placed it over the whole layout, so every middle was (1600, 1079); omabox's build places it.

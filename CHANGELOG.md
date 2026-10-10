@@ -22,6 +22,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A peek window survives its monitor dropping** (#200). `omabox peek --monitor NAME` of a monitor
+  that `omabox output drop` took away kept asking the box for the dead screen, and its window died
+  (or froze on the last frame); after `output back` it never showed the monitor again. It now lets the
+  screen go: its window turns dark, says `NAME is gone`, and its title ends ` (gone)`; when a monitor
+  of that name comes back it shows it again.
 - **`keys --window` no longer types into a launcher that has the keyboard** (#201). With Omarchy's
   launcher (or another layer that holds the keyboard against any window) open, `keys --window SEL`
   exited 0 while the text went into the launcher's search field. It now refuses before sending or
