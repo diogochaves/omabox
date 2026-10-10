@@ -182,7 +182,9 @@ LD_PRELOAD, OMABOX_BOX...), by any of them.
 --seed SRC:DEST: a file or folder of yours copied into the box HOME at DEST (.config/x or ~/.config/x)
 before its session starts, for a plugin that reads its config once at start; the same refusals as
 --ro-bind (no secret stores; nothing in ~/.config/omarchy but plugins/ and themes/). A copy: the
-box's changes stay in the box; a link already in DEST is replaced, never written through.
+box's changes stay in the box; a link already in DEST is replaced, never written through. Never
+into a --plugin's or --theme-dir's folder there (refused: it would replace the plugin or theme):
+write the file in that folder instead.
 @ up run
 --theme-dir DIR: a theme you are editing, live: the box HOME's ~/.config/omarchy/themes/NAME (DIR's
 name) is a link to DIR at its own path, in place of the copy \`up\` makes of each of your themes. The
@@ -1826,6 +1828,26 @@ seed_spec() {
   [[ $r != /* ]] && [ "$r" != . ] || { say "--seed: DEST must be inside the box HOME, got $dest"; return 1; }
   printf '%s\t%s\n' "$src" "$r"
 }
+# A --seed that would land on a plugin's or theme's folder in the box HOME (#199): seed_home links
+# each --plugin the box has at its own path and each --theme-dir there (findings 240, 241), and the
+# box mounts any other plugin there. seed_copy_in unlinks every link on DEST's way (finding 257: a seed
+# never writes through one) and makes real dirs, so a seed inside one replaced the plugin or theme
+# with a folder holding only the seed (`ls --json` still said linked); under a mount it was hidden.
+# DEST at or below such a folder is refused, and so is one above it that would write there: a file
+# (it replaces the dir holding it) or a folder holding that path. Prints what it would write over,
+# as "REL<TAB>KIND<TAB>NAME" from PLACES (each "REL<TAB>KIND<TAB>NAME", REL in the box HOME), and
+# "in" or "over"; fails when none. Says nothing of where SRC leads (a jailed caller's: finding 257).
+# seed_blocked SRC REL PLACE...
+seed_blocked() {
+  local src=$1 rel=$2 x at; shift 2
+  for x; do
+    at=${x%%$'\t'*}
+    if [ "$rel" = "$at" ] || [[ $rel == "$at"/* ]]; then printf '%s\tin\n' "$x"; return 0; fi
+    [[ $at == "$rel"/* ]] || continue
+    if [ ! -d "$src" ] || [ -e "$src/${at#"$rel"/}" ] || [ -L "$src/${at#"$rel"/}" ]; then printf '%s\tover\n' "$x"; return 0; fi
+  done
+  return 1
+}
 # Copy SRC into the box HOME at REL (seed_spec's), replacing what seed_home put there; links on the way
 # are cleared first (a save's HOME may have them: finding 168). A folder's contents go into REL, which
 # may hold links already (a save's, or an earlier --seed's): never written through (finding 228). cp -a
@@ -2101,6 +2123,22 @@ cmd_up() {
         die "up: --omarchy $omarchy is not in this jail's project nor a folder it was given whole, so it does not go into the box"
       omarchy_bind=0
     fi
+  fi
+  # A --seed onto a --plugin's or --theme-dir's folder in the box HOME (#199): refused before anything
+  # is made, naming the plugin or theme and DEST as the box HOME has it, never where SRC leads.
+  if [ ${#seeds[@]} -gt 0 ]; then
+    local seed_onto=() b at kind what how opt
+    for p in ${PLUGINS[@]+"${PLUGINS[@]}"}; do seed_onto+=(".config/omarchy/plugins/${p%%$'\t'*}"$'\t'plugin$'\t'"${p%%$'\t'*}"); done
+    for g in ${theme_dirs[@]+"${theme_dirs[@]}"}; do seed_onto+=(".config/omarchy/themes/${g##*/}"$'\t'theme$'\t'"${g##*/}"); done
+    for p in "${seeds[@]}"; do
+      b=$(seed_blocked "${p%%$'\t'*}" "${p#*$'\t'}" ${seed_onto[@]+"${seed_onto[@]}"}) || continue
+      IFS=$'\t' read -r at kind what how <<<"$b"
+      opt=--theme-dir; [ "$kind" = theme ] || opt=--plugin
+      if [ "$how" = in ]; then how="is inside $kind $what ($opt)"; else how="would write over $kind $what ($opt, ~/$at)"; fi
+      die "--seed ~/${p#*$'\t'} $how: the box has the $kind from its folder, and the seed would replace" \
+        "it with a folder holding only what is seeded$([ "$kind" = theme ] || echo ' (or go under its mount, unseen)')." \
+        "Write the file in the $kind's folder instead, or seed outside it"
+    done
   fi
   # --hyprland (finding 116): the build's folder, read-only at its own path, refused as --ro-bind's are
   # (a binary right in HOME or /tmp would take all of it along). Not one under /usr: the box has it.

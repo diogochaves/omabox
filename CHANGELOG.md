@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`up` refuses a `--seed` into a `--plugin`'s or `--theme-dir`'s folder** (#199). The plugin's or
+  theme's place in the box HOME became a folder holding only the seeded file: the plugin silently not
+  in the box (while `ls --json` still said `via: linked`), or the theme gone; under a mounted plugin
+  the file was hidden. `up` now says so before the box starts, naming the plugin or theme: write the
+  file in its folder instead, or seed outside it.
 - **`wait still` (and every `--wait`) sees a thin change that is no caret** (#180). Any change 4 px
   thin was taken for a blinking caret and ignored, however long: a tab's underline appearing or a
   2 px progress bar could leave it "still" while the screen changed. A caret is now 40 px long at

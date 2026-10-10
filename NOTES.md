@@ -5202,6 +5202,19 @@ from them.
     segment sweeping with a period of 4 steps or less would be read as carets; none seen. t_wait
     checks both cases (124, the change 2 px high) after the blinking beam's (still, `caret?`); the
     tool before this answered "still" to both in a box.
+270. **A `--seed` into a `--plugin`'s or `--theme-dir`'s folder replaced it** (2026-10-10, #199).
+    seed_home links a plugin the box has at its own path (241) and each `--theme-dir` (240) into the
+    box HOME, and mounts any other plugin there; seed_copy_in then clears every link on DEST's way
+    (257, so a seed never writes through one) and makes real dirs. `--seed cfg.json:.config/omarchy/
+    plugins/ID/cfg.json` left `plugins/ID` a folder holding only `cfg.json` (no manifest: the plugin
+    silently not in the box, `plugin_status` still `via: linked`), a theme likewise gone; under a
+    mounted plugin the file was hidden by the mount. `up` now refuses, before the lock or any box dir
+    (after the jail's checks), a DEST at or below `plugins/ID` or `themes/NAME`, and one above it that
+    would write there (a file, or a folder holding that path): `seed_blocked`. The message names the
+    plugin or theme and DEST as the box HOME has it, never where SRC leads (a jailed caller's). The
+    unlinking in seed_copy_in is unchanged. t_unit_plugin_link (the decision), t_unit_refusals (a
+    theme), t_plugin_link (a linked plugin: refused, no box dir; a folder seeded above the plugins dir
+    beside them: in the box, the plugins still linked and loaded).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

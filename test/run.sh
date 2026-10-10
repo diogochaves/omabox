@@ -661,6 +661,12 @@ t_unit_refusals() {
   check_match "...of a file" "--theme-dir: no such directory" "$(ob up "$P-r30" --theme-dir "$fh/.ssh/id_test" 2>&1)"
   check_match "...two of one name" "--theme-dir: two themes named t" "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --theme-dir "$TMP/rf-td/b/t" 2>&1)"
   check_match "...a name omarchy-theme-set refuses" "cannot start with a dot" "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/.hidden" 2>&1)"
+  # #199: a --seed into a --theme-dir theme (a link in the box HOME) refused, naming the theme, not where SRC leads.
+  echo s > "$TMP/rf-td/s.toml"
+  check_match "--seed into a --theme-dir theme refused" \
+    "--seed ~/.config/omarchy/themes/t/s.toml is inside theme t \(--theme-dir\).*Write the file in the theme's folder instead, or seed outside it" \
+    "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --seed "$TMP/rf-td/s.toml:.config/omarchy/themes/t/s.toml" 2>&1)"
+  check_fails "...SRC's path not said" grep -q "$TMP/rf-td/s.toml" <<<"$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --seed "$TMP/rf-td/s.toml:~/.config/omarchy/themes/t/s.toml" 2>&1)"
   check_fails "...no box dir for any of them" test -e "$XDG_RUNTIME_DIR/omabox/$P-r30"
   # (#123) Only where it is refused: with the fix it would open a window on the real desktop.
   if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
@@ -1039,6 +1045,21 @@ t_unit_plugin_link() {
   lib home_link "$d/h" .config/omarchy/plugins/y "$d/repo/sub/plug"
   check "...a link on the way is replaced by a dir" test -d "$d/h/.config/omarchy/plugins" -a ! -L "$d/h/.config"
   check_eq "...and nothing written where it led" "" "$(ls -A "$d/out/cfg")"
+  # #199: a --seed onto a --plugin's or --theme-dir's folder in the box HOME (a link seed_home makes, or
+  # a plugin's mount): at or below it refused, above it only when it would write there.
+  local pl=.config/omarchy/plugins/x.y th=.config/omarchy/themes/t sb=$d/sb
+  mkdir -p "$sb/none/sub" "$sb/holds/plugins/x.y" "$sb/holdst/t"; echo f > "$sb/file"
+  # shellcheck disable=SC2329 # called below
+  blk() { lib seed_blocked "$1" "$2" "$pl"$'\t'plugin$'\t'x.y "$th"$'\t'theme$'\t't; }
+  check_eq "seed_blocked: a file inside the plugin's folder" "$pl plugin x.y in" "$(blk "$sb/file" "$pl/cfg.json" | tr '\t' ' ')"
+  check_eq "...a folder at the plugin's own place" "$pl plugin x.y in" "$(blk "$sb/none" "$pl" | tr '\t' ' ')"
+  check_eq "...inside a --theme-dir theme" "$th theme t in" "$(blk "$sb/file" "$th/colors.toml" | tr '\t' ' ')"
+  check_eq "...a folder above that holds the plugin's place" "$pl plugin x.y over" "$(blk "$sb/holds" .config/omarchy | tr '\t' ' ')"
+  check_eq "...one holding the theme's" "$th theme t over" "$(blk "$sb/holdst" .config/omarchy/themes | tr '\t' ' ')"
+  check_eq "...a file in place of a dir above it" "$pl plugin x.y over" "$(blk "$sb/file" .config/omarchy/plugins | tr '\t' ' ')"
+  check_fails "...not a folder above that does not hold it" blk "$sb/none" .config/omarchy
+  check_fails "...nor a file beside it" blk "$sb/file" .config/omarchy/plugins/x.y.json
+  check_fails "...nor another plugin's place" blk "$sb/file" .config/omarchy/plugins/x.z/cfg.json
 }
 
 t_unit_bar_filter() {
@@ -2991,10 +3012,19 @@ t_plugin_link() {
   }
   lfix "$R/widget" "$P.lw"; lfix "$O/widget" "$P.lo"; lfix "$M/widget" "$P.lm"; lfix "$V/widget" "$P.lv"
   mkdir -p "$R/tools" "$M/tools" "$V/tools"; echo sibling > "$R/tools/sibling.txt"; echo sibling > "$M/tools/sibling.txt"; echo sibling > "$V/tools/sibling.txt"
+  # #199: a --seed inside the linked plugin's folder would replace the link with a folder holding only
+  # the seed: refused before anything is made, naming the plugin. One beside it (a folder above the
+  # plugins dir that does not hold the plugin's place) is seeded, the plugin still linked and loaded.
+  mkdir -p "$TMP/pl-seed/omarchy/seeded"; echo '{"seeded":1}' > "$TMP/pl-seed/cfg.json"; cp "$TMP/pl-seed/cfg.json" "$TMP/pl-seed/omarchy/seeded/"
+  check_match "a --seed inside a linked plugin's folder: refused, naming the plugin" \
+    "--seed ~/.config/omarchy/plugins/$P.lw/cfg.json is inside plugin $P.lw \(--plugin\).*Write the file in the plugin's folder instead" \
+    "$(cd "$R" && ob up "$B" --net isolated --plugin "$R/widget" --seed "$TMP/pl-seed/cfg.json:~/.config/omarchy/plugins/$P.lw/cfg.json" 2>&1)"
+  check_fails "...no box dir left" test -e "$XDG_RUNTIME_DIR/omabox/$B"
   out=$(cd "$R" && ob up "$B" --net isolated --ro-bind "$M" --overlay "$V" --plugin "$R/widget" --plugin "$O/widget" --plugin "$M/widget" \
-    --plugin "$V/widget" 2>&1) ||
-    { no "up with a plugin in its repo, one outside, one in a --ro-bind, one in an --overlay" "$out"; return; }
+    --plugin "$V/widget" --seed "$TMP/pl-seed/omarchy:.config/omarchy" 2>&1) ||
+    { no "up with a plugin in its repo, one outside, one in a --ro-bind, one in an --overlay, a --seed beside them" "$out"; return; }
   H=$(ob path "$B")/home
+  check_eq "a --seed beside the plugins: in the box HOME" '{"seeded":1}' "$(ob run -b "$B" -- cat /home/sbx/.config/omarchy/seeded/cfg.json 2>&1)"
   check_eq "a plugin inside the repo up runs from: its helper reaches the repo through readlink -f" sibling \
     "$(ob run -b "$B" -- bash "$f/$P.lw/helpers/find.sh" 2>&1)"
   check_eq "...a link in the box HOME to its own path, as on a desk" "$R/widget" "$(readlink "$H/.config/omarchy/plugins/$P.lw")"
