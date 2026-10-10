@@ -301,6 +301,10 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `/sys` and system-wide `/proc` files are the host's (read-only): CPU, temperatures, memory, disks,
   USB devices and DRM connectors read as the real machine's. A widget reading those shows the host's
   hardware state, not the box's.
+- Every node in a box's `/dev` (`null`, `tty`, the render node, `/dev/nvidia*`) is a bind mount, so
+  plain `lsof /dev/nvidia0` reads it as a file system and lists every `/dev` holder (`/dev/null`'s
+  too). Who holds the GPU: `lsof -f -- /dev/nvidia0`, or `fuser -v /dev/nvidia0`. A box's own
+  compositor and shell hold it; the desktop's holders are not visible from a box.
 - The box has the host's programs, not more: an app the host does not have fails in the box too
   (`setsid: failed to execute alacritty`); Omarchy's terminal is `foot` or what the host has.
 - The session's PATH is yours (mise's tools, as in `omabox run`) after omabox's stand-ins and the box

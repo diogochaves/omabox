@@ -5172,6 +5172,22 @@ from them.
     checks (`/opt/omabox/share` a mount root, no system bus) is untouched, `/opt` still empty. t_clip,
     named in the issue as likely the same, passed from copies at `/tmp/omabox-194` and deeper under
     `/tmp`: a box's own `/tmp` is a tmpfs too, but the repo is bound after it, so the stand-in sees it.
+268. **`lsof` on a device node bound into a box lists every open file of `/dev`** (2026-10-10, #185).
+    `lsof /dev/nvidia0` (or `/dev/nvidiactl`, the render node, `/dev/null`, `/dev/zero`, `/dev/tty`) in
+    a box printed every `/dev/null` holder (bwrap, bash, dbus-daemon, …) with the GPU's real ones. Not
+    the nodes (distinct inode and rdev) but lsof's documented rule that a name matching a mounted-on
+    path in the mount table is a file system, all of whose open files it lists. Every node in a box's
+    `/dev` is a bind mount of that one host file (bwrap's `--dev /dev` binds null, zero, full, random,
+    urandom, tty; `up` binds the render node and `/dev/nvidia*` by `--dev-bind`), so each is a mount
+    point in the box's mountinfo, all on the host's devtmpfs (`0:7` here): naming any of them lists all
+    their fds. On the host `/dev/nvidia0` is no mount point and lsof matches only its own holders. No
+    bind can avoid it (a node must be its own mount: the unprivileged box cannot mknod, and binding a
+    host directory holding it would bring the seat's nodes too). Real holders, in a box: `lsof -f --
+    /dev/nvidia0` (`-f`: names are plain files), `fuser -v /dev/nvidia0`, or the `/proc/*/fd` links;
+    all three list only the box's own GPU users (its labwc, Hyprland, the shell; so not "none" either).
+    t_main checks, in an NVIDIA box, that `lsof -f` names no `/dev/null` and plain lsof still does (if
+    lsof changes, this finding goes). lsof could skip that rule for a mount point that is no
+    directory (a file bind mount is never a file system's root).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

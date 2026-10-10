@@ -2563,6 +2563,18 @@ t_main() {
   if [ "$(jq -r .wayland_screen "$D/box.json")" = true ]; then
     check_eq "NVIDIA uses the private Wayland screen" WAYLAND-1 "$screen_name"
     check "NVIDIA control node is present" ob run -b "$B" -- test -c /dev/nvidiactl
+    # Finding 268 (#185): a bound node is a mount point, which plain lsof reads as a file system (every
+    # /dev fd); `lsof -f` lists only the node's own holders. Plain lsof doing so no more: the finding goes.
+    if ob run -b "$B" -- sh -c 'command -v lsof' >/dev/null 2>&1; then
+      local lsof_f lsof_plain
+      lsof_f=$(ob run -b "$B" -- lsof -w -f -- /dev/nvidia0 2>&1) || lsof_f="(failed) $lsof_f"
+      lsof_plain=$(ob run -b "$B" -- lsof -w -- /dev/nvidia0 2>&1) || lsof_plain="(failed) $lsof_plain"
+      if [[ $lsof_f =~ /dev/nvidia0 ]] && [[ ! $lsof_f =~ /dev/null ]]; then ok "lsof -f on the NVIDIA node lists its own holders only"
+      else no "lsof -f on the NVIDIA node lists its own holders only" "$lsof_f"; fi
+      check_match "plain lsof on the NVIDIA node still lists /dev/null holders (finding 268)" '/dev/null' "$lsof_plain"
+    else
+      skip "lsof on the NVIDIA node (finding 268)" "no lsof"
+    fi
     check_eq "parent output matches the box" "1920 1080" \
       "$(ob run -b "$B" -- env WAYLAND_DISPLAY=wayland-0 wlr-randr --json | jq -r '.[0].modes[] | select(.current) | "\(.width) \(.height)"')"
   elif [ "$(lib render_driver "$(lib render_node)")" = nvidia ]; then
