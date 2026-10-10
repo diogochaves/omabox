@@ -16,9 +16,11 @@
 // It asks the compositor for frames with wlr-screencopy's copy_with_damage, which only completes when
 // something was drawn: an idle screen costs nothing while it waits. Every frame is compared with the
 // one before of its output, pixel by pixel, inside --region. A change is significant
-// unless it is 4 pixels or less in width or height (a text caret blinking) or lies inside an --ignore
-// rectangle (where the software cursor is: Hyprland hides it on a key press) or a --mask one (the
-// caller's: an animation that never stops, #131); --strict counts all but a --mask.
+// unless it is a caret blinking in place or lies inside an --ignore rectangle (where the software
+// cursor is: Hyprland hides it on a key press) or a --mask one (the caller's: an animation that never
+// stops, #131); --strict counts all but a --mask. A caret is a change 4 px thin and 40 long at most
+// (as shot --changed's) that is the output's first one since its last change of another shape, or
+// lies inside one it had (or holds one): a thin segment that moves is a change (#180).
 // Before it answers "nothing changed" or "still", one plain copy (which never waits) of each output is
 // compared too, so a change drawn between two requests is not missed.
 //
@@ -54,7 +56,11 @@
 #define MAX_SIDE 16384
 #define MAX_IGNORE 48   // drag --wait: the cursor along its path (omabox path_rects: 30), and 16 --mask
 #define MAX_OUTPUTS 16
-#define THIN 4   // a change this thin or thinner is a caret, not a change
+// A caret: a change THIN px thin and CARET_LONG long at most. bin/omabox's shot_changed has the same
+// numbers (4, 40); keep them the same.
+#define THIN 4
+#define CARET_LONG 40
+#define CARETS 4   // the caret boxes an output remembers (two windows' carets blinking in turn)
 
 struct rect { int x, y, w, h; };
 
@@ -136,6 +142,8 @@ struct output {
     struct zwlr_screencopy_frame_v1 *frame;
     int frame_done, frame_failed, frame_plain;
     struct rect pregion, pignore[MAX_IGNORE];   // region and ignores in this output's pixels
+    struct rect carets[CARETS];   // its last caret-shaped changes (layout), since a change of another shape
+    int ncarets, ncaret_next;
 };
 
 static struct wl_display *display;
@@ -344,11 +352,38 @@ static int ignored(const struct output *o, int x, int y) {
     return -1;
 }
 
+static int inside(const struct rect *a, const struct rect *b) {   // a within b
+    return a->x >= b->x && a->y >= b->y && a->x + a->w <= b->x + b->w && a->y + a->h <= b->y + b->h;
+}
+
+// A caret blinks in place: a caret-shaped change (s, layout) is one when it is the output's first since
+// a change of another shape, or lies inside one of its last ones or holds it (a caret fading in or out
+// changes part of its box). Any other caret-shaped change (a thin segment that moved, a caret moved by
+// an arrow key) is a change, remembered: where a caret blinks next. Another shape forgets them all
+// (typing moved the caret: its first blink at the new place is not a change).
+static int is_caret(struct output *o, struct rect s) {
+    if (!((s.w <= THIN && s.h <= CARET_LONG) || (s.h <= THIN && s.w <= CARET_LONG))) {
+        o->ncarets = o->ncaret_next = 0;
+        return 0;
+    }
+    for (int i = 0; i < o->ncarets; i++) {
+        struct rect *c = &o->carets[i];
+        if (inside(&s, c)) return 1;
+        if (inside(c, &s)) { *c = s; return 1; }
+    }
+    int first = !o->ncarets;
+    o->carets[o->ncaret_next] = s;
+    o->ncaret_next = (o->ncaret_next + 1) % CARETS;
+    if (o->ncarets < CARETS) o->ncarets++;
+    return first;
+}
+
 // Compare the output's new frame (cur) with its prev inside the region. Returns 1 for a significant
 // change (its box in sig_box, in the layout), 0 otherwise (a smaller one goes to ign_box/ign_why).
 static int compare(struct output *o) {
     int cur = !o->prev;
     if (!o->have_prev) {
+        o->ncarets = o->ncaret_next = 0;
         sig_box = out_rect(o);
         // Moved out of the region watched (another monitor's add or remove re-laid it out): nothing of
         // the region changed, so not a change of it.
@@ -385,7 +420,7 @@ static int compare(struct output *o) {
     if (!ns) return 0;
     // Thin in the layout's pixels: a caret is as thin at scale 2 as at 1.
     s = to_layout(o, s);
-    if (!strict && (s.w <= THIN || s.h <= THIN)) { ign_box = s; ign_why = "caret"; return 0; }
+    if (!strict && is_caret(o, s)) { ign_box = s; ign_why = "caret"; return 0; }
     sig_box = s;
     return 1;
 }

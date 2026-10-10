@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`wait still` (and every `--wait`) sees a thin change that is no caret** (#180). Any change 4 px
+  thin was taken for a blinking caret and ignored, however long: a tab's underline appearing or a
+  2 px progress bar could leave it "still" while the screen changed. A caret is now 40 px long at
+  most, as for `shot --changed`, and blinks in place: a short thin segment that moves (a "working"
+  sweep) is a change too.
 - **A box has an accessibility (AT-SPI) bus** (#177). It never started (its launcher's
   dbus-broker needs a journal a box lacks), so GTK apps showed no accessibility tree and any AT-SPI
   client, dogtail or a toolkit's a11y tests aborted. `up` now has it run on dbus-daemon, in the

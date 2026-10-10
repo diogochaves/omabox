@@ -7473,6 +7473,23 @@ t_wait() {
   ob run -b "$B" -- pkill -f 'foot -T C' >/dev/null
   check "wait window --gone" ob wait -b "$B" window 'title:^C$' --gone
   ob wait -b "$B" still >/dev/null   # A takes the whole screen once C is gone
+  # #180: a caret is 40 px long at most and blinks in place. A 2 px underline 60 cells long toggling,
+  # and a one-cell one stepping along its line (each step 2 cells: caret-sized), are changes.
+  ob run -b "$B" -d -q --wait -- foot -T U -o underline-thickness=2px sh -c \
+    'printf "\033[?25l"; while :; do printf "\r\033[4m%60s\033[0m" ""; sleep 0.1; printf "\r%60s" ""; sleep 0.1; done' >/dev/null 2>&1
+  out=$(ob wait -b "$B" still --timeout 1500ms --window 'title:^U$' --json); rc=$?
+  check_eq "a long thin line toggling: not a caret, still changing (124)" "124 2" "$rc $(jq -r '.change.h' <<<"$out")"
+  check "...the change is that line (${out:0:300})" jq -e '.change.w > 100' <<<"$out"
+  ob run -b "$B" -- pkill -f 'foot -T U' >/dev/null
+  ob wait -b "$B" window 'title:^U$' --gone >/dev/null
+  ob run -b "$B" -d -q --wait -- foot -T M -o underline-thickness=2px sh -c \
+    'printf "\033[?25l"; i=0; while :; do printf "\r%*s\033[4m \033[0m%*s" $i "" $((30 - i)) ""; i=$(((i + 1) % 30)); sleep 0.08; done' >/dev/null 2>&1
+  out=$(ob wait -b "$B" still --timeout 1500ms --window 'title:^M$' --json); rc=$?
+  check_eq "a short thin segment moving: not a caret, still changing (124)" "124 2" "$rc $(jq -r '.change.h' <<<"$out")"
+  check "...the change is caret-sized (${out:0:300})" jq -e '.change.w <= 40' <<<"$out"
+  ob run -b "$B" -- pkill -f 'foot -T M' >/dev/null
+  ob wait -b "$B" window 'title:^M$' --gone >/dev/null
+  ob wait -b "$B" still >/dev/null
   out=$(ob click -b "$B" --wait --start 1s --window 'title:^A$' 40 40 2>"$TMP/wait.err"); rc=$?
   check_eq "click --wait on what does nothing: 124" 124 "$rc"
   check_match "...said, and that the click was sent" "^unsatisfied: nothing changed.*click was sent" "$out $(cat "$TMP/wait.err")"

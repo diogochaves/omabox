@@ -226,9 +226,10 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `--ignore "X,Y WxH"` (up to 16; `--strict` keeps them) leaves out an animation that never stops. A 124
   "still changing" whose late changes were all in one small region ends with `--ignore "X,Y WxH" if
   that is an animation`: add it if the shot shows a spinner or a glow there, not the app under test.
-- A caret (a change 4 px or thinner) and the software cursor (in every frame; it hides on a key
-  press) are not changes; the line says what was ignored. `--strict` counts them (a thin progress bar
-  or spinner is ignored like a caret otherwise).
+- A caret blinking in place (a change 4 px thin and 40 long at most, where the last one was) and the
+  software cursor (in every frame; it hides on a key press) are not changes; the line says what was
+  ignored. A longer thin change (a tab's underline, a progress bar) or a short one that moves is one.
+  `--strict` counts them all.
 - Exit 0 satisfied, 124 not in time, 1 unknown (the box went down; an interactive box that is not
   drawn while hidden: an older one, or one whose window confirm-close replaced). Waiting counts as use
   for the idle timeout.

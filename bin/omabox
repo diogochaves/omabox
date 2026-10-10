@@ -282,13 +282,14 @@ number is seconds, as for --quiet and --timeout (\`keys -s\` and \`pointer sleep
 scaled or cropped one says so, for \`click --in\`). --wait ignores the cursor along the drag's path
 (it is in every frame): what the drag changes beside it counts, a change wholly under it may not.
 @ wait keys click run scroll drag
-\`wait still\`: nothing on screen changed for --quiet; a caret (4 px or thinner) and the cursor do not
-count, and are said (--strict counts them). \`keys\`, \`click\`, \`scroll\`, \`drag\` and \`run -d\` take --wait
-[--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--json]: a change within
---start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16) leaves out an animation that never
-stops (a spinner, a glow); a 124 "still changing" names it when one small region kept changing. -g
-watches only that part of the screen. The screen is every monitor; -g, --window and --ignore pick
-parts of it, all in the layout's coordinates (as click's), --ignore with --window too.
+\`wait still\`: nothing on screen changed for --quiet; a caret blinking in place (4 px thin, 40 long at
+most) and the cursor do not count, and are said (--strict counts them). \`keys\`, \`click\`, \`scroll\`,
+\`drag\` and \`run -d\` take --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore
+GEOM]... [--json]: a change within --start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16)
+leaves out an animation that never stops (a spinner, a glow); a 124 "still changing" names it when
+one small region kept changing. -g watches only that part of the screen. The screen is every monitor;
+-g, --window and --ignore pick parts of it, all in the layout's coordinates (as click's), --ignore
+with --window too.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
@@ -4123,6 +4124,7 @@ shot_changed() {
     x0=$((dx * lw / iw)) y0=$((dy * lh / ih))
     x1=$((((dx + dw) * lw + iw - 1) / iw)) y1=$((((dy + dh) * lh + ih - 1) / ih))
     w=$((x1 - x0)) h=$((y1 - y0))
+    # A caret: 4 px thin, 40 long at most; tools/still's THIN and CARET_LONG are the same numbers.
     if { [ $w -le 4 ] && [ $h -le 40 ]; } || { [ $h -le 4 ] && [ $w -le 40 ]; }; then caret="; a caret? ${w}x$h at $x0,$y0 left out"; box=""; fi
   fi
   # All of it where the pointer is now, which moved there: perhaps the pointer alone.

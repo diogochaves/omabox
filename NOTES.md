@@ -5188,6 +5188,20 @@ from them.
     t_main checks, in an NVIDIA box, that `lsof -f` names no `/dev/null` and plain lsof still does (if
     lsof changes, this finding goes). lsof could skip that rule for a mount point that is no
     directory (a file bind mount is never a file system's root).
+269. **`wait still`'s caret is short and blinks in place** (2026-10-10, #180). omabox-still left out
+    any change 4 px thin as a caret, whatever its length: a 2 px underline 60 cells long toggling
+    (540x2) and a one-cell underline stepping along its line (18x2 each step: the cell it left and the
+    one it took) were both "still after 0.30s (… caret?)". A caret is now what `shot --changed` calls
+    one, 4 px thin and 40 long at most (`THIN`/`CARET_LONG` in still.c, the same literal numbers in
+    shot_changed: keep them equal), and it must stay in place: each output remembers its last 4
+    caret-shaped boxes, and one is a caret only when it is the first since a change of another shape,
+    or lies inside a remembered one or holds it (a fading caret changes part of its box). Any other
+    caret-shaped change counts and is remembered (a caret an arrow key moved blinks there next); a
+    change of another shape forgets them (typing moved the caret: its first blink is still left out).
+    Four, not one: two carets blinking in turn are both left out after one counted change. A thin
+    segment sweeping with a period of 4 steps or less would be read as carets; none seen. t_wait
+    checks both cases (124, the change 2 px high) after the blinking beam's (still, `caret?`); the
+    tool before this answered "still" to both in a box.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
