@@ -2049,6 +2049,17 @@ EOF
   check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
   check "the user's box still up" ob shot -b "$P-host" -o "$TMP/host.png"
   ob down "$P-host" >/dev/null 2>&1
+  # #193 (finding 275): a jailed agent in a linked worktree, its main checkout's .git mapped as ai-jail
+  # --worktree maps it: git works in its box, the main checkout's files are not there.
+  local M W
+  M=$(tmp_repo jailwt-main); echo m > "$M/f"
+  git -C "$M" add f && git -C "$M" -c user.name=t -c user.email=t@t commit -qm one
+  W=$TMP/$P-jailwt; git -C "$M" worktree add -q -b "$P-jailwt" "$W" 2>/dev/null
+  out=$(cd "$W" && timeout 120 ai-jail --no-save-config --worktree --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" \
+    bash -c '"$1" up "$2" >/dev/null 2>&1 || echo up-failed; "$1" run -b "$2" -- git -C "$3" status --short --branch 2>&1; echo "rc=$?"
+      "$1" run -b "$2" -- test -e "$4/f" && echo main-files; "$1" down "$2" >/dev/null 2>&1' wt "$CLI" "$P-jailwt" "$W" "$M" </dev/null 2>&1)
+  check_match "a jailed agent's box from a linked worktree: git status there (#193)" "(^| )## $P-jailwt rc=0 $" "$(tr '\n' ' ' <<<"$out")"
+  check_fails "...the main checkout's files not in it" grep -q main-files <<<"$out"
 }
 
 # Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
@@ -4071,8 +4082,42 @@ t_unit_git_dirs() {
   check_eq "a submodule's worktree: the same" "$M/.git/modules/sm" "$(gdirs "$SW")"
   check_eq "a worktree whose main checkout is gone: nothing, quietly" "" "$(gdirs "$X-wt" 2>&1)"
   check_eq "no repo: nothing" "" "$(gdirs "$N" 2>&1)"
-  check_eq "a jailed caller: nothing (no git run for one)" "" \
+  check_eq "a jailed caller whose jail has no folders: nothing" "" \
     "$(cd "$W" && OMABOX_JAIL='{"roots":[]}' lib repo_git_dirs "$W" 2>&1)"
+  # A jailed caller (#193, finding 275): the files git reads, read inside the jail's folders, git never
+  # run (a stub that records being run first on PATH). JAIL CWD ROOT...: the jail's policy as
+  # jail_policy writes it (ai-jail --worktree maps the common dir and the gitdir inside it: masked).
+  local B=$TMP/$P-gd-bin G C=$M/.git
+  mkdir -p "$B"
+  printf '#!/bin/sh\necho "$*" >> %q/git-ran\nexit 1\n' "$TMP/$P-gd" > "$B/git"; chmod +x "$B/git"
+  jdirs() {
+    local cwd=$1 j; shift
+    j=$(jq -nc --arg c "$cwd" '{net: false, cwd: $c, roots: ($ARGS.positional | map({path: ., masked: false}))}' --args "$@")
+    j=$(jq -c --arg c "$C" '.roots |= map(if .path == $c then .masked = true else . end)' <<<"$j")
+    (cd "$cwd" && PATH=$B:$PATH OMABOX_JAIL=$j bash -c 'source "$1"; top=$(repo_top) && repo_git_dirs "$top"' lib "$TMP/lib/bin/omabox" 2>&1)
+  }
+  G=$(sed -n '1s/^gitdir: //p' "$W/.git")
+  check_eq "a jailed caller in a linked worktree, its jail sees the common dir (ai-jail --worktree): it" "$C" "$(jdirs "$W" "$W" "$C" "$G")"
+  check_eq "...the common dir alone a folder of the jail's: the same" "$C" "$(jdirs "$W" "$W" "$C")"
+  check_eq "...the jail does not see it: nothing" "" "$(jdirs "$W" "$W")"
+  check_eq "...it sees the gitdir only: nothing" "" "$(jdirs "$W" "$W" "$G")"
+  check_eq "...it sees it only inside a folder of its own (the main checkout, which it could swap for a link): nothing" "" "$(jdirs "$W" "$W" "$M")"
+  check_eq "...a stale gitdir (the main checkout gone): nothing" "" "$(jdirs "$X-wt" "$X-wt" "$X/.git")"
+  check_eq "a jailed caller in a submodule (no commondir): nothing" "" "$(jdirs "$M/sm" "$M/sm" "$M/.git/modules/sm")"
+  # What the jail writes in its .git file is the jail's: a gitdir that is no worktree's, or a common dir
+  # not named .git (a folder of the jail's whose own masks the box would not have), is nothing.
+  local F=$TMP/$P-gd-fake; mkdir -p "$F/w" "$F/root/worktrees/x"
+  printf 'gitdir: %s\n' "$F/root/worktrees/x" > "$F/w/.git"; echo ../.. > "$F/root/worktrees/x/commondir"
+  check_eq "...a common dir not named .git: nothing" "" "$(jdirs "$F/w" "$F/w" "$F/root")"
+  printf 'gitdir: %s\n' "$C" > "$F/w/.git"
+  check_eq "...a gitdir that is the common dir itself: nothing" "" "$(jdirs "$F/w" "$F/w" "$C")"
+  # (A link out to a link back in: readlink would land in the common dir; the jail cannot follow it.)
+  mkdir -p "$F/out"; ln -s "$G" "$F/out/g"; ln -s "$F/out/g" "$F/w/lnk"; printf 'gitdir: lnk\n' > "$F/w/.git"
+  check_eq "...a gitdir through a link out of the jail's folders, though it leads back in: nothing" "" "$(jdirs "$F/w" "$F/w" "$C")"
+  check_eq "...the same link, the jail seeing where it goes: the common dir" "$C" "$(jdirs "$F/w" "$F/w" "$C" "$F/out")"
+  rm "$F/w/lnk"; ln -s "$W/.git" "$F/w/.git"
+  check_eq "...a .git that is a link out of the jail's folders: nothing" "" "$(jdirs "$F/w" "$F/w" "$C")"
+  check_fails "...and git was never run" test -e "$TMP/$P-gd/git-ran"
 }
 
 # finding 250 (#183): a box started from a linked worktree has git there. Its gitdir and the main

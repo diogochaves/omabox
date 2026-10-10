@@ -2834,23 +2834,16 @@ aq_ver_fixed() {
 # aq_main_lib CHECKOUT: a linked worktree's main checkout's build/prefix/lib (issue #182, finding 271),
 # for aq_resolve to look in after the worktree's own: a fresh `git worktree add` has no build/, and its
 # headless boxes on NVIDIA were refused for lacking the fix the main checkout had built. Found where
-# `git rev-parse --git-common-dir` finds it, from the files git reads, never by running git (the same
-# answer for a jailed caller's broker, which runs no git: repo_top): CHECKOUT/.git is a file
-# `gitdir: G` (G relative to CHECKOUT), G/commondir names the common dir (relative to G), and the main
-# checkout is that dir's parent when it is a dir named .git. Nothing for a main checkout (.git is a
-# dir), an installed omabox (no .git), a submodule or its worktree (the common dir is in the
-# superproject's .git/modules), any other layout, or a lib dir missing or not readable.
+# `git rev-parse --git-common-dir` finds it, never by running git (git_link_dirs; the same answer for a
+# jailed caller's broker, which runs no git: repo_top): the main checkout is the common dir's parent
+# when that is a dir named .git. Nothing for a main checkout (.git is a dir), an installed omabox (no
+# .git), a submodule or its worktree (the common dir is in the superproject's .git/modules), any other
+# layout, or a lib dir missing or not readable.
 aq_main_lib() {
   local co=$1 g c top
-  [ -f "$co/.git" ] || return 1
-  g=$(sed -n '1s/^gitdir: //p' "$co/.git" 2>/dev/null) || return 1
-  [ -n "$g" ] || return 1
-  [[ $g == /* ]] || g=$co/$g
-  c=$(cat -- "$g/commondir" 2>/dev/null) || return 1
-  [ -n "$c" ] || return 1
-  [[ $c == /* ]] || c=$g/$c
-  c=$(readlink -e -- "$c" 2>/dev/null) || return 1
-  [[ $c == */.git ]] && [ -d "$c" ] || return 1
+  g=$(git_link_dirs "$co") || return 1
+  c=${g#*$'\n'} g=${g%%$'\n'*}
+  [ "$g" != "$c" ] && [[ $c == */.git ]] || return 1
   top=${c%/.git}
   [ ! "$top" -ef "$co" ] || return 1
   [ -d "$top/build/prefix/lib" ] && [ -r "$top/build/prefix/lib" ] && [ -x "$top/build/prefix/lib" ] || return 1
@@ -8088,16 +8081,62 @@ repo_top() {
   [ -n "$r" ] && [ -e "$r/.git" ] && echo "$r"
 }
 
+# git_link_dirs CHECKOUT [jail]: a linked worktree's (or submodule's) gitdir and common dir, where git
+# finds them, from the files git reads and never by running git (findings 271, 275): CHECKOUT/.git is a
+# file `gitdir: G` (G relative to CHECKOUT), G/commondir names the common dir (relative to G; none: G is
+# its own, a submodule's). Prints both, resolved, G first, one per line. Fails for a main checkout (.git
+# is a dir), no .git, a gitdir or common dir gone (a stale worktree), or a path with a newline. With
+# `jail` (a jailed caller's checkout: #193), each path is followed only inside the jail's folders
+# (jail_path) and each file read through jail_read, so nothing outside them is looked at, and every
+# failure is the same failure.
+git_link_dirs() {
+  local co=$1 j=${2:-} t g c
+  if [ "$j" = jail ]; then { t=$(jail_path "$co/.git") && [ -f "$t" ] && t=$(jail_read "$t"); } || return 1
+  else { [ -f "$co/.git" ] && t=$(cat -- "$co/.git" 2>/dev/null); } || return 1; fi
+  g=$(sed -n '1s/^gitdir: //p' <<<"$t") || return 1
+  [ -n "$g" ] || return 1
+  [[ $g == /* ]] || g=$co/$g
+  g=$(git_link_path "$g" "$j") && [ -d "$g" ] || return 1
+  if [ "$j" = jail ]; then t=$(jail_path "$g/commondir") || return 1; else t=$g/commondir; fi
+  if [ -f "$t" ]; then
+    if [ "$j" = jail ]; then c=$(jail_read "$t") || return 1; else c=$(cat -- "$t" 2>/dev/null) || return 1; fi
+    [ -n "$c" ] || return 1
+    [[ $c == /* ]] || c=$g/$c
+    c=$(git_link_path "$c" "$j") && [ -d "$c" ] || return 1
+  elif [ -e "$t" ] || [ -L "$t" ]; then return 1
+  else c=$g; fi
+  [[ $g$c != *$'\n'* ]] || return 1
+  printf '%s\n%s\n' "$g" "$c"
+}
+# git_link_path PATH [jail]: PATH resolved (git_link_dirs'); with `jail`, only inside the jail's folders.
+git_link_path() {
+  if [ "${2:-}" = jail ]; then local q; q=$(jail_path "$1") && jail_sees "$q"
+  else readlink -e -- "$1" 2>/dev/null; fi
+}
+
 # The dirs outside its top level TOP that a repo's git data lives in, one per line, for `up` to mount
 # read-only at their own paths (finding 250). A linked worktree's .git is a file naming its gitdir,
 # <common>/worktrees/NAME, inside the main checkout's .git (the common dir: objects, refs, config); a
 # submodule's names one in the superproject's .git/modules. The common dir holds the gitdir, so it
 # goes alone: the main checkout's .git, not the rest of it. Nothing for a main checkout (its .git is in
-# TOP), one whose gitdir is gone (git fails), or a jailed caller (repo_top runs no git for one).
+# TOP), or one whose gitdir is gone (git fails).
+# A jailed caller's (#193, finding 275): git is never run (repo_top's reason), the files are read
+# (git_link_dirs, inside the jail's folders only), and only a linked worktree's common dir goes: a
+# dir named .git that is one of the jail's folders itself (as ai-jail --worktree maps it), so the jail
+# cannot swap it for a link out between this check and the mount, holding the gitdir as
+# <common>/worktrees/NAME. Anything else (a submodule, a common dir the jail does not see or sees only
+# inside a folder of its own, a stale gitdir) is nothing, quietly.
 repo_git_dirs() {
-  ! in_jail || return 0
   local out d top prev=""
   top=$(readlink -e -- "$1" 2>/dev/null) || top=$1
+  if in_jail; then
+    out=$(git_link_dirs "$1" jail) || return 0
+    d=${out#*$'\n'}
+    [[ $d == */.git && ${out%%$'\n'*} == "$d"/worktrees/* && ${out%%$'\n'*} != "$d"/worktrees/*/* ]] || return 0
+    jq -e --arg p "$d" 'any(.roots[]; .path == $p)' <<<"$OMABOX_JAIL" >/dev/null || return 0
+    [[ $d/ != "${top%/}"/* ]] || return 0
+    echo "$d"; return 0
+  fi
   out=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir --git-dir 2>/dev/null) || return 0
   while IFS= read -r d; do
     d=$(readlink -e -- "$d" 2>/dev/null) || continue

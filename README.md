@@ -395,7 +395,9 @@ blocks the network and every other socket, omabox's included), or see
 ## What a box can and cannot touch
 
 - **Your files**: the repo you run `omabox up` from, **read-only** at the same path (from a git
-  worktree or submodule, its git dir in the main checkout's `.git` too, so git works there), plus the dirs
+  worktree or submodule, its git dir in the main checkout's `.git` too, so git works there; inside
+  ai-jail, a worktree's when the jail has that `.git` as a folder of its own, as `ai-jail --worktree`
+  maps it), plus the dirs
   in `~/.config/omabox/ro-bind` (one per line) or `--ro-bind`; mise's toolchains (so `omabox run`
   finds node, python, uv as on the host), the `--plugin` and `--theme-dir` dirs, and your git
   `user.name` and `user.email`. Nothing else of your HOME. Refused whatever you pass: anything that

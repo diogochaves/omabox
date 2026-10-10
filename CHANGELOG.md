@@ -17,6 +17,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **Git works in a jailed agent's box from a git worktree** (#193). Inside ai-jail, a box started
+  from a linked worktree still had no git (`fatal: not a git repository`): the main checkout's `.git`
+  went in only outside a jail, where git itself is asked. omabox now reads the worktree's `.git` file
+  and `commondir` instead, never running git on the jail's files, and mounts the main checkout's
+  `.git` read-only when the jail has it as a folder of its own (`ai-jail --worktree` maps it so).
 - **A box starts on the wallpaper the desk has, one of your own too** (#184). A wallpaper added with
   Omarchy's background install (`~/.config/omarchy/backgrounds/THEME/`) gave a box with no wallpaper:
   its background link led to a path the box does not have, and the shell started with

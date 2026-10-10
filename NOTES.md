@@ -5326,6 +5326,34 @@ from them.
     Omarchy has #9639 (seen set to the copy's path with `--omarchy` on a checkout at 26897e0c; the
     installed 4.0.4 has not). t_theme's background checks now expect Omarchy's pick.
 
+275. **A jailed agent's box from a git worktree had no git there** (2026-10-10, #193). Finding 250
+    mounts a linked worktree's common dir (`<main>/.git`, read-only, at its own path) by asking git,
+    which `repo_git_dirs` never did for a jailed caller: the jail's `.git` and `.git/config` are its to
+    write, and settings there (core.fsmonitor, hooks) would run programs on the host. So from ai-jail
+    in a worktree, git in the box failed, `fatal: not a git repository`. Now, for a jailed caller, the
+    files git reads are read instead, with the parser `aq_main_lib` had (finding 271), now
+    `git_link_dirs` for both: the worktree's `.git` file (`gitdir: G`, relative to it or absolute)
+    and `G/commondir` (relative to G; none: G is its own common dir, a submodule's). In a jail each
+    path is followed only inside the jail's folders (`jail_path`, finding 273) and each file read
+    through `jail_read`, and every failure is the same nothing, so what the jail writes there tells
+    it nothing of the host. What goes in is narrower than outside a jail, since the jail wrote the
+    `.git` file: a common dir named `.git` that is one of the jail's folders itself (a mount point in
+    the jail, so it cannot be swapped for a link out between the check and the box's mount; one seen
+    only inside a folder of the jail's, such as a mapped main checkout, could be), holding G as
+    `<common>/worktrees/NAME`, outside the worktree, and through `refuse_src`/`refuse_dest` as
+    before. `ai-jail --worktree` maps it so (the common dir and the gitdir, both at their own paths;
+    jail_policy marks the common dir masked, as anything of the jail's inside a folder makes it).
+    Nothing for a submodule, a common dir the jail does not see, a stale gitdir, or a `gitdir:` that
+    leads out of the jail even when it comes back in. Only the common dir goes, never more of the
+    main checkout, and the `.git`-name rule keeps a jail from naming another of its folders its
+    common dir. `aq_main_lib` is unchanged in what it finds (a linked worktree's
+    main checkout only). t_unit_git_dirs (a jailed caller with a stub git that records being run:
+    the common dir when the jail has it as `--worktree` maps it or alone, nothing when it sees no
+    or only the gitdir, only the main checkout, a stale gitdir, a submodule, a common dir not named
+    `.git`, a gitdir that is the common dir, a gitdir and a `.git` through links out; git never run)
+    and t_jail (from a worktree under `ai-jail --worktree`: `git status --branch` in the box, the main
+    checkout's files absent; fails on the old code).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
