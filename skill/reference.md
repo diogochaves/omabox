@@ -156,6 +156,11 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   anything that repaints per frame costs ~2.4x more at 144 Hz than at the default 60. NVIDIA driver
   615.71.09 does not expose the per-process DRM counters `gpu` needs; on that driver it reports no
   percentages.
+- **Measuring CPU and memory** (an app's idle cost, a busy loop, a leak): `omabox cpu 30 --settle 5
+  --app NAME` (or `--pid PID`, as `omabox run -- ps -e` numbers it, or the host's; neither: every
+  process of the box), CPU as % of one core over the window, RSS and PSS as last seen (`--json`:
+  `processes[]`, `total`). `--settle` stands for the `sleep` you would put before measuring. Not
+  `top`/`pgrep` on the host: they mix the box's processes with the user's (`omabox which PID`).
 - Which GPU: headless boxes render on the one the user's `omabox config gpu` names (`auto`: the first;
   `up` says when it fell back because that GPU is gone, and why; `omabox gpu` names the box's; `ls
   --json` has each box's `render`: node, pci, driver, fallback, and for one the setting's `wanted` and

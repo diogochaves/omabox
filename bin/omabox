@@ -115,6 +115,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
+  omabox cpu [-b NAME] [SECONDS] [--settle S] [--pid PID | --app NAME] [--json]
+                                                         CPU (% of one core) and memory of this box's processes (default 5s)
   omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
@@ -386,9 +388,9 @@ else in the box is touched: an app started some other way stays.
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
 (-b NAME) stays.
-@ up mode gpu run
+@ up mode gpu cpu run
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
-Measure rendering cost with \`omabox gpu\` in a box whose mode matches your monitor.
+Measure rendering cost with \`omabox gpu\` (and \`omabox cpu\`) in a box whose mode matches your monitor.
 @ up monitor shot peek
 More monitors: \`up --monitor SPEC\` (repeatable) or \`monitor add SPEC\` on a running box.
 SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one made by default, or below
@@ -420,6 +422,16 @@ render node, and on NVIDIA its /dev/nvidia*). Interactive boxes are left alone (
 desktop's GPU), and so are boxes on other GPUs. An \`up\` or \`down\` in progress is waited for first.
 Each box's GPU is in \`gpu\`, \`ls\` (with more than one GPU, or when it is a fallback, and why) and
 \`--json\` (render).
+@ cpu
+\`cpu\` is \`gpu\`'s twin for CPU and memory: each process in the box's pid namespace (never the
+desktop's, which a host \`top\` or \`pgrep\` mixes in), its CPU over SECONDS as % of one core (100% is
+one core busy; the rows add up to the total), its RSS and PSS (shared pages split among the processes
+sharing them: the total is what the box holds) as last seen. Sampled every second: a process that
+started in the window counts all its time, one that exited keeps what was seen up to its last sample
+(both said). --settle S waits S seconds before the window (an app's start-up left out). --pid PID: one
+process, as the box numbers it (\`omabox run -- ps -e\`) or its host pid; --app NAME: the processes of
+that name (their /proc comm, the first 15 bytes). --json: percent by name (as \`gpu\`'s), processes
+(pid, host_pid, name, cpu, rss_kb, pss_kb, started, exited) and total.
 @ output
 \`output drop [OUT]\` removes one of a headless box's screens, as a monitor that drops off on wake
 (standby, a KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on
@@ -6787,6 +6799,24 @@ box_render_held() {
   return 1
 }
 
+# What `gpu` and `cpu` say about the box before their figures, into the caller's screen, aq and rj: its
+# main screen ("OUTPUT WxH@HZ"), the aquamarine it runs (as `up` recorded it: rendering cost can depend
+# on it) and its GPU (finding 237; none for an interactive box, the desktop's).
+cost_context() {
+  screen=$(box_screen)
+  aq=$(jq -c '.aquamarine // null' "$D/box.json" 2>/dev/null) || aq=null
+  rj=$(jq -c '.render // null' "$D/box.json" 2>/dev/null) || rj=null
+}
+# Their lines under the first: the aquamarine and the GPU.
+cost_lines() {
+  [ "$aq" = null ] || jq -r '"aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
+    + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)
+    + (if .main_checkout then " (" + .main_checkout + ", the main checkout\u0027s)" else "" end)' <<<"$aq"
+  if [ "$rj" != null ]; then render_line <<<"$rj" || true
+  elif [ "$(meta mode)" = interactive ]; then echo "GPU: the desktop's (an interactive box renders where your compositor does)"
+  fi
+}
+
 # GPU engine time of this box's processes, as % of wall time, by process name. Host-wide tools sum
 # DRM fdinfo by name, so a box's Hyprland and quickshell merge with the real ones; here a process
 # belongs to the box when it is in the box's pid namespace. Any driver that reports drm-engine-*;
@@ -6826,11 +6856,7 @@ cmd_gpu() {
   t0=$(date +%s%N); snap > "$tmp/a"
   sleep "$secs"
   t1=$(date +%s%N); snap > "$tmp/b"
-  local screen; screen=$(box_screen)
-  # Which aquamarine the box runs (as `up` recorded it): rendering cost can depend on it.
-  local aq; aq=$(jq -c '.aquamarine // null' "$D/box.json" 2>/dev/null) || aq=null
-  # And which GPU (finding 237), as `up` recorded it: none for an interactive box (the desktop's).
-  local rj; rj=$(jq -c '.render // null' "$D/box.json" 2>/dev/null) || rj=null
+  local screen aq rj; cost_context
   # A client first seen in the second sample started during the window: all its time counts. Every
   # process holding a client is listed, idle ones at 0.0.
   awk -v wall=$((t1 - t0)) '
@@ -6848,15 +6874,152 @@ cmd_gpu() {
     return
   fi
   echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
-  [ "$aq" = null ] || jq -r '"aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
-    + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)
-    + (if .main_checkout then " (" + .main_checkout + ", the main checkout\u0027s)" else "" end)' <<<"$aq"
-  if [ "$rj" != null ]; then render_line <<<"$rj" || true
-  elif [ "$(meta mode)" = interactive ]; then echo "GPU: the desktop's (an interactive box renders where your compositor does)"
-  fi
+  cost_lines
   # Rows by kind (finding 176): a process whose comm is `engine` is a process.
   grep '^proc ' "$tmp/r" | sort -k3 -rn | awk '{ printf "  %-20s %5.1f%%\n", $2, $3 }'
   grep -q '^proc ' "$tmp/r" || echo "  (no GPU time)"
+}
+
+# CPU and memory of this box's processes (#205), gpu's twin: CPU as % of one core over SECONDS, RSS
+# and PSS as last seen. Host-wide tools (top, pgrep) mix a box's processes with the desktop's (finding
+# 242); a box's are the ones in its pid namespace, as for gpu (box_pids). utime+stime from
+# /proc/PID/stat, sampled every second of the window (and at its ends), so a process that exits
+# during it keeps the time seen up to its last sample, and one that starts counts all of its own.
+cmd_cpu() {
+  local name="" secs=5 settle=0 pid="" app="" json=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      --settle) optarg "$@"; [[ $2 =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "cpu: --settle takes seconds (a number), got $2"; settle=$2; shift ;;
+      --pid) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,6}$ ]] || die "cpu: --pid takes a pid in the box (omabox run -- ps -e) or its host pid, got $2"; pid=$2; shift ;;
+      --app) optarg "$@"; app=$2; shift ;;
+      --json) json=1 ;;
+      -h|--help) usage cpu; return ;;
+      -*) die "cpu: unknown option $1" ;;
+      *) { [[ $1 =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v s="$1" 'BEGIN { exit !(s > 0) }'; } || die "cpu: SECONDS is a number above 0, got $1"; secs=$1 ;;
+    esac
+    shift
+  done
+  [ -z "$pid" ] || [ -z "$app" ] || die "cpu: --pid or --app, not both"
+  select_box "$name"; need_box
+  box_pids >/dev/null || die "cpu: cannot read the box's pid namespace"
+  local clk; clk=$(getconf CLK_TCK) && [[ $clk =~ ^[1-9][0-9]*$ ]] || die "cpu: getconf CLK_TCK gave no tick rate"
+  [ "$settle" = 0 ] || sleep "$settle"
+  # Global, not local: the EXIT trap runs after this function has returned (or on Ctrl-C).
+  CPU_TMP=$(mktemp -d); trap 'rm -rf "$CPU_TMP"' EXIT
+  local s=$CPU_TMP/s t0 now left ns
+  cpu_snap() { local pids=(); mapfile -t pids < <(box_pids || true); echo "S $(date +%s%N)"; cpu_sample /proc "${pids[@]}"; }
+  cpu_snap > "$s"
+  # --pid: there before the window, not after it (gone by then, it is a process that exited).
+  if [ -n "$pid" ] && ! awk -v p="$pid" '!/^S / && ($6 == p || $1 == p) { f = 1 } END { exit !f }' "$s"; then
+    die "cpu: box '$NAME' has no process $pid (omabox run -b $NAME -- ps -e)"
+  fi
+  t0=$(sed -n '1s/^S //p' "$s")
+  ns=$(awk -v s="$secs" 'BEGIN { printf "%.0f", s * 1e9 }')
+  while now=$(date +%s%N); left=$((t0 + ns - now)); [ "$left" -gt 0 ]; do
+    sleep "$(awk -v l="$left" 'BEGIN { printf "%.3f", (l > 1e9 ? 1e9 : l) / 1e9 }')"
+    cpu_snap >> "$s"
+  done
+  cpu_report "$clk" "$pid" "$(cpu_tame "${app:0:15}")" < "$s" > "$CPU_TMP/r"
+  if ! grep -q '^p ' "$CPU_TMP/r"; then
+    [ -z "$app" ] || die "cpu: box '$NAME' ran no process $app in the window (its name in omabox run -b $NAME -- ps -e)"
+  fi
+  local screen aq rj cores; cost_context
+  cores=$(getconf _NPROCESSORS_ONLN) || cores=null
+  if [ $json = 1 ]; then
+    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson settle "$settle" \
+      --argjson cores "$cores" --argjson aq "$aq" --argjson render "$rj" '
+      def n: if . == "-" then null else tonumber end;
+      [inputs | split(" ")] as $r |
+      [$r[] | select(.[0] == "p") | {pid: (.[2] | tonumber), host_pid: (.[1] | tonumber), name: .[3], cpu: (.[4] | tonumber),
+        rss_kb: (.[5] | tonumber), pss_kb: (.[6] | n), started: (.[7] == "1"), exited: (.[8] == "1")}] as $p |
+      first($r[] | select(.[0] == "total")) as $t |
+      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, settle: $settle,
+        cores: $cores, aquamarine: $aq, render: $render,
+        percent: (reduce $p[] as $x ({}; .[$x.name] += $x.cpu) | map_values(. * 10 | round / 10)),
+        processes: $p, total: {cpu: ($t[1] | tonumber), rss_kb: ($t[2] | tonumber), pss_kb: ($t[3] | n)} }' < "$CPU_TMP/r"
+    return
+  fi
+  echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, CPU as % of one core (${cores} cores), memory as last seen"
+  cost_lines
+  cpu_table < "$CPU_TMP/r"
+}
+
+# A process name as `cpu` writes it: one field (blanks become _), tame characters (the box names its
+# processes: prctl, /proc/PID/comm); bytes, as the kernel truncates a name to 15 of them.
+cpu_tame() {
+  local LC_ALL=C tamed=$1
+  tamed=${tamed//[[:space:]]/_}; tamed=${tamed//[^A-Za-z0-9_.:+@-]/?}
+  echo "$tamed"
+}
+
+# One sample of processes PID... under PROC (/proc, or a test's tree), a line each: host pid, start
+# time (ticks after boot: a reused pid is another process), utime+stime (ticks), VmRSS and Pss (kB;
+# Pss - when smaps_rollup cannot be read), its pid in its own namespace (the box's: NSpid's last), name.
+# Read with builtins: no fork per process, and one gone meanwhile is skipped. Names as cpu_tame.
+cpu_sample() {
+  local LC_ALL=C proc=$1 p l comm rss pss bp k f=() st=(); shift
+  for p; do
+    { read -r l < "$proc/$p/stat"; } 2>/dev/null || continue
+    comm=${l#*\(}; comm=${comm%) *}
+    read -ra st <<<"${l##*) }"   # st[0] is field 3 (state): utime 14, stime 15, starttime 22
+    [ ${#st[@]} -ge 20 ] || continue
+    rss=0 pss=- bp=$p
+    while read -ra f; do
+      case ${f[0]:-} in VmRSS:) rss=${f[1]} ;; NSpid:) bp=${f[-1]} ;; esac
+    done 2>/dev/null < "$proc/$p/status" || true
+    while read -r k l _; do
+      [ "$k" != Pss: ] || { pss=$l; break; }
+    done 2>/dev/null < "$proc/$p/smaps_rollup" || true
+    comm=${comm//[[:space:]]/_}; comm=${comm//[^A-Za-z0-9_.:+@-]/?}; [ -n "$comm" ] || comm='?'
+    echo "$p ${st[19]} $((st[11] + st[12])) $rss $pss $bp $comm"
+  done
+}
+
+# Samples (an "S NANOSECONDS" line, then cpu_sample's lines, for each) into `cpu`'s figures: a line per
+# process, "p HOSTPID PID NAME CPU RSS PSS STARTED EXITED", busiest first, then "total CPU RSS PSS".
+# CPU: % of one core over the whole window (first sample to last), so the rows add up to the total.
+# A process first seen after the first sample started in the window: all its ticks count. One gone
+# before the last sample: its ticks up to the last sample it was in, its memory as then.
+# cpu_report CLK_TCK [PID] [NAME]: only process PID (a pid in the box, else a host pid; as in the
+# first sample), or the processes named NAME (cpu_tame'd: the first 15 bytes).
+cpu_report() {
+  awk -v clk="$1" -v want="${2:-}" -v app="${3:-}" '
+    /^S / { t[++k] = $2; next }
+    { key = $1 " " $2
+      if (!(key in first)) { first[key] = k; base[key] = k == 1 ? $3 : 0; keys[++n] = key }
+      last[key] = k; tk[key] = $3; rss[key] = $4; pss[key] = $5; bp[key] = $6; nm[key] = $7 }
+    END {
+      wall = k > 1 ? (t[k] - t[1]) / 1e9 : 0
+      if (want != "") {   # the box numbering first, as gdb --pid
+        for (i = 1; i <= n; i++) if (first[keys[i]] == 1 && bp[keys[i]] == want) only = keys[i]
+        if (only == "") for (i = 1; i <= n; i++) if (first[keys[i]] == 1 && keys[i] ~ ("^" want " ")) only = keys[i]
+      }
+      for (i = 1; i <= n; i++) {
+        key = keys[i]
+        if (want != "" && key != only) continue
+        if (app != "" && nm[key] != app) continue
+        c = wall > 0 ? (tk[key] - base[key]) / clk / wall * 100 : 0
+        if (c < 0) c = 0
+        started = first[key] > 1; exited = last[key] < k
+        printf "p %s %s %s %.1f %d %s %d %d\n", substr(key, 1, index(key, " ") - 1), bp[key], nm[key], c, rss[key], pss[key],
+          started, exited | "sort -k5,5 -rn -s"
+        tc += c; tr += rss[key]; if (pss[key] != "-") { tp += pss[key]; np++ }
+      }
+      close("sort -k5,5 -rn -s")
+      printf "total %.1f %d %s\n", tc, tr, np ? tp : "-"
+    }'
+}
+
+# cpu_report's lines as `cpu`'s table: memory in MiB (GiB from 1 GiB); a process seen for part of the
+# window says so.
+cpu_table() {
+  awk 'function mem(k) { if (k == "-") return "-"; return k >= 1048576 ? sprintf("%.2fG", k / 1048576) : sprintf("%.1fM", k / 1024) }
+    BEGIN { printf "  %-20s %8s %7s %9s %9s\n", "PROCESS", "PID", "CPU", "RSS", "PSS" }
+    $1 == "p" { note = $8 && $9 ? "  (started and exited in the window)" : $8 ? "  (started in the window)" : $9 ? "  (exited in the window)" : ""
+      printf "  %-20s %8s %6.1f%% %9s %9s%s\n", $4, $3, $5, mem($6), mem($7), note; rows++ }
+    $1 == "total" { if (!rows) print "  (no processes)"
+      printf "  %-20s %8s %6.1f%% %9s %9s\n", "total", "", $2, mem($3), mem($4) }'
 }
 
 # Listening TCP sockets in a /proc net dir, "PORT ADDR UID INODE" each. ADDR: 127.0.0.1, 0.0.0.0, ::,
@@ -8301,7 +8464,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|pixel|windows|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|pixel|windows|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|cpu|env|path|down|ls|list) ;;
     # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
     ports) ;;
     help|-h|--help|version|-V|--version) ;;
@@ -8583,7 +8746,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu ports env path down save clip "
+BOX_CMDS=" up run shot screenshot pixel windows keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu ports env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -8650,6 +8813,7 @@ main() {
     output) cmd_output "$@" ;;
     gdb) cmd_gdb "$@" ;;
     gpu) cmd_gpu "$@" ;;
+    cpu) cmd_cpu "$@" ;;
     ports) cmd_ports "$@" ;;
     env) cmd_env "$@" ;;
     path) cmd_path "$@" ;;

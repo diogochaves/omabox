@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`omabox cpu`: CPU and memory of a box's processes** (#205), `gpu`'s twin. `omabox cpu
+  [SECONDS] [--settle S] [--pid PID | --app NAME] [--json]` gives each process of the box (never the
+  desktop's, which `top` and `pgrep` mix in), or one, its CPU over the window as % of one core, RSS
+  and PSS, and a total. A process that starts or exits during the window is counted for what was
+  seen of it, and says so. No more hand-written samplers of `/proc/PID/stat`, or a `sleep` before them.
 - **`omabox config shot-fit N`: a default size for every shot** (#188). Some models read click
   points in the smaller image their API scales a big shot down to (Haiku 4.5: hundreds of pixels
   off on a 1920x1080 shot); whoever runs one sets `shot-fit 1456` once, and every `shot` given no

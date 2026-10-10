@@ -136,8 +136,9 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   systemd user manager, for plugins that manage a service or schedule alarms), `--from SAVE` (start
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
   the whole box session), `--xwayland`, `--autoreload` (Hyprland reloads its config when a file it
-  loaded changes, as on your desktop), and `omabox gpu 10` (GPU time of one box's
-  processes, where the driver reports per-process counters). `omabox help` lists every flag,
+  loaded changes, as on your desktop), `omabox gpu 10` (GPU time of one box's
+  processes, where the driver reports per-process counters) and `omabox cpu 10` (their CPU, as % of one
+  core, and memory; `--app NAME` or `--pid PID` for one). `omabox help` lists every flag,
   `omabox help CMD` (or `omabox CMD --help`) one command's.
 
 ### Tests that touch the desktop

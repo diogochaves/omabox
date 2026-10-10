@@ -70,7 +70,8 @@ omabox down                                # when done (never --all: it takes ot
 
 Also: `drag`, `scroll`, `pointer`, `pixel`, `events`, `gdb`, `output`, `save`/`up --from` (`omabox help`).
 Rendering cost: `omabox gpu 10`, each of the box's processes' share of GPU engine time (`--json`),
-in a box whose mode matches the monitor (`up --size host`); not host-wide tools.
+in a box whose mode matches the monitor (`up --size host`); not host-wide tools. CPU and memory:
+`omabox cpu 10 [--settle 5] [--app NAME | --pid PID]` (% of one core, RSS, PSS; `--json`).
 ref: Screen size and rendering cost.
 
 ## Driving an app

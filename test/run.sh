@@ -7401,6 +7401,39 @@ output_on() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# omabox cpu (#205, finding 277) in a box: a busy loop is ~one core, by --pid (the box's number or the
+# host's) and --app; an idle box is near 0; --json has gpu's shape plus processes and a total.
+t_cpu() {
+  local B=$P-cpu out j bp hp
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  j=$(ob cpu -b "$B" 2 --json)
+  check "cpu --json parses, with gpu's fields and its own" jq -e '.box and .output and .mode and (.seconds == 2) and (.percent | type == "object")
+    and (.processes | length > 0) and (.total | has("cpu") and has("rss_kb") and has("pss_kb")) and (.cores > 0) and has("render")' <<<"$j"
+  check "...every process with pid, host_pid, name, cpu, rss_kb, pss_kb, started, exited" \
+    jq -e '[.processes[] | keys == ["cpu","exited","host_pid","name","pid","pss_kb","rss_kb","started"]] | all' <<<"$j"
+  check "...the box's own: Hyprland at its pid in the box" jq -e --argjson p "$(ob run -b "$B" -- pgrep -xo Hyprland)" \
+    '[.processes[] | select(.name == "Hyprland" and .pid == $p)] | length == 1' <<<"$j"
+  check "an idle box: under 30% of one core in all" jq -e '.total.cpu < 30' <<<"$j"
+  check "...RSS read, PSS too, no larger" jq -e '.total.rss_kb > 10000 and .total.pss_kb > 0 and .total.pss_kb <= .total.rss_kb' <<<"$j"
+  ob run -b "$B" -d -q -- sh -c 'while :; do :; done' >/dev/null 2>&1
+  until_ok 5 ob run -b "$B" -- pgrep -x sh >/dev/null
+  bp=$(ob run -b "$B" -- pgrep -xn sh) || bp=0
+  out=$(ob cpu -b "$B" 2 --pid "$bp")
+  check_match "cpu --pid: a busy loop is about one core" $'\n  sh +'"$bp"' +(9[0-9]|10[0-9])\.[0-9]%' "$out"
+  check_eq "...that process alone, and the total" 2 "$(grep -cE '^  (sh|total) ' <<<"$out")"
+  j=$(ob cpu -b "$B" 1 --settle 0.5 --app sh --json)
+  hp=$(jq -r '.processes[0].host_pid' <<<"$j")
+  check_eq "cpu --app sh: the processes named sh only" "sh" "$(jq -r '[.processes[].name] | unique | join(" ")' <<<"$j")"
+  check "...the busy one at about one core" jq -e --argjson p "$bp" '.processes[] | select(.pid == $p) | .cpu > 90' <<<"$j"
+  check "...its host pid is the box's (omabox which)" test "$(ob which "$hp" 2>/dev/null)" = "$B"
+  check "cpu --pid HOSTPID: the same process" jq -e --argjson p "$bp" '.processes | length == 1 and .[0].pid == $p' \
+    <<<"$(ob cpu -b "$B" 1 --pid "$hp" --json)"
+  check_match "cpu --pid not in the box: refused before the window" "has no process 4999999" "$(ob cpu -b "$B" 5 --pid 4999999 2>&1)"
+  check_match "cpu --app not there: said" "ran no process nope" "$(ob cpu -b "$B" 0.5 --app nope 2>&1)"
+  ob run -b "$B" -- pkill -x sh >/dev/null 2>&1
+  ob down "$B" >/dev/null 2>&1
+}
+
 # omabox gdb (#135, finding 211): a backtrace of the box's Hyprland, running or stopped, of a process
 # of the box, and --watch catching a crash; a gdb of the box's own (run) is still refused.
 t_gdb() {
@@ -7566,6 +7599,41 @@ t_unit_gpu() {
   local out; out=$(rel nvidia | paste -sd '|'); wait "$holder"
   check_match "gpu release waits for an up in progress, said" "waiting for box 'f' \(an up or down in progress\)" "$out"
   check_match "...and takes its box down too" "\|down a d f$" "$out"
+}
+
+# omabox cpu (#205, finding 277): /proc read on a fake tree (cpu_sample), the arithmetic on injected
+# samples (cpu_report), the table, and the refusals before any box is read.
+t_unit_cpu() {
+  local f=$TMP/cpu out
+  mkdir -p "$f/10" "$f/11"
+  # A name with blanks and parens (the box sets its own: prctl), NSpid's last its pid in the box.
+  printf '10 (my (odd) app) S 1 10 10 0 -1 4194304 100 0 0 0 250 50 0 0 20 0 3 0 5000 1000000 300 18446744073709551615\n' > "$f/10/stat"
+  printf 'Name:\tx\nVmRSS:\t  2048 kB\nNSpid:\t10\t7\n' > "$f/10/status"
+  printf 'Rss:   2048 kB\nPss:   1024 kB\n' > "$f/10/smaps_rollup"
+  printf '11 (sleep) S 1 10 10 0 -1 4194304 100 0 0 0 1 2 0 0 20 0 3 0 6000 1000000 300 18446744073709551615\n' > "$f/11/stat"
+  check_eq "cpu_sample: pid, start, utime+stime, RSS, PSS, pid in the box, the name as one field" \
+    $'10 5000 300 2048 1024 7 my_?odd?_app\n11 6000 3 0 - 11 sleep' "$(lib cpu_sample "$f" 10 11 12)"
+  # Two samples 2 s apart at 100 ticks/s: pid 10 (box 7) used 100 ticks (50%), 11 exited, 12 started
+  # with 50 ticks (25%); a pid reused by another process (start time) is another process.
+  printf 'S 1000000000\n10 5000 300 2048 1024 7 a\n11 6000 3 0 - 11 b\n13 100 70 10 - 13 d\nS 3000000000\n10 5000 400 4096 1024 7 a\n12 7000 50 100 - 12 c\n13 900 10 10 - 13 d\n' > "$f/s"
+  out=$(lib cpu_report 100 < "$f/s")
+  check_eq "cpu_report: % of one core over the window, busiest first, a total" \
+    $'p 10 7 a 50.0 4096 1024 0 0\np 12 12 c 25.0 100 - 1 0\np 13 13 d 5.0 10 - 1 0\np 11 11 b 0.0 0 - 0 1\np 13 13 d 0.0 10 - 0 1\ntotal 80.0 4216 1024' "$out"
+  check_eq "...--pid: the box's number" $'p 10 7 a 50.0 4096 1024 0 0\ntotal 50.0 4096 1024' "$(lib cpu_report 100 7 < "$f/s")"
+  check_eq "...or the host's" "p 10 7 a 50.0 4096 1024 0 0" "$(lib cpu_report 100 10 < "$f/s" | head -1)"
+  check_eq "...a pid not there at the start: none" "total 0.0 0 -" "$(lib cpu_report 100 12 < "$f/s")"
+  check_eq "...--app: by name" $'p 12 12 c 25.0 100 - 1 0\ntotal 25.0 100 -' "$(lib cpu_report 100 "" c < "$f/s")"
+  check_eq "cpu_tame: as cpu_sample names" "my_?odd?_app" "$(lib cpu_tame 'my (odd) app')"
+  out=$(lib cpu_report 100 < "$f/s" | lib cpu_table)
+  check_match "cpu_table: a header, then the rows" $'^  PROCESS +PID +CPU +RSS +PSS\n  a +7 +50.0% +4.0M +1.0M\n' "$out"
+  check_match "...one that started, and one that exited, said" $'\n  c +12 +25.0% +0.1M +-  \\(started in the window\\)\n.*\n  b +11 +0.0% +0.0M +-  \\(exited in the window\\)' "$out"
+  check_match "...the total last" $'\n  total +80.0% +4.1M +1.0M$' "$out"
+  check_match "cpu: SECONDS above 0" "SECONDS is a number above 0" "$(ob cpu -b "$P-x" 0 2>&1)"
+  check_match "cpu: --pid or --app" "--pid or --app, not both" "$(ob cpu -b "$P-x" --pid 1 --app x 2>&1)"
+  check_match "cpu: --pid junk refused" "--pid takes a pid" "$(ob cpu -b "$P-x" --pid x 2>&1)"
+  check_match "cpu: --settle junk refused" "--settle takes seconds" "$(ob cpu -b "$P-x" --settle 1s 2>&1)"
+  check "cpu is a jailed agent's, as gpu" lib broker_check cpu
+  check_match "cpu takes -b first (a box command)" "no box .nope-$P. is up" "$(ob -b "nope-$P" cpu 2>&1)"
 }
 
 # Travel (#38, finding 111) and --mod (#25, finding 112): the pure parts and what is refused before
@@ -8222,9 +8290,9 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

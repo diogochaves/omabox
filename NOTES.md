@@ -5382,6 +5382,28 @@ from them.
     repro: refused, exit 1, the pointer unmoved, the launcher's field empty (one Escape closes it;
     with text the first only clears it); then typed into the terminal still active; an on-demand
     overlay clicked, then typed into the terminal; fails on the old code).
+277. **`omabox cpu`: a box's CPU and memory, `gpu`'s twin** (2026-10-10, #205). Measuring a Qt app's
+    idle CPU in a box took a host `pgrep`, `omabox which` to tell its pid from the desktop's (finding
+    242) and a script of one's own sampling utime+stime and VmRSS, a `sleep` before it for the app to
+    settle (agents get no plain `sleep`). Now `omabox cpu [SECONDS] [--settle S] [--pid PID | --app
+    NAME] [--json]`: the box's processes as `gpu` finds them (`box_pids`, its pid namespace), each one's
+    utime+stime (`/proc/PID/stat`, fields 14 and 15, after the last `)`: the box names its processes)
+    over the window / CLK_TCK / wall time, as % of one core, so the rows add up to the total; VmRSS and
+    smaps_rollup's Pss as last seen (Pss is readable for every box process: the user owns the box's user
+    namespace; a box's 11 processes read in a few ms, all with builtins, no fork per process). Sampled
+    every second, not only at the ends: a process that exits during the window keeps the time seen up
+    to its last sample (a 1.5 s busy loop in a 4 s window read 32.9%, 37.5% exact), one first seen
+    after the first sample counts all its ticks (it started in the window), both marked (`started`,
+    `exited`); a process is its host pid with its start time, so a reused pid is another. `--pid` is
+    the box's numbering first (NSpid's last, as `gdb --pid` and `run -- ps -e`), else a host pid of the
+    box's, checked before the window; `--app` matches the comm (15 bytes), after it, so an app started
+    during the window counts. `--json` keeps `gpu`'s fields (box, output, mode, seconds, aquamarine,
+    render, percent by name) and adds settle, cores, processes[] and total; the text has `gpu`'s lines
+    first (cost_context/cost_lines, shared now). Allowed to a jailed agent, as `gpu` (its own boxes
+    only: select_box). Live, an idle `--no-shell` box on the RTX: 1.0% in all (labwc and Hyprland
+    0.5% each), 423 MB RSS, 264 MB PSS; `run -d -- sh -c 'while :; do :; done'`: 99.9% by `--pid`,
+    by its host pid and by `--app sh`. t_unit_cpu (a fake /proc and injected samples: the arithmetic,
+    a reused pid, the table, refusals) and t_cpu (that box and loop).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
