@@ -8372,6 +8372,11 @@ t_inspect() {
   check_match "log --grep" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep 'creating the' -i -n 1)"
   check_match "log --grep -i RE, as grep users type it (#130)" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep -i 'creating the' -n 1)"
   check_match "path --logs: where each is" "^hyprland +$(ob path -b "$B")/run/hypr/[^/]+/hyprland\.log$" "$(ob path -b "$B" --logs | grep '^hyprland')"
+  # path --run (#208): the box's /run/user/$UID on the host, where what the box writes there is.
+  check_eq "path --run: <dir>/run" "$(ob path -b "$B")/run" "$(ob path -b "$B" --run)"
+  ob run -b "$B" -- sh -c 'echo omabox-run-$$ > "$XDG_RUNTIME_DIR/omabox-208"' >/dev/null 2>&1
+  check_match "...a file the box wrote to \$XDG_RUNTIME_DIR is there" '^omabox-run-[0-9]+$' "$(cat "$(ob path -b "$B" --run)/omabox-208" 2>&1)"
+  check_fails "path --logs --run: one or the other" ob path -b "$B" --logs --run
   ob run -b "$B" -d -- sh -c 'echo omabox-log-1; sleep 1.5; echo omabox-log-2; sleep 600' >/dev/null 2>&1
   check "log run: the latest run -d's" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-log-1"
   ob log -b "$B" -f -n all run keyring > "$TMP/log.f" 2>&1 & local lf=$!

@@ -7,6 +7,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`omabox path --run`: where a box's /run/user/$UID is on the host** (#208): `<dir>/run`, the
+  box's `XDG_RUNTIME_DIR`, where an app's runtime state (a `status.json`, a socket) is read from the
+  host. The host's own `/run/user/$UID` is your real session's: `omabox help path` and the agent skill
+  now say so, after an agent read a desktop app's state there instead of the box's.
 - **`omabox cpu`: CPU and memory of a box's processes** (#205), `gpu`'s twin. `omabox cpu
   [SECONDS] [--settle S] [--pid PID | --app NAME] [--json]` gives each process of the box (never the
   desktop's, which `top` and `pgrep` mix in), or one, its CPU over the window as % of one core, RSS

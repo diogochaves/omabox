@@ -308,6 +308,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   Inside the box it is `/home/sbx`, which does not exist on the host: a path under it passed to a
   service running on the host (a download dir sent to a local server) fails there. Use a path both
   can see.
+- The box's runtime dir (`/run/user/$UID` in it, its `XDG_RUNTIME_DIR`) is `omabox path --run` →
+  `<dir>/run` on the host: an app's runtime state (a `status.json`, a socket) is read there. The host's
+  own `/run/user/$UID` is the real session's: a file read there is the desktop's app state, not the box's.
 - `/sys` and system-wide `/proc` files are the host's (read-only): CPU, temperatures, memory, disks,
   USB devices and DRM connectors read as the real machine's. A widget reading those shows the host's
   hardware state, not the box's.

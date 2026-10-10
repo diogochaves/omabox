@@ -5485,6 +5485,17 @@ from them.
     bar widget taking in a poll, a zenity mapped but not taking keys). Under 20 busy loops, two suites
     of burst, monitors_wait, shell_crash and output at once: 400 of 400.
 
+281. **`path --run`: the box's /run/user/$UID from the host** (2026-10-10, #208). An agent checking a
+    file an app in the box writes under `$XDG_RUNTIME_DIR` (`<app>/status.json`) read it from the host
+    at `/run/user/1000/<app>/status.json`: the real session's copy, the desktop's app state (read
+    only; the guard does not cover file reads). Nothing said where the box's own runtime dir is: the
+    box dir's `run/`, bound at `/run/user/$UID` in the box. `omabox path --run` prints `<dir>/run` (a
+    box not up, or dead with its dir still there, as `--logs` takes it; not with `--logs`); `help
+    path`, the skill's "What is and is not in a box", reference.md and the README's box-dir line say
+    it, and that the host's own is the real session's. Through the broker it is the same answer:
+    `path` was already one of a jailed caller's commands, on the jail's own boxes. t_inspect: `path
+    --run` is `$(path)/run`, and a file the box writes to `$XDG_RUNTIME_DIR` is there on the host.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

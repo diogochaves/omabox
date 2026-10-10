@@ -127,7 +127,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
   omabox events [-b NAME] --mark [MARK]                  from here: prints the offset, keeps MARK for --since
   omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
-  omabox path [NAME | -b NAME] [--logs]                  the box dir (HOME is <dir>/home); --logs: each log's file
+  omabox path [NAME | -b NAME] [--logs | --run]          the box dir (HOME is <dir>/home); --logs: each log's file;
+                                                         --run: the box's /run/user/\$UID (<dir>/run)
   omabox down [NAME | -b NAME | --all]
   omabox ls [--json]
   omabox which PID                                       the box a host process is in, or "not in a box" (exit 1)
@@ -151,6 +152,10 @@ by its own folder, so each worktree has its own box. -b NAME also goes before th
 (omabox -b NAME windows), for every command that takes it. Outside any repo (a scratch dir) the name
 is default-SESSION; with no box of that name, every command but \`up\` uses the session's one box
 started from its repo, said once: \`down\` too, so \`omabox down\` there takes that box down.
+@ path
+From the host, the box's HOME (/home/sbx in it) is <dir>/home and its /run/user/\$UID (its
+XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path --run\`. The host's own
+/run/user/\$UID is the real session's: never read a box app's state there.
 @ run
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
@@ -7731,13 +7736,17 @@ cmd_env() {
 }
 
 cmd_path() {
-  local name="" logs=0 a args=()
-  for a; do if [ "$a" = --logs ]; then logs=1; else args+=("$a"); fi; done
+  local name="" logs=0 rundir=0 a args=()
+  for a; do case $a in --logs) logs=1 ;; --run) rundir=1 ;; *) args+=("$a") ;; esac; done
+  [ $((logs + rundir)) -le 1 ] || die "path: --logs or --run, not both"
   name=$(name_arg path "${args[@]}") || exit 1
   select_box "$name"
   # Seeding a box's HOME through its path is using it.
   if box_alive; then touch "$D/used" 2>/dev/null || true; take_over || need_box; fi
-  [ $logs = 1 ] || { echo "$D"; return 0; }
+  [ $((logs + rundir)) = 1 ] || { echo "$D"; return 0; }
+  # --run (#208): the box's runtime dir, its /run/user/$UID, as the host sees it. The host's own
+  # /run/user/$UID is the real session's: an app's state read there is the desktop's, not the box's.
+  [ $rundir = 0 ] || { [ -d "$D" ] || need_box; echo "$D/run"; return 0; }
   # --logs (issue #41): each log the box has, where it is on the host (`omabox log NAME` reads it).
   [ -d "$D" ] || need_box
   local s w
