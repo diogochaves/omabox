@@ -5353,6 +5353,35 @@ from them.
     `.git`, a gitdir that is the common dir, a gitdir and a `.git` through links out; git never run)
     and t_jail (from a worktree under `ai-jail --worktree`: `git status --branch` in the box, the main
     checkout's files absent; fails on the old code).
+276. **`keys --window` typed into a launcher that had the keyboard** (2026-10-10, #201). With
+    Omarchy's launcher open (layer `omarchy-menu`, overlay, keyboard interactivity exclusive),
+    `keys --window SEL` focused SEL (its border lit, `activewindow` named it) and exited 0, and the
+    text went into the launcher's field. Nothing in Hyprland 0.56.2 names the surface that has the
+    keyboard: not `hyprctl -j layers` (no interactivity), not `activewindow`, no Lua query and no
+    event (socket2 has `openlayer`/`closelayer`, Lua `layer.opened`/`layer.closed`). Lua's layer
+    objects do carry it, as `interactivity` (0 none, 1 exclusive, 2 on demand), with `mapped`,
+    `namespace`, `layer`, `monitor`, `address` (`hl.get_layers()`). In a box, a quickshell layer of
+    each kind showed: a mapped exclusive one keeps the keyboard against any window, at every level
+    (background, bottom, top, overlay; the protocol lets a compositor treat the lower two as on
+    demand, Hyprland does not) and from another monitor; an on-demand one keeps it once clicked, and a
+    focus dispatch takes it back. So `keys --window` asks for the mapped exclusive layers (one
+    `hyprctl eval`, `kb_layers`) and refuses when there is one, exit 1, before focusing or sending
+    anything, naming it: `a layer (omarchy-menu) has the keyboard`. Not wrong in the refusing
+    direction: while one is mapped no window gets the keys. A layer gone (`hyprctl layers` no longer
+    lists it) is unmapped already, never counted. Plain `keys` is left alone: typing into the
+    launcher after super+space is what it is for. Second finding: `activewindow` is not the keyboard.
+    The launcher closed with the pointer over no window (on a monitor without one) leaves the window
+    that was active still active, its border lit, and the keyboard on nothing: the keys went nowhere.
+    An on-demand layer clicked leaves it so too, the keyboard on the layer. `keys --window` skipped
+    the focus when the window was active; it now focuses it again (`win_refocus`), with
+    `cursor:no_warps` set around the dispatch (Hyprland warps the pointer to the window's middle on
+    every focus, inside it or not) and put back, so the pointer stays test state. An inactive window
+    is raised as before (warp included). Omarchy 4.0.4's exclusive layers: the launcher/menus, the
+    clipboard, emojis, image picker, wifi QR, polkit, reminders, speed test, its lock layer, and the
+    keyboard panel for a moment before it turns on demand. t_keys_layer (two monitors, the issue's
+    repro: refused, exit 1, the pointer unmoved, the launcher's field empty (one Escape closes it;
+    with text the first only clears it); then typed into the terminal still active; an on-demand
+    overlay clicked, then typed into the terminal; fails on the old code).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

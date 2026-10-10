@@ -225,6 +225,10 @@ does, each named). \`shot --window\` (-w; --active is --window active) is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
 \`keys --window\` focuses it, then types.
+@ keys
+\`keys --window\` focuses the window (the active one again), then types; while a layer holds the
+keyboard against any window (Omarchy's launcher, a menu) it refuses, exit 1, before sending or
+focusing anything: close the layer first (Escape; twice in a launcher with text in its field).
 @ shot click drag pointer pixel
 --fit N scales a shot's longest side down to N pixels. --zoom N (2-16, with -g) shows each pixel of
 a small crop as N x N, unblended: a 1 px border, a glyph's edge; \`click --in\` maps it back.
@@ -3830,6 +3834,20 @@ win_raise() {
   done
 }
 
+# Focus the active window again, the pointer left where it is (keys --window, #201): Hyprland shows a
+# window active while the keyboard is elsewhere (an on-demand layer clicked, or on nothing after an
+# exclusive one closed with the pointer over no window); a focus gives it back. Its warp is held off.
+win_refocus() {
+  local addr out; addr=$(jq -r .address <<<"$1")
+  [[ $addr =~ ^0x[0-9a-f]+$ ]] || die "bad window address: $addr"
+  out=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "local nw = hl.get_config('cursor.no_warps')
+hl.config({ cursor = { no_warps = true } })
+local ok, err = pcall(hl.dispatch, hl.dsp.focus({ window = 'address:$addr' }))
+hl.config({ cursor = { no_warps = nw } })
+if not ok then error(err, 0) end" 2>&1) || true
+  [ "$out" = ok ] || die "could not focus window $addr: $out"
+}
+
 # The screen point for window coordinates X,Y of the window SEL picks, raised first when it is not on
 # screen or something covers that point (unless RAISE is 0); a point still covered is refused, naming
 # what covers it. win_point RAISE X Y SEL... → "SX SY"
@@ -4613,11 +4631,15 @@ cmd_keys() {
   set -- "${toks[@]}"
   select_box "$name"; need_box; shell_note
   [ $# -gt 0 ] || die "keys: nothing to send"
-  # --window: that window focused first (finding 81), as a click on it would.
+  # --window: that window focused first (finding 81), as a click on it would. A layer that holds the
+  # keyboard against any window is refused before anything is sent or focused (#201, finding 276).
+  # The active window is focused again: being active does not say it has the keyboard.
   if [ ${#sels[@]} -gt 0 ]; then
-    local w wins; wins=$(box_windows)
+    local w wins kl; wins=$(box_windows)
     w=$(win_select "$wins" "${sels[@]}")
-    [ "$(jq -r .active <<<"$w")" = true ] || win_raise "$w"
+    kl=$(kb_layers)
+    [ -z "$kl" ] || die "keys --window: a layer ($kl) has the keyboard: the keys would go to it, not to $(win_desc "$w"); nothing sent (close it first, e.g. keys Escape: twice in a launcher with text in its field)"
+    if [ "$(jq -r .active <<<"$w")" = true ]; then win_refocus "$w"; else win_raise "$w"; fi
   fi
   kb_tool
   local kb=("${KB[@]}" "$@")
@@ -4646,6 +4668,22 @@ cmd_keys() {
     mark "${lines[@]}"
   fi
 }
+# The mapped layers that hold the keyboard against any window (#201, finding 276): their namespaces
+# (else addresses), ", " between. Nothing names the surface that has the keyboard (not hyprctl layers,
+# activewindow or an event); Lua's layer objects carry the keyboard interactivity (0 none, 1
+# exclusive, 2 on demand), and the box's Hyprland keeps a mapped exclusive one's keyboard against any
+# window, at any level and on any monitor. Empty too when Hyprland did not answer as asked (keys goes
+# on as before).
+kb_layers() {
+  local out
+  out=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "local e = {}
+for _, l in ipairs(hl.get_layers()) do
+  if l.mapped and l.interactivity == 1 then e[#e + 1] = (l.namespace ~= '' and l.namespace) or tostring(l.address) end
+end
+error('omabox-kbl:' .. table.concat(e, ', '), 0)" 2>&1) || true
+  case $out in "error: omabox-kbl:"*) echo "${out#"error: omabox-kbl:"}" ;; esac
+}
+
 # The keyboard tool with the box's own keyboard settings, in KB, so keycodes mean to the keymap what
 # they mean to its binds (kb_options like altwin:swap_lalt_lwin move Super). Not in $(...): it sets KB.
 KB=()

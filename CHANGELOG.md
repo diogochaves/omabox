@@ -17,6 +17,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`keys --window` no longer types into a launcher that has the keyboard** (#201). With Omarchy's
+  launcher (or another layer that holds the keyboard against any window) open, `keys --window SEL`
+  exited 0 while the text went into the launcher's search field. It now refuses before sending or
+  focusing anything, exit 1, naming the layer: `a layer (omarchy-menu) has the keyboard`. It also
+  focuses the window when it is already the active one, the pointer left where it is: a window can
+  be active without the keyboard (after such a layer closed with the pointer over no window, or with
+  a panel that takes the keyboard on demand clicked), and the keys went nowhere or to the panel.
 - **Git works in a jailed agent's box from a git worktree** (#193). Inside ai-jail, a box started
   from a linked worktree still had no git (`fatal: not a git repository`): the main checkout's `.git`
   went in only outside a jail, where git itself is asked. omabox now reads the worktree's `.git` file

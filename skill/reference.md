@@ -86,7 +86,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | `unsatisfied: still changing` (124) | Something never stops moving (a spinner, a glow): the line names the region; `--ignore "X,Y WxH"` it, or `-g` the part under test. |
 | Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
-| Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. |
+| Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. `keys --window` refusing with "a layer (NAME) has the keyboard": a launcher or menu is open and would take the keys: Escape it (twice if its field has text) or close it, then again. |
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it (Shots). |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |

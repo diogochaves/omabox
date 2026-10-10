@@ -4347,6 +4347,59 @@ t_keys() {
   wait "$p"; check_eq "pointer exits 1 when the box goes mid-run" 1 $?
 }
 
+# keys --window and a layer with the keyboard (#201, finding 276): Omarchy's launcher, open on one
+# monitor, keeps it against a terminal on the other (exclusive): refused before anything is sent or
+# focused. Closed with the pointer over no window, it leaves the terminal active without the keyboard,
+# as an on-demand layer clicked does: keys --window focuses the active window again, the pointer kept.
+t_keys_layer() {
+  local B=$P-kl D out rc pos l
+  ob up "$B" --net isolated --monitor 1080x1920 >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$(ob path -b "$B")
+  ob click -b "$B" 2400 900 >/dev/null   # the second monitor: the terminal opens there
+  ob run -b "$B" -d -q -- foot -T K sh -c 'cat > /tmp/typed'
+  ob wait -b "$B" window 'title:^K$' >/dev/null 2>&1
+  check_eq "the terminal is on the second monitor" true "$(ob windows -b "$B" --json | jq '.[] | select(.title == "K") | .at[0] >= 1920')"
+  ob click -b "$B" 960 540 >/dev/null
+  ob keys -b "$B" super+space >/dev/null
+  if ! ob wait -b "$B" layer omarchy-menu >/dev/null 2>&1; then no "the launcher opens (super+space)" "no omarchy-menu layer"; ob down "$B" >/dev/null; return; fi
+  pos=$(ob hyprctl -b "$B" cursorpos)
+  out=$(ob keys -b "$B" --window 'title:^K$' -t 'echo hi' Return 2>&1); rc=$?
+  check_eq "keys --window with the launcher open: refused, exit 1" 1 "$rc"
+  check_match "...said: the launcher's layer has the keyboard, nothing sent" \
+    "keys --window: a layer \(omarchy-menu\) has the keyboard: the keys would go to it, not to 0x[0-9a-f]+ foot \"K\"; nothing sent" "$out"
+  check_eq "...the terminal not focused (a focus would have moved the pointer to it)" "$pos" "$(ob hyprctl -b "$B" cursorpos)"
+  ob keys -b "$B" Escape >/dev/null
+  # With text in its field, the first Escape only clears it.
+  check "...the launcher's field untouched: one Escape closes it" ob wait -b "$B" --timeout 3s layer omarchy-menu --gone
+  check "...then keys --window to the terminal, still the active window, goes on" ob keys -b "$B" --window 'title:^K$' -t hi Return
+  check_eq "...the pointer left where it was" "$pos" "$(ob hyprctl -b "$B" cursorpos)"
+  # An overlay with the keyboard on demand, given it by a click; the terminal stays the active window.
+  cat > "$D/home/t201.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+PanelWindow {
+  anchors { top: true; left: true }
+  implicitWidth: 300; implicitHeight: 80
+  WlrLayershell.layer: WlrLayer.Overlay
+  WlrLayershell.namespace: "t201-od"
+  WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+  TextInput { anchors.fill: parent; focus: true; font.pixelSize: 30 }
+}
+QML
+  ob run -b "$B" -d -q -- qs -p /home/sbx/t201.qml >/dev/null 2>&1
+  if ob wait -b "$B" layer t201-od >/dev/null 2>&1; then
+    l=$(ob hyprctl -b "$B" -j layers | jq -r '[.[].levels[][] | select(.namespace == "t201-od")][0] | "\(.x + 150) \(.y + 40)"')
+    # shellcheck disable=SC2086 # X Y
+    ob click -b "$B" $l >/dev/null
+    check_eq "an on-demand layer clicked: the terminal is still the active window" K "$(ob hyprctl -b "$B" -j activewindow | jq -r .title)"
+    check "...keys --window to it goes on" ob keys -b "$B" --window 'title:^K$' -t od Return ctrl+d
+  else no "an on-demand layer maps" "no t201-od layer"; ob keys -b "$B" --window 'title:^K$' ctrl+d >/dev/null 2>&1; fi
+  check "with the launcher closed, keys --window types into the terminal" until_ok 5 ob run -b "$B" -- test -s /tmp/typed
+  check_eq "...what was typed: nothing from the refused run, both texts after it in the terminal" $'hi\nod' "$(ob run -b "$B" -- cat /tmp/typed)"
+  ob down "$B" >/dev/null
+}
+
 # A box whose Hyprland is alive but does not answer (stopped here; in use, a plugin under test's
 # deadlock): what asks it ends, saying so in words (#124, #125, findings 181-182). Continued, it
 # answers again.
@@ -8171,7 +8224,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
