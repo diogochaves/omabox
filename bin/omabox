@@ -131,7 +131,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox which PID                                       the box a host process is in, or "not in a box" (exit 1)
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
-  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu
+  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit
   omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
   omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
@@ -232,6 +232,11 @@ a small crop as N x N, unblended: a 1 px border, a glyph's edge; \`click --in\` 
 A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`drag\`, \`pointer --in\`)
 take that image's pixels (a window shot follows the window if it moved). Screen shots show the
 pointer; window shots never do. -o makes the file's folder if it is missing.
+@ shot config drag
+\`omabox config shot-fit N\` makes --fit N every shot's default (\$OMABOX_SHOT_FIT overrides it; off
+or \`default\` clears it): for a model that reads points in the smaller image its API scales a big
+one down to (1456 for 16:9 on Claude), set once. It goes wherever --fit goes (a window, -g,
+--monitor, --burst, drag --shot), not --changed or --zoom; --fit N wins, --fit 0 is full size.
 @ scroll pointer
 \`scroll X Y DY [DX]\` moves the pointer there and scrolls: DY down (negative: up), DX right (negative:
 left), in wl_pointer units (15 is one wheel notch). Without --source it is one plain axis event;
@@ -262,14 +267,15 @@ without -o, a new folder each time. --after -- ACTION takes the first frame, the
 ACTION\` (keys, click, scroll, run -d, monitor add ...) beside the rest: a transition from its start.
 --sheet adds one contact sheet of them all, labelled with their times: one image to read instead of N.
 @ shot
-\`shot --changed\` (or \`--window SEL --changed\`) is a crop of what changed since the last whole shot of
-the same screen or window (\`shot\` without -g, --fit, --zoom or --monitor, or --changed), 16 px
-around it; stderr says where it is (\`click --in\` maps it) and, when it changed in places far apart,
-each. Nothing changed: no image, nothing on stdout, exit 0, said on stderr. No earlier shot of it (or
-another size or mode since): a whole shot, said why. A caret blinking alone (4 px thin, 40 long at
-most) and where the pointer was before it moved are not changes; --ignore "X,Y WxH" (up to 16, in
-the shot's coordinates: the window's with --window) leaves out an animation or a caret elsewhere.
---since SHOT compares with that whole shot instead (not from a jail).
+\`shot --changed\` (or \`--window SEL --changed\`) is a crop of what changed since the last whole
+shot of the same screen or window (\`shot\` without -g, --fit, --zoom or --monitor, or --changed;
+with --fit 0 while shot-fit is set), 16 px around it; stderr says where it is (\`click --in\` maps
+it) and, when it changed in places far apart, each. Nothing changed: no image, nothing on stdout,
+exit 0, said on stderr. No earlier shot of it (or another size or mode since): a whole shot, said
+why. A caret blinking alone (4 px thin, 40 long at most) and where the pointer was before it moved
+are not changes; --ignore "X,Y WxH" (up to 16, in the shot's coordinates: the window's with
+--window) leaves out an animation or a caret elsewhere. --since SHOT compares with that whole shot
+instead (not from a jail).
 @ pixel
 \`pixel X Y\` reads the box's own pixel (#rrggbb), with no shot: a colour off a scaled shot, or one read
 by eye, is not the one drawn. Several points in one call print "X,Y #rrggbb" each. The screen's pixels
@@ -458,8 +464,8 @@ find() { if [ -r . ]; then command find "$@"; else (cd / && command find "$@"); 
 # ~/.config/omabox/config, KEY=VALUE lines: what `omabox config` and the bar widget change (finding
 # 70). A value that does not check out is ignored with a warning, never used.
 CONFIG=$HOME/.config/omabox/config
-CONF_KEYS=(workspace confirm-close bar-icon gpu)
-conf_default() { case $1 in workspace) echo 9 ;; confirm-close) echo off ;; bar-icon) echo always ;; gpu) echo auto ;; esac; }
+CONF_KEYS=(workspace confirm-close bar-icon gpu shot-fit)
+conf_default() { case $1 in workspace) echo 9 ;; confirm-close) echo off ;; bar-icon) echo always ;; gpu) echo auto ;; shot-fit) echo off ;; esac; }
 # A value for KEY, printed in its normal form, or a failure.
 conf_check() {
   case $1 in
@@ -475,6 +481,8 @@ conf_check() {
         *) [[ $g =~ ^([0-9a-f]{4}:)?[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$ ]] || return 1
            [[ $g == ????:* ]] || g=0000:$g; echo "$g" ;;
       esac ;;
+    # The --fit every shot takes when none is given (#188): a longest side as --fit takes it, or off.
+    shot-fit) case $2 in off|0) echo off ;; *) [[ $2 =~ ^[1-9][0-9]{1,4}$ ]] && echo "$2" ;; esac ;;
     *) return 1 ;;
   esac
 }
@@ -3912,6 +3920,17 @@ shot_path() {
   rm -f -- "$file"
 }
 
+# The --fit a shot takes when it is given none (#188): $OMABOX_SHOT_FIT (a jailed caller's, sent by its
+# omabox), else the shot-fit setting; nothing when off. A bad $OMABOX_SHOT_FIT is refused, not ignored.
+shot_fit_default() {
+  local e=${OMABOX_SHOT_FIT:-} v
+  ! in_jail || e=${OMABOX_RELAY_SHOT_FIT:-}
+  if [ -n "$e" ]; then
+    v=$(conf_check shot-fit "$e") || { say "shot: OMABOX_SHOT_FIT is off, 0 or the longest side in pixels (10-99999), got $e"; return 1; }
+  else v=$(conf_get shot-fit); fi
+  [ "$v" = off ] || echo "$v"
+}
+
 cmd_shot() {
   local name="" out="" geom="" sels=() fit="" tofd="" as="" zoom="" burst="" every="" sheet=0 bdiff=0 after=() monitor=""
   local changed=0 since="" masks=()
@@ -3927,7 +3946,7 @@ cmd_shot() {
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --active) sels+=(active) ;;
       --monitor) optarg "$@"; [[ $2 =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "shot: --monitor takes a monitor's name (omabox monitor list), got $2"; monitor=$2; shift ;;
-      --fit) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{1,4}$ ]] || die "shot: --fit takes the longest side in pixels (10-99999), got $2"; fit=$2; shift ;;
+      --fit) optarg "$@"; [[ $2 =~ ^(0|[1-9][0-9]{1,4})$ ]] || die "shot: --fit takes the longest side in pixels (10-99999; 0: full size), got $2"; fit=$2; shift ;;
       --zoom) optarg "$@"; [[ $2 =~ ^([2-9]|1[0-6])$ ]] || die "shot: --zoom takes 2-16 (each pixel N x N), got $2"; zoom=$2; shift ;;
       --burst) optarg "$@"; [[ $2 =~ ^([2-9]|[1-9][0-9]|1[0-9][0-9]|200)$ ]] || die "shot: --burst takes 2-200 frames, got $2"; burst=$2; shift ;;
       # --every 0: back to back (#191, finding 249: 100 ms apart by default).
@@ -3948,6 +3967,10 @@ cmd_shot() {
     shift
   done
   local g=""; [ -z "$geom" ] || g=$(geom_parse "$geom") || die "shot: -g is \"X,Y WxH\" (or X,Y,W,H), got $geom"
+  # No --fit: the shot-fit setting's (or $OMABOX_SHOT_FIT's), wherever --fit could go (not --changed
+  # or --zoom). --fit 0: full size, whatever the setting.
+  if [ -z "$fit" ] && [ $changed = 0 ] && [ -z "$zoom" ]; then fit=$(shot_fit_default) || exit 1; fi
+  [ "$fit" != 0 ] || fit=""
   if [ -n "$burst" ]; then
     [ -z "$zoom" ] || die "shot: --burst or --zoom, not both"
     case ${after[0]:-} in
@@ -4161,7 +4184,7 @@ shot_changed() {
     [ "$rkind" = "$where" ] || { rm -f -- "$file"; die "shot --since: $rshot is a shot of $rkind, not of $what"; }
     [ "$rmode" = "$mode" ] || { rm -f -- "$file"; die "shot --since: $rshot was taken at $rmode, the box's mode is $mode now"; }
     [ "$rgeo" = "${lw}x$lh ${iw}x$ih" ] ||
-      { rm -f -- "$file"; die "shot --since: $rshot is ${rgeo%% *} as a ${rgeo#* } image; $what is ${lw}x$lh as ${iw}x$ih now (--since takes a whole shot of it: no -g or --fit)"; }
+      { rm -f -- "$file"; die "shot --since: $rshot is ${rgeo%% *} as a ${rgeo#* } image; $what is ${lw}x$lh as ${iw}x$ih now (--since takes a whole shot of it: no -g or --fit, and --fit 0 while shot-fit is set)"; }
   elif [ -f "$dir/$key.png" ] && [ -f "$dir/$key.tsv" ]; then
     IFS=$'\t' read -r rshot rmode rgeo rptr rt < "$dir/$key.tsv"
     rfile=$dir/$key.png
@@ -4169,6 +4192,9 @@ shot_changed() {
     elif [ "$rgeo" != "${lw}x$lh ${iw}x$ih" ]; then why="it was ${rgeo%% *} at the last shot of it"; fi
   else
     why="no earlier shot of it to compare with"
+    # Shots the shot-fit setting scales leave none (#188).
+    local sf; sf=$(shot_fit_default 2>/dev/null) || sf=""
+    [ -z "$sf" ] || why+=" (a shot scaled by shot-fit leaves none: shot --fit 0 for one)"
   fi
   # The image to the caller: renamed into place, or into a jailed caller's fd. put_image SRC
   put_image() {
@@ -7594,7 +7620,8 @@ cmd_config() {
     1) k=${args[0]}; [ -n "$(conf_default "$k")" ] || die "config: unknown key $k (keys: ${CONF_KEYS[*]})"
        conf_get "$k"
        # The GPUs there are, on stderr: stdout stays the value, for scripts.
-       [ "$k" != gpu ] || gpu_list >&2 ;;
+       [ "$k" != gpu ] || gpu_list >&2
+       [ "$k" != shot-fit ] || [ -z "${OMABOX_SHOT_FIT:-}" ] || say "OMABOX_SHOT_FIT=$OMABOX_SHOT_FIT overrides it here" ;;
     2) k=${args[0]}; [ -n "$(conf_default "$k")" ] || die "config: unknown key $k (keys: ${CONF_KEYS[*]})"
        if [ "${args[1]}" = default ]; then conf_set "$k"; v=$(conf_default "$k")
        else v=$(conf_check "$k" "${args[1]}") || die "config: bad $k: ${args[1]} ($(conf_help "$k"))"; conf_set "$k" "$v"; fi
@@ -7616,6 +7643,7 @@ conf_help() {
     confirm-close) echo "on or off" ;;
     bar-icon) echo "always (the default) or auto (only while boxes exist)" ;;
     gpu) echo "auto (the default: the first GPU), nvidia, amd, intel (or a driver: nouveau, amdgpu, radeon, i915, xe) or a PCI slot (0000:03:00.0); headless boxes only; omabox config gpu lists them" ;;
+    shot-fit) echo "off (the default: full size) or the longest side in pixels, 10-99999, every shot is scaled down to, as with --fit: 1456 for 16:9 as Claude sees it" ;;
   esac
 }
 
@@ -8099,6 +8127,8 @@ relay_call() {
 relay_shot() {
   local relay=$1 env=() args=() name="" out=""; shift
   while [ "$1" != -- ]; do env+=("$1"); shift; done; shift
+  # The caller's default --fit (#188): the broker gets nothing of its environment but what is sent.
+  [ -z "${OMABOX_SHOT_FIT:-}" ] || env+=(--env "SHOT_FIT=$OMABOX_SHOT_FIT")
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; args+=("$1" "$2"); shift ;;

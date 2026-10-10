@@ -5,6 +5,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **`omabox config shot-fit N`: a default size for every shot** (#188). Some models read click
+  points in the smaller image their API scales a big shot down to (Haiku 4.5: hundreds of pixels
+  off on a 1920x1080 shot); whoever runs one sets `shot-fit 1456` once, and every `shot` given no
+  `--fit` comes out as with `--fit 1456`, `click --in` mapping it as usual. `OMABOX_SHOT_FIT`
+  overrides the setting (an agent inside ai-jail's too), `--fit N` on a shot wins, and the new
+  `--fit 0` takes one full size. It reaches what `--fit` reaches (window shots, `-g`, `--monitor`,
+  `--burst`, `drag --shot`), not `--changed` or `--zoom`.
+
 ### Fixed
 
 - **A git worktree of omabox runs headless NVIDIA boxes on its main checkout's aquamarine build**

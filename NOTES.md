@@ -5240,6 +5240,28 @@ from them.
     says, a relative gitdir, the same in a jail with git never run, a main checkout, a submodule's
     worktree, unreadable, gone; aq_resolve and aq_desc from the worktree).
 
+272. **A per-user default size for shots: `config shot-fit`** (2026-10-10, #188; the setting finding
+    251 left for later). `omabox config shot-fit N` (10-99999, as `--fit` takes; `off`, the default,
+    or `default` clears it) makes every shot given no `--fit` a `--fit N` one, so whoever runs a model
+    that reads points in the downscaled image sets 1456 once. `$OMABOX_SHOT_FIT` (N, or `off`/`0`)
+    overrides it, as `$OMABOX_RENDER_NODE` overrides `gpu`; a bad value stops the shot (the setting
+    file's is ignored with a warning, as any key's). From a jail the broker gets nothing of the
+    caller's environment, so relay_shot sends it as `SHOT_FIT` (OMABOX_RELAY_SHOT_FIT, read only
+    there). `--fit 0` is new: one full-size shot whatever the setting (as `--idle 0` and `--every 0`
+    turn theirs off). The default reaches exactly what `--fit` reaches: screen, window, `-g` and
+    `--monitor` shots, `--burst` frames, `drag --shot` (cmd_shot is its shot); not `--changed`
+    (`--since` too) or `--zoom`, which refuse `--fit`: there it is simply not applied. A scaled shot
+    leaves no `--changed` baseline (finding 243: the comparison is of whole, unscaled frames), so
+    with the setting on a first `--changed` finds none and says so, adding "a shot scaled by shot-fit
+    leaves none: shot --fit 0 for one"; `--since`'s refusal of a scaled shot says the same. `config
+    shot-fit` prints the setting and notes on stderr when the variable overrides it here; `config`
+    and `--json` list it (the widget ignores keys it does not know). The suite exports
+    `OMABOX_SHOT_FIT=off`, so a user's setting never changes what its shots are. t_unit_shot_fit (get,
+    set, refused values, off/default, the variable over it, the jail's, relay_shot sending it);
+    t_shot_fit (a box: the setting's 1000 px shot, `click --in` on it landing where it does on a
+    `--fit 1000` one, the variable, a `-g` crop and `--burst` scaled, `--fit 800` winning, `--changed`
+    full size and saying why, `--fit 0` full size). `omabox calibrate` stays open on #188.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

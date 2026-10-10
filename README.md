@@ -260,6 +260,12 @@ them, and `omabox config KEY default` puts one back.
   unavailable, and why). `omabox ls` and `omabox gpu` show each box's GPU, and **`omabox gpu release
   GPU`** takes down the headless boxes on one (naming each, after any `up` in progress) before you hand
   it to a VM: a box holds its render node.
+- `shot-fit N`: every `shot` comes out as with `--fit N` (its longest side scaled down to N pixels)
+  unless it is given a `--fit`, for an agent on a model that reads click points in the smaller image
+  its API scales a big one down to (`1456` for a 16:9 screen on Claude; NOTES finding 251). It goes
+  where `--fit` goes (window shots, `-g`, `--monitor`, `--burst`, `drag --shot`), not `--changed` or
+  `--zoom`; `click --in` maps it as usual, and `--fit 0` takes one shot full size. `off` (the
+  default) clears it; `OMABOX_SHOT_FIT=N` (or `off`) overrides it for one agent.
   Tested on a desktop with an AMD iGPU and an NVIDIA dGPU (on `nvidia` and on `vfio-pci`); laptops
   (hybrid graphics, MUX, eGPU) should work the same but are untested: reports welcome (#119).
 

@@ -40,6 +40,8 @@ set -uo pipefail
 unset CLAUDE_CONFIG_DIR CODEX_HOME
 # An agent running the suite would otherwise give every default-named box its session's suffix.
 unset OMABOX_SESSION CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID CLAUDE_PID OMABOX_AGENT_PID
+# Shots full size whatever the user's shot-fit setting (#188): the tests of it set their own.
+export OMABOX_SHOT_FIT=off
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
@@ -833,14 +835,14 @@ t_unit_live_edit() {
 t_unit_config() {
   local h=$TMP/confhome; mkdir -p "$h"
   cfg() { HOME=$h "$CLI" config "$@" 2>&1; }
-  check_eq "defaults" "workspace=9 confirm-close=off bar-icon=always gpu=auto" "$(cfg | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "defaults" "workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off" "$(cfg | tr '\n' ' ' | sed 's/ $//')"
   check_eq "set a workspace" workspace=4 "$(cfg workspace 4)"
   check_eq "special is the scratchpad" workspace=special:scratchpad "$(cfg workspace special)"
   check_eq "special:NAME" workspace=special:omabox "$(cfg workspace special:omabox)"
   check_eq "confirm-close yes reads on" confirm-close=on "$(cfg confirm-close yes | tail -1)"
   check_eq "bar-icon auto" bar-icon=auto "$(cfg bar-icon auto)"
   check_fails "bar-icon takes auto or always" env HOME="$h" "$CLI" config bar-icon sometimes
-  check_eq "--json for the widget" '{"workspace":"special:omabox","confirm-close":"on","bar-icon":"auto","gpu":"auto"}' \
+  check_eq "--json for the widget" '{"workspace":"special:omabox","confirm-close":"on","bar-icon":"auto","gpu":"auto","shot-fit":"off"}' \
     "$(HOME=$h "$CLI" config --json | jq -c 'del(.["confirm-close-available"], .version, .gpus, .["gpu-auto"], .["gpu-now"])')"
   local bad; for bad in 0 100 "3 silent" "special:a'b" "special:" "1;x" "special:$(printf 'x%.0s' {1..33})"; do
     check_fails "workspace '$bad' refused" env HOME="$h" "$CLI" config workspace "$bad"
@@ -868,6 +870,45 @@ t_unit_config() {
   lib box_file "$d/run/omabox.mode" 1280x720@60
   check_eq "...over a link to a host file: that file untouched" keep "$(cat "$d/host-file")"
   check "...the flag a plain file now" test -f "$d/run/omabox.mode" -a ! -L "$d/run/omabox.mode"
+}
+
+# shot-fit (#188): every shot's default --fit, from the config or $OMABOX_SHOT_FIT (which wins); the
+# box half (the size, click --in, --fit over it) is t_shot_fit.
+t_unit_shot_fit() {
+  local h=$TMP/shotfithome; mkdir -p "$h"
+  # SFE: $OMABOX_SHOT_FIT for the call (the suite's is off).
+  shotfit_cfg() { OMABOX_SHOT_FIT=${SFE:-} HOME=$h "$CLI" config shot-fit "$@" 2>&1; }
+  shotfit_dflt() { OMABOX_SHOT_FIT=${SFE:-} HOME=$h lib shot_fit_default 2>&1; }
+  check_eq "shot-fit is off by default" off "$(shotfit_cfg)"
+  check_eq "...and no shot is fitted" "" "$(shotfit_dflt)"
+  check_eq "set it" shot-fit=1456 "$(shotfit_cfg 1456)"
+  check_eq "...it reads back" 1456 "$(shotfit_cfg)"
+  check_eq "...and is every shot's --fit" 1456 "$(shotfit_dflt)"
+  check_eq "...listed with the rest" shot-fit=1456 "$(HOME=$h "$CLI" config | grep '^shot-fit=')"
+  local bad; for bad in 5 9 100000 -1 1456px "1456 x" huge; do
+    check_fails "shot-fit '$bad' refused" env HOME="$h" "$CLI" config shot-fit "$bad"
+  done
+  check_eq "...and nothing changed" 1456 "$(shotfit_cfg)"
+  check_eq "OMABOX_SHOT_FIT wins over it" 1280 "$(SFE=1280 shotfit_dflt)"
+  check_eq "...off turns it off" "" "$(SFE=off shotfit_dflt)"
+  check_eq "...as 0 does" "" "$(SFE=0 shotfit_dflt)"
+  check_match "config shot-fit says the variable overrides it" "OMABOX_SHOT_FIT=1280 overrides it here" "$(SFE=1280 shotfit_cfg)"
+  check_eq "...stdout stays the setting" 1456 "$(OMABOX_SHOT_FIT=1280 HOME=$h "$CLI" config shot-fit 2>/dev/null)"
+  check_match "a bad OMABOX_SHOT_FIT stops the shot, saying what it takes" "OMABOX_SHOT_FIT is off, 0 or the longest side" \
+    "$(OMABOX_SHOT_FIT=huge "$CLI" shot -b "$P-nobox" 2>&1)"
+  check_match "shot --fit takes 0 (full size), said when refused" "10-99999; 0: full size" "$("$CLI" shot -b "$P-nobox" --fit 5 2>&1)"
+  # A jailed caller's (sent by its omabox as SHOT_FIT), not the broker's own environment.
+  check_eq "in a jail: the caller's, sent along" 800 "$(OMABOX_JAIL='{}' OMABOX_RELAY_SHOT_FIT=800 SFE=1280 shotfit_dflt)"
+  check_eq "...else the setting" 1456 "$(OMABOX_JAIL='{}' SFE=1280 shotfit_dflt)"
+  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$TMP/sf-relay"; chmod +x "$TMP/sf-relay"
+  check_match "a jailed caller's omabox sends its OMABOX_SHOT_FIT" "\|--env\|SHOT_FIT=1280\|.*\|shot\|" \
+    "$(OMABOX_SHOT_FIT=1280 lib relay_shot "$TMP/sf-relay" -- -b "$P-nobox" -o "$TMP/sf-relay.png" 2>&1)"
+  check_eq "...none when it has none" "" "$(OMABOX_SHOT_FIT='' lib relay_shot "$TMP/sf-relay" -- -b "$P-nobox" -o "$TMP/sf-relay.png" 2>&1 | grep -o SHOT_FIT)"
+  check_eq "off clears it" shot-fit=off "$(shotfit_cfg off)"
+  check_eq "...so no shot is fitted" "" "$(shotfit_dflt)"
+  shotfit_cfg 1000 >/dev/null
+  check_eq "default clears it too" shot-fit=off "$(shotfit_cfg default)"
+  check "...removing its line" bash -c "! grep -q shot-fit '$h/.config/omabox/config'"
 }
 
 # seed_home's copies of the user's config dirs (finding 74): a link inside is kept as a link, never
@@ -6862,6 +6903,44 @@ QML
 # nothing on stdout, exit 0), typed text cropped and `click --in` mapping the crop, the pointer's old
 # place on the screen left out, --since, a resized window shot whole, a blinking block cursor left out
 # by --ignore, a blinking beam caret alone not a change.
+# shot-fit (#188): a shot given no --fit takes the setting's (or $OMABOX_SHOT_FIT's) wherever --fit
+# goes, and click --in maps it as it maps --fit's; --fit N wins, --fit 0 is full size; --changed is
+# not scaled, and says why it has nothing to compare with.
+t_shot_fit() {
+  local B=$P-sfit o=$TMP/sfit err
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  mkdir -p "$o/home/.config/omabox"; echo shot-fit=1000 > "$o/home/.config/omabox/config"
+  pos() { ob hyprctl -b "$B" cursorpos; }
+  err=$(OMABOX_SHOT_FIT='' HOME=$o/home "$CLI" shot -b "$B" -o "$o/set.png" 2>&1 >/dev/null)
+  check_match "config shot-fit 1000: the shot 1000 wide" "1000 x 562," "$(file "$o/set.png")"
+  check_match "...said, for --in" "1000x562 image of the screen's 1920x1080 at 0,0 \(x1.92\); click with --in $o/set.png" "$err"
+  ob shot -b "$B" --fit 1000 -o "$o/flag.png" >/dev/null 2>&1
+  ob click -b "$B" --in "$o/flag.png" 500 270 >/dev/null 2>&1
+  local want; want=$(pos)
+  ob pointer -b "$B" -- move 10 10 >/dev/null 2>&1
+  ob click -b "$B" --in "$o/set.png" 500 270 >/dev/null 2>&1
+  check_eq "click --in it lands where it does on a --fit 1000 shot" "$want" "$(pos)"
+  check_eq "...the screen's point" "960, 519" "$want"
+  OMABOX_SHOT_FIT=640 ob shot -b "$B" -o "$o/env.png" >/dev/null 2>&1
+  check_match "OMABOX_SHOT_FIT=640: 640 wide" "640 x 360," "$(file "$o/env.png")"
+  err=$(OMABOX_SHOT_FIT=200 ob shot -b "$B" -g "100,100 400x100" -o "$o/g.png" 2>&1 >/dev/null)
+  check_match "...a -g crop scaled too" "200 x 50," "$(file "$o/g.png")"
+  ob click -b "$B" --in "$o/g.png" 50 20 >/dev/null 2>&1
+  check_eq "...click --in maps it" "201, 141" "$(pos)"
+  local out; out=$(OMABOX_SHOT_FIT=300 ob shot -b "$B" --burst 2 --every 0 -o "$o/burst" 2>/dev/null)
+  check_match "...--burst frames too" "300 x 168," "$(file "$o/burst/frame-001.png")"
+  OMABOX_SHOT_FIT=640 ob shot -b "$B" --fit 800 -o "$o/wins.png" >/dev/null 2>&1
+  check_match "--fit 800 wins over it" "800 x 450," "$(file "$o/wins.png")"
+  # --changed is never scaled; the shots before were, so they left nothing to compare with.
+  err=$(OMABOX_SHOT_FIT=640 ob shot -b "$B" --changed -o "$o/chg.png" 2>&1 >/dev/null)
+  check_match "--changed: full size" "1920 x 1080," "$(file "$o/chg.png")"
+  check_match "...a scaled shot left no baseline, said with what does" "a shot scaled by shot-fit leaves none: shot --fit 0" "$err"
+  err=$(OMABOX_SHOT_FIT=640 ob shot -b "$B" --fit 0 -o "$o/full.png" 2>&1 >/dev/null)
+  check_match "--fit 0: full size" "1920 x 1080," "$(file "$o/full.png")"
+  check_eq "...said nothing extra (1:1)" "" "$err"
+  ob down "$B" >/dev/null 2>&1
+}
+
 t_changed() {
   local B=$P-chg o=$TMP/chg out err rc W='title:^C$'
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
@@ -7893,9 +7972,9 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

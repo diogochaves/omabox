@@ -51,6 +51,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   with a "multiply by" note). A `-g` crop, a `--changed` crop or a window already that small needs no
   `--fit`. Full size reads small text; do not click off it. A small model still missed about a third
   of small targets at 1456: a `-g` crop around one is the next step (not measured). NOTES finding 251.
+  Whoever runs a small model sets it once: `omabox config shot-fit 1456` (or `OMABOX_SHOT_FIT=1456`)
+  makes every shot `--fit 1456` unless one is given (stderr says so, `click --in` maps it); `--fit 0`
+  is one full-size shot (small text, or a baseline for `--changed`). The setting is the user's.
 - One image outweighs anything omabox prints as text. Take the smallest that shows it: `shot --window
   SEL` for one app, `-g "X,Y WxH"` for the part under test (a menu, a field, a bar widget), `--fit
   1280` for a whole screen's layout (full size to read small text). `--wait`'s `at X,Y WxH` is the
