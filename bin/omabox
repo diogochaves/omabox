@@ -8244,6 +8244,32 @@ jail_root() {
   local p; p=$(readlink -e -- "$1" 2>/dev/null) || return 1
   jq -e --arg p "$p" 'any(.roots[]; $p == .path and (.masked | not))' <<<"$OMABOX_JAIL" >/dev/null && echo "$p"
 }
+# jail_mounts POLICY MOUNTINFO: POLICY with the jail's hidden paths as the kernel has them now, from the
+# caller's /proc/PID/mountinfo (its mount namespace is the jail's): every mount point inside one of
+# the jail's folders that is not a folder itself is added to `masks`, and its folder is marked masked.
+# bwrap's command line names a mask as ai-jail gave it, and bwrap followed links in it when it mounted;
+# the jail can rename a folder holding a mask after that (`mv config config2`: the mount goes along,
+# on the host too), so a path from the command line alone would miss where the hidden file is now. A
+# mount point with a newline (escaped `\012`, so one line still) hides its whole folder. Fails when the
+# file cannot be read.
+jail_mounts() {
+  local pol=$1 mi=$2 line mp r f m roots=() out=()
+  mapfile -t roots < <(jq -r '.roots[].path' <<<"$pol")
+  [ -r "$mi" ] || return 1
+  while IFS= read -r line; do
+    read -r _ _ _ _ mp _ <<<"$line" || continue
+    m=${mp//\\040/ }; m=${m//\\011/$'\t'}; m=${m//\\012/$'\n'}; m=${m//\\134/\\}
+    for r in ${roots[@]+"${roots[@]}"}; do
+      [[ $m == "$r"/* ]] || continue
+      if [[ $m == *$'\n'* ]]; then out+=("$r"); break; fi
+      for f in "${roots[@]}"; do [ "$m" != "$f" ] || break 2; done
+      out+=("$m"); break
+    done
+  done < "$mi" || return 1
+  jq -c '.masks = ((.masks // []) + $ARGS.positional | unique)
+    | .masks as $ms | .roots |= map(.path as $p | .masked = (.masked or any($ms[]; startswith($p + "/"))))' \
+    --args ${out[@]+"${out[@]}"} <<<"$pol"
+}
 # jail_masked PATH (#198 security): PATH (resolved, inside the jail's folders) at, under, or holding
 # one of the jail's hidden paths (ai-jail --mask/--deny-path mount an empty file over it while the real
 # host file stays, so the box, mounting from the host, would get the host's): true, so --seed refuses
@@ -8371,7 +8397,7 @@ git_link_path() {
 # dir named .git that is one of the jail's folders itself (as ai-jail --worktree maps it), so the jail
 # cannot swap it for a link out between this check and the mount, holding the gitdir as
 # <common>/worktrees/NAME. Anything else (a submodule, a common dir the jail does not see or sees only
-# inside a folder of its own, a stale gitdir) is nothing, quietly.
+# inside a folder of its own, one with a path the jail hides inside, a stale gitdir) is nothing, quietly.
 repo_git_dirs() {
   local out d top prev=""
   top=$(readlink -e -- "$1" 2>/dev/null) || top=$1
@@ -8381,6 +8407,9 @@ repo_git_dirs() {
     [[ $d == */.git && ${out%%$'\n'*} == "$d"/worktrees/* && ${out%%$'\n'*} != "$d"/worktrees/*/* ]] || return 0
     jq -e --arg p "$d" 'any(.roots[]; .path == $p)' <<<"$OMABOX_JAIL" >/dev/null || return 0
     [[ $d/ != "${top%/}"/* ]] || return 0
+    # One the jail hides something in (an ai-jail --mask on its config, say) would show the box the
+    # host's file: the box mounts it from the host (#198 security).
+    ! jail_masked "$d" || return 0
     echo "$d"; return 0
   fi
   out=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir --git-dir 2>/dev/null) || return 0
@@ -8508,6 +8537,7 @@ broker_init() {
   local policy start
   start=$(proc_start "$jail") && [ -n "$start" ] || die "broker: the jail is gone"
   policy=$(jail_policy "/proc/$pp/fd" < "/proc/$jail/cmdline") || die "broker: cannot read the jail's policy: $policy"
+  policy=$(jail_mounts "$policy" "/proc/$peer/mountinfo") || die "broker: cannot read the jail's mounts"
   peer_there || die "broker: the caller is gone"
   eval "exec $pfd<&-"
   OMABOX_JAIL=$(jq -c --arg id "$jail $start" '. + {id: $id}' <<<"$policy"); export OMABOX_JAIL
@@ -8571,7 +8601,7 @@ relay_call() {
     if [ "$a" = --env-file ] && [ "$cmd" = run ]; then prev=$a; continue; fi
     if [ "$prev" = --pass ] && [[ $a =~ ^[A-Za-z_][A-Za-z0-9_]{0,58}$ ]] && v=$(caller_env "$a"); then env+=(--env "PASS_$a=$v"); fi
     case $prev in
-      --plugin|--overlay|--theme-dir) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
+      --plugin|--overlay|--theme-dir|--omarchy) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
       --hyprland) [[ $a != /* && -e $a ]] && a=$(readlink -f -- "$a") ;;
       --ro-bind) [[ $a != /* ]] && a=$(readlink -f -- "${a%%:/*}")${a#"${a%%:/*}"} ;;
       # SRC:DEST: only SRC is the caller's path (DEST is in the box HOME). One that is not there is

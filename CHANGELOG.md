@@ -77,8 +77,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **Security: a jailed agent's `up --seed` refuses a file ai-jail masked** (#198). ai-jail's
   `--mask`/`--deny-path` put an empty file over a path while the real one stays on the host, and the
   box seeds from the host, so `up --seed SECRET:x` could copy the masked host file into the box. A
-  jailed `up` now refuses a `--seed` at, under or holding a path the jail masks (and refuses every
-  seed if it cannot tell which paths are masked). Outside a jail nothing changes.
+  jailed `up` now refuses a `--seed` at, under or holding a path the jail masks, where the jail's
+  mounts have it now (a folder the jail renamed included), and refuses every seed if it cannot tell
+  which paths are masked. A jailed agent's box from a git worktree no longer gets the main
+  checkout's `.git` when the jail masks a path inside it (its `config`, say). Outside a jail nothing
+  changes.
+- **A jailed `up --omarchy` with a relative path works.** `./tree` went to the broker as written, so
+  it was refused as outside the jail.
 - **A git worktree of omabox runs headless NVIDIA boxes on its main checkout's aquamarine build**
   (#182). A fresh `git worktree add` has no `build/prefix`, so its boxes on NVIDIA were refused for
   lacking aquamarine's fix the main checkout had built. A worktree with none of its own now uses the

@@ -5495,32 +5495,46 @@ from them.
     it, and that the host's own is the real session's. Through the broker it is the same answer:
     `path` was already one of a jailed caller's commands, on the jail's own boxes. t_inspect: `path
     --run` is `$(path)/run`, and a file the box writes to `$XDG_RUNTIME_DIR` is there on the host.
-282. **A jailed caller's `up` ran host programs and git on the jail's own writable paths** (2026-10-10,
-    #198 follow-up, local branch `security-jail-exec`). Three ways a jailed agent could run code or read
-    a hidden file on the host, outside its jail. (1) `git_rev` ran `git status` on host paths the jail
-    writes — a mounted plugin's dir (`plugin_check`), and an `--omarchy` tree (box.json build and
-    `restart-shell`) — and `core.fsmonitor` in a repo's `.git/config` runs a program on `git status`, so
-    the jail's `.git/config` ran on the host. Now `git_rev` returns nothing for a jailed caller (the
-    revision is reported as unknown, as `repo_top` already skips git for one). (2) `plugin_check` ran
-    `$tree/bin/omarchy-plugin-validate`, where `$tree` is the jailed caller's own `--omarchy` tree, on
-    the host; now a jailed caller's `plugin_check` runs only the host's installed
-    `/usr/share/omarchy/bin/omarchy-plugin-validate` (it only reads the plugin dir, and is not the
-    jail's to change), or none (a warning, never a refusal). (3) ai-jail `--mask`/`--deny-path` mount an
-    empty file over a path while the real host file stays underneath; the box mounts from the host, so
-    `up --seed MASKED:x` would have copied the host's real file in. `jail_policy` recorded only a
-    per-root `masked` bool, not which path, so omabox could not tell. It now records a `masks` list
-    (each path resolved like its folder), and `jail_masked` refuses a `--seed` at, under or holding a
-    masked path — and refuses outright if the policy has no `masks` key (an older broker). A sweep of
-    `bin/omabox` for other jail-writable exec/source/git found none: `default_name`,
-    `theme_snapshot_note`, `repo_top`, `repo_git_dirs` already guard with `in_jail`, the aquamarine
-    build (`setup`) is not on `broker_check`'s allowed list, and `seed_gitconfig`/the common-dir read
-    only read. Verified from a real ai-jail 2.8.1 with harmless markers (details in the private
-    `.local/security-2026-10-10/`). Still open for the owner: the box mounts a jailed caller's project
-    from the host, so a file masked *inside the project* is visible in the box through that base mount,
-    not only through `--seed`. t_unit_jail_policy (masks recorded; `jail_masked` at/under/holding, and
-    no-masks-key refuses all; `seed_spec` refuses a masked file, a non-masked sibling still seeds;
-    `git_rev` runs no git for a jailed caller); t_jail (a masked file not seeded, `up --plugin` from the
-    jail works with no host marker from its `core.fsmonitor`).
+282. **A jailed caller's `up` ran host programs and git on the jail's own writable paths, and seeded
+    files the jail hides** (2026-10-10, #198 follow-up). The broker runs on the host, outside the jail,
+    and three of its steps acted on what a jailed agent can write. (1) `git_rev` ran `git status` on a
+    mounted plugin's dir (`plugin_check`) and on an `--omarchy` tree (box.json at `up`,
+    `restart-shell`); `core.fsmonitor` in that repo's `.git/config`, the jail's to write, runs a
+    program on `git status`. `git_rev` now returns nothing for a jailed caller (the revision unknown,
+    as `repo_top` already runs no git for one). (2) `plugin_check` ran `$tree/bin/omarchy-plugin-validate`
+    from the jailed caller's own `--omarchy` tree; a jailed caller's plugins now get the host's
+    installed `/usr/share/omarchy/bin/omarchy-plugin-validate` (it only reads the plugin dir with jq),
+    or none (a warning, never a refusal). (3) ai-jail's `--mask`/`--deny-path` bind an empty file over
+    a path while the real file stays on the host, and the box mounts and seeds from the host, so
+    `up --seed MASKED:x` copied the real file in. `jail_policy` recorded only a per-folder `masked`
+    flag, so nothing knew which path. It now records `masks` (each mount inside a kept folder that is
+    not a folder itself), and `jail_masked` refuses a `--seed` at, under or holding one, and every seed
+    when the policy has no `masks` (an older broker). The command line alone is not enough: ai-jail
+    passes a mask path as given and bwrap follows links in it when mounting, and the jail can rename a
+    folder holding a masked file afterwards (`mv config config2`: the mount moves with it, on the host
+    too), so `config2/.env` was the real file while the command line still said `config/.env`. So
+    `broker_init` also reads the caller's `/proc/PID/mountinfo` (its mount namespace is the jail's,
+    readable by the user, checked against the caller's pidfd like the rest) with `jail_mounts`: every
+    mount point inside a kept folder that is not a folder itself joins `masks`, and its folder is
+    marked masked; a mount point with a newline hides its whole folder; an unreadable one fails the
+    command. The same holds for #193's worktree mount (finding 275): a common dir the jail hides a
+    path in (`ai-jail --mask <main>/.git/config`) is not mounted, since the box would show the host's.
+    What was thought a gap is none: a project with any mount inside is masked, and `repo_top` takes
+    only unmasked folders, so its box has no project mount at all, the hidden files included. That
+    also means a project with its own `.ai-jail` file (ai-jail hides it by default) gets no project
+    mount (Open). A sweep of `bin/omabox` for other exec, source or git on jail-writable paths found
+    none (`default_name`, `theme_snapshot_note`, `repo_top`, `repo_git_dirs` check `in_jail`; `setup`
+    is not on `broker_check`'s list; `seed_gitconfig` reads the host's global config). Also: a jailed
+    `up --omarchy ./tree` (relative) was sent as written and refused; relay_call now makes it absolute,
+    as it does `--plugin`. t_unit_jail_policy (masks recorded; `jail_masked` at, under, holding, no
+    masks key; `jail_mounts`: a renamed mask, a sub-root, `\040`, `\012`, outside the folders,
+    unreadable; `seed_spec` refusing both; `git_rev` running no git); t_unit_git_dirs (a common dir
+    holding a mask: nothing; a mask elsewhere: kept); t_jail, from a real ai-jail 2.8.1 through the
+    broker: no host marker from a plugin's or an `--omarchy` tree's `core.fsmonitor` or from the tree's
+    validator (`up --omarchy`, `restart-shell`), a masked file and a renamed one not seeded, the
+    hidden `.git/config` and a masked project's files in no box, `cpu`. On the code before this, 18 of
+    those fail (every marker made, the secrets in a box); with only the command line's masks, the
+    renamed file and the `.git/config` still get in.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -5558,7 +5572,11 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
   `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried (→ #81).
-- A shell hung in its crash handler (finding 280: a crash inside jemalloc, Quickshell's handler
+- A jailed agent's project with a path the jail hides inside (any `ai-jail --mask`, or its own `.ai-jail`
+  file, hidden by default) gets no project mount in its box (finding 282): safe, but the agent's
+  repo is missing there. Mounting it with the jail's hidden paths covered again in the box (an empty
+  file over each, as ai-jail does) would give it back.
+- A shell hung in its crash handler (#209; finding 280: a crash inside jemalloc, Quickshell's handler
   fork()ing into the lock) reads as running to `ls`, `restart-shell` and every command: its pid lives
   and its bar stays mapped, frozen. A thread with SIGSEGV blocked for more than a few seconds (`SigBlk`
   in `/proc/PID/task/*/status`, if the handler masks it while it runs) might tell it; untried.

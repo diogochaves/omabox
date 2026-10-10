@@ -1857,6 +1857,30 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
     "$(cd "$d/proj" && OMABOX_JAIL="$JM" bash -c 'source "$1"; seed_spec ".env:.config/leak"' _ "$lm" 2>&1)"
   check_eq "...a non-masked file in the same folder still seeds" "$d/proj/README-seed"$'\t'".config/ok" \
     "$(cd "$d/proj" && OMABOX_JAIL="$JM" bash -c 'source "$1"; seed_spec "README-seed:.config/ok"' _ "$lm" 2>&1)"
+  # jail_mounts (#198 security): the hidden paths as the kernel has them now, from the caller's
+  # mountinfo. The jail renamed the folder holding its mask (config -> config2): the command line still
+  # says config/.env, the mount (and the host's real file) is at config2/.env.
+  local mi=$d/mountinfo jp
+  jp=$(jq -nc --arg p "$d/proj" --arg s "$d/proj/sub" '{net: false, roots: [{path: $p, masked: false}, {path: $s, masked: false}], masks: ["\($p)/config/.env"]}')
+  { echo "1 0 0:1 / / rw - tmpfs tmpfs rw"
+    echo "2 1 0:2 /proj $d/proj rw - btrfs x rw"
+    echo "3 2 0:3 /ai-jail-empty $d/proj/config2/.env ro - tmpfs tmpfs ro"
+    echo "4 2 0:2 /proj/sub $d/proj/sub rw - btrfs x rw"
+    printf '%s\n' "5 4 0:3 /ai-jail-empty $d/proj/sub/a\\040b ro - tmpfs tmpfs ro"
+    echo "6 1 0:3 /ai-jail-empty /etc/hosts ro - tmpfs tmpfs ro"; } > "$mi"
+  check_eq "jail_mounts: a renamed mask where the kernel has it, the command line's kept, a sub-root not one" \
+    "$d/proj/config/.env|$d/proj/config2/.env|$d/proj/sub/a b" "$(lib jail_mounts "$jp" "$mi" | jq -r '.masks | join("|")')"
+  check_eq "...each folder holding one marked masked; nothing outside the jail's folders (/etc/hosts)" "true true" \
+    "$(lib jail_mounts "$jp" "$mi" | jq -r '[.roots[].masked] | map(tostring) | join(" ")')"
+  printf '%s\n' "7 2 0:3 /ai-jail-empty $d/proj/x\\012y ro - tmpfs tmpfs ro" >> "$mi"
+  check_match "...a mount point with a newline hides its whole folder" "\"$d/proj\"" "$(lib jail_mounts "$jp" "$mi" | jq -c '.masks')"
+  check_fails "...an unreadable mountinfo fails" lib jail_mounts "$jp" "$d/no-mountinfo"
+  printf '%s\n' "8 1 0:3 /ai-jail-empty $d/sp\\040ace/.env ro - tmpfs tmpfs ro" > "$d/mountinfo-sp"
+  check_eq "...a folder with a space in its path (the kernel writes it \\040)" "$d/sp ace/.env" \
+    "$(lib jail_mounts "$(jq -nc --arg p "$d/sp ace" '{roots: [{path: $p, masked: false}], masks: []}')" "$d/mountinfo-sp" | jq -r '.masks[]')"
+  mkdir -p "$d/proj/config2"; echo secret > "$d/proj/config2/.env"
+  check_match "seed_spec refuses the renamed folder's masked file" "does not go into the box" \
+    "$(cd "$d/proj" && OMABOX_JAIL="$(lib jail_mounts "$jp" "$mi" | jq -c '. + {id: "1 2", cwd: ""}')" bash -c 'source "$1"; seed_spec "config2/.env:.config/leak"' _ "$lm" 2>&1)"
   # git_rev must not run git on a jailed caller's path: its .git/config is the jail's to write, and
   # core.fsmonitor there runs a program (#198 security).
   git -C "$d/proj" config core.fsmonitor "touch $d/gitrev-ran"
@@ -2011,7 +2035,7 @@ t_jail() {
     { skip "an agent inside ai-jail drives its box through the broker" "--installed: ai-jail trusts no bwrap in a user namespace"; return; }
   local R=$ROOT/tools/relay/omabox-relay br=$TMP/br repo out
   [ -x "$R" ] || { skip "an agent inside ai-jail drives its box through the broker" "tools/relay not built"; return; }
-  mkdir -p "$br" "$TMP/lacks" "$TMP/jmark" "$TMP/jsec"; repo=$(tmp_repo jail); echo hi > "$repo/README"
+  mkdir -p "$br" "$TMP/lacks" "$TMP/jmark" "$TMP/jsec" "$TMP/jren/cfg"; repo=$(tmp_repo jail); echo hi > "$repo/README"
   # #198 security: a file ai-jail masks must not be seeded (its real host content stays on the host),
   # and the broker must run no git and no validator on the jail's writable paths. The masked secret is
   # in a mapped folder of its own, so the project root stays unmasked (a mask inside it would mask the
@@ -2022,6 +2046,16 @@ t_jail() {
   git -C "$repo/plug" init -q; git -C "$repo/plug" add -A
   git -C "$repo/plug" -c user.email=t@t -c user.name=t commit -qm x
   git -C "$repo/plug" config core.fsmonitor "touch $TMP/jmark/pwned"
+  # An --omarchy tree in the project, whose validator and core.fsmonitor would touch host markers were
+  # the broker to run either (git_rev on the tree at up and restart-shell; plugin_check's validator).
+  copy_omarchy "$repo/omt"
+  rm -f "$repo/omt/bin/omarchy-plugin-validate"
+  printf '#!/bin/sh\ntouch %q/validate\n' "$TMP/jmark" > "$repo/omt/bin/omarchy-plugin-validate"; chmod +x "$repo/omt/bin/omarchy-plugin-validate"
+  git -C "$repo/omt" init -q; git -C "$repo/omt" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
+  git -C "$repo/omt" config core.fsmonitor "touch $TMP/jmark/omgit"
+  # A masked file in a folder the jail may write: the jail renames the folder holding it (the mount
+  # moves with it, on the host too), then asks to seed it from its new path.
+  echo SEKRIT > "$TMP/jren/cfg/.env"
   # The broker as systemd starts it: a few variables, the socket handed over.
   env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
     systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$CLI" >"$br/log" 2>&1 & SERVERS+=($!)
@@ -2054,9 +2088,17 @@ r sleeps \$O run -- pgrep -cxf 'sleep 604'
 r seedmask \$O up $P-sm --seed $TMP/jsec/.secret:.config/leak
 r plugit \$O up $P-pg --plugin ./plug
 r plugdown \$O down $P-pg
+r cpu \$O cpu 1
+r omarchy \$O up $P-om --net isolated --omarchy ./omt --plugin ./plug
+r omrs \$O restart-shell -b $P-om
+r omdown \$O down $P-om
+r rename sh -c 'mv $TMP/jren/cfg $TMP/jren/cfg2 && echo moved; cat $TMP/jren/cfg2/.env; echo seen'
+r seedren \$O up $P-sr --seed $TMP/jren/cfg2/.env:.config/leak
+r seedrenhome \$O run -b $P-sr -- sh -c 'cat \$HOME/.config/leak'
+r seedrendown \$O down $P-sr
 r down \$O down
 EOF
-  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT" --map "$br" --map "$TMP/jsec" --mask "$TMP/jsec/.secret" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
+  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT" --map "$br" --map "$TMP/jsec" --mask "$TMP/jsec/.secret" --rw-map "$TMP/jren" --mask "$TMP/jren/cfg/.env" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
   printf '%s\n' "$out" > "$TMP/jail.out"
   sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jail.out" | tr '\n' ' '; }
   check_match "up from the jail" "box '$P-jail' up .*rc=0" "$(sect up)"
@@ -2089,6 +2131,14 @@ EOF
   check_match "a masked host file is not seeded into the box" "does not go into the box.* rc=1" "$(sect seedmask)"
   check_match "up --plugin from the jail works (the host's validator, no git on the jail's path)" "box '$P-pg' up .*rc=0" "$(sect plugit)"
   check_fails "...no host marker: the plugin's core.fsmonitor never ran on the host" test -e "$TMP/jmark/pwned"
+  check_match "cpu from the jail: its box's processes" "Hyprland.*rc=0" "$(sect cpu)"
+  check_match "up --omarchy on a tree in the jail's project" "box '$P-om' up .*rc=0" "$(sect omarchy)"
+  check_match "...restart-shell on it" "rc=0" "$(sect omrs)"
+  check_fails "...the tree's omarchy-plugin-validate never ran on the host" test -e "$TMP/jmark/validate"
+  check_fails "...nor git on the tree (its core.fsmonitor)" test -e "$TMP/jmark/omgit"
+  check_match "the jail renames the folder holding a masked file: still hidden in it" "^moved seen rc=0" "$(sect rename)"
+  check_match "...seeding it from its new path is refused (the kernel's mounts, not the command line's)" "does not go into the box.* rc=1" "$(sect seedren)"
+  check_fails "...its real content is in no box" grep -q SEKRIT <<<"$(sect seedrenhome)"
   check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
   check "the user's box still up" ob shot -b "$P-host" -o "$TMP/host.png"
   ob down "$P-host" >/dev/null 2>&1
@@ -2103,6 +2153,20 @@ EOF
       "$1" run -b "$2" -- test -e "$4/f" && echo main-files; "$1" down "$2" >/dev/null 2>&1' wt "$CLI" "$P-jailwt" "$W" "$M" </dev/null 2>&1)
   check_match "a jailed agent's box from a linked worktree: git status there (#193)" "(^| )## $P-jailwt rc=0 $" "$(tr '\n' ' ' <<<"$out")"
   check_fails "...the main checkout's files not in it" grep -q main-files <<<"$out"
+  # #198 security: the jail hides the main checkout's .git/config (ai-jail --mask): the box, mounting
+  # from the host, would show the real one, so the common dir does not go in.
+  git -C "$M" config omabox.marker SEKRITCFG
+  out=$(cd "$W" && timeout 120 ai-jail --no-save-config --worktree --mask "$M/.git/config" --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" \
+    bash -c '"$1" up "$2" >/dev/null 2>&1 || echo up-failed; "$1" run -b "$2" -- cat "$3/.git/config" 2>&1; "$1" down "$2" >/dev/null 2>&1' wt "$CLI" "$P-jailwm" "$M" </dev/null 2>&1)
+  check_fails "...its .git/config masked in the jail: the real one is not in the box" grep -q SEKRITCFG <<<"$out"
+  check_fails "...and the box came up" grep -q up-failed <<<"$out"
+  # A project the jail hides a path in (an ai-jail --mask, and its own .ai-jail, hidden by default) is not
+  # mounted in its box: the box would show the real files.
+  local H; H=$(tmp_repo jailmask); echo SEKRITENV > "$H/.env"; printf 'mask = []\n' > "$H/.ai-jail"
+  out=$(cd "$H" && timeout 120 ai-jail --no-save-config --mask .env --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" \
+    bash -c '"$1" up "$2" >/dev/null 2>&1 || echo up-failed; "$1" run -b "$2" -- sh -c "cat $3/.env; test -e $3/.ai-jail && echo has-config" 2>&1; "$1" down "$2" >/dev/null 2>&1' mp "$CLI" "$P-jailmp" "$H" </dev/null 2>&1)
+  check_fails "a project the jail hides a file in: not in its box (the real .env is not there)" grep -q -e SEKRITENV -e has-config <<<"$out"
+  check_fails "...and the box came up" grep -q up-failed <<<"$out"
 }
 
 # Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
@@ -4130,18 +4194,26 @@ t_unit_git_dirs() {
   # A jailed caller (#193, finding 275): the files git reads, read inside the jail's folders, git never
   # run (a stub that records being run first on PATH). JAIL CWD ROOT...: the jail's policy as
   # jail_policy writes it (ai-jail --worktree maps the common dir and the gitdir inside it: masked).
-  local B=$TMP/$P-gd-bin G C=$M/.git
+  local B=$TMP/$P-gd-bin G C=$M/.git jmask=""
   mkdir -p "$B"
   printf '#!/bin/sh\necho "$*" >> %q/git-ran\nexit 1\n' "$TMP/$P-gd" > "$B/git"; chmod +x "$B/git"
   jdirs() {
     local cwd=$1 j; shift
-    j=$(jq -nc --arg c "$cwd" '{net: false, cwd: $c, roots: ($ARGS.positional | map({path: ., masked: false}))}' --args "$@")
+    j=$(jq -nc --arg c "$cwd" --arg m "${jmask:-}" '{net: false, cwd: $c, roots: ($ARGS.positional | map({path: ., masked: false})),
+      masks: (if $m == "" then [] else [$m] end)}' --args "$@")
     j=$(jq -c --arg c "$C" '.roots |= map(if .path == $c then .masked = true else . end)' <<<"$j")
     (cd "$cwd" && PATH=$B:$PATH OMABOX_JAIL=$j bash -c 'source "$1"; top=$(repo_top) && repo_git_dirs "$top"' lib "$TMP/lib/bin/omabox" 2>&1)
   }
   G=$(sed -n '1s/^gitdir: //p' "$W/.git")
   check_eq "a jailed caller in a linked worktree, its jail sees the common dir (ai-jail --worktree): it" "$C" "$(jdirs "$W" "$W" "$C" "$G")"
   check_eq "...the common dir alone a folder of the jail's: the same" "$C" "$(jdirs "$W" "$W" "$C")"
+  # #198 security: a path the jail hides in the common dir (ai-jail --mask on its config) would be the
+  # host's in the box, which mounts it from the host: the common dir does not go.
+  jmask=$C/config
+  check_eq "...the jail hiding its config: nothing" "" "$(jdirs "$W" "$W" "$C" "$G")"
+  jmask=$M/other
+  check_eq "...a path hidden elsewhere: the common dir still" "$C" "$(jdirs "$W" "$W" "$C" "$G")"
+  jmask=""
   check_eq "...the jail does not see it: nothing" "" "$(jdirs "$W" "$W")"
   check_eq "...it sees the gitdir only: nothing" "" "$(jdirs "$W" "$W" "$G")"
   check_eq "...it sees it only inside a folder of its own (the main checkout, which it could swap for a link): nothing" "" "$(jdirs "$W" "$W" "$M")"
@@ -4158,7 +4230,7 @@ t_unit_git_dirs() {
   mkdir -p "$F/out"; ln -s "$G" "$F/out/g"; ln -s "$F/out/g" "$F/w/lnk"; printf 'gitdir: lnk\n' > "$F/w/.git"
   check_eq "...a gitdir through a link out of the jail's folders, though it leads back in: nothing" "" "$(jdirs "$F/w" "$F/w" "$C")"
   check_eq "...the same link, the jail seeing where it goes: the common dir" "$C" "$(jdirs "$F/w" "$F/w" "$C" "$F/out")"
-  rm "$F/w/lnk"; ln -s "$W/.git" "$F/w/.git"
+  rm "$F/w/lnk" "$F/w/.git"; ln -s "$W/.git" "$F/w/.git"
   check_eq "...a .git that is a link out of the jail's folders: nothing" "" "$(jdirs "$F/w" "$F/w" "$C")"
   check_fails "...and git was never run" test -e "$TMP/$P-gd/git-ran"
 }
