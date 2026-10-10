@@ -57,8 +57,10 @@ tools_ready() {
       continue
     fi
     make -q -C "$ROOT/tools/$t" >/dev/null 2>&1 && continue
+    # (install.sh from the main checkout in a linked worktree: there, it would link omabox to it, #182.)
     out=$(flock "$ROOT/tools" make -s -C "$ROOT/tools/$t" 2>&1) ||
-      { printf 'building tools/%s failed (./install.sh installs what it needs):\n%s\n' "$t" "$out"; return 1; }
+      { printf 'building tools/%s failed (./install.sh installs what it needs%s):\n%s\n' "$t" \
+          "$([ ! -f "$ROOT/.git" ] || echo ", run from the main checkout, not this worktree")" "$out"; return 1; }
     echo "built tools/$t (it was missing or older than its sources)"
   done
 }
@@ -3637,6 +3639,68 @@ t_unit_aquamarine() {
     check_eq "config --json: confirm-close available with the fix" true "$(HOME=$d/home "$CLI" config --json | jq '."confirm-close-available"')"
   fi
   check_match "setup: an unknown option, refused before anything is done" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
+}
+
+# finding 271 (issue #182): a linked worktree with no build/prefix of its own runs its boxes on the main
+# checkout's (aq_main_lib), found from the files git reads, never by running git. A scratch main
+# checkout and worktrees of it (one with a relative gitdir, one with a space in its path).
+t_unit_aq_worktree() {
+  local d=$TMP/$P-aqwt so=libaquamarine.so.14 M W X S SW out
+  M=$d/main W="$d/wt one" X=$d/wt-rel S=$d/sub SW=$d/subwt
+  gw() { git -c user.name=t -c user.email=t@t -c protocol.file.allow=always "$@" >/dev/null 2>&1; }
+  mkdir -p "$M" "$S" "$d/sys" "$d/bin"
+  for r in "$M" "$S"; do gw -C "$r" init -q && echo x > "$r/f" && gw -C "$r" add f && gw -C "$r" commit -qm one; done
+  gw -C "$M" worktree add -q -b "$P-aqwt" "$W"
+  gw -C "$M" worktree add -q -b "$P-aqwt-rel" "$X"
+  printf 'gitdir: ../main/.git/worktrees/%s\n' "${X##*/}" > "$X/.git"   # as worktree.useRelativePaths writes it
+  gw -C "$M" submodule add -q "$S" sm
+  gw -C "$M/sm" worktree add -q -b "$P-aqwt-sub" "$SW"
+  : > "$d/sys/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/sys/$so"
+  # A git that records being run: aq_main_lib never runs it, in a jail or out.
+  printf '#!/bin/sh\necho "$*" >> %q/git-ran\nexit 1\n' "$d" > "$d/bin/git"; chmod +x "$d/bin/git"
+  main_lib() { PATH=$d/bin:$PATH lib aq_main_lib "$@" 2>&1; }
+  check_eq "a worktree, no build in the main checkout: nothing" "" "$(main_lib "$W")"
+  mkdir -p "$M/build/prefix/lib"
+  : > "$M/build/prefix/lib/libaquamarine.so.0.15.1"; ln -s libaquamarine.so.0.15.1 "$M/build/prefix/lib/$so"
+  lib eval 'echo "$AQ_BUILD"' > "$M/build/prefix/.omabox-commit"
+  local common; common=$(git -C "$W" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  check_eq "a worktree: the main checkout's build/prefix/lib, where git's common dir says" "${common%/.git}/build/prefix/lib" "$(main_lib "$W")"
+  check_eq "...one whose .git names its gitdir relative to it: the same" "$M/build/prefix/lib" "$(main_lib "$X")"
+  check_eq "...for a jailed caller's broker: the same" "$M/build/prefix/lib" "$(OMABOX_JAIL='{"roots":[]}' main_lib "$W")"
+  check_fails "...and git was never run" test -e "$d/git-ran"
+  check_eq "the main checkout itself: nothing (its own build/prefix is first already)" "" "$(main_lib "$M")"
+  check_eq "a submodule's worktree: nothing (its common dir is in .git/modules)" "" "$(main_lib "$SW")"
+  check_eq "no checkout (an installed omabox): nothing" "" "$(main_lib "$d/sys")"
+  # resolve DIR: which aquamarine a box from checkout DIR runs, and how --version says it.
+  resolve() { bash -c 'source "$1"; ROOT=$2 AQ_SYSDIR=$3 AQ_USER=$4; aq_resolve "$5" && echo "$AQ_KIND|$AQ_LIB|$AQ_MAIN|$(aq_desc)"' \
+    lib "$TMP/lib/bin/omabox" "$1" "$d/sys" "$d/user" "$so" 2>&1; }
+  out=$(resolve "$W")
+  check_match "a box from the worktree runs the main checkout's build" "^private\|$M/build/prefix/lib\|$M/build/prefix\|" "$out"
+  check_match "...said so" "a private build, 0\.15\.1@[^ ]* \($M/build/prefix, the main checkout's: this worktree has no usable one\)$" "$out"
+  mkdir -p "$W/build/prefix/lib"; : > "$W/build/prefix/lib/libaquamarine.so.0.15.1"; ln -s libaquamarine.so.0.15.1 "$W/build/prefix/lib/$so"
+  check_eq "...its own build, once it has one: first, not said to be the main's" "private|$W/build/prefix/lib||a private build, 0.15.1 ($W/build/prefix)" "$(resolve "$W")"
+  rm -rf "$W/build"
+  check_eq "the main checkout's own boxes: its build, nothing borrowed" "private|$M/build/prefix/lib|" "$(resolve "$M" | cut -d'|' -f1-3)"
+  if [ "$(id -u)" != 0 ]; then
+    chmod 000 "$M/build/prefix/lib"
+    check_eq "a main checkout's lib dir not readable: nothing" "" "$(main_lib "$W")"
+    check_match "...the worktree's boxes on the system's" "^system\|\|\|" "$(resolve "$W")"
+    chmod 755 "$M/build/prefix/lib"
+    chmod 000 "$M/build/prefix/lib/libaquamarine.so.0.15.1"
+    out=$(resolve "$W")
+    check_match "a build whose library is not readable: skipped, saying so" "skipping the aquamarine in $M/build/prefix/lib: $so is not readable" "$out"
+    check_match "...the system's used" $'\n''system\|\|\|' "$out"
+    chmod 644 "$M/build/prefix/lib/libaquamarine.so.0.15.1"
+  else
+    skip "a build not readable is not used" "running as root reads everything"
+  fi
+  rm -rf "$M/build"
+  check_eq "the main checkout's build gone: nothing, quietly" "" "$(main_lib "$W")"  # up from a worktree whose tools are not built (a fresh one): make, never install.sh there.
+  check_match "up from a worktree without its tools: build them with make, not install.sh" \
+    "missing .*: in a git worktree, build them: for m in .*/tools/\*/Makefile; do make -C" \
+    "$(bash -c 'source "$1"; ROOT=$2 KEYBOARD=$2/tools/keyboard/omabox-keyboard; check_install /dev/null' lib "$TMP/lib/bin/omabox" "$W" 2>&1)"
+  check_match "...a main checkout's: install.sh" "missing .*: run install.sh$" \
+    "$(bash -c 'source "$1"; ROOT=$2 KEYBOARD=$2/tools/keyboard/omabox-keyboard; check_install /dev/null' lib "$TMP/lib/bin/omabox" "$M" 2>&1)"
 }
 
 # finding 246 (issue #48): the system's aquamarine has the fix when it exports what #415 added, whatever
@@ -7830,7 +7894,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_pointer t_pixel t_burst t_changed t_output t_output_nvidia t_gdb t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
@@ -7981,6 +8045,11 @@ main() {
       echo probe; CUR=probe
       no "a box starts here" "$_out"
       echo "       (no box can start here: the box tests are not run)"
+      # A linked worktree (#182, finding 271): its boxes use the main checkout's aquamarine build.
+      if [ -f "$ROOT/.git" ] && [[ $_out == *"aquamarine's fix"* ]]; then
+        echo "       (a git worktree: its boxes use the main checkout's build/prefix when it has none of its own;"
+        echo "       omabox setup --aquamarine builds one, in the main checkout for every worktree, or here)"
+      fi
       tests=(); for _t in "${UNIT[@]}"; do [[ " ${_sel[*]:-${UNIT[*]}} " == *" $_t "* ]] && tests+=("$_t"); done
     fi
   fi

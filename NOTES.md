@@ -5215,6 +5215,30 @@ from them.
     unlinking in seed_copy_in is unchanged. t_unit_plugin_link (the decision), t_unit_refusals (a
     theme), t_plugin_link (a linked plugin: refused, no box dir; a folder seeded above the plugins dir
     beside them: in the box, the plugins still linked and loaded).
+271. **A fresh worktree's headless NVIDIA boxes were refused: it has no `build/prefix`** (2026-10-10,
+    #182). aq_resolve looked for omabox's aquamarine build in `$ROOT/build/prefix` and the user's data
+    dir; a `git worktree add` of omabox has no `build/`, so while the GPU is on nvidia its boxes and
+    the suite's box tests were refused for lacking #415 (finding 125) that the main checkout had
+    built, and agents in parallel worktrees linked `build/` by hand. Now `aq_main_lib` adds the main
+    checkout's `build/prefix/lib` after the worktree's own (aq_pick still takes the first with the
+    soname, so a worktree's own build wins, and a stale one is skipped as before). It finds the main
+    checkout where `git rev-parse --git-common-dir` does, from the files git reads, never by running
+    git (a jailed caller's broker runs no git: repo_top): `.git` a file `gitdir: G` (relative to the
+    checkout or absolute), `G/commondir` (relative to G), the main checkout that dir's parent when it
+    is a dir named `.git`. Nothing for a main checkout, an installed omabox (no `.git`), a submodule
+    or its worktree (common dir in `.git/modules`), or a lib dir missing or not readable; aq_pick now
+    also skips any build whose library is not readable, saying so. `--version`/`setup` (aq_desc) say
+    "(PREFIX, the main checkout's: this worktree has no usable one)"; box.json's
+    `aquamarine.main_checkout` (so `ls --json`, `gpu --json`) and `gpu`'s text name it. A worktree's
+    tools: the suite already built every `tools/*` with make before its tests (finding 253), so only
+    the messages changed: `up` with tools missing in a worktree says to build them with make (not
+    install.sh, which would link the user's omabox, skill and widget to the worktree), the suite's
+    tool-build failure says to run install.sh from the main checkout, and its "no box can start
+    here" probe adds the worktree note when the refusal is aquamarine's; AGENTS.md says the same.
+    Using another GPU when the fix is missing (the issue's third option) is not done: it changes
+    which GPU a box gets. t_unit_aq_worktree (a scratch main checkout and worktrees: found where git
+    says, a relative gitdir, the same in a jail with git never run, a main checkout, a submodule's
+    worktree, unreadable, gone; aq_resolve and aq_desc from the worktree).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

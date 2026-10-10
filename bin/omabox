@@ -347,7 +347,8 @@ omabox's own fixes for interactive boxes on top: a key held when the window lose
 and in a monitor's window your pointer lands on that monitor and your cursor stays shown. No system
 aquamarine has those, so it builds even when the system's has the fix; it builds nothing only when
 boxes already use this omabox's build (--force rebuilds it). \`omabox --version\` says which one new
-boxes use: a private build, or the system's (with the fix, patched with it, or without it).
+boxes use: a private build, or the system's (with the fix, patched with it, or without it). A git
+worktree of omabox with no build of its own uses its main checkout's build/prefix, and says so.
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
 @ up keys-to-box
 $PASS_KEY toggles sending SUPER keys to an interactive box, once:
@@ -2380,14 +2381,14 @@ cmd_up() {
     --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg omarchy "$omarchy" \
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
-    --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
+    --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --arg aq_main "${AQ_MAIN:-}" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" --arg theme "$THEME" \
     --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
       plugin_via: (reduce $plugins[] as $i ({}; .[$i] = (if $linked | index($i) then "linked" else "mounted" end))), net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
       xwayland: ($xwayland == 1), autoreload: ($autoreload == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
-      aquamarine: {kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed}}
+      aquamarine: ({kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed} + (if $aq_main != "" then {main_checkout: $aq_main} else {} end))}
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
       + (if ($themes | length) > 0 then {theme_dirs: $themes} else {} end)
@@ -2625,7 +2626,11 @@ cmd_up() {
 # installed Hyprland, or `up --hyprland`'s build (finding 116), which is refused here rather than left
 # to crash in the box.
 check_install() {
-  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] && [ -x "$EVENTS" ] || die "missing $KEYBOARD, $POINTER, $STILL or $EVENTS: run install.sh"
+  # A linked worktree (.git a file) builds its own with make, as test/run.sh does: install.sh there
+  # would point your omabox, skill and widget at the worktree (issue #182).
+  local how="run install.sh"
+  [ ! -f "$ROOT/.git" ] || how="in a git worktree, build them: for m in $ROOT/tools/*/Makefile; do make -C \"\${m%/*}\"; done (test/run.sh builds them itself)"
+  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] && [ -x "$EVENTS" ] || die "missing $KEYBOARD, $POINTER, $STILL or $EVENTS: $how"
   # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
   [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$1")" != nvidia ] ||
     die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
@@ -2682,6 +2687,8 @@ aq_pick() {
   [ "${OMABOX_AQUAMARINE:-}" != system ] || set --
   [ -z "${OMABOX_AQUAMARINE:-}" ] || [ "$OMABOX_AQUAMARINE" = system ] || die "OMABOX_AQUAMARINE is system or unset, got $OMABOX_AQUAMARINE"
   for d in "$@"; do
+    # One the box could not load is no build to use (an unreadable copy, another user's checkout).
+    if [ -e "$d/$want" ] && [ ! -r "$d/$want" ]; then say "skipping the aquamarine in $d: $want is not readable"; continue; fi
     if [ -e "$d/$want" ]; then
       f=$(readlink -f "$d/$want"); v=${f##*.so.}
       commit=$(cat "$d/../.omabox-commit" 2>/dev/null) || commit=""
@@ -2709,17 +2716,47 @@ aq_ver_fixed() {
   [ "$1" != unknown ] && [ "$(printf '%s\n%s\n' "$AQ_FIXED_AFTER" "$1" | sort -V | tail -1)" != "$AQ_FIXED_AFTER" ]
 }
 
-# aq_resolve SONAME: aq_pick's answer for a box, in AQ_KIND, AQ_LIB, AQ_VER and AQ_FIXED.
+# aq_main_lib CHECKOUT: a linked worktree's main checkout's build/prefix/lib (issue #182, finding 271),
+# for aq_resolve to look in after the worktree's own: a fresh `git worktree add` has no build/, and its
+# headless boxes on NVIDIA were refused for lacking the fix the main checkout had built. Found where
+# `git rev-parse --git-common-dir` finds it, from the files git reads, never by running git (the same
+# answer for a jailed caller's broker, which runs no git: repo_top): CHECKOUT/.git is a file
+# `gitdir: G` (G relative to CHECKOUT), G/commondir names the common dir (relative to G), and the main
+# checkout is that dir's parent when it is a dir named .git. Nothing for a main checkout (.git is a
+# dir), an installed omabox (no .git), a submodule or its worktree (the common dir is in the
+# superproject's .git/modules), any other layout, or a lib dir missing or not readable.
+aq_main_lib() {
+  local co=$1 g c top
+  [ -f "$co/.git" ] || return 1
+  g=$(sed -n '1s/^gitdir: //p' "$co/.git" 2>/dev/null) || return 1
+  [ -n "$g" ] || return 1
+  [[ $g == /* ]] || g=$co/$g
+  c=$(cat -- "$g/commondir" 2>/dev/null) || return 1
+  [ -n "$c" ] || return 1
+  [[ $c == /* ]] || c=$g/$c
+  c=$(readlink -e -- "$c" 2>/dev/null) || return 1
+  [[ $c == */.git ]] && [ -d "$c" ] || return 1
+  top=${c%/.git}
+  [ ! "$top" -ef "$co" ] || return 1
+  [ -d "$top/build/prefix/lib" ] && [ -r "$top/build/prefix/lib" ] && [ -x "$top/build/prefix/lib" ] || return 1
+  echo "$top/build/prefix/lib"
+}
+
+# aq_resolve SONAME: aq_pick's answer for a box, in AQ_KIND, AQ_LIB, AQ_VER and AQ_FIXED; AQ_MAIN is
+# the main checkout's build/prefix when the box's is that (a worktree's, aq_main_lib), else empty.
 aq_resolve() {
   # In a box (an omabox started there: the suite's stand-in hosts), the box's own aquamarine too, last:
   # `up` binds a private build at /opt/omabox/lib, and the user's data dir is not in reach there
   # (a system install has no checkout build/prefix to find instead; finding 130).
   local here=(); [ ! -f /opt/omabox/share/session.sh ] || here=(/opt/omabox/lib)
-  local r; r=$(aq_pick "$1" "$AQ_SYSDIR" "$ROOT/build/prefix/lib" "$AQ_USER/lib" "${here[@]}") || return 1
+  local main; main=$(aq_main_lib "$ROOT") || main=""
+  local r; r=$(aq_pick "$1" "$AQ_SYSDIR" "$ROOT/build/prefix/lib" ${main:+"$main"} "$AQ_USER/lib" "${here[@]}") || return 1
   IFS='|' read -r AQ_KIND AQ_LIB AQ_VER AQ_FIXED <<<"$r"
+  AQ_MAIN=""; [ "$AQ_KIND" != private ] || [ -z "$main" ] || [ "$AQ_LIB" != "$main" ] || AQ_MAIN=${main%/lib}
 }
 aq_desc() {
-  if [ "$AQ_KIND" = private ]; then echo "a private build, $AQ_VER (${AQ_LIB%/lib})"
+  if [ -n "${AQ_MAIN:-}" ]; then echo "a private build, $AQ_VER ($AQ_MAIN, the main checkout's: this worktree has no usable one)"
+  elif [ "$AQ_KIND" = private ]; then echo "a private build, $AQ_VER (${AQ_LIB%/lib})"
   elif [ "$AQ_FIXED" = 1 ] && aq_ver_fixed "$AQ_VER"; then echo "the system's, $AQ_VER"
   elif [ "$AQ_FIXED" = 1 ]; then echo "the system's, $AQ_VER, patched with the fix for nested Wayland outputs (hyprwm/aquamarine#415)"
   else echo "the system's, $AQ_VER, without the fix for nested Wayland outputs (hyprwm/aquamarine#415): headless NVIDIA boxes and confirm-close need omabox setup --aquamarine"; fi
@@ -6646,7 +6683,8 @@ cmd_gpu() {
   fi
   echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
   [ "$aq" = null ] || jq -r '"aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
-    + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)' <<<"$aq"
+    + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)
+    + (if .main_checkout then " (" + .main_checkout + ", the main checkout\u0027s)" else "" end)' <<<"$aq"
   if [ "$rj" != null ]; then render_line <<<"$rj" || true
   elif [ "$(meta mode)" = interactive ]; then echo "GPU: the desktop's (an interactive box renders where your compositor does)"
   fi

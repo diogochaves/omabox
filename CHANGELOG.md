@@ -7,6 +7,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A git worktree of omabox runs headless NVIDIA boxes on its main checkout's aquamarine build**
+  (#182). A fresh `git worktree add` has no `build/prefix`, so its boxes on NVIDIA were refused for
+  lacking aquamarine's fix the main checkout had built. A worktree with none of its own now uses the
+  main checkout's (`omabox --version` and `omabox gpu` say so), and `up` from a worktree whose tools
+  are not built says to build them with make, not to run `install.sh` (which would link your omabox
+  to the worktree).
 - **`up` refuses a `--seed` into a `--plugin`'s or `--theme-dir`'s folder** (#199). The plugin's or
   theme's place in the box HOME became a folder holding only the seeded file: the plugin silently not
   in the box (while `ls --json` still said `via: linked`), or the theme gone; under a mounted plugin

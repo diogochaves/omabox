@@ -14,6 +14,10 @@ suite (run it in full before each commit; box tests run in parallel, `-j 1` one 
 leak to one test; `test/run.sh unit` is the fast tier; a failure's evidence
 is in `~/.local/state/omabox/test/`; a peek the user opens at its `t<pid>-*` boxes is noted and
 skips the checks it holds up, but one opened by an omabox older than the suite fails it).
+A linked worktree (`git worktree add`, no `build/`): the suite builds its `tools/*` with make (by
+hand: `make -C tools/NAME`; never `install.sh` there, which would link your omabox to the worktree),
+and its boxes use the main checkout's `build/prefix` when it has none of its own (`omabox --version`
+says which), else `omabox setup --aquamarine` builds one.
 `spike/` is the original record; the CLI supersedes it.
 
 ## Non-negotiables
