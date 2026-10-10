@@ -5537,6 +5537,23 @@ from them.
     those fail (every marker made, the secrets in a box); with only the command line's masks, the
     renamed file and the `.git/config` still get in.
 
+283. **CUDA in an NVIDIA box: `/dev/nvidia-uvm` bound** (2026-10-10, #149). A box on the RTX got
+    `/dev/nvidiactl` and its `/dev/nvidiaN` only; the driver also makes `/dev/nvidia-uvm`,
+    `/dev/nvidia-uvm-tools` and `/dev/nvidia-modeset`. Measured in a box on the RTX 5070 Ti
+    (renderD129, nvidia-open), through libcuda with ctypes: with today's binds `cuInit` = 999
+    (CUDA_ERROR_UNKNOWN); with `nvidia-uvm` added, `cuInit`, `cuCtxCreate` and a 1 MiB `cuMemAlloc` all
+    0; `nvidia-uvm-tools` (profiling) is not needed for that. So `up` binds `/dev/nvidia-uvm` into an
+    NVIDIA box when it exists (the driver makes it on the host's first CUDA use; no node, nothing:
+    CUDA fails as before). Neither node changed the rest: `eglinfo -p wayland` still falls back to
+    llvmpipe after `failed to create dri2 screen` (GBM is the RTX), and `vulkaninfo --summary` still
+    segfaults after `vkGetPhysicalDeviceDisplayPropertiesKHR failed with ERROR_UNKNOWN` (#204).
+    `nvidia-modeset` was not tried: it is NVIDIA's mode-setting interface, and on this machine the
+    RTX drives a live output (card0-DP-4 enabled), so a box holding it could reach a display the
+    desktop uses. `gpu release` already takes down every box on the node, so a CUDA program in a box
+    does not keep a switch to vfio-pci from going through unseen. t_main (an NVIDIA box): no
+    `nvidia-modeset`; `nvidia-uvm` there when the host has it, and CUDA's three calls 0 (skipped
+    without the node or libcuda); on the code before, the node is missing and `cuInit` gives 999.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

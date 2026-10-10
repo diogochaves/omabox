@@ -2573,6 +2573,9 @@ cmd_up() {
   [ -z "$AQ_LIB" ] || args+=(--ro-bind "$AQ_LIB" /opt/omabox/lib)
   for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
   [ ${#nvidia_devs[@]} = 0 ] || args+=(--dev-bind /dev/nvidiactl /dev/nvidiactl)
+  # CUDA allocates through /dev/nvidia-uvm (#149: cuInit fails, 999, without it); compute only, no
+  # display. There when the driver made it (nvidia-modprobe -u, on first CUDA use on the host).
+  [ ${#nvidia_devs[@]} = 0 ] || [ ! -c /dev/nvidia-uvm ] || args+=(--dev-bind /dev/nvidia-uvm /dev/nvidia-uvm)
   for n in "${nvidia_devs[@]}"; do args+=(--dev-bind "$n" "$n"); done
   args+=("${ro_args[@]}")
   # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,

@@ -3,6 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **CUDA works in a box on an NVIDIA GPU** (#149). The box had the GPU's node and `/dev/nvidiactl`
+  but not `/dev/nvidia-uvm`, which CUDA allocates through, so `cuInit` failed (999). It is bound now
+  when the driver has made it. Wayland EGL and Vulkan in an NVIDIA box are unchanged (#204).
+
 ## 0.5.3 — 2026-10-10
 
 Security fixes for agents inside ai-jail driving boxes through the broker: update if you use

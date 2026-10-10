@@ -2843,6 +2843,24 @@ t_main() {
   if [ "$(jq -r .wayland_screen "$D/box.json")" = true ]; then
     check_eq "NVIDIA uses the private Wayland screen" WAYLAND-1 "$screen_name"
     check "NVIDIA control node is present" ob run -b "$B" -- test -c /dev/nvidiactl
+    # #149: CUDA's memory node goes in when the driver made it (cuInit 999 without it); never
+    # nvidia-modeset, NVIDIA's mode-setting node, which reaches the GPU's displays.
+    check_fails "...never nvidia-modeset (the GPU's displays)" ob run -b "$B" -- test -e /dev/nvidia-modeset
+    if [ -c /dev/nvidia-uvm ]; then
+      check "...CUDA's memory node, nvidia-uvm, too (#149)" ob run -b "$B" -- test -c /dev/nvidia-uvm
+      if [ -e /usr/lib/libcuda.so.1 ]; then
+        check_eq "...CUDA starts in the box and allocates (cuInit, cuCtxCreate, cuMemAlloc)" "0 0 0" "$(ob run -b "$B" -- /usr/bin/python3 -I -c '
+import ctypes
+c = ctypes.CDLL("libcuda.so.1"); d = ctypes.c_int(); x = ctypes.c_void_p(); m = ctypes.c_void_p()
+r = [c.cuInit(0)]
+if r[0] == 0: c.cuDeviceGet(ctypes.byref(d), 0); r += [c.cuCtxCreate_v2(ctypes.byref(x), 0, d), c.cuMemAlloc_v2(ctypes.byref(m), 1 << 20)]
+print(*r)' 2>&1)"
+      else
+        skip "CUDA in an NVIDIA box (#149)" "no libcuda.so.1"
+      fi
+    else
+      skip "CUDA's memory node in an NVIDIA box (#149)" "the host has no /dev/nvidia-uvm (no CUDA program ran since the driver loaded)"
+    fi
     # Finding 268 (#185): a bound node is a mount point, which plain lsof reads as a file system (every
     # /dev fd); `lsof -f` lists only the node's own holders. Plain lsof doing so no more: the finding goes.
     if ob run -b "$B" -- sh -c 'command -v lsof' >/dev/null 2>&1; then
