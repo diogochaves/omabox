@@ -7639,8 +7639,9 @@ t_unit_inspect() {
   check_match "events: a bad expression said" "not a regular expression" "$(ob events -b "$P-x" --until '(' 2>&1)"
   check "events is a jailed agent's (its own boxes only)" lib broker_check events
   local out rc=0
-  out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp --die-with-parent \
-        env -i "$ROOT/tools/events/omabox-events" /tmp/ev.log 2>&1) || rc=$?
+  # The checkout bound back over the empty /tmp (#194): one under /tmp had its tool hidden (exit 127).
+  out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp \
+        --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i "$ROOT/tools/events/omabox-events" /tmp/ev.log 2>&1) || rc=$?
   check_eq "omabox-events refuses outside a box" 2 "$rc"
   check_match "...and says so" "only runs inside an omabox box" "$out"
 }

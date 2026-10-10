@@ -5166,6 +5166,12 @@ from them.
     baseline (it is still recorded for `--in`); internal, for the suite, not in help. The suite's
     `ev_shot` sets it, evidence takes its shots through it, and t_changed takes one of its own box
     just before the screen's first `--changed`, which must still be whole.
+267. **The suite runs from a checkout under `/tmp`** (2026-10-10, #194). t_unit_inspect's "omabox-events
+    refuses outside a box" runs the tool in a bwrap with an empty `/tmp`, which hid a checkout there:
+    exit 127, not the refusal's 2. The checkout is bound back read-only over that tmpfs; what the tool
+    checks (`/opt/omabox/share` a mount root, no system bus) is untouched, `/opt` still empty. t_clip,
+    named in the issue as likely the same, passed from copies at `/tmp/omabox-194` and deeper under
+    `/tmp`: a box's own `/tmp` is a tmpfs too, but the repo is bound after it, so the stand-in sees it.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
