@@ -7623,7 +7623,7 @@ output_on() {
 # omabox cpu (#205, finding 277) in a box: a busy loop is ~one core, by --pid (the box's number or the
 # host's) and --app; an idle box is near 0; --json has gpu's shape plus processes and a total.
 t_cpu() {
-  local B=$P-cpu out j bp hp
+  local B=$P-cpu out j bp hp t0 t1 w0 w1 own got
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
   j=$(ob cpu -b "$B" 2 --json)
   check "cpu --json parses, with gpu's fields and its own" jq -e '.box and .output and .mode and (.seconds == 2) and (.percent | type == "object")
@@ -7637,13 +7637,24 @@ t_cpu() {
   ob run -b "$B" -d -q -- sh -c 'while :; do :; done' >/dev/null 2>&1
   until_ok 5 ob run -b "$B" -- pgrep -x sh >/dev/null
   bp=$(ob run -b "$B" -- pgrep -xn sh) || bp=0
+  hp=$(ob cpu -b "$B" 0.2 --pid "$bp" --json | jq -r '.processes[0].host_pid // 0')
+  # A busy loop gets one core only on an idle machine (a full parallel run gave it 64%): cpu's figure
+  # is checked against the loop's own ticks over the same window, read from the host's /proc.
+  # own_ticks HOSTPID: utime + stime (fields 14, 15; after the last `)`, as cpu reads them).
+  own_ticks() { local st; st=$(cat "/proc/$1/stat" 2>/dev/null) || { echo 0; return; }; st=${st##*) }; awk '{print $12 + $13}' <<<"$st"; }
+  t0=$(own_ticks "$hp"); w0=$(date +%s.%N)
   out=$(ob cpu -b "$B" 2 --pid "$bp")
-  check_match "cpu --pid: a busy loop is about one core" $'\n  sh +'"$bp"' +(9[0-9]|10[0-9])\.[0-9]%' "$out"
+  t1=$(own_ticks "$hp"); w1=$(date +%s.%N)
+  own=$(awk -v d=$((t1 - t0)) -v hz="$(getconf CLK_TCK)" -v a="$w0" -v b="$w1" 'BEGIN { printf "%.0f", d / hz / (b - a) * 100 }')
+  got=$(awk -v p="$bp" '$1 == "sh" && $2 == p { sub("%", "", $3); print $3 }' <<<"$out")
+  check_match "cpu --pid: the busy loop's line" $'\n  sh +'"$bp"' +[0-9]+\.[0-9]%' "$out"
+  check "...at its own share of a core (its ticks over the window: ${own}%, cpu: ${got:-none}%), more than a fifth" \
+    awk -v g="${got:-0}" -v e="$own" 'BEGIN { exit !(g > 20 && g >= e - 20 && g <= e + 20) }'
   check_eq "...that process alone, and the total" 2 "$(grep -cE '^  (sh|total) ' <<<"$out")"
   j=$(ob cpu -b "$B" 1 --settle 0.5 --app sh --json)
   hp=$(jq -r '.processes[0].host_pid' <<<"$j")
   check_eq "cpu --app sh: the processes named sh only" "sh" "$(jq -r '[.processes[].name] | unique | join(" ")' <<<"$j")"
-  check "...the busy one at about one core" jq -e --argjson p "$bp" '.processes[] | select(.pid == $p) | .cpu > 90' <<<"$j"
+  check "...the busy one busy (more than a fifth of a core)" jq -e --argjson p "$bp" '.processes[] | select(.pid == $p) | .cpu > 20' <<<"$j"
   check "...its host pid is the box's (omabox which)" test "$(ob which "$hp" 2>/dev/null)" = "$B"
   check "cpu --pid HOSTPID: the same process" jq -e --argjson p "$bp" '.processes | length == 1 and .[0].pid == $p' \
     <<<"$(ob cpu -b "$B" 1 --pid "$hp" --json)"

@@ -5403,7 +5403,8 @@ from them.
     only: select_box). Live, an idle `--no-shell` box on the RTX: 1.0% in all (labwc and Hyprland
     0.5% each), 423 MB RSS, 264 MB PSS; `run -d -- sh -c 'while :; do :; done'`: 99.9% by `--pid`,
     by its host pid and by `--app sh`. t_unit_cpu (a fake /proc and injected samples: the arithmetic,
-    a reused pid, the table, refusals) and t_cpu (that box and loop).
+    a reused pid, the table, refusals) and t_cpu (that box and loop). t_cpu checks a busy loop against its own ticks over the same window
+    (the host's /proc), not a fixed 90-109%: a full parallel run gave it 64% of a core, and cpu said so.
 
 278. **A peek whose monitor drops; `write_layout` checked** (2026-10-10, #200; review of findings 232,
     233, 238, 261). (1) omabox-peek ignored the box's `global_remove`: a `peek --monitor HEADLESS-3`
