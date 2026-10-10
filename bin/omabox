@@ -6635,20 +6635,32 @@ output_back_one() {
   [ "$(meta wayland_screen)" != true ] || kind=wayland
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create "$kind" "$out" 2>&1) || true
   [ "$res" = ok ] || die "output: creating $out again failed: $res"
-  if grep -q "^$out " <(monitors_file); then
-    monitors_place >/dev/null || die "output: $out is back, but placing it failed"
-  else
-    res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$out', mode = '$mode', position = '$pos', scale = $scale })" 2>&1) || true
-    [ "$res" = ok ] || die "output: $out is back, but setting its mode failed: $res"
-  fi
-  local end=$((SECONDS + 5))
+  # Made, it is no longer dropped, whatever mode it comes up at (#200, finding 279): kept in the record
+  # when its mode was late, the box listed it twice (back, and dropped), and `drop` and `mode` refused
+  # it as away while it was on screen; a second `back` would make another output of that name.
+  dropped_set "$(dropped_file | awk -v n="$out" '$1 != n')" || die "output: $out is back, but $D/output.dropped still has it"
+  output_place_one "$out" "$mode" "$pos" "$scale" || die "output: $out is back, but placing it failed: $res"
+  # On NVIDIA the mode set can land before labwc's first configure of the new window, which then
+  # leaves it at 1280x720 (seen under load, #200): set again each second until it holds, as wait_ready
+  # does for the screen at `up`.
+  local end=$((SECONDS + 10)) again=$((SECONDS + 1))
   until m=$(hypr_json monitors) && line=$(jq -r --arg n "$out" 'first(.[] | select(.name == $n and (.disabled | not))) |
       "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"' <<<"$m") && [ "$line" = "$out $mode" ]; do
-    [ $SECONDS -lt $end ] || die "output: $out came back as ${line:-nothing}, not $mode"
+    [ $SECONDS -lt $end ] || die "output: $out is back, but as ${line:-nothing}, not $mode (omabox monitor list -b $NAME)"
+    if [ "$kind" = wayland ] && [ $SECONDS -ge $again ]; then output_place_one "$out" "$mode" "$pos" "$scale" || true; again=$((SECONDS + 1)); fi
     sleep 0.05
   done
-  dropped_set "$(dropped_file | awk -v n="$out" '$1 != n')" || die "output: $out is back, but $D/output.dropped still has it"
   echo "$line"
+}
+# output_place_one NAME MODE XxY SCALE: a monitor of omabox.monitors placed by the box's config, the
+# main screen (or one made by hand) by its line; a failure's reason in res (the caller's).
+output_place_one() {
+  if grep -q "^$1 " <(monitors_file); then
+    res=""; monitors_place >/dev/null
+  else
+    res=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.monitor({ output = '$1', mode = '$2', position = '$3', scale = $4 })" 2>&1) || true
+    [ "$res" = ok ]
+  fi
 }
 
 # gdb on a box's Hyprland, shell or any of its processes (#135, finding 211). A gdb started beside

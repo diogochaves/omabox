@@ -5437,6 +5437,23 @@ from them.
     auto-placed one after a fractional width and a `position = '3000.6x10.4'` rule alike (3000, 10):
     finding 261's rounding guards a later Hyprland, untested.
 
+279. **`output back` on NVIDIA: a late labwc left the main screen at 1280x720, kept as dropped**
+    (2026-10-10, #200). A full parallel run once listed `WAYLAND-1` twice after t_output_nvidia's
+    drop and back (1280x720, and 1600x900 marked dropped), and the next `drop` said the main screen was
+    dropped already. On NVIDIA the screen is a Wayland output, a window on the box's labwc:
+    `output create wayland WAYLAND-1` comes up at 1280x720 and only the `hl.monitor` mode set after it
+    sizes it (labwc's Maximize does not: created alone it stays 1280x720). When that set lands before
+    labwc's first configure of the new window, the output keeps 1280x720 (the same race `wait_ready`
+    answers at `up` by setting the mode again). `output_back_one` then waited 5 s for the mode, died
+    "came back as WAYLAND-1 1280x720@60" and left the line in `output.dropped`: `monitor list` showed
+    it twice, `mode` and `drop` refused it as away, and a second `back` failed ("Name already taken").
+    Made certain by stopping the box's labwc (SIGSTOP, 1.1-1.3 s) across `output back`: the old code
+    failed 3 of 3 just so; CPU load alone (20 busy loops, 45 rounds) never did. Now an output made again
+    leaves the record at once, whatever mode it comes up at, and on NVIDIA its mode (or its monitor's
+    place, `output_place_one`) is set again each second until it holds, 10 s at most; a mode that never
+    comes is said ("is back, but as ..."), the output no longer listed as dropped. t_output_nvidia: labwc
+    stopped 1.2 s across `back` after `mode 1600x900`: back at 1600x900, `WAYLAND-1` listed once.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

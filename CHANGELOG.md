@@ -22,6 +22,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`output back` on an NVIDIA box brings the main screen back at its mode under load** (#200). When
+  the box's labwc was slow to size the new window, the screen came back at 1280x720, `output back`
+  failed, and the box listed it twice (on screen, and as dropped): `mode` and the next `drop` then
+  refused it as away. Its mode is now set again until it holds, and a screen made again is never
+  kept as dropped.
 - **A peek window survives its monitor dropping** (#200). `omabox peek --monitor NAME` of a monitor
   that `omabox output drop` took away kept asking the box for the dead screen, and its window died
   (or froze on the last frame); after `output back` it never showed the monitor again. It now lets the

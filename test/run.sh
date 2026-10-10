@@ -7426,6 +7426,21 @@ output_on() {
     "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" '.[] | select(.name == $n) | "\(.x),\(.y)"')"
   ob output -b "$B" back >/dev/null 2>&1; ob mode -b "$B" 1280x720 >/dev/null 2>&1
   check_eq "...the main screen back, mode 1280x720: all as before" "$ml" "$(ob monitor -b "$B" list --json | jq -c "$list")"
+  if [ "$m0" = WAYLAND-1 ]; then
+    # Finding 279 (#200): labwc's first configure of the window came after the mode was set (seen under
+    # load; made certain here by stopping labwc a while) and left it at 1280x720; back failed, kept it as
+    # dropped, and the box listed it twice. (The sleep is the point: labwc late by over a second.)
+    local lp lt; ob mode -b "$B" 1600x900 >/dev/null 2>&1; ob output -b "$B" drop >/dev/null 2>&1
+    lp=$(ob run -b "$B" -- pgrep -xo omabox-labwc)
+    ob run -b "$B" -- kill -STOP "$lp"
+    ob output -b "$B" back > "$TMP/late.out" 2>&1 & lt=$!
+    sleep 1.2; ob run -b "$B" -- kill -CONT "$lp"
+    wait "$lt"; rc=$?
+    check_eq "labwc late to configure the main screen's window: back at its mode all the same (finding 279)" "0 $m0 1600x900@60" "$rc $(cat "$TMP/late.out")"
+    check_eq "...listed once, not dropped" "[\"$m0 1600x900@60\"]" \
+      "$(ob monitor -b "$B" list --json | jq -c --arg n "$m0" '[.[] | select(.name == $n) | "\(.name) \(.mode)\(if .dropped then " dropped" else "" end)"]')"
+    ob mode -b "$B" 1280x720 >/dev/null 2>&1
+  fi
   out=$(ob output -b "$B" drop --for 300ms --cycles 3); rc=$?
   check_eq "drop --for 300ms --cycles 3: exit 0" 0 "$rc"
   check_eq "...three cycles, each back as before, the shell running" \
