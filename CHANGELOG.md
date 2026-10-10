@@ -67,6 +67,18 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `--plugin`, `--hyprland` and `--omarchy` now follow a jailed agent's path only inside the jail's
   folders, through links in its project too, and refuse one that leaves them with the same words
   whether anything is there or not, naming the path as written. Outside a jail nothing changes.
+- **Security: a jailed agent's `up` runs no host program or git on paths the jail can write** (#198).
+  A jailed `up --plugin` or `up --omarchy` had the broker run `git status` on the agent's own plugin
+  dir and `--omarchy` tree to read their commit, and `core.fsmonitor` in a `.git/config` the jail
+  writes runs a program on `git status`; `up --omarchy` also ran that tree's own
+  `bin/omarchy-plugin-validate`, both on the host, outside the jail. The commit is now left unknown
+  for a jailed caller (no git is run), and a jailed caller's plugins are checked with the host's
+  installed Omarchy validator, never the tree's.
+- **Security: a jailed agent's `up --seed` refuses a file ai-jail masked** (#198). ai-jail's
+  `--mask`/`--deny-path` put an empty file over a path while the real one stays on the host, and the
+  box seeds from the host, so `up --seed SECRET:x` could copy the masked host file into the box. A
+  jailed `up` now refuses a `--seed` at, under or holding a path the jail masks (and refuses every
+  seed if it cannot tell which paths are masked). Outside a jail nothing changes.
 - **A git worktree of omabox runs headless NVIDIA boxes on its main checkout's aquamarine build**
   (#182). A fresh `git worktree add` has no `build/prefix`, so its boxes on NVIDIA were refused for
   lacking aquamarine's fix the main checkout had built. A worktree with none of its own now uses the

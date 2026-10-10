@@ -1836,6 +1836,32 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   check_match "...said, without naming that box" "taken: a box outside this jail serves on it too" "$(jports_out 1)"
   check_fails "...whose name is not in it" grep -q "$P-jo" <<<"$(jports_out 1; jports_out 1 --json)"
   check_eq "...with no box outside on it: this, as before" "this" "$(jports_out 0 --json | jq -r '.[0].host.state')"
+  # A path ai-jail hides inside a folder (--mask/--deny-path: a mount inside it that is not a sub-root):
+  # jail_policy records it, and --seed must refuse it (#198 security). A same-path bind nested inside a
+  # folder is a visible sub-root, not masked.
+  check_eq "jail_policy lists a path masked inside a folder" "$d/proj/in/h" \
+    "$(pol --bind "$d/proj" "$d/proj" --ro-bind /etc/hostname "$d/proj/in/h" -- sh | jq -r '.masks[]')"
+  check_eq "...a same-path bind nested inside it is a sub-root, not masked" "" \
+    "$(pol --bind "$d/proj" "$d/proj" --ro-bind "$d/proj/in" "$d/proj/in" -- sh | jq -r '.masks[]?')"
+  local JM lm; lm=$TMP/lib/bin/omabox
+  JM=$(jq -nc --arg p "$d/proj" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: true}], masks: ["\($p)/.env"]}')
+  jm() { OMABOX_JAIL="$JM" bash -c 'source "$1"; shift; jail_masked "$@"' _ "$lm" "$@"; }
+  check "jail_masked: the masked path itself" jm "$d/proj/.env"
+  check "...a file under it" jm "$d/proj/.env/k"
+  check "...a folder holding it" jm "$d/proj"
+  check_fails "...not a sibling of it" jm "$d/proj/in"
+  check "...everything, when the policy has no masks key (an older broker)" \
+    env OMABOX_JAIL='{"id": "1 2", "net": false, "roots": []}' bash -c 'source "$1"; jail_masked "$2"' _ "$lm" "$d/proj/x"
+  echo secret > "$d/proj/.env"; echo ok > "$d/proj/README-seed"
+  check_match "seed_spec refuses a masked host file (its real content stays on the host)" "does not go into the box" \
+    "$(cd "$d/proj" && OMABOX_JAIL="$JM" bash -c 'source "$1"; seed_spec ".env:.config/leak"' _ "$lm" 2>&1)"
+  check_eq "...a non-masked file in the same folder still seeds" "$d/proj/README-seed"$'\t'".config/ok" \
+    "$(cd "$d/proj" && OMABOX_JAIL="$JM" bash -c 'source "$1"; seed_spec "README-seed:.config/ok"' _ "$lm" 2>&1)"
+  # git_rev must not run git on a jailed caller's path: its .git/config is the jail's to write, and
+  # core.fsmonitor there runs a program (#198 security).
+  git -C "$d/proj" config core.fsmonitor "touch $d/gitrev-ran"
+  check_eq "git_rev: nothing for a jailed caller" "" "$(OMABOX_JAIL=$JM lib git_rev "$d/proj")"
+  check_fails "...its core.fsmonitor never ran" test -e "$d/gitrev-ran"
 }
 
 # omabox broker on/off writes a socket and a service for the user manager (systemctl stubbed: the real
@@ -1867,7 +1893,7 @@ t_unit_broker_units() {
 t_unit_jail_paths() {
   local d=$TMP/jpath; mkdir -p "$d/proj/th/t1" "$d/proj/plug" "$d/out/dir" "$d/out/back"
   git -C "$d/proj" init -q; echo x > "$d/proj/f"; echo s > "$d/out/f"; echo '{"id": "plug1"}' > "$d/proj/plug/manifest.json"
-  local J; J=$(jq -nc --arg p "$d/proj" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}]}')
+  local J; J=$(jq -nc --arg p "$d/proj" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}], masks: []}')
   ln -sfn "$d/out" "$d/proj/lout"; ln -sfn "$d/proj/f" "$d/proj/fin"; ln -sfn "$d/proj/f" "$d/out/back/f"
   ln -sfn "$d/out/f" "$d/out/flink"
   jp() { OMABOX_JAIL=$J lib jail_path "$@"; }
@@ -1985,7 +2011,17 @@ t_jail() {
     { skip "an agent inside ai-jail drives its box through the broker" "--installed: ai-jail trusts no bwrap in a user namespace"; return; }
   local R=$ROOT/tools/relay/omabox-relay br=$TMP/br repo out
   [ -x "$R" ] || { skip "an agent inside ai-jail drives its box through the broker" "tools/relay not built"; return; }
-  mkdir -p "$br" "$TMP/lacks"; repo=$(tmp_repo jail); echo hi > "$repo/README"
+  mkdir -p "$br" "$TMP/lacks" "$TMP/jmark" "$TMP/jsec"; repo=$(tmp_repo jail); echo hi > "$repo/README"
+  # #198 security: a file ai-jail masks must not be seeded (its real host content stays on the host),
+  # and the broker must run no git and no validator on the jail's writable paths. The masked secret is
+  # in a mapped folder of its own, so the project root stays unmasked (a mask inside it would mask the
+  # whole root, which repo_top already excludes). A plugin git repo in the project whose core.fsmonitor
+  # would touch a host marker were git ever run on it.
+  echo SEKRIT > "$TMP/jsec/.secret"
+  mkdir -p "$repo/plug"; echo '{"id": "p", "schemaVersion": 1}' > "$repo/plug/manifest.json"
+  git -C "$repo/plug" init -q; git -C "$repo/plug" add -A
+  git -C "$repo/plug" -c user.email=t@t -c user.name=t commit -qm x
+  git -C "$repo/plug" config core.fsmonitor "touch $TMP/jmark/pwned"
   # The broker as systemd starts it: a few variables, the socket handed over.
   env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
     systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$CLI" >"$br/log" 2>&1 & SERVERS+=($!)
@@ -2015,9 +2051,12 @@ r net-in-box \$O run -- sh -c 'curl -s --max-time 3 -o /dev/null https://archlin
 r run-d \$O run -d -q --print-log -- sleep 604
 r replace \$O run -d -q --replace -- sleep 604
 r sleeps \$O run -- pgrep -cxf 'sleep 604'
+r seedmask \$O up $P-sm --seed $TMP/jsec/.secret:.config/leak
+r plugit \$O up $P-pg --plugin ./plug
+r plugdown \$O down $P-pg
 r down \$O down
 EOF
-  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
+  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT" --map "$br" --map "$TMP/jsec" --mask "$TMP/jsec/.secret" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
   printf '%s\n' "$out" > "$TMP/jail.out"
   sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jail.out" | tr '\n' ' '; }
   check_match "up from the jail" "box '$P-jail' up .*rc=0" "$(sect up)"
@@ -2046,6 +2085,10 @@ EOF
   check_match "run -d -q --print-log through the broker: only the log path" "^/[^ ]*/run-[0-9]+\.log rc=0 $" "$(sect run-d)"
   check_eq "run -d --replace through the broker: one job left" "1 rc=0 " "$(sect sleeps)"
   check_match "down" "box '$P-jail' down rc=0" "$(sect down)"
+  # #198 security: seeding a masked file is refused, and a plugin up runs no git on the jail's path.
+  check_match "a masked host file is not seeded into the box" "does not go into the box.* rc=1" "$(sect seedmask)"
+  check_match "up --plugin from the jail works (the host's validator, no git on the jail's path)" "box '$P-pg' up .*rc=0" "$(sect plugit)"
+  check_fails "...no host marker: the plugin's core.fsmonitor never ran on the host" test -e "$TMP/jmark/pwned"
   check_fails "nothing written where the jail could not" bash -c "ls '$br'/pwned*"
   check "the user's box still up" ob shot -b "$P-host" -o "$TMP/host.png"
   ob down "$P-host" >/dev/null 2>&1

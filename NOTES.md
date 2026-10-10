@@ -5495,6 +5495,32 @@ from them.
     it, and that the host's own is the real session's. Through the broker it is the same answer:
     `path` was already one of a jailed caller's commands, on the jail's own boxes. t_inspect: `path
     --run` is `$(path)/run`, and a file the box writes to `$XDG_RUNTIME_DIR` is there on the host.
+282. **A jailed caller's `up` ran host programs and git on the jail's own writable paths** (2026-10-10,
+    #198 follow-up, local branch `security-jail-exec`). Three ways a jailed agent could run code or read
+    a hidden file on the host, outside its jail. (1) `git_rev` ran `git status` on host paths the jail
+    writes — a mounted plugin's dir (`plugin_check`), and an `--omarchy` tree (box.json build and
+    `restart-shell`) — and `core.fsmonitor` in a repo's `.git/config` runs a program on `git status`, so
+    the jail's `.git/config` ran on the host. Now `git_rev` returns nothing for a jailed caller (the
+    revision is reported as unknown, as `repo_top` already skips git for one). (2) `plugin_check` ran
+    `$tree/bin/omarchy-plugin-validate`, where `$tree` is the jailed caller's own `--omarchy` tree, on
+    the host; now a jailed caller's `plugin_check` runs only the host's installed
+    `/usr/share/omarchy/bin/omarchy-plugin-validate` (it only reads the plugin dir, and is not the
+    jail's to change), or none (a warning, never a refusal). (3) ai-jail `--mask`/`--deny-path` mount an
+    empty file over a path while the real host file stays underneath; the box mounts from the host, so
+    `up --seed MASKED:x` would have copied the host's real file in. `jail_policy` recorded only a
+    per-root `masked` bool, not which path, so omabox could not tell. It now records a `masks` list
+    (each path resolved like its folder), and `jail_masked` refuses a `--seed` at, under or holding a
+    masked path — and refuses outright if the policy has no `masks` key (an older broker). A sweep of
+    `bin/omabox` for other jail-writable exec/source/git found none: `default_name`,
+    `theme_snapshot_note`, `repo_top`, `repo_git_dirs` already guard with `in_jail`, the aquamarine
+    build (`setup`) is not on `broker_check`'s allowed list, and `seed_gitconfig`/the common-dir read
+    only read. Verified from a real ai-jail 2.8.1 with harmless markers (details in the private
+    `.local/security-2026-10-10/`). Still open for the owner: the box mounts a jailed caller's project
+    from the host, so a file masked *inside the project* is visible in the box through that base mount,
+    not only through `--seed`. t_unit_jail_policy (masks recorded; `jail_masked` at/under/holding, and
+    no-masks-key refuses all; `seed_spec` refuses a masked file, a non-masked sibling still seeds;
+    `git_rev` runs no git for a jailed caller); t_jail (a masked file not seeded, `up --plugin` from the
+    jail works with no host marker from its `core.fsmonitor`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
