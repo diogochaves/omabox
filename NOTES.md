@@ -5144,6 +5144,20 @@ from them.
     bus-less box back. t_dbus_user_app checks the variable, the address and its socket under the box's
     dir, and a GTK4 window on the bus (skipped without GTK4 or python-gobject's `Atspi`; fails without
     the fix). Qt apps still need `org.a11y.Status.IsEnabled` true (finding 244); `omabox tree` is #144's.
+265. **omabox's bar widget inside a box draws nothing while it has no omabox to run** (2026-10-10,
+    #207). A box that mounts every plugin of the desk brings omabox's own widget along; the box has no
+    `omabox` (unless the host has one in `/usr/bin`), so after three polls it notified "omabox: cannot
+    list boxes · cannot run omabox", and the bar showed the dimmed icon and its error for as long as
+    the box was up. The widget now reads `OMABOX_BOX` (finding 242: every process of a box's session
+    has it): there a list command that cannot start is no failure: no notification, and the widget is
+    hidden, from the start until a poll runs one, after which it works as on the desktop (a stand-in
+    omabox, an installed one; other failures, a non-zero exit or a timeout, are notified as before).
+    On the desktop, "cannot run" is still notified. t_widget (in a box, a stand-in omabox moved away):
+    nothing notified over 6 polls, the panel stays shut when opened, and opens again once the stand-in
+    is back; skipped with a `/usr/bin/omabox`. The desktop's "cannot run" notification is no longer
+    checked: the suite's widget always runs in a box. Opened while hidden, the widget polls before it
+    closes: each open restarts its poll timer (the interval follows `opened`), so t_clip's opens in a
+    row, retried until an omabox written mid-test is seen, kept it hidden for good.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

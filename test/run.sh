@@ -4945,10 +4945,20 @@ t_widget() {
   check "...and the list after them is read (shot -b after)" until_ok 3 grep -qx "shot -b after" "$H/actions"
   # (Not with omabox installed on the host: the box sees its /usr/bin/omabox, so there is always one.)
   if [ ! -e /usr/bin/omabox ]; then
+    # In a box (OMABOX_BOX) a list command that cannot run is no error (#207): the widget of a box
+    # that mounts every plugin of the desk draws nothing and notifies nothing; one that runs again
+    # brings it back. (bar-icon is always here: with a command it would open with no boxes.)
     mv "$H/.local/bin/omabox" "$H/.local/bin/omabox.off"
-    check "a list command that cannot run is notified" until_ok 20 grep -q "notify-send .*cannot run omabox" "$H/actions"
+    check "in a box, a list command that cannot run is not notified (#207)" \
+      holds 6 bash -c "! grep -q 'cannot list boxes.*cannot run' '$H/actions'"
+    ob run -b "$B" -- omarchy-shell chaves.omabox open
+    check "...and the widget draws nothing: opened, it stays shut" holds 1 bash -c "! '$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-keyboard-panel"
+    mv "$H/.local/bin/omabox.off" "$H/.local/bin/omabox"; polled
+    ob run -b "$B" -- omarchy-shell chaves.omabox open
+    check "...until one runs again" until_ok 3 panel
+    ob keys -b "$B" Escape >/dev/null
   else
-    skip "a list command that cannot run is notified" "the box has the host's /usr/bin/omabox"
+    skip "in a box, a list command that cannot run is not notified (#207)" "the box has the host's /usr/bin/omabox"
   fi
   ob down "$B" >/dev/null
 }
@@ -5867,7 +5877,10 @@ t_clip() {
   # shellcheck disable=SC2329 # called through until_ok
   has() { [ "$("${inb[@]}" wl-paste -n 2>/dev/null)" = "$1" ]; }
   # shellcheck disable=SC2329 # called through until_ok
-  listed() { ob run -b "$B" -- omarchy-shell chaves.omabox open >/dev/null 2>&1; until_ok 3 panel >/dev/null && ob keys -b "$B" Escape >/dev/null && sleep 2.5; }
+  opens() { ob run -b "$B" -- omarchy-shell chaves.omabox open >/dev/null 2>&1; until_ok 1 panel >/dev/null; }
+  # The stand-in had no omabox until now, so its widget draws nothing (#207) until a poll runs the
+  # one just written: opened before that, it stays shut (and polls).
+  listed() { until_ok 10 opens >/dev/null && ob keys -b "$B" Escape >/dev/null && sleep 2.5; }
   listed   # (the panel polls every 2 s while open: ib is in its list after that)
   ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
   ob keys -b "$B" Down v >/dev/null

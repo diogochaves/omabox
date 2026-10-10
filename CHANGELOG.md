@@ -16,6 +16,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   from settings.json (#203). It looked for omabox only in its checkout, which a jail sees only as
   the `~/.local/bin/omabox` the broker maps in. A jailed agent got the guard's usual note instead.
   Run `omabox guard on` once to update the hook.
+- **omabox's bar widget stays quiet inside a box** (#207). A box that mounts every plugin of
+  your desk brought the widget along, and with no `omabox` in the box it notified "cannot list
+  boxes: cannot run omabox" and kept the error in the box's bar. Inside a box it now draws nothing
+  until an `omabox` runs there. Restart the shell to load the new widget.
 
 ## 0.5.2 — 2026-10-09
 

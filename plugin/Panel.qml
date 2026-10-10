@@ -76,7 +76,13 @@ Panel {
   // bar-icon: always (the default) keeps the icon, and the panel's settings, in the bar with no box
   // up, dimmed; auto shows it only while any box exists.
   readonly property bool alwaysShown: cliConfig["bar-icon"] !== "auto"
-  readonly property bool shown: hasBoxes || alwaysShown
+  // Inside a box (OMABOX_BOX, which `up` gives its whole session: finding 242) there is usually no
+  // omabox to run, when a box mounts every plugin of the desk (#207). There a command that cannot run
+  // is no error: the widget draws nothing and notifies nothing, from the start until a poll runs one
+  // (a stand-in, an installed omabox), which it then uses as on the desktop.
+  readonly property bool inBox: (Quickshell.env("OMABOX_BOX") || "") !== ""
+  property bool noCommand: inBox
+  readonly property bool shown: !(inBox && noCommand) && (hasBoxes || alwaysShown)
   readonly property string workspaceLabel: {
     var w = String(cliConfig.workspace || "9")
     return w === "special:scratchpad" ? "the scratchpad" : w.indexOf("special:") === 0 ? "special:" + w.slice(8) : "workspace " + w
@@ -184,8 +190,10 @@ Panel {
     if (!opened) return
     // Opened (IPC, a keybinding) with nothing to show: stay closed, or the panel would pop up and take
     // the keyboard later, whenever an agent starts a box. Later: closing inside this handler is a
-    // binding loop on `opened`, which then stays true.
-    if (!shown) { Qt.callLater(close); return }
+    // binding loop on `opened`, which then stays true. It polls, though: in a box with no omabox
+    // (#207) one may have come since, and each open restarts the poll timer (its interval changes with
+    // `opened`), so opens in a row would otherwise keep the widget hidden.
+    if (!shown) { refresh(); Qt.callLater(close); return }
     armedDown = ""
     armedNew = false
     cursorActive = false
@@ -393,6 +401,7 @@ Panel {
     onStarted: listLimit.restart()
     onExited: function(code) {
       exited = true
+      root.noCommand = false
       if (timedOut) root.listFailed("omabox ls --json did not answer in " + root.listTimeoutSec + " s")
       else if (code === 0) root.parseList(listOut.text)
       else root.listFailed((listErr.text.trim().split("\n").pop() || root.command + " ls: exit " + code))
@@ -401,7 +410,9 @@ Panel {
       listLimit.stop()
       listKill.stop()
       Qt.callLater(function() {
-        if (!listProc.exited && !listProc.running) root.listFailed("cannot run " + root.command)
+        if (listProc.exited || listProc.running) return
+        if (root.inBox) root.noCommand = true
+        else root.listFailed("cannot run " + root.command)
       })
     }
   }
