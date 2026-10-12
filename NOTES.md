@@ -5703,6 +5703,17 @@ from them.
     the note, the probe with box_exec stubbed with and without eglinfo, ls's line and JSON);
     output_on's box in t_output_nvidia (said once, ls and ls --json) and t_output (nothing said).
 
+291. **The widget reads Omarchy's palette as `Commons.Color`** (2026-10-12). Qt 6.12's QtQuick adds a
+    `Color` type of its own, which shadows the `Color` singleton from `qs.Commons` in any file that
+    imports both, so a bare `Color.foreground` stops reaching the theme. Omarchy qualified its shell
+    in b83d3df (#14553), and its docs say plugins must do the same: the host's fix does not change a
+    plugin's import scope (its later 51717f1, a Quickshell load patch that pins unversioned QtQuick
+    imports to 6.11, covers only Omarchy's own Quickshell package). `plugin/Panel.qml` imports
+    `qs.Commons as Commons` beside the plain import (kept for `Style`) and reads `Commons.Color` in its
+    two fallbacks. Verified on Qt 6.11.2, where both forms resolve: the widget loads in a box with no
+    QML warnings. Qt 6.12 itself was not available to run. t_unit_version: no bare `Color.` in
+    `plugin/*.qml`; on the code before, it names `Panel.qml`'s two lines.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

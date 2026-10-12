@@ -3,6 +3,7 @@ import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // omabox in the bar: an icon while any box exists, and a panel listing them.
@@ -34,8 +35,8 @@ Panel {
 
   // The bar's colours and font, or the theme's while the bar is null: a `bar.layout` change rebuilds
   // every widget, the new before the old are deleted, and the old ones' bindings read a bar already gone.
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   property var boxes: []               // the last `omabox ls --json`

@@ -1244,6 +1244,12 @@ t_unit_version() {
   # #155: a bar rebuild leaves the old widget's `bar` null while its bindings still run.
   check_eq "the widget reads its bar only where it may be null (bar ? bar.x : ...; #155)" "" \
     "$(grep -nE "(root\.|[^.A-Za-z_])bar\.[A-Za-z]" "$ROOT"/plugin/*.qml | grep -vE "bar \? bar\.|^[^:]*:[0-9]+: *//")"
+  # Qt 6.12's QtQuick brings a Color type of its own, which shadows Omarchy's palette singleton: the
+  # widget reads it as Commons.Color, as Omarchy's shell does since its b83d3df (finding 291).
+  local bare='(?<![\w.])Color\.'
+  check_eq "the widget reads Omarchy's palette as Commons.Color (Qt 6.12; finding 291)" "" "$(grep -nP "$bare" "$ROOT"/plugin/*.qml)"
+  printf '%s\n' 'a: Color.accent' 'b: Commons.Color.accent' 'c: hoverColor.r' > "$TMP/palette.qml"
+  check_eq "...a check that finds a bare one (and not the qualified)" "1:a: Color.accent" "$(grep -nP "$bare" "$TMP/palette.qml")"
   check_match "...and the changelog" "^## $v " "$(grep "^## $v " "$ROOT/CHANGELOG.md")"
   check_eq "config --json names it, for a widget left from before an upgrade (finding 133)" "$v" "$("$CLI" config --json | jq -r .version)"
   # Agent Skills hosts cap a skill's description at 1024 characters (it grows with each trigger), and
