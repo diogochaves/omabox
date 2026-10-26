@@ -349,18 +349,23 @@ fn first_field(j: &[u8], prog: &str) -> Vec<u8> {
     strip_nl(&lines.join(&b'\n'))
 }
 
+/// An input:kb_* option's value: empty when unset, which Hyprland says as `[[EMPTY]]` (a config that
+/// leaves kb_variant, kb_model or kb_options alone, as `--desktop plain`'s does: #247). Passed on as
+/// written, xkb could build no keymap from it and every `keys` failed. (An empty layout is `us`, below.)
+const KB_STR: &str = r#".str // "" | if . == "[[EMPTY]]" then "" else . end"#;
+
 /// kb_tool: the keyboard tool with the box's own keyboard settings, so keycodes mean to the keymap
 /// what they mean to its binds (kb_options like altwin:swap_lalt_lwin move Super). A Hyprland that
 /// does not answer is said in words (hypr_json).
 pub fn kb_tool(ctx: &Ctx) -> Res<Vec<Vec<u8>>> {
     let j = strip_nl(&hypr_json(ctx, &["getoption", "input:kb_layout"])?);
-    let layout = first_field(&j, r#".str // "us""#);
+    let layout = first_field(&j, KB_STR);
     let j = strip_nl(&hypr_json(ctx, &["getoption", "input:kb_variant"])?);
-    let variant = first_field(&j, r#".str // """#);
+    let variant = first_field(&j, KB_STR);
     let j = strip_nl(&hypr_json(ctx, &["getoption", "input:kb_model"])?);
-    let model = jq::jq(&["-r", r#".str // """#], Some(&j), jq::Err::Inherit).text();
+    let model = jq::jq(&["-r", KB_STR], Some(&j), jq::Err::Inherit).text();
     let j = strip_nl(&hypr_json(ctx, &["getoption", "input:kb_options"])?);
-    let options = jq::jq(&["-r", r#".str // """#], Some(&j), jq::Err::Inherit).text();
+    let options = jq::jq(&["-r", KB_STR], Some(&j), jq::Err::Inherit).text();
     Ok(vec![
         BOX_KEYBOARD.as_bytes().to_vec(),
         b"--layout".to_vec(),
