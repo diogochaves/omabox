@@ -11,7 +11,7 @@ use crate::cat;
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jq::{self, Args};
 use crate::select::select_box;
-use crate::settle::geom_parse;
+use crate::settle::{geom_parse, geom_text};
 use crate::shell::{self, dec, strip_nl};
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -1188,10 +1188,10 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             b"--active" => sels.push(b"active".to_vec()),
             b"-g" => {
                 optarg(ctx, x, v)?;
-                if geom_parse(&args[i + 1]).is_none() {
+                let Some(g) = geom_parse(&args[i + 1]) else {
                     return Err(ctx.die(cat!("check point: -g is \"X,Y WxH\", got ", args[i + 1])));
-                }
-                geom = args[i + 1].clone();
+                };
+                geom = geom_text(&g);
                 i += 1;
             }
             b"--ignore" => {

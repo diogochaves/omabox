@@ -11538,6 +11538,9 @@ EOF
   # (decimal: 08 is 8, the region kept; bash's omabox ended at it, the region left out: finding 448)
   cx_want=(rc=0 "out=$ck/p/rp3.png" err= 'state~^ignore 8 0 10 10$')
   cx_case "check point --ignore 08: decimal, kept" check point -b "$B" rp3 -o "$ck/p" --ignore "08,0 10x10"
+  # (-g kept as read, decimal and grim's form, however it was typed: #384)
+  cx_want=(rc=0 "out=$ck/p/rp4.png" err= 'state~^of region 0,10 300x200$')
+  cx_case "check point -g 00,010 300,200: kept as read" check point -b "$B" rp4 -o "$ck/p" -g "00,010 300,200"
   # (its .point that cannot be written: said in omabox's words, 2, check's own failure: finding 442)
   cx_ckpd() { cx_ckp; mkdir -p "$ck/p/rpx.point"; }
   cx_prep=cx_ckpd; cx_want=(rc=2 out= "err=omabox: check: cannot write $ck/p/rpx.point: Is a directory")

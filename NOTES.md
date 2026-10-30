@@ -10583,6 +10583,13 @@ from them.
     QML, not run on a desktop). Tests: t_unit_setup (stand-in shells: none, one that lists it, one
     that lists it after a rescan, one a rescan does not change, a "no" remembered), t_setup_prompts
     (in a box, the line run at once enables the widget); both failed on the old code.
+540. **check point kept a region as typed** (2026-10-30, #384). `-g "010,010 400x300"` went into
+    the `.point` file as `of region 010,010 400x300` (and `crop ...` with `--window`), and grim's
+    other forms, `X,Y,W,H` and `X,Y W,H`, as typed too, while shot writes regions as read (finding
+    448). So the same region typed two ways made two different `.point` lines. check point now keeps
+    `-g` as geom_parse reads it, written in grim's form with its numbers decimal (settle::geom_text):
+    `00,010 300,200` is `of region 0,10 300x200`. Tests: settle's `geometry` unit test, t_cli_box's
+    "check point -g 00,010 300,200: kept as read" (failed on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

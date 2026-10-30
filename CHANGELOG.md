@@ -3,6 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`check point -g` kept the region as typed**: `-g "010,010 400x300"` went into the checkpoint as
+  `010,010`, so the same region typed another way (`10,10,400,300`) read as a different one. It is
+  now kept as read, `10,10 400x300`, as `shot` does
+  ([#384](https://github.com/diogochaves/omabox/issues/384)).
+
 ## 1.0.1 — 2026-10-27
 
 Fixes for what an upgrade from 0.x runs into, and a security fix: a box could take a port on your

@@ -75,6 +75,12 @@ pub fn geom_parse(v: &[u8]) -> Option<[Vec<u8>; 4]> {
     all.iter().all(|n| shell::dec(n).is_some()).then_some(all)
 }
 
+/// geom_parse's answer as grim's "X,Y WxH", its numbers as read (`010` is 10: #384).
+pub fn geom_text(g: &[Vec<u8>; 4]) -> Vec<u8> {
+    let n = |v: &[u8]| dec(v).map_or_else(|| v.to_vec(), |n| n.to_string().into_bytes());
+    cat!(n(&g[0]), ",", n(&g[1]), " ", n(&g[2]), "x", n(&g[3]))
+}
+
 /// `${g// /,}` of geom_parse's answer: omabox-still's X,Y,W,H.
 pub fn geom_csv(g: &[Vec<u8>; 4]) -> Vec<u8> {
     g.join(&b',')
@@ -1056,6 +1062,11 @@ mod tests {
         );
         assert_eq!(geom_parse(b"1,2 0x4"), None);
         assert_eq!(geom_parse(b"1,2 3x4 "), None);
+        // (as read, in grim's form: #384)
+        assert_eq!(
+            geom_parse(b"00,-010 300,200").map(|g| geom_text(&g)),
+            Some(b"0,-10 300x200".to_vec())
+        );
         assert_eq!(rects_meet(b"0,0,10,10", b"5,5,10,10"), Some(true));
         assert_eq!(rects_meet(b"0,0,10,10", b"10,0,10,10"), Some(false));
         // (decimal: finding 448; bash read 010 as 8 and refused 08)
