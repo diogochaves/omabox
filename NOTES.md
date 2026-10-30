@@ -10612,6 +10612,18 @@ from them.
     left out. Tests: check's `ignore_px_as_bash` unit test (#342's own numbers), t_cli_box's "check
     point --ignore partly outside -g: cut, said", t_check's summary count (desk now has an
     `--ignore`).
+543. **tree cut names and text at 80 characters for --json and --find too** (2026-10-30, #314). The
+    tree tool cut every name and text to 80 characters (a text read at most 200) and a value to 40
+    as it read them, so `--find` matched the cut string and `--json` carried it: an agent's check of a
+    status band whose part it needed sat past character 80 got exit 1 from `--find "next:"`, and the
+    same cut name in `--json` left it unsure whether omabox or the app cut it. The tool now reads
+    names, text and values whole, up to 4000 characters (FULL), and cuts them only where the text view
+    prints them (NAME_W 80, VALUE_W 40, ending in …, as before); `--find` matches the whole line,
+    `--json` carries whole strings, and its `path` whole ancestors (the text view's path stays cut).
+    Comparisons that read names (a value or text equal to the name, a label repeating its parent's)
+    now see them whole. `help tree` says so. Test: t_tree's Qt window has a check box named past 80
+    characters: `--find` matches its end, the line cut at 80, `--json` the whole name (failed on the
+    old code: `--find` exit 1).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

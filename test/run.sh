@@ -8136,6 +8136,7 @@ ApplicationWindow {
         CheckBox { text: "Enable sync"; checked: true }
         CheckBox { text: "Dark mode" }
         Switch { text: "Wi-Fi"; checked: true }
+        CheckBox { text: "Queue: 12 of 40 moved, 3 failed, 25 waiting, now the first item in the queue, next: Zeta report"; Layout.fillWidth: true }
     }
     // Qt measures what is inside a dialog from the dialog, which says 0,0 (finding 364).
     Dialog {
@@ -8153,6 +8154,11 @@ QML
       "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled 2>&1)"
     check_match "...a switch's state" '^check box "Wi-Fi" \[checked\]' "$(ob tree -b "$B" --window 'Tree demo QML' --find wi-fi 2>&1)"
     check_match "...an entry's text" "^text 'hello qt' \\[editable\\]" "$(ob tree -b "$B" --window 'Tree demo QML' --find 'hello' 2>&1)"
+    # (#314: --find and --json see a name whole past its 80th character; the text view cuts it)
+    check_match "...--find matches past a name's 80th character, its line cut there" \
+      '^check box "Queue: 12 of 40 [^"]* queue, n…" \[unchecked\] @' "$(ob tree -b "$B" --window 'Tree demo QML' --find 'zeta report' 2>&1)"
+    check_eq "...--json has the whole name" "Queue: 12 of 40 moved, 3 failed, 25 waiting, now the first item in the queue, next: Zeta report" \
+      "$(ob tree -b "$B" --window 'Tree demo QML' --json --find 'zeta report' 2>&1 | jq -r '.[0].name' 2>&1)"
     if mid=$(tree_mid "$out"); then
       # shellcheck disable=SC2086 # X Y
       ob click -b "$B" --window 'Tree demo QML' --wait $mid >/dev/null 2>&1

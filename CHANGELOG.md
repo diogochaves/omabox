@@ -18,6 +18,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the wrong coordinates was kept as a sliver. It now says what was kept, and `check run --approve`'s
   "with regions left out" counts the checkpoints with `--ignore` regions too
   ([#342](https://github.com/diogochaves/omabox/issues/342)).
+- **`tree --json` and `--find` saw names and text cut at 80 characters**: a status line whose end
+  mattered could not be found or read. They now see them whole (up to 4000 characters); the text
+  view still cuts them at 80, as `help tree` now says
+  ([#314](https://github.com/diogochaves/omabox/issues/314)).
 
 ## 1.0.1 — 2026-10-27
 

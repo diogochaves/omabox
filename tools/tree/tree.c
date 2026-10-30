@@ -47,6 +47,10 @@
 #include "../common/box.h"
 
 #define BUDGET 4000      // nodes visited at most (a long page is tens of thousands)
+#define FULL 4000        // characters of a name, text or value read at most (#314: --json and --find
+                         // see them whole; the text view cuts them, NAME_W and VALUE_W)
+#define NAME_W 80        // a name's or text's characters in the text view
+#define VALUE_W 40       // a value's
 #define MAX_CHILDREN 500 // children of one node read at most
 #define MAX_DEPTH 64
 
@@ -55,8 +59,9 @@ static const char *find;
 static int nodes, lines, matched, truncated;
 static GString *out;
 
-// The printed ancestors of the node being read, for --find's path.
-static char *path[MAX_DEPTH];
+// The printed ancestors of the node being read, for --find's path: as the text view says them, and
+// whole for --json.
+static char *path[MAX_DEPTH], *path_full[MAX_DEPTH];
 static int path_n;
 
 static const struct { AtspiStateType st; const char *word; } SHOWN[] = {
@@ -81,6 +86,22 @@ static int in(const char *s, const char **set) {
     return 0;
 }
 
+// g cut to n characters, its last one an ellipsis, when it is longer.
+static void cut_to(GString *g, glong n) {
+    if (g_utf8_strlen(g->str, -1) > n) {
+        char *end = g_utf8_offset_to_pointer(g->str, n - 1);
+        g_string_truncate(g, end - g->str);
+        g_string_append(g, "…");
+    }
+}
+
+// s as the text view says it: at most n characters.
+static char *cut(const char *s, glong n) {
+    GString *g = g_string_new(s);
+    cut_to(g, n);
+    return g_string_free(g, FALSE);
+}
+
 // One line of text: U+FFFC (an embedded child) and private-use glyphs (icon fonts) out, runs of
 // white space as one space, at most n characters.
 static char *clean(const char *s, glong n) {
@@ -95,11 +116,7 @@ static char *clean(const char *s, glong n) {
         space = 0;
         g_string_append_unichar(g, c);
     }
-    if (g_utf8_strlen(g->str, -1) > n) {
-        char *end = g_utf8_offset_to_pointer(g->str, n - 1);
-        g_string_truncate(g, end - g->str);
-        g_string_append(g, "…");
-    }
+    cut_to(g, n);
     return g_string_free(g, FALSE);
 }
 
@@ -129,7 +146,7 @@ static char *text_of(AtspiAccessible *a, const char *role) {
     AtspiText *t = atspi_accessible_get_text_iface(a);
     if (!t) return g_strdup("");
     gint n = atspi_text_get_character_count(t, NULL);
-    char *raw = n > 0 ? atspi_text_get_text(t, 0, MIN(n, 200), NULL) : NULL, *s = clean(raw, 80);
+    char *raw = n > 0 ? atspi_text_get_text(t, 0, MIN(n, FULL), NULL) : NULL, *s = clean(raw, FULL);
     g_free(raw);
     g_object_unref(t);
     return s;
@@ -140,7 +157,7 @@ static char *value_of(AtspiAccessible *a) {
     if (!v) return NULL;
     GError *e = NULL;
     char *txt = atspi_value_get_text(v, NULL), *r = NULL;
-    if (txt && *txt) r = clean(txt, 40);
+    if (txt && *txt) r = clean(txt, FULL);
     else {
         gdouble cur = atspi_value_get_current_value(v, &e);
         if (!e) r = g_strdup_printf("%g", cur);
@@ -165,7 +182,7 @@ static char *combo_choice(AtspiAccessible *a) {
             int sel = ss && atspi_state_set_contains(ss, ATSPI_STATE_SELECTED);
             if (ss) g_object_unref(ss);
             if (sel) {
-                char *s = name_of(it, 40);
+                char *s = name_of(it, FULL);
                 g_object_unref(it);
                 g_object_unref(menu);
                 if (*s) return s;
@@ -221,17 +238,30 @@ static int holds(const char *s, const char *text) {
     return r;
 }
 
-static void emit(int depth, const char *role, const char *name, const char *text, const char *val,
-                 GPtrArray *states, int *b) {
+// A node's line without its bounds; names, text and values cut as the text view has them when cut.
+static GString *line_of(const char *role, const char *name, const char *text, const char *val, GPtrArray *states,
+                        int cut_them) {
+    char *n = cut_them ? cut(name, NAME_W) : g_strdup(name), *t = cut_them ? cut(text, NAME_W) : g_strdup(text),
+         *v = val && cut_them ? cut(val, VALUE_W) : g_strdup(val);
     GString *body = g_string_new(role);
-    if (*name) g_string_append_printf(body, " \"%s\"", name);
-    if (*text) g_string_append_printf(body, " '%s'", text);
-    if (val) g_string_append_printf(body, " =%s", val);
+    if (*n) g_string_append_printf(body, " \"%s\"", n);
+    if (*t) g_string_append_printf(body, " '%s'", t);
+    if (v) g_string_append_printf(body, " =%s", v);
     if (states->len) {
         g_string_append(body, " [");
         for (guint i = 0; i < states->len; i++) g_string_append_printf(body, "%s%s", i ? " " : "", (char *)states->pdata[i]);
         g_string_append_c(body, ']');
     }
+    g_free(n);
+    g_free(t);
+    g_free(v);
+    return body;
+}
+
+static void emit(int depth, const char *role, const char *name, const char *text, const char *val,
+                 GPtrArray *states, int *b) {
+    // --find matches the whole strings (#314), whatever the text view shows of them.
+    GString *body = line_of(role, name, text, val, states, 0);
     lines++;
     int hit = !find || holds(body->str, find);
     if (hit) {
@@ -255,7 +285,7 @@ static void emit(int depth, const char *role, const char *name, const char *text
                 g_string_append(out, ", \"path\": [");
                 for (int i = 1; i < path_n; i++) {
                     if (i > 1) g_string_append(out, ", ");
-                    json_str(out, path[i]);
+                    json_str(out, path_full[i]);
                 }
                 g_string_append_c(out, ']');
             }
@@ -267,7 +297,9 @@ static void emit(int depth, const char *role, const char *name, const char *text
             } else {
                 for (int i = 0; i < depth; i++) g_string_append(out, "  ");
             }
-            g_string_append(out, body->str);
+            GString *shown = line_of(role, name, text, val, states, 1);
+            g_string_append(out, shown->str);
+            g_string_free(shown, TRUE);
             if (b) g_string_append_printf(out, " @%d,%d %dx%d", b[0] + layer_ox, b[1] + layer_oy, b[2], b[3]);
             g_string_append_c(out, '\n');
         }
@@ -278,7 +310,7 @@ static void emit(int depth, const char *role, const char *name, const char *text
 static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     if (nodes >= BUDGET) { truncated = 1; return; }
     nodes++;
-    char *role = role_of(a), *name = name_of(a, 80);
+    char *role = role_of(a), *name = name_of(a, FULL);
     AtspiStateSet *ss = atspi_accessible_get_state_set(a);
 #define HAS(st) (ss && atspi_state_set_contains(ss, (st)))
     // A popup's offset (extents) holds for what is under it, and no further.
@@ -318,7 +350,7 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
             char *cr = role_of(ch);
             if (!strcmp(cr, "label") && atspi_accessible_get_child_count(ch, NULL) == 0) {
                 g_free(name);
-                name = name_of(ch, 80);
+                name = name_of(ch, FULL);
                 n = 0;
             }
             g_free(cr);
@@ -344,7 +376,13 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     if (printed) {
         emit(path_n, role, name, text, val, states, hasb ? b : NULL);
         // Popped below only when pushed here: past MAX_DEPTH a pop would free an ancestor's slot.
-        if (path_n < MAX_DEPTH) { path[path_n++] = *name ? g_strdup_printf("%s \"%s\"", role, name) : g_strdup(role); pushed = 1; }
+        if (path_n < MAX_DEPTH) {
+            char *shown = cut(name, NAME_W);
+            path[path_n] = *name ? g_strdup_printf("%s \"%s\"", role, shown) : g_strdup(role);
+            path_full[path_n++] = *name ? g_strdup_printf("%s \"%s\"", role, name) : g_strdup(role);
+            g_free(shown);
+            pushed = 1;
+        }
     }
     for (int i = 0; i < MIN(n, MAX_CHILDREN) && nodes < BUDGET; i++) {
         AtspiAccessible *ch = atspi_accessible_get_child_at_index(a, i, NULL);
@@ -353,7 +391,11 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
         g_object_unref(ch);
     }
     if (n > MAX_CHILDREN) truncated = 1;
-    if (pushed) g_free(path[--path_n]);
+    if (pushed) {
+        path_n--;
+        g_free(path[path_n]);
+        g_free(path_full[path_n]);
+    }
 done:
 #undef HAS
     off_x = ox, off_y = oy;

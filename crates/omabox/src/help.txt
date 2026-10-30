@@ -465,6 +465,8 @@ hidden nodes and what lies outside the window are left out (--all keeps them). T
 window's own coordinates: `click --window SEL` at their middle lands on that node. Ask first, read
 whole later: --find TEXT prints only the lines holding TEXT (any case, not in the bounds), each after
 its ancestors (`list > list item "Beta" [selected] @12,354 1872x22`); exit 1 when none does.
+The text view cuts a name or text at 80 characters and a value at 40 (ending in …); --find matches
+them whole, and --json carries them whole (up to 4000 characters).
 --json: an array, one object a node printed. GTK, Qt and egui/winit (AccessKit) apps have a tree
 (`tree` sets org.a11y.Status.IsEnabled, which Qt and AccessKit wait for). AccessKit needs
 accesskit_unix 0.22+ (eframe 0.37+) with at-spi2-core 2.61+: an older one waits only for
