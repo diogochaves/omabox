@@ -26,6 +26,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   dir that no box can be named made `ls` exit 2 with nothing listed. The reaper now counts the idle
   time from when it finds the file gone, and `ls` leaves such a folder out, saying so
   ([#371](https://github.com/diogochaves/omabox/issues/371)).
+- **Back-to-back `run`s got slower**: each kept a marker file for 10 s, and every run read them
+  all. Runs close together now share one, so thousands in a row cost the same each
+  ([#392](https://github.com/diogochaves/omabox/issues/392)).
 
 ## 1.0.1 — 2026-10-27
 

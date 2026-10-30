@@ -942,18 +942,24 @@ pub fn run_mark_begin(ctx: &Ctx) -> Option<i64> {
     Some(mark)
 }
 
-/// Its end; dropped: a run that ended 10 s before this one began, and one whose omabox is gone.
+/// Its end; dropped: a run that ended 10 s before this one began, and one whose omabox is gone. An
+/// ended run within JOB_RUN_GRACE_MS of this one is merged with it into one c.START.END (#392): what
+/// job_run_stopped answers is the same, and back-to-back runs keep one file, not one each (a run
+/// read them all: 630 in 3 s made each run 2x slower). Each file is removed only after one covering
+/// it is there, so runs ending at once lose none.
 pub fn run_mark_end(ctx: &Ctx, mark: Option<i64>) {
     let Some(mark) = mark else { return };
     let dir = ctx.at("runs");
-    let now = now_ms();
-    let _ = std::fs::rename(
-        dir.join(format!("o.{}.{mark}", std::process::id())),
-        dir.join(format!("c.{mark}.{now}")),
-    );
+    let mut ended = Vec::new();
     for f in shell::glob(&dir, false) {
-        let gone = if let Some(e) = re_group(r"^c\.[0-9]+\.([0-9]+)$", &f, 1) {
-            shell::test_int(&e).is_some_and(|e| e < mark - 10000)
+        let ends =
+            |i| re_group(r"^c\.([0-9]+)\.([0-9]+)$", &f, i).and_then(|v| shell::test_int(&v));
+        let gone = if let (Some(x), Some(y)) = (ends(1), ends(2)) {
+            let old = y < mark - 10000;
+            if !old {
+                ended.push((x, y, f.clone()));
+            }
+            old
         } else if let Some(p) = re_group(r"^o\.([0-9]+)\.[0-9]+$", &f, 1) {
             !shell::path(&cat!("/proc/", p)).is_dir()
         } else {
@@ -962,6 +968,25 @@ pub fn run_mark_end(ctx: &Ctx, mark: Option<i64>) {
         if gone {
             let _ = std::fs::remove_file(dir.join(shell::path(&f)));
         }
+    }
+    // (until none is left that meets it: one that meets it only once it grew is merged too)
+    let (mut a, mut b) = (mark, now_ms());
+    let mut merged = Vec::new();
+    while let Some(i) = ended
+        .iter()
+        .position(|&(x, y, _)| x <= b + JOB_RUN_GRACE_MS && a <= y + JOB_RUN_GRACE_MS)
+    {
+        let (x, y, f) = ended.swap_remove(i);
+        (a, b) = (a.min(x), b.max(y));
+        merged.push(f);
+    }
+    let name = format!("c.{a}.{b}");
+    let _ = std::fs::rename(
+        dir.join(format!("o.{}.{mark}", std::process::id())),
+        dir.join(&name),
+    );
+    for f in merged.iter().filter(|f| f.as_slice() != name.as_bytes()) {
+        let _ = std::fs::remove_file(dir.join(shell::path(f)));
     }
 }
 
@@ -1331,6 +1356,40 @@ mod tests {
             after.len() == 1 && shell::re_match(r"^c\.[0-9]{13}\.[0-9]{13}$", after[0].as_bytes()),
             "...then closed; an old one and a dead one's dropped: {after:?}"
         );
+        // #392: runs back to back (an ended one within 2 s of the next's start) keep one mark, from
+        // the first's start to the last's end; one apart from them by more is kept as it is.
+        std::fs::remove_dir_all(d.join("runs")).unwrap();
+        std::fs::create_dir_all(d.join("runs")).unwrap();
+        let t = now_ms();
+        std::fs::write(d.join(format!("runs/c.{}.{}", t - 9000, t - 8000)), "").unwrap();
+        std::fs::write(d.join(format!("runs/c.{}.{}", t - 3000, t - 2500)), "").unwrap();
+        std::fs::write(d.join(format!("runs/c.{}.{}", t - 2400, t - 1500)), "").unwrap();
+        for _ in 0..50 {
+            let m = run_mark_begin(&ctx);
+            run_mark_end(&ctx, m);
+        }
+        let after = ls();
+        assert_eq!(
+            after.len(),
+            2,
+            "back to back: one mark, the one apart kept: {after:?}"
+        );
+        assert!(
+            after.contains(&format!("c.{}.{}", t - 9000, t - 8000)),
+            "{after:?}"
+        );
+        let joined = after
+            .iter()
+            .find(|f| f.starts_with(&format!("c.{}.", t - 3000)));
+        let end = joined.and_then(|f| f.rsplit('.').next()?.parse::<i64>().ok());
+        assert!(
+            end.is_some_and(|e| e >= t),
+            "...from the first's start to the last's end: {after:?}"
+        );
+        // (what job_run_stopped answers: a job that ended in the 0.1 s between two of them, or in
+        // the gap the merge closed, was stopped during runs either way)
+        assert!(job_run_stopped(&ctx, t - 1800) && job_run_stopped(&ctx, t - 2450));
+        assert!(!job_run_stopped(&ctx, t - 5000) && job_run_stopped(&ctx, t - 8500));
         // The record kept until the end is dealt with: job_live (the box's processes as BOX_PID SID
         // START, host pids from 901) lists a live job, keeps an ended one's record until job_note
         // has noted its end, then drops it.

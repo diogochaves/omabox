@@ -10639,6 +10639,17 @@ from them.
     and `ls` names each on stderr ("'NAME' in DIR is no box's folder (no box can be named so): left
     out"), exit 0. Tests: t_unit_bash_changes (ls on such a folder), t_idle (its used file removed
     after up: it still goes down).
+546. **Back-to-back runs got slower: a marker a run, kept 10 s** (2026-10-30, #392). Each `run`
+    leaves `runs/c.START.END` (#300, finding 406: a `run -d` job killed during a run or within 2 s of
+    its end is not warned about), dropped only 10 s after it ended, and each run lists the folder: six
+    batches of 100 runs in a row went from 3.1 to 6.6 ms a run (630 markers in about 3 s). A run's
+    end now merges its marker with every ended one within JOB_RUN_GRACE_MS (2 s) of it, until none
+    is left that meets it, into one `c.FIRST.LAST`: job_run_stopped's answer is the same for every
+    time (the gaps it closes were inside the earlier run's grace already), and back-to-back runs keep
+    one file. A file is removed only once one covering it is there, so runs ending at once lose none.
+    Measured on a box: three batches of 200 runs, 2.46, 2.52, 2.53 ms a run, one marker. Test:
+    jobs' `job_note_as_bash` (50 runs back to back keep one marker beside one apart; what
+    job_run_stopped answers), failed on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
