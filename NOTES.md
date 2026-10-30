@@ -10590,6 +10590,16 @@ from them.
     `-g` as geom_parse reads it, written in grim's form with its numbers decimal (settle::geom_text):
     `00,010 300,200` is `of region 0,10 300x200`. Tests: settle's `geometry` unit test, t_cli_box's
     "check point -g 00,010 300,200: kept as read" (failed on the old code).
+541. **shot -o x.ppm wrote a PNG without a word** (2026-10-30, #346). shot writes PNG whatever FILE
+    is called (grim's PNG, then magick's for --fit, --zoom and --changed, and baselines, --changed and
+    `click --in` read PNGs), so an agent that asked for x.ppm to read raw pixels got a PNG and went
+    on to write a PNG decoder. Honouring the extension would touch every path that reads the shot
+    back; a note does not. shot now says `shot: FILE holds a PNG (shot writes PNG only, whatever the
+    name)` on stderr when FILE's extension is another image format's (ppm pgm pbm pnm pam jpg jpeg
+    webp bmp gif tif tiff avif jxl qoi heic raw, any case; for a jailed caller, its --as name), and
+    `help shot` says so with the magick line that converts one. The shot itself is unchanged, so a
+    script that names its PNG x.jpg keeps working. Tests: shot's `png_named_note` unit test,
+    t_unit_capture_errors' "shot -o x.ppm: a PNG, said".
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

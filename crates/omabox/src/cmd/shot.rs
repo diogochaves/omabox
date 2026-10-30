@@ -165,6 +165,28 @@ impl Shot {
     }
 }
 
+/// The note for a shot named as another image format (#346): shot writes PNG only, whatever the
+/// name, and an agent that asked for x.ppm went on to read raw pixels from a PNG.
+fn png_named(out: &[u8]) -> Option<Vec<u8>> {
+    const OTHER: [&str; 17] = [
+        "ppm", "pgm", "pbm", "pnm", "pam", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff",
+        "avif", "jxl", "qoi", "heic", "raw",
+    ];
+    let name = shell::basename(out);
+    let dot = name.iter().rposition(|&c| c == b'.').filter(|&i| i > 0)?;
+    let ext = &name[dot + 1..];
+    OTHER
+        .iter()
+        .any(|o| ext.eq_ignore_ascii_case(o.as_bytes()))
+        .then(|| {
+            cat!(
+                "shot: ",
+                out,
+                " holds a PNG (shot writes PNG only, whatever the name)"
+            )
+        })
+}
+
 /// The capture's grab, run beside this command: grim in the box (through magick with --zoom), its
 /// words appended to ERR; the pids that run it, for a kill.
 struct Grab {
@@ -496,6 +518,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if !s.out.is_empty() && burst.is_empty() {
             (s.out, s.file) = shot_path(ctx, &s.out)?;
         }
+    }
+    if burst.is_empty()
+        && let Some(m) = png_named(&s.out)
+    {
+        say(m);
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
@@ -2028,6 +2055,26 @@ fn burst_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #346: a name of another image format gets the note; .png, no extension or a dot folder none.
+    #[test]
+    fn png_named_note() {
+        assert_eq!(
+            png_named(b"/t/x.PPM"),
+            Some(b"shot: /t/x.PPM holds a PNG (shot writes PNG only, whatever the name)".to_vec())
+        );
+        assert!(png_named(b"/t/x.jpg").is_some());
+        for n in [
+            &b"/t/x.png"[..],
+            b"/t/x",
+            b"/t/.ppm",
+            b"/t.ppm/x",
+            b"",
+            b"x.ppm.png",
+        ] {
+            assert_eq!(png_named(n), None, "{}", String::from_utf8_lossy(n));
+        }
+    }
 
     // What bash's geom_clip printed for each, but numbers written as numbers and read as decimal
     // (finding 448: it printed X and Y as given, 010, and clipped them as octal).

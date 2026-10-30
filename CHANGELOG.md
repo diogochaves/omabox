@@ -11,6 +11,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `010,010`, so the same region typed another way (`10,10,400,300`) read as a different one. It is
   now kept as read, `10,10 400x300`, as `shot` does
   ([#384](https://github.com/diogochaves/omabox/issues/384)).
+- **`shot -o x.ppm` wrote a PNG without a word**: shot writes PNG whatever the file is called. It
+  now says so on stderr when the name is another image format's (`.ppm`, `.jpg`, ...), and `help
+  shot` says how to convert one ([#346](https://github.com/diogochaves/omabox/issues/346)).
 
 ## 1.0.1 — 2026-10-27
 

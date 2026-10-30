@@ -3913,6 +3913,9 @@ t_unit_capture_errors() {
   cx_want=(rc=1 out= "err=omabox: cannot write $r/rt/omabox/fk/shots.tsv: Is a directory")
   cx_case "shot: its record cannot be written: said, 1, nothing on stdout" shot -b fk -o "$r/out/s.png"
   sd_pre=()
+  # (a name of another image format: a PNG, said: #346)
+  cx_want=(rc=0 "out=$r/out/x.ppm" "err~^omabox: shot: $r/out/x\\.ppm holds a PNG \\(shot writes PNG only, whatever the name\\)$")
+  cx_case "shot -o x.ppm: a PNG, said" shot -b fk -o "$r/out/x.ppm"
   if [ -x /root ]; then skip "shot -o in a folder it cannot look into: said" "/root can be looked into here (root?)"; else
     cx_want=(rc=1 out= "err=omabox: shot: cannot resolve /root/rp.png (a folder on its way is missing or cannot be looked into, or a link loops)")
     cx_case "shot -o in a folder it cannot look into: said" shot -b fk -o /root/rp.png

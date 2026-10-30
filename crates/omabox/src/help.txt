@@ -343,6 +343,9 @@ that time). Without it nothing glides, but while `record start --glide` records.
 BTN is left (the default), right, middle, back or forward (also side and extra: a mouse's thumb
 buttons, BTN_SIDE and BTN_EXTRA, which apps take as back and forward).
 @ shot
+`shot` writes PNG, whatever FILE is called: a name like x.ppm or x.jpg gets a PNG and a note on
+stderr (`magick x.png x.ppm` converts one).
+@ shot
 `shot --burst N` takes N frames (2-200) of the same capture 100 ms apart (--every DURATION; --every 0:
 back to back, ~15 ms a crop, ~25 a 1920x1080 screen) into a folder, one line each: its path and time,
 with --diff where it differs from the frame before ("changed X,Y WxH", in the screen's coordinates as
