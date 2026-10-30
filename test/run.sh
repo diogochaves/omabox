@@ -2592,6 +2592,14 @@ t_unit_bash_changes() {
     check_eq "ls --json in byte order under LC_ALL=$l (finding 446)" "B-x a-x" "$(bc env LC_ALL="$l" XDG_RUNTIME_DIR="$r/lsrt" "$CLI" ls --json | jq -r '.[].name' | paste -sd' ')"
     check_eq "...and ls' table" "B-x a-x" "$(bc env LC_ALL="$l" XDG_RUNTIME_DIR="$r/lsrt" "$CLI" ls | awk 'NR > 1 { print $1 }' | paste -sd' ')"
   done
+  # (#371: a folder there no box can be named, a box.json in it: left out and said, not ls ended at 2)
+  mkdir -p "$r/lsrt/omabox/bad name!"; echo '{}' > "$r/lsrt/omabox/bad name!/box.json"
+  local lsout lsrc=0
+  lsout=$(cd "$r/norepo" && env -u OMABOX -u OMABOX_NAME XDG_RUNTIME_DIR="$r/lsrt" "$CLI" ls --json 2>"$r/ls.err") || lsrc=$?
+  check_eq "ls: a folder no box can be named: left out, said, exit 0 (#371)" \
+    "0|B-x a-x|omabox: ls: 'bad name!' in $r/lsrt/omabox is no box's folder (no box can be named so): left out" \
+    "$lsrc|$(jq -r '.[].name' <<<"$lsout" 2>&1 | paste -sd' ')|$(cat "$r/ls.err")"
+  rm -rf "$r/lsrt/omabox/bad name!"
   # (a name such as -n named in its refusal: bash's echo took it for its own option, finding 438)
   check_match "OMABOX=-n: named in its refusal (finding 438)" "^omabox: env: bad box name -n: " "$(bc env OMABOX=-n "$CLI" env)"
   # (the word as written: bash's awk read u\160 as up, finding 500)
@@ -7144,6 +7152,13 @@ t_idle() {
   held "$B" check_match "next command says why" "went down after 10s idle" "$(ob shot -b "$B" 2>&1)"
   ob down "$B" >/dev/null 2>&1
   check_fails "down clears the note" test -e "$XDG_RUNTIME_DIR/omabox/.expired-$B"
+  # (#371: its used file gone: made again by the reaper, the idle time counted from then; it never was)
+  B=$P-idle2
+  check "up --idle 10s, its used file then removed" ob up "$B" --idle 10s --no-shell
+  rm -f "$XDG_RUNTIME_DIR/omabox/$B/used"
+  until_ok 40 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
+  held "$B" check_fails "...it went down by itself all the same" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\")'"
+  ob down "$B" >/dev/null 2>&1
 }
 
 # The reaper (finding 74): it decides on the box it watches, then waits for the lock in `down`; a box

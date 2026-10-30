@@ -10629,6 +10629,16 @@ from them.
     cases and t_main's "record --audio refused" failed instead (record asks for its tools before the
     box's audio): 9 of 13 box failures in the 1.0.1 package's installed suite in a VM without them.
     They now skip with the same guard, naming the tools.
+545. **A box whose used file was gone was never reaped; a stray folder ended ls** (2026-10-30, #371).
+    The idle reaper reads the idle time from the mtime of `<box dir>/used`; with the file gone it
+    went on polling and never took the box down until a command touched it again (bash's reaper died
+    on an arithmetic error there, finding 471). It now makes the file again, so the idle time counts
+    from then. And a folder in the runtime dir with a box.json whose name no box can have (`bad
+    name!`, made by hand or by another tool) ended `ls` and `ls --json` with select_box's refusal,
+    exit 2, nothing listed: list_names now leaves such folders out (every command that lists boxes),
+    and `ls` names each on stderr ("'NAME' in DIR is no box's folder (no box can be named so): left
+    out"), exit 0. Tests: t_unit_bash_changes (ls on such a folder), t_idle (its used file removed
+    after up: it still goes down).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

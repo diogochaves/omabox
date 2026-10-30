@@ -4,7 +4,7 @@
 //! order, the same in every locale (finding 446; bash's glob followed the locale's collation).
 
 use crate::args::{unexpected, unknown_opt_hint};
-use crate::boxes::{box_state, list_names, meta};
+use crate::boxes::{box_state, list_names, meta, stray_names};
 use crate::cat;
 use crate::cmd::save::pad;
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -113,10 +113,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
     }
     ctx.parsed();
-    // (a dir no box can be named: select_box's refusal ends `ls` before anything is said, as bash's
-    // hung_boxes did)
-    for n in list_names(ctx, false) {
-        select_box(&mut ctx.clone(), &n)?;
+    // (a dir no box can be named is left out, said: #371; bash's hung_boxes ended `ls` at it, exit 2)
+    for n in stray_names(ctx) {
+        say(cat!(
+            cmd,
+            ": '",
+            n,
+            "' in ",
+            ctx.boxes,
+            " is no box's folder (no box can be named so): left out"
+        ));
     }
     let hung = hung_boxes(ctx);
     if as_json {

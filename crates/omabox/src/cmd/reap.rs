@@ -264,7 +264,9 @@ fn poll(ctx: &mut Ctx, r: &mut Reap) -> Res<bool> {
     if starting_alive(ctx) {
         return Ok(true);
     }
+    // (its used file gone: made again, so the idle time counts from now; it was never counted, #371)
     let Some(used) = mtime(&ctx.at("used")) else {
+        touch(&ctx.at("used"));
         return Ok(true);
     };
     if now().saturating_sub(used) < r.idle {

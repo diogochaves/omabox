@@ -22,6 +22,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   mattered could not be found or read. They now see them whole (up to 4000 characters); the text
   view still cuts them at 80, as `help tree` now says
   ([#314](https://github.com/diogochaves/omabox/issues/314)).
+- **A box whose `used` file was removed never went down for idleness**, and a folder in the runtime
+  dir that no box can be named made `ls` exit 2 with nothing listed. The reaper now counts the idle
+  time from when it finds the file gone, and `ls` leaves such a folder out, saying so
+  ([#371](https://github.com/diogochaves/omabox/issues/371)).
 
 ## 1.0.1 — 2026-10-27
 

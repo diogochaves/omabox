@@ -226,6 +226,28 @@ pub fn box_state(d: &[u8]) -> &'static str {
 /// left behind is listed (dead), so `down --all` clears it (finding 163). In a jail, the jail's own
 /// boxes; ALL: every box.
 pub fn list_names(ctx: &Ctx, all: bool) -> Vec<Vec<u8>> {
+    box_dirs(ctx, all)
+        .into_iter()
+        .filter(|n| box_name_ok(n))
+        .collect()
+}
+
+/// The folders under the runtime dir that look like boxes' (a box.json or info.json in them) but no
+/// box can be named so (#371: one made by hand ended `ls` with select_box's refusal): `ls` names them.
+pub fn stray_names(ctx: &Ctx) -> Vec<Vec<u8>> {
+    box_dirs(ctx, false)
+        .into_iter()
+        .filter(|n| !box_name_ok(n))
+        .collect()
+}
+
+/// Whether N is a name select_box takes as it is.
+fn box_name_ok(n: &[u8]) -> bool {
+    n.first().is_some_and(u8::is_ascii_alphanumeric) && crate::select::tame(n) == n
+}
+
+/// The folders under the runtime dir with a box.json or info.json (in a jail, the jail's, unless ALL).
+fn box_dirs(ctx: &Ctx, all: bool) -> Vec<Vec<u8>> {
     let id = if in_jail() && !all {
         jail_id()
     } else {
