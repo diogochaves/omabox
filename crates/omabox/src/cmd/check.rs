@@ -1134,6 +1134,17 @@ fn ignore_px(v: [i64; 10]) -> Option<Vec<u8>> {
     Some(format!("{x} {y} {} {}", x2 - x, y2 - y).into_bytes())
 }
 
+/// ignore_px's region cut to the shot, as "WxH at X,Y" in its own coordinates, when the shot cut it
+/// (#342: a region given in the wrong coordinates was kept as a sliver, without a word); None when
+/// it lies wholly inside, or wholly outside (ignore_px's None, said apart).
+fn ignore_cut(v: [i64; 10]) -> Option<String> {
+    let [ox, oy, lw, lh, _, _, x, y, gw, gh] = v;
+    let (cx, cy) = (x.max(ox), y.max(oy));
+    let (cx2, cy2) = ((x + gw).min(ox + lw), (y + gh).min(oy + lh));
+    let cut = (cx, cy, cx2, cy2) != (x, y, x + gw, y + gh);
+    (cut && cx2 > cx && cy2 > cy).then(|| format!("{}x{} at {cx},{cy}", cx2 - cx, cy2 - cy))
+}
+
 /// `"$self" -b NAME ARGS... >/dev/null 2>FILE` (FILE None: 2>&1 to /dev/null), with ENV: its status.
 fn self_cmd(ctx: &Ctx, args: &[Vec<u8>], err: Option<&[u8]>, env: &[(&str, &str)]) -> i32 {
     let mut c = crate::sig::omabox_cmd();
@@ -1391,7 +1402,36 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 ai(&gw[3]),
             ];
             match ignore_px(v).filter(|_| ok) {
-                Some(m) => px.push(m),
+                Some(m) => {
+                    // (part of it outside the shot: what was kept said, #342)
+                    if let Some(c) = ignore_cut(v) {
+                        say(cat!(
+                            "check point ",
+                            id,
+                            ": --ignore \"",
+                            gw[0],
+                            ",",
+                            gw[1],
+                            " ",
+                            gw[2],
+                            "x",
+                            gw[3],
+                            "\" is partly outside the shot (",
+                            space,
+                            "; it covers ",
+                            lw,
+                            "x",
+                            lh,
+                            " at ",
+                            ox,
+                            ",",
+                            oy,
+                            "): cut to ",
+                            c
+                        ));
+                    }
+                    px.push(m);
+                }
                 None => say(cat!(
                     "check point ",
                     id,
@@ -2905,8 +2945,11 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
         }
         let given = speck.is_some();
         let unst_data = std::fs::read(shell::path(&uf)).unwrap_or_default();
-        if !unst_data.is_empty() {
+        // (its --ignore regions are left out too: counted with the unstable ones, #342)
+        if !unst_data.is_empty() || has_line_starting(&bpoint, b"ignore ") {
             unst += 1;
+        }
+        if !unst_data.is_empty() {
             copy(ctx, &uf, &cat!(base, "/", shell::basename(&uf)))?;
             if odd.len() + 1 < runs {
                 let odds: Vec<String> = odd.iter().map(ToString::to_string).collect();
@@ -3282,6 +3325,27 @@ mod tests {
             t([100, 0, 400, 26, 400, 26, 900, 0, 10, 10]),
             None,
             "...none of it in the shot: fails"
+        );
+        // ignore_cut (#342): what the shot kept of one it cut, in the coordinates given
+        let c = |v| ignore_cut(v);
+        assert_eq!(
+            c([100, 0, 400, 26, 400, 26, 150, 5, 20, 10]),
+            None,
+            "inside"
+        );
+        assert_eq!(
+            c([100, 0, 400, 26, 400, 26, 90, -5, 20, 40]).as_deref(),
+            Some("10x26 at 100,0")
+        );
+        assert_eq!(
+            c([568, 78, 760, 875, 760, 875, 230, 130, 430, 52]).as_deref(),
+            Some("92x52 at 568,130"),
+            "#342's: given relative to the crop"
+        );
+        assert_eq!(
+            c([100, 0, 400, 26, 400, 26, 900, 0, 10, 10]),
+            None,
+            "outside"
         );
     }
 

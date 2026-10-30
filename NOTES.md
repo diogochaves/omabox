@@ -10600,6 +10600,18 @@ from them.
     `help shot` says so with the magick line that converts one. The shot itself is unchanged, so a
     script that names its PNG x.jpg keeps working. Tests: shot's `png_named_note` unit test,
     t_unit_capture_errors' "shot -o x.ppm: a PNG, said".
+542. **check point cut an --ignore region to the shot without a word** (2026-10-30, #342). An agent
+    gave `--window APP -g "568,78 760x875" --ignore "230,130 430x52"`, the region relative to the
+    crop by mistake (the docs say the window's coordinates): the `.point` file kept `ignore 0 52 92
+    52`, a 92-pixel sliver, and nothing was said; one wholly outside was said and left out, one
+    partly outside was not. And approve's summary, "(0 with regions left out)", counted only the
+    unstable regions found between runs, so with several `--ignore` checkpoints it read as if the
+    ignores were dropped. check point now says `--ignore "X,Y WxH" is partly outside the shot (SPACE;
+    it covers WxH at X,Y): cut to WxH at X,Y` (ignore_cut, in the coordinates given) and keeps the
+    cut region as before; the summary counts a checkpoint with `ignore` lines as one with regions
+    left out. Tests: check's `ignore_px_as_bash` unit test (#342's own numbers), t_cli_box's "check
+    point --ignore partly outside -g: cut, said", t_check's summary count (desk now has an
+    `--ignore`).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

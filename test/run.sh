@@ -8032,7 +8032,7 @@ ApplicationWindow {
     Label { x: 20; y: 120; color: "white"; text: "run " + Math.floor(Math.random() * 1000000) }
 }
 QML
-omabox check point desk -g "0,0 1920x26"
+omabox check point desk -g "0,0 1920x26" --ignore "0,0 10x10"
 omabox run -d -- qml6 /home/sbx/c.qml
 omabox wait --timeout 20s window 'title:^Check demo$'
 omabox check point demo --window 'title:^Check demo$'
@@ -8046,6 +8046,9 @@ SH
   rc=0; out=$(ob check run --approve --runs 2 --base "$d/base" -o "$d/a" -- "$d/scenario.sh" 2>&1) || rc=$?
   check_eq "approve: exit 0" 0 "$rc"
   check_match "...the bar's checkpoint is a plain baseline" $'(^|\n)baseline desk' "$out"
+  # (#342: a checkpoint with --ignore regions counts as one with regions left out, as an unstable one)
+  local nleft; nleft=$( { grep -l '^ignore ' "$d/base/"*.point; ls "$d/base/"*.unstable 2>/dev/null | sed 's/\.unstable$/.point/'; } | sort -u | wc -l)
+  check_match "...the summary counts the checkpoints with regions left out, --ignore's too ($nleft)" "check: baseline of 4 checkpoints in [^ ]* \\($nleft with regions left out\\)" "$out"
   check_match "...each run's box start said" 'check: run 2 of 2: box up in [0-9]+ s' "$out"
   check_match "...a crop of the window: its tree only what touches it (the random label is outside)" $'(^|\n)baseline democrop \(' "$out"
   check_match "...the baseline's image, and to look at it" $'\noverview: [^\n]*/a/baseline.png [^\n]*\ncheck: look at it before you keep this baseline' "$out"
@@ -11541,6 +11544,9 @@ EOF
   # (decimal: 08 is 8, the region kept; bash's omabox ended at it, the region left out: finding 448)
   cx_want=(rc=0 "out=$ck/p/rp3.png" err= 'state~^ignore 8 0 10 10$')
   cx_case "check point --ignore 08: decimal, kept" check point -b "$B" rp3 -o "$ck/p" --ignore "08,0 10x10"
+  # (one partly outside the shot: kept, cut, and what was kept said: #342)
+  cx_want=(rc=0 "out=$ck/p/rp5.png" "err=omabox: check point rp5: --ignore \"290,190 20x20\" is partly outside the shot (the screen's coordinates; it covers 300x200 at 0,0): cut to 10x10 at 290,190" 'state~^ignore 290 190 10 10$')
+  cx_case "check point --ignore partly outside -g: cut, said" check point -b "$B" rp5 -o "$ck/p" -g "0,0 300x200" --ignore "290,190 20x20"
   # (-g kept as read, decimal and grim's form, however it was typed: #384)
   cx_want=(rc=0 "out=$ck/p/rp4.png" err= 'state~^of region 0,10 300x200$')
   cx_case "check point -g 00,010 300,200: kept as read" check point -b "$B" rp4 -o "$ck/p" -g "00,010 300,200"

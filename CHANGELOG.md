@@ -14,6 +14,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`shot -o x.ppm` wrote a PNG without a word**: shot writes PNG whatever the file is called. It
   now says so on stderr when the name is another image format's (`.ppm`, `.jpg`, ...), and `help
   shot` says how to convert one ([#346](https://github.com/diogochaves/omabox/issues/346)).
+- **`check point --ignore` partly outside the shot was cut down without a word**: a region given in
+  the wrong coordinates was kept as a sliver. It now says what was kept, and `check run --approve`'s
+  "with regions left out" counts the checkpoints with `--ignore` regions too
+  ([#342](https://github.com/diogochaves/omabox/issues/342)).
 
 ## 1.0.1 — 2026-10-27
 
