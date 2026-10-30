@@ -6458,7 +6458,10 @@ t_main() {
   # No --audio (#226): no PipeWire in the box, and what reads its sound refused.
   check_eq "ls --json: no audio" false "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .audio')"
   check_fails "...no pipewire in it" ob run -b "$B" -- pgrep -x pipewire
-  check_match "...record --audio refused" "record --audio: box '$B' has no audio" "$(ob record -b "$B" start --audio 2>&1)"
+  # (record asks for its tools first, optional ones: #405)
+  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null; then
+    check_match "...record --audio refused" "record --audio: box '$B' has no audio" "$(ob record -b "$B" start --audio 2>&1)"
+  else skip "...record --audio refused" "no wf-recorder or ffmpeg here"; fi
   check_match "...audio refused" "audio: box '$B' has no audio" "$(ob audio -b "$B" 2>&1)"
   check_match "...up --audio again refused" "without what you asked for: --audio \(it has no audio\)" "$(ob up "$B" --audio 2>&1)"
   # finding 62: up waits for the shell (bar layer + notification server) before returning
@@ -11673,43 +11676,48 @@ EOF
   check_eq "...every check box went down" "" "$(cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n')"
   cx_prep="" cx_env=() cx_also="" cx_sed=""
   # record on the box: wf-recorder and ffmpeg for real (the numbers of a take's length, its
-  # times and sizes left out: they are the take's).
-  local rv=$TMP/rp-rec rvN; rm -rf "$rv"; mkdir -p "$rv"
-  # (its path as the cases' sed leaves it, every number an N)
-  rvN=$(sed -E 's/[0-9]+(\.[0-9]+)?/N/g' <<<"$rv")
-  cx_recx() { ob record -b "$B" stop >/dev/null 2>&1 || true; rm -rf "$rv"; mkdir -p "$rv"; }
-  cx_recs() { cx_recx; ob record -b "$B" start -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
-  cx_recm() { cx_recs; ob record -b "$B" mark 'scene one' >/dev/null 2>&1; }
-  cx_recls() { (cd "$rv" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in *.tsv *.vtt; do [ -f "$f" ] && { echo "== $f"; sed -E 's/[0-9]+/N/g' "$f"; }; done 2>/dev/null); }
-  cx_also=cx_recls
-  cx_sed='s/[0-9]+(\.[0-9]+)?/N/g'
-  cx_prep=cx_recx
-  cx_want=(rc=0 "out=$rvN/v.mpN"$'\n'"$rvN/v.sheet.png" 'err~^omabox: record: a NxN contact sheet of N frames ' 'state~^\./v\.mp4 f$' 'state~^\./v\.sheet\.png f$')
-  cx_case "record --for 1s --sheet --frames 2" record -b "$B" --for 1s --sheet --frames 2 -o "$rv/v.mp4"
-  cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: NxN, Ns at N fps$' 'state~^\./v\.mp4 f$')
-  cx_case "record -- ACTION --hold 200ms" record -b "$B" --hold 200ms -o "$rv/v.mp4" -- keys a
-  cx_want=(rc=0 "out~^box 't[N0-9]+-rpN': not recording\$" err=)
-  cx_case "record status: not recording" record -b "$B" status
-  cx_prep=cx_recs
-  cx_want=(rc=0 "out~^\\{\"recording\":true,\"stopped\":false,\"monitors\":\\[\"[A-Z]+-N\"\\],\"fps\":N,\"file\":\"$rvN/v\\.mpN\",\"audio\":false,\"started\":N\\}\$" err=)
-  cx_case "record status --json: recording" record -b "$B" status --json
-  cx_want=(rc=0 'out=Ns scene two' err=)
-  cx_case "record mark" record -b "$B" mark 'scene two'
-  cx_want=(rc=0 'out=held Ns to Ns' err=)
-  cx_case "record hold 300ms" record -b "$B" hold 300ms
-  cx_prep=cx_recm
-  cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: N still stretch(es)? cut to Ns' "err~^omabox: record: N mark in $rvN/v\\.marks\\.tsv \\(ms in the video\\), and $rvN/v\\.vtt \\(captions\\)\$" 'state~^N	N\.N	scene one$' 'state~^WEBVTT$')
-  cx_case "record stop --captions --cut-idle" record -b "$B" stop --captions --cut-idle
-  # --no-pointer: the hold kept past start, given back at stop.
-  cx_recptr() { cx_recls; echo "== pointer"; sed -E 's/[0-9]+/N/g' "$XDG_RUNTIME_DIR/omabox/$B/pointer" 2>/dev/null; }
-  cx_also=cx_recptr cx_prep=cx_recx
-  cx_want=(rc=0 out= "err~^omabox: record: recording [A-Z]+-N of box 't[N0-9]+-rpN' to $rvN/v\\.mpN \\(omabox record stop\\)\$" 'state~^hold record N$')
-  cx_case "record start --no-pointer: the hold kept" record -b "$B" start --no-pointer -o "$rv/v.mp4"
-  cx_recnp() { cx_recx; ob record -b "$B" start --no-pointer -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
-  cx_prep=cx_recnp
-  cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: NxN, Ns at N fps$' 'state!~^hold record')
-  cx_case "record stop: the --no-pointer hold given back" record -b "$B" stop
-  cx_recx
+  # times and sizes left out: they are the take's). Both are optional: skipped without them (#405).
+  local rv=$TMP/rp-rec rvN
+  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
+    skip "record on the box (8 cases)" "no wf-recorder or ffmpeg here"
+  else
+    rm -rf "$rv"; mkdir -p "$rv"
+    # (its path as the cases' sed leaves it, every number an N)
+    rvN=$(sed -E 's/[0-9]+(\.[0-9]+)?/N/g' <<<"$rv")
+    cx_recx() { ob record -b "$B" stop >/dev/null 2>&1 || true; rm -rf "$rv"; mkdir -p "$rv"; }
+    cx_recs() { cx_recx; ob record -b "$B" start -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
+    cx_recm() { cx_recs; ob record -b "$B" mark 'scene one' >/dev/null 2>&1; }
+    cx_recls() { (cd "$rv" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in *.tsv *.vtt; do [ -f "$f" ] && { echo "== $f"; sed -E 's/[0-9]+/N/g' "$f"; }; done 2>/dev/null); }
+    cx_also=cx_recls
+    cx_sed='s/[0-9]+(\.[0-9]+)?/N/g'
+    cx_prep=cx_recx
+    cx_want=(rc=0 "out=$rvN/v.mpN"$'\n'"$rvN/v.sheet.png" 'err~^omabox: record: a NxN contact sheet of N frames ' 'state~^\./v\.mp4 f$' 'state~^\./v\.sheet\.png f$')
+    cx_case "record --for 1s --sheet --frames 2" record -b "$B" --for 1s --sheet --frames 2 -o "$rv/v.mp4"
+    cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: NxN, Ns at N fps$' 'state~^\./v\.mp4 f$')
+    cx_case "record -- ACTION --hold 200ms" record -b "$B" --hold 200ms -o "$rv/v.mp4" -- keys a
+    cx_want=(rc=0 "out~^box 't[N0-9]+-rpN': not recording\$" err=)
+    cx_case "record status: not recording" record -b "$B" status
+    cx_prep=cx_recs
+    cx_want=(rc=0 "out~^\\{\"recording\":true,\"stopped\":false,\"monitors\":\\[\"[A-Z]+-N\"\\],\"fps\":N,\"file\":\"$rvN/v\\.mpN\",\"audio\":false,\"started\":N\\}\$" err=)
+    cx_case "record status --json: recording" record -b "$B" status --json
+    cx_want=(rc=0 'out=Ns scene two' err=)
+    cx_case "record mark" record -b "$B" mark 'scene two'
+    cx_want=(rc=0 'out=held Ns to Ns' err=)
+    cx_case "record hold 300ms" record -b "$B" hold 300ms
+    cx_prep=cx_recm
+    cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: N still stretch(es)? cut to Ns' "err~^omabox: record: N mark in $rvN/v\\.marks\\.tsv \\(ms in the video\\), and $rvN/v\\.vtt \\(captions\\)\$" 'state~^N	N\.N	scene one$' 'state~^WEBVTT$')
+    cx_case "record stop --captions --cut-idle" record -b "$B" stop --captions --cut-idle
+    # --no-pointer: the hold kept past start, given back at stop.
+    cx_recptr() { cx_recls; echo "== pointer"; sed -E 's/[0-9]+/N/g' "$XDG_RUNTIME_DIR/omabox/$B/pointer" 2>/dev/null; }
+    cx_also=cx_recptr cx_prep=cx_recx
+    cx_want=(rc=0 out= "err~^omabox: record: recording [A-Z]+-N of box 't[N0-9]+-rpN' to $rvN/v\\.mpN \\(omabox record stop\\)\$" 'state~^hold record N$')
+    cx_case "record start --no-pointer: the hold kept" record -b "$B" start --no-pointer -o "$rv/v.mp4"
+    cx_recnp() { cx_recx; ob record -b "$B" start --no-pointer -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
+    cx_prep=cx_recnp
+    cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: NxN, Ns at N fps$' 'state!~^hold record')
+    cx_case "record stop: the --no-pointer hold given back" record -b "$B" stop
+    cx_recx
+  fi
   cx_prep="" cx_sed="" cx_also=""
   cx_prep="" cx_sed="" cx_also=""
   cx_lay

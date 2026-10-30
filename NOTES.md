@@ -10624,6 +10624,11 @@ from them.
     now see them whole. `help tree` says so. Test: t_tree's Qt window has a check box named past 80
     characters: `--find` matches its end, the line cut at 80, `--json` the whole name (failed on the
     old code: `--find` exit 1).
+544. **Record cases failed without wf-recorder and ffmpeg** (2026-10-30, #405). Both are optional
+    (the package's optdepends), and most record tests skip without them, but t_cli_box's eight record
+    cases and t_main's "record --audio refused" failed instead (record asks for its tools before the
+    box's audio): 9 of 13 box failures in the 1.0.1 package's installed suite in a VM without them.
+    They now skip with the same guard, naming the tools.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
