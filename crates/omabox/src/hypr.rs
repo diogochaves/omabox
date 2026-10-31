@@ -144,14 +144,18 @@ pub fn hypr_down_text(ctx: &Ctx) -> Vec<u8> {
 
 /// Whether the box's Hyprland is gone, or held by gdb --watch at a fatal signal, after a call to it
 /// got no answer (#232): up to 2 s for the box or labwc's line to say how it ended; one that runs
-/// (twice, 0.2 s apart) is not lost. Some(what happened), None for one that runs or cannot be told.
+/// (twice, 0.2 s apart) is not lost; one whose exit is under way is, given up to 10 s to go (finding
+/// 606). Some(what happened), None for one that runs or cannot be told.
 pub fn hypr_lost(ctx: &Ctx) -> Res<Option<Vec<u8>>> {
     hypr_lost_with(&RealBox, ctx)
 }
 
 fn hypr_lost_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<Option<Vec<u8>>> {
-    let (mut run, mut hp) = (0, None);
-    for _ in 0..10 {
+    let (mut run, mut hp, mut looks, mut going) = (0, None, 0, false);
+    // 10 looks 0.2 s apart, and up to 40 more while its exit is under way (finding 606).
+    while looks < 10 || (going && looks < 50) {
+        looks += 1;
+        going = false;
         if !sys.box_alive(ctx)? {
             return Ok(Some(hypr_down_text(ctx)));
         }
@@ -177,6 +181,10 @@ fn hypr_lost_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<Option<Vec<u8>>
                         " gdb --crash; the box goes down after it)"
                     )));
                 }
+            } else if sys.pid_exiting(p) {
+                // Its exit under way (finding 606): its socket closed, while it tears down its
+                // memory, which under load takes more than these looks. Going, not hung.
+                going = true;
             } else {
                 run += 1;
             }
@@ -197,7 +205,8 @@ fn hypr_lost_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<Option<Vec<u8>>
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    if hp.is_some() {
+    // (one still exiting after 10 s: going all the same)
+    if hp.is_some() && !going {
         return Ok(None);
     }
     Ok(Some(hypr_down_text(ctx)))
@@ -630,6 +639,80 @@ mod tests {
         assert!(
             t.starts_with("box 'u' went down: its Hyprland crashed (SIGSEGV)"),
             "went down, how: {t}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A box whose Hyprland (this test's own pid, so hypr_host_pid finds it) is exiting, R in
+    /// /proc, for its first ALIVE looks, then gone with the box (finding 606).
+    struct Exiting {
+        me: Vec<u8>,
+        alive: std::cell::Cell<u32>,
+        exiting: bool,
+    }
+
+    impl BoxSys for Exiting {
+        fn box_alive(&self, _: &Ctx) -> Res<bool> {
+            let a = self.alive.get();
+            self.alive.set(a.saturating_sub(1));
+            Ok(a > 0)
+        }
+        fn box_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
+            vec![self.me.clone()]
+        }
+        fn pid_state(&self, _: &[u8]) -> Vec<u8> {
+            b"R (running)".to_vec()
+        }
+        fn pid_exiting(&self, _: &[u8]) -> bool {
+            self.exiting
+        }
+    }
+
+    // #222: a Hyprland that crashed closes its socket at its exit's start, then runs (R, D) while it
+    // tears down its memory; under load longer than two looks. Going, then gone: not hung. One that
+    // runs and is not exiting is still hung.
+    #[test]
+    fn hypr_lost_an_exiting_hyprland_is_going() {
+        let me = std::process::id().to_string().into_bytes();
+        assert!(
+            !procfs::exiting(&me),
+            "this test's own process is not exiting"
+        );
+        let (ctx, d) = hctx("exiting", &me);
+        std::fs::write(
+            d.join("home/labwc.log"),
+            "spawned child 4194305 terminated with signal 11 (Segmentation fault)\n",
+        )
+        .unwrap();
+        let sys = Exiting {
+            me: me.clone(),
+            alive: std::cell::Cell::new(4),
+            exiting: true,
+        };
+        let t = String::from_utf8_lossy(&hung_text_with(&sys, &ctx, "").unwrap()).into_owned();
+        assert!(
+            t.starts_with("box 'u' went down: its Hyprland crashed (SIGSEGV)"),
+            "an exiting Hyprland: went down once the box went, not hung: {t}"
+        );
+        let sys = Exiting {
+            me: me.clone(),
+            alive: std::cell::Cell::new(13),
+            exiting: true,
+        };
+        let t = String::from_utf8_lossy(&hung_text_with(&sys, &ctx, "").unwrap()).into_owned();
+        assert!(
+            t.starts_with("box 'u' went down"),
+            "...past the first 10 looks too: {t}"
+        );
+        let sys = Exiting {
+            me,
+            alive: std::cell::Cell::new(u32::MAX),
+            exiting: false,
+        };
+        let t = String::from_utf8_lossy(&hung_text_with(&sys, &ctx, "").unwrap()).into_owned();
+        assert!(
+            t.starts_with("box 'u': its Hyprland did not answer (hung?"),
+            "...one running, not exiting: hung: {t}"
         );
         let _ = std::fs::remove_dir_all(&d);
     }

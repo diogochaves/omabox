@@ -51,6 +51,15 @@ pub fn self_start() -> Option<Vec<u8>> {
     proc_start(b"self")
 }
 
+/// PID's exit is under way: stat's flags have the kernel's PF_EXITING (0x4), from its exit's
+/// start, while it tears down its memory and files, through to the zombie (finding 606).
+pub fn exiting(pid: &[u8]) -> bool {
+    proc_stat(pid, 6)
+        .and_then(|f| String::from_utf8(f).ok())
+        .and_then(|f| f.parse::<u64>().ok())
+        .is_some_and(|f| f & 0x4 != 0)
+}
+
 /// PID is running: not gone, and not a child that exited and was not waited for yet (a zombie).
 pub fn running(pid: &[u8]) -> bool {
     let Some(s) = read(pid, "stat") else {

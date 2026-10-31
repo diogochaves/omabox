@@ -11315,6 +11315,20 @@ from them.
     t_unit_capture_errors (a stand-in grim ending 139 once, three times: taken; every time: 4 tries,
     then said; a screen's 139: asked once), t_window_resizing (20 shots of a window resizing every
     30 ms: none fails; on the old code 4 of 20 did).
+606. **A crashed Hyprland could be called hung while its exit was under way** (2026-10-31, #222's
+    t_hyprland_crash under load). After a fatal signal (or gdb --watch passing one on) the process
+    exits: its socket closes at the start, so the call that crashed it gets no answer, then it tears
+    down its memory, its last thread in R or D, before the zombie. Sampled in a box: 49 ms R, 91 ms
+    D, 152 ms R, gone at 189 ms, with `/proc/PID/stat`'s flags carrying PF_EXITING (0x4) throughout
+    (0x40860c). hypr_lost took two looks 0.2 s apart at a Hyprland in R or D as one that runs, so an
+    exit longer than that read "did not answer (hung?)": the likely cause (inferred, not caught in
+    the act) of t_hyprland_crash's load-only failures (its gdb case, 1 of 14 loaded runs here; both
+    crash checks in the 2026-10-20 runs). Now a Hyprland with
+    PF_EXITING is going, not running: hypr_lost waits on, up to 10 s, for the box or labwc's line,
+    and says it went down. Not reproduced on demand in a real box (the exit is too short here unless
+    the machine is loaded); the unit test drives it. Test: hypr.rs
+    hypr_lost_an_exiting_hyprland_is_going (exiting: went down, before and past 10 looks; running
+    and not exiting: still hung; it fails on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

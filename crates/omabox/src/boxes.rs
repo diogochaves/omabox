@@ -191,6 +191,10 @@ pub trait BoxSys {
     fn pid_state(&self, pid: &[u8]) -> Vec<u8> {
         crate::hypr::pid_state(pid)
     }
+    /// Whether a process's exit is under way (procfs::exiting).
+    fn pid_exiting(&self, pid: &[u8]) -> bool {
+        procfs::exiting(pid)
+    }
     /// The box's desktop now, as one snapshot (desk_snap), in the foreground.
     fn desk_snap(&self, ctx: &Ctx) -> Vec<u8> {
         crate::desk::desk_snap(ctx, false)

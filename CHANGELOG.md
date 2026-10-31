@@ -63,6 +63,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   during it (just resized, or shown at a new size): Hyprland fails such a copy, and grim 1.5.0 then
   crashes. The window is now taken again, up to four tries, and one that keeps failing says why
   ([#387](https://github.com/diogochaves/omabox/issues/387)).
+- **A box whose Hyprland crashed was now and then said to be hung** ("did not answer (hung?)")
+  on a loaded machine, while the crashed Hyprland was still exiting. One whose exit is under way
+  now reads as going, and the command says it went down, with its signal
+  ([#222](https://github.com/diogochaves/omabox/issues/222)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count
