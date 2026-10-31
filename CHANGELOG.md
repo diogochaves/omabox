@@ -18,6 +18,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   could reach at their start. Changing it now names the connected boxes that need a restart, and
   warns when `nft`, which the rule needs, is missing
   ([#374](https://github.com/diogochaves/omabox/issues/374)).
+- **A `run -d` job stopped with `omabox run -- pkill` was still warned about when it exits with a
+  code of its own** on SIGTERM (foot exits 230). A job that ends while a `run` that kills runs (or
+  just after) is no longer said, whatever its status; the warning's hint now reads `(log: omabox
+  log -b NAME run)` ([#329](https://github.com/diogochaves/omabox/issues/329)).
 
 ## 1.0.2 — 2026-10-30
 

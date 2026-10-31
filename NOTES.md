@@ -10743,6 +10743,21 @@ from them.
     when nft is not in /usr/bin, where up then refuses a connected box. Test: t_protect_ports (a
     change names its box; the same set again says nothing), failed on the old code. The nft warning
     is not run here (this machine has nft).
+553. **A run -d job that traps SIGTERM was warned about after `run -- pkill`** (2026-10-30, #329).
+    #300 (finding 406) left out a job killed while an `omabox run` ran, or 2 s after, but only for
+    statuses 130, 137 and 143. foot catches SIGTERM and exits 230 (its own "failure in foot" code),
+    so a stop-and-relaunch loop (`run -- pkill -f 'app-id X'`, then `run -d -- foot --app-id X`) got
+    "exited with status 230" 4 times in one subagent. Leaving out any status during any run would
+    hide real crashes (agents run commands all the time), so a run that kills is marked apart: its
+    words (or a `sh -c` script's) hold kill, pkill or killall (kill_cmd), and its marks are `ok.` /
+    `ck.` instead of `o.` / `c.`, merged only with their own kind (finding 546). A job that ends in
+    a kill's window is left out whatever its status; in a plain run's window, 130/137/143 only, as
+    before. A word `kill` that is only an argument (`pgrep -x kill`) counts too: it errs to silence,
+    for that run's window alone. The hint is now `(log: omabox log -b NAME run)`, as the other
+    branch's `(log: PATH)`: "since the last command (omabox log ...)" read as if that was the last
+    command. Tests: jobs' `job_note_as_bash` (a kill's own mark, a job ending in it, kill_cmd),
+    t_replace (a job that exits 230 on SIGTERM, stopped by `run -- pkill`: not said), which failed
+    on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

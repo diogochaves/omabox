@@ -297,7 +297,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if detach {
             return detached(ctx, &mut st, quiet, print_log, replace, &cmd);
         }
-        let mark = run_mark_begin(ctx); // (a job it stops is no news: job_note)
+        // (a job it stops is no news: job_note; any status, when it kills: #329)
+        let mark = run_mark_begin(ctx, crate::jobs::kill_cmd(&cmd));
         let opts = ExecOpts {
             kill_say: true,
             ..ExecOpts::default()

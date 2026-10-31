@@ -129,9 +129,12 @@ fn job_note_with(ctx: &Ctx, live: impl Fn(&std::path::Path) -> bool) {
             continue;
         }
         // Stopped by the agent itself (#300, finding 406): killed while an `omabox run` ran in the
-        // box (`omabox run -- pkill APP`), or just after. An exit or a crash is still said.
-        if matches!(st.as_slice(), b"130" | b"137" | b"143") && job_run_stopped(ctx, end) {
-            continue;
+        // box (`omabox run -- pkill APP`), or just after. An exit or a crash is still said, but not
+        // during a run that kills (#329: foot traps SIGTERM and exits 230, its own code).
+        match job_run_stopped(ctx, end) {
+            Some(true) => continue,
+            Some(false) if matches!(st.as_slice(), b"130" | b"137" | b"143") => continue,
+            _ => {}
         }
         // What it was: its record ($D/jobs, the host's), kept until now (finding 405). Found by its
         // log's name, each record a line read on its own. A leader that exited leaving its session
@@ -175,6 +178,11 @@ fn job_note_with(ctx: &Ctx, live: impl Fn(&std::path::Path) -> bool) {
             job_how(&st),
             format!(" after {}.{}s", ms / 1000, ms % 1000 / 100),
             ", since the last command (",
+            if wher.starts_with(b"log: ") {
+                Vec::new()
+            } else {
+                b"log: ".to_vec()
+            },
             wher,
             ")"
         ));
@@ -265,30 +273,39 @@ pub fn job_how(st: &[u8]) -> String {
 }
 
 /// Whether a job that ended at END (ms) did so while an `omabox run` ran in the box, or within
-/// JOB_RUN_GRACE_MS of one's end. $D/runs (host-only) holds o.PID.START while one runs and
-/// c.START.END once it ended.
-fn job_run_stopped(ctx: &Ctx, end: i64) -> bool {
+/// JOB_RUN_GRACE_MS of one's end: Some(whether one of them was a run that kills), None when none
+/// was. $D/runs (host-only) holds o.PID.START while one runs and c.START.END once it ended; ok. and
+/// ck. for a run that kills (#329: kill_cmd).
+fn job_run_stopped(ctx: &Ctx, end: i64) -> Option<bool> {
     let num = |v: &[u8]| shell::test_int(v);
+    let mut any = None;
     for f in shell::glob(&ctx.at("runs"), false) {
-        if let (Some(a), Some(b)) = (
-            re_group(r"^c\.([0-9]+)\.([0-9]+)$", &f, 1),
-            re_group(r"^c\.([0-9]+)\.([0-9]+)$", &f, 2),
-        ) {
-            if num(&a).is_some_and(|a| a <= end)
-                && num(&b).is_some_and(|b| end <= b + JOB_RUN_GRACE_MS)
-            {
-                return true;
-            }
-        } else if let (Some(p), Some(s)) = (
-            re_group(r"^o\.([0-9]+)\.([0-9]+)$", &f, 1),
-            re_group(r"^o\.([0-9]+)\.([0-9]+)$", &f, 2),
-        ) {
-            if num(&s).is_some_and(|s| s <= end) && shell::path(&cat!("/proc/", p)).is_dir() {
-                return true;
-            }
+        let c = |i| re_group(r"^c(k?)\.([0-9]+)\.([0-9]+)$", &f, i);
+        let o = |i| re_group(r"^o(k?)\.([0-9]+)\.([0-9]+)$", &f, i);
+        let hit = if let (Some(k), Some(a), Some(b)) = (c(1), c(2), c(3)) {
+            (num(&a).is_some_and(|a| a <= end)
+                && num(&b).is_some_and(|b| end <= b + JOB_RUN_GRACE_MS))
+            .then_some(!k.is_empty())
+        } else if let (Some(k), Some(p), Some(s)) = (o(1), o(2), o(3)) {
+            (num(&s).is_some_and(|s| s <= end) && shell::path(&cat!("/proc/", p)).is_dir())
+                .then_some(!k.is_empty())
+        } else {
+            None
+        };
+        if let Some(k) = hit {
+            any = Some(any.unwrap_or(false) || k);
         }
     }
-    false
+    any
+}
+
+/// Whether a command (a word of it, or of a `sh -c` script in it) runs kill, pkill or killall: a
+/// job that ends during it was stopped by the agent, whatever its status (#329).
+pub fn kill_cmd(cmd: &[Vec<u8>]) -> bool {
+    cmd.iter().flat_map(|w| shell::words(w)).any(|t| {
+        let b = t.rsplit(|&c| c == b'/').next().unwrap_or_default();
+        matches!(b, b"kill" | b"pkill" | b"killall")
+    })
 }
 
 /// The box's processes, as host pids: everything in its pid namespace.
@@ -933,13 +950,15 @@ pub fn job_ended(
     Ok(Some(rc))
 }
 
-/// While an `omabox run` runs in the box, $D/runs/o.PID.START; once it ended, c.START.END (#300).
-pub fn run_mark_begin(ctx: &Ctx) -> Option<i64> {
+/// While an `omabox run` runs in the box, $D/runs/o.PID.START; once it ended, c.START.END (#300);
+/// ok. and ck. for one that KILLs (#329).
+pub fn run_mark_begin(ctx: &Ctx, kill: bool) -> Option<(i64, bool)> {
     let mark = now_ms();
     let dir = ctx.at("runs");
     std::fs::create_dir_all(&dir).ok()?;
-    std::fs::write(dir.join(format!("o.{}.{mark}", std::process::id())), b"").ok()?;
-    Some(mark)
+    let k = if kill { "k" } else { "" };
+    std::fs::write(dir.join(format!("o{k}.{}.{mark}", std::process::id())), b"").ok()?;
+    Some((mark, kill))
 }
 
 /// Its end; dropped: a run that ended 10 s before this one began, and one whose omabox is gone. An
@@ -947,20 +966,22 @@ pub fn run_mark_begin(ctx: &Ctx) -> Option<i64> {
 /// job_run_stopped answers is the same, and back-to-back runs keep one file, not one each (a run
 /// read them all: 630 in 3 s made each run 2x slower). Each file is removed only after one covering
 /// it is there, so runs ending at once lose none.
-pub fn run_mark_end(ctx: &Ctx, mark: Option<i64>) {
-    let Some(mark) = mark else { return };
+pub fn run_mark_end(ctx: &Ctx, mark: Option<(i64, bool)>) {
+    let Some((mark, kill)) = mark else { return };
+    let k = if kill { "k" } else { "" };
     let dir = ctx.at("runs");
     let mut ended = Vec::new();
     for f in shell::glob(&dir, false) {
-        let ends =
-            |i| re_group(r"^c\.([0-9]+)\.([0-9]+)$", &f, i).and_then(|v| shell::test_int(&v));
-        let gone = if let (Some(x), Some(y)) = (ends(1), ends(2)) {
+        let c = |i| re_group(r"^c(k?)\.([0-9]+)\.([0-9]+)$", &f, i);
+        let ends = |i| c(i).and_then(|v| shell::test_int(&v));
+        let gone = if let (Some(kind), Some(x), Some(y)) = (c(1), ends(2), ends(3)) {
             let old = y < mark - 10000;
-            if !old {
+            // (merged with its own kind only: a kill's window stays its own)
+            if !old && kind == k.as_bytes() {
                 ended.push((x, y, f.clone()));
             }
             old
-        } else if let Some(p) = re_group(r"^o\.([0-9]+)\.[0-9]+$", &f, 1) {
+        } else if let Some(p) = re_group(r"^ok?\.([0-9]+)\.[0-9]+$", &f, 1) {
             !shell::path(&cat!("/proc/", p)).is_dir()
         } else {
             false
@@ -980,9 +1001,9 @@ pub fn run_mark_end(ctx: &Ctx, mark: Option<i64>) {
         (a, b) = (a.min(x), b.max(y));
         merged.push(f);
     }
-    let name = format!("c.{a}.{b}");
+    let name = format!("c{k}.{a}.{b}");
     let _ = std::fs::rename(
-        dir.join(format!("o.{}.{mark}", std::process::id())),
+        dir.join(format!("o{k}.{}.{mark}", std::process::id())),
         dir.join(&name),
     );
     for f in merged.iter().filter(|f| f.as_slice() != name.as_bytes()) {
@@ -1200,7 +1221,7 @@ mod tests {
         );
         assert_eq!(
             note(),
-            "omabox: warning: run -d job sh -c sleep 1; exit 3 (pid 115) exited with status 3 after 2.1s, since the last command (omabox log -b u run)\n",
+            "omabox: warning: run -d job sh -c sleep 1; exit 3 (pid 115) exited with status 3 after 2.1s, since the last command (log: omabox log -b u run)\n",
             "a job that ended 2.1 s in, its log the newest: its words, pid, status, and log -b NAME run"
         );
         assert_eq!(note(), "", "...said once");
@@ -1344,7 +1365,7 @@ mod tests {
             v.sort();
             v
         };
-        let mark = run_mark_begin(&ctx);
+        let mark = run_mark_begin(&ctx, false);
         let open = ls()
             .iter()
             .filter(|f| shell::re_match(&format!("^o\\.{me}\\.[0-9]{{13}}$"), f.as_bytes()))
@@ -1365,7 +1386,7 @@ mod tests {
         std::fs::write(d.join(format!("runs/c.{}.{}", t - 3000, t - 2500)), "").unwrap();
         std::fs::write(d.join(format!("runs/c.{}.{}", t - 2400, t - 1500)), "").unwrap();
         for _ in 0..50 {
-            let m = run_mark_begin(&ctx);
+            let m = run_mark_begin(&ctx, false);
             run_mark_end(&ctx, m);
         }
         let after = ls();
@@ -1388,8 +1409,41 @@ mod tests {
         );
         // (what job_run_stopped answers: a job that ended in the 0.1 s between two of them, or in
         // the gap the merge closed, was stopped during runs either way)
-        assert!(job_run_stopped(&ctx, t - 1800) && job_run_stopped(&ctx, t - 2450));
-        assert!(!job_run_stopped(&ctx, t - 5000) && job_run_stopped(&ctx, t - 8500));
+        let st = |e| job_run_stopped(&ctx, e);
+        assert_eq!(
+            [st(t - 1800), st(t - 2450), st(t - 5000), st(t - 8500)],
+            [Some(false), Some(false), None, Some(false)]
+        );
+        // #329: a run that kills keeps a mark of its own kind, not merged with a plain one beside it;
+        // a job ending in its window was stopped whatever its status (foot exits 230 on SIGTERM).
+        let m = run_mark_begin(&ctx, true);
+        run_mark_end(&ctx, m);
+        let after = ls();
+        assert_eq!(
+            after.iter().filter(|f| f.starts_with("ck.")).count(),
+            1,
+            "a kill's own mark: {after:?}"
+        );
+        assert_eq!(
+            st(now_ms()),
+            Some(true),
+            "...a job ending now: stopped by it"
+        );
+        assert!(kill_cmd(&[
+            b"pkill".to_vec(),
+            b"-f".to_vec(),
+            b"app-id x".to_vec()
+        ]));
+        assert!(kill_cmd(&[
+            b"sh".to_vec(),
+            b"-c".to_vec(),
+            b"/usr/bin/killall foot; true".to_vec()
+        ]));
+        assert!(!kill_cmd(&[
+            b"foot".to_vec(),
+            b"--app-id".to_vec(),
+            b"skill".to_vec()
+        ]));
         // The record kept until the end is dealt with: job_live (the box's processes as BOX_PID SID
         // START, host pids from 901) lists a live job, keeps an ended one's record until job_note
         // has noted its end, then drops it.

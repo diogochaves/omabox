@@ -16914,7 +16914,7 @@ t_replace() {
   check "a job that exits 3 after 1 s: its status kept" until_ok 5 test -e "$D/run/omabox.$(basename "$out" .log).exit"
   err=$(ob windows -b "$B" 2>&1 >/dev/null)
   check_match "...the next command says it, with its pid, status, time and log" \
-    "omabox: warning: run -d job sh -c sleep 1; exit 3 \(pid [0-9]+\) exited with status 3 after 1\.[0-9]s, since the last command \(omabox log -b $B run\)" "$err"
+    "omabox: warning: run -d job sh -c sleep 1; exit 3 \(pid [0-9]+\) exited with status 3 after 1\.[0-9]s, since the last command \(log: omabox log -b $B run\)" "$err"
   check_eq "...once: not the command after" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
   ob run -b "$B" -d -q -- sh -c 'sleep 610'
   out=$(ob run -b "$B" -d -q --print-log --replace -- sh -c 'sleep 610')
@@ -16927,6 +16927,11 @@ t_replace() {
   ob run -b "$B" -- pkill -xf 'sleep 611'
   check "a job stopped by omabox run -- pkill: its status kept" until_ok 5 test -e "$D/run/omabox.$(basename "$out" .log).exit"
   check_eq "...not said by the next command" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
+  # (#329: one that traps SIGTERM and exits with a code of its own, as foot exits 230: not said either)
+  out=$(ob run -b "$B" -d -q --print-log -- sh -c 'trap "exit 230" TERM; while :; do sleep 0.1; done; : trap230')
+  ob run -b "$B" -- pkill -f 'trap230'
+  check "a job that exits 230 on SIGTERM, stopped by omabox run -- pkill: its status kept" until_ok 5 test -e "$D/run/omabox.$(basename "$out" .log).exit"
+  check_eq "...not said by the next command (#329)" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
   out=$(ob run -b "$B" -d -q --print-log -- sh -c 'sleep 3; kill -TERM $$')
   check "a job killed otherwise: its status kept" until_ok 8 test -e "$D/run/omabox.$(basename "$out" .log).exit"
   check_match "...said" "run -d job sh -c sleep 3; kill -TERM .* was killed by SIGTERM \(143\) after 3\." "$(ob windows -b "$B" 2>&1 >/dev/null)"
