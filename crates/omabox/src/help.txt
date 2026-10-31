@@ -11,6 +11,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio] [--polkit]                         its own PipeWire (a silent mic); a polkit agent can register (polkit ask)
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
+            [--dnd] [--no-dock]                          Do Not Disturb on, no toast up; Omarchy 4.5's dock off
             [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
@@ -88,6 +89,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox plugin [-b NAME] (add PATH|ID | remove ID)      a shell plugin into a box that is up (as up --plugin), or out
+  omabox dnd [-b NAME] [on|off] [--clear]                the box's Do Not Disturb; --clear: its toasts dismissed
+  omabox dock [-b NAME] [on|off | --json]                where Omarchy 4.5's dock takes input in the box; off, on
   omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
   omabox mode [-b NAME] [--json | WxH[@HZ][,scale=S]|host]   show or change a headless box's screen mode
   omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
@@ -142,7 +145,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
+@+ up run shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -333,7 +336,8 @@ a layer surface over that point (a notification toast, a panel) is said on stder
 (it goes to the layer where the layer takes input; only its rectangle is known), and --no-raise
 refuses (`wait layer NAMESPACE --gone` waits one out); one spanning the screen (Omarchy's
 notifications and dock, input on their items only) is said as one the input may go to, never
-refused; `windows` lists them under its table. A click, scroll or drag at the screen's X Y says
+refused; `windows` lists them under its table. The dock on a workspace that is not floating (or
+behind a fullscreen window) takes no input at all: it is not said, nor listed. A click, scroll or drag at the screen's X Y says
 a layer certainly over the window there the same way (never refused; a spanning one not).
 `keys --window` focuses it, then types.
 @ window
@@ -835,6 +839,19 @@ it, SUPER is the box's; focus goes elsewhere or the pointer leaves it (your bar,
 it is yours, and the pointer back over it gives it to the box again. SUPER + ALT + ESCAPE over the box
 gives the keys back until the box loses focus and gets it again. No argument prints on or off. While keys go to a box, its window's border takes the
 theme's red and the bar widget's icon is lit.
+@ up run dnd dock
+--dnd, `dnd on`: the box's Do Not Disturb, in its own Omarchy shell (never your desktop's): new
+notifications stay off its screen, so no toast lands over a window's corner between steps (Omarchy
+still shows a critical notify-send, a verification code and its own action toasts, such as a
+layout change's). --dnd also dismisses
+any toast up when the box is ready; `dnd --clear` does that at any time. Bare `dnd` prints on or off.
+A box `--from` a save keeps the save's (Omarchy 4.5 keeps it in its notifications state).
+--no-dock, `dock off`: Omarchy 4.5's dock disabled in the box's shell (its shell.json's
+disabledPlugins, as `omarchy plugin disable omarchy.dock` writes it), its layer gone. The dock shows
+only on a floating workspace; elsewhere its layer stays mapped, taking no input. Bare `dock` says,
+per monitor, whether it is shown (its icons take input), tucked away (auto-hide or a maximised
+window: only the strip along its edge, until the pointer reaches it) or hidden (none); --json the
+same as an object. Both refuse a box with no shell; dock one whose Omarchy has none (before 4.5).
 @ clip
 `clip` hands your clipboard's item (text, else an image by its type) to an interactive box, once;
 --from-box hands the box's back. With no -b: the interactive box whose window has focus, else the only

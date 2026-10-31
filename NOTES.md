@@ -11923,6 +11923,34 @@ from them.
     t_record_sheet_frames (no box: --changed -g and --every-frame -g equal to the box's; -b of a down
     box refused; the cache folder empty after; a jailed caller's fds), record_stop.rs
     host_sandbox_holds_only_usr_and_the_folder.
+611. **Do Not Disturb and the dock, in the box's own shell** (2026-10-31, #309; verified in boxes on
+    4.5.0rc2 and on the v4.0.6 tree). A project's walk on 4.5 kept its box quiet by hand (a toast over
+    a window's corner took clicks meant for the app), and `click --window` said the dock's layer
+    (1878x245 at 42,835 beside a vertical bar) might take input over a maximised window's status line
+    on a tiled workspace. The dock (`DockWindow.qml`) stays mapped everywhere but is `shown` only on a
+    floating workspace with no fullscreen window (`dock.isFloating(workspaceId) && fullscreenMode < 2`);
+    elsewhere its mask is empty and every click passes through, so that warning was noise. Floating is
+    not a Hyprland layout: Omarchy keeps it in `~/.local/state/omarchy/workspace-layouts/N.lua` (`mode =
+    "floating"`), else `default.lua`'s `default`, as `omarchy-hyprland-workspace-layout-current`
+    reads them. **Added**: `dnd [on|off] [--clear]` and `up --dnd` (the notifications' `setDnd`,
+    `isDnd`, `dismissAll`, the same on 4.0 and 4.5; --dnd also dismisses a toast the start left up,
+    once the shell answers); `dock [on|off|--json]` and `up --no-dock` (`shell setPluginEnabled
+    omarchy.dock`, so the box's shell.json gets `disabledPlugins`, and `dock off` waits for the layer
+    to go). Bare `dock` says per monitor shown (icons), tucked (auto-hide or a maximised window: the
+    edge strip) or hidden (none). `windows` and the --window input commands (omshell's
+    input_layers) drop the dock from the layers of a monitor whose active workspace is not floating,
+    read on the host from the box's HOME through box_home_file; a shown one is still said as a may,
+    now with `omabox dock` as its way out (the notifications' hint names `dnd --clear`). All of it
+    runs `omarchy-shell` inside the box (box_exec, the session's environment), never the host's.
+    Refused before the box starts: `--dnd`/`--no-dock` with `--no-shell`, `--no-dock` (and `dock`) on
+    an Omarchy without a dock (4.0), `--dnd` on one whose notifications have no `setDnd`. Under Do Not
+    Disturb, 4.5 still shows Omarchy's own action toasts (`omarchy-action`: a layout change's) and a
+    critical bare notify-send, and drops a plain notify-send's rather than keeping it in history
+    (`Delivery.js`). `up` of a box already up with --dnd/--no-dock names what differs, as for
+    --no-pointer. Tests: t_dnd_dock (both generations, OM), t_click_layer (the hidden dock not said),
+    t_unit_omarchy_contract (the IPC, the dock's `shown`, the mode files, setPluginEnabled), omshell's
+    hidden_dock_dropped_from_its_monitor_only.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

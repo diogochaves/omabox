@@ -39,6 +39,8 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"events",
     b"peek",
     b"restart-shell",
+    b"dnd",
+    b"dock",
     b"reload",
     b"mode",
     b"output",

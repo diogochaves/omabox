@@ -99,7 +99,8 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
 
 ## Where to look next
 
-- A failure: ref: Symptoms. Exit codes: `omabox help exit-codes`. Colours, fades: ref: Shots.
+- A failure: ref: Symptoms; `omabox help exit-codes`. Colours, transitions: ref: Shots. Toasts:
+  ref: Toasts and dock.
 - Baselines: ref: Visual checks. `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors,
   `gpu`/`cpu`: ref: Screen size and rendering cost.
 - Plugins: ref: Testing a shell plugin. `--hyprland`: ref: A Hyprland build of your own. `--omarchy`:
@@ -107,5 +108,5 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
 - Mounts, HOME, `save`: ref: Mounts, HOME and the session. Ports: ref: Network. Idling: ref: Box
   lifetime. Logs: ref: Hyprland's Lua, logs and events. `host`: ref: The guard, in detail.
 - What runs without a prompt: ref: Commands that run without a prompt. ai-jail: ref: Inside
-  ai-jail. Showing the user: ref: Showing the user. Reporting: ref: Reporting what a box showed. A
-  worktree-isolated subagent: ref: For subagents in an isolated worktree.
+  ai-jail. Showing the user: ref: Showing the user. Reporting: ref: Reporting what a box showed.
+  Worktree subagents: ref: For subagents in an isolated worktree.

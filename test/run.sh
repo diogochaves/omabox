@@ -2584,6 +2584,11 @@ omarchy_contract() {
   # What differs between Omarchy 4.0.x and 4.5 (#311): one list or the other, by what the tree has
   # (omarchy45: its bar splits the centre, as center_split tells it), never by its version.
   if omarchy45 "$o"; then omarchy_contract_45 "$o"; else omarchy_contract_40 "$o"; fi   # omarchy<4.5: the else
+  # Do Not Disturb (#309, finding 611: dnd, up --dnd), on 4.0 and 4.5 alike.
+  for e in "function setDnd(value: string): string" "function isDnd(): string" "function dismissAll(): string"; do
+    oc "the notifications' IPC: $e (omabox dnd)" "not in plugins/notifications/Service.qml" \
+      oc_has "$s/plugins/notifications/Service.qml" "$e"
+  done
   # --omarchy's xkb (finding 420).
   oc "Omarchy's keyboard option omarchy:shift_caps_compose is in its etc/xkb (up --omarchy lays a tree's over /etc/xkb)" \
     "default/hypr/input.lua names it but etc/xkb/symbols/omarchy is not there" \
@@ -2639,6 +2644,18 @@ omarchy_contract_45() {
     bash -c 'grep -qF "anchors { top: true; bottom: true; right: true }" "$1" && grep -qF "exclusionMode: ExclusionMode.Ignore" "$1" && grep -qF "mask: Region { item: surface.showingNotifications ? deck : null }" "$1" && grep -qF "/live.json" "$1"' _ "$s/plugins/notifications/Service.qml"
   oc "the dock (layer omarchy-dock) reserves no edge and takes input on its items (LAYER_SPAN_JQ)" "not so in plugins/dock/DockWindow.qml" \
     bash -c 'grep -qF "WlrLayershell.namespace: \"omarchy-dock\"" "$1" && grep -qF "exclusiveZone: 0" "$1" && grep -qF "mask: Region {" "$1"' _ "$s/plugins/dock/DockWindow.qml"
+  # The dock's input (#309, finding 611: omshell's input_layers, `dock`): shown only on a floating
+  # workspace with no fullscreen window, as Omarchy keeps the mode in workspace-layouts/N.lua (else
+  # default.lua's); `dock off|on` is the shell's setPluginEnabled.
+  oc "the dock shows only on a floating workspace with no fullscreen window, input on its icons only then (omabox's hidden dock)" \
+    "not so in plugins/dock/DockWindow.qml" \
+    bash -c 'grep -qF "readonly property bool shown: !!dock && dock.isFloating(workspaceId) && fullscreenMode < 2" "$1" && grep -qF "item: window.contentShown ? body : null" "$1"' _ "$s/plugins/dock/DockWindow.qml"
+  oc "a workspace's mode is mode = \"...\" in workspace-layouts/N.lua, else default.lua's default = \"...\" (omshell::ws_mode)" \
+    "not so in bin/omarchy-hyprland-workspace-layout-current" \
+    bash -c 'grep -qF "MODES_DIR=\"\${XDG_STATE_HOME:-\$HOME/.local/state}/omarchy/workspace-layouts\"" "$1" && grep -qF "s/.*mode = \"\([a-z]*\)\".*/\1/p" "$1" && grep -qF "\$MODES_DIR/default.lua" "$1" && grep -qF "s/.*default = \"\([a-z]*\)\".*/\1/p" "$2"' _ "$o/bin/omarchy-hyprland-workspace-layout-current" "$o/bin/omarchy-hyprland-workspace-layout-default"
+  oc "the dock is the service omarchy.dock, switched by the shell's setPluginEnabled (dock off|on, up --no-dock)" \
+    "not so in plugins/dock/manifest.json or bin/omarchy-plugin-disable" \
+    bash -c 'grep -qF "\"id\": \"omarchy.dock\"" "$1" && grep -qF "omarchy-shell shell setPluginEnabled \"\$id\" false" "$2"' _ "$s/plugins/dock/manifest.json" "$o/bin/omarchy-plugin-disable"
   # Only where the surface spans its screen (4.5.0-rc2 on): bar_strip leaves a strip-sized one (rc1's)
   # alone. 4.5.0's mask (none under a fullscreen window, else the strip) counts as the strip's.
   oc "the bar's surface (omarchy-bar), where it spans its screen: input on its strip (mask), exclusive zone its thickness (#407: bar_strip in LAYER_SPAN_JQ)" \
@@ -11914,7 +11931,7 @@ t_click_layer() {
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
   check_eq "--no-raise far from the toast: clicked, exit 0" 0 "$rc"
   check_match "...said: the input may go to the layer" \
-    "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at $fx,$fy may go to it if one of its items \(a toast, a dock icon\) is there; elsewhere it goes to the window \(omabox run -- omarchy-shell notifications dismissAll clears the toasts\)" "$out"
+    "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at $fx,$fy may go to it if one of its items \(a toast, a dock icon\) is there; elsewhere it goes to the window \(omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off\)" "$out"
   out=$(ob click -b "$B" 1700 600 2>&1); rc=$?
   check_eq "a click at the screen's 1700,600, under the spanning layer only: clicked, nothing said (#361)" "0 " "$rc $out"
   if omarchy45; then check "...the toast is still up" jq -e 'length == 1' "$live"
@@ -11975,9 +11992,9 @@ QML
     check_match "...said as a may" "a layer spanning the screen, \"omarchy-notifications\" .* may go to it" "$out"
     if ob wait -b "$B" --timeout 1s layer omarchy-dock >/dev/null 2>&1; then
       out=$(ob click -b "$B" --window 'title:^L$' --no-raise $((400 - ${at% *})) $((1000 - ${at#* })) 2>&1); rc=$?
-      check_eq "--no-raise over the idle dock: clicked, exit 0" 0 "$rc"
-      check_match "...said as a may" "a layer spanning the screen, \"omarchy-dock\" \(top 1920x[0-9]+ at 0,[0-9]+\), is up over window .* may go to it" "$out"
-    else skip "--no-raise over the idle dock" "no omarchy-dock layer in this box"; fi
+      # (the box's workspace is not floating: there the dock is hidden and takes no input, #309)
+      check_eq "--no-raise over the hidden dock: clicked, exit 0, nothing said (#309)" "0 " "$rc $out"
+    else skip "--no-raise over the hidden dock" "no omarchy-dock layer in this box"; fi
   else   # omarchy<4.5: the layer goes with its last toast
     check "...the click went to the toast, which closed" ob wait -b "$B" --timeout 3s layer omarchy-notifications --gone
   fi
@@ -12122,6 +12139,93 @@ t_wait_since() {
   touch "$o/nope.png"
   check_match "...a file that is no shot of the box" "wait --since: $o/nope\.png is not a shot of box '$B'" "$(ob wait -b "$B" change --since "$o/nope.png" 2>&1)"
   ob down "$B" >/dev/null 2>&1
+}
+
+# Do Not Disturb and the dock (#309, finding 611), in the box's own shell: `up --dnd` starts with it
+# on, `dnd` reads and sets it, `dnd --clear` dismisses the toasts up. Omarchy 4.5's dock is hidden on
+# a workspace that is not floating, taking no input: `dock` says so per monitor, and `windows` and a
+# --window click no longer name it there; on a floating one it is shown, said as a may, with its way
+# out; `dock off|on` and `up --no-dock` switch its service. 4.0 has the same Do Not Disturb, no dock:
+# `dock` and `--no-dock` refuse it.
+t_dnd_dock() {
+  local B=$P-dd D out rc w at live h
+  check_fails "up --no-shell --dnd: refused" ob up "$P-dd-x" --no-shell --dnd
+  up_ok "$B" --net isolated --stock-bar --dnd "${OM[@]}" || { no "up --dnd" "$UP_OUT"; return; }
+  D=$(ob path -b "$B")
+  live=$D/home/.local/state/omarchy/notifications/live.json
+  check_eq "up --dnd: dnd says on" on "$(ob dnd -b "$B" 2>&1)"
+  out=$(ob dnd -b "$B" maybe 2>&1); rc=$?
+  check_eq "dnd maybe: a usage error, exit 2" 2 "$rc"
+  check_match "...naming what it takes" "unknown argument maybe \(on, off" "$out"
+  ob run -b "$B" -- notify-send -t 120000 T309a "quiet"
+  if omarchy45; then
+    sleep 1; check "...a toast sent under Do Not Disturb stays off the screen (live.json)" jq -e 'length == 0' "$live"
+  else   # omarchy<4.5
+    check_fails "...a toast sent under Do Not Disturb stays off the screen" ob wait -b "$B" --timeout 1s layer omarchy-notifications
+  fi
+  out=$(ob dnd -b "$B" off 2>&1); rc=$?
+  check_match "dnd off: said, exit 0" "^0 omabox: box '$B': Do Not Disturb off" "$rc $out"
+  check_eq "...dnd says off" off "$(ob dnd -b "$B" 2>&1)"
+  ob run -b "$B" -- notify-send -t 120000 T309b "loud"
+  if omarchy45; then check "...a toast shows again (live.json)" until_ok 5 jq -e 'length == 1' "$live"
+  else check "...a toast shows again" ob wait -b "$B" layer omarchy-notifications; fi   # omarchy<4.5
+  out=$(ob dnd -b "$B" on --clear 2>&1); rc=$?
+  check_match "dnd on --clear: on, and the toast dismissed" "^0 .*Do Not Disturb on: .*(1 toast|its toasts) cleared$" "$rc $(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+  if omarchy45; then check "...live.json empty" until_ok 3 jq -e 'length == 0' "$live"
+  else check "...its layer gone" ob wait -b "$B" --timeout 3s layer omarchy-notifications --gone; fi   # omarchy<4.5
+  check_eq "...dnd says on" on "$(ob dnd -b "$B" 2>&1)"
+  if ! omarchy45; then   # omarchy<4.5: no dock
+    out=$(ob dock -b "$B" 2>&1); rc=$?
+    check_match "dock on 4.0: refused, exit 1" "^1 omabox: dock: box '$B' runs an Omarchy with no dock .*Omarchy 4.5 brought it" "$rc $out"
+    out=$(ob up "$P-dd-x" --net isolated --no-dock "${OM[@]}" 2>&1); rc=$?
+    check_match "up --no-dock on 4.0: refused before it starts" "^1 omabox: up: --no-dock: the Omarchy at .* has no dock" "$rc $out"
+    ob down "$B" >/dev/null
+    return
+  fi
+  ob run -b "$B" -d -q -- foot -T L sh -c 'cat > /dev/null'
+  ob wait -b "$B" window 'title:^L$' >/dev/null 2>&1
+  if ! ob wait -b "$B" --timeout 5s layer omarchy-dock >/dev/null 2>&1; then
+    no "the dock's layer" "no omarchy-dock layer in this box"; ob down "$B" >/dev/null; return
+  fi
+  out=$(ob dock -b "$B" 2>&1); rc=$?
+  check_match "dock on a tiled workspace: hidden, no input" "^0 [A-Z0-9-]+: hidden \([0-9]+x[0-9]+ at [0-9]+,[0-9]+\): workspace 1 is [a-z]+, not floating; the dock takes no input there$" "$rc $out"
+  check_eq "...--json: state hidden, input none" "hidden none" "$(ob dock -b "$B" --json | jq -r '.monitors[0] | "\(.state) \(.input)"')"
+  out=$(ob windows -b "$B")
+  check_fails "...windows does not name it over the window" grep -qF '"omarchy-dock"' <<<"$out"
+  w=$(ob windows -b "$B" --json | jq -c '.[] | select(.title == "L")')
+  at=$(jq -r '"\(.at[0]) \(.at[1])"' <<<"$w")
+  h=$(jq -r '.size[1]' <<<"$w")
+  out=$(ob click -b "$B" --window 'title:^L$' 300 $((h - 20)) 2>&1); rc=$?
+  check_eq "...a --window click by its bottom edge: nothing said of it" "0 " "$rc $out"
+  # Floating: the dock shows, its icons take input.
+  ob run -b "$B" -- omarchy-hyprland-workspace-layout-toggle back >/dev/null 2>&1
+  check "the workspace made floating: dock says shown" until_ok 5 bash -c '"$1" dock -b "$2" | grep -qE "^[A-Z0-9-]+: shown along the bottom \([0-9]+x[0-9]+ at [0-9]+,[0-9]+\) on workspace 1 \(floating\): input on its icons"' _ "$CLI" "$B"
+  check "...windows names it as possibly over the window" until_ok 5 bash -c '"$1" windows -b "$2" | grep -qE "^layer \"omarchy-dock\" .* spans the screen, possibly over"' _ "$CLI" "$B"
+  # A point of the floating window inside the dock's rectangle, if they meet.
+  w=$(ob windows -b "$B" --json | jq -c '.[] | select(.title == "L")')
+  out=$(ob dock -b "$B" --json | jq -r '.monitors[0].layer | "\(.at[1])"')
+  at=$(jq -r '"\(.at[0]) \(.at[1]) \(.size[1])"' <<<"$w")
+  read -r _ y0 h <<<"$at"
+  if [ $((y0 + h - 5)) -gt "$out" ]; then
+    out=$(ob click -b "$B" --window 'title:^L$' --no-raise 300 $((h - 5)) 2>&1); rc=$?
+    check_match "...a --no-raise click there: sent, said as a may, with dock's way out" \
+      "^0 omabox: a layer spanning the screen, \"omarchy-dock\" .* may go to it .*\(omabox dock says where it takes input; omabox dock off takes it away\)$" "$rc $out"
+  else skip "a click where the window meets the shown dock" "the floating window ends above the dock"; fi
+  out=$(ob dock -b "$B" off 2>&1); rc=$?
+  check_match "dock off: said, exit 0" "^0 omabox: box '$B': dock off: its service disabled" "$rc $out"
+  check "...its layer gone" ob wait -b "$B" --timeout 1s layer omarchy-dock --gone
+  check_eq "...dock says off" "off: its service is disabled in this box (omabox dock on brings it back)" "$(ob dock -b "$B" 2>&1)"
+  check "...in the box's shell.json, never the host's" jq -e '.disabledPlugins | index(["omarchy.dock"])' "$D/home/.config/omarchy/shell.json"
+  out=$(ob dock -b "$B" on 2>&1); rc=$?
+  check_match "dock on: said, exit 0" "^0 omabox: box '$B': dock on" "$rc $out"
+  check "...its layer back" ob wait -b "$B" --timeout 3s layer omarchy-dock
+  out=$(ob up "$B" --no-dock 2>&1); rc=$?
+  check_match "up --no-dock on it, already up with its dock: names what differs, exit 1" "^1 .*already up, without what you asked for: --no-dock \(its dock is on: omabox dock off\)" "$rc $out"
+  ob down "$B" >/dev/null
+  up_ok "$B" --net isolated --stock-bar --no-dock "${OM[@]}" || { no "up --no-dock" "$UP_OUT"; return; }
+  check_eq "up --no-dock: dock says off" "off: its service is disabled in this box (omabox dock on brings it back)" "$(ob dock -b "$B" 2>&1)"
+  check_fails "...no dock layer" ob wait -b "$B" --timeout 1s layer omarchy-dock
+  ob down "$B" >/dev/null
 }
 
 # A box whose Hyprland is alive but does not answer (stopped here; in use, a plugin under test's
@@ -19923,7 +20027,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

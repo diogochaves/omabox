@@ -81,6 +81,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `record status --json` | `recording, stopped, monitors, fps, file, audio, started` |
 | `mode --json` | `name, mode, scale` |
 | `window --json` | the window, as an element of `windows --json` |
+| `dock --json` | `enabled, position, autohide, monitors` (each `name, workspace, layout, fullscreen, layer` (`at, size`, or null), `state` (shown, tucked, hidden, off, none), `input` (icons, edge, none)) |
 | `monitor list --json` | an array: `name, mode, scale, x, y, workspace` (`dropped` for one `output drop` took) |
 | `gpu --json` | `box, seconds, source, render, percent, engines` and more |
 | `cpu --json` | `box, seconds, settle, cores, percent, processes, total` and more |
@@ -415,7 +416,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it; `omabox calibrate` measures the size for you (Shots). |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
 | `click --window` says "a layer surface "NS" … is over X,Y" (or `--no-raise` refuses it); a click at the screen's X Y, "… is over the screen's X,Y, on window …" | A panel or menu is over that point and takes the click where it takes input (only its rectangle is known). `omabox wait layer NS --gone`, then click again. |
-| `click --window` says "a layer spanning the screen, "NS" … is up … may go to it" | A layer covering the screen, or its whole height or width (Omarchy's notifications and, on 4.5, its dock), takes input only on its items: a click on a toast goes to the toast, elsewhere to the window. Not refused under `--no-raise`. Clicking where a toast is: `omabox run -- omarchy-shell notifications dismissAll` first (Omarchy 4.5 keeps the layer up with no toast, so `wait layer NS --gone` would not return). |
+| `click --window` says "a layer spanning the screen, "NS" … is up … may go to it" | A layer covering the screen, or its whole height or width (Omarchy's notifications and, on 4.5, its dock), takes input only on its items: a click on a toast goes to the toast, elsewhere to the window. Not refused under `--no-raise`. Clicking where a toast is: `omabox dnd --clear` first (Omarchy 4.5 keeps the layer up with no toast, so `wait layer NS --gone` would not return). The dock is said only where it is shown (a floating workspace): ref: Toasts and dock. |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
 | `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new` with those options (it starts the box), then `-b box-N` as it printed. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
@@ -1111,6 +1112,26 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   --is-ancestor FIX REVISION` in the Quickshell checkout).
 - Testing a shell plugin's accessibility tree: `omabox tree --layer NAMESPACE` (Shots, above), on
   the installed Quickshell from 0.3.2 or on a build.
+
+## Toasts and dock
+
+Both are the box's own shell's (never your desktop's), on Omarchy 4.0 and 4.5 alike for Do Not
+Disturb; the dock is 4.5's.
+
+- **Toasts in the way** (a notification over a window's corner takes the clicks meant for the app):
+  `omabox up --dnd` (or `run --dnd`) starts the box with Do Not Disturb on and no toast up; `omabox dnd
+  on|off` sets it later, bare `omabox dnd` prints on or off. Under it Omarchy still shows a critical
+  `notify-send`, a verification code and its own action toasts (a layout change's), so between steps
+  `omabox dnd --clear` dismisses whatever is up (as a click on each would). A notification you are
+  testing: leave it off, or `dnd off` for that step.
+- **The dock** (4.5): a strip along the bottom, shown only on a floating workspace with no fullscreen
+  window; elsewhere its layer stays mapped with no input at all, and `windows` and `click --window`
+  leave it out. `omabox dock` says per monitor whether it is shown (input on its icons), tucked away
+  (auto-hide on, or a maximised window: input only on the strip along its edge until the pointer
+  reaches it) or hidden; `--json` the same as an object. `omabox up --no-dock` (or `dock off`) disables
+  its service in the box's shell.json, its layer gone; `dock on` brings it back. An app's bottom bar
+  under a shown dock: `dock off`, or put the workspace back to tiling.
+- A box with no shell (`--no-shell`) refuses both; `dock` and `--no-dock` refuse an Omarchy before 4.5.
 
 ## The Omarchy shell's IPC (direct routes)
 

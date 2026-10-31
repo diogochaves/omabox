@@ -15,7 +15,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
             "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
-            "--autoreload --no-shell --no-pointer"
+            "--autoreload --no-shell --no-pointer --dnd --no-dock"
         )),
         b"path" => Some("-b= --box= --logs --run --home --json"),
         b"env" | b"brief" | b"reload" | b"restart-shell" => Some("-b= --box="),
@@ -31,7 +31,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
             "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
-            "--autoreload --no-shell --no-pointer"
+            "--autoreload --no-shell --no-pointer --dnd --no-dock"
         )),
         b"hyprctl" => Some("-b= --box="),
         b"lua" => Some("-b= --box= --json"),
@@ -53,6 +53,8 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= -w= --window= --active -t= -s= --pass= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"keys-to-box" => Some("-b= --box="),
+        b"dnd" => Some("-b= --box= --clear"),
+        b"dock" => Some("-b= --box= --json"),
         b"click" => Some(
             "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --image= --similar= --offset= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
@@ -87,7 +89,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         )),
         b"check" => Some(concat!(
             "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= --report-scale= --only= -w= --window= --active -g= --expect= --expect-tree= --expect-image= --expect-cmd ",
-            "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland --autoreload --no-shell --no-pointer"
+            "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland --autoreload --no-shell --no-pointer --dnd --no-dock"
         )),
         _ => None,
     }
@@ -99,7 +101,7 @@ pub const UP_BOX_OPTS: &str = concat!(
     "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
     "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
     "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
-    "--autoreload --no-shell --no-pointer"
+    "--autoreload --no-shell --no-pointer --dnd --no-dock"
 );
 
 /// The names cmd_opts has a table for, as bash's CMD_OPTS keys (no aliases: screenshot, logs, list).

@@ -460,6 +460,17 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         crate::plugins::plugin_check(ctx, &install::git_rev)?;
     }
     ready::client_render_check(ctx)?;
+    // --dnd, --no-dock (#309): asked of the box's own shell, now that it answers; --dnd dismisses
+    // any toast the start left up.
+    if crashed.is_none() {
+        if u.dnd {
+            crate::omshell::dnd_set(ctx, "up --dnd", true)?;
+            crate::omshell::toasts_clear(ctx, "up --dnd")?;
+        }
+        if u.nodock {
+            crate::cmd::dock::switch(ctx, false, false)?;
+        }
+    }
     // --audio (#226): its speaker the default output before up returns.
     if u.audio && !install::audio_ready(ctx) {
         return Err(ctx.die(cat!(

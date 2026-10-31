@@ -9,6 +9,8 @@ pub mod click;
 pub mod clip;
 pub mod config;
 pub mod cpu;
+pub mod dnd;
+pub mod dock;
 pub mod down;
 pub mod drag;
 pub mod env;

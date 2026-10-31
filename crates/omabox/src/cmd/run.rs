@@ -41,11 +41,13 @@ const UP_VALUED: [&str; 18] = [
     "--omarchy",
     "--keep",
 ];
-const UP_FLAGS: [&str; 10] = [
+const UP_FLAGS: [&str; 12] = [
     "--xwayland",
     "--autoreload",
     "--no-shell",
     "--no-pointer",
+    "--dnd",
+    "--no-dock",
     "--stock-bar",
     "--desk-shell",
     "--systemd",

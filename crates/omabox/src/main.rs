@@ -35,6 +35,7 @@ mod marks;
 mod mon;
 mod net;
 mod num;
+mod omshell;
 mod paths;
 mod pidfd;
 mod plugins;
@@ -160,6 +161,8 @@ fn main() -> ExitCode {
         Some("shot" | "screenshot") => Some(cmd::shot::run),
         Some("calibrate") => Some(cmd::calibrate::run),
         Some("keys-to-box") => Some(cmd::keys_to_box::run),
+        Some("dnd") => Some(cmd::dnd::run),
+        Some("dock") => Some(cmd::dock::run),
         Some("monitor") => Some(cmd::monitor::run),
         Some("plugin") => Some(cmd::plugin::run),
         Some("output") => Some(cmd::output::run),

@@ -52,6 +52,8 @@ const GIVEN: &[&str] = &[
     "autoreload",
     "no-shell",
     "no-pointer",
+    "dnd",
+    "no-dock",
     "seed",
     "no-seed",
     "monitor",
@@ -126,6 +128,9 @@ pub struct Up {
     pub autoreload: bool,
     pub shell: bool,
     pub nopointer: bool,
+    /// --dnd, --no-dock (#309): Do Not Disturb on, the dock off, in the box's shell once it is up.
+    pub dnd: bool,
+    pub nodock: bool,
     /// The options given, for up_already.
     pub given: Vec<&'static str>,
     /// The host paths --ro-bind, --seed, --overlay and --theme-dir name, as named: (verb, path, prep).
@@ -480,6 +485,8 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                     b"--autoreload" => u.autoreload = true,
                     b"--no-shell" => u.shell = false,
                     b"--no-pointer" => u.nopointer = true,
+                    b"--dnd" => u.dnd = true,
+                    b"--no-dock" => u.nodock = true,
                     b"-h" | b"--help" => {
                         crate::args::usage("up")?;
                         return Ok(true);
@@ -691,6 +698,31 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
         }
     }
     seeds_onto(ctx, u)?;
+    // --dnd, --no-dock (#309): asked of the box's shell once it is up, so refused before it starts
+    // when there is none to ask, or its Omarchy has none of it.
+    for (on, opt) in [(u.dnd, "--dnd"), (u.nodock, "--no-dock")] {
+        if on && !u.shell {
+            return Err(ctx.usage_die(cat!(
+                "up: ",
+                opt,
+                " asks the box's shell, and --no-shell starts none"
+            )));
+        }
+    }
+    if u.dnd && !crate::omshell::tree_has_dnd(&u.tree()) {
+        return Err(ctx.die(cat!(
+            "up: --dnd: the Omarchy at ",
+            u.tree(),
+            " has no Do Not Disturb to set (its notifications answer no setDnd)"
+        )));
+    }
+    if u.nodock && !crate::omshell::tree_has_dock(&u.tree()) {
+        return Err(ctx.die(cat!(
+            "up: --no-dock: the Omarchy at ",
+            u.tree(),
+            " has no dock (Omarchy 4.5 brought it)"
+        )));
+    }
     // --hyprland (finding 116): the build's folder, read-only at its own path, refused as --ro-bind's
     // are. Not one under /usr: the box has it.
     for (bin, bind, opt) in [
@@ -1474,8 +1506,15 @@ fn robind_line(raw: &[u8]) -> Option<Vec<u8>> {
 /// What `up` says of a box that is up already, which counts as use. The options given that the box
 /// does not have are refused (finding 134); only those given. Mounts, --env and --idle are not
 /// compared.
-pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
+pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
     crate::whose::mark_used(ctx);
+    // (#309: asked of its shell; a box with none, or a shell that does not answer, is not on)
+    let dnd_off = u.has("dnd")
+        && crate::omshell::ipc(ctx, &[b"notifications", b"isDnd"]).as_deref()
+            != Ok(b"on".as_slice());
+    let dock_on =
+        u.has("no-dock") && crate::omshell::dock_enabled(ctx) && meta(&ctx.d, "shell").0 == b"true";
+    let ctx: &Ctx = ctx;
     let d = &ctx.d;
     let m = |k: &str| meta(d, k).0;
     let or = |v: Vec<u8>, none: &str| {
@@ -1599,6 +1638,12 @@ pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
         if !hidden {
             diff.push(b"--no-pointer (its pointer shows: omabox pointer hide)".to_vec());
         }
+    }
+    if dnd_off {
+        diff.push(b"--dnd (its Do Not Disturb is off: omabox dnd on)".to_vec());
+    }
+    if dock_on {
+        diff.push(b"--no-dock (its dock is on: omabox dock off)".to_vec());
     }
     if u.has("no-shell") && jqr(".shell | tostring") != b"false" {
         diff.push(b"--no-shell (it has the shell)".to_vec());

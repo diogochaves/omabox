@@ -5,10 +5,8 @@ use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::{meta, need_box};
 use crate::cat;
 use crate::exit::{Ctx, Res, out};
-use crate::hypr::hypr_json;
 use crate::jq;
 use crate::select::select_box;
-use crate::shell::strip_nl;
 use crate::shellnote::shell_note;
 use crate::win::box_windows;
 
@@ -32,7 +30,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     select_box(ctx, &name)?;
     need_box(ctx)?;
     shell_note(ctx)?;
-    let lys = strip_nl(&hypr_json(ctx, &["layers"])?);
+    // (a dock hidden on its workspace taken out: it takes no input there, #309)
+    let lys = crate::omshell::input_layers(ctx)?;
     let wins = box_windows(ctx, Some(&lys))?;
     if json {
         let r = jq::jq(

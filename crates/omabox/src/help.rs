@@ -38,6 +38,8 @@ pub const COMMANDS: &[&str] = &[
     "events",
     "peek",
     "restart-shell",
+    "dnd",
+    "dock",
     "reload",
     "mode",
     "output",

@@ -318,7 +318,8 @@ pub enum Raise {
 /// over it: said as such, never refused (findings 398, 421).
 pub fn win_point(ctx: &Ctx, raise: Raise, x: &[u8], y: &[u8], sels: &[Vec<u8>]) -> Res<Vec<u8>> {
     // The layers read once: raising a window changes none of them.
-    let lys = strip_nl(&hypr_json(ctx, &["layers"])?);
+    // (a dock hidden on its workspace taken out: it takes no input there, #309)
+    let lys = crate::omshell::input_layers(ctx)?;
     let wins = box_windows(ctx, Some(&lys))?;
     let mut w = win_select(ctx, &wins, sels)?;
     let desc = win_desc(&w);
@@ -429,7 +430,10 @@ fn layer_words(
     };
     if how == b"possible" {
         let tail: &[u8] = if ns == b"omarchy-notifications" {
-            b" (omabox run -- omarchy-shell notifications dismissAll clears the toasts)"
+            b" (omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off)"
+        } else if ns == crate::omshell::DOCK_NS.as_bytes() {
+            // (shown: a hidden dock never gets here, #309)
+            b" (omabox dock says where it takes input; omabox dock off takes it away)"
         } else {
             b""
         };

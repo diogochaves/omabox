@@ -111,6 +111,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`record sheet VIDEO` needs no box**: with none named and none up, ffmpeg reads the video on the
   host in a sandbox of its own (no network, no display, only the video) and makes the same sheet
   ([#279](https://github.com/diogochaves/omabox/issues/279)).
+- **`omabox dnd [on|off] [--clear]` and `up --dnd`**: the box's Do Not Disturb, in its own Omarchy
+  shell, so no toast lands over a window between steps; `--clear` dismisses the toasts up. **`omabox
+  dock [on|off]` and `up --no-dock`**: whether Omarchy 4.5's dock takes input in the box, per
+  monitor, and its service off or on. `windows` and `click --window` no longer name the dock where
+  it is hidden (a workspace that is not floating), since it takes no input there
+  ([#309](https://github.com/diogochaves/omabox/issues/309)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications
