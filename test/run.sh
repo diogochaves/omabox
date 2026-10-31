@@ -7233,7 +7233,9 @@ t_host_paths() {
 # so wherever its end is said, with libwayland-client's line from its log: run -d's first moments,
 # run -d --wait, the next command's note, and a `wait window` that gave up. The fixture binds a
 # global that does not exist after DELAY s (libwayland-server refuses it: "global ... is unavailable",
-# "invalid global" in older ones), then exits 1.
+# "invalid global" in older ones), then exits 1. A GTK 4 and a Qt 6 app do the same through their
+# toolkit's display, or shut their connection down (any word: "lost"): those toolkits keep
+# libwayland's line off stderr and write their own, said as what it is.
 t_proto_error() {
   local B=$P-pe s=$TMP/pe out err rc
   if ! command -v cc >/dev/null || ! pkg-config --exists wayland-client 2>/dev/null; then
@@ -7285,6 +7287,86 @@ EOF
   err=$(ob run -b "$B" -d -- sh -c 'echo x@1: error 2 >&2; exit 2' 2>&1 >/dev/null)
   check_match "a job that fails otherwise: its end said" "the command exited with status 2 at once" "$err"
   check_fails "...no protocol error" grep -q "protocol error" <<<"$err"
+  # GTK's and Qt's own lines. The app's end is said by run -d's first moments or by the next
+  # command, whichever it falls in: both read.
+  pe_tk() {   # APP [lost]: what run -d and the command after it say of it
+    local log; log=$(ob run -b "$B" -d -q --print-log -- "$@" 2>"$TMP/pe-tk.err")
+    [[ $log == /* ]] && until_ok 15 test -e "$D/run/omabox.$(basename "$log" .log).exit" >/dev/null
+    cat "$TMP/pe-tk.err"; { ob windows -b "$B" >/dev/null; } 2>&1
+  }
+  if pkg-config --exists gtk4 gtk4-wayland 2>/dev/null; then
+    cat > "$s/gtk.c" <<'EOF'
+#include <sys/socket.h>
+#include <gtk/gtk.h>
+#include <gdk/wayland/gdkwayland.h>
+#include <wayland-client.h>
+static int lost;
+static gboolean bad(gpointer d) {
+    (void)d;
+    struct wl_display *w = gdk_wayland_display_get_wl_display(gdk_display_get_default());
+    if (lost) { shutdown(wl_display_get_fd(w), SHUT_RDWR); return G_SOURCE_REMOVE; }
+    wl_registry_bind(wl_display_get_registry(w), 4000000000u, &wl_compositor_interface, 1);
+    wl_display_flush(w);
+    return G_SOURCE_REMOVE;
+}
+int main(int argc, char **argv) {
+    (void)argv; lost = argc > 1;
+    gtk_init();
+    g_timeout_add(300, bad, NULL);
+    g_main_loop_run(g_main_loop_new(NULL, FALSE));
+    return 0;
+}
+EOF
+    # shellcheck disable=SC2046 # (pkg-config's words)
+    if cc -o "$s/gtk" "$s/gtk.c" $(pkg-config --cflags --libs gtk4 gtk4-wayland wayland-client); then
+      err=$(pe_tk "$s/gtk")
+      check_match "GTK 4: its own protocol-error line, said as one" \
+        "omabox: its Wayland connection was closed for a protocol error: Error 71 \(Protocol error\) dispatching to Wayland display\." "$err"
+      err=$(pe_tk "$s/gtk" lost)
+      check_match "...its connection shut down: lost" \
+        "omabox: its Wayland connection was lost: Lost connection to Wayland compositor\." "$err"
+      check_fails "...not a protocol error" grep -q "protocol error" <<<"$err"
+    else
+      no "the GTK fixture builds" "cc failed"
+    fi
+  else
+    skip "GTK's protocol-error line said" "no gtk4 headers"
+  fi
+  if command -v c++ >/dev/null && pkg-config --exists Qt6Gui 2>/dev/null; then
+    cat > "$s/qt.cpp" <<'EOF'
+#include <sys/socket.h>
+#include <QGuiApplication>
+#include <QTimer>
+#include <wayland-client.h>
+int main(int argc, char **argv) {
+    bool lost = argc > 1;
+    QGuiApplication app(argc, argv);
+    auto *n = app.nativeInterface<QNativeInterface::QWaylandApplication>();
+    if (!n) return 5;
+    QTimer::singleShot(300, [n, lost] {
+        struct wl_display *w = n->display();
+        if (lost) { shutdown(wl_display_get_fd(w), SHUT_RDWR); return; }
+        wl_registry_bind(wl_display_get_registry(w), 4000000000u, &wl_compositor_interface, 1);
+        wl_display_flush(w);
+    });
+    return app.exec();
+}
+EOF
+    # shellcheck disable=SC2046 # (pkg-config's words)
+    if c++ -std=c++17 -fPIC -o "$s/qt" "$s/qt.cpp" $(pkg-config --cflags --libs Qt6Gui wayland-client); then
+      err=$(pe_tk env QT_QPA_PLATFORM=wayland LANG=C.UTF-8 "$s/qt")
+      check_match "Qt 6: its own fatal-error line, Protocol error: said as a protocol error" \
+        "omabox: its Wayland connection was closed for a protocol error: The Wayland connection experienced a fatal error: Protocol error" "$err"
+      err=$(pe_tk env QT_QPA_PLATFORM=wayland LANG=C.UTF-8 "$s/qt" lost)
+      check_match "...its connection shut down: lost" \
+        "omabox: its Wayland connection was lost: The Wayland connection broke\. Did the Wayland compositor die\?" "$err"
+      check_fails "...not a protocol error" grep -q "protocol error" <<<"$err"
+    else
+      no "the Qt fixture builds" "c++ failed"
+    fi
+  else
+    skip "Qt's protocol-error line said" "no Qt 6 headers"
+  fi
   rm -rf "$s"
   ob down "$B" >/dev/null 2>&1
 }

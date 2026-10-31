@@ -199,17 +199,68 @@ pub fn proto_line(text: &[u8]) -> Option<Vec<u8>> {
     let re = Re::new(r"([A-Za-z_][A-Za-z0-9_]*[@#][0-9]+|\[destroyed object\]): error -?[0-9]+: ")?;
     text.split(|&c| c == b'\n').rev().find_map(|l| {
         let (a, _) = re.captures(l, false)?.first().copied()??;
-        let l: Vec<u8> = l[a..]
-            .iter()
-            .map(|&c| if c < 0x20 || c == 0x7f { b' ' } else { c })
-            .collect();
-        Some(shell::cut_line(l.trim_ascii_end(), 300).to_vec())
+        Some(tidy(&l[a..]))
     })
 }
 
-/// The protocol error the log LOG (a name in the box HOME, run-NS.log) ends with, as proto_line
-/// finds it in its last 64 KiB. The box writes its HOME: read only as a regular file inside it, not
-/// through a link, never waiting on a FIFO (S7).
+/// A line as said: its control characters spaces, cut to 300 characters.
+fn tidy(l: &[u8]) -> Vec<u8> {
+    let l: Vec<u8> = l
+        .iter()
+        .map(|&c| if c < 0x20 || c == 0x7f { b' ' } else { c })
+        .collect();
+    shell::cut_line(l.trim_ascii_end(), 300).to_vec()
+}
+
+/// How a log says its app's Wayland connection ended, as said after the job's end: libwayland's
+/// protocol error (proto_line) first, which names the object; else the last line a toolkit
+/// writes in its own words (a GTK or Qt app routes libwayland's lines to its own log, so they never
+/// reach stderr: seen here). A protocol error only where the line says so; a lost connection and
+/// another failure as what they are.
+pub fn wl_end(text: &[u8]) -> Option<Vec<u8>> {
+    if let Some(l) = proto_line(text) {
+        return Some(cat!(PROTO_SAID, l));
+    }
+    toolkit_end(text)
+}
+
+const PROTO_SAID: &str = "its Wayland connection was closed for a protocol error: ";
+
+/// wl_end's toolkit lines, the last in TEXT, from where it starts in its line. GTK (3 and 4):
+/// "Error ERRNO (STRERROR) dispatching to Wayland display." (71 is EPROTO, in every locale) and
+/// "Lost connection to Wayland compositor."; Qt 6: "The Wayland connection experienced a fatal
+/// error[ during blocking read event]: STRERROR" (a protocol error only as "Protocol error":
+/// strerror's words follow the app's locale) and "The Wayland connection broke. Did the Wayland
+/// compositor die?".
+fn toolkit_end(text: &[u8]) -> Option<Vec<u8>> {
+    let gtk = Re::new(r"Error (-?[0-9]+) \([^)]*\) dispatching to Wayland display")?;
+    let qt = Re::new(r"The Wayland connection experienced a fatal error[^:]*: (.*)$")?;
+    let lost = Re::new(r"Lost connection to Wayland compositor|The Wayland connection broke")?;
+    let failed = "its Wayland connection failed: ";
+    text.split(|&c| c == b'\n').rev().find_map(|l| {
+        let at = |m: Vec<Option<(usize, usize)>>| m.first().copied().flatten().map(|(a, _)| a);
+        if let Some(m) = gtk.captures(l, false) {
+            let proto = gtk.group(l, 1).as_deref() == Some(b"71");
+            let words = if proto { PROTO_SAID } else { failed };
+            return Some(cat!(words, tidy(&l[at(m)?..])));
+        }
+        if let Some(m) = qt.captures(l, false) {
+            let why = qt.group(l, 1).unwrap_or_default();
+            let proto = why.trim_ascii() == b"Protocol error";
+            let words = if proto { PROTO_SAID } else { failed };
+            return Some(cat!(words, tidy(&l[at(m)?..])));
+        }
+        let m = lost.captures(l, false)?;
+        Some(cat!(
+            "its Wayland connection was lost: ",
+            tidy(&l[at(m)?..])
+        ))
+    })
+}
+
+/// How the log LOG (a name in the box HOME, run-NS.log) says its Wayland connection ended, as
+/// wl_end finds it in its last 64 KiB. The box writes its HOME: read only as a regular file inside
+/// it, not through a link, never waiting on a FIFO (S7).
 pub fn proto_error(ctx: &Ctx, log: &[u8]) -> Option<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     use std::os::unix::fs::OpenOptionsExt;
@@ -227,16 +278,13 @@ pub fn proto_error(ctx: &Ctx, log: &[u8]) -> Option<Vec<u8>> {
         .ok()?;
     let mut v = Vec::new();
     f.take(65536).read_to_end(&mut v).ok()?;
-    proto_line(&v)
+    wl_end(&v)
 }
 
 /// proto_error said, when LOG holds one.
 fn say_proto_error(ctx: &Ctx, log: &[u8]) {
-    if let Some(l) = proto_error(ctx, log) {
-        say(cat!(
-            "its Wayland connection was closed for a protocol error: ",
-            l
-        ));
+    if let Some(m) = proto_error(ctx, log) {
+        say(m);
     }
 }
 
@@ -1970,6 +2018,84 @@ mod tests {
             Some(300),
             "cut to 300 characters"
         );
+    }
+
+    // wl_end: libwayland's line first; else GTK's and Qt's own, a protocol error only where the line
+    // says so (as GTK 4.24 and Qt 6.12 wrote them in a box: a bad bind, a connection shut down, Qt
+    // in pt_BR).
+    #[test]
+    fn wl_end_words() {
+        let w = |t: &str| wl_end(t.as_bytes()).map(|v| String::from_utf8_lossy(&v).into_owned());
+        let p = "its Wayland connection was closed for a protocol error: ";
+        assert_eq!(
+            w(
+                "Gdk-Message: 02:57:17.648: Error 71 (Protocol error) dispatching to Wayland display.\n"
+            ),
+            Some(format!(
+                "{p}Error 71 (Protocol error) dispatching to Wayland display."
+            )),
+            "GTK, EPROTO: a protocol error, its prefix left out"
+        );
+        assert_eq!(
+            w("Gdk-Message: 1.0: Error 71 (Erro de protocolo) dispatching to Wayland display.\n"),
+            Some(format!(
+                "{p}Error 71 (Erro de protocolo) dispatching to Wayland display."
+            )),
+            "...by its number, whatever the locale"
+        );
+        assert_eq!(
+            w("Gdk-Message: 1.0: Error 104 (Connection reset by peer) dispatching to Wayland display.\n"),
+            Some("its Wayland connection failed: Error 104 (Connection reset by peer) dispatching to Wayland display.".into()),
+            "GTK, another errno: failed, not a protocol error"
+        );
+        assert_eq!(
+            w("Gdk-Message: 02:57:37.874: Lost connection to Wayland compositor.\n"),
+            Some("its Wayland connection was lost: Lost connection to Wayland compositor.".into()),
+            "GTK, the connection gone: lost"
+        );
+        assert_eq!(
+            w("The Wayland connection experienced a fatal error: Protocol error\n"),
+            Some(format!(
+                "{p}The Wayland connection experienced a fatal error: Protocol error"
+            )),
+            "Qt, EPROTO: a protocol error"
+        );
+        assert_eq!(
+            w(
+                "The Wayland connection experienced a fatal error during blocking read event: Protocol error\n"
+            ),
+            Some(format!(
+                "{p}The Wayland connection experienced a fatal error during blocking read event: Protocol error"
+            )),
+            "...in its blocking read too"
+        );
+        assert_eq!(
+            w("The Wayland connection experienced a fatal error: Erro de protocolo\n"),
+            Some("its Wayland connection failed: The Wayland connection experienced a fatal error: Erro de protocolo".into()),
+            "Qt in another locale, or another errno: failed, not said to be a protocol error"
+        );
+        assert_eq!(
+            w("The Wayland connection broke. Did the Wayland compositor die?\n"),
+            Some("its Wayland connection was lost: The Wayland connection broke. Did the Wayland compositor die?".into()),
+            "Qt, the connection gone: lost"
+        );
+        assert_eq!(
+            w(
+                "xdg_surface#12: error 3: x\nThe Wayland connection experienced a fatal error: Protocol error\n"
+            ),
+            Some(format!("{p}xdg_surface#12: error 3: x")),
+            "libwayland's line first: it names the object"
+        );
+        assert_eq!(
+            w(
+                "Lost connection to Wayland compositor.\nError 71 (Protocol error) dispatching to Wayland display.\n"
+            ),
+            Some(format!(
+                "{p}Error 71 (Protocol error) dispatching to Wayland display."
+            )),
+            "of the toolkit's, the last"
+        );
+        assert_eq!(w("segfault\nexit 1\n"), None, "none: nothing");
     }
 
     // job_note and a log that holds that line: said after the job's warning; a log that is a link

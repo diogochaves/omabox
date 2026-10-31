@@ -11218,14 +11218,22 @@ from them.
     A `wait window`/`wait layer` that gives up (124) runs job_note too, so a job that died during
     the wait is said by the wait, not by the command after it. Hyprland's own words for the bind of
     a global that is not there are "global wl_compositor (N) is unavailable" (older
-    libwayland-server: "invalid global"). Not matched: GTK's own "Error 71 (Protocol error)
-    dispatching to Wayland display" (GTK installs its own wl_log handler, so a GTK app may show only
-    that one) and Qt's "The Wayland connection experienced a fatal error: …"; neither names the
-    object, and neither was tried here. Tests: t_unit_proto_error (jobs.rs proto_line_found,
-    job_note_says_proto_error: the line, a prefix, the last of two, a link not read), t_proto_error
-    (a fixture client built by the test binds a global that does not exist: run -d, --wait, the next
-    command's note and `wait window` say it; a plain failure does not; on the old code 5 checks
-    failed).
+    libwayland-server: "invalid global"). GTK 4.24 and Qt 6.12 keep libwayland's line off stderr
+    (each sets its own wl_log handler; seen in a box): a GTK app writes only "Gdk-Message: TIME:
+    Error 71 (Protocol error) dispatching to Wayland display.", a Qt app only "The Wayland
+    connection experienced a fatal error: Protocol error". So with no libwayland line, the last
+    toolkit line is said, as what it is: a protocol error only where it says so (GTK's errno 71,
+    EPROTO, in any locale; Qt's strerror text "Protocol error", which follows the app's locale, so a
+    Qt app in pt_BR writes "Erro de protocolo" and is said as "its Wayland connection failed: …", as
+    is any other errno); a connection shut down (GTK "Lost connection to Wayland compositor.", Qt
+    "The Wayland connection broke. Did the Wayland compositor die?") as "its Wayland connection was
+    lost: …". libwayland's line wins over a toolkit's (it names the object). Tests:
+    t_unit_proto_error (jobs.rs proto_line_found, wl_end_words, job_note_says_proto_error: the line,
+    a prefix, the last of two, each toolkit line as GTK and Qt wrote it, a link not read),
+    t_proto_error (a fixture client built by the test binds a global that does not exist: run -d,
+    --wait, the next command's note and `wait window` say it; a plain failure does not; a GTK 4 and
+    a Qt 6 fixture make the same bad bind through their toolkit, or shut their connection down: each
+    said as a protocol error or as lost; on the old code 5, then 4 checks failed).
 590. **`wait layer` did not say which monitor a layer was on** (2026-10-31, #316). Its probe found
     the first drawn layer of the namespace anywhere in `hyprctl -j layers` (`..|objects`), so the
     monitor (the object's key above `levels`) was lost: `at 0,0 1920x1080` for a full-screen panel
