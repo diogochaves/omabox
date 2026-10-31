@@ -575,7 +575,7 @@ pub fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
     let first = ract.first().cloned().unwrap_or_default();
     match first.as_slice() {
         b"keys" | b"click" | b"scroll" | b"drag" | b"pointer" | b"run" | b"hyprctl" | b"lua"
-        | b"output" | b"monitor" | b"mode" | b"restart-shell" | b"wait" => {}
+        | b"output" | b"monitor" | b"mode" | b"window" | b"restart-shell" | b"wait" => {}
         _ => {
             let got = if first.is_empty() {
                 b"nothing".to_vec()
@@ -583,7 +583,7 @@ pub fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
                 first
             };
             return Err(ctx.die(cat!(
-                "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell, wait), got ",
+                "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, restart-shell, wait), got ",
                 got
             )));
         }

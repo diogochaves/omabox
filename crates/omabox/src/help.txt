@@ -36,6 +36,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
+  omabox window [-b NAME] [--window SEL] (--size WxH | --float | --tile) [--json]   one window floated at that size, or tiled
   omabox jobs [-b NAME] [--json]                         the box's run -d jobs: pid, age, processes, log, command
   omabox stop [-b NAME] (JOB... | --all)                 stop run -d jobs (JOB: a pid jobs lists), their windows gone
   omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
@@ -120,12 +121,12 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief
+@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
 -o (or --output) names what the command writes.
-@short shot pixel tree check keys click scroll pointer drag wait
+@short shot pixel tree check keys click scroll pointer drag wait window
 --window SEL (or -w SEL): a window: active (or --active), 0x... (its address), pid:N, class:RE, title:RE, a word
 @short keys click scroll drag run
 --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--strict] [--json]
@@ -278,7 +279,7 @@ private API, so the build must be one against the installed Qt: `up` refuses a b
 another Qt, or one needing a library the box lacks, naming both. `ls` and `windows` name it;
 `ls --json` has quickshell_version (`quickshell --version` in the box, every box's), which is the
 last release's number, never proof that a fix is in: a build of an unreleased commit says it too.
-@ shot windows keys click drag pointer scroll wait pixel tree check
+@ shot windows window keys click drag pointer scroll wait pixel tree check
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
 org.gnome.Nautilus, or part of its title; failing those, a hyphen-separated part of the class,
@@ -294,6 +295,17 @@ notifications and dock, input on their items only) is said as one the input may 
 refused; `windows` lists them under its table. A click, scroll or drag at the screen's X Y says
 a layer certainly over the window there the same way (never refused; a spanning one not).
 `keys --window` focuses it, then types.
+@ window
+`window` changes one window of the box (--window SEL; none: the active one) in the box's own
+Hyprland, where `mode` sizes the whole screen: a narrow layout, a sheet that wraps. --size WxH
+floats it (a tiled window takes no size of its own), makes it that size in layout pixels, as
+`windows` gives sizes, and centres it on its monitor's free area; again to try another width.
+--float floats it where Hyprland puts it (the size it last floated at); --tile tiles it again.
+It prints the window as it is then, `0x... CLASS "TITLE" floating at X,Y WxH` (--json: the
+object `windows --json` lists). A size the window did not take is exit 1, saying the size it
+took: an app's smallest or largest size bounds it (9x20 for a terminal asked 5x5). A fullscreen
+window is refused (exit 1, nothing changed). The app redraws at its new size a moment later: `wait
+still` before a shot of it.
 @ keys
 `keys --window` focuses the window (the active one again), then types; while a layer holds the
 keyboard against any window (Omarchy's launcher, a menu) it refuses, exit 1, before sending or

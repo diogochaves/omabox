@@ -137,6 +137,7 @@ fn main() -> ExitCode {
         Some("events") => Some(cmd::events::run),
         Some("wait") => Some(cmd::wait::run),
         Some("windows") => Some(cmd::windows::run),
+        Some("window") => Some(cmd::window::run),
         Some("jobs") => Some(cmd::jobs::run),
         Some("stop") => Some(cmd::jobs::stop),
         Some("tree") => Some(cmd::tree::run),

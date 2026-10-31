@@ -47,4 +47,5 @@ pub mod up_box;
 pub mod version;
 pub mod wait;
 pub mod which;
+pub mod window;
 pub mod windows;

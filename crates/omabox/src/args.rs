@@ -43,6 +43,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         ),
         b"windows" | b"jobs" => Some("-b= --box= --json"),
         b"stop" => Some("-b= --box= --all"),
+        b"window" => Some("-b= --box= -w= --window= --active --size= --float --tile --json"),
         b"tree" => Some("-b= --box= -w= --window= --active -l= --layer= --find= --json --all"),
         b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),
         b"keys" => Some(

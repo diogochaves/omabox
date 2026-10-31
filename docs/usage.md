@@ -60,7 +60,7 @@ omabox brief -b box-3                  # ~15 lines for a subagent's prompt: the 
   has one, `omabox down` included. `-b NAME` or `OMABOX=NAME` picks a box; `OMABOX_SESSION=` (empty) turns
   the per-session names off. Two repos with the same directory name need `-b`.
 - **Screen**: `--size 3440x1440`, `3440x1440@144`, or `host` for your focused monitor;
-  `omabox mode` changes it live.
+  `omabox mode` changes it live; `omabox window --size 760x600` floats one window at that size.
 - **Idle**: a headless box goes down after 2 hours with no `omabox` command, peek or `omabox run`
   against it (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`). A `run -d` job does not count.
   A box at `--idle 0` that goes with no agent stays up until `omabox down`: once what started it (a

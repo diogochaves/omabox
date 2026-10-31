@@ -447,10 +447,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 | b"output"
                 | b"monitor"
                 | b"mode"
+                | b"window"
                 | b"restart-shell"
         ) {
             return Err(ctx.die(cat!(
-                "shot --after: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell), got ",
+                "shot --after: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, restart-shell), got ",
                 first
             )));
         }

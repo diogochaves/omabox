@@ -16,6 +16,7 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"pixel",
     b"calibrate",
     b"windows",
+    b"window",
     b"jobs",
     b"stop",
     b"tree",

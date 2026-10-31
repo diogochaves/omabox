@@ -18,6 +18,7 @@ pub const COMMANDS: &[&str] = &[
     "pixel",
     "calibrate",
     "windows",
+    "window",
     "jobs",
     "stop",
     "tree",

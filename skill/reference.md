@@ -78,6 +78,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `check diff --json` | `result, size, regions, specks, marked, report` |
 | `record status --json` | `recording, stopped, monitors, fps, file, audio, started` |
 | `mode --json` | `name, mode, scale` |
+| `window --json` | the window, as an element of `windows --json` |
 | `monitor list --json` | an array: `name, mode, scale, x, y, workspace` (`dropped` for one `output drop` took) |
 | `gpu --json` | `box, seconds, source, render, percent, engines` and more |
 | `cpu --json` | `box, seconds, settle, cores, percent, processes, total` and more |
@@ -418,6 +419,14 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   and apps at their usual size in twice the pixels, so `shot` is 3840x2160 and stays sharp when
   zoomed or cropped. Coordinates are still the layout's (1920x1080); `click --in SHOT` maps a shot's.
   Scale 1 to 4 (`7680x4320,scale=4` for 8K), headless boxes only; `mode WxH` without one is scale 1.
+- **One window at a width** (a narrow layout, a sheet that wraps, a breakpoint): `omabox window
+  --window SEL --size 760x600`, then `--size 540x600` for the next, not `mode` (the whole screen).
+  It floats the window, sizes it in layout pixels (as `windows` gives sizes) and centres it on its
+  monitor's free area, in the box's own Hyprland; it prints `0x... CLASS "TITLE" floating at X,Y
+  WxH`. A size the app does not take (its smallest or largest) is exit 1, naming the size it took:
+  check at that one or say so. `--tile` puts it back in the layout, `--float` floats it as it is;
+  a fullscreen window is refused. `wait still` before a shot, while the app redraws. Not
+  `hyprctl dispatch togglefloating`: under the Lua config it prints a note and does nothing.
 - **More monitors** (a bar on each, windows between them, portrait, ultrawide, mixed scale, an
   unplug): `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below` (SPEC
   `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last made by default, moving with it), or

@@ -45,6 +45,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and `windows --json`'s `layers` have `monitor`
   ([#316](https://github.com/diogochaves/omabox/issues/316)).
 
+- **`omabox window --size WxH`** floats one window of the box at that size, centred, where `mode`
+  resizes the whole screen: an app checked at a narrow width, again at another. `--window SEL` takes
+  the same selectors as `click --window` (none: the active window); it prints the window as it is
+  then, and a size the app did not take (its smallest or largest) is exit 1, saying the size it
+  took. `--float` floats a window as it is, `--tile` tiles it again, `--json` gives the window as
+  `windows --json` does ([#362](https://github.com/diogochaves/omabox/issues/362)).
+
 ### Fixed
 
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and

@@ -15772,6 +15772,52 @@ t_window() {
   ob down "$B" >/dev/null
 }
 
+# window (#362, finding 591): one window floated and sized by the box's own Hyprland (the run's
+# watcher fails any of it reaching the host's, S8), centred, what it took said; tiled again.
+t_window_size() {
+  local B=$P-wsz out err rc
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  ob run -b "$B" -d -- foot -T A sleep 600 >/dev/null
+  ob run -b "$B" -d -- foot -T B sleep 600 >/dev/null
+  until_ok 10 bash -c "'$CLI' windows -b '$B' --json | jq -e 'length == 2'"
+  ob wait -b "$B" still >/dev/null
+  win() { ob windows -b "$B" --json | jq -c '.[] | select(.title == "A")'; }
+  check_eq "two foot windows, A tiled" false "$(win | jq .floating)"
+  check_eq "window with nothing to do: exit 2" 2 "$(ob window -b "$B" -w 'title:^A$' >/dev/null 2>&1; echo $?)"
+  check_match "...saying what it takes" "--size WxH, --float or --tile" "$(ob window -b "$B" -w 'title:^A$' 2>&1)"
+  check_match "--size not WxH: exit 2" "rc=2 .*--size is WxH .*got 760" "$(out=$(ob window -b "$B" --size 760 2>&1); echo "rc=$? $out")"
+  check_match "--size and --tile: exit 2" "rc=2 .*not both" "$(out=$(ob window -b "$B" --size 760x500 --tile 2>&1); echo "rc=$? $out")"
+  check_eq "a selector matching both: exit 2" 2 "$(ob window -b "$B" -w foot --size 760x500 >/dev/null 2>&1; echo $?)"
+  out=$(ob window -b "$B" -w 'title:^A$' --size 760x540 2>"$TMP/wsz-err"); rc=$?
+  check_eq "--size 760x540: exit 0, nothing on stderr" "0 " "$rc $(cat "$TMP/wsz-err")"
+  check_match "...prints the window, floating, at its size" "^0x[0-9a-f]+ foot \"A\" floating at [0-9]+,[0-9]+ 760x540$" "$out"
+  check_eq "...the box has it so" "true [760,540]" "$(win | jq -r '"\(.floating) \(.size | tojson)"')"
+  # Centred on the free area: B tiles alone across it, so the centres meet (to a pixel of rounding).
+  local cb ca
+  cb=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "B") | "\(.at[0] + .size[0] / 2) \(.at[1] + .size[1] / 2)"')
+  ca=$(win | jq -r '"\(.at[0] + .size[0] / 2) \(.at[1] + .size[1] / 2)"')
+  check "...centred where the tiled window is ($ca; $cb)" awk -v a="$ca" -v b="$cb" 'BEGIN { split(a, p, " "); split(b, q, " "); d = p[1] - q[1]; e = p[2] - q[2]; exit !(d * d <= 4 && e * e <= 4) }'
+  out=$(ob -b "$B" window -w 'title:^A$' --size 540x400 --json); rc=$?
+  check_eq "again at 540x400, -b before it, --json: windows --json's object" "0 540 400 true" "$rc $(jq -r '"\(.w) \(.h) \(.floating)"' <<<"$out")"
+  ob shot -b "$B" -w 'title:^A$' -o "$TMP/wsz.png" >/dev/null 2>&1
+  check_match "...a shot of it is that size" "540 x 400," "$(file "$TMP/wsz.png")"
+  err=$(ob window -b "$B" -w 'title:^A$' --size 5x5 2>&1 >/dev/null); rc=$?
+  check_eq "a size below the app's smallest: exit 1" 1 "$rc"
+  check_match "...saying the size it took" "asked for 5x5, the window took [0-9]+x[0-9]+: its app's smallest" "$err"
+  out=$(ob window -b "$B" -w 'title:^A$' --tile); rc=$?
+  check_match "--tile: tiled again" "^0 0x[0-9a-f]+ foot \"A\" tiled at " "$rc $out"
+  check_eq "...the box has it so" false "$(win | jq .floating)"
+  out=$(ob window -b "$B" -w 'title:^A$' --float); rc=$?
+  check_match "--float: floated, at the size it last floated at" "^0 .* floating at [0-9]+,[0-9]+ [0-9]+x[0-9]+$" "$rc $out"
+  ob window -b "$B" -w 'title:^A$' --tile >/dev/null 2>&1
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.fullscreen({ mode = 'fullscreen', window = 'address:$(win | jq -r .address)' })" >/dev/null
+  until_ok 5 bash -c "'$CLI' windows -b '$B' --json | jq -e '.[] | select(.title == \"A\") | .fullscreen'"
+  err=$(ob window -b "$B" -w 'title:^A$' --size 600x400 2>&1); rc=$?
+  check_match "a fullscreen window: refused, exit 1" "^1 omabox: window: .* is fullscreen" "$rc $err"
+  check_eq "...and left as it was (not floated)" false "$(win | jq .floating)"
+  ob down "$B" >/dev/null
+}
+
 # pixel and shot --zoom (#133, finding 209): what is refused before any box is asked (--zoom's size:
 # t_window, on the region once clipped).
 # Multi-monitor edges (#161) that need no box.
@@ -18060,7 +18106,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

@@ -11158,6 +11158,29 @@ from them.
     too, and `--json`'s have `monitor`. Tests: t_unit_wait (wait.rs layer_answers; the refusals),
     t_unit_window_select (the windows line, `monitor`), t_monitors (three bars named; `--monitor`,
     `--json`; one it does not have; `--gone` after `monitor remove`, back after `monitor add`).
+591. **One window at a width took three hand-made dispatches** (2026-10-31, #362). Checking an app
+    at a given window width (a narrow layout, a sheet that wraps) meant `windows --json` for the
+    address, then `hyprctl dispatch 'hl.dsp.window.float(...)'` and `hl.dsp.window.resize(...)`;
+    the old `dispatch togglefloating class:APP` prints only Hyprland 0.56's "dispatch in lua is a
+    shorthand" note and does nothing, and `mode` resizes the whole screen. `omabox window [--window
+    SEL] (--size WxH | --float | --tile) [--json]` does it in the box's Hyprland (on_box's
+    `hyprctl eval`, never the host's): one Lua chunk floats the window, resizes it and centres it
+    (`hl.dsp.window.center`, on its monitor's free area: the bar's reserved edge left out), each
+    dispatch's `{ok = false, error}` raised as the chunk's error. What was measured in a box: a resize
+    keeps a floating window's centre, so without the centring a window floated at 9x20 and sized up
+    lands wherever its centre was, and a 3000x2000 one past the screen's edges; Hyprland holds a
+    window within its app's smallest size (foot asked 5x5 took 9x20), which `window` says ("asked
+    for 5x5, the window took 9x20"), exit 1, as `mode` fails a mode the box did not take; a window
+    floated again takes the size it last floated at; a fullscreen window floats but refuses the
+    resize ("Window is fullscreen"), so `window` refuses it before dispatching anything (exit 1,
+    the window left tiled). It reads the window back until the same geometry twice 100 ms apart (2 s
+    at most) and prints it as `0x... CLASS "TITLE" floating at X,Y WxH`; a `shot --window` right
+    after is already the new size. --window defaults to the active window, as `tree`'s does. It is an
+    action for `shot --burst --after` and `record -- ACTION`, and a jailed agent may ask it through
+    the broker. Not done: `run --size` (a window sized as it opens), which the issue offered as the
+    other form. Tests: t_window_size (sizes, the centre, -b before it, --json, the app's smallest,
+    --tile, --float, a fullscreen window refused, the usage errors), window.rs's sizes and
+    lua_chunks.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
