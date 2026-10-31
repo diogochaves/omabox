@@ -705,7 +705,9 @@ first 30 s, with a status other than 0 (a server that dies a second in) is said 
 next command, whatever it is: "warning: run -d job CMD (pid N) exited with status 1 after 2.1s,
 since the last command (omabox log -b NAME run)". Not one --replace stopped, one killed (SIGTERM,
 SIGINT, SIGKILL) while an `omabox run` ran in the box or just after (`omabox run -- pkill APP`),
-nor one already said.
+nor one already said. A `wait window` or `wait layer` that gives up says such a job itself. When
+the job's log holds libwayland's line for a protocol error (the compositor closed its connection),
+each of these adds it: "its Wayland connection was closed for a protocol error: LINE".
 @ up run
 A `run -d` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (`ls` says never); a box with another name

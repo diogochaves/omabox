@@ -186,6 +186,57 @@ fn job_note_with(ctx: &Ctx, live: impl Fn(&std::path::Path) -> bool) {
             wher,
             ")"
         ));
+        say_proto_error(ctx, &log);
+    }
+}
+
+/// The line libwayland-client writes (wl_log, to stderr) when the compositor sends the error it
+/// closes a client's connection for, `INTERFACE#ID: error CODE: MESSAGE` (`INTERFACE@ID` in older
+/// libwayland; `[destroyed object]` for an object the client had let go): the last in TEXT, from
+/// where it starts in its line (a toolkit may put its own words in front), its control characters
+/// spaces, cut to 300 characters (#335).
+pub fn proto_line(text: &[u8]) -> Option<Vec<u8>> {
+    let re = Re::new(r"([A-Za-z_][A-Za-z0-9_]*[@#][0-9]+|\[destroyed object\]): error -?[0-9]+: ")?;
+    text.split(|&c| c == b'\n').rev().find_map(|l| {
+        let (a, _) = re.captures(l, false)?.first().copied()??;
+        let l: Vec<u8> = l[a..]
+            .iter()
+            .map(|&c| if c < 0x20 || c == 0x7f { b' ' } else { c })
+            .collect();
+        Some(shell::cut_line(l.trim_ascii_end(), 300).to_vec())
+    })
+}
+
+/// The protocol error the log LOG (a name in the box HOME, run-NS.log) ends with, as proto_line
+/// finds it in its last 64 KiB. The box writes its HOME: read only as a regular file inside it, not
+/// through a link, never waiting on a FIFO (S7).
+pub fn proto_error(ctx: &Ctx, log: &[u8]) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::unix::fs::OpenOptionsExt;
+    let p = crate::boxes::box_home_file(&ctx.d, &String::from_utf8_lossy(log))?;
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_NOCTTY)
+        .open(p)
+        .ok()?;
+    let m = f.metadata().ok()?;
+    if !m.is_file() {
+        return None;
+    }
+    f.seek(SeekFrom::Start(m.len().saturating_sub(65536)))
+        .ok()?;
+    let mut v = Vec::new();
+    f.take(65536).read_to_end(&mut v).ok()?;
+    proto_line(&v)
+}
+
+/// proto_error said, when LOG holds one.
+fn say_proto_error(ctx: &Ctx, log: &[u8]) {
+    if let Some(l) = proto_error(ctx, log) {
+        say(cat!(
+            "its Wayland connection was closed for a protocol error: ",
+            l
+        ));
     }
 }
 
@@ -1187,6 +1238,7 @@ pub fn job_ended(
             ")"
         ));
     }
+    say_proto_error(ctx, log);
     if !miss.is_empty() {
         say(cat!(
             "its arguments name host paths box '",
@@ -1874,6 +1926,107 @@ mod tests {
         assert_eq!(
             [0, 59, 60, 192, 3599, 3600, 7500].map(age_text),
             ["0s", "59s", "1m00s", "3m12s", "59m59s", "1h00m", "2h05m"]
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // t_unit_proto_error (#335, finding 589): libwayland-client's line for the error the compositor
+    // closed the connection with, the last one of a log, found wherever a toolkit put it in a line.
+    #[test]
+    fn proto_line_found() {
+        let t = b"starting\nxdg_wm_base@3: error 2: wrong configure serial: 7\nqt: bye\n";
+        assert_eq!(
+            proto_line(t).as_deref(),
+            Some(&b"xdg_wm_base@3: error 2: wrong configure serial: 7"[..]),
+            "the line, not what follows it"
+        );
+        assert_eq!(
+            proto_line(b"[12:00] wl_registry#2: error 0: invalid global wl_compositor (99)")
+                .as_deref(),
+            Some(&b"wl_registry#2: error 0: invalid global wl_compositor (99)"[..]),
+            "a prefix in front of it left out"
+        );
+        assert_eq!(
+            proto_line(b"[destroyed object]: error 1: gone\n").as_deref(),
+            Some(&b"[destroyed object]: error 1: gone"[..]),
+            "an error on an object the client had destroyed"
+        );
+        assert_eq!(
+            proto_line(b"a@1: error 1: first\nb@2: error 2: second\r\x1b[0m\n").as_deref(),
+            Some(&b"b@2: error 2: second  [0m"[..]),
+            "the last of two, its control characters spaces"
+        );
+        for no in [
+            &b"Error 71 (Protocol error) dispatching to Wayland display\n"[..],
+            b"user@host: error 2 was fine\n",
+            b"me@example.com: error: x\n",
+            b"",
+        ] {
+            assert_eq!(proto_line(no), None, "{}", String::from_utf8_lossy(no));
+        }
+        let long = format!("x@1: error 1: {}\n", "é".repeat(400));
+        assert_eq!(
+            proto_line(long.as_bytes()).map(|l| String::from_utf8_lossy(&l).chars().count()),
+            Some(300),
+            "cut to 300 characters"
+        );
+    }
+
+    // job_note and a log that holds that line: said after the job's warning; a log that is a link
+    // to a host file is not read (the box writes its HOME).
+    #[test]
+    fn job_note_says_proto_error() {
+        let d = std::env::temp_dir().join(format!("omabox-jpe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for x in ["run", "home", "jobs"] {
+            std::fs::create_dir_all(d.join(x)).unwrap();
+        }
+        std::fs::write(d.join("jobs-noted"), "").unwrap();
+        let ds = d.display().to_string();
+        let mut ctx = Ctx::new(b"shot", Vec::new());
+        ctx.name = b"u".to_vec();
+        ctx.d = ds.as_bytes().to_vec();
+        let now = now_us() / 1_000_000;
+        let job = |k: u32, log: &str| {
+            let t0 = now - 5;
+            let ns = format!("{t0}{k:09}");
+            let lf = d.join(format!("home/run-{ns}.log"));
+            if let Some(target) = log.strip_prefix("->") {
+                std::os::unix::fs::symlink(target, &lf).unwrap();
+            } else {
+                std::fs::write(&lf, log).unwrap();
+            }
+            let f = d.join(format!("run/omabox.run-{ns}.exit"));
+            std::fs::write(&f, "1\n").unwrap();
+            set_mtime(&f, t0 * 1000 + 700);
+            let v = serde_json::json!({"pid": k.to_string(), "start": "1",
+                "log": format!("{ds}/home/run-{ns}.log"), "exe": "x", "argv": ["./app"]});
+            std::fs::write(d.join("jobs").join(k.to_string()), format!("{v}\n")).unwrap();
+        };
+        let note = || crate::exit::heard(|| job_note_with(&ctx, |_| false)).1;
+        job(
+            1,
+            "hello\nwl_registry#2: error 0: invalid global wl_compositor (4294967295)\nbye\n",
+        );
+        assert_eq!(
+            note(),
+            "omabox: warning: run -d job ./app (pid 1) exited with status 1 after 0.7s, since the last command (log: omabox log -b u run)\n\
+             omabox: its Wayland connection was closed for a protocol error: wl_registry#2: error 0: invalid global wl_compositor (4294967295)\n",
+            "the job's end, then the protocol error its log holds"
+        );
+        let host = d.join("host-file");
+        std::fs::write(&host, "x@1: error 1: a host file\n").unwrap();
+        job(2, &format!("->{}", host.display()));
+        let out = note();
+        assert!(
+            out.contains("job ./app (pid 2) exited with status 1") && !out.contains("protocol"),
+            "a log that is a link: its end said, the file it leads to not read: {out}"
+        );
+        job(3, "plain failure\n");
+        let out = note();
+        assert!(
+            out.contains("(pid 3)") && !out.contains("protocol"),
+            "no such line: only the end: {out}"
         );
         let _ = std::fs::remove_dir_all(&d);
     }

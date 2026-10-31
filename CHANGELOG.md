@@ -56,6 +56,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   then, and a size the app did not take (its smallest or largest) is exit 1, saying the size it
   took. `--float` floats a window as it is, `--tile` tiles it again, `--json` gives the window as
   `windows --json` does ([#362](https://github.com/diogochaves/omabox/issues/362)).
+- **An app that died of a Wayland protocol error says so.** Where omabox says a `run -d` job ended
+  (its first moments, `run -d --wait`, the next command's warning), a log holding libwayland's line
+  for it adds "its Wayland connection was closed for a protocol error: xdg_surface#12: error 3: …".
+  A `wait window` or `wait layer` that gives up now says a job that ended meanwhile itself, instead
+  of leaving it to the next command ([#335](https://github.com/diogochaves/omabox/issues/335)).
 
 ### Fixed
 

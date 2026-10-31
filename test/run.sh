@@ -7229,6 +7229,66 @@ t_host_paths() {
   rm -rf "$s" "$TMP/$P-hpt"
 }
 
+# #335, finding 589: a run -d job whose Wayland connection Hyprland closed for a protocol error says
+# so wherever its end is said, with libwayland-client's line from its log: run -d's first moments,
+# run -d --wait, the next command's note, and a `wait window` that gave up. The fixture binds a
+# global that does not exist after DELAY s (libwayland-server refuses it: "global ... is unavailable",
+# "invalid global" in older ones), then exits 1.
+t_proto_error() {
+  local B=$P-pe s=$TMP/pe out err rc
+  if ! command -v cc >/dev/null || ! pkg-config --exists wayland-client 2>/dev/null; then
+    skip "a protocol error said" "no C compiler or wayland-client headers"; return
+  fi
+  rm -rf "$s"; mkdir -p "$s"
+  cat > "$s/pe.c" <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <wayland-client.h>
+int main(int argc, char **argv) {
+    struct wl_display *d = wl_display_connect(NULL);
+    if (!d) { fprintf(stderr, "pe: no display\n"); return 3; }
+    struct wl_registry *r = wl_display_get_registry(d);
+    if (wl_display_roundtrip(d) < 0) return 4;
+    usleep((useconds_t)(atof(argc > 1 ? argv[1] : "0") * 1e6));
+    wl_registry_bind(r, 4000000000u, &wl_compositor_interface, 1);
+    if (wl_display_roundtrip(d) < 0) { fprintf(stderr, "pe: the connection is gone\n"); return 1; }
+    return 0;
+}
+EOF
+  # shellcheck disable=SC2046 # (pkg-config's words)
+  cc -o "$s/pe" "$s/pe.c" $(pkg-config --cflags --libs wayland-client) || { no "the fixture builds" "cc failed"; return; }
+  up_ok "$B" --no-shell --net isolated --ro-bind "$s" || { no "up" "$UP_OUT"; return; }
+  local D; D=$(ob path "$B")
+  local said="its Wayland connection was closed for a protocol error: wl_registry[#@]2: error 0: [^[:cntrl:]]*wl_compositor \(-?[0-9]+\)"
+  err=$(ob run -b "$B" -d -- "$s/pe" 2>&1 >/dev/null); rc=$?
+  check_eq "run -d of an app that commits a protocol error at once: its status" 1 "$rc"
+  check_match "...its end said, then the protocol error, from its log" \
+    "the command exited with status 1 at once in box '$B'.*"$'\n'"omabox: $said" "$err"
+  check_match "...its log's last lines too (the line is not the last)" "  pe: the connection is gone" "$err"
+  err=$(ob run -b "$B" -d -q --wait --start 1s -- "$s/pe" 2>&1 >/dev/null); rc=$?
+  check_eq "run -d --wait: its status" 1 "$rc"
+  check_match "...said before the screen settled, and the protocol error" \
+    "the command exited with status 1 before the screen settled, and left nothing running"$'\n'"omabox: $said" "$err"
+  out=$(ob run -b "$B" -d -q --print-log -- "$s/pe" 1.5)
+  check "a job that commits one 1.5 s in: its status kept" until_ok 8 test -e "$D/run/omabox.$(basename "$out" .log).exit"
+  err=$(ob windows -b "$B" 2>&1 >/dev/null)
+  check_match "...the next command's note says it, after the job's end" \
+    "omabox: warning: run -d job $s/pe 1\.5 \(pid [0-9]+\) exited with status 1 after 1\.[0-9]s, since the last command \(log: omabox log -b $B run\)"$'\n'"omabox: $said" "$err"
+  ob run -b "$B" -d -q -- "$s/pe" 1
+  out=$(ob wait -b "$B" window 'title:^never$' --timeout 4s 2>"$TMP/pe.err"); rc=$?; err=$(cat "$TMP/pe.err")
+  check_eq "wait window for a window that never comes: 124" 124 "$rc"
+  check_match "...its answer on stdout" "^unsatisfied: " "$out"
+  check_match "...the job that died meanwhile said by the wait itself, with the protocol error" \
+    "run -d job $s/pe 1 \(pid [0-9]+\) exited with status 1 after 1\.[0-9]s.*"$'\n'"omabox: $said" "$err"
+  check_eq "...once: not by the command after" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep -E 'run -d job|protocol error')"
+  err=$(ob run -b "$B" -d -- sh -c 'echo x@1: error 2 >&2; exit 2' 2>&1 >/dev/null)
+  check_match "a job that fails otherwise: its end said" "the command exited with status 2 at once" "$err"
+  check_fails "...no protocol error" grep -q "protocol error" <<<"$err"
+  rm -rf "$s"
+  ob down "$B" >/dev/null 2>&1
+}
+
 t_protect_ports() {
   local B=$P-prot h=$TMP/prot-home p q r w a got reached="" control=""
   rm -rf "$h"; mkdir -p "$h/.config/omabox"
@@ -18438,7 +18498,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

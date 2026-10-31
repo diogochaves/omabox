@@ -11204,6 +11204,28 @@ from them.
     so `run -- readlink /proc/self/fd/0` was told its stdin "is not in the box" (found by the full
     suite: t_run_stdio, t_jail_record). With #299 the started line reads "(pid N, log: HOST,
     /home/sbx/run-NS.log in the box)".
+589. **An app the compositor dropped for a protocol error just "exited"** (2026-10-31, #335). When
+    Hyprland (libwayland-server) closes a client for a protocol error, libwayland-client writes the
+    error event to stderr before the app's next dispatch fails: `INTERFACE#ID: error CODE: MESSAGE`
+    (wayland 1.26 here; `@ID` in older ones; `[destroyed object]: error …` for an object the client
+    had let go). A `run -d` job's stderr is its log, so the reason was one line deep in it while
+    omabox said "exited with status 1". Now every place that says a job's end (job_ended: run -d's
+    first moments and run -d --wait's unsettled end; job_note: the next command's warning) adds
+    "its Wayland connection was closed for a protocol error: LINE", the last such line in the log's
+    last 64 KiB, from where it starts in its line (a toolkit's prefix left out), control characters
+    as spaces, 300 characters at most. The log is in the box HOME, which the box writes: read on the
+    host through box_home_file, opened O_NOFOLLOW|O_NONBLOCK and taken only as a regular file (S7).
+    A `wait window`/`wait layer` that gives up (124) runs job_note too, so a job that died during
+    the wait is said by the wait, not by the command after it. Hyprland's own words for the bind of
+    a global that is not there are "global wl_compositor (N) is unavailable" (older
+    libwayland-server: "invalid global"). Not matched: GTK's own "Error 71 (Protocol error)
+    dispatching to Wayland display" (GTK installs its own wl_log handler, so a GTK app may show only
+    that one) and Qt's "The Wayland connection experienced a fatal error: …"; neither names the
+    object, and neither was tried here. Tests: t_unit_proto_error (jobs.rs proto_line_found,
+    job_note_says_proto_error: the line, a prefix, the last of two, a link not read), t_proto_error
+    (a fixture client built by the test binds a global that does not exist: run -d, --wait, the next
+    command's note and `wait window` say it; a plain failure does not; on the old code 5 checks
+    failed).
 590. **`wait layer` did not say which monitor a layer was on** (2026-10-31, #316). Its probe found
     the first drawn layer of the namespace anywhere in `hyprctl -j layers` (`..|objects`), so the
     monitor (the object's key above `levels`) was lost: `at 0,0 1920x1080` for a full-screen panel

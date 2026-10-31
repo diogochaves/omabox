@@ -397,6 +397,11 @@ fn poll_until(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    // A window or layer that never came: a run -d job that ended meanwhile is said now, as the next
+    // command would (job_note), not after it (#335: its app may have died of a protocol error).
+    if res == "unsatisfied" && matches!(probe, Probe::Win(..) | Probe::Layer(..)) {
+        crate::jobs::job_note(ctx);
+    }
     if json {
         let r = Args::new(&["-nc"])
             .kv("--arg", "res", res)
