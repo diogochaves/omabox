@@ -7325,18 +7325,36 @@ t_plugin_hosted() {
     printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$1" > "$F/$1/W.qml"
   }
   hfix a "$P.ha"; hfix b "$P.hb"; hfix c "$P.hc"
-  up_ok "$B" --net isolated --plugin "$F/a" --plugin "$F/b" --plugin "$F/c" || { no "up" "$UP_OUT"; return; }
+  # D: a service with a widget (a notification plugin's shape, #326), its service answering on IPC.
+  hfix d "$P.hd"
+  jq '.kinds = ["service", "bar-widget"] | .entryPoints.service = "S.qml"' "$F/d/manifest.json" > "$F/d/m" && mv "$F/d/m" "$F/d/manifest.json"
+  printf 'import QtQuick\nimport Quickshell.Io\nItem {\n  IpcHandler {\n    target: "%s"\n    function ping(): string { return "pong" }\n  }\n}\n' "$P-hd" > "$F/d/S.qml"
+  up_ok "$B" --net isolated --plugin "$F/a" --plugin "$F/b" --plugin "$F/c" --plugin "$F/d" || { no "up" "$UP_OUT"; return; }
   H=$(ob path "$B")/home
-  # A out of the bar into B's own entry; C out of the bar, in nothing's.
-  jq --arg a "$P.ha" --arg b "$P.hb" --arg c "$P.hc" \
-    '.bar.layout |= map_values(map(select((if type == "object" then .id else . end) as $x | $x != $a and $x != $c)))
-     | .plugins = [(.plugins // [])[] | select(.id != $b)] + [{id: $b, widgets: [{id: $a}]}]' \
+  # A out of the bar into B's own entry; C out of the bar, in nothing's; D out of the bar, in its own.
+  jq --arg a "$P.ha" --arg b "$P.hb" --arg c "$P.hc" --arg d "$P.hd" \
+    '.bar.layout |= map_values(map(select((if type == "object" then .id else . end) as $x | $x != $a and $x != $c and $x != $d)))
+     | .plugins = [(.plugins // [])[] | select(.id != $b and .id != $d)] + [{id: $b, widgets: [{id: $a}]}, {id: $d}]' \
     "$H/.config/omarchy/shell.json" > "$TMP/hosted.json" && cp "$TMP/hosted.json" "$H/.config/omarchy/shell.json"
   out=$(ob restart-shell -b "$B" 2>&1)
   check_fails "a widget hosted in another mounted plugin's layout: no \"disabled\" warning (#127)" grep -q "$P.ha disabled" <<<"$out"
   check_eq "...ls --json: hosted, and by which" "hosted $P.hb" \
     "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.ha" '.[] | select(.name == $n) | .plugin_status[$i] | "\(.state) \(.host)"')"
-  check_match "a widget off the bar and in no plugin's layout: still disabled" "plugin $P.hc disabled: listed but not enabled" "$out"
+  check_eq "a service with a widget, off the bar, in its own entry: its service runs" "pong" "$(ob run -b "$B" -- omarchy-shell "$P-hd" ping 2>&1)"
+  check_fails "...and no warning for it (#326)" grep -q "plugin $P.hd" <<<"$out"
+  check_eq "...ls --json: loaded" "loaded" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.hd" '.[] | select(.name == $n) | .plugin_status[$i].state')"
+  check_match "a widget off the bar, with a mounted service running that may place it: a note naming it (#326)" \
+    "plugin $P.hc is not in the bar's layout: if $P.hd places it itself, ignore this" "$out"
+  check_fails "...not a warning" grep -qE "warning: plugin $P.hc|the shell's log" <<<"$out"
+  check_eq "...ls --json: off the bar" "off the bar" \
+    "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.hc" '.[] | select(.name == $n) | .plugin_status[$i].state')"
+  # D out of its entry too: nothing mounted runs that could place C, nor D.
+  jq --arg d "$P.hd" '.plugins |= map(select(.id != $d))' "$H/.config/omarchy/shell.json" > "$TMP/hosted.json" \
+    && cp "$TMP/hosted.json" "$H/.config/omarchy/shell.json"
+  out=$(ob restart-shell -b "$B" 2>&1)
+  check_match "a widget off the bar and in no plugin's layout: still disabled" "warning: plugin $P.hc disabled: not in the bar's layout" "$out"
+  check_match "...a service with a widget in no entry: disabled" "warning: plugin $P.hd disabled: not in the bar's layout" "$out"
   ob down "$B" >/dev/null 2>&1
 }
 

@@ -27,6 +27,19 @@ const ENABLED_JQ: &str = ".[$i].enabled";
 /// A widget in another mounted plugin's own entry (a sidebar that hosts widgets, #127).
 const HOST_JQ: &str = r#"[(.plugins // [])[] | select(.id != $id and (.id as $p | $m | index($p)))
             | select([.. | if type == "object" then .id? elif type == "string" then . else empty end] | index($id)) | .id][0] // empty"#;
+/// Its own `plugins[]` entry, not in `disabledPlugins`: what the registry's isEnabled asks of a plugin
+/// off the bar (#326). `listPlugins`'s `enabled` is `inBar` for any plugin with a bar widget, so a
+/// service with a widget, loaded from its entry, reads as off there.
+const OWN_JQ: &str = r#"((.disabledPlugins // []) | index($i) | not)
+            and ([(.plugins // [])[]? | objects | .id] | index($i) != null)"#;
+/// The other mounted plugins running with more than a bar widget (a service, a panel, a bar...): any
+/// of them may place a widget through its own config and IPC, where shell.json does not show it (#326).
+const PLACERS_JQ: &str = r#". as $c
+            | def own($p): (($c.disabledPlugins // []) | index($p) | not)
+                and ([($c.plugins // [])[]? | objects | .id] | index($p) != null);
+            [$m[] | . as $p | select($p != $i and $l[$p] != null)
+              | select(($l[$p].kinds // []) | any(. != "bar-widget"))
+              | select($l[$p].enabled == true or own($p))] | join(" or ")"#;
 const STATUS_JQ: &str = r#".[$i] = ({state: $s} + (if $h != "" then {host: $h} else {} end) + (if $c != "" then {commit: $c} else {} end) + (if $w != "" then {log: $w} else {} end)
         + (if $v != "" then {validate: $v} else {} end))"#;
 const PLUGIN_STATUS_JQ: &str = ".plugin_status = $s";
@@ -368,8 +381,8 @@ fn listed_jq(flag: &str, id: &[u8], prog: &str, listed: &[u8]) -> jq::Ran {
 /// restart-shell). Omarchy's validator on each mounted plugin's dir (the box's Omarchy's; for a
 /// jailed caller the host's installed one, never the jail's tree: #198), then the shell's plugin list
 /// and its log. Warnings, never a refusal. Each plugin's state goes into box.json's plugin_status:
-/// loaded, failed, not loaded, disabled, hosted (#127) or enabled. GIT_REV: install.rs's git_rev (a
-/// plugin dir's commit; never run for a jailed caller).
+/// loaded, failed, not loaded, disabled, hosted (#127), off the bar (#326) or enabled. GIT_REV:
+/// install.rs's git_rev (a plugin dir's commit; never run for a jailed caller).
 pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()> {
     let bj = ctx.at("box.json");
     let bjs = shell::bytes(&bj).to_vec();
@@ -500,11 +513,65 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
                         host = h.text();
                     }
                 }
+                let words = shell::words(&kinds);
+                let widget = words.iter().any(|k| k == b"bar-widget");
+                let more = words.iter().any(|k| k != b"bar-widget");
                 if !host.is_empty() {
                     state = "hosted";
                 } else if desk.contains(id) {
                     state = "disabled";
                     why = b"off in the desk's shell.json".to_vec();
+                } else if widget
+                    && more
+                    && cfg.as_ref().is_some_and(|c| {
+                        Args::new(&["-e", "--arg", "i"])
+                            .arg(id)
+                            .arg(OWN_JQ)
+                            .arg(shell::bytes(c))
+                            .run_file(jq::Err::Null)
+                            .ok()
+                    })
+                {
+                    // A service (or panel...) with a widget, loaded from its own entry, its widget
+                    // off the bar (#326): what the shell loads, not what the bar shows.
+                    state = if words.iter().any(|k| k == b"service") {
+                        "loaded"
+                    } else {
+                        "enabled"
+                    };
+                    why = first_line(&lines);
+                } else if widget {
+                    let placers = cfg
+                        .as_ref()
+                        .map(|c| {
+                            Args::new(&["-r", "--arg", "i"])
+                                .arg(id)
+                                .kv("--argjson", "m", &m)
+                                .kv("--argjson", "l", l)
+                                .arg(PLACERS_JQ)
+                                .arg(shell::bytes(c))
+                                .run_file(jq::Err::Null)
+                                .text()
+                        })
+                        .unwrap_or_default();
+                    why = b"not in the bar's layout".to_vec();
+                    if placers.is_empty() {
+                        state = "disabled";
+                    } else {
+                        // omabox cannot see a widget another plugin places itself: said, not warned.
+                        state = "off the bar";
+                        say(cat!(
+                            "plugin ",
+                            id,
+                            " is not in the bar's layout: if ",
+                            placers,
+                            " places it itself, ignore this (check with its IPC or a shot); to put it there: omabox -b ",
+                            ctx.name,
+                            " run -- omarchy-shell shell putBarWidget ",
+                            id,
+                            " '{}'"
+                        ));
+                    }
                 } else {
                     state = "disabled";
                     why = b"listed but not enabled".to_vec();
@@ -517,10 +584,21 @@ pub fn plugin_check(ctx: &mut Ctx, git_rev: &dyn Fn(&[u8]) -> Vec<u8>) -> Res<()
                 why = first_line(&lines);
             }
             match state {
-                "hosted" => {}
+                "hosted" | "off the bar" => {}
                 "disabled" => {
                     if !desk.contains(id) {
-                        say(cat!("warning: plugin ", id, " ", state, ": ", why));
+                        let put = if why == b"not in the bar's layout" {
+                            cat!(
+                                " (to put it there: omabox -b ",
+                                ctx.name,
+                                " run -- omarchy-shell shell putBarWidget ",
+                                id,
+                                " '{}')"
+                            )
+                        } else {
+                            Vec::new()
+                        };
+                        say(cat!("warning: plugin ", id, " ", state, ": ", why, put));
                         bad = true;
                     }
                 }

@@ -10907,6 +10907,21 @@ from them.
     `rolled` (an overlap added, mid-line ends, no overlap, a chance overlap of part of a line,
     repeated lines not doubled); t_log_rolling (a `[Lua]` print not in the file yet: in `log --grep`,
     once in `-n all`; it fails on the old code).
+567. **"listed but not enabled" for a running service, and for a widget another plugin places**
+    (2026-10-31, #326). The shell's `listPlugins` gives a plugin with a bar widget `enabled:
+    inBar(id)` (what `omarchy plugin enable/disable` toggles), not whether the shell loaded it. So a
+    service with a widget (a notification plugin), loaded from its own `plugins[]` entry with its
+    widget off the bar, was warned as disabled at every up and restart-shell; so was a widget another
+    plugin places through its own config and IPC, where shell.json does not show it (finding 197's
+    `hosted` covers only a widget in a mounted plugin's entry). Now plugin_check asks what the
+    registry's `isEnabled` asks: a plugin with a widget and another kind, in its own `plugins[]`
+    entry and not in `disabledPlugins`, is `loaded` (a service) or `enabled`, unsaid. A widget in no
+    layout while another mounted plugin runs with more than a bar widget (a service, panel, bar...)
+    gets a note naming those plugins, how to check and how to put it in the bar
+    (`putBarWidget ID '{}'`), not a warning: its state is `off the bar`. With no such plugin it is
+    still a warning, now "disabled: not in the bar's layout", with the same `putBarWidget` line
+    (a plugin without a widget keeps "listed but not enabled"). Test: t_plugin_hosted (a service
+    fixture answering on its IPC while it reads loaded; on the old code: both warned).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

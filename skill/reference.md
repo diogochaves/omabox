@@ -947,7 +947,12 @@ most people will. Then:
   validator's message, or the shell's QML error); `omabox ls --json` has its `plugin_status`. A panel,
   menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`. A
   widget placed in another mounted plugin's layout is `hosted` (`plugin_status`'s `host` names that
-  plugin), with no warning: check it with that plugin's IPC.
+  plugin), with no warning: check it with that plugin's IPC. A service with a widget, in its own
+  `plugins[]` entry, is `loaded` even with its widget off the bar. `plugin X is not in the bar's
+  layout: if Y places it itself, ignore this`: a widget in no layout of the box's shell.json while
+  another mounted plugin runs (`off the bar`); if Y puts it in its own lanes through its config or
+  IPC, that is fine. `warning: plugin X disabled: not in the bar's layout`: no mounted plugin could
+  place it; the line gives the `putBarWidget` command that puts it there.
 - **Its settings** are the desk's (`~/.config/omarchy/extensions/NAME.json`, copied at `up`, which
   says so): an on/off switch off on the desk is off in the box. `up --no-seed extensions` starts
   without them; `--seed` a fixture for a known state (Mounts, HOME and the session above).

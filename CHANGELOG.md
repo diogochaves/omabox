@@ -34,6 +34,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   told". The popup is the one of them that takes the keyboard (on demand, not exclusively, which was
   all `tree` looked for), so its tree is read now, and the wallpaper's and the bar's say they publish
   nothing ([#315](https://github.com/diogochaves/omabox/issues/315)).
+- **No "plugin X disabled: listed but not enabled" for a plugin that is running.** A service with a
+  bar widget, loaded from its own `plugins[]` entry with its widget off the bar, now reads `loaded`
+  with no warning. A widget in no layout of the box's shell.json while another mounted plugin runs
+  (one that may place it through its own config and IPC) gets a note naming that plugin, not a
+  warning (`plugin_status`: `off the bar`); with none, the warning says "not in the bar's layout"
+  and gives the `putBarWidget` command that puts it there
+  ([#326](https://github.com/diogochaves/omabox/issues/326)).
 - **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
   `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
   Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).
