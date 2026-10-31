@@ -3,7 +3,11 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.0.2 — 2026-10-30
+
+Omarchy 4.5.0-rc2 support for `click`, `windows` and `tree --layer` (its bar now spans the screen),
+and a batch of smaller fixes: `wait until` with a command the box cannot run, `tree` names past 80
+characters, `check point` regions, back-to-back `run`s. Update if you run the 4.5 release candidates.
 
 ### Fixed
 
@@ -36,7 +40,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   waiting ([#400](https://github.com/diogochaves/omabox/issues/400)).
 - **On Omarchy 4.5.0-rc2 every `click` said it "may go to omarchy-bar"**: the bar's surface now
   spans the screen, taking input on its strip only. omabox now takes the bar as that strip, along
-  the edge it reserves ([#407](https://github.com/diogochaves/omabox/issues/407)).
+  the edge it reserves ([#407](https://github.com/diogochaves/omabox/issues/407)). And `tree
+  --layer omarchy-bar` refused as ambiguous (the bar and the wallpaper, one size): two frames with
+  nothing in either now read as a layer that publishes no accessible items, as one does.
 
 ## 1.0.1 — 2026-10-27
 
