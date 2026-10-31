@@ -224,33 +224,48 @@ fn path_in(pol: &Value, p: &[u8]) -> Option<Vec<u8>> {
     rs.iter().any(|r| at_or_under(&end, r)).then_some(end)
 }
 
-/// jail_read FILE: FILE's content, when the file it opens is inside the jail's folders (its path
-/// read back from the open fd, so a link swapped in after a check is caught), a regular file, and
-/// not one the jail hides (#210); None, reading nothing, otherwise (#198). Opened without blocking:
-/// a FIFO swapped in is refused, where bash's open of it waited for a writer.
+/// jail_read FILE: FILE's content, when the file it opens is inside the jail's folders, a regular
+/// file, not one the jail hides (#210), and at most READ_MAX bytes; None, reading nothing, otherwise
+/// (#198). Where FILE leads is found first without looking at anything outside them (jail_path), so
+/// nothing there is opened (#367); then it is opened as a path only (O_PATH: no device's or FIFO's
+/// open runs, no terminal becomes this process's), its path read back from the fd (a link swapped in
+/// since is caught), and only a regular file is opened again to read (O_NONBLOCK, O_NOCTTY).
 pub fn jail_read(f: &[u8]) -> Option<Vec<u8>> {
     read_in(&policy()?, f)
 }
 
+/// What jail_read reads at most: what it is for (a plugin's manifest, a checkout's .git file, a
+/// worktree's commondir) is small; a bigger file is refused, never read whole (#367).
+const READ_MAX: u64 = 1 << 20;
+
 fn read_in(pol: &Value, f: &[u8]) -> Option<Vec<u8>> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
+    let t = path_in(pol, f)?;
+    // (links already followed inside the jail's folders: one at its end now was swapped in)
+    let at = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(shell::path(f))
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
+        .open(shell::path(&t))
         .ok()?;
-    if !file.metadata().ok()?.is_file() {
+    if !at.metadata().ok()?.is_file() {
         return None;
     }
-    let p = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()?;
+    let fd = format!("/proc/self/fd/{}", at.as_raw_fd());
+    let p = std::fs::read_link(&fd).ok()?;
     let p = shell::bytes(&p).to_vec();
     if !roots(pol).iter().any(|r| at_or_under(&p, r)) || hidden_in(pol, &p) {
         return None;
     }
+    // (the same file, through its fd: never the path again)
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(&fd)
+        .ok()?;
     let mut out = Vec::new();
-    std::io::Read::read_to_end(&mut &file, &mut out).ok()?;
-    Some(out)
+    std::io::Read::read_to_end(&mut std::io::Read::take(&file, READ_MAX + 1), &mut out).ok()?;
+    (out.len() as u64 <= READ_MAX).then_some(out)
 }
 
 /// jail_refuse OPT PATH WHAT (#198): up's refusal of a host path a jailed caller named: the path as
@@ -548,6 +563,73 @@ mod tests {
             assert_eq!(sees_in(&pol, &cat!(pb, "/fin")), Some(cat!(pb, "/f")));
             assert_eq!(sees_in(&pol, &cat!(pb, "/lout/f")), None);
         }
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// The IN_OPEN events inotify saw on a watch W of fd IN.
+    fn opens_seen(fd: i32) -> usize {
+        let mut buf = [0u8; 4096];
+        // SAFETY: a read into buf of ours, from a non-blocking inotify fd.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        let n = usize::try_from(n).unwrap_or(0);
+        let (mut i, mut seen) = (0, 0);
+        let head = std::mem::size_of::<libc::inotify_event>();
+        while i + head <= n {
+            // SAFETY: a whole event header inside what read gave.
+            let ev: libc::inotify_event =
+                unsafe { std::ptr::read_unaligned(buf[i..].as_ptr().cast()) };
+            if ev.mask & libc::IN_OPEN != 0 {
+                seen += 1;
+            }
+            i += head + ev.len as usize;
+        }
+        seen
+    }
+
+    // #367: jail_read looks at nothing outside the jail's folders: a link inside that leads out is
+    // refused before anything there is opened (it opened the file, then checked where it was); a
+    // file inside bigger than READ_MAX is refused, never read whole; a FIFO inside is not opened.
+    #[test]
+    fn read_opens_nothing_outside_and_is_bounded() {
+        let d = tmp("jread");
+        let (p, o) = (d.join("proj"), d.join("out"));
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::create_dir_all(&o).unwrap();
+        std::fs::write(o.join("f"), "s").unwrap();
+        std::os::unix::fs::symlink(o.join("f"), p.join("lout")).unwrap();
+        let big = vec![b'x'; usize::try_from(READ_MAX).unwrap() + 1];
+        std::fs::write(p.join("big"), &big).unwrap();
+        std::fs::write(p.join("max"), &big[1..]).unwrap();
+        let fifo = std::ffi::CString::new(p.join("fifo").to_str().unwrap()).unwrap();
+        // SAFETY: a FIFO made at a path of ours.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let ps = p.to_str().unwrap();
+        let pb = ps.as_bytes();
+        let pol = policy_of(&format!(
+            r#"{{"roots":[{{"path":"{ps}","masked":false}}],"masks":[]}}"#
+        ));
+        // SAFETY: an inotify fd of ours, watching two files of ours for opens.
+        let ino = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(ino >= 0);
+        for w in [o.join("f"), p.join("fifo")] {
+            let c = std::ffi::CString::new(w.to_str().unwrap()).unwrap();
+            // SAFETY: as above.
+            assert!(unsafe { libc::inotify_add_watch(ino, c.as_ptr(), libc::IN_OPEN) } >= 0);
+        }
+        assert_eq!(read_in(&pol, &cat!(pb, "/lout")), None);
+        assert_eq!(read_in(&pol, &cat!(pb, "/fifo")), None);
+        assert_eq!(
+            opens_seen(ino),
+            0,
+            "a file outside, or the FIFO, was opened"
+        );
+        assert_eq!(read_in(&pol, &cat!(pb, "/big")), None, "past READ_MAX");
+        assert_eq!(
+            read_in(&pol, &cat!(pb, "/max")).map(|v| v.len()),
+            Some(big.len() - 1)
+        );
+        // SAFETY: our inotify fd, closed once.
+        unsafe { libc::close(ino) };
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

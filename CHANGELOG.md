@@ -129,6 +129,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   stop's cleanup ran alongside up's own work instead of after it. It now waits for that step (at
   most 10 s, said as a stop that waits is said)
   ([#367](https://github.com/diogochaves/omabox/issues/367)).
+- **Inside ai-jail, a link in the project to a file outside it had that file opened** before it was
+  refused. It is now refused before anything outside is opened, and a plugin's manifest or a `.git`
+  file read there is read up to 1 MiB ([#367](https://github.com/diogochaves/omabox/issues/367)).
 
 ## 1.0.2 — 2026-10-30
 

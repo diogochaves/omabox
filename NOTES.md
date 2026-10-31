@@ -11023,6 +11023,16 @@ from them.
     term_waits_for_mains_in_process_work (the undo sees a file main made 300 ms after the TERM),
     mains_endless_in_process_work_is_bounded and an_undo_outside_a_busy_section_runs_at_once;
     t_up_signals (a TERM or HUP while up seeds the HOME).
+577. **`jail_read` opened a jailed caller's path before checking where it led** (2026-10-31, #367;
+    found in the port's review). It opened the path (O_NONBLOCK, no O_NOCTTY), then read back where
+    the fd led and refused one outside the jail's folders: a link inside to a file outside had that
+    file opened (a device's open run, a terminal possibly made the controlling one), and a file
+    inside was read whole, however big. It now finds where the path leads first without looking
+    outside them (jail_path), opens that as a path only (O_PATH, O_NOFOLLOW), checks the fd (inside,
+    not hidden, a regular file), and only then opens it again through the fd to read (O_NONBLOCK,
+    O_NOCTTY), at most 1 MiB (a plugin's manifest, a .git file, a commondir); a bigger one is
+    refused. Test: jailpath.rs's read_opens_nothing_outside_and_is_bounded (inotify sees no open of
+    the file outside nor of a FIFO inside; 1 MiB read, a byte more refused).
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one
