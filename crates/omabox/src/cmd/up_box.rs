@@ -1126,9 +1126,8 @@ fn bwrap_args(
         b"--unshare-pid",
         b"--unshare-ipc",
         b"--unshare-uts",
-        b"--hostname",
-        &hostname(),
     ]);
+    b.hostname(&hostname());
     b.sys_ro("/usr").map_err(refused)?;
     b.words(&[
         b"--symlink",
@@ -2178,97 +2177,206 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// One of up's paths (#365): mostly ones up lets through (so the case reaches bwrap's words),
+    /// some of the seat's or the box's own, some built of the seat's names.
     fn seg() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
         use proptest::prelude::*;
-        let parts = prop::sample::select(vec![
-            "dev",
-            "dri",
-            "card0",
-            "renderD128",
-            "input",
-            "event1",
-            "run",
-            "dbus",
-            "seatd.sock",
-            "user",
-            "1000",
-            "..",
-            ".",
-            "usr",
-            "home",
-            "sbx",
-            "tmp",
-            "nvidia0",
-            "opt",
-            "omabox",
-            "srv",
-        ]);
-        prop::collection::vec(parts, 1..5).prop_map(|v| format!("/{}", v.join("/")).into_bytes())
+        let loose = prop::collection::vec(
+            prop::sample::select(vec![
+                "dev",
+                "dri",
+                "card0",
+                "renderD128",
+                "input",
+                "event1",
+                "run",
+                "dbus",
+                "seatd.sock",
+                "user",
+                "1000",
+                "..",
+                ".",
+                "usr",
+                "home",
+                "sbx",
+                "tmp",
+                "nvidia0",
+                "opt",
+                "omabox",
+                "srv",
+            ]),
+            1..5,
+        )
+        .prop_map(|v| format!("/{}", v.join("/")).into_bytes());
+        let fine = prop::sample::select(vec![
+            "/srv/data",
+            "/srv/data/sub",
+            "/home/u/src",
+            "/home/u/src/../proj",
+            "/mnt/x",
+            "/data",
+        ])
+        .prop_map(|p| p.as_bytes().to_vec());
+        let seat = prop::sample::select(vec![
+            "/dev/dri/card0",
+            "/dev/input",
+            "/run/dbus",
+            "/run/seatd.sock",
+            "/run/user/1000",
+            "/run/user/1000/wayland-1",
+            "/dev",
+            "/run",
+            "/",
+            "/srv/../dev/input",
+        ])
+        .prop_map(|p| p.as_bytes().to_vec());
+        prop_oneof![24 => fine, 2 => seat, 1 => loose]
     }
 
-    proptest::proptest! {
-        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
-        // S1 (#355): whatever combination of up's options (its mounts, overlays, plugins, desk fonts,
-        // net mode, --systemd, --interactive, NVIDIA's nodes and card placeholders) the bwrap words
-        // come out with no seat path as a bind's source or destination, or up is refused.
-        #[test]
-        fn up_options_never_bind_the_seat(
-            interactive: bool, systemd: bool, clean: bool, net in 0u8..3,
-            overlays in proptest::collection::vec(seg(), 0..3),
-            ro in proptest::collection::vec((seg(), seg()), 0..4),
-            plugins in proptest::collection::vec(seg(), 0..3),
-            fonts in proptest::collection::vec((seg(), seg()), 0..2),
-            cards in proptest::collection::vec(0u8..4, 0..3),
-        ) {
-            let rt = shell::env_or_empty("XDG_RUNTIME_DIR");
-            let base = std::env::temp_dir().join(format!("omabox-up-prop-{}", std::process::id()));
-            let d = cat!(shell::bytes(&base), "/box");
-            let _ = std::fs::create_dir_all(shell::path(&cat!(d, "/run")));
-            let mut ctx = Ctx::new(b"up", shell::bytes(&base).to_vec());
-            ctx.name = b"box".to_vec();
-            ctx.d = d.clone();
-            let u = Up {
-                interactive,
-                systemd,
-                clean,
-                net: [b"connected".to_vec(), b"isolated".to_vec(), b"none".to_vec()][usize::from(net)].clone(),
-                size: b"1920x1080@60".to_vec(),
-                scale: b"1".to_vec(),
+    /// A name up puts under a box folder (a plugin's id, a desk font folder's place): mostly plain,
+    /// some climbing out to the seat's paths.
+    fn rel() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+        use proptest::prelude::*;
+        prop_oneof![
+            12 => prop::sample::select(vec!["p", "a.b", ".local/share/fonts", "x/y"]),
+            1 => prop::sample::select(vec![
+                "../../../../../../dev/input",
+                "../../../../../../run/dbus",
+                "x/../../../../../../../dev/dri/card0",
+                "../../../../..",
+            ]),
+        ]
+        .prop_map(|p| p.as_bytes().to_vec())
+    }
+
+    // S1 (#355, #365): whatever combination of up's options (its mounts, overlays, plugins, desk
+    // fonts, a jailed caller's covers, a private aquamarine, net mode, --systemd, --interactive,
+    // NVIDIA's nodes and card placeholders, /etc as files or an overlay) the bwrap words come out with
+    // no mount touching the seat, every word read as bwrap reads it (crate::bwrap::oracle), or up is
+    // refused. Most cases get as far as the words (counted), and some are refused.
+    #[test]
+    fn up_options_never_bind_the_seat() {
+        use proptest::prelude::*;
+        let opts = (
+            (
+                any::<bool>(),
+                any::<bool>(),
+                any::<bool>(),
+                0u8..3,
+                any::<bool>(),
+            ),
+            proptest::collection::vec(seg(), 0..3),
+            proptest::collection::vec((seg(), seg()), 0..4),
+            proptest::collection::vec((seg(), rel()), 0..3),
+            proptest::collection::vec((seg(), rel()), 0..2),
+            proptest::collection::vec(0u8..4, 0..3),
+            (proptest::collection::vec(seg(), 0..3), 0u8..8),
+        );
+        let base = std::env::temp_dir().join(format!("omabox-up-prop-{}", std::process::id()));
+        let d = cat!(shell::bytes(&base), "/box");
+        let _ = std::fs::create_dir_all(shell::path(&cat!(d, "/run")));
+        let rt = shell::env_or_empty("XDG_RUNTIME_DIR");
+        let [made, refused] = crate::bwrap::oracle::run_counted(
+            128,
+            opts,
+            |(
+                (interactive, systemd, clean, net, etc_overlay),
                 overlays,
-                ro_args: ro,
-                plugins: plugins
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, dir)| crate::plugins::Plugin { id: format!("p{i}").into_bytes(), dir })
-                    .collect(),
-                ..Up::default()
-            };
-            let render = RenderNode::new(b"/dev/dri/renderD128").ok_or(proptest::test_runner::TestCaseError::fail("node"))?;
-            let devs: Vec<NvidiaDev> = NvidiaDev::new(b"/dev/nvidia0").into_iter().collect();
-            let cards: Vec<Vec<u8>> = cards.iter().map(|n| format!("card{n}").into_bytes()).collect();
-            let fonts: Vec<(Vec<u8>, Vec<u8>)> = fonts;
-            let etc = Etc { overlay: false, files: Vec::new() };
-            let r = crate::exit::muted(|| {
-                bwrap_args(&ctx, &u, &render, std::slice::from_ref(&render), &devs, &cards, false, &etc, &fonts)
-            });
-            if let Ok(args) = r {
-                let mut i = 0;
-                while i < args.len() {
-                    let w = args[i].as_slice();
-                    if matches!(w, b"--bind" | b"--ro-bind" | b"--dev-bind") {
-                        let (src, dest) = (&args[i + 1], &args[i + 2]);
-                        let own = crate::bwrap::lexical(src).starts_with(&cat!(d, "/"));
-                        let placeholder = own && dest.starts_with(b"/dev/dri/card");
-                        proptest::prop_assert!(own || src == b"@CGROUP@" || crate::bwrap::seat_path(src, &rt).is_none(), "source {:?}", String::from_utf8_lossy(src));
-                        proptest::prop_assert!(placeholder || crate::bwrap::seat_path(dest, b"").is_none(), "dest {:?}", String::from_utf8_lossy(dest));
-                        i += 3;
+                ro,
+                plugins,
+                fonts,
+                cards,
+                (covers, aq),
+            ),
+             n| {
+                let mut ctx = Ctx::new(b"up", shell::bytes(&base).to_vec());
+                ctx.name = b"box".to_vec();
+                ctx.d = d.clone();
+                let aq_lib = [b"".as_slice(), b"/srv/aq/lib", b"/run/user/1000/aq"]
+                    [usize::from(aq.saturating_sub(5))];
+                let u = Up {
+                    interactive,
+                    systemd,
+                    clean,
+                    net: [
+                        b"connected".to_vec(),
+                        b"isolated".to_vec(),
+                        b"none".to_vec(),
+                    ][usize::from(net)]
+                    .clone(),
+                    size: b"1920x1080@60".to_vec(),
+                    scale: b"1".to_vec(),
+                    overlays,
+                    ro_args: ro,
+                    plugins: plugins
+                        .into_iter()
+                        .map(|(dir, id)| crate::plugins::Plugin { id, dir })
+                        .collect(),
+                    cover_srcs: if covers.is_empty() {
+                        Vec::new()
                     } else {
-                        i += 1;
+                        vec![b"/srv/hidden".to_vec()]
+                    },
+                    covers: covers
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, dest)| {
+                            let k = if i % 2 == 0 {
+                                crate::jailpath::CoverKind::Dir
+                            } else {
+                                crate::jailpath::CoverKind::File
+                            };
+                            (k, dest)
+                        })
+                        .collect(),
+                    aq: crate::install::Aq {
+                        lib: aq_lib.to_vec(),
+                        ..Default::default()
+                    },
+                    ..Up::default()
+                };
+                let render =
+                    RenderNode::new(b"/dev/dri/renderD128").ok_or(TestCaseError::fail("node"))?;
+                let devs: Vec<NvidiaDev> = NvidiaDev::new(b"/dev/nvidia0").into_iter().collect();
+                let cards: Vec<Vec<u8>> = cards
+                    .iter()
+                    .map(|n| format!("card{n}").into_bytes())
+                    .collect();
+                let fonts: Vec<(Vec<u8>, Vec<u8>)> = fonts;
+                let etc = Etc {
+                    overlay: etc_overlay,
+                    files: vec![(cat!(d, "/etc/omarchy.conf"), b"/etc/omarchy.conf".to_vec())],
+                };
+                let r = crate::exit::muted(|| {
+                    bwrap_args(
+                        &ctx,
+                        &u,
+                        &render,
+                        std::slice::from_ref(&render),
+                        &devs,
+                        &cards,
+                        false,
+                        &etc,
+                        &fonts,
+                    )
+                });
+                match r {
+                    Ok(args) => {
+                        if let Err(e) = crate::bwrap::oracle::seat_ok(&args, &rt, &d) {
+                            return Err(TestCaseError::fail(e));
+                        }
+                        crate::bwrap::oracle::bump(n, 0);
                     }
+                    Err(_) => crate::bwrap::oracle::bump(n, 1),
                 }
-            }
-            let _ = std::fs::remove_dir_all(&base);
-        }
+                Ok(())
+            },
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            made >= 32 && refused >= 8,
+            "words made {made}, refused {refused}"
+        );
     }
 
     #[test]
