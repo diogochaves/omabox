@@ -1436,6 +1436,7 @@ impl Base {
                 .kv("--argjson", "changes", "null")
                 .kv("--argjson", "target", "null")
                 .kv("--argjson", "evs", "null")
+                .kv("--arg", "exp", "")
                 .arg(crate::jqprog::SETTLE_JSON_JQ)
                 .run(None, jq::Err::Inherit);
             out(&r.out)?;
