@@ -1527,11 +1527,14 @@ impl Base {
                 .kv("--arg", "why", "-")
                 .kv("--arg", "frames", "")
                 .kv("--arg", "late", "-")
+                .kv("--arg", "blink", "-")
+                .kv("--arg", "blinks", "")
                 .kv("--arg", "facts", "")
                 .kv("--argjson", "changes", "null")
                 .kv("--argjson", "target", "null")
                 .kv("--argjson", "evs", "null")
                 .kv("--arg", "exp", "")
+                .kv("--arg", "treed", "")
                 .arg(crate::jqprog::SETTLE_JSON_JQ)
                 .run(None, jq::Err::Inherit);
             out(&r.out)?;
