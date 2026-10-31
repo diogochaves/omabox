@@ -79,6 +79,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   on a loaded machine, while the crashed Hyprland was still exiting. One whose exit is under way
   now reads as going, and the command says it went down, with its signal
   ([#222](https://github.com/diogochaves/omabox/issues/222)).
+- **`tree` on a Chromium or Electron window started without `--force-renderer-accessibility`**
+  said it was not on the accessibility bus with a reason about egui apps; it now says it is
+  Chromium's or Electron's and to start it with the flag
+  ([#323](https://github.com/diogochaves/omabox/issues/323)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count

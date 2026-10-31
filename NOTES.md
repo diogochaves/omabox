@@ -150,8 +150,13 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    leaves the inside running. Use `bwrap --info-fd` to get `child-pid` and `kill -KILL` it.
 7. Unix socket paths are limited to 108 bytes: from the host, point `XDG_RUNTIME_DIR` at a short
    symlink to the box's run dir.
-8. Hyprland 0.56 is Lua-only (`hl.monitor`, `hl.config`, `hl.on`, `hl.window_rule`,
-   `hyprctl eval '<lua>'`). Plain `hyprctl monitors` can say `unknown request`; use `-j`.
+8. Omarchy's Hyprland config is Lua, and so is the box's (`hl.monitor`, `hl.config`, `hl.on`,
+   `hl.window_rule`, `hyprctl eval '<lua>'`). Hyprland 0.56 itself is not Lua-only: with no
+   `hyprland.lua` it still reads `hyprland.conf` ("Lua config not found, using legacy config");
+   main dropped that in hyprwm/Hyprland#15539. Under a `.conf` config `hyprctl eval` refuses ("eval
+   is only supported with the lua config manager"), under a Lua one `hyprctl keyword` does ("Use
+   eval."). Plain `hyprctl monitors` can say `unknown request`; use `-j`. (Reworded 2026-10-31,
+   #323: it said "Hyprland 0.56 is Lua-only"; the two refusals read from 0.56.2's binary.)
 9. Omarchy config reuse: `dofile(bootstrap.lua)`, then pre-mark `default.hypr.autostart` as loaded
    (skips systemd env import, first-run provisioning, monitor-watch, udiskie), then
    `require("default.hypr.omarchy")`. `misc.disable_watchdog_warning = true` hides the
@@ -11328,6 +11333,31 @@ from them.
     cmd::plugin's unit tests (linked only through a same-path mount still bound), broker_check (a
     jailed caller refused), t_up_again (the new words). On the old code `plugin` is an unknown
     command (exit 2).
+596. **`drag` in a browser canvas draws** (2026-10-31, #323: absolute motion with a button held was
+    reported as no drag there; finding 101 had tested foot only). Chromium 155 in a box, a page whose
+    800x500 `<canvas>` draws a line on `pointermove` while a `pointerdown` holds (pointer capture)
+    and counts every pointer and mouse event in its title: `drag --window` (10 steps) gave 1
+    pointerdown, 10 pointermoves with `buttons` set, 1 pointerup (the mouse events the same) and the
+    line in the shot; `--steps 1` one move with the button held, `--glide 500ms` 13; `pointer -- move
+    down move up` (one absolute motion between press and release) a line too. Each `move` is its
+    own frame and waits 40 ms (finding 101's tool), so no motion is coalesced away. Not reproduced;
+    no change. Not measured: Firefox (not installed here), a canvas app that wants several frames of
+    motion before a drag starts (a threshold over time rather than distance).
+597. **Chromium's tree, re-checked on 155: yes with `--force-renderer-accessibility`, and a better
+    no without it** (2026-10-31, #323; another project's notes said Chromium gave no tree in a box).
+    Chromium 155.0.8059.84, a box (AMD iGPU): with the flag, in a normal window and in `--app`, the
+    whole tree (browser chrome, the page, a `canvas` by its aria-label) in 40 ms, as finding 244
+    said. Without it, what it gives depends on IsEnabled when it starts: off (a box before its first
+    `tree`) and it never joins the bus, and `tree` said "pid N is not on the box's accessibility bus
+    (an egui/winit app on AccessKit ...)", the AccessKit reason, misleading here; on, and it joins
+    with its frame only (finding 244's "frame and its title", which `tree` already notes with the
+    flag). `ACCESSIBILITY_ENABLED=1` or `GNOME_ACCESSIBILITY=1` in its environment changes nothing:
+    the flag is the only way. So the "no" was a Chromium started without it. Now the helper tells a
+    Chromium or Electron process (a thread named `Chrome_IOThread`, which both have) off the bus:
+    "pid N, a Chromium or Electron app, is not on the box's accessibility bus: start it with
+    --force-renderer-accessibility". Seen: a box started before the helper was rebuilt kept the old
+    helper (its bind mount holds the deleted file): `down` and `up` again after `make -C tools/tree`.
+    Test: t_tree (Chromium without the flag, IsEnabled set off before it starts: said so, exit 1).
 599. **A sibling subagent's `down` ended a box another was using, and nothing said who**
     (2026-10-31, #295; follows 88, 377, 411). A Claude Code session's subagents share its
     `CLAUDE_CODE_SESSION_ID` and its process (`CLAUDE_PID`): their shells carry no id of their own

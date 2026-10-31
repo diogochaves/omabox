@@ -9233,6 +9233,17 @@ HTML
     check_match "...a closed select still says its choice as its value, no text" \
       'combo box "closed" =two @' "$(ob tree -b "$B" --window 'Tree combo web' --find closed 2>&1)"
     ob run -b "$B" -- pkill -f tree-chromium >/dev/null 2>&1 || true
+    # #323: one without the flag, started while IsEnabled is off, never joins the bus (Chromium 155):
+    # said as Chromium's, with the flag, not as an AccessKit app's.
+    ob wait -b "$B" --timeout 10s window 'title:Tree combo web' --gone >/dev/null 2>&1 || true
+    ob run -b "$B" -- busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b false >/dev/null 2>&1
+    ob run -b "$B" -d -- chromium --no-first-run --user-data-dir=/home/sbx/tree-chromium-noflag \
+      --app=file:///home/sbx/tree-combo.html >/dev/null 2>&1
+    ob wait -b "$B" --timeout 30s window 'title:Tree combo web' >/dev/null
+    rc=0; out=$(ob tree -b "$B" --window 'Tree combo web' 2>&1) || rc=$?
+    check_eq "Chromium without --force-renderer-accessibility, off the bus: said so, exit 1" "1 yes" \
+      "$rc $(head -1 <<<"$out" | grep -q 'a Chromium or Electron app, is not on the box.s accessibility bus: start it with --force-renderer-accessibility$' && echo yes)"
+    ob run -b "$B" -- pkill -f tree-chromium-noflag >/dev/null 2>&1 || true
   else
     skip "tree of an editable combo box (Chromium)" "no chromium"
   fi

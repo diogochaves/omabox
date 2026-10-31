@@ -509,6 +509,25 @@ done:
 // IsEnabled rework): then AccessKit before 0.22 never registers, whatever tree does.
 static int no_sre;
 
+// Whether PID is a Chromium or Electron browser process: one of its threads is Chrome_IOThread (both
+// name it so). Without --force-renderer-accessibility, one started while IsEnabled was off never joins
+// the bus (Chromium 155, finding 597), and one started after that joins with its frame only.
+static int chromium_like(long pid) {
+    char dir[64];
+    snprintf(dir, sizeof dir, "/proc/%ld/task", pid);
+    GDir *d = g_dir_open(dir, 0, NULL);
+    if (!d) return 0;
+    int hit = 0;
+    for (const char *t; !hit && (t = g_dir_read_name(d));) {
+        char *f = g_strdup_printf("%s/%s/comm", dir, t), *comm = NULL;
+        if (g_file_get_contents(f, &comm, NULL, NULL)) hit = !strcmp(g_strchomp(comm), "Chrome_IOThread");
+        g_free(comm);
+        g_free(f);
+    }
+    g_dir_close(d);
+    return hit;
+}
+
 // The box's a11y bus answers (at-spi-bus-launcher on its session bus); and IsEnabled set true.
 // Returns -1 without a bus, else whether IsEnabled or ScreenReaderEnabled was off (and is on now).
 static int a11y_bus(void) {
@@ -921,6 +940,8 @@ static int tree_main(int argc, char **argv) {
     }
     if (apps->len == 0) {
         if (any) fprintf(stderr, "no accessibility tree: its application (pid %ld) is on the bus with no window under it\n", pid);
+        else if (chromium_like(pid)) fprintf(stderr, "no accessibility tree: pid %ld, a Chromium or Electron app, is not on the box's "
+                                             "accessibility bus: start it with --force-renderer-accessibility\n", pid);
         else if (no_sre) fprintf(stderr, "no accessibility tree: pid %ld is not on the box's accessibility bus (an egui/winit app on "
                                  "AccessKit before accesskit_unix 0.22 never joins it here: it waits for ScreenReaderEnabled, which "
                                  "at-spi2-core 2.61 and later do not have)\n", pid);
