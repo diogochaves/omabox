@@ -24,6 +24,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
+              [--grid N [--cell C3]]                  lettered cells to aim with, no tree; --cell: that cell, closer
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
   omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--crf 18] [--no-pointer] [--audio] [--glide DURATION]
                 | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status [--json])   a video of the screen
@@ -58,7 +59,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png [--report-scale N]] [--json]
                                                          what differs, as a check sees it
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
-  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
+  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] (X Y | --cell C3) [BTN] [--double]
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
   omabox click [-b NAME] [--window SEL | --layer SEL] --find TEXT [--index N] [BTN] [OPTIONS as above]
                                                          what the accessibility tree names TEXT, at its middle
@@ -394,6 +395,17 @@ its point is not what was there at the shot: another window or layer over it, or
 under it ("the screen changed at X,Y since SHOT: then on ..., now on ...; take a new shot"). A
 change elsewhere on the screen (a toast, a clock, a window away from the point) is not. One
 Hyprland read per point; a --burst frame is not checked.
+@ shot click
+`shot --grid N` (2-26) draws N lettered columns (A, B, ...) and N numbered rows over the shot (of
+the screen, -g, --monitor or a window), the labels in a 28 px margin top and left so nothing is
+hidden; stderr names each column's and row's span in the shot's coordinates. For a small target
+with no tree: `--grid N --cell C3` is that cell cropped as -g would, enlarged (--zoom, to about
+shot-fit's size, 1000 px without; --fit N or --zoom N to choose) and gridded again, its stderr
+saying the -g for a closer look still; a target a grid line cuts is both cells, `--cell C3:D3`
+(any rectangle of cells). `click --in GRID.png --cell C3` clicks the cell's middle; `click --in
+GRID.png X Y` takes the image's pixels, margin included (a point in it is refused). A grid shot is
+never what --changed compares with, nor a --since (shot --changed, wait change). Needs
+ImageMagick's magick.
 @ shot config drag
 `omabox config shot-fit N` makes --fit N every shot's default ($OMABOX_SHOT_FIT overrides it; off
 or `default` clears it): for a model that reads points in the smaller image its API scales a big

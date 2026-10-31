@@ -12098,6 +12098,35 @@ from them.
     window's place is on the shot's stderr line) or a whole shot, and `click --in` that. If
     Hyprland ever exports a window's popup extents, `shot --window` could take a screen crop of
     them instead when the window is uncovered. Docs only: no test.
+
+620. **A small target on a surface with no tree was aimed at by eye, and missed** (2026-10-31, #268).
+    With no accessibility tree and no reference image yet (a bar icon, a caret), an agent reads a
+    point off a shot; on small targets that is a few pixels off, a shot to see nothing happened, and
+    another try. `--fit` and `calibrate` fix the scale between the shot and the model, not the aim.
+    `shot --grid N` (2-26) draws N lettered columns and N numbered rows over the shot (the screen,
+    -g, --monitor or a window) with ImageMagick: lines black 3 px under yellow 1 px, seen on any
+    colour, and the labels (fontconfig's bold monospace) in a 28 px margin spliced on top and left,
+    so nothing under them is hidden; stderr names each column's and row's span in the shot's
+    coordinates (N + N spans rather than N² boxes), how to click a cell and the command for a closer
+    look. `--grid N --cell C3` (stateless: the cell of the N grid over what the rest of the command
+    asks for, so a jailed agent's works without a file) becomes that cell's `-g`, taken again
+    through the same aim as any -g (a window's crop scaled to its buffer), enlarged with `--zoom` to
+    about shot-fit's size (1000 px without one; `--fit` or `--zoom` given choose instead) and
+    gridded again; its stderr gives the `-g` of the cell for the next look. A target a grid line cuts
+    is named as both cells, `--cell C3:D3` (any rectangle of cells, spreadsheet style), so the closer
+    look has it whole. The issue's `shot --grid N --in C3` was not taken: `--in` takes a shot file
+    everywhere else. The margin shifts every image pixel, so a grid shot's shots.tsv line has a
+    sixth field, `grid N M`: `--in` takes M off a point first (a point in the margin is refused, as
+    one past the image is); an older omabox reads that line's geometry as no number and refuses
+    rather than missing by M. `click --in GRID --cell C3` is the cell's middle as an image pixel of
+    that shot, then --in as any point (so a window shot follows the window, and the screen's checks
+    apply). Measured in a box: on a 1920x1080 screen at --fit 1000, C3 of 8 clicks 600,337; a cell
+    of the box's bar enlarged 3 times showed a workspace number cut by a line, which C3:D3 keeps
+    whole. A grid shot is never --changed's baseline nor a --since (lines drawn on it); cells under
+    12 image px (no room for a label) are refused after the capture, which is removed. The capture
+    goes to a temp in the box dir first (as --changed's), then magick writes OUT.part (renamed) or a
+    jailed caller's fd. Tests: t_shot_grid (the margin, the spans, click --cell and X Y through the
+    margin, --cell C3:D3's crop, zoom and --json, a window's grid, the refusals), grid.rs's units.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

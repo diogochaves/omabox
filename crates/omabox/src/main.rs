@@ -15,6 +15,7 @@ mod exec;
 mod exit;
 mod front;
 mod gpu;
+mod grid;
 mod guard;
 mod help;
 mod homeuse;

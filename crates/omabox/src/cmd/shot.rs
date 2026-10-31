@@ -118,6 +118,10 @@ struct Shot {
     sref: Option<[Vec<u8>; 7]>,
     /// A screen shot's desktop, being read (desk_snap) for layouts.tsv (#333).
     snap: Option<std::thread::JoinHandle<Vec<u8>>>,
+    /// --grid N (#268): N x N cells drawn over the image, labels in a margin.
+    grid: Option<i64>,
+    /// What --json says of the grid drawn: N, the margin, the file's size, the cells.
+    grid_json: Vec<u8>,
 }
 
 impl Shot {
@@ -130,6 +134,12 @@ impl Shot {
         let snap = t.join().unwrap_or_default();
         let ptr = crate::exit::muted(|| cursor_now(ctx).ok().unwrap_or_default());
         crate::shotcmp::layout_save(ctx, path, file, &ptr, &snap);
+    }
+
+    /// The capture goes to a file of omabox's (s.file) first, never straight into a jailed caller's
+    /// fd: --changed crops it, --grid draws on it.
+    fn via_file(&self) -> bool {
+        self.changed || self.grid.is_some()
     }
 
     /// shot_said PATH X Y W H IW IH [RESULT SINCE WHY]: what shot prints on stdout: the image's
@@ -173,6 +183,15 @@ impl Shot {
             .kv("--arg", "res", changed[0])
             .kv("--arg", "since", changed[1])
             .kv("--arg", "why", changed[2])
+            .kv(
+                "--argjson",
+                "grid",
+                if self.grid_json.is_empty() {
+                    b"null".as_slice()
+                } else {
+                    &self.grid_json
+                },
+            )
             .arg(crate::jqprog::SHOT_SAID_JQ)
             .run(None, jq::Err::Inherit);
         out(&r.out)?;
@@ -312,6 +331,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut burst, mut every, mut since): (Vec<u8>, Option<i64>, Vec<u8>) =
         (Vec::new(), None, Vec::new());
     let (mut sheet, mut bdiff, mut nopointer) = (false, false, false);
+    let (mut fit_given, mut cell) = (false, None);
     let mut after: Vec<Vec<u8>> = Vec::new();
     let mut s = Shot::default();
     let mut masks_st = Settle::default();
@@ -379,6 +399,29 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     )));
                 }
                 s.fit = val();
+                fit_given = true;
+                i += 1;
+            }
+            b"--grid" => {
+                optarg(ctx, a, v)?;
+                let Some(gn) = crate::grid::n_arg(&val()) else {
+                    return Err(ctx.die(cat!(
+                        "shot: --grid takes the cells a side, 2-26 (columns A-Z), got ",
+                        val()
+                    )));
+                };
+                s.grid = Some(gn);
+                i += 1;
+            }
+            b"--cell" => {
+                optarg(ctx, a, v)?;
+                let Some(c) = crate::grid::cell_arg(&val()) else {
+                    return Err(ctx.die(cat!(
+                        "shot: --cell takes a cell of the grid, like C3 (column letter, row number), or C3:D3 for the cells a line cuts a target between, got ",
+                        val()
+                    )));
+                };
+                cell = Some(c);
                 i += 1;
             }
             b"--zoom" => {
@@ -546,7 +589,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if !s.fit.is_empty() {
             return Err(ctx.die("shot: --zoom or --fit, not both"));
         }
-        if s.g.is_none() {
+        if s.g.is_none() && cell.is_none() {
             return Err(
                 ctx.die("shot: --zoom goes with -g, a small crop (shot -g \"X,Y 40x30\" --zoom 8)")
             );
@@ -557,6 +600,29 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "shot: --zoom needs ImageMagick's magick (package imagemagick, part of Omarchy)",
             ));
         }
+    }
+    // --grid (#268, finding 620): drawn on the image by ImageMagick; --cell a cell of it, closer.
+    if let Some(gn) = s.grid {
+        if !burst.is_empty() || s.changed {
+            return Err(
+                ctx.die("shot: --grid goes with one shot, not --burst or --changed (--since)")
+            );
+        }
+        if let Some(c) = &cell
+            && !c.fits(gn)
+        {
+            return Err(ctx.die(cat!("shot: --cell ", crate::grid::past(c, gn))));
+        }
+        if !on_path("magick") {
+            ctx.parsed();
+            return Err(ctx.die(
+                "shot: --grid needs ImageMagick's magick (package imagemagick, part of Omarchy)",
+            ));
+        }
+    } else if cell.is_some() {
+        return Err(ctx.die(
+            "shot: --cell goes with --grid N, the grid it is a cell of (shot --grid 8 --cell C3)",
+        ));
     }
     // A path that cannot be written is said so before anything is captured (issue #63).
     ctx.parsed();
@@ -646,10 +712,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "' (take one with omabox shot)"
             )));
         }
-        let r = shell::read_ifs(&rec, 5, b"\t");
+        let r = shell::read_ifs(&rec, 6, b"\t");
         let (stp, smode, skind, sgeo) = (r[1].clone(), r[2].clone(), r[3].clone(), r[4].clone());
         if stamp(&sf) != stp {
             return Err(ctx.die(cat!("shot --since: ", since, " changed since the shot")));
+        }
+        if crate::grid::rec_parse(&r[5]).is_some() {
+            return Err(ctx.die(cat!(
+                "shot --since: ",
+                since,
+                " is a grid shot (lines drawn on it); --since takes a whole shot"
+            )));
         }
         if skind == b"screen 0,0" {
             if !sels.is_empty() {
@@ -703,7 +776,156 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let (o, f, d) = shot_path(ctx, &cat!(tmp, "/omabox-", ctx.name, "-", hms_ms(), ".png"))?;
         (s.out, s.file, s.dir) = (o, f, Some(d));
     }
-    // What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
+    let mut wgeo = aim(ctx, &mut s, &sels)?;
+    if let Some(gn) = s.grid {
+        let fine = |ctx: &Ctx, s: &Shot| -> Res<(i64, i64)> {
+            let (lw, lh) = (bi(&s.lw)?, bi(&s.lh)?);
+            if lw < gn || lh < gn {
+                return Err(ctx.die(cat!(
+                    "shot: a grid of ",
+                    n(gn),
+                    "x",
+                    n(gn),
+                    " over ",
+                    s.lw,
+                    "x",
+                    s.lh,
+                    " has cells under a pixel: fewer cells or a bigger region"
+                )));
+            }
+            Ok((lw, lh))
+        };
+        let (lw, lh) = fine(ctx, &s)?;
+        // --cell: that cell of the grid over what was asked, shot as -g would take it, enlarged
+        // (--zoom: to about shot-fit's size, 1000 px with none) and gridded again.
+        if let Some(c) = cell {
+            let at = |v: &[u8]| if v.is_empty() { Ok(0) } else { bi(v) };
+            let r = crate::grid::rect([at(&s.gx)?, at(&s.gy)?, lw, lh], gn, c);
+            s.g = Some(r.map(n));
+            wgeo = aim(ctx, &mut s, &sels)?;
+            fine(ctx, &s)?;
+            if s.zoom.is_empty() && !fit_given {
+                let t = if s.fit.is_empty() { 1000 } else { bi(&s.fit)? };
+                let long = r[2].max(r[3]).max(1);
+                let z = (t / long).min(2000 / long).min(16);
+                if z >= 2 {
+                    s.zoom = n(z);
+                    s.fit.clear();
+                }
+            }
+        }
+    }
+    let (lw, lh) = (bi(&s.lw)?, bi(&s.lh)?);
+    // --zoom's limit on the region left once -g was cut (#240).
+    if !s.zoom.is_empty() {
+        let z = bi(&s.zoom)?;
+        if lw.max(lh).saturating_mul(z) > 2000 {
+            return Err(ctx.die(cat!(
+                "shot: --zoom ",
+                s.zoom,
+                " of ",
+                s.lw,
+                "x",
+                s.lh,
+                " is ",
+                n(lw.saturating_mul(z)),
+                "x",
+                n(lh.saturating_mul(z)),
+                ": at most 2000 px a side, a smaller -g"
+            )));
+        }
+    }
+    // --fit: grim scales the capture (-s), truncating the size, so the factor is rounded up. What is
+    // compared with N is the image grim writes without -s (#227): the layout's size times the
+    // highest scale of the outputs captured; a window's capture is its buffer (finding 300).
+    let long = lw.max(lh);
+    let mut scaled = false;
+    if !s.fit.is_empty() {
+        let (native, base): (Vec<u8>, Vec<u8>);
+        if !s.win.is_empty() {
+            if !wgeo.is_empty() {
+                let f = shell::read_ifs(&wgeo, 3, b"x ");
+                let (bw, bh) = (bi(&f[1])?, bi(&f[2])?);
+                native = n(bw.max(bh));
+            } else {
+                let wsc = win_scale(ctx, &jq_r(".address", &s.win))?;
+                native = fixed((long as f64 * awk_num(&wsc) + 0.5).trunc(), 0).into_bytes();
+            }
+            base = native.clone();
+        } else {
+            let mons = strip_nl(&hypr_json(ctx, &["monitors"])?);
+            let rx: &[u8] = if s.gx.is_empty() { b"0" } else { &s.gx };
+            let ry: &[u8] = if s.gy.is_empty() { b"0" } else { &s.gy };
+            let r = Args::new(&["-r"])
+                .kv("--argjson", "x", rx)
+                .kv("--argjson", "y", ry)
+                .kv("--argjson", "w", &s.lw)
+                .kv("--argjson", "h", &s.lh)
+                .arg(format!("{JQ_MON}{}", crate::jqprog::SHOT_SCALE_JQ))
+                .run(Some(&mons), jq::Err::Null);
+            let mut sc = if r.ok() { r.text() } else { b"1".to_vec() };
+            if !shell::re_match(r"^[0-9]+(\.[0-9]+)?$", &sc) {
+                sc = b"1".to_vec();
+            }
+            native = fixed(long as f64 * awk_num(&sc), 6).into_bytes();
+            base = n(long);
+        }
+        let fitn = awk_num(&s.fit);
+        if awk_num(&native) > fitn + 1e-9 {
+            scaled = true;
+            let f = ((fitn / awk_num(&base) * 1e6 + 1.0).trunc()) / 1e6;
+            s.grim.extend([b"-s".to_vec(), fixed(f, 6).into_bytes()]);
+        }
+    }
+    // --no-pointer (#228): hidden from the first frame on, shown again when this omabox ends. A
+    // window's own pixels never have it.
+    if nopointer && s.win.is_empty() {
+        crate::ptr::hold_until_exit(ctx, format!("shot {}", std::process::id()).as_bytes())?;
+    }
+    if !burst.is_empty() {
+        return burst_run(
+            ctx,
+            &mut s,
+            bi(&burst)?,
+            every.unwrap_or(100),
+            sheet,
+            bdiff,
+            &after,
+        );
+    }
+    // --changed captures the whole of it beside the references, to compare; the crop is written
+    // after.
+    if s.changed {
+        let dir = cat!(ctx.d, "/changed");
+        if !crate::shots::mkdir_p(&dir) {
+            return Err(ctx.die(cat!("shot: cannot write in ", ctx.d, "/changed")));
+        }
+        match shell::mktemp_in(&cat!(dir, "/.new-XXXXXX")) {
+            // (a file of omabox's own, by its name: not in OUT's folder)
+            Ok((_, f)) => (s.file, s.dir) = (f, None),
+            Err(_) => return Err(ctx.die(cat!("shot: cannot write in ", ctx.d, "/changed"))),
+        }
+    } else if s.grid.is_some() {
+        // --grid: the capture beside the box's records (a file of omabox's own, by its name: not in
+        // OUT's folder), drawn on into the image after, made and renamed in OUT's folder held.
+        match shell::mktemp_in(&cat!(ctx.d, "/.grid-XXXXXX")) {
+            Ok((_, f)) => s.file = f,
+            Err(_) => return Err(ctx.die(cat!("shot: cannot write in ", ctx.d))),
+        }
+    }
+    // A screen shot's desktop, read beside the capture and just before it, for --in (#333): what
+    // a later click at one of its points would get then.
+    if s.win.is_empty() {
+        let c = ctx.clone();
+        s.snap = Some(std::thread::spawn(move || crate::desk::desk_snap(&c, true)));
+    }
+    capture(ctx, &mut s, long, lw, lh, scaled)
+}
+
+/// aim: what the image covers, a window (its own pixels, finding 81), a region, or the whole layout,
+/// as grim takes it: S.grim, the region (gx, gy, lw, lh) cut to it and where_; a window crop's region
+/// in its buffer's pixels returned. Again for --cell (#268), with the cell as -g.
+fn aim(ctx: &mut Ctx, s: &mut Shot, sels: &[Vec<u8>]) -> Res<Vec<u8>> {
     // PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
     s.grim = vec![b"grim".to_vec(), b"-l".to_vec(), b"1".to_vec()];
     let mut wgeo = Vec::new();
@@ -712,7 +934,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     if !sels.is_empty() {
         let wins = box_windows(ctx, None)?;
-        s.win = win_select(ctx, &wins, &sels)?;
+        s.win = win_select(ctx, &wins, sels)?;
         let id = jq_r(".stableId", &s.win);
         if !shell::re_match("^[0-9a-fA-F]+$", &id) {
             return Err(ctx.die(cat!(
@@ -822,104 +1044,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         s.where_ = b"screen 0,0".to_vec();
         (s.lw, s.lh) = crate::input::wh(&ext);
     }
-    let (lw, lh) = (bi(&s.lw)?, bi(&s.lh)?);
-    // --zoom's limit on the region left once -g was cut (#240).
-    if !s.zoom.is_empty() {
-        let z = bi(&s.zoom)?;
-        if lw.max(lh).saturating_mul(z) > 2000 {
-            return Err(ctx.die(cat!(
-                "shot: --zoom ",
-                s.zoom,
-                " of ",
-                s.lw,
-                "x",
-                s.lh,
-                " is ",
-                n(lw.saturating_mul(z)),
-                "x",
-                n(lh.saturating_mul(z)),
-                ": at most 2000 px a side, a smaller -g"
-            )));
-        }
-    }
-    // --fit: grim scales the capture (-s), truncating the size, so the factor is rounded up. What is
-    // compared with N is the image grim writes without -s (#227): the layout's size times the
-    // highest scale of the outputs captured; a window's capture is its buffer (finding 300).
-    let long = lw.max(lh);
-    let mut scaled = false;
-    if !s.fit.is_empty() {
-        let (native, base): (Vec<u8>, Vec<u8>);
-        if !s.win.is_empty() {
-            if !wgeo.is_empty() {
-                let f = shell::read_ifs(&wgeo, 3, b"x ");
-                let (bw, bh) = (bi(&f[1])?, bi(&f[2])?);
-                native = n(bw.max(bh));
-            } else {
-                let wsc = win_scale(ctx, &jq_r(".address", &s.win))?;
-                native = fixed((long as f64 * awk_num(&wsc) + 0.5).trunc(), 0).into_bytes();
-            }
-            base = native.clone();
-        } else {
-            let mons = strip_nl(&hypr_json(ctx, &["monitors"])?);
-            let rx: &[u8] = if s.gx.is_empty() { b"0" } else { &s.gx };
-            let ry: &[u8] = if s.gy.is_empty() { b"0" } else { &s.gy };
-            let r = Args::new(&["-r"])
-                .kv("--argjson", "x", rx)
-                .kv("--argjson", "y", ry)
-                .kv("--argjson", "w", &s.lw)
-                .kv("--argjson", "h", &s.lh)
-                .arg(format!("{JQ_MON}{}", crate::jqprog::SHOT_SCALE_JQ))
-                .run(Some(&mons), jq::Err::Null);
-            let mut sc = if r.ok() { r.text() } else { b"1".to_vec() };
-            if !shell::re_match(r"^[0-9]+(\.[0-9]+)?$", &sc) {
-                sc = b"1".to_vec();
-            }
-            native = fixed(long as f64 * awk_num(&sc), 6).into_bytes();
-            base = n(long);
-        }
-        let fitn = awk_num(&s.fit);
-        if awk_num(&native) > fitn + 1e-9 {
-            scaled = true;
-            let f = ((fitn / awk_num(&base) * 1e6 + 1.0).trunc()) / 1e6;
-            s.grim.extend([b"-s".to_vec(), fixed(f, 6).into_bytes()]);
-        }
-    }
-    // --no-pointer (#228): hidden from the first frame on, shown again when this omabox ends. A
-    // window's own pixels never have it.
-    if nopointer && s.win.is_empty() {
-        crate::ptr::hold_until_exit(ctx, format!("shot {}", std::process::id()).as_bytes())?;
-    }
-    if !burst.is_empty() {
-        return burst_run(
-            ctx,
-            &mut s,
-            bi(&burst)?,
-            every.unwrap_or(100),
-            sheet,
-            bdiff,
-            &after,
-        );
-    }
-    // --changed captures the whole of it beside the references, to compare; the crop is written
-    // after.
-    if s.changed {
-        let dir = cat!(ctx.d, "/changed");
-        if !crate::shots::mkdir_p(&dir) {
-            return Err(ctx.die(cat!("shot: cannot write in ", ctx.d, "/changed")));
-        }
-        match shell::mktemp_in(&cat!(dir, "/.new-XXXXXX")) {
-            // (a file of omabox's own, by its name: not in OUT's folder)
-            Ok((_, f)) => (s.file, s.dir) = (f, None),
-            Err(_) => return Err(ctx.die(cat!("shot: cannot write in ", ctx.d, "/changed"))),
-        }
-    }
-    // A screen shot's desktop, read beside the capture and just before it, for --in (#333): what
-    // a later click at one of its points would get then.
-    if s.win.is_empty() {
-        let c = ctx.clone();
-        s.snap = Some(std::thread::spawn(move || crate::desk::desk_snap(&c, true)));
-    }
-    capture(ctx, &mut s, long, lw, lh, scaled)
+    Ok(wgeo)
 }
 
 /// geom_clip X Y W H LW LH: the region cut to LW x LH, as numbers (`010` is 10 and written 10:
@@ -1006,7 +1131,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         }
         let (pid, mpid, stop, done) = (pid.clone(), mpid.clone(), stop.clone(), done.clone());
         let (err, file) = (gerr.clone(), s.file.clone());
-        let unput = s.tofd.is_empty() || s.changed;
+        let unput = s.tofd.is_empty() || s.via_file();
         let undo = crate::trap::on_exit(move || {
             if !crate::trap::signalled() {
                 return;
@@ -1038,10 +1163,15 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         mpid,
         stop,
     });
-    let to_fd = !s.tofd.is_empty() && !s.changed;
+    let to_fd = !s.tofd.is_empty() && !s.via_file();
     let tofd = s.tofd.clone();
     let file = s.file.clone();
-    let held = s.dir.clone();
+    // (a grid's capture is a file of omabox's own, not in OUT's folder: never made there)
+    let held = if s.grid.is_some() {
+        None
+    } else {
+        s.dir.clone()
+    };
     let has_win = !s.win.is_empty();
     // put: into a jailed caller's fd (never reopened by name), else the file.
     let put = {
@@ -1074,7 +1204,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     {
         let g = grab.clone();
         let file = file.clone();
-        let changed = s.changed;
+        let changed = s.via_file();
         let tofd_empty = tofd.is_empty();
         th = Some(std::thread::spawn(move || {
             // A window's first capture can be a frame from long ago (finding 81): captured twice.
@@ -1105,7 +1235,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         }));
     }
     let unput = |s: &Shot| {
-        if s.tofd.is_empty() || s.changed {
+        if s.tofd.is_empty() || s.via_file() {
             let _ = std::fs::remove_file(shell::path(&s.file));
         }
     };
@@ -1191,30 +1321,57 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     if s.changed {
         return changed(ctx, s, lw, lh);
     }
-    if s.tofd.is_empty() {
-        // (`mv "$file" "$out"`: into a folder of that name, as mv does; in the folder held, where
-        // shot_path refused a folder at OUT)
-        let moved = match &s.dir {
-            Some(d) => d
-                .rename(&shell::basename(&s.file), &shell::basename(&s.out))
-                .map_err(|e| {
-                    say(cat!(
-                        "shot: cannot write ",
-                        s.out,
-                        ": ",
-                        crate::shots::why(&e)
-                    ))
-                })
-                .is_ok(),
-            None => crate::shots::mv_f(&s.file, &s.out),
+    // --grid (#268): the image's own pixels (IW x IH) are the capture's, after the margin.
+    let (iw, ih) = if let Some(gn) = s.grid {
+        let Some((iw, ih)) = png_size(&s.file) else {
+            unput(s);
+            return Err(ctx.die("shot: the capture is not a PNG"));
         };
-        if !moved {
-            return Err(Exit(1));
+        if iw / gn < crate::grid::MIN_CELL || ih / gn < crate::grid::MIN_CELL {
+            unput(s);
+            return Err(ctx.die(cat!(
+                "shot: a grid of ",
+                n(gn),
+                "x",
+                n(gn),
+                " on a ",
+                n(iw),
+                "x",
+                n(ih),
+                " image has cells under ",
+                n(crate::grid::MIN_CELL),
+                " px, too small for their labels: fewer cells, or a bigger image (--fit, --zoom)"
+            )));
         }
-        s.file = s.out.clone();
-    }
-    let Some((iw, ih)) = png_size(&s.file) else {
-        return Err(ctx.die(cat!("shot: ", s.out, " is not a PNG")));
+        gridded(ctx, s, gn, [lw, lh, iw, ih])?;
+        (iw, ih)
+    } else {
+        if s.tofd.is_empty() {
+            // (`mv "$file" "$out"`: into a folder of that name, as mv does; in the folder held, where
+            // shot_path refused a folder at OUT)
+            let moved = match &s.dir {
+                Some(d) => d
+                    .rename(&shell::basename(&s.file), &shell::basename(&s.out))
+                    .map_err(|e| {
+                        say(cat!(
+                            "shot: cannot write ",
+                            s.out,
+                            ": ",
+                            crate::shots::why(&e)
+                        ))
+                    })
+                    .is_ok(),
+                None => crate::shots::mv_f(&s.file, &s.out),
+            };
+            if !moved {
+                return Err(Exit(1));
+            }
+            s.file = s.out.clone();
+        }
+        let Some((iw, ih)) = png_size(&s.file) else {
+            return Err(ctx.die(cat!("shot: ", s.out, " is not a PNG")));
+        };
+        (iw, ih)
     };
     // Its scale in its comment (#267, finding 616), image pixels to the layout's, which a crop of it
     // keeps: find --image scales it to a box drawn at another. (Not into a jailed caller's fd, which
@@ -1227,12 +1384,18 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     let screen = box_screen(ctx)?;
     let mode = split_at(&screen, b' ').1;
     let geo = cat!(s.lw, "x", s.lh, " ", n(iw), "x", n(ih));
-    shot_record(ctx, &s.out, &mode, &s.where_, &geo, &s.file)?;
+    // (a grid shot's record has a sixth field, "grid N M", that --in reads)
+    let rgeo = match s.grid {
+        Some(gn) => cat!(geo, "\t", crate::grid::rec_field(gn)),
+        None => geo.clone(),
+    };
+    shot_record(ctx, &s.out, &mode, &s.where_, &rgeo, &s.file)?;
     let (o, f) = (s.out.clone(), s.file.clone());
     s.layout_save(ctx, &o, &f);
     // A whole shot is what a later --changed compares with (finding 243); not one taken with
-    // OMABOX_SHOT_NO_BASELINE=1 (the suite's evidence shots, #195, finding 266).
+    // OMABOX_SHOT_NO_BASELINE=1 (the suite's evidence shots, #195, finding 266), nor a grid's.
     if s.g.is_none()
+        && s.grid.is_none()
         && s.zoom.is_empty()
         && !scaled
         && shell::env_or_empty("OMABOX_SHOT_NO_BASELINE") != b"1"
@@ -1288,8 +1451,9 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
             "; click with --in ",
             s.out
         ));
-    } else if cat!(s.where_, " ", s.lw, " ", n(iw)) != cat!("screen 0,0 ", s.lw, " ", s.lw)
-        || s.lh != n(ih)
+    } else if s.grid.is_none()
+        && (cat!(s.where_, " ", s.lw, " ", n(iw)) != cat!("screen 0,0 ", s.lw, " ", s.lw)
+            || s.lh != n(ih))
     {
         say(cat!(
             n(iw),
@@ -1310,11 +1474,151 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     }
     let gx: &[u8] = if s.gx.is_empty() { b"0" } else { &s.gx };
     let gy: &[u8] = if s.gy.is_empty() { b"0" } else { &s.gy };
+    if let Some(gn) = s.grid {
+        let r = [bi(gx)?, bi(gy)?, lw, lh];
+        say(grid_words(s, gn, r, [iw, ih], &k));
+        s.grid_json = crate::grid::json(r, gn, iw, ih).into_bytes();
+    }
     let (lws, lhs) = (s.lw.clone(), s.lh.clone());
     s.said(
         [&s.out, gx, gy, &lws, &lhs, &n(iw), &n(ih)],
         [b"", b"", b""],
     )
+}
+
+/// What a grid shot says on stderr (#268): the grid, each cell's box in the shot's coordinates (the
+/// screen's, or the window's), how to click a cell's middle and how to look closer at one.
+fn grid_words(s: &Shot, gn: i64, r: [i64; 4], [iw, ih]: [i64; 2], k: &[u8]) -> Vec<u8> {
+    let m = crate::grid::MARGIN;
+    let last = crate::grid::col(gn - 1);
+    let mut again: Vec<u8> = b"shot".to_vec();
+    if !s.win.is_empty() {
+        again = cat!(again, " --window ", jq_r(".address", &s.win));
+    }
+    if s.g.is_some() {
+        again = cat!(
+            again,
+            " -g \"",
+            n(r[0]),
+            ",",
+            n(r[1]),
+            " ",
+            n(r[2]),
+            "x",
+            n(r[3]),
+            "\""
+        );
+    }
+    cat!(
+        "grid ",
+        n(gn),
+        "x",
+        n(gn),
+        " (columns A-",
+        last.to_string(),
+        ", rows 1-",
+        n(gn),
+        ") on a ",
+        n(iw + m),
+        "x",
+        n(ih + m),
+        " image: the shot's ",
+        n(iw),
+        "x",
+        n(ih),
+        k,
+        " after a ",
+        n(m),
+        " px margin top and left, the labels'; in ",
+        if s.win.is_empty() {
+            "the screen's"
+        } else {
+            "the window's"
+        },
+        " coordinates, ",
+        crate::grid::boxes(r, gn),
+        ". A cell's middle: click --in ",
+        s.out,
+        " --cell C3; closer: ",
+        again,
+        " --grid ",
+        n(gn),
+        " --cell C3; a target a line cuts: both cells, --cell C3:D3"
+    )
+}
+
+/// --grid (#268): the grid drawn on the capture (S.file, removed after) into the image: a jailed
+/// caller's fd, or OUT whole (OUT.part renamed into place). S.file is the image after.
+fn gridded(ctx: &Ctx, s: &mut Shot, gn: i64, sizes: [i64; 4]) -> Res<()> {
+    let raw = s.file.clone();
+    let rm = |f: &[u8]| {
+        let _ = std::fs::remove_file(shell::path(f));
+    };
+    let part = if s.tofd.is_empty() {
+        cat!(s.out, ".part")
+    } else {
+        Vec::new()
+    };
+    // A signal while it is drawn leaves no OUT.part (the capture's own undo removes RAW).
+    let _undo = (!part.is_empty() && !crate::ptr::holding()).then(|| {
+        let p = part.clone();
+        crate::trap::on_exit(move || {
+            if crate::trap::signalled() {
+                let _ = std::fs::remove_file(shell::path(&p));
+            }
+        })
+    });
+    let target: Option<OwnedFd> = if part.is_empty() {
+        let fd: i32 = String::from_utf8_lossy(&s.tofd).parse().unwrap_or(-1);
+        // SAFETY: fd_file checked it is open; dup gives a descriptor of our own.
+        let d = unsafe { libc::dup(fd) };
+        // SAFETY: d is a new descriptor of ours.
+        (d >= 0).then(|| unsafe { OwnedFd::from_raw_fd(d) })
+    } else {
+        // (never through a link at PART: #338; in OUT's folder held, when there is one)
+        match &s.dir {
+            Some(d) => d.create(&shell::basename(&part)),
+            None => crate::shots::create_nofollow(&part),
+        }
+        .ok()
+        .map(OwnedFd::from)
+    };
+    let Some(t) = target else {
+        rm(&raw);
+        return Err(ctx.die(cat!("shot: cannot write ", s.out)));
+    };
+    let r = crate::grid::draw(&raw, t, sizes, gn);
+    rm(&raw);
+    if let Err(why) = r {
+        if !part.is_empty() {
+            rm(&part);
+        }
+        return Err(ctx.die(cat!("shot: cannot draw the grid: ", why)));
+    }
+    if part.is_empty() {
+        s.file = cat!("/dev/fd/", s.tofd);
+    } else {
+        let moved = match &s.dir {
+            Some(d) => d
+                .rename(&shell::basename(&part), &shell::basename(&s.out))
+                .map_err(|e| {
+                    say(cat!(
+                        "shot: cannot write ",
+                        s.out,
+                        ": ",
+                        crate::shots::why(&e)
+                    ))
+                })
+                .is_ok(),
+            None => crate::shots::mv_f(&part, &s.out),
+        };
+        if !moved {
+            rm(&part);
+            return Err(Exit(1));
+        }
+        s.file = s.out.clone();
+    }
+    Ok(())
 }
 
 /// `[ -s FILE ]`.

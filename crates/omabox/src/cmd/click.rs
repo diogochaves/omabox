@@ -8,6 +8,7 @@
 //! watches what it does (finding 82). --find (#318) clicks the middle of what the accessibility tree
 //! names TEXT, read fresh by omabox-tree --click, with the real pointer as X Y would. --image FILE
 //! (#267) clicks the middle of where that image is (find --image's search), --offset beside it.
+//! `--in SHOT --cell C3` (#268) clicks the middle of a cell of a grid shot (shot --grid N).
 
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::need_box;
@@ -264,6 +265,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         (None, Vec::new(), None);
     let (mut find, mut layer, mut index) = (Vec::new(), Vec::new(), None);
     let (mut spec, mut offset) = (find::Spec::default(), None);
+    let mut cell = None;
     let mut st = Settle::default();
     let mut i = 0;
     while i < args.len() {
@@ -340,6 +342,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 mods = mods_add(ctx, &mods, &args[i + 1])?;
                 i += 1;
             }
+            b"--cell" => {
+                optarg(ctx, a, v)?;
+                let Some(c) = crate::grid::cell_arg(&args[i + 1]) else {
+                    return Err(ctx.die(cat!(
+                        "click: --cell takes a cell of a grid shot, like C3 (column letter, row number) or C3:D3, got ",
+                        args[i + 1]
+                    )));
+                };
+                cell = Some(c);
+                i += 1;
+            }
             w if button(w) => btn = w.to_vec(),
             w if w == b"-g" || w.starts_with(b"--") => {
                 st.opt(ctx, &args[i..])?;
@@ -366,6 +379,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let on_window = sels.len() + usize::from(!find.is_empty() && layer.is_empty());
     st.opts_check(ctx, on_window)?;
     let image = !spec.file.is_empty();
+    if cell.is_some() {
+        if inp.is_empty() {
+            return Err(ctx.die(
+                "click: --cell goes with --in SHOT, the grid shot it is a cell of (shot --grid N)",
+            ));
+        }
+        if !find.is_empty() || !xyv.is_empty() || image {
+            return Err(ctx.die(
+                "click: --cell C3, X Y, --find TEXT or --image FILE: one of them",
+            ));
+        }
+    }
     if image && !find.is_empty() {
         return Err(ctx.die("click: --find TEXT or --image FILE, not both"));
     }
@@ -388,7 +413,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if !layer.is_empty() || index.is_some() {
             return Err(ctx.die("click: --layer and --index go with --find TEXT or --image FILE"));
         }
-        if xyv.len() != 2 {
+        if xyv.len() != 2 && cell.is_none() {
             let s = if xyv.len() == 1 { "" } else { "s" };
             return Err(ctx.die(format!("click: need X Y, got {} number{s}", xyv.len())));
         }
@@ -414,6 +439,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // A recording's glide (record start --glide) unless --steps says how to get there.
     if steps.is_none() && glide.is_none() {
         glide = rec_glide(ctx).and_then(|g| shell::dec(&g));
+    }
+    // --cell (#268): the cell's middle, as an image pixel of the grid shot (--in maps it on).
+    if let Some(c) = &cell {
+        let (sizes, gn, m) = crate::screen::shot_grid(ctx, &inp)?;
+        if !c.fits(gn) {
+            return Err(ctx.die(cat!("click: --cell ", crate::grid::past(c, gn))));
+        }
+        let Some((px, py)) = crate::grid::middle_px(sizes, gn, m, *c) else {
+            return Err(ctx.die(cat!(
+                "--in: ",
+                inp,
+                ": its record in shots.tsv is not one omabox reads"
+            )));
+        };
+        xyv = vec![px, py];
     }
     spec.sels = sels.clone();
     let (x, y) = if image {

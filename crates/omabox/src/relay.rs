@@ -373,9 +373,9 @@ fn shot(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()> 
                 fwd.extend_from_slice(&args[i..i + 2]);
                 i += 1;
             }
-            // (--monitor NAME was taken for the output file, #284)
+            // (--monitor NAME was taken for the output file, #284; --grid N would be, #268)
             b"-g" | b"-w" | b"--window" | b"--monitor" | b"--fit" | b"--zoom" | b"--burst"
-            | b"--every" | b"--ignore" => {
+            | b"--every" | b"--ignore" | b"--grid" | b"--cell" => {
                 crate::args::optarg(ctx, a, args.get(i + 1))?;
                 fwd.extend_from_slice(&args[i..i + 2]);
                 i += 1;

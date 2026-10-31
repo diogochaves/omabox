@@ -147,6 +147,27 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
     Ok(shot_point_ref(ctx, file, x, y)?.0)
 }
 
+/// A grid shot's record (#268): its layout and image sizes ("LWxLH IWxIH", the image's pixels
+/// after the margin), N and the margin; refused, said, for a shot that is not one.
+pub fn shot_grid(ctx: &Ctx, file: &[u8]) -> Res<([i64; 4], i64, i64)> {
+    let r = crate::shotcmp::load(ctx, file, "--in")?;
+    let Some((n, m)) = crate::grid::rec_parse(&r.grid) else {
+        return Err(ctx.die(cat!(
+            "--cell: ",
+            r.key,
+            " is not a grid shot (take one with shot --grid N)"
+        )));
+    };
+    match r.sizes() {
+        Some([a, b, c, d]) if a > 0 && b > 0 && c > 0 && d > 0 => Ok(([a, b, c, d], n, m)),
+        _ => Err(ctx.die(cat!(
+            "--in: ",
+            r.key,
+            ": its record in shots.tsv is not one omabox reads"
+        ))),
+    }
+}
+
 /// shot_point for an action there (click, scroll, drag, pointer): a point of a screen shot is
 /// refused too when what is at it on the screen now is not what was there at the shot (#333,
 /// layout_check), said as "click --in: ...".
@@ -176,6 +197,53 @@ fn shot_point_ref(
     let geo = &geo;
     let g = shell::read_ifs(geo, 4, b"x ");
     let (lw, lh, iw, ih) = (&g[0], &g[1], &g[2], &g[3]);
+    // A grid shot (#268): its pixels start after the labels' margin, top and left.
+    let (x, y) = match crate::grid::rec_parse(&r.grid) {
+        Some((_, m)) => {
+            let (Some(xi), Some(yi), Some(wi), Some(hi)) =
+                (shell::test_int(x), shell::test_int(y), dec(iw), dec(ih))
+            else {
+                return Err(ctx.die(cat!(
+                    "--in: ",
+                    key,
+                    ": its record in shots.tsv is not one omabox reads"
+                )));
+            };
+            if (xi < m || yi < m) && xi < wi + m && yi < hi + m && xi >= 0 && yi >= 0 {
+                return Err(ctx.die(cat!(
+                    "--in: ",
+                    x,
+                    ",",
+                    y,
+                    " is in the grid's margin (its labels, ",
+                    m.to_string(),
+                    " px top and left): the shot's pixels start at ",
+                    m.to_string(),
+                    ",",
+                    m.to_string()
+                )));
+            }
+            if !(xi < wi + m && yi < hi + m) {
+                return Err(ctx.die(cat!(
+                    "--in: ",
+                    x,
+                    ",",
+                    y,
+                    " is outside the image (",
+                    (wi + m).to_string(),
+                    "x",
+                    (hi + m).to_string(),
+                    ")"
+                )));
+            }
+            (
+                (xi - m).to_string().into_bytes(),
+                (yi - m).to_string().into_bytes(),
+            )
+        }
+        None => (x.to_vec(), y.to_vec()),
+    };
+    let (x, y) = (x.as_slice(), y.as_slice());
     let lt = |a: &[u8], b: &[u8]| {
         shell::test_int(a)
             .zip(shell::test_int(b))

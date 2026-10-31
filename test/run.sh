@@ -18391,6 +18391,59 @@ t_shot_fit() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# shot --grid (#268, finding 620): lettered cells in a margin, --cell a closer look, click --cell.
+t_shot_grid() {
+  local B=$P-grid o=$TMP/grid out err
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  mkdir -p "$o"
+  pos() { ob hyprctl -b "$B" cursorpos; }
+  err=$(ob shot -b "$B" --grid 8 --fit 1000 -o "$o/g.png" 2>&1 >/dev/null)
+  check_match "--grid 8: the image 28 px more each way, the labels' margin" "1028 x 590," "$(file "$o/g.png")"
+  check_match "...each column's and row's span said, in the screen's coordinates" \
+    "grid 8x8 \(columns A-H, rows 1-8\) on a 1028x590 image.*columns \(x\) A 0-239, B 240-479, C 480-719.*rows \(y\) 1 0-134, 2 135-269, 3 270-404" "$err"
+  check_match "...and how to click a cell and look closer" "click --in $o/g.png --cell C3; closer: shot --grid 8 --cell C3" "$err"
+  ob click -b "$B" --in "$o/g.png" --cell C3 >/dev/null 2>&1
+  check_eq "click --in it --cell C3: the cell's middle on the screen" "600, 337" "$(pos)"
+  ob click -b "$B" --in "$o/g.png" 528 298 >/dev/null 2>&1
+  check_eq "click --in it X Y: the margin taken off first (500,270 of a --fit 1000 shot)" "960, 519" "$(pos)"
+  check_match "...a point in the margin refused" "is in the grid's margin" "$(ob click -b "$B" --in "$o/g.png" 5 100 2>&1)"
+  check_match "...past the image refused" "is outside the image \(1028x590\)" "$(ob click -b "$B" --in "$o/g.png" 1028 100 2>&1)"
+  check_match "...a cell past the grid refused" "I1 is past the 8x8 grid" "$(ob click -b "$B" --in "$o/g.png" --cell I1 2>&1)"
+  out=$(ob shot -b "$B" --grid 8 --cell C3:D3 --json -o "$o/c.png" 2>"$o/err"); err=$(cat "$o/err")
+  check_eq "--cell C3:D3: the two cells, cropped as -g" "480 270 480 135" "$(jq -r '"\(.region.x) \(.region.y) \(.region.w) \(.region.h)"' <<<"$out")"
+  check_eq "...enlarged to about 1000 px (--zoom 2), gridded again behind its margin" "2 960 988 298" \
+    "$(jq -r '"\(.zoom) \(.image.w) \(.grid.file.w) \(.grid.file.h)"' <<<"$out")"
+  check_match "...the image that size" "988 x 298," "$(file "$o/c.png")"
+  check_eq "...--json: each column where it is" "A 480 60|H 900 60|1 270 16" \
+    "$(jq -r '[(.grid.columns[0], .grid.columns[7] | "\(.name) \(.x) \(.w)"), (.grid.rows[0] | "\(.name) \(.y) \(.h)")] | join("|")' <<<"$out")"
+  check_match "...said how to look closer still" 'closer: shot -g "480,270 480x135" --grid 8 --cell C3' "$err"
+  ob click -b "$B" --in "$o/c.png" --cell A1 >/dev/null 2>&1
+  check_eq "click --cell A1 of the closer look: its middle" "510, 278" "$(pos)"
+  # A window's grid: its own coordinates, followed by --in.
+  ob run -b "$B" -d -q --wait -- foot -T G -o cursor.blink=no cat >/dev/null 2>&1
+  local wx wy ww wh
+  read -r wx wy ww wh < <(ob windows -b "$B" --json | jq -r '.[] | select(.title == "G") | "\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1])"')
+  err=$(ob shot -b "$B" -w 'title:^G$' --grid 4 --fit 0 -o "$o/w.png" 2>&1 >/dev/null)
+  check_match "a window's grid: in its coordinates" "in the window's coordinates, columns \(x\) A 0-$((ww / 4 - 1)), " "$err"
+  ob click -b "$B" --in "$o/w.png" --cell B2 >/dev/null 2>&1
+  check_eq "...click --cell B2: its middle in the window" \
+    "$((wx + (ww / 4 + ww * 2 / 4) / 2)), $((wy + (wh / 4 + wh * 2 / 4) / 2))" "$(pos)"
+  # Refused: what --grid and --cell cannot go with, or do not take.
+  check_match "--cell without --grid refused" "--cell goes with --grid N" "$(ob shot -b "$B" --cell C3 2>&1)"
+  check_match "--grid 27 refused" "--grid takes the cells a side, 2-26" "$(ob shot -b "$B" --grid 27 2>&1)"
+  check_match "--grid with --changed refused" "--grid goes with one shot" "$(ob shot -b "$B" --grid 8 --changed 2>&1)"
+  check_match "a cell past the grid refused" "--cell I1 is past the 8x8 grid" "$(ob shot -b "$B" --grid 8 --cell I1 2>&1)"
+  check_match "cells too small for their labels refused" "cells under 12 px" "$(ob shot -b "$B" --grid 26 -g "0,0 100x100" -o "$o/tiny.png" 2>&1)"
+  check_fails "...no image left" test -e "$o/tiny.png"
+  check_eq "...nor the capture" "" "$(compgen -G "$XDG_RUNTIME_DIR/omabox/$B/.grid-*" || true)"
+  check_match "click --cell without --in refused" "--cell goes with --in SHOT" "$(ob click -b "$B" --cell C3 2>&1)"
+  ob shot -b "$B" -o "$o/plain.png" >/dev/null 2>&1
+  check_match "click --cell in a shot with no grid refused" "is not a grid shot" "$(ob click -b "$B" --in "$o/plain.png" --cell A1 2>&1)"
+  check_match "--since a grid shot refused" "is a grid shot" "$(ob shot -b "$B" --changed --since "$o/g.png" 2>&1)"
+  check_match "...wait change --since one refused too" "wait --since: .* is a grid shot \(lines drawn on it\); --since takes a whole shot" "$(ob wait -b "$B" --timeout 1s change --since "$o/g.png" 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+}
+
 t_changed() {
   local B=$P-chg o=$TMP/chg out err rc W='title:^C$'
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
@@ -20618,7 +20671,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

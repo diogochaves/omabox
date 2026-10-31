@@ -25,6 +25,8 @@ pub struct ShotRef {
     pub stamp: Vec<u8>,
     pub kind: Vec<u8>,
     pub geo: Vec<u8>,
+    /// A grid shot's sixth field, "grid N M" (#268: N cells a side, an M px margin), else empty.
+    pub grid: Vec<u8>,
 }
 
 impl ShotRef {
@@ -86,7 +88,8 @@ pub fn load(ctx: &Ctx, file: &[u8], label: &str) -> Res<ShotRef> {
             "' (take one with omabox shot)"
         )));
     }
-    let r = shell::read_ifs(&rec, 5, b"\t");
+    // (a grid shot's record has a sixth field, "grid N M": kept apart, never part of the sizes)
+    let r = shell::read_ifs(&rec, 6, b"\t");
     if stamp(&f) != r[1] {
         return Err(ctx.die(cat!(
             label,
@@ -116,6 +119,7 @@ pub fn load(ctx: &Ctx, file: &[u8], label: &str) -> Res<ShotRef> {
         stamp: r[1].clone(),
         kind: r[3].clone(),
         geo: r[4].clone(),
+        grid: r[5].clone(),
     })
 }
 

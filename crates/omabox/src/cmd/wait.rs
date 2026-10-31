@@ -1331,6 +1331,17 @@ impl Base {
         let t0 = mono_ms();
         let label = format!("wait {opt}");
         let r = crate::shotcmp::load(ctx, file, &label)?;
+        // (a grid shot has lines drawn on it: never compared, as shot --changed --since refuses it)
+        if crate::grid::rec_parse(&r.grid).is_some() {
+            return Err(ctx.die(cat!(
+                label,
+                ": ",
+                r.key,
+                " is a grid shot (lines drawn on it); ",
+                opt,
+                " takes a whole shot"
+            )));
+        }
         let Some([lw, lh, _, _]) = r.sizes() else {
             return Err(ctx.die(cat!(
                 label,
