@@ -12276,7 +12276,8 @@ t_unit_install() {
   rmdir "$h/.claude/skills/omabox"
   check "install.sh in a clean HOME" env HOME="$h" PATH="$stub:$PATH" "$c/install.sh"
   check_eq "...built every tool in its own ROOT" "$(cd "$c/tools" && printf '%s\n' */Makefile | sed 's|\(.*\)/Makefile|\1/omabox-\1|')" \
-    "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "$f"; done)"
+    "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && [[ $f != *.so ]] && echo "$f"; done)"
+  check "...and up --polkit's session shim (#258)" test -f "$c/tools/polkit/omabox-polkit-session.so"
   check "...and omabox, at build/omabox" cmp -s "$ROOT/build/omabox" "$c/build/omabox"
   # finding 66's successor (#324 wave 6-flip): build/omabox is replaced by a rename, so a command
   # running from it keeps its file (the one open here) and no caller runs a half-written one.
