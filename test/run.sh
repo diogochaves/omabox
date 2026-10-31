@@ -624,11 +624,42 @@ host_same() {
   else no "$1" "want [$2] got [$3]; no event to it in the host's log"; fi
 }
 
+# stand_in_host RT SIG: a stand-in host session for unit checks of what omabox does on the user's
+# Hyprland (host, --size host), which must never reach the real one (#372). RT is a new runtime dir
+# whose only session is SIG: a socket that writes each request to RT/requests.log and answers version
+# and monitors (STANDIN_MODE the focused one's mode), its Wayland socket wayland-sti beside it.
+# STANDIN_PID is its server's (declare it local first); kill it when done.
+STANDIN_MODE=2560x1440@59.95
+stand_in_host() {
+  local rt=$1 sig=$2 i
+  mkdir -m 700 "$rt"; mkdir -p "$rt/hypr/$sig"
+  python3 - "$rt/hypr/$sig/.socket.sock" "$rt/wayland-sti" "$rt/requests.log" <<'PY' &
+import socket, sys
+w = socket.socket(socket.AF_UNIX); w.bind(sys.argv[2])
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)
+mons = (b'[{"name": "DP-8", "width": 1920, "height": 1080, "refreshRate": 60.0, "focused": false},'
+        b' {"name": "DP-9", "width": 2560, "height": 1440, "refreshRate": 59.951, "focused": true}]')
+while True:
+    c, _ = s.accept()
+    d = c.recv(1 << 16).decode("utf-8", "replace")
+    with open(sys.argv[3], "a") as h:
+        h.write(d + "\n")
+    c.sendall(b'{"tag": "stand-in"}' if d.startswith("j/version") else mons if d.startswith("j/monitors") else b"unknown request")
+    c.close()
+PY
+  STANDIN_PID=$!
+  for i in $(seq 50); do [ -S "$rt/hypr/$sig/.socket.sock" ] && break; sleep 0.1; done
+  printf '%s\nwayland-sti\n' "$STANDIN_PID" > "$rt/hypr/$sig/hyprland.lock"
+}
+
 # --- tests ---------------------------------------------------------------------------------------
 
 t_unit_parse_mode() {
   # The modes, the main screen's scale (finding 296) and size_text: mon.rs modes_as_bash.
-  check_match "host = the focused monitor" '^[0-9]+x[0-9]+@[0-9.]+$' "$(probe parse_mode host)"
+  # (a stand-in session's, #372: never the user's desktop)
+  local STANDIN_PID; stand_in_host "$TMP/pm-host" a_9_9
+  check_eq "host = the focused monitor" "$STANDIN_MODE" "$(XDG_RUNTIME_DIR=$TMP/pm-host probe parse_mode host)"
+  kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null || true
 }
 
 t_unit_rec_ff() {
@@ -13740,11 +13771,19 @@ t_monitors_window() {
 GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
   BROWSER="$ROOT/share/guard/xdg-open" GH_BROWSER="$ROOT/share/guard/xdg-open" PATH="$ROOT/share/guard:$PATH")
 t_unit_host_session() {
-  check_fails "hyprctl under the guard fails" "${GUARDED[@]}" hyprctl -j version
-  local found; found=$("${GUARDED[@]}" "$PROBE" _rust probe host_session); found=${found%% *}
-  check "under the guard omabox finds a live session ($found)" env HYPRLAND_INSTANCE_SIGNATURE="$found" hyprctl -j version
-  check "and reaches it (read-only hyprctl -j monitors, --size host's)" "${GUARDED[@]}" "$PROBE" _rust probe parse_mode host
-  check_eq "--size host under the guard is the same monitor" "$(probe parse_mode host)" "$("${GUARDED[@]}" "$PROBE" _rust probe parse_mode host)"
+  # On a stand-in session (#372), never the user's desktop.
+  local hrt=$TMP/hs-host STANDIN_PID found; stand_in_host "$hrt" a_8_8
+  local hg=("${GUARDED[@]}" XDG_RUNTIME_DIR="$hrt")
+  check_fails "hyprctl under the guard fails" "${hg[@]}" hyprctl -j version
+  found=$("${hg[@]}" "$PROBE" _rust probe host_session)
+  check_eq "under the guard omabox finds the live session" "a_8_8 $hrt/wayland-sti" "$found"
+  check_match "...which hyprctl reaches under its signature" '"tag": "stand-in"' \
+    "$(XDG_RUNTIME_DIR=$hrt HYPRLAND_INSTANCE_SIGNATURE=${found%% *} hyprctl -j version)"
+  check_eq "and reaches it (read-only hyprctl -j monitors, --size host's): its focused monitor" "$STANDIN_MODE" \
+    "$("${hg[@]}" "$PROBE" _rust probe parse_mode host)"
+  check_eq "--size host under the guard is the same monitor" "$(XDG_RUNTIME_DIR=$hrt probe parse_mode host)" "$("${hg[@]}" "$PROBE" _rust probe parse_mode host)"
+  check "...the stand-in heard monitors asked" grep -qx j/monitors "$hrt/requests.log"
+  kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null || true
   local rt=$TMP/rt n
   fake() { mkdir -p "$rt/hypr/$1"; printf '%s\n%s\n' $$ "$2" > "$rt/hypr/$1/hyprland.lock"; }
   sock() { python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$1"; }
@@ -14096,34 +14135,17 @@ t_unit_guard_exec_host() {
   else
     no "...which refuse kill and ipc" "not run: quickshell under guard exec is [$qs], not the guard's"
   fi
-  # host's session, a stand-in one (#372): a runtime dir of the test's own, its Hyprland a socket that
-  # writes down each request and answers version, its Wayland socket beside it. No check below
-  # reaches the user's desktop, and each one sees the session omabox finds there, not
-  # $HYPRLAND_INSTANCE_SIGNATURE (under the guard, an agent running the suite, that is the guard's).
-  local hrt=$TMP/ghost-rt hsig=a_7_7 hsrv i
-  mkdir -m 700 "$hrt"; mkdir -p "$hrt/hypr/$hsig"
-  python3 - "$hrt/hypr/$hsig/.socket.sock" "$hrt/wayland-gh" "$TMP/ghost.log" <<'PY' &
-import socket, sys
-w = socket.socket(socket.AF_UNIX); w.bind(sys.argv[2])
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)
-while True:
-    c, _ = s.accept()
-    d = c.recv(1 << 16).decode("utf-8", "replace")
-    with open(sys.argv[3], "a") as h:
-        h.write(d + "\n")
-    c.sendall(b'{"tag": "stand-in"}' if d.startswith("j/version") else b"unknown request")
-    c.close()
-PY
-  hsrv=$!
-  for i in $(seq 50); do [ -S "$hrt/hypr/$hsig/.socket.sock" ] && break; sleep 0.1; done
-  printf '%s\nwayland-gh\n' "$hsrv" > "$hrt/hypr/$hsig/hyprland.lock"
-  check_eq "the stand-in session is the only one there" "$hsig wayland-gh" \
+  # host's session, a stand-in one (#372, stand_in_host): no check below reaches the user's desktop,
+  # and each one sees the session omabox finds there, not $HYPRLAND_INSTANCE_SIGNATURE (under the
+  # guard, an agent running the suite, that is the guard's).
+  local hrt=$TMP/ghost-rt hsig=a_7_7 STANDIN_PID; stand_in_host "$hrt" "$hsig"
+  check_eq "the stand-in session is the only one there" "$hsig wayland-sti" \
     "$(XDG_RUNTIME_DIR=$hrt hyprctl -j instances | jq -r '.[] | "\(.instance) \(.wl_socket)"' | paste -sd '|')"
   local GUARDED=("${GUARDED[@]}" XDG_RUNTIME_DIR="$hrt")
-  check_eq "host from a guarded shell: the session's Wayland display and signature" "wayland-gh $hsig" \
+  check_eq "host from a guarded shell: the session's Wayland display and signature" "wayland-sti $hsig" \
     "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY $HYPRLAND_INSTANCE_SIGNATURE' 2>/dev/null)"
   check_match "host: and hyprctl reaches it" '"tag": "stand-in"' "$("${GUARDED[@]}" "$CLI" host -- hyprctl -j version 2>/dev/null)"
-  check "...the stand-in heard it" grep -qx j/version "$TMP/ghost.log"
+  check "...the stand-in heard it" grep -qx j/version "$hrt/requests.log"
   local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
   check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
   check_fails "...not the guard's" grep -q share/guard <<<"$open"
@@ -14157,7 +14179,7 @@ EOF
   check_eq "...a short command exactly as it is" "omabox: on your real desktop: printf %s A=b x" "$("${GUARDED[@]}" "$CLI" host -- printf %s A=b x 2>&1 >/dev/null)"
   # (...a long word cut too: host.rs the_record_cuts_long_words.)
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
-  kill "$hsrv" 2>/dev/null; wait "$hsrv" 2>/dev/null || true
+  kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null || true
 }
 
 # #290: Omarchy 4.5's omarchy-shell takes the newest wayland-N when $WAYLAND_DISPLAY names no socket, and
