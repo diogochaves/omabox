@@ -1188,7 +1188,7 @@ t_unit_cli_contract() {
   check_match "...both kinds among them" "^ .+ \| .+$" "$on |$off"
   out=$(ob check --json --help 2>&1); rc=$?
   check_eq "check --json --help: --json is no subcommand of check's (2)" \
-    "2|omabox: check: unknown subcommand --json (run, point or diff) (omabox help check)" "$rc|$out"
+    "2|omabox: check: unknown subcommand --json (run, point, diff or wants) (omabox help check)" "$rc|$out"
 }
 
 # #273 part C: the --json shapes that need no box (each a jq check: the fields a script reads), what
