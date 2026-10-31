@@ -302,6 +302,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         st.facts = "drag";
         st.fxy = cat!(num(x1), " ", num(y1));
+        st.expect_sels = sels.clone();
         let mut tool = vec![b"settle".to_vec()];
         tool.extend(st.args.iter().cloned());
         st.begin(ctx, &tool)?;
@@ -366,7 +367,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     );
     if st.wait {
         let json = st.json;
-        st.expect_sels = sels;
         return code(st.end(ctx, "settle", json, b"the drag was sent")?);
     }
     Ok(())

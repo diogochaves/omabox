@@ -210,6 +210,12 @@ pub const SCREEN_WIN_JQ: &str = r#"$s.clients as $c | $s.monitors as $m | $s.act
     def r: {x: .at[0], y: .at[1], w: .size[0], h: .size[1]};
   first((WIN) | .[] | select(.onscreen and at(r) and all(.cover[]; at(r) | not))) // empty"#;
 
+/// treewait::window_at: the address of the window at $x,$y among box_windows', as SCREEN_WIN_JQ
+/// finds it (#288).
+pub const WIN_AT_POINT_JQ: &str = r#"def at($o): $x >= $o.x and $x < $o.x + $o.w and $y >= $o.y and $y < $o.y + $o.h;
+  def r: {x: .at[0], y: .at[1], w: .size[0], h: .size[1]};
+  first(.[] | select(.onscreen and at(r) and all(.cover[]; at(r) | not))) | .address // empty"#;
+
 /// The layers of `hyprctl -j layers`, one object each.
 pub const LAYER_LIST_JQ: &str = layer_list_jq!();
 
@@ -273,7 +279,8 @@ pub const SETTLE_JSON_JQ: &str = r#"
        ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
        frames: (if $frames == "" then null else $frames | tonumber end)}
       + if $facts == "" then {} else {changes: $changes, target: $target, events_since: $evs} end
-      + if $exp == "" then {} else {expect: ($exp | fromjson)} end"#;
+      + if $exp == "" then {} else {expect: ($exp | fromjson)} end
+      + if $treed == "" then {} else {tree: ($treed | fromjson)} end"#;
 /// desk_snap: the five answers as one object.
 pub const SNAP_JQ: &str = r#"select(length == 5 and (.[0] | type) == "array" and (.[1] | type) == "object"
     and (.[2] | type) == "object" and (.[4] | type) == "array")

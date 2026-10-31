@@ -49,18 +49,18 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"tray" => Some("-b= --box= --json --all --secondary --index="),
         b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),
         b"keys" => Some(
-            "-b= --box= -w= --window= --active -t= -s= --pass= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
+            "-b= --box= -w= --window= --active -t= -s= --pass= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"keys-to-box" => Some("-b= --box="),
         b"click" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
+            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"scroll" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
+            "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"pointer" => Some("-b= --box= -w= --window= --active --in= --steps= --glide= --mod="),
         b"drag" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g= --shot-monitor= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
+            "-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g= --shot-monitor= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"shot" | b"screenshot" => Some(
             "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --after --json",

@@ -115,24 +115,27 @@ pub fn secs_left(deadline: i64, now: i64) -> Vec<u8> {
     crate::num::fixed(ms as f64 / 1000.0, 3).into_bytes()
 }
 
-/// One read of the tree for TEXT (FIND: what is looked for, TEXT or a part of it), given until
-/// DEADLINE (mono_ms; secs_left): one that takes longer is "did not answer", not held. A failure that
-/// no retry changes (no accessibility bus) is said, exit 1; several windows or layers matching, exit
-/// 2, with them.
-pub fn try_once(ctx: &mut Ctx, w: &TreeWant, find: &[u8], deadline: i64) -> Res<Try> {
+/// One read of what W names with omabox-tree's TARGS, given until DEADLINE (mono_ms; secs_left): the
+/// window or layer read (its address, as `tree::read` takes it) and the reading, or why there is
+/// none to read now. A window closing between the pick and the read is gone, not a failure.
+fn read_target(
+    ctx: &mut Ctx,
+    w: &TreeWant,
+    targs: &[Vec<u8>],
+    deadline: i64,
+) -> Res<Result<(Target, tree::Reading), Vec<u8>>> {
     let read = |ctx: &mut Ctx, t: &Target| -> Res<tree::Reading> {
-        let targs = vec![b"--find".to_vec(), find.to_vec()];
         let secs = secs_left(deadline, mono_ms());
         let (sels, l): (&[Vec<u8>], &[u8]) = match t {
             Target::Win(a) => (std::slice::from_ref(a), &[]),
             Target::Layer(l) => (&[], l),
             Target::Absent(_) => return Err(Exit(1)),
         };
-        tree::read_within(ctx, "wait", sels, l, targs, true, &secs)
+        tree::read_within(ctx, "wait", sels, l, targs.to_vec(), true, &secs)
     };
     let t = target(ctx, w)?;
     if let Target::Absent(why) = t {
-        return Ok(Try::Absent(why));
+        return Ok(Err(why));
     }
     // (a window closing between the two reads is no failure: it is gone; else read again, said. A
     // refusal's list of windows goes to fd 2 itself: that too held back, one thread here)
@@ -140,12 +143,27 @@ pub fn try_once(ctx: &mut Ctx, w: &TreeWant, find: &[u8], deadline: i64) -> Res<
         let _quiet = crate::exec::Redir::null(2);
         muted(|| read(ctx, &t))
     };
-    let r = match first_read {
-        Ok(r) => r,
+    Ok(Ok(match first_read {
+        Ok(r) => (t, r),
         Err(_) => match target(ctx, w)? {
-            Target::Absent(why) => return Ok(Try::Absent(why)),
-            t => read(ctx, &t)?,
+            Target::Absent(why) => return Ok(Err(why)),
+            t => {
+                let r = read(ctx, &t)?;
+                (t, r)
+            }
         },
+    }))
+}
+
+/// One read of the tree for TEXT (FIND: what is looked for, TEXT or a part of it), given until
+/// DEADLINE (mono_ms; secs_left): one that takes longer is "did not answer", not held. A failure that
+/// no retry changes (no accessibility bus) is said, exit 1; several windows or layers matching, exit
+/// 2, with them.
+pub fn try_once(ctx: &mut Ctx, w: &TreeWant, find: &[u8], deadline: i64) -> Res<Try> {
+    let targs = [b"--find".to_vec(), find.to_vec()];
+    let r = match read_target(ctx, w, &targs, deadline)? {
+        Ok((_, r)) => r,
+        Err(why) => return Ok(Try::Absent(why)),
     };
     let first = |v: &[u8]| v.split(|&c| c == b'\n').next().unwrap_or_default().to_vec();
     Ok(match r.rc {
@@ -159,6 +177,94 @@ pub fn try_once(ctx: &mut Ctx, w: &TreeWant, find: &[u8], deadline: i64) -> Res<
             return Err(Exit(1));
         }
     })
+}
+
+/// --wait --tree (#288): the whole tree of one window or layer (`tree --json`), read before the
+/// input and again once the screen settled: the same one both times, by its address.
+pub struct Snap {
+    /// The window's or layer's address, as `tree::read` takes it; what a message calls it.
+    pub sel: Vec<u8>,
+    pub layer: bool,
+    pub what: Vec<u8>,
+    /// omabox-tree --json's array.
+    pub json: Vec<u8>,
+}
+
+/// One whole read of what W names (none: the active window), given until DEADLINE: Ok(the snap), or
+/// Err(why there is none: no such window, no tree for it, the app did not answer, a failure). Never
+/// a refusal, nothing said: the input goes all the same, and the line says why nothing is compared.
+pub fn snap(ctx: &mut Ctx, w: &TreeWant, deadline: i64) -> Result<Snap, Vec<u8>> {
+    let targs = [b"--json".to_vec()];
+    let got = {
+        let _quiet = crate::exec::Redir::null(2);
+        muted(|| read_target(ctx, w, &targs, deadline))
+    };
+    let (t, r) = match got {
+        Ok(Ok(x)) => x,
+        Ok(Err(why)) => return Err(why),
+        Err(Exit(2)) => return Err(b"several windows or layers match".to_vec()),
+        Err(_) => return Err(b"the tree could not be read".to_vec()),
+    };
+    let first = |v: &[u8]| v.split(|&c| c == b'\n').next().unwrap_or_default().to_vec();
+    match r.rc {
+        0 => {}
+        124 => return Err(cat!(r.what, " did not answer in time (busy or hung?)")),
+        4 => return Err(b"the box has no accessibility bus".to_vec()),
+        _ if r.why.is_empty() => {
+            return Err(cat!(r.what, ": no tree (status ", r.rc.to_string(), ")"));
+        }
+        _ => return Err(cat!(r.what, ": ", first(&r.why))),
+    }
+    let (sel, layer) = match t {
+        Target::Win(a) => (a, false),
+        Target::Layer(a) => (a, true),
+        Target::Absent(why) => return Err(why),
+    };
+    Ok(Snap {
+        sel,
+        layer,
+        what: r.what,
+        json: r.out,
+    })
+}
+
+/// S's window or layer read again, given until DEADLINE: its tree now, or why there is none ("it
+/// closed" when it is gone).
+pub fn snap_again(ctx: &mut Ctx, s: &Snap, deadline: i64) -> Result<Vec<u8>, Vec<u8>> {
+    let w = TreeWant {
+        text: Vec::new(),
+        sels: if s.layer {
+            Vec::new()
+        } else {
+            vec![s.sel.clone()]
+        },
+        layer: if s.layer { s.sel.clone() } else { Vec::new() },
+    };
+    match snap(ctx, &w, deadline) {
+        Ok(n) => Ok(n.json),
+        Err(why) if why.starts_with(b"no window matches") || why.starts_with(b"no layer") => {
+            Err(b"it closed".to_vec())
+        }
+        Err(why) => Err(why),
+    }
+}
+
+/// The window at the screen's X Y as a click there reaches it (the topmost shown there, nothing
+/// over it at the point): its address, or nothing.
+pub fn window_at(ctx: &Ctx, x: &[u8], y: &[u8]) -> Vec<u8> {
+    let Ok(wins) = muted(|| box_windows(ctx, None)) else {
+        return Vec::new();
+    };
+    let r = Args::new(&["-r"])
+        .kv("--argjson", "x", x)
+        .kv("--argjson", "y", y)
+        .arg(crate::jqprog::WIN_AT_POINT_JQ)
+        .run(Some(&wins), jq::Err::Null);
+    if r.ok() {
+        strip_nl(&r.text())
+    } else {
+        Vec::new()
+    }
 }
 
 /// wait tree TEXT: what is looked for, whether until it is gone, the shot to take the moment it holds

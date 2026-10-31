@@ -144,7 +144,7 @@ too (omabox -b NAME windows).
 --window SEL (or -w SEL): a window: active (or --active), 0x... (its address), pid:N, class:RE, title:RE, a word
 @short keys click scroll drag run
 --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--strict] [--json]
-       [--expect tree TEXT] (not run's)
+       [--expect tree TEXT] [--tree] (not run's)
        after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout;
        the line adds what changed on the desktop (windows, layers, focus), a 124 where the input went
 @short run
@@ -655,6 +655,13 @@ click --find's or its layer's; none: the active one) until --timeout (from the i
 `click --find Save --wait --expect tree 'label "Saved"' && keys ...` stops at a 124 when it does not,
 the line then saying what the tree had instead; the line adds the line holding it, --json `expect`
 {tree, met, detail}. The input was sent all the same.
+--tree (#288) reads that window's tree (none given: the one under a click's point, else the active
+one) before the input and again once the screen settled, and the line adds what changed in it ("no
+change in the app's tree", else "the app's tree: N changes" and a line each under it, 20 at most:
+`entry "Name": '' → 'hello'`, `check box "Beta": +checked -unchecked`, `label "Idle" → "Saving"`,
+`+ dialog "Confirm" (and 3 inside)`); a password field's text, and any text after keys --pass, never
+shown; --json adds tree {window, changes, why}. Opt-in: a read before the input (the box's first
+turns accessibility on, ~3 s). No tree (a terminal): "no tree to compare (why)", the input sent.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); --timeout at most

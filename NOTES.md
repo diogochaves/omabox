@@ -11734,6 +11734,34 @@ from them.
     t_tray (an item with escapes in its Id, Title and a label: plain, `--json` as said, a click's
     words; 72 items: 64; 5 that do not answer: done in 15 s, said), tray.rs layout_as_text,
     entries_capped. They fail on the old code.
+610. **An action's --wait said what moved on screen, not what the app now holds** (2026-10-31, #288).
+    About a third of the shots after an action in the 10-02 study were taken to read the app's own
+    text: did the field get the text, is the box checked, which item is selected. `keys`, `click`,
+    `scroll` and `drag --wait --tree` read one window's whole tree (`omabox-tree --json`, through
+    treewait's probe: read_target, the same pick and retry as `wait tree`) before the input, before
+    the screen's watch starts (the box's first read turns accessibility on, and a Qt app may redraw),
+    and the same window again (by its address) once the screen settled and after any --expect. The
+    window: --window's, click --find's window or layer, else the one under a click's, scroll's or
+    drag's point (WIN_AT_POINT_JQ over box_windows, as a click reaches it), else the active one.
+    treediff.rs keys each node by its printed ancestors' `role "name"` (the frame left out), its role
+    and its name, never by its place: one row put first renumbers every place after it, and a diff by
+    place (check's, role#N) would then say every row renamed. Same keys pair in order; what is left
+    pairs by roles alone only where as many are left on both sides, so a label whose name is its text
+    reads `label "Idle" → "Saving"`, while two rows gone and one come stay `-`, `-`, `+`. A subtree
+    that appeared or went is one line, `+ dialog "Confirm" (and 3 inside)`; the frame's own name (the
+    title) is the desktop facts' to say. Bounds are not compared. The line ends `; no change in the
+    app's tree` or `; the app's tree: N changes` (`the layer's` for a layer), the changes on lines of
+    their own under it, two spaces in, 20 at most then `and N more`: `entry "Name": '' → 'hello'`,
+    `check box "Beta": +checked -unchecked`, `slider "Volume": =40 → =60`, an unnamed node `(in` its
+    nearest named ancestor`)`. A `password text` node's text and value are never printed ("its text
+    changed (not shown)", --json `hidden`), nor any text or value after `keys --pass`. No tree (a
+    terminal, no window, the app hung within 10 s before or the --timeout's end after, 2 s at least):
+    `; no tree to compare (why)`, the input sent all the same, the exit the screen's. Not on unknown.
+    --json adds `tree` {window, changes (each kind changed|appeared|vanished, role, name, path, line;
+    name_was, text/value {from, to}, states_added, states_removed, hidden, inside), why}. Tests:
+    t_wait_tree_diff (GTK4: an entry's text, a check box's states, a label renamed, a password field
+    hidden in --json too, nothing changed, no window), t_unit_wait (refusals), treediff.rs (pairing
+    by name not place, subtrees, passwords and secrets, values, the cap).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

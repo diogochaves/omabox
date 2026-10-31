@@ -9602,6 +9602,63 @@ PY
   check "down" ob down "$B"
 }
 
+# --wait --tree (#288, finding 610): what changed in the window's own tree, from a read before the
+# input and one once the screen settled; a password field's text never shown.
+t_wait_tree_diff() {
+  local B=$P-wtd H out rc
+  if ! python3 -c 'import gi; gi.require_version("Gtk", "4.0")' >/dev/null 2>&1; then
+    skip "wait --tree" "no GTK4 or python-gobject"; return
+  fi
+  check "up" ob up "$B" --no-shell
+  H=$(ob path -b "$B")/home
+  cat > "$H/tree-diff.py" <<'PY'
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk
+def build(app):
+    win = Gtk.ApplicationWindow(application=app, title="Tree diff demo")
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=12, margin_start=12, margin_end=12)
+    box.append(Gtk.Entry())
+    box.append(Gtk.CheckButton(label="Beta", active=False))
+    lab = Gtk.Label(label="Idle")
+    box.append(lab)
+    box.append(Gtk.PasswordEntry())
+    btn = Gtk.Button(label="Save")
+    btn.connect("clicked", lambda *a: lab.set_label("Saving"))
+    box.append(btn)
+    win.set_child(box)
+    win.present()
+app = Gtk.Application(application_id="org.omabox.TreeDiff")
+app.connect("activate", build)
+app.run(None)
+PY
+  ob run -b "$B" -d -- python3 /home/sbx/tree-diff.py >/dev/null 2>&1
+  ob wait -b "$B" --timeout 20s window 'title:^Tree diff demo$' >/dev/null
+  rc=0; out=$(ob keys -b "$B" --window 'Tree diff demo' --wait --tree -t hello 2>/dev/null) || rc=$?
+  check_match "keys --wait --tree: the field's text, '' → 'hello', a line under the --wait line" \
+    "^satisfied: settled after [^|]*; the app's tree: 1 change\\|  text: '' → 'hello'\\|0$" "$(paste -sd'|' <<<"$out")|$rc"
+  rc=0; out=$(ob click -b "$B" --find Beta --wait --tree 2>/dev/null) || rc=$?
+  check_match "click --wait --tree: a state, +checked -unchecked" '\|  check box "Beta": [^|]*\+checked -unchecked' "$(paste -sd'|' <<<"$out")|$rc"
+  check_eq "...exit 0" 0 "$rc"
+  out=$(ob click -b "$B" --find Save --wait --tree 2>/dev/null) || true
+  check_match "...a label's text (its name): that label renamed, not one gone and another come" \
+    '\|  label "Idle" → "Saving"\|' "$(paste -sd'|' <<<"$out")|"
+  # (the password field: under the label, as tree prints it)
+  ob click -b "$B" --window 'Tree diff demo' 900 125 --wait >/dev/null 2>&1
+  rc=0; out=$(ob keys -b "$B" --wait --json --tree -t hunter2 2>/dev/null) || rc=$?
+  check_eq "...a password field: changed, its text never shown (--json too)" \
+    'password text|true|null|password text: its text changed (not shown)|no hunter2|0' \
+    "$(jq -r '.tree.changes[0] | "\(.role)|\(.hidden)|\(.text)|\(.line)"' <<<"$out" 2>&1)|$(grep -q hunter2 <<<"$out" && echo hunter2 || echo no hunter2)|$rc"
+  check_match "...--json: the window it read" '^0x[0-9a-f]+ org\.omabox\.TreeDiff "Tree diff demo"$' "$(jq -r .tree.window <<<"$out" 2>&1)"
+  rc=0; out=$(ob click -b "$B" --window 'Tree diff demo' 900 600 --wait --timeout 2s --tree 2>/dev/null) || rc=$?
+  check_match "...nothing changed: said, the 124 the screen's" "^unsatisfied: nothing changed in [^|]*; no change in the app's tree\\|124$" "$out|$rc"
+  ob run -b "$B" -- pkill -f tree-diff.py >/dev/null 2>&1 || true
+  ob wait -b "$B" --timeout 10s window 'title:^Tree diff demo$' --gone >/dev/null 2>&1 || true
+  rc=0; out=$(ob keys -b "$B" --wait --timeout 1s --tree a 2>/dev/null) || rc=$?
+  check_match "...no window: no tree to compare, said why, the keys sent" "; no tree to compare \\(no window is active\\)\\|124$" "$out|$rc"
+  check "down" ob down "$B"
+}
+
 # click --find TEXT (#318): the one node named TEXT, read fresh, clicked at the middle of what of it
 # is in view with the real pointer; several, hidden, scrolled out or disabled said, nothing clicked.
 t_click_find() {
@@ -18696,7 +18753,7 @@ t_unit_wait() {
   check_match "...--layer and --shot only with tree" "wait: --layer and --shot go with tree" "$(ob wait -b "$P-x" still --shot x.png 2>&1)"
   check_match "...read (no box here)" "no box '$P-x'" "$(ob wait -b "$P-x" tree '"Save"' --shot x.png 2>&1)"
   check_match "...help says tree" "tree TEXT \[--window SEL \| --layer SEL\] \[--gone\] \[--shot FILE\]" "$(ob help wait 2>&1)"
-  check_match "--expect goes with --wait" "--expect go with --wait" "$(ob keys -b "$P-x" --expect tree x a 2>&1)"
+  check_match "--expect goes with --wait" "--expect and --tree go with --wait" "$(ob keys -b "$P-x" --expect tree x a 2>&1)"
   check_match "...takes tree TEXT" "--expect takes tree TEXT" "$(ob keys -b "$P-x" --wait --expect window x a 2>&1)"
   check_match "...a TEXT" "--expect takes tree TEXT" "$(ob click -b "$P-x" --wait --expect tree 2>&1)"
   check_match "...once" "--expect once" "$(ob scroll -b "$P-x" --wait --expect tree a --expect tree b 1 2 3 2>&1)"
@@ -18739,6 +18796,11 @@ WL
   check_match "wait for: no box needed, said as a fixed time" \
     "^0 satisfied: waited 0\.1[0-9]s, a fixed time" "$rc $out"
   check_match "...naming what to wait for instead" "a fixed time \(wait log, change, window or until waits for the thing itself\)$" "$out"
+  # --wait --tree (#288, finding 610); in a box: t_wait_tree_diff.
+  check_match "--tree goes with --wait" "--expect and --tree go with --wait" "$(ob click -b "$P-x" --tree 1 2 2>&1)"
+  check_match "...on keys too (read: no box here)" "no box '$P-x'" "$(ob keys -b "$P-x" --wait --tree a 2>&1)"
+  check_match "...not on run -d" "unknown option|nearest" "$(ob run -b "$P-x" -d --wait --tree -- true 2>&1)"
+  check_match "...help says it" "\\[--tree\\]" "$(ob help keys 2>&1)"
   check_match "path: one of --home, --run, --logs" "one of --home, --run and --logs" "$(ob path -b "$P-x" --home --logs 2>&1)"
   check_match "--quiet without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --quiet 1s a 2>&1)"
   check_match "run --wait needs -d" "goes with -d" "$(ob run -b "$P-x" --wait -- true 2>&1)"
@@ -19605,7 +19667,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

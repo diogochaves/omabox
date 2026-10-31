@@ -280,6 +280,11 @@ pub struct Settle {
     pub expect: Vec<u8>,
     pub expect_sels: Vec<Vec<u8>>,
     pub expect_layer: Vec<u8>,
+    /// --tree (#288): the same window's tree read before the input and once the screen settled,
+    /// what changed in it said; TREE_SECRET: the input held a secret (keys --pass), no text shown.
+    pub tree: bool,
+    pub tree_secret: bool,
+    tree_before: Option<Result<crate::treewait::Snap, Vec<u8>>>,
     snap: Option<JoinHandle<Vec<u8>>>,
     before: Vec<u8>,
     line: Vec<u8>,
@@ -342,6 +347,7 @@ impl Settle {
                 self.took = 2;
             }
             b"--strict" => self.args.push(b"--strict".to_vec()),
+            b"--tree" => self.tree = true,
             b"--expect" => {
                 let t = args.get(2).filter(|t| !t.is_empty());
                 let (Some(b"tree"), Some(t)) = (v.map(Vec::as_slice), t) else {
@@ -363,9 +369,11 @@ impl Settle {
     /// settle_opts_check [WINDOWS]: the options go with --wait; with one --window selector, -g and
     /// --ignore are the window's coordinates; an --ignore that misses -g's region is said (#162).
     pub fn opts_check(&mut self, ctx: &Ctx, windows: usize) -> Res<()> {
-        if !self.wait && !(self.args.is_empty() && !self.json && self.expect.is_empty()) {
+        if !self.wait
+            && !(self.args.is_empty() && !self.json && self.expect.is_empty() && !self.tree)
+        {
             return Err(ctx.die(
-                "--start, --quiet, --timeout, --strict, --ignore, -g, --json and --expect go with --wait",
+                "--start, --quiet, --timeout, --strict, --ignore, -g, --json, --expect and --tree go with --wait",
             ));
         }
         if windows != 0 {
@@ -448,6 +456,83 @@ impl Settle {
         Ok(())
     }
 
+    /// --tree's read before the input (#288), before the screen is watched (turning accessibility on
+    /// may redraw): the window EXPECT_SELS picks or the layer EXPECT_LAYER, else the one under the
+    /// point of a click, scroll or drag, else the active one. Given 10 s: the box's first read turns
+    /// accessibility on and waits for the app (~3 s).
+    fn tree_start(&mut self, ctx: &Ctx) {
+        if !self.tree || self.facts.is_empty() {
+            return;
+        }
+        let mut sels = self.expect_sels.clone();
+        if sels.is_empty() && self.expect_layer.is_empty() && !self.fxy.is_empty() {
+            let w = shell::words(&self.fxy);
+            if let [x, y] = w.as_slice() {
+                let a = crate::treewait::window_at(ctx, x, y);
+                if !a.is_empty() {
+                    sels.push(a);
+                }
+            }
+        }
+        let w = crate::treewait::TreeWant {
+            text: Vec::new(),
+            sels,
+            layer: self.expect_layer.clone(),
+        };
+        let mut c = ctx.clone();
+        self.tree_before = Some(crate::treewait::snap(&mut c, &w, mono_ms() + 10_000));
+    }
+
+    /// --tree's part of the line once the screen settled (DEADLINE: the --timeout's end, 2 s at
+    /// least): its summary, the lines under it, the `tree` object for --json.
+    fn tree_end(&mut self, ctx: &Ctx, deadline: i64) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        use crate::treediff;
+        let mut c = ctx.clone();
+        let (what, got) = match self.tree_before.take() {
+            None => return (Vec::new(), Vec::new(), Vec::new()),
+            Some(Err(why)) => (b"the app's".to_vec(), Err(why)),
+            Some(Ok(s)) => {
+                let what = if s.layer {
+                    b"the layer's".to_vec()
+                } else {
+                    b"the app's".to_vec()
+                };
+                let after = crate::treewait::snap_again(&mut c, &s, deadline.max(mono_ms() + 2000));
+                let got =
+                    after.and_then(|a| match (treediff::nodes(&s.json), treediff::nodes(&a)) {
+                        (Some(b), Some(n)) => Ok((s.what.clone(), b, n)),
+                        _ => Err(b"omabox-tree's answer was not a tree".to_vec()),
+                    });
+                (what, got)
+            }
+        };
+        let what_s = String::from_utf8_lossy(&what).into_owned();
+        match got {
+            Err(why) => {
+                let js = Args::new(&["-nc"])
+                    .kv("--arg", "why", &why)
+                    .arg("{window: null, changes: null, why: $why}")
+                    .run(None, jq::Err::Inherit)
+                    .text();
+                (cat!("no tree to compare (", why, ")"), Vec::new(), js)
+            }
+            Ok((win, b, n)) => {
+                let d = treediff::diff(&b, &n, self.tree_secret);
+                let lines: Vec<String> = d.iter().map(|c| c.0.clone()).collect();
+                let js = serde_json::json!({
+                    "window": String::from_utf8_lossy(&win),
+                    "changes": d.into_iter().map(|c| c.1).collect::<Vec<_>>(),
+                    "why": null,
+                });
+                (
+                    treediff::summary(lines.len(), &what_s).into_bytes(),
+                    treediff::shown(&lines),
+                    crate::json::compact(&js).into_bytes(),
+                )
+            }
+        }
+    }
+
     /// desk_snap_take: the before snapshot, once its read is over.
     fn snap_take(&mut self) {
         if let Some(t) = self.snap.take() {
@@ -496,6 +581,7 @@ impl Settle {
                 ", then up again"
             )));
         }
+        self.tree_start(ctx);
         self.snap_start(ctx)?;
         // (the tool's fifos were in a `mktemp -d` dir: the same rule)
         let (_, dir) = shell::mktemp_args(&[b"-d"])?;
@@ -965,6 +1051,18 @@ impl Settle {
                 .run(None, jq::Err::Inherit)
                 .text();
         }
+        // --tree (#288): the window's tree again, after --expect's reads; not on unknown.
+        let (mut tree_part, mut tree_lines, mut tree_js) = (Vec::new(), Vec::new(), Vec::new());
+        if self.tree && res != b"unknown" {
+            let tmo = self
+                .args
+                .windows(2)
+                .rev()
+                .find(|a| a[0] == b"--timeout")
+                .and_then(|a| shell::dec(&a[1]))
+                .unwrap_or(10_000);
+            (tree_part, tree_lines, tree_js) = self.tree_end(ctx, self.t0 + tmo);
+        }
         // An action's --wait (#274): what changed on the desktop since just before the input; on a
         // 124, where the input went first. Not on unknown (the box may be hung).
         let (mut changes, mut target, mut evs) =
@@ -1032,6 +1130,9 @@ impl Settle {
                 }
             }
         }
+        if !tree_part.is_empty() {
+            msg = cat!(msg, "; ", tree_part);
+        }
         if json {
             let r = Args::new(&["-nc"])
                 .kv("--arg", "res", &res)
@@ -1050,12 +1151,13 @@ impl Settle {
                 .kv("--argjson", "target", &target)
                 .kv("--argjson", "evs", &evs)
                 .kv("--arg", "exp", &exp)
+                .kv("--arg", "treed", &tree_js)
                 .arg(crate::jqprog::SETTLE_JSON_JQ)
                 .run(None, jq::Err::Inherit);
             // (a write that fails is not settle_end's end: its status is the answer's)
             let _ = out(&r.out);
         } else {
-            let _ = out(cat!(res, ": ", msg, "\n"));
+            let _ = out(cat!(res, ": ", msg, "\n", tree_lines));
         }
         Ok(match res.as_slice() {
             b"satisfied" => 0,

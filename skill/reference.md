@@ -72,7 +72,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `tray --json` | an array of items: `id, title, status, category, service, path, menu` (null: none), `item_is_menu, rows` (each `id, label, role, enabled, visible, toggle, checked, rows`); `tray menu --json`: one item |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, report_scaled, setup, only, counts` (`skipped`: not named by `--only`), `checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
@@ -644,6 +644,15 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   active one) by `--timeout`, else 124 with what it had instead. `omabox click --find Save --wait
   --expect tree 'label "Saved"' && omabox keys ...` stops when the effect is not the one wanted; the
   input was sent either way.
+- Did it land, without a shot: add `--tree` to an action's `--wait`. The window's tree (`--window`'s,
+  `click --find`'s, else the one under the point, else the active one) is read before the input and
+  once the screen settled; the line ends `; no change in the app's tree` or `; the app's tree: N
+  changes`, then a line each, two spaces in, 20 at most (`and N more`): `entry "Name": '' → 'hello'`,
+  `check box "Beta": +checked -unchecked`, `list item "Pear": +selected`, `label "Idle" → "Saving"`,
+  `+ dialog "Confirm" (and 3 inside)`, `- menu "File"`. A password field's text (and any text after
+  `keys --pass`) is never shown: "its text changed (not shown)". No tree (a terminal): `; no tree to
+  compare (why)`. It costs a read before the input (the box's first: ~3 s), so only when the answer
+  replaces a look.
 - An app that redraws later, by itself (after a server sync, a timer): `omabox wait --timeout 30s
   change --window APP` (satisfied at the first change there; the window must be on screen), then
   `omabox wait still` for it to finish. Never `wait until -- false` (or `-- true`) as a sleep: the first

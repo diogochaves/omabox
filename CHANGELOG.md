@@ -70,6 +70,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   sequence in its name or a label never reaches your terminal); one call reads at most 64 items, in
   15 s at most, and says what it left out
   ([#343](https://github.com/diogochaves/omabox/issues/343)).
+- **`--wait --tree`** on `keys`, `click`, `scroll` and `drag` says what changed in the app's own
+  accessibility tree: the window's tree is read before the input and again once the screen settled,
+  and the line ends with "no change in the app's tree" or "the app's tree: N changes", one line each
+  under it (20 at most): `entry "Name": '' → 'hello'`, `check box "Beta": +checked -unchecked`,
+  `label "Idle" → "Saving"`, `+ dialog "Confirm" (and 3 inside)`. Nodes are known by their ancestry,
+  role and name, not their place, so a row put first is one row added. A password field's text is
+  never shown. `--json` adds `tree`. Opt-in: it costs a read before the input
+  ([#288](https://github.com/diogochaves/omabox/issues/288)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

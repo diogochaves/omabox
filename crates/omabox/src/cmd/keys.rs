@@ -216,6 +216,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         st.args.extend([b"--ignore".to_vec(), r]);
     }
     st.facts = "keys";
+    (st.expect_sels, st.tree_secret) = (sels, !pass.is_empty());
     let mut tool = vec![b"settle".to_vec()];
     tool.extend(st.args.iter().cloned());
     st.begin(ctx, &tool)?;
@@ -224,6 +225,5 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let t0 = epoch_us();
     sh_e(keys_send(ctx, &kb, &pass, held)?)?;
     mark(ctx, &t0, false, &lines);
-    st.expect_sels = sels;
     code(st.end(ctx, "settle", json, b"the keys were sent")?)
 }

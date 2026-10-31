@@ -57,6 +57,7 @@ mod shots;
 mod sig;
 mod term;
 mod trap;
+mod treediff;
 mod treewait;
 mod upspec;
 mod whose;
