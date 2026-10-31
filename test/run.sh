@@ -1546,7 +1546,7 @@ t_unit_down_jail_race() {
   # as a headless box on NVIDIA with no aquamarine fix is refused before it (an install with no build
   # of its own, #381).
   local rn=(); [ -z "$(gpu_node other)" ] || rn=(OMABOX_RENDER_NODE="$(gpu_node other)")
-  jx() { (cd "$r/norepo" && env -u OMABOX XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" "${rn[@]}" "$@"); }
+  jx() { (cd "$r/norepo" && env -u OMABOX XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" XDG_STATE_HOME="$r/state" "${rn[@]}" "$@"); }
   # hold NAME: the name's lock taken, as an up holds it, until $r/release-NAME exists.
   hold() {
     rm -f "$r/held-$1" "$r/release-$1"
@@ -1644,6 +1644,8 @@ t_unit_layout() {
 # are refused unless they are one of the known shapes.
 t_unit_config() {
   local h=$TMP/confhome; mkdir -p "$h"
+  # (its ups run with stand-in runtime dirs: a cache and state of their own too, finding 584)
+  local -x XDG_CACHE_HOME=$TMP/conf-cache XDG_STATE_HOME=$TMP/conf-state
   cfg() { HOME=$h "$CLI" config "$@" 2>&1; }
   # (protect-ports: the Rust half's key, finding 480; bash's half lists the first five)
   local dflt="workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off protect-ports="
@@ -2640,7 +2642,7 @@ t_unit_bash_changes() {
   # said where it has none: the cases that need it are then skipped, not passed)
   if locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8'; then locs+=" en_US.UTF-8"
   else skip "box names and lists under en_US.UTF-8 (findings 445, 446)" "no en_US.UTF-8 on this system, whose ranges and collation they need"; fi
-  bc() { (cd "$r/norepo" && env -u OMABOX -u OMABOX_NAME XDG_RUNTIME_DIR="$r/rt" "$@" 2>&1); }
+  bc() { (cd "$r/norepo" && env -u OMABOX -u OMABOX_NAME XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" XDG_STATE_HOME="$r/state" "$@" 2>&1); }
   for l in $locs; do
     # (box names ASCII, finding 445: glibc's ranges in en_US.UTF-8 took é for a letter)
     check_match "a box name é refused under LC_ALL=$l (ASCII names, finding 445)" "^omabox: path: bad box name é: a box name starts with a letter" \
@@ -2672,7 +2674,7 @@ t_unit_bash_changes() {
   # --overlay of a folder not there refuses too, after it, so a regression starts no box)
   mkdir -p "$r/glob"; : > "$r/glob/fonts"
   check_match "up --no-seed 'font?' beside a file fonts: taken as written, refused (finding 457)" "^omabox: --no-seed: what a box starts without .*got 'font\?'$" \
-    "$(cd "$r/glob" && XDG_RUNTIME_DIR="$r/rt" "$CLI" up bc-x --no-seed 'font?' --overlay "$r/none" 2>&1)"
+    "$(cd "$r/glob" && XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" XDG_STATE_HOME="$r/state" "$CLI" up bc-x --no-seed 'font?' --overlay "$r/none" 2>&1)"
   # (a settings link that cannot be followed: said, the link kept; bash's readlink -f ended it unsaid,
   # finding 482)
   local h=$r/home; mkdir -p "$h/.config/omabox"; ln -s "$h/dots/omabox/config" "$h/.config/omabox/config"
@@ -2712,8 +2714,18 @@ cx_case() {
   local -a wants=("${cx_want[@]}"); cx_want=()
   mkdir -p "$d"
   [ -z "$cx_prep" ] || "$cx_prep"
+  # (an up, run or down in a stand-in runtime dir gets a stand-in cache and state, unless cx_env names
+  # its own: those are what sweep and remove box HOMEs, finding 584)
+  # (after cx_env, whose -u words env takes before any NAME=VALUE)
+  local -a sto=()
+  if [ -n "$cx_rt" ] && [ "$cx_rt" != "$XDG_RUNTIME_DIR" ]; then
+    case ${1:-} in up | run | down)
+      [[ " ${cx_env[*]} " == *" XDG_CACHE_HOME="* ]] || sto+=(XDG_CACHE_HOME="$cx_rt.cache")
+      [[ " ${cx_env[*]} " == *" XDG_STATE_HOME="* ]] || sto+=(XDG_STATE_HOME="$cx_rt.state") ;;
+    esac
+  fi
   (cd "$cx_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN \
-    ${cx_env[@]+"${cx_env[@]}"} XDG_RUNTIME_DIR="$cx_rt" \
+    ${cx_env[@]+"${cx_env[@]}"} ${sto[@]+"${sto[@]}"} XDG_RUNTIME_DIR="$cx_rt" \
     ${cx_wrap[@]+"${cx_wrap[@]}"} "$CLI" "$@" >"$d/out" 2>"$d/err" <"$cx_in"; echo $? > "$d/rc")
   cx_state > "$d/state"
   [ -z "$cx_check" ] || "$cx_check" "$label" "$d/out" "$d/err"
@@ -4021,7 +4033,7 @@ t_unit_broker_side() {
   rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/aj" "$r/proj/hidden" "$r/home"
   [ -x "$R" ] || { no "the broker's side" "tools/relay is not built (tools_ready builds it)"; return 0; }
   cp "$(command -v bash)" "$r/aj/ai-jail"
-  HOME=$r/home XDG_RUNTIME_DIR=$r/rt "$R" listen --socket "$r/b.sock" -- "$CLI" >/dev/null 2>&1 & SERVERS+=($!)
+  HOME=$r/home XDG_RUNTIME_DIR=$r/rt XDG_CACHE_HOME=$r/home/.cache XDG_STATE_HOME=$r/home/.local/state "$R" listen --socket "$r/b.sock" -- "$CLI" >/dev/null 2>&1 & SERVERS+=($!)
   until_ok 5 test -S "$r/b.sock" >/dev/null
   # (JAIL_OUT=1: the caller in a bwrap whose parent is not ai-jail; JAIL_NET=0: --unshare-net)
   printf '%s\n' '#!/bin/bash' \
@@ -4193,7 +4205,7 @@ EOF
   cx_want=(rc=2 out= 'err=omabox: record: --for takes a duration up to 60m, like 5s or 1.5m (a bare number is seconds), got 2x')
   cx_case "jailed: record --for unreadable: refused here" record --for 2x
   # (relay_call's, from t_unit_hyprland and t_unit_quickshell: the broker is not in the caller's folder)
-  local rjo; rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" up rjx --hyprland build/Hyprland --quickshell build/quickshell 2>&1 | paste -sd '|')
+  local rjo; rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" XDG_STATE_HOME="$r/state" "$CLI" up rjx --hyprland build/Hyprland --quickshell build/quickshell 2>&1 | paste -sd '|')
   check_match "jailed: --hyprland goes absolute" "broker: \[--hyprland\]\|broker: \[$r/proj/build/Hyprland\]" "$rjo"
   check_match "...and --quickshell" "broker: \[--quickshell\]\|broker: \[$r/proj/build/quickshell\]" "$rjo"
   # (relay_shot's, from t_unit_shot_fit: the caller's OMABOX_SHOT_FIT goes along, #188)
@@ -4203,7 +4215,7 @@ EOF
   check_fails "...none when it has none" grep -q SHOT_FIT <<<"$rjo"
   # (relay_call's, from t_unit_mount_rules: a relative --seed SRC goes absolute, DEST as given; one not
   # there as given, for the broker to say so; a relative --theme-dir absolute, #170)
-  rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" up rjx --seed fixtures:.config/x --seed nowhere:y --theme-dir th 2>&1 | paste -sd '|')
+  rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" XDG_STATE_HOME="$r/state" "$CLI" up rjx --seed fixtures:.config/x --seed nowhere:y --theme-dir th 2>&1 | paste -sd '|')
   check_match "jailed: a relative --seed SRC goes absolute, DEST as given" "broker: \[--seed\]\|broker: \[$r/proj/fixtures:\.config/x\]" "$rjo"
   check_match "...one that is not there as given" "broker: \[--seed\]\|broker: \[nowhere:y\]" "$rjo"
   check_match "...a relative --theme-dir goes absolute" "broker: \[--theme-dir\]\|broker: \[$r/proj/th\]" "$rjo"
@@ -5977,7 +5989,7 @@ EOF
   check_match "...no value: said" "-b needs a value" "$(ob -b 2>&1)"
   # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
   mkdir -p "$TMP/rt"
-  check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt "$CLI" down "$P-x" --all 2>&1)"
+  check_match "down --all with a name refused" "--all or names, not both" "$(XDG_RUNTIME_DIR=$TMP/rt XDG_CACHE_HOME=$TMP/rt.cache XDG_STATE_HOME=$TMP/rt.state "$CLI" down "$P-x" --all 2>&1)"
   check_fails "peek --fps junk refused" ob peek -b "$P-x" --fps "10'"
   # ls while a box goes down (seen with the suite's boxes in parallel, issue #60): its box.json gone,
   # the rest of the list still shown. Three boxes in a runtime dir of its own; the middle one half gone.
@@ -6211,7 +6223,7 @@ t_unit_agent_session() {
     for b in "$P-r-$sid" "$P-q-$sid" "$P-r-0000beef"; do
       if [[ " $up " == *" $b "* ]]; then echo "{\"child-pid\": $sb}" > "$sr/omabox/$b/info.json"; else rm -f "$sr/omabox/$b/info.json"; fi
     done
-    (cd "$wd" && env -u OMABOX -u OMABOX_SESSION -u CODEX_THREAD_ID XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc "$@" 2>&1)
+    (cd "$wd" && env -u OMABOX -u OMABOX_SESSION -u CODEX_THREAD_ID XDG_RUNTIME_DIR="$sr" XDG_CACHE_HOME="$sr.cache" XDG_STATE_HOME="$sr.state" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc "$@" 2>&1)
   }
   check_eq "no repo: this session's one box is used, said once (#136)" \
     "omabox: note: no box 'default-$sid' (this directory is in no repo); using this session's box '$P-r-$sid', started from its repo (-b $P-r-$sid names it)"$'\n'"$sr/omabox/$P-r-$sid" \
@@ -9647,7 +9659,7 @@ aq_up_gate() {
   out=$(unshare -r -m bash -c '
     gt=$1/gt; mount --bind "$gt/dev/dri" /dev/dri && mount --bind "$gt/sys/class/drm" /sys/class/drm &&
       mount --bind "$(readlink -f "$1/$2/$3")" "/usr/lib/$3" || exit 99
-    env HOME="$1/up-home" XDG_RUNTIME_DIR="$4" OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=/dev/dri/renderD129 "$5" up "$6"
+    env HOME="$1/up-home" XDG_RUNTIME_DIR="$4" XDG_CACHE_HOME="$1/up-home/.cache" XDG_STATE_HOME="$1/up-home/.local/state" OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=/dev/dri/renderD129 "$5" up "$6"
   ' _ "$d" "$dir" "$so" "$rt/run" "$CLI" "$P-aqs" 2>&1; echo "rc=$?")
   if [ "$refused" = 1 ]; then
     check_match "...up itself refuses it" "^omabox: a headless box on NVIDIA \(/dev/dri/renderD129\) needs aquamarine's fix.*rc=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
