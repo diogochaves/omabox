@@ -17257,6 +17257,12 @@ t_unit_run_cwd_note() {
   check_fails "...absolute, an option, ~: none" probe cwd_path_word "$d/dir" "$d/home" cat "$d/dir/run.sh" --file=tests '~/x'
   check_fails "...one the box HOME has too: none" probe cwd_path_word "$d/dir" "$d/home" ls .config
   check_fails "...a glob is not expanded" probe cwd_path_word "$d/dir" "$d/home" 'ls *'
+  # (#325: a word that only shares a folder's name is no path: an IPC target, a subcommand)
+  mkdir -p "$d/dir/stash" "$d/dir/console"
+  check_fails "...a subcommand named as a folder there: none (#325)" probe cwd_path_word "$d/dir" "$d/home" omarchy-shell stash modules
+  check_fails "...nor in a script's arguments" probe cwd_path_word "$d/dir" "$d/home" sh -c 'omarchy-shell console get top.hint | jq .'
+  check_eq "...a script's later command is one" tests/x.py "$(probe cwd_path_word "$d/dir" "$d/home" sh -c 'true && tests/x.py')"
+  check_eq "...the command itself, bare" run.sh "$(probe cwd_path_word "$d/dir" "$d/home" run.sh --x)"
   check_eq "cwd_note: a throwaway outside any repo" \
     "omabox: note: tests/x.py is relative to $d/dir, which is in no repo, so not in this throwaway box: the command runs in the box HOME (/home/sbx); run --overlay $d/dir (or --ro-bind, read-only) mounts it" \
     "$(probe cwd_note bx run tests/x.py "$d/dir" 1 2>&1)"

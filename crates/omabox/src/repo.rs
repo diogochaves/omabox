@@ -591,16 +591,33 @@ pub fn run_link_notes(ctx: &Ctx, how: &str, top_said: bool, words: &[Vec<u8>]) {
 }
 
 /// cwd_path_word DIR BOXHOME WORD... (#251): the first word of a command, or of a script in one,
-/// that is a relative path there in DIR, and not one BOXHOME has too; 64 looked at at most.
+/// that is a relative path there in DIR, and not one BOXHOME has too; 64 looked at at most. Only a
+/// word that reads as a path counts (#325: a subcommand that shares a folder's name, `omarchy-shell
+/// stash modules` beside a `stash` folder, was taken for one): one with a `/`, `.` or `..`, the
+/// command itself, a script's command (its first word, or one after `&&`, `||`, `;`, `|`, `then`,
+/// `do`, `else`), or `cd`'s folder.
 pub fn cwd_path_word(dir: &[u8], home: &[u8], words: &[Vec<u8>]) -> Option<Vec<u8>> {
     let mut n = 0;
-    for w in words {
-        for t in shell::words(w) {
+    let mut prev = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        let toks = shell::words(w);
+        let script = i > 0 && toks.len() > 1;
+        for (j, t) in toks.into_iter().enumerate() {
             n += 1;
             if n > 64 {
                 return None;
             }
-            if t.starts_with(b"-") || t.starts_with(b"/") || t.starts_with(b"~") {
+            let lead = (i == 0 && j == 0)
+                || (script
+                    && (j == 0
+                        || prev.ends_with(b";")
+                        || matches!(
+                            prev.as_slice(),
+                            b"&&" | b"||" | b"|" | b"then" | b"do" | b"else"
+                        )));
+            let pathy = lead || prev == b"cd" || t.contains(&b'/') || t == b"." || t == b"..";
+            prev.clone_from(&t);
+            if !pathy || t.starts_with(b"-") || t.starts_with(b"/") || t.starts_with(b"~") {
                 continue;
             }
             if !shell::path(&cat!(dir, "/", t)).exists() {

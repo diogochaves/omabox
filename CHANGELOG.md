@@ -3,6 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`run`'s note "WORD is relative to DIR" fired on words that only share a folder's name**: from a
+  checkout with a `stash` folder, `run -- omarchy-shell stash modules` was told to restart the box
+  with `--overlay`. A word now counts only when it reads as a path (a `/` in it, the command itself,
+  `cd`'s folder) ([#325](https://github.com/diogochaves/omabox/issues/325)).
+
 ## 1.0.2 — 2026-10-30
 
 Omarchy 4.5.0-rc2 support for `click`, `windows` and `tree --layer` (its bar now spans the screen),

@@ -10714,6 +10714,17 @@ from them.
     (GTK4: active window, part and exact names, label vs entry, two in view and --index, disabled,
     scrolled out, nothing; Designer: a dialog's Close, the dock's place, four docks' Close buttons),
     t_tree_layer (`click --layer --find` on the stub panel).
+551. **run's "WORD is relative to DIR" note fired on words that only share a folder's name** (2026-10-30,
+    #325). cwd_path_word (#251) took any word of the command that was not `-*`, `/*` or `~*` and named
+    something in the caller's directory for a path: from a plugin checkout with folders `stash`,
+    `console` and `rail`, `run -- omarchy-shell stash modules` (an IPC target) got the note and its
+    advice to restart the box with `--overlay`, 10 times in 6 subagents of one session, all false;
+    once on stderr into a `2>&1 | jq`, which failed. Now a word counts only when it reads as a path:
+    it has a `/`, is `.` or `..`, is the command itself, a script's command (`sh -c`'s first word, or
+    one after `&&`, `||`, `;`, `|`, `then`, `do`, `else`), or `cd`'s folder. A bare argument that
+    names a folder (`python3 tests`) is no longer said; one with a `/` (`tests/x.py`) still is.
+    Test: t_unit_run_cwd_note (the issue's commands: none; a script's later command: said), failed
+    on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
