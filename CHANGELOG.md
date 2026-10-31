@@ -78,6 +78,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   role and name, not their place, so a row put first is one row added. A password field's text is
   never shown. `--json` adds `tree`. Opt-in: it costs a read before the input
   ([#288](https://github.com/diogochaves/omabox/issues/288)).
+- **`find --image FILE`, `click --image FILE` and `wait image FILE [--gone]`** find what has no
+  accessibility tree (the bar, the shell's panels, plugins, terminals) by its picture: a crop of a
+  shot (`shot -g "X,Y WxH" -o FILE`). Each match is a line `X,Y WxH SCORE` in the layout's
+  coordinates, a text line where a shot cost ~1.5k tokens; several are all listed in reading order,
+  and `click --image` refuses them (exit 2, `--index N` picks one); `--offset DX,DY` clicks beside
+  the match. `--similar` (0.95) is a colour correlation that also falls with another contrast or
+  tone, so a greyed or switched-off copy does not pass; transparent pixels are not compared, and the
+  pointer's place is left out. Each shot records its scale in its PNG comment, and a crop shot at
+  another scale is resized to the box's and said. `-g` or `--window SEL` narrow the search
+  ([#267](https://github.com/diogochaves/omabox/issues/267)).
 - **Proofs on a checkpoint**: `check point --expect TEXT` says in words what that screen must show,
   kept with it and said under its line in `check run` and `--approve`, on its cards in `report.png`
   and `baseline.png`, and in `--json`, for whoever judges a change or a baseline. `--expect-tree TEXT`

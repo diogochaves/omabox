@@ -13,6 +13,7 @@ pub mod down;
 pub mod drag;
 pub mod env;
 pub mod events;
+pub mod find;
 pub mod gdb;
 pub mod gpu;
 pub mod guard;

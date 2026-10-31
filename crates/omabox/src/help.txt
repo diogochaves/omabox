@@ -44,6 +44,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox tray menu ID [-b NAME] [--json] [--all]         one item's menu, opened as a host opens it (AboutToShow)
   omabox tray activate ID [-b NAME] [--secondary]        a left (--secondary: middle) click on its icon, over the bus
   omabox tray click ID LABEL [-b NAME] [--index N]       the menu row named LABEL clicked, as the bar's card clicks it
+  omabox find [-b NAME] --image FILE [--similar 0.95] [-g GEOM | --window SEL] [--all] [--json]
+                                                         where an image (a crop of a shot) is: X,Y WxH SCORE each
   omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [--only ID,GLOB...] [--report-scale N]
                    [UP OPTIONS] -- SCENARIO [ARG...]     a visual check: the scenario's checkpoints against a baseline
   omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
@@ -57,6 +59,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
   omabox click [-b NAME] [--window SEL | --layer SEL] --find TEXT [--index N] [BTN] [OPTIONS as above]
                                                          what the accessibility tree names TEXT, at its middle
+  omabox click [-b NAME] [--window SEL] --image FILE [--similar 0.95] [--offset DX,DY] [--index N] [BTN] [OPTIONS as above]
+                                                         where an image is (find --image), at its middle
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
               [--steps 10 | --glide DURATION] [--hold DURATION] [--mod MODS]  press, move, hold, release
               [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)
@@ -71,6 +75,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
          COND: still [--quiet 300ms | --like SHOT] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
                | change [--since SHOT] [-g GEOM | --window SEL] [--ignore GEOM]...
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] [--monitor NAME]
+               | image FILE [--gone] [--similar 0.95] [-g GEOM | --window SEL]   find --image's, polled
                | until -- CMD [ARG...]
                | job [JOB] [--gone] | log [JOB] RE [-i]   a run -d job's end; a line in its log
                | tree TEXT [--window SEL | --layer SEL] [--gone] [--shot FILE]
@@ -136,12 +141,12 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
+@+ up run shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
 -o (or --output) names what the command writes.
-@short shot pixel tree check keys click scroll pointer drag wait window
+@short shot pixel find tree check keys click scroll pointer drag wait window
 --window SEL (or -w SEL): a window: active (or --active), 0x... (its address), pid:N, class:RE, title:RE, a word
 @short keys click scroll drag run
 --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--strict] [--json]
@@ -314,7 +319,7 @@ private API, so the build must be one against the installed Qt: `up` refuses a b
 another Qt, or one needing a library the box lacks, naming both. `ls` and `windows` name it;
 `ls --json` has quickshell_version (`quickshell --version` in the box, every box's), which is the
 last release's number, never proof that a fix is in: a build of an unreleased commit says it too.
-@ shot windows window keys click drag pointer scroll wait pixel tree check
+@ shot windows window keys click drag pointer scroll wait pixel find tree check
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
 org.gnome.Nautilus, or part of its title; failing those, a hyphen-separated part of the class,
@@ -594,6 +599,20 @@ named TEXT, or the one named so is hidden (it or what it is in is not showing), 
 out of view (outside its window or a container's bounds: scroll it into view first) or disabled,
 said which. Its line and where the pointer went are said on stderr; BTN, --double, --mod, --steps,
 --glide and --wait as with X Y.
+@ find click wait
+`find --image FILE` finds a picture where there is no accessibility tree (the shell, its plugins, the
+bar, a terminal): FILE is a PNG, best a crop of a shot of the box (`shot -g "X,Y WxH" -o FILE`), whose
+comment records the scale it was taken at. Each match is a line `X,Y WxH SCORE` in the layout's
+coordinates, in reading order (`-g`'s, click's, shot -g's), 1 the same pixels; exit 1 none, with the
+best score seen and where. Several: all listed (20, --all every one) and said on stderr, never one
+taken for you. --similar (0.95) is the score a match needs: normalised correlation of the colours,
+less for another contrast or tone (a grey switch is not its blue self); an image of one colour by its
+difference, transparent pixels not compared. A box drawn at another scale than FILE's resizes it and
+says so, then needs 0.8 unless --similar says. -g looks in a region, --window SEL in that window's own
+pixels (covered or not). `click --image FILE` clicks the middle of the one match (--offset DX,DY
+beside it: a label's field), several exit 2 numbered for --index N; `wait image FILE [--gone]` polls
+for it (0, 124, 1 as the other waits). Each takes a frame and searches it in about 50-100 ms. A
+jailed agent's FILE is read by its own omabox.
 @ check
 `check` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
 is a script of yours that sets the box up, drives it with omabox commands and calls `omabox check

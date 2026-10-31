@@ -1,15 +1,18 @@
 //! `omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
 //! [--steps N | --glide DURATION] [--mod MODS]`, `omabox click ... --find TEXT [--window SEL | --layer
+//! SEL] [--index N] [BTN]`, `omabox click ... --image FILE [--similar S] [--offset DX,DY] [--window
 //! SEL] [--index N] [BTN]` and `omabox scroll ... X Y DY [DX] [--source ...]`
 //! (#134, finding 213): the pointer there, then a click or a scroll. X Y are screen pixels; with
 //! --window the window's own (finding 81), with --in a shot's image's. --steps travels there from
 //! where the pointer is (#38), --glide in that time (#176), --mod holds modifiers down (#25), --wait
 //! watches what it does (finding 82). --find (#318) clicks the middle of what the accessibility tree
-//! names TEXT, read fresh by omabox-tree --click, with the real pointer as X Y would.
+//! names TEXT, read fresh by omabox-tree --click, with the real pointer as X Y would. --image FILE
+//! (#267) clicks the middle of where that image is (find --image's search), --offset beside it.
 
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::need_box;
 use crate::cat;
+use crate::cmd::find;
 use crate::cmd::hyprctl::code;
 use crate::cmd::tree;
 use crate::exec::{ErrTo, Out, on_box};
@@ -141,6 +144,95 @@ fn found(
     to_screen(ctx, st, raise, &[], sels, x, y)
 }
 
+/// --image FILE: the middle of the one match of SPEC (--index N: the Nth in reading order), moved by
+/// OFFSET; in the window SELS picks, to the screen as --window maps X Y; its line said. None is exit 1,
+/// several without --index exit 2 with their lines, numbered (as --find's).
+fn found_image(
+    ctx: &mut Ctx,
+    st: &mut Settle,
+    raise: bool,
+    sels: &mut Vec<Vec<u8>>,
+    spec: &find::Spec,
+    index: Option<i64>,
+    offset: (i64, i64),
+) -> Res<(i64, i64)> {
+    let (f, fr) = find::prepare(ctx, "click", spec)?;
+    if !f.note.is_empty() {
+        say(&f.note);
+    }
+    let s = f.look(&fr);
+    if s.hits.is_empty() {
+        say(cat!("click: ", f.none_words(&s)));
+        return Err(Exit(1));
+    }
+    let n = s.hits.len();
+    let m = match index {
+        Some(k) => {
+            let Some(m) = usize::try_from(k - 1).ok().and_then(|i| s.hits.get(i)) else {
+                let (es, are) = if n == 1 { ("", "is") } else { ("es", "are") };
+                say(format!("click: --index {k}: {n} match{es} {are} in view"));
+                return Err(Exit(1));
+            };
+            m
+        }
+        None if n > 1 => {
+            let more = if s.more { "more than " } else { "" };
+            say(cat!(
+                "click: ",
+                more,
+                n.to_string(),
+                " matches of ",
+                f.name,
+                " in ",
+                f.where_(),
+                ": pick one with --index N"
+            ));
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &find::numbered(&s.hits, 20));
+            return Err(Exit(2));
+        }
+        None => &s.hits[0],
+    };
+    let (dx, dy) = offset;
+    let (x, y) = match &m.win {
+        Some((addr, wx, wy)) => {
+            *sels = vec![addr.clone()];
+            (wx + m.w / 2 + dx, wy + m.h / 2 + dy)
+        }
+        None => {
+            let (cx, cy) = m.middle();
+            (cx + dx, cy + dy)
+        }
+    };
+    let (x, y) = to_screen(ctx, st, raise, &[], sels, x, y)?;
+    say(cat!(
+        "click: ",
+        f.name,
+        " at ",
+        m.line(),
+        ": at ",
+        num(x),
+        ",",
+        num(y)
+    ));
+    Ok((x, y))
+}
+
+/// --offset's DX,DY: whole pixels, either way.
+fn offset_arg(ctx: &Ctx, v: &[u8]) -> Res<(i64, i64)> {
+    let p = shell::re_match("^-?[0-9]{1,5},-?[0-9]{1,5}$", v)
+        .then(|| {
+            let i = v.iter().position(|&c| c == b',')?;
+            Some((shell::dec(&v[..i])?, shell::dec(&v[i + 1..])?))
+        })
+        .flatten();
+    p.ok_or_else(|| {
+        ctx.die(cat!(
+            "click: --offset takes DX,DY in pixels (40,0: 40 to the right), got ",
+            v
+        ))
+    })
+}
+
 /// --wait: the cursor where it is and where it goes is not the change looked for.
 fn ignore_cursor(ctx: &Ctx, st: &mut Settle, x: i64, y: i64) -> Res<()> {
     let p = cursor_now(ctx)?;
@@ -171,6 +263,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut steps, mut mods, mut glide): (Option<i64>, Vec<u8>, Option<i64>) =
         (None, Vec::new(), None);
     let (mut find, mut layer, mut index) = (Vec::new(), Vec::new(), None);
+    let (mut spec, mut offset) = (find::Spec::default(), None);
     let mut st = Settle::default();
     let mut i = 0;
     while i < args.len() {
@@ -206,6 +299,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             b"-l" | b"--layer" => {
                 optarg(ctx, a, v)?;
                 layer = args[i + 1].clone();
+                i += 1;
+            }
+            b"--image" => {
+                optarg(ctx, a, v)?;
+                spec.file = args[i + 1].clone();
+                i += 1;
+            }
+            b"--similar" => {
+                optarg(ctx, a, v)?;
+                spec.sim = Some(find::similar_arg(ctx, "click", &args[i + 1])?);
+                i += 1;
+            }
+            b"--offset" => {
+                optarg(ctx, a, v)?;
+                offset = Some(offset_arg(ctx, &args[i + 1])?);
                 i += 1;
             }
             b"--index" => {
@@ -257,9 +365,28 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // --find without --window clicks in the active window: its coordinates, as --window's.
     let on_window = sels.len() + usize::from(!find.is_empty() && layer.is_empty());
     st.opts_check(ctx, on_window)?;
-    if find.is_empty() {
+    let image = !spec.file.is_empty();
+    if image && !find.is_empty() {
+        return Err(ctx.die("click: --find TEXT or --image FILE, not both"));
+    }
+    if !image && (spec.sim.is_some() || offset.is_some()) {
+        return Err(ctx.die("click: --similar and --offset go with --image FILE"));
+    }
+    if image {
+        if !layer.is_empty() {
+            return Err(ctx.die(
+                "click: --layer goes with --find TEXT (--image looks at the screen, or at --window SEL's own pixels)",
+            ));
+        }
+        if !xyv.is_empty() {
+            return Err(ctx.die("click: --image FILE or X Y, not both"));
+        }
+        if !inp.is_empty() {
+            return Err(ctx.die("click: --image FILE or --in SHOT, not both"));
+        }
+    } else if find.is_empty() {
         if !layer.is_empty() || index.is_some() {
-            return Err(ctx.die("click: --layer and --index go with --find TEXT"));
+            return Err(ctx.die("click: --layer and --index go with --find TEXT or --image FILE"));
         }
         if xyv.len() != 2 {
             let s = if xyv.len() == 1 { "" } else { "s" };
@@ -288,7 +415,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if steps.is_none() && glide.is_none() {
         glide = rec_glide(ctx).and_then(|g| shell::dec(&g));
     }
-    let (x, y) = if find.is_empty() {
+    spec.sels = sels.clone();
+    let (x, y) = if image {
+        let off = offset.unwrap_or((0, 0));
+        found_image(ctx, &mut st, raise, &mut sels, &spec, index, off)?
+    } else if find.is_empty() {
         to_screen(ctx, &mut st, raise, &inp, &mut sels, xyv[0], xyv[1])?
     } else {
         found(ctx, &mut st, raise, &mut sels, &layer, &find, index)?

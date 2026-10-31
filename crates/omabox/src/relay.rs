@@ -275,9 +275,10 @@ pub fn call(ctx: &mut Ctx, cmd: &[u8], args: &[Vec<u8>]) -> Res<()> {
     match cmd {
         b"shot" | b"screenshot" => shot(ctx, &relay, env, &words),
         b"record" => record(ctx, &relay, env, &words),
-        b"click" | b"scroll" | b"pointer" | b"drag" | b"pixel" => {
+        b"click" | b"scroll" | b"pointer" | b"drag" | b"pixel" | b"find" => {
             relay_in(ctx, &relay, cmd, env, &words)
         }
+        b"wait" if wait_image_file(&words).is_some() => relay_in(ctx, &relay, cmd, env, &words),
         _ => {
             // (run's: the relay's own failure, the broker not reached, is 125 as run's own are)
             if cmd == b"run" {
@@ -442,20 +443,38 @@ fn shot(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()> 
     if rc == 0 { Ok(()) } else { Err(code(rc)) }
 }
 
-/// relay_in: click, scroll, pointer, drag and pixel --in SHOT, from a jail: the shot opened here
-/// and passed as fd 3, with its name.
+/// relay_in: click, scroll, pointer, drag and pixel --in SHOT, find and click --image FILE and wait
+/// image FILE (#267), from a jail: the file opened here and passed as fd 3, with its name.
 fn relay_in(ctx: &mut Ctx, relay: &[u8], cmd: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()> {
     let (mut words, mut input) = (vec![cmd.to_vec()], None);
+    let mut label: &[u8] = b"--in";
+    let wfile = if cmd == b"wait" {
+        wait_image_file(args)
+    } else {
+        None
+    };
     let mut i = 0;
     while i < args.len() {
         if args[i] == b"--" {
             words.extend_from_slice(&args[i..]);
             break;
         }
-        if args[i] == b"--in" && i + 1 < args.len() {
+        if (args[i] == b"--in" || args[i] == b"--image") && i + 1 < args.len() && input.is_none() {
             input = Some(args[i + 1].clone());
-            words.extend([b"--in".to_vec(), b"/dev/fd/3".to_vec()]);
+            label = if args[i] == b"--in" {
+                b"--in"
+            } else {
+                b"--image"
+            };
+            words.extend([args[i].clone(), b"/dev/fd/3".to_vec()]);
             i += 2;
+            continue;
+        }
+        if wfile == Some(i) {
+            input = Some(args[i].clone());
+            label = b"wait image";
+            words.push(b"/dev/fd/3".to_vec());
+            i += 1;
             continue;
         }
         words.push(args[i].clone());
@@ -465,11 +484,53 @@ fn relay_in(ctx: &mut Ctx, relay: &[u8], cmd: &[u8], mut env: Env, args: &[Vec<u
         return Err(exec_call(ctx, relay, &[], &env, &words));
     };
     if !path(&input).is_file() {
-        return Err(ctx.die(cat!("--in: no such file: ", input)));
+        return Err(ctx.die(cat!(label, ": no such file: ", input)));
     }
     let f = open_for(ctx, &input, false)?;
     env.add(cat!("IN_AS=", abs(&input)));
     Err(exec_call(ctx, relay, &[f.as_raw_fd()], &env, &words))
+}
+
+/// wait's words: where the FILE of `wait image FILE` is (the first word after `image` that is
+/// neither an option nor an option's value), None when it is not wait image.
+fn wait_image_file(args: &[Vec<u8>]) -> Option<usize> {
+    let takes = |w: &[u8]| {
+        matches!(
+            w,
+            b"-b"
+                | b"--box"
+                | b"--ignore"
+                | b"--timeout"
+                | b"--quiet"
+                | b"-g"
+                | b"-w"
+                | b"--window"
+                | b"--monitor"
+                | b"--similar"
+        )
+    };
+    let (mut cond, mut i) = (false, 0);
+    while i < args.len() {
+        let a = &args[i];
+        if a == b"--" {
+            return None;
+        }
+        if takes(a) {
+            i += 2;
+            continue;
+        }
+        if !a.starts_with(b"-") {
+            if cond {
+                return Some(i);
+            }
+            if a != b"image" {
+                return None;
+            }
+            cond = true;
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Where `"$0" ARGS` sends its stdout: here, to stderr (`>&2`), or nowhere (`>/dev/null`).
@@ -890,6 +951,22 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #267: the FILE of wait image FILE is found past options and their values; other conditions
+    /// and a value named image are not it.
+    #[test]
+    fn wait_image_file_is_the_word_after_image() {
+        let w = |s: &str| -> Vec<Vec<u8>> { s.split(' ').map(|x| x.as_bytes().to_vec()).collect() };
+        assert_eq!(wait_image_file(&w("image a.png")), Some(1));
+        assert_eq!(
+            wait_image_file(&w("--timeout 2s image --gone -g 0,0,9,9 a.png")),
+            Some(6)
+        );
+        assert_eq!(wait_image_file(&w("-b image still")), None);
+        assert_eq!(wait_image_file(&w("window image")), None);
+        assert_eq!(wait_image_file(&w("image --gone")), None);
+        assert_eq!(wait_image_file(&w("until -- image x")), None);
+    }
 
     /// A stand-in relay, written by a shell of its own: no fd of this process ever holds it open for
     /// writing, which a fork in another test's thread would carry into an exec of it (ETXTBSY).

@@ -71,6 +71,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `tray --json` | an array of items: `id, title, status, category, service, path, menu` (null: none), `item_is_menu, rows` (each `id, label, role, enabled, visible, toggle, checked, rows`); `tray menu --json`: one item |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
+| `find --json` | `image, similar, matches` (an array in reading order: `x, y, w, h, middle` ([x, y]), `score`, and `window` (`address, x, y`: the window's own coordinates) with `--window`), `more` (true: past 1000, not all listed), `best` (the best place seen, a match's shape, null for none) |
 | `lua --json` | a line each value Lua returned (any JSON value) |
 | `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
@@ -151,6 +152,21 @@ a turn. Five rules keep every omabox call plain:
   (foot) have none and say "no accessibility tree": shots for those. An unnamed control takes its
   label's name where the app links them; one that does not (a switch beside its label) matches by
   its role (`--find switch`), or read the whole tree.
+- No tree (the bar, the shell's panels, a plugin, a terminal, a game): find it by its picture.
+  Shoot a crop of it once, `omabox shot -g "X,Y WxH" -o icon.png` (its comment records the box's
+  scale), then `omabox find --image icon.png` prints each match as `X,Y WxH SCORE` in the layout's
+  coordinates (a text line, not a shot), exit 1 none with the best score seen and where.
+  `click --image icon.png` clicks its middle (`--offset 40,0`: beside a label, in its field), and
+  `wait image icon.png [--gone]` waits for it to be drawn or to go. Several matches are all listed in
+  reading order and said; click refuses them, exit 2, numbered for `--index N`. The score
+  (`--similar`, 0.95 by default; 1 is the same pixels) is correlation of the colours, lower for
+  another contrast or tone, so a disabled grey copy or the off state of a switch does not pass for
+  the on one; a crop of one colour is matched by difference (it matches every place of that colour),
+  and transparent pixels are not compared. The pointer's place is left out (a click leaves it on the
+  match). A crop shot at another scale is resized to the box's and softened, said, and needs 0.8
+  unless `--similar` says: shoot crops in the box they are used in when you can. `-g` or `--window
+  SEL` (its own pixels, covered or not) narrow the search; each search is one frame, 50-100 ms on a
+  1080p screen. A scenario for `check run` can click by image instead of by fixed coordinates.
 - The shell's bar, panels, menus and plugins are layer surfaces: `omabox tree --layer SEL` (a
   namespace from `omabox hyprctl layers`, `address:0x...` or `pid:PID`), with `--find`, `--json` and
   `--all` as for windows. Its bounds are the **screen's** coordinates: plain `click X Y` at a node's

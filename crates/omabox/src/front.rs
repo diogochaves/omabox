@@ -21,6 +21,7 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"stop",
     b"tree",
     b"tray",
+    b"find",
     b"check",
     b"keys",
     b"keys-to-box",

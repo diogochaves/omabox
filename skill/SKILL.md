@@ -77,8 +77,8 @@ omabox down                               # when done
 
 1. **Look, act once, look again; with text when text can tell.** Exit 0 from `keys`/`click` means
    sent, not landed. A label, a checked box, a field's text: `tree --find TEXT` (~60 tokens), not a
-   shot (~1.2k); the bar, panels, menus: `tree --layer NS --find TEXT`. Else `--wait`'s line,
-   `windows`, `wait`, `events`, `log --grep`; a shot for pixels.
+   shot (~1.2k); the bar, panels, menus: `tree --layer NS --find TEXT`; no tree: `find --image`
+   (a shot's crop). Else `--wait`'s line, `windows`, `wait`, `events`, `log --grep`.
 2. **Never resend input you have not seen land**: it types twice or toggles back. A 124 after
    `--wait`: it WAS sent, and the line says where it went: read it, look (`tree`, a shot) before
    sending again.
@@ -92,14 +92,14 @@ video `record hold 2s`. Never send a wait to `/dev/null`. An animation that neve
 names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
 
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
-discard it) click with `--in THAT.png X Y`, never your own arithmetic; off a whole screen or a big
+discard it) click with `--in THAT.png X Y`, never your arithmetic; off a whole screen or a big
 window, `shot --fit 1456` first (some models read points in the smaller image they see). **Shots are
 most of a session's context**: the smallest that shows it (`--window`, `-g`, `--changed`): ref: Shots.
 **The pointer is test state** (focus follows it): ref: Pointer, in detail.
 
 ## Where to look next
 
-- A failure: ref: Symptoms. Exit codes: `omabox help exit-codes`. Colours, transitions: ref: Shots.
+- A failure: ref: Symptoms. Exit codes: `omabox help exit-codes`. Colours, fades: ref: Shots.
 - Baselines: ref: Visual checks. `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors,
   `gpu`/`cpu`: ref: Screen size and rendering cost.
 - Plugins: ref: Testing a shell plugin. `--hyprland`: ref: A Hyprland build of your own. `--omarchy`:

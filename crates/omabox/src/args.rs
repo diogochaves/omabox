@@ -40,7 +40,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n=",
         ),
         b"wait" => Some(
-            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused -i --monitor= -l= --layer= --shot= --since= --like= --grep=",
+            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused -i --monitor= -l= --layer= --shot= --since= --like= --grep= --similar=",
         ),
         b"windows" | b"jobs" => Some("-b= --box= --json"),
         b"stop" => Some("-b= --box= --all"),
@@ -48,12 +48,13 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"tree" => Some("-b= --box= -w= --window= --active -l= --layer= --find= --json --all"),
         b"tray" => Some("-b= --box= --json --all --secondary --index="),
         b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),
+        b"find" => Some("-b= --box= --image= --similar= -g= -w= --window= --active --all --json"),
         b"keys" => Some(
             "-b= --box= -w= --window= --active -t= -s= --pass= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"keys-to-box" => Some("-b= --box="),
         b"click" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
+            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --image= --similar= --offset= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"scroll" => Some(
             "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",

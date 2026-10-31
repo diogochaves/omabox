@@ -447,7 +447,8 @@ pub fn check(ctx: &Ctx, cmd: &[u8], args: &[Vec<u8>]) -> Res<()> {
 /// broker_check's answer: why the command is refused, or None when a jailed agent may ask it.
 pub fn refusal(cmd: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
     match cmd {
-        b"up" | b"run" | b"shot" | b"screenshot" | b"pixel" | b"windows" | b"window" | b"tree"
+        b"up" | b"run" | b"shot" | b"screenshot" | b"pixel" | b"find" | b"windows" | b"window"
+        | b"tree"
         | b"tray" | b"keys" | b"click" | b"scroll" | b"pointer" | b"drag" | b"wait"
         | b"hyprctl" | b"lua" | b"log" | b"logs" | b"gdb" | b"pid" | b"events"
         | b"restart-shell" | b"reload" | b"mode" | b"output" | b"monitor" | b"gpu" | b"cpu"
@@ -562,6 +563,7 @@ mod tests {
             "config workspace",
             "ports --json",
             "pixel",
+            "find",
             "tree",
             "reload",
             "restart-shell",

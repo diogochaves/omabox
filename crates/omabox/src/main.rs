@@ -19,6 +19,7 @@ mod help;
 mod homeuse;
 mod host;
 mod hypr;
+mod imgfind;
 mod input;
 mod install;
 mod jail;
@@ -149,6 +150,7 @@ fn main() -> ExitCode {
         Some("stop") => Some(cmd::jobs::stop),
         Some("tray") => Some(cmd::tray::run),
         Some("tree") => Some(cmd::tree::run),
+        Some("find") => Some(cmd::find::run),
         Some("pixel") => Some(cmd::pixel::run),
         Some("keys") => Some(cmd::keys::run),
         Some("click") => Some(cmd::click::run),

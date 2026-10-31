@@ -1,5 +1,6 @@
 //! `omabox wait [-b NAME] [--timeout 10s] [--json] COND` (finding 82): until the screen holds still
-//! or changes (omabox-still in the box: settle.rs), a window or layer is there or gone, a command
+//! or changes (omabox-still in the box: settle.rs), a window or layer is there or gone, an image
+//! is on the screen or gone (find --image's search, #267), a command
 //! succeeds (polled here), a run -d job ends or logs a line (#299), a box log gets a new line
 //! (wait_log.rs, #330), or the accessibility tree holds a text (treewait.rs, #319); `wait for` is a
 //! fixed time, said as one. One line on stdout (or --json); 0 satisfied, 124 not in time, 1 unknown.
@@ -8,6 +9,7 @@ use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
 use crate::boxes::{box_alive, need_box, touch};
 use crate::cat;
 use crate::cmd::wait_log::{LogWait, for_wait, log_wait};
+use crate::cmd::find::{self, Finder, Frame, NoFrame};
 use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers_in, hypr_json};
@@ -41,6 +43,8 @@ enum Probe<'a> {
     /// A line matching RE (grep -E, ICASE: -i) in a `run -d` job's log (#299).
     Log(&'a Job, &'a [u8], bool),
     Tree(&'a crate::treewait::TreeProbe),
+    /// An image on the screen or in a window, or with GONE not (#267); the frame prepare took first.
+    Image(&'a Finder, bool, &'a std::cell::RefCell<Option<Frame>>),
 }
 
 impl Probe<'_> {
@@ -53,12 +57,34 @@ impl Probe<'_> {
             Probe::Job(..) => "job_probe",
             Probe::Log(..) => "log_probe",
             Probe::Tree(..) => "tree_probe",
+            Probe::Image(..) => "image_probe",
         }
     }
 
     /// `out=$(PROBE)`: its status and its output (trailing newlines off).
     fn run(&self, ctx: &mut Ctx, t0: i64, tmo: i64) -> (i32, Vec<u8>) {
         match self {
+            Probe::Image(f, gone, first) => {
+                let taken = first.borrow_mut().take();
+                let fr = match taken {
+                    Some(fr) => fr,
+                    None => match f.grab(ctx) {
+                        Ok(Ok(fr)) => fr,
+                        // (a window gone is an answer: no image in it)
+                        Ok(Err(NoFrame::Gone(why))) => {
+                            return (0, cat!(if *gone { "yes " } else { "no " }, why));
+                        }
+                        Ok(Err(NoFrame::Failed(_))) => return (1, Vec::new()),
+                        Err(Exit(rc)) => return (i32::from(rc), Vec::new()),
+                    },
+                };
+                let s = f.look(&fr);
+                let yes = s.hits.is_empty() == *gone;
+                (
+                    0,
+                    cat!(if yes { "yes " } else { "no " }, find::seen_words(&s)),
+                )
+            }
             Probe::Win(want, sels) => {
                 let wins = {
                     let _quiet = Redir::null(2);
@@ -455,6 +481,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // a box log's wait and a fixed one (#330): --grep RE (log's way of giving RE), --since, DURATION
     let (mut grep, mut since, mut tmo_set, mut dur): (Option<Vec<u8>>, Option<i64>, bool, Vec<u8>) =
         (None, None, false, Vec::new());
+    let (mut imgw, mut sim): (Vec<u8>, Option<f64>) = (Vec::new(), None);
     let mut masks: Vec<Vec<u8>> = Vec::new();
     // --since SHOT (change) or --like SHOT (still): the screen against an earlier shot (#344).
     let (mut base, mut base_opt): (Vec<u8>, &str) = (Vec::new(), "");
@@ -533,6 +560,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 base_opt = if a == b"--since" { "--since" } else { "--like" };
                 i += 1;
             }
+            b"--similar" => {
+                optarg(ctx, a, v)?;
+                sim = Some(find::similar_arg(ctx, "wait", &args[i + 1])?);
+                i += 1;
+            }
             b"-g" => {
                 optarg(ctx, a, v)?;
                 geom = args[i + 1].clone();
@@ -597,6 +629,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     text = Some(a.clone());
                 } else if cond == b"for" && dur.is_empty() {
                     dur = a.clone();
+                } else if cond == b"image" && imgw.is_empty() {
+                    imgw = a.clone();
                 } else {
                     return Err(unexpected(ctx, cat!("wait ", cond), a, ""));
                 }
@@ -607,6 +641,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let none = geom.is_empty() && quiet.is_empty();
     if icase && cond != b"log" {
         return Err(ctx.die("wait: -i goes with log (wait log [JOB] RE -i)"));
+    }
+    if sim.is_some() && cond != b"image" {
+        return Err(ctx.die("wait: --similar goes with image (wait image FILE --similar 0.9)"));
     }
     if !mon.is_empty() && cond != b"layer" {
         return Err(
@@ -763,6 +800,22 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 ));
             }
         }
+        b"image" => {
+            if imgw.is_empty() {
+                return Err(
+                    ctx.die("wait image: which image? a PNG, a crop of a shot (wait image FILE)")
+                );
+            }
+            if want == "focused" {
+                return Err(ctx.die("wait image: --gone or nothing"));
+            }
+            if !quiet.is_empty() || strict || !masks.is_empty() {
+                return Err(ctx.die("wait image: only --gone, --similar, -g and --window"));
+            }
+            if !geom.is_empty() && !sels.is_empty() {
+                return Err(ctx.die("wait: -g or --window, not both"));
+            }
+        }
         b"until" => {
             if cmd.is_empty() {
                 return Err(ctx.die("wait until: nothing to run (omabox wait until -- CMD ...)"));
@@ -784,7 +837,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         b"" => {
             return Err(ctx.die(
-                "wait: for what? still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION (omabox help)",
+                "wait: for what? still, change, window SEL, layer NAMESPACE, image FILE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION (omabox help)",
             ));
         }
         _ => {
@@ -793,9 +846,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "wait",
                 "condition",
                 &cond,
-                "(still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION)",
+                "(still, change, window SEL, layer NAMESPACE, image FILE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION)",
                 &[
-                    "still", "change", "window", "layer", "job", "log", "tree", "until", "for",
+                    "still", "change", "window", "layer", "image", "job", "log", "tree", "until", "for",
                 ],
             ));
         }
@@ -878,6 +931,36 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return log_wait(ctx, &w, tmo, json);
     }
     match cond.as_slice() {
+        b"image" => {
+            let g = if geom.is_empty() {
+                None
+            } else {
+                let Some(g) = crate::settle::geom_parse(&geom) else {
+                    return Err(ctx.die(cat!("wait image: -g takes \"X,Y WxH\", got ", geom)));
+                };
+                let n = |k: usize| dec(&g[k]).unwrap_or(0);
+                Some([n(0), n(1), n(2), n(3)])
+            };
+            let spec = find::Spec {
+                file: imgw.clone(),
+                sim,
+                geom: g,
+                sels: sels.clone(),
+            };
+            let (f, fr) = find::prepare(ctx, "wait image", &spec)?;
+            if !f.note.is_empty() {
+                say(&f.note);
+            }
+            let gone = want == "gone";
+            let w = cat!("image ", f.name);
+            let (yes, no) = if gone {
+                (cat!(w, " gone"), cat!(w, " still there"))
+            } else {
+                (w.clone(), cat!("no ", w))
+            };
+            let first = std::cell::RefCell::new(Some(fr));
+            poll_until(ctx, &yes, &no, 1, tmo, json, Probe::Image(&f, gone, &first))
+        }
         b"window" => {
             let w = cat!("window ", joined(&sels));
             let (yes, no) = match want {

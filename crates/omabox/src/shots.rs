@@ -483,6 +483,22 @@ pub fn geom_clip(r: [i64; 4], lw: i64, lh: i64) -> Option<([i64; 4], Vec<u8>)> {
 
 /// png_size FILE: its width and height, from its header; why not said when it cannot read the file,
 /// or the file ends before its 16th byte (in omabox's words: bash's were od's, finding 441).
+/// tag_scale FILE SCALE: the shot's comment says its scale, image pixels per layout pixel (`omabox
+/// scale=1.5`, #267): a crop of it keeps it, and find --image reads it. Nothing when FILE cannot be
+/// read or written, or is not a PNG.
+pub fn tag_scale(f: &[u8], scale: f64) {
+    if !(scale.is_finite() && scale > 0.0) {
+        return;
+    }
+    let s = format!("{scale:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    let p = shell::path(f);
+    let Ok(b) = std::fs::read(&p) else { return };
+    if let Some(t) = crate::imgfind::png_with_comment(&b, format!("omabox scale={s}").as_bytes()) {
+        let _ = std::fs::write(p, t);
+    }
+}
+
 pub fn png_size(f: &[u8]) -> Option<(i64, i64)> {
     let data = match std::fs::read(shell::path(f)) {
         Ok(d) => d,

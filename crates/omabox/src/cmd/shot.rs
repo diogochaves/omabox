@@ -1216,6 +1216,14 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     let Some((iw, ih)) = png_size(&s.file) else {
         return Err(ctx.die(cat!("shot: ", s.out, " is not a PNG")));
     };
+    // Its scale in its comment (#267, finding 616), image pixels to the layout's, which a crop of it
+    // keeps: find --image scales it to a box drawn at another. (Not into a jailed caller's fd, which
+    // is never read back here.)
+    if s.tofd.is_empty()
+        && let Some(w) = shell::dec(&s.lw).filter(|&w| w > 0)
+    {
+        crate::shots::tag_scale(&s.file, iw as f64 / w as f64);
+    }
     let screen = box_screen(ctx)?;
     let mode = split_at(&screen, b' ').1;
     let geo = cat!(s.lw, "x", s.lh, " ", n(iw), "x", n(ih));

@@ -11794,7 +11794,43 @@ from them.
     proof_options_refused_as_written; t_check_proof (a real check: both proofs held and approved,
     a command that fails over the baseline's own pixels, a tree text the window lacks in --json,
     an --approve refused with the baseline kept byte for byte).
-
+616. **What has no accessibility tree could only be found in a shot** (2026-10-31, #267). The bar,
+    the shell's panels, plugins and terminals give `tree` nothing, so an agent read points off a shot
+    (~1.5k image tokens each time) and a `check run` scenario hard-coded coordinates. `find --image
+    FILE [--similar 0.95] [-g GEOM | --window SEL] [--all] [--json]` finds a template there:
+    imgfind.rs, plain Rust (no OpenCV, no image crate): grim's PPM of the screen or a window (`-T`,
+    its own pixels) read directly, the PNG template decoded by ImageMagick's PNG reader alone
+    (`png:-` to `pam:-`, alpha kept). The score is `2ΣT'I'/(ΣT'²+ΣI'²)` over the three channels
+    times `1 - max|mean T - mean I|/255`: normalised correlation that also falls with another
+    contrast or tone, since plain NCC is blind to both and took a grey switch for its blue self and a
+    copy at half brightness for the thing (unit tests); a template under 2 levels of spread is scored
+    `1 - RMS/255` (correlation is undefined there); alpha under 128 is left out. The search is coarse
+    to fine: grey NCC over every place on the template halved while it keeps 8 px a side (at most 3
+    times), its local bests over 0.4 (1500 at most) each followed down a level within 2 px, then the
+    colour score at full size; overlapping matches keep the best. Measured in a box, 1080p: 50-100 ms
+    a search including grim (a whole-screen PPM grab is ~30 ms), so `wait image` polls it as `wait
+    window` polls; random crops of a text-heavy screen (two foot windows of `ls` output) were found
+    where cut in 88 of 89 (the miss a slice of a window border, identical all along it: listed
+    elsewhere on it), 32 of them among several (repeated words), at scale 1 and at 1.5. Each shot now
+    records its scale in its PNG comment (`omabox scale=1.5`, image px per layout px: a tEXt chunk
+    `shots.rs`'s `tag_scale` inserts; ImageMagick's crops keep it, as `comment`); a box drawn at
+    another scale resizes the template (magick `-resize`) and says so. Text and icons drawn natively
+    at another scale are not the resized pixels: a 1x crop of foot text scored 0.83 at scale 2 as
+    resized; blurred 3x3 once (both), 0.92 at 2, 0.89 at 1.25, 0.75 at 1.5; twice, 0.94, 0.93 and
+    0.83, the next best place under 0.45. So a resized template and the frame are blurred twice, and
+    the match needs 0.8 by default. The box's pointer is drawn into its frames: right
+    after `click --image` it sat on the match (0.69), and a `wait image --gone` was satisfied at once;
+    40x40 layout px around the pointer (an arrow's and an I-beam's) are left out of the score.
+    Several matches are all listed in reading order and said, never one taken: `click --image`
+    refuses them, exit 2, numbered for `--index N`, as `click --find` does; `--offset DX,DY` clicks
+    beside the match. `wait image FILE [--gone]` is in the `wait` family (0, 124, 1). A jailed agent's
+    FILE is opened by its own omabox and passed as fd 3 (relay.rs, as `--in`'s), never a path the
+    broker opens. Not done: the issue's optional "where it was last found, searched first" (a search
+    is fast enough without), and a scale comment in a shot written to a jailed caller's fd (never
+    read back here: its crops match as if at the box's scale). Tests: t_find_image (where cut, -g,
+    --window, --json, two in view, --index, --offset, wait for it and --gone, scale 2, the
+    refusals), imgfind.rs's tests (crops, noise, colour and contrast, transparency, one colour, the
+    pointer, the PNG comment), relay.rs's wait_image_file_is_the_word_after_image.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
