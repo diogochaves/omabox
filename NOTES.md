@@ -10986,6 +10986,29 @@ from them.
     t_save_killed (a `cp` of the test's first in PATH holds the copy open; the save SIGKILLed in it:
     the box runs again within 5 s, the watch gone; a save after it works and clears the killed one's
     copy). It failed before the fix: the box stayed stopped.
+575. **S1's self-check looked only at where each of the box's mounts is** (2026-10-31, #363; the
+    check is finding 456's). It took each mount point of the started box's mountinfo through
+    seat_path with no runtime dir: a `/dev/dri` folder bound whole (its cards inside, the mount point
+    `/dev/dri` no seat path), a seat path bound at another destination (`/dev/input` at `/opt/x`) and
+    a mount inside the runtime dir's path (a host `wayland-1` at `/run/user/UID/wayland-1`) all
+    passed. Now (up_box.rs's seat_mounts, dri_seat, seat_rdev): each mount's source is named through
+    omabox's own mountinfo (the mount of the same major:minor whose root holds the box mount's root,
+    that mount point plus the rest), and a source that is a seat path or holds one ends the box at
+    whatever destination it has (one in the box's own dir is its own: run dir, placeholder, covers);
+    any mount point strictly under the runtime dir's path ends it (the box's own run dir is at the
+    path itself, still compared by inode); every `card*` in the box's `/dev/dri` must be the empty
+    placeholder file; and a character device mounted under `/dev` (or from a devtmpfs) that is a
+    card (226, minor below 128) or an input device (13) by its number ends it. Device numbers are
+    looked at only there: a stat of every mount point could wait on a FUSE or network folder bound
+    in. A source no mount of omabox's shows (the box's own tmpfs, an overlay) is not named; the
+    binds' own refusals stay the first line (none of these was ever made by `up`). The mountinfo of
+    omabox itself that cannot be read fails closed too. Tests: up_box.rs's unit tests
+    seat_mounts_a_box_as_up_makes_it_passes, seat_mounts_finds_the_seat_by_source_and_place (15
+    fixtures; failed on the old check), seat_mounts_without_a_runtime_dir, seat_devices_by_number,
+    dri_cards_must_be_placeholders; t_seat_check (a stand-in runtime dir with a folder of the test's
+    bound inside it: refused, its processes gone; an older omabox started that box). A test with a
+    stand-in `XDG_RUNTIME_DIR` must give `XDG_CACHE_HOME` one too: up's sweep_homes removes every
+    HOME whose box its runtime dir does not have, which is every real box's.
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one

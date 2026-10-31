@@ -1583,12 +1583,13 @@ fn covers_check(ctx: &Ctx, u: &Up, r: &Ready) -> Res<()> {
     Ok(())
 }
 
-/// S1's self-check (#355): the started box's own mounts, read back through its PID 1, hold none of
-/// the seat's paths (a card node that is a device, /dev/input, seatd's socket, the system bus, the
-/// user's runtime dir itself). One there ends the box, said: the bwrap words were wrong somewhere.
+/// S1's self-check (#355, #363): the started box's own mounts, read back through its PID 1, hold
+/// none of the seat's paths (a card node that is a device, /dev/input, seatd's socket, the system
+/// bus, the user's runtime dir or anything in it), at their own path or anywhere else. One there ends
+/// the box, said: the bwrap words were wrong somewhere.
 fn seat_check(ctx: &Ctx, pid: &[u8]) -> Res<()> {
     let runtime = shell::env_or_empty("XDG_RUNTIME_DIR");
-    if let Some(why) = seat_visible(pid, &runtime) {
+    if let Some(why) = seat_visible(pid, &runtime, &ctx.d) {
         return Err(ctx.die(cat!(
             "up: box '",
             ctx.name,
@@ -1600,25 +1601,42 @@ fn seat_check(ctx: &Ctx, pid: &[u8]) -> Res<()> {
     Ok(())
 }
 
-/// What of the seat the box whose PID 1 is PID has, or None. Each mount point of its mountinfo, as
-/// the box sees it: a DRM card node there must be the box's empty placeholder file (finding 294),
-/// none of /dev/input, /run/seatd.sock or /run/dbus may be one or be there; and the runtime dir at its
-/// path must not be the user's own (the same file). What cannot be read is no pass (fail closed).
-pub fn seat_visible(pid: &[u8], runtime: &[u8]) -> Option<Vec<u8>> {
+/// What of the seat the box whose PID 1 is PID has, or None. Its mounts (seat_mounts: by where they
+/// are and by what they are of, OWN its box dir); each mount point of its mountinfo, as the box sees
+/// it: a DRM card node there must be the box's empty placeholder file (finding 294), and so must
+/// every card in its /dev/dri; no mounted device may be a card or an input device by its number;
+/// none of /dev/input, /run/seatd.sock or /run/dbus may be one or be there; and the runtime dir at
+/// its path must not be the user's own (the same file). What cannot be read is no pass (fail closed).
+pub fn seat_visible(pid: &[u8], runtime: &[u8], own: &[u8]) -> Option<Vec<u8>> {
     let root = cat!("/proc/", pid, "/root");
     let mi = cat!("/proc/", pid, "/mountinfo");
+    let unread = |p: &[u8], e: std::io::Error| {
+        Some(cat!(
+            "mounts that cannot be read (",
+            p,
+            ": ",
+            e.to_string(),
+            ")"
+        ))
+    };
     let info = match std::fs::read(shell::path(&mi)) {
         Ok(i) => i,
-        Err(e) => {
-            return Some(cat!(
-                "mounts that cannot be read (",
-                mi,
-                ": ",
-                e.to_string(),
-                ")"
-            ));
-        }
+        Err(e) => return unread(&mi, e),
     };
+    // (omabox's own view of the mounts: what names each of the box's sources)
+    let host = match std::fs::read("/proc/self/mountinfo") {
+        Ok(i) => i,
+        Err(e) => return unread(b"/proc/self/mountinfo", e),
+    };
+    let real = |p: &[u8]| crate::repo::readlink_f(p).unwrap_or_else(|| crate::bwrap::lexical(p));
+    let rt = if runtime.is_empty() {
+        Vec::new()
+    } else {
+        real(runtime)
+    };
+    if let Some(why) = seat_mounts(&info, &host, &rt, &real(own)) {
+        return Some(why);
+    }
     // (`there`: Some(true) when the path exists in the box, Some(false) when it does not, None when
     // the look itself fails)
     let there = |p: &[u8]| match std::fs::symlink_metadata(shell::path(&cat!(root, p))) {
@@ -1626,16 +1644,28 @@ pub fn seat_visible(pid: &[u8], runtime: &[u8]) -> Option<Vec<u8>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
         Err(_) => None,
     };
-    for mp in mount_points(&info) {
-        if let Some(why) = crate::bwrap::seat_path(&mp, b"") {
-            if mp.starts_with(b"/dev/dri/card") {
-                let m = std::fs::symlink_metadata(shell::path(&cat!(root, mp)));
-                if m.is_ok_and(|m| m.file_type().is_file() && m.len() == 0) {
-                    continue;
-                }
+    for m in mounts(&info) {
+        // (a device's number is looked at only where devices are: a stat of any mount point could
+        // wait on a FUSE or network folder bound in)
+        if !m.at.starts_with(b"/dev/") && m.fstype != b"devtmpfs" {
+            if let Some(why) = crate::bwrap::seat_path(&m.at, b"") {
+                return Some(cat!(why, " at ", m.at));
             }
-            return Some(cat!(why, " at ", mp));
+            continue;
         }
+        let meta = std::fs::symlink_metadata(shell::path(&cat!(root, m.at)));
+        if let Some(why) = meta.as_ref().ok().and_then(seat_device) {
+            return Some(cat!(why, " at ", m.at));
+        }
+        if let Some(why) = crate::bwrap::seat_path(&m.at, b"") {
+            if m.at.starts_with(b"/dev/dri/card") && meta.as_ref().is_ok_and(placeholder) {
+                continue;
+            }
+            return Some(cat!(why, " at ", m.at));
+        }
+    }
+    if let Some(why) = dri_seat(&cat!(root, "/dev/dri")) {
+        return Some(why);
     }
     for p in ["/dev/input", "/run/seatd.sock", "/run/dbus"] {
         match there(p.as_bytes()) {
@@ -1662,31 +1692,173 @@ pub fn seat_visible(pid: &[u8], runtime: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-/// The mount points of a mountinfo (its fifth field, octal escapes undone).
-fn mount_points(info: &[u8]) -> Vec<Vec<u8>> {
+/// Whether M is the box's card placeholder: an empty regular file (finding 294).
+fn placeholder(m: &std::fs::Metadata) -> bool {
+    m.file_type().is_file() && m.len() == 0
+}
+
+/// Why a device M is the seat's by its number, or None.
+fn seat_device(m: &std::fs::Metadata) -> Option<&'static str> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    if m.file_type().is_char_device() {
+        seat_rdev(m.rdev())
+    } else {
+        None
+    }
+}
+
+/// Why a character device numbered RDEV is the seat's: a DRM card (major 226 below minor 128; the
+/// render nodes are from 128), an input device (major 13).
+fn seat_rdev(rdev: u64) -> Option<&'static str> {
+    match (libc::major(rdev), libc::minor(rdev)) {
+        (226, n) if n < 128 => Some("a DRM card node (the seat's display)"),
+        (13, _) => Some("an input device"),
+        _ => None,
+    }
+}
+
+/// What of the seat the box's /dev/dri (DRI, through its root) holds, however it got there (a
+/// /dev/dri folder bound whole brings every card), or None: each card there must be the box's empty
+/// placeholder file, and nothing there a card or an input device by its number. A folder that cannot
+/// be read is no pass; none at all is (a box with no GPU node).
+fn dri_seat(dri: &[u8]) -> Option<Vec<u8>> {
+    let unread = || Some(cat!("a root that cannot be read (", dri, ")"));
+    let rd = match std::fs::read_dir(shell::path(dri)) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => return unread(),
+    };
+    for e in rd {
+        let Ok(e) = e else {
+            return unread();
+        };
+        let at = cat!(
+            "/dev/dri/",
+            std::os::unix::ffi::OsStrExt::as_bytes(e.file_name().as_os_str())
+        );
+        let meta = std::fs::symlink_metadata(e.path());
+        if let Some(why) = meta.as_ref().ok().and_then(seat_device) {
+            return Some(cat!(why, " at ", at));
+        }
+        if let Some(why) = crate::bwrap::seat_path(&at, b"")
+            && !meta.as_ref().is_ok_and(placeholder)
+        {
+            return Some(cat!(why, " at ", at));
+        }
+    }
+    None
+}
+
+/// One line of a mountinfo: the source's device (major:minor), the folder of that filesystem it
+/// mounts (its root), the mount point (octal escapes undone) and the filesystem's type.
+#[derive(Debug, PartialEq, Eq)]
+struct Mount {
+    dev: Vec<u8>,
+    root: Vec<u8>,
+    at: Vec<u8>,
+    fstype: Vec<u8>,
+}
+
+/// The mounts of a mountinfo (its third, fourth and fifth fields, and the one after its `-`).
+fn mounts(info: &[u8]) -> Vec<Mount> {
     let mut out = Vec::new();
     for l in info.split(|&c| c == b'\n') {
-        let Some(f) = l.split(|&c| c == b' ').nth(4) else {
+        let f: Vec<&[u8]> = l.split(|&c| c == b' ').collect();
+        if f.len() < 5 {
             continue;
-        };
-        let mut v = Vec::with_capacity(f.len());
-        let mut i = 0;
-        while i < f.len() {
-            if f[i] == b'\\'
-                && i + 3 < f.len()
-                && f[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
-            {
-                let n = (f[i + 1] - b'0') * 64 + (f[i + 2] - b'0') * 8 + (f[i + 3] - b'0');
-                v.push(n);
-                i += 4;
-            } else {
-                v.push(f[i]);
-                i += 1;
-            }
         }
-        out.push(v);
+        // (the optional fields run from the seventh to the `-`)
+        let fstype = f
+            .iter()
+            .skip(6)
+            .position(|x| *x == b"-")
+            .and_then(|i| f.get(6 + i + 1))
+            .map(|t| unescape(t))
+            .unwrap_or_default();
+        out.push(Mount {
+            dev: f[2].to_vec(),
+            root: unescape(f[3]),
+            at: unescape(f[4]),
+            fstype,
+        });
     }
     out
+}
+
+/// A mountinfo field with its octal escapes (`\040` a space...) undone.
+fn unescape(f: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(f.len());
+    let mut i = 0;
+    while i < f.len() {
+        if f[i] == b'\\'
+            && i + 3 < f.len()
+            && f[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
+        {
+            let n = (f[i + 1] - b'0') * 64 + (f[i + 2] - b'0') * 8 + (f[i + 3] - b'0');
+            v.push(n);
+            i += 4;
+        } else {
+            v.push(f[i]);
+            i += 1;
+        }
+    }
+    v
+}
+
+/// Where in omabox's own view (HOST, its mountinfo) the source of M is: for each mount of the same
+/// device whose root holds M's, that mount point and the rest of M's root (a filesystem mounted
+/// twice gives both). None when no mount of HOST shows it (a source omabox cannot see).
+fn sources(m: &Mount, host: &[Mount]) -> Vec<Vec<u8>> {
+    if !m.root.starts_with(b"/") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for h in host
+        .iter()
+        .filter(|h| h.dev == m.dev && h.root.starts_with(b"/"))
+    {
+        let rest = if h.root == b"/" {
+            Some(m.root.as_slice())
+        } else if m.root == h.root {
+            Some(b"".as_slice())
+        } else {
+            m.root
+                .strip_prefix(h.root.as_slice())
+                .filter(|r| r.starts_with(b"/"))
+        };
+        if let Some(rest) = rest {
+            out.push(crate::bwrap::lexical(&cat!(h.at, "/", rest)));
+        }
+    }
+    out
+}
+
+/// The seat a box's mounts (BOX, its mountinfo) bring in, or None: a mount point under the user's
+/// runtime dir (RUNTIME; the box's own run dir is bound at its path, nothing in it), or a mount whose
+/// source, named through omabox's own mounts (HOST), is one of the seat's paths or holds one, at
+/// whatever path the box has it (a source in the box dir OWN is the box's own: its run dir, its
+/// placeholder files).
+fn seat_mounts(boxm: &[u8], host: &[u8], runtime: &[u8], own: &[u8]) -> Option<Vec<u8>> {
+    let host = mounts(host);
+    let rt = crate::bwrap::lexical(runtime);
+    let own = crate::bwrap::lexical(own);
+    for m in mounts(boxm) {
+        let at = crate::bwrap::lexical(&m.at);
+        if !runtime.is_empty() && at.starts_with(&cat!(rt, "/")) {
+            return Some(cat!("a mount under the runtime dir's path at ", m.at));
+        }
+        for src in sources(&m, &host) {
+            if src == own || src.starts_with(&cat!(own, "/")) {
+                continue;
+            }
+            let why = crate::bwrap::seat_path(&src, runtime)
+                .or_else(|| crate::bwrap::holds_seat(&src, runtime));
+            if let Some(why) = why {
+                return Some(cat!(src, " at ", m.at, " (", why, ")"));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1725,15 +1897,216 @@ mod tests {
 
     #[test]
     fn mountinfo() {
-        let m = b"22 1 0:20 / / rw - tmpfs t rw\n23 22 0:21 / /dev/dri/renderD128 rw - devtmpfs d rw\n24 22 0:22 / /a\\040b rw - x y rw\n";
+        let m = b"22 1 0:20 / / rw - tmpfs t rw\n23 22 0:21 /dri/renderD128 /dev/dri/renderD128 rw shared:3 master:1 - devtmpfs d rw\n24 22 0:22 /x\\040y /a\\040b rw - x\\040t y rw\n25 22 0:5 net:[4026531833] /n rw - nsfs nsfs rw\n";
+        let at: Vec<_> = mounts(m).into_iter().map(|m| m.at).collect();
         assert_eq!(
-            mount_points(m),
+            at,
             vec![
                 b"/".to_vec(),
                 b"/dev/dri/renderD128".to_vec(),
-                b"/a b".to_vec()
+                b"/a b".to_vec(),
+                b"/n".to_vec()
             ]
         );
+        assert_eq!(
+            mounts(m)[1],
+            Mount {
+                dev: b"0:21".to_vec(),
+                root: b"/dri/renderD128".to_vec(),
+                at: b"/dev/dri/renderD128".to_vec(),
+                fstype: b"devtmpfs".to_vec(),
+            }
+        );
+        assert_eq!(mounts(m)[2].root, b"/x y");
+        assert_eq!(mounts(m)[2].fstype, b"x t");
+    }
+
+    // #363's fixtures: a host's own mounts (a btrfs root and home, devtmpfs, /run, the runtime dir's
+    // own tmpfs, sysfs, a second mount of /run's tmpfs) and the mounts of a box `b1` as up makes it.
+    const HOST: &str = "\
+1 0 0:30 /@ / rw - btrfs /dev/x rw
+2 1 0:7 / /dev rw - devtmpfs devtmpfs rw
+3 1 0:28 / /run rw - tmpfs tmpfs rw
+4 3 0:28 /credentials/@encrypted /run/credentials/@encrypted rw - tmpfs tmpfs rw
+5 3 0:84 / /run/user/1000 rw - tmpfs tmpfs rw
+6 1 0:30 /@home /home rw - btrfs /dev/x rw
+7 1 0:25 / /sys rw - sysfs sysfs rw
+8 3 0:5 net:[4026533623] /run/docker/netns/a rw - nsfs nsfs rw
+";
+    const BOX: &str = "\
+100 99 0:200 / / rw - tmpfs tmpfs rw
+101 100 0:30 /@/usr /usr ro - btrfs /dev/x rw
+102 100 0:201 / /dev rw - tmpfs tmpfs rw
+103 102 0:7 /null /dev/null rw - devtmpfs devtmpfs rw
+104 102 0:7 /dri/renderD128 /dev/dri/renderD128 rw - devtmpfs devtmpfs rw
+105 102 0:7 /nvidia0 /dev/nvidia0 rw - devtmpfs devtmpfs rw
+106 100 0:84 /omabox/b1/run /run/user/1000 rw - tmpfs tmpfs rw
+107 102 0:84 /omabox/b1/card-placeholder /dev/dri/card1 ro - tmpfs tmpfs rw
+108 100 0:28 /systemd/resolve/stub-resolv.conf /run/systemd/resolve/stub-resolv.conf ro - tmpfs tmpfs rw
+109 100 0:30 /@home/chaves/.cache/omabox/b1/home /home/sbx rw - btrfs /dev/x rw
+110 100 0:25 / /sys ro - sysfs sysfs rw
+111 100 0:202 / /run/systemd/journal rw - tmpfs tmpfs rw
+112 100 0:84 /omabox/b1/cover-dir /home/chaves/p/secret ro - tmpfs tmpfs rw
+113 100 0:5 net:[4026533623] /n rw - nsfs nsfs rw
+";
+    const RT: &[u8] = b"/run/user/1000";
+    const OWN: &[u8] = b"/run/user/1000/omabox/b1";
+
+    fn seat_with(line: &str) -> Option<String> {
+        let boxm = format!("{BOX}{line}\n");
+        seat_mounts(boxm.as_bytes(), HOST.as_bytes(), RT, OWN)
+            .map(|w| String::from_utf8_lossy(&w).into_owned())
+    }
+
+    #[test]
+    fn seat_mounts_a_box_as_up_makes_it_passes() {
+        assert_eq!(seat_with(""), None);
+        // (a source no mount of omabox's shows, a root that is no path: nothing to name)
+        assert_eq!(
+            seat_with("120 100 0:999 /input /opt/x ro - tmpfs t rw"),
+            None
+        );
+        assert_eq!(seat_with("120 100 0:5 net:[1] /opt/n ro - nsfs n rw"), None);
+        // (the root of a second mount of /run's tmpfs: what it is in /run)
+        assert_eq!(
+            seat_with("120 100 0:28 /credentials/@encrypted/k /opt/k ro - tmpfs t rw"),
+            None
+        );
+    }
+
+    // #363: a /dev/dri folder bound whole, a seat path bound at another destination (named by its
+    // source device and root through omabox's own mounts), a mount in the runtime dir's place.
+    #[test]
+    fn seat_mounts_finds_the_seat_by_source_and_place() {
+        for (line, want) in [
+            (
+                "120 102 0:7 /dri /dev/dri rw - devtmpfs d rw",
+                "/dev/dri at /dev/dri (it holds the DRM card nodes)",
+            ),
+            (
+                "120 100 0:7 /dri /opt/gpu rw - devtmpfs d rw",
+                "/dev/dri at /opt/gpu (it holds the DRM card nodes)",
+            ),
+            (
+                "120 100 0:7 /dri/card0 /home/sbx/c rw - devtmpfs d rw",
+                "/dev/dri/card0 at /home/sbx/c (a DRM card node (the seat's display))",
+            ),
+            (
+                "120 100 0:7 /input /opt/x ro - devtmpfs d rw",
+                "/dev/input at /opt/x (the input devices)",
+            ),
+            (
+                "120 100 0:7 /input/event3 /tmp/e ro - devtmpfs d rw",
+                "/dev/input/event3 at /tmp/e (the input devices)",
+            ),
+            (
+                "120 100 0:7 / /mnt/d ro - devtmpfs d rw",
+                "/dev at /mnt/d (it holds the DRM card nodes)",
+            ),
+            (
+                "120 100 0:28 /seatd.sock /tmp/s ro - tmpfs t rw",
+                "/run/seatd.sock at /tmp/s (seatd's socket)",
+            ),
+            (
+                "120 100 0:28 /dbus /opt/bus ro - tmpfs t rw",
+                "/run/dbus at /opt/bus (the system bus)",
+            ),
+            (
+                "120 100 0:28 /user /opt/u ro - tmpfs t rw",
+                "/run/user at /opt/u (it holds your runtime dir)",
+            ),
+            (
+                "120 100 0:84 / /mnt/rt rw - tmpfs t rw",
+                "/run/user/1000 at /mnt/rt (your runtime dir)",
+            ),
+            (
+                "120 100 0:84 /wayland-1 /home/sbx/w rw - tmpfs t rw",
+                "/run/user/1000/wayland-1 at /home/sbx/w (your runtime dir)",
+            ),
+            // (another box's dir, and one whose name only starts like this box's)
+            (
+                "120 100 0:84 /omabox/b2/run /opt/r rw - tmpfs t rw",
+                "/run/user/1000/omabox/b2/run at /opt/r (your runtime dir)",
+            ),
+            (
+                "120 100 0:84 /omabox/b10 /opt/r rw - tmpfs t rw",
+                "/run/user/1000/omabox/b10 at /opt/r (your runtime dir)",
+            ),
+            (
+                "120 106 0:203 / /run/user/1000/wayland-1 rw - tmpfs t rw",
+                "a mount under the runtime dir's path at /run/user/1000/wayland-1",
+            ),
+            (
+                "120 106 0:30 /@home/chaves/x /run/user/1000/bus rw - btrfs /dev/x rw",
+                "a mount under the runtime dir's path at /run/user/1000/bus",
+            ),
+        ] {
+            assert_eq!(seat_with(line).as_deref(), Some(want), "{line}");
+        }
+    }
+
+    // #363: with no runtime dir known, the rest still holds (nothing is the runtime dir's).
+    #[test]
+    fn seat_mounts_without_a_runtime_dir() {
+        let boxm = format!("{BOX}120 100 0:7 /input /opt/x ro - devtmpfs d rw\n");
+        assert!(seat_mounts(boxm.as_bytes(), HOST.as_bytes(), b"", OWN).is_some());
+        let boxm = format!("{BOX}120 100 0:84 /wayland-1 /run/user/1000/w ro - tmpfs t rw\n");
+        assert_eq!(
+            seat_mounts(boxm.as_bytes(), HOST.as_bytes(), b"", OWN),
+            None
+        );
+    }
+
+    #[test]
+    fn seat_devices_by_number() {
+        for (maj, min, seat) in [
+            (226, 0, true),
+            (226, 1, true),
+            (226, 127, true),
+            (226, 128, false),
+            (226, 129, false),
+            (13, 64, true),
+            (13, 63, true),
+            (1, 3, false),
+            (195, 0, false),
+            (195, 255, false),
+        ] {
+            assert_eq!(
+                seat_rdev(libc::makedev(maj, min)).is_some(),
+                seat,
+                "{maj}:{min}"
+            );
+        }
+    }
+
+    // #363: a card in the box's /dev/dri is the empty placeholder file or the box is ended; a
+    // folder bound whole brings its cards in, which a look at the mount points alone would miss.
+    #[test]
+    fn dri_cards_must_be_placeholders() {
+        let d = std::env::temp_dir().join(format!("omabox-dri-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let p = |n: &str| d.join(n);
+        let bytes = std::os::unix::ffi::OsStrExt::as_bytes(d.as_os_str()).to_vec();
+        assert_eq!(dri_seat(&cat!(bytes, "/none")), None);
+        std::fs::write(p("renderD128"), b"x").unwrap();
+        std::fs::write(p("card1"), b"").unwrap();
+        std::fs::create_dir(p("by-path")).unwrap();
+        assert_eq!(dri_seat(&bytes), None);
+        std::fs::write(p("card0"), b"x").unwrap();
+        assert_eq!(
+            dri_seat(&bytes),
+            Some(b"a DRM card node (the seat's display) at /dev/dri/card0".to_vec())
+        );
+        std::fs::remove_file(p("card0")).unwrap();
+        std::fs::create_dir(p("card2")).unwrap();
+        assert!(dri_seat(&bytes).is_some(), "a folder at a card's name");
+        std::fs::remove_dir(p("card2")).unwrap();
+        std::os::unix::fs::symlink("card1", p("card3")).unwrap();
+        assert!(dri_seat(&bytes).is_some(), "a link at a card's name");
+        std::fs::remove_file(p("card3")).unwrap();
+        assert_eq!(dri_seat(&bytes), None);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     fn seg() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {

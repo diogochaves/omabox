@@ -116,6 +116,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   checkout started, or another worktree's) until its next look. The reaper now records its pid in
   the box's folder, and `down` ends it whichever omabox started it
   ([#383](https://github.com/diogochaves/omabox/issues/383)).
+- **`up`'s check of the started box's own mounts (S1) looked only at where each mount is**: a
+  `/dev/dri` folder bound whole, a seat path bound somewhere else, and a mount inside the runtime
+  dir's path got by it. It now also names each mount's source on the host (a seat path at any
+  destination, or a folder that holds one, ends the box), lists the box's `/dev/dri` (every card
+  there must be the empty placeholder file), refuses a mounted card or input device by its number,
+  and refuses any mount under the runtime dir's path. `up` never made such mounts (its binds refuse
+  them as they are added): this is the second line behind that one. With `XDG_RUNTIME_DIR` outside
+  `/run`, `--ro-bind DIR:DEST` with DEST inside it is now refused
+  ([#363](https://github.com/diogochaves/omabox/issues/363)).
 
 ## 1.0.2 — 2026-10-30
 
