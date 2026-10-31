@@ -36,6 +36,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
+  omabox jobs [-b NAME] [--json]                         the box's run -d jobs: pid, age, processes, log, command
+  omabox stop [-b NAME] (JOB... | --all)                 stop run -d jobs (JOB: a pid jobs lists), their windows gone
   omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
   omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
                                                          a visual check: the scenario's checkpoints against a baseline
@@ -62,6 +64,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
          COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
                | change [-g GEOM | --window SEL] [--ignore GEOM]...
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | until -- CMD [ARG...]
+               | job [JOB] [--gone] | log [JOB] RE [-i]   a run -d job's end; a line in its log
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
@@ -116,7 +119,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief
+@+ up run shot record pixel calibrate windows jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -128,7 +131,7 @@ too (omabox -b NAME windows).
        after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout;
        the line adds what changed on the desktop (windows, layers, focus), a 124 where the input went
 @short run
--d (or --detach): the command left running in the box, its log said on stderr; --replace: the same one stopped first
+-d (or --detach): the command left running in the box, its pid and log said on stderr; --replace: the same one stopped first
 @short shot
 --monitor NAME: one monitor of the box's (omabox monitor list)
 @short tree click
@@ -550,6 +553,14 @@ CMD runs in the box, where the host's paths are not (its /tmp and HOME are its o
 found there (127) or that cannot run (126) ends the wait at once, "unknown"; one that names this
 box's folder or your $TMPDIR is said before waiting. A wait that did not succeed ends with the
 last try's last lines of stderr.
+@ wait jobs
+`wait job [JOB]`: until the command of `run -d` job JOB (its pid, as `jobs` lists it; none: the latest
+`run -d`'s) has exited, satisfied with how it ended ("exited with status 0", "was killed by SIGTERM
+(143)"), at once for one that ended already; --gone: until nothing of its session runs either (what
+it forked: an app a launcher left). `wait log [JOB] RE [-i]`: until a line of the job's log (as
+`log run` has it, every line from its first: one there already counts) matches RE (grep -E; -i:
+either case), satisfied with that line; a job that ended with no such line is unknown (exit 1), as
+nothing more will come. Each tried every 100 ms. Never a host `pgrep` or a loop over the log file.
 @ up run
 $OMABOX_READY_TIMEOUT: how long `up` waits for Hyprland and the shell (default 30s).
 @ reload
@@ -640,13 +651,25 @@ watching either clipboard. Bind it to a key in your Hyprland config to paste int
 A headless box goes down after $OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no `omabox run` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
 Write the unit: a bare --idle 45 is refused (minutes up to 0.9, seconds everywhere else).
+@ jobs stop run
+`jobs` lists the box's `run -d` jobs still running, oldest first: PID (the job's command's, in the
+box, as `windows` shows its windows'), AGE, PROCS (processes of its session), LOG (its log, from the
+host) and COMMAND; --json: [{pid, age (seconds), processes, log, argv}]. A job that ended is not
+listed (its end, when early, is said by the next command). `stop JOB...` stops each job as
+`run -d --replace` stops one: SIGTERM to its session (what it forked included), SIGKILL after 5 s,
+then until its windows are gone (3 s), each said with how long it took. JOB is a job's pid, or the
+pid of any process of its session (a window's PID from `windows`); --all: every job. Its signals go
+through a pidfd of each process, checked to be the box's, never a pid number on the host. A stopped
+job's end is not said as a warning. Another process of the box: `omabox run -- kill PID`. Not a
+`run -d` job's pid: exit 1, nothing stopped.
 @ run
-`run -d` (or --detach) says where the command's output goes (its log) on stderr: -q says nothing (errors still),
---print-log prints the log's path on stdout (first, before --wait's line). `run -d --replace`
-first stops what `run -d` started in that box with the same command and arguments (SIGTERM to its
-session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt app in one step. Nothing
-else in the box is touched: an app started some other way stays, and so does a job of the same
-program with other arguments (named, with its pid). A `run -d` whose command ends in its first
+`run -d` (or --detach) says the job's pid and where its output goes (its log) on stderr: -q says
+nothing (errors still), --print-log prints the log's path on stdout (first, before --wait's line).
+`run -d --replace` first stops what `run -d` started in that box with the same command and
+arguments (SIGTERM to its session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt
+app in one step. Nothing else in the box is touched: an app started some other way stays, and so
+does a job of the same program with other arguments: named, with its pid and the `omabox stop PID`
+that stops it, and the new job starts beside it. A `run -d` whose command ends in its first
 0.3 s, leaving nothing running (a server on a port already taken), says so instead of started, with
 its exit status and its log's last lines, and exits with that status. A `run -d --wait` whose
 command ended before the screen settled, leaving nothing running, says so too, and exits with that

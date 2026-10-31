@@ -7177,7 +7177,7 @@ t_host_paths() {
   check_eq "...nothing said for paths the box has" "" "$(ob run -b "$B" -- ls /usr/bin/true /etc/hostname 2>&1 >/dev/null)"
   out=$(ob run -b "$B" -d -- sh -c 'echo said-301; exec sleep 30' 2>&1)
   check_match "run -d: its log as the box has it too (#301)" \
-    "^omabox: started in box '$B' \(log: $h/run-[0-9]+\.log, /home/sbx/run-[0-9]+\.log in the box\)\$" "$out"
+    "^omabox: started in box '$B' \(pid [0-9]+, log: $h/run-[0-9]+\.log, /home/sbx/run-[0-9]+\.log in the box\)\$" "$out"
   lg=$(sed -nE 's/.*, (\/home\/sbx\/run-[0-9]+\.log) in the box\)$/\1/p' <<<"$out")
   check "...a command in the box reads it there" ob wait until -b "$B" --timeout 10 -- grep -q said-301 "${lg:-/none}"
   ob run -b "$B" -- pkill -x sleep >/dev/null 2>&1
@@ -11881,13 +11881,13 @@ t_cli_box() {
   cx_case "run -d -q: a 0 at once is not said" run -b "$B" -d -q -- true
   cx_want=(rc=2 out= "err~^omabox: note: $TMP is not in box '$B' " "err~^omabox: the command exited with status 2 at once in box '$B', and left nothing running " "err~^  ls: cannot access '.*': No such file or directory\$")
   cx_case "run -d: a host path the box has not" run -b "$B" -d -- ls "$TMP"
-  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/home/run-N.log" "err=omabox: started in box '$B' (log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N.log, /home/sbx/run-N.log in the box)")
+  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/home/run-N.log" "err=omabox: started in box '$B' (pid P, log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N.log, /home/sbx/run-N.log in the box)")
   cx_case "run -d --print-log: started" run -b "$B" -d --print-log -- sleep 610
   cx_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; ob run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
   cx_prep=cx_jobs
   cx_want=(rc=0 out= 'err~^omabox: --replace: stopped the earlier job \(0 windows\) in Ts$' "err~^omabox: started in box '$B' ")
   cx_case "run -d --replace: the earlier job stopped" run -b "$B" -d --replace -- sleep 611
-  cx_want=(rc=0 out= 'err~^omabox: --replace: no earlier job with these arguments; sleep \(pid P, 611\) still runs: stop it, or --replace with its arguments$' "err~^omabox: started in box '$B' ")
+  cx_want=(rc=0 out= "err~^omabox: --replace: no earlier job with these arguments, none stopped; sleep \\(pid P, 611\\) still runs, and the new job starts beside it \\(omabox -b $B stop [0-9]+ stops it\\)\$" "err~^omabox: started in box '$B' ")
   cx_case "run -d --replace: another job of the program named" run -b "$B" -d --replace -- sleep 612
   cx_want=(rc=0 out= err=)
   cx_case "run -d --replace -q: none of this command" run -b "$B" -d --replace -q -- true
@@ -17162,7 +17162,7 @@ t_unit_wait() {
   check_match "wait --quiet over 10 min refused" "--quiet is at most 10m" "$(ob wait -b "$P-x" still --quiet 11m 2>&1)"
   check_match "wait for nothing: says what it can wait for" "still, change, window" "$(ob wait -b "$P-x" 2>&1)"
   check_match "an unknown condition refused" "unknown condition" "$(ob wait -b "$P-x" soon 2>&1)"
-  check_match "--gone is for window and layer" "go with window or layer" "$(ob wait -b "$P-x" still --gone 2>&1)"
+  check_match "--gone is for window, layer and job" "go with window, layer or job" "$(ob wait -b "$P-x" still --gone 2>&1)"
   check_match "until needs a command" "nothing to run" "$(ob wait -b "$P-x" until -- 2>&1)"
   # #272: `wait until` is the name; `wait cmd` (refused by Claude Code's worktree check) was warned in
   # 0.9 and is refused since 1.0 (#287), whatever follows it.
@@ -17513,7 +17513,7 @@ t_replace() {
   out=$(ob run -b "$B" -d --replace --wait -- foot -T R sh -c 'sleep 600' 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
   check_eq "--replace --wait: settled" 0 "$rc"
   check_match "...said: the earlier job stopped, its window gone" "stopped the earlier job \(1 window\)" "$err"
-  check_match "...and the new one's log" "started in box '$B' \(log: " "$err"
+  check_match "...and the new one's pid and log" "started in box '$B' \(pid [0-9]+, log: " "$err"
   new=$(ob windows -b "$B" --json | jq -r '[.[] | select(.title == "R") | .pid] | join(" ")')
   check "...one window R, a new process ($old -> $new)" test -n "$new" -a "$new" != "$old" -a "${new// /}" = "$new"
   check_fails "...the old record is gone" test -e "$D/jobs/$old"
@@ -17536,7 +17536,7 @@ t_replace() {
   # Other arguments (#255): not replaced, as before, but the job of the same program still running named
   err=$(ob run -b "$B" -d --replace -- sleep 602 2>&1 >/dev/null)
   check_match "other arguments: the earlier job of the program named" \
-    "no earlier job with these arguments; sleep \(pid [0-9]+, 601\) still runs: stop it, or --replace with its arguments" "$err"
+    "no earlier job with these arguments, none stopped; sleep \(pid [0-9]+, 601\) still runs, and the new job starts beside it \(omabox -b $B stop [0-9]+ stops it\)" "$err"
   old=$(sed -n 's/.*sleep (pid \([0-9]*\),.*/\1/p' <<<"$err")
   check "...and left running ($old), beside the new one" test -n "$old" -a "$(ob run -b "$B" -- sh -c "kill -0 $old && pgrep -cxf 'sleep 602'")" = 1
   # Nothing to replace: said; a job that ended: its record dropped
@@ -17635,6 +17635,79 @@ t_replace() {
   check_eq "run -d over a link the box put at its log's name: the path" "$D/home/run-1229.log" "$out"
   check "...the log is the box's, with the output" until_ok 5 bash -c "[ -f '$D/home/run-1229.log' ] && [ ! -L '$D/home/run-1229.log' ] && grep -qx omabox-t229 '$D/home/run-1229.log'"
   check_eq "...the link's target untouched" keep "$(cat "$TMP/rep-victim")"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# jobs, stop, wait job and wait log (#299, finding 587): a run -d job listed, stopped and waited for
+# by its pid, with no host pgrep, kill or loop over its log.
+t_jobs() {
+  local B=$P-jobs out err rc pid wpid lpid D
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  D=$(ob path "$B")
+  err=$(ob jobs -b "$B" 2>&1 >/dev/null)
+  check_eq "jobs with none: said" "omabox: no run -d job runs in box '$B'" "$err"
+  check_eq "...--json: []" "[]" "$(ob jobs -b "$B" --json)"
+  err=$(ob run -b "$B" -d -- sleep 621 2>&1 >/dev/null)
+  check_match "run -d says the job's pid" "^omabox: started in box '$B' \(pid [0-9]+, log: $D/home/run-[0-9]+\.log, /home/sbx/run-[0-9]+\.log in the box\)$" "$err"
+  pid=$(sed -n 's/.*(pid \([0-9]*\),.*/\1/p' <<<"$err")
+  out=$(ob jobs -b "$B")
+  check_match "jobs: its pid, age, processes, log and command" "^PID +AGE +PROCS +LOG +COMMAND"$'\n'"$pid +[0-9]+s +1 +$D/home/run-[0-9]+\.log +sleep 621$" "$out"
+  check_eq "...--json" "$pid 1 sleep,621" "$(ob jobs -b "$B" --json | jq -r '.[] | "\(.pid) \(.processes) \(.argv | join(","))"')"
+  ob run -b "$B" -d -q --wait -- foot -T J sleep 622 >/dev/null
+  wpid=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "J") | .pid')
+  err=$(ob stop -b "$B" "$wpid" 2>&1); rc=$?
+  check_eq "stop a job by its window's pid: 0" 0 "$rc"
+  check_match "...said, with its window" "^omabox: stopped job $wpid \(foot -T J sleep 622\), 1 window, in [0-9.]+s$" "$err"
+  check_eq "...its window gone" 0 "$(ob windows -b "$B" --json | jq '[.[] | select(.title == "J")] | length')"
+  check_eq "...not said as an end by the next command" "" "$(ob jobs -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
+  check_eq "...jobs lists the other one only" "$pid" "$(ob jobs -b "$B" --json | jq -r '.[].pid')"
+  # A process of the box that is no job's: refused, nothing stopped
+  err=$(ob stop -b "$B" 1 2>&1); rc=$?
+  check_eq "stop of a pid no job has: exit 1" 1 "$rc"
+  check_match "...said, with what stops another process" "no run -d job of pid 1 runs in box '$B'.*run -- kill 1" "$err"
+  check_eq "...the job still runs" "$pid" "$(ob jobs -b "$B" --json | jq -r '.[].pid')"
+  check_eq "stop with no job: a usage error" 2 "$(ob stop -b "$B" >/dev/null 2>&1; echo $?)"
+  # wait job: the latest job's end, with its status; at once once it ended
+  ob run -b "$B" -d -q -- sh -c 'sleep 1; exit 3'
+  out=$(ob wait -b "$B" job); rc=$?
+  check_eq "wait job (the latest): satisfied" 0 "$rc"
+  check_match "...with how it ended" "^satisfied: job [0-9]+ \(sh -c sleep 1; exit 3\) ended after [0-9.]+s: exited with status 3$" "$out"
+  lpid=$(sed -n 's/^satisfied: job \([0-9]*\) .*/\1/p' <<<"$out")
+  ob jobs -b "$B" >/dev/null 2>&1
+  out=$(ob wait -b "$B" job "$lpid"); rc=$?
+  check_eq "...asked again once it ended and was said: at once" 0 "$rc"
+  check_match "...the same" "^satisfied: job $lpid \(sh -c sleep 1; exit 3\) ended after 0\.[0-9]+s: exited with status 3$" "$out"
+  out=$(ob wait -b "$B" --timeout 1s job "$pid"); rc=$?
+  check_eq "wait job of one still running: 124" 124 "$rc"
+  check_match "...said" "^unsatisfied: job $pid \(sleep 621\) still running after" "$out"
+  check_eq "wait job of a pid no job had: exit 1" 1 "$(ob wait -b "$B" job 2 >/dev/null 2>&1; echo $?)"
+  # A launcher that leaves a process behind: ended at once, --gone once that one is gone too
+  ob run -b "$B" -d -q -- sh -c 'sleep 2 & exit 0'
+  out=$(ob wait -b "$B" job)
+  check_match "a launcher: ended, what it started said" "exited with status 0; 1 process it started still run \(--gone waits for them\)$" "$out"
+  out=$(ob wait -b "$B" --timeout 8s job --gone); rc=$?
+  check_eq "...--gone: satisfied once that one ended" 0 "$rc"
+  check_match "...said" "^satisfied: job [0-9]+ \(sh -c sleep 2 & exit 0\) gone after" "$out"
+  # wait log: a line of the job's log, there already or to come
+  ob run -b "$B" -d -q -- sh -c 'echo starting; sleep 1; echo "Ready on port 8099"; exec sleep 623'
+  out=$(ob wait -b "$B" log 'ready on port [0-9]+' -i); rc=$?
+  check_eq "wait log -i (the latest job's): satisfied" 0 "$rc"
+  check_match "...with the line" "^satisfied: a line matching ready on port \[0-9\]\+ in the log of job [0-9]+ \(.*\) after [0-9.]+s: Ready on port 8099$" "$out"
+  check_match "...one there already counts" "^satisfied: .*: starting$" "$(ob wait -b "$B" log '^start')"
+  out=$(ob wait -b "$B" --timeout 1s log "$pid" 'never said'); rc=$?
+  check_eq "wait log JOB of a line that does not come: 124" 124 "$rc"
+  check_match "...said" "^unsatisfied: no line matching never said in the log of job $pid \(sleep 621\) after" "$out"
+  ob run -b "$B" -d -q -- sh -c 'echo only this; sleep 0.5'
+  out=$(ob wait -b "$B" --timeout 8s log 'not this'); rc=$?
+  check_eq "wait log of a job that ended without the line: exit 1" 1 "$rc"
+  check_match "...said" "^unknown: job [0-9]+ exited with status 0, and its log has no line matching not this \(job ended\) after" "$out"
+  check_eq "wait log of a bad expression: 2" 2 "$(ob wait -b "$B" log '(' >/dev/null 2>&1; echo $?)"
+  # stop --all
+  err=$(ob stop -b "$B" --all 2>&1); rc=$?
+  check_eq "stop --all: 0" 0 "$rc"
+  check_match "...each said" "stopped job $pid \(sleep 621\), 0 windows" "$err"
+  check_eq "...none left" "[]" "$(ob jobs -b "$B" --json)"
+  check_eq "...the box's sleeps gone" 0 "$(ob run -b "$B" -- pgrep -c sleep)"
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -17966,7 +18039,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

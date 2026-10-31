@@ -8,7 +8,9 @@ change, several monitors. Agents get the same from the skill and `omabox help`. 
 
 ```bash
 omabox up                              # headless box, 1920x1080; returns when the bar is drawn
-omabox run -d -- ./build/src/myapp     # launch an app inside (detached; prints its log path)
+omabox run -d -- ./build/src/myapp     # launch an app inside (detached; prints its pid and log path)
+omabox jobs                            # the box's run -d jobs; omabox stop PID stops one, its windows gone
+omabox wait log 'listening on'         # until a line in the latest job's log; wait job: until it ends
 omabox shot                            # screenshot; prints the PNG path (--fit 2000: scaled down)
 omabox windows                         # the box's windows, where they are, what covers them
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too

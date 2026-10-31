@@ -490,12 +490,20 @@ fn detached(
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+    // (its pid, as `jobs` lists it: what `stop` and `wait job` take, #299)
     if !quiet {
         // (and as the box has it, for a command run there: a grep of it in wait until, #301)
+        let pid = if numeric {
+            cat!("pid ", jpid, ", ")
+        } else {
+            Vec::new()
+        };
         say(cat!(
             "started in box '",
             ctx.name,
-            "' (log: ",
+            "' (",
+            pid,
+            "log: ",
             log,
             ", /home/sbx/",
             lname,

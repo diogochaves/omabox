@@ -39,9 +39,10 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n=",
         ),
         b"wait" => Some(
-            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused",
+            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused -i",
         ),
-        b"windows" => Some("-b= --box= --json"),
+        b"windows" | b"jobs" => Some("-b= --box= --json"),
+        b"stop" => Some("-b= --box= --all"),
         b"tree" => Some("-b= --box= -w= --window= --active -l= --layer= --find= --json --all"),
         b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),
         b"keys" => Some(

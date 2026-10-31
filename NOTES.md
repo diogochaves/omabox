@@ -11090,6 +11090,34 @@ from them.
     state dir and the same cache: the first box's HOME kept, read by the box; a gone box's HOME and an
     unused older one taken; the same name refused; an older box's HOME, its record removed, kept while
     the box runs), t_unit_rm_tree's record cases, homeuse.rs's `a_bound_home_is_used`.
+587. **A `run -d` job could be stopped or waited for only by a host pgrep** (2026-10-31, #299). Five
+    agents needed to stop, swap or wait for one job and found no command: one ran a host `pgrep -f`
+    loop, telling the box's process from the same program on the desktop by `/proc/PID/environ`, and
+    a second try matched its own bash and killed it; others waited with `wait until -- sh -c '!
+    pgrep -f …'` (it matched itself) or a sleep loop over `run-*.log`. `--replace` with other
+    arguments said "still runs: stop it" with no command for it, and did not say it started the new
+    job beside it. Now `run -d` says the job's pid ("started in box 'B' (pid N, log: …)"); `omabox
+    jobs [--json]` lists the running jobs from their records (PID, AGE from the log's name, PROCS of
+    its session, LOG, COMMAND); `omabox stop PID... | --all` stops them as `--replace` does (one
+    `job_stop` for both now), a PID being the job's or any of its session's in the box (a window's).
+    Its signals, and `--replace`'s, which sent kill(2) to a host pid number, go through a pidfd: the
+    pid is opened first, then /proc of it checked to be the listed process (the box's pid namespace,
+    its NSpid there, its start time); a pid reused before the open shows another process there, so
+    it is never signalled. `wait job [PID] [--gone]` (no PID: the latest job) is satisfied once the
+    command's status file (share/run-job.sh's) is written or nothing of it runs, with how it ended;
+    `--gone` waits for its whole session. To answer for a job that ended and was dealt with, its
+    record now moves to `$D/jobs-done/` instead of being deleted, so `wait job PID` after the end is
+    satisfied at once rather than "no such job". `wait log [PID] RE [-i]` greps the job's log inside
+    the box (`timeout 2 grep -m1 -E`, the box's file read as the box sees it, 4 KiB at most kept),
+    every 100 ms; a job already gone with no matching line is unknown (exit 1): the job's end is read
+    before its log, so a line written as it ended is not missed. `--replace`'s note now reads
+    "no earlier job with these arguments, none stopped; X (pid N, ARGS) still runs, and the new job
+    starts beside it (omabox -b B stop N stops it)". Tests: jobs.rs `jobs_lookups` (records, the
+    latest, jobs-done, a job by any pid of its session, ages); t_jobs (list, stop by a window's pid,
+    a pid that is no job's refused, wait job on an exit 3, again after it was said, a launcher with
+    --gone, wait log -i, a line that never comes, a job that ended without it, a bad expression,
+    stop --all); t_replace and t_cli_box's lines updated. The old binary has none of these commands
+    (`jobs`: unknown command).
 588. **A host path the box does not have failed in it with no word of why** (2026-10-31, #301). Agents
     passed `run` the path run -d had printed for its log (`<dir>/home/run-NS.log`), `$(omabox path
     --home)/…`, a scratch file under the host's /tmp, a `--plugin` folder's helper by the path given

@@ -474,7 +474,7 @@ fn job_live_with(
         if !p.is_empty() {
             out.extend(p);
         } else if job_said(ctx, &log) {
-            let _ = std::fs::remove_file(f);
+            retire(ctx, f);
         }
     }
     out
@@ -616,8 +616,9 @@ fn job_files(ctx: &Ctx) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-/// job_others ARGV...: the live `run -d` jobs of ARGV's program, as "ARGV0 (pid PID, ARGS)" by pid.
-fn job_others(ctx: &Ctx, argv: &[Vec<u8>]) -> Vec<String> {
+/// job_others ARGV...: the live `run -d` jobs of ARGV's program, by pid: each pid, and the job as
+/// "ARGV0 (pid PID, ARGS)".
+fn job_others(ctx: &Ctx, argv: &[Vec<u8>]) -> Vec<(String, String)> {
     let a0 = argv.first().cloned().unwrap_or_default();
     job_others_with(ctx, argv, &job_exe(&a0), |f| {
         !job_live(ctx, std::slice::from_ref(&f.to_path_buf())).is_empty()
@@ -630,11 +631,11 @@ fn job_others_with(
     argv: &[Vec<u8>],
     exe: &[u8],
     live: impl Fn(&std::path::Path) -> bool,
-) -> Vec<String> {
+) -> Vec<(String, String)> {
     let a0 = argv.first().cloned().unwrap_or_default();
     let exe = String::from_utf8_lossy(exe).into_owned();
     let a0 = String::from_utf8_lossy(&a0).into_owned();
-    let mut out: Vec<(Vec<u8>, String)> = Vec::new();
+    let mut out: Vec<(Vec<u8>, String, String)> = Vec::new();
     for f in job_files(ctx) {
         let Some(v) = record(&f) else { continue };
         let first = v
@@ -673,8 +674,8 @@ fn job_others_with(
             interp(Some(&first)),
             interp(v.get("pid"))
         );
-        let pid = json::raw(v.get("pid").unwrap_or(&Value::Null)).into_bytes();
-        out.push((cat!(pid, "\t", line), line));
+        let raw = json::raw(v.get("pid").unwrap_or(&Value::Null));
+        out.push((cat!(raw, "\t", line), raw, line));
     }
     // `sort -n | cut -f2-`: by the pid's number, then the whole line.
     let num = |l: &[u8]| -> u128 {
@@ -682,7 +683,7 @@ fn job_others_with(
         String::from_utf8_lossy(&d).parse().unwrap_or(0)
     };
     out.sort_by(|a, b| num(&a.0).cmp(&num(&b.0)).then_with(|| a.0.cmp(&b.0)));
-    out.into_iter().map(|(_, l)| l).collect()
+    out.into_iter().map(|(_, p, l)| (p, l)).collect()
 }
 
 fn now_ms() -> i64 {
@@ -690,47 +691,41 @@ fn now_ms() -> i64 {
 }
 
 /// run -d --replace (issue #29): stop the jobs `run -d` started in this box with these same words,
-/// and wait until they and their windows are gone: SIGTERM to each job's processes, SIGKILL to what is
-/// left after 5 s. Refuses, before anything is started, when one cannot be stopped or a window of it
-/// stays.
+/// and wait until they and their windows are gone (job_stop). Refuses, before anything is started,
+/// when one cannot be stopped or a window of it stays.
 pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res<()> {
     let want = Value::Array(argv.iter().map(|a| jstr(a)).collect());
     let recs: Vec<std::path::PathBuf> = job_files(ctx)
         .into_iter()
         .filter(|f| record(f).is_some_and(|v| v.get("argv") == Some(&want)))
         .collect();
-    let mut procs = if recs.is_empty() {
-        Vec::new()
-    } else {
-        job_live(ctx, &recs)
-    };
-    // Stopped on purpose: not an early end for the next command to say (job_note).
-    if !procs.is_empty() {
-        let mut stop = Vec::new();
-        for f in &recs {
-            let Some(log) =
-                record(f).and_then(|v| v.get("log").and_then(Value::as_str).map(String::from))
-            else {
-                continue;
-            };
-            if let Some(ns) = re_group(r"/run-([0-9]+)\.log$", log.as_bytes(), 1) {
-                stop.push(cat!("omabox.run-", ns, ".exit"));
-            }
-        }
-        job_noted(ctx, &stop);
-    }
-    if procs.is_empty() {
-        // A job of the same program with other arguments still runs (#255): named, said under -q too.
+    let live = !recs.is_empty() && !job_live(ctx, &recs).is_empty();
+    if !live {
+        // A job of the same program with other arguments still runs (#255): named, said under -q
+        // too, with what stops it (#299): the new job starts beside it.
         let others = job_others(ctx, argv);
         if !others.is_empty() {
-            let verb = if others.len() == 1 {
-                "still runs: stop it, or --replace with its arguments"
+            let pids: Vec<String> = others.iter().map(|(p, _)| p.clone()).collect();
+            let (verb, them) = if others.len() == 1 {
+                ("still runs", "it")
             } else {
-                "still run: stop them, or --replace with the arguments of one"
+                ("still run", "them")
             };
-            say(format!(
-                "--replace: no earlier job with these arguments; {} {verb}",
-                others.join(", ")
+            let lines: Vec<String> = others.into_iter().map(|(_, l)| l).collect();
+            say(cat!(
+                "--replace: no earlier job with these arguments, none stopped; ",
+                lines.join(", "),
+                " ",
+                verb,
+                ", and the new job starts beside ",
+                them,
+                " (omabox -b ",
+                ctx.name,
+                " stop ",
+                pids.join(" "),
+                " stops ",
+                them,
+                ")"
             ));
         } else if !quiet {
             say(cat!(
@@ -741,6 +736,98 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
         }
         return Ok(());
     }
+    match job_stop(ctx, &recs)? {
+        Stop::Done {
+            windows,
+            killed,
+            ms,
+        } => {
+            if !quiet {
+                let s = if windows == 1 { "" } else { "s" };
+                let k = if killed {
+                    "; it ignored SIGTERM for 5 s: killed"
+                } else {
+                    ""
+                };
+                say(format!(
+                    "--replace: stopped the earlier job ({windows} window{s}) in {:.2}s{k}",
+                    ms as f64 / 1000.0
+                ));
+            }
+            Ok(())
+        }
+        Stop::Stuck(ids) => Err(ctx.die(cat!(
+            "--replace: the earlier job still runs after SIGKILL (pids in the box: ",
+            ids.join(&b' '),
+            "); nothing started"
+        ))),
+        Stop::Window(still) => Err(ctx.die(cat!(
+            "--replace: the earlier job ended, but its window ",
+            still.join(&b' '),
+            " is still there; nothing started"
+        ))),
+    }
+}
+
+/// What job_stop did.
+pub enum Stop {
+    /// Stopped, its WINDOWS gone (KILLED: it ignored SIGTERM for 5 s), in MS.
+    Done {
+        windows: usize,
+        killed: bool,
+        ms: i64,
+    },
+    /// Still running after SIGKILL: these pids in the box.
+    Stuck(Vec<Vec<u8>>),
+    /// Ended, but these windows of it still there after 3 s.
+    Window(Vec<Vec<u8>>),
+}
+
+/// SIG to each of PROCS (host pid, box pid), processes of the box as SNAP (box_procs) listed them,
+/// each pinned by a pidfd (#299, #377: pidfd::Pidfd::pin) while the process at that pid is the one
+/// listed: in the box's pid namespace (pin_in_box's check), with that pid in it and that start time,
+/// read once the pidfd is open. A pid reused since the listing fails the check, and the pidfd of a
+/// process that has gone signals nothing: never a bare host pid number to kill(2).
+fn signal_procs(ctx: &Ctx, procs: &[(Vec<u8>, Vec<u8>)], snap: &[[Vec<u8>; 4]], sig: i32) {
+    let Some(ns) = box_ns(ctx) else { return };
+    for (h, b) in procs {
+        let Some(start) = snap.iter().find(|r| r[0] == *h).map(|r| r[3].clone()) else {
+            continue;
+        };
+        // (read after the pidfd is open: had the pid been taken by another process before it was,
+        // /proc shows that one, or a later one, never the listed one)
+        let listed = || {
+            let status =
+                std::fs::read(shell::path(&cat!("/proc/", h, "/status"))).unwrap_or_default();
+            procfs::pidns(h).as_ref() == Some(&ns)
+                && procfs::status_last(&status, "NSpid") == *b
+                && procfs::proc_start(h).as_ref() == Some(&start)
+        };
+        if let Some(p) = crate::pidfd::Pidfd::pin(h, listed) {
+            p.signal(sig);
+        }
+    }
+}
+
+/// Stop the jobs recorded in RECS and wait until they and their windows are gone: SIGTERM to each
+/// job's processes (its session, what it forked included), SIGKILL to what is left after 5 s, then up
+/// to 3 s for their windows. Their ends are noted first: stopped on purpose, not an early end for the
+/// next command to say (job_note).
+pub fn job_stop(ctx: &Ctx, recs: &[std::path::PathBuf]) -> crate::exit::Res<Stop> {
+    let mut stop = Vec::new();
+    for f in recs {
+        let Some(log) =
+            record(f).and_then(|v| v.get("log").and_then(Value::as_str).map(String::from))
+        else {
+            continue;
+        };
+        if let Some(ns) = re_group(r"/run-([0-9]+)\.log$", log.as_bytes(), 1) {
+            stop.push(cat!("omabox.run-", ns, ".exit"));
+        }
+    }
+    job_noted(ctx, &stop);
+    let mut snap = box_procs(ctx);
+    let mut procs = job_live_with(ctx, recs, &snap);
     // Its windows, to see them go (Hyprland's pids are the box's).
     let bpids: Vec<Value> = procs
         .iter()
@@ -763,19 +850,11 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
     let wins = windows(&cj);
     let t0 = crate::settle::mono_ms();
     let (mut end, mut killed) = (t0 + 5000, false);
-    // (each through a pidfd, while it is still the box's: #377)
-    let ns = box_ns(ctx).unwrap_or_default();
-    let signal = |procs: &[(Vec<u8>, Vec<u8>)], sig: i32| {
-        for (h, _) in procs {
-            if let Some(p) = pin_in_box(&ns, h) {
-                p.signal(sig);
-            }
-        }
-    };
-    signal(&procs, libc::SIGTERM);
+    signal_procs(ctx, &procs, &snap, libc::SIGTERM);
     loop {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        procs = job_live(ctx, &recs);
+        snap = box_procs(ctx);
+        procs = job_live_with(ctx, recs, &snap);
         if procs.is_empty() {
             break;
         }
@@ -783,18 +862,13 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
             continue;
         }
         if killed {
-            let ids: Vec<Vec<u8>> = procs.iter().map(|(_, b)| b.clone()).collect();
-            return Err(ctx.die(cat!(
-                "--replace: the earlier job still runs after SIGKILL (pids in the box: ",
-                ids.join(&b' '),
-                "); nothing started"
-            )));
+            return Ok(Stop::Stuck(procs.into_iter().map(|(_, b)| b).collect()));
         }
         killed = true;
         end = crate::settle::mono_ms() + 3000;
-        signal(&procs, libc::SIGKILL);
+        signal_procs(ctx, &procs, &snap, libc::SIGKILL);
     }
-    // A client's windows go when it does; a window still there after 3 s is not what --replace is for.
+    // A client's windows go when it does; a window still there after 3 s is not a stopped job's.
     let mut n = 0;
     if !wins.is_empty() {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -815,29 +889,187 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
                 break;
             }
             if std::time::Instant::now() >= until {
-                return Err(ctx.die(cat!(
-                    "--replace: the earlier job ended, but its window ",
-                    still.join(&b' '),
-                    " is still there; nothing started"
-                )));
+                return Ok(Stop::Window(still));
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         n = wins.iter().filter(|w| !w.is_empty()).count();
     }
-    if !quiet {
-        let s = if n == 1 { "" } else { "s" };
-        let k = if killed {
-            "; it ignored SIGTERM for 5 s: killed"
+    Ok(Stop::Done {
+        windows: n,
+        killed,
+        ms: crate::settle::mono_ms() - t0,
+    })
+}
+
+// --- jobs, stop, wait job / wait log (#299, finding 587) ------------------------------------------
+
+/// A `run -d` job, as `jobs`, `stop` and `wait job|log` know it: its record and its processes now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Job {
+    /// Its record file ($D/jobs/PID, or $D/jobs-done/PID once it ended and was dealt with).
+    pub file: std::path::PathBuf,
+    /// Its command's pid in the box (the session's: what forked from it is in that session).
+    pub pid: Vec<u8>,
+    /// That process's start time (`-`: gone before it was recorded).
+    pub start: Vec<u8>,
+    /// Its log, as the host has it.
+    pub log: Vec<u8>,
+    /// Its words, as run -d was given them.
+    pub argv: Vec<String>,
+    /// Its start, ns since 1970 (its log's name).
+    pub ns: Option<u128>,
+    /// Its processes still running, (host pid, box pid).
+    pub procs: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl Job {
+    /// Its words joined, cut to 60 characters (job_note's).
+    pub fn words(&self) -> String {
+        let w = self.argv.join(" ");
+        if w.chars().count() > 60 {
+            format!("{}…", w.chars().take(59).collect::<String>())
         } else {
-            ""
-        };
-        say(format!(
-            "--replace: stopped the earlier job ({n} window{s}) in {:.2}s{k}",
-            (crate::settle::mono_ms() - t0) as f64 / 1000.0
-        ));
+            w
+        }
     }
-    Ok(())
+
+    /// Its status file's name in the box's runtime dir (share/run-job.sh writes it as it ends).
+    fn exit_name(&self) -> Option<String> {
+        let base = self.log.rsplit(|&c| c == b'/').next().unwrap_or(&self.log);
+        let ns = re_group(r"^run-([0-9]{1,19})\.log$", base, 1)?;
+        Some(format!("omabox.run-{}.exit", String::from_utf8_lossy(&ns)))
+    }
+
+    /// Its log, as the box has it (/home/sbx/run-NS.log), for a read inside the box.
+    pub fn box_log(&self) -> Option<Vec<u8>> {
+        let base = self.log.rsplit(|&c| c == b'/').next().unwrap_or(&self.log);
+        shell::re_match(r"^run-[0-9]{1,19}\.log$", base).then(|| cat!("/home/sbx/", base))
+    }
+}
+
+/// A record's job, its processes not read (None for a record that is not one).
+fn job_of(f: &std::path::Path) -> Option<Job> {
+    let v = record(f)?;
+    let pid = json::raw(v.get("pid")?).into_bytes();
+    if !shell::is_num(&pid) {
+        return None;
+    }
+    let start = json::raw(v.get("start").unwrap_or(&Value::Null)).into_bytes();
+    let log = v.get("log")?.as_str()?.as_bytes().to_vec();
+    let Value::Array(a) = v.get("argv")? else {
+        return None;
+    };
+    let argv = a.iter().map(|x| interp(Some(x))).collect();
+    let base = log.rsplit(|&c| c == b'/').next().unwrap_or(&log).to_vec();
+    let ns = re_group(r"^run-([0-9]{1,19})\.log$", &base, 1)
+        .and_then(|n| String::from_utf8_lossy(&n).parse().ok());
+    Some(Job {
+        file: f.to_path_buf(),
+        pid,
+        start,
+        log,
+        argv,
+        ns,
+        procs: Vec::new(),
+    })
+}
+
+/// The record files of jobs that ended and were dealt with ($D/jobs-done): `wait job` still finds
+/// one that ended before it asked.
+fn done_files(ctx: &Ctx) -> Vec<std::path::PathBuf> {
+    let dir = ctx.at("jobs-done");
+    shell::glob(&dir, false)
+        .into_iter()
+        .map(|n| dir.join(shell::path(&n)))
+        .filter(|f| f.is_file() && !f.is_symlink())
+        .collect()
+}
+
+/// The box's `run -d` jobs still running, oldest first (#299).
+pub fn jobs_now(ctx: &Ctx) -> Vec<Job> {
+    let snap = box_procs(ctx);
+    let mut out: Vec<Job> = Vec::new();
+    for f in job_files(ctx) {
+        let Some(mut j) = job_of(&f) else { continue };
+        let procs = job_live_with(ctx, std::slice::from_ref(&f), &snap);
+        if procs.is_empty() {
+            continue;
+        }
+        j.procs = procs;
+        out.push(j);
+    }
+    out.sort_by(|a, b| a.ns.cmp(&b.ns).then_with(|| a.pid.cmp(&b.pid)));
+    out
+}
+
+/// Of JOBS, the one PID names: its command's pid, or the pid in the box of any process of its
+/// session (what `windows` shows for an app the job forked).
+pub fn job_named<'a>(jobs: &'a [Job], pid: &[u8]) -> Option<&'a Job> {
+    jobs.iter().find(|j| awk_eq(&j.pid, pid)).or_else(|| {
+        jobs.iter()
+            .find(|j| j.procs.iter().any(|(_, b)| awk_eq(b, pid)))
+    })
+}
+
+/// The job PID names, running or not: a running one first (job_named), else the record of an ended
+/// one ($D/jobs/PID, then $D/jobs-done/PID). None: no `run -d` job of that pid is known.
+pub fn job_find(ctx: &Ctx, pid: &[u8]) -> Option<Job> {
+    if !shell::is_num(pid) {
+        return None;
+    }
+    let now = jobs_now(ctx);
+    if let Some(j) = job_named(&now, pid) {
+        return Some(j.clone());
+    }
+    let p = shell::path(pid);
+    [ctx.at("jobs").join(&p), ctx.at("jobs-done").join(&p)]
+        .iter()
+        .filter(|f| f.is_file() && !f.is_symlink())
+        .find_map(|f| job_of(f))
+}
+
+/// The latest `run -d` job (its log the newest: the one `log run` reads), running or not.
+pub fn job_latest(ctx: &Ctx) -> Option<Job> {
+    job_files(ctx)
+        .into_iter()
+        .chain(done_files(ctx))
+        .filter_map(|f| job_of(&f))
+        .max_by(|a, b| a.ns.cmp(&b.ns))
+}
+
+/// JOB's processes running now (job_procs on the box's processes).
+pub fn job_procs_now(ctx: &Ctx, job: &Job) -> Vec<(Vec<u8>, Vec<u8>)> {
+    job_procs(&box_procs(ctx), &job.pid, &job.start)
+}
+
+/// JOB's command's exit status, once share/run-job.sh has written it (digits only).
+pub fn job_status(ctx: &Ctx, job: &Job) -> Option<Vec<u8>> {
+    let mut st = run_read(&ctx.d, &job.exit_name()?)?;
+    st.truncate(64);
+    let st = shell::strip_nl(&st);
+    shell::is_num(&st).then_some(st)
+}
+
+/// A record whose job ended and was dealt with: kept in $D/jobs-done for `wait job` (#299), out of
+/// $D/jobs, which lists the jobs that may still run. Removed when it cannot be moved.
+fn retire(ctx: &Ctx, f: &std::path::Path) {
+    let dir = ctx.at("jobs-done");
+    let moved = std::fs::create_dir_all(&dir).is_ok()
+        && f.file_name()
+            .is_some_and(|n| std::fs::rename(f, dir.join(n)).is_ok());
+    if !moved {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// A duration in whole seconds as `jobs` shows an age: 45s, 3m12s, 2h05m.
+pub fn age_text(s: u64) -> String {
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m{:02}s", s / 60, s % 60),
+        _ => format!("{}h{:02}m", s / 3600, s % 3600 / 60),
+    }
 }
 
 /// job_ended WHEN QUIET PID LOG EXIT_FILE ARGV... (#215, #286): whether job PID had ended, nothing of
@@ -885,7 +1117,9 @@ pub fn job_ended(
     }
     let base = ex.rsplit(|&c| c == b'/').next().unwrap_or(ex).to_vec();
     job_noted(ctx, &[base]);
-    let _ = std::fs::remove_file(&rec);
+    if rec.is_file() {
+        retire(ctx, &rec);
+    }
     let what = job_how(&st);
     let rc = if st.is_empty() {
         1
@@ -1143,7 +1377,11 @@ mod tests {
         };
         let others = |exe: &str, argv: &[&str]| {
             let a: Vec<Vec<u8>> = argv.iter().map(|w| w.as_bytes().to_vec()).collect();
-            job_others_with(&ctx, &a, exe.as_bytes(), live).join("\n")
+            job_others_with(&ctx, &a, exe.as_bytes(), live)
+                .into_iter()
+                .map(|(_, l)| l)
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         assert_eq!(
             others(&app, &["./build/app", "--demo", "table"]),
@@ -1546,6 +1784,96 @@ mod tests {
             job_live_with(&ctx, &[d.join("jobs/53")], &ps(&["53 49 555"])),
             vec![(b"901".to_vec(), b"53".to_vec())],
             "...and live"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // #299, finding 587: what `jobs`, `stop` and `wait job|log` read of a job's record; a record
+    // whose job ended and was dealt with kept in jobs-done for `wait job`; a job named by any pid of
+    // its session; the latest by its log's name; ages as `jobs` shows them.
+    #[test]
+    fn jobs_lookups() {
+        let d = std::env::temp_dir().join(format!("omabox-jl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for x in ["jobs", "run", "home"] {
+            std::fs::create_dir_all(d.join(x)).unwrap();
+        }
+        // (a box of this omabox: ends not noted yet are kept in jobs/)
+        std::fs::write(d.join("jobs-noted"), "").unwrap();
+        let ds = d.display().to_string();
+        let mut ctx = Ctx::new(b"jobs", Vec::new());
+        ctx.d = ds.as_bytes().to_vec();
+        let rec = |dir: &str, pid: &str, ns: &str, argv: &[&str]| {
+            let v = serde_json::json!({"pid": pid, "start": "9", "log": format!("{ds}/home/run-{ns}.log"),
+                "exe": argv[0], "argv": argv});
+            std::fs::create_dir_all(d.join(dir)).unwrap();
+            std::fs::write(d.join(dir).join(pid), format!("{v}\n")).unwrap();
+        };
+        rec("jobs", "40", "1000", &["./server", "--port", "8081"]);
+        rec("jobs-done", "41", "3000", &["make"]);
+        rec("jobs", "42", "2000", &["sh", "-c", "foot & exit"]);
+        let j = job_of(&d.join("jobs/40")).unwrap();
+        assert_eq!(
+            (
+                j.pid.as_slice(),
+                j.ns,
+                j.words().as_str(),
+                j.box_log(),
+                j.exit_name()
+            ),
+            (
+                &b"40"[..],
+                Some(1000),
+                "./server --port 8081",
+                Some(b"/home/sbx/run-1000.log".to_vec()),
+                Some("omabox.run-1000.exit".to_string())
+            ),
+            "a record read: pid, start, words, its log in the box, its status file"
+        );
+        std::fs::write(d.join("jobs/43"), "{\"pid\":").unwrap();
+        assert!(job_of(&d.join("jobs/43")).is_none(), "half a record: none");
+        assert_eq!(
+            job_latest(&ctx).map(|j| j.pid),
+            Some(b"41".to_vec()),
+            "the latest by its log, an ended one's too"
+        );
+        std::fs::write(d.join("run/omabox.run-3000.exit"), "2\n").unwrap();
+        let done = job_latest(&ctx).unwrap();
+        assert_eq!(job_status(&ctx, &done), Some(b"2".to_vec()), "its status");
+        std::fs::write(d.join("run/omabox.run-1000.exit"), "x\n").unwrap();
+        assert_eq!(job_status(&ctx, &j), None, "...digits only");
+        // (job_find of a pid with no live process here: the record of jobs/, then jobs-done/)
+        assert_eq!(
+            [b"40", b"41", b"44"].map(|p| job_find(&ctx, p).map(|j| j.file)),
+            [Some(d.join("jobs/40")), Some(d.join("jobs-done/41")), None]
+        );
+        assert!(job_find(&ctx, b"4x").is_none());
+        let mut a = job_of(&d.join("jobs/40")).unwrap();
+        a.procs = vec![(b"900".to_vec(), b"40".to_vec())];
+        let mut b = job_of(&d.join("jobs/42")).unwrap();
+        b.procs = vec![(b"901".to_vec(), b"57".to_vec())];
+        let both = [a, b];
+        let named = |p: &[u8]| job_named(&both, p).map(|j| j.pid.clone());
+        assert_eq!(
+            [named(b"40"), named(b"57"), named(b"42"), named(b"900")],
+            [
+                Some(b"40".to_vec()),
+                Some(b"42".to_vec()),
+                Some(b"42".to_vec()),
+                None
+            ],
+            "by its command's pid, any of its session's in the box; never a host pid"
+        );
+        // retire: out of jobs/ into jobs-done/, which job_find still reads.
+        retire(&ctx, &d.join("jobs/42"));
+        assert!(!d.join("jobs/42").exists() && d.join("jobs-done/42").is_file());
+        assert_eq!(
+            job_find(&ctx, b"42").map(|j| j.file),
+            Some(d.join("jobs-done/42"))
+        );
+        assert_eq!(
+            [0, 59, 60, 192, 3599, 3600, 7500].map(age_text),
+            ["0s", "59s", "1m00s", "3m12s", "59m59s", "1h00m", "2h05m"]
         );
         let _ = std::fs::remove_dir_all(&d);
     }

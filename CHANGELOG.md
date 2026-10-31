@@ -30,6 +30,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   folder that is not at its own path is in the box
   ([#301](https://github.com/diogochaves/omabox/issues/301)).
 
+- **`omabox jobs`, `omabox stop PID`, `wait job` and `wait log`**: a `run -d` job is listed, stopped
+  and waited for by its pid, with no `pgrep` or `kill` on the host (where the same program may run on
+  your desktop). `run -d` says the job's pid; `jobs [--json]` lists the running ones (pid, age,
+  processes, log, command); `stop PID... | --all` stops one as `--replace` does, its windows gone,
+  by its pid or a window's; `wait job [PID] [--gone]` until it ends, with its exit status; `wait log
+  [PID] RE [-i]` until a line of its log matches. `--replace` with other arguments now says the new
+  job starts beside the one still running, and the `omabox stop PID` that stops it
+  ([#299](https://github.com/diogochaves/omabox/issues/299)).
+
 ### Fixed
 
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and

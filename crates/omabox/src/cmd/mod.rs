@@ -18,6 +18,7 @@ pub mod gpu;
 pub mod guard;
 pub mod host;
 pub mod hyprctl;
+pub mod jobs;
 pub mod keys;
 pub mod keys_to_box;
 pub mod log;

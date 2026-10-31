@@ -5,9 +5,10 @@
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
 use crate::boxes::{box_alive, need_box, touch};
 use crate::cat;
-use crate::exec::{ExecOpts, Redir, box_exec};
+use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers_in, hypr_json};
+use crate::jobs::{Job, job_find, job_how, job_latest, job_procs_now, job_status};
 use crate::jq::{self, Args};
 use crate::jqprog::WIN_DESC_JQ;
 use crate::num::{fixed, ms_duration, ms_s, xywh_less};
@@ -20,6 +21,7 @@ use crate::shellnote::shell_note;
 use crate::win::{
     box_windows, joined, jq_error_text, jq_length, jq_r, win_desc, win_hits, win_select,
 };
+use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 
 /// A polled condition's one try (win_probe, layer_probe, until_probe): "yes DETAIL" or "no DETAIL";
@@ -28,6 +30,10 @@ enum Probe<'a> {
     Win(&'a str, &'a [Vec<u8>]),
     Layer(&'a str, &'a [u8]),
     Until(&'a [Vec<u8>]),
+    /// A `run -d` job's end (#299): its command's, or with GONE its whole session's.
+    Job(&'a Job, bool),
+    /// A line matching RE (grep -E, ICASE: -i) in a `run -d` job's log (#299).
+    Log(&'a Job, &'a [u8], bool),
 }
 
 impl Probe<'_> {
@@ -37,6 +43,8 @@ impl Probe<'_> {
             Probe::Win(..) => "win_probe",
             Probe::Layer(..) => "layer_probe",
             Probe::Until(..) => "until_probe",
+            Probe::Job(..) => "job_probe",
+            Probe::Log(..) => "log_probe",
         }
     }
 
@@ -73,6 +81,78 @@ impl Probe<'_> {
                     _ => cat!("yes at ", l),
                 };
                 (0, o)
+            }
+            Probe::Job(job, gone) => {
+                match box_alive(ctx) {
+                    Ok(true) => {}
+                    Ok(false) => return (1, Vec::new()),
+                    Err(Exit(rc)) => return (i32::from(rc), Vec::new()),
+                }
+                let procs = job_procs_now(ctx, job);
+                let st = job_status(ctx, job);
+                let how = job_how(st.as_deref().unwrap_or_default());
+                let n = procs.len();
+                let o = if procs.is_empty() {
+                    cat!("yes ", how)
+                } else if *gone {
+                    format!("no {n} of its processes still run").into_bytes()
+                } else if st.is_some() {
+                    let s = if n == 1 { "" } else { "es" };
+                    format!(
+                        "yes {how}; {n} process{s} it started still run (--gone waits for them)"
+                    )
+                    .into_bytes()
+                } else {
+                    b"no its command still runs".to_vec()
+                };
+                (0, o)
+            }
+            Probe::Log(job, re, icase) => {
+                match box_alive(ctx) {
+                    Ok(true) => {}
+                    Ok(false) => return (1, Vec::new()),
+                    Err(Exit(rc)) => return (i32::from(rc), Vec::new()),
+                }
+                // (whether it still ran, read before its log: a line it wrote as it ended is seen)
+                let ended = job_procs_now(ctx, job).is_empty();
+                let Some(log) = job.box_log() else {
+                    return (0, b"stop no log: the job has no log of run -d's".to_vec());
+                };
+                let mut argv = vec![
+                    b"/usr/bin/timeout".to_vec(),
+                    b"2".to_vec(),
+                    b"/usr/bin/grep".to_vec(),
+                    b"-m1".to_vec(),
+                    b"-a".to_vec(),
+                    b"-E".to_vec(),
+                ];
+                if *icase {
+                    argv.push(b"-i".to_vec());
+                }
+                argv.extend([b"-e".to_vec(), re.to_vec(), b"--".to_vec(), log]);
+                let r = on_box(ctx, &argv, true, Out::Capture(Some(4096)), ErrTo::Null);
+                if r.refused {
+                    return (r.rc, Vec::new());
+                }
+                if r.rc == 0 {
+                    let line = r.out.split(|&c| c == b'\n').next().unwrap_or_default();
+                    return (0, cat!("yes ", crate::shell::cut_line(line, 200)));
+                }
+                if ended {
+                    let how = job_how(job_status(ctx, job).as_deref().unwrap_or_default());
+                    return (
+                        0,
+                        cat!(
+                            "stop job ended: job ",
+                            job.pid,
+                            " ",
+                            how,
+                            ", and its log has no line matching ",
+                            *re
+                        ),
+                    );
+                }
+                (0, b"no".to_vec())
             }
             Probe::Until(cmd) => {
                 let left = tmo - (mono_ms() - t0);
@@ -340,6 +420,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut sels, mut ns, mut cmd): (Vec<Vec<u8>>, Vec<u8>, Vec<Vec<u8>>) =
         (Vec::new(), Vec::new(), Vec::new());
     let mut want = "";
+    let (mut jobw, mut logw, mut icase): (Vec<u8>, Vec<Vec<u8>>, bool) =
+        (Vec::new(), Vec::new(), false);
     let mut masks: Vec<Vec<u8>> = Vec::new();
     let mut s = Settle::default();
     let mut i = 0;
@@ -403,6 +485,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             b"--active" => sels.push(b"active".to_vec()),
             b"--gone" => want = "gone",
             b"--focused" => want = "focused",
+            b"-i" => icase = true,
             b"--" => {
                 if cond != b"until" {
                     return Err(ctx.die("wait: -- goes with until (omabox wait until -- CMD ...)"));
@@ -424,6 +507,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     sels.push(a.clone());
                 } else if cond == b"layer" && ns.is_empty() {
                     ns = a.clone();
+                } else if cond == b"job" && jobw.is_empty() {
+                    jobw = a.clone();
+                } else if cond == b"log" && logw.len() < 2 {
+                    logw.push(a.clone());
                 } else {
                     return Err(unexpected(ctx, cat!("wait ", cond), a, ""));
                 }
@@ -432,10 +519,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         i += 1;
     }
     let none = geom.is_empty() && quiet.is_empty();
+    if icase && cond != b"log" {
+        return Err(ctx.die("wait: -i goes with log (wait log [JOB] RE -i)"));
+    }
+    let plain = sels.is_empty() && none && !strict && masks.is_empty();
     match cond.as_slice() {
         b"still" | b"change" => {
             if !want.is_empty() {
-                return Err(ctx.die("wait: --gone and --focused go with window or layer"));
+                return Err(ctx.die("wait: --gone and --focused go with window, layer or job"));
             }
             if !geom.is_empty() && !sels.is_empty() {
                 return Err(ctx.die("wait: -g or --window, not both"));
@@ -464,6 +555,51 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 return Err(ctx.die("wait layer: only --gone"));
             }
         }
+        b"job" => {
+            if want == "focused" {
+                return Err(ctx.die("wait job: --gone or nothing"));
+            }
+            if !plain {
+                return Err(ctx.die("wait job: only --gone"));
+            }
+            if !jobw.is_empty() && !crate::shell::is_num(&jobw) {
+                return Err(ctx.die(cat!(
+                    "wait job: JOB is a job's pid (omabox jobs), got ",
+                    jobw
+                )));
+            }
+        }
+        b"log" => {
+            if !want.is_empty() || !plain {
+                return Err(ctx.die("wait log: only -i"));
+            }
+            if logw.is_empty() {
+                return Err(ctx.die(
+                    "wait log: for which line? a regular expression (grep -E): wait log [JOB] RE",
+                ));
+            }
+            if logw.len() == 2 && !crate::shell::is_num(&logw[0]) {
+                return Err(ctx.die(cat!(
+                    "wait log: JOB is a job's pid (omabox jobs), got ",
+                    logw[0]
+                )));
+            }
+            let re = logw.last().cloned().unwrap_or_default();
+            let st = crate::sig::command("grep")
+                .arg("-E")
+                .arg("-e")
+                .arg(std::ffi::OsStr::from_bytes(&re))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            if st.as_ref().map_or(true, |s| s.code() == Some(2)) {
+                return Err(ctx.die(cat!(
+                    "wait log: RE is a regular expression (grep -E), got ",
+                    re
+                )));
+            }
+        }
         b"until" => {
             if cmd.is_empty() {
                 return Err(ctx.die("wait until: nothing to run (omabox wait until -- CMD ...)"));
@@ -474,7 +610,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         b"" => {
             return Err(ctx.die(
-                "wait: for what? still, change, window SEL, layer NAMESPACE or until -- CMD (omabox help)",
+                "wait: for what? still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE or until -- CMD (omabox help)",
             ));
         }
         _ => {
@@ -483,8 +619,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "wait",
                 "condition",
                 &cond,
-                "(still, change, window SEL, layer NAMESPACE or until -- CMD)",
-                &["still", "change", "window", "layer", "until"],
+                "(still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE or until -- CMD)",
+                &["still", "change", "window", "layer", "job", "log", "until"],
             ));
         }
     }
@@ -514,6 +650,60 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             };
             let probe = Probe::Layer(if want == "gone" { "gone" } else { "present" }, &ns);
             poll_until(ctx, &yes, &no, 2, tmo, json, probe)
+        }
+        b"job" | b"log" => {
+            let pid = if cond == b"job" {
+                jobw.clone()
+            } else if logw.len() == 2 {
+                logw[0].clone()
+            } else {
+                Vec::new()
+            };
+            let job = if pid.is_empty() {
+                job_latest(ctx)
+            } else {
+                job_find(ctx, &pid)
+            };
+            let Some(job) = job else {
+                return Err(ctx.die(if pid.is_empty() {
+                    cat!(
+                        "wait ",
+                        cond,
+                        ": box '",
+                        ctx.name,
+                        "' has no run -d job yet"
+                    )
+                } else {
+                    cat!(
+                        "wait ",
+                        cond,
+                        ": box '",
+                        ctx.name,
+                        "' has no run -d job of pid ",
+                        pid,
+                        " (omabox -b ",
+                        ctx.name,
+                        " jobs)"
+                    )
+                }));
+            };
+            let j = cat!("job ", job.pid, " (", job.words(), ")");
+            if cond == b"job" {
+                let gone = want == "gone";
+                let (yes, no) = if gone {
+                    (cat!(j, " gone"), cat!(j, " still running"))
+                } else {
+                    (cat!(j, " ended"), cat!(j, " still running"))
+                };
+                poll_until(ctx, &yes, &no, 1, tmo, json, Probe::Job(&job, gone))
+            } else {
+                let re = logw.last().cloned().unwrap_or_default();
+                let (yes, no) = (
+                    cat!("a line matching ", re, " in the log of ", j),
+                    cat!("no line matching ", re, " in the log of ", j),
+                );
+                poll_until(ctx, &yes, &no, 1, tmo, json, Probe::Log(&job, &re, icase))
+            }
         }
         b"until" => {
             if let Some(n) = host_path_note(ctx, &cmd) {

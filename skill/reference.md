@@ -66,11 +66,12 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | Command | Shape |
 |---|---|
 | `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more |
+| `jobs --json` | an array, oldest first: `pid, age` (seconds), `processes, log, argv` |
 | `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, certain` (false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all) |
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/until add `detail`; an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/until add `detail`; an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, setup, counts, checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
@@ -543,7 +544,8 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
 - `omabox wait [--timeout 10s] [--json] COND`, one condition per call (chain with `&&`): `still
   [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change [-g GEOM |
   --window SEL] [--ignore GEOM]...`, `window SEL [--gone | --focused]`, `layer NAMESPACE [--gone]`
-  (`omarchy-menu`, `omarchy-notifications`, ...), `until -- CMD` (exit 0 inside the box). Options go
+  (`omarchy-menu`, `omarchy-notifications`, ...), `job [PID] [--gone]` (a `run -d` job's end), `log
+  [PID] RE [-i]` (a line in its log), `until -- CMD` (exit 0 inside the box). Options go
   before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several.
@@ -812,8 +814,20 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   setsid ...`, D-Bus activation) is not touched, even when the job only handed it its arguments (a
   single-instance app already running): stop that one yourself. Nor a job of the same program with
   other arguments (`--demo details`, then `--replace -- ./app --demo table`): it stays beside the new
-  one, and `--replace` names it with its pid (`omabox run -- kill PID` stops it). No earlier job (or
-  one that exited): it just starts, and says so.
+  one, and `--replace` names it with its pid and the `omabox stop PID` that stops it. No earlier job
+  (or one that exited): it just starts, and says so.
+- **A job by its pid, never a host `pgrep`/`kill`** (the same program often runs on the user's
+  desktop): `run -d` says the job's pid ("started in box 'B' (pid 115, log: …)"). `omabox jobs
+  [--json]` lists the box's running jobs (PID, AGE, PROCS, LOG, COMMAND). `omabox stop PID...`
+  (or `--all`) stops one as `--replace` does (SIGTERM to its session, SIGKILL after 5 s, its windows
+  gone), through a pidfd of each of its processes; PID may be any pid of its session, a window's PID
+  from `windows` too. A stopped job is not said as an early end. Another process of the box: `omabox
+  run -- kill PID`. `omabox wait job [PID]` (none: the latest job) until its command exits,
+  satisfied with how ("exited with status 3"), at once when it already had; `--gone` until nothing
+  of its session runs either (a launcher's app). `omabox wait log [PID] RE [-i]` until a line of
+  its log matches RE (grep -E; a line there already counts), satisfied with the line; a job that
+  ended without one is `unknown` (exit 1). Not `wait until -- sh -c '! pgrep …'` (it matches
+  itself) nor a loop over `run-*.log`.
 
 ## Network
 
