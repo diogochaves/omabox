@@ -40,6 +40,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   shell applies, an IPC call) is no longer missed, else at the first change; `--like` waits until it
   looks like SHOT again. The pointer, a caret blinking alone and `--ignore`'s regions are no
   difference ([#344](https://github.com/diogochaves/omabox/issues/344)).
+- **`up --polkit`: a polkit agent can be tested in a box.** The shell's polkit plugin (or a copy of it
+  under test, or a GTK or Qt agent) registers and shows its dialog as on a desktop: the box gets a
+  system bus of its own whose one service is a stand-in authority, never your system bus or polkitd.
+  `omabox polkit ask [--action ID] [--message TEXT] [--accept PASSWORD] [--timeout 60s] [--delay
+  DURATION]` makes a request and says how the agent ended it (authenticated, cancelled, timeout, the
+  agent gone), with the passwords tried and how many were wrong; `--accept` names the one test
+  password the box's helper takes. `omabox polkit agents` lists who registered; `log polkit` is the
+  authority's log. It decides nothing for any service (pkexec and pkcheck get no answer from it)
+  ([#258](https://github.com/diogochaves/omabox/issues/258)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

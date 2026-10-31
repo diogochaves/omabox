@@ -80,9 +80,9 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    aquamarine's build deps, and what the box runs that Omarchy
    already has (quickshell, gtk3, xdg-terminal-exec, dbus). `sudo pacman -S --needed` only for the
    missing ones.
-2. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`
-   (need `wayland-scanner`; protocol XML is vendored). Then omabox itself (finding 523): `cargo build
-   --release --locked`, `install -Dm755 target/release/omabox build/omabox.new`, `mv -f
+2. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`,
+   `polkit` (need `wayland-scanner`, and libsystemd for `polkit`; protocol XML is vendored). Then
+   omabox itself (finding 523): `cargo build --release --locked`, `install -Dm755 target/release/omabox build/omabox.new`, `mv -f
    build/omabox.new build/omabox` (`bin/omabox` is a link to it; Arch's `rust` when there is no cargo,
    a rustup with a default toolchain otherwise; the first build fetches its crates).
 3. aquamarine's fix into a private prefix, `omabox setup --aquamarine` (only headless NVIDIA boxes
@@ -11577,6 +11577,56 @@ from them.
     hypr_lost_an_exiting_hyprland_is_going (exiting: went down, before and past 10 looks; running
     and not exiting: still hung; it fails on the old code).
 
+627. **A polkit agent could not be tested in a box** (2026-10-31, #258). A shell plugin that is a polkit
+    agent (Omarchy's `omarchy.polkit`, a copy of it with its own look) loaded in a box but never
+    registered: Quickshell's `PolkitAgent` takes its subject from `polkit_unix_session_new_for_process`,
+    which asks logind's `sd_pid_get_session`, and a box's processes are in a user unit's cgroup (or the
+    box's own), so "No session for pid N"; and with no system bus there was no authority to register
+    with or to send it a request. Its dialog's states could only be faked, which hid the real order of
+    a request's end (Quickshell drops a finished request, `isActive` false, before it emits
+    `authenticationSucceeded`: a `Connections` on its flow never hears the success, which the fixture
+    below shows). The host's polkitd or system bus in a box is out (S1). A real polkitd on a bus of the
+    box's own is out too: it takes an agent's answer (`AuthenticationAgentResponse2`) only from uid 0,
+    and its helper runs PAM as root (since polkit 121 a socket-activated root service behind
+    `/run/polkit/agent-helper.socket`, no longer setuid); nothing in a box is root or can become it
+    (bwrap's no_new_privs). So `up --polkit` is a stand-in that speaks both sides an agent meets, and
+    nothing else:
+    - a system bus of the box's own: dbus-daemon (`share/polkit/bus.conf`) at
+      `$XDG_RUNTIME_DIR/omabox-polkit/bus`, named by `DBUS_SYSTEM_BUS_ADDRESS` for the session; never
+      `/run/dbus`, which the box safety invariant keeps out and the input tools' in-box check reads;
+    - `tools/polkit/omabox-polkit serve` (C, sd-bus) owns `org.freedesktop.PolicyKit1` there and keeps
+      agents as polkitd 128 does: one per subject (`RegisterAuthenticationAgent[WithOptions]`; a
+      session subject must be the box's, "omabox", else polkitd's own "Passed session and the session
+      the caller is in differs"), a second refused with "An authentication agent already exists for
+      the given subject", unregistered only by its owner at its path, dropped when it leaves the bus
+      (NameOwnerChanged). `AuthenticationAgentResponse[2]` from the box gets polkitd's "Only uid 0 may
+      invoke this method."; `CheckAuthorization` NotSupported: it decides nothing, so pkexec, pkcheck
+      and a mechanism get no yes from it;
+    - the same process listens on the box's own `/run/polkit/agent-helper.socket`, which polkit's agent
+      library (`PolkitAgentSession`) tries before the setuid helper: it reads the user and the cookie as
+      polkit-agent-helper-1 does, says `PAM_PROMPT_ECHO_OFF Password: ` (g_strescape'd, as the helper
+      writes it) and answers the response, after `--delay`, with SUCCESS (the request marked
+      authenticated first, as AgentResponse2 marks it before the helper's SUCCESS) or FAILURE: only the
+      one password `ask --accept` names, for the box user. No PAM;
+    - `omabox-polkit-session.so`, preloaded for the whole session (`LD_PRELOAD`), answers
+      `sd_pid_get_session` with `OMABOX_POLKIT_SESSION` ("omabox"), and `XDG_SESSION_ID` is "omabox"
+      for agents that read that. Only that one function: the rest of sd-login still finds no session.
+    `omabox polkit ask` makes a request as polkitd does (BeginAuthentication with a cookie, the box user
+    as the `unix-user` identity, the action, message, icon and details) on the session's agent, waits
+    for the agent's own end and says it: authenticated, not-authenticated, cancelled (the agent's
+    Cancelled error: dismissed), timeout (the authority sent CancelAuthentication after --timeout, as
+    polkitd does when its caller cancels; exit 124), agent-gone (NoReply: it left the bus) or no-agent,
+    with the passwords tried and how many were wrong; `polkit agents` lists them. The tool runs in the
+    box (box_exec `sys`), its answer read here through a pipe, bounded. Verified in a box: Omarchy 4.5's
+    stock `omarchy.polkit` (`up --polkit --stock-bar`) registers at `/org/omarchy/PolkitAgent` and shows
+    its dialog with the message asked; a wrong password, then the right one, end authenticated (2
+    passwords, 1 wrong). A bar seeded from the desk loads the polkit plugin only when its shell.json
+    does. Not covered: a real polkitd's decisions (rules, `auth_admin_keep`, implicit authorizations),
+    the real PAM stack (fingerprint, faillock), identities other than the box user (an admin dialog's
+    list of wheel members), agents of another session. Tests: t_polkit (a throwaway Quickshell agent:
+    registers, a second refused, wrong then right, dismissed, timeout, the agent gone and the other
+    registering; no /run/dbus, pkcheck NotSupported, a box's AgentResponse2 refused), t_main (no
+    --polkit: no system bus, `polkit` refused), t_unit_cli and the usage errors.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

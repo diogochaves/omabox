@@ -83,6 +83,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `gpu --json` | `box, seconds, source, render, percent, engines` and more |
 | `cpu --json` | `box, seconds, settle, cores, percent, processes, total` and more |
 | `audio --json` | `box, seconds, sound, sound_s, peak_db, rms_db, spans, levels` and more |
+| `polkit ask --json` | `result` (authenticated, not-authenticated, cancelled, timeout, agent-gone, no-agent), `tries, wrong, agent, path, action, why`; `polkit agents --json`: an array, `subject, name, path, fallback` |
 | `ports --json` | an array: `box, port, addresses, process, host` |
 | `path --logs --json` | `{NAME: PATH}`, each log there is |
 | `saves --json` | an array: `name, box, saved, size, size_kb, keyring` |
@@ -725,7 +726,7 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors; each line with its
   time to the millisecond, `YYYY-MM-DD HH:MM:SS.mmm`, for timing what the shell does), `apps` (what the
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
-  `--systemd`), `audio` (PipeWire's, with `--audio`), `events` (Hyprland's events, which `omabox events` reads), `journal` (what programs
+  `--systemd`), `audio` (PipeWire's, with `--audio`), `polkit` (the stand-in authority's, with `--polkit`), `events` (Hyprland's events, which `omabox events` reads), `journal` (what programs
   sent the box's journal sockets: dbus-broker, `logger` and `logger --journald` (not `-t omarchy-shell`: `shell`), `/usr/bin/systemd-cat` (the bare name writes `~/ID.log`), Qt with `QT_FORCE_STDERR_LOGGING=0`, units' output; at most 4 MB, then
   `journal.1.log`), `box` (bwrap), `reap` (the
   reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
@@ -752,7 +753,7 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   `~/.config/omarchy`, `/tmp`, secret stores or the runtime dir is refused: do not work around it.
   The box HOME is fake (`/home/sbx`; `omabox path --home` on the host). The box's /run/user/$UID is
   `omabox path --run` on the host; the host's own is the real session's: never read app state there.
-  Private session bus and keyring; audio: `up --audio`; `/sys`: the host's.
+  Private session bus and keyring; audio: `up --audio`; a polkit agent: `up --polkit`; `/sys`: the host's.
 - The repo you ran `omabox up` from is visible **read-only** at the same path (from a linked worktree
   or a submodule, the main checkout's `.git` too: git reads work there, writes fail), plus any dirs listed in
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
@@ -1225,6 +1226,36 @@ your own and a test password, through an Omarchy tree (`up --omarchy`; a box ref
 `t_lock` in the suite does exactly this. The real PAM stack (pam_unix, faillock, fingerprint), the
 login screen and the disk passphrase stay a VM's to test.
 
+## Testing a polkit agent
+
+A box has no system bus and no logind session, so a polkit agent (the shell's `omarchy.polkit`, a
+plugin that replaces it, a GTK or Qt agent) never registers in a plain box ("No session for pid N").
+`omabox up --polkit` gives the box a system bus of its own with a stand-in authority on it (never
+your bus or polkitd) and a session, "omabox", for its processes. The agent registers as on a desk;
+`omabox polkit agents` lists it (subject, bus name, object path). Then make a request and drive the
+dialog, never faking its flow:
+
+```bash
+omabox up --polkit --stock-bar          # or --plugin PATH for yours (your bar: only if its shell.json loads it)
+omabox polkit ask --action org.example.restart --message "Authentication is required to restart." \
+  --accept test-pw --json > /tmp/ask.json &   # waits for the request's end
+omabox wait layer omarchy-polkit        # the dialog (omabox hyprctl -j layers names yours)
+omabox keys -t wrong Return             # FAILURE: the agent's wrong-password state
+omabox keys -t test-pw Return           # SUCCESS
+wait; cat /tmp/ask.json                 # {"result":"authenticated","tries":2,"wrong":1,...}
+```
+
+The end is the agent's own, through polkit's real agent library and helper protocol, so the order of
+its signals is the real one (Quickshell drops a finished request before it emits
+`authenticationSucceeded`: code that waits for that signal on the flow never hears it). Results:
+authenticated, not-authenticated, cancelled (its user dismissed it: Escape), timeout (no end in
+`--timeout`, 60s: the authority cancels the request, as polkitd does when its caller gives up; exit
+124), agent-gone, no-agent. `--delay 1s` holds each answer, to see a checking state; `--accept` is a
+test password (never the user's): without it every password is wrong. A second agent for the session
+is refused, as polkitd refuses it. `omabox log polkit` has each registration and request. Not
+testable here: a real polkitd's decisions (rules, `auth_admin_keep`), pkexec (the stand-in decides
+nothing), the real PAM stack (fingerprint), an admin dialog's list of other users.
+
 ## When a box cannot test it, in detail
 
 A box has virtual screens only (`--monitor` for more, any size and scale; `output drop` makes one
@@ -1247,7 +1278,8 @@ and data cannot be verified in a box: do not report it as tested. (`systemctl --
   --cycles 20`, which stops at the first shell crash; an unplug for good: `omabox monitor remove NAME`.
   On NVIDIA an output the app creates itself (`hyprctl output create headless`) comes up 0x0: a box
   on the other GPU (`OMABOX_RENDER_NODE`, "Screen size and rendering cost").
-- No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit. No
+- No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit (an
+  agent's dialog: `up --polkit`, "Testing a polkit agent"). No
   devices: no sound card (`up --audio` gives a box its own PipeWire, with a null sink, omabox-speaker,
   as its only output and a silent mic, omabox-mic: apps play, nobody hears, `omabox audio` and
   `record --audio` read it; real outputs, Bluetooth audio and `wpctl` on the user's devices stay
