@@ -10800,6 +10800,14 @@ from them.
     fullscreen window, where 4.5.0's bar takes none (`windows` already drops top layers there): not
     changed. Test: t_unit_omarchy_contract (rc1's bar and 4.5.0's mask hold, a full-screen bar with
     no mask fails); the contract passes on rc1, rc2 and `v4-5-0` trees.
+559. **A crash was sometimes said as a hang: the box ended between two looks** (2026-10-30, #351).
+    After a call got no answer, `hypr_lost` looks whether the box is alive, then for its Hyprland's
+    host pid. The box outlives its crashed Hyprland by ~75 ms; when it ended between the two looks,
+    the second found no pids, which reads as "cannot tell", and the crash was said as "did not
+    answer (hung? ...)". t_hyprland_crash failed on it 4 to 8 times in 20 (bash era; the Rust port
+    kept the order). Now no pids with the box gone is "went down", with labwc's how. The issue's
+    second race, a later call finding the box still up, was finding 527. Test: the unit test
+    hypr_lost_box_ends_between_looks (alive at one look, no pids at the next).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

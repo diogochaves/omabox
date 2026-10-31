@@ -49,6 +49,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A bound folder deleted and made again on the host showed empty in the box**, with every command
   succeeding. `run` now says so once, with what to do
   ([#391](https://github.com/diogochaves/omabox/issues/391)).
+- **A box whose Hyprland crashed was sometimes reported as hung**: `omabox lua` (or any call to
+  its Hyprland) said "did not answer (hung?)" when the box ended in the moment between two of its
+  looks. It now says the box went down and how
+  ([#351](https://github.com/diogochaves/omabox/issues/351)).
 
 ## 1.0.2 — 2026-10-30
 

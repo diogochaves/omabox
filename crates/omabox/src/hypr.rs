@@ -156,7 +156,9 @@ fn hypr_lost_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<Option<Vec<u8>>
             return Ok(Some(hypr_down_text(ctx)));
         }
         let Some(h) = hypr_host_pid(sys, ctx) else {
-            return Ok(None);
+            // The box can end between that look and this one, a moment after its Hyprland: gone,
+            // not hung (#351).
+            return Ok((!sys.box_alive(ctx)?).then(|| hypr_down_text(ctx)));
         };
         hp = h;
         if let Some(p) = &hp {
@@ -599,6 +601,36 @@ mod tests {
             "...one that stays: still said: {t}"
         );
         assert!((900..2000).contains(&ms), "...after 1 s ({ms} ms)");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A box that ends between hypr_lost's look at it and its look for its Hyprland (#351).
+    struct Vanishing(std::cell::Cell<bool>);
+
+    impl BoxSys for Vanishing {
+        fn box_alive(&self, _: &Ctx) -> Res<bool> {
+            Ok(self.0.replace(false))
+        }
+        fn box_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
+            Vec::new()
+        }
+    }
+
+    // #351: alive at the first look, gone (no pids) at the next: it went down, not hung.
+    #[test]
+    fn hypr_lost_box_ends_between_looks() {
+        let (ctx, d) = hctx("vanishing", b"1");
+        std::fs::write(
+            d.join("home/labwc.log"),
+            "spawned child 4194305 terminated with signal 11 (Segmentation fault)\n",
+        )
+        .unwrap();
+        let sys = Vanishing(std::cell::Cell::new(true));
+        let t = String::from_utf8_lossy(&hung_text_with(&sys, &ctx, "").unwrap()).into_owned();
+        assert!(
+            t.starts_with("box 'u' went down: its Hyprland crashed (SIGSEGV)"),
+            "went down, how: {t}"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
