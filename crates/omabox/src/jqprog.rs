@@ -272,7 +272,8 @@ pub const SETTLE_JSON_JQ: &str = r#"
        last_change: ($last | secs), change: ($ch | box), late_changes: ($late | box),
        ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
        frames: (if $frames == "" then null else $frames | tonumber end)}
-      + if $facts == "" then {} else {changes: $changes, target: $target, events_since: $evs} end"#;
+      + if $facts == "" then {} else {changes: $changes, target: $target, events_since: $evs} end
+      + if $exp == "" then {} else {expect: ($exp | fromjson)} end"#;
 /// desk_snap: the five answers as one object.
 pub const SNAP_JQ: &str = r#"select(length == 5 and (.[0] | type) == "array" and (.[1] | type) == "object"
     and (.[2] | type) == "object" and (.[4] | type) == "array")

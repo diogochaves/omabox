@@ -337,6 +337,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     sh_e(with_mods(ctx, &mods, |c| pointer_tool(c, &ext, &seq))?)?;
     mark(ctx, &t0, false, &marks);
     let json = st.json;
+    (st.expect_sels, st.expect_layer) = (sels, layer);
     code(st.end(ctx, "settle", json, b"the click was sent")?)
 }
 
@@ -488,5 +489,6 @@ pub fn scroll(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     sh_e(with_mods(ctx, &mods, |c| pointer_tool(c, &ext, &seq))?)?;
     mark(ctx, &t0, false, &marks);
     let json = st.json;
+    st.expect_sels = sels;
     code(st.end(ctx, "settle", json, b"the scroll was sent")?)
 }

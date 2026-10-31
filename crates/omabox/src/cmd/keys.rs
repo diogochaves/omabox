@@ -224,5 +224,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let t0 = epoch_us();
     sh_e(keys_send(ctx, &kb, &pass, held)?)?;
     mark(ctx, &t0, false, &lines);
+    st.expect_sels = sels;
     code(st.end(ctx, "settle", json, b"the keys were sent")?)
 }

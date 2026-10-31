@@ -11333,6 +11333,33 @@ from them.
     cmd::plugin's unit tests (linked only through a same-path mount still bound), broker_check (a
     jailed caller refused), t_up_again (the new words). On the old code `plugin` is an unknown
     command (exit 2).
+595. **The accessibility tree had no wait: agents polled `tree --find` in loops** (2026-10-31, #319).
+    `wait until -- …` runs in the box and cannot read the tree, so sessions wrote `for …; omabox tree
+    --find X; sleep 0.4` loops, background loops to catch a short-lived alert, `while omabox tree
+    --find TITLE | grep -q dialog` to time a sheet. `wait tree TEXT [--window SEL | --layer SEL]
+    [--gone] [--shot FILE]` (treewait.rs, a poll_until probe) reads the tree with omabox-tree --find
+    TEXT, its matching unchanged, every ~100 ms in the window SEL picks (none: the active one, picked
+    again each read) or on the layer: satisfied at the first read holding TEXT (one read, so a state of
+    a second is caught; the line gives the line holding it), `--gone` at two reads in a row without
+    it (as a window's gone, one read mid-rebuild is not an answer) or when the window or layer is
+    gone. A window not there yet or not on the bus yet (no tree, exit 3/5/6/7) is waited for, said at
+    the 124; no accessibility bus, a read that hung, several windows matching are said at once (1, 2).
+    The 124 says what the tree had instead: the lines holding TEXT's name (its first "quoted" part,
+    else what comes before ` [`, ` '`, ` =`), read once at the end, else omabox-tree's words.
+    `--shot FILE` (shot -o FILE, its stdout held back; refused in ai-jail as drag --shot is) is taken
+    by the probe at the yes that ends the wait, before the line, which names it. `--expect tree TEXT`
+    on keys, click, scroll and drag `--wait` (Settle::opt, so run -d does not take it): once the
+    screen is satisfied, treewait::expect reads until --timeout from the watch's start, once at
+    least, in the window the input went to (--window's, click --find's window or layer; none: the
+    active one); not held: 124, "but the tree does not hold TEXT (instead: …)", and "sent all the
+    same (the screen settled; 124 is about the tree)"; --json adds `expect` {tree, met, detail}. A
+    window closing between the probe's pick and its read is gone, not a failure: the read's refusal
+    is held back (say muted, fd 2 to /dev/null: win_lines writes there itself). Seen here: the
+    issue's own example, `--expect tree '"Dark mode" [checked]'`, is 124 after a click, since the
+    clicked box reads `[focused checked]`: substring matching takes states as printed, in order;
+    the instead line shows it at once. Tests: t_wait_tree (GTK4: held, instead, --json, a window not
+    there, --gone both ways, click --expect held and not, keys --json's expect, --shot, a closed
+    window), t_unit_wait (the refusals), treewait.rs name_and_lines.
 596. **`drag` in a browser canvas draws** (2026-10-31, #323: absolute motion with a button held was
     reported as no drag there; finding 101 had tested foot only). Chromium 155 in a box, a page whose
     800x500 `<canvas>` draws a line on `pointermove` while a `pointerdown` holds (pointer capture)

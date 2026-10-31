@@ -71,7 +71,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/until add `detail`; an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, setup, counts, checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
@@ -555,13 +555,25 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change [-g GEOM |
   --window SEL] [--ignore GEOM]...`, `window SEL [--gone | --focused]`, `layer NAMESPACE [--gone]
   [--monitor NAME]` (`omarchy-menu`, `omarchy-notifications`, ...), `job [PID] [--gone]` (a `run -d`
-  job's end), `log [PID] RE [-i]` (a line in its log), `until -- CMD` (exit 0 inside the box).
-  Options go before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
+  job's end), `log [PID] RE [-i]` (a line in its log), `tree TEXT [--window SEL | --layer SEL]
+  [--gone] [--shot FILE]`, `until -- CMD` (exit 0 inside the box). Options go before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several. `layer`'s line names the monitor of each one drawn (`at
   0,0 1920x1080 on HEADLESS-2`; a bar on every monitor is each named): which screen a popup opened
   on, without parsing `hyprctl layers`. `--monitor NAME` waits for one on that monitor (`--gone`:
   none left there, after `monitor remove` or `output drop`); `--json` has it in `detail`.
+- A label, a state, a sheet: `omabox wait tree TEXT [--window SEL]` (none: the active window) until
+  the accessibility tree holds TEXT, matched as `tree --find` matches it (any case; states as printed,
+  in order: `'"Dark mode" [focused checked]'`), read about every 100 ms: satisfied at the first read
+  holding it (a toast or a sheet that lasts a second is caught), the line giving that line. `--gone`:
+  two reads in a row without it, or its window gone. A 124 says what the tree had instead (the lines
+  holding TEXT's name, else why). `--shot FILE` takes a shot the moment it holds. No hand-rolled
+  `tree --find` loops.
+- `keys`, `click`, `scroll` and `drag` `--wait` take `--expect tree TEXT`: once the screen settled, the
+  tree must hold TEXT (in the window the input went to: `--window`'s, `click --find`'s; none: the
+  active one) by `--timeout`, else 124 with what it had instead. `omabox click --find Save --wait
+  --expect tree 'label "Saved"' && omabox keys ...` stops when the effect is not the one wanted; the
+  input was sent either way.
 - An app that redraws later, by itself (after a server sync, a timer): `omabox wait --timeout 30s
   change --window APP` (satisfied at the first change there; the window must be on screen), then
   `omabox wait still` for it to finish. Never `wait until -- false` (or `-- true`) as a sleep: the first

@@ -67,6 +67,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] [--monitor NAME]
                | until -- CMD [ARG...]
                | job [JOB] [--gone] | log [JOB] RE [-i]   a run -d job's end; a line in its log
+               | tree TEXT [--window SEL | --layer SEL] [--gone] [--shot FILE]
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
@@ -131,13 +132,14 @@ too (omabox -b NAME windows).
 --window SEL (or -w SEL): a window: active (or --active), 0x... (its address), pid:N, class:RE, title:RE, a word
 @short keys click scroll drag run
 --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--strict] [--json]
+       [--expect tree TEXT] (not run's)
        after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout;
        the line adds what changed on the desktop (windows, layers, focus), a 124 where the input went
 @short run
 -d (or --detach): the command left running in the box, its pid and log said on stderr; --replace: the same one stopped first
 @short shot
 --monitor NAME: one monitor of the box's (omabox monitor list)
-@short tree click
+@short tree click wait
 --layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N
 @short log events
 -f (or --follow): on until the box goes down
@@ -564,6 +566,12 @@ closed, a layer drawn or hidden, focus, a title, the workspace (3 at most, then 
 events --since OFFSET)"); a 124 says where the input went (the focused window, a layer holding the
 keyboard, what was under the point) and "no window, layer or focus changed" when nothing did. Since
 the input, not caused by it. --json adds changes (null: not read), target and events_since.
+`keys`, `click`, `scroll` and `drag` --wait take --expect tree TEXT (#319): once the screen settled,
+the tree holds TEXT, read as `wait tree TEXT` reads it, in the window the input went to (--window's,
+click --find's or its layer's; none: the active one) until --timeout (from the input), once at least:
+`click --find Save --wait --expect tree 'label "Saved"' && keys ...` stops at a 124 when it does not,
+the line then saying what the tree had instead; the line adds the line holding it, --json `expect`
+{tree, met, detail}. The input was sent all the same.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); --timeout at most
@@ -579,6 +587,15 @@ CMD runs in the box, where the host's paths are not (its /tmp and HOME are its o
 found there (127) or that cannot run (126) ends the wait at once, "unknown"; one that names this
 box's folder or your $TMPDIR is said before waiting. A wait that did not succeed ends with the
 last try's last lines of stderr.
+`wait tree TEXT`: until the accessibility tree holds TEXT, matched as `tree --find` matches it (any
+case, names whole; `'"Dark mode" [focused checked]'` is one line's states as they are printed, in
+their order), read about every 100 ms in the window --window SEL picks (none: the active one, picked
+again at each read) or on the layer --layer SEL (-l SEL): satisfied at the first read holding it,
+the line saying the one holding it, so a state that lasts a moment (a toast, a sheet) is caught.
+--gone: until two reads in a row do not (or the window or layer is gone). A window not there yet,
+or not on the bus yet, is waited for. A 124 says what the tree had instead: the lines holding TEXT's name (its "quoted" part, or
+what comes before its states) when there are any, else why (omabox-tree's words, "no window
+matches SEL"). --shot FILE takes a shot (as `shot -o FILE`) the moment it holds, named on the line.
 @ wait jobs
 `wait job [JOB]`: until the command of `run -d` job JOB (its pid, as `jobs` lists it; none: the latest
 `run -d`'s) has exited, satisfied with how it ended ("exited with status 0", "was killed by SIGTERM

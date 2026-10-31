@@ -275,6 +275,11 @@ pub struct Settle {
     pub masks: usize,
     /// SETTLE_LOOKED: a 124 said where the input went and that nothing moved.
     pub looked: bool,
+    /// --expect tree TEXT (#319): the text the tree holds once the screen settled, read in the window
+    /// EXPECT_SELS picks (the action's) or on the layer EXPECT_LAYER, else the active window.
+    pub expect: Vec<u8>,
+    pub expect_sels: Vec<Vec<u8>>,
+    pub expect_layer: Vec<u8>,
     snap: Option<JoinHandle<Vec<u8>>>,
     before: Vec<u8>,
     line: Vec<u8>,
@@ -337,6 +342,19 @@ impl Settle {
                 self.took = 2;
             }
             b"--strict" => self.args.push(b"--strict".to_vec()),
+            b"--expect" => {
+                let t = args.get(2).filter(|t| !t.is_empty());
+                let (Some(b"tree"), Some(t)) = (v.map(Vec::as_slice), t) else {
+                    return Err(ctx.die(
+                        "--expect takes tree TEXT (as tree --find takes it): --expect tree '\"Dark mode\" [focused checked]'",
+                    ));
+                };
+                if !self.expect.is_empty() {
+                    return Err(ctx.die("--expect once: one text is looked for"));
+                }
+                self.expect = t.clone();
+                self.took = 3;
+            }
             _ => self.took = 0,
         }
         Ok(())
@@ -345,9 +363,9 @@ impl Settle {
     /// settle_opts_check [WINDOWS]: the options go with --wait; with one --window selector, -g and
     /// --ignore are the window's coordinates; an --ignore that misses -g's region is said (#162).
     pub fn opts_check(&mut self, ctx: &Ctx, windows: usize) -> Res<()> {
-        if !self.wait && !(self.args.is_empty() && !self.json) {
+        if !self.wait && !(self.args.is_empty() && !self.json && self.expect.is_empty()) {
             return Err(ctx.die(
-                "--start, --quiet, --timeout, --strict, --ignore, -g and --json go with --wait",
+                "--start, --quiet, --timeout, --strict, --ignore, -g, --json and --expect go with --wait",
             ));
         }
         if windows != 0 {
@@ -892,6 +910,50 @@ impl Settle {
             res = b"unsatisfied".to_vec();
             msg = cat!(msg, "; the command had ended by then: not its screen");
         }
+        // --expect tree TEXT (#319): a screen that settled on something else is a 124 too; read
+        // until --timeout (from the watch's start), once at least.
+        let (mut exp, mut missed) = (Vec::new(), false);
+        if !self.expect.is_empty() {
+            let mut met: &str = "null";
+            let mut said = Vec::new();
+            if res == b"satisfied" {
+                let tmo = self
+                    .args
+                    .windows(2)
+                    .rev()
+                    .find(|a| a[0] == b"--timeout")
+                    .and_then(|a| shell::dec(&a[1]))
+                    .unwrap_or(10_000);
+                let w = crate::treewait::TreeWant {
+                    text: self.expect.clone(),
+                    sels: self.expect_sels.clone(),
+                    layer: self.expect_layer.clone(),
+                };
+                let q = quoted(&self.expect);
+                match crate::treewait::expect(ctx, &w, tmo - (mono_ms() - self.t0)) {
+                    Ok((true, l)) => {
+                        msg = cat!(msg, "; the tree holds ", q, ": ", l);
+                        (met, said) = ("true", l);
+                    }
+                    Ok((false, why)) => {
+                        res = b"unsatisfied".to_vec();
+                        msg = cat!(msg, "; but the tree does not hold ", q, " (", why, ")");
+                        (met, said, missed) = ("false", why, true);
+                    }
+                    Err(_) => {
+                        res = b"unknown".to_vec();
+                        msg = cat!(msg, "; but the tree could not be read for ", q);
+                    }
+                }
+            }
+            exp = Args::new(&["-nc"])
+                .kv("--arg", "t", &self.expect)
+                .kv("--argjson", "m", met)
+                .kv("--arg", "d", &said)
+                .arg(r#"{tree: $t, met: $m, detail: (if $d == "" then null else $d end)}"#)
+                .run(None, jq::Err::Inherit)
+                .text();
+        }
         // An action's --wait (#274): what changed on the desktop since just before the input; on a
         // 124, where the input went first. Not on unknown (the box may be hung).
         let (mut changes, mut target, mut evs) =
@@ -976,6 +1038,7 @@ impl Settle {
                 .kv("--argjson", "changes", &changes)
                 .kv("--argjson", "target", &target)
                 .kv("--argjson", "evs", &evs)
+                .kv("--arg", "exp", &exp)
                 .arg(crate::jqprog::SETTLE_JSON_JQ)
                 .run(None, jq::Err::Inherit);
             // (a write that fails is not settle_end's end: its status is the answer's)
@@ -986,7 +1049,12 @@ impl Settle {
         Ok(match res.as_slice() {
             b"satisfied" => 0,
             b"unsatisfied" => {
-                if !sent.is_empty() {
+                if !sent.is_empty() && missed {
+                    say(cat!(
+                        sent,
+                        " all the same (the screen settled; 124 is about the tree): look before sending anything again"
+                    ));
+                } else if !sent.is_empty() {
                     settle_sent(124, sent, self.looked);
                 }
                 124
@@ -998,6 +1066,15 @@ impl Settle {
                 1
             }
         })
+    }
+}
+
+/// TEXT as a line quotes it: in "double" quotes, or 'single' ones when it holds a double one.
+pub fn quoted(text: &[u8]) -> Vec<u8> {
+    if text.contains(&b'"') {
+        cat!("'", text, "'")
+    } else {
+        cat!("\"", text, "\"")
     }
 }
 

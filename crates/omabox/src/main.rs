@@ -55,6 +55,7 @@ mod shellnote;
 mod shots;
 mod sig;
 mod trap;
+mod treewait;
 mod upspec;
 mod whose;
 mod win;

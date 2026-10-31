@@ -18,6 +18,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (and who used it last, when another); `down` of a box another caller started or used in the last
   10 minutes warns that it may be another agent's (it still takes it down); and the name's next
   command says when a `down` took it and from where, not just `no box is up`.
+- **`wait tree TEXT [--window SEL | --layer SEL] [--gone] [--shot FILE]`** waits for the
+  accessibility tree to hold TEXT, matched as `tree --find` matches it: satisfied at the first read
+  holding it (a toast or a sheet that lasts a second is caught), `--gone` when two reads in a row do
+  not, `--shot FILE` a shot the moment it holds. A 124 says what the tree had instead. And
+  **`--expect tree TEXT`** on `keys`, `click`, `scroll` and `drag --wait`: once the screen settled,
+  the tree must hold TEXT, else 124, so a chain of steps stops when one's effect is not the one
+  wanted ([#319](https://github.com/diogochaves/omabox/issues/319)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

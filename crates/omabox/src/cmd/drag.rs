@@ -366,6 +366,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     );
     if st.wait {
         let json = st.json;
+        st.expect_sels = sels;
         return code(st.end(ctx, "settle", json, b"the drag was sent")?);
     }
     Ok(())

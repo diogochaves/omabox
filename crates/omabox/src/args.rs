@@ -39,7 +39,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n=",
         ),
         b"wait" => Some(
-            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused -i --monitor=",
+            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused -i --monitor= -l= --layer= --shot=",
         ),
         b"windows" | b"jobs" => Some("-b= --box= --json"),
         b"stop" => Some("-b= --box= --all"),
@@ -47,18 +47,18 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"tree" => Some("-b= --box= -w= --window= --active -l= --layer= --find= --json --all"),
         b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),
         b"keys" => Some(
-            "-b= --box= -w= --window= --active -t= -s= --pass= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+            "-b= --box= -w= --window= --active -t= -s= --pass= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
         ),
         b"keys-to-box" => Some("-b= --box="),
         b"click" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
         ),
         b"scroll" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+            "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
         ),
         b"pointer" => Some("-b= --box= -w= --window= --active --in= --steps= --glide= --mod="),
         b"drag" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g= --shot-monitor= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+            "-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g= --shot-monitor= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect=",
         ),
         b"shot" | b"screenshot" => Some(
             "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --after --json",

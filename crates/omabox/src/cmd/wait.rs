@@ -1,6 +1,7 @@
 //! `omabox wait [-b NAME] [--timeout 10s] [--json] COND` (finding 82): until the screen holds still
 //! or changes (omabox-still in the box: settle.rs), a window or layer is there or gone, or a command
-//! succeeds (polled here). One line on stdout (or --json); 0 satisfied, 124 not in time, 1 unknown.
+//! succeeds (polled here), or the accessibility tree holds a text (treewait.rs, #319). One line on
+//! stdout (or --json); 0 satisfied, 124 not in time, 1 unknown.
 
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
 use crate::boxes::{box_alive, need_box, touch};
@@ -24,8 +25,9 @@ use crate::win::{
 use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 
-/// A polled condition's one try (win_probe, layer_probe, until_probe): "yes DETAIL" or "no DETAIL";
-/// status 2 a selector never answered (a bad regex), any other failure the box not answering.
+/// A polled condition's one try (win_probe, layer_probe, until_probe, tree_probe): "yes DETAIL" or
+/// "no DETAIL"; status 2 a selector never answered (a bad regex), 3 a failure already said (exit 1),
+/// any other failure the box not answering.
 enum Probe<'a> {
     Win(&'a str, &'a [Vec<u8>]),
     Layer(&'a str, &'a [u8], &'a [u8]),
@@ -34,6 +36,7 @@ enum Probe<'a> {
     Job(&'a Job, bool),
     /// A line matching RE (grep -E, ICASE: -i) in a `run -d` job's log (#299).
     Log(&'a Job, &'a [u8], bool),
+    Tree(&'a crate::treewait::TreeProbe),
 }
 
 impl Probe<'_> {
@@ -45,6 +48,7 @@ impl Probe<'_> {
             Probe::Until(..) => "until_probe",
             Probe::Job(..) => "job_probe",
             Probe::Log(..) => "log_probe",
+            Probe::Tree(..) => "tree_probe",
         }
     }
 
@@ -187,6 +191,7 @@ impl Probe<'_> {
                     _ => (0, format!("no exit {rc}").into_bytes()),
                 }
             }
+            Probe::Tree(p) => crate::treewait::answer(ctx, p, t0, tmo),
         }
     }
 }
@@ -333,6 +338,9 @@ fn poll_until(
         if rc == 2 {
             return Err(Exit(2));
         }
+        if rc == 3 {
+            return Err(Exit(1));
+        }
         if rc != 0 {
             // A probe that could not ask a box still up: its Hyprland not answering, said so (#125).
             if box_alive(ctx)? {
@@ -437,6 +445,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut jobw, mut logw, mut icase): (Vec<u8>, Vec<Vec<u8>>, bool) =
         (Vec::new(), Vec::new(), false);
     let mut mon = Vec::new();
+    // wait tree TEXT [--layer SEL] [--shot FILE] (#319)
+    let (mut text, mut layer, mut shot): (Option<Vec<u8>>, Vec<u8>, Vec<u8>) =
+        (None, Vec::new(), Vec::new());
     let mut masks: Vec<Vec<u8>> = Vec::new();
     let mut s = Settle::default();
     let mut i = 0;
@@ -509,6 +520,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 mon = args[i + 1].clone();
                 i += 1;
             }
+            b"-l" | b"--layer" => {
+                optarg(ctx, a, v)?;
+                layer = args[i + 1].clone();
+                i += 1;
+            }
+            b"--shot" => {
+                optarg(ctx, a, v)?;
+                shot = args[i + 1].clone();
+                i += 1;
+            }
             b"--gone" => want = "gone",
             b"--focused" => want = "focused",
             b"-i" => icase = true,
@@ -537,6 +558,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     jobw = a.clone();
                 } else if cond == b"log" && logw.len() < 2 {
                     logw.push(a.clone());
+                } else if cond == b"tree" && text.is_none() {
+                    text = Some(a.clone());
                 } else {
                     return Err(unexpected(ctx, cat!("wait ", cond), a, ""));
                 }
@@ -553,11 +576,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ctx.die("wait: --monitor goes with layer (wait layer NAMESPACE --monitor NAME)")
         );
     }
+    if (!layer.is_empty() || !shot.is_empty()) && cond != b"tree" && !cond.is_empty() {
+        return Err(ctx.die(
+            "wait: --layer and --shot go with tree (wait layer takes its NAMESPACE as a word)",
+        ));
+    }
     let plain = sels.is_empty() && none && !strict && masks.is_empty();
     match cond.as_slice() {
         b"still" | b"change" => {
             if !want.is_empty() {
-                return Err(ctx.die("wait: --gone and --focused go with window, layer or job"));
+                return Err(ctx.die("wait: --gone and --focused go with window, layer or job (--gone with tree too)"));
             }
             if !geom.is_empty() && !sels.is_empty() {
                 return Err(ctx.die("wait: -g or --window, not both"));
@@ -631,6 +659,30 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 )));
             }
         }
+        b"tree" => {
+            if text.as_deref().is_none_or(<[u8]>::is_empty) {
+                return Err(ctx.die(
+                    "wait tree: what text? as tree --find takes it: wait tree '\"Save\"', wait tree 'Dark mode' --window SEL",
+                ));
+            }
+            if want == "focused" {
+                return Err(ctx.die("wait tree: --gone or nothing"));
+            }
+            if !layer.is_empty() && !sels.is_empty() {
+                return Err(ctx.die("wait tree: --window or --layer, not both"));
+            }
+            if !(none && !strict && masks.is_empty()) {
+                return Err(ctx.die(
+                    "wait tree: -g, --quiet, --strict and --ignore go with still and change",
+                ));
+            }
+            if !shot.is_empty() && crate::jail::in_jail() {
+                ctx.parsed();
+                return Err(ctx.die(
+                    "wait tree: --shot is not for an agent inside ai-jail yet: omabox shot after the wait",
+                ));
+            }
+        }
         b"until" => {
             if cmd.is_empty() {
                 return Err(ctx.die("wait until: nothing to run (omabox wait until -- CMD ...)"));
@@ -641,7 +693,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         b"" => {
             return Err(ctx.die(
-                "wait: for what? still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE or until -- CMD (omabox help)",
+                "wait: for what? still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE, tree TEXT or until -- CMD (omabox help)",
             ));
         }
         _ => {
@@ -650,8 +702,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "wait",
                 "condition",
                 &cond,
-                "(still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE or until -- CMD)",
-                &["still", "change", "window", "layer", "job", "log", "until"],
+                "(still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE, tree TEXT or until -- CMD)",
+                &[
+                    "still", "change", "window", "layer", "job", "log", "tree", "until",
+                ],
             ));
         }
     }
@@ -738,6 +792,39 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 );
                 poll_until(ctx, &yes, &no, 1, tmo, json, Probe::Log(&job, &re, icase))
             }
+        }
+        b"tree" => {
+            let text = text.unwrap_or_default();
+            let place = if !layer.is_empty() {
+                cat!(" on layer ", layer)
+            } else if !sels.is_empty() {
+                cat!(" in window ", joined(&sels))
+            } else {
+                Vec::new()
+            };
+            let t = cat!("tree ", crate::settle::quoted(&text), place);
+            let gone = want == "gone";
+            let (yes, no) = if gone {
+                (cat!(t, " gone"), cat!(t, " still there"))
+            } else {
+                (t.clone(), cat!("no ", t))
+            };
+            let shot = if shot.is_empty() {
+                Vec::new()
+            } else {
+                vec![b"-b".to_vec(), ctx.name.clone(), b"-o".to_vec(), shot]
+            };
+            // (gone: two reads in a row without it, as a window's; there: the first read with it,
+            // for a state that lasts a moment)
+            let need = if gone { 2 } else { 1 };
+            let p = crate::treewait::TreeProbe {
+                want: crate::treewait::TreeWant { text, sels, layer },
+                gone,
+                shot,
+                need,
+                streak: std::cell::Cell::new(0),
+            };
+            poll_until(ctx, &yes, &no, need, tmo, json, Probe::Tree(&p))
         }
         b"until" => {
             if let Some(n) = host_path_note(ctx, &cmd) {

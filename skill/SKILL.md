@@ -65,7 +65,7 @@ omabox shot --window app                  # one window's own pixels, even covere
 omabox click --window app 40 12           # window coordinates, as in its shot; or --find NAME
 omabox keys --window app --wait -t hi     # focus it, type, wait until settled
 omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
-omabox wait window app                    # or --gone; wait layer NS; wait until -- CMD
+omabox wait window app                    # or --gone; wait layer NS; wait tree TEXT; wait until -- CMD
 omabox wait change --window app           # a later redraw by itself; then wait still
 omabox run -- busctl --user list          # any command in the box (its exit code)
 omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
