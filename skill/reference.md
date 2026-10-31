@@ -71,7 +71,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, report_scaled, setup, only, counts` (`skipped`: not named by `--only`), `checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
@@ -587,8 +587,10 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   [--quiet 300ms | --like SHOT] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change
   [--since SHOT] [-g GEOM | --window SEL] [--ignore GEOM]...`, `window SEL [--gone | --focused]`,
   `layer NAMESPACE [--gone] [--monitor NAME]` (`omarchy-menu`, `omarchy-notifications`, ...), `job
-  [PID] [--gone]` (a `run -d` job's end), `log [PID] RE [-i]` (a line in its log), `tree TEXT
-  [--window SEL | --layer SEL] [--gone] [--shot FILE]`, `until -- CMD` (exit 0 inside the box).
+  [PID] [--gone]` (a `run -d` job's end), `log [PID] RE [-i]` (a line in its log), `log LOG RE [-i]
+  [--since OFFSET]` (a new line in a box log: shell, hyprland, ...), `tree TEXT [--window SEL |
+  --layer SEL] [--gone] [--shot FILE]`, `until -- CMD` (exit 0 inside the box); `wait for DURATION`
+  is a fixed time.
   Options go before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several. `layer`'s line names the monitor of each one drawn (`at
@@ -620,6 +622,17 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   (a panel closed, a theme back). SHOT: a full-size shot of the screen, a part of it, or a whole
   window (that window is watched); the pointer and a caret alone do not count, a clock does
   (`--ignore` it). Not for an agent inside ai-jail yet.
+- A line in a box log: `omabox wait log shell 'RE'` (a plugin's line, a QML warning), `wait log
+  hyprland '\[Lua\] ready'`, any of `log`'s logs by name (a `run -d` job's: `wait log [PID] RE`,
+  from its first line); `-i` for case, RE as `log --grep` takes it (grep -E; `--grep RE` works too).
+  Only a line written after the wait began counts, printed on the `satisfied:` line; a 124 says when
+  one was there before (`--since 0` counts the whole log: after `restart-shell`, which begins the
+  shell's anew). `--json` has `offset`, where the line found ends: a next `wait log shell RE --since
+  OFFSET` takes the lines after it, so two lines in a row are never missed. A log begun anew during
+  the wait is read from its start (said). Hyprland's lines come from its rolling log (its file is
+  written 8 KiB late): no `--since` there.
+- A time that really is fixed (a timer under test, a debounce of 2 s): `omabox wait for 2s`, where a
+  foreground `sleep` is blocked. Its line says it was a fixed time; not for letting an app settle.
 - Time that is part of a video is the only time you let pass, and never with a sleep: `omabox record
   -o cycle.mp4 --for 5s` records the screen for 5 s with no action (a panel cycling on a timer: no
   dummy action, the pointer left where it is); in a take, `omabox record hold 2s` between `record

@@ -69,6 +69,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                | until -- CMD [ARG...]
                | job [JOB] [--gone] | log [JOB] RE [-i]   a run -d job's end; a line in its log
                | tree TEXT [--window SEL | --layer SEL] [--gone] [--shot FILE]
+               | log LOG (RE | --grep RE) [-i] [--since OFFSET]   a new line in a box log: shell, hyprland, ...
+  omabox wait [-b NAME] [--json] for DURATION            a fixed time, said as one (no box needed)
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
@@ -569,7 +571,8 @@ scaled or cropped one says so, for `click --in`). --wait ignores the cursor alon
 `wait still`: nothing on screen changed for --quiet; a caret blinking in place (4 px thin, 40 long at
 most) and the cursor do not count, and are said (--strict counts them). `wait change`: the first
 change there, for an app that redraws later, by itself (a sync, a timer): then `wait still`; never
-`wait until -- false` as a sleep. `wait change --since SHOT`: changed since that shot, at once if it
+`wait until -- false` (nor `-- true`) as a sleep: `wait log` for a line, `wait for 2s` for a
+time that really is fixed. `wait change --since SHOT`: changed since that shot, at once if it
 already differs (a redraw done before the wait started: after an edit or an IPC call), else the
 first change; `wait still --like SHOT`: until it looks like SHOT again (a new frame every 200 ms).
 SHOT is a full-size shot of this box: the screen's (-g: a part of it), a crop of it, or a whole
@@ -628,6 +631,16 @@ it forked: an app a launcher left). `wait log [JOB] RE [-i]`: until a line of th
 `log run` has it, every line from its first: one there already counts) matches RE (grep -E; -i:
 either case), satisfied with that line; a job that ended with no such line is unknown (exit 1), as
 nothing more will come. Each tried every 100 ms. Never a host `pgrep` or a loop over the log file.
+`wait log LOG RE [-i]` (LOG a box log, as `log` names them: shell, hyprland, apps, journal, ...;
+RE also as --grep RE): until LOG gets a line RE matches written after the wait began, printed with
+it (a plugin's line in the shell log). A box log has lines from before: they do not count, and a 124
+says one that was there (`--since 0` counts the whole log). --since OFFSET reads from that byte;
+--json's offset is where the line found ends, for the next wait's --since. A log begun anew
+meanwhile (restart-shell starts the shell's) is read from its start, said. Hyprland's new lines come
+from `hyprctl rollinglog` (its file is written 8 KiB late), every 250 ms: no --since there.
+`wait for DURATION`: that long, then "satisfied: waited ..., a fixed time": for a time that is the
+point (a timer under test), where a foreground sleep is blocked. Not to let an app settle: wait for
+what it does (still, change, window, job, log, until).
 @ up run
 $OMABOX_READY_TIMEOUT: how long `up` waits for Hyprland and the shell (default 30s).
 @ reload

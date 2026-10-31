@@ -134,7 +134,7 @@ pub fn with_rolling(file: &[u8], roll: &[u8]) -> (Vec<u8>, Rolled) {
 }
 
 /// `hyprctl rollinglog` in a live box, within 2 s (empty when it does not answer: the file alone).
-fn rolling(ctx: &Ctx) -> Vec<u8> {
+pub fn rolling(ctx: &Ctx) -> Vec<u8> {
     let argv: Vec<Vec<u8>> = ["timeout", "2", "hyprctl", "rollinglog"]
         .iter()
         .map(|w| w.as_bytes().to_vec())
@@ -152,6 +152,14 @@ fn grep_cmd(re: &[u8], icase: bool) -> Command {
     }
     c.arg("--").arg(std::ffi::OsStr::from_bytes(re));
     c
+}
+
+/// Whether grep -E takes RE (its status 2 is a bad expression): `log --grep`'s and `wait log`'s.
+pub fn grep_ok(re: &[u8], icase: bool) -> bool {
+    let mut c = grep_cmd(re, icase);
+    // (grep --line-buffered is no different here: only its status 2 is read)
+    let st = c.stdin(Stdio::null()).stdout(Stdio::null()).status();
+    !st.as_ref().map_or(true, |s| s.code() == Some(2))
 }
 
 /// awk's `{ print }`: every line ending in a newline.
@@ -274,16 +282,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         i += 1;
     }
-    if !rd.re.is_empty() {
-        let mut c = grep_cmd(&rd.re, rd.icase);
-        // (grep --line-buffered is no different here: only its status 2 is read)
-        let st = c.stdin(Stdio::null()).stdout(Stdio::inherit()).status();
-        if st.as_ref().map_or(true, |s| s.code() == Some(2)) {
-            return Err(ctx.die(cat!(
-                "log: --grep takes a regular expression (grep -E), got ",
-                rd.re
-            )));
-        }
+    if !rd.re.is_empty() && !grep_ok(&rd.re, rd.icase) {
+        return Err(ctx.die(cat!(
+            "log: --grep takes a regular expression (grep -E), got ",
+            rd.re
+        )));
     }
     let mut all: Vec<&str> = LOG_NAMES.to_vec();
     all.push("all");

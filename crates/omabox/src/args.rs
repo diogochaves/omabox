@@ -39,7 +39,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n=",
         ),
         b"wait" => Some(
-            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused -i --monitor= -l= --layer= --shot= --since= --like=",
+            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused -i --monitor= -l= --layer= --shot= --since= --like= --grep=",
         ),
         b"windows" | b"jobs" => Some("-b= --box= --json"),
         b"stop" => Some("-b= --box= --all"),

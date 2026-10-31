@@ -1,11 +1,13 @@
 //! `omabox wait [-b NAME] [--timeout 10s] [--json] COND` (finding 82): until the screen holds still
-//! or changes (omabox-still in the box: settle.rs), a window or layer is there or gone, or a command
-//! succeeds (polled here), or the accessibility tree holds a text (treewait.rs, #319). One line on
-//! stdout (or --json); 0 satisfied, 124 not in time, 1 unknown.
+//! or changes (omabox-still in the box: settle.rs), a window or layer is there or gone, a command
+//! succeeds (polled here), a run -d job ends or logs a line (#299), a box log gets a new line
+//! (wait_log.rs, #330), or the accessibility tree holds a text (treewait.rs, #319); `wait for` is a
+//! fixed time, said as one. One line on stdout (or --json); 0 satisfied, 124 not in time, 1 unknown.
 
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
 use crate::boxes::{box_alive, need_box, touch};
 use crate::cat;
+use crate::cmd::wait_log::{LogWait, for_wait, log_wait};
 use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers_in, hypr_json};
@@ -450,6 +452,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // wait tree TEXT [--layer SEL] [--shot FILE] (#319)
     let (mut text, mut layer, mut shot): (Option<Vec<u8>>, Vec<u8>, Vec<u8>) =
         (None, Vec::new(), Vec::new());
+    // a box log's wait and a fixed one (#330): --grep RE (log's way of giving RE), --since, DURATION
+    let (mut grep, mut since, mut tmo_set, mut dur): (Option<Vec<u8>>, Option<i64>, bool, Vec<u8>) =
+        (None, None, false, Vec::new());
     let mut masks: Vec<Vec<u8>> = Vec::new();
     // --since SHOT (change) or --like SHOT (still): the screen against an earlier shot (#344).
     let (mut base, mut base_opt): (Vec<u8>, &str) = (Vec::new(), "");
@@ -484,6 +489,25 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     )));
                 }
                 tmo = ms;
+                tmo_set = true;
+                i += 1;
+            }
+            // `--grep -i RE` as grep users type it, as log takes it.
+            b"--grep" => {
+                optarg(ctx, a, v)?;
+                if args[i + 1] == b"-i" {
+                    icase = true;
+                    i += 1;
+                    optarg(ctx, &args[i], args.get(i + 1))?;
+                }
+                let r = &args[i + 1];
+                if r.starts_with(b"-") {
+                    return Err(ctx.die(cat!(
+                        "wait: --grep takes RE (-i goes before or after it; an RE starting with - as [-]...), got ",
+                        r
+                    )));
+                }
+                grep = Some(r.clone());
                 i += 1;
             }
             b"--quiet" => {
@@ -571,6 +595,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     logw.push(a.clone());
                 } else if cond == b"tree" && text.is_none() {
                     text = Some(a.clone());
+                } else if cond == b"for" && dur.is_empty() {
+                    dur = a.clone();
                 } else {
                     return Err(unexpected(ctx, cat!("wait ", cond), a, ""));
                 }
@@ -592,6 +618,22 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "wait: --layer and --shot go with tree (wait layer takes its NAMESPACE as a word)",
         ));
     }
+    // --since is a SHOT for change (#344) and a byte offset into the log for log (#330).
+    if cond == b"log" && base_opt == "--since" {
+        if !crate::shell::re_match("^[0-9]{1,15}$", &base) {
+            return Err(ctx.die(cat!(
+                "wait log: --since takes a byte offset into the log (0: its start; --json's offset: where the line waited for ends), got ",
+                base
+            )));
+        }
+        since = dec(&base);
+        (base, base_opt) = (Vec::new(), "");
+    }
+    if cond != b"log" && grep.is_some() {
+        return Err(ctx.die("wait: --grep goes with log"));
+    }
+    // wait log's source (#330): none, a job's pid or `run` (a run -d job's log, #299), or a box log.
+    let mut boxlog: Option<Vec<u8>> = None;
     let plain = sels.is_empty() && none && !strict && masks.is_empty();
     match cond.as_slice() {
         b"still" | b"change" => {
@@ -641,18 +683,45 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         b"log" => {
             if !want.is_empty() || !plain {
-                return Err(ctx.die("wait log: only -i"));
+                return Err(ctx.die("wait log: only -i (and --since OFFSET for a box log)"));
+            }
+            if let Some(g) = grep.take() {
+                if logw.len() == 2 {
+                    return Err(ctx.die("wait log: RE once: --grep RE or a word, not both"));
+                }
+                logw.push(g);
             }
             if logw.is_empty() {
                 return Err(ctx.die(
-                    "wait log: for which line? a regular expression (grep -E): wait log [JOB] RE",
+                    "wait log: for which line? a regular expression (grep -E): wait log [JOB | LOG] RE",
                 ));
             }
+            if logw.len() == 2 && logw[0] == b"run" {
+                logw.remove(0);
+            }
             if logw.len() == 2 && !crate::shell::is_num(&logw[0]) {
-                return Err(ctx.die(cat!(
-                    "wait log: JOB is a job's pid (omabox jobs), got ",
-                    logw[0]
-                )));
+                let names = crate::logs::LOG_NAMES;
+                if !names.iter().any(|n| n.as_bytes() == logw[0].as_slice()) {
+                    return Err(unknown_word(
+                        ctx,
+                        "wait log",
+                        "log",
+                        &logw[0],
+                        "(JOB is a job's pid, omabox jobs; LOG a box log: shell, hyprland, apps, journal, ...: omabox help log)",
+                        &names,
+                    ));
+                }
+                boxlog = Some(logw.remove(0));
+            }
+            if since.is_some() && boxlog.is_none() {
+                return Err(ctx.die(
+                    "wait log: --since goes with a box log (wait log LOG RE --since OFFSET); a job's log is read from its first line",
+                ));
+            }
+            if boxlog.as_deref() == Some(b"hyprland") && since.is_some() {
+                return Err(ctx.die(
+                    "wait log hyprland: no --since (its new lines come from its rolling log: Hyprland writes its file 8 KiB late)",
+                ));
             }
             let re = logw.last().cloned().unwrap_or_default();
             let st = crate::sig::command("grep")
@@ -702,9 +771,20 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 return Err(ctx.die("wait until: --ignore goes with still and change"));
             }
         }
+        b"for" => {
+            if dur.is_empty() {
+                return Err(ctx.die("wait for: how long? a duration: 500ms, 2s, 1m"));
+            }
+            if tmo_set {
+                return Err(ctx.die("wait for: DURATION is the wait (no --timeout)"));
+            }
+            if !(plain && want.is_empty()) {
+                return Err(ctx.die("wait for: only DURATION (and --json)"));
+            }
+        }
         b"" => {
             return Err(ctx.die(
-                "wait: for what? still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE, tree TEXT or until -- CMD (omabox help)",
+                "wait: for what? still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION (omabox help)",
             ));
         }
         _ => {
@@ -713,9 +793,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "wait",
                 "condition",
                 &cond,
-                "(still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB] RE, tree TEXT or until -- CMD)",
+                "(still, change, window SEL, layer NAMESPACE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION)",
                 &[
-                    "still", "change", "window", "layer", "job", "log", "tree", "until",
+                    "still", "change", "window", "layer", "job", "log", "tree", "until", "for",
                 ],
             ));
         }
@@ -766,9 +846,37 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             )));
         }
     }
+    let for_ms = if cond == b"for" {
+        let Some(ms) = ms_duration(&dur) else {
+            return Err(ctx.die(cat!(
+                "wait for: DURATION is a duration: 500ms, 2s, 1m (got ",
+                dur,
+                ")"
+            )));
+        };
+        if ms > WAIT_MAX_MS {
+            return Err(ctx.die(cat!("wait for: at most 10m (got ", dur, ")")));
+        }
+        ms
+    } else {
+        0
+    };
     select_box(ctx, &name)?;
+    // (a fixed time needs no box: the one selected counts it as use when it is up)
+    if cond == b"for" {
+        return for_wait(ctx, for_ms, json);
+    }
     need_box(ctx)?;
     shell_note(ctx)?;
+    if let Some(log) = boxlog {
+        let w = LogWait {
+            log,
+            re: logw.pop().unwrap_or_default(),
+            icase,
+            since,
+        };
+        return log_wait(ctx, &w, tmo, json);
+    }
     match cond.as_slice() {
         b"window" => {
             let w = cat!("window ", joined(&sels));

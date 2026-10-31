@@ -11153,6 +11153,34 @@ from them.
     state dir and the same cache: the first box's HOME kept, read by the box; a gone box's HOME and an
     unused older one taken; the same name refused; an older box's HOME, its record removed, kept while
     the box runs), t_unit_rm_tree's record cases, homeuse.rs's `a_bound_home_is_used`.
+585. **No wait for a log line, nor for a fixed time: `wait until` was used as a sleep** (2026-10-31,
+    #330). Agents whose harness blocks a foreground `sleep` wrote `wait until --timeout 3 -- false`
+    (a whole timeout, 124, to /dev/null) as a tick before reading `log shell --grep`, and `wait
+    until -- sh -c '...; true'` meant as a wait for a plugin's line, which returned at once. #299
+    (finding 587) made `wait log [JOB] RE [-i]` for a `run -d` job's log; a box log is its source
+    word in JOB's place: `wait log LOG RE [-i] [--since OFFSET]` (LOG one of `log`'s names; `run` is
+    the job form; RE also as `--grep RE`, as `log` takes it; no source stays the latest job's, so
+    the issue's default of shell was not taken). It is satisfied by a line RE matches (grep -E -a,
+    as `log --grep`) that was written after the wait began, printed on its line (a job's log counts
+    from its first line: it began with the job; a box log has lines from before). A file log is read
+    in the box (`sh -c` with `stat -Lc %s` and `tail -c +N`, a regular file only) every 100 ms from
+    the byte the wait began at; a line begun before and ended during the wait is not new; a file
+    shorter than that byte was begun anew (shell.sh empties shell.log at every start: restart-shell)
+    and is read from its start, said. A 124 says the line that was there before, if one was, and
+    `--since 0` (the whole log). `--json` has `offset`, the byte past the line found, so `wait log
+    LOG RE --since OFFSET` takes the next line of two written at once. Hyprland's file lags by up to
+    8 KiB (finding 566), so `wait log hyprland` diffs each `hyprctl rollinglog` against the last
+    (log.rs with_rolling's overlap) every 250 ms (each read logs a "Hyprctl: new connection" line of
+    its own); no overlap (over 4 KiB between two reads) counts it all and says a line may be missed;
+    no `--since` there. Not `hyprctl rollinglog -f`: it prints the buffer first and then the new
+    lines without their level prefix (`[Lua] x`, not `DEBUG ]: [Lua] x`), with Hyprland's own
+    "RollingLogFollow" lines between (measured in a box), so neither where the old ones end nor an
+    RE written for `log` holds. `wait for DURATION` (at most 10m, no --timeout, no box needed;
+    counts as use of an up one) says "waited Ns, a fixed time (wait log, change, window or until
+    waits for the thing itself)". Tests: the unit tests first_lines and rolling_news; t_unit_wait
+    (the refusals, `wait for` without a box); t_wait_log (a new line, one there before: 124 and the
+    hint, `--since 0`, the offset chain, a partial line, a log begun anew, a Lua print through the
+    rolling log, `wait for`, the box going down: unknown, 1).
 587. **A `run -d` job could be stopped or waited for only by a host pgrep** (2026-10-31, #299). Five
     agents needed to stop, swap or wait for one job and found no command: one ran a host `pgrep -f`
     loop, telling the box's process from the same program on the desktop by `/proc/PID/environ`, and

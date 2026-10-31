@@ -65,7 +65,7 @@ omabox shot --window app                  # one window's own pixels, even covere
 omabox click --window app 40 12           # window coordinates, as in its shot; or --find NAME
 omabox keys --window app --wait -t hi     # focus it, type, wait until settled
 omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
-omabox wait window app                    # or --gone; wait layer NS; wait tree TEXT; wait until -- CMD
+omabox wait window app                    # or --gone; layer NS; tree TEXT; until -- CMD; log shell RE
 omabox wait change --window app           # a later redraw by itself; then wait still
 omabox run -- busctl --user list          # any command in the box (its exit code)
 omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
@@ -86,9 +86,9 @@ omabox down                               # when done
    `omabox hyprctl dispatch`), not by keys and clicks, unless the gesture is under test. **Stop when
    it shows the goal.**
 
-No `sleep` (nor `wait until -- false`): `--wait`, `omabox wait`, `wait change`; in a video `record
-hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124 names it,
-`--ignore "X,Y WxH"`. ref: Waiting, in detail.
+No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;
+video `record hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124
+names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
 
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your own arithmetic; off a whole screen or a big

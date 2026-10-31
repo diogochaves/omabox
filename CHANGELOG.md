@@ -52,6 +52,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   bounds, one scrolled out of its container and a disabled one are refused, saying which, and nothing
   is clicked. `--window SEL` (none: the active window) or `--layer SEL` for the shell's layers
   ([#318](https://github.com/diogochaves/omabox/issues/318)).
+- **`wait log LOG RE [-i]`** waits for a new line in a box log, by `log`'s names (`shell`,
+  `hyprland`, `apps`, `journal`, ...), as `wait log [JOB] RE` does for a `run -d` job's: a plugin's
+  line, Hyprland's own (from its rolling log, since its file is written late); RE also as `--grep
+  RE`. A line already there does not count, and a 124 says when one was;
+  `--since OFFSET` reads from a byte (`--since 0`: the whole log), and `--json`'s `offset` is where
+  the line found ends, for the next wait. A log begun anew meanwhile (restart-shell's) is read from
+  its start. **`wait for DURATION`** is a fixed wait that says it is one, for agents whose harness
+  blocks `sleep`: no more `wait until -- false` as a sleep
+  ([#330](https://github.com/diogochaves/omabox/issues/330)).
 - **`tree` names an unnamed control after its label** (LABELLED_BY), so `--find Email` finds the
   entry its label names, and reads a node once when it sits under two parents (Qt WebEngine)
   ([#318](https://github.com/diogochaves/omabox/issues/318)).
