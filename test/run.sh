@@ -1542,7 +1542,11 @@ t_unit_home_secrets() {
 t_unit_down_jail_race() {
   local r=$TMP/djr j='{"id":"j1","roots":[]}' p l="" out i
   rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/cache" "$r/norepo"
-  jx() { (cd "$r/norepo" && env -u OMABOX XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" "$@"); }
+  # The ups below must get as far as the name's lock: on a GPU other than NVIDIA's when there is one,
+  # as a headless box on NVIDIA with no aquamarine fix is refused before it (an install with no build
+  # of its own, #381).
+  local rn=(); [ -z "$(gpu_node other)" ] || rn=(OMABOX_RENDER_NODE="$(gpu_node other)")
+  jx() { (cd "$r/norepo" && env -u OMABOX XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" "${rn[@]}" "$@"); }
   # hold NAME: the name's lock taken, as an up holds it, until $r/release-NAME exists.
   hold() {
     rm -f "$r/held-$1" "$r/release-$1"
@@ -1557,6 +1561,9 @@ t_unit_down_jail_race() {
   touch "$r/release-ub"; wait "$p"
   check_eq "a jailed down that waited on the user's up leaves the user's box" "user" "$(jq -r .created "$r/rt/omabox/ub/box.json" 2>&1)"
   check_match "...said: not this jail's" "box 'ub' is not this jail's" "$(cat "$r/out")"
+  if [ ${#rn[@]} = 0 ] && aq_unfixed "$CLI"; then
+    skip "a jailed up and the user's, past the name's lock" "only NVIDIA's render node here, and no aquamarine fix: up is refused before the lock"; return
+  fi
   # A jailed up of the name, while the user's up makes a box that comes up (a stand-in PID 1).
   local u; u=$( (unshare -Urpf --mount-proc sleep 300 >/dev/null 2>&1 & echo $!) )
   for i in $(seq 100); do l=$(pgrep -P "$u") && [ "$(readlink "/proc/$l/ns/pid" 2>/dev/null)" != "$(readlink /proc/self/ns/pid)" ] && break; sleep 0.05; done
@@ -6002,7 +6009,9 @@ t_unit_which() {
   check_eq "which: a host shell is not in a box, exit 1" "not in a box 1" "$out $rc"
   out=$(ob which 1 2>/dev/null); rc=$?
   check_eq "...nor another user's process (pid 1, root's)" "not in a box 1" "$out $rc"
-  check_match "...said whose it is" "process 1 is root's" "$(ob which 1 2>&1 >/dev/null)"
+  # (whose as this namespace sees it: root's, or nobody's in --installed's user namespace, which maps
+  # only the user's uid: #381)
+  check_match "...said whose it is" "process 1 is $(stat -c %U /proc/1)'s" "$(ob which 1 2>&1 >/dev/null)"
   sh -c 'exit 0' & local gone=$!; wait "$gone"
   out=$(ob which "$gone" 2>&1); rc=$?
   check_match "...a pid that is gone: said, exit 2" "no process $gone .* 2\$" "$out $rc"
@@ -13774,7 +13783,9 @@ t_unit_guard_settings() {
   check_match "...the hooks read from what guard on wrote" "^if .*omabox-guard.*# >>> omabox guard.*# <<< omabox guard$" "$(printf %s "${gh[*]}" | tr '\n' ' ' | sed 's/ $//')"
   check_eq "share/guard/hook-version is the hash of what guard on writes (changed the hook? write [$stamps] there)" \
     "$stamps" "$(cat "$ROOT/share/guard/hook-version")"
-  cp "$ROOT/share/guard/hook-version" "$co/share/guard/"
+  # (writable, as the stamps below are written over it: --installed's tree is read-only, and cp kept
+  # its 444, so the "outdated" cases read the real stamps, #381)
+  install -m 644 "$ROOT/share/guard/hook-version" "$co/share/guard/"
   mapfile -d '' -t gh < <(gh_hooks)
   hook=${gh[0]%$'\n'} chook=${gh[1]%$'\n'}
   check_eq "the hooks carry the stamps" 2 "$(grep -cF -e "= '${stamps% *}' ]" -e "= '${stamps#* }' ]" <<<"$hook
@@ -17710,7 +17721,7 @@ box_procs() {
   mine=" $$ $(descendants $$ | xargs) "
   for p in /proc/[0-9]*; do
     [[ $mine != *" ${p#/proc/} "* ]] || continue
-    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+    c=$(tr '\0' ' ' 2>/dev/null < "$p/cmdline") 2>/dev/null || continue
     e=$(tr '\0' '\n' 2>/dev/null < "$p/environ") 2>/dev/null || e=""
     if [[ $c == *"/omabox/$1"* || $c == *" _reap $1"* ]] || grep -qE "^OMABOX_(BOX|NAME)=$1" <<<"$e"; then
       echo "${p#/proc/} ${c:0:200}"
