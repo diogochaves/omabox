@@ -514,6 +514,8 @@ impl Settle {
                     .arg("{window: null, changes: null, why: $why}")
                     .run(None, jq::Err::Inherit)
                     .text();
+                // (why may be the box's helper's words: plain, S7)
+                let why = crate::term::plain(&why);
                 (cat!("no tree to compare (", why, ")"), Vec::new(), js)
             }
             Ok((win, b, n)) => {

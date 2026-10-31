@@ -105,7 +105,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !r.ok() {
         return Err(Exit(1));
     }
-    out(&r.out)
+    // (its monitors' and workspaces' names are the box's Hyprland's: plain, S7)
+    out(crate::term::plain_cap(&r.out, 64 << 10))
 }
 
 /// DOCK_JQ's object for the box now.

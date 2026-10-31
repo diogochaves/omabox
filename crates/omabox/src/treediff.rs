@@ -320,7 +320,8 @@ pub fn shown(lines: &[String]) -> Vec<u8> {
     let mut out = String::new();
     for l in lines.iter().take(CAP) {
         out.push_str("  ");
-        out.push_str(l);
+        // (an app's names and text are the box's: plain on the terminal, S7)
+        out.push_str(&crate::term::plain_str(l));
         out.push('\n');
     }
     if lines.len() > CAP {
@@ -335,6 +336,16 @@ mod tests {
 
     fn tree(js: &str) -> Vec<Node> {
         nodes(js.as_bytes()).expect("a tree")
+    }
+
+    // What an app names its nodes is the box's: said plain on the terminal (term::plain, S7).
+    #[test]
+    fn shown_keeps_an_apps_escapes_off_the_terminal() {
+        let got = shown(&["label \"\u{1b}[31mRed\u{7}\" \u{2192} \"ok\"".to_string()]);
+        assert_eq!(
+            String::from_utf8(got).unwrap(),
+            "  label \"?[31mRed?\" \u{2192} \"ok\"\n"
+        );
     }
 
     fn lines(a: &str, b: &str, secret: bool) -> Vec<String> {

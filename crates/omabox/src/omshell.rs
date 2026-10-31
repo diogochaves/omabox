@@ -86,13 +86,19 @@ pub fn ipc(ctx: &mut Ctx, words: &[&[u8]]) -> Result<Vec<u8>, Vec<u8>> {
         )
     };
     drop(wr);
-    let said = strip_nl(&reader.join().unwrap_or_default());
+    ipc_answer(rc.ok(), &reader.join().unwrap_or_default())
+}
+
+/// What ipc makes of omarchy-shell's status (None: the box went down) and what it said, plain: the
+/// box's shell (or whatever answers in its place) says it, and it reaches the terminal (S7).
+fn ipc_answer(rc: Option<i32>, said: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+    let said = crate::term::plain(&strip_nl(said));
     match rc {
-        Ok(0) => Ok(said),
-        Ok(124) => Err(b"its shell did not answer in 5 s".to_vec()),
-        Ok(_) if said.is_empty() => Err(b"its shell did not answer".to_vec()),
-        Ok(_) => Err(said),
-        Err(_) => Err(b"the box went down".to_vec()),
+        Some(0) => Ok(said),
+        Some(124) => Err(b"its shell did not answer in 5 s".to_vec()),
+        Some(_) if said.is_empty() => Err(b"its shell did not answer".to_vec()),
+        Some(_) => Err(said),
+        None => Err(b"the box went down".to_vec()),
     }
 }
 
@@ -331,6 +337,21 @@ pub fn input_layers(ctx: &Ctx) -> Res<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // What the box's shell says is the box's: plain on the terminal, answer or refusal (S7).
+    #[test]
+    fn ipc_answer_is_plain() {
+        assert_eq!(ipc_answer(Some(0), b"on\n"), Ok(b"on".to_vec()));
+        assert_eq!(
+            ipc_answer(Some(0), b"\x1b]0;x\x07on"),
+            Ok(b"?]0;x?on".to_vec())
+        );
+        assert_eq!(
+            ipc_answer(Some(1), b"no \x1b[2Jway"),
+            Err(b"no ?[2Jway".to_vec())
+        );
+        assert_eq!(ipc_answer(None, b""), Err(b"the box went down".to_vec()));
+    }
 
     #[test]
     fn hidden_dock_dropped_from_its_monitor_only() {
