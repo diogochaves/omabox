@@ -193,10 +193,20 @@ pub fn pid_self() -> Vec<u8> {
     std::process::id().to_string().into_bytes()
 }
 
+/// Who this up is, as a down that came while it was starting is told by: its pid and start. A
+/// broker's is the jailed caller's (#404, finding 579): its call began before the broker made this
+/// process, and a user's down between the two came while it was starting.
+fn up_origin() -> (Vec<u8>, Vec<u8>) {
+    match crate::broker_side::caller() {
+        Some((pid, start)) => (pid.clone(), start.clone()),
+        None => (pid_self(), procfs::self_start().unwrap_or_default()),
+    }
+}
+
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut u = Up {
         // (a down started after this asks for the box gone, even before it has a lock)
-        t0: procfs::proc_start(&pid_self()).unwrap_or_default(),
+        t0: up_origin().1,
         size: b"1920x1080".to_vec(),
         net: b"connected".to_vec(),
         idle: shell::env("OMABOX_IDLE")
@@ -985,8 +995,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let dmark = std::fs::read(&mpath).unwrap_or_default();
     let (dline, djail) = down_marker(&dmark);
     let mine = djail.is_none_or(|j| crate::jail::in_jail() && j == crate::jail::jail_id());
+    // (a broker's caller's pid is one of this process's pid namespace: SO_PEERCRED's, as the kernel
+    // hands it to the listener; it was made before this process, so its made_us holds for it too)
     let me = UpSelf {
-        pid: i64::from(std::process::id()),
+        pid: num(&up_origin().0).unwrap_or_else(|| i64::from(std::process::id())),
         pidns: procfs::pidns(b"self"),
         call_us: num(&crate::call_us()),
         pid_max: procfs::pid_max(),

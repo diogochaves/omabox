@@ -22,10 +22,10 @@ pub fn after_comm(s: &[u8]) -> &[u8] {
 }
 
 /// Field I of /proc/PID/stat after the command name (0 its state, 1 its parent, 19 its start), empty
-/// when it has none; None for no such process. A pid only: an empty one would read /proc//stat,
-/// which is the system-wide /proc/stat.
+/// when it has none; None for no such process. A pid or `self` only: an empty one would read
+/// /proc//stat, which is the system-wide /proc/stat.
 pub fn proc_stat(pid: &[u8], i: usize) -> Option<Vec<u8>> {
-    if !shell::is_num(pid) {
+    if !shell::is_num(pid) && pid != b"self" {
         return None;
     }
     let s = read(pid, "stat")?;
@@ -43,6 +43,12 @@ pub fn proc_ppid(pid: &[u8]) -> Option<Vec<u8>> {
 
 pub fn proc_start(pid: &[u8]) -> Option<Vec<u8>> {
     proc_stat(pid, 19)
+}
+
+/// This process's start, in clock ticks since boot: /proc/self, never /proc/<its pid>, which in a pid
+/// namespace of its own with the host's /proc mounted is another process (its pid 1 the host's init).
+pub fn self_start() -> Option<Vec<u8>> {
+    proc_start(b"self")
 }
 
 /// PID is running: not gone, and not a child that exited and was not waited for yet (a zombie).

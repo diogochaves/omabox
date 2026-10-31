@@ -208,11 +208,10 @@ fn down_one_with<S: BoxSys + ?Sized>(
 /// fallback's, with a bash down).
 fn down_mark<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, cond: &DownIf) {
     if cond.created.is_none() {
-        let me = std::process::id().to_string().into_bytes();
         let mark = ctx.in_boxes(cat!(".down-", ctx.name));
         // (a jail's never takes the place of the user's own, which cancels any up)
         let users = in_jail() && std::fs::read(&mark).is_ok_and(|m| user_marker(&m));
-        if let (Some(start), false) = (sys.proc_start(&me), users) {
+        if let (Some(start), false) = (sys.proc_start(b"self"), users) {
             let dash = || b"-".to_vec();
             let last = crate::procfs::last_pid().map(|n| n.to_string().into_bytes());
             let boot = crate::procfs::boot_us().map(|n| n.to_string().into_bytes());

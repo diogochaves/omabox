@@ -11055,6 +11055,21 @@ from them.
     the first four fields only. Tests: t_race ("a down of another pid namespace while its up starts",
     fails at 24d53d6), up.rs's a_down_of_another_pid_namespace_by_boot_time, down_lines,
     made_us_is_before_now_and_after_boot.
+    Two more found on the way, both fixed. **A pid namespace with the host's /proc** (`unshare -pf`
+    without --mount-proc): down and up read their start from /proc/<own pid>, there another process,
+    pid 1 the host's init; a down's marker said init's start (older than any up) and an up took it
+    for its own, so every down of its name in 10 minutes cancelled it. Both read /proc/self now.
+    **The relay hop:** a jailed agent's up is the process the broker forks once the caller's relay
+    has connected, a few ms (or, for a slow caller, any time) after the agent's call; a user's down
+    in between found no lock, left its marker, and the up, made after it, went on. A broker's up is
+    now its caller's: the pid and start of OMABOX_BROKER_PEER, which the relay's listen sets from the
+    socket's SO_PEERCRED (the kernel's, in the broker's pid namespace; nothing the caller sends can
+    set it, its variables come renamed OMABOX_RELAY_*), its start read between two looks through the
+    caller's pidfd (broker_side::caller). A jail can only make its call look older than it was (a
+    process it made earlier connects), which cancels its own up sooner, never the user's. Tests:
+    t_race ("a down in a pid namespace with the host's /proc", "...an up there", both fail at
+    df286ca), t_jail_down_race (a real ai-jail: a caller that sleeps a second before it connects, the
+    down in that second; at df286ca the box came up).
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one

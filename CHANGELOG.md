@@ -134,8 +134,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   file read there is read up to 1 MiB ([#367](https://github.com/diogochaves/omabox/issues/367)).
 - **A `down` from another pid namespace (a container of its own) could miss the `up` it raced**: an
   up started a moment before it, but slower to get going, was taken for one started after it, and
-  its box stayed up. The two are now ordered on one clock all pid namespaces share
-  ([#404](https://github.com/diogochaves/omabox/issues/404)).
+  its box stayed up. The two are now ordered on one clock all pid namespaces share. A jailed agent's
+  `up` now counts from its own call, not from when the broker took it up, so your `down` in between
+  cancels it; and `up`/`down` in a pid namespace that shows the host's `/proc` read their own start,
+  not the host init's ([#404](https://github.com/diogochaves/omabox/issues/404)).
 
 ## 1.0.2 — 2026-10-30
 

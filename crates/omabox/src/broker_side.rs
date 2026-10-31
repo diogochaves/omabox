@@ -298,6 +298,17 @@ fn child_named(pid: &[u8], name: &[u8]) -> Option<Vec<u8>> {
         .find(|c| procfs::read(c, "comm").is_some_and(|n| n == name))
 }
 
+/// The caller this broker's omabox runs for: its pid, in this process's pid namespace, and its start
+/// in clock ticks. The relay's `listen` sets OMABOX_BROKER_PEER from the socket's SO_PEERCRED (the
+/// kernel's, not the caller's word: what the caller sends is renamed OMABOX_RELAY_*), and init makes
+/// sure of it by its pidfd. An up is that caller's, made before this process (#404, finding 579).
+static CALLER: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
+
+/// The jailed caller (pid, start), once init has made sure of it.
+pub fn caller() -> Option<&'static (Vec<u8>, Vec<u8>)> {
+    CALLER.get()
+}
+
 /// broker_init: the caller (OMABOX_BROKER_PEER, made sure of by its pidfd OMABOX_BROKER_PIDFD) is
 /// ai-jail's, a process in the pid namespace of a bwrap whose parent is ai-jail itself; that bwrap's
 /// command line is the jail's whole policy, which nothing in the jail can change. Sets OMABOX_JAIL
@@ -323,6 +334,12 @@ pub fn init(ctx: &Ctx) -> Res<()> {
     };
     if !there() {
         return Err(ctx.die("broker: the caller is gone"));
+    }
+    // (its start read between two looks through its pidfd: the start of that very process)
+    if let Some(start) = procfs::proc_start(&peer).filter(|s| !s.is_empty())
+        && there()
+    {
+        let _ = CALLER.set((peer.clone(), start));
     }
     let (mut p, mut jail, mut parent) = (peer.clone(), None, Vec::new());
     while shell::dec(&p).is_some_and(|n| n > 1) {
