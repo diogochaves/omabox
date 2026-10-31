@@ -117,6 +117,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   monitor, and its service off or on. `windows` and `click --window` no longer name the dock where
   it is hidden (a workspace that is not floating), since it takes no input there
   ([#309](https://github.com/diogochaves/omabox/issues/309)).
+- **Input under a layer spanning the screen is narrowed to where it draws**: Omarchy's
+  notifications column and dock take input on their items only, and `click`, `scroll`, `drag` and
+  `pointer --window` said "may go to it" at every point under them. Now the box compares the screen
+  with the window's own pixels there: on a toast (or a dock icon) the layer is named as over the
+  point, and `--no-raise` refuses; far from one, nothing is said. A click at the screen's X Y names
+  it on a toast too. Where the pixels cannot tell (a scaled output), the "may" stays
+  ([#283](https://github.com/diogochaves/omabox/issues/283)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

@@ -9,6 +9,7 @@ mod cmd;
 mod conf;
 mod desk;
 mod deskwin;
+mod drawn;
 mod enter;
 mod exec;
 mod exit;

@@ -12042,6 +12042,41 @@ from them.
     `/run`, `/dev/dri`, a card node, `/dev/input`, seatd's socket, the system bus); up says so and
     stops. Test: bwrap.rs's `box_dir_never_covers_the_seat` (each of those, a link to `/run`, and the
     runtime dir reached by `..`, refused; a box dir of the runtime dir's or of a plain folder taken).
+618. **A layer spanning the screen counted as over every point it spans, toast or no toast**
+    (2026-10-31, #283; findings 398, 421, 562). Hyprland gives a layer's rectangle only, so while
+    Omarchy's notifications column (or its dock) was up, every `--window` point under it got "may go
+    to it": a click 560 px below a toast warned, and the toast itself was never certain, so
+    `--no-raise` sent a click that landed on it. The issue's plan, the toasts' bounds from `tree
+    --layer` (finding 384), is still shut: on Omarchy 4.5.0rc2 with Quickshell 0.3.2.r7 the layer
+    publishes no accessible items (`Toast.qml` and `Service.qml` set no `Accessible` role; seen in a
+    box). What the box can read is where the layer draws: `drawn.rs` grabs, in the box, the region
+    where the layer and the window meet three times, the window's own pixels (`grim -T`), the
+    screen's, the window's again, and marks 4 px cells where the screen differs from the window by
+    more than 24 in a channel and the window's two grabs agree within 8 (a blinking cursor, an
+    animation are the window's own). Cells within 24 px are one item; the point is on one when it is
+    within 8 px of its box, so a toast's empty middle counts through its border and text. Left out:
+    the pointer (plain grim draws it: 48 px around its hot spot), the window's 48 px corners (its
+    rounding), windows over it and layers certainly over it. On an item: the line becomes `drawn`,
+    said as "a layer spanning the screen, NS (...), draws over X,Y of window ...: one of its items (a
+    toast, a dock icon) is there, and input there goes to it, not to the window", certain, so
+    `--no-raise` refuses it; the way out for the notifications is `omarchy-shell notifications
+    dismissAll` (4.5 keeps the layer mapped, `wait layer --gone` would not return). Nowhere near one:
+    nothing said, nothing refused. It cannot tell (grabs of other sizes, a grab that failed, one item
+    over the whole region: a dimming, a backdrop): the may, as before. A click at the screen's X Y
+    (#361) now names a spanning layer where it draws (finding 562 left it unsaid everywhere). `windows`
+    and a `--wait` 124 still give the rectangle's "possibly" (no grabs there). Cost: three grabs of the
+    region (465x1056 here) and three hyprctl reads, ~0.1 s, only when a spanning layer is over the
+    point. Seen in a box (Omarchy 4.5.0rc2, Hyprland 0.56.2, 1920x1080, scale 1): with a `notify-send`
+    toast at 1472..1914 x 6..76, `--no-raise` at 1700,40 and 1480,20 refused, at 1700,80 refused (the
+    pad), at 1700,100, 1460,40 and 1700,600 clicked silently; the idle column and the idle dock say
+    nothing; a screen click on the toast said it and closed it. Not seen: a scaled output (its grabs
+    should match at an integer scale; at others the sizes differ and it falls back to the may), a
+    light theme, a translucent window over a bright wallpaper (a 0.9 opacity there is near the
+    threshold). Tests: drawn.rs (the clusters, the pad, faint and global differences, the window
+    moving, left-out regions, sizes, the PPM, the line's rectangle), t_unit_wait_facts (`probe
+    screen_layer ... here|nothere|unknown`), t_click_layer (far from the toast: nothing said, also
+    under `pointer --window`, the idle column and dock; on it: refused under `--no-raise`, the toast
+    left up, a plain click said and closed it; failed on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

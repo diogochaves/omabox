@@ -58,8 +58,9 @@ pub const NAMES: &[(&str, &str)] = &[
         "desk_target",
         "keys|click|scroll|drag|run SNAPSHOT [KB_LAYERS | X_Y | PID]",
     ),
-    // What a click at the screen's X Y says of a layer over the window there (#361).
-    ("screen_layer", "SNAPSHOT X_Y"),
+    // What a click at the screen's X Y says of a layer over the window there (#361); DRAWN what the
+    // pixels said of one spanning the screen (#283: here, nothere or unknown, the default).
+    ("screen_layer", "SNAPSHOT X_Y [DRAWN]"),
     (
         "record_overlay",
         "INPUT MARKS FIRST X0 Y0 K W H DUR SHOW CAPS [AREA]",
@@ -346,9 +347,15 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             };
             out(crate::desk::desk_target_with(t, snap, || arg.to_vec()))
         }
-        (b"screen_layer", [snap, xy]) => {
+        (b"screen_layer", [snap, xy, rest @ ..]) if rest.len() <= 1 => {
             let f = crate::shell::read_fields(xy, 2);
-            line(&crate::win::screen_layer_of(snap, &f[0], &f[1]))
+            let d = rest.first().map_or(&b"unknown"[..], |d| &d[..]);
+            let narrow = |_: &[u8], lay: Vec<u8>| match d {
+                b"here" => crate::cat!("drawn", &lay[b"possible".len()..]),
+                b"nothere" => Vec::new(),
+                _ => lay,
+            };
+            line(&crate::win::screen_layer_of(snap, &f[0], &f[1], &narrow))
         }
         (b"job_exe", [a0]) => line(&crate::jobs::job_exe(a0)),
         (b"layer_select", [lys, sel]) => line(&crate::layer::layer_select(&ctx, lys, sel)?),

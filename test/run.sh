@@ -12222,12 +12222,13 @@ QML
 }
 
 # A layer surface over the point a --window click aims at (#263): the Omarchy shell's notification
-# toasts sit in a layer that spans the screen and takes input on the toasts only (findings 398, 421):
-# possibly over the points it spans, said as a may, never refused, the click sent (on the toast it
-# lands there, which closes it); `windows` and a 124 name it as possible. Omarchy 4.0's is a
-# full-screen overlay, up while a toast shows; 4.5's a 465 px column at the right, mapped while idle
-# beside a dock along the bottom (the same kind of layer). A smaller layer (a panel stub) is over the
-# point for certain, even under a spanning one: refused under --no-raise. Without one, nothing is said.
+# toasts sit in a layer that spans the screen and takes input on the toasts only (findings 398, 421);
+# `windows` and a 124 name it as possible. Omarchy 4.0's is a full-screen overlay, up while a toast
+# shows; 4.5's a 465 px column at the right, mapped while idle beside a dock along the bottom (the
+# same kind of layer). Where it draws over the window is read from the pixels (#283, finding 618): on
+# the toast it is said and refused under --no-raise (a plain click lands there, which closes it); far
+# from it, or with no toast, nothing is said. A smaller layer (a panel stub) is over the point for
+# certain, even under a spanning one: refused under --no-raise. Without one, nothing is said.
 t_click_layer() {
   local B=$P-cl D out rc w at x y px py fx fy live
   up_ok "$B" --net isolated --stock-bar "${OM[@]}" || { no "up" "$UP_OUT"; return; }
@@ -12256,9 +12257,7 @@ t_click_layer() {
   check_eq "...--json: certain false" false \
     "$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | .layers[] | select(.namespace == "omarchy-notifications") | .certain')"
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
-  check_eq "--no-raise far from the toast: clicked, exit 0" 0 "$rc"
-  check_match "...said: the input may go to the layer" \
-    "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at $fx,$fy may go to it if one of its items \(a toast, a dock icon\) is there; elsewhere it goes to the window \(omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off\)" "$out"
+  check_eq "--no-raise 560 px below the toast: clicked, nothing said (#283)" "0 " "$rc $out"
   out=$(ob click -b "$B" 1700 600 2>&1); rc=$?
   check_eq "a click at the screen's 1700,600, under the spanning layer only: clicked, nothing said (#361)" "0 " "$rc $out"
   if omarchy45; then check "...the toast is still up" jq -e 'length == 1' "$live"
@@ -12269,8 +12268,15 @@ t_click_layer() {
   check_match "...on the window, possibly on the layer" \
     "the click at $px,$py was on foot \"L\" \(its $fx,$fy\), or possibly on layer omarchy-notifications \(it spans the screen: if one of its items, a toast, is there\)" "$out"
   out=$(ob pointer -b "$B" --window 'title:^L$' move "$fx" "$fy" 2>&1); rc=$?
-  check_eq "pointer --window: moved (exit 0)" 0 "$rc"
-  check_match "...the layer said as a may" "a layer spanning the screen, \"omarchy-notifications\" .* input at $fx,$fy may go to it" "$out"
+  check_eq "pointer --window far from the toast: moved, nothing said (#283)" "0 " "$rc $out"
+  # On the toast: drawn there, so certain (#283): --no-raise refuses and leaves it up, with the toasts'
+  # way out.
+  out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$x" "$y" 2>&1); rc=$?
+  check_eq "--no-raise on the toast: refused, exit 1 (#283)" 1 "$rc"
+  check_match "...naming the layer as drawing there, and the way out" \
+    "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), draws over $x,$y of window 0x[0-9a-f]+ foot \"L\": one of its items \(a toast, a dock icon\) is there, and input there goes to it, not to the window \(refused under --no-raise; without it, this is a warning; omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off\)" "$out"
+  if omarchy45; then check "...the toast is still up" jq -e 'length == 1' "$live"
+  else check "...the toast is still up" ob wait -b "$B" --timeout 1s layer omarchy-notifications; fi   # omarchy<4.5
   # A layer smaller than its output (a panel) over the point: certain, refused under --no-raise, and
   # it wins over a spanning one above it (4.0's full-screen notifications).
   cat > "$D/home/t263.qml" <<'QML'
@@ -12309,14 +12315,13 @@ QML
   else no "the panel layer maps" "no t263-panel layer"; fi
   out=$(ob click -b "$B" --window 'title:^L$' "$x" "$y" 2>&1); rc=$?
   check_eq "click --window on the toast: clicked (exit 0)" 0 "$rc"
-  check_match "...said on stderr as a may" "a layer spanning the screen, \"omarchy-notifications\" .* may go to it" "$out"
+  check_match "...said on stderr: it draws there (#283)" "a layer spanning the screen, \"omarchy-notifications\" .* draws over $x,$y of window .*: one of its items .* \(omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off\)$" "$out"
   if omarchy45; then
     check "...the click went to the toast, which closed (live.json empty; the layer stays)" until_ok 3 jq -e 'length == 0' "$live"
     # 4.5's layers stay mapped while idle (finding 421): with no toast, under the column and over
     # the dock, --no-raise still clicks (it was refused: "input there goes to it").
     out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
-    check_eq "...then --no-raise under the idle column: clicked, exit 0" 0 "$rc"
-    check_match "...said as a may" "a layer spanning the screen, \"omarchy-notifications\" .* may go to it" "$out"
+    check_eq "...then --no-raise under the idle column: clicked, nothing said (it draws nothing there, #283)" "0 " "$rc $out"
     if ob wait -b "$B" --timeout 1s layer omarchy-dock >/dev/null 2>&1; then
       out=$(ob click -b "$B" --window 'title:^L$' --no-raise $((400 - ${at% *})) $((1000 - ${at#* })) 2>&1); rc=$?
       # (the box's workspace is not floating: there the dock is hidden and takes no input, #309)
@@ -19845,6 +19850,13 @@ t_unit_wait_facts() {
     "$(probe screen_layer "$(wf_snap "$toast")" "700 50")"
   check_eq "...a full-screen one: nothing (it may not take the point; --window says the may)" "" \
     "$(probe screen_layer "$sn" "100 450")"
+  # #283 (finding 618): where the pixels show one of its items over the window, it is said, its way
+  # out the toasts' dismissAll; where they show none, or cannot tell, nothing.
+  check_eq "...a full-screen one that draws there (a toast): said (#283)" \
+    'a layer spanning the screen, "omarchy-notifications" (overlay 1920x1080 at 0,0), draws over the screen'"'"'s 100,450, on window 0xa foot "K": one of its items (a toast, a dock icon) is there, and input there goes to it, not to the window (omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off)' \
+    "$(probe screen_layer "$sn" "100 450" here)"
+  check_eq "...one that draws nothing there: nothing" "" "$(probe screen_layer "$sn" "100 450" nothere)"
+  check_eq "...one whose pixels cannot tell: nothing" "" "$(probe screen_layer "$sn" "100 450" unknown)"
   check_eq "...the floating window's own point, under the toast-sized one: that window named" \
     'a layer surface "omarchy-notifications" (overlay 300x100 at 600,0) is over the screen'"'"'s 850,50, on window 0xb zenity "Save as": where it takes input (a notification, a panel), input there goes to it, not to the window (omabox wait layer omarchy-notifications --gone waits it out)' \
     "$(probe screen_layer "$(jq -c "$toast | .clients[1].at = [800, 0]" <<<"$s")" "850 50")"

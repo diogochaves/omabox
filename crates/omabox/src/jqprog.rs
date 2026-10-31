@@ -822,3 +822,8 @@ pub const AUDIO_SAY_JQ: &str = concat!(
 );
 /// agent_caller (AGENT_MARKS): what gives an agent's process away, in its environment.
 pub const AGENT_MARKS: &str = r#"^(CLAUDECODE|CLAUDE_CODE_SESSION_ID|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX|OPENCODE|AI_AGENT|OMABOX_AGENT_PID)=|^OMABOX_SESSION=.|^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE)=omabox-guard$|^PATH=([^:]*:)*[^:]*/share/guard/?(:|$)"#;
+
+/// layer_drawn (#283): a window's stableId and rectangle, then a rectangle per window over it and per
+/// layer certainly over it (what else draws there).
+pub const DRAWN_JQ: &str = r#"def r: "\(.at[0] | floor) \(.at[1] | floor) \(.size[0] | floor) \(.size[1] | floor)";
+  "\(.stableId // "") \(r)", ((.cover[]?, (.layers[]? | select(.certain != false))) | r)"#;

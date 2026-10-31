@@ -314,8 +314,9 @@ pub enum Raise {
 /// win_point RAISE X Y SEL...: the screen point "SX SY" for window coordinates X,Y of the window
 /// SEL picks, raised first when it is not on screen or something covers the point (unless RAISE
 /// says not); a point still covered is refused, naming what covers it. A layer surface over the
-/// point (#263) is said, and refused under --no-raise; one spanning its output may or may not be
-/// over it: said as such, never refused (findings 398, 421).
+/// point (#263) is said, and refused under --no-raise; one spanning its output is narrowed by where
+/// it draws (#283, finding 618): on one of its items as certain, nowhere near one not at all, and
+/// where the pixels cannot tell as a may, never refused (findings 398, 421).
 pub fn win_point(ctx: &Ctx, raise: Raise, x: &[u8], y: &[u8], sels: &[Vec<u8>]) -> Res<Vec<u8>> {
     // The layers read once: raising a window changes none of them.
     // (a dock hidden on its workspace taken out: it takes no input there, #309)
@@ -365,23 +366,27 @@ pub fn win_point(ctx: &Ctx, raise: Raise, x: &[u8], y: &[u8], sels: &[Vec<u8>]) 
             )));
         }
     }
-    let lay = jq_xy(crate::jqprog::WIN_LAYER_JQ, &w, x, y).text();
+    let mut lay = jq_xy(crate::jqprog::WIN_LAYER_JQ, &w, x, y).text();
+    if lay.starts_with(b"possible ") {
+        let at = jq_xy(crate::jqprog::WIN_AT_JQ, &w, x, y).text();
+        lay = narrow(ctx, &w, lay, &at);
+    }
     if !lay.is_empty() {
-        let (certain, said, ns) = layer_words(&lay, Whose::Window, x, y, &desc);
+        let (certain, said, way) = layer_words(&lay, Whose::Window, x, y, &desc);
         if certain && raise == Raise::No {
-            let w = if ns.is_empty() {
+            let w = if way.is_empty() {
                 Vec::new()
             } else {
-                cat!("; omabox wait layer ", ns, " --gone waits it out")
+                cat!("; ", way)
             };
             return Err(ctx.die(cat!(
-                layer_said(&said),
+                said,
                 " (refused under --no-raise; without it, this is a warning",
                 w,
                 ")"
             )));
         }
-        say(said);
+        say(with_way(said, &way));
     }
     Ok(jq_xy(crate::jqprog::WIN_AT_JQ, &w, x, y).text())
 }
@@ -393,19 +398,37 @@ pub enum Whose {
     Screen,
 }
 
-/// The way out a certain layer's sentence ends with (" (omabox wait layer NS --gone waits it out)").
-const WAY_OUT: &[u8] = b" (omabox wait layer ";
+/// A layer's sentence with its way out after it, in brackets.
+fn with_way(said: Vec<u8>, way: &[u8]) -> Vec<u8> {
+    if way.is_empty() {
+        said
+    } else {
+        cat!(said, " (", way, ")")
+    }
+}
 
-/// A certain layer's sentence without its way out: --no-raise's refusal says it its own way.
-fn layer_said(said: &[u8]) -> Vec<u8> {
-    match said.windows(WAY_OUT.len()).rposition(|w| w == WAY_OUT) {
-        Some(i) => said[..i].to_vec(),
-        None => said.to_vec(),
+/// narrow LINE "SX SY": a WIN_LAYER_JQ line of a layer spanning the screen, narrowed by where it
+/// draws over the window at the screen's SX,SY (#283, finding 618): `drawn ...` when one of its items
+/// is there, nothing when none is, the line as it was when that cannot be told.
+fn narrow(ctx: &Ctx, w: &[u8], lay: Vec<u8>, at: &[u8]) -> Vec<u8> {
+    use crate::drawn::{Drawn, layer_drawn, line_rect};
+    let p: Vec<&[u8]> = at.splitn(2, |&c| c == b' ').collect();
+    let (Some(r), [sx, sy]) = (line_rect(&lay), &p[..]) else {
+        return lay;
+    };
+    let (Some(sx), Some(sy)) = (shell::dec(sx), shell::dec(sy)) else {
+        return lay;
+    };
+    match layer_drawn(ctx, w, r, sx, sy) {
+        Drawn::Here => cat!("drawn", &lay[b"possible".len()..]),
+        Drawn::NotHere => Vec::new(),
+        Drawn::Unknown => lay,
     }
 }
 
 /// A layer over a point (WIN_LAYER_JQ's line: `certain|possible "NAMESPACE" LAYER WxH at X,Y`, only
-/// its rectangle known) in words: whether it is certain, the sentence with its way out, its namespace.
+/// its rectangle known, or narrow's `drawn` for one spanning the screen that draws there) in words:
+/// whether it is certain, the sentence, and the way out to say after it.
 fn layer_words(
     lay: &[u8],
     whose: Whose,
@@ -428,15 +451,16 @@ fn layer_words(
     } else {
         b""
     };
+    // (Omarchy 4.5's notifications stay mapped while idle: wait layer --gone would not return;
+    // a dock said here is shown: a hidden one never gets here, #309)
+    let toasts: &[u8] = if ns == b"omarchy-notifications" {
+        b"omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off"
+    } else if ns == crate::omshell::DOCK_NS.as_bytes() {
+        b"omabox dock says where it takes input; omabox dock off takes it away"
+    } else {
+        b""
+    };
     if how == b"possible" {
-        let tail: &[u8] = if ns == b"omarchy-notifications" {
-            b" (omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off)"
-        } else if ns == crate::omshell::DOCK_NS.as_bytes() {
-            // (shown: a hidden dock never gets here, #309)
-            b" (omabox dock says where it takes input; omabox dock off takes it away)"
-        } else {
-            b""
-        };
         let said = cat!(
             "a layer spanning the screen, ",
             first,
@@ -449,36 +473,54 @@ fn layer_words(
             x,
             ",",
             y,
-            " may go to it if one of its items (a toast, a dock icon) is there; elsewhere it goes to the window",
-            tail
+            " may go to it if one of its items (a toast, a dock icon) is there; elsewhere it goes to the window"
         );
-        return (false, said, ns);
+        return (false, said, toasts.to_vec());
     }
     let over = if whose == Whose::Screen {
-        cat!("is over the screen's ", x, ",", y, ", on window ", desc)
+        cat!("the screen's ", x, ",", y, ", on window ", desc)
     } else {
-        cat!("is over ", x, ",", y, " of window ", desc)
+        cat!(x, ",", y, " of window ", desc)
     };
-    let mut said = cat!(
+    if how == b"drawn" {
+        let said = cat!(
+            "a layer spanning the screen, ",
+            first,
+            " (",
+            rest,
+            "), draws over ",
+            over,
+            ": one of its items (a toast, a dock icon) is there, and input there goes to it, not to the window"
+        );
+        return (true, said, toasts.to_vec());
+    }
+    let said = cat!(
         "a layer surface ",
         first,
         " (",
         rest,
-        ") ",
+        ") is over ",
         over,
         ": where it takes input (a notification, a panel), input there goes to it, not to the window"
     );
-    if !ns.is_empty() {
-        said = cat!(said, WAY_OUT, ns, " --gone waits it out)");
-    }
-    (true, said, ns)
+    let way = if ns.is_empty() {
+        Vec::new()
+    } else {
+        cat!("omabox wait layer ", ns, " --gone waits it out")
+    };
+    (true, said, way)
 }
 
-/// screen_layer_of SNAPSHOT X Y: for input at the screen's X,Y (no --window), what win_point says of
-/// a layer certainly over the window there (#361, finding 562), from a desk_snap snapshot; nothing
-/// for one spanning the screen (it may not take the point), when no layer is over a window at the
-/// point (a click meant for the bar or the desktop) or the snapshot is missing.
-pub fn screen_layer_of(snap: &[u8], x: &[u8], y: &[u8]) -> Vec<u8> {
+/// What narrows a WIN_LAYER_JQ line of a layer spanning the screen (the window, the line): narrow, or
+/// a probe's stand-in.
+pub type Narrow<'a> = dyn Fn(&[u8], Vec<u8>) -> Vec<u8> + 'a;
+
+/// screen_layer_of SNAPSHOT X Y NARROW: for input at the screen's X,Y (no --window), what win_point
+/// says of a layer certainly over the window there (#361, finding 562), from a desk_snap snapshot;
+/// one spanning the screen is said only when NARROW (the window, the WIN_LAYER_JQ line) finds it
+/// draws there (#283); nothing when no layer is over a window at the point (a click meant for the
+/// bar or the desktop) or the snapshot is missing.
+pub fn screen_layer_of(snap: &[u8], x: &[u8], y: &[u8], narrow: &Narrow<'_>) -> Vec<u8> {
     let (Some(sx), Some(sy)) = (shell::dec(x), shell::dec(y)) else {
         return Vec::new();
     };
@@ -519,10 +561,18 @@ pub fn screen_layer_of(snap: &[u8], x: &[u8], y: &[u8]) -> Vec<u8> {
     if lay.is_empty() {
         return Vec::new();
     }
-    // (one spanning the screen only may take it: said for --window, not here, where Omarchy 4.5's
-    // idle notifications column and dock would speak at every plain click under them)
+    let lay = if lay.starts_with(b"possible ") {
+        narrow(&w, lay)
+    } else {
+        lay
+    };
+    if lay.is_empty() {
+        return Vec::new();
+    }
+    // (one spanning the screen that only may take it: said for --window, not here, where Omarchy
+    // 4.5's idle notifications column and dock would speak at every plain click under them)
     match layer_words(&lay, Whose::Screen, x, y, &win_desc(&w)) {
-        (true, said, _) => said,
+        (true, said, way) => with_way(said, &way),
         _ => Vec::new(),
     }
 }
@@ -530,7 +580,10 @@ pub fn screen_layer_of(snap: &[u8], x: &[u8], y: &[u8]) -> Vec<u8> {
 /// screen_layer X Y: screen_layer_of the box's desktop now, said on stderr. Never refuses and never
 /// dies: a desktop that does not answer leaves the input to its own errors.
 pub fn screen_layer(ctx: &Ctx, x: &[u8], y: &[u8]) {
-    let said = screen_layer_of(&crate::desk::desk_snap(ctx, false), x, y);
+    let at = cat!(x, " ", y);
+    let said = screen_layer_of(&crate::desk::desk_snap(ctx, false), x, y, &|w, lay| {
+        narrow(ctx, w, lay, &at)
+    });
     if !said.is_empty() {
         say(said);
     }
