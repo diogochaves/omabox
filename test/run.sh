@@ -224,7 +224,7 @@ evidence() {
   local e=$EVID/${CUR:-none} b d q f bd
   mkdir -p "$e" 2>/dev/null || return 0
   printf '%s\n%s\n\n' "$1" "$2" >> "$e/failures.txt"
-  [ ! -e "$e/boxes" ] || return 0
+  [ ! -e "$e/boxes" ] || { ev_nested "$e"; return 0; }
   mkdir -p "$e/boxes"
   [ ! -s "$UNTIL" ] || cp "$UNTIL" "$e/last-wait.txt"
   slice "$EVID/host-events.log" "$CUR" > "$e/host-events.log" 2>/dev/null
@@ -240,7 +240,37 @@ evidence() {
     ev_read "$bd" "$d" timeout 5 "$CLI" hyprctl -b "$b" cursorpos > "$d/cursorpos" 2>&1
     for f in "$bd/box.log" "$bd"/home/*.log "$bd"/run/hypr/*/hyprland.log "$bd/run/events.log"; do [ -f "$f" ] && tail -n 100 "$f" > "$d/${f##*/}"; done
   done
+  ev_nested "$e"
   printf '       evidence: %s\n' "$e"
+}
+# ev_nested EVDIR: at every failure, the log tails of each box started inside one of the run's boxes
+# (a stand-in host's: t_guard's nested `up --interactive`, #406), in boxes/OUTER/nested/INNER: the
+# test's `down` of a failed one, or the outer box's end, takes them. Read from inside the outer box,
+# where an inner box's home link (a path in the outer box's HOME) leads to its own HOME.
+EV_NESTED='for d in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/omabox/*/; do
+  [ -f "$d/box.json" ] || continue
+  n=${d%/}; n=${n##*/}
+  for f in "$d/box.log" "$d"/home/*.log "$d"/run/hypr/*/hyprland.log "$d/run/events.log"; do
+    [ -f "$f" ] && { printf "\036%s/%s\n" "$n" "${f##*/}"; tail -n 200 "$f"; }
+  done
+done; true'
+ev_nested() {
+  local bd b d
+  for bd in "$XDG_RUNTIME_DIR/omabox/$P"-*; do
+    compgen -G "$bd/run/omabox/*/box.json" >/dev/null || continue
+    b=${bd##*/}; d=$1/boxes/$b/nested; mkdir -p "$d"
+    [ ! -e "$bd/used" ] || touch -r "$bd/used" "$d/.used"
+    ev_read "$bd" "$d" ev_nested_read "$b" "$d"
+    rm -f "$d/.used"
+  done
+}
+# (The read prints each file as a line "\036INNER/FILE", then its tail.)
+ev_nested_read() {
+  local line f=""
+  while IFS= read -r line; do
+    if [[ $line == $'\036'* ]]; then f=$2/${line#$'\036'}; mkdir -p "${f%/*}"; : > "$f"
+    elif [ -n "$f" ]; then printf '%s\n' "$line" >> "$f"; fi
+  done < <(timeout 10 "$CLI" run -b "$1" -- sh -c "$EV_NESTED" 2>/dev/null)
 }
 # ev_shot SHOT-ARGS...: evidence's shot of a box, which a later `shot --changed` does not compare with:
 # a test using that box meanwhile (t_changed) still finds its own last shot, or none (#195, finding 266).
@@ -4353,6 +4383,7 @@ u=$r/rt/omabox/$P-ev/used
 case \$1 in
   ls) echo '[{"name": "$P-ev", "state": "up"}]' ;;
   shot) touch "\$u"; if [ -n "\${USE:-}" ]; then sleep 1.5; touch -d "\$USE" "\$u"; fi ;;
+  run) touch "\$u"; shift 3; XDG_RUNTIME_DIR=$r/rt/omabox/$P-ev/run exec "\$@" ;;
   *) touch "\$u" ;;
 esac
 EOF
@@ -4366,6 +4397,24 @@ EOF
   local later; later=$(date -d '+1 hour' +%s)
   ev 2 "@$later"
   check_eq "...but not over a test's use of the box meanwhile (finding 237)" "$later" "$(stat -c %Y "$r/rt/omabox/$P-ev/used")"
+  # #406: a box started inside one (a stand-in host's, t_guard's nested up): its logs too, read from
+  # inside the outer box (the stand-in's `run` runs the command with the outer box's runtime dir), at
+  # every failure, as the test's `down` of it or the outer box's end takes them.
+  local nd=$r/rt/omabox/$P-ev/run/omabox/ws3
+  mkdir -p "$nd/run/hypr/sig" "$r/ws3-home"; ln -sfn "$r/ws3-home" "$nd/home"
+  echo '{}' > "$nd/box.json"; echo "inner box.log" > "$nd/box.log"
+  echo "inner hyprland.log" > "$nd/run/hypr/sig/hyprland.log"; echo "inner labwc.log" > "$r/ws3-home/labwc.log"
+  ev 3
+  local ne=$r/evid-3/t_x/boxes/$P-ev/nested/ws3
+  check_eq "evidence keeps a nested box's box.log (#406)" "inner box.log" "$(cat "$ne/box.log" 2>&1)"
+  check_eq "...its Hyprland log" "inner hyprland.log" "$(cat "$ne/hyprland.log" 2>&1)"
+  check_eq "...and its HOME's logs, through its home link (labwc's)" "inner labwc.log" "$(cat "$ne/labwc.log" 2>&1)"
+  touch -d '-30 seconds' "$r/rt/omabox/$P-ev/used"; before=$(stat -c %.9Y "$r/rt/omabox/$P-ev/used")
+  echo "inner box.log, later" > "$nd/box.log"
+  ev 3
+  check_eq "...again at a later failure of the test, as it is then" "inner box.log, later" "$(cat "$ne/box.log" 2>&1)"
+  check_eq "...the outer box's idle clock put back after that read too" "$before" "$(stat -c %.9Y "$r/rt/omabox/$P-ev/used")"
+  rm -rf "$r/rt/omabox/$P-ev/run/omabox"
   # #285: a long output's end is printed, where the reason is.
   local long; long="box up$(printf 'n%.0s' {1..400})the reason"
   check_eq "a short output is printed whole" "box up: fine" "$(clip_out "box up: fine")"
