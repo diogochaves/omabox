@@ -13425,10 +13425,73 @@ t_own_processes() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# RPU_NORM (#385): `python3 -c "$RPU_NORM" LAUNCH BOXJSON GOLDEN NAME [FROM TO]...`: launch.sh's words
+# (read as the shell reads them, one per line) and box.json (sorted, indented), evened out for the
+# machine and the run: each FROM made TO (paths, in the order given), the box's own pids, the user,
+# host and locale words, the GPU's (its device binds, card placeholder, render node, Wayland screen:
+# the machine's GPU mode picks them; t_main, t_output_nvidia and the bwrap proptests hold those), the
+# caller's PATH, the versions installed and a private aquamarine's lib bind (setup's). box.json keeps
+# only the keys GOLDEN's has, when there is one: a key added since is not this check's until the
+# golden is written again.
+RPU_NORM='
+import json, os, re, shlex, sys
+launch, boxj, golden, name, *pairs = sys.argv[1:]
+subs = [(a, b) for a, b in zip(pairs[0::2], pairs[1::2]) if a]
+def norm(w):
+    for a, b in subs:
+        w = w.replace(a, b)
+    return re.sub(r"omabox-" + re.escape(name) + r"-[0-9]+", "omabox-NAME-PID", w).replace(name, "NAME")
+text = open(launch, encoding="utf-8", errors="surrogateescape").read()
+words = [w for line in text.splitlines() for w in shlex.split(line, comments=False)]
+uid = str(os.getuid())
+gone = {"OMABOX_RENDER_NODE", "OMABOX_WAYLAND_SCREEN", "OMABOX_CALLER_PATH", "OMABOX_OMARCHY_VERSION"}
+out, i = [], 0
+while i < len(words):
+    w = words[i]
+    nxt = words[i + 1] if i + 1 < len(words) else ""
+    if w == "--dev-bind" or (w == "--ro-bind" and re.fullmatch(r"/dev/dri/card[0-9]+", words[i + 2] if i + 2 < len(words) else "")):
+        i += 3; continue
+    if w == "--ro-bind" and i + 2 < len(words) and words[i + 2] == "/opt/omabox/lib":
+        i += 3; continue
+    if w == "--hostname" or (w in ("--uid", "--gid") and nxt == uid):
+        out += [w, "X"]; i += 2; continue
+    if w == "--setenv" and nxt in gone:
+        out += [w, nxt, "X"]; i += 3; continue
+    if re.match(r"(LC_[A-Z_]+|LANGUAGE)=", w):
+        i += 1; continue
+    if re.match(r"(USER|LOGNAME|SHELL|LANG)=", w):
+        w = w.split("=")[0] + "=X"
+    out.append(norm(w)); i += 1
+print("== launch.sh")
+print("\n".join(out))
+b = json.load(open(boxj))
+for k in ("created", "pidns"):
+    b.pop(k, None)
+if isinstance(b.get("starter"), dict):
+    for k in ("pid", "start", "command"):
+        b["starter"].pop(k, None)
+for k in ("aquamarine", "render", "client_render", "wayland_screen", "hyprland_version", "quickshell_version", "omarchy_version"):
+    if k in b:
+        b[k] = "X"
+for m in b.get("mounts") or []:
+    for k in ("dev", "ino"):
+        if k in m:
+            m[k] = "N"
+if os.path.exists(golden):
+    g = open(golden).read().split("== box.json\n", 1)
+    if len(g) == 2:
+        keep = json.loads(g[1])
+        b = {k: v for k, v in b.items() if k in keep}
+print("== box.json")
+print(norm(json.dumps(b, indent=2, sort_keys=True, ensure_ascii=False)))
+'
+
 # `up` itself on a box name of its own, taken down before each case (#324: what wave 5a compared with
 # bash's up, each now stated): what it says (durations evened out) and what it leaves in the box dir,
 # launch.sh, box.json and the files there; then ls, save, saves, brief, reload, restart-shell and down
-# on the box up.
+# on the box up. #385: each up's launch.sh and box.json whole too, against its golden in
+# test/golden/up/ (what the retired parity compared with bash's: "and nothing else changed"), evened
+# out by RPU_NORM; OMABOX_GOLDEN=write writes them instead (then read their diff before committing).
 t_cli_up() {
   local U=$P-rpu r=$TMP/rpu
   rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
@@ -13449,7 +13512,30 @@ t_cli_up() {
     echo "== files"; (cd "$d" 2>/dev/null && command find . -maxdepth 1 -printf '%p %y\n' | LC_ALL=C sort)
     echo "== home"; (cd "$d/home" 2>/dev/null && command find .config/rp .config/omarchy/themes/rp-theme -maxdepth 0 -printf '%p %y %l\n' 2>/dev/null)
   }
-  cx_rt=$XDG_RUNTIME_DIR cx_dir=$r/norepo cx_env=("HOME=$h") cx_snap=0 cx_prep=rpu_down cx_also=rpu_state
+  # (#385, the case's cx_check: its launch.sh and box.json against test/golden/up/SLUG, SLUG its label's
+  # words; the paths evened out longest first, the test's own before the ones they lie under)
+  rpu_golden() {
+    local d=$XDG_RUNTIME_DIR/omabox/$U slug g got=$TMP/rpu-golden.$BASHPID eph resolv
+    slug=$(tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
+    g=$ROOT/test/golden/up/$slug
+    # (a connected box's: the host's ephemeral ports, pasta's to forward, and its resolver file)
+    eph=$(tr -s '\t ' '-' < /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null) || eph=""
+    resolv=$(readlink -f /etc/resolv.conf 2>/dev/null) || resolv=""
+    [[ $resolv == /run/* ]] || resolv=""
+    python3 -c "$RPU_NORM" "$d/launch.sh" "$d/box.json" "$g" "$U" \
+      "$r" R "$TMP" TMP "$d" BOXDIR "$XDG_RUNTIME_DIR" RT "${XDG_CACHE_HOME:-$HOME/.cache}" CACHE \
+      "$ROOT" ROOT "$HOME" HOME "$resolv" RESOLV "${eph:+$eph,}" EPHEMERAL, "${pp:-}" PP > "$got" 2>&1
+    if [ "${OMABOX_GOLDEN:-}" = write ]; then
+      mkdir -p "${g%/*}"; cp "$got" "$g"; ok "$1: golden written ($slug)"
+    elif [ ! -f "$g" ]; then
+      no "$1: launch.sh and box.json as their golden" "no golden test/golden/up/$slug (OMABOX_GOLDEN=write writes it)"
+    elif cmp -s "$g" "$got"; then
+      ok "$1: launch.sh and box.json as their golden"
+    else
+      no "$1: launch.sh and box.json as their golden" "$(diff "$g" "$got" | head -n 20)"
+    fi
+  }
+  cx_rt=$XDG_RUNTIME_DIR cx_dir=$r/norepo cx_env=("HOME=$h") cx_snap=0 cx_prep=rpu_down cx_also=rpu_state cx_check=rpu_golden
   cx_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
   # (each up's line on stderr, said after the bar's seeding, when the desk has a bar to seed)
   local qr; qr=$(printf '%s' "$XDG_RUNTIME_DIR/omabox/$U" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g')
@@ -13497,7 +13583,7 @@ t_cli_up() {
   cx_case "up of a connected box with protect-ports set (finding 459)" up "$U" --no-shell
   : > "$h/.config/omabox/config"
   # Up already: said, or refused for what it lacks.
-  cx_prep=""
+  cx_prep="" cx_check=""
   cx_want=(rc=0 out= "err=omabox: box '$U' is already up")
   cx_case "up of the box up already" up "$U"
   cx_want=(rc=0 "out~^\\{\"name\":\"$U\",\"mode\":\"headless\",.*\"net\":\"connected\"" "err=omabox: box '$U' is already up")
@@ -14031,26 +14117,64 @@ fi
 cat $rpnv/pmon.rec; exit "\$(cat $rpnv/pmon.rc)"
 EOF
   chmod +x "$rpnv/nvidia-smi"
-  # (its words, the case's state; the recording dropped before each gpu case)
-  cx_gpu_also() { cat "$rpnv/log" 2>/dev/null; rm -f "$rpnv/log"; }
+  # (its words, the case's state, nvidia-smi pmon's as gpu calls it said as PMON; the recording
+  # dropped before each gpu case. #385: on NVIDIA one pmon call and nothing else; elsewhere none)
+  cx_gpu_also() {
+    sed -E 's/^nvidia-smi pmon -s u -d 1 -c [0-9]+( -i [0-9a-fA-F:.]+)?$/PMON/' "$rpnv/log" 2>/dev/null; rm -f "$rpnv/log"
+  }
   cx_gpu_fresh() { rm -f "$rpnv/pmon.rec" "$rpnv/pmon.args" "$rpnv/pmon.rc"; }
+  # (NVIDIA's driver samples whole seconds: its windows are said so)
+  local pmon=state= gsrc="drm fdinfo" gj=0.5 gt='0\.3' ghdr='% of wall time on the GPU \(all engines\)'
+  [ -z "$nv" ] || pmon=state=PMON gsrc="nvidia-smi pmon" gj=1 gt=1 \
+    ghdr="% of the GPU by process as NVIDIA's driver samples it each second \\(nvidia-smi pmon: SM, encoders, decoders\\)"
+  # (#385: gpu --json whole: its keys, its source and seconds as the box's GPU has them, its render,
+  # aquamarine and client_render the box's, every figure a number, Hyprland's among them on NVIDIA,
+  # where the stand-in lists it)
+  cx_gpu_json() {
+    check_eq "$1: its keys, source, seconds, the box's GPU, its figures numbers" \
+      "aquamarine,box,client_render,engines,mode,output,percent,render,seconds,source|$B|$mn|1920x1080@60|$gj|$gsrc|true|true|${nv:+true}" \
+      "$(jq -r --slurpfile b "$mon_d/box.json" '"\(keys | join(","))|\(.box)|\(.output)|\(.mode)|\(.seconds)|\(.source)|\(.render == $b[0].render and .aquamarine == $b[0].aquamarine and .client_render == $b[0].client_render)|\([.percent[], .engines[][]] | all(type == "number"))|\(if .source == "nvidia-smi pmon" then .percent | has("Hyprland") else "" end)"' "$2" 2>&1)"
+  }
   cx_gpu_fresh
-  cx_env=(PATH="$rpnv:$PATH") cx_also=cx_gpu_also
-  cx_want=(rc=0 'out~^\{$' "out~^  \"box\": \"$B\",\$" "out~^  \"output\": \"$mn\",\$" err=)
+  cx_env=(PATH="$rpnv:$PATH") cx_also=cx_gpu_also cx_check=cx_gpu_json
+  cx_want=(rc=0 'out~^\{$' "out~^  \"box\": \"$B\",\$" "out~^  \"output\": \"$mn\",\$" err= "$pmon")
   cx_case "gpu --json" gpu -b "$B" 500ms --json
   cx_env=() cx_also=cx_lay_also
-  cx_check=""
+  # (#385: cpu's table whole: its header, the box's aquamarine and GPU, the column heads, PID 1's row
+  # alone (bwrap, the box's PID 1), the total)
+  local nl=$'\n'
+  cx_cpu_rows() {
+    check_match "$1: the header, aquamarine, GPU, the column heads, PID 1's row alone, the total" \
+      "^box '$B': [^$nl]+${nl}aquamarine: [^$nl]+${nl}GPU: [^$nl]+${nl}  PROCESS +PID +CPU +RSS +PSS${nl}  bwrap +1 +[0-9]+\\.[0-9]% +[0-9.]+[KMG] +([0-9.]+[KMG]|-)${nl}  total +[0-9]+\\.[0-9]% +[0-9.]+[KMG] +([0-9.]+[KMG]|-)\$" "$(cat "$2")"
+  }
+  cx_check=cx_cpu_rows
   cx_want=(rc=0 "out~^box '$B': 1920x1080@60 on $mn, 0\\.3s, CPU as % of one core \\([0-9]+ cores\\), memory as last seen\$" 'out~^  total ' err=)
   cx_case "cpu --pid 1" cpu -b "$B" 300ms --pid 1
   # (--threads of a one-thread process of its own: PID 1's threads come in CPU order, which flakes)
   ob run -b "$B" -d -q -- sleep 600 >/dev/null 2>&1
+  # (#385: cpu --json whole: its keys, sleep's processes alone, each one thread, itself; numbers)
+  cx_cpu_json() {
+    check_eq "$1: its keys, sleep's processes alone, each its one thread, the box's GPU, the figures numbers" \
+      "aquamarine,box,client_render,cores,mode,output,percent,processes,render,seconds,settle,total|$B|$mn|0.3|sleep|true|true|true" \
+      "$(jq -r --slurpfile b "$mon_d/box.json" '"\(keys | join(","))|\(.box)|\(.output)|\(.seconds)|\(.percent | keys | join(","))|\(.processes | length > 0 and all(.name == "sleep" and (.threads | length) == 1 and .threads[0].tid == .pid and .threads[0].name == "sleep"))|\(.render == $b[0].render and .aquamarine == $b[0].aquamarine)|\([.cores, .total.cpu, .total.rss_kb, (.processes[] | .pid, .host_pid, .cpu, .rss_kb, .threads[0].tid)] | all(type == "number"))"' "$2" 2>&1)"
+  }
+  cx_check=cx_cpu_json
   cx_want=(rc=0 'out~^\{$' "out~^  \"box\": \"$B\",\$" 'out~"threads"' err=)
   cx_case "cpu --app --threads --json" cpu -b "$B" 300ms --app sleep --threads --json
   cx_gpu_fresh
-  cx_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/' cx_env=(PATH="$rpnv:$PATH") cx_also=cx_gpu_also
-  cx_want=(rc=0 "out~^box '$B': 1920x1080@60 on $mn, " err=)
+  # (#385: gpu's rows each a process's name and figure, or none said; Hyprland's on NVIDIA, where the
+  # stand-in lists it)
+  cx_gpu_rows() {
+    local rows; rows=$(tail -n +4 "$2")
+    check_match "$1: the header, aquamarine, GPU, then the rows" \
+      "^box '$B': 1920x1080@60 on $mn, ${gt}s, ${ghdr}${nl}aquamarine: [^$nl]+${nl}GPU: [^$nl]+${nl}  ([^ ]+ +[0-9]+\\.[0-9]%|\\(no GPU time\\))" "$(cat "$2")"
+    check_fails "...every row a process and its figure" grep -qvE '^  ([^ ]+ +[0-9]+\.[0-9]%|\(no GPU time\))$' <<<"$rows"
+    [ -z "$nv" ] || check_match "...Hyprland's among them" "(^|$nl)  Hyprland +[0-9]" "$rows"
+  }
+  cx_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/' cx_env=(PATH="$rpnv:$PATH") cx_also=cx_gpu_also cx_check=cx_gpu_rows
+  cx_want=(rc=0 "out~^box '$B': 1920x1080@60 on $mn, " err= "$pmon")
   cx_case "gpu: its rows" gpu -b "$B" 300ms
-  cx_sed="" cx_env=() cx_also=cx_lay_also
+  cx_sed="" cx_env=() cx_also=cx_lay_also cx_check=""
   check "...the box lived through them" ob hyprctl -b "$B" version
   # (The main screen's drop and back are on the stand-in desktop of t_unit_monitor_add_window, and t_output's
   # on a real box: here the main screen dropped once more, after it was back, crashed this Hyprland

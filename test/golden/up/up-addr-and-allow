@@ -1,0 +1,229 @@
+== launch.sh
+#!/usr/bin/env
+bash
+for
+f
+in
+/proc/self/fd/*;
+do
+f=${f##*/};
+[
+$f
+-le
+2
+]
+||
+eval
+exec $f>&-;
+done
+2>/dev/null;
+exec
+env
+-i
+PATH=/usr/bin
+TERM=dumb
+LANG=X
+USER=X
+LOGNAME=X
+SHELL=X
+${HL_EXEC_RULE_TOKEN:+HL_EXEC_RULE_TOKEN=$HL_EXEC_RULE_TOKEN}
+prlimit
+--core=1:
+setsid
+pasta
+-q
+-P
+BOXDIR/pasta.pid
+--splice-only
+-t
+none
+-u
+none
+-U
+none
+-T
+18080,18081
+--
+sh
+-c
+{ ip addr add 192.0.2.7/32 dev lo && ip -6 addr add 2001:db8::7/128 dev lo nodad && :; } || { echo 'omabox: could not add the --addr addresses to the box loopback' >&2; exit 1; }; exec 3>"$0"; exec "$@"
+BOXDIR/info.json
+bwrap
+--unshare-user
+--uid
+X
+--gid
+X
+--die-with-parent
+--unsetenv
+HL_EXEC_RULE_TOKEN
+--info-fd
+3
+--unshare-pid
+--unshare-ipc
+--unshare-uts
+--hostname
+X
+--ro-bind
+/usr
+/usr
+--symlink
+usr/bin
+/bin
+--symlink
+usr/lib
+/lib
+--symlink
+usr/lib
+/lib64
+--ro-bind
+/etc
+/etc
+--ro-bind
+BOXDIR/etc/omarchy.conf
+/etc/omarchy.conf
+--proc
+/proc
+--dev
+/dev
+--ro-bind
+/sys
+/sys
+--tmpfs
+/tmp
+--bind
+BOXDIR/run
+RT
+--bind
+CACHE/omabox/NAME/home
+/home/sbx
+--ro-bind
+ROOT/share
+/opt/omabox/share
+--ro-bind
+ROOT/tools/keyboard/omabox-keyboard
+/opt/omabox/bin/omabox-keyboard
+--ro-bind
+ROOT/tools/pointer/omabox-pointer
+/opt/omabox/bin/omabox-pointer
+--ro-bind
+ROOT/tools/still/omabox-still
+/opt/omabox/bin/omabox-still
+--ro-bind
+ROOT/tools/events/omabox-events
+/opt/omabox/bin/omabox-events
+--ro-bind
+ROOT/tools/burst/omabox-burst
+/opt/omabox/bin/omabox-burst
+--ro-bind
+ROOT/tools/tree/omabox-tree
+/opt/omabox/bin/omabox-tree
+--tmpfs
+/run/systemd/journal
+--setenv
+PATH
+/opt/omabox/share/bin:/usr/bin
+--setenv
+XDG_RUNTIME_DIR
+RT
+--setenv
+HOME
+/home/sbx
+--setenv
+XDG_DATA_HOME
+/home/sbx/.local/share
+--setenv
+XDG_CONFIG_HOME
+/home/sbx/.config
+--setenv
+XDG_CACHE_HOME
+/home/sbx/.cache
+--setenv
+XDG_STATE_HOME
+/home/sbx/.local/state
+--setenv
+QT_FORCE_STDERR_LOGGING
+1
+--setenv
+ATSPI_DBUS_IMPLEMENTATION
+dbus-daemon
+--setenv
+OMABOX_RENDER_NODE
+X
+--setenv
+OMABOX_CALLER_PATH
+X
+--setenv
+OMABOX_WAYLAND_SCREEN
+X
+--setenv
+OMABOX_SIZE
+1920x1080@60
+--setenv
+OMABOX_SCALE
+1
+--setenv
+OMABOX_INTERACTIVE
+0
+--setenv
+OMABOX_XWAYLAND
+0
+--setenv
+OMABOX_AUTORELOAD
+0
+--setenv
+OMABOX_SYSTEMD
+0
+--setenv
+OMABOX_AUDIO
+0
+--setenv
+OMABOX_SHELL
+0
+--setenv
+OMABOX_OMARCHY_VERSION
+X
+--setenv
+OMABOX_BOX
+NAME
+/opt/omabox/share/session.sh
+3>BOXDIR/info.json
+</dev/null
+>BOXDIR/box.log
+2>&1
+== box.json
+{
+  "addrs": [
+    "192.0.2.7",
+    "2001:db8::7"
+  ],
+  "allow": "18080,18081",
+  "aquamarine": "X",
+  "audio": false,
+  "autoreload": false,
+  "bar": "user",
+  "client_render": "X",
+  "dir": "R/norepo",
+  "hyprland_version": "X",
+  "idle": 7200,
+  "mode": "headless",
+  "mounts": [],
+  "name": "NAME",
+  "net": "isolated",
+  "omarchy_version": "X",
+  "overlays": [],
+  "plugin_dirs": {},
+  "plugin_via": {},
+  "plugins": [],
+  "quickshell_version": "X",
+  "render": "X",
+  "scale": 1,
+  "shell": false,
+  "size": "1920x1080@60",
+  "starter": {
+    "terminal": false
+  },
+  "systemd": false,
+  "wayland_screen": "X",
+  "xwayland": false
+}
