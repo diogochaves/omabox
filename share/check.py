@@ -604,7 +604,7 @@ def sheet(plan, out_png, font):
                 geo, crop = f"{max(1, round(iw * s))}x{max(1, round(ih * s))}!", []
             else:
                 geo, crop = f"{z(c['sw'])}x{z(c['sh'])}!", ["-crop", f"{cw}x{ch}+{cx}+{cy}", "+repage"]
-            a.extend(["(", path, "-alpha", "off"] + crop + (["-scale", geo] if s >= 1 else ["-resize", geo]))
+            a.extend(["(", "png:" + path, "-alpha", "off"] + crop + (["-scale", geo] if s >= 1 else ["-resize", geo]))
             a.extend(["-fill", "none", "-strokewidth", str(2 * F)])
             for (mx, my, mw, mh), colour, *_ in c["marks"]:
                 x0, y0 = int((mx - cx) * s) - 3 * F, int((my - cy) * s) - 3 * F
@@ -703,7 +703,7 @@ def overview(plan, out_png, font):
             a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {z(x)},{z(y)} {z(x + c['w']) - 1},{z(y + c['h']) - 1}"])
             text(x + PAD, y + PAD, fit(c["lines"][0][0], c["w"] - 2 * PAD), INK)
             iy, sc = y + PAD + LH + 4, c["s"] * F
-            a.extend(["(", c["pt"]["png"], "-alpha", "off"] + (["-scale"] if sc >= 1 else ["-resize"]) + [f"{z(c['sw'])}x{z(c['sh'])}!"])
+            a.extend(["(", "png:" + c["pt"]["png"], "-alpha", "off"] + (["-scale"] if sc >= 1 else ["-resize"]) + [f"{z(c['sw'])}x{z(c['sh'])}!"])
             for colour, (mx, my, mw, mh) in c["pt"]["marks"]:
                 x0, y0 = int(mx * sc), int(my * sc)
                 x1, y1 = max(x0 + 1, int((mx + mw) * sc + 0.999) - 1), max(y0 + 1, int((my + mh) * sc + 0.999) - 1)

@@ -140,11 +140,13 @@ fn calib_card(file: &[u8], w: &[u8], h: &[u8], marks: &[u8]) -> Option<bool> {
 }
 
 /// calib_read FILE: the card's size ("W H") and its marks ("L X Y" lines); None for a file that is
-/// not a card.
+/// not a card. The card is read as the PNG it is, from a file of its own opened here (no link), never by its
+/// name: magick takes a name's `coder:` prefix (`msl:`, `ephemeral:`, `text:`, `@FILE`) at its word.
 fn calib_read(file: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let f = crate::shots::open_regular(file)?;
     let o = crate::sig::command("magick")
-        .args(["identify", "-format", "%c", "--"])
-        .arg(OsStr::from_bytes(file))
+        .args(["identify", "-format", "%c", "png:-"])
+        .stdin(Stdio::from(f))
         .stderr(Stdio::null())
         .output()
         .ok()?;

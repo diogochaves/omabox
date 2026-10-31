@@ -11676,6 +11676,23 @@ from them.
     t_burst (in a box: a burst folder with a frame that is not an image, `shot -o` a text file and a
     link, `drag --shot` a text file, refused and untouched; an earlier shot written over),
     t_unit_version (the two caps). Not verified: a Claude Code session using the grant.
+    *Review (2026-10-31):* a pre-approved verb must also not run what a path names. `calibrate
+    --answer` gave its CARD to `magick identify` as named, so `msl:FILE` ran an ImageMagick script
+    (it wrote a file on the host), and `ephemeral:` (read once, then removed), `text:` or `@FILE`
+    took the name as theirs. The
+    card is now opened here (a regular file, O_NOFOLLOW: a link to one is no card) and given to magick
+    on its stdin as `png:-`. Every other host-side magick call takes its files as `png:PATH`
+    (shots.rs png_arg: `shot --since`/`--changed` and `wait --since`'s diff, the crop, the burst's
+    sheet, `check diff`, the check's marks, holes and report pages in check.py, record's contact
+    sheet's tiles). ffmpeg and ffprobe run only in the box (record, audio), on paths of the box's.
+    And `shot -o`'s folder checked then written by name: a box could swap a folder on its way (in its
+    HOME) for a link between shot_path's checks and the write, sending the PNG over a host file of the
+    same name. shot_path now opens the resolved folder a component at a time from `/`, none a link
+    (O_PATH|O_NOFOLLOW), checks OUT and OUT.part through that fd (fstatat, openat), and the shot makes
+    OUT.part and renames it OUT only there (openat, renameat; shots.rs OutDir). A `--burst` folder is
+    still written by name. Tests: t_unit_calibrate (`msl:` ran nothing, `ephemeral:CARD` is no
+    card, a link refused), shots.rs out_dir_holds_the_folder (the swap; by name, the control,
+    follows the link), png_arg_names_the_coder. The calibrate ones fail on the old code.
 623. **A tray menu took a hand-made walk over the bus and a PNG decoder** (2026-10-31, #343).
     Omarchy 4.5's bar publishes no accessible items (`tree --layer omarchy-bar`), and its 4.5
     indicator moved the tray one slot, so a fixed click opened the neighbouring widget. An agent

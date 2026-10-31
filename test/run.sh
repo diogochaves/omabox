@@ -1822,6 +1822,18 @@ t_unit_calibrate() {
   check_match "...a letter the card has not: refused, exit 2" "the card has no mark Q .* 2$" "${out//$'\n'/ } $rc"
   out=$(cal "$d/none.png" --answer "A 1,2 B 3,4 C 5,6" 2>&1); rc=$?
   check_match "...no card: says how to draw one, exit 2" "no card at .*omabox calibrate draws one first.* 2$" "${out//$'\n'/ } $rc"
+  # A card is read as the PNG it is, never through an ImageMagick coder its name might name (msl:,
+  # ephemeral:, text:, @FILE...): an MSL script would write files on the host.
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<image size="4x4"><read filename="xc:red"/><write filename="%s"/></image>\n' \
+    "$d/msl-wrote.png" > "$d/card.msl"
+  out=$(cal "msl:$d/card.msl" --answer "A 1,2 B 3,4 C 5,6" 2>&1); rc=$?
+  check_match "...msl:FILE as the card: no card, exit 2" "no card at msl:.* 2$" "${out//$'\n'/ } $rc"
+  check_fails "...and its script never ran" test -e "$d/msl-wrote.png"
+  cp "$d/card.png" "$d/card-copy.png"
+  check_match "...ephemeral:CARD: no card either" "no card at ephemeral:" "$(cal "ephemeral:$d/card-copy.png" --answer "A 1,2 B 3,4 C 5,6" 2>&1)"
+  check "...and the file is still there" test -e "$d/card-copy.png"
+  ln -sf "$d/card.png" "$d/card-link.png"
+  check_match "...a link to a card: refused (a card is a file of its own)" "no card at .*card-link.png" "$(cal "$d/card-link.png" --answer "A 1,2 B 3,4 C 5,6" 2>&1)"
   check "calibrate is in -b's commands (a box's size)" bash -c "'$CLI' -b '$P-nobox' calibrate --size 640x480 -o '$d/c4.png' >/dev/null 2>&1"
 }
 

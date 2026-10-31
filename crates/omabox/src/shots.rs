@@ -146,6 +146,26 @@ pub fn overwrite_refusal(p: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
+/// A PNG named to magick: `png:PATH`, so no `coder:` prefix in PATH (`msl:`, `ephemeral:`,
+/// `text:`) and no `@` list means anything to it (#338's review).
+pub fn png_arg(p: &[u8]) -> Vec<u8> {
+    cat!("png:", p)
+}
+
+/// A file a caller named, open for reading as the regular file it is: never through a link at its
+/// name, never a FIFO or a device (None for those, or for nothing there). Hand it to a tool as its
+/// stdin (`png:-`), so no `coder:` prefix in the name means anything to it.
+pub fn open_regular(p: &[u8]) -> Option<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(shell::path(p))
+        .ok()?;
+    f.metadata().ok().filter(|m| m.is_file())?;
+    Some(f)
+}
+
 /// A file omabox writes at a path its caller named: made or truncated, never through a link there.
 pub fn create_nofollow(p: &[u8]) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -157,10 +177,133 @@ pub fn create_nofollow(p: &[u8]) -> std::io::Result<std::fs::File> {
         .open(shell::path(p))
 }
 
+/// The folder a caller's file is written into, held open (#338's review): the file made, renamed
+/// and removed only by its name in that folder's fd, so a folder on its way swapped for a link after
+/// the checks (a box HOME is the box's to change) cannot send the write anywhere else.
+#[derive(Clone)]
+pub struct OutDir(std::sync::Arc<std::os::fd::OwnedFd>);
+
+fn c_name(name: &[u8]) -> std::io::Result<std::ffi::CString> {
+    if name.is_empty() || name.contains(&b'/') || name == b"." || name == b".." {
+        return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    std::ffi::CString::new(name).map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))
+}
+
+fn rc(r: libc::c_int) -> std::io::Result<libc::c_int> {
+    if r < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(r)
+    }
+}
+
+impl OutDir {
+    /// DIR (absolute, resolved) opened a folder at a time from `/`, none of them a link.
+    pub fn open(dir: &[u8]) -> std::io::Result<OutDir> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        if !dir.starts_with(b"/") {
+            return Err(std::io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        let fl = libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: a constant C string; open only adds a descriptor of ours.
+        let fd = rc(unsafe { libc::open(c"/".as_ptr(), fl) })?;
+        // SAFETY: fd was just opened and is ours alone.
+        let mut at = unsafe { OwnedFd::from_raw_fd(fd) };
+        for comp in dir
+            .split(|&c| c == b'/')
+            .filter(|c| !c.is_empty() && *c != b".")
+        {
+            let c = c_name(comp)?;
+            // SAFETY: at is open, c a valid C string; openat only adds a descriptor of ours.
+            let fd = rc(unsafe { libc::openat(at.as_raw_fd(), c.as_ptr(), fl) })?;
+            // SAFETY: as above.
+            at = unsafe { OwnedFd::from_raw_fd(fd) };
+        }
+        Ok(OutDir(std::sync::Arc::new(at)))
+    }
+
+    fn fd(&self) -> libc::c_int {
+        use std::os::fd::AsRawFd;
+        self.0.as_raw_fd()
+    }
+
+    /// NAME in the folder made or truncated for writing, never through a link there.
+    pub fn create(&self, name: &[u8]) -> std::io::Result<std::fs::File> {
+        use std::os::fd::FromRawFd;
+        let c = c_name(name)?;
+        let fl =
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: the folder's fd is open, c a valid C string; openat only adds a descriptor.
+        let fd = rc(unsafe { libc::openat(self.fd(), c.as_ptr(), fl, 0o666 as libc::c_uint) })?;
+        // SAFETY: fd was just opened and is ours alone.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    }
+
+    /// FROM renamed TO, both in the folder.
+    pub fn rename(&self, from: &[u8], to: &[u8]) -> std::io::Result<()> {
+        let (f, t) = (c_name(from)?, c_name(to)?);
+        // SAFETY: the folder's fd is open, both valid C strings.
+        rc(unsafe { libc::renameat(self.fd(), f.as_ptr(), self.fd(), t.as_ptr()) }).map(|_| ())
+    }
+
+    /// NAME in the folder removed.
+    pub fn remove(&self, name: &[u8]) -> std::io::Result<()> {
+        let c = c_name(name)?;
+        // SAFETY: the folder's fd is open, c a valid C string.
+        rc(unsafe { libc::unlinkat(self.fd(), c.as_ptr(), 0) }).map(|_| ())
+    }
+
+    /// overwrite_refusal of NAME in the folder (SHOWN: its path, as the refusal says it).
+    pub fn refusal(&self, name: &[u8], shown: &[u8]) -> Option<Vec<u8>> {
+        use std::os::fd::FromRawFd;
+        let Ok(c) = c_name(name) else {
+            return Some(cat!(shown, " is no file name (name a new path)"));
+        };
+        // SAFETY: an all-zero stat is a valid out buffer for fstatat.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: the folder's fd is open, c a valid C string, st ours to write.
+        if unsafe { libc::fstatat(self.fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0
+        {
+            return None;
+        }
+        match st.st_mode & libc::S_IFMT {
+            libc::S_IFLNK => {
+                return Some(cat!(
+                    shown,
+                    " is a link: omabox writes through none (name the file itself, or a new path)"
+                ));
+            }
+            libc::S_IFREG => {}
+            _ => return Some(cat!(shown, " is there and is not a file (name a new path)")),
+        }
+        if st.st_size == 0 {
+            return None;
+        }
+        let fl = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        // SAFETY: as above; openat only adds a descriptor of ours.
+        let fd = unsafe { libc::openat(self.fd(), c.as_ptr(), fl) };
+        let mut head = [0u8; 8];
+        let png = fd >= 0 && {
+            use std::io::Read;
+            // SAFETY: fd was just opened and is ours alone.
+            let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+            f.read_exact(&mut head).is_ok() && &head == PNG_MAGIC
+        };
+        (!png).then(|| {
+            cat!(
+                shown,
+                " is there and is not a PNG: omabox writes over no file but an image (name a new path, or remove it first)"
+            )
+        })
+    }
+}
+
 /// shot_path OUT: OUT's directory made, then OUT (resolved) written once and removed as OUT.part, so
-/// a path that cannot be written stops here, saying why (issue #63). OUT resolved, its FILE. OUT and
-/// OUT.part are written over only as overwrite_refusal lets them be (#338).
-pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>)> {
+/// a path that cannot be written stops here, saying why (issue #63). OUT resolved, its FILE and the
+/// folder they are in, held (OutDir: where the shot is then made and renamed). OUT and OUT.part are
+/// written over only as overwrite_refusal lets them be (#338).
+pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>, OutDir)> {
     if let Some(m) = overwrite_refusal(out) {
         return Err(ctx.die(cat!("shot: ", m)));
     }
@@ -170,14 +313,17 @@ pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>)> {
     }
     let out = real_or_end(ctx, out)?;
     let file = cat!(out, ".part");
-    if let Some(m) = overwrite_refusal(&out).or_else(|| overwrite_refusal(&file)) {
+    let held = OutDir::open(&dirname(&out))
+        .map_err(|e| ctx.die(cat!("shot: cannot write ", out, ": ", why(&e))))?;
+    let (ob, fb) = (shell::basename(&out), shell::basename(&file));
+    if let Some(m) = held.refusal(&ob, &out).or_else(|| held.refusal(&fb, &file)) {
         return Err(ctx.die(cat!("shot: ", m)));
     }
-    if let Err(e) = create_nofollow(&file) {
+    if let Err(e) = held.create(&fb) {
         return Err(ctx.die(cat!("shot: cannot write ", out, ": ", why(&e))));
     }
-    let _ = std::fs::remove_file(shell::path(&file));
-    Ok((out, file))
+    let _ = held.remove(&fb);
+    Ok((out, file, held))
 }
 
 /// stat -f's names of the filesystems fd_file takes (ext4 says ext2/ext3). No network filesystem: a
@@ -555,8 +701,8 @@ fn mask_draws(masks: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
 fn magick_diff(a: &[u8], b: &[u8], masks: &[Vec<u8>], rest: &[&str]) -> Option<Vec<u8>> {
     let draws = mask_draws(masks)?;
     let mut c = crate::sig::command("magick");
-    c.arg(std::ffi::OsStr::from_bytes(a))
-        .arg(std::ffi::OsStr::from_bytes(b))
+    c.arg(std::ffi::OsStr::from_bytes(&png_arg(a)))
+        .arg(std::ffi::OsStr::from_bytes(&png_arg(b)))
         .args(["-fill", "black"])
         .args(draws.iter().map(|d| std::ffi::OsStr::from_bytes(d)))
         .args(rest)
@@ -763,6 +909,77 @@ pub fn other_gpu(driver: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #338's review: a folder on the way to a shot's -o swapped for a link after shot_path's checks
+    /// (a box HOME is the box's) does not send the write: the file is made and renamed in the folder
+    /// held. By name (the old way, kept here as the control) it lands where the link points.
+    #[test]
+    fn out_dir_holds_the_folder() {
+        let t = std::env::temp_dir().join(format!("omabox-outdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (a, b, moved) = (t.join("a"), t.join("b"), t.join("a-moved"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let held = OutDir::open(shell::bytes(&a)).unwrap();
+        // The swap: a moved away, a link to b in its place.
+        std::fs::rename(&a, &moved).unwrap();
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        // By name: through the link, into b.
+        let by_name = cat!(shell::bytes(&a), "/old.png");
+        let part = cat!(by_name, ".part");
+        create_nofollow(&part)
+            .unwrap()
+            .write_all(PNG_MAGIC)
+            .unwrap();
+        assert!(mv_f(&part, &by_name));
+        assert!(
+            b.join("old.png").exists(),
+            "the control: by name it follows the link"
+        );
+        // Held: into the folder that was checked.
+        held.create(b"x.png.part")
+            .unwrap()
+            .write_all(PNG_MAGIC)
+            .unwrap();
+        held.rename(b"x.png.part", b"x.png").unwrap();
+        assert!(moved.join("x.png").exists() && !b.join("x.png").exists());
+        held.remove(b"x.png").unwrap();
+        assert!(!moved.join("x.png").exists());
+        // No link on the way, at any folder; no name with a slash.
+        assert!(
+            OutDir::open(shell::bytes(&a)).is_err(),
+            "a link as the folder"
+        );
+        assert!(OutDir::open(shell::bytes(&a.join("."))).is_err());
+        assert!(OutDir::open(b"relative").is_err());
+        assert!(held.create(b"../b/y.png").is_err() && !b.join("y.png").exists());
+        // The overwrite rules, through the folder.
+        std::fs::write(moved.join("text"), "keep").unwrap();
+        std::fs::write(moved.join("img.png"), PNG_MAGIC).unwrap();
+        std::fs::write(moved.join("empty"), "").unwrap();
+        std::os::unix::fs::symlink(moved.join("img.png"), moved.join("ln")).unwrap();
+        assert!(held.refusal(b"text", b"T").unwrap().ends_with(b"not a PNG: omabox writes over no file but an image (name a new path, or remove it first)"));
+        assert!(
+            held.refusal(b"ln", b"L")
+                .unwrap()
+                .starts_with(b"L is a link")
+        );
+        assert_eq!(held.refusal(b"img.png", b"I"), None);
+        assert_eq!(held.refusal(b"empty", b"E"), None);
+        assert_eq!(held.refusal(b"none", b"N"), None);
+        assert!(
+            held.create(b"ln").is_err(),
+            "never through a link at the name"
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    /// #338's review: a PNG named to magick takes no coder from its name.
+    #[test]
+    fn png_arg_names_the_coder() {
+        assert_eq!(png_arg(b"msl:/x"), b"png:msl:/x");
+        assert_eq!(png_arg(b"/a/b.png"), b"png:/a/b.png");
+    }
 
     #[test]
     fn as_coreutils_and_awk() {

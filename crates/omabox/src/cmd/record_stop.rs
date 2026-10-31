@@ -2160,7 +2160,7 @@ fn record_sheet(
         let l = replace_all(&replace_all(l, b"\\", b"\\\\"), b"%", b"%%");
         args.push(b"-label".to_vec());
         args.push(l);
-        args.push(format!("{}/{:03}.png", String::from_utf8_lossy(&tmp), i + 1).into_bytes());
+        args.push(format!("png:{}/{:03}.png", String::from_utf8_lossy(&tmp), i + 1).into_bytes());
     }
     let part = cat!(png, ".part");
     args.extend(w(&[

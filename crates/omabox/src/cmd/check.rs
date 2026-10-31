@@ -13,6 +13,7 @@ use crate::jq::{self, Args};
 use crate::select::select_box;
 use crate::settle::{geom_parse, geom_text};
 use crate::shell::{self, dec, strip_nl};
+use crate::shots::png_arg;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -77,14 +78,19 @@ fn check_py() -> Vec<u8> {
     shell::bytes(&crate::root().join("share/check.py")).to_vec()
 }
 
-/// `magick ARGS... 2>/dev/null`: its status and stdout.
+/// `magick ARGS... 2>/dev/null`: its status and stdout. Every file in ARGS goes as `png_arg`'s.
 fn magick(args: &[Vec<u8>]) -> jq::Ran {
     jq::tool("magick", args, None, jq::Err::Null)
 }
 
 /// `$(magick identify -format FMT FILE 2>/dev/null)`.
 fn identify(fmt: &str, f: &[u8]) -> Option<Vec<u8>> {
-    let r = magick(&w(&[b"identify".as_slice(), b"-format", fmt.as_bytes(), f]));
+    let r = magick(&w(&[
+        b"identify".as_slice(),
+        b"-format",
+        fmt.as_bytes(),
+        &png_arg(f),
+    ]));
     r.ok().then(|| r.text())
 }
 
@@ -379,7 +385,8 @@ fn check_regions_in(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Op
             (y2 - 1).to_string()
         ));
     }
-    let mut a = w(&[fa, fb, b"-alpha", b"off", b"-fill", b"black"]);
+    let (pa, pb) = (png_arg(fa), png_arg(fb));
+    let mut a = w(&[pa.as_slice(), &pb, b"-alpha", b"off", b"-fill", b"black"]);
     a.extend(draw);
     a.extend(w(&[
         "-compose",
@@ -412,7 +419,7 @@ fn check_regions_in(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Op
 /// check_mark NEW OUT REGION...: the regions drawn on the new shot.
 fn check_mark(new: &[u8], outp: &[u8], regions: &[Vec<u8>]) -> bool {
     let mut a = w(&[
-        new,
+        png_arg(new).as_slice(),
         b"-fill",
         b"none",
         b"-stroke",
@@ -428,7 +435,7 @@ fn check_mark(new: &[u8], outp: &[u8], regions: &[Vec<u8>]) -> bool {
         a.push(b"-draw".to_vec());
         a.push(format!("rectangle {},{} {},{}", x - 2, y - 2, x + ww + 1, y + h + 1).into_bytes());
     }
-    a.push(outp.to_vec());
+    a.push(png_arg(outp));
     magick(&a).ok()
 }
 
@@ -517,7 +524,7 @@ fn check_holes_in(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
             CLEAN_WALLPAPER,
         ])
     };
-    let mut a = vec![f.to_vec()];
+    let mut a = vec![png_arg(f)];
     a.extend(mask);
     a.extend(w(&[
         "-define",

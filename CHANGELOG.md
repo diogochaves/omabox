@@ -146,6 +146,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`calibrate CARD --answer` ran what CARD's name told ImageMagick to**: a card named
+  `msl:FILE` ran an ImageMagick script, which can write files. The card is now read as the PNG file
+  it is (a link to one is no card), and every file omabox gives ImageMagick is read as a PNG
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
+- **`shot -o` into a box's HOME could be sent elsewhere**: a box that swapped a folder on the way
+  for a link between omabox's checks and the write had the shot written where the link pointed.
+  The shot is now made and renamed in the folder omabox checked, held open
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
 - **A window shot failed with "grim failed: it ended with status 139"** when the window changed size
   during it (just resized, or shown at a new size): Hyprland fails such a copy, and grim 1.5.0 then
   crashes. The window is now taken again, up to four tries, and one that keeps failing says why

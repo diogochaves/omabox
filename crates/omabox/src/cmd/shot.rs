@@ -95,6 +95,8 @@ fn split_at(v: &[u8], sep: u8) -> (Vec<u8>, Vec<u8>) {
 struct Shot {
     out: Vec<u8>,
     file: Vec<u8>,
+    /// The folder OUT and FILE are in, held (shot_path): FILE made and renamed OUT only there.
+    dir: Option<crate::shots::OutDir>,
     tofd: Vec<u8>,
     zoom: Vec<u8>,
     fit: Vec<u8>,
@@ -572,7 +574,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ));
         }
         if !s.out.is_empty() && burst.is_empty() {
-            (s.out, s.file) = shot_path(ctx, &s.out)?;
+            let (o, f, d) = shot_path(ctx, &s.out)?;
+            (s.out, s.file, s.dir) = (o, f, Some(d));
         }
     }
     if burst.is_empty()
@@ -697,7 +700,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let tmp = shell::env("TMPDIR")
             .filter(|t| !t.is_empty())
             .unwrap_or(b"/tmp".to_vec());
-        (s.out, s.file) = shot_path(ctx, &cat!(tmp, "/omabox-", ctx.name, "-", hms_ms(), ".png"))?;
+        let (o, f, d) = shot_path(ctx, &cat!(tmp, "/omabox-", ctx.name, "-", hms_ms(), ".png"))?;
+        (s.out, s.file, s.dir) = (o, f, Some(d));
     }
     // What the image covers: a window (its own pixels, finding 81), a region, or the whole layout.
     // PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
@@ -904,7 +908,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             return Err(ctx.die(cat!("shot: cannot write in ", ctx.d, "/changed")));
         }
         match shell::mktemp_in(&cat!(dir, "/.new-XXXXXX")) {
-            Ok((_, f)) => s.file = f,
+            // (a file of omabox's own, by its name: not in OUT's folder)
+            Ok((_, f)) => (s.file, s.dir) = (f, None),
             Err(_) => return Err(ctx.die(cat!("shot: cannot write in ", ctx.d, "/changed"))),
         }
     }
@@ -1036,11 +1041,12 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     let to_fd = !s.tofd.is_empty() && !s.changed;
     let tofd = s.tofd.clone();
     let file = s.file.clone();
+    let held = s.dir.clone();
     let has_win = !s.win.is_empty();
     // put: into a jailed caller's fd (never reopened by name), else the file.
     let put = {
         let g = grab.clone();
-        let (tofd, file) = (tofd.clone(), file.clone());
+        let (tofd, file, held) = (tofd.clone(), file.clone(), held.clone());
         move || -> i32 {
             // (once the command gave up on the capture, nothing more is made)
             if g.stop.load(Ordering::SeqCst) {
@@ -1052,6 +1058,8 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 let d = unsafe { libc::dup(fd) };
                 // SAFETY: d is a new descriptor of ours.
                 (d >= 0).then(|| unsafe { OwnedFd::from_raw_fd(d) })
+            } else if let Some(d) = &held {
+                d.create(&shell::basename(&file)).ok().map(OwnedFd::from)
             } else {
                 crate::shots::create_nofollow(&file).ok().map(OwnedFd::from)
             };
@@ -1184,8 +1192,23 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         return changed(ctx, s, lw, lh);
     }
     if s.tofd.is_empty() {
-        // (`mv "$file" "$out"`: into a folder of that name, as mv does)
-        if !crate::shots::mv_f(&s.file, &s.out) {
+        // (`mv "$file" "$out"`: into a folder of that name, as mv does; in the folder held, where
+        // shot_path refused a folder at OUT)
+        let moved = match &s.dir {
+            Some(d) => d
+                .rename(&shell::basename(&s.file), &shell::basename(&s.out))
+                .map_err(|e| {
+                    say(cat!(
+                        "shot: cannot write ",
+                        s.out,
+                        ": ",
+                        crate::shots::why(&e)
+                    ))
+                })
+                .is_ok(),
+            None => crate::shots::mv_f(&s.file, &s.out),
+        };
+        if !moved {
             return Err(Exit(1));
         }
         s.file = s.out.clone();
@@ -1429,11 +1452,19 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
             data.is_ok_and(|d| f.write_all(&d).is_ok())
         } else {
             let part = cat!(s.out, ".part");
-            // (never through a link at PART: #338)
+            // (never through a link at PART: #338; in the folder held, when there is one)
+            let (pb, ob) = (shell::basename(&part), shell::basename(&s.out));
+            let made = |d: Option<&crate::shots::OutDir>| match d {
+                Some(d) => d.create(&pb),
+                None => crate::shots::create_nofollow(&part),
+            };
             std::fs::File::open(shell::path(src))
-                .and_then(|mut f| std::io::copy(&mut f, &mut crate::shots::create_nofollow(&part)?))
+                .and_then(|mut f| std::io::copy(&mut f, &mut made(s.dir.as_ref())?))
                 .is_ok()
-                && crate::shots::mv_f(&part, &s.out)
+                && match &s.dir {
+                    Some(d) => d.rename(&pb, &ob).is_ok(),
+                    None => crate::shots::mv_f(&part, &s.out),
+                }
         };
         if !ok {
             let _ = std::fs::remove_file(shell::path(&s.file));
@@ -1559,7 +1590,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         Err(e) => return Err(e),
     };
     let ok = crate::sig::command("magick")
-        .arg(std::ffi::OsStr::from_bytes(&s.file))
+        .arg(std::ffi::OsStr::from_bytes(&crate::shots::png_arg(&s.file)))
         .arg("-crop")
         .arg(format!("{ciw}x{cih}+{ix}+{iy}"))
         .arg("+repage")
@@ -2037,7 +2068,7 @@ fn burst_run(
         for (k, f) in files.iter().enumerate() {
             c.arg("-label")
                 .arg(format!("{}: {}", k + 1, ms_s(&ts[k])))
-                .arg(std::ffi::OsStr::from_bytes(f));
+                .arg(std::ffi::OsStr::from_bytes(&crate::shots::png_arg(f)));
         }
         c.arg("-tile")
             .arg(format!("{}x", nf.min(5)))
@@ -2050,7 +2081,11 @@ fn burst_run(
                 "white",
             ])
             .args(["-alpha", "off", "-depth", "8"])
-            .arg(std::ffi::OsStr::from_bytes(&cat!(s.out, "/sheet.png")))
+            .arg(std::ffi::OsStr::from_bytes(&cat!(
+                "png:",
+                s.out,
+                "/sheet.png"
+            )))
             .stderr(std::process::Stdio::null());
         if !c.status().is_ok_and(|s| s.success()) {
             return Err(ctx.die("shot --burst: the contact sheet failed (magick montage)"));
