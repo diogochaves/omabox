@@ -1428,6 +1428,54 @@ if not rule: bad.append("exec.rs: command does not close the fds of a child ente
 if not pid: bad.append("enter.rs: Plan::pid_ns does not test CLONE_NEWPID")
 print("\n".join(bad + ["%d calls" % n]))
 '
+# HOST_DISPATCH_RS DIR: S8's host side (#366) over the crate's sources in DIR (their tests left out),
+# where it holds by construction: only host.rs reaches the user's Hyprland. Elsewhere, no hyprctl run
+# on the host (a command, Command::new or jq::tool of it), no signature set on a command, no path to a
+# Hyprland socket, and a HostAsked made only by `host` and `peek --focus`, the user's requests. In
+# host.rs, its raw calls (host_eval, host_eval_out, host_hyprctl, install_passthrough) private, each
+# window it opens or rule it adds `silent` with no focus, and its dispatches only a window's float,
+# resize, move and the submap's reset, a focus only in HostAsked. As FILE:LINE: TEXT, each place that
+# breaks it; then "N Lua", the host Lua it read.
+HOST_DISPATCH_RS='
+import os, re, sys
+bad = []; n = 0
+spawn = re.compile(r"(?<![\w])(command|Command::new|tool)\(\s*b?\"hyprctl\"")
+sigset = re.compile(r"\.env\(\s*b?\"HYPRLAND_INSTANCE_SIGNATURE\"")
+sock = re.compile(r"\.socket2?\.sock\"")
+asked = re.compile(r"HostAsked::user_asked\(")
+raw = re.compile(r"\bpub(\([\w:]+\))? fn (host_eval|host_eval_out|host_hyprctl|install_passthrough)\b")
+lua = re.compile(r"hl\.(exec_cmd|window_rule)\(")
+dsp = re.compile(r"hl\.dsp\.([\w.]+)")
+quiet = " silent\x27, no_initial_focus = true"
+for root, _, files in sorted(os.walk(sys.argv[1])):
+    for f in sorted(files):
+        if not f.endswith(".rs"): continue
+        p = os.path.join(root, f); rel = os.path.relpath(p, sys.argv[1]); L = open(p).read().split("\n")
+        end = next((i for i in range(len(L) - 1) if L[i] == "#[cfg(test)]" and L[i + 1].startswith("mod tests")), len(L))
+        impl = ""
+        for i in range(end):
+            t = L[i].strip()
+            if t.startswith("//"): continue
+            m = re.match(r"impl(<[^>]*>)? (\w+)", t)
+            if m: impl = m.group(2)
+            say = lambda why: bad.append("%s:%d: %s (%s)" % (rel, i + 1, t, why))
+            if rel == "host.rs":
+                if raw.search(t): say("a raw call on the host made public")
+                if lua.search(t):
+                    n += 1
+                    if quiet not in " ".join(x.strip() for x in L[i:i + 12]): say("a window opened or ruled on the host without silent and no focus")
+                for d in dsp.findall(t):
+                    n += 1
+                    if d in ("window.float", "window.resize", "window.move", "submap"): continue
+                    if d == "focus" and impl == "HostAsked": continue
+                    say("a dispatch on the host HostSilent may not send")
+                continue
+            if spawn.search(t): say("hyprctl run on the host outside host.rs")
+            if sigset.search(t): say("a Hyprland signature set outside host.rs")
+            if sock.search(t): say("a Hyprland socket reached outside host.rs")
+            if asked.search(t) and rel not in ("cmd/host.rs", "cmd/peek.rs"): say("a HostAsked made where the user did not ask")
+print("\n".join(bad + ["%d Lua" % n]))
+'
 # ON_BOX_KILLS_RS DIR: finding 289 over the crate's sources in DIR (their tests left out). on_box,
 # on_box_io and on_box_bg (and an entry with enter::TOOL) put a tool in the box's user and mount
 # namespaces only, so a pid read from the box's /proc means a host process there: each such call in a
@@ -1525,6 +1573,34 @@ t_unit_ns_fds() {
   sed -i 's/let only = fds.only || fds.enter.is_some_and(|p| p.pid_ns());/let only = fds.only;/' "$t/exec.rs"
   check_eq "...on a copy: an entry applied outside command, and command's rule gone, both found" \
     "planted.rs exec.rs" "$(python3 -c "$NS_FDS_RS" "$t" | sed '$d' | cut -d: -f1 | paste -sd' ')"
+  rm -rf "$t"
+}
+
+# #366, S8: every dispatch to the user's Hyprland goes through host.rs's typed handles (HostSilent:
+# silent, no focus; HostAsked: what the user asked for), the only module that reaches it.
+t_unit_host_dispatch() {
+  local out n t
+  out=$(python3 -c "$HOST_DISPATCH_RS" "$ROOT/crates/omabox/src")
+  n=$(tail -n 1 <<<"$out"); n=${n%% *}
+  check_eq "nothing but host.rs's HostSilent and HostAsked reaches your Hyprland, and they only as S8 says (#366)" "" "$(sed '$d' <<<"$out")"
+  check "...the check read host.rs's Lua ($n)" test "$n" -ge 8
+  # The check itself, on a copy: a hyprctl, a signature, a socket and a HostAsked planted outside
+  # host.rs; there, host_eval made public, peek's window not silent and a focus in HostSilent.
+  t=$TMP/hostdsp-rs; rm -rf "$t"; cp -r "$ROOT/crates/omabox/src" "$t"; chmod -R u+w "$t"   # (an install's tree is read-only)
+  cat > "$t/planted.rs" <<'PLANTED'
+fn a(sig: &[u8]) {
+    let mut c = crate::sig::command("hyprctl");
+    c.env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(sig));
+}
+fn b(ctx: &Ctx, rt: &[u8], sig: &[u8]) {
+    let _ = HostAsked::user_asked(ctx);
+    let _ = cat!(rt, "/hypr/", sig, "/.socket.sock");
+}
+PLANTED
+  sed -i 's/^fn host_eval(ctx/pub fn host_eval(ctx/; s/hl\.dsp\.window\.move(/hl.dsp.focus(/' "$t/host.rs"
+  sed -i "s/\" silent', no_initial_focus = true })\"/\"', no_initial_focus = true })\"/" "$t/host.rs"
+  check_eq "...on a copy: each planted one found" "host.rs host.rs host.rs planted.rs planted.rs planted.rs planted.rs" \
+    "$(python3 -c "$HOST_DISPATCH_RS" "$t" | sed '$d' | cut -d: -f1 | paste -sd' ')"
   rm -rf "$t"
 }
 
@@ -20169,7 +20245,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
