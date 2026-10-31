@@ -29,6 +29,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **Back-to-back `run`s got slower**: each kept a marker file for 10 s, and every run read them
   all. Runs close together now share one, so thousands in a row cost the same each
   ([#392](https://github.com/diogochaves/omabox/issues/392)).
+- **`wait until` with a command the box cannot run retried it to the timeout**, and never showed
+  why. A command not found (127) or that cannot run (126) in the box now ends the wait at once
+  ("unknown", exit 1); a wait that did not succeed shows the last lines of the command's stderr; and
+  a command naming a host path the box cannot see (this box's folder, your `$TMPDIR`) is said before
+  waiting ([#400](https://github.com/diogochaves/omabox/issues/400)).
 
 ## 1.0.1 — 2026-10-27
 

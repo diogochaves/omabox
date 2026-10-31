@@ -89,9 +89,14 @@ impl Probe<'_> {
                     secs.into_bytes(),
                 ];
                 argv.extend(cmd.iter().cloned());
+                // (its stderr kept, each try's over the last: the deciding one's is said, #400)
+                let errf = std::fs::File::create(ctx.at(UNTIL_ERR)).ok();
                 let rc = {
                     let _o = Redir::null(1);
-                    let _e = Redir::null(2);
+                    let _e = match &errf {
+                        Some(f) => Redir::to(2, std::os::fd::AsRawFd::as_raw_fd(f)),
+                        None => Redir::null(2),
+                    };
                     box_exec(ctx, &argv, ExecOpts::default())
                 };
                 // box_exec's die ends the probe's `$(...)` with its status: no answer from the
@@ -100,14 +105,80 @@ impl Probe<'_> {
                     Ok(rc) => rc,
                     Err(Exit(rc)) => return (i32::from(rc), Vec::new()),
                 };
-                if rc == 0 {
-                    (0, b"yes".to_vec())
-                } else {
-                    (0, format!("no exit {rc}").into_bytes())
+                // (126, 127: it cannot run in the box, which no retry changes: a host path is not
+                // there, #400; it was retried to the timeout)
+                match rc {
+                    0 => (0, b"yes".to_vec()),
+                    127 => (0, b"stop exit 127: command not found in the box".to_vec()),
+                    126 => (
+                        0,
+                        b"stop exit 126: command found but could not run in the box".to_vec(),
+                    ),
+                    _ => (0, format!("no exit {rc}").into_bytes()),
                 }
             }
         }
     }
+}
+
+/// The file in the box dir (host-only) that holds `wait until`'s last try's stderr.
+const UNTIL_ERR: &str = "until.err";
+
+/// The last N lines of TEXT that hold anything, each cut to 200 bytes.
+fn last_lines(text: &[u8], n: usize) -> Vec<Vec<u8>> {
+    let ls: Vec<&[u8]> = text
+        .split(|&c| c == b'\n')
+        .filter(|l| !l.trim_ascii().is_empty())
+        .collect();
+    ls[ls.len().saturating_sub(n)..]
+        .iter()
+        .map(|l| l[..l.len().min(200)].to_vec())
+        .collect()
+}
+
+/// `wait until`'s note when CMD (a word of it, or a `sh -c` string) names a path the box cannot
+/// see (#400): one under the box's own folder here (its HOME is /home/sbx in the box), or under the
+/// caller's $TMPDIR (the box has a /tmp of its own). Such a command fails in the box; behind a `!`
+/// it succeeded at once.
+fn host_path_note(ctx: &Ctx, cmd: &[Vec<u8>]) -> Option<Vec<u8>> {
+    host_path_note_with(&ctx.d, crate::shell::env("TMPDIR"), cmd)
+}
+
+/// host_path_note for box folder D and TMPDIR TMP.
+fn host_path_note_with(d: &[u8], tmp: Option<Vec<u8>>, cmd: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let home = cat!(d, "/home");
+    let tmp = tmp
+        .map(|t| t.strip_suffix(b"/").map_or(t.clone(), <[u8]>::to_vec))
+        .filter(|t| !t.is_empty() && t != b"/tmp" && t.starts_with(b"/"));
+    let under = |w: &[u8], dir: &[u8]| {
+        w.windows(dir.len() + 1)
+            .any(|x| x.starts_with(dir) && matches!(x[dir.len()], b'/'))
+            || w.ends_with(dir)
+    };
+    for w in cmd {
+        if under(w, &home) {
+            return Some(cat!(
+                "wait until: the command names ",
+                home,
+                "/..., this box's HOME as the host has it: in the box it is /home/sbx/..."
+            ));
+        }
+        if under(w, d) {
+            return Some(cat!(
+                "wait until: the command names ",
+                d,
+                "/..., this box's folder on the host: the box does not see it"
+            ));
+        }
+        if let Some(t) = tmp.as_deref().filter(|t| under(w, t)) {
+            return Some(cat!(
+                "wait until: the command names ",
+                t,
+                "/..., your $TMPDIR on the host: the box does not see it (it has a /tmp of its own; omabox up --ro-bind DIR binds a folder)"
+            ));
+        }
+    }
+    None
 }
 
 /// win_answer WANT WINDOWS SEL...: win_probe's answer for these windows.
@@ -189,6 +260,17 @@ fn poll_until(
                 "' went down after ",
                 ms_s(now.to_string())
             );
+            break;
+        }
+        if let Some(d) = o.strip_prefix(b"stop ") {
+            // (an answer no retry changes: said at once, not known)
+            let (code, why) = match d.iter().position(|&c| c == b':') {
+                Some(i) => (&d[..i], d[i + 1..].trim_ascii_start()),
+                None => (d, &b""[..]),
+            };
+            detail = code.to_vec();
+            res = "unknown";
+            msg = cat!(why, " (", code, ") after ", ms_s(now.to_string()));
             break;
         }
         detail = match o.iter().position(|&c| c == b' ') {
@@ -433,15 +515,33 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let probe = Probe::Layer(if want == "gone" { "gone" } else { "present" }, &ns);
             poll_until(ctx, &yes, &no, 2, tmo, json, probe)
         }
-        b"until" => poll_until(
-            ctx,
-            b"command succeeded",
-            b"command still failing",
-            1,
-            tmo,
-            json,
-            Probe::Until(&cmd),
-        ),
+        b"until" => {
+            if let Some(n) = host_path_note(ctx, &cmd) {
+                say(n);
+            }
+            let r = poll_until(
+                ctx,
+                b"command succeeded",
+                b"command still failing",
+                1,
+                tmo,
+                json,
+                Probe::Until(&cmd),
+            );
+            // (the deciding try's own words, when it did not succeed: #400, they were hidden)
+            let err = std::fs::read(ctx.at(UNTIL_ERR)).unwrap_or_default();
+            let _ = std::fs::remove_file(ctx.at(UNTIL_ERR));
+            let tail = last_lines(&err, 3);
+            if r.is_err() && !tail.is_empty() {
+                say("wait until: the command's last words (stderr):");
+                let mut e = Vec::new();
+                for l in tail {
+                    e.extend_from_slice(&cat!("  ", l, "\n"));
+                }
+                let _ = std::io::Write::write_all(&mut std::io::stderr(), &e);
+            }
+            r
+        }
         _ => screen(
             ctx, &mut s, &cond, tmo, &quiet, strict, &geom, &sels, masks, json,
         ),
@@ -568,4 +668,48 @@ fn screen(
     s.begin(ctx, &tool)?;
     let rc = s.end(ctx, &c, json, b"")?;
     crate::cmd::hyprctl::code(rc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #400: the deciding try's last lines; a command naming a path the box cannot see.
+    #[test]
+    fn until_words() {
+        assert_eq!(
+            last_lines(b"a\n\n  \nb\nc\nd\n", 3),
+            vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec()]
+        );
+        assert!(last_lines(b"\n \n", 3).is_empty());
+        let w = |v: &[&str]| -> Vec<Vec<u8>> { v.iter().map(|s| s.as_bytes().to_vec()).collect() };
+        let note = |tmp: Option<&str>, v: &[&str]| {
+            host_path_note_with(
+                b"/run/u/omabox/b",
+                tmp.map(|t| t.as_bytes().to_vec()),
+                &w(v),
+            )
+            .map(|n| String::from_utf8(n).unwrap())
+        };
+        assert!(
+            note(
+                None,
+                &["sh", "-c", "! /run/u/omabox/b/home/left.sh | grep -q X"]
+            )
+            .is_some_and(|n| n.contains("in the box it is /home/sbx/")),
+            "its HOME, inside a sh -c string"
+        );
+        assert!(
+            note(None, &["test", "-e", "/run/u/omabox/b/run/x"])
+                .is_some_and(|n| n.contains("this box's folder on the host"))
+        );
+        assert!(
+            note(Some("/h/.cache/tmp/"), &["/h/.cache/tmp/left.sh"])
+                .is_some_and(|n| n.contains("your $TMPDIR on the host"))
+        );
+        // (the box's own /tmp, a sibling of the box's folder, a TMPDIR of /tmp: nothing said)
+        assert_eq!(note(Some("/tmp"), &["test", "-e", "/tmp/ready"]), None);
+        assert_eq!(note(None, &["test", "-e", "/run/u/omabox/bb/x"]), None);
+        assert_eq!(note(Some("/h/t"), &["/h/tt/x"]), None);
+    }
 }

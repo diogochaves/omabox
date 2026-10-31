@@ -531,6 +531,10 @@ Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); -
 @ wait
 `wait until -- CMD`: until CMD, run in the box, exits 0 (tried every 100 ms): a server answering
 (`curl -fsS http://127.0.0.1:PORT/`), a file written, a process gone (`sh -c '! pgrep -x NAME'`).
+CMD runs in the box, where the host's paths are not (its /tmp and HOME are its own): a command not
+found there (127) or that cannot run (126) ends the wait at once, "unknown"; one that names this
+box's folder or your $TMPDIR is said before waiting. A wait that did not succeed ends with the
+last try's last lines of stderr.
 @ up run
 $OMABOX_READY_TIMEOUT: how long `up` waits for Hyprland and the shell (default 30s).
 @ reload

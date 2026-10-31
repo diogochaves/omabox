@@ -10659,6 +10659,21 @@ from them.
     it, so which is the layer's does not matter: when every frame of the size (after --active's
     filter) is empty, the tool now says the layer publishes no accessible items (exit 5), as it does
     for one. A popup whose card has items beside the wallpaper is still #315's case.
+548. **wait until: 127 retried to the timeout, its stderr hidden, a false success through `!`**
+    (2026-10-30, #400). An agent's `wait until --timeout 120 -- <host path>/left.sh` polled 120 s and
+    ended `unsatisfied: command still failing after 120.04s (exit 127)`, the command's own "not
+    found" never shown; `sh -c "! <host path>/script | grep -q X"` was satisfied at once (the
+    pipeline failed in the box, the `!` made it 0). Now: a try that exits 127 (not found) or 126
+    (cannot run) ends the wait at once, `unknown: command not found in the box (exit 127) after Ns`,
+    exit 1 (no retry changes it; `unknown` is wait's "could not tell", as for a box gone); each try's
+    stderr goes to `<box dir>/until.err` (host-only), and a wait that did not succeed says its last
+    three lines on stderr ("the command's last words"); and a command whose words (a `sh -c` string
+    too) name a path under the box's folder here (its HOME's host path: /home/sbx in the box) or
+    under the caller's $TMPDIR (not /tmp: the box has a /tmp of its own, so a /tmp path cannot be
+    judged from the word) is said before waiting. The "unknown:" lead of the box-down line is kept:
+    it is wait's documented result word (`help exit-codes`), for still and change too. Tests: wait's
+    `until_words` unit test; t_cli_box's wait until cases (not found: at once, 1, its words; one
+    still failing: its words; a `!` of a host path: said before).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

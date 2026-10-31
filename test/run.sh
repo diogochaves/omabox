@@ -11218,6 +11218,14 @@ t_cli_box() {
   cx_case "wait until: a command that succeeds" wait -b "$B" until -- true
   cx_want=(rc=124 'out=unsatisfied: command still failing after Ts (exit 1)' err=)
   cx_case "wait until: one still failing, 124" wait -b "$B" until --timeout 400ms -- false
+  # (#400: a command not in the box: at once, unknown, 1, its own words said; one failing: its last
+  # words; one that names this box's folder here: said before waiting, a `!` of it satisfied at once)
+  cx_want=(rc=1 'out=unknown: command not found in the box (exit 127) after Ts' "err~^omabox: wait until: the command's last words \\(stderr\\):\$" "err~^  .*rp-none-cmd")
+  cx_case "wait until: a command not in the box: at once, 1, its words" wait -b "$B" until --timeout 20s -- /rp-none-cmd
+  cx_want=(rc=124 'out=unsatisfied: command still failing after Ts (exit 2)' "err~^omabox: wait until: the command's last words" 'err~^  boom$')
+  cx_case "wait until: one still failing: its last words" wait -b "$B" until --timeout 300ms -- sh -c 'echo boom >&2; exit 2'
+  cx_want=(rc=0 'out=satisfied: command succeeded after Ts' "err~^omabox: wait until: the command names .*/$B/home/\\.\\.\\., this box's HOME as the host has it: in the box it is /home/sbx/\\.\\.\\.\$")
+  cx_case "wait until: a ! of the box's HOME path here: said before" wait -b "$B" until -- sh -c "! $XDG_RUNTIME_DIR/omabox/$B/home/left.sh"
   cx_want=(rc=0 'out=satisfied: still after Ts (no change)' err=)
   cx_case "wait still: a part of the background" wait -b "$B" still -g '900,300 40x40' --quiet 200ms
   cx_want=(rc=124 'out=unsatisfied: nothing changed in Ts' err=)
