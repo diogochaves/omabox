@@ -35,6 +35,9 @@ const BOX_STILL: &str = "/opt/omabox/bin/omabox-still";
 const BOX_EVENTS: &str = "/opt/omabox/bin/omabox-events";
 const BOX_BURST: &str = "/opt/omabox/bin/omabox-burst";
 const BOX_TREE: &str = "/opt/omabox/bin/omabox-tree";
+/// `up --polkit`'s stand-in authority and its session shim (#258).
+pub const BOX_POLKIT: &str = "/opt/omabox/bin/omabox-polkit";
+const BOX_POLKIT_SESSION: &str = "/opt/omabox/bin/omabox-polkit-session.so";
 
 /// The PATH a box's start (launch.sh, and pasta's shell in it) runs with: up looks there for what
 /// that start runs, as nft (#364), not on the caller's.
@@ -759,6 +762,7 @@ fn box_json(
     o.insert("bar".into(), s(bar));
     o.insert("systemd".into(), Value::Bool(u.systemd));
     o.insert("audio".into(), Value::Bool(u.audio));
+    o.insert("polkit".into(), Value::Bool(u.polkit));
     o.insert("overlays".into(), arr(&u.overlays));
     // The folders bound in, each source's device and inode as up found it (#391): `run` tells one
     // deleted and made again on the host, which the box keeps as it was (empty).
@@ -1150,6 +1154,14 @@ fn bwrap_args(
             b.own_ro(&t, dest.as_bytes()).map_err(refused)?;
         }
     }
+    // `up --polkit` (#258, finding 627): the stand-in authority share/session.sh starts on the box's
+    // own system bus, and the shim that gives the box's processes a session.
+    if u.polkit {
+        b.own_ro(&paths::tool("polkit"), BOX_POLKIT.as_bytes())
+            .map_err(refused)?;
+        b.own_ro(&paths::polkit_session(), BOX_POLKIT_SESSION.as_bytes())
+            .map_err(refused)?;
+    }
     // A private aquamarine (finding 125), which share/start-hyprland.sh puts first.
     if !u.aq.lib.is_empty() {
         b.own_ro(&u.aq.lib, b"/opt/omabox/lib").map_err(refused)?;
@@ -1287,6 +1299,7 @@ fn bwrap_args(
         (b"OMABOX_AUTORELOAD", bit(u.autoreload).to_vec()),
         (b"OMABOX_SYSTEMD", bit(u.systemd).to_vec()),
         (b"OMABOX_AUDIO", bit(u.audio).to_vec()),
+        (b"OMABOX_POLKIT", bit(u.polkit).to_vec()),
         (b"OMABOX_SHELL", bit(u.shell).to_vec()),
         (b"OMABOX_OMARCHY_VERSION", install::omarchy_version()),
         (b"OMABOX_BOX", ctx.name.clone()),

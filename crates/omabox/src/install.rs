@@ -1249,6 +1249,35 @@ pub fn audio_packages() -> Result<(), Vec<u8>> {
     Err(miss.join(b", ".as_slice()))
 }
 
+/// polkit_ready: what `up --polkit` needs (#258, finding 627), or what is missing: the stand-in
+/// authority and its session shim (tools/polkit), and dbus-daemon for the box's own system bus.
+pub fn polkit_ready() -> Result<(), Vec<u8>> {
+    let (tool, shim) = (crate::paths::tool("polkit"), crate::paths::polkit_session());
+    if !crate::exec::executable(&tool) || !shell::path(&shim).is_file() {
+        let how: &[u8] = if shell::path(&cat!(crate::paths::root(), "/.git")).is_file() {
+            b"make -C"
+        } else {
+            b"install.sh builds it; by hand: make -C"
+        };
+        return Err(cat!(
+            tool,
+            " and ",
+            shim,
+            " (",
+            how,
+            " ",
+            crate::paths::root(),
+            "/tools/polkit)"
+        ));
+    }
+    if !crate::exec::executable(b"/usr/bin/dbus-daemon") {
+        return Err(
+            b"/usr/bin/dbus-daemon, for the box's own system bus (sudo pacman -S dbus)".to_vec(),
+        );
+    }
+    Ok(())
+}
+
 /// audio_ready: the box's audio is up (#226): its pipewire-pulse answers, its default output is
 /// omabox-speaker and its default input omabox-mic (10 s at most).
 pub fn audio_ready(ctx: &mut Ctx) -> bool {

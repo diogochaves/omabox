@@ -41,7 +41,7 @@ const UP_VALUED: [&str; 18] = [
     "--omarchy",
     "--keep",
 ];
-const UP_FLAGS: [&str; 9] = [
+const UP_FLAGS: [&str; 10] = [
     "--xwayland",
     "--autoreload",
     "--no-shell",
@@ -50,6 +50,7 @@ const UP_FLAGS: [&str; 9] = [
     "--desk-shell",
     "--systemd",
     "--audio",
+    "--polkit",
     "--clean",
 ];
 

@@ -14,7 +14,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive ",
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
-            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland ",
+            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
             "--autoreload --no-shell --no-pointer"
         )),
         b"path" => Some("-b= --box= --logs --run --home --json"),
@@ -30,7 +30,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "--wait --start= --quiet= --timeout= --strict --json --ignore= -g= ",
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
-            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland ",
+            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
             "--autoreload --no-shell --no-pointer"
         )),
         b"hyprctl" => Some("-b= --box="),
@@ -72,6 +72,9 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"gpu" => Some("-b= --box= --json"),
         b"cpu" => Some("-b= --box= --settle= --pid= --app= --threads --json"),
         b"audio" => Some("-b= --box= --json"),
+        b"polkit" => Some(
+            "-b= --box= --action= --message= --icon= --prompt= --accept= --detail= --timeout= --delay= --json",
+        ),
         b"ports" => Some("-b= --box= --json"),
         b"clip" => Some("-b= --box= --from-box"),
         b"peek" => Some("-b= --box= --fps= --workspace= --focus --monitor="),
@@ -82,7 +85,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         )),
         b"check" => Some(concat!(
             "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= --report-scale= --only= -w= --window= --active -g= ",
-            "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland --autoreload --no-shell --no-pointer"
+            "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland --autoreload --no-shell --no-pointer"
         )),
         _ => None,
     }
@@ -93,7 +96,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
 pub const UP_BOX_OPTS: &str = concat!(
     "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
     "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
-    "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland ",
+    "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
     "--autoreload --no-shell --no-pointer"
 );
 

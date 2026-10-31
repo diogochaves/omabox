@@ -41,6 +41,11 @@ pub fn tool(name: &str) -> Vec<u8> {
     cat!(shell::bytes(&root), "/tools/", name, "/omabox-", name)
 }
 
+/// `up --polkit`'s session shim (#258), preloaded in the box: `$ROOT/tools/polkit/omabox-polkit-session.so`.
+pub fn polkit_session() -> Vec<u8> {
+    cat!(tool("polkit"), "-session.so")
+}
+
 /// The checkout's root as bytes ($ROOT).
 pub fn root() -> Vec<u8> {
     shell::bytes(&crate::root()).to_vec()

@@ -47,6 +47,7 @@ const GIVEN: &[&str] = &[
     "desk-shell",
     "systemd",
     "audio",
+    "polkit",
     "xwayland",
     "autoreload",
     "no-shell",
@@ -120,6 +121,7 @@ pub struct Up {
     pub desk_ids: Vec<u8>,
     pub systemd: bool,
     pub audio: bool,
+    pub polkit: bool,
     pub xwayland: bool,
     pub autoreload: bool,
     pub shell: bool,
@@ -473,6 +475,7 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                     }
                     b"--systemd" => u.systemd = true,
                     b"--audio" => u.audio = true,
+                    b"--polkit" => u.polkit = true,
                     b"--xwayland" => u.xwayland = true,
                     b"--autoreload" => u.autoreload = true,
                     b"--no-shell" => u.shell = false,
@@ -1033,6 +1036,11 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             " (sudo pacman -S pipewire wireplumber pipewire-pulse libpulse)"
         )));
     }
+    if u.polkit
+        && let Err(missing) = install::polkit_ready()
+    {
+        return Err(ctx.die(cat!("up --polkit needs ", missing)));
+    }
     for p in &u.plugins {
         if let Some(why) = refuse_src(&p.dir) {
             return Err(ctx.die(cat!(
@@ -1551,6 +1559,9 @@ pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
     }
     if u.has("audio") && m("audio") != b"true" {
         diff.push(b"--audio (it has no audio)".to_vec());
+    }
+    if u.has("polkit") && m("polkit") != b"true" {
+        diff.push(b"--polkit (it has no polkit)".to_vec());
     }
     if u.has("stock-bar") && m("bar") != b"stock" {
         diff.push(b"--stock-bar (it has your bar)".to_vec());

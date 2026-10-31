@@ -50,7 +50,7 @@ const BOX_JSON_JQ: &str = r#"{name: $name, mode, size, scale: (.scale // 1), cre
       allowed: (.allow // "" | split(",") | map(select(. != "") | tonumber)), addrs: (.addrs // []), idle: (.idle // 0),
       dir: (.dir // null), session: (.session // null),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
-        | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
+        | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), polkit: (.polkit // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), quickshell: (.quickshell // null), quickshell_version: (.quickshell_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
       client_render: (.client_render // null),
       monitors: (.monitors // null),

@@ -16,6 +16,8 @@ tools/burst/*-protocol.[ch]
 tools/relay/omabox-relay
 tools/events/omabox-events
 tools/tree/omabox-tree
+tools/polkit/omabox-polkit
+tools/polkit/omabox-polkit-session.so
 
 # release.sh output
 dist/

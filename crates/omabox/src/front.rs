@@ -45,6 +45,7 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"gpu",
     b"cpu",
     b"audio",
+    b"polkit",
     b"ports",
     b"env",
     b"path",

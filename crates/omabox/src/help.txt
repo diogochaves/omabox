@@ -10,6 +10,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
+            [--polkit]                                   a polkit agent can register: a stand-in authority (polkit ask)
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
             [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
@@ -83,6 +84,10 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox gpu [-b NAME] [DURATION] [--json]               GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
   omabox audio [-b NAME] [DURATION] [--json]             an up --audio box's sound for DURATION (3s): when, how loud
+  omabox polkit [-b NAME] ask [--action ID] [--message TEXT] [--icon NAME] [--prompt TEXT] [--accept PASSWORD]
+                [--detail KEY=VALUE]... [--timeout 60s] [--delay DURATION] [--json]
+                                                         the box's polkit agent asked for a password: how it ended
+  omabox polkit [-b NAME] agents [--json]                the polkit agents registered in the box
   omabox cpu [-b NAME] [DURATION] [--settle DURATION] [--pid PID | --app NAME] [--threads] [--json]
                                                          CPU (% of one core) and memory of this box's processes (default 5s)
   omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
@@ -90,8 +95,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
                                                          a box's logs: hyprland (the default), shell, apps, run,
-                                                         events, keyring, labwc, systemd, audio, gdb,
-                                                         journal, box, reap
+                                                         events, keyring, labwc, systemd, audio, polkit,
+                                                         gdb, journal, box, reap
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
   omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
@@ -127,7 +132,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio ports env path down save clip brief
+@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -252,6 +257,16 @@ its only devices a speaker nobody hears (omabox-speaker, a null sink: the defaul
 silent microphone (omabox-mic, the default input). Nothing reaches your audio: a box has no /dev/snd
 and its own runtime dir (its sockets, never yours). `audio` says whether the box made a sound,
 `record --audio` puts it in the video (AAC). Logs: `log audio`. Without it a box has no audio.
+@ up run polkit
+--polkit: a polkit agent in the box (the shell's polkit plugin, a copy of it under test, a GTK or Qt
+agent) registers and is asked, as on a desktop, and the end of each request is the agent's own. A
+box has no system bus and no logind session, and never gets yours: it gets a system bus of its own
+whose one service is a stand-in authority, which keeps the agents as polkitd does (one per session,
+dropped when they leave the bus) and makes a request only when `polkit ask` does. In place of PAM it
+answers polkit's agent helper with a password prompt, and takes the one password `ask --accept`
+names (a test's, never yours). It decides nothing for any service: pkexec, pkcheck and mechanisms
+get no answer from it. The box's processes are in a session named "omabox" (XDG_SESSION_ID). Logs:
+`log polkit`.
 @ up run reload
 --autoreload: the box's Hyprland reloads its config when a file it loaded changes, as a desktop's
 does; a box turns that off, so an update of omabox or Omarchy leaves it as it is. For a project that
@@ -462,6 +477,19 @@ The speaker is a null sink, exact zeros while nothing plays: anything above -70 
 --json: sound (true/false), sound_s, peak_db, rms_db, spans ([from, to] seconds), levels (each
 window's t, peak_db, rms_db; null for silence). Exit 0 either way. Start it, then make the sound
 (`omabox run -d -- APP`, a key), or record with --audio and check the video.
+@ polkit
+`polkit ask` makes one request, as polkitd makes one: BeginAuthentication on the box's agent (the one
+registered for its session, else the last one), with --action (org.omabox.test), --message (else
+"Authentication is required for ACTION"), --icon and each --detail, the box user as the identity. Each
+password the agent sends goes to the box's helper, which takes only --accept's (none: every one is
+wrong) after --delay (0; a checking state to see), as SUCCESS or FAILURE. It waits for the end: one
+line, "authenticated: the agent at :1.5 /PATH, 2 passwords (1 wrong)". authenticated: the helper took
+the password and the agent returned; not-authenticated: the agent returned without; cancelled: the
+agent cancelled (its user dismissed it); timeout: no end in --timeout (60s), so the authority sent
+CancelAuthentication, as polkitd does when its caller gives up (exit 124); agent-gone: it left the
+bus; no-agent. Exit 0 authenticated, 124 timeout, 1 any other end. --json: result, tries, wrong, agent, path, action, why.
+Start it in the background (`omabox polkit ask ... &`), then drive the dialog: `wait layer`, `keys`.
+`polkit agents`: subject, bus name, object path (and fallback) of each agent registered.
 @ shot record pointer up
 `shot --no-pointer` (a screen shot, --burst too) and `record --no-pointer` leave the pointer out, for
 stills and videos meant for people (no arrow on the app, none parked on a hover state): it is hidden

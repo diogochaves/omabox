@@ -162,6 +162,7 @@ fn main() -> ExitCode {
         Some("gpu") => Some(cmd::gpu::run),
         Some("cpu") => Some(cmd::cpu::run),
         Some("audio") => Some(cmd::audio::run),
+        Some("polkit") => Some(cmd::polkit::run),
         Some("ports") => Some(cmd::ports::run),
         Some("clip") => Some(cmd::clip::run),
         Some("peek") => Some(cmd::peek::run),

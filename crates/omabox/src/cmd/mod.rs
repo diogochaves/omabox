@@ -33,6 +33,7 @@ pub mod pid;
 pub mod pixel;
 pub mod plugin;
 pub mod pointer;
+pub mod polkit;
 pub mod ports;
 pub mod reap;
 pub mod record;

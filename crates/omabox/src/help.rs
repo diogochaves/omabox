@@ -45,6 +45,7 @@ pub const COMMANDS: &[&str] = &[
     "gpu",
     "cpu",
     "audio",
+    "polkit",
     "ports",
     "env",
     "path",

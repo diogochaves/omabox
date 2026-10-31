@@ -941,6 +941,7 @@ t_unit_exit_codes() {
   check_match "...wait's condition" "wait: unknown condition stil \(did you mean still\?\)" "$(ob wait stil 2>&1)"
   check_match "...check's" "check: unknown subcommand rnu \(did you mean run\?\)" "$(ob check rnu 2>&1)"
   check_match "...monitor's" "monitor: unknown subcommand ad \(did you mean add\?\)" "$(ob monitor ad 2>&1)"
+  check_match "...polkit's" "polkit: unknown subcommand aks \(did you mean ask\?\)" "$(ob polkit aks 2>&1)"
   check_match "...config's keys" "config: unknown key gpuu \(did you mean gpu\?\)" "$(ob config gpuu 2>&1)"
   check_match "...log's names" "log: unknown log hyprlnad \(did you mean hyprland\?\)" "$(ob log hyprlnad 2>&1)"
   # (did_you_mean: a swap is one typo, far is nothing, a tie is nothing: args.rs's nearest)
@@ -952,7 +953,7 @@ t_unit_exit_codes() {
   local args
   for args in "shot --fit abc" "wait --timeout soon still" "click 1" "click 1 2 thumb" "scroll 1 2" "keys" "tree --window a --layer b" \
       "record --fps 0 start" "events foo" "config a b c" "config workspace 0" "mode 5x" "monitor list x" "output" "guard on claude x" \
-      "which" "ls x" "saves x" "down --all x" "cpu --pid 1 --app x" "audio 0" "gpu soon" "peek --fps 0" "save" "check diff a" "lua"; do
+      "which" "ls x" "saves x" "down --all x" "cpu --pid 1 --app x" "audio 0" "polkit" "polkit ask x" "polkit agents --accept x" "polkit ask --timeout 2h" "polkit ask --delay 2m" "polkit ask --detail =x" "gpu soon" "peek --fps 0" "save" "check diff a" "lua"; do
     read -ra a <<<"$args"
     out=$(ob "${a[@]}" 2>&1); rc=$?
     [ "$rc" = 2 ] || bad+=" [$args: $rc $out]"
@@ -6767,6 +6768,10 @@ t_main() {
   else skip "...record --audio refused" "no wf-recorder or ffmpeg here"; fi
   check_match "...audio refused" "audio: box '$B' has no audio" "$(ob audio -b "$B" 2>&1)"
   check_match "...up --audio again refused" "without what you asked for: --audio \(it has no audio\)" "$(ob up "$B" --audio 2>&1)"
+  # No --polkit (#258): no system bus at all, and polkit refused.
+  check_eq "ls --json: no polkit" false "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .polkit')"
+  check_eq "...no system bus in it" "" "$(ob run -b "$B" -- printenv DBUS_SYSTEM_BUS_ADDRESS)"
+  check_match "...polkit refused" "polkit: box '$B' has no polkit: a box gets it at up \(omabox up --polkit" "$(ob polkit -b "$B" agents 2>&1)"
   # finding 62: up waits for the shell (bar layer + notification server) before returning
   check "bar is up when up returns" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-bar"
   check "notify-send works right after up" ob run -b "$B" -- notify-send omabox-test
@@ -14377,6 +14382,116 @@ record_stuck_on() {
     ob run -b "$B" -- pkill -f t356 >/dev/null 2>&1 || true
   done
 }
+# Polkit in a box (#258, finding 627): up --polkit's own system bus and stand-in authority. A polkit
+# agent (a throwaway Quickshell one, as a shell plugin's) registers for the box's session, a second
+# is refused while it is there, and a request from `polkit ask` ends as the agent ends it: a wrong
+# password, then the accepted one (authenticated, 2 passwords, 1 wrong), dismissed (cancelled), no
+# end in time (timeout, 124: the authority cancelled it, and the dialog went), the agent gone
+# mid-request (agent-gone; the other agent then registers). The bus is the box's own (no /run/dbus),
+# and its authority decides nothing (pkcheck gets NotSupported) and takes no answer from the box.
+# t258_agent BOX_HOME NAME: the fixture agent, at /org/omabox/NAME; its dialog the layer NAME, its
+# states in its log as "NAME ...".
+t258_agent() {
+  cat > "$1/$2.qml" <<QML
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+import Quickshell.Services.Polkit
+ShellRoot {
+  PolkitAgent {
+    id: agent
+    path: "/org/omabox/$2"
+    onIsRegisteredChanged: console.log("$2 registered " + isRegistered)
+    onAuthenticationRequestStarted: console.log("$2 request " + flow.actionId + " | " + flow.message)
+  }
+  Connections {
+    target: agent.flow
+    ignoreUnknownSignals: true
+    function onAuthenticationFailed() { console.log("$2 failed") }
+  }
+  PanelWindow {
+    visible: agent.isActive
+    WlrLayershell.namespace: "$2"
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    implicitWidth: 500; implicitHeight: 100
+    color: "#202020"
+    Column {
+      Text { color: "white"; text: agent.flow ? agent.flow.message : "" }
+      TextInput {
+        focus: true; color: "white"; width: 400; height: 30
+        echoMode: TextInput.Password
+        onAccepted: { agent.flow.submit(text); text = "" }
+        Keys.onEscapePressed: agent.flow.cancelAuthenticationRequest()
+      }
+    }
+  }
+}
+QML
+}
+# t258_start BOX NAME: the fixture agent NAME started (run -d); its job's pid.
+t258_start() {
+  local err; err=$(ob run -b "$1" -d -- qs -p "/home/sbx/$2.qml" 2>&1 >/dev/null)
+  sed -n 's/.*(pid \([0-9]*\),.*/\1/p' <<<"$err"
+}
+t_polkit() {
+  local B=$P-polkit D out rc pa pb apid bus
+  command -v qs >/dev/null || { skip "up --polkit" "no qs here"; return; }
+  up_ok "$B" --polkit --no-shell --net isolated --size 1280x720 || { no "up --polkit" "$UP_OUT"; return; }
+  D=$(ob path "$B") bus="unix:path=/run/user/$(id -u)/omabox-polkit/bus"
+  check_eq "ls --json: polkit" true "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .polkit')"
+  check_fails "...no /run/dbus in it: never the host's system bus" ob run -b "$B" -- test -e /run/dbus
+  check_eq "...its system bus its own, in its runtime dir" "$bus" "$(ob run -b "$B" -- printenv DBUS_SYSTEM_BUS_ADDRESS)"
+  check_match "...pkcheck there asks the stand-in, which decides nothing" "NotSupported: omabox's stand-in authority decides nothing" \
+    "$(ob run -b "$B" -- pkcheck --action-id org.freedesktop.policykit.exec --process 1 2>&1)"
+  check_match "...nor takes an agent's answer from the box (polkitd's: only uid 0)" "Only uid 0 may invoke this method" \
+    "$(ob run -b "$B" -- busctl --address="$bus" call org.freedesktop.PolicyKit1 /org/freedesktop/PolicyKit1/Authority \
+      org.freedesktop.PolicyKit1.Authority AuthenticationAgentResponse2 'us(sa{sv})' 0 x unix-user 1 uid u 0 2>&1)"
+  out=$(ob polkit -b "$B" ask --timeout 2s 2>&1); rc=$?
+  check_eq "ask with no agent: exit 1, said" "1 no-agent, 0 passwords (0 wrong): no polkit agent is registered in the box" "$rc $out"
+  t258_agent "$D/home" T258a; t258_agent "$D/home" T258b
+  pa=$(t258_start "$B" T258a)
+  check "a Quickshell agent registers for the box's session" until_ok 15 \
+    bash -c "'$CLI' polkit -b '$B' agents --json | jq -e '.[] | select(.subject == \"unix-session:omabox\" and .path == \"/org/omabox/T258a\")'"
+  check "...it says so itself" ob wait -b "$B" log "$pa" 'T258a registered true'
+  pb=$(t258_start "$B" T258b)
+  check "a second agent for the session: refused, as polkitd refuses it" until_ok 15 \
+    bash -c "'$CLI' log -b '$B' polkit -n all | grep -q 'refused an agent for unix-session:omabox at .* /org/omabox/T258b'"
+  check_eq "...the first stays the only one" /org/omabox/T258a "$(ob polkit -b "$B" agents --json | jq -r '.[].path')"
+  # A wrong password, then the accepted one.
+  ob polkit -b "$B" ask --action org.omabox.t258 --message "t258 asks" --accept right --json > "$TMP/$B-ask1" 2>&1 & apid=$!
+  check "a request: the agent's dialog shows" ob wait -b "$B" layer T258a
+  check "...with the action and message asked" ob wait -b "$B" log "$pa" 'T258a request org\.omabox\.t258 \| t258 asks'
+  ob keys -b "$B" -t wrong Return >/dev/null
+  check "...a wrong password: the agent's flow failed" ob wait -b "$B" log "$pa" 'T258a failed'
+  ob keys -b "$B" -t right Return >/dev/null
+  wait "$apid"; rc=$?
+  check_eq "...the accepted one: authenticated (exit 0), 2 passwords, 1 wrong, by that agent" \
+    "0 authenticated 2 1 /org/omabox/T258a org.omabox.t258" "$rc $(jq -r '"\(.result) \(.tries) \(.wrong) \(.path) \(.action)"' "$TMP/$B-ask1")"
+  check "...and the dialog goes" ob wait -b "$B" layer T258a --gone
+  # Dismissed by its user.
+  ob polkit -b "$B" ask --accept right > "$TMP/$B-ask2" 2>&1 & apid=$!
+  ob wait -b "$B" layer T258a >/dev/null
+  ob keys -b "$B" Escape >/dev/null
+  wait "$apid"; rc=$?
+  check_match "dismissed: cancelled (exit 1), said" "^1 cancelled: the agent at :[0-9.]+ /org/omabox/T258a, 0 passwords \(0 wrong\)" "$rc $(cat "$TMP/$B-ask2")"
+  # No end in time: the authority cancels it, as polkitd does when its caller gives up.
+  out=$(ob polkit -b "$B" ask --timeout 1s 2>&1); rc=$?
+  check_match "no end in --timeout: timeout (exit 124), said" "^124 timeout: the agent at :[0-9.]+ /org/omabox/T258a" "$rc $out"
+  check "...the agent took the cancel: its dialog went" ob wait -b "$B" layer T258a --gone
+  # The agent gone mid-request.
+  ob polkit -b "$B" ask > "$TMP/$B-ask3" 2>&1 & apid=$!
+  ob wait -b "$B" layer T258a >/dev/null
+  ob stop -b "$B" "$pa" >/dev/null 2>&1
+  wait "$apid"; rc=$?
+  check_match "the agent gone mid-request: agent-gone (exit 1)" "^1 agent-gone: " "$rc $(cat "$TMP/$B-ask3")"
+  check_eq "...it is dropped" "[]" "$(ob polkit -b "$B" agents --json)"
+  ob stop -b "$B" "$pb" >/dev/null 2>&1
+  pb=$(t258_start "$B" T258b)
+  check "...then another agent registers" until_ok 15 \
+    bash -c "'$CLI' polkit -b '$B' agents --json | jq -e '.[] | select(.path == \"/org/omabox/T258b\")'"
+  ob down "$B" >/dev/null
+}
+
 # Audio in a box (#226, finding 313): up --audio's own PipeWire, its only devices a speaker nobody
 # hears and a silent mic, nothing of the host's audio in it (no /dev/snd, its own sockets; your
 # PipeWire, asked read-only, has no client from it); `audio` tells silence from a tone; `record
@@ -19086,7 +19201,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

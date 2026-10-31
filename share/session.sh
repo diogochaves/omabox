@@ -98,6 +98,33 @@ if [ "${OMABOX_AUDIO:-0}" = 1 ]; then
   without_host_fd pipewire-pulse >> "$HOME/audio.log" 2>&1 &
 fi
 
+# `up --polkit` (#258, finding 627): a polkit agent (the shell's polkit plugin, one under test) can
+# register and be asked. A box has no system bus and no logind session, so it gets a system bus of its
+# own, a dbus-daemon at $XDG_RUNTIME_DIR/omabox-polkit/bus (never /run/dbus: the box safety invariant,
+# and the input tools' own check), whose one service is omabox-polkit, a stand-in authority: it keeps
+# the agents as polkitd does, answers polkit's agent helper socket (/run/polkit, the box's own) with a
+# password prompt, and makes a request only when `omabox polkit ask` does. It decides nothing for any
+# service. The shim answers logind's session lookup with the box's session ("omabox"), which a box
+# lacks (finding 627). Nothing here reaches the host's polkitd, bus or PAM.
+if [ "${OMABOX_POLKIT:-0}" = 1 ]; then
+  pk=$XDG_RUNTIME_DIR/omabox-polkit
+  mkdir -p "$pk" && rm -f "$pk/ready" "$pk/bus"
+  : > "$HOME/polkit.log"
+  if ! without_host_fd dbus-daemon --config-file=/opt/omabox/share/polkit/bus.conf --fork --nopidfile \
+      --address="unix:path=$pk/bus" >> "$HOME/polkit.log" 2>&1; then
+    echo "session.sh: up --polkit: the box's system bus did not start (~/polkit.log)" >&2
+    kill -KILL -1; exit 1
+  fi
+  without_host_fd /opt/omabox/bin/omabox-polkit serve omabox >> "$HOME/polkit.log" 2>&1 &
+  for _ in $(seq 100); do [ -e "$pk/ready" ] && break; sleep 0.05; done
+  if [ ! -e "$pk/ready" ]; then
+    echo "session.sh: up --polkit: the stand-in authority did not come up: $(tail -n 1 "$HOME/polkit.log") (~/polkit.log)" >&2
+    kill -KILL -1; exit 1
+  fi
+  export DBUS_SYSTEM_BUS_ADDRESS=unix:path=$pk/bus OMABOX_POLKIT_SESSION=omabox XDG_SESSION_ID=omabox \
+    LD_PRELOAD=/opt/omabox/bin/omabox-polkit-session.so
+fi
+
 # The session's PATH (finding 57), so the bar, plugins and apps launched from binds find what `omabox
 # run` finds: omabox's stand-ins, the box HOME's ~/.local/bin (a test can drop a stub CLI there), then
 # the PATH `omabox up` ran with in its order, keeping only absolute dirs the box can see (mise's
