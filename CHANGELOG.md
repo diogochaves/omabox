@@ -147,6 +147,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   environment through a shot. The action now refuses `--env-file` (`--env KEY=VAL` still goes),
   so a pre-approved `shot` reads none of your files
   ([#338](https://github.com/diogochaves/omabox/issues/338)).
+- **`shot -o FILE` wrote over any file there, through a link too**, as did `drag --shot`,
+  `calibrate CARD` and a burst's frames in `-o DIR`. They now write over only an earlier image or
+  an empty file, and refuse a link, a folder or any other file, saying why, before anything is
+  written; a new path is made as before
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count

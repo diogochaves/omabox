@@ -16983,6 +16983,27 @@ t_unit_pixel() {
     "$(ob shot -b "$P-x" --burst 3 --after -- run --env-file=/dev/null -- true 2>&1)"
   check_match "...a CMD's own --env-file is CMD's" "no box '$P-x' is up" \
     "$(ob shot -b "$P-x" --burst 3 --after -- run -d -- app --env-file x 2>&1)"
+  # #338, finding 621: a pre-approved shot writes over nothing but an image (or an empty file), never
+  # through a link, before any box is asked; a new path is made.
+  local ow=$TMP/overwrite
+  mkdir -p "$ow/fr" && printf 'keep\n' > "$ow/notes.txt" && ln -sf "$ow/notes.txt" "$ow/link.png" &&
+    printf 'keep\n' > "$ow/new.png.part" && printf '\x89PNG\r\n\x1a\n' > "$ow/old.png" && : > "$ow/empty.png" &&
+    printf 'keep\n' > "$ow/fr/frame-001.png"
+  check_match "shot -o a text file: refused" "^omabox: shot: $ow/notes.txt is there and is not a PNG" "$(ob shot -b "$P-x" -o "$ow/notes.txt" 2>&1)"
+  check_match "...FILE too" "is not a PNG" "$(ob shot -b "$P-x" "$ow/notes.txt" 2>&1)"
+  check_match "...a link: refused" "link.png is a link" "$(ob shot -b "$P-x" -o "$ow/link.png" 2>&1)"
+  check_match "...a folder" "is there and is not a file" "$(ob shot -b "$P-x" -o "$ow/fr" 2>&1)"
+  check_match "...a FILE.part of the caller's" "new.png.part is there and is not a PNG" "$(ob shot -b "$P-x" -o "$ow/new.png" 2>&1)"
+  # (drag --shot and a burst's folder, checked once a box is up: t_burst)
+  check_eq "...each left as it was" "keep keep keep link" \
+    "$(cat "$ow/notes.txt" "$ow/new.png.part" "$ow/fr/frame-001.png" | paste -sd ' ') $(test -L "$ow/link.png" && echo link)"
+  check_match "...a PNG written over: to the box" "no box '$P-x' is up" "$(ob shot -b "$P-x" -o "$ow/old.png" 2>&1)"
+  check_match "...an empty file (mktemp's)" "no box '$P-x' is up" "$(ob shot -b "$P-x" -o "$ow/empty.png" 2>&1)"
+  check_match "calibrate CARD: a text file refused" "^omabox: calibrate: $ow/notes.txt is there and is not a PNG" \
+    "$(ob calibrate -b "$P-x" "$ow/notes.txt" 2>&1)"
+  ob calibrate -b "$P-x" "$ow/card.png" >/dev/null 2>&1
+  check_match "...an earlier card drawn again" "^$ow/card.png$" "$(ob calibrate -b "$P-x" "$ow/card.png" 2>/dev/null)"
+  check_eq "...the text file kept" keep "$(cat "$ow/notes.txt")"
   check_match "shot --after needs --" "--after -- ACTION" "$(ob shot -b "$P-x" --burst 3 --after keys a 2>&1)"
   # shot --changed (#145, finding 243): what it refuses before any box is asked.
   local a
@@ -17050,6 +17071,21 @@ t_burst() {
   ob shot -b "$B" --burst 2 -g "0,0 200x200" -o "$o/b" >/dev/null 2>&1
   check_eq "-o a folder used before: only this burst's frames, the caller's file kept" "frame-001.png frame-002.png notes.txt" \
     "$(cd "$o/b" && echo *)"
+  # #338, finding 621: a pre-approved shot writes over no file of the caller's: a frame name that is
+  # not an image, a text file, a link; an earlier shot is written over.
+  echo mine > "$o/b/frame-002.png"
+  check_match "-o a folder whose frame is not an image: refused" "frame-002.png is there and is not a PNG" \
+    "$(ob shot -b "$B" --burst 2 -g "0,0 200x200" -o "$o/b" 2>&1)"
+  check_eq "...nothing of it removed" "mine PNG" "$(cat "$o/b/frame-002.png") $(file -b "$o/b/frame-001.png" | cut -c1-3)"
+  echo mine > "$o/notes.txt"; ln -sf "$o/notes.txt" "$o/link.png"
+  check_match "shot -o a text file: refused" "notes.txt is there and is not a PNG" "$(ob shot -b "$B" -o "$o/notes.txt" 2>&1)"
+  check_match "...through a link: refused" "link.png is a link" "$(ob shot -b "$B" -g "0,0 9x9" -o "$o/link.png" 2>&1)"
+  check_match "drag --shot a text file: refused" "notes.txt is there and is not a PNG" \
+    "$(ob drag -b "$B" --shot "$o/notes.txt" 300 300 310 310 2>&1)"
+  check_eq "...the file and the link as they were" "mine link" "$(cat "$o/notes.txt") $(test -L "$o/link.png" && echo link)"
+  ob shot -b "$B" -g "0,0 9x9" -o "$o/again.png" >/dev/null 2>&1
+  out=$(ob shot -b "$B" -g "0,0 20x10" -o "$o/again.png" 2>/dev/null); rc=$?
+  check_eq "...an earlier shot written over" "0 $o/again.png 20 x 10" "$rc $out $(file -b "$o/again.png" | grep -o '20 x 10')"
   # Two bursts at once with no -o: a folder each (the default was the second's name).
   mkdir -p "$o/tmp"
   TMPDIR=$o/tmp ob shot -b "$B" --burst 2 -g "0,0 200x200" >/dev/null 2>"$TMP/burst1.err" & local b1=$!

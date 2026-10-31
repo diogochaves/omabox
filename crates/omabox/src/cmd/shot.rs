@@ -1046,9 +1046,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 // SAFETY: d is a new descriptor of ours.
                 (d >= 0).then(|| unsafe { OwnedFd::from_raw_fd(d) })
             } else {
-                std::fs::File::create(shell::path(&file))
-                    .ok()
-                    .map(OwnedFd::from)
+                crate::shots::create_nofollow(&file).ok().map(OwnedFd::from)
             };
             match target {
                 Some(t) => g.grab(t),
@@ -1424,7 +1422,10 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
             data.is_ok_and(|d| f.write_all(&d).is_ok())
         } else {
             let part = cat!(s.out, ".part");
-            std::fs::copy(shell::path(src), shell::path(&part)).is_ok()
+            // (never through a link at PART: #338)
+            std::fs::File::open(shell::path(src))
+                .and_then(|mut f| std::io::copy(&mut f, &mut crate::shots::create_nofollow(&part)?))
+                .is_ok()
                 && crate::shots::mv_f(&part, &s.out)
         };
         if !ok {
@@ -1730,6 +1731,13 @@ fn burst_run(
             names.push(b"frame-[0-9][0-9][0-9].png".to_vec());
         }
         names.push(b"sheet.png".to_vec());
+        // Only what a burst writes goes (#338): a link, or a file that is not an image, refuses it.
+        if let Some(m) = names
+            .iter()
+            .find_map(|nm| crate::shots::overwrite_refusal(&cat!(s.out, "/", nm)))
+        {
+            return Err(ctx.die(cat!("shot --burst: ", m)));
+        }
         for nm in names {
             if let Err(e) = std::fs::remove_file(shell::path(&cat!(s.out, "/", nm))) {
                 if e.kind() != std::io::ErrorKind::NotFound {
@@ -1869,7 +1877,9 @@ fn burst_run(
             });
             let mut data = Vec::new();
             let _ = (&mut rd).take(len).read_to_end(&mut data);
-            let wrote = std::fs::write(shell::path(&fpath), &data).is_ok();
+            let wrote = crate::shots::create_nofollow(&fpath)
+                .and_then(|mut f| f.write_all(&data))
+                .is_ok();
             // (`[ "$(stat -c %s -- "$f")" = "$fl" ]`: the words, so a length with a zero in front
             // is not the one written)
             if !wrote || data.len().to_string().as_bytes() != fl.as_slice() {
@@ -1929,7 +1939,7 @@ fn burst_run(
             let fpath = cat!(frame(&s.out, &n(k))?, ".png");
             let t = crate::settle::mono_ms() - t0;
             let ef = std::fs::File::create(shell::path(&err)).ok();
-            let rc = match (std::fs::File::create(shell::path(&fpath)), ef.as_ref()) {
+            let rc = match (crate::shots::create_nofollow(&fpath), ef.as_ref()) {
                 (Ok(f), Some(e)) => {
                     on_box(ctx, &g, false, Out::Fd(f.into()), ErrTo::Fd(e.as_raw_fd())).rc
                 }

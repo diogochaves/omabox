@@ -103,16 +103,77 @@ pub fn why(e: &std::io::Error) -> String {
     }
 }
 
+/// The first bytes of every PNG.
+const PNG_MAGIC: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+/// What omabox writes over at a path its caller named (#338, finding 621): nothing there, or a
+/// regular file, never a link, that is empty or holds a PNG (an image of its own, a `mktemp`'s
+/// file). The refusal's words for anything else: a text file of the user's is never overwritten
+/// by a pre-approved shot.
+pub fn overwrite_refusal(p: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = shell::path(p);
+    // (a path that cannot be looked at cannot be written either: its own words come where it is)
+    let Ok(m) = std::fs::symlink_metadata(&path) else {
+        return None;
+    };
+    if m.file_type().is_symlink() {
+        return Some(cat!(
+            p,
+            " is a link: omabox writes through none (name the file itself, or a new path)"
+        ));
+    }
+    if !m.is_file() {
+        return Some(cat!(p, " is there and is not a file (name a new path)"));
+    }
+    if m.len() == 0 {
+        return None;
+    }
+    let mut head = [0u8; 8];
+    let png = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok()
+        && &head == PNG_MAGIC;
+    (!png).then(|| {
+        cat!(
+            p,
+            " is there and is not a PNG: omabox writes over no file but an image (name a new path, or remove it first)"
+        )
+    })
+}
+
+/// A file omabox writes at a path its caller named: made or truncated, never through a link there.
+pub fn create_nofollow(p: &[u8]) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(shell::path(p))
+}
+
 /// shot_path OUT: OUT's directory made, then OUT (resolved) written once and removed as OUT.part, so
-/// a path that cannot be written stops here, saying why (issue #63). OUT resolved, its FILE.
+/// a path that cannot be written stops here, saying why (issue #63). OUT resolved, its FILE. OUT and
+/// OUT.part are written over only as overwrite_refusal lets them be (#338).
 pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>)> {
+    if let Some(m) = overwrite_refusal(out) {
+        return Err(ctx.die(cat!("shot: ", m)));
+    }
     let dir = dirname(out);
     if !mkdir_p(&dir) {
         return Err(ctx.die(cat!("shot: cannot make the directory ", dir)));
     }
     let out = real_or_end(ctx, out)?;
     let file = cat!(out, ".part");
-    if let Err(e) = std::fs::File::create(shell::path(&file)) {
+    if let Some(m) = overwrite_refusal(&out).or_else(|| overwrite_refusal(&file)) {
+        return Err(ctx.die(cat!("shot: ", m)));
+    }
+    if let Err(e) = create_nofollow(&file) {
         return Err(ctx.die(cat!("shot: cannot write ", out, ": ", why(&e))));
     }
     let _ = std::fs::remove_file(shell::path(&file));

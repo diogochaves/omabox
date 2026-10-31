@@ -11643,12 +11643,26 @@ from them.
     to close first: `shot --burst --after -- run --env-file FILE` read a host file through a
     pre-approved shot (any KEY=VAL file, `api-keys.env` among them) into a box command's
     environment; the action now refuses `--env-file` (and `--env-file=`), a CMD's own words after
-    `--` untouched. What a listed verb still writes on the host is the image `-o` names. Codex
+    `--` untouched. The second hole was the output path: `shot -o ~/.bashrc` (or `FILE`, `drag
+    --shot`, `calibrate CARD`, a burst's `-o DIR` frames) wrote, or for a burst deleted, whatever
+    was there, following a link, and `FILE.part` was truncated through a link and removed. Now each
+    such path is written over only when nothing is there or it is a regular file, never a link, that
+    is empty (a `mktemp`'s) or starts with the PNG magic (shots.rs's `overwrite_refusal`, checked on
+    the path as named and resolved, and on `.part`), refused otherwise with its reason (`is a link`,
+    `is there and is not a PNG`, `is not a file`) before anything is written; the part files and
+    frames are opened with O_NOFOLLOW. A new path is still made, folders too. Checked for the other
+    listed verbs: none writes or removes a host file the caller names (events' marks, gdb's log,
+    `run -d` logs and shots.tsv are in the box dir or HOME; `--in`, `--since` and `calibrate
+    --answer` only read). `record` and `check` (not listed) keep their old writes. Codex
     (`~/.codex/rules` prefix rules), OpenCode (`permission.bash`), pi (no prompts) and Hermes read no
     grant from a skill: reference.md's "Commands that run without a prompt" says what each takes.
     Tests: t_unit_skill_tools (the list against the reviewed one and the never list, each verb a
     command and named in reference.md, the parser on fixtures), t_unit_pixel (the `--after`
-    refusals), t_unit_version (the two caps). Not verified: a Claude Code session using the grant.
+    refusals; `-o` over a text file, a link, a folder, a caller's `.part`, `calibrate` over a text
+    file refused and each left as it was, an image and an empty file taken, a card drawn twice),
+    t_burst (in a box: a burst folder with a frame that is not an image, `shot -o` a text file and a
+    link, `drag --shot` a text file, refused and untouched; an earlier shot written over),
+    t_unit_version (the two caps). Not verified: a Claude Code session using the grant.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

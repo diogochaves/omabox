@@ -464,7 +464,9 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   ends other boxes); `record` (`record sheet VIDEO` reads any video), `check` (`check run` runs a
   scenario on the host); `env`, `which`, `--version` (harmless, rare).
 - **What the listed ones write on the host:** only the images named with `-o` (`shot`, `drag
-  --shot`; a burst's `-o DIR` replaces its own frames there). `keys --pass VAR` types a variable of
+  --shot`, `calibrate CARD`; a burst's `-o DIR` frames), at a new path or over an earlier image or
+  an empty file: a link, a folder or any other file there is refused (`is there and is not a PNG`),
+  untouched. `keys --pass VAR` types a variable of
   the agent's own environment, as the user exported it. `shot --after`'s action takes no
   `--env-file`. Keys, clicks and `hyprctl dispatch exec` run anything inside the box, which reaches
   the network as the box does (ref: Network): a box the user started is still theirs.

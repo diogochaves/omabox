@@ -599,12 +599,23 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .map_or(s.clone(), |i| s[i + 1..].to_vec());
     }
     ctx.parsed();
+    // A card is written over only where an image was, never through a link (#338).
+    if let Some(m) = crate::shots::overwrite_refusal(&card) {
+        return Err(ctx.die(cat!("calibrate: ", m)));
+    }
     let dir = dirname(&card);
     if !mkdir_p(&dir) {
         return Err(ctx.die(cat!("calibrate: cannot make the directory ", dir)));
     }
     let card = crate::shots::real_or_end(ctx, &card)?;
     let part = cat!(card, ".part");
+    if let Some(m) =
+        crate::shots::overwrite_refusal(&card).or_else(|| crate::shots::overwrite_refusal(&part))
+    {
+        return Err(ctx.die(cat!("calibrate: ", m)));
+    }
+    // (magick writes PART by its name: a stale one of ours goes first)
+    let _ = std::fs::remove_file(shell::path(&part));
     let marks = calib_marks(&w, &h);
     let drawn = calib_card(&part, &w, &h, &marks).unwrap_or(false);
     if !drawn || !crate::shots::mv_f(&part, &card) {
