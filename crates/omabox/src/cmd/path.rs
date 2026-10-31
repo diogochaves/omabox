@@ -39,6 +39,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             need_box(ctx)?;
         }
     }
+    // This session's box, up under another directory's name: named, not a path of no box (#327).
+    if ctx.name_derived
+        && !shell::path(&ctx.d).is_dir()
+        && !crate::select::session_boxes(ctx).is_empty()
+    {
+        need_box(ctx)?;
+    }
     if kinds != 1 {
         return out(cat!(ctx.d, "\n"));
     }

@@ -10758,6 +10758,15 @@ from them.
     command. Tests: jobs' `job_note_as_bash` (a kill's own mark, a job ending in it, kill_cmd),
     t_replace (a job that exits 230 on SIGTERM, stopped by `run -- pkill`: not said), which failed
     on the old code.
+554. **A foreground run and a plain path skipped the session's box** (2026-10-30, #327). #296 made `run -d`
+    (and `down`) name the session's boxes when the name derived here has no box; a foreground `run`
+    went on to a throwaway (an agent's IPC calls answered "Target not found." three times from a box
+    without the plugin under test, nothing saying which box), and plain `path` printed the dir of a
+    box that is not there, exit 0. Now both refuse as `run -d` does, naming the session's box or
+    boxes, when the name was derived, it has no box (path: no dir) and the session has boxes up
+    elsewhere; a throwaway (no session boxes) and a path printed before `up` stay as they were. And
+    bare `omabox help` says how the box is picked without -b (it was in `--long` only). Test:
+    t_unit_agent_session (both, from another repo with the session's box up), failed on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

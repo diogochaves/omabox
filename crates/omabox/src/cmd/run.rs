@@ -324,8 +324,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         up_args.extend([b"--env".to_vec(), kv]);
     }
     // A box asked for by name, one that was up and died, or one that expired is not replaced by a
-    // throwaway: that would hide what happened to it.
+    // throwaway: that would hide what happened to it. Nor this session's box up under another
+    // directory's name, as run -d (#327: the command ran in a throwaway without its plugin).
     if !name.is_empty()
+        || (ctx.name_derived && !session_boxes(ctx).is_empty())
         || env_names_box()
         || shell::path(&ctx.d).is_dir()
         || ctx.in_boxes(cat!(".expired-", ctx.name)).is_file()

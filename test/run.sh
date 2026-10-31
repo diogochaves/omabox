@@ -6139,6 +6139,13 @@ t_unit_agent_session() {
   check_eq "...run -d there: only the session's box, no up of another" \
     "omabox: no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' (started from another directory): -b $P-r-$sid" \
     "$(se "$P-r-$sid" "$repo" "$CLI" run -d -- true)"
+  # #327: a foreground run and a plain path there the same, not a throwaway nor the path of no box.
+  check_eq "...a foreground run there: the same, no throwaway (#327)" \
+    "omabox: no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' (started from another directory): -b $P-r-$sid" \
+    "$(se "$P-r-$sid" "$repo" "$CLI" run -- true)"
+  check_eq "...a plain path there: the same, no path of a box that is not there (#327)" \
+    "omabox: no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' (started from another directory): -b $P-r-$sid" \
+    "$(se "$P-r-$sid" "$repo" "$CLI" path)"
   check_eq "...none: the up it needs" "omabox: run -d needs a box that is up (omabox up $P-as-$sid)" \
     "$(se "" "$repo" "$CLI" run -d -- true)"
   check_eq "up there: the session's box named, the new one still starts" \

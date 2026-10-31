@@ -22,6 +22,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   code of its own** on SIGTERM (foot exits 230). A job that ends while a `run` that kills runs (or
   just after) is no longer said, whatever its status; the warning's hint now reads `(log: omabox
   log -b NAME run)` ([#329](https://github.com/diogochaves/omabox/issues/329)).
+- **A foreground `run` and a plain `path` skipped the session's box**: run from another directory,
+  `run` quietly started a throwaway box and `path` printed the folder of a box that was not there.
+  Both now name the session's boxes, as `run -d` does; `omabox help` says how the box is picked
+  without -b ([#327](https://github.com/diogochaves/omabox/issues/327)).
 
 ## 1.0.2 — 2026-10-30
 

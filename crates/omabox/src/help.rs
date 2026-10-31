@@ -149,6 +149,8 @@ fn bare(long: bool) -> Vec<u8> {
         o.extend_from_slice(l);
         o.push(b'\n');
     }
+    // (#327: how the box is picked without -b was in --long only)
+    o.extend_from_slice(b"\nWithout -b, the box is $OMABOX, else the git repo's name (plus the agent session's id), else\n\"default\": omabox help up --long says more.\n");
     o.extend_from_slice(b"\nmore: omabox help CMD (one command's options), omabox help --long (every command's notes too)\n");
     o
 }
