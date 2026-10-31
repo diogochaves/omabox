@@ -8,8 +8,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ### Added
 
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
-  does: a notification toast or a panel over the point is named on stderr before the input is sent
-  (never refused), so a click that went to a toast no longer passes in silence
+  does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
+  the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications
+  column, its dock) is not said there, since it takes input on its items only
   ([#361](https://github.com/diogochaves/omabox/issues/361)).
 - **`click --find TEXT`** clicks what the accessibility tree names TEXT, with the real pointer at the
   middle of what of it is in view, read fresh on every call: no `tree --find`, then working out the

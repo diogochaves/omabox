@@ -10227,9 +10227,7 @@ t_click_layer() {
   check_match "...said: the input may go to the layer" \
     "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at $fx,$fy may go to it if one of its items \(a toast, a dock icon\) is there; elsewhere it goes to the window \(omabox run -- omarchy-shell notifications dismissAll clears the toasts\)" "$out"
   out=$(ob click -b "$B" 1700 600 2>&1); rc=$?
-  check_eq "a click at the screen's 1700,600, under the spanning layer: clicked, exit 0 (#361)" 0 "$rc"
-  check_match "...said as --window says it, in the screen's coordinates" \
-    "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at the screen's 1700,600 may go to it if one of its items \(a toast, a dock icon\) is there" "$out"
+  check_eq "a click at the screen's 1700,600, under the spanning layer only: clicked, nothing said (#361)" "0 " "$rc $out"
   if omarchy45; then check "...the toast is still up" jq -e 'length == 1' "$live"
   else check "...the toast is still up" ob wait -b "$B" --timeout 1s layer omarchy-notifications; fi   # omarchy<4.5
   px=$((fx + ${at% *})) py=$((fy + ${at#* }))
@@ -16802,14 +16800,13 @@ t_unit_wait_facts() {
   check_eq "...fullscreen on a workspace not shown: the bar is" 'the click at 100,10 was on layer omarchy-bar' \
     "$(probe desk_target click "$(jq -c '.clients[0].workspace = {id: 2, name: "2"}' <<<"$sf")" "100 10" | jq -r .text)"
   # A click at screen X Y (#361, finding 562) says a layer over the window there before it is sent,
-  # as --window does: certain for one smaller than its output, a may for one spanning it; nothing
-  # with no layer there or no window under it (a click meant for the bar, the desktop).
+  # as --window does, when it certainly covers the point (one smaller than its output); nothing for
+  # one spanning it, with no layer there or no window under it (a click meant for the bar, the desktop).
   local toast='.layers["HEADLESS-2"].levels["3"] += [{address: "0x8", namespace: "omarchy-notifications", x: 600, y: 0, w: 300, h: 100}]'
   check_eq "screen click under a toast-sized layer over a window: said, certain (#361)" \
     'a layer surface "omarchy-notifications" (overlay 300x100 at 600,0) is over the screen'"'"'s 700,50, on window 0xa foot "K": where it takes input (a notification, a panel), input there goes to it, not to the window (omabox wait layer omarchy-notifications --gone waits it out)' \
     "$(probe screen_layer "$(wf_snap "$toast")" "700 50")"
-  check_eq "...a full-screen one: a may" \
-    'a layer spanning the screen, "omarchy-notifications" (overlay 1920x1080 at 0,0), is up over window 0xa foot "K": input at the screen'"'"'s 100,450 may go to it if one of its items (a toast, a dock icon) is there; elsewhere it goes to the window (omabox run -- omarchy-shell notifications dismissAll clears the toasts)' \
+  check_eq "...a full-screen one: nothing (it may not take the point; --window says the may)" "" \
     "$(probe screen_layer "$sn" "100 450")"
   check_eq "...the floating window's own point, under the toast-sized one: that window named" \
     'a layer surface "omarchy-notifications" (overlay 300x100 at 600,0) is over the screen'"'"'s 850,50, on window 0xb zenity "Save as": where it takes input (a notification, a panel), input there goes to it, not to the window (omabox wait layer omarchy-notifications --gone waits it out)' \

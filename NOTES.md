@@ -10835,15 +10835,17 @@ from them.
     start: the press's surface keeps the pointer for the drag) at the screen's X Y (and `--in` a
     screen shot) read one snapshot (desk_snap) before sending, find the window there as the click
     report does (finding 561's fullscreen rule included, through WIN_JQ's `layers`), and say the
-    layer over it in `--window`'s words, the point given as "the screen's X,Y": certain for one
-    smaller than its output ("is over the screen's X,Y, on window ...: ... input there goes to it"),
-    a may for one spanning it. Never refused (there is no window to raise or keep). Nothing is said
-    where no window is under the layer: a click on the bar or the desktop is meant for the layer.
-    `--wait`'s 124 already named the layer (findings 396, 398). The limit is #283's: on Omarchy 4.5
-    the notifications column and the dock stay mapped while idle and span the screen, so a screen
-    click under either says the may with no toast up, as `--window` does. Tests: t_unit_wait_facts
-    (`probe screen_layer`, new), t_click_layer (a screen click under the spanning layer and under a
-    panel, a scroll and a drag there too; failed with the call left out), t_wait_facts (the 124's
+    layer over it in `--window`'s words, the point given as "the screen's X,Y", when it certainly
+    covers the point (smaller than its output: "is over the screen's X,Y, on window ...: ... input
+    there goes to it"). Never refused (there is no window to raise or keep). *Decided* (2026-10-31):
+    a layer spanning the screen says nothing here, unlike `--window`'s may: on Omarchy 4.5 the
+    notifications column and the dock stay mapped while idle and span the screen, so every plain
+    click under them would speak with no toast up; #283's narrowing would let it speak where a toast
+    is. Nothing is said where no window is under the layer either: a click on the bar or the desktop
+    is meant for the layer. `--wait`'s 124 already names a spanning layer as possible (findings
+    396, 398). Tests: t_unit_wait_facts (`probe screen_layer`, new), t_click_layer (a screen click
+    under the spanning layer only: nothing said; under a panel, a click, scroll and drag say it;
+    failed with the call left out), t_wait_facts (the 124's
     button layer said before its click); t_unit_signal_cleanup's `click --mod` cases moved off the
     stand-in bar, which now says itself.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)

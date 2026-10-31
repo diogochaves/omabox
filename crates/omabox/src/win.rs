@@ -471,9 +471,9 @@ fn layer_words(
 }
 
 /// screen_layer_of SNAPSHOT X Y: for input at the screen's X,Y (no --window), what win_point says of
-/// a layer over the window there (#361, finding 562), from a desk_snap snapshot; nothing when no
-/// layer is over a window at the point (a click meant for the bar or the desktop) or the snapshot is
-/// missing.
+/// a layer certainly over the window there (#361, finding 562), from a desk_snap snapshot; nothing
+/// for one spanning the screen (it may not take the point), when no layer is over a window at the
+/// point (a click meant for the bar or the desktop) or the snapshot is missing.
 pub fn screen_layer_of(snap: &[u8], x: &[u8], y: &[u8]) -> Vec<u8> {
     let (Some(sx), Some(sy)) = (shell::dec(x), shell::dec(y)) else {
         return Vec::new();
@@ -515,7 +515,12 @@ pub fn screen_layer_of(snap: &[u8], x: &[u8], y: &[u8]) -> Vec<u8> {
     if lay.is_empty() {
         return Vec::new();
     }
-    layer_words(&lay, Whose::Screen, x, y, &win_desc(&w)).1
+    // (one spanning the screen only may take it: said for --window, not here, where Omarchy 4.5's
+    // idle notifications column and dock would speak at every plain click under them)
+    match layer_words(&lay, Whose::Screen, x, y, &win_desc(&w)) {
+        (true, said, _) => said,
+        _ => Vec::new(),
+    }
 }
 
 /// screen_layer X Y: screen_layer_of the box's desktop now, said on stderr. Never refuses and never
