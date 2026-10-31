@@ -8010,7 +8010,8 @@ EOF
   sets2() { nsenter -t "${kid2:-0}" -U -n --preserve-credentials nft list table inet omabox 2>&1; }
   # in2 REGEX: the second box's rule holds REGEX (when not: it, and reap.log's end)
   in2() { local t; t=$(sets2) || t=""; grep -q "$1" <<<"$t" && return 0; echo "$t"; tail -n 3 "$rlog2" 2>&1; return 1; }
-  check "a reaper whose nft fails says so" until_ok 5 grep -q "could not set the host's addresses in its protected ports' rule (nft stand-in: refused)" "$rlog2"
+  # (its first look comes as the reaper starts, after up; 20 s holds under a full suite's load)
+  check "a reaper whose nft fails says so" until_ok 20 grep -q "could not set the host's addresses in its protected ports' rule (nft stand-in: refused)" "$rlog2"
   check "...the host gains an address meanwhile" asns ip addr add 10.239.3.1/24 dev d1
   sleep 0.5
   rm -f "$f/fail"
