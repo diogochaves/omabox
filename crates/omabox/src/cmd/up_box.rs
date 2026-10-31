@@ -531,6 +531,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
                 &u.clean_zone
             )
         ));
+    } else if u.stock {
+        say(cat!(
+            "stock: ",
+            crate::upspec::stock_text(&u.theme, &u.clean_lang, &u.clean_zone)
+        ));
     }
     // A Hyprland that stops answering here (finding 353): said, the box left up, exit 1 at the end.
     let unanswered = !crate::hypr::hypr_errors_note(ctx)?;
@@ -673,6 +678,7 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
         theme: u.theme.clone(),
         theme_dirs: u.theme_dirs.clone(),
         no_seed: u.no_seed.clone(),
+        stock: u.stock,
         clean: u.clean,
         clean_keep: u.clean_keep.clone(),
         omarchy: u.omarchy.clone(),
@@ -771,6 +777,7 @@ fn box_json(
         b"user"
     };
     o.insert("bar".into(), s(bar));
+    o.insert("stock".into(), Value::Bool(u.stock));
     o.insert("systemd".into(), Value::Bool(u.systemd));
     o.insert("audio".into(), Value::Bool(u.audio));
     o.insert("polkit".into(), Value::Bool(u.polkit));

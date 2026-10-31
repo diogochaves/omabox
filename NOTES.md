@@ -11987,6 +11987,44 @@ from them.
     broker refuses doctor as any command not on its list. Tests: doctor.rs's (families, the table,
     versions, programs in a stand-in /usr/bin, userns reasons, socket length, PATH, render nodes
     with a virtio-gpu stand-in, --json), t_unit_doctor, t_doctor_smoke (a real box).
+
+613. **`up --stock`: Omarchy as a new user sees it; `--clean` is it plus the freezes** (2026-10-31,
+    #265). Asked for shots of a plugin "with a default look", an agent ran `up --theme tokyo-night
+    --stock-bar` (the skill's row for a theme or bar result), and the box was still the desk's: its
+    terminal configs, branding, the plugins' settings (`extensions/`), the user's themes, their own
+    wallpaper for the theme, the locale and timezone. `--clean` had most of that left out, but it is
+    the opposite of a showcase (a #ff00ff wallpaper, the clock frozen, no network, animations off),
+    and the skill named it only "against a baseline". **`up --stock`** (`run --stock` too; `check
+    run` takes it and has it anyway): Omarchy's bar (`--stock-bar`) on CLEAN_THEME (tokyo-night) or
+    `--theme NAME`, the theme's own wallpaper (seed_backgrounds not run: never the user's for it),
+    English in UTC as a clean box (one code path: `clean_lang`/`clean_zone`, /etc/locale.conf and
+    localtime; `--env TZ=` still wins), and none of seed_home's look: no terminal configs or
+    `*xdg-terminals.list`, branding, `extensions/` (as `--no-seed extensions`), the user's themes,
+    Hyprland toggles, fonts (seed_fonts), and no kept notifications; the HOME is /etc/skel's, as a
+    new user's. The user's commit identity is still seeded (`user.name`/`user.email` only, finding
+    48): not seen in a shot, and an agent committing in the box needs it. A theme of the user's that
+    `--theme` names is the one theme of theirs copied in (only when Omarchy has none of that name:
+    one of theirs of Omarchy's name would change Omarchy's look); `--theme-dir`, `--plugin`, `--seed`
+    work on top; over a `--from` save, what the save's HOME holds stays (as `--no-seed`'s do). The
+    clock, pointer, network and animations are as in any box. Not with
+    `--desk-shell` (refused before anything is made); `--keep` stays `--clean`'s. **`--clean` is
+    `--stock` plus the freezes**: `checks` sets `stock` for it, and seed_home and seed_fonts read
+    `plan.stock` for what both leave out, `plan.clean` only for the sentinel and the clock, so the
+    two cannot drift. That changes a clean box: the desk's look is out of it too, and `--keep
+    wallpaper` gives the theme's wallpaper rather than the user's for it. The words `up` says come
+    from one list (upspec::look_text): "stock: Omarchy's bar, theme tokyo-night with its own
+    wallpaper, locale en_US.UTF-8 in UTC, none of your look (terminal configs, branding, themes,
+    wallpapers, the plugins' settings, Hyprland toggles, fonts)", a clean box's line the same with
+    its freezes. box.json and `ls --json` have `stock` (true for a clean box; one from an older
+    omabox counts as stock when clean); `up` again with `--stock` on a box that is not is refused
+    ("--stock (it has your look)"). The skill's table: "how a new Omarchy user sees it → `up
+    --stock`", "shots compared across runs → `up --clean`", `--theme NAME --stock-bar` left for a
+    theme or bar result on an otherwise normal box. Not `--default`: a box's default is the desk's
+    look. Tests: t_stock (a fake desk with a marker in each part of its look: all of it in a plain
+    box, none in a stock one; the theme's wallpaper, English in UTC, Omarchy's clock format,
+    animations on, the pointer shown; a theme of the user's by `--theme`; `--clean --keep
+    wallpaper`), t_unit_check (`--stock --desk-shell` and `--stock --keep` refused, `run --stock`
+    too), upspec.rs clean_as_bash and clean_words (the words), seed.rs fonts_as_bash.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

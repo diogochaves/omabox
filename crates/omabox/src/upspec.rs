@@ -1,7 +1,7 @@
 //! up's option values (#324 wave 5a): mounts, seeds, addresses, ports, --clean's, as up reads them.
 
-// up --clean (#252, finding 357): what it sets, and what --keep can take back. The theme is Omarchy's
-// default; the wallpaper a colour no theme uses, so any of it inside a window or the bar is a hole (a
+// up --clean (#252, finding 357): what it sets, and what --keep can take back. The theme (--stock's
+// too) is Omarchy's default; the wallpaper a colour no theme uses, so any of it inside a window or the bar is a hole (a
 // 16x16 PNG of it, scaled); the clock a literal Qt format, which keeps its widget, place and width.
 // The locale and timezone (finding 363): English in UTF-8 and UTC for the whole session.
 pub const CLEAN_THEME: &str = "tokyo-night";
@@ -11,6 +11,10 @@ pub const CLEAN_CLOCK: &str = "'Friday 12:00'";
 pub const CLEAN_CLOCK_VERTICAL: &str = "'12'\n'\u{2014}'\n'00'";
 pub const CLEAN_TZ: &str = "UTC";
 pub const CLEAN_KEEPS: &str = "animations bar clock fonts locale pointer wallpaper";
+// up --stock (#265, finding 613): what of the desk a stock box leaves out (seed_home's `plan.stock`),
+// as up says it. A clean box is a stock one with the freezes above.
+pub const STOCK_LEFT_OUT: &str =
+    "terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles";
 
 use crate::boxes;
 use crate::cat;
@@ -544,6 +548,24 @@ pub fn clean_text(
     clean_lang: &[u8],
     clean_zone: &[u8],
 ) -> Vec<u8> {
+    look_text(true, keep, theme, net, clean_lang, clean_zone)
+}
+
+/// stock_text THEME CLEAN_LANG CLEAN_ZONE: what a stock box is (#265, finding 613), as up says it.
+pub fn stock_text(theme: &[u8], clean_lang: &[u8], clean_zone: &[u8]) -> Vec<u8> {
+    look_text(false, b"", theme, b"", clean_lang, clean_zone)
+}
+
+/// The words of a stock box, and with CLEAN those of a clean one (a stock box with the run-to-run
+/// freezes): one list, so the two cannot drift apart.
+fn look_text(
+    clean: bool,
+    keep: &[u8],
+    theme: &[u8],
+    net: &[u8],
+    clean_lang: &[u8],
+    clean_zone: &[u8],
+) -> Vec<u8> {
     let has = |w| clean_has(keep, w);
     let mut parts: Vec<Vec<u8>> = Vec::new();
     parts.push(if has("bar") {
@@ -551,15 +573,19 @@ pub fn clean_text(
     } else {
         b"Omarchy's bar".to_vec()
     });
-    parts.push(cat!("theme ", theme));
-    if !has("wallpaper") {
+    // (a stock box's wallpaper is the theme's own, never one of yours for it; a clean one's too with
+    // --keep wallpaper)
+    if clean && !has("wallpaper") {
+        parts.push(cat!("theme ", theme));
         parts.push(cat!(
             "wallpaper ",
             CLEAN_WALLPAPER,
             " (any of it inside a window or the bar is a hole)"
         ));
+    } else {
+        parts.push(cat!("theme ", theme, " with its own wallpaper"));
     }
-    if !has("clock") {
+    if clean && !has("clock") {
         parts.push(cat!("the clock at ", CLEAN_CLOCK.replace('\'', "")));
     }
     if !has("locale") {
@@ -575,28 +601,21 @@ pub fn clean_text(
         };
         parts.push(cat!("locale ", lang, " in ", zone));
     }
-    if !has("fonts") {
-        parts.push(b"none of your fonts".to_vec());
-    }
-    if !has("pointer") {
+    parts.push(if has("fonts") {
+        cat!("none of your look but your fonts (", STOCK_LEFT_OUT, ")")
+    } else {
+        cat!("none of your look (", STOCK_LEFT_OUT, ", fonts)")
+    });
+    if clean && !has("pointer") {
         parts.push(b"no pointer".to_vec());
     }
     if net == b"isolated" {
         parts.push(b"no network".to_vec());
     }
-    if !has("animations") {
+    if clean && !has("animations") {
         parts.push(b"animations off".to_vec());
     }
-    // (`IFS=,; "${parts[*]}"`, then each comma as ", ": one in a part's own words too)
-    let s = parts.join(&b',');
-    let mut out = Vec::with_capacity(s.len());
-    for &c in &s {
-        out.push(c);
-        if c == b',' {
-            out.push(b' ');
-        }
-    }
-    out
+    parts.join(b", ".as_slice())
 }
 
 /// box_starter (#220): who started this box, for `ls` to tell an orphan, as "PID START COMM": the
@@ -730,7 +749,7 @@ mod tests {
                 b"UTC"
             ))
             .unwrap(),
-            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off",
+            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your look (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles, fonts), no pointer, no network, animations off",
             "clean_text: all of it"
         );
         assert_eq!(
@@ -742,8 +761,14 @@ mod tests {
                 b""
             ))
             .unwrap(),
-            "your bar, theme nord, no pointer",
+            "your bar, theme nord with its own wallpaper, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles), no pointer",
             "...what --keep takes back, and a network"
+        );
+        // up --stock (#265, finding 613): the same words, less the freezes.
+        assert_eq!(
+            String::from_utf8(stock_text(b"tokyo-night", b"en_US.UTF-8", b"UTC")).unwrap(),
+            "Omarchy's bar, theme tokyo-night with its own wallpaper, locale en_US.UTF-8 in UTC, none of your look (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles, fonts)",
+            "stock_text"
         );
     }
 
@@ -947,7 +972,7 @@ mod tests {
         );
         assert_eq!(
             String::from_utf8(t).unwrap(),
-            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale C.UTF-8 in UTC, no network"
+            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale C.UTF-8 in UTC, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles), no network"
         );
         let t = clean_text(
             b"bar,wallpaper,clock,locale,fonts,pointer,animations",
@@ -956,7 +981,10 @@ mod tests {
             b"",
             b"",
         );
-        assert_eq!(t, b"your bar, theme x");
+        assert_eq!(
+            String::from_utf8(t).unwrap(),
+            "your bar, theme x with its own wallpaper, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles)"
+        );
         assert_eq!(
             clean_zone_rec(
                 &[

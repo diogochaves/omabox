@@ -14,7 +14,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive ",
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
-            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
+            "--omarchy= --keep= --stock-bar --stock --clean --desk-shell --systemd --audio --polkit --xwayland ",
             "--autoreload --no-shell --no-pointer --dnd --no-dock"
         )),
         b"path" => Some("-b= --box= --logs --run --home --json"),
@@ -31,7 +31,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "--wait --start= --quiet= --timeout= --strict --json --ignore= -g= ",
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
-            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
+            "--omarchy= --keep= --stock-bar --stock --clean --desk-shell --systemd --audio --polkit --xwayland ",
             "--autoreload --no-shell --no-pointer --dnd --no-dock"
         )),
         b"hyprctl" => Some("-b= --box="),
@@ -90,7 +90,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         )),
         b"check" => Some(concat!(
             "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= --report-scale= --only= -w= --window= --active -g= --expect= --expect-tree= --expect-image= --expect-cmd ",
-            "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland --autoreload --no-shell --no-pointer --dnd --no-dock"
+            "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --stock --clean --desk-shell --systemd --audio --polkit --xwayland --autoreload --no-shell --no-pointer --dnd --no-dock"
         )),
         _ => None,
     }
@@ -101,7 +101,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
 pub const UP_BOX_OPTS: &str = concat!(
     "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
     "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
-    "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --polkit --xwayland ",
+    "--omarchy= --keep= --stock-bar --stock --clean --desk-shell --systemd --audio --polkit --xwayland ",
     "--autoreload --no-shell --no-pointer --dnd --no-dock"
 );
 

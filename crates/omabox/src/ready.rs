@@ -55,7 +55,7 @@ const BOX_JSON_JQ: &str = r#"{name: $name, mode, size, scale: (.scale // 1), cre
       client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
-      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {desk_fonts: (.desk_fonts // [])} + {clean: (.clean // null)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}"#;
+      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {desk_fonts: (.desk_fonts // [])} + {clean: (.clean // null), stock: (.stock // (.clean != null))} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}"#;
 /// box_json's answer for a box.json jq cannot read.
 const BOX_JSON_BARE_JQ: &str = "{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}";
 

@@ -245,6 +245,8 @@ pub struct SeedPlan {
     pub theme_dirs: Vec<Vec<u8>>,
     /// NO_SEED: --no-seed's list, comma-separated (#231).
     pub no_seed: Vec<u8>,
+    /// STOCK (--stock, #265, or --clean): a new Omarchy user's HOME, nothing of the desk's look.
+    pub stock: bool,
     /// CLEAN (--clean, #252) and CLEAN_KEEP, comma-separated.
     pub clean: bool,
     pub clean_keep: Vec<u8>,
@@ -964,12 +966,13 @@ pub fn seed_extensions(ctx: &Ctx, look: &Look, plan: &SeedPlan, h: &[u8]) -> Res
 
 /// seed_fonts HOME (#261, finding 380): the desk's user fonts, ~/.local/share/fonts and ~/.fonts,
 /// each to be mounted read-only at the same place in the box HOME (there from the box's first
-/// process, so fontconfig finds them). Not with --no-seed fonts, nor in a --clean box unless --keep
-/// fonts. Said: what goes in, what does not and why, and the links in them that lead out of them
-/// (nowhere in the box). DESK_FONTS: (the folder resolved, its place in the box HOME) each.
+/// process, so fontconfig finds them). Not with --no-seed fonts, nor in a --stock box (a --clean one
+/// too) unless --keep fonts. Said: what goes in, what does not and why, and the links in them that
+/// lead out of them (nowhere in the box). DESK_FONTS: (the folder resolved, its place in the box
+/// HOME) each.
 pub fn seed_fonts(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<(Vec<u8>, Vec<u8>)>> {
     let mut fonts = Vec::new();
-    if plan.no_seed("fonts") || plan.clean && !plan.clean_has("fonts") {
+    if plan.no_seed("fonts") || plan.stock && !plan.clean_has("fonts") {
         return Ok(fonts);
     }
     let look = Look {
@@ -1732,20 +1735,26 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
                 &base64_decode(crate::upspec::CLEAN_WALLPAPER_PNG),
             )?;
         }
-        // Omarchy 4.5 keeps its notifications (#293, finding 419): a clean box starts with none.
+    }
+    // Omarchy 4.5 keeps its notifications (#293, finding 419): a stock box (a clean one too) starts
+    // with none, a --from save's too.
+    if plan.stock {
         let d = Dest::of(".local/state/omarchy/notifications");
         home_unlink(ctx, h, &d)?;
         rm_rf(&d.on(h)).map_err(|e| failed(ctx, &cat!("remove ", d.on(h)), &e))?;
     }
     // The theme: the user's current one, or with --theme NAME none of it (finding 245: the box's
-    // session runs omarchy-theme-set NAME), the user's own wallpapers for it in either case.
+    // session runs omarchy-theme-set NAME), the user's own wallpapers for it in either case; in a
+    // stock box (#265, finding 613) the theme's own.
     let cur = cat!(h, "/.local/state/omarchy/current");
     if !plan.theme.is_empty() {
         for f in ["theme", "theme.name", "background"] {
             let x = cat!(cur, "/", f);
             rm_rf(&x).map_err(|e| failed(ctx, &cat!("remove ", x), &e))?;
         }
-        seed_backgrounds(ctx, &look, &plan.theme, h, b"")?;
+        if !plan.stock {
+            seed_backgrounds(ctx, &look, &plan.theme, h, b"")?;
+        }
     } else {
         seed_theme(ctx, &look, h)?;
         if let Some(n) = look.src(Base::Home, b".local/state/omarchy/current/theme.name") {
@@ -1760,41 +1769,48 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         box_background(ctx, &look, h, &id, &bg)?;
     }
     // The rest of the look (finding 69): terminal configs and choice, branding, extensions, themes,
-    // toggles.
-    for t in ["foot", "alacritty", "ghostty", "kitty"] {
-        let d = Dest::of(&format!(".config/{t}"));
+    // toggles. None of it in a stock box (#265, finding 613): /etc/skel's, as a new user has them.
+    if !plan.stock {
+        for t in ["foot", "alacritty", "ghostty", "kitty"] {
+            let d = Dest::of(&format!(".config/{t}"));
+            if let Some(s) = look.src(Base::Home, d.rel()) {
+                seed_copy(ctx, &s, h, &d, &[])?;
+            }
+        }
+        let cfg = cat!(home, "/.config");
+        for n in shell::glob(&p(&cfg), false) {
+            if !n.ends_with(b"xdg-terminals.list") {
+                continue;
+            }
+            let rel = cat!(".config/", n);
+            let (Some(s), Some(d)) = (look.src(Base::Home, &rel), Dest::new(&rel)) else {
+                continue;
+            };
+            if !p(s.path()).exists() {
+                continue;
+            }
+            home_unlink(ctx, h, &d)?;
+            cp_into(&s, &cat!(h, "/.config"));
+        }
+        let d = Dest::of(".config/omarchy/branding");
         if let Some(s) = look.src(Base::Home, d.rel()) {
             seed_copy(ctx, &s, h, &d, &[])?;
         }
+        seed_extensions(ctx, &look, plan, h)?;
     }
-    let cfg = cat!(home, "/.config");
-    for n in shell::glob(&p(&cfg), false) {
-        if !n.ends_with(b"xdg-terminals.list") {
-            continue;
-        }
-        let rel = cat!(".config/", n);
-        let (Some(s), Some(d)) = (look.src(Base::Home, &rel), Dest::new(&rel)) else {
-            continue;
-        };
-        if !p(s.path()).exists() {
-            continue;
-        }
-        home_unlink(ctx, h, &d)?;
-        cp_into(&s, &cat!(h, "/.config"));
-    }
-    let d = Dest::of(".config/omarchy/branding");
-    if let Some(s) = look.src(Base::Home, d.rel()) {
-        seed_copy(ctx, &s, h, &d, &[])?;
-    }
-    seed_extensions(ctx, &look, plan, h)?;
     // Each theme on its own: one linked in from where it is developed is copied now (said, #170);
-    // one --theme-dir names is a link to its folder at its own path in the box: live.
+    // one --theme-dir names is a link to its folder at its own path in the box: live. A stock box
+    // has only the one --theme names, when it is yours and not Omarchy's (yours of Omarchy's name
+    // would change Omarchy's look).
     let top = crate::repo::repo_top().unwrap_or_default();
     let live: Vec<Vec<u8>> = plan.theme_dirs.iter().map(|t| shell::basename(t)).collect();
     let themes = cat!(home, "/.config/omarchy/themes");
     let tdest = Dest::of(".config/omarchy/themes");
     for id in shell::glob(&p(&themes), true) {
         if live.contains(&id) {
+            continue;
+        }
+        if plan.stock && (id != plan.theme || p(&cat!(omarchy, "/themes/", id)).is_dir()) {
             continue;
         }
         let (Some(s), Some(d)) = (
@@ -1819,7 +1835,9 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     }
     mkdir_p(ctx, &cat!(h, "/.local/state/omarchy/toggles"))?;
     let d = Dest::of(".local/state/omarchy/toggles/hypr");
-    if let Some(s) = look.src(Base::Home, d.rel()) {
+    if !plan.stock
+        && let Some(s) = look.src(Base::Home, d.rel())
+    {
         seed_copy(ctx, &s, h, &d, &[])?;
     }
     // Without /etc/skel (an older Omarchy), at least the desktop entries: foot's X-TerminalArgAppId
@@ -3023,6 +3041,8 @@ mod tests {
          -> (String, Vec<String>) {
             let plan = SeedPlan {
                 no_seed: no_seed.as_bytes().to_vec(),
+                // (--clean is --stock plus its freezes: up sets both)
+                stock: clean,
                 clean,
                 clean_keep: keep.as_bytes().to_vec(),
                 ..SeedPlan::default()
@@ -3087,7 +3107,7 @@ mod tests {
         assert_eq!(
             sf("desk", "h2", "", true, ""),
             (String::new(), vec![]),
-            "--clean: nothing, nothing said"
+            "--stock (--clean too): nothing, nothing said"
         );
         assert!(
             sf("desk", "h3", "", true, "clock,fonts")

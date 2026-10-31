@@ -9013,6 +9013,10 @@ t_unit_check() {
   # Refused before any box is made.
   check_match "up --keep without --clean refused" "--keep goes with --clean" "$(ob up "$P-uck" --keep clock 2>&1)"
   check_match "up --clean --desk-shell refused" "--clean or --desk-shell, not both" "$(ob up "$P-uck" --clean --desk-shell 2>&1)"
+  # up --stock (#265, finding 613): a new user's desktop, not the desk's; --keep is --clean's.
+  check_match "up --stock --desk-shell refused" "--stock or --desk-shell, not both" "$(ob up "$P-uck" --stock --desk-shell 2>&1)"
+  check_match "up --stock --keep refused: --keep goes with --clean" "--keep goes with --clean" "$(ob up "$P-uck" --stock --keep fonts 2>&1)"
+  check_match "run --stock --desk-shell refused as up's" "--stock or --desk-shell, not both" "$(env -u OMABOX "$CLI" run --stock --desk-shell -- true 2>&1)"
   check_match "check point outside a run refused" "outside a check run" "$(env -u OMABOX_CHECK_OUT "$CLI" check point a 2>&1)"
   check_match "check point: a bad ID refused" "an ID is letters" "$(OMABOX_CHECK_OUT=$d/o ob check point ../x 2>&1)"
   rc=0; out=$(ob check run --base "$d/none" -- true 2>&1) || rc=$?
@@ -16936,6 +16940,79 @@ t_desk_backgrounds() {
   fake down "$B" >/dev/null 2>&1
 }
 
+# up --stock (#265, finding 613): Omarchy as a new user sees it, on a fake desk (HOME and the XDG dirs
+# a folder of the test's) that has one of each thing of a desk's look, each holding a marker: none of
+# it in the box, the theme's own wallpaper (not the user's for it), English in UTC; the clock,
+# animations, pointer and network as in any box. A theme of the user's that --theme names: that one
+# only. --clean is --stock plus its freezes: none of the look either, --keep wallpaper the theme's.
+t_stock() {
+  local B=$P-stk fh=$TMP/$P-stk-home c u H D lang bg out M=omabox-desk-look-265 sj cur=/home/sbx/.local/state/omarchy/current
+  lang=$(probe clean_locale)
+  c=$fh/.local/state/omarchy/current u=$fh/.config/omarchy/backgrounds
+  rm -rf "$fh"
+  mkdir -p "$c" "$u/tokyo-night" "$fh/.config/foot" "$fh/.config/omarchy/branding" "$fh/.config/omarchy/extensions" \
+    "$fh/.config/omarchy/themes/mine" "$fh/.config/omarchy/themes/tokyo-night" "$fh/.local/state/omarchy/toggles/hypr" "$fh/.local/share/fonts"
+  cp -r /usr/share/omarchy/themes/nord "$c/theme"; echo nord > "$c/theme.name"
+  magick -size 64x64 xc:'#00ffff' "$u/tokyo-night/zz-mine.png"
+  echo "# $M" > "$fh/.config/foot/foot.ini"
+  echo "$M.desktop" > "$fh/.config/xdg-terminals.list"
+  echo "$M" > "$fh/.config/omarchy/branding/about.txt"
+  echo "{\"m\": \"$M\"}" > "$fh/.config/omarchy/extensions/$M.json"
+  echo "$M" > "$fh/.local/state/omarchy/toggles/hypr/$M"
+  echo "$M" > "$fh/.local/share/fonts/$M.ttf"
+  # (the user's own theme, and one of theirs of Omarchy's name over it)
+  for t in mine tokyo-night; do echo "# $M" | cat /usr/share/omarchy/themes/nord/colors.toml - > "$fh/.config/omarchy/themes/$t/colors.toml"; done
+  # shellcheck disable=SC2329 # called below
+  fake() { env HOME="$fh" XDG_CONFIG_HOME="$fh/.config" XDG_DATA_HOME="$fh/.local/share" XDG_CACHE_HOME="$fh/.cache" \
+    XDG_STATE_HOME="$fh/.local/state" LC_TIME=pt_BR.UTF-8 "$CLI" "$@"; }
+  # The fake desk's look does reach a box that is not stock: each marker is one to look for.
+  UP_OUT=$(fake up "$B" --no-shell --net isolated 2>&1) || { no "up on a fake desk" "$UP_OUT"; return; }
+  out=$(cd "$(ob path -b "$B")/home" && { grep -rlsF "$M" .config .local/state 2>/dev/null || true; } | LC_ALL=C sort | paste -sd ' ')
+  check_eq "a box that is not stock: the fake desk's look in it (each marked)" \
+    ".config/foot/foot.ini .config/omarchy/branding/about.txt .config/omarchy/extensions/$M.json .config/omarchy/themes/mine/colors.toml .config/omarchy/themes/tokyo-night/colors.toml .config/xdg-terminals.list .local/state/omarchy/toggles/hypr/$M" \
+    "$out"
+  check_match "...and its fonts" "\"desk_fonts\":\\[\"" "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | {desk_fonts}')"
+  fake down "$B" >/dev/null 2>&1
+  UP_OUT=$(fake up "$B" --stock 2>&1) || { no "up --stock on a fake desk" "$UP_OUT"; return; }
+  D=$(ob path -b "$B"); H=$D/home
+  check_match "up says what a stock box is" \
+    "stock: Omarchy's bar, theme tokyo-night with its own wallpaper, locale $lang in UTC, none of your look \(terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles, fonts\)" "$UP_OUT"
+  check_eq "...ls --json: stock, the stock bar, tokyo-night, the network as usual, not clean, none of the desk's fonts" \
+    '[true,"stock","tokyo-night","connected",null,[]]' \
+    "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | [.stock, .bar, .theme, .net, .clean, .desk_fonts]')"
+  check_eq "...nothing of the desk's look in the box HOME" "" "$(grep -rlsF "$M" "$H" 2>/dev/null || true)"
+  check_fails "...none of the user's themes" test -e "$H/.config/omarchy/themes/mine"
+  check_fails "...nor the user's tokyo-night over Omarchy's" test -e "$H/.config/omarchy/themes/tokyo-night"
+  check "...its colors Omarchy's tokyo-night's" cmp "$H/.local/state/omarchy/current/theme/colors.toml" /usr/share/omarchy/themes/tokyo-night/colors.toml
+  bg=$(cd /usr/share/omarchy/themes/tokyo-night/backgrounds && command find . -maxdepth 1 -type f | LC_ALL=C sort | head -n 1)
+  check_eq "...its wallpaper the theme's own, not the user's for it" "$cur/theme/backgrounds/${bg#./}" "$(readlink "$H/.local/state/omarchy/current/background")"
+  check_fails "...which is not in the box at all" test -e "$H/.config/omarchy/backgrounds/tokyo-night/zz-mine.png"
+  check_eq "...English in UTC for the session (the host's LC_TIME not taken)" "$lang||UTC" \
+    "$(ob run -b "$B" -- sh -c 'echo "$LANG|$(env | grep "^LC_" || true)|$(date +%Z)"' 2>&1)"
+  sj=$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' /usr/share/omarchy/config/omarchy/shell.json)
+  check_eq "...a live clock: the bar's format Omarchy's" "$sj" \
+    "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$H/.config/omarchy/shell.json")"
+  check_fails "...no frozen shell defaults" test -e "$D/shell-defaults.json"
+  check_eq "...animations on" true "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
+  check_fails "...the pointer not hidden" grep -qs '^hidden' "$D/pointer"
+  check "up again with --stock: fine" fake up "$B" --stock
+  check_match "...with --clean: refused, it is not clean" "--clean \(it is not clean\)" "$(fake up "$B" --clean 2>&1)"
+  fake down "$B" >/dev/null 2>&1
+  UP_OUT=$(fake up "$B" --stock --theme mine --no-shell --net isolated 2>&1) || { no "up --stock --theme mine" "$UP_OUT"; return; }
+  H=$(ob path -b "$B")/home
+  check_eq "up --stock --theme NAME, a theme of the user's: on it, the one theme of theirs in the box" "mine|mine" \
+    "$(cat "$H/.local/state/omarchy/current/theme.name")|$(cd "$H/.config/omarchy/themes" && printf '%s\n' * | paste -sd ' ')"
+  fake down "$B" >/dev/null 2>&1
+  UP_OUT=$(fake up "$B" --clean --keep wallpaper --no-shell 2>&1) || { no "up --clean --keep wallpaper" "$UP_OUT"; return; }
+  H=$(ob path -b "$B")/home
+  check_eq "up --clean --keep wallpaper: stock (ls --json), nothing of the desk's look" "true|" \
+    "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .stock')|$(grep -rlsF "$M" "$H" 2>/dev/null || true)"
+  check_eq "...the theme's own wallpaper, not the user's for it" "$cur/theme/backgrounds/${bg#./}" "$(readlink "$H/.local/state/omarchy/current/background")"
+  check_match "...said" "none of your look \(terminal configs" "$UP_OUT"
+  check_match "up again with --stock: fine, a clean box is a stock one" "box '$B' is already up$" "$(fake up "$B" --stock 2>&1)"
+  fake down "$B" >/dev/null 2>&1
+}
+
 # up --theme NAME (finding 245): the box on that theme, not the desk's current one (a theme the desk is
 # not on: tokyo-night, or nord on a desk on tokyo-night); over a save's look; refused when there is no
 # such theme, before anything is made; a box whose omarchy-theme-set fails ends, saying why.
@@ -20095,7 +20172,7 @@ t_run_cwd() {
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

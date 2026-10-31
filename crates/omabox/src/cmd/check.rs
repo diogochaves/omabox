@@ -2247,7 +2247,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     ")"
                 )));
             }
-            b"--clean" => {}
+            b"--clean" | b"--stock" => {}
             b"--idle" => {
                 optarg(ctx, x, v)?;
                 match idle_duration(&args[i + 1], "--idle ") {

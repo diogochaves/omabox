@@ -41,7 +41,7 @@ const UP_VALUED: [&str; 18] = [
     "--omarchy",
     "--keep",
 ];
-const UP_FLAGS: [&str; 12] = [
+const UP_FLAGS: [&str; 13] = [
     "--xwayland",
     "--autoreload",
     "--no-shell",
@@ -54,6 +54,7 @@ const UP_FLAGS: [&str; 12] = [
     "--audio",
     "--polkit",
     "--clean",
+    "--stock",
 ];
 
 /// env_reserved: a variable the box session sets, or that changes how every program in it runs

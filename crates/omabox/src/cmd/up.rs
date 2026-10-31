@@ -60,6 +60,7 @@ const GIVEN: &[&str] = &[
     "theme-dir",
     "theme",
     "clean",
+    "stock",
 ];
 
 /// cmd_up's state: what the options set, then what up worked out from them.
@@ -113,6 +114,8 @@ pub struct Up {
     pub owner: Vec<u8>,
     pub agent: Vec<u8>,
     pub stock_bar: bool,
+    /// --stock (#265): a new Omarchy user's desktop; --clean sets it too (a stock box with freezes).
+    pub stock: bool,
     pub clean: bool,
     pub clean_keep: Vec<u8>,
     pub clean_lang: Vec<u8>,
@@ -468,6 +471,7 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                     }
                     b"--stock-bar" => u.stock_bar = true,
                     b"--clean" => u.clean = true,
+                    b"--stock" => u.stock = true,
                     // The desk's config is outside any jail, and its files are the user's (#206).
                     b"--desk-shell" => {
                         if jailed {
@@ -522,14 +526,22 @@ fn base_of(g: &[u8]) -> Vec<u8> {
 /// Everything cmd_up checks before it makes anything: false when the box is up already (said).
 fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let jailed = in_jail();
-    // --clean (#252, finding 357): a desktop where only what is tested moves. Omarchy's own bar on
-    // CLEAN_THEME, a sentinel wallpaper, the clock frozen, English in UTC (finding 363), no pointer,
-    // no network, animations off; --keep takes any of them back, --theme and --net choose their own.
+    // --stock (#265, finding 613): Omarchy as a new user sees it. Omarchy's own bar on CLEAN_THEME
+    // with its own wallpaper, English in UTC (finding 363), none of the desk's look (seed_home); the
+    // clock, pointer, network and animations as in any box. --clean (#252, finding 357) is --stock
+    // plus the freezes, a desktop where only what is tested moves: a sentinel wallpaper, the clock
+    // frozen, no pointer, no network, animations off; --keep takes any of them back (and the bar, the
+    // locale, the fonts), --theme and --net choose their own.
     if u.clean {
+        u.stock = true;
+    }
+    if u.stock {
         if u.desk_shell {
-            return Err(ctx.die(
-                "up: --clean or --desk-shell, not both (--clean starts from Omarchy's bar; --keep bar keeps yours)",
-            ));
+            return Err(ctx.die(if u.clean {
+                "up: --clean or --desk-shell, not both (--clean starts from Omarchy's bar; --keep bar keeps yours)"
+            } else {
+                "up: --stock or --desk-shell, not both (--stock is a new user's desktop, --desk-shell yours)"
+            }));
         }
         if !u.clean_has("bar") {
             u.stock_bar = true;
@@ -537,15 +549,17 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
         if u.theme.is_empty() {
             u.theme = upspec::CLEAN_THEME.as_bytes().to_vec();
         }
+        if !u.clean_has("locale") {
+            u.clean_lang = upspec::clean_locale().as_bytes().to_vec();
+            u.clean_zone = upspec::CLEAN_TZ.as_bytes().to_vec();
+        }
+    }
+    if u.clean {
         if !u.clean_has("pointer") {
             u.nopointer = true;
         }
         if !u.net_set {
             u.net = b"isolated".to_vec();
-        }
-        if !u.clean_has("locale") {
-            u.clean_lang = upspec::clean_locale().as_bytes().to_vec();
-            u.clean_zone = upspec::CLEAN_TZ.as_bytes().to_vec();
         }
     } else if !u.clean_keep.is_empty() {
         return Err(
@@ -1604,6 +1618,10 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
     }
     if u.has("stock-bar") && m("bar") != b"stock" {
         diff.push(b"--stock-bar (it has your bar)".to_vec());
+    }
+    // (a clean box is a stock one too)
+    if u.has("stock") && jqr(".stock // (.clean != null)") != b"true" {
+        diff.push(b"--stock (it has your look)".to_vec());
     }
     if u.has("clean") {
         if jqr(".clean != null") != b"true" {

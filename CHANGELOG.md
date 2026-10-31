@@ -197,6 +197,19 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   session's PATH find. Each failure or warning has a fix line for your distribution's family (Arch,
   Debian and Ubuntu, Fedora, openSUSE); exit 1 when something fails. `--smoke` also starts a box,
   takes a shot and takes it down ([#320](https://github.com/diogochaves/omabox/issues/320)).
+- **`up --stock`: Omarchy as a new user sees it**, for a showcase or a shot for someone else:
+  Omarchy's bar on tokyo-night (or `--theme NAME`) with the theme's own wallpaper, English in UTC,
+  and nothing of your desktop's look (terminal configs and choice, branding, your themes and
+  wallpapers, the plugins' settings, Hyprland toggles, fonts); the clock live, animations on, the
+  network and pointer as in any box. `--plugin`, `--theme-dir` and the rest work on top; `ls --json`
+  says `stock` ([#265](https://github.com/diogochaves/omabox/issues/265)).
+
+### Changed
+
+- **`up --clean` is `--stock` plus its freezes**, so the two cannot drift apart: a clean box now
+  leaves out your terminal configs, branding, themes, wallpapers, plugins' settings and Hyprland
+  toggles too, and `--keep wallpaper` gives the theme's own wallpaper, not yours for it
+  ([#265](https://github.com/diogochaves/omabox/issues/265)).
 
 ### Fixed
 

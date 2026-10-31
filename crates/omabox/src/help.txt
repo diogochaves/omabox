@@ -12,7 +12,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--audio] [--polkit]                         its own PipeWire (a silent mic); a polkit agent can register (polkit ask)
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
             [--dnd] [--no-dock]                          Do Not Disturb on, no toast up; Omarchy 4.5's dock off
-            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves
+            [--stock]                                    Omarchy as a new user sees it: none of your look, for showcase shots
+            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   --stock, frozen: shots compared across runs
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
@@ -236,7 +237,7 @@ extensions/NAME.json from your desk"): that plugin starts on your desk's setting
 in them too.
 --no-seed fonts: the box starts without your fonts. Otherwise ~/.local/share/fonts and ~/.fonts are
 mounted read-only at the same place in the box HOME (`ls --json`: desk_fonts), so a theme's or a
-plugin's own faces draw as on your desk (not in a --clean box unless --keep fonts; nor when the box
+plugin's own faces draw as on your desk (not in a --stock box, nor a --clean one unless --keep fonts; nor when the box
 HOME has its own folder there, a --from save's or a --seed's: it keeps that one). A link in them that
 leads out of them is not in the box (said). Comma-separated, repeatable.
 @ up run
@@ -249,22 +250,30 @@ applies it, as it is then.
 --theme NAME: the box starts on that theme (Omarchy's, one of yours or a --theme-dir one; checked
 before anything is made), not your desktop's current one: omarchy-theme-set NAME runs in the box
 before its Hyprland and bar start, so a test gets the same look whatever your desktop is on (its
-background: your own first for NAME, else the theme's). Over a --from save's look too. `up` again with another is refused.
+background: your own first for NAME, else the theme's; with --stock the theme's). Over a --from save's look too. `up` again with another is refused.
 @ up run
 --stock-bar: Omarchy's default bar (its shell.json, no shell.toml), not a copy of yours: for shots,
 sizes and colours as most people see them. --theme leaves your bar as it is; without this `up`
 says when that bar is not Omarchy's ("seeded the bar from your desk: its shell.json layout and
-shell.toml [bar]"). Plugins are placed as without it.
+shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new user's desktop too.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+@ up run
+--stock: Omarchy as a new user sees it, for a showcase or a shot for someone else: Omarchy's bar
+(--stock-bar) on tokyo-night (or --theme) with the theme's own wallpaper (never yours for it),
+English (en_US.UTF-8, else C.UTF-8) in UTC for the whole session, and nothing of your desk's look:
+not your terminal configs and terminal choice, branding, themes (but the one --theme names, when it
+is yours and not Omarchy's), wallpapers, plugins' settings (as --no-seed extensions), Hyprland
+toggles or fonts; a new user's HOME (/etc/skel's) instead. The clock, pointer, network and animations
+are as in any box; --plugin, --theme-dir and the rest work on top (`ls --json`: stock, a clean box's too).
+Not with --desk-shell.
 @ up run check
---clean: a desktop where only what is tested moves, for shots compared across runs (`check`):
-Omarchy's bar (--stock-bar) on tokyo-night (or --theme), a #ff00ff wallpaper (no theme has it: any of
-it inside a window or the bar is a hole), the bar's clock frozen at "Friday 12:00" (in its place, at
-its width), English (en_US.UTF-8, else C.UTF-8) in UTC for the whole session, no pointer, no network
-(--net connected gives it back), animations off (over reloads too), none of your fonts (--no-seed
-fonts). --keep LIST takes any of animations, bar (yours), clock, fonts (yours), locale (yours and
-your timezone), pointer, wallpaper back. A theme set later in the box brings that theme's wallpaper.
+--clean: --stock plus the run-to-run freezes, a desktop where only what is tested moves, for shots
+compared across runs (`check`): a #ff00ff wallpaper (no theme has it: any of it inside a window or
+the bar is a hole), the bar's clock frozen at "Friday 12:00" (in its place, at its width), no
+pointer, no network (--net connected gives it back), animations off (over reloads too). --keep LIST
+takes any of animations, bar (yours), clock, fonts (yours), locale (yours and your timezone),
+pointer, wallpaper (the theme's) back. A theme set later in the box brings that theme's wallpaper.
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
 its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
@@ -310,7 +319,7 @@ in ~/.config/omarchy your plugins read (a plugin's JSON, a folder beside shell.j
 box's. Never api-keys.env nor anything named or holding a key, token, secret, password, credential,
 auth, cookie or session (any .env, .pem, .gpg...), hooks/ (your scripts), a git dir or a backup; regular
 files up to 1 MiB (16 MiB, 1000 in all); a link only to a file inside the folder. `up` says what went
-in and what did not, and why (`ls --json`: desk_shell). Not with --stock-bar; not inside ai-jail.
+in and what did not, and why (`ls --json`: desk_shell). Not with --stock-bar or --stock; not inside ai-jail.
 @ up run
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
 box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
