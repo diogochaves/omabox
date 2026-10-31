@@ -10650,6 +10650,15 @@ from them.
     Measured on a box: three batches of 200 runs, 2.46, 2.52, 2.53 ms a run, one marker. Test:
     jobs' `job_note_as_bash` (50 runs back to back keep one marker beside one apart; what
     job_run_stopped answers), failed on the old code.
+547. **Omarchy 4.5.0-rc2's bar is a full-screen layer: `tree --layer omarchy-bar` could not tell it
+    from the wallpaper** (2026-10-30, refs #315). On rc2 (proart since 10-28) the shell's
+    `omarchy-bar` layer is 1920x1080, the size of `omarchy-background`, both of one pid, so the tree
+    tool's frame by size found two and refused (exit 6: "which one is the layer's cannot be told");
+    t_tree_layer's two checks of an empty layer and t_cli_box's "tree --layer: the bar" failed on
+    rc2 (and with the tree tool from before #314: not that change). Neither frame has anything under
+    it, so which is the layer's does not matter: when every frame of the size (after --active's
+    filter) is empty, the tool now says the layer publishes no accessible items (exit 5), as it does
+    for one. A popup whose card has items beside the wallpaper is still #315's case.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

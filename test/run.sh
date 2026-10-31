@@ -8443,14 +8443,19 @@ QML
   check_match "...said so, not as no tree" "the layer publishes no accessible items" "$out"
   check_eq "pid:PID with two layers: exit 2" 2 \
     "$(ob tree -b "$B" --layer "pid:$(ob hyprctl -b "$B" -j layers | jq -r '[.. | objects | select(.namespace? == "t254")][0].pid')" >/dev/null 2>&1; echo $?)"
-  # Two layers of one size in one process: their frames cannot be told apart.
+  # Two layers of one size in one process, each with an item: their frames cannot be told apart. (Two
+  # empty ones publish nothing whichever is the layer's: said so, finding 547.)
   cat > "$D/home/t254b.qml" <<'QML'
 import QtQuick
 import Quickshell
 import Quickshell.Wayland
 ShellRoot {
-  PanelWindow { anchors { bottom: true; left: true } implicitWidth: 100; implicitHeight: 100; WlrLayershell.namespace: "t254-a" }
-  PanelWindow { anchors { top: true; right: true } implicitWidth: 100; implicitHeight: 100; WlrLayershell.namespace: "t254-b" }
+  PanelWindow { anchors { bottom: true; left: true } implicitWidth: 100; implicitHeight: 100; WlrLayershell.namespace: "t254-a"
+    Rectangle { width: 50; height: 50; Accessible.role: Accessible.Button; Accessible.name: "a" } }
+  PanelWindow { anchors { top: true; right: true } implicitWidth: 100; implicitHeight: 100; WlrLayershell.namespace: "t254-b"
+    Rectangle { width: 50; height: 50; Accessible.role: Accessible.Button; Accessible.name: "b" } }
+  PanelWindow { anchors { bottom: true; right: true } implicitWidth: 80; implicitHeight: 80; WlrLayershell.namespace: "t254-c" }
+  PanelWindow { anchors { top: true; left: true } implicitWidth: 80; implicitHeight: 80; WlrLayershell.namespace: "t254-d" }
 }
 QML
   ob run -b "$B" -d -q -- qs -p /home/sbx/t254b.qml >/dev/null 2>&1
@@ -8458,6 +8463,10 @@ QML
     out=$(ob tree -b "$B" --layer t254-a 2>&1); rc=$?
     check_eq "two layers of one process and size: exit 1" 1 "$rc"
     check_match "...said so, both listed" "2 of its application's \(pid [0-9]+\) windows are 100x100.*cannot be told.*\"t254-a\".*\"t254-b\"" "$(tr '\n' ' ' <<<"$out")"
+    ob wait -b "$B" layer t254-c >/dev/null 2>&1; ob wait -b "$B" layer t254-d >/dev/null 2>&1
+    out=$(ob tree -b "$B" --layer t254-c 2>&1); rc=$?
+    check_eq "...two of one size with nothing in either: the layer publishes nothing, exit 1 (finding 547)" \
+      "1 yes" "$rc $(grep -q 'the layer publishes no accessible items' <<<"$out" && echo yes || echo "no: $out")"
   else no "two layers of one size map" "no t254-a / t254-b layer"; fi
   # The launcher and the wallpaper: one pid, both 1920x1080; the launcher holds the keyboard.
   ob keys -b "$B" super+space >/dev/null

@@ -653,11 +653,20 @@ static int layer_frame(GPtrArray *apps, long pid, AtspiAccessible **win) {
             }
         }
     }
+    // Several of that size, none with anything under it: which is the layer's does not matter, it
+    // publishes nothing either way (Omarchy 4.5.0-rc2's bar is full-screen too, beside the wallpaper;
+    // #315 is the case of one that has items).
+    int empty = 0;
+    for (guint i = 0; i < same->len; i++)
+        if (atspi_accessible_get_child_count(same->pdata[i], NULL) <= 0) empty++;
     int rc = 0;
     if (same->len == 0) {
         fprintf(stderr, "no accessibility tree for the layer: none of its application's (pid %ld) windows is %dx%d (they are %s)\n",
                 pid, win_w, win_h, sizes->len ? sizes->str : "none");
         rc = 3;
+    } else if (same->len > 1 && empty == (int)same->len) {
+        fprintf(stderr, "the layer publishes no accessible items (nothing in it sets an Accessible role)\n");
+        rc = 5;
     } else if (same->len > 1) {
         fprintf(stderr, "%u of its application's (pid %ld) windows are %dx%d, and they have no names: which one is the layer's cannot be told\n",
                 same->len, pid, win_w, win_h);
