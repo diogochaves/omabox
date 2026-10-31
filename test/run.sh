@@ -624,6 +624,78 @@ host_same() {
   else no "$1" "want [$2] got [$3]; no event to it in the host's log"; fi
 }
 
+# --- the leak check without a host Hyprland (#336) ---------------------------------------------------
+
+# What a run could leave in your session that no Hyprland event shows, read at the start and the end
+# with nothing but reads: your user manager's environment (an import of a box's WAYLAND_DISPLAY there
+# would send your apps into it) and your runtime dir's entries (a stray socket, a box's compositor
+# writing beside yours). It needs no host Hyprland.
+# session_snap RT OUT [CMD...]: CMD's output (default `systemctl --user show-environment`) in OUT.env,
+# or OUT.unread when it fails (no user manager: the suite in a jail); RT's entries in OUT.rt, one
+# "TYPE PATH" line each (find's %y: s a socket, d a dir, f a file), its top level, hypr/ and
+# systemd/transient/ (a box's scope left); omabox/ is omabox's own (S6 and ls answer for its boxes).
+session_snap() {
+  local rt=$1 out=$2; shift 2
+  [ $# -gt 0 ] || set -- systemctl --user show-environment
+  rm -f "$out.unread"
+  "$@" > "$out.env" 2>/dev/null || : > "$out.unread"
+  (cd "$rt" 2>/dev/null && { command find . -mindepth 1 -maxdepth 1 ! -name omabox -printf '%y %P\n'
+    command find hypr systemd/transient -mindepth 1 -maxdepth 1 -printf '%y %p\n' 2>/dev/null; } | LC_ALL=C sort) > "$out.rt"
+}
+# session_scan PREFIX A B RT [TMPDIR]: what changed from snapshot A to B (session_snap's), as leak_scan
+# says it: one `leak: ...` line each for what is the run's or omabox's, one `note: ...` line for the
+# rest (yours, during the run). A leak: a variable of the environment named OMABOX_*, or whose value
+# (before or after) names omabox, PREFIX or TMPDIR, added, changed or removed; WAYLAND_DISPLAY, DISPLAY
+# or HYPRLAND_INSTANCE_SIGNATURE changed or removed at all (your session's display does not change
+# under a run); a new entry in RT named for PREFIX, or for omabox outside systemd/ (where other boxes'
+# scopes come and go); a new Hyprland session dir (hypr/SIG)
+# whose lock names no live process, or a new wayland-* socket nothing serves (no live Hyprland's lock
+# names it, nothing listens on it): what a box's compositor killed with its box would leave there.
+session_scan() {
+  local pre=$1 a=$2 b=$3 rt=$4 tmp=${5:-} k v w t p notes=() line
+  local -A e0=() e1=()
+  if [ -e "$a.unread" ] || [ -e "$b.unread" ]; then notes+=("your user manager's environment unread (no user manager?)")
+  else
+    while IFS= read -r line; do [ -z "$line" ] || e0[${line%%=*}]=${line#*=}; done < "$a.env"
+    while IFS= read -r line; do [ -z "$line" ] || e1[${line%%=*}]=${line#*=}; done < "$b.env"
+    for k in $(printf '%s\n' "${!e0[@]}" "${!e1[@]}" | LC_ALL=C sort -u); do
+      if [ -n "${e0[$k]+x}" ] && [ -n "${e1[$k]+x}" ]; then
+        [ "${e0[$k]}" != "${e1[$k]}" ] || continue
+        w="changed: $k=${e1[$k]} (was ${e0[$k]})"
+      elif [ -n "${e1[$k]+x}" ]; then w="added: $k=${e1[$k]}"
+      else w="removed: $k (was ${e0[$k]})"; fi
+      v="${e0[$k]:-} ${e1[$k]:-}"
+      if [[ $k == OMABOX_* || ${v,,} == *omabox* || $v == *"$pre"* ]] || { [ -n "$tmp" ] && [[ $v == *"$tmp"* ]]; } ||
+        { [[ " WAYLAND_DISPLAY DISPLAY HYPRLAND_INSTANCE_SIGNATURE " == *" $k "* ]] && [ -n "${e0[$k]+x}" ]; }; then
+        echo "leak: your user manager's environment, $w"
+      else notes+=("environment $w"); fi
+    done
+  fi
+  while read -r t p; do
+    # (A unit of another box's, systemd/transient/omabox-NAME-PID.scope, comes and goes with it.)
+    if [[ $p == *"$pre"* ]] || { [[ $p != systemd/* ]] && [[ ${p,,} == *omabox* ]]; }; then
+      echo "leak: new in your runtime dir, named for omabox or this run: $p"
+    elif [ "$t" = d ] && [[ $p == hypr/* ]] && ! session_live "$rt/$p"; then
+      echo "leak: a Hyprland session dir in your runtime dir that no live process holds: $p (a box's compositor, killed with its box?)"
+    elif [ "$t" = s ] && [[ $p == wayland-* ]] && ! session_served "$rt" "$p"; then
+      echo "leak: a Wayland socket in your runtime dir that nothing serves: $p (a box's compositor, killed with its box?)"
+    else notes+=("new in your runtime dir: $p"); fi
+  done < <(LC_ALL=C comm -13 "$a.rt" "$b.rt")
+  while read -r t p; do notes+=("gone from your runtime dir: $p"); done < <(LC_ALL=C comm -23 "$a.rt" "$b.rt")
+  [ ${#notes[@]} = 0 ] || echo "note: not the suite's: $(printf '%s\n' "${notes[@]}" | awk '!seen[$0]++ && n++ < 8' | paste -sd, - | sed 's/,/, /g')"
+}
+# session_live DIR: a Hyprland session dir whose hyprland.lock names a live process (its first line).
+session_live() { local pid; pid=$(sed -n 1p "$1/hyprland.lock" 2>/dev/null) && [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; }
+# session_served RT NAME: a Wayland socket a live Hyprland's lock names (its second line), or one that
+# something listens on (/proc/net/unix, flag __SO_ACCEPTCON: a read, nothing connects to it).
+session_served() {
+  local d
+  for d in "$1"/hypr/*/; do
+    [ "$(sed -n 2p "$d/hyprland.lock" 2>/dev/null)" = "$2" ] && session_live "$d" && return 0
+  done
+  awk -v p="$1/$2" '$8 == p && $4 == "00010000" {f = 1} END {exit !f}' /proc/net/unix
+}
+
 # stand_in_host RT SIG: a stand-in host session for unit checks of what omabox does on the user's
 # Hyprland (host, --size host), which must never reach the real one (#372). RT is a new runtime dir
 # whose only session is SIG: a socket that writes each request to RT/requests.log and answers version
@@ -4683,6 +4755,62 @@ EOF
   cx_want=(rc=1 out= 'err=omabox: omabox-relay is not in reach: map it into the jail (omabox broker on prints how)')
   cx_case "alone: no omabox-relay in reach" ls
   cx_also="" cx_wrap=() cx_env=() cx_dir=/
+}
+
+# The leak check without a host Hyprland (#336: session_snap, session_scan), on a stand-in session: a
+# stand_in_host runtime dir and a stand-in systemctl, never your manager or runtime dir. Quiet, it says
+# nothing; then each kind of leak is made there on purpose and must be reported, and what is not the
+# run's is only noted.
+t_unit_session_scan() {
+  local rt=$TMP/ss-rt bin=$TMP/ss-bin env=$TMP/ss-env s=$TMP/ss STANDIN_PID out lp dead
+  rm -rf "$rt" "$bin" "$s"; mkdir -p "$bin" "$s"
+  stand_in_host "$rt" a_6_6
+  # shellcheck disable=SC2016 # (the stand-in's own $*)
+  printf '#!/bin/sh\n[ "$*" = "--user show-environment" ] || exit 1\nexec cat "%s"\n' "$env" > "$bin/systemctl"; chmod +x "$bin/systemctl"
+  printf 'HOME=/home/u\nWAYLAND_DISPLAY=wayland-1\nDISPLAY=:0\nBAR=1\nPATH=/usr/bin\n' > "$env"
+  touch "$rt/gone-file"; mkdir -p "$rt/omabox/t1-box" "$rt/systemd/transient"
+  snap() { PATH=$bin:$PATH session_snap "$rt" "$s/$1"; }
+  scan() { session_scan t1- "$s/$1" "$s/$2" "$rt" "$TMP/ss-tmp"; }
+  snap a; snap b
+  check_eq "nothing changed: nothing said" "" "$(scan a b)"
+  check_eq "...it read the stand-in's environment" "WAYLAND_DISPLAY=wayland-1" "$(grep '^WAYLAND' "$s/a.env")"
+  check_eq "...and its runtime dir, the Hyprland session's dir and socket, not omabox/" "d hypr/a_6_6 s wayland-sti" \
+    "$(grep -E '^(d hypr/|s |. omabox)' "$s/a.rt" | paste -sd' ' -)"
+  # The leaks, on purpose.
+  printf 'HOME=/home/u\nWAYLAND_DISPLAY=wayland-9\nDISPLAY=:0\nOMABOX_BOX=t1-x\nFOO=bar\nPATH=%s/bin:/usr/bin\n' "$TMP/ss-tmp" > "$env"
+  touch "$rt/t1-left"; mkdir "$rt/omabox-stray"; rm "$rt/gone-file"
+  touch "$rt/systemd/transient/omabox-t1-x-9.scope" "$rt/systemd/transient/omabox-other-1.scope"
+  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$rt/wayland-7"   # (bound, then its process gone)
+  sleep 0 & dead=$!; wait "$dead"
+  mkdir "$rt/hypr/b_5_5"; printf '%s\nwayland-7\n' "$dead" > "$rt/hypr/b_5_5/hyprland.lock"
+  # ...and what is not the run's: a session a live process holds, its socket; a socket something
+  # listens on; a box's dir under omabox/.
+  mkdir "$rt/hypr/c_4_4"; printf '%s\nwayland-c\n' "$STANDIN_PID" > "$rt/hypr/c_4_4/hyprland.lock"
+  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$rt/wayland-c"
+  python3 -c 'import socket, sys, time; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(30)' "$rt/wayland-l" & lp=$!
+  until_ok 5 test -S "$rt/wayland-l" >/dev/null
+  mkdir "$rt/omabox/t1-other"
+  snap c; out=$(scan a c)
+  check_match "an OMABOX_ variable put in your manager's environment: a leak" "leak: your user manager's environment, added: OMABOX_BOX=t1-x" "$out"
+  check_match "...WAYLAND_DISPLAY changed" "leak: your user manager's environment, changed: WAYLAND_DISPLAY=wayland-9 \(was wayland-1\)" "$out"
+  check_match "...a value naming the run's temporary dir" "leak: your user manager's environment, changed: PATH=$TMP/ss-tmp/bin" "$out"
+  check_match "a new entry named for the run: a leak" "leak: new in your runtime dir, named for omabox or this run: t1-left" "$out"
+  check_match "...for omabox" "leak: new in your runtime dir, named for omabox or this run: omabox-stray" "$out"
+  check_match "...a scope of the run's left" "leak: new in your runtime dir, named for omabox or this run: systemd/transient/omabox-t1-x-9.scope" "$out"
+  check_match "a Hyprland session dir no live process holds: a leak" "leak: a Hyprland session dir in your runtime dir that no live process holds: hypr/b_5_5" "$out"
+  check_match "a Wayland socket nothing serves: a leak" "leak: a Wayland socket in your runtime dir that nothing serves: wayland-7 " "$out"
+  check_eq "...those, and nothing else" 8 "$(grep -c '^leak:' <<<"$out")"
+  check_match "what is not the run's, noted: a variable of yours gone, one added, a live session and its socket, another box's scope, a socket listened on, an entry gone" \
+    "^note: not the suite's: environment removed: BAR \(was 1\), environment added: FOO=bar, new in your runtime dir: hypr/c_4_4, new in your runtime dir: systemd/transient/omabox-other-1.scope, new in your runtime dir: wayland-c, new in your runtime dir: wayland-l, gone from your runtime dir: gone-file$" \
+    "$(grep '^note:' <<<"$out")"
+  kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null
+  check_eq "...a listened one that stopped listening: a leak" "leak: a Wayland socket in your runtime dir that nothing serves: wayland-l (a box's compositor, killed with its box?)" \
+    "$(scan a c | grep wayland-l)"
+  check_eq "...nothing between two snapshots alike" "" "$(snap d; scan c d)"
+  printf '#!/bin/sh\nexit 1\n' > "$bin/systemctl"; snap e
+  check_eq "no user manager to read: noted, not a leak" "note: not the suite's: your user manager's environment unread (no user manager?)" "$(scan d e)"
+  kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null || true
+  rm -rf "$rt" "$bin" "$s"
 }
 
 # evidence() puts back a box's idle clock after its reads (#111, finding 180), but not over another
@@ -10379,6 +10507,17 @@ t_systemd() {
   ob run -b "$B" -- systemd-run --user --quiet --unit omabox-say echo omabox unit output >/dev/null 2>&1
   check "a unit's output in omabox log journal (#234)" until_ok 10 \
     bash -c "'$CLI' log -b '$B' journal --grep 'omabox unit output$' | grep -q ."
+  # The suite's leak check without Hyprland (#336), on this box's real user manager and runtime dir
+  # standing in for yours: an import into the manager and a stray socket, each reported.
+  local srt; srt=$(ob path -b "$B")/run
+  session_snap "$srt" "$TMP/sd-s0" "$CLI" run -b "$B" -- systemctl --user show-environment
+  ob run -b "$B" -- systemctl --user set-environment WAYLAND_DISPLAY=wayland-77 OMABOX_STRAY=1
+  ob run -b "$B" -- python3 -c 'import socket, os; socket.socket(socket.AF_UNIX).bind(os.environ["XDG_RUNTIME_DIR"] + "/wayland-77")'
+  session_snap "$srt" "$TMP/sd-s1" "$CLI" run -b "$B" -- systemctl --user show-environment
+  local sout; sout=$(session_scan "$P-" "$TMP/sd-s0" "$TMP/sd-s1" "$srt" "$TMP")
+  check_eq "the session leak check (#336) on a real user manager: an import reported, and a stray socket" \
+    "leak: your user manager's environment, added: OMABOX_STRAY=1|leak: your user manager's environment, changed: WAYLAND_DISPLAY=wayland-77 (was wayland-1)|leak: a Wayland socket in your runtime dir that nothing serves: wayland-77 (a box's compositor, killed with its box?)" \
+    "$(grep '^leak:' <<<"$sout" | paste -sd'|' -)"
   local scope; scope=$(systemctl --user list-units --no-legend "omabox-$B-*" | awk '{print $1}')
   check_match "host scope exists" "^omabox-$B-" "$scope"
   check "down" ob down "$B"
@@ -20305,7 +20444,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
-  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor)
+  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
@@ -20498,6 +20637,8 @@ main() {
   if [ "$INSTALLED" = 1 ]; then tools_ready installed; else tools_ready; fi || exit 2
   # The host's session, as omabox finds it (the probe is the build tools_ready made).
   HOST_SIG=$(probe host_session 2>/dev/null) && HOST_SIG=${HOST_SIG%% *}
+  # Your session as it is before any box (#336): compared at the end, with no Hyprland's help.
+  session_snap "${XDG_RUNTIME_DIR:-/run/user/$UID}" "$TMP/session0"
   hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
   ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
   # omabox's workspace coming up is a leak (from #13's watch), unless you were on it already.
@@ -20594,6 +20735,13 @@ main() {
   while [ -n "$_procs" ] && [ $SECONDS -lt $_until ]; do sleep 0.5; _procs=$(box_procs "$P-"); done
   if [ -z "$_procs" ]; then ok "S6: no process of this run's boxes is left (#355)"
   else no "S6: no process of this run's boxes is left (#355)" "$_procs"; fi
+  # #336: what the host's events cannot show, from reads alone: your user manager's environment and
+  # your runtime dir as they were at the start (session_scan).
+  session_snap "${XDG_RUNTIME_DIR:-/run/user/$UID}" "$TMP/session1"
+  _out=$(session_scan "$P-" "$TMP/session0" "$TMP/session1" "${XDG_RUNTIME_DIR:-/run/user/$UID}" "$TMP")
+  if [[ $_out == *leak:* ]]; then no "nothing of the run is left in your session: your user manager's environment, your runtime dir (#336)" "$(grep '^leak:' <<<"$_out")"
+  else ok "nothing of the run is left in your session: your user manager's environment, your runtime dir (#336)"; fi
+  [[ $_out != *note:* ]] || printf '       (session, %s)\n' "$(grep '^note:' <<<"$_out" | cut -c7-)"
   if [ $_filtered = 0 ]; then
     [ ${#tests[@]} = ${#UNIT[@]} ] || [ $((pass + fail)) -ge $MIN_CHECKS ] ||
       no "a full run has at least $MIN_CHECKS checks" "$((pass + fail)) ran (a test stopped checking?)"
