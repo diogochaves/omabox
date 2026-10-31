@@ -7149,6 +7149,46 @@ t_seat_check() {
   rm -rf "$r"
 }
 
+# #301: a host path in run's command that the box has elsewhere or not at all is said before it runs:
+# a scratch file, the box HOME's host path, a --plugin folder mounted at its id, a build dir in
+# LD_LIBRARY_PATH; run -d names its log as the box has it too, for a command run there. up says
+# where a --plugin folder is.
+t_host_paths() {
+  local B=$P-hp s=$TMP/hp-src h out lg
+  rm -rf "$s"; mkdir -p "$s/plug" "$s/lib" "$TMP/$P-hpt"; echo one > "$s/a"
+  echo '{"id": "hp.plug", "schemaVersion": 1}' > "$s/plug/manifest.json"; echo 'echo helper' > "$s/plug/h.sh"
+  up_ok "$B" --no-shell --net isolated --plugin "$s/plug" || { no "up" "$UP_OUT"; return; }
+  check_match "up: a --plugin folder mounted at its id, said (#301)" \
+    "note: plugin hp.plug: $s/plug is /home/sbx/.config/omarchy/plugins/hp.plug in the box, not at its own path" "$UP_OUT"
+  h=$(ob path -b "$B" --home)
+  out=$(ob run -b "$B" -- cat "$s/a" 2>&1)
+  check_match "run: a scratch file the box has not, said (#301)" \
+    "note: $s/a is not in box '$B' \(a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME\): copy it into the box HOME \(omabox path --home; /home/sbx in the box\), or down, then up --ro-bind $s mounts it" "$out"
+  out=$(ob run -b "$B" -- test -e "$h/x" 2>&1)
+  check_match "...the box HOME's host path: where it is in the box" \
+    "note: $h/x is box '$B''s HOME as the host has it \(omabox path --home\): in the box it is /home/sbx/x" "$out"
+  out=$(ob run -b "$B" -- sh "$s/plug/h.sh" 2>&1)
+  check_match "...a --plugin folder's file: its path in the box" \
+    "note: $s/plug/h.sh is in $s/plug, plugin hp.plug's folder, which box '$B' has at /home/sbx/.config/omarchy/plugins/hp.plug: in the box it is /home/sbx/.config/omarchy/plugins/hp.plug/h.sh" "$out"
+  check_eq "...which runs there" helper "$(ob run -b "$B" -- sh /home/sbx/.config/omarchy/plugins/hp.plug/h.sh 2>&1)"
+  out=$(ob run -b "$B" -- env "LD_LIBRARY_PATH=$s/lib:/usr/lib" true 2>&1)
+  check_match "...a build dir in LD_LIBRARY_PATH" "note: $s/lib is not in box '$B' " "$out"
+  check_fails ".../usr/lib, which the box has, not said" grep -q "note: /usr/lib " <<<"$out"
+  check_eq "...nothing said for paths the box has" "" "$(ob run -b "$B" -- ls /usr/bin/true /etc/hostname 2>&1 >/dev/null)"
+  out=$(ob run -b "$B" -d -- sh -c 'echo said-301; exec sleep 30' 2>&1)
+  check_match "run -d: its log as the box has it too (#301)" \
+    "^omabox: started in box '$B' \(log: $h/run-[0-9]+\.log, /home/sbx/run-[0-9]+\.log in the box\)\$" "$out"
+  lg=$(sed -nE 's/.*, (\/home\/sbx\/run-[0-9]+\.log) in the box\)$/\1/p' <<<"$out")
+  check "...a command in the box reads it there" ob wait until -b "$B" --timeout 10 -- grep -q said-301 "${lg:-/none}"
+  ob run -b "$B" -- pkill -x sleep >/dev/null 2>&1
+  ob down "$B" >/dev/null 2>&1
+  # A throwaway's (outside any repo): the mount on run's own command line.
+  out=$(cd "$TMP/$P-hpt" && env -u OMABOX "$CLI" run --no-shell --net isolated -- cat "$s/a" 2>&1)
+  check_match "a throwaway: the mount on run's command line" \
+    "note: $s/a is not in box '[^']+-run[0-9]+' \(a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME\): run --ro-bind $s mounts it" "$out"
+  rm -rf "$s" "$TMP/$P-hpt"
+}
+
 t_protect_ports() {
   local B=$P-prot h=$TMP/prot-home p q r w a got reached="" control=""
   rm -rf "$h"; mkdir -p "$h/.config/omabox"
@@ -11839,9 +11879,9 @@ t_cli_box() {
   cx_case "run -d: a job that exits at once, its status" run -b "$B" -d -- sh -c 'echo said; exit 4'
   cx_want=(rc=0 out= err=)
   cx_case "run -d -q: a 0 at once is not said" run -b "$B" -d -q -- true
-  cx_want=(rc=2 out= "err~^omabox: the command exited with status 2 at once in box '$B', and left nothing running " "err~^  ls: cannot access '.*': No such file or directory\$")
+  cx_want=(rc=2 out= "err~^omabox: note: $TMP is not in box '$B' " "err~^omabox: the command exited with status 2 at once in box '$B', and left nothing running " "err~^  ls: cannot access '.*': No such file or directory\$")
   cx_case "run -d: a host path the box has not" run -b "$B" -d -- ls "$TMP"
-  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/home/run-N.log" "err=omabox: started in box '$B' (log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N.log)")
+  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/home/run-N.log" "err=omabox: started in box '$B' (log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N.log, /home/sbx/run-N.log in the box)")
   cx_case "run -d --print-log: started" run -b "$B" -d --print-log -- sleep 610
   cx_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; ob run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
   cx_prep=cx_jobs
@@ -17926,7 +17966,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

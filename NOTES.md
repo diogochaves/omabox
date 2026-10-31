@@ -11090,6 +11090,31 @@ from them.
     state dir and the same cache: the first box's HOME kept, read by the box; a gone box's HOME and an
     unused older one taken; the same name refused; an older box's HOME, its record removed, kept while
     the box runs), t_unit_rm_tree's record cases, homeuse.rs's `a_bound_home_is_used`.
+588. **A host path the box does not have failed in it with no word of why** (2026-10-31, #301). Agents
+    passed `run` the path run -d had printed for its log (`<dir>/home/run-NS.log`), `$(omabox path
+    --home)/…`, a scratch file under the host's /tmp, a `--plugin` folder's helper by the path given
+    to `--plugin` (the box has it at `~/.config/omarchy/plugins/ID`), and `env LD_LIBRARY_PATH=<build
+    dir>` (the app quietly loaded the system's library). Each failed, or did something else, with an
+    error naming the file and not the cause. `run` (on a box up, -d and a throwaway's) now looks at
+    the absolute paths its command names (a word, a `KEY=VAL` or `--opt=VAL` value split on `:`, a
+    `sh -c` script's words; `--env`/`--env-file` values too; 64 words) and says, before it runs, what
+    each is in the box: the box HOME's or runtime dir's host path, with the path in the box ("note: P
+    is box 'B''s HOME as the host has it (omabox path --home): in the box it is /home/sbx/X"); the box
+    folder, which the box does not see; a file in a mounted plugin's folder or a `DIR:DEST` bind
+    (box.json's `plugin_dirs`/`plugin_via` and `mounts`), with its path there; else one the host has
+    and the box's root (`/proc/PID/root`) does not, with the box HOME or the `--ro-bind` of its folder
+    as the way in (`down, then up …`; a throwaway's `run --ro-bind …`), or why a box may not mount it
+    (refuse_src: /dev, the runtime dir…). 3 notes at most, then a count; not for a jailed caller (as
+    #235, #251). A path the command makes in the box that the host has too is said as well (true, if
+    not needed). run -d's "started" line names the log as the box has it too ("(log: HOST, /home/sbx/
+    run-NS.log in the box)"; `--print-log` still prints the host path alone), and `up` says where a
+    `--plugin` folder it mounts at its id is ("note: plugin ID: DIR is /home/sbx/.config/omarchy/
+    plugins/ID in the box, not at its own path"; not for one linked to its own path, finding 241).
+    `wait until` has its own note since #400 (wait.rs's host_path_note), left as it is. Not done:
+    `path --home` saying on stderr that the path is the host's (the issue's "could"): every call
+    would print it, and the agents' scripts read it with `$(…)`; run's note says it where it matters.
+    Tests: repo.rs host_path_words_found, host_path_said; t_host_paths (each shape in a real box and
+    a throwaway); t_cli_box's run -d cases.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

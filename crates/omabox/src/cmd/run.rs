@@ -295,6 +295,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         run_link_notes(ctx, "down, then up", false, &cmd); // through a link out of the repo (#235)
         run_cwd_note(ctx, "down, then up", &cmd); // a path in this dir the box does not have (#251)
         crate::repo::mount_gone_notes(ctx); // a folder bound at up, replaced on the host since (#391)
+        let words = [cmd.as_slice(), &ctx.envkv].concat();
+        crate::repo::host_path_notes(ctx, "down, then up", &words); // one the box has elsewhere, or not (#301)
         if detach {
             return detached(ctx, &mut st, quiet, print_log, replace, &cmd);
         }
@@ -489,7 +491,16 @@ fn detached(
         }
     }
     if !quiet {
-        say(cat!("started in box '", ctx.name, "' (log: ", log, ")"));
+        // (and as the box has it, for a command run there: a grep of it in wait until, #301)
+        say(cat!(
+            "started in box '",
+            ctx.name,
+            "' (log: ",
+            log,
+            ", /home/sbx/",
+            lname,
+            " in the box)"
+        ));
     }
     if !st.wait {
         return Ok(());
@@ -593,6 +604,18 @@ fn throwaway_run(
     let _ = std::io::Write::write_all(&mut std::io::stderr(), &notes);
     run_link_notes(ctx, "run", true, cmd); // (links at the top of the repo: its up said them)
     run_cwd_note(ctx, "run", cmd); // outside a repo: nothing of this dir in the box (#251)
+    // (and --env's values, which went to its up)
+    let envs = up_args
+        .windows(2)
+        .filter(|w| w[0] == b"--env")
+        .map(|w| w[1].clone());
+    let words: Vec<Vec<u8>> = cmd
+        .iter()
+        .cloned()
+        .chain(ctx.envkv.iter().cloned())
+        .chain(envs)
+        .collect();
+    crate::repo::host_path_notes(ctx, "run", &words); // a host path the box has elsewhere, or not (#301)
     let opts = ExecOpts {
         kill_say: true,
         ..ExecOpts::default()

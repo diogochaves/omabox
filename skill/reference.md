@@ -675,10 +675,16 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
   path mapping with `--ro-bind ~/nas:/mnt/nas`), mise's toolchains (`omabox run` keeps your PATH, so
   node/python/uv are the host's), `--plugin` dirs and the user's fonts (below); nothing else of the
-  user's HOME is mounted. A bound folder is the one that was there at `up`: deleted and made again
+  user's HOME is mounted. A `--plugin` dir is at `~/.config/omarchy/plugins/ID` in the box, not at
+  its own path, unless the box has that anyway (in the repo); `up` says so when it is elsewhere. A
+  bound folder is the one that was there at `up`: deleted and made again
   on the host (a build that `rm -rf`s its output folder, another agent sharing it), the box keeps the
   old one, empty, and every command there succeeds (`run` says so once). Bind a folder you keep and
   remake the files inside it, not the folder; or `down`, then `up` again.
+- A host path in `run`'s command that the box has elsewhere or not at all (a scratch file in the
+  host's `/tmp`, `$(omabox path --home)/…`, a plugin's helper by its host path, a build dir in
+  `LD_LIBRARY_PATH`) is said before it runs, with its path in the box or the mount that brings it in.
+  The command still runs: give it the path the note names.
 - **The user's fonts** (`~/.local/share/fonts`, `~/.fonts`) are mounted read-only at the same place in
   the box HOME, so a theme's or plugin's own faces draw as on the desk (`up` says it; `ls --json`:
   `desk_fonts`). Not in an `up --clean` box (`--keep fonts` brings them), not with `up --no-seed
@@ -790,8 +796,10 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
 - Logs: `omabox log` prints them (below); `omabox path --logs` says where each file is.
-- `run -d` jobs: each is its own session, with a log (`run-*.log`) named on stderr; `-q` drops that
-  line, `--print-log` prints only the path on stdout (first, before a `--wait` line). A job that
+- `run -d` jobs: each is its own session, with a log (`run-*.log`) named on stderr, as the host has it
+  and as the box does (`/home/sbx/run-*.log`: the one to give a command in the box, `wait until --
+  grep -q X /home/sbx/run-….log`); `-q` drops that
+  line, `--print-log` prints only the host path on stdout (first, before a `--wait` line). A job that
   ends in its first 0.3 s leaving nothing running is said instead (its status, its log's last lines),
   and `run -d` exits with its status: a server whose port is taken shows here, not as "started". One
   that ends later in its first 30 s with a status other than 0 is a warning on the box's next

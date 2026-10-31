@@ -747,6 +747,254 @@ pub fn mount_gone_notes(ctx: &Ctx) {
     }
 }
 
+/// host_path_words WORD... (#301): the absolute paths a command names, each once, in order: a word
+/// that is one, the value of a `KEY=VAL` word (or `--opt=VAL`) split on `:` as PATH and
+/// LD_LIBRARY_PATH are, and the same in a script word (`sh -c '...'`), its quotes taken off; 64 words
+/// looked at at most.
+pub fn host_path_words(words: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let mut paths: Vec<Vec<u8>> = Vec::new();
+    let mut n = 0;
+    for (i, w) in words.iter().enumerate() {
+        let toks = shell::words(w);
+        let toks = if i > 0 && toks.len() > 1 {
+            toks
+        } else {
+            vec![w.clone()]
+        };
+        for t in toks {
+            n += 1;
+            if n > 64 {
+                return paths;
+            }
+            let mut t = t.trim_ascii();
+            while let [b'"' | b'\'' | b'(' | b'`', r @ ..] = t {
+                t = r;
+            }
+            while let [r @ .., b'"' | b'\'' | b')' | b';' | b'`'] = t {
+                t = r;
+            }
+            let vals: Vec<&[u8]> = if t.starts_with(b"/") {
+                vec![t]
+            } else if let Some(e) = t.iter().position(|&c| c == b'=') {
+                t[e + 1..].split(|&c| c == b':').collect()
+            } else {
+                Vec::new()
+            };
+            for v in vals {
+                if v.len() > 1 && v.starts_with(b"/") && !paths.iter().any(|p| p == v) {
+                    paths.push(v.to_vec());
+                }
+            }
+        }
+    }
+    paths
+}
+
+/// What a host path is in box NAME, said by run before its command (#301; HOW: the mount's command,
+/// `down, then up` or `run` for a throwaway). P: the path; D: the box's folder; MAPS: (host folder,
+/// the box's path for it, what it is) for what the box has elsewhere; IN_BOX: the box has P at its
+/// own path; ON_HOST: the host has it. None: the box sees P as the host does, or neither has it.
+#[allow(clippy::too_many_arguments)]
+pub fn host_path_text(
+    name: &[u8],
+    how: &str,
+    p: &[u8],
+    d: &[u8],
+    uid: u32,
+    maps: &[(Vec<u8>, Vec<u8>, Vec<u8>)],
+    in_box: &dyn Fn(&[u8]) -> bool,
+    on_host: &dyn Fn(&[u8]) -> bool,
+) -> Option<Vec<u8>> {
+    let rest = |dir: &[u8]| -> Option<Vec<u8>> {
+        let dir = dir.strip_suffix(b"/").unwrap_or(dir);
+        if p == dir {
+            return Some(Vec::new());
+        }
+        p.strip_prefix(dir)
+            .filter(|r| r.starts_with(b"/"))
+            .map(<[u8]>::to_vec)
+    };
+    let (pp, n) = (no_cntrl(p), no_cntrl(name));
+    let own: [(&[u8], Vec<u8>, &str, &str); 2] = [
+        (b"/home", b"/home/sbx".to_vec(), "HOME", "--home"),
+        (
+            b"/run",
+            format!("/run/user/{uid}").into_bytes(),
+            "runtime dir",
+            "--run",
+        ),
+    ];
+    for (sub, at, what, flag) in own {
+        if let Some(r) = rest(&cat!(d, sub)) {
+            return Some(cat!(
+                "note: ",
+                pp,
+                " is box '",
+                n,
+                "''s ",
+                what,
+                " as the host has it (omabox path ",
+                flag,
+                "): in the box it is ",
+                at,
+                no_cntrl(&r)
+            ));
+        }
+    }
+    if rest(d).is_some() {
+        return Some(cat!(
+            "note: ",
+            pp,
+            " is in box '",
+            n,
+            "''s folder on the host, which the box does not see"
+        ));
+    }
+    if in_box(p) {
+        return None;
+    }
+    // (the deepest folder it is in that the box has elsewhere: a plugin's, a DIR:DEST bind)
+    let best = maps
+        .iter()
+        .filter_map(|(src, dest, what)| rest(src).map(|r| (src, dest, what, r)))
+        .max_by_key(|(src, ..)| src.len());
+    if let Some((src, dest, what, r)) = best {
+        return Some(cat!(
+            "note: ",
+            pp,
+            " is in ",
+            no_cntrl(src),
+            ", ",
+            what,
+            ", which box '",
+            n,
+            "' has at ",
+            no_cntrl(dest),
+            ": in the box it is ",
+            no_cntrl(dest),
+            no_cntrl(&r)
+        ));
+    }
+    if !on_host(p) {
+        return None;
+    }
+    let dir = if shell::path(p).is_dir() {
+        p.to_vec()
+    } else {
+        p[..p.iter().rposition(|&c| c == b'/').unwrap_or(0).max(1)].to_vec()
+    };
+    let mount = match refuse_src(&dir) {
+        Some(why) => cat!("a box may not mount ", no_cntrl(&dir), " (", why, ")"),
+        None => cat!(how, " --ro-bind ", no_cntrl(&dir), " mounts it"),
+    };
+    let fix = if how == "run" {
+        mount
+    } else {
+        cat!(
+            "copy it into the box HOME (omabox path --home; /home/sbx in the box), or ",
+            mount
+        )
+    };
+    Some(cat!(
+        "note: ",
+        pp,
+        " is not in box '",
+        n,
+        "' (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME): ",
+        fix
+    ))
+}
+
+/// host_path_notes HOW WORD... (#301): each absolute host path the command names (host_path_words)
+/// that the box has elsewhere or not at all, said before it runs; 3 at most. A path the box HOME's
+/// host path, a /tmp scratch file, a build dir in LD_LIBRARY_PATH: the command fails in the box, or
+/// quietly takes something else, and its error names the file, not why. Not for a jailed caller.
+pub fn host_path_notes(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
+    if in_jail() {
+        return;
+    }
+    let paths = host_path_words(words);
+    if paths.is_empty() {
+        return;
+    }
+    let Some(pid) = box_root_pid(ctx) else { return };
+    let maps = box_maps(ctx);
+    let in_box =
+        |p: &[u8]| std::fs::symlink_metadata(shell::path(&cat!("/proc/", pid, "/root", p))).is_ok();
+    let on_host = |p: &[u8]| std::fs::symlink_metadata(shell::path(p)).is_ok();
+    let uid = crate::procfs::uid();
+    let (mut n, mut more) = (0, 0);
+    for p in &paths {
+        let Some(t) = host_path_text(&ctx.name, how, p, &ctx.d, uid, &maps, &in_box, &on_host)
+        else {
+            continue;
+        };
+        if n >= 3 {
+            more += 1;
+            continue;
+        }
+        n += 1;
+        say(t);
+    }
+    if more > 0 {
+        say(cat!(
+            "note: and ",
+            more.to_string(),
+            " more host paths in the command that box '",
+            no_cntrl(&ctx.name),
+            "' has elsewhere or not at all"
+        ));
+    }
+}
+
+/// What box.json says the box has at another path than the host's (#301): each plugin mounted (not
+/// linked) at its id, each bind of DIR:DEST.
+fn box_maps(ctx: &Ctx) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let Ok(text) = std::fs::read(ctx.at("box.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_slice::<Value>(&text) else {
+        return Vec::new();
+    };
+    let mut maps = Vec::new();
+    if let Some(dirs) = v.get("plugin_dirs").and_then(Value::as_object) {
+        for (id, dir) in dirs {
+            let via = v
+                .get("plugin_via")
+                .and_then(|x| x.get(id))
+                .and_then(Value::as_str);
+            if let (Some(dir), Some("mounted")) = (dir.as_str(), via) {
+                maps.push((
+                    dir.as_bytes().to_vec(),
+                    cat!("/home/sbx/.config/omarchy/plugins/", id),
+                    cat!("plugin ", id, "'s folder"),
+                ));
+            }
+        }
+    }
+    for m in v
+        .get("mounts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(src), Some(dest)) = (
+            m.get("src").and_then(Value::as_str),
+            m.get("dest").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if src != dest {
+            maps.push((
+                src.as_bytes().to_vec(),
+                dest.as_bytes().to_vec(),
+                b"bound at up".to_vec(),
+            ));
+        }
+    }
+    maps
+}
+
 /// The note run_cwd_note says (NAME's box; HOW the command; WORD the path word, DIR the caller's
 /// dir; NOREPO a throwaway outside any repo), its control characters as ?.
 pub fn cwd_note(name: &[u8], how: &str, word: &[u8], dir: &[u8], norepo: bool) -> Vec<u8> {
@@ -877,6 +1125,125 @@ mod tests {
         assert_eq!(
             cwd_path_word(&dir, b"/nonexistent", &[b"/abs ~x".to_vec()]),
             None
+        );
+    }
+
+    // #301: the absolute paths a command names: a word, KEY=VAL's parts, a script's words unquoted.
+    #[test]
+    fn host_path_words_found() {
+        let w = |v: &[&str]| -> Vec<Vec<u8>> { v.iter().map(|x| x.as_bytes().to_vec()).collect() };
+        assert_eq!(
+            host_path_words(&w(&[
+                "env",
+                "LD_LIBRARY_PATH=/b/lib:/usr/lib",
+                "/tmp/x/app",
+                "--conf=/c",
+                "rel/x",
+                "/tmp/x/app",
+            ])),
+            w(&["/b/lib", "/usr/lib", "/tmp/x/app", "/c"])
+        );
+        assert_eq!(
+            host_path_words(&w(&[
+                "sh",
+                "-c",
+                "grep -q x \"/r/run-1.log\"; test -s '/h/f'"
+            ])),
+            w(&["/r/run-1.log", "/h/f"])
+        );
+        // the command itself is one word, spaces and all; "/" alone is no path
+        assert_eq!(host_path_words(&w(&["/a b/c", "/"])), w(&["/a b/c"]));
+    }
+
+    // #301: what a host path is in the box: its HOME's and runtime dir's host paths mapped, the box
+    // folder unseen, a plugin's or DIR:DEST's mapped, one the box lacks with the mount that gives it.
+    #[test]
+    fn host_path_said() {
+        let maps = vec![
+            (
+                b"/src/plug".to_vec(),
+                b"/home/sbx/.config/omarchy/plugins/p.x".to_vec(),
+                b"plugin p.x's folder".to_vec(),
+            ),
+            (
+                b"/nas".to_vec(),
+                b"/mnt/nas".to_vec(),
+                b"bound at up".to_vec(),
+            ),
+        ];
+        let t = |how: &str, p: &str, in_box: bool, on_host: bool| {
+            host_path_text(
+                b"B",
+                how,
+                p.as_bytes(),
+                b"/r/omabox/B",
+                1000,
+                &maps,
+                &|_| in_box,
+                &|_| on_host,
+            )
+            .map(|v| String::from_utf8_lossy(&v).into_owned())
+        };
+        assert_eq!(
+            t("down, then up", "/r/omabox/B/home/run-1.log", false, true).as_deref(),
+            Some(
+                "note: /r/omabox/B/home/run-1.log is box 'B''s HOME as the host has it (omabox path --home): in the box it is /home/sbx/run-1.log"
+            )
+        );
+        assert_eq!(
+            t("down, then up", "/r/omabox/B/run/app/s.json", false, true).as_deref(),
+            Some(
+                "note: /r/omabox/B/run/app/s.json is box 'B''s runtime dir as the host has it (omabox path --run): in the box it is /run/user/1000/app/s.json"
+            )
+        );
+        assert_eq!(
+            t("down, then up", "/r/omabox/B/home", false, true).as_deref(),
+            Some(
+                "note: /r/omabox/B/home is box 'B''s HOME as the host has it (omabox path --home): in the box it is /home/sbx"
+            )
+        );
+        assert_eq!(
+            t("down, then up", "/r/omabox/B/box.json", false, true).as_deref(),
+            Some(
+                "note: /r/omabox/B/box.json is in box 'B''s folder on the host, which the box does not see"
+            )
+        );
+        // (/r/omabox/Bx is another box's: not this one's folder)
+        assert_eq!(t("down, then up", "/r/omabox/Bx/f", true, true), None);
+        assert_eq!(
+            t("down, then up", "/src/plug/bin/h.sh", false, true).as_deref(),
+            Some(
+                "note: /src/plug/bin/h.sh is in /src/plug, plugin p.x's folder, which box 'B' has at /home/sbx/.config/omarchy/plugins/p.x: in the box it is /home/sbx/.config/omarchy/plugins/p.x/bin/h.sh"
+            )
+        );
+        assert_eq!(
+            t("down, then up", "/nas/a", false, true).as_deref(),
+            Some(
+                "note: /nas/a is in /nas, bound at up, which box 'B' has at /mnt/nas: in the box it is /mnt/nas/a"
+            )
+        );
+        // what the box has at the host's path, or neither has: nothing said
+        assert_eq!(t("down, then up", "/usr/bin/true", true, true), None);
+        assert_eq!(t("down, then up", "/home/sbx/x", false, false), None);
+        let missing = "/nonexistent-301/f";
+        assert_eq!(
+            t("down, then up", missing, false, true).as_deref(),
+            Some(
+                "note: /nonexistent-301/f is not in box 'B' (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME): copy it into the box HOME (omabox path --home; /home/sbx in the box), or down, then up --ro-bind /nonexistent-301 mounts it"
+            )
+        );
+        assert_eq!(
+            t("run", missing, false, true).as_deref(),
+            Some(
+                "note: /nonexistent-301/f is not in box 'B' (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME): run --ro-bind /nonexistent-301 mounts it"
+            )
+        );
+        let dev = t("run", "/dev/dri/card0", false, true).unwrap_or_default();
+        assert!(
+            dev.ends_with(
+                "a box may not mount /dev/dri (it is inside /dev/ (secrets or live sockets))"
+            ),
+            "{dev}"
         );
     }
 }

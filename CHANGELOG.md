@@ -22,6 +22,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`tree` names an unnamed control after its label** (LABELLED_BY), so `--find Email` finds the
   entry its label names, and reads a node once when it sits under two parents (Qt WebEngine)
   ([#318](https://github.com/diogochaves/omabox/issues/318)).
+- **`run` says when its command names a host path the box sees elsewhere or not at all**, before it
+  runs: the box HOME's host path (`omabox path --home`, the log `run -d` printed) with its path in
+  the box (`/home/sbx/…`), a file in a `--plugin` folder with where the box has it, a scratch file in
+  the host's `/tmp` or a build dir in `LD_LIBRARY_PATH` with the mount that brings it in. `run -d`
+  names its log as the box has it too (`/home/sbx/run-NS.log`), and `up` says where a `--plugin`
+  folder that is not at its own path is in the box
+  ([#301](https://github.com/diogochaves/omabox/issues/301)).
 
 ### Fixed
 

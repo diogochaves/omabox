@@ -537,6 +537,21 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     }
     // Links at the top of the repo out of it, to what the box lacks (#235); a throwaway's: run's.
     crate::repo::up_link_notes(ctx, if u.owner.is_empty() { "up" } else { "run" });
+    // A --plugin folder the box has at its id, not at the path given (#301): a helper of it run by
+    // that path is not there. (One the box sees at its own path anyway is linked: nothing to say.)
+    for p in u.plugins.iter().take(u.plugin_args.len()) {
+        if !u.linked.contains(&p.id) {
+            say(cat!(
+                "note: plugin ",
+                p.id,
+                ": ",
+                p.dir,
+                " is /home/sbx/.config/omarchy/plugins/",
+                p.id,
+                " in the box, not at its own path"
+            ));
+        }
+    }
     if u.json {
         out(ready::box_json(ctx, false, "", ""))?;
     } else if u.new {
