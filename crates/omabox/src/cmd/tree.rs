@@ -113,7 +113,8 @@ pub struct Reading {
 }
 
 /// omabox-tree with TARGS on the window SELS picks (none: the active one) or the layer LAYER: its
-/// output on stdout, or in Read's `out` when CAPTURE. CMD names the command in what it says.
+/// output on stdout, or in Read's `out` when CAPTURE. CMD names the command in what it says. A read
+/// may take 30 s (then 124).
 pub fn read(
     ctx: &mut Ctx,
     cmd: &str,
@@ -121,6 +122,19 @@ pub fn read(
     layer: &[u8],
     targs: Vec<Vec<u8>>,
     capture: bool,
+) -> Res<Reading> {
+    read_within(ctx, cmd, sels, layer, targs, capture, b"30")
+}
+
+/// read, the tool given SECS (`timeout`'s duration) instead of 30 s: a wait's time left (#319).
+pub fn read_within(
+    ctx: &mut Ctx,
+    cmd: &str,
+    sels: &[Vec<u8>],
+    layer: &[u8],
+    targs: Vec<Vec<u8>>,
+    capture: bool,
+    secs: &[u8],
 ) -> Res<Reading> {
     let t = on_box(
         ctx,
@@ -153,7 +167,7 @@ pub fn read(
         what = cat!("layer ", layer_desc(&l));
         win = Vec::new();
         let (f, p) = shell::mktemp()?;
-        (rc, out) = captured(capture, || layer_read(ctx, &l, &lys, &f, &targs))?;
+        (rc, out) = captured(capture, || layer_read(ctx, &l, &lys, &f, &targs, secs))?;
         (err, path) = (f, p);
     } else {
         (l, lys) = (Vec::new(), Vec::new());
@@ -193,7 +207,7 @@ pub fn read(
         let (f, p) = shell::mktemp()?;
         let mut argv: Vec<Vec<u8>> = vec![
             b"/usr/bin/timeout".to_vec(),
-            b"30".to_vec(),
+            secs.to_vec(),
             BOX_TREE.as_bytes().to_vec(),
             b"--pid".to_vec(),
             pid,

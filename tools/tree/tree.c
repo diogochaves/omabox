@@ -17,7 +17,10 @@
 // in window coordinates, what `omabox click --window` takes. Anonymous containers, hidden nodes, a
 // control's own label and wrappers repeating their parent's name are left out (--all keeps them).
 // --find TEXT prints only the lines holding TEXT (any case; not in the bounds), each after its
-// printed ancestors: `list "Options" > check box "Dark mode" [checked] @12,40 140x24`.
+// printed ancestors: `list "Options" > check box "Dark mode" [checked] @12,40 140x24`. A TEXT ending
+// in `[STATE ...]` also matches a line whose states include each of those, in any order, the rest
+// of TEXT held by the line before its states (#319): `"Dark mode" [checked]` finds
+// `check box "Dark mode" [focused checked]`, not `[unchecked]`.
 //
 // Before reading, it sets org.a11y.Status.IsEnabled and ScreenReaderEnabled (what a screen reader
 // sets): Qt apps export their tree only then, and follow it live; AccessKit apps (egui, winit) before
@@ -301,12 +304,46 @@ static GString *line_of(const char *role, const char *name, const char *text, co
     return body;
 }
 
+// --find's TEXT ending in `[STATE ...]` (#319): the line's states hold each one named (any case,
+// whole words, any order) and the line before its states holds what TEXT has before them.
+static int holds_states(const char *role, const char *name, const char *text, const char *val,
+                        GPtrArray *states, const char *want) {
+    size_t n = strlen(want);
+    while (n && want[n - 1] == ' ') n--;
+    if (!n || want[n - 1] != ']') return 0;
+    const char *open = NULL;
+    for (const char *c = want; c < want + n; c++)
+        if (*c == '[') open = c;
+    if (!open || (open > want && open[-1] != ' ')) return 0;
+    char *inner = g_strndup(open + 1, want + n - 1 - (open + 1));
+    char **words = g_strsplit_set(inner, " ", -1);
+    int r = 1, any = 0;
+    for (char **w = words; r && *w; w++) {
+        if (!**w) continue;
+        any = 1;
+        int found = 0;
+        for (guint i = 0; i < states->len && !found; i++) found = !g_ascii_strcasecmp(*w, states->pdata[i]);
+        r = found;
+    }
+    g_strfreev(words);
+    g_free(inner);
+    if (!r || !any) return 0;
+    char *pre = g_strstrip(g_strndup(want, open - want));
+    GPtrArray *none = g_ptr_array_new();
+    GString *head = line_of(role, name, text, val, none, 0);
+    r = !*pre || holds(head->str, pre);
+    g_string_free(head, TRUE);
+    g_ptr_array_free(none, TRUE);
+    g_free(pre);
+    return r;
+}
+
 static void emit(int depth, const char *role, const char *name, const char *text, const char *val,
                  GPtrArray *states, int *b) {
     // --find matches the whole strings (#314), whatever the text view shows of them.
     GString *body = line_of(role, name, text, val, states, 0);
     lines++;
-    int hit = !find || holds(body->str, find);
+    int hit = !find || holds(body->str, find) || holds_states(role, name, text, val, states, find);
     if (hit) {
         matched++;
         if (opt_json) {

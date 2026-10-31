@@ -9137,6 +9137,15 @@ PY
       ob click -b "$B" --window 'Tree demo GTK4' --wait $mid >/dev/null 2>&1
       check "...a click at its bounds' middle (click --window $mid) checks it" until_ok 5 \
         bash -c "'$CLI' tree -b '$B' --window 'Tree demo GTK4' --find 'dark mode' | grep -q '^check box \"Dark mode\" \[focused checked\]'"
+      # (#319: TEXT's [states] are a set, each among the line's; the line as printed still matches)
+      check_match "...--find TEXT [STATE]: one of its states, the others left out" '^check box "Dark mode" \[focused checked\] @' \
+        "$(ob tree -b "$B" --window 'Tree demo GTK4' --find '"Dark mode" [checked]' 2>&1)"
+      check_match "...in any order, any case" '^check box "Dark mode" \[focused checked\] @' \
+        "$(ob tree -b "$B" --window 'Tree demo GTK4' --find '"dark mode" [CHECKED focused]' 2>&1)"
+      check_match "...the states as printed, as before" '^check box "Dark mode" \[focused checked\] @' \
+        "$(ob tree -b "$B" --window 'Tree demo GTK4' --find '"Dark mode" [focused checked]' 2>&1)"
+      rc=0; ob tree -b "$B" --window 'Tree demo GTK4' --find '"Dark mode" [unchecked]' >/dev/null 2>&1 || rc=$?
+      check_eq "...a state it does not have (unchecked is not checked): nothing, exit 1" 1 "$rc"
     else no "...a click at its bounds' middle checks it" "no bounds in [$out]"; fi
     rc=0; out=$(ob tree -b "$B" --window 'Tree demo GTK4' --find 'no such words' 2>&1) || rc=$?
     check_eq "...--find with nothing matching: 1, and says so" "1 yes" "$rc $(grep -q 'nothing in the window holds "no such words"' <<<"$out" && echo yes)"
@@ -9276,7 +9285,7 @@ t_wait_tree() {
   check "up" ob up "$B" --no-shell
   H=$(ob path -b "$B")/home d=$(mktemp -d)
   cat > "$H/wait-tree.py" <<'PY'
-import gi
+import gi, time
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GLib
 def build(app):
@@ -9291,6 +9300,9 @@ def build(app):
         GLib.timeout_add(3000, lambda: (lab.set_label("Saved"), False)[1])
     btn.connect("clicked", saved)
     box.append(btn)
+    hang = Gtk.Button(label="Hang")
+    hang.connect("clicked", lambda *a: time.sleep(40))
+    box.append(hang)
     win.set_child(box)
     win.present()
 app = Gtk.Application(application_id="org.omabox.WaitTree")
@@ -9306,7 +9318,7 @@ PY
   check_match "...not there by --timeout: 124, and what the tree has instead (its name's line)" \
     "^unsatisfied: no tree '\"Dark mode\" \\[checked\\]' in window Wait tree demo after [0-9.]+s \\(instead: check box \"Dark mode\" \\[[a-z ]*unchecked\\] @[^|]*\\)\\|124$" "$out|$rc"
   rc=0; out=$(ob wait -b "$B" --timeout 1s --json tree 'no such words' 2>&1) || rc=$?
-  check_eq "...--json: the condition, and omabox-tree's words as its detail" 'tree|nothing in the window holds "no such words" (4 lines)|124' \
+  check_eq "...--json: the condition, and omabox-tree's words as its detail" 'tree|nothing in the window holds "no such words" (5 lines)|124' \
     "$(jq -r '"\(.condition)|\(.detail)"' <<<"$out" 2>&1)|$rc"
   rc=0; out=$(ob wait -b "$B" --timeout 1s tree 'Dark mode' --window nosuchwindow 2>&1) || rc=$?
   check_match "...a window that is not there: waited for, said" '^unsatisfied: no tree "Dark mode" in window nosuchwindow after [0-9.]+s \(no window matches nosuchwindow\)\|124$' "$out|$rc"
@@ -9326,8 +9338,21 @@ PY
     "unsatisfied: settled after [^|]*; but the tree does not hold \"no such words\" \\(nothing in the window holds" "$out|$rc"
   check_eq "...exit 124" 124 "$rc"
   check_match "...the click sent all the same, the 124 the tree's" "the click was sent all the same \\(the screen settled; 124 is about the tree\\)" "$out"
+  rc=0; out=$(ob wait -b "$B" --timeout 3s tree '"Dark mode" [checked]' 2>&1) || rc=$?
+  check_match "...[checked] matches a box that is [focused checked]: states are a set" \
+    '^satisfied: tree .\"Dark mode\" \[checked\]. after [0-9.]+s: check box "Dark mode" \[focused checked\] [^|]*\|0$' "$out|$rc"
   rc=0; out=$(ob keys -b "$B" --window 'Wait tree demo' --wait --json --expect tree 'Dark mode' space 2>/dev/null) || rc=$?
   check_match "keys --wait --json --expect: its expect object" '^\{"tree":"Dark mode","met":true,"detail":"check box \\"Dark mode\\" \[[a-z ]*\] @[^|]*\}\|0$' "$(jq -c .expect <<<"$out" 2>&1)|$rc"
+  rc=0; out=$(ob click -b "$B" --find 'Dark mode' --wait --timeout 3s --expect tree '"Dark mode" [checked]' 2>/dev/null) || rc=$?
+  check_match "the issue's own example: click --expect tree '\"Dark mode\" [checked]', 0" \
+    "the tree holds '\"Dark mode\" \\[checked\\]': check box \"Dark mode\" \\[focused checked\\][^|]*\\|0$" "$out|$rc"
+  # A hung app (its main loop asleep 40 s): a read is given the wait's time left, not 30 s.
+  ob click -b "$B" --find Hang >/dev/null 2>&1
+  local t0 t1; t0=$(date +%s%N)
+  rc=0; out=$(ob wait -b "$B" --timeout 1s tree 'no such words' --window 'Wait tree demo' 2>&1) || rc=$?
+  t1=$(date +%s%N)
+  check_match "...a hung app: 124, said" 'did not answer in time \(busy or hung\?\)[^|]*\|124$' "$out|$rc"
+  check "...within the --timeout's second, give or take ($(((t1 - t0) / 1000000)) ms)" test $(((t1 - t0) / 1000000)) -lt 3500
   ob run -b "$B" -- pkill -f wait-tree.py >/dev/null 2>&1 || true
   rc=0; out=$(ob wait -b "$B" --timeout 10s tree 'Dark mode' --window 'title:^Wait tree demo$' --gone 2>&1) || rc=$?
   check_match "...its window closed: gone, said why" '^satisfied: tree "Dark mode" in window title:\^Wait tree demo\$ gone after [0-9.]+s: no window matches title:\^Wait tree demo\$\|0$' "$out|$rc"

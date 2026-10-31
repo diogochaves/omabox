@@ -563,8 +563,10 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   on, without parsing `hyprctl layers`. `--monitor NAME` waits for one on that monitor (`--gone`:
   none left there, after `monitor remove` or `output drop`); `--json` has it in `detail`.
 - A label, a state, a sheet: `omabox wait tree TEXT [--window SEL]` (none: the active window) until
-  the accessibility tree holds TEXT, matched as `tree --find` matches it (any case; states as printed,
-  in order: `'"Dark mode" [focused checked]'`), read about every 100 ms: satisfied at the first read
+  the accessibility tree holds TEXT, matched as `tree --find` matches it (any case; `[STATE ...]` at
+  its end: each among the line's states, any order: `'"Dark mode" [checked]'` finds `[focused
+  checked]`, never `[unchecked]`), read about every 100 ms (each read given the time left: a hung
+  app keeps `--timeout`): satisfied at the first read
   holding it (a toast or a sheet that lasts a second is caught), the line giving that line. `--gone`:
   two reads in a row without it, or its window gone. A 124 says what the tree had instead (the lines
   holding TEXT's name, else why). `--shot FILE` takes a shot the moment it holds. No hand-rolled

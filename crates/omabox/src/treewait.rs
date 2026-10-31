@@ -108,17 +108,27 @@ fn target(ctx: &mut Ctx, w: &TreeWant) -> Res<Target> {
     })
 }
 
-/// One read of the tree for TEXT (FIND: what is looked for, TEXT or a part of it). A failure that
-/// no retry changes (no accessibility bus, a tree read that hung) is said, exit 1; several windows
-/// or layers matching, exit 2, with them.
-pub fn try_once(ctx: &mut Ctx, w: &TreeWant, find: &[u8]) -> Res<Try> {
+/// The seconds a read may take before DEADLINE (a mono_ms time), as `timeout` takes them: the time
+/// left, half a second at least (a read takes ~0.1 s) and 30 s at most, as `tree`'s.
+pub fn secs_left(deadline: i64, now: i64) -> Vec<u8> {
+    let ms = (deadline - now).clamp(500, 30_000);
+    crate::num::fixed(ms as f64 / 1000.0, 3).into_bytes()
+}
+
+/// One read of the tree for TEXT (FIND: what is looked for, TEXT or a part of it), given until
+/// DEADLINE (mono_ms; secs_left): one that takes longer is "did not answer", not held. A failure that
+/// no retry changes (no accessibility bus) is said, exit 1; several windows or layers matching, exit
+/// 2, with them.
+pub fn try_once(ctx: &mut Ctx, w: &TreeWant, find: &[u8], deadline: i64) -> Res<Try> {
     let read = |ctx: &mut Ctx, t: &Target| -> Res<tree::Reading> {
         let targs = vec![b"--find".to_vec(), find.to_vec()];
-        match t {
-            Target::Win(a) => tree::read(ctx, "wait", std::slice::from_ref(a), &[], targs, true),
-            Target::Layer(l) => tree::read(ctx, "wait", &[], l, targs, true),
-            Target::Absent(_) => Err(Exit(1)),
-        }
+        let secs = secs_left(deadline, mono_ms());
+        let (sels, l): (&[Vec<u8>], &[u8]) = match t {
+            Target::Win(a) => (std::slice::from_ref(a), &[]),
+            Target::Layer(l) => (&[], l),
+            Target::Absent(_) => return Err(Exit(1)),
+        };
+        tree::read_within(ctx, "wait", sels, l, targs, true, &secs)
     };
     let t = target(ctx, w)?;
     if let Target::Absent(why) = t {
@@ -142,6 +152,8 @@ pub fn try_once(ctx: &mut Ctx, w: &TreeWant, find: &[u8]) -> Res<Try> {
         0 => Try::Held(r.out),
         1 => Try::Not(first(&r.why)),
         3 | 5 | 6 | 7 => Try::NoTree(cat!(r.what, ": ", first(&r.why))),
+        // (killed at the deadline: the app busy or hung, said at the 124)
+        124 => Try::NoTree(cat!(r.what, " did not answer in time (busy or hung?)")),
         _ => {
             tree::fail(ctx, "wait", &r)?;
             return Err(Exit(1));
@@ -162,7 +174,7 @@ pub struct TreeProbe {
 /// wait.rs's tree_probe, one try: "yes DETAIL" / "no DETAIL"; the shot taken at the yes that ends the wait.
 pub fn answer(ctx: &mut Ctx, p: &TreeProbe, t0: i64, tmo: i64) -> (i32, Vec<u8>) {
     let w = &p.want;
-    let got = match try_once(ctx, w, &w.text) {
+    let got = match try_once(ctx, w, &w.text, t0 + tmo) {
         Ok(t) => t,
         Err(Exit(2)) => return (2, Vec::new()),
         // (the box not answering: poll_until says why; any other failure was said)
@@ -260,7 +272,7 @@ pub fn name_part(text: &[u8]) -> Option<Vec<u8>> {
 /// (name_part), else WHY.
 pub fn instead(ctx: &mut Ctx, w: &TreeWant, why: &[u8]) -> Vec<u8> {
     if let Some(n) = name_part(&w.text) {
-        if let Ok(Try::Held(l)) = muted(|| try_once(ctx, w, &n)) {
+        if let Ok(Try::Held(l)) = muted(|| try_once(ctx, w, &n, mono_ms() + 1000)) {
             return cat!("instead: ", first_and_more(&l));
         }
     }
@@ -273,7 +285,7 @@ pub fn expect(ctx: &Ctx, w: &TreeWant, left_ms: i64) -> Res<(bool, Vec<u8>)> {
     let mut c = ctx.clone();
     let t0 = mono_ms();
     loop {
-        let got = match try_once(&mut c, w, &w.text) {
+        let got = match try_once(&mut c, w, &w.text, t0 + left_ms) {
             Err(Exit(NO_ANSWER)) => {
                 say(cat!("--expect: box '", c.name, "' did not answer"));
                 return Err(Exit(1));
@@ -316,5 +328,9 @@ mod tests {
         assert_eq!(first_and_more(b""), b"".to_vec());
         assert_eq!(first_and_more(b"a b\n"), b"a b".to_vec());
         assert_eq!(first_and_more(b"a\nb\nc\n"), b"a (+2 more)".to_vec());
+        // (a read given the time left: half a second at least, 30 s at most, #319)
+        assert_eq!(secs_left(10_000, 8_000), b"2.000".to_vec());
+        assert_eq!(secs_left(10_000, 10_400), b"0.500".to_vec());
+        assert_eq!(secs_left(100_000, 0), b"30.000".to_vec());
     }
 }

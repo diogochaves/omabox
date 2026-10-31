@@ -346,7 +346,7 @@ impl Settle {
                 let t = args.get(2).filter(|t| !t.is_empty());
                 let (Some(b"tree"), Some(t)) = (v.map(Vec::as_slice), t) else {
                     return Err(ctx.die(
-                        "--expect takes tree TEXT (as tree --find takes it): --expect tree '\"Dark mode\" [focused checked]'",
+                        "--expect takes tree TEXT (as tree --find takes it): --expect tree '\"Dark mode\" [checked]'",
                     ));
                 };
                 if !self.expect.is_empty() {

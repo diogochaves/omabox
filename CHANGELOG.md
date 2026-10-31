@@ -24,7 +24,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   not, `--shot FILE` a shot the moment it holds. A 124 says what the tree had instead. And
   **`--expect tree TEXT`** on `keys`, `click`, `scroll` and `drag --wait`: once the screen settled,
   the tree must hold TEXT, else 124, so a chain of steps stops when one's effect is not the one
-  wanted ([#319](https://github.com/diogochaves/omabox/issues/319)).
+  wanted. `tree --find` (and both of these) takes TEXT's `[STATE ...]` as a set: `"Dark mode"
+  [checked]` finds a box that is `[focused checked]`
+  ([#319](https://github.com/diogochaves/omabox/issues/319)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

@@ -134,14 +134,16 @@ pub fn box_sys_out(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Option<(i32, Vec<u8>)> {
 /// layer_read LAYER LAYERS ERR [omabox-tree ARGS]: LAYER's accessibility tree on stdout, in the
 /// screen's coordinates, the tool's words in ERR; its exit code (3: no pid to find its app by). Two
 /// layers of one pid and size are told apart only when exactly one can hold the keyboard (kb_hint).
+/// SECS: how long the read may take (`timeout`'s, 30 for `tree`; a wait's time left, #319).
 pub fn layer_read(
     ctx: &mut Ctx,
     l: &[u8],
     lys: &[u8],
     err: &std::fs::File,
     args: &[Vec<u8>],
+    secs: &[u8],
 ) -> Res<i32> {
-    let argv = match layer_argv(l, lys, args, || kb_takers(ctx)) {
+    let mut argv = match layer_argv(l, lys, args, || kb_takers(ctx)) {
         Ok(a) => a,
         Err(words) => {
             let mut e = err;
@@ -149,6 +151,7 @@ pub fn layer_read(
             return Ok(3);
         }
     };
+    argv[1] = secs.to_vec();
     box_sys_err(ctx, &argv, err.as_raw_fd())
 }
 

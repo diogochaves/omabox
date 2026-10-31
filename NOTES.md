@@ -11354,12 +11354,20 @@ from them.
     active one); not held: 124, "but the tree does not hold TEXT (instead: …)", and "sent all the
     same (the screen settled; 124 is about the tree)"; --json adds `expect` {tree, met, detail}. A
     window closing between the probe's pick and its read is gone, not a failure: the read's refusal
-    is held back (say muted, fd 2 to /dev/null: win_lines writes there itself). Seen here: the
-    issue's own example, `--expect tree '"Dark mode" [checked]'`, is 124 after a click, since the
-    clicked box reads `[focused checked]`: substring matching takes states as printed, in order;
-    the instead line shows it at once. Tests: t_wait_tree (GTK4: held, instead, --json, a window not
+    is held back (say muted, fd 2 to /dev/null: win_lines writes there itself). The issue's own
+    example, `--expect tree '"Dark mode" [checked]'`, was 124 after a click: the clicked box reads
+    `[focused checked]` and the substring took states as printed, in order. So omabox-tree's --find
+    (tree --find, wait tree, --expect alike) also matches a TEXT ending in `[STATE ...]` as a set:
+    each named state among the line's (any case, whole words, so `checked` is never `unchecked`),
+    any order, and the rest of TEXT held by the line before its states; a line the substring
+    matched still matches. A read had omabox-tree's fixed 30 s `timeout`; with an app's main loop
+    asleep a `wait --timeout 1s tree` took 6 s (libatspi's 2 s per call). Each read is now given
+    the wait's time left (secs_left: 0.5 s at least, 30 s at most; tree::read_within, layer_read's
+    SECS); one killed then is "did not answer in time (busy or hung?)", not held. Tests: t_wait_tree (GTK4: held, instead, --json, a window not
     there, --gone both ways, click --expect held and not, keys --json's expect, --shot, a closed
-    window), t_unit_wait (the refusals), treewait.rs name_and_lines.
+    window, `[checked]` against `[focused checked]`, a hung app within its second), t_tree (states
+    as a set, in any order and case; as printed; `[unchecked]` not `[checked]`), t_unit_wait (the
+    refusals), treewait.rs name_and_lines (secs_left).
 596. **`drag` in a browser canvas draws** (2026-10-31, #323: absolute motion with a button held was
     reported as no drag there; finding 101 had tested foot only). Chromium 155 in a box, a page whose
     800x500 `<canvas>` draws a line on `pointermove` while a `pointerdown` holds (pointer capture)
