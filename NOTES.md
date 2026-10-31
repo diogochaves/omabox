@@ -11009,6 +11009,20 @@ from them.
     bound inside it: refused, its processes gone; an older omabox started that box). A test with a
     stand-in `XDG_RUNTIME_DIR` must give `XDG_CACHE_HOME` one too: up's sweep_homes removes every
     HOME whose box its runtime dir does not have, which is every real box's.
+576. **A signal's undo could run alongside main's in-process work** (2026-10-31, #367; found in the
+    port's review, not seen happen). A trap's thread waited for main's foreground child
+    (finding 453), but with none running it began the undo at once while main went on until its
+    next child or sleep: `up` making its box dir or seeding the HOME (what were bash's `mkdir -p` and
+    `cp` children, which bash's trap waited for) could make a dir again after the undo removed it,
+    a box dir with no box.json. In a busy section of main's (sig::busy: `up` from its dir's making
+    on) the thread now also waits until main is at rest (parked for the stop, or waiting for the
+    foreground lock), bounded by the same first 10 s, after which the undo goes on regardless, said
+    as a stop that waits is said. Only there: a first try waited for main everywhere and broke
+    shot's cleanup on a signal (#386's t_unit_signal_cleanup cases: the PNG left), as shot's main
+    waits in-process for the very capture its undo stops. Tests: sig.rs's
+    term_waits_for_mains_in_process_work (the undo sees a file main made 300 ms after the TERM),
+    mains_endless_in_process_work_is_bounded and an_undo_outside_a_busy_section_runs_at_once;
+    t_up_signals (a TERM or HUP while up seeds the HOME).
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one

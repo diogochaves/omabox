@@ -125,6 +125,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   them as they are added): this is the second line behind that one. With `XDG_RUNTIME_DIR` outside
   `/run`, `--ro-bind DIR:DEST` with DEST inside it is now refused
   ([#363](https://github.com/diogochaves/omabox/issues/363)).
+- **An INT, TERM or HUP while `up` made its box dir could leave a box dir with no box.json**: the
+  stop's cleanup ran alongside up's own work instead of after it. It now waits for that step (at
+  most 10 s, said as a stop that waits is said)
+  ([#367](https://github.com/diogochaves/omabox/issues/367)).
 
 ## 1.0.2 — 2026-10-30
 

@@ -121,9 +121,12 @@ pub fn run_child<T>(
     // (a monitor no one listed).
     let r = loop {
         park_while_stopping();
-        let g = FOREGROUND
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // (at rest while it waits: a trap's thread holding FOREGROUND waits for main to rest)
+        let g = resting(|| {
+            FOREGROUND
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
         // (a signal between the park and the lock: its trap first, nothing started)
         if STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
             drop(g);
@@ -183,9 +186,60 @@ fn park_while_stopping() {
     if !main_step() {
         return;
     }
-    while STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    let stopping = || STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst);
+    if !stopping() {
+        return;
     }
+    resting(|| {
+        while stopping() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
+}
+
+/// Main is at rest: parked for a trap on its way, or waiting for FOREGROUND (held by the trap's
+/// thread). Inside a busy section (busy: up's box dir made, its HOME seeded) a trap's undo waits for
+/// main to rest (trap.rs, #367): there in-process work replaced what were bash's foreground children
+/// (a `mkdir -p` under the box's HOME), which its trap waited for; run alongside it, the undo could
+/// remove a box dir that main then made again. Elsewhere it does not: main's in-process waits there
+/// are often for what the undo itself stops (shot's capture).
+static MAIN_RESTS: AtomicBool = AtomicBool::new(false);
+static MAIN_BUSY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// F, main at rest meanwhile (MAIN_RESTS), when this is main's thread.
+pub fn resting<T>(f: impl FnOnce() -> T) -> T {
+    if !on_main() {
+        return f();
+    }
+    let was = MAIN_RESTS.swap(true, Ordering::SeqCst);
+    let r = f();
+    MAIN_RESTS.store(was, Ordering::SeqCst);
+    r
+}
+
+/// Main's busy section, till this is dropped: a trap's undo waits for main to rest (MAIN_RESTS).
+pub struct Busy(());
+
+/// A busy section of main's begins (on another thread: nothing).
+pub fn busy() -> Option<Busy> {
+    on_main().then(|| {
+        MAIN_BUSY.fetch_add(1, Ordering::SeqCst);
+        Busy(())
+    })
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        MAIN_BUSY.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Whether a trap's undo need not wait for main: main at rest (MAIN_RESTS) or outside a busy
+/// section, or no main to wait for (set_main never ran).
+pub fn main_rests() -> bool {
+    MAIN.get().is_none()
+        || MAIN_RESTS.load(Ordering::SeqCst)
+        || MAIN_BUSY.load(Ordering::SeqCst) == 0
 }
 
 /// A foreground child that takes a Ctrl-C is running (FG_ACTIVE, takes_ctrl_c), and one of the
@@ -720,6 +774,81 @@ mod signal_cases {
         assert_eq!(rc, 143, "{err}");
         assert!(err.contains("CASE undo saw the child's file"), "{err}");
         assert!(!err.contains("CASE after"), "{err}");
+    }
+
+    /// A TERM while main works in-process in a busy section, no foreground child (up making its box
+    /// dir, seeding its HOME): the undo waits until main reaches its next step, here an in-process
+    /// sleep, so it sees what that work made, and nothing main makes comes after it (it ran at once,
+    /// alongside that work: #367, finding 576); then 143.
+    #[test]
+    fn term_waits_for_mains_in_process_work() {
+        let f = case_file("inproc");
+        let Some(r) = in_child("term_waits_for_mains_in_process_work") else {
+            super::set_main();
+            let g = f.clone();
+            let _t = crate::trap::on_exit(move || {
+                let seen = if g.exists() { "main's file" } else { "nothing" };
+                eprintln!("CASE undo saw {seen}");
+            });
+            kill_at(&[(100, libc::SIGTERM)]);
+            // (in-process work: no child, no park)
+            let busy = super::busy();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = std::fs::write(&f, b"");
+            crate::trap::sleep(b"5");
+            drop(busy);
+            eprintln!("CASE past the sleep");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        let _ = std::fs::remove_file(&f);
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE undo saw main's file"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+    }
+
+    /// Main's busy in-process work that does not end (a read that blocks): the undo waits for it at
+    /// most FG_GRACE[0], then runs regardless, as for a foreground child that will not end.
+    #[test]
+    fn mains_endless_in_process_work_is_bounded() {
+        let Some(r) = in_child("mains_endless_in_process_work_is_bounded") else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| eprintln!("CASE undo"));
+            kill_at(&[(100, libc::SIGTERM)]);
+            let _busy = super::busy();
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            eprintln!("CASE past the work");
+            return;
+        };
+        let t0 = std::time::Instant::now();
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(4), "{err}");
+    }
+
+    /// Outside a busy section the undo does not wait for main's in-process work: shot's main waits
+    /// in-process for the capture that its undo stops.
+    #[test]
+    fn an_undo_outside_a_busy_section_runs_at_once() {
+        let Some(r) = in_child("an_undo_outside_a_busy_section_runs_at_once") else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| eprintln!("CASE undo"));
+            kill_at(&[(100, libc::SIGTERM)]);
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            eprintln!("CASE past the work");
+            return;
+        };
+        let t0 = std::time::Instant::now();
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains(crate::trap::STOPPING_LINE), "{err}");
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(900),
+            "{err}"
+        );
     }
 
     /// A foreground child that does not end: waited for FG_GRACE[0], sent a TERM it ignores, then a

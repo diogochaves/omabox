@@ -3,7 +3,8 @@
 //! INT, TERM or HUP, the signal then raised again, as bash dies of it after its EXIT trap. A code
 //! trap's (on_exit_code) ends with the signal's 128+N instead. Before the undo, main's foreground
 //! child is waited for, bounded (foreground_over: bash ran its EXIT trap at once on TERM and HUP,
-//! the child left running, finding 453). An INT stops the command as TERM does (finding 454), but
+//! the child left running, finding 453), then, in a busy section of main's (sig::busy: up's),
+//! main's in-process step, bounded too (main_at_rest: #367). An INT stops the command as TERM does (finding 454), but
 //! for a Ctrl-C from the terminal while a child that takes one runs (sig::takes_ctrl_c: check run's
 //! scenario): when that child outlives it, the command goes on, as bash's does; another signal
 //! meanwhile stops it (ctrl_c_wait). The first
@@ -217,7 +218,7 @@ pub(crate) fn foreground_over() -> Option<std::sync::MutexGuard<'static, ()>> {
             // (said once the wait is felt: the stop is on its way)
             if !said && t0.elapsed() >= SAY_AFTER {
                 said = true;
-                let _ = std::io::Write::write_all(&mut std::io::stderr(), STOPPING_LINE.as_bytes());
+                say_stopping();
             }
             if std::time::Instant::now() >= end {
                 break;
@@ -235,6 +236,32 @@ pub(crate) fn foreground_over() -> Option<std::sync::MutexGuard<'static, ()>> {
 pub(crate) const STOPPING_LINE: &str =
     "omabox: stopping once the step in progress ends (at most 20 s)\n";
 const SAY_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// STOPPING_LINE said, once in this process.
+fn say_stopping() {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, Ordering::SeqCst) {
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), STOPPING_LINE.as_bytes());
+    }
+}
+
+/// Main at rest (sig::main_rests: parked, or waiting for FOREGROUND, which the caller holds) when it
+/// is in a busy section, so the undo never runs alongside main's in-process work there (up's box dir
+/// made, its HOME seeded: a dir made again after the undo removed it, #367, finding 576): at most
+/// FG_GRACE[0], then the undo goes on regardless (in-process work that blocks, as a child that will
+/// not end).
+fn main_at_rest() {
+    let t0 = std::time::Instant::now();
+    while !crate::sig::main_rests() {
+        if t0.elapsed() >= SAY_AFTER {
+            say_stopping();
+        }
+        if t0.elapsed() >= FG_GRACE[0] {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
 
 /// What a Ctrl-C a marked child may outlive comes to (ctrl_c_wait).
 enum CtrlC {
@@ -326,6 +353,11 @@ fn arm() {
                 // bounded (an INT sent by a process, `kill -INT`, among them: finding 454).
                 foreground_over()
             };
+            // (main's in-process step over too, once its foreground child is: not when that child
+            // would not end, main stuck in it)
+            if fg.is_some() {
+                main_at_rest();
+            }
             // From here a second INT, TERM or HUP changes nothing: the thread reads no more of
             // them, and the undo finishes (finding 452).
             // (FOREGROUND held, when it was had, till this process ends: main starts nothing more)

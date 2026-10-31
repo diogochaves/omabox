@@ -334,9 +334,12 @@ fn gated<T>(f: impl FnOnce() -> T) -> T {
 /// A terminating signal came (sig::STOPPING): main stays where it is until the trap's work ends
 /// this process.
 fn park_if_stopping() {
-    while crate::sig::STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    // (at rest there: a trap's undo waits for main to rest, sig::main_rests)
+    crate::sig::resting(|| {
+        while crate::sig::STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
 }
 
 /// The one-off hold of this process (shot --no-pointer), given back when it ends however it ends.

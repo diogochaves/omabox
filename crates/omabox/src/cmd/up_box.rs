@@ -105,6 +105,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             ready::rm_box(&undo_ctx);
         }
     })));
+    // (a signal's undo waits for up's in-process steps, the dir made and its HOME seeded, as bash's
+    // trap waited for its mkdir and cp: never a dir made again after the undo removed it, #367)
+    let _busy = crate::sig::busy();
     let drop_trap = || {
         if let Some(t) = trap.borrow_mut().take() {
             t.forget();
