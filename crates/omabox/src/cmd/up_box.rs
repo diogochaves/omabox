@@ -1152,6 +1152,32 @@ fn bwrap_args(
     b.words(&[b"--proc", b"/proc", b"--dev", b"/dev"]);
     b.sys_ro("/sys").map_err(refused)?;
     b.words(&[b"--tmpfs", b"/tmp"]);
+    // What every Linux has (finding 624, #322): /var/tmp, the box's own as /tmp is (1777, as on a
+    // host), and /var/lib, an empty mount point; /run and /run/user at 0755, not the 0700 bwrap gives
+    // a parent it makes (the box's runtime dir stays 0700). mktemp in /var/tmp, a mount over /var/lib
+    // in a namespace of the program's own and a check of /run's mode failed in a box only.
+    b.words(&[
+        b"--perms",
+        b"0755",
+        b"--dir",
+        b"/var",
+        b"--perms",
+        b"01777",
+        b"--tmpfs",
+        b"/var/tmp",
+        b"--perms",
+        b"0755",
+        b"--dir",
+        b"/var/lib",
+        b"--perms",
+        b"0755",
+        b"--dir",
+        b"/run",
+        b"--perms",
+        b"0755",
+        b"--dir",
+        b"/run/user",
+    ]);
     b.own_rw(&cat!(d, "/run"), &run).map_err(refused)?;
     b.own_rw(&home_dir, b"/home/sbx").map_err(refused)?;
     b.own_ro(&cat!(root, "/share"), b"/opt/omabox/share")
