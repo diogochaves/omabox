@@ -10790,6 +10790,16 @@ from them.
     files remade inside it, needs neither)"; said ones in `<box dir>/noted-mounts`). A box started
     by an older omabox has no `mounts`: nothing said. The skill's reference says it under Mounts.
     Test: t_mount_replaced (a folder remade after up: said once, the box sees none of the new one).
+558. **The Omarchy contract's bar item failed on any 4.5 tree but rc2** (2026-10-30, after #407; seen
+    by #408's author on a dev tree). It asked every 4.5 tree for rc2's bar: a surface as big as its
+    screen, `mask: dragActive ? null : stripInputRegion`. rc1's bar is strip-sized, which bar_strip
+    leaves alone, and 4.5.0's (`v4-5-0`, 10-29) masks it as `dragActive ? null : (underFullscreen ?
+    noInputRegion : stripInputRegion)`, so the item failed on both. It now checks the mask and the
+    exclusive zone only where the surface spans its screen, and takes any mask that names
+    `stripInputRegion`. The click report still names the bar for a click on its strip over a
+    fullscreen window, where 4.5.0's bar takes none (`windows` already drops top layers there): not
+    changed. Test: t_unit_omarchy_contract (rc1's bar and 4.5.0's mask hold, a full-screen bar with
+    no mask fails); the contract passes on rc1, rc2 and `v4-5-0` trees.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

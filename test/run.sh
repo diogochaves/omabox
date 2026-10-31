@@ -2461,9 +2461,11 @@ omarchy_contract_45() {
     bash -c 'grep -qF "anchors { top: true; bottom: true; right: true }" "$1" && grep -qF "exclusionMode: ExclusionMode.Ignore" "$1" && grep -qF "mask: Region { item: surface.showingNotifications ? deck : null }" "$1" && grep -qF "/live.json" "$1"' _ "$s/plugins/notifications/Service.qml"
   oc "the dock (layer omarchy-dock) reserves no edge and takes input on its items (LAYER_SPAN_JQ)" "not so in plugins/dock/DockWindow.qml" \
     bash -c 'grep -qF "WlrLayershell.namespace: \"omarchy-dock\"" "$1" && grep -qF "exclusiveZone: 0" "$1" && grep -qF "mask: Region {" "$1"' _ "$s/plugins/dock/DockWindow.qml"
-  oc "the bar's surface (omarchy-bar) spans its screen, input on its strip (mask), exclusive zone its thickness (#407: bar_strip in LAYER_SPAN_JQ)" \
+  # Only where the surface spans its screen (4.5.0-rc2 on): bar_strip leaves a strip-sized one (rc1's)
+  # alone. 4.5.0's mask (none under a fullscreen window, else the strip) counts as the strip's.
+  oc "the bar's surface (omarchy-bar), where it spans its screen: input on its strip (mask), exclusive zone its thickness (#407: bar_strip in LAYER_SPAN_JQ)" \
     "not so in plugins/bar/Bar.qml" \
-    bash -c 'grep -qF "mask: dragActive ? null : stripInputRegion" "$1" && grep -qF "exclusiveZone: thickness" "$1" && grep -qF "implicitHeight: root.vertical ? 0 : (screen ? screen.height : thickness)" "$1"' _ "$s/plugins/bar/Bar.qml"
+    bash -c '! grep -qF "implicitHeight: root.vertical ? 0 : (screen ? screen.height : thickness)" "$1" || { grep -qE "^ *mask: dragActive \? null : .*\<stripInputRegion\>" "$1" && grep -qF "exclusiveZone: thickness" "$1"; }' _ "$s/plugins/bar/Bar.qml"
   oc "Print's omarchy-capture-screenshot runs Omasnap (t_cursor_hw_nvidia waits for its layer omasnap)" "not in bin/omarchy-capture-screenshot" \
     oc_has "$o/bin/omarchy-capture-screenshot" 'exec omasnap '
 }
@@ -2506,6 +2508,24 @@ t_unit_omarchy_contract() {
   check_eq "...a moved method and a renamed layer: those two fail, with what changed" \
     "omarchy-shell shell moveBarWidget, 2 argument(s) (skill): takes 1 argument(s) now|layer omarchy-bar (up waits for it): no WlrLayershell.namespace \"omarchy-bar\" under shell/" \
     "$(omarchy_contract "$t" | awk -F'\t' '$2 != "" { print $1 ": " $2 }' | paste -sd '|')"
+  # The bar's surface (#407): checked only where it spans its screen, as rc2's does. A strip-sized one
+  # (rc1's) and 4.5.0's mask, which drops the strip under a fullscreen window, hold; a screen-sized one
+  # without the strip's mask fails.
+  if omarchy45 "$o" && grep -qF "(screen ? screen.height : thickness)" "$o/shell/plugins/bar/Bar.qml"; then
+    local bar="the bar's surface (omarchy-bar)" v out
+    for v in rc1 final nomask; do
+      case $v in
+        rc1) sed -e 's/(screen ? screen.height : thickness)/thickness/; s/(screen ? screen.width : thickness)/thickness/' \
+          -e '/^ *mask: dragActive ? null : /d' "$o/shell/plugins/bar/Bar.qml" ;;
+        final) sed 's/^\( *mask: dragActive ? null : \).*stripInputRegion$/\1(underFullscreen ? noInputRegion : stripInputRegion)/' \
+          "$o/shell/plugins/bar/Bar.qml" ;;
+        nomask) sed '/^ *mask: dragActive ? null : /d' "$o/shell/plugins/bar/Bar.qml" ;;
+      esac > "$t/shell/plugins/bar/Bar.qml"
+      grep -q "^ *mask: dragActive ? null : (underFullscreen" "$t/shell/plugins/bar/Bar.qml" || [ "$v" != final ] || no "...the bar: 4.5.0's mask" "the sed left no such line"
+      out=$(omarchy_contract "$t" | awk -F'\t' -v b="$bar" 'index($1, b) == 1 { print ($2 == "" ? "holds" : "fails") }')
+      check_eq "...$bar, $v: $([ "$v" = nomask ] && echo fails || echo holds)" "$([ "$v" = nomask ] && echo fails || echo holds)" "$out"
+    done
+  fi
   rm -rf "$t"
 }
 
