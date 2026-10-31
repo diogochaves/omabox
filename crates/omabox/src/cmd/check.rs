@@ -1407,6 +1407,7 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut tmo = b"15s".to_vec();
     // Proofs (#266): what the screen must show, in words (for whoever judges it), and checked.
     let (mut expects, mut etrees, mut ecmd) = (Vec::new(), Vec::new(), Vec::<Vec<u8>>::new());
+    let mut eimgs: Vec<Vec<u8>> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
@@ -1474,6 +1475,16 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 } else {
                     etrees.push(t);
                 }
+                i += 1;
+            }
+            b"--expect-image" => {
+                optarg(ctx, x, v)?;
+                if args[i + 1].is_empty() {
+                    return Err(
+                        ctx.die("check point: --expect-image takes a PNG, a crop of a shot")
+                    );
+                }
+                eimgs.push(args[i + 1].clone());
                 i += 1;
             }
             b"--expect-cmd" => {
@@ -1781,6 +1792,31 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         };
         rm(&pf);
         proofs.push((cat!("tree \"", t, "\""), why));
+    }
+    // --expect-image FILE (#267): find --image on the screen, or in --window's own pixels.
+    for im in &eimgs {
+        let mut ta = vec![b"find".to_vec(), b"--image".to_vec(), im.clone()];
+        for s in &sels {
+            ta.push(b"--window".to_vec());
+            ta.push(s.clone());
+        }
+        let pf = f(".proof");
+        let rc = self_cmd(ctx, &ta, Some(&pf), &[]);
+        let why = match rc {
+            0 => Vec::new(),
+            _ => {
+                let l = tail1(&pf);
+                let l = l.strip_prefix(b"omabox: ").unwrap_or(&l);
+                let l = l.strip_prefix(b"find: ").unwrap_or(l);
+                if l.is_empty() {
+                    format!("exit {rc}").into_bytes()
+                } else {
+                    one_line(l)
+                }
+            }
+        };
+        rm(&pf);
+        proofs.push((cat!("image ", one_line(im)), why));
     }
     if !ecmd.is_empty() {
         let ms = crate::num::ms_duration(&tmo).unwrap_or(15_000);

@@ -88,6 +88,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   pointer's place is left out. Each shot records its scale in its PNG comment, and a crop shot at
   another scale is resized to the box's and said. `-g` or `--window SEL` narrow the search
   ([#267](https://github.com/diogochaves/omabox/issues/267)).
+- **`check point --expect-image FILE`** proves a checkpoint by a picture where there is no tree: it
+  fails the checkpoint when `find --image FILE` finds no match on the screen (or in `--window`'s own
+  pixels), as `--expect-tree` does for a tree
+  ([#267](https://github.com/diogochaves/omabox/issues/267), [#266](https://github.com/diogochaves/omabox/issues/266)).
 - **Proofs on a checkpoint**: `check point --expect TEXT` says in words what that screen must show,
   kept with it and said under its line in `check run` and `--approve`, on its cards in `report.png`
   and `baseline.png`, and in `--json`, for whoever judges a change or a baseline. `--expect-tree TEXT`

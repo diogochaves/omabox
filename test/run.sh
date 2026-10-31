@@ -9291,7 +9291,7 @@ omabox wait --timeout 20s window 'title:^Proof demo$'
 [ -z "${MADE:-}" ] || omabox run -- touch /home/sbx/made
 find=${FIND:-'"Beta" [checked]'}
 omabox check point win --window 'title:^Proof demo$' --expect "the demo window, Beta checked" \
-  --expect-tree "$find" --expect-cmd -- test -e /home/sbx/made
+  --expect-tree "$find" ${IMG:+--expect-image "$IMG"} --expect-cmd -- test -e /home/sbx/made
 SH
   chmod +x "$d/scenario.sh"
   export OMABOX_CHECK_NAME=$P-ckp
@@ -9317,6 +9317,16 @@ SH
     $'(^|\n)proof    win: proof failed in every run: command test -e /home/sbx/made \\(exit 1\\)\n.*check: not approved: 1 checkpoint failed a proof in every run \\(win\\)[^|]*\\|1$' "$out|$rc"
   check "...the baseline as it was" cmp -s "$d/win.before.png" "$d/base/win.png"
   check_eq "...its proofs as they were" 2 "$(grep -c $'^proof\theld' "$d/base/win.point" 2>&1)"
+  # --expect-image (#267): a crop of the baseline's window is found in it; a magenta square nowhere.
+  magick "$d/base/win.png" -crop 80x30+10+10 +repage "$d/crop.png"
+  rc=0; out=$(MADE=1 IMG=$d/crop.png ob check run --json --base "$d/base" -o "$d/g" -- "$d/scenario.sh" 2>/dev/null) || rc=$?
+  check_eq "--expect-image of a crop of the window: held, same, exit 0" "same|image $d/crop.png|true|0" \
+    "$(jq -r '.checkpoints[0] | "\(.result)|\(.proofs[1].proof)|\(.proofs[1].held)"' <<<"$out" 2>&1)|$rc"
+  magick -size 24x24 xc:'#ff00ff' "$d/magenta.png"
+  rc=0; out=$(MADE=1 IMG=$d/magenta.png ob check run --json --base "$d/base" -o "$d/h" -- "$d/scenario.sh" 2>/dev/null) || rc=$?
+  check_eq "...an image that is not there: the proof failed, exit 1" "proof|false|1" \
+    "$(jq -r '.checkpoints[0] | "\(.result)|\(.proofs[1].held)"' <<<"$out" 2>&1)|$rc"
+  check_match "...why, in find's words" "^no match of .*magenta.png in window " "$(jq -r '.checkpoints[0].proofs[1].why' <<<"$out" 2>&1)"
   check_eq "no check box left" "" "$(ob ls 2>/dev/null | grep -F "$P-ckp" || true)"
   unset OMABOX_CHECK_NAME
 }

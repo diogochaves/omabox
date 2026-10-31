@@ -375,7 +375,9 @@ omabox check point menu --window myapp --expect "the menu open, Beta selected" \
 (`  expect: ...`, not under `same`) and at `--approve`, on its cards in `report.png` and
 `baseline.png`, and in `--json` (`expect`). Judge a change or a baseline against it. `--expect-tree
 TEXT` (repeatable, needs `--window`) fails the checkpoint when `tree --find TEXT` of its window finds
-nothing; `--expect-cmd -- CMD [ARG...]` (last: the rest is the command) when CMD, run in the box after
+nothing; `--expect-image FILE` (repeatable; a crop of a shot) when `find --image FILE` finds no match
+on the screen, or in `--window`'s own pixels: the proof for what has no tree (the bar, a panel, a
+terminal); `--expect-cmd -- CMD [ARG...]` (last: the rest is the command) when CMD, run in the box after
 the shot, exits non-zero or outlasts `--timeout`. A failed proof is its own result, even where the
 pixels are the baseline's: `proof    lock: proof failed: command omarchy-hyprland-session-locked
 (exit 1)`, then `  shot: .../run1/lock.png (the same as the baseline's: the baseline shows it too)`

@@ -11830,7 +11830,10 @@ from them.
     read back here: its crops match as if at the box's scale). Tests: t_find_image (where cut, -g,
     --window, --json, two in view, --index, --offset, wait for it and --gone, scale 2, the
     refusals), imgfind.rs's tests (crops, noise, colour and contrast, transparency, one colour, the
-    pointer, the PNG comment), relay.rs's wait_image_file_is_the_word_after_image.
+    pointer, the PNG comment), relay.rs's wait_image_file_is_the_word_after_image. `check point
+    --expect-image FILE` (finding 614's proofs) runs `find --image FILE` on the screen, or with
+    --window in its own pixels, and fails the checkpoint with find's words when there is no match
+    (t_check_proof).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
