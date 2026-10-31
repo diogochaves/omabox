@@ -20,6 +20,7 @@ use crate::mon::jq_box_json;
 use crate::plugins::{Plugin, id_ok, resolve_plugin, session_out};
 use crate::select::select_box;
 use crate::shell;
+use crate::term;
 use std::time::Duration;
 
 /// The box HOME's plugins dir, as the box has it.
@@ -233,34 +234,6 @@ fn in_box(ctx: &Ctx, script: &str, args: &[&[u8]]) -> Res<(i32, Vec<u8>)> {
     Ok((r.rc, r.out))
 }
 
-/// What the box wrote, fit for the caller's terminal: a control character (but newline and tab) or a
-/// byte that is no UTF-8 as `?`, at most 400 bytes of it, what is cut said (S7: an escape sequence
-/// the box wrote never reaches the terminal as one).
-fn plain(v: &[u8]) -> Vec<u8> {
-    const CAP: usize = 400;
-    let (head, cut) = if v.len() > CAP {
-        (&v[..CAP], v.len() - CAP)
-    } else {
-        (v, 0)
-    };
-    let mut out = Vec::new();
-    for chunk in head.utf8_chunks() {
-        for c in chunk.valid().chars() {
-            if c.is_control() && c != '\n' && c != '\t' {
-                out.push(b'?');
-            } else {
-                let mut b = [0u8; 4];
-                out.extend_from_slice(c.encode_utf8(&mut b).as_bytes());
-            }
-        }
-        out.extend(std::iter::repeat_n(b'?', chunk.invalid().len()));
-    }
-    if cut > 0 {
-        out.extend_from_slice(format!("... ({cut} bytes more)").as_bytes());
-    }
-    out
-}
-
 /// Whether the box was started with its shell (not --no-shell).
 fn has_shell(bj: &serde_json::Value) -> bool {
     bj.get("shell") != Some(&serde_json::Value::Bool(false))
@@ -378,7 +351,7 @@ fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
             " in box '",
             n,
             "' (to ",
-            plain(&shell::strip_nl(t)),
+            term::plain(&shell::strip_nl(t)),
             ")"
         ));
     }
@@ -449,7 +422,7 @@ fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
             Some((0, _)) => {}
             r => {
                 let said = r
-                    .map(|(_, o)| plain(&shell::strip_nl(&o)))
+                    .map(|(_, o)| term::plain(&shell::strip_nl(&o)))
                     .unwrap_or_default();
                 say(cat!(
                     "plugin add: omarchy plugin enable ",
@@ -606,20 +579,6 @@ mod tests {
             "a mount from elsewhere over it"
         );
         let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// #345: what the box wrote reaches the terminal with no control character but newline and tab,
-    /// no byte that is not UTF-8, and capped.
-    #[test]
-    fn plain_keeps_escapes_off_the_terminal() {
-        assert_eq!(plain(b"/a/b\tc\nd"), b"/a/b\tc\nd");
-        assert_eq!(plain(b"x\x1b]52;c;aGk=\x07y"), b"x?]52;c;aGk=?y");
-        assert_eq!(plain(b"\x1b[31mred\r"), b"?[31mred?");
-        assert_eq!(plain("a\u{9b}b é".as_bytes()), "a?b é".as_bytes());
-        assert_eq!(plain(b"a\x9bb\xff"), b"a?b?");
-        let long = vec![b'z'; 65536];
-        let p = plain(&long);
-        assert!(p.starts_with(&[b'z'; 400]) && p.ends_with(b"... (65136 bytes more)"));
     }
 
     #[test]
