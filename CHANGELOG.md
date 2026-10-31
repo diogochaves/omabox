@@ -257,6 +257,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and learnt again wherever it moves. A counter or a progress bar never looks as it did before, so
   it still counts; `--strict` counts blinkers too
   ([#307](https://github.com/diogochaves/omabox/issues/307)).
+- **`help` and the skill say that `shot --window` cuts off a menu past the window's edge**: a window
+  shot is the window's box, and Hyprland says nowhere where a window's popups (a GTK or Chromium
+  context menu, a dropdown) are, so it cannot grow the shot to them. Take the screen around the
+  window with `shot -g`, or a whole shot ([#334](https://github.com/diogochaves/omabox/issues/334)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count

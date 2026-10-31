@@ -340,7 +340,10 @@ org.gnome.Nautilus, or part of its title; failing those, a hyphen-separated part
 portal for xdg-desktop-portal-gtk); repeat to narrow. None or
 several is exit 2, with the candidates (`wait window SEL` asks for a window like it: any of several
 does, each named); -w is --window, and --active is --window active wherever it goes. `shot --window` is the
-window's own pixels, covered or on another workspace too; `click --window` takes the window's
+window's own pixels, covered or on another workspace too, cut at its edges: a menu or popup reaching
+past them is cut off (Hyprland says nowhere where a window's popups are), so take the screen around
+it with `shot -g "X,Y WxH"` (the window's place is on the shot's stderr line) or a whole shot, and
+click into that with `click --in`; `click --window` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
 a layer surface over that point (a notification toast, a panel) is said on stderr, the click sent
 (it goes to the layer where the layer takes input; only its rectangle is known), and --no-raise

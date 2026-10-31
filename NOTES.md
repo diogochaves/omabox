@@ -12077,6 +12077,27 @@ from them.
     screen_layer ... here|nothere|unknown`), t_click_layer (far from the toast: nothing said, also
     under `pointer --window`, the idle column and dock; on it: refused under `--no-raise`, the toast
     left up, a plain click said and closed it; failed on the old code).
+619. **`shot --window` cannot grow to a window's popups: Hyprland says nowhere where they are**
+    (2026-10-31, #334). A menu that opens past a window's edge is cut off in its window shot
+    (finding 81 noted it). Checked in a box (Hyprland 0.56.2) with a GTK 4 context menu (zenity
+    `--entry` floated at 300x252, right-click near the entry's right end) and a Chromium one
+    (Wayland, floated at 500x300): both are xdg_popups drawn past the window's right and bottom
+    edges, whole in a `-g` shot of the screen, cut at the edge in `shot --window`. With either open,
+    `hyprctl clients` and `layers` are unchanged (no entry, no size or place grows), and Hyprland's
+    source has no other way to ask: its Lua window object (`hl.get_windows()`) has no popup field,
+    hyprctl no popup request, socket2 no popup event, and its log names a popup by pointer only
+    ("New popup at ..."), never where. The window's extents with its popups exist inside it
+    (`CWindow::getFullWindowBoundingBox`, `popupTreeExtents`) but nothing exports them. The window
+    capture `-T` uses is sized to the window (`m_bufferSize` = the window's size times the scale)
+    and renders its popups into that buffer, so a popup inside the window is in the shot and the
+    part past the edge is lost. Other readings were weighed and left: the accessibility tree (the
+    open GTK 4 menu is not in zenity's tree at all, `tree --find copy` finds nothing in its 5
+    lines; a Qt popup's bounds start at 0,0, finding 364), and pixels past the window's edge (no
+    way to tell a popup from the window or wallpaper beside it). So `help` (the SEL paragraph) and the skill's reference (the `--window` bullet, a
+    Symptoms row) say it: take the screen around the window, `shot -g` in screen coordinates (the
+    window's place is on the shot's stderr line) or a whole shot, and `click --in` that. If
+    Hyprland ever exports a window's popup extents, `shot --window` could take a screen crop of
+    them instead when the window is uncovered. Docs only: no test.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

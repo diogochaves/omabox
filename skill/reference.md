@@ -192,7 +192,9 @@ a turn. Five rules keep every omabox call plain:
   title, failing those a hyphen-separated part of the class (`portal` for `xdg-desktop-portal-gtk`);
   `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is satisfied by
   any window it matches. `shot --window SEL -g "X,Y WxH"` crops the window in its own
-  coordinates; a `-g` past the window (or the screen) is cut to it, said on stderr.
+  coordinates; a `-g` past the window (or the screen) is cut to it, said on stderr. A menu or popup
+  reaching past the window's edge is cut off in its window shot: take the screen around it (`shot
+  -g` in the screen's coordinates, or a whole shot; Symptoms).
 - Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
   --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. Screen
   shots show the pointer (hover evidence: a `-g` crop of the screen; `--no-pointer` leaves it out of
@@ -425,6 +427,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it; `omabox calibrate` measures the size for you (Shots). |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
+| A menu, dropdown or tooltip in a `shot --window` is cut off at the window's edge | A window shot is the window's box only, and Hyprland says nowhere where its popups are. Take the screen around it: `shot -g "X,Y WxH"` from the window's place (the shot's stderr line: `300x252 at 831,414`) grown toward the menu, or a whole shot; then `click --in` that shot (or `click X Y` on a whole one). |
 | `click --window` says "a layer surface "NS" … is over X,Y" (or `--no-raise` refuses it); a click at the screen's X Y, "… is over the screen's X,Y, on window …" | A panel or menu is over that point and takes the click where it takes input (only its rectangle is known). `omabox wait layer NS --gone`, then click again. |
 | `click --window` (or a click at the screen's X Y) says "a layer spanning the screen, "NS" … draws over …" (`--no-raise` refuses it) | A layer covering the screen, or its whole height or width (Omarchy's notifications and, on 4.5, its dock), takes input only on its items, and one of them (a toast, a dock icon) is drawn at that point: the click goes to it. `omabox dnd --clear` clears the toasts (Omarchy 4.5 keeps the layer up with no toast, so `wait layer NS --gone` would not return). Far from its items nothing is said. The dock is said only where it is shown (a floating workspace): ref: Toasts and dock. |
 | `click --window` says "a layer spanning the screen, "NS" … is up … may go to it" | As above, but the pixels could not tell where its items are (a scaled output): a click on a toast goes to the toast, elsewhere to the window. Not refused under `--no-raise`. |
