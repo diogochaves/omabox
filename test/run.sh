@@ -803,6 +803,18 @@ t_unit_record() {
   check_match "record sheet without a video" "record sheet: the video, like" "$(ob record sheet 2>&1)"
   check_match "...of no file" "record sheet: no video $TMP/none.mp4" "$(ob record sheet "$TMP/none.mp4" 2>&1)"
   check_match "...two videos" "record sheet: unexpected b.mp4" "$(ob record sheet a.mp4 b.mp4 2>&1)"
+  # Its sheet writes over no file but an image (shot's rule, #338's review), with a box or none: a
+  # text file at -o (or the video's own .sheet.png) refused before ffmpeg runs, a link too.
+  local rs=$TMP/rsheet; mkdir -p "$rs"; : > "$rs/v.mp4"; echo notes > "$rs/notes.txt"; echo notes > "$rs/v.sheet.png"
+  ln -sf "$rs/notes.txt" "$rs/link.png"
+  # (no box named, none up for the name: the sheet made here, ffmpeg sandboxed, #279)
+  rsh() { (cd "$rs" && env -u OMABOX -u OMABOX_SESSION -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID "$CLI" record "$@" 2>&1); }
+  out=$(rsh sheet "$rs/v.mp4" -o "$rs/notes.txt"); rc=$?
+  check_match "record sheet -o a text file: refused" "^[12] omabox: record sheet: $rs/notes\.txt is there and is not a PNG" "$rc $out"
+  check_eq "...the file as it was" notes "$(cat "$rs/notes.txt")"
+  check_match "...-o a link: refused" "record sheet: $rs/link\.png is a link" "$(rsh sheet "$rs/v.mp4" -o "$rs/link.png")"
+  check_match "...beside the video, a text file where its sheet goes: refused" "record sheet: $rs/v\.sheet\.png is there and is not a PNG" "$(rsh sheet "$rs/v.mp4")"
+  check_eq "...that file as it was" notes "$(cat "$rs/v.sheet.png")"
   # A jailed agent's record (#224, finding 321): the broker (OMABOX_JAIL set) opens no path the jail
   # names, and takes only fds that are files open as they are used; all refused before any box.
   local rj=$TMP/rjail; mkdir -p "$rj/dir"; : > "$rj/f"; : > "$rj/r"; rm -f "$rj/fifo"; mkfifo "$rj/fifo"; echo HOSTVIDEO > "$rj/host.mp4"

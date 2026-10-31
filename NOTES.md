@@ -11997,7 +11997,9 @@ from them.
     frames are opened with O_NOFOLLOW. A new path is still made, folders too. Checked for the other
     listed verbs: none writes or removes a host file the caller names (events' marks, gdb's log,
     `run -d` logs and shots.tsv are in the box dir or HOME; `--in`, `--since` and `calibrate
-    --answer` only read). `record` and `check` (not listed) keep their old writes. Codex
+    --answer` only read). `record` and `check` (not listed) keep their old writes, but for `record
+    sheet`'s sheet (`-o`, or the video's `.sheet.png`), which since #279 runs with no box: held to
+    the same rule before the video is read (record_stop.rs's `sheet_out_ok`; t_unit_record). Codex
     (`~/.codex/rules` prefix rules), OpenCode (`permission.bash`), pi (no prompts) and Hermes read no
     grant from a skill: reference.md's "Commands that run without a prompt" says what each takes.
     Tests: t_unit_skill_tools (the list against the reviewed one and the never list, each verb a

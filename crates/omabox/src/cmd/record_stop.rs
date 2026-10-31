@@ -1841,6 +1841,7 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         } else {
             so.out.clone()
         };
+        sheet_out_ok(ctx, &outp)?;
         tsv = cat!(base, ".marks.tsv");
         let f = std::fs::File::open(shell::path(&so.video));
         let ok = match f {
@@ -1910,6 +1911,17 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
 /// here in host_sandbox, reading the video from an fd this omabox opened (a jailed caller's, its
 /// --from-fd); the frames, and a jailed caller's marks and sheet, in a folder of omabox's cache
 /// (on disk, not /tmp's memory), gone however it ends.
+/// A sheet's OUT (and OUT.part) written over only as shot's are (#338's review): nothing there, or
+/// an image, never a link; refused before any video is read.
+fn sheet_out_ok(ctx: &Ctx, outp: &[u8]) -> Res<()> {
+    match crate::shots::overwrite_refusal(outp)
+        .or_else(|| crate::shots::overwrite_refusal(&cat!(outp, ".part")))
+    {
+        Some(m) => Err(ctx.die(cat!("record sheet: ", m))),
+        None => Ok(()),
+    }
+}
+
 pub fn sheet_file_host(ctx: &mut Ctx, so: &SheetOpts) -> Res<()> {
     for has in [
         crate::exec::executable(b"/usr/bin/ffmpeg"),
@@ -1969,6 +1981,7 @@ fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
         } else {
             so.out.clone()
         };
+        sheet_out_ok(ctx, &outp)?;
         (OwnedFd::from(f), size, cat!(base, ".marks.tsv"), outp)
     } else {
         // (as the box's way: its marks read in 10 s at most, 1 MiB; the video as the fd is)
