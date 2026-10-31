@@ -116,7 +116,7 @@ if [ "${1:-}" = --installed ]; then
   [ -x "$inst/tree/bin/omabox" ] || { echo "--installed: no runnable bin/omabox in the install"; exit 2; }
   chmod -R a-w "$inst/tree"
   # shellcheck disable=SC2016 # expanded by the namespace's shell
-  unshare -r -m bash -c '
+  unshare -r -m --propagation slave bash -c '
     set -e; i=$1; shift
     mount -t overlay overlay -o "lowerdir=/usr/lib,upperdir=$i/up/lib,workdir=$i/work/lib" /usr/lib
     mkdir /usr/lib/omabox; mount --bind "$i/tree" /usr/lib/omabox; mount -o remount,bind,ro /usr/lib/omabox
@@ -1328,7 +1328,7 @@ t_unit_refusals() {
   check_fails "--plugin HOME refused" bash -c "mkdir -p '$TMP/fakehome' && echo '{\"id\":\"x.y\"}' > '$TMP/fakehome/manifest.json' && HOME='$TMP/fakehome' '$CLI' up '$P-r18' --plugin '$TMP/fakehome'"
   # (/dev/net/tun hidden in a mount namespace of its own: pasta would fail inside the box, 10 s later)
   check_match "a connected box without /dev/net/tun is refused up front" "needs /dev/net/tun" \
-    "$(unshare -Urm bash -c 'mount -t tmpfs none /dev/net && exec "$0" up "$1"' "$CLI" "$P-r19" 2>&1)"
+    "$(unshare -Urm --propagation slave bash -c 'mount -t tmpfs none /dev/net && exec "$0" up "$1"' "$CLI" "$P-r19" 2>&1)"
   # (bwrap would fail at its uid map behind pasta, and only box.log would say so, 10 s later; a
   # connected box falls back to none there instead, t_no_new_privs)
   check_match "an isolated box is refused up front from a no_new_privs process" \
@@ -1596,7 +1596,7 @@ t_unit_down_jail_race() {
     skip "a jailed up and the user's, past the name's lock" "only NVIDIA's render node here, and no aquamarine fix: up is refused before the lock"; return
   fi
   # A jailed up of the name, while the user's up makes a box that comes up (a stand-in PID 1).
-  local u; u=$( (unshare -Urpf --mount-proc sleep 300 >/dev/null 2>&1 & echo $!) )
+  local u; u=$( (unshare -Urpf --mount-proc --propagation slave sleep 300 >/dev/null 2>&1 & echo $!) )
   for i in $(seq 100); do l=$(pgrep -P "$u") && [ "$(readlink "/proc/$l/ns/pid" 2>/dev/null)" != "$(readlink /proc/self/ns/pid)" ] && break; sleep 0.05; done
   mkdir -p "$r/rt/omabox/uu"; hold uu
   jx env OMABOX_JAIL="$j" "$CLI" up uu --json > "$r/out" 2>"$r/err" & p=$!
@@ -2720,6 +2720,48 @@ t_unit_bash_changes() {
   check_eq "...no box was started by any of them" "" "$(cd "$r/rt/omabox" 2>/dev/null && command find . -mindepth 1 -maxdepth 1 ! -name '.*' -printf '%P\n')"
 }
 
+# The suite's stand-in namespaces (#350): each `unshare` that makes a mount namespace copies every
+# host mount, and in a user namespace the copy is locked. unshare's default propagation, private,
+# kept a drive the host unmounted mounted in each copy, so the drive stayed busy (`wipefs`: Device or
+# resource busy) until the suite ended. `--propagation slave` lets the host's umount reach a locked
+# copy too. Proved in a fake host of the test's own (a user, mount and pid namespace: nothing on the
+# real host is mounted or unmounted), then every such call in this file held to it.
+t_unit_standin_mounts() {
+  local d=$TMP/standin-mounts out bad
+  if ! unshare -Urmpf --mount-proc --propagation private true 2>/dev/null; then
+    skip "stand-in namespaces follow a host umount (#350)" "no user namespaces of the test's own here"
+  else
+    mkdir -p "$d"
+    # shellcheck disable=SC2016 # expanded by the fake host's shell
+    out=$(unshare -Urmpf --mount-proc --propagation private bash -c '
+      set -e; d=$1
+      seen() { awk -v m="$d/drive" '"'"'$5 == m'"'"' "/proc/$1/mountinfo" | wc -l; }
+      remount() { mount -t tmpfs drive "$d/drive"; mount --make-shared "$d/drive"; }
+      mount -t tmpfs top "$d"; mount --make-shared "$d"; mkdir "$d/drive"; remount
+      for prop in slave private; do
+        unshare -Urpf --mount-proc --propagation "$prop" sleep 60 >/dev/null 2>&1 & u=$!
+        c=""; for _ in $(seq 100); do c=$(pgrep -P "$u") && break; sleep 0.05; done
+        [ -n "$c" ] || { echo "$prop: no stand-in"; continue; }
+        before=$(seen "$c")
+        locked=$(unshare -Urpf --mount-proc --propagation "$prop" sh -c '"'"'umount "$1" 2>/dev/null && echo unlocked || echo locked'"'"' sh "$d/drive")
+        umount "$d/drive"
+        echo "$prop $before $locked $(seen "$c")"
+        kill -KILL "$c" "$u" 2>/dev/null || true; wait "$u" 2>/dev/null || true
+        remount
+      done
+    ' _ "$d" 2>&1) || out+=" rc=$?"
+    check_eq "a stand-in made --propagation slave loses a drive the host unmounts, its copy locked (#350)" \
+      "slave 1 locked 0" "$(sed -n 1p <<<"$out")"
+    check_eq "...one made private (unshare's default: the stand-ins before) keeps it mounted" \
+      "private 1 locked 1" "$(sed -n 2p <<<"$out")"
+  fi
+  # Every unshare here that makes a mount namespace (-m in its flags, or --mount-proc) names its
+  # propagation on the same line: slave, unless the test means another (this one's private host).
+  bad=$(awk '/^[[:space:]]*#/ { next }
+    /unshare( -[A-Za-z]+)* -[A-Za-z]*m|unshare[^|;&]*--mount[-]proc/ && !/--propagation/ { print FILENAME ":" FNR ": " $0 }' "$ROOT/test/run.sh")
+  check_eq "every mount namespace the suite makes says its propagation, slave for a stand-in (#350)" "" "$bad"
+}
+
 # cx_case LABEL ARGS...: one case of the CLI (#324 wave 6b-end: what parity compared with bash's omabox
 # until the port ended, now each stated). Runs `omabox ARGS` (the binary, $CLI) once from $cx_dir,
 # with XDG_RUNTIME_DIR=$cx_rt and ${cx_env[@]} (env's words: -u NAME, NAME=VALUE), ${cx_wrap[@]}
@@ -3183,11 +3225,11 @@ EOF
   chmod +x "$r"/bin/* "$r"/hostbin/*
   # The stand-in desktop: a pid namespace with its own mounts, the tools above bound over the real
   # ones there (the host's are never run by the box's side), the box's HOME and runtime dir tmpfs.
-  unshare -Urpfui --mount-proc sh -c 'mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
+  unshare -Urpfui --mount-proc --propagation slave sh -c 'mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
     mkdir -p "/run/user/$2/labwc" && for t in hyprctl wlr-randr labwc ffmpeg wl-paste wl-copy; do mount --bind "$1/$t" "/usr/bin/$t"; done &&
     exec sleep 3600' sh "$r/bin" "$(id -u)" >/dev/null 2>&1 & local ufk=$!
   # A plain one (no Hyprland: nothing answers).
-  unshare -Urpf --mount-proc sleep 3600 >/dev/null 2>&1 & local u1=$!
+  unshare -Urpf --mount-proc --propagation slave sleep 3600 >/dev/null 2>&1 & local u1=$!
   local lfk="" l1="" i
   for i in $(seq 300); do
     lfk=$(pgrep -P "$ufk" -x sleep) l1=$(pgrep -P "$u1")
@@ -3639,7 +3681,7 @@ PYEOF
   # mode's box gone while it waits for the box's lock: a stand-in desktop of its own, ended by the
   # lock's holder before it lets go.
   rp4_dying() {
-    local u k p=""; u=$(unshare -Urpfui --mount-proc sh -c 'mount --bind "$1/hyprctl" /usr/bin/hyprctl && exec sleep 600' sh "$r/bin" >/dev/null 2>&1 & echo $!)
+    local u k p=""; u=$(unshare -Urpfui --mount-proc --propagation slave sh -c 'mount --bind "$1/hyprctl" /usr/bin/hyprctl && exec sleep 600' sh "$r/bin" >/dev/null 2>&1 & echo $!)
     for k in $(seq 100); do p=$(pgrep -P "$u" -x sleep) && break; sleep 0.05; done
     rp4_box fkd "{\"mode\":\"headless\",\"pidns\":\"$(readlink "/proc/$p/ns/pid")\"}" "$p"
     printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$r/rt/omabox/fkd/run/omabox.env"
@@ -3752,7 +3794,7 @@ EOF
   echo '{"x": 960.7, "y": 540.2}' > "$fk/cursor.json"; echo '{"id":1,"name":"1"}' > "$fk/workspace.json"
   magick -size 1920x1080 xc:'#204060' "$fk/grim.png"
   magick -size 40x30 xc:'#406080' "$fk/grim-small.png"
-  unshare -Urpfui --mount-proc sh -c 'mount -t tmpfs none /opt && mkdir -p /opt/omabox/bin && cp "$1/omabox-still" /opt/omabox/bin/ &&
+  unshare -Urpfui --mount-proc --propagation slave sh -c 'mount -t tmpfs none /opt && mkdir -p /opt/omabox/bin && cp "$1/omabox-still" /opt/omabox/bin/ &&
     for t in keyboard pointer burst; do ln -s "$1/omabox-$t" "/opt/omabox/bin/omabox-$t"; done &&
     mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
     mount --bind "$1/hyprctl" /usr/bin/hyprctl && { [ ! -e /usr/bin/grim ] || mount --bind "$1/grim" /usr/bin/grim; } && exec sleep 3600' sh "$fk/bin" >/dev/null 2>&1 &
@@ -3950,7 +3992,7 @@ while time.time() < end:
         os.waitpid(-1, 0)
     except ChildProcessError:
         time.sleep(0.2)'
-  prlimit --core=1: unshare -Urpfui --mount-proc sh -c 'mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
+  prlimit --core=1: unshare -Urpfui --mount-proc --propagation slave sh -c 'mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
     mkdir -p "/run/user/$2" && for t in hyprctl ffmpeg ffprobe; do mount --bind "$1/$t" "/usr/bin/$t"; done || exit 1
     exec python3 -c "$3"' sh "$rb" "$(id -u)" "$reaper" >/dev/null 2>&1 & local urc=$!
   local lrc="" i; for i in $(seq 300); do lrc=$(pgrep -P "$urc" -x python3) && break; sleep 0.1; done
@@ -5809,7 +5851,7 @@ r up \$O up $P-jm
 r pwd \$O run -b $P-jm -- sh -c 'pwd; cat README'
 r leak leak $P-jm
 r empty \$O run -b $P-jm -- sh -c 'for f in .env .ai-jail cfg/key envlink keylink; do printf "%s:%s " "\$f" "\$(wc -c < "\$f")"; done; ls -A secrets | wc -l'
-r unmount \$O run -b $P-jm -- sh -c 'umount "$H/.env" 2>&1; unshare -Urm sh -c "umount $H/.env 2>&1 || echo refused; cat $H/.env" || echo no-unshare'
+r unmount \$O run -b $P-jm -- sh -c 'umount "$H/.env" 2>&1; unshare -Urm --propagation slave sh -c "umount $H/.env 2>&1 || echo refused; cat $H/.env" || echo no-unshare'
 r renamed sh -c 'mv "$H/cfg" "$H/cfg2" && $CLI run -b $P-jm -- cat "$H/cfg2/key"'
 r leak2 leak $P-jm
 r seedenv \$O up $P-js --seed "$H/.env:.config/leak"
@@ -6279,7 +6321,7 @@ t_unit_agent_session() {
   # process in a pid namespace of its own), dead without. In $TMP: no repo. `path` says the box chosen.
   local sr=$TMP/rt-sess sid=5cc72cdc b sb="" i
   for b in "$P-r-$sid" "$P-q-$sid" "$P-r-0000beef"; do mkdir -p "$sr/omabox/$b"; echo '{}' > "$sr/omabox/$b/box.json"; done
-  unshare -Urpf --mount-proc sleep 300 >/dev/null 2>&1 & local su=$!
+  unshare -Urpf --mount-proc --propagation slave sleep 300 >/dev/null 2>&1 & local su=$!
   for i in $(seq 100); do
     sb=$(pgrep -P "$su") && [ "$(readlink "/proc/$sb/ns/pid")" != "$(readlink /proc/self/ns/pid)" ] && break
     sb=""; sleep 0.1
@@ -7196,7 +7238,7 @@ protect_ports_nft() {
   local h=$1 B=$P-protnft fake=$TMP/protnft out rc t0 t
   # with_nft FILE CMD...: CMD with FILE as /usr/bin/nft
   with_nft() {
-    unshare -Urm sh -c 'f=$1 u=$2 g=$3; shift 3; mount --bind "$f" /usr/bin/nft && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
+    unshare -Urm --propagation slave sh -c 'f=$1 u=$2 g=$3; shift 3; mount --bind "$f" /usr/bin/nft && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
       _ "$1" "$(id -u)" "$(id -g)" "${@:2}"
   }
   if ! with_nft /dev/null true 2>/dev/null; then skip "a missing or failing nft (#364)" "no user namespace of the test's own here"; return; fi
@@ -9833,11 +9875,11 @@ aq_symbol_checks() {
 aq_up_gate() {
   local d=$1 dir=$2 so=$3 refused=$4 rt=$1/up-$2 out
   [ -e "/usr/lib/$so" ] || { skip "...up itself on the $dir system's aquamarine" "no /usr/lib/$so here"; return; }
-  unshare -r -m true 2>/dev/null || { skip "...up itself on the $dir system's aquamarine" "no user namespaces here"; return; }
+  unshare -r -m --propagation slave true 2>/dev/null || { skip "...up itself on the $dir system's aquamarine" "no user namespaces here"; return; }
   mkdir -p "$rt/run/omabox" "$d/up-home/.local/state/omarchy/current/theme"; chmod 700 "$rt/run"
   echo 99999999999 > "$rt/run/omabox/.down-$P-aqs"
   # shellcheck disable=SC2016 # expanded by the namespace's shell
-  out=$(unshare -r -m bash -c '
+  out=$(unshare -r -m --propagation slave bash -c '
     gt=$1/gt; mount --bind "$gt/dev/dri" /dev/dri && mount --bind "$gt/sys/class/drm" /sys/class/drm &&
       mount --bind "$(readlink -f "$1/$2/$3")" "/usr/lib/$3" || exit 99
     env HOME="$1/up-home" XDG_RUNTIME_DIR="$4" XDG_CACHE_HOME="$1/up-home/.cache" XDG_STATE_HOME="$1/up-home/.local/state" OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=/dev/dri/renderD129 "$5" up "$6"
@@ -12391,7 +12433,7 @@ t_which() {
   check_eq "which: the box shell's host pid gives the box, exit 0" "$B 0" "$out $rc"
   check_eq "...what run starts in it carries the name too" "$B" "$(ob run -b "$B" -- sh -c 'echo "$OMABOX_BOX"')"
   # A pid namespace of its own inside the box (Chromium's sandbox, a nested box): its ancestor's.
-  ob run -b "$B" -d -q -- unshare -Urpf --mount-proc sleep 61.72 >/dev/null 2>&1
+  ob run -b "$B" -d -q -- unshare -Urpf --mount-proc --propagation slave sleep 61.72 >/dev/null 2>&1
   check "...a process in a pid namespace of its own in the box" until_ok 5 pgrep -fx 'sleep 61.72'
   p=$(pgrep -fx 'sleep 61.72' | head -1)
   check_eq "...is in the box, by its ancestors" "$B" "$(ob which "${p:-0}" 2>/dev/null)"
@@ -16223,8 +16265,8 @@ gpu_release_cases() {
   # live NAME JSON [HOLD]: box NAME up on a stand-in (holding HOLD open), box.json JSON plus its pidns
   live() {
     local u p="" i
-    if [ -n "${3:-}" ]; then u=$(unshare -Urpf --mount-proc sh -c 'exec 3<"$0"; exec sleep 600' "$3" >/dev/null 2>&1 & echo $!)
-    else u=$(unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & echo $!); fi
+    if [ -n "${3:-}" ]; then u=$(unshare -Urpf --mount-proc --propagation slave sh -c 'exec 3<"$0"; exec sleep 600' "$3" >/dev/null 2>&1 & echo $!)
+    else u=$(unshare -Urpf --mount-proc --propagation slave sleep 600 >/dev/null 2>&1 & echo $!); fi
     echo "$u" >> "$rt/pids"
     for i in $(seq 100); do p=$(pgrep -P "$u") && [ -n "$p" ] && { [ -z "${3:-}" ] || readlink "/proc/$p/fd/3" >/dev/null 2>&1; } && break; sleep 0.05; done
     mkdir -p "$bx/$1/home" "$bx/$1/run"
@@ -16253,7 +16295,7 @@ gpu_release_cases() {
   # An `up` in progress (its lock held, no box.json yet) is waited for (finding 237): here box f's up
   # writes its box.json, on that GPU, and lets go of the lock a second on.
   local fu fp
-  fu=$(unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & echo $!); echo "$fu" >> "$rt/pids"
+  fu=$(unshare -Urpf --mount-proc --propagation slave sleep 600 >/dev/null 2>&1 & echo $!); echo "$fu" >> "$rt/pids"
   for b in $(seq 100); do fp=$(pgrep -P "$fu") && [ -n "$fp" ] && break; sleep 0.05; done
   : > "$bx/.lock-f"
   flock "$bx/.lock-f" bash -c "sleep 1; mkdir -p '$bx/f/home' '$bx/f/run'
@@ -17883,7 +17925,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
-  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
+  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
