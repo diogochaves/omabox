@@ -11033,6 +11033,28 @@ from them.
     O_NOCTTY), at most 1 MiB (a plugin's manifest, a .git file, a commondir); a bigger one is
     refused. Test: jailpath.rs's read_opens_nothing_outside_and_is_bounded (inotify sees no open of
     the file outside nor of a FIFO inside; 1 MiB read, a byte more refused).
+579. **A down from another pid namespace did not cancel an up made just before it** (2026-10-31,
+    #404, left from #380 and finding 513). In a tie (one 10 ms tick), finding 513 orders a down and an
+    up by their pids, which holds only in one pid namespace; a down of another one fell back to the
+    calls' wall-clock times, which is the fault 513 fixed: an up made first but slower to its first
+    line than the whole down read as started after it, and its box survived the down. With the up 6
+    ms busy before its exec and the down in `unshare -Upf --mount-proc`, 6 in 6 at 24d53d6. (The
+    issue's case, the user's down against a jailed agent's up, is not one: a jailed caller's commands
+    run in the broker, a child of the user's systemd, in the user's pid namespace, so 513's pid order
+    already decides it.) **Fix** (Rust): the down's marker line gets two more fields, CLOCK_BOOTTIME in
+    µs as it writes the marker and the time namespace it read it in (`... CALL_US BOOT_US
+    time:[NS]`); the up takes, first thing in main, when it was made at the latest
+    (procfs::made_us: CLOCK_BOOTTIME less its thread's CPU time, CLOCK_THREAD_CPUTIME_ID, and its
+    wait for a CPU, schedstat's run_delay, both counted from the fork; a sleep, a read from disk, is
+    the only thing left out, and it makes the time later, never earlier). Of another pid namespace
+    and the same time namespace, the down came when the up was made by then. CLOCK_BOOTTIME is one
+    clock for all pid namespaces and no wall-clock step moves it. Measured: 10 cancels in 10; `down
+    B` (other namespace) then `up B`, 7 of 8 in one tick: 8 boxes up in 8. Left: a marker of the
+    start alone (a bash down's, an omabox older than 1.0) is still read against its mtime, the
+    issue's case 2, until 0.x relays are no longer expected (Diogo's call). An older 1.0.x up reads
+    the first four fields only. Tests: t_race ("a down of another pid namespace while its up starts",
+    fails at 24d53d6), up.rs's a_down_of_another_pid_namespace_by_boot_time, down_lines,
+    made_us_is_before_now_and_after_boot.
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one

@@ -133,6 +133,46 @@ pub fn last_pid() -> Option<i64> {
     shell::dec(last)
 }
 
+/// `readlink /proc/self/ns/time`: the time namespace CLOCK_BOOTTIME is read in (#404).
+pub fn timens() -> Option<Vec<u8>> {
+    std::fs::read_link("/proc/self/ns/time")
+        .ok()
+        .map(|p| shell::bytes(&p).to_vec())
+        .filter(|n| !n.is_empty() && !n.contains(&b' '))
+}
+
+fn clock_us(clock: libc::clockid_t) -> Option<i64> {
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime writes the timespec it is given.
+    if unsafe { libc::clock_gettime(clock, &raw mut t) } != 0 {
+        return None;
+    }
+    Some(t.tv_sec * 1_000_000 + t.tv_nsec / 1000)
+}
+
+/// CLOCK_BOOTTIME now, in µs: one clock for every pid namespace (a time namespace's offset aside).
+pub fn boot_us() -> Option<i64> {
+    clock_us(libc::CLOCK_BOOTTIME)
+}
+
+/// When this process was made, in µs of CLOCK_BOOTTIME, at the latest (#404): now less the time its
+/// thread has spent on a CPU (CLOCK_THREAD_CPUTIME_ID) and waiting for one (schedstat's run_delay)
+/// since its fork. Only a sleep (a read from disk) is left out, which makes it later, never earlier.
+/// Its start in /proc/PID/stat is in 10 ms ticks; this tells two starts in one tick apart across pid
+/// namespaces, where the pids' order cannot. Read first thing, before anything that may sleep.
+pub fn made_us() -> Option<i64> {
+    let now = boot_us()?;
+    let cpu = clock_us(libc::CLOCK_THREAD_CPUTIME_ID)?;
+    let wait = std::fs::read("/proc/thread-self/schedstat")
+        .ok()
+        .and_then(|s| shell::words(&s).get(1).and_then(|w| shell::dec(w)))
+        .map_or(0, |ns| ns / 1000);
+    Some(now - cpu - wait)
+}
+
 /// /proc/sys/kernel/pid_max: where pids wrap (the most a 64-bit kernel allows when it cannot be read).
 pub fn pid_max() -> i64 {
     read(b"sys", "kernel/pid_max")

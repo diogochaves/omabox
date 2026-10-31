@@ -9058,6 +9058,30 @@ t_race() {
   check "...nothing of it running" until_ok 5 none_running "$C"
   check "a down before an up does not cancel it" ob up "$C" --no-shell
   check "...down" ob down "$C"
+  # A down from another pid namespace (#404): its pids say nothing of the up's, and an up made first
+  # but 6 ms slower to its first line (busy, not asleep) than the whole down was taken for one made
+  # after it by the calls' times: the box stayed up (at 24d53d6, 6 in 6). Three goes, each in one
+  # 10 ms tick or not; either way the up must not outlast the down.
+  local i e
+  # shellcheck disable=SC2329 # run in the background below
+  spin_up() { e=$((${EPOCHREALTIME//[!0-9]/} + 6000)); while ((${EPOCHREALTIME//[!0-9]/} < e)); do :; done; exec "$CLI" up "$1" --no-shell; }
+  for i in 1 2 3; do
+    C=$P-race3$i
+    spin_up "$C" > "$TMP/race-up" 2>&1 & a=$!
+    unshare -Upf --map-current-user --mount-proc "$CLI" down "$C" >/dev/null 2>&1
+    rc=0; wait "$a" || rc=$?
+    if [ "$rc" = 0 ]; then
+      check_eq "a down of another pid namespace while its up starts ($i): the box is gone" "" "$(ob ls --json | jq -r --arg n "$C" '.[] | select(.name == $n) | .name')"
+    else
+      check_match "a down of another pid namespace while its up starts ($i): the up says it was cancelled" "cancelled: omabox down $C came while it was starting" "$(cat "$TMP/race-up")"
+    fi
+    ob down "$C" >/dev/null 2>&1
+  done
+  # ...and one before an up, in the same tick or the next, does not cancel it.
+  C=$P-race4
+  unshare -Upf --map-current-user --mount-proc "$CLI" down "$C" >/dev/null 2>&1
+  check "a down of another pid namespace before an up does not cancel it" ob up "$C" --no-shell
+  check "...down" ob down "$C"
 }
 
 # A failed `up` does not leave a box running unseen (finding 63): the box is killed, its dir kept for

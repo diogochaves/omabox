@@ -990,6 +990,8 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
         pidns: procfs::pidns(b"self"),
         call_us: num(&crate::call_us()),
         pid_max: procfs::pid_max(),
+        made_us: crate::made_us(),
+        timens: procfs::timens(),
     };
     if let (true, Some(d), Some(t0)) = (mine, DownLine::read(&dline), num(&u.t0))
         && down_came(&d, t0, &me, marker_us(&mpath))
@@ -1036,13 +1038,16 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
 
 /// A down marker's first line (down.rs's down_mark): its start in clock ticks, then, from a Rust
 /// down (finding 513), the pid its pid namespace made last as it wrote the marker, that namespace
-/// and its CALL_US. Bash's down writes the start alone.
+/// and its CALL_US, and (#404) CLOCK_BOOTTIME in µs as it wrote the marker and the time namespace
+/// that was read in. Bash's down writes the start alone.
 #[derive(Debug, Default, PartialEq)]
 struct DownLine {
     dt: i64,
     last_pid: Option<i64>,
     pidns: Option<Vec<u8>>,
     call_us: Option<i64>,
+    boot_us: Option<i64>,
+    timens: Option<Vec<u8>>,
 }
 
 impl DownLine {
@@ -1056,17 +1061,22 @@ impl DownLine {
             last_pid: field(1).and_then(|v| num(v)),
             pidns: field(2).cloned(),
             call_us: field(3).and_then(|v| num(v)),
+            boot_us: field(4).and_then(|v| num(v)),
+            timens: field(5).cloned(),
         })
     }
 }
 
-/// This up, as down_came compares it with a down: its pid, pid namespace and CALL_US, and where its
-/// namespace's pids wrap.
+/// This up, as down_came compares it with a down: its pid, pid namespace and CALL_US, where its
+/// namespace's pids wrap, and when it was made at the latest (CLOCK_BOOTTIME, µs, procfs::made_us)
+/// in which time namespace.
 struct UpSelf {
     pid: i64,
     pidns: Option<Vec<u8>>,
     call_us: Option<i64>,
     pid_max: i64,
+    made_us: Option<i64>,
+    timens: Option<Vec<u8>>,
 }
 
 /// Whether the down whose marker is D came while an up started at tick T0 was starting (finding
@@ -1077,9 +1087,13 @@ struct UpSelf {
 /// That is the order itself, where the times compared before were each taken a while after a
 /// process began: an up started first but slower to its first line than a whole down (a few ms) was
 /// taken for one started after it, and `up B & down B` left the box up 14 times in 15 (finding
-/// 513, #380). A down of another pid namespace (the user's, for a jailed up) is compared by the
-/// calls' times, like with like; one from bash (its start alone) by when its marker was written
-/// against this call's time; with none of them, it came (bash's `dt >= t0`).
+/// 513, #380). A down of another pid namespace (one run in a container of its own: a jailed
+/// caller's commands run in the broker's, the user's) has pids of another order: this up came
+/// first if it was made, at the latest (procfs::made_us), by the time on CLOCK_BOOTTIME the down
+/// wrote its marker at, read in the same time namespace (#404; the calls' times compared before
+/// were the fault above, and a wall-clock step could flip them). Without those, the calls' times;
+/// one from bash (its start alone) by when its marker was written against this call's time; with
+/// none of them, it came (bash's `dt >= t0`).
 fn down_came(d: &DownLine, t0: i64, me: &UpSelf, marker_us: Option<i64>) -> bool {
     match d.dt.cmp(&t0) {
         std::cmp::Ordering::Greater => true,
@@ -1090,6 +1104,12 @@ fn down_came(d: &DownLine, t0: i64, me: &UpSelf, marker_us: Option<i64>) -> bool
             {
                 let max = me.pid_max.max(2);
                 return (last - me.pid).rem_euclid(max) < max / 2;
+            }
+            if let (Some(db), Some(dtn), Some(made), Some(tn)) =
+                (d.boot_us, &d.timens, me.made_us, &me.timens)
+                && dtn == tn
+            {
+                return made <= db;
             }
             match (d.call_us, marker_us, me.call_us) {
                 (Some(dc), _, Some(c)) => dc >= c,
@@ -1679,6 +1699,8 @@ mod tests {
             pidns: Some(b"pid:[1]".to_vec()),
             call_us: call,
             pid_max: 4_194_304,
+            made_us: Some(5),
+            timens: Some(b"time:[1]".to_vec()),
         };
         assert!(down_came(&bash(11), 10, &me(500, None), None));
         assert!(!down_came(&bash(9), 10, &me(500, Some(1)), Some(5)));
@@ -1696,12 +1718,15 @@ mod tests {
             last_pid: Some(last),
             pidns: Some(b"pid:[1]".to_vec()),
             call_us: Some(900),
+            ..DownLine::default()
         };
         let me = |pid, ns: &[u8]| UpSelf {
             pid,
             pidns: Some(ns.to_vec()),
             call_us: Some(1000),
             pid_max: 4_194_304,
+            made_us: Some(5),
+            timens: Some(b"time:[1]".to_vec()),
         };
         // `up B & down B`: the up made first, slower to its first line than the whole down: it came
         // (its call and its marker both before the up's call, which said otherwise)
@@ -1712,7 +1737,7 @@ mod tests {
         // pids that wrapped between the two
         assert!(down_came(&ours(3), 10, &me(4_194_300, b"pid:[1]"), None));
         assert!(!down_came(&ours(4_194_300), 10, &me(3, b"pid:[1]"), None));
-        // another pid namespace's (the user's, for a jailed up): the calls' times, like with like
+        // another pid namespace's, from a down with no boot time: the calls' times, like with like
         assert!(!down_came(&ours(510), 10, &me(500, b"pid:[2]"), Some(2000)));
         let later = DownLine {
             call_us: Some(1000),
@@ -1726,6 +1751,71 @@ mod tests {
             &me(500, b"pid:[1]"),
             None
         ));
+    }
+
+    /// #404: a down of another pid namespace, in a tie, by CLOCK_BOOTTIME: when this up was made at
+    /// the latest against when the down wrote its marker, whatever the calls' times say.
+    #[test]
+    fn a_down_of_another_pid_namespace_by_boot_time() {
+        let theirs = |boot, tns: &[u8]| DownLine {
+            dt: 10,
+            last_pid: Some(3),
+            pidns: Some(b"pid:[2]".to_vec()),
+            call_us: Some(900),
+            boot_us: Some(boot),
+            timens: Some(tns.to_vec()),
+        };
+        let me = |made| UpSelf {
+            pid: 500,
+            pidns: Some(b"pid:[1]".to_vec()),
+            call_us: Some(1000),
+            pid_max: 4_194_304,
+            made_us: made,
+            timens: Some(b"time:[1]".to_vec()),
+        };
+        // an up made first, slower to its first line than the down to its marker: it came (the
+        // calls' times, 900 before 1000, said it was over)
+        assert!(down_came(
+            &theirs(7000, b"time:[1]"),
+            10,
+            &me(Some(6000)),
+            None
+        ));
+        assert!(down_came(
+            &theirs(7000, b"time:[1]"),
+            10,
+            &me(Some(7000)),
+            None
+        ));
+        // `down B; up B`: the up made after the marker: it did not
+        assert!(!down_came(
+            &theirs(7000, b"time:[1]"),
+            10,
+            &me(Some(7001)),
+            None
+        ));
+        // another time namespace (another offset), or no made time: the calls' times
+        assert!(!down_came(
+            &theirs(7000, b"time:[2]"),
+            10,
+            &me(Some(6000)),
+            None
+        ));
+        assert!(!down_came(&theirs(7000, b"time:[1]"), 10, &me(None), None));
+        // the same pid namespace still goes by the pids' order
+        let same = DownLine {
+            pidns: Some(b"pid:[1]".to_vec()),
+            last_pid: Some(499),
+            ..theirs(7000, b"time:[1]")
+        };
+        assert!(!down_came(&same, 10, &me(Some(6000)), None));
+    }
+
+    #[test]
+    fn made_us_is_before_now_and_after_boot() {
+        let made = crate::procfs::made_us().expect("CLOCK_BOOTTIME");
+        let now = crate::procfs::boot_us().expect("CLOCK_BOOTTIME");
+        assert!(made > 0 && made <= now, "{made} {now}");
     }
 
     #[test]
@@ -1744,6 +1834,20 @@ mod tests {
                 last_pid: Some(456),
                 pidns: Some(b"pid:[4026531836]".to_vec()),
                 call_us: Some(1_792_884_909_460_285),
+                ..DownLine::default()
+            })
+        );
+        assert_eq!(
+            DownLine::read(
+                b"123 456 pid:[4026531836] 1792884909460285 640123456789 time:[4026531834]"
+            ),
+            Some(DownLine {
+                dt: 123,
+                last_pid: Some(456),
+                pidns: Some(b"pid:[4026531836]".to_vec()),
+                call_us: Some(1_792_884_909_460_285),
+                boot_us: Some(640_123_456_789),
+                timens: Some(b"time:[4026531834]".to_vec()),
             })
         );
         assert_eq!(

@@ -64,10 +64,14 @@ use std::process::ExitCode;
 
 /// When this omabox was called, in µs (bash's CALL_US, taken before anything else).
 static CALL_US: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+/// When this process was made, at the latest, in µs of CLOCK_BOOTTIME (procfs::made_us): taken
+/// first, before anything that may sleep (#404).
+static MADE_US: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
 
 type Run = fn(&mut exit::Ctx, &[Vec<u8>]) -> exit::Res<()>;
 
 fn main() -> ExitCode {
+    let _ = MADE_US.set(procfs::made_us());
     // As bash: a write to a closed pipe ends the command (Rust ignores SIGPIPE), unless SIGPIPE came
     // ignored: bash keeps it so, for itself and what it runs (sig::command gives the children it
     // back: std's spawn resets it). No setlocale: text is UTF-8 and lists byte order in every locale
@@ -251,6 +255,11 @@ fn find_root() -> PathBuf {
 
 pub fn root() -> PathBuf {
     ROOT.get_or_init(find_root).clone()
+}
+
+/// MADE_US: when this process was made, at the latest, in µs of CLOCK_BOOTTIME.
+pub fn made_us() -> Option<i64> {
+    *MADE_US.get_or_init(procfs::made_us)
 }
 
 /// CALL_US: when this omabox was called, in µs.

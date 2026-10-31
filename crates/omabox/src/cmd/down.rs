@@ -202,8 +202,10 @@ fn down_one_with<S: BoxSys + ?Sized>(
 ///
 /// After the start, on its line, what an up started in the same tick tells the order by (finding
 /// 513): the pid its pid namespace made last as the marker is written, that namespace, and this
-/// call's time (CALL_US), each `-` when it cannot be told. Bash's up reads a marker of one number
-/// only, so it takes these for none (a bash up is a fallback's, with a bash down).
+/// call's time (CALL_US); then, for an up of another pid namespace, CLOCK_BOOTTIME in µs as the
+/// marker is written and the time namespace it was read in (#404); each `-` when it cannot be told.
+/// Bash's up reads a marker of one number only, so it takes these for none (a bash up is a
+/// fallback's, with a bash down).
 fn down_mark<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, cond: &DownIf) {
     if cond.created.is_none() {
         let me = std::process::id().to_string().into_bytes();
@@ -211,16 +213,22 @@ fn down_mark<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, cond: &DownIf) {
         // (a jail's never takes the place of the user's own, which cancels any up)
         let users = in_jail() && std::fs::read(&mark).is_ok_and(|m| user_marker(&m));
         if let (Some(start), false) = (sys.proc_start(&me), users) {
+            let dash = || b"-".to_vec();
             let last = crate::procfs::last_pid().map(|n| n.to_string().into_bytes());
+            let boot = crate::procfs::boot_us().map(|n| n.to_string().into_bytes());
             let ns = crate::procfs::pidns(b"self").filter(|n| !n.is_empty() && !n.contains(&b' '));
             let mut v = cat!(
                 start,
                 " ",
-                last.unwrap_or_else(|| b"-".to_vec()),
+                last.unwrap_or_else(dash),
                 " ",
-                ns.unwrap_or_else(|| b"-".to_vec()),
+                ns.unwrap_or_else(dash),
                 " ",
                 crate::call_us(),
+                " ",
+                boot.unwrap_or_else(dash),
+                " ",
+                crate::procfs::timens().unwrap_or_else(dash),
                 "\n"
             );
             if in_jail() {
