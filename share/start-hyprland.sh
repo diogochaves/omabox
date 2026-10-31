@@ -35,6 +35,15 @@ fi
 # read-only install's 0444, and a write to the copy in the box was refused (finding 528).
 cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua
 cat /opt/omabox/share/hyprland.lua > "$cfg.new" && mv -f "$cfg.new" "$cfg"
+# The version this Hyprland is, as a desk's HOME has it after its first session (finding 626): with
+# none, the box's Hyprland wrote 0.0.0, and the next Hyprland started in the box (a test's nested
+# compositor, one run by hand) took itself for an upgrade and opened Hyprland's update news over its
+# first frames. A HOME that has the file (a save's) keeps its own.
+seen=${XDG_DATA_HOME:-$HOME/.local/share}/hyprland/lastVersion
+if [ ! -e "$seen" ]; then
+  ver=$("${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --version 2>/dev/null | sed -n '1s/^Hyprland \([0-9][0-9.]*\) .*/\1/p') || ver=""
+  [ -z "$ver" ] || { mkdir -p "${seen%/*}" && printf '%s' "$ver" > "$seen"; } || true
+fi
 exec env -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u WLR_SCENE_DISABLE_VISIBILITY -u DISPLAY -u OMABOX_HYPRLAND \
   OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
   "${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --config "$cfg"
