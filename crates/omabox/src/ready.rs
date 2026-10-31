@@ -392,11 +392,110 @@ pub fn box_held(ctx: &Ctx, pid: &[u8]) -> bool {
         && crate::exit::contains(&strip_nl(&sc), b" 0x4 ")
 }
 
-/// died_starting COVERS: a box that ended while up waited for it, said with Hyprland's last line
-/// when it logged one (finding 95), else why share/session.sh ended it (finding 245), else bwrap's
-/// own refusal (a jailed caller's cover, COVERS: #210).
+/// What a VM's render node needs for a box (install.sh says the same, finding 538).
+const VIRGL_HINT: &[u8] = b"in a VM, virtio-gpu with virgl (QEMU's virtio-vga-gl, libvirt's accel3d with an OpenGL display)";
+
+/// render_why (#396, finding 568): why a headless box's labwc could not render on its GPU, from the
+/// head of its log, else empty. wlroots refuses a render node whose EGL device is software (a VM's
+/// virtio-gpu without virgl: "Software rendering detected"), or finds no EGL on it ("Could not
+/// initialize EGL", from its GLES2 renderer); either way labwc goes on with pixman, which offers no
+/// dmabuf, and the box's Hyprland aborts (CBackend::create() failed!), its line only in labwc.log.
+fn render_why(ctx: &Ctx) -> Vec<u8> {
+    let Some(f) = box_home_file(&ctx.d, "labwc.log") else {
+        return Vec::new();
+    };
+    let mut log = Vec::new();
+    if let Ok(fh) = std::fs::File::open(f) {
+        use std::io::Read;
+        let _ = fh.take(256 * 1024).read_to_end(&mut log);
+    }
+    let bj: serde_json::Value = std::fs::read(ctx.at("box.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let field = |k: &str| {
+        bj.pointer(&format!("/render/{k}"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .as_bytes()
+            .to_vec()
+    };
+    let (node, driver) = (field("node"), field("driver"));
+    if !crate::exit::contains(&log, b"Software rendering detected")
+        && !crate::exit::contains(&log, b"Could not initialize EGL")
+    {
+        return Vec::new();
+    }
+    let other = if driver.is_empty() {
+        Vec::new()
+    } else {
+        crate::shots::other_gpu(&driver)
+    };
+    render_why_from(&log, &node, &driver, &other)
+}
+
+/// render_why on labwc's LOG, the box's render NODE and its DRIVER, and OTHER as other_gpu gives it
+/// (`renderD129 nvidia`, or empty): what to say, or empty when LOG says neither failure.
+fn render_why_from(log: &[u8], node: &[u8], driver: &[u8], other: &[u8]) -> Vec<u8> {
+    let node: &[u8] = if node.is_empty() {
+        b"its render node"
+    } else {
+        node
+    };
+    let lines = || log.split(|&c| c == b'\n');
+    let mut m = if lines().any(|l| crate::exit::contains(l, b"Software rendering detected")) {
+        cat!(
+            "a box needs GPU rendering: ",
+            node,
+            " renders in software only (no 3D acceleration)"
+        )
+    } else if lines().any(|l| {
+        crate::exit::contains(l, b"[render/gles2/")
+            && crate::exit::contains(l, b"Could not initialize EGL")
+    }) {
+        // EGL's own reason: the first `message: "..."` of an [EGL] line.
+        let egl = lines()
+            .filter(|l| crate::exit::contains(l, b"[EGL]"))
+            .find_map(|l| {
+                let i = l.windows(10).position(|w| w == b"message: \"")? + 10;
+                let t = &l[i..];
+                let j = t.iter().rposition(|&c| c == b'"')?;
+                Some(shell::cut_line(&t[..j], 200).to_vec())
+            })
+            .filter(|s| !s.is_empty());
+        let mut m = cat!("a box needs GPU rendering: labwc found no EGL on ", node);
+        if let Some(e) = egl {
+            m.extend(cat!(" (EGL: ", e, ")"));
+        }
+        m
+    } else {
+        return Vec::new();
+    };
+    if driver == b"virtio_gpu" {
+        m.extend(cat!("; ", VIRGL_HINT));
+    }
+    if !other.is_empty() {
+        let n = other.split(|&c| c == b' ').next().unwrap_or_default();
+        m.extend(cat!(
+            "; a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/",
+            n,
+            " omabox up --new (",
+            n,
+            " is ",
+            after_space(other),
+            ")"
+        ));
+    }
+    m
+}
+
+/// died_starting COVERS: a box that ended while up waited for it, said with why its labwc could not
+/// render when it logged that (#396), else Hyprland's last line when it logged one (finding 95),
+/// else why share/session.sh ended it (finding 245), else bwrap's own refusal (a jailed caller's
+/// cover, COVERS: #210).
 pub fn died_starting(ctx: &Ctx, covers: bool) -> Exit {
     let mut why = Vec::new();
+    let render = render_why(ctx);
     let last = box_home_file(&ctx.d, "hyprland.log")
         .and_then(|f| std::fs::read(f).ok())
         .map(|t| last_line(&t))
@@ -412,7 +511,9 @@ pub fn died_starting(ctx: &Ctx, covers: bool) -> Exit {
         .find(|l| l.starts_with(b"bwrap: "))
         .map(|l| shell::cut_line(l, 300))
         .filter(|s| !s.is_empty());
-    if !last.is_empty() {
+    if !render.is_empty() {
+        why = cat!(" (", render, ")");
+    } else if !last.is_empty() {
         why = cat!(" (Hyprland: ", last, ")");
     } else if let Some(s) = sess {
         why = cat!(" (", s.strip_prefix(b"session.sh: ").unwrap_or(s), ")");
@@ -465,10 +566,18 @@ fn wait_hyprland_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, r: &Ready) -> Res<
     {
         starting_ok_with(sys, ctx, r)?;
         if past(deadline) {
+            let render = render_why(ctx);
+            let why = if render.is_empty() {
+                Vec::new()
+            } else {
+                cat!(" (", render, ")")
+            };
             return Err(ctx.die(cat!(
                 "Hyprland not up after ",
                 t.to_string(),
-                "s; logs: ",
+                "s",
+                why,
+                "; logs: ",
                 ctx.d,
                 "/home/*.log"
             )));
@@ -1394,6 +1503,110 @@ mod tests {
         assert!(
             t0.elapsed() <= Duration::from_secs(3),
             "...at once, not at the deadline"
+        );
+    }
+
+    /// labwc's log on a render node that renders in software only (#396: a VM's virtio-gpu without
+    /// virgl; these lines from a box whose Mesa GBM was forced to software): wlroots refuses the
+    /// software EGL device, labwc goes on with pixman, and the box's Hyprland aborts.
+    const LABWC_SOFT: &[u8] = b"00:00:00.167 [ERROR] [render/egl.c:334] Software rendering detected, please use the WLR_RENDERER_ALLOW_SOFTWARE environment variable to proceed\n00:00:00.167 [ERROR] [render/egl.c:611] Failed to initialize EGL context\n00:00:00.167 [ERROR] [render/gles2/renderer.c:499] Could not initialize EGL\nWelcome to Hyprland!\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  CBackend::create() failed!\n00:00:00.237 [ERROR] [../labwc/src/server.c:207] spawned child 60 terminated with signal 6 (Aborted)\n";
+    /// ...and as an EGL that does not initialise on the node does (Mesa's EGL alone on an NVIDIA
+    /// GPU, whose GBM is NVIDIA's).
+    const LABWC_NO_EGL: &[u8] = b"00:00:00.150 [ERROR] [EGL] command: eglInitialize, error: EGL_NOT_INITIALIZED (0x3001), message: \"DRI2: gbm device using incorrect/incompatible backend\"\n00:00:00.150 [ERROR] [EGL] command: eglInitialize, error: EGL_NOT_INITIALIZED (0x3001), message: \"eglInitialize\"\n00:00:00.150 [ERROR] [render/egl.c:269] Failed to initialize EGL\n00:00:00.150 [ERROR] [render/gles2/renderer.c:499] Could not initialize EGL\n00:00:00.189 [ERROR] [render/vulkan/renderer.c:2608] Could not match drm and vulkan device\n  what():  CBackend::create() failed!\n";
+
+    /// t_unit_up_software (#396, finding 568): a box that died because its labwc could not render
+    /// says so, with the node, not only "died while starting".
+    #[test]
+    fn died_starting_says_a_software_render_node() {
+        let ctx = uctx("sw");
+        let home = cat!(ctx.d, "/home");
+        std::fs::create_dir_all(shell::path(&home)).unwrap();
+        std::fs::write(shell::path(&cat!(home, "/labwc.log")), LABWC_SOFT).unwrap();
+        std::fs::write(
+            ctx.at("box.json"),
+            r#"{"render":{"node":"/dev/dri/renderD128","driver":"virtio_gpu"}}"#,
+        )
+        .unwrap();
+        let (e, said) = crate::exit::heard(|| died_starting(&ctx, false));
+        assert_eq!(e, Exit(1));
+        let want = "omabox: box 'u' died while starting (a box needs GPU rendering: /dev/dri/renderD128 renders in software only (no 3D acceleration); in a VM, virtio-gpu with virgl (QEMU's virtio-vga-gl, libvirt's accel3d with an OpenGL display)";
+        assert!(said.starts_with(want), "the reason and the node: {said}");
+        assert!(
+            said.ends_with(&format!(
+                "); logs: {d}/home/*.log {d}/box.log\n",
+                d = String::from_utf8_lossy(&ctx.d)
+            )),
+            "...and the logs, as before: {said}"
+        );
+        // No labwc.log (an interactive box) or none of the two lines: said as before.
+        std::fs::write(shell::path(&cat!(home, "/labwc.log")), b"hl\n").unwrap();
+        let (_, said) = crate::exit::heard(|| died_starting(&ctx, false));
+        assert!(
+            said.starts_with("omabox: box 'u' died while starting; logs: "),
+            "{said}"
+        );
+        let _ = std::fs::remove_dir_all(shell::path(&ctx.d));
+    }
+
+    /// t_unit_up_software: render_why's words for each log, node and other GPU.
+    #[test]
+    fn render_why_cases() {
+        let s = |v: Vec<u8>| String::from_utf8(v).unwrap();
+        assert_eq!(
+            s(render_why_from(
+                LABWC_SOFT,
+                b"/dev/dri/renderD128",
+                b"virtio_gpu",
+                b""
+            )),
+            format!(
+                "a box needs GPU rendering: /dev/dri/renderD128 renders in software only (no 3D acceleration); {}",
+                String::from_utf8_lossy(VIRGL_HINT)
+            ),
+            "virtio-gpu without virgl, no other GPU"
+        );
+        assert_eq!(
+            s(render_why_from(
+                LABWC_SOFT,
+                b"/dev/dri/renderD128",
+                b"virtio_gpu",
+                b"renderD129 nvidia"
+            )),
+            format!(
+                "a box needs GPU rendering: /dev/dri/renderD128 renders in software only (no 3D acceleration); {}; a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/renderD129 omabox up --new (renderD129 is nvidia)",
+                String::from_utf8_lossy(VIRGL_HINT)
+            ),
+            "...beside a real GPU: that one named"
+        );
+        assert_eq!(
+            s(render_why_from(
+                LABWC_NO_EGL,
+                b"/dev/dri/renderD128",
+                b"amdgpu",
+                b""
+            )),
+            "a box needs GPU rendering: labwc found no EGL on /dev/dri/renderD128 (EGL: DRI2: gbm device using incorrect/incompatible backend)",
+            "no EGL on the node: EGL's first reason, no VM hint on a real GPU"
+        );
+        assert_eq!(
+            s(render_why_from(
+                b"00:00:00.141 [ERROR] [render/egl.c:208] EGL_EXT_platform_base not supported\n00:00:00.141 [ERROR] [render/gles2/renderer.c:499] Could not initialize EGL\n",
+                b"",
+                b"",
+                b""
+            )),
+            "a box needs GPU rendering: labwc found no EGL on its render node",
+            "...no EGL at all (t_up_software's): no EGL message; no node in box.json"
+        );
+        assert_eq!(
+            s(render_why_from(
+                b"[ERROR] [types/wlr_linux_dmabuf_v1.c:1130] Failed to get backend DRM FD\n",
+                b"/dev/dri/renderD128",
+                b"amdgpu",
+                b""
+            )),
+            "",
+            "a box that renders: nothing"
         );
     }
 

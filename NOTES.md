@@ -10922,6 +10922,27 @@ from them.
     still a warning, now "disabled: not in the bar's layout", with the same `putBarWidget` line
     (a plugin without a widget keeps "listed but not enabled"). Test: t_plugin_hosted (a service
     fixture answering on its IPC while it reads loaded; on the old code: both warned).
+568. **up on a GPU that renders only in software said only "died while starting"** (2026-10-31,
+    #396). On a VM's virtio-gpu without virgl (finding 538) wlroots, in labwc, finds the node's EGL
+    device is software and refuses it ("Software rendering detected, please use the
+    WLR_RENDERER_ALLOW_SOFTWARE environment variable"); its GLES2 renderer fails, Vulkan finds no
+    device, and labwc goes on with pixman, which offers no dmabuf: the box's Hyprland (labwc's -S
+    child, its stdout in labwc.log, so no hyprland.log) aborts with `CBackend::create() failed!` and
+    the box ends in under a second. None of died_starting's reasons was there. It now reads the head
+    of labwc.log (256 KiB, through box_home_file) first: that line says "a box needs GPU rendering:
+    NODE renders in software only (no 3D acceleration)"; the GLES2 renderer's "Could not initialize
+    EGL" without it says "labwc found no EGL on NODE (EGL: its first message)". NODE is box.json's
+    render node; on virtio_gpu it adds install.sh's virgl line, and with another GPU here (other_gpu)
+    `OMABOX_RENDER_NODE=… omabox up --new`, as the llvmpipe note does. The same reason goes into
+    "Hyprland not up after Ns" when the box hangs instead (made here: Mesa's GBM forced to software on
+    the RTX, `LIBGL_ALWAYS_SOFTWARE=1 GBM_BACKEND=dri`, where Vulkan comes up and Hyprland waits).
+    Reproduced on this machine without a VM: `--env __EGL_VENDOR_LIBRARY_FILENAMES=/nonexistent.json
+    --env VK_ICD_FILENAMES=/nonexistent.json` fails the same way on any GPU (no EGL, no Vulkan,
+    pixman, the abort). The box is still left dead for its logs (finding 63). Not done: choosing
+    another node up front when `gpu` is auto and the first one is software (a choice for Diogo).
+    Tests: t_unit_up_software (ready.rs died_starting_says_a_software_render_node: the reason, the
+    node, the VM line, the logs, and as before without them; render_why_cases), t_up_software (a real
+    box with no EGL: said, with its node).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

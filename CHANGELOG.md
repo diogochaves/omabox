@@ -92,6 +92,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   nothing as if it never happened. `log hyprland` of a live box now adds the lines past the file's
   end from `hyprctl rollinglog`; when the file is further behind than rollinglog's last 4 KiB reach,
   it says so on stderr ([#328](https://github.com/diogochaves/omabox/issues/328)).
+- **`up` on a GPU a box cannot render on said only "died while starting"**: on a VM's virtio-gpu
+  without virgl the reason was only in `labwc.log`. It now says a box needs GPU rendering and that
+  the node renders in software only (or has no EGL), how to give a VM 3D, and another GPU when the
+  machine has one ([#396](https://github.com/diogochaves/omabox/issues/396)).
 
 ## 1.0.2 — 2026-10-30
 
