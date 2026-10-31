@@ -499,6 +499,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if own.iter().any(|w| *w == b"-b" || *w == b"--box") {
             return Err(ctx.die("shot --after: the action runs on the burst's box (no -b)"));
         }
+        // shot is on the skill's allowed-tools (#338, finding 621): its action reads no host file.
+        if own
+            .iter()
+            .any(|w| *w == b"--env-file" || w.starts_with(b"--env-file="))
+        {
+            return Err(ctx.die(
+                "shot --after: the action takes no --env-file (a host file: start the app with it first, or --env KEY=VAL)",
+            ));
+        }
     } else if !(every.is_none() && !sheet && !bdiff && after.is_empty()) {
         return Err(ctx.die("shot: --every, --sheet, --diff and --after go with --burst N"));
     }

@@ -16919,6 +16919,13 @@ t_unit_pixel() {
   check_match "shot --after: an omabox command that acts" "got ls" "$(ob shot -b "$P-x" --burst 3 --after -- ls 2>&1)"
   check_match "...scroll and monitor are (#167)" "no box '$P-x' is up.*"$'\n'"omabox: no box '$P-x' is up" "$(ob shot -b "$P-x" --burst 3 --after -- scroll 1 1 15 2>&1; ob shot -b "$P-x" --burst 3 --after -- monitor add 800x600 2>&1)"
   check_match "...on the burst's box" "no -b" "$(ob shot -b "$P-x" --burst 3 --after -- keys -b other a 2>&1)"
+  # #338, finding 621: shot is on the skill's allowed-tools, so its action reads no host file.
+  check_match "...whose run takes no --env-file (a host file read: #338)" "takes no --env-file" \
+    "$(ob shot -b "$P-x" --burst 3 --after -- run -d --env-file /dev/null -- true 2>&1)"
+  check_match "...nor --env-file=FILE" "takes no --env-file" \
+    "$(ob shot -b "$P-x" --burst 3 --after -- run --env-file=/dev/null -- true 2>&1)"
+  check_match "...a CMD's own --env-file is CMD's" "no box '$P-x' is up" \
+    "$(ob shot -b "$P-x" --burst 3 --after -- run -d -- app --env-file x 2>&1)"
   check_match "shot --after needs --" "--after -- ACTION" "$(ob shot -b "$P-x" --burst 3 --after keys a 2>&1)"
   # shot --changed (#145, finding 243): what it refuses before any box is asked.
   local a

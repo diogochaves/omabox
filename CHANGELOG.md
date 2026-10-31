@@ -137,6 +137,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   said it was not on the accessibility bus with a reason about egui apps; it now says it is
   Chromium's or Electron's and to start it with the flag
   ([#323](https://github.com/diogochaves/omabox/issues/323)).
+- **`shot --burst --after -- run --env-file FILE` read a host file** into the box command's
+  environment through a shot. The action now refuses `--env-file` (`--env KEY=VAL` still goes),
+  so a pre-approved `shot` reads none of your files
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count
