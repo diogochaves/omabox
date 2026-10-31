@@ -169,6 +169,7 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // have left: an app's database is whole, as after a crash, not torn by a write during the copy.
     let me = std::process::id().to_string();
     let tmp = cat!(saves, "/.new-", save, "-", me);
+    let ns = crate::jobs::box_ns(ctx).unwrap_or_default();
     let Some(pids) = crate::jobs::box_pins_try(ctx) else {
         return Err(ctx.die(cat!(
             "save: cannot read the pid namespace of box '",
@@ -178,7 +179,7 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     };
     // A save SIGKILLed (or killed by the OOM killer) runs no trap: a watch of its own resumes the
     // box then (#369, finding 574). None, no pause.
-    let Some(watch) = start_watch(&pids) else {
+    let Some(watch) = start_watch(&ns, &pids) else {
         return Err(ctx.die(cat!(
             "save: could not start the watch that resumes box '",
             ctx.name,
@@ -298,7 +299,7 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// What a save holds while it copies: the box's processes it stops, and the watch that resumes
 /// them should the save die without letting go (#369).
 struct Hold {
-    pids: Vec<Vec<u8>>,
+    pids: Vec<crate::pidfd::Pidfd>,
     watch: Option<std::process::Child>,
 }
 
@@ -322,13 +323,15 @@ const WATCH_LET_GO: &[u8] = b"x";
 /// What the watch says once it holds the box's processes.
 const WATCH_READY: &[u8] = b"ready\n";
 
-/// `omabox _save-watch PID...` in a session of its own (a kill of the save's process group or
+/// `omabox _save-watch NS PID...` in a session of its own (a kill of the save's process group or
 /// session does not reach it), its stdin a pipe only this save writes (close-on-exec: not cp's).
-/// Started and ready (it holds a pidfd of each of PIDS) before the box is stopped; None when not.
-fn start_watch(pids: &[Vec<u8>]) -> Option<std::process::Child> {
+/// Started and ready (it holds a pidfd of each of PIDS still in the box's pid namespace NS) before
+/// the box is stopped; None when not.
+fn start_watch(ns: &[u8], pids: &[crate::pidfd::Pidfd]) -> Option<std::process::Child> {
     let mut c = crate::sig::command(crate::root().join("bin/omabox"));
     c.arg("_save-watch")
-        .args(pids.iter().map(|p| OsStr::from_bytes(p)))
+        .arg(OsStr::from_bytes(ns))
+        .args(pids.iter().map(|p| OsStr::from_bytes(p.pid())))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -353,8 +356,10 @@ fn start_watch(pids: &[Vec<u8>]) -> Option<std::process::Child> {
     Some(w)
 }
 
-/// `omabox _save-watch PID...` (#369, finding 574): says it is ready once it holds a pidfd of each
-/// of PIDS (the box's processes a save is about to stop), then waits on its stdin. The save writes
+/// `omabox _save-watch NS PID...` (#369, finding 574): says it is ready once it holds a pidfd of
+/// each of PIDS (the box's processes a save is about to stop) that is still in the box's pid
+/// namespace NS once its pidfd is open (#377: not a process that took the pid of one that ended
+/// since the save listed it), then waits on its stdin. The save writes
 /// it a byte once it resumed the box; its stdin closing with nothing written means the save died
 /// without that (SIGKILL, the OOM killer), and the watch resumes them. Through the pidfds: never a
 /// process that took one of their pids since.
@@ -364,14 +369,26 @@ pub fn watch_main(args: &[std::ffi::OsString]) -> std::process::ExitCode {
         // (no pidfd for a reason other than its end: too many fds, say)
         Pid(i32),
     }
+    let ns = args
+        .first()
+        .map(|a| a.as_bytes().to_vec())
+        .unwrap_or_default();
     let held: Vec<Held> = args
         .iter()
+        .skip(1)
         .filter_map(|a| shell::dec(a.as_bytes()).and_then(|n| i32::try_from(n).ok()))
         .filter(|&p| p > 0)
-        .filter_map(|p| match crate::sig::pidfd_open(p) {
-            Some(fd) => Some(Held::Fd(fd)),
-            None if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) => None,
-            None => Some(Held::Pid(p)),
+        .filter_map(|p| {
+            let fd = crate::sig::pidfd_open(p);
+            let gone =
+                fd.is_none() && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            // (read once the pidfd is open, as pidfd::Pidfd::pin does)
+            let boxs = crate::procfs::pidns(p.to_string().as_bytes()).is_some_and(|n| n == ns);
+            match fd {
+                _ if gone || !boxs => None,
+                Some(fd) => Some(Held::Fd(fd)),
+                None => Some(Held::Pid(p)),
+            }
         })
         .collect();
     let mut o = std::io::stdout();

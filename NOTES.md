@@ -10976,10 +10976,11 @@ from them.
     box (SIGSTOP to its pid namespace, finding 470) and lets it go on every way out a trap sees: a
     refusal, a failure, INT, TERM, HUP. A SIGKILL (or the OOM killer) runs none, and the box stayed
     stopped, read as hung by every later call, until someone sent SIGCONT by hand. Now, before it
-    stops the box, the save starts a watch, `omabox _save-watch PID...` (main.rs's first lines, as
+    stops the box, the save starts a watch, `omabox _save-watch NS PID...` (main.rs's first lines, as
     `_enter`; refused through the broker), in a session of its own (setsid: a kill of the save's
     process group or session misses it), its stdin a close-on-exec pipe only the save writes. It
-    takes a pidfd of each of the box's processes, says `ready` (no ready, no save: "could not start
+    takes a pidfd of each of the box's processes (the pids the save pinned, #377, each kept only
+    while it is in the box's pid namespace NS once its pidfd is open), says `ready` (no ready, no save: "could not start
     the watch"), and waits. The save resumes the box, then writes it a byte, and the watch ends; its
     stdin closing with nothing written means the save died without letting go, and the watch sends
     SIGCONT through the pidfds (never to a process that took one of their pids since). Test:
