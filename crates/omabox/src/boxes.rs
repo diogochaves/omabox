@@ -738,6 +738,58 @@ mod tests {
         assert_eq!(last_spawned(b"spawned child x exited with 1"), None);
     }
 
+    // #385: how a box's Hyprland ended, from labwc's line or session.sh's: a signal by its name, one
+    // with no name (32, 33: glibc's own; past RTMAX) by its number, an exit by its status.
+    #[test]
+    fn hypr_end_words() {
+        let base = std::env::temp_dir().join(format!("omabox-hypr-end-{}", std::process::id()));
+        let d = base.join("box");
+        std::fs::create_dir_all(d.join("home")).unwrap();
+        let db = d.as_os_str().as_encoded_bytes();
+        let end = |file: &str, line: &str| {
+            let _ = std::fs::remove_file(d.join("home/labwc.log"));
+            let _ = std::fs::remove_file(d.join("home/hyprland.log"));
+            std::fs::write(d.join("home").join(file), line).unwrap();
+            hypr_end(db)
+        };
+        for (file, line, want) in [
+            (
+                "labwc.log",
+                "x spawned child 12 terminated with signal 11",
+                "crashed (SIGSEGV)",
+            ),
+            (
+                "labwc.log",
+                "spawned child 12 terminated with signal 32",
+                "crashed (signal 32)",
+            ),
+            (
+                "labwc.log",
+                "spawned child 12 terminated with signal 99",
+                "crashed (signal 99)",
+            ),
+            (
+                "labwc.log",
+                "spawned child 9 exited with 3",
+                "exited (status 3)",
+            ),
+            (
+                "hyprland.log",
+                "a\nomabox: Hyprland terminated with signal 33\n",
+                "crashed (signal 33)",
+            ),
+            (
+                "hyprland.log",
+                "omabox: Hyprland terminated with signal 6\n",
+                "crashed (SIGABRT)",
+            ),
+        ] {
+            assert_eq!(end(file, line).as_deref(), Some(want), "{file}: {line:?}");
+        }
+        assert_eq!(end("hyprland.log", "nothing said\n"), None);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
     #[test]
     fn session_line() {
         let t = b"omabox: Hyprland exited with 3\nomabox: Hyprland terminated with signal 6 \nz";

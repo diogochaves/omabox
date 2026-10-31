@@ -1161,6 +1161,34 @@ t_unit_cli_contract() {
          case $c in help|--version|which|guard|host|broker|check) continue ;; esac
          probe cmd_opts "$c" >/dev/null || echo -n " $c"
        done)"
+  # #385: what the retired parity held on the front, each stated: an empty word to help, help --long
+  # -h, an option with no name, a value-taking option's empty value, and a --help after --json (the
+  # command's own parser: its help where --json is one of its options, --json refused where not).
+  local rc out
+  out=$(ob help '' 2>&1); rc=$?
+  check_eq "help '': an unknown command, the empty word (2)" \
+    "2|omabox: unknown command:  (omabox help lists the commands and their options)" "$rc|$out"
+  out=$(ob help --long -h 2>&1); rc=$?
+  check_eq "help --long -h: the short help, the -h last (0)" "0|$(ob help)" "$rc|$out"
+  out=$(ob path --=x 2>&1); rc=$?
+  check_eq "path --=x: an option with no name, unknown (2)" "2|omabox: path: unknown option --=x (omabox help path)" "$rc|$out"
+  out=$(env -u OMABOX -u OMABOX_NAME "$CLI" events --since= 2>&1); rc=$?
+  check_eq "events --since=: an empty value, refused before any box is asked (2)" \
+    "2|omabox: events: --since needs a value: --since MARK (omabox help events)" "$rc|$out"
+  local on="" off="" bad=""
+  for c in lua log events setup config pixel tree cpu output monitor gdb ports keys-to-box save saves scroll run up; do
+    out=$(ob "$c" --json --help 2>&1); rc=$?
+    if probe cmd_opts "$c" | grep -qx -- --json; then
+      on+=" $c"; [ "$rc|$out" = "0|$(ob help "$c")" ] || bad+=" $c"
+    else
+      off+=" $c"; [[ $rc = 2 && $out == "omabox: $c: unknown option --json "* ]] || bad+=" $c"
+    fi
+  done
+  check_eq "CMD --json --help: its help (0) where --json is its option ($on), else --json refused (2, $off)" "" "$bad"
+  check_match "...both kinds among them" "^ .+ \| .+$" "$on |$off"
+  out=$(ob check --json --help 2>&1); rc=$?
+  check_eq "check --json --help: --json is no subcommand of check's (2)" \
+    "2|omabox: check: unknown subcommand --json (run, point or diff) (omabox help check)" "$rc|$out"
 }
 
 # #273 part C: the --json shapes that need no box (each a jq check: the fields a script reads), what
@@ -6536,11 +6564,17 @@ t_unit_clip() {
   # to find) and a box that does not exist.
   mkdir -p "$TMP/rt-clip"
   cl() { env -i PATH=/usr/bin:/bin HOME="$HOME" XDG_RUNTIME_DIR="$TMP/rt-clip" "$@" 2>&1; }
-  local m
+  # (#385: each refusal's exit status too, 1, a refusal's: help exit-codes)
+  clrc() { local rc=0; cl "$@" >/dev/null || rc=$?; echo "$rc"; }
+  local m rcs=""
   for m in CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=70178a3a CLAUDE_PID=1 CODEX_THREAD_ID=01a0314c OPENCODE=1 AI_AGENT=x \
       OMABOX_AGENT_PID=1 OMABOX_SESSION=abcd1234 WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard; do
     check_match "clip refused: $m" "clip is not for agents \(${m%%=*} set for " "$(cl "$m" "$CLI" clip -b "$P-x")"
+    rcs+="$(clrc "$m" "$CLI" clip -b "$P-x") "
   done
+  check_eq "...each with exit 1, a refusal's" "1 1 1 1 1 1 1 1 1 1 " "$rcs"
+  check_eq "...before an argument it does not know too (1, not 2), and under the guard's PATH, guard exec, ai-jail" "1 1 1 1" \
+    "$(clrc CLAUDECODE=1 "$CLI" clip --bogus) $(clrc PATH="$ROOT/share/guard:/usr/bin:/bin" "$CLI" clip -b "$P-x") $(clrc "$CLI" guard exec -- "$CLI" clip -b "$P-x") $(clrc OMABOX_JAIL='{}' "$CLI" clip -b "$P-x")"
   check_match "clip refused: the guard's PATH" "clip is not for agents \(PATH set" "$(cl PATH="$ROOT/share/guard:/usr/bin:/bin" "$CLI" clip -b "$P-x")"
   check_eq "...in one line" 1 "$(cl CLAUDECODE=1 "$CLI" clip -b "$P-x" | wc -l)"
   check_match "...before anything else (an argument it does not know)" "not for agents" "$(cl CLAUDECODE=1 "$CLI" clip --bogus)"
