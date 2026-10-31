@@ -26,6 +26,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `run` quietly started a throwaway box and `path` printed the folder of a box that was not there.
   Both now name the session's boxes, as `run -d` does; `omabox help` says how the box is picked
   without -b ([#327](https://github.com/diogochaves/omabox/issues/327)).
+- **The agent guard refused `omarchy plugin list` naming `omarchy-shell`**, a command the agent never
+  ran. When one of Omarchy's commands calls it, the guard now names that command, and for `omarchy
+  plugin list` says where the installed plugins are
+  ([#332](https://github.com/diogochaves/omabox/issues/332)).
 
 ## 1.0.2 — 2026-10-30
 

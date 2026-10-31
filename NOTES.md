@@ -10767,6 +10767,17 @@ from them.
     elsewhere; a throwaway (no session boxes) and a path printed before `up` stay as they were. And
     bare `omabox help` says how the box is picked without -b (it was in `--long` only). Test:
     t_unit_agent_session (both, from another repo with the session's box up), failed on the old code.
+555. **The guard refused `omarchy plugin list` as "omarchy-shell"** (2026-10-30, #332). 45 of Omarchy
+    4.5's commands call `omarchy-shell` by name (omarchy-plugin-list's `$(omarchy-shell shell
+    listPlugins)`), so the guard's shim answered for them, naming a command the agent never typed;
+    under `| grep` the refusal read as "no match". The shim now reads its parent's words
+    (`/proc/$PPID/cmdline`: the script, also in a `$(...)` subshell, a fork of it) and, when one is
+    an Omarchy command (`omarchy-*`, not omarchy-shell), names it: "not running omarchy-plugin-list
+    here: it asks the user's desktop shell ... through omarchy-shell. For a box's: omabox run --
+    omarchy-plugin-list ...", and for that one where the plugins are (`~/.config/omarchy/plugins`).
+    Exit 4 (0 with -q) as before. Read-only queries still do not pass: they reach the user's shell,
+    which the guard keeps an agent from (the issue left that call open; not changed). Test:
+    t_unit_guard_omarchy_shell (a stand-in omarchy-plugin-list calling it from `$(...)`).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

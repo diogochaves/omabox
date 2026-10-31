@@ -12,6 +12,17 @@ r=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 d=${WAYLAND_DISPLAY:-}
 case $d in /*) ;; ?*) d=$r/$d ;; esac
 if [ -z "$d" ] || [ ! -S "$d" ]; then
+  # One of Omarchy's own commands that calls omarchy-shell by name (45 in 4.5: omarchy-plugin-list's
+  # `omarchy-shell shell listPlugins`): named, as the agent ran it, not omarchy-shell (#332). Its
+  # script is in its process's words (a `$(...)` subshell's are the script's).
+  c=$(tr '\0' '\n' < "/proc/$PPID/cmdline" 2>/dev/null | sed -n '/omarchy-shell$/d; s|^\(.*/\)\{0,1\}\(omarchy-[a-z0-9-]*\)$|\2|p' | head -n 1)
+  if [ -n "$c" ]; then
+    hint=""
+    [ "$c" = omarchy-plugin-list ] && hint=" The plugins installed are the folders in ~/.config/omarchy/plugins."
+    echo "omabox guard: not running $c here: it asks the user's desktop shell (their bar, menus and panels) through omarchy-shell. For a box's: omabox run -- $c ...$hint Only when the user asked for their real desktop: omabox host -- CMD" >&2
+    [ "${1:-}" = -q ] && exit 0
+    exit 4
+  fi
   echo "omabox guard: not running omarchy-shell here: from this shell it reaches the user's desktop shell (their bar, menus and panels). For a box's shell: omabox run -- omarchy-shell ..., or omabox restart-shell. Only when the user asked for their real desktop: omabox host -- CMD" >&2
   [ "${1:-}" = -q ] && exit 0
   exit 4

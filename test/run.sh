@@ -13862,6 +13862,13 @@ PY
   check_eq "...and 0 for -q (best effort), as omarchy-shell's own failures" 0 "$("${gx[@]}" omarchy-shell -q shell ping >/dev/null 2>&1; echo $?)"
   check_match "...also with no guard's file and no display at all" "not running omarchy-shell here" \
     "$("${env[@]}" WAYLAND_DISPLAY= "$ROOT/share/guard/omarchy-shell" shell ping 2>&1)"
+  # (#332: one of Omarchy's commands calling it by name, from a `$(...)`, as omarchy-plugin-list does: named)
+  mkdir -p "$d/om-bin"
+  printf '#!/bin/bash\nplugins=$(omarchy-shell shell listPlugins)\necho "listed: $plugins"\n' > "$d/om-bin/omarchy-plugin-list"
+  chmod +x "$d/om-bin/omarchy-plugin-list"
+  check_match "...an Omarchy command that calls it is named, with where its plugins are (#332)" \
+    "^omabox guard: not running omarchy-plugin-list here: it asks the user's desktop shell .* through omarchy-shell\. For a box's: omabox run -- omarchy-plugin-list \.\.\. The plugins installed are the folders in ~/\.config/omarchy/plugins\." \
+    "$("${gx[@]}" env PATH="$ROOT/share/guard:$d/om-bin:$PATH" omarchy-plugin-list 2>&1 >/dev/null)"
   check_eq "...nothing got past it" "" "$(cat "$d/stub.log" 2>/dev/null)"
   check_eq "a display that is a socket goes on to the next omarchy-shell, its words whole" "real omarchy-shell reached: -q shell ping" \
     "$("${env[@]}" WAYLAND_DISPLAY=wayland-1 "$ROOT/share/guard/omarchy-shell" -q shell ping >/dev/null 2>&1; cat "$d/stub.log")"
