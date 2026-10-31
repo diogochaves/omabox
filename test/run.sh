@@ -6768,7 +6768,7 @@ t_main() {
   # finding 98: a Qt app with no terminal logs to the journal, which a box has none of; the box
   # sends it to stderr, so a `run -d` log has what the app printed.
   printf '%s\n' 'import QtQml' 'QtObject { Component.onCompleted: { console.warn("omabox-t98"); Qt.quit() } }' > "$D/home/t98.qml"
-  local qlog; qlog=$(ob run -b "$B" -d -- qml6 -platform offscreen /home/sbx/t98.qml 2>&1 >/dev/null | sed -n 's/.*(log: \(.*\))$/\1/p')
+  local qlog; qlog=$(ob run -b "$B" -d -- qml6 -platform offscreen /home/sbx/t98.qml 2>&1 >/dev/null | sed -n 's/.*[( ]log: \(\/[^,)]*\)[,)].*/\1/p')
   check "run -d: a Qt app's warning reaches its log" until_ok 10 grep -qs omabox-t98 "$qlog"
   # The session itself (what the bar and apps launched from binds get), through a Hyprland exec.
   ob hyprctl -b "$B" dispatch "hl.dsp.exec_cmd('sh -c \"{ echo \$SHELL; echo \$OMABOX_TEST; echo \$LC_TIME; echo \$PATH; } > /tmp/sess\"')" >/dev/null
@@ -7878,7 +7878,8 @@ t_plugin_check() {
   check_match "...and the shell's: failed" "plugin $P.entry failed: Plugin widget $P.entry failed: .*No such file" "$out"
   check_match "a QML error (the validator passes it): the shell's line" "plugin $P.qml failed: Plugin widget $P.qml failed: .*Syntax error" "$out"
   check_match "...and where the rest is" "omabox log -b $B shell" "$out"
-  check_fails "a plugin that loads: no line" grep -q "$P.good" <<<"$out"
+  # (but up's note of where the box has its folder, #301)
+  check_fails "a plugin that loads: no line" grep -q "$P.good" <<<"$(grep -v "^omabox: note: plugin $P.good: " <<<"$out")"
   check_eq "ls --json: each plugin's state" "loaded failed failed not loaded" \
     "$(ob ls --json | jq -r --arg n "$B" --arg p "$P" '.[] | select(.name == $n) | .plugin_status | [.[$p + ".good", $p + ".qml", $p + ".entry", $p + ".schema"] | .state] | join(" ")')"
   check_match "...a checkout's commit, +dirty with uncommitted files (finding 139)" "^[0-9a-f]{7,}\+dirty$" \
@@ -9183,7 +9184,7 @@ t_race() {
   for i in 1 2 3; do
     C=$P-race3$i
     spin_up "$C" > "$TMP/race-up" 2>&1 & a=$!
-    unshare -Upf --map-current-user --mount-proc "$CLI" down "$C" >/dev/null 2>&1
+    unshare -Upf --map-current-user --mount-proc --propagation slave "$CLI" down "$C" >/dev/null 2>&1
     rc=0; wait "$a" || rc=$?
     if [ "$rc" = 0 ]; then
       check_eq "a down of another pid namespace while its up starts ($i): the box is gone" "" "$(ob ls --json | jq -r --arg n "$C" '.[] | select(.name == $n) | .name')"
@@ -9194,7 +9195,7 @@ t_race() {
   done
   # ...and one before an up, in the same tick or the next, does not cancel it.
   C=$P-race4
-  unshare -Upf --map-current-user --mount-proc "$CLI" down "$C" >/dev/null 2>&1
+  unshare -Upf --map-current-user --mount-proc --propagation slave "$CLI" down "$C" >/dev/null 2>&1
   check "a down of another pid namespace before an up does not cancel it" ob up "$C" --no-shell
   check "...down" ob down "$C"
   # A pid namespace of its own with the host's /proc (no --mount-proc): /proc/<its pid> is another
@@ -10468,7 +10469,8 @@ t_throwaway_home() {
     no "a box named 'default' is up or idled out: run it again after omabox down default"; return
   fi
   local out; out=$(cd "$HOME" && env -u OMABOX "$CLI" run -- sh -c "test -e '$HOME/.config' && echo LEAK || echo ok; pwd" 2>&1)
-  check_match "HOME not visible in a throwaway run from ~" '^ok' "$out"
+  # (run's note that the box has no $HOME/.config, #301, goes before the command's own output)
+  check_match "HOME not visible in a throwaway run from ~" '^ok' "$(grep -v '^omabox: note: ' <<<"$out")"
   check_match "it runs in the box HOME" '/home/sbx$' "$out"
 }
 
@@ -14561,7 +14563,9 @@ t_guard() {
   # ...so wait sees it too (finding 82: it said "not rendered" before finding 90). Its answer depends
   # on the app (animated gears never hold still: 124), but it is never "unknown".
   local out rc=0; out=$("${in[@]}" "$CLI" wait -b inner still --timeout 3s 2>&1) || rc=$?
-  check_match "wait on a hidden interactive box sees it drawn (an answer, not unknown)" "^(satisfied|unsatisfied): " "$out"
+  # (run's notes of the host paths in the guard's words, #301, go before it: wait's answer is the rest)
+  check_match "wait on a hidden interactive box sees it drawn (an answer, not unknown)" "^(satisfied|unsatisfied): " \
+    "$(grep -v '^omabox: note: ' <<<"$out")"
   check_match "...exit 0 or 124, never 1" "^(0|124)$" "$rc"
   "${in[@]}" "$CLI" down inner >/dev/null 2>&1
   # The workspace setting (finding 70): a number, the scratchpad; neither takes focus
@@ -17185,7 +17189,7 @@ t_pointer() {
       '    WheelHandler { acceptedDevices: PointerDevice.AllDevices' \
       '      onWheel: e => console.log("t214", e.angleDelta.y, e.pixelDelta.y, e.phase, e.device.type === PointerDevice.TouchPad ? "touchpad" : e.device.type) } } }' \
       > "$(ob path -b "$B")/home/t214.qml"
-    local qlog q0=0; qlog=$(ob run -b "$B" -d --wait -- /usr/lib/qt6/bin/qml /home/sbx/t214.qml 2>&1 >/dev/null | sed -n 's/.*(log: \(.*\))$/\1/p')
+    local qlog q0=0; qlog=$(ob run -b "$B" -d --wait -- /usr/lib/qt6/bin/qml /home/sbx/t214.qml 2>&1 >/dev/null | sed -n 's/.*[( ]log: \(\/[^,)]*\)[,)].*/\1/p')
     # shellcheck disable=SC2329 # called below
     qw() { grep -a '^qml: t214' "$qlog" | tail -n +$((q0 + 1)) | sed 's/^qml: t214 //' | tr '\n' ',' | sed 's/,$//'; }
     ob wait -b "$B" window title:qtwheel >/dev/null; ob wait -b "$B" still >/dev/null   # (its opening animated)
