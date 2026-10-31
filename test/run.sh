@@ -17964,17 +17964,22 @@ home_copies() {
 home_shapes() {
   (cd "$1/" && command grep -rlIE -- "$2|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{20,}|xox[abprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}" . 2>/dev/null | head -n 5)
 }
-# S6 (#355): the processes of this run's boxes (PREFIX*) still running, one a line: what names a box
-# of it in its command line (a box dir, a reaper) or its environment (OMABOX_BOX, the box session's;
-# OMABOX_NAME, a run's), this runner and what it runs aside.
+# S6 (#355, #370): the processes of this run's boxes still running, one a line. A box of the run is
+# one named PREFIX*, so named in a process's command line (a box dir, a reaper) or its environment
+# (OMABOX_BOX, the box session's; OMABOX_NAME, a run's); one whose dir is in a stand-in runtime dir
+# under the run's $TMP, whatever its name; or one whose reaper the run started (OMABOX_SUITE), as
+# `up --new` and a session's name make. Only the runner, this scan, the host's event watcher and the
+# test servers are set aside: what a test left running under the runner counts too.
 box_procs() {
   local p c e mine
-  mine=" $$ $(descendants $$ | xargs) "
+  mine=" $$ $BASHPID ${WATCH_PID:-} ${SERVERS[*]} "
   for p in /proc/[0-9]*; do
     [[ $mine != *" ${p#/proc/} "* ]] || continue
     c=$(tr '\0' ' ' 2>/dev/null < "$p/cmdline") 2>/dev/null || continue
     e=$(tr '\0' '\n' 2>/dev/null < "$p/environ") 2>/dev/null || e=""
-    if [[ $c == *"/omabox/$1"* || $c == *" _reap $1"* ]] || grep -qE "^OMABOX_(BOX|NAME)=$1" <<<"$e"; then
+    if [[ $c == *"/omabox/$1"* || $c == *" _reap $1"* || $c == *"$TMP/"*"/omabox/"* ]] ||
+      grep -qE "^OMABOX_(BOX|NAME)=$1" <<<"$e" ||
+      { [[ $c == *" _reap "* ]] && grep -qxF "OMABOX_SUITE=$OMABOX_SUITE" <<<"$e"; }; then
       echo "${p#/proc/} ${c:0:200}"
     fi
   done
@@ -18160,7 +18165,11 @@ main() {
   _left=$("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-" | xargs)
   for _t in $_left; do "$CLI" down "$_t" >/dev/null 2>&1; done
   [ -z "$_left" ] || echo "       (left up at the end, taken down here: $_left)"
+  # (down sends TERM to a box's reaper and peeks without waiting for them: one still listed right
+  # after the last down gets a while to end, #370)
+  local _until=$((SECONDS + 15))
   _procs=$(box_procs "$P-")
+  while [ -n "$_procs" ] && [ $SECONDS -lt $_until ]; do sleep 0.5; _procs=$(box_procs "$P-"); done
   if [ -z "$_procs" ]; then ok "S6: no process of this run's boxes is left (#355)"
   else no "S6: no process of this run's boxes is left (#355)" "$_procs"; fi
   if [ $_filtered = 0 ]; then
