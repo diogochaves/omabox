@@ -14096,12 +14096,34 @@ t_unit_guard_exec_host() {
   else
     no "...which refuse kill and ipc" "not run: quickshell under guard exec is [$qs], not the guard's"
   fi
-  # The session omabox finds, not $HYPRLAND_INSTANCE_SIGNATURE: under the guard (an agent running the
-  # suite) that is the guard's.
-  local sig want; sig=$(probe host_session); sig=${sig%% *}
-  want=$(hyprctl -j instances | jq -r --arg s "$sig" '.[] | select(.instance == $s) | .wl_socket')
-  check_eq "host from a guarded shell: the real Wayland display" "$want" "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY' 2>/dev/null)"
-  check "host: and hyprctl reaches it (read-only)" "${GUARDED[@]}" "$CLI" host -- hyprctl -j version
+  # host's session, a stand-in one (#372): a runtime dir of the test's own, its Hyprland a socket that
+  # writes down each request and answers version, its Wayland socket beside it. No check below
+  # reaches the user's desktop, and each one sees the session omabox finds there, not
+  # $HYPRLAND_INSTANCE_SIGNATURE (under the guard, an agent running the suite, that is the guard's).
+  local hrt=$TMP/ghost-rt hsig=a_7_7 hsrv i
+  mkdir -m 700 "$hrt"; mkdir -p "$hrt/hypr/$hsig"
+  python3 - "$hrt/hypr/$hsig/.socket.sock" "$hrt/wayland-gh" "$TMP/ghost.log" <<'PY' &
+import socket, sys
+w = socket.socket(socket.AF_UNIX); w.bind(sys.argv[2])
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)
+while True:
+    c, _ = s.accept()
+    d = c.recv(1 << 16).decode("utf-8", "replace")
+    with open(sys.argv[3], "a") as h:
+        h.write(d + "\n")
+    c.sendall(b'{"tag": "stand-in"}' if d.startswith("j/version") else b"unknown request")
+    c.close()
+PY
+  hsrv=$!
+  for i in $(seq 50); do [ -S "$hrt/hypr/$hsig/.socket.sock" ] && break; sleep 0.1; done
+  printf '%s\nwayland-gh\n' "$hsrv" > "$hrt/hypr/$hsig/hyprland.lock"
+  check_eq "the stand-in session is the only one there" "$hsig wayland-gh" \
+    "$(XDG_RUNTIME_DIR=$hrt hyprctl -j instances | jq -r '.[] | "\(.instance) \(.wl_socket)"' | paste -sd '|')"
+  local GUARDED=("${GUARDED[@]}" XDG_RUNTIME_DIR="$hrt")
+  check_eq "host from a guarded shell: the session's Wayland display and signature" "wayland-gh $hsig" \
+    "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY $HYPRLAND_INSTANCE_SIGNATURE' 2>/dev/null)"
+  check_match "host: and hyprctl reaches it" '"tag": "stand-in"' "$("${GUARDED[@]}" "$CLI" host -- hyprctl -j version 2>/dev/null)"
+  check "...the stand-in heard it" grep -qx j/version "$TMP/ghost.log"
   local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
   check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
   check_fails "...not the guard's" grep -q share/guard <<<"$open"
@@ -14135,6 +14157,7 @@ EOF
   check_eq "...a short command exactly as it is" "omabox: on your real desktop: printf %s A=b x" "$("${GUARDED[@]}" "$CLI" host -- printf %s A=b x 2>&1 >/dev/null)"
   # (...a long word cut too: host.rs the_record_cuts_long_words.)
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
+  kill "$hsrv" 2>/dev/null; wait "$hsrv" 2>/dev/null || true
 }
 
 # #290: Omarchy 4.5's omarchy-shell takes the newest wayland-N when $WAYLAND_DISPLAY names no socket, and
