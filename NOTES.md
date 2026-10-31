@@ -11834,6 +11834,34 @@ from them.
     --expect-image FILE` (finding 614's proofs) runs `find --image FILE` on the screen, or with
     --window in its own pixels, and fails the checkpoint with find's words when there is no match
     (t_check_proof).
+609. **A small blinker timed every wait out, and an --ignore of it stopped matching when it moved**
+    (2026-10-31, #307). A bar widget's 6x6 animated dot changed in every few frames, so `wait still`
+    and every `click --wait` ended 124 "still changing"; the agent `--ignore`d it on each call, and
+    when the bar re-laid out the dot was 13 px away and the waits timed out again. omabox-still now
+    takes a blinker out as it does a caret: each output remembers 8 spots, places where a change 48
+    px a side at most happened, with their last 16 looks (the spot's pixels, each channel's top four
+    bits, hashed; a pixel under an --ignore, the cursor, as black). A change inside a spot whose look
+    after is one it had is a return; at the third it is a blinker, and from then on its pixels are
+    left out of the frame's change while they take a look it had. A look it never had (a menu over it,
+    another icon there) is a change, and the spot is forgotten; a change holding a spot grows it and
+    starts its looks again; a moved output or a new buffer forgets them all. Why looks, not just "a
+    small place that keeps changing": a counter or a progress bar changes in place too, but never
+    comes back to how it looked, and a wait should go on through it (the box test's `%05d` counter is
+    still 124). The top bits make a pulse's way up meet its way down (the test's colour steps by 15).
+    Choices made where the issue left them: no per-box `ignore add`/`up --ignore` (a fixed rectangle
+    is what broke when the dot moved; learning per wait needs none); BLINK_SIDE 48, 16 looks, 3
+    returns (the first three changes count: about 0.75 s for a dot blinking every 250 ms, paid by
+    each wait, since spots are not kept between calls). The answer line has `blink=X,Y,W,H` (the last
+    spot taken) and `blinks=N`; omabox says `X,Y WxH kept coming back to how it looked: left out as a
+    blinker` on stderr, the ignored change's why is `blinker`, and `--json` adds `blinking` ({x, y, w,
+    h, places}, null without one). `--strict` counts blinkers. A looping counter of 10 states is a
+    blinker now: t_wait's and t_monitors_wait's counter cell (#131's steady animation) cycles through
+    62 glyphs instead, more than the 16 looks kept. Two blinkers changing in the same frame before
+    either is learnt make one change too big to be one (not learnt; an --ignore still works). Tests:
+    t_unit_wait (settle.rs blinker_said: the stderr note, several places, JSON, nothing for an older
+    tool's line; facts_as_bash's key lists), t_wait_blink (a box: a blinking cell and a pulsing one
+    still, said; --strict 124; a blinking cell moving every 2 s still, three times; a counter 124,
+    no note).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

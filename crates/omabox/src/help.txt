@@ -657,7 +657,10 @@ scaled or cropped one says so, for `click --in`). --wait ignores the cursor alon
 (it is in every frame): what the drag changes beside it counts, a change wholly under it may not.
 @ wait keys click run scroll drag
 `wait still`: nothing on screen changed for --quiet; a caret blinking in place (4 px thin, 40 long at
-most) and the cursor do not count, and are said (--strict counts them). `wait change`: the first
+most), the cursor and a blinker do not count, and are said (--strict counts them). A blinker is a
+spot 48 px a side at most that came back to how it looked 3 times (a dot blinking or pulsing, a
+looping spinner): from then on it is left out, said on stderr, and learnt again where it moves; a
+counter or a progress bar never comes back, so it counts. `wait change`: the first
 change there, for an app that redraws later, by itself (a sync, a timer): then `wait still`; never
 `wait until -- false` (nor `-- true`) as a sleep: `wait log` for a line, `wait for 2s` for a
 time that really is fixed. `wait change --since SHOT`: changed since that shot, at once if it

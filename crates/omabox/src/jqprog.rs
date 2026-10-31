@@ -277,7 +277,8 @@ pub const SETTLE_JSON_JQ: &str = r#"
       {result: $res, condition: $cond, message: $msg, elapsed: ($t | secs), first_change: ($first | secs),
        last_change: ($last | secs), change: ($ch | box), late_changes: ($late | box),
        ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
-       frames: (if $frames == "" then null else $frames | tonumber end)}
+       frames: (if $frames == "" then null else $frames | tonumber end),
+       blinking: (($blink | box) as $b | if $b then $b + {places: ($blinks | tonumber? // 1)} else null end)}
       + if $facts == "" then {} else {changes: $changes, target: $target, events_since: $evs} end
       + if $exp == "" then {} else {expect: ($exp | fromjson)} end
       + if $treed == "" then {} else {tree: ($treed | fromjson)} end"#;

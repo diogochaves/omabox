@@ -15271,7 +15271,8 @@ monitors_wait_on() {
   check_eq "...and the box has them so, the third below the second at 1920,450 (#379)" "0,0 1 1920,0 1.6 1920,450 1" \
     "$(ob hyprctl -b "$B" monitors -j | jq -r '[sort_by(.id)[] | "\(.x),\(.y) \(.scale)"] | join(" ")')"
   ob pointer -b "$B" -- move 2300 200 >/dev/null
-  ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
+  # (62 glyphs in turn, never a loop of 16 looks or fewer: that is a blinker, #307, finding 609)
+  ob run -b "$B" -d -q -- foot -T N sh -c 's=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789; i=0; while :; do printf "\r%s" "${s:$((i++ % 62)):1}"; sleep 0.05; done'
   ob wait -b "$B" window 'title:^N$' >/dev/null
   w=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "N") | "\(.at[0]) \(.at[1]) \(.at[0] + .size[0]) \(.at[1] + .size[1])"')
   for when in "" " (after output drop and back)"; do
@@ -19216,10 +19217,11 @@ t_wait() {
   out=$(ob wait -b "$B" --timeout 500ms --json until -- false); rc=$?
   check_eq "...--json: condition until, exit 124" "unsatisfied until exit 1 124" "$(jq -r '"\(.result) \(.condition) \(.detail)"' <<<"$out") $rc"
   # A steady animation (#131, finding 208): one cell that never stops changing. The 124 names it as an
-  # --ignore; --ignore'd, wait still and keys --wait are satisfied; -g watches elsewhere.
+  # --ignore; --ignore'd, wait still and keys --wait are satisfied; -g watches elsewhere. (62 glyphs in turn:
+  # a loop of 16 looks or fewer, as 0-9 was, is a blinker since #307, finding 609.)
   ob run -b "$B" -- pkill -x foot >/dev/null
   ob wait -b "$B" window foot --gone >/dev/null
-  ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
+  ob run -b "$B" -d -q -- foot -T N sh -c 's=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789; i=0; while :; do printf "\r%s" "${s:$((i++ % 62)):1}"; sleep 0.05; done'
   ob wait -b "$B" window 'title:^N$' >/dev/null
   out=$(ob wait -b "$B" still --timeout 2s); rc=$?
   check_eq "a cell that never stops changing: 124" 124 "$rc"
@@ -19259,6 +19261,52 @@ t_wait() {
   wait "$w"; rc=$?
   check_eq "the box went down during wait: exit 1" 1 "$rc"
   check_match "...said" "^unknown: box '$B' went down after" "$(cat "$TMP/wait.out")"
+}
+
+# A blinker (#307, finding 609): a small spot whose changes keep bringing it back to how it looked (a
+# dot blinking, a pulse) is left out of wait still after a few times, said on stderr; where it moves
+# to, it is learnt again; --strict counts it; a small spot that never comes back (a counter) is still
+# a change.
+t_wait_blink() {
+  local B=$P-blink out rc err
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  # A cell blinking (reverse video on and off, every 250 ms: never 300 ms quiet), no caret.
+  ob run -b "$B" -d -q --wait -- foot -T K sh -c \
+    'printf "\033[?25l"; while :; do printf "\r  \033[7m \033[0m"; sleep 0.25; printf "\r   "; sleep 0.25; done' >/dev/null 2>&1
+  out=$(ob wait -b "$B" still --timeout 6s --json 2>"$TMP/blink.err"); rc=$?; err=$(cat "$TMP/blink.err")
+  check_eq "a blinking cell: wait still satisfied" "0 satisfied" "$rc $(jq -r .result <<<"$out")"
+  check "...its last change ignored as a blinker, small (${out:0:400})" jq -e '.ignored.why == "blinker" and .blinking.w <= 48 and .blinking.h <= 48' <<<"$out"
+  check_match "...said on stderr" "^omabox: [0-9]+,[0-9]+ [0-9]+x[0-9]+ kept coming back to how it looked: left out as a blinker" "$err"
+  check_eq "...--strict: a change (124)" 124 "$(ob wait -b "$B" still --strict --timeout 2s >/dev/null 2>&1; echo $?)"
+  out=$(ob keys -b "$B" --wait --start 1s shift 2>/dev/null); rc=$?
+  check_match "...an action's --wait beside it: no 'still changing' (rc $rc)" "^(satisfied: settled|unsatisfied: nothing changed)" "$out"
+  ob run -b "$B" -- pkill -f 'foot -T K' >/dev/null
+  ob wait -b "$B" window 'title:^K$' --gone >/dev/null
+  # A pulse: one cell's colour going down and back up every 30 ms.
+  ob run -b "$B" -d -q --wait -- foot -T P sh -c \
+    'printf "\033[?25l"; v=255 d=-15; while :; do printf "\r\033[48;2;%d;0;0m  \033[0m" "$v"; v=$((v + d)); [ "$v" -gt 30 ] || d=15; [ "$v" -lt 255 ] || d=-15; sleep 0.03; done' >/dev/null 2>&1
+  out=$(ob wait -b "$B" still --timeout 6s 2>"$TMP/blink.err"); rc=$?; err=$(cat "$TMP/blink.err")
+  check_eq "a pulsing cell: wait still satisfied ($out)" 0 "$rc"
+  check_match "...said" "left out as a blinker" "$err"
+  ob run -b "$B" -- pkill -f 'foot -T P' >/dev/null
+  ob wait -b "$B" window 'title:^P$' --gone >/dev/null
+  # The issue's: a blinking cell that moves every 2 s (a re-layout): an --ignore of where it was would
+  # miss it; learnt again where it went.
+  ob run -b "$B" -d -q --wait -- foot -T M sh -c \
+    'printf "\033[?25l"; c=0; while :; do for i in 1 2 3 4; do printf "\r%*s\033[7m \033[0m" "$c" ""; sleep 0.25; printf "\r%*s " "$c" ""; sleep 0.25; done; c=$(((c + 3) % 60)); done' >/dev/null 2>&1
+  local n
+  for n in 1 2 3; do
+    out=$(ob wait -b "$B" still --quiet 500ms --timeout 8s 2>/dev/null); rc=$?
+    check_eq "a blinking cell that moves: wait still satisfied ($n of 3: $out)" 0 "$rc"
+  done
+  ob run -b "$B" -- pkill -f 'foot -T M' >/dev/null
+  ob wait -b "$B" window 'title:^M$' --gone >/dev/null
+  # A counter: small, changing in place, never back to a look it had: a change, no blinker.
+  ob run -b "$B" -d -q --wait -- foot -T C sh -c \
+    'printf "\033[?25l"; i=0; while :; do printf "\r%05d" "$i"; i=$((i + 1)); sleep 0.05; done' >/dev/null 2>&1
+  out=$(ob wait -b "$B" still --timeout 2s 2>"$TMP/blink.err"); rc=$?
+  check_eq "a counter: still changing, 124" 124 "$rc"
+  check_eq "...not a blinker" "" "$(grep blinker "$TMP/blink.err")"
 }
 
 # run -d -q / --print-log (issue #42, finding 109) and run -d --replace (issue #29, finding 110).
@@ -19805,7 +19853,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

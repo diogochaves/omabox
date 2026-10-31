@@ -204,6 +204,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   an empty file, and refuse a link, a folder or any other file, saying why, before anything is
   written; a new path is made as before
   ([#338](https://github.com/diogochaves/omabox/issues/338)).
+- **A small blinking or pulsing dot timed every `wait still` and `--wait` out**, and an `--ignore`
+  of it stopped matching once a re-layout moved it. A spot 48 px a side at most whose changes keep
+  bringing it back to how it looked (a dot blinking or pulsing, a looping spinner) now counts for its
+  first few changes and is then left out as a blinker, said on stderr and in `--json` as `blinking`,
+  and learnt again wherever it moves. A counter or a progress bar never looks as it did before, so
+  it still counts; `--strict` counts blinkers too
+  ([#307](https://github.com/diogochaves/omabox/issues/307)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count

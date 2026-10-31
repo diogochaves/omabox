@@ -1146,6 +1146,8 @@ impl Settle {
                 .kv("--arg", "why", dash("why"))
                 .kv("--arg", "frames", get("frames"))
                 .kv("--arg", "late", dash("late"))
+                .kv("--arg", "blink", dash("blink"))
+                .kv("--arg", "blinks", get("blinks"))
                 .kv("--arg", "facts", self.facts)
                 .kv("--argjson", "changes", &changes)
                 .kv("--argjson", "target", &target)
@@ -1158,6 +1160,21 @@ impl Settle {
             let _ = out(&r.out);
         } else {
             let _ = out(cat!(res, ": ", msg, "\n", tree_lines));
+        }
+        // A spot the tool took for a blinker (#307): the wait went on without it, said.
+        if dash("blink") != b"-" {
+            let more = dec(&get("blinks")).unwrap_or(1).saturating_sub(1);
+            let more = match more {
+                0 => Vec::new(),
+                1 => b", and 1 more place that did".to_vec(),
+                n => cat!(", and ", n.to_string(), " more places that did"),
+            };
+            say(cat!(
+                xywh_words(&get("blink")),
+                " kept coming back to how it looked: left out as a blinker",
+                more,
+                " (a blinking or pulsing dot, a looping spinner; --strict counts it)"
+            ));
         }
         Ok(match res.as_slice() {
             b"satisfied" => 0,
@@ -1614,6 +1631,44 @@ mod tests {
         );
     }
 
+    // t_unit_wait (#307): a spot the tool took for a blinker is said on stderr (the last one, and how
+    // many more), its ignored change named a blinker; JSON has it as `blinking`, null when none.
+    #[test]
+    fn blinker_said() {
+        let none = Stub { after: Vec::new() };
+        let end = |answer: &str, json: bool| {
+            let mut st = watch("ready 1920x1080", &[&format!("{answer}\n")], Duration::ZERO);
+            ended(&mut st, &none, "still", json, b"")
+        };
+        let one = "satisfied still t=2100 first=40 last=1790 change=1706,59,6,6 ignored=1706,59,6,6 why=blinker late=- blink=1706,59,6,6 blinks=1 frames=60";
+        assert_eq!(
+            end(one, false),
+            "satisfied: still after 2.10s (last change 1.79s at 1706,59 6x6; ignored 6x6 at 1706,59: blinker)\nomabox: 1706,59 6x6 kept coming back to how it looked: left out as a blinker (a blinking or pulsing dot, a looping spinner; --strict counts it)\nrc 0",
+            "a blinker: named in the line, said on stderr"
+        );
+        let three = one.replace("blinks=1", "blinks=3");
+        assert!(
+            end(&three, false)
+                .contains("left out as a blinker, and 2 more places that did (a blinking"),
+            "...several: how many more"
+        );
+        let js = end(one, true);
+        assert_eq!(
+            jqv(&js, "[.blinking, .ignored.why]"),
+            r#"[{"x":1706,"y":59,"w":6,"h":6,"places":1},"blinker"]"#,
+            "...--json: blinking, with how many places"
+        );
+        let plain = "satisfied still t=400 first=- last=- change=- ignored=- why=- late=- frames=9";
+        assert_eq!(
+            (end(plain, false), jqv(&end(plain, true), ".blinking")),
+            (
+                "satisfied: still after 0.40s (no change)\nrc 0".to_string(),
+                "null".to_string()
+            ),
+            "...none (or an older tool's line): nothing said, null"
+        );
+    }
+
     // t_unit_wait (#124, finding 181): a tool that never ends (and never answered) is killed after
     // 2 s, with what runs it; a box whose Hyprland does not answer either is said so.
     #[test]
@@ -1727,7 +1782,7 @@ mod tests {
         let out = se(yes, "keys", &wf_snap("."), &wf_snap(menu), true);
         assert_eq!(
             jqv(&out, "keys_unsorted | join(\" \")"),
-            "\"result condition message elapsed first_change last_change change late_changes ignored frames changes target events_since\"",
+            "\"result condition message elapsed first_change last_change change late_changes ignored frames blinking changes target events_since\"",
             "--json: today's fields, then changes, target and events_since"
         );
         assert_eq!(
@@ -1752,7 +1807,7 @@ mod tests {
         let out = se(yes, "", &s, &wf_snap(menu), true);
         assert_eq!(
             jqv(&out, "keys_unsorted | join(\" \")"),
-            "\"result condition message elapsed first_change last_change change late_changes ignored frames\"",
+            "\"result condition message elapsed first_change last_change change late_changes ignored frames blinking\"",
             "...wait (no action): today's fields only"
         );
     }

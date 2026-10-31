@@ -73,7 +73,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `find --json` | `image, similar, matches` (an array in reading order: `x, y, w, h, middle` ([x, y]), `score`, and `window` (`address, x, y`: the window's own coordinates) with `--window`), `more` (true: past 1000, not all listed), `best` (the best place seen, a match's shape, null for none) |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames, blinking`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, report_scaled, setup, only, counts` (`skipped`: not named by `--only`), `checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
@@ -763,7 +763,13 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
 - A caret blinking in place (a change 4 px thin and 40 long at most, where the last one was) and the
   software cursor (in every frame; it hides on a key press) are not changes; the line says what was
   ignored. A longer thin change (a tab's underline, a progress bar) or a short one that moves is one.
-  `--strict` counts them all.
+- A blinker is not a change either (#307): a spot 48 px a side at most whose changes brought it back
+  to one of its last 16 looks 3 times (a dot blinking or pulsing, a looping spinner, a bar widget's
+  animated badge). Its first few changes count, then it is left out: stderr says `X,Y WxH kept coming
+  back to how it looked: left out as a blinker`, `--json` has it as `blinking` (`places`: how many).
+  It need not be `--ignore`d, and when a re-layout moves it, it is learnt again where it went; a look
+  it never had there (a menu over it) is a change. A counter or a progress bar never comes back: a
+  change. `--strict` counts carets, the cursor and blinkers.
 - Exit 0 satisfied, 124 not in time, 1 unknown (the box went down; an interactive box that is not
   drawn while hidden: an older one, or one whose window confirm-close replaced). Waiting counts as use
   for the idle timeout.

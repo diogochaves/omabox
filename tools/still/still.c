@@ -21,15 +21,22 @@
 // stops, #131); --strict counts all but a --mask. A caret is a change 4 px thin and 40 long at most
 // (as shot --changed's) that is the output's first one since its last change of another shape, or
 // lies inside one it had (or holds one): a thin segment that moves is a change (#180).
+// A blinker (#307) is not significant either: a spot BLINK_SIDE px a side at most whose changes keep
+// bringing it back to one of its last BLINK_LOOKS looks (a dot blinking or pulsing, a looping spinner),
+// once it has done so BLINK_RETURNS times; until then each change of it counts. A look is the spot's
+// pixels, each channel's top four bits (a pulse's way up meets its way down). A learnt spot that takes
+// a look it never had (a menu over it, another icon) is a change again, and forgotten; one that moved
+// (a re-layout) is learnt afresh where it went. A counter or a progress bar never comes back: a change.
 // Before it answers "nothing changed" or "still", one plain copy (which never waits) of each output is
 // compared too, so a change drawn between two requests is not missed.
 //
 // Prints `ready WxH area=N` once it has the first frame of each output (the caller acts after that):
 // the layout box around the outputs watched and how much of it they cover, then one line:
 //   satisfied|unsatisfied|unknown REASON t=MS first=MS last=MS change=X,Y,W,H ignored=X,Y,W,H why=WHY
-//   late=X,Y,W,H frames=N
+//   late=X,Y,W,H blink=X,Y,W,H blinks=N frames=N
 // (times from `ready`, - when there is none; late: all the significant changes in the second half of
-// --timeout, one box around them: what kept a wait from its answer). Exit 0 satisfied, 124 unsatisfied, 1 unknown, 2 usage.
+// --timeout, one box around them: what kept a wait from its answer; blink: the last spot taken for a
+// blinker, blinks how many were). Exit 0 satisfied, 124 unsatisfied, 1 unknown, 2 usage.
 // unknown: no first frame within --first ms (default 2000: an interactive box's hidden window is not
 // rendered), the compositor went away, it did not answer its first round trip within 10 s (`hung`: alive
 // but stopped or deadlocked, finding 181), or with --tied, stdin closed (the caller is gone).
@@ -65,8 +72,24 @@
 #define THIN 4
 #define CARET_LONG 40
 #define CARETS 4   // the caret boxes an output remembers (two windows' carets blinking in turn)
+// A blinker (#307): a change BLINK_SIDE px a side at most, back to one of its last BLINK_LOOKS looks
+// BLINK_RETURNS times; an output remembers SPOTS such places.
+#define BLINK_SIDE 48
+#define BLINK_LOOKS 16
+#define BLINK_RETURNS 3
+#define SPOTS 8
+#define LOOK_BITS 0xf0f0f0u
 
 struct rect { int x, y, w, h; };
+
+// A place that changed a little, maybe a blinker: where (layout, and this output's pixels), its last
+// looks (hashes), how often a change brought it back to one of them; a blinker from BLINK_RETURNS on.
+struct spot {
+    int used;
+    struct rect r, pr;
+    uint64_t looks[BLINK_LOOKS];
+    int nlooks, next, returns;
+};
 
 static void usage(void) {
     fprintf(stderr, "usage: omabox-still (still|change|settle) [--region X,Y,W,H] [--ignore X,Y,W,H]... [--mask X,Y,W,H]...\n"
@@ -119,6 +142,8 @@ static int64_t first_sig = -1, last_sig = -1;   // ms since t0
 static struct rect sig_box, ign_box;  // the last significant change, the last ignored one (layout)
 static struct rect late_box;          // around every significant change after timeout/2
 static int nlate;
+static struct rect blink_box;         // the last spot taken for a blinker (layout)
+static int nblinks;                   // how many were
 static const char *ign_why;
 static long frames;
 
@@ -149,6 +174,8 @@ struct output {
     struct rect pregion, pignore[MAX_IGNORE];   // region and ignores in this output's pixels
     struct rect carets[CARETS];   // its last caret-shaped changes (layout), since a change of another shape
     int ncarets, ncaret_next;
+    struct spot spots[SPOTS];     // small places that changed: blinkers, and maybe-blinkers (#307)
+    int spot_next;
 };
 
 static struct wl_display *display;
@@ -383,6 +410,88 @@ static int is_caret(struct output *o, struct rect s) {
     return first;
 }
 
+// ---- blinkers (#307) -------------------------------------------------------------------------------
+
+// The look of pixels PR (this output's) in buffer B: each channel's top bits, hashed (FNV-1a); a pixel
+// under an --ignore (where the cursor is) counts as black.
+static uint64_t look(const struct output *o, const struct shmbuf *b, struct rect pr) {
+    uint64_t h = 1469598103934665603ull;
+    const int words = o->stride / 4;
+    for (int y = pr.y; y < pr.y + pr.h; y++) {
+        int row = o->y_invert ? o->height - 1 - y : y;
+        const uint32_t *p = b->data + (size_t)row * (size_t)words;
+        for (int x = pr.x; x < pr.x + pr.w; x++) {
+            uint32_t v = ignored(o, x, y) >= 0 ? 0 : p[x] & LOOK_BITS;
+            for (int k = 0; k < 3; k++) { h ^= (v >> (8 * k)) & 0xff; h *= 1099511628211ull; }
+        }
+    }
+    return h;
+}
+
+static int known(const struct spot *sp, uint64_t h) {
+    for (int i = 0; i < sp->nlooks; i++)
+        if (sp->looks[i] == h) return 1;
+    return 0;
+}
+static void remember(struct spot *sp, uint64_t h) {
+    sp->looks[sp->next] = h;
+    sp->next = (sp->next + 1) % BLINK_LOOKS;
+    if (sp->nlooks < BLINK_LOOKS) sp->nlooks++;
+}
+static int is_blinker(const struct spot *sp) { return sp->used && sp->returns >= BLINK_RETURNS; }
+
+// The blinker a pixel of this output is in (its index), or -1.
+static int in_blinker(const struct output *o, int x, int y) {
+    for (int i = 0; i < SPOTS; i++) {
+        const struct spot *sp = &o->spots[i];
+        if (is_blinker(sp) && x >= sp->pr.x && x < sp->pr.x + sp->pr.w && y >= sp->pr.y && y < sp->pr.y + sp->pr.h)
+            return i;
+    }
+    return -1;
+}
+
+// A spot afresh at S (layout): its look before the change and after.
+static void spot_set(struct output *o, struct spot *sp, struct rect s) {
+    memset(sp, 0, sizeof(*sp));
+    sp->used = 1;
+    sp->r = s;
+    sp->pr = to_pixels(o, s);
+    remember(sp, look(o, &o->bufs[o->prev], sp->pr));
+    uint64_t h = look(o, &o->bufs[!o->prev], sp->pr);
+    if (!known(sp, h)) remember(sp, h);
+}
+
+// A change S (layout) that is not a caret: a blinker's, 1 (not significant), or not, 0. A small one is
+// remembered: a new place, or a look of a place it had changed before (inside it, or holding it: then
+// the place grows and its looks start again), or one more time it came back to an earlier look.
+static int blinks(struct output *o, struct rect s) {
+    if (s.w > BLINK_SIDE || s.h > BLINK_SIDE) return 0;
+    struct spot *sp = NULL;
+    for (int i = 0; i < SPOTS && !sp; i++) {
+        struct spot *c = &o->spots[i];
+        if (c->used && !is_blinker(c) && (inside(&s, &c->r) || inside(&c->r, &s))) sp = c;
+    }
+    if (!sp) {
+        // A new place: a free spot, else the next that is not a blinker, else the next.
+        int k = -1;
+        for (int i = 0; i < SPOTS && k < 0; i++)
+            if (!o->spots[i].used) k = i;
+        for (int n = 0; n < SPOTS && k < 0; n++)
+            if (!is_blinker(&o->spots[(o->spot_next + n) % SPOTS])) k = (o->spot_next + n) % SPOTS;
+        if (k < 0) k = o->spot_next;
+        o->spot_next = (k + 1) % SPOTS;
+        spot_set(o, &o->spots[k], s);
+        return 0;
+    }
+    if (!inside(&s, &sp->r)) { spot_set(o, sp, s); return 0; }
+    uint64_t h = look(o, &o->bufs[!o->prev], sp->pr);
+    if (!known(sp, h)) { remember(sp, h); return 0; }
+    if (++sp->returns < BLINK_RETURNS) return 0;
+    blink_box = sp->r;
+    nblinks++;
+    return 1;
+}
+
 // --dump: buffer B of output O, cut to C (its pixels), as a binary PPM at DIR/NAME (written whole, then
 // renamed: a reader never sees half of one). LAYOUT is the change, said in the comment.
 static void dump_ppm(const struct output *o, const struct shmbuf *b, struct rect c, struct rect layout, const char *name) {
@@ -425,6 +534,8 @@ static int compare(struct output *o) {
     int cur = !o->prev;
     if (!o->have_prev) {
         o->ncarets = o->ncaret_next = 0;
+        memset(o->spots, 0, sizeof(o->spots));   // its places moved (or there were none yet)
+        o->spot_next = 0;
         sig_box = out_rect(o);
         // Moved out of the region watched (another monitor's add or remove re-laid it out): nothing of
         // the region changed, so not a change of it.
@@ -441,8 +552,8 @@ static int compare(struct output *o) {
     const int x0 = r.x, y0 = r.y, x1 = r.x + r.w, y1 = r.y + r.h;
     if (x0 >= x1 || y0 >= y1) return 0;
     // Each ignored rectangle on its own: a box around two of them would name the screen between.
-    struct rect s = {0}, ig[MAX_IGNORE] = {{0}};
-    int ns = 0, ni[MAX_IGNORE] = {0};
+    struct rect s = {0}, ig[MAX_IGNORE] = {{0}}, bl[SPOTS] = {{0}};
+    int ns = 0, ni[MAX_IGNORE] = {0}, nb[SPOTS] = {0};
     const int words = o->stride / 4;
     for (int y = y0; y < y1; y++) {
         int row = o->y_invert ? o->height - 1 - y : y;
@@ -452,17 +563,30 @@ static int compare(struct output *o) {
             if (!((a[x] ^ b[x]) & 0xffffff)) continue;   // colour only: X/alpha bytes may be anything
             int i = ignored(o, x, y);
             if (strict && i >= 0 && !masked[i]) i = -1;
+            int j = i < 0 && !strict ? in_blinker(o, x, y) : -1;
             if (i >= 0) grow(&ig[i], &ni[i], x, y);
+            else if (j >= 0) grow(&bl[j], &nb[j], x, y);
             else grow(&s, &ns, x, y);
         }
     }
     for (int i = 0; i < nignore; i++)
         if (ni[i]) { ign_box = to_layout(o, ig[i]); ign_why = masked[i] ? "mask" : "cursor"; }
+    // A blinker that changed: back to a look it had is not significant; a look it never had is (a menu
+    // drawn over it, another icon there), and it is forgotten.
+    for (int j = 0; j < SPOTS; j++) {
+        if (!nb[j]) continue;
+        struct spot *sp = &o->spots[j];
+        if (known(sp, look(o, &o->bufs[cur], sp->pr))) { ign_box = to_layout(o, bl[j]); ign_why = "blinker"; continue; }
+        grow(&s, &ns, bl[j].x, bl[j].y);
+        grow(&s, &ns, bl[j].x + bl[j].w - 1, bl[j].y + bl[j].h - 1);
+        sp->used = 0;
+    }
     if (!ns) return 0;
     // Thin in the layout's pixels: a caret is as thin at scale 2 as at 1.
     const struct rect px = s;
     s = to_layout(o, s);
     if (!strict && is_caret(o, s)) { ign_box = s; ign_why = "caret"; return 0; }
+    if (!strict && blinks(o, s)) { ign_box = s; ign_why = "blinker"; return 0; }
     sig_box = s;
     if (dump_dir) dump_change(o, px, s);
     return 1;
@@ -476,15 +600,16 @@ static void rect_str(char *out, size_t n, const struct rect *r, int have) {
 }
 
 static void finish(const char *result, const char *reason, int code) {
-    char t[32] = "-", f[32] = "-", l[32] = "-", s[64], ig[64], la[64];
+    char t[32] = "-", f[32] = "-", l[32] = "-", s[64], ig[64], la[64], bk[64];
     if (t0 >= 0) snprintf(t, sizeof(t), "%lld", (long long)(now_ms() - t0));
     if (first_sig >= 0) snprintf(f, sizeof(f), "%lld", (long long)first_sig);
     if (last_sig >= 0) snprintf(l, sizeof(l), "%lld", (long long)last_sig);
     rect_str(s, sizeof(s), &sig_box, last_sig >= 0);
     rect_str(ig, sizeof(ig), &ign_box, ign_why != NULL);
     rect_str(la, sizeof(la), &late_box, nlate);
-    printf("%s %s t=%s first=%s last=%s change=%s ignored=%s why=%s late=%s frames=%ld\n",
-           result, reason, t, f, l, s, ig, ign_why ? ign_why : "-", la, frames);
+    rect_str(bk, sizeof(bk), &blink_box, nblinks);
+    printf("%s %s t=%s first=%s last=%s change=%s ignored=%s why=%s late=%s blink=%s blinks=%d frames=%ld\n",
+           result, reason, t, f, l, s, ig, ign_why ? ign_why : "-", la, bk, nblinks, frames);
     fflush(stdout);
     exit(code);
 }
