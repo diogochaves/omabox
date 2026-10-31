@@ -11691,7 +11691,10 @@ from them.
     real click on an icon is still `click X Y` from a shot. Tests: t_tray (a python-gobject fixture
     with a dbusmenu and one without: the listing, --all, --json, menu, click on a check, on a radio
     in a submenu, two alike and --index, the refusals, activate, --secondary, ContextMenu, an item
-    that quits; a --no-shell box has no watcher), tray.rs's parsing, lines and picks.
+    that quits; a --no-shell box has no watcher), tray.rs's parsing, lines and picks. `tray menu`,
+    `activate` and `click` are actions for `shot --burst --after` and `record -- ACTION`, as
+    `window` is (finding 591); a bare `tray` (or `tray --json`) only reads, so both refuse it,
+    saying which forms act (t_unit_record, t_unit_pixel; tray.rs which_act).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

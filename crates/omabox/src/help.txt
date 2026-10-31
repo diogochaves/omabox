@@ -581,6 +581,8 @@ line said on stderr, the row as the app then has it on stdout (`check menu item 
 one. Exit 1, nothing sent: no row is named LABEL, or the one named so is hidden, disabled (itself
 or its submenu) or a submenu. None of it draws the bar's menu card: the bar publishes no place for
 an icon (no accessible items), so a real click on one is `click X Y` at the icon a shot shows.
+`tray menu`, `activate` and `click` are actions for `shot --burst --after` and `record -- ACTION`
+(what a row opens, as it opens); a bare `tray` reads only, and is refused there.
 @ click
 `click --find TEXT` clicks the node of the accessibility tree `tree` reads (--window SEL, none: the
 active window; --layer SEL (or -l SEL) a layer's) named TEXT, with the real pointer at the middle of

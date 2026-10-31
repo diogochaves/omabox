@@ -1183,6 +1183,8 @@ most people will. Then:
   accessible items nor where an icon is (`tree --layer omarchy-bar` has none), so for the look of
   the icon or the card, a shot (`--stock-bar` if the user's bar has no tray). An item listed
   `(no menu)` shows a menu of its own: `tray menu ID` asks it (ContextMenu), then `windows`, `tree`.
+  What a row opens, as it opens: `shot --burst 12 --sheet --after -- tray click ID LABEL` (or
+  `record -- tray click ...`); `menu` and `activate` are actions too, a bare `tray` is not.
 - **Fresh profile, first run**: every new box. A state you reach once and test from often: `omabox
   save NAME`, then `up --from NAME`.
 - **Focus loss**: open another window (`omabox run -d -- foot`) or the Omarchy menu (`keys

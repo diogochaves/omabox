@@ -576,14 +576,17 @@ pub fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
     match first.as_slice() {
         b"keys" | b"click" | b"scroll" | b"drag" | b"pointer" | b"run" | b"hyprctl" | b"lua"
         | b"output" | b"monitor" | b"mode" | b"window" | b"restart-shell" | b"wait" => {}
+        b"tray" if crate::cmd::tray::acts(&ract[1..]) => {}
         _ => {
             let got = if first.is_empty() {
                 b"nothing".to_vec()
+            } else if first == b"tray" {
+                cat!(first, crate::cmd::tray::LISTING_NOTE)
             } else {
                 first
             };
             return Err(ctx.die(cat!(
-                "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, restart-shell, wait), got ",
+                "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, tray menu|activate|click, restart-shell, wait), got ",
                 got
             )));
         }

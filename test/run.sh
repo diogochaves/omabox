@@ -680,6 +680,8 @@ t_unit_record() {
   check_match "record alone: what it takes" "start, stop, status, mark, hold, sheet, -- ACTION or --for DURATION" "$(ob record 2>&1)"
   check_match "...--fps 0 refused" "--fps is 1 to 120, got 0" "$(ob record start --fps 0 2>&1)"
   check_match "...an action that does not act" "an omabox command that acts .*got shot" "$(ob record -- shot 2>&1)"
+  check_eq "...tray menu, activate and click act (#343): on to the box" 3 "$({ ob -b "$P-x" record -- tray click x y; ob -b "$P-x" record -- tray menu x; ob -b "$P-x" record -- tray activate x; } 2>&1 | grep -c "^omabox: no box '$P-x' is up")"
+  check_match "...a tray listing does not" "an omabox command that acts .*got tray \(a listing" "$(ob record -- tray --json 2>&1)"
   check_match "...an action naming another box" "the action runs on the recorded box \(no -b\)" "$(ob record -- keys -b x Return 2>&1)"
   check_match "...an action with start" "records one action .*not with start" "$(ob record start -- keys Return 2>&1)"
   check_match "...--hold past 60s" "--hold takes a duration up to 60s" "$(ob record --hold 2m -- keys Return 2>&1)"
@@ -9871,6 +9873,8 @@ omabox-tray-plain \"Plain demo\" [active] (no menu)" "$rc $out"
   check_eq "usage: a word tray does not know: exit 2" 2 "$(ob tray -b "$B" bogus >/dev/null 2>&1; echo $?)"
   check_eq "...click without LABEL: exit 2" 2 "$(ob tray -b "$B" click tray-demo >/dev/null 2>&1; echo $?)"
   check_eq "...--index 0: exit 2" 2 "$(ob tray -b "$B" click tray-demo open --index 0 >/dev/null 2>&1; echo $?)"
+  ob shot -b "$B" --burst 2 --after -- tray click tray-demo sync >/dev/null 2>&1
+  check_eq "shot --burst --after -- tray click: the row clicked once more" 2 "$(grep -c '^omabox-tray-demo event 2 clicked$' "$lg")"
   ob tray -b "$B" click tray-demo quit >/dev/null 2>&1
   check "Quit: the app leaves, the tray lists one" until_ok 10 bash -c "'$CLI' tray -b '$B' --json | jq -e 'length == 1 and .[0].id == \"omabox-tray-plain\"'"
   ob down "$B" >/dev/null
@@ -17164,6 +17168,8 @@ t_unit_pixel() {
   check_match "shot --burst with --zoom refused" "--burst or --zoom" "$(ob shot -b "$P-x" --burst 3 --zoom 2 -g "0,0 9x9" 2>&1)"
   check_match "shot --after: an omabox command that acts" "got ls" "$(ob shot -b "$P-x" --burst 3 --after -- ls 2>&1)"
   check_match "...scroll and monitor are (#167)" "no box '$P-x' is up.*"$'\n'"omabox: no box '$P-x' is up" "$(ob shot -b "$P-x" --burst 3 --after -- scroll 1 1 15 2>&1; ob shot -b "$P-x" --burst 3 --after -- monitor add 800x600 2>&1)"
+  check_eq "...tray click, menu and activate are (#343)" 3 "$({ ob shot -b "$P-x" --burst 3 --after -- tray click x y; ob shot -b "$P-x" --burst 3 --after -- tray menu x; ob shot -b "$P-x" --burst 3 --after -- tray activate x; } 2>&1 | grep -c "^omabox: no box '$P-x' is up")"
+  check_match "...a tray listing is not" "got tray \(a listing" "$(ob shot -b "$P-x" --burst 3 --after -- tray 2>&1)"
   check_match "...on the burst's box" "no -b" "$(ob shot -b "$P-x" --burst 3 --after -- keys -b other a 2>&1)"
   # #338, finding 621: shot is on the skill's allowed-tools, so its action reads no host file.
   check_match "...whose run takes no --env-file (a host file read: #338)" "takes no --env-file" \

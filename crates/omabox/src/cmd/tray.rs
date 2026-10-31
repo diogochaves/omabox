@@ -603,6 +603,18 @@ fn the_item(ctx: &mut Ctx, want: &str) -> Res<Item> {
     }
 }
 
+/// Whether `tray WORDS` (the words after `tray`) acts, for `shot --after` and `record -- ACTION`:
+/// menu, activate and click do; a listing only reads.
+pub fn acts(words: &[Vec<u8>]) -> bool {
+    words
+        .iter()
+        .find(|w| !w.starts_with(b"-"))
+        .is_some_and(|w| matches!(w.as_slice(), b"menu" | b"activate" | b"click"))
+}
+
+/// What an action check says of a `tray` that does not act.
+pub const LISTING_NOTE: &str = " (a listing: tray menu, activate or click act)";
+
 enum Sub {
     List,
     Menu(String),
@@ -951,6 +963,13 @@ mod tests {
 
     fn rows() -> Vec<Row> {
         layout(&serde_json::from_str(LAYOUT).unwrap()).unwrap().1
+    }
+
+    #[test]
+    fn which_act() {
+        let w = |s: &str| -> Vec<Vec<u8>> { s.split(' ').map(|x| x.as_bytes().to_vec()).collect() };
+        assert!(acts(&w("click x y")) && acts(&w("--json menu x")) && acts(&w("activate x")));
+        assert!(!acts(&w("--json")) && !acts(&[]) && !acts(&w("bogus")));
     }
 
     #[test]

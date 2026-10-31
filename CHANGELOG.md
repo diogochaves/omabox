@@ -62,7 +62,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (several alike: `--index N`; a hidden, disabled or submenu row is refused). `tray menu ID` opens
   one item's menu as a host does, `tray activate ID` is a left click on its icon (`--secondary` a
   middle one). No pixels: Omarchy's bar publishes no place for its icons, so where a real click on
-  one lands is still found from a shot ([#343](https://github.com/diogochaves/omabox/issues/343)).
+  one lands is still found from a shot. `tray menu`, `activate` and `click` are actions for `shot
+  --burst --after` and `record -- ACTION`
+  ([#343](https://github.com/diogochaves/omabox/issues/343)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

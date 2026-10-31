@@ -488,10 +488,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 | b"mode"
                 | b"window"
                 | b"restart-shell"
-        ) {
+        ) && !(first == b"tray" && crate::cmd::tray::acts(&after[1..]))
+        {
+            let note = if first == b"tray" {
+                crate::cmd::tray::LISTING_NOTE
+            } else {
+                ""
+            };
             return Err(ctx.die(cat!(
-                "shot --after: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, restart-shell), got ",
-                first
+                "shot --after: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, window, tray menu|activate|click, restart-shell), got ",
+                first,
+                note
             )));
         }
         // (Only the action's own words, before a `--`: `run -d -- grep -b x` passes its -b to grep.)
