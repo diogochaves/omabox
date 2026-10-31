@@ -10880,6 +10880,16 @@ from them.
     told. Tests: the unit tests kb_hint_picks_the_one_that_can_hold_the_keyboard and
     layer_argv_as_bash; t_tree_layer (a full-screen overlay on demand beside a full-screen
     background of one pid: its tree, and the wallpaper's says it publishes nothing).
+565. **An editable combo box's typed text was not in the tree** (2026-10-31, #341). `tree` read
+    the Text interface only for text roles, and a combo box only for its Value or a closed menu's
+    selected item. Chromium's `<input list>` and `role=combobox` input (Qt WebEngine's likely too,
+    Chromium inside: not measured) are a `combo box` [editable] with the text on it and no child: a
+    filled path field printed `combo box "new path" [editable]` and nothing `--find` could match.
+    Qt Quick's and GTK4's combo boxes have no Text interface of their own; Qt Quick's editable one
+    has an entry child that already says it (an AT-SPI probe in a box). Now an editable combo box's
+    Text is its `'text'`; a closed one's stays out (Chromium's is U+FFFC, its menu), and its choice
+    is still `=value`. Test: t_tree (Chromium: the typed path found by `--find`, in `--json`, a
+    closed select `=two`).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

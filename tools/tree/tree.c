@@ -180,9 +180,11 @@ static char *label_of(AtspiAccessible *a) {
     return s;
 }
 
-// The text a shot would be read for, when the name does not carry it.
-static char *text_of(AtspiAccessible *a, const char *role) {
-    if (!in(role, TEXT_ROLES)) return g_strdup("");
+// The text a shot would be read for, when the name does not carry it. An editable combo box (an
+// input with suggestions: Chromium, Qt WebEngine) holds its typed text itself; a closed one's Text
+// is a placeholder for its menu, and its choice is combo_choice's.
+static char *text_of(AtspiAccessible *a, const char *role, int editable) {
+    if (!in(role, TEXT_ROLES) && !(editable && strcmp(role, "combo box") == 0)) return g_strdup("");
     AtspiText *t = atspi_accessible_get_text_iface(a);
     if (!t) return g_strdup("");
     gint n = atspi_text_get_character_count(t, NULL);
@@ -425,7 +427,7 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     val = value_of(a);
     if (!val && strcmp(role, "combo box") == 0) val = combo_choice(a);
     if (val && strcmp(val, name) == 0) g_clear_pointer(&val, g_free);
-    text = text_of(a, role);
+    text = text_of(a, role, HAS(ATSPI_STATE_EDITABLE));
     if (strcmp(text, name) == 0) *text = 0;
     for (size_t i = 0; i < G_N_ELEMENTS(SHOWN); i++)
         if (HAS(SHOWN[i].st)) g_ptr_array_add(states, (gpointer)SHOWN[i].word);

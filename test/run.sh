@@ -8410,6 +8410,29 @@ PY
   else
     skip "tree of a GTK4 window" "no GTK4 or python-gobject"
   fi
+  # #341: an editable combo box (an input with suggestions: Chromium, Qt WebEngine) holds its typed
+  # text itself, with no entry under it; a closed select's choice stays its value.
+  if ob run -b "$B" -- sh -c 'command -v chromium' >/dev/null 2>&1; then
+    cat > "$H/tree-combo.html" <<'HTML'
+<!doctype html><title>Tree combo web</title>
+<label>new path <input list="s" value="/home/sbx/typed path"></label>
+<datalist id="s"><option value="/home/sbx/old"></option></datalist>
+<p><select aria-label="closed"><option>one</option><option selected>two</option></select></p>
+HTML
+    ob run -b "$B" -d -- chromium --force-renderer-accessibility --no-first-run --user-data-dir=/home/sbx/tree-chromium \
+      --app=file:///home/sbx/tree-combo.html >/dev/null 2>&1
+    ob wait -b "$B" --timeout 30s window 'title:Tree combo web' >/dev/null
+    until_ok 15 bash -c "'$CLI' tree -b '$B' --window 'Tree combo web' --find closed >/dev/null 2>&1" || true
+    check_match "Chromium: an editable combo box's typed text, found by it" \
+      "combo box \"new path\" '/home/sbx/typed path' \\[editable\\] @" "$(ob tree -b "$B" --window 'Tree combo web' --find 'typed path' 2>&1)"
+    check_eq "...in --json" "/home/sbx/typed path" \
+      "$(ob tree -b "$B" --window 'Tree combo web' --json --find 'typed path' 2>&1 | jq -r '.[0].text' 2>&1)"
+    check_match "...a closed select still says its choice as its value, no text" \
+      'combo box "closed" =two @' "$(ob tree -b "$B" --window 'Tree combo web' --find closed 2>&1)"
+    ob run -b "$B" -- pkill -f tree-chromium >/dev/null 2>&1 || true
+  else
+    skip "tree of an editable combo box (Chromium)" "no chromium"
+  fi
   ob run -b "$B" -d -- foot --app-id=omabox.tree >/dev/null 2>&1
   ob wait -b "$B" --timeout 20s window omabox.tree >/dev/null
   rc=0; out=$(ob tree -b "$B" --window omabox.tree 2>&1) || rc=$?

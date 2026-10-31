@@ -37,6 +37,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
   `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
   Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).
+- **`tree` printed no text for an editable combo box** (an input with suggestions in Chromium or Qt
+  WebEngine), so a typed value could not be read, found by `--find` or seen in `--json`. It is now
+  its `'text'`; a closed select still says its choice as `=value`
+  ([#341](https://github.com/diogochaves/omabox/issues/341)).
 - **`run`'s note "WORD is relative to DIR" fired on words that only share a folder's name**: from a
   checkout with a `stash` folder, `run -- omarchy-shell stash modules` was told to restart the box
   with `--overlay`. A word now counts only when it reads as a path (a `/` in it, the command itself,
