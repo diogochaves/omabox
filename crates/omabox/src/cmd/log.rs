@@ -92,6 +92,57 @@ impl Reading {
     }
 }
 
+/// What `hyprctl rollinglog` added to a hyprland.log read (#328, finding 566).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Rolled {
+    /// The file had every line rollinglog holds (or there was none to have).
+    Current,
+    /// The file's end overlapped rollinglog: the lines past it were added.
+    Added,
+    /// No overlap: the file is further behind than rollinglog reaches, so lines are in neither.
+    Gap,
+}
+
+/// The box's hyprland.log with the lines Hyprland logged but has not written to it yet (#328,
+/// finding 566): Hyprland writes its file through an 8 KiB buffer and never flushes it, while
+/// `hyprctl rollinglog` holds the last 4 KiB it logged, whole lines, byte for byte as the file gets
+/// them. Where the file's end is rollinglog's start, the rest of rollinglog is added; an overlap
+/// shorter than rollinglog's first line is taken for chance (the file ends mid-line), not a match.
+pub fn with_rolling(file: &[u8], roll: &[u8]) -> (Vec<u8>, Rolled) {
+    if roll.is_empty() {
+        return (file.to_vec(), Rolled::Current);
+    }
+    let first = roll
+        .iter()
+        .position(|&c| c == b'\n')
+        .map_or(roll.len(), |i| i + 1);
+    let k = (first..=roll.len())
+        .rev()
+        .find(|&k| file.ends_with(&roll[..k]));
+    match k {
+        Some(k) if k == roll.len() => (file.to_vec(), Rolled::Current),
+        Some(k) => (cat!(file, &roll[k..]), Rolled::Added),
+        None => {
+            let nl: &[u8] = if file.is_empty() || file.ends_with(b"\n") {
+                b""
+            } else {
+                b"\n"
+            };
+            (cat!(file, nl, roll), Rolled::Gap)
+        }
+    }
+}
+
+/// `hyprctl rollinglog` in a live box, within 2 s (empty when it does not answer: the file alone).
+fn rolling(ctx: &Ctx) -> Vec<u8> {
+    let argv: Vec<Vec<u8>> = ["timeout", "2", "hyprctl", "rollinglog"]
+        .iter()
+        .map(|w| w.as_bytes().to_vec())
+        .collect();
+    let r = on_box(ctx, &argv, true, Out::Capture(Some(1_048_576)), ErrTo::Null);
+    if r.rc == 0 { r.out } else { Vec::new() }
+}
+
 /// `grep --line-buffered -E [-i] -- RE`.
 fn grep_cmd(re: &[u8], icase: bool) -> Command {
     let mut c = crate::sig::command("grep");
@@ -327,7 +378,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 None => c,
             }
         } else {
-            let g = rd.grep(&rd.cat(ctx, *kind, p));
+            let mut data = rd.cat(ctx, *kind, p);
+            // Hyprland's file lags what it logged (#328): the rest from its rolling log.
+            if rd.live && s == b"hyprland" {
+                let (d, how) = with_rolling(&data, &rolling(ctx));
+                if how == Rolled::Gap {
+                    say(
+                        "log: Hyprland's log file is behind by more than its rolling log holds (it writes the file 8 KiB at a time): its last 4 KiB, from `hyprctl rollinglog`, are added, and the lines before them are in neither yet",
+                    );
+                }
+                data = d;
+            }
+            let g = rd.grep(&data);
             shell::subst(&count.map_or(g.clone(), |k| tail_lines(&g, k)))
         };
         // Several: each under its name, as tail does; an empty one (or none matching) not at all.
@@ -513,6 +575,43 @@ mod tests {
         assert_eq!(tail_lines(b"a\n", 0), b"");
         assert_eq!(lines_ended(b"a\nb"), b"a\nb\n");
         assert_eq!(lines_ended(b""), b"");
+    }
+
+    // #328: the lines Hyprland has not written to its file yet, from its rolling log.
+    #[test]
+    fn rolled() {
+        let f = b"a 1\nb 2\nc 3\nd 4\n";
+        // (rollinglog holds the last lines: here the file's last two, and two more)
+        assert_eq!(
+            with_rolling(f, b"c 3\nd 4\ne 5\nf 6\n"),
+            (b"a 1\nb 2\nc 3\nd 4\ne 5\nf 6\n".to_vec(), Rolled::Added)
+        );
+        assert_eq!(
+            with_rolling(f, b"c 3\nd 4\n"),
+            (f.to_vec(), Rolled::Current)
+        );
+        assert_eq!(with_rolling(f, b""), (f.to_vec(), Rolled::Current));
+        // The file ends mid-line (its buffer was written at 8 KiB, not at a line's end).
+        assert_eq!(
+            with_rolling(b"a 1\nb 2\nc ", b"b 2\nc 3\nd 4\n"),
+            (b"a 1\nb 2\nc 3\nd 4\n".to_vec(), Rolled::Added)
+        );
+        // No overlap: further behind than rollinglog reaches. The file's partial line ended.
+        assert_eq!(
+            with_rolling(b"a 1\nb 2\nc", b"x 8\ny 9\n"),
+            (b"a 1\nb 2\nc\nx 8\ny 9\n".to_vec(), Rolled::Gap)
+        );
+        // An end that matches only part of rollinglog's first line is chance, not the overlap.
+        assert_eq!(
+            with_rolling(b"a 1\nDEB", b"DEBUG x\nDEBUG y\n"),
+            (b"a 1\nDEB\nDEBUG x\nDEBUG y\n".to_vec(), Rolled::Gap)
+        );
+        // The same line many times: the longest overlap, nothing doubled.
+        assert_eq!(
+            with_rolling(b"z\nr\nr\n", b"r\nr\ns\n"),
+            (b"z\nr\nr\ns\n".to_vec(), Rolled::Added)
+        );
+        assert_eq!(with_rolling(b"", b"a\n"), (b"a\n".to_vec(), Rolled::Gap));
     }
 
     // As t_unit_gdb_crashes checks bash's.

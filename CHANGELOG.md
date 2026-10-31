@@ -80,6 +80,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   of the screen's left never had it. `omabox hyprctl notify` now says where, with the `shot -g` of
   that corner, and the reference says it
   ([#359](https://github.com/diogochaves/omabox/issues/359)).
+- **`omabox log` missed Hyprland's latest lines**: Hyprland writes `hyprland.log` 8 KiB at a time,
+  so what a reload or a plugin just logged was often not in the file yet, and `log --grep` found
+  nothing as if it never happened. `log hyprland` of a live box now adds the lines past the file's
+  end from `hyprctl rollinglog`; when the file is further behind than rollinglog's last 4 KiB reach,
+  it says so on stderr ([#328](https://github.com/diogochaves/omabox/issues/328)).
 
 ## 1.0.2 — 2026-10-30
 

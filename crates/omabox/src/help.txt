@@ -572,7 +572,8 @@ then journal.1.log), box bwrap's. shell's lines carry their time (YYYY-MM-DD HH:
 --log-times; the launcher's `logger` lines too, not what Quickshell prints outside its log) as
 `omabox events`' do (HH:MM:SS.mmm); Hyprland's have none. --grep sees the time as part of the
 line. -f (or --follow) follows them until the box goes down (-n then counts lines before --grep). Hyprland writes
-its log in pieces: its newest lines can come late. `log gdb --crash`: only each crash's signal and
+its log file 8 KiB at a time: `log hyprland` adds the newest lines from `hyprctl rollinglog` (its last
+4 KiB; stderr says when the file is further behind), while -f gets them late. `log gdb --crash`: only each crash's signal and
 the backtrace of the thread it hit (-n and --grep then apply to those).
 @ gdb
 `gdb` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a

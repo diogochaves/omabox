@@ -647,8 +647,10 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   `journal.1.log`), `box` (bwrap), `reap` (the
   reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
   `-f` follows until the box goes down (exit 0). `-i` (ignore case) goes anywhere, `--grep -i RE`
-  too. Hyprland writes its log in pieces: a line about what just happened can come a moment (or
-  many lines) later; `-f` shows it when it does.
+  too. Hyprland writes its log file 8 KiB at a time: `log hyprland` of a live box adds the lines
+  not in the file yet from `omabox hyprctl rollinglog` (its last 4 KiB), and says on stderr when the
+  file is further behind than that (the lines between come later). `-f` follows the file, so a line
+  about what just happened can come many lines later; `omabox hyprctl rollinglog` has it at once.
 - `omabox events`: Hyprland's event stream (`activewindow>>`, `urgent>>`, `openlayer>>`,
   `workspace>>`, ...) as the box recorded it from its start, one stamped line each (`--json`:
   `{time, event, data}`). Never hand-roll a socat on `.socket2.sock`, and never truncate a log

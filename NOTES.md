@@ -10890,6 +10890,23 @@ from them.
     Text is its `'text'`; a closed one's stays out (Chromium's is U+FFFC, its menu), and its choice
     is still `=value`. Test: t_tree (Chromium: the typed path found by `--find`, in `--json`, a
     closed select `=two`).
+566. **`omabox log` read a hyprland.log that lagged what Hyprland had logged** (2026-10-31, #328).
+    Hyprland 0.56 logs through hyprutils' CLogger into a file stream it never flushes: the file
+    grows in 8 KiB steps (measured: 191887 bytes, unchanged through a reload and 35 s, then 200081
+    after 30 more reloads), so the last 0-8 KiB of lines are only in Hyprland's memory. Its rolling
+    log (`hyprctl rollinglog`, the last ~4 KiB, whole lines, byte for byte as the file gets them) has
+    them: in a fresh box its first 745 bytes were the file's last, and 3335 bytes past it were in
+    no file. `log --grep` for a reload's or a plugin's lines found nothing, as if they never came
+    (the issue's frozen file was this; plain sessions show it too). Now `log hyprland` of a live box
+    (not `--crash`, not `-f`) asks `timeout 2 hyprctl rollinglog` and adds what is past the file's
+    end: the longest overlap of the file's end with rollinglog's start, at least rollinglog's first
+    line (a file ending mid-line in "DEB" is not an overlap with "DEBUG ]: ..."). No overlap means
+    the file is behind by more than 4 KiB (about half the time, as the buffer fills to 8): rollinglog
+    is added after it and stderr says the lines between are in neither yet. `-f` still follows the
+    file (`tail -F`), which gets them in 8 KiB pieces, as the reference says. Tests: the unit test
+    `rolled` (an overlap added, mid-line ends, no overlap, a chance overlap of part of a line,
+    repeated lines not doubled); t_log_rolling (a `[Lua]` print not in the file yet: in `log --grep`,
+    once in `-n all`; it fails on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
