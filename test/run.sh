@@ -16231,8 +16231,9 @@ t_monitors_window() {
   check "...its screen its window's size again, at scale 1" until_ok 3 mons 'map("\(.name) \(.mode) \(.scale)") | join("|")' "WAYLAND-1 3416x1416@60 1"
   # (its table too, the main screen alone: add, remove and list --json are checked above; #324, what
   # wave 4a compared with bash's)
+  # (run's notes of host paths in its words, #301, read past: the table is what is checked)
   check_match "monitor list, interactive: its table, the main screen alone" "^NAME +MODE +SCALE +POSITION +WORKSPACE"$'\n'"WAYLAND-1 +3416x1416@60 +1 +0,0 " \
-    "$("${in[@]}" monitor -b wm list 2>&1)"
+    "$("${in[@]}" monitor -b wm list 2>&1 | grep -v '^omabox: note: ')"
   "${in[@]}" monitor -b wm add 800x600 >/dev/null 2>&1
   local main; main=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .floating and .size[0] > 1000) | .address')
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$main' })" >/dev/null
