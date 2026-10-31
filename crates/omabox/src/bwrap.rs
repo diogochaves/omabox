@@ -86,6 +86,39 @@ pub fn lexical(p: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Why D cannot be a box dir (finding 607), or None: D, as written or as it resolves, is or holds
+/// the runtime dir (RUNTIME), HOME, `/`, or any seat path (`/dev`, `/run` among the folders that
+/// hold one), or lies in one of the seat's paths but the runtime dir. A box dir is the runtime dir's
+/// `omabox/NAME`; a source in it skips the seat check, so a D past those would let them in.
+fn box_dir_refused(d: &[u8], runtime: &[u8], home: &[u8]) -> Option<&'static str> {
+    let canon = |p: &[u8]| -> Vec<Vec<u8>> {
+        let mut v = vec![lexical(p)];
+        if let Ok(c) = std::fs::canonicalize(crate::shell::path(p)) {
+            let c = lexical(crate::shell::bytes(&c));
+            if !v.contains(&c) {
+                v.push(c);
+            }
+        }
+        v
+    };
+    let at_or_above = |x: &[u8], y: &[u8]| x == b"/" || y == x || y.starts_with(&cat!(x, "/"));
+    for own in canon(d) {
+        if own == b"/" {
+            return Some("it is /");
+        }
+        if !runtime.is_empty() && canon(runtime).iter().any(|r| at_or_above(&own, r)) {
+            return Some("it is or holds your runtime dir");
+        }
+        if !home.is_empty() && canon(home).iter().any(|h| at_or_above(&own, h)) {
+            return Some("it is or holds your HOME");
+        }
+        if let Some(why) = seat_path(&own, b"").or_else(|| holds_seat(&own, b"")) {
+            return Some(why);
+        }
+    }
+    None
+}
+
 /// A device a box may have (S1): a render node, NVIDIA's numbered nodes, its control node and its
 /// unified memory node (#149). Nothing else can be made one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,15 +164,25 @@ pub const SYS_RO: [&str; 3] = ["/usr", "/etc", "/sys"];
 
 impl Bwrap {
     /// RUNTIME: the user's runtime dir; D: the box dir; RW: the box's runtime dir and HOME;
-    /// OWN_ROOTS: where omabox's own files may be besides D.
-    pub fn new(runtime: &[u8], d: &[u8], rw: Vec<Vec<u8>>, own_roots: Vec<Vec<u8>>) -> Bwrap {
-        Bwrap {
+    /// OWN_ROOTS: where omabox's own files may be besides D. Refused for a D whose by-path
+    /// exemption (a source in it skips the seat check) would cover the seat, HOME or the runtime
+    /// dir (finding 607).
+    pub fn new(
+        runtime: &[u8],
+        d: &[u8],
+        rw: Vec<Vec<u8>>,
+        own_roots: Vec<Vec<u8>>,
+    ) -> Result<Bwrap, Refused> {
+        if let Some(why) = box_dir_refused(d, runtime, &crate::shell::env_or_empty("HOME")) {
+            return Err(Refused(cat!("refusing box dir ", d, ": ", why)));
+        }
+        Ok(Bwrap {
             args: Vec::new(),
             runtime: runtime.to_vec(),
             own: lexical(d),
             rw: rw.iter().map(|p| lexical(p)).collect(),
             own_roots: own_roots.iter().map(|p| lexical(p)).collect(),
-        }
+        })
     }
 
     pub fn into_args(self) -> Vec<Vec<u8>> {
@@ -468,6 +511,7 @@ mod tests {
             ],
             vec![b"/home/u/omabox".to_vec()],
         )
+        .unwrap()
     }
 
     #[test]
@@ -494,6 +538,45 @@ mod tests {
         assert!(b.resolv(b"/run/dbus/system_bus_socket").is_err());
         assert!(b.resolv(b"/etc/passwd").is_err());
         assert_eq!(b.into_args()[0], b"--ro-bind");
+    }
+
+    // Finding 607: a box dir whose by-path exemption would cover the seat, HOME or the runtime dir
+    // is refused, as written or as it resolves; a box dir of the runtime dir's, or anywhere plain, is
+    // taken.
+    #[test]
+    fn box_dir_never_covers_the_seat() {
+        let home = crate::shell::env_or_empty("HOME");
+        let parent = home[..home.iter().rposition(|&c| c == b'/').unwrap_or(0)].to_vec();
+        let base = std::env::temp_dir().join(format!("omabox-box-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let link = base.join("to-run");
+        let _ = std::os::unix::fs::symlink("/run", &link);
+        let link = crate::shell::bytes(&link).to_vec();
+        let new = |d: &[u8]| Bwrap::new(RT, d, Vec::new(), Vec::new()).map(|_| ());
+        for d in [
+            b"/".as_slice(),
+            b"/run",
+            b"/dev",
+            b"/run/user",
+            RT,
+            b"/run/user/1000/",
+            b"/run/user/1000/omabox/..",
+            b"/run/user/1000/omabox/b/../../..",
+            b"/dev/dri",
+            b"/dev/dri/card0",
+            b"/dev/input/x",
+            b"/run/dbus",
+            b"/run/seatd.sock",
+            &home,
+            &parent,
+            &link,
+        ] {
+            assert!(new(d).is_err(), "{:?}", String::from_utf8_lossy(d));
+        }
+        assert!(new(b"/run/user/1000/omabox/b").is_ok());
+        assert!(new(crate::shell::bytes(&base)).is_ok());
+        assert!(new(&cat!(home, "/.cache/omabox/b")).is_ok());
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     // #365: words() refuses every bind-like word in a release build too, the ones the first list
@@ -684,7 +767,10 @@ mod tests {
         );
         let [_, by_seat] =
             oracle::run_counted(256, (roots_strategy(), calls), |((roots, rw), calls), n| {
-                let mut b = Bwrap::new(RT, b"/run/user/1000/omabox/b", rw.clone(), roots.clone());
+                let mut b = Bwrap::new(RT, b"/run/user/1000/omabox/b", rw.clone(), roots.clone())
+                    .map_err(|e| {
+                    TestCaseError::fail(String::from_utf8_lossy(&e.0).into_owned())
+                })?;
                 for (k, s, d, i) in &calls {
                     // (10, 11: a file of one of the box's own roots, one of its writable dirs)
                     let root = cat!(roots[i % roots.len()], "/share");

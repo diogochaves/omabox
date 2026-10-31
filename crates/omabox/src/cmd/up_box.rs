@@ -1112,13 +1112,14 @@ fn bwrap_args(
     if !u.aq.lib.is_empty() {
         own_roots.push(u.aq.lib.clone());
     }
+    let refused = |e: crate::bwrap::Refused| ctx.die(cat!(ctx.label(), e.0));
     let mut b = Bwrap::new(
         &runtime,
         d,
         vec![cat!(d, "/run"), home_dir.clone()],
         own_roots,
-    );
-    let refused = |e: crate::bwrap::Refused| ctx.die(cat!(ctx.label(), e.0));
+    )
+    .map_err(refused)?;
     // The host's name in both network modes (finding 54).
     b.words(&[
         b"--info-fd",

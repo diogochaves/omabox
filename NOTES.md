@@ -12025,6 +12025,17 @@ from them.
     animations on, the pointer shown; a theme of the user's by `--theme`; `--clean --keep
     wallpaper`), t_unit_check (`--stock --desk-shell` and `--stock --keep` refused, `run --stock`
     too), upspec.rs clean_as_bash and clean_words (the words), seed.rs fonts_as_bash.
+607. **The bwrap builder trusted its box dir by path alone** (2026-10-31, found writing #365's
+    tests). `Bwrap`'s seat check (S1) skips a source inside the box dir, which lies in the runtime
+    dir: the box's own run dir, etc files and placeholders are bound from there. Nothing checked the
+    box dir itself, so a box dir that was the runtime dir, `/`, `/run`, `/dev` or a link to one (a
+    name of `..`, a wrong prefix) would have exempted every seat path under it. Box names are
+    validated and the dir is always `$XDG_RUNTIME_DIR/omabox/NAME`, so no user could reach it:
+    defence in depth, no CHANGELOG line. `Bwrap::new` now refuses a box dir that, as written or
+    canonicalised, is or holds `/`, the runtime dir or HOME, or is or holds a seat path (`/dev`,
+    `/run`, `/dev/dri`, a card node, `/dev/input`, seatd's socket, the system bus); up says so and
+    stops. Test: bwrap.rs's `box_dir_never_covers_the_seat` (each of those, a link to `/run`, and the
+    runtime dir reached by `..`, refused; a box dir of the runtime dir's or of a plain folder taken).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
