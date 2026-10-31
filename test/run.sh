@@ -11374,6 +11374,141 @@ QML
   ob down "$B" >/dev/null
 }
 
+# An action --in a screen shot when the screen changed since (#333, finding 592): refused, exit 1, when
+# what is at its point is not what was there (a layer over it, another window, the window resized
+# under it), saying then and now and what changed; a change away from the point is not; a new shot,
+# or a window's, is not checked. Nothing is sent when it is refused.
+t_in_changed() {
+  local B=$P-inch o=$TMP/inch D out rc
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  D=$(ob path -b "$B"); mkdir -p "$o"
+  ob run -b "$B" -d -q --wait -- foot -T A -o cursor.blink=no cat >/dev/null 2>&1
+  ob shot -b "$B" -o "$o/s1.png" >/dev/null 2>&1
+  out=$(ob click -b "$B" --in "$o/s1.png" 1500 800 2>&1); rc=$?
+  check_eq "nothing changed: click --in clicks" "0 " "$rc $out"
+  cat > "$D/home/t333.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+ShellRoot {
+  PanelWindow {
+    anchors { top: true; left: true }
+    margins { top: 200; left: 300 }
+    implicitWidth: 300; implicitHeight: 150
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.namespace: "t333-panel"
+    color: "#4060c0"
+  }
+}
+QML
+  ob run -b "$B" -d -q -- qs -p /home/sbx/t333.qml >/dev/null 2>&1
+  if ob wait -b "$B" layer t333-panel >/dev/null 2>&1; then
+    ob pointer -b "$B" -- move 10 10 >/dev/null 2>&1
+    out=$(ob click -b "$B" --in "$o/s1.png" 400 250 2>&1); rc=$?
+    check_eq "a layer over the point since the shot: refused, exit 1" 1 "$rc"
+    check_match "...saying then, now and what changed" \
+      "click --in: the screen changed at 400,250 since $o/s1\.png: then on foot \"A\" \(its [0-9]+,[0-9]+; the window [0-9]+x[0-9]+\), now on layer t333-panel .*\(since the shot: layer t333-panel opened\); take a new shot" "$out"
+    check_eq "...nothing sent: the pointer did not move" "10, 10" "$(ob hyprctl -b "$B" cursorpos)"
+    out=$(ob pointer -b "$B" --in "$o/s1.png" move 400 250 2>&1); rc=$?
+    check_match "...pointer --in there: refused too" "^1 omabox: pointer --in: the screen changed at 400,250 since " "$rc $out"
+    out=$(ob scroll -b "$B" --in "$o/s1.png" 400 250 15 2>&1); rc=$?
+    check_match "...scroll --in" "^1 omabox: scroll --in: the screen changed at 400,250 since " "$rc $out"
+    out=$(ob drag -b "$B" --in "$o/s1.png" 1500 800 400 250 2>&1); rc=$?
+    check_match "...drag --in ending there" "^1 omabox: drag --in: the screen changed at 400,250 since " "$rc $out"
+    check_eq "...none of them sent: the pointer did not move" "10, 10" "$(ob hyprctl -b "$B" cursorpos)"
+    out=$(ob click -b "$B" --in "$o/s1.png" 1500 800 2>&1); rc=$?
+    check_eq "...away from the layer: clicked, nothing said" "0 " "$rc $out"
+    ob shot -b "$B" -o "$o/s2.png" >/dev/null 2>&1
+    out=$(ob click -b "$B" --in "$o/s2.png" 400 250 2>&1); rc=$?
+    check_match "a shot taken since: clicked (the layer said, as for any click there)" "^0 omabox: a layer surface \"t333-panel\"" "$rc $out"
+  else no "the panel layer maps" "no t333-panel layer"; fi
+  ob shot -b "$B" -o "$o/s3.png" >/dev/null 2>&1
+  # A second window tiles beside A: A is resized under 1500,800, B is there.
+  ob run -b "$B" -d -q --wait -- foot -T B -o cursor.blink=no cat >/dev/null 2>&1
+  local bx; bx=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "B") | .at[0]')
+  out=$(ob click -b "$B" --in "$o/s3.png" 1500 800 2>&1); rc=$?
+  check_eq "a window opened over the point: refused" 1 "$rc"
+  check_match "...then A, now B, the window opened" \
+    "then on foot \"A\" .*, now on foot \"B\" \(its $((1500 - bx)),[0-9]+; the window [0-9]+x[0-9]+\) \(since the shot: window opened, focused: foot \"B\"\)" "$out"
+  out=$(ob click -b "$B" --in "$o/s3.png" 100 800 2>&1); rc=$?
+  check_match "...A resized under its point: refused" "^1 .*then on foot \"A\" \(its [0-9]+,[0-9]+; the window [0-9]+x[0-9]+\), now on foot \"A\" \(its [0-9]+,[0-9]+; the window [0-9]+x[0-9]+\)" "$rc $out"
+  # The layer gone since: a screen shot's point under it refused, a window's shot not checked (its
+  # point is the window's, raised if covered).
+  if ob wait -b "$B" --timeout 1s layer t333-panel >/dev/null 2>&1; then
+    ob shot -b "$B" -w 'title:^A$' -o "$o/w.png" >/dev/null 2>&1
+    ob shot -b "$B" -o "$o/s4.png" >/dev/null 2>&1
+    ob run -b "$B" -- pkill -f t333.qml >/dev/null 2>&1
+    ob wait -b "$B" layer t333-panel --gone >/dev/null 2>&1
+    out=$(ob click -b "$B" --in "$o/s4.png" 400 250 2>&1); rc=$?
+    check_match "the layer at the point gone since: refused" "^1 .*: then on layer t333-panel .*, now on foot \"A\" .*layer t333-panel closed" "$rc $out"
+    local ax ay; read -r ax ay < <(ob windows -b "$B" --json | jq -r '.[] | select(.title == "A") | "\(.at[0]) \(.at[1])"')
+    out=$(ob click -b "$B" --in "$o/w.png" $((400 - ax)) $((250 - ay)) 2>&1); rc=$?
+    check_eq "...a window's shot there: not checked (clicked, nothing said)" "0 " "$rc $out"
+  fi
+  ob down "$B" >/dev/null 2>&1
+}
+
+# wait change --since SHOT and wait still --like SHOT (#344, finding 593): the screen against an
+# earlier shot. A change made before the wait started (typed, then the screen still) is the answer at
+# once, where a plain `wait change` sees nothing; -g, a crop of the screen, a window's shot; --like
+# waits until it looks as before. A caret blinking in place is no difference either way.
+t_wait_since() {
+  local B=$P-since o=$TMP/since out rc
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  mkdir -p "$o"
+  ob run -b "$B" -d -q --wait -- foot -T S -o cursor.blink=no cat >/dev/null 2>&1
+  ob wait -b "$B" still >/dev/null 2>&1
+  ob shot -b "$B" -o "$o/s.png" >/dev/null 2>&1
+  ob shot -b "$B" -w 'title:^S$' -o "$o/w.png" >/dev/null 2>&1
+  ob shot -b "$B" -g "0,0 400x200" -o "$o/g.png" >/dev/null 2>&1
+  out=$(ob wait -b "$B" --timeout 1s change --since "$o/s.png"); rc=$?
+  check_match "nothing changed since the shot: 124" "^124 unsatisfied: nothing changed in 1\.[0-9]+s$" "$rc $out"
+  out=$(ob wait -b "$B" --timeout 2s still --like "$o/s.png"); rc=$?
+  check_match "still --like the shot: at once" "^0 satisfied: like $o/s\.png after 0\.[0-9]+s$" "$rc $out"
+  # The issue's case: the change is over before the wait starts.
+  ob keys -b "$B" -t hello >/dev/null 2>&1
+  ob wait -b "$B" still >/dev/null 2>&1
+  out=$(ob wait -b "$B" --timeout 1s change); rc=$?
+  check_eq "a plain wait change after it: nothing (124)" 124 "$rc"
+  out=$(ob wait -b "$B" --timeout 3s change --since "$o/s.png"); rc=$?
+  check_match "--since the shot: satisfied at once, where" "^0 satisfied: changed since $o/s\.png at [0-9]+,[0-9]+ [0-9]+x[0-9]+; seen after 0\.[0-9]+s$" "$rc $out"
+  out=$(ob wait -b "$B" --timeout 3s --json change --since "$o/s.png"); rc=$?
+  check "...--json: wait change's, the change's box" jq -e '.result == "satisfied" and .condition == "change" and .change.w > 0 and .elapsed < 3' <<<"$out"
+  out=$(ob wait -b "$B" --timeout 1s change --since "$o/s.png" -g "1000,600 200x200"); rc=$?
+  check_eq "...-g elsewhere: nothing changed there (124)" 124 "$rc"
+  out=$(ob wait -b "$B" --timeout 3s change --since "$o/g.png"); rc=$?
+  check_match "...a crop of the screen holding the text: changed" "^0 satisfied: changed since $o/g\.png at " "$rc $out"
+  out=$(ob wait -b "$B" --timeout 3s change --since "$o/w.png"); rc=$?
+  check_match "...a window's shot: in its coordinates" "^0 satisfied: changed since $o/w\.png at [0-9]+,[0-9]+ [0-9]+x[0-9]+ of the window, in its coordinates; " "$rc $out"
+  out=$(ob wait -b "$B" --timeout 1s still --like "$o/w.png"); rc=$?
+  check_match "still --like while it differs: 124, saying where" "^124 unsatisfied: not like $o/w\.png after 1\.[0-9]+s \(it differs at " "$rc $out"
+  # Back as before: the text rubbed out while it waits.
+  (sleep 0.5; ob keys -b "$B" BackSpace BackSpace BackSpace BackSpace BackSpace >/dev/null 2>&1) &
+  out=$(ob wait -b "$B" --timeout 8s --json still --like "$o/w.png"); rc=$?
+  wait
+  check "...the text rubbed out while it waits: like it again ($out)" jq -e '.result == "satisfied" and .condition == "still"' <<<"$out"
+  # A blinking caret alone: no difference.
+  ob run -b "$B" -d -q --wait -- foot -T C -o cursor.blink=yes -o cursor.style=beam cat >/dev/null 2>&1
+  ob wait -b "$B" still >/dev/null 2>&1
+  ob shot -b "$B" -w 'title:^C$' -o "$o/c.png" >/dev/null 2>&1
+  local i like=0
+  for i in 1 2 3 4; do
+    sleep 0.3
+    ob wait -b "$B" --timeout 1s still --like "$o/c.png" >/dev/null 2>&1 && like=$((like + 1))
+  done
+  check_eq "a blinking caret: still --like each time" 4 "$like"
+  check_eq "...wait change --since it: nothing (124)" 124 "$(ob wait -b "$B" --timeout 1500ms change --since "$o/c.png" >/dev/null 2>&1; echo $?)"
+  # What it refuses once the box is read.
+  check_match "-g with a window's shot refused, 1" "-g goes with a shot of the screen.* rc=1$" "$(ob wait -b "$B" change --since "$o/w.png" -g "0,0 10x10" 2>&1; echo " rc=$?")"
+  check_match "...-g outside the shot refused" "has nothing inside $o/g\.png \(0,0 400x200 of the screen\)" "$(ob wait -b "$B" change --since "$o/g.png" -g "500,500 10x10" 2>&1)"
+  ob shot -b "$B" --fit 960 -o "$o/fit.png" >/dev/null 2>&1
+  check_match "...a scaled shot refused" "a shot scaled or zoomed .* is not compared; take one with --fit 0" "$(ob wait -b "$B" change --since "$o/fit.png" 2>&1)"
+  touch "$o/nope.png"
+  check_match "...a file that is no shot of the box" "wait --since: $o/nope\.png is not a shot of box '$B'" "$(ob wait -b "$B" change --since "$o/nope.png" 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # A box whose Hyprland is alive but does not answer (stopped here; in use, a plugin under test's
 # deadlock): what asks it ends, saying so in words (#124, #125, findings 181-182). Continued, it
 # answers again.
@@ -17854,6 +17989,17 @@ t_unit_wait() {
   check_match "...once" "--expect once" "$(ob scroll -b "$P-x" --wait --expect tree a --expect tree b 1 2 3 2>&1)"
   check_match "...on drag too (read: no box here)" "no box '$P-x'" "$(ob drag -b "$P-x" --wait --expect tree a 1 2 3 4 2>&1)"
   check_match "...not on run -d" "unknown option|nearest" "$(ob run -b "$P-x" -d --wait --expect tree a -- true 2>&1)"
+  # --since SHOT and --like SHOT (#344, finding 593): change's and still's, never with --window or
+  # (--like) --quiet; one file. Refused before any box is read.
+  out=$(ob wait -b "$P-x" still --since a.png 2>&1); rc=$?
+  check_eq "wait still --since: refused (2), naming --like" \
+    "2|omabox: wait still: --since goes with change (still takes --like SHOT: back as it was) (omabox help wait)" "$rc|$out"
+  check_match "...change --like" "^omabox: wait change: --like goes with still \(change takes --since SHOT" "$(ob wait -b "$P-x" change --like a.png 2>&1)"
+  check_match "...with --window" "--since SHOT says what is watched: no --window" "$(ob wait -b "$P-x" change --since a.png --window foot 2>&1)"
+  check_match "...--like with --quiet" "no --quiet \(it is satisfied once the screen looks like SHOT\)" "$(ob wait -b "$P-x" still --like a.png --quiet 1s 2>&1)"
+  check_match "...with window" "wait window: --since goes with change \(--since\) or still \(--like\)" "$(ob wait -b "$P-x" window foot --since a.png 2>&1)"
+  check_match "...two files" "wait: two files, a.png and b.png" "$(ob wait -b "$P-x" change --since a.png --since b.png 2>&1)"
+  check_match "...help says them" "still \[--quiet 300ms \| --like SHOT\].*change \[--since SHOT\]" "$(ob help wait 2>&1 | tr '\n' ' ')"
   check_match "path: one of --home, --run, --logs" "one of --home, --run and --logs" "$(ob path -b "$P-x" --home --logs 2>&1)"
   check_match "--quiet without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --quiet 1s a 2>&1)"
   check_match "run --wait needs -d" "goes with -d" "$(ob run -b "$P-x" --wait -- true 2>&1)"
@@ -18717,7 +18863,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

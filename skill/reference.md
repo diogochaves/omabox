@@ -170,6 +170,10 @@ a turn. Five rules keep every omabox call plain:
   one), except after `keys`: Omarchy hides it on a key press until it moves; window shots never do.
   A shot right after a `click` or `keys` without `--wait` can show the frame before the redraw: `--wait`, or
   `omabox wait still`, first.
+- An action `--in` a screen shot is refused (exit 1, nothing sent) when what is at its point changed
+  since the shot: "the screen changed at X,Y since SHOT: then on ..., now on layer omarchy-menu ...;
+  take a new shot". Shoot again and read the new image; a change away from the point (a toast, the
+  clock) is not refused. A window's shot follows its window.
 - How a model reads points off a shot depends on the model. An image bigger than the model sees is
   scaled down before it looks (Claude: 1568 px a side and about 1.2 MP, so 1920x1080 is seen at
   ~1456x819; other providers have their own limits). Some models map what they read back to the
@@ -552,11 +556,12 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
 ## Waiting, in detail
 
 - `omabox wait [--timeout 10s] [--json] COND`, one condition per call (chain with `&&`): `still
-  [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change [-g GEOM |
-  --window SEL] [--ignore GEOM]...`, `window SEL [--gone | --focused]`, `layer NAMESPACE [--gone]
-  [--monitor NAME]` (`omarchy-menu`, `omarchy-notifications`, ...), `job [PID] [--gone]` (a `run -d`
-  job's end), `log [PID] RE [-i]` (a line in its log), `tree TEXT [--window SEL | --layer SEL]
-  [--gone] [--shot FILE]`, `until -- CMD` (exit 0 inside the box). Options go before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
+  [--quiet 300ms | --like SHOT] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change
+  [--since SHOT] [-g GEOM | --window SEL] [--ignore GEOM]...`, `window SEL [--gone | --focused]`,
+  `layer NAMESPACE [--gone] [--monitor NAME]` (`omarchy-menu`, `omarchy-notifications`, ...), `job
+  [PID] [--gone]` (a `run -d` job's end), `log [PID] RE [-i]` (a line in its log), `tree TEXT
+  [--window SEL | --layer SEL] [--gone] [--shot FILE]`, `until -- CMD` (exit 0 inside the box).
+  Options go before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several. `layer`'s line names the monitor of each one drawn (`at
   0,0 1920x1080 on HEADLESS-2`; a bar on every monitor is each named): which screen a popup opened
@@ -580,6 +585,13 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   change --window APP` (satisfied at the first change there; the window must be on screen), then
   `omabox wait still` for it to finish. Never `wait until -- false` (or `-- true`) as a sleep: the first
   is a fixed wait ending in 124, the second no wait at all.
+- A change you cause without an omabox input (a file the shell applies live, an IPC call, a command
+  in the box) can be drawn before a `wait change` starts, which then times out: shot first, act,
+  then `omabox wait change --since BEFORE.png [-g GEOM]` (satisfied at once if it already differs,
+  else at the first change). `omabox wait still --like BEFORE.png` waits until it looks as before
+  (a panel closed, a theme back). SHOT: a full-size shot of the screen, a part of it, or a whole
+  window (that window is watched); the pointer and a caret alone do not count, a clock does
+  (`--ignore` it). Not for an agent inside ai-jail yet.
 - Time that is part of a video is the only time you let pass, and never with a sleep: `omabox record
   -o cycle.mp4 --for 5s` records the screen for 5 s with no action (a panel cycling on a timer: no
   dummy action, the pointer left where it is); in a take, `omabox record hold 2s` between `record

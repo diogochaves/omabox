@@ -19,7 +19,7 @@ use crate::input::{
 use crate::jail::in_jail;
 use crate::marks::{epoch_us, mark, rec_glide, rec_input};
 use crate::num::ms_duration;
-use crate::screen::{Point, extent, shot_point};
+use crate::screen::{Point, extent, shot_point_act};
 use crate::select::select_box;
 use crate::settle::{Lines, Settle};
 use crate::shell;
@@ -223,7 +223,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let (mut x, mut y) = (xyv[k], xyv[k + 1]);
         let mut wsel = sels.clone();
         if !inp.is_empty() {
-            match shot_point(ctx, &inp, &num(x), &num(y))? {
+            match shot_point_act(ctx, &inp, &num(x), &num(y))? {
                 Point::Window(a, wx, wy) => {
                     (x, y) = (wx, wy);
                     wsel = vec![a];

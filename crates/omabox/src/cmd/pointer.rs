@@ -16,7 +16,7 @@ use crate::input::{
 };
 use crate::marks::{epoch_us, mark, rec_glide, rec_input};
 use crate::ptr::pointer_shown;
-use crate::screen::{Point, extent, shot_point};
+use crate::screen::{Point, extent, shot_point_act};
 use crate::select::select_box;
 use crate::shell::{self, dec};
 use crate::win::{Raise, win_point};
@@ -171,7 +171,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if !sels.is_empty() {
             (px, py) = at(win_point(ctx, Raise::Pointer, &num(px), &num(py), &sels)?)?;
         } else if !inp.is_empty() {
-            match shot_point(ctx, &inp, &num(px), &num(py))? {
+            match shot_point_act(ctx, &inp, &num(px), &num(py))? {
                 Point::Window(wa, wx, wy) => {
                     (px, py) = at(win_point(ctx, Raise::Pointer, &num(wx), &num(wy), &[wa])?)?;
                 }

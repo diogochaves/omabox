@@ -20,7 +20,7 @@ use crate::input::{
 };
 use crate::marks::{epoch_us, mark, rec_glide, rec_input};
 use crate::num::awk_num;
-use crate::screen::{Point, extent, shot_point};
+use crate::screen::{Point, extent, shot_point_act};
 use crate::select::select_box;
 use crate::settle::{Settle, cursor_now, cursor_rect};
 use crate::shell;
@@ -68,7 +68,7 @@ fn to_screen(
 ) -> Res<(i64, i64)> {
     let (mut x, mut y) = (x, y);
     if !inp.is_empty() {
-        match shot_point(ctx, inp, &num(x), &num(y))? {
+        match shot_point_act(ctx, inp, &num(x), &num(y))? {
             Point::Window(a, wx, wy) => {
                 (x, y) = (wx, wy);
                 *sels = vec![a];

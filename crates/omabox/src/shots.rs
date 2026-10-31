@@ -436,6 +436,36 @@ pub fn shot_ref_save(ctx: &Ctx, file: &[u8], key: &[u8], v: [&[u8]; 4]) -> Res<(
     Ok(())
 }
 
+/// A caret: a change 4 px thin and 40 long at most (in layout pixels); tools/still's THIN and
+/// CARET_LONG are the same. shot --changed and wait --since/--like leave one alone out.
+pub fn caret_shaped(w: i64, h: i64) -> bool {
+    (w <= 4 && h <= 40) || (h <= 4 && w <= 40)
+}
+
+/// A region X,Y,W,H in layout pixels as the image's, outwards ("X,Y,W,H"), for a mask; None when the
+/// layout has no size.
+pub fn to_image_px(r: [i64; 4], lw: i64, lh: i64, iw: i64, ih: i64) -> Option<Vec<u8>> {
+    let [x, y, w, h] = r;
+    let d = |a: i64, b: i64| {
+        if b == 0 {
+            None
+        } else {
+            Some(a.saturating_div(b))
+        }
+    };
+    let a = d(x.saturating_mul(iw), lw)?;
+    let b = d(y.saturating_mul(ih), lh)?;
+    let c = d(
+        w.saturating_mul(iw).saturating_add(lw).saturating_sub(1),
+        lw,
+    )?;
+    let e = d(
+        h.saturating_mul(ih).saturating_add(lh).saturating_sub(1),
+        lh,
+    )?;
+    Some(format!("{a},{b},{c},{e}").into_bytes())
+}
+
 /// `-draw "rectangle X0,Y0 X1,Y1"` for each MASK (X,Y,W,H in image pixels: `IFS=, read`).
 fn mask_draws(masks: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
     let mut d = Vec::new();

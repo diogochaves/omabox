@@ -62,8 +62,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                 [--mod MODS]
                                                          scroll there (DX: sideways; 15 is a wheel notch)
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
-         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
-               | change [-g GEOM | --window SEL] [--ignore GEOM]...
+         COND: still [--quiet 300ms | --like SHOT] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
+               | change [--since SHOT] [-g GEOM | --window SEL] [--ignore GEOM]...
                | window SEL [--gone | --focused] | layer NAMESPACE [--gone] [--monitor NAME]
                | until -- CMD [ARG...]
                | job [JOB] [--gone] | log [JOB] RE [-i]   a run -d job's end; a line in its log
@@ -342,6 +342,11 @@ A cropped or scaled shot says so on stderr: `click --in SHOT X Y` (and `drag`, `
 take that image's pixels (a window shot follows the window if it moved). Screen shots show the
 pointer (--no-pointer: not this one; `pointer hide`: none until `pointer show`); window shots never
 do. -o makes the file's folder if it is missing.
+An action `--in` a screen shot (click, scroll, drag, pointer) is refused, exit 1, when what is at
+its point is not what was there at the shot: another window or layer over it, or the window moved
+under it ("the screen changed at X,Y since SHOT: then on ..., now on ...; take a new shot"). A
+change elsewhere on the screen (a toast, a clock, a window away from the point) is not. One
+Hyprland read per point; a --burst frame is not checked.
 @ shot config drag
 `omabox config shot-fit N` makes --fit N every shot's default ($OMABOX_SHOT_FIT overrides it; off
 or `default` clears it): for a model that reads points in the smaller image its API scales a big
@@ -556,7 +561,13 @@ scaled or cropped one says so, for `click --in`). --wait ignores the cursor alon
 `wait still`: nothing on screen changed for --quiet; a caret blinking in place (4 px thin, 40 long at
 most) and the cursor do not count, and are said (--strict counts them). `wait change`: the first
 change there, for an app that redraws later, by itself (a sync, a timer): then `wait still`; never
-`wait until -- false` as a sleep. `keys`, `click`, `scroll`,
+`wait until -- false` as a sleep. `wait change --since SHOT`: changed since that shot, at once if it
+already differs (a redraw done before the wait started: after an edit or an IPC call), else the
+first change; `wait still --like SHOT`: until it looks like SHOT again (a new frame every 200 ms).
+SHOT is a full-size shot of this box: the screen's (-g: a part of it), a crop of it, or a whole
+window's (that window, wherever it is; --ignore in its coordinates). The pointer, a caret alone and
+--ignore's regions are no difference (--strict counts a caret); a clock in the region is one:
+--ignore it. `keys`, `click`, `scroll`,
 `drag` and `run -d` take --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore
 GEOM]... [--json]: a change within --start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16)
 leaves out an animation that never stops (a spinner, a glow); a 124 "still changing" names it when

@@ -20,8 +20,8 @@ use crate::settle::{Settle, cursor_now, cursor_rect, geom_parse, kill_tree, now_
 use crate::shell::{self, dec, strip_nl};
 use crate::shellnote::shell_note;
 use crate::shots::{
-    diff_box, diff_parts, fd_file, geom_clip, png_size, ratio, shot_fit_default, shot_path,
-    shot_record, shot_ref_save, two_files, zero_note,
+    caret_shaped, diff_box, diff_parts, fd_file, geom_clip, png_size, ratio, shot_fit_default,
+    shot_path, shot_record, shot_ref_save, to_image_px, two_files, zero_note,
 };
 use crate::win::{box_windows, jq_r, win_desc, win_select};
 use std::io::{BufRead, Read, Write};
@@ -114,9 +114,22 @@ struct Shot {
     grim: Vec<Vec<u8>>,
     masks: Vec<Vec<u8>>,
     sref: Option<[Vec<u8>; 7]>,
+    /// A screen shot's desktop, being read (desk_snap) for layouts.tsv (#333).
+    snap: Option<std::thread::JoinHandle<Vec<u8>>>,
 }
 
 impl Shot {
+    /// layout_save for this shot, recorded in shots.tsv as PATH (FILE: its other name): the
+    /// desktop read beside the capture and the pointer now. Window shots have none.
+    fn layout_save(&mut self, ctx: &Ctx, path: &[u8], file: &[u8]) {
+        let Some(t) = self.snap.take() else {
+            return;
+        };
+        let snap = t.join().unwrap_or_default();
+        let ptr = crate::exit::muted(|| cursor_now(ctx).ok().unwrap_or_default());
+        crate::shotcmp::layout_save(ctx, path, file, &ptr, &snap);
+    }
+
     /// shot_said PATH X Y W H IW IH [RESULT SINCE WHY]: what shot prints on stdout: the image's
     /// path, or with --json (#273, audit J2) what it is.
     fn said(&self, v: [&[u8]; 7], changed: [&[u8]; 3]) -> Res<()> {
@@ -879,6 +892,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             Err(_) => return Err(ctx.die(cat!("shot: cannot write in ", ctx.d, "/changed"))),
         }
     }
+    // A screen shot's desktop, read beside the capture and just before it, for --in (#333): what
+    // a later click at one of its points would get then.
+    if s.win.is_empty() {
+        let c = ctx.clone();
+        s.snap = Some(std::thread::spawn(move || crate::desk::desk_snap(&c, true)));
+    }
     capture(ctx, &mut s, long, lw, lh, scaled)
 }
 
@@ -1164,6 +1183,8 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     let mode = split_at(&screen, b' ').1;
     let geo = cat!(s.lw, "x", s.lh, " ", n(iw), "x", n(ih));
     shot_record(ctx, &s.out, &mode, &s.where_, &geo, &s.file)?;
+    let (o, f) = (s.out.clone(), s.file.clone());
+    s.layout_save(ctx, &o, &f);
     // A whole shot is what a later --changed compares with (finding 243); not one taken with
     // OMABOX_SHOT_NO_BASELINE=1 (the suite's evidence shots, #195, finding 266).
     if s.g.is_none()
@@ -1412,6 +1433,8 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     if !why.is_empty() {
         put_image(ctx, s, &s.file)?;
         shot_record(ctx, &s.out, &mode, &s.where_, &geo, &rec)?;
+        let o = s.out.clone();
+        s.layout_save(ctx, &o, &rec);
         shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr])?;
         rmf(&s.file);
         say(cat!(
@@ -1440,28 +1463,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     for r in &rs {
         let f = shell::read_ifs(r, 4, b",");
         let (x, y, w, h) = (bi(&f[0])?, bi(&f[1])?, bi(&f[2])?, bi(&f[3])?);
-        let d = |a: i64, b: i64| {
-            if b == 0 {
-                None
-            } else {
-                Some(a.saturating_div(b))
-            }
-        };
-        let (Some(a), Some(b), Some(c), Some(e)) = (
-            d(x.saturating_mul(iw), lw),
-            d(y.saturating_mul(ih), lh),
-            d(
-                w.saturating_mul(iw).saturating_add(lw).saturating_sub(1),
-                lw,
-            ),
-            d(
-                h.saturating_mul(ih).saturating_add(lh).saturating_sub(1),
-                lh,
-            ),
-        ) else {
-            return Err(Exit(1));
-        };
-        m.push(format!("{a},{b},{c},{e}").into_bytes());
+        m.push(to_image_px([x, y, w, h], lw, lh, iw, ih).ok_or(Exit(1))?);
     }
     let Some(dbox) = diff_box(&rfile, &s.file, &m) else {
         rmf(&s.file);
@@ -1487,8 +1489,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
             .saturating_sub(1))
             / ih;
         let (w, h) = (x1 - x0, y1 - y0);
-        // A caret: 4 px thin, 40 long at most; tools/still's THIN and CARET_LONG are the same.
-        if (w <= 4 && h <= 40) || (h <= 4 && w <= 40) {
+        if caret_shaped(w, h) {
             caret = format!("; a caret? {w}x{h} at {x0},{y0} left out").into_bytes();
             boxed = None;
         }
@@ -1570,6 +1571,8 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         &cat!(n(cw), "x", n(ch), " ", n(ciw), "x", n(cih)),
         &rec,
     )?;
+    let o = s.out.clone();
+    s.layout_save(ctx, &o, &rec);
     shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr])?;
     // Changes far apart make one big box: each named when they would be much smaller.
     let (mut places, mut cnt, mut area) = (Vec::new(), 0i64, 0i64);

@@ -7,7 +7,6 @@ use crate::boxes::meta;
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res};
 use crate::hypr::hypr_json;
-use crate::jail::in_jail;
 use crate::jq::{self, Args};
 use crate::jqprog::JQ_MON;
 use crate::num::awk_num;
@@ -126,11 +125,6 @@ pub fn stamp(f: &[u8]) -> Vec<u8> {
     }
 }
 
-/// `$(P=KEY awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" | tail -n 1)`: the last record of a shot.
-pub fn shot_rec(ctx: &Ctx, key: &[u8]) -> Vec<u8> {
-    tsv_last(&ctx.at("shots.tsv"), key)
-}
-
 /// The last line of a tab-separated FILE whose first field is KEY (awk's), empty for none.
 pub fn tsv_last(file: &std::path::Path, key: &[u8]) -> Vec<u8> {
     let tsv = std::fs::read(file).unwrap_or_default();
@@ -150,64 +144,36 @@ pub enum Point {
 /// coordinates or the screen's. Refused: a file that is not a shot of this box, changed since, or
 /// taken in another screen mode; a window gone or resized.
 pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
-    let (f, key) = if in_jail() {
-        // A jailed caller's omabox opened the shot in the jail and passed it as /dev/fd/N, with its
-        // name there (relay_in): the broker opens no path of the caller's.
-        let as_ = shell::env_or_empty("OMABOX_RELAY_IN_AS");
-        if !(shell::re_match("^/dev/fd/[3-9]$", file)
-            && shell::path(file).is_file()
-            && !as_.is_empty())
-        {
-            let mut c = ctx.clone();
-            c.parsed();
-            return Err(c.die(
-                "--in: a jailed agent's shot is read by its own omabox, never at a path here",
-            ));
-        }
-        (file.to_vec(), as_)
-    } else {
-        match crate::repo::readlink_f(file).filter(|f| shell::path(f).is_file()) {
-            Some(f) => (f.clone(), f),
-            None => return Err(ctx.die(cat!("--in: no such file: ", file))),
-        }
-    };
-    let rec = shot_rec(ctx, &key);
-    if rec.is_empty() {
-        return Err(ctx.die(cat!(
-            "--in: ",
-            file,
-            " is not a shot of box '",
-            ctx.name,
-            "' (take one with omabox shot)"
-        )));
+    Ok(shot_point_ref(ctx, file, x, y)?.0)
+}
+
+/// shot_point for an action there (click, scroll, drag, pointer): a point of a screen shot is
+/// refused too when what is at it on the screen now is not what was there at the shot (#333,
+/// layout_check), said as "click --in: ...".
+pub fn shot_point_act(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
+    let (p, r) = shot_point_ref(ctx, file, x, y)?;
+    if let Point::Screen(sx, sy) = p {
+        let label = format!("{} --in", String::from_utf8_lossy(&ctx.main_cmd));
+        crate::shotcmp::layout_check(ctx, &label, &r, sx, sy)?;
     }
-    let r = shell::read_ifs(&rec, 5, b"\t");
-    let (stp, mode, kind, geo) = (&r[1], &r[2], &r[3], &r[4]);
-    let (kind, ref_) = match kind.iter().position(|&c| c == b' ') {
-        Some(i) => (kind[..i].to_vec(), kind[i + 1..].to_vec()),
-        None => (kind.clone(), kind.clone()),
+    Ok(p)
+}
+
+/// shot_point, with the shot's record.
+fn shot_point_ref(
+    ctx: &Ctx,
+    file: &[u8],
+    x: &[u8],
+    y: &[u8],
+) -> Res<(Point, crate::shotcmp::ShotRef)> {
+    let r = crate::shotcmp::load(ctx, file, "--in")?;
+    let key = r.key.clone();
+    let (kind, ref_) = match r.kind.iter().position(|&c| c == b' ') {
+        Some(i) => (r.kind[..i].to_vec(), r.kind[i + 1..].to_vec()),
+        None => (r.kind.clone(), r.kind.clone()),
     };
-    if stamp(&f) != *stp {
-        return Err(ctx.die(cat!(
-            "--in: ",
-            key,
-            " changed since the shot: take a new one"
-        )));
-    }
-    let screen = box_screen(ctx)?;
-    let smode = match screen.iter().position(|&c| c == b' ') {
-        Some(i) => screen[i + 1..].to_vec(),
-        None => screen.clone(),
-    };
-    if smode != *mode {
-        return Err(ctx.die(cat!(
-            "--in: the box's mode is ",
-            smode,
-            ", the shot was taken at ",
-            mode,
-            ": take a new one"
-        )));
-    }
+    let geo = r.geo.clone();
+    let geo = &geo;
     let g = shell::read_ifs(geo, 4, b"x ");
     let (lw, lh, iw, ih) = (&g[0], &g[1], &g[2], &g[3]);
     let lt = |a: &[u8], b: &[u8]| {
@@ -282,16 +248,18 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
         let (Some(ox), Some(oy)) = (half(&org, true), half(&org, false)) else {
             return Err(unread());
         };
-        return Ok(Point::Window(
-            addr,
-            ox.saturating_add(rx),
-            oy.saturating_add(ry),
+        return Ok((
+            Point::Window(addr, ox.saturating_add(rx), oy.saturating_add(ry)),
+            r,
         ));
     }
     let (Some(ox), Some(oy)) = (half(&ref_, true), half(&ref_, false)) else {
         return Err(unread());
     };
-    Ok(Point::Screen(ox.saturating_add(rx), oy.saturating_add(ry)))
+    Ok((
+        Point::Screen(ox.saturating_add(rx), oy.saturating_add(ry)),
+        r,
+    ))
 }
 
 #[cfg(test)]

@@ -52,6 +52,7 @@ mod settle;
 mod shell;
 mod shelljson;
 mod shellnote;
+mod shotcmp;
 mod shots;
 mod sig;
 mod trap;

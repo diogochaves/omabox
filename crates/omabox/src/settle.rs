@@ -591,6 +591,17 @@ impl Settle {
         Err(Exit(1))
     }
 
+    /// Whether the tool has its first frame (`ready`): what it watches from now on is a change.
+    pub fn is_ready(&self) -> bool {
+        self.line.starts_with(b"ready")
+    }
+
+    /// The tool stopped without its answer (wait change --since answered at once, #344).
+    pub fn stop(&mut self) {
+        self.snap_take();
+        self.finish_tool();
+    }
+
     /// The tool's ends closed, then the tool given 2 s to be gone, killed with what runs it after
     /// (#124).
     fn finish_tool(&mut self) {

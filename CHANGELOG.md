@@ -27,6 +27,19 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   wanted. `tree --find` (and both of these) takes TEXT's `[STATE ...]` as a set: `"Dark mode"
   [checked]` finds a box that is `[focused checked]`
   ([#319](https://github.com/diogochaves/omabox/issues/319)).
+- **`click --in SHOT` refuses when the screen changed at its point since that shot**: a click,
+  scroll, drag or pointer move `--in` a screen shot is refused (exit 1, nothing sent) when what is at
+  the point is not what was there at the shot (a menu or dialog over it, another window, the window
+  moved or resized under it), saying what it was on then and now and what changed since; take a new
+  shot. A change elsewhere on the screen (a toast, a clock, a window away from the point) is not
+  refused. A window's shot follows its window as before
+  ([#333](https://github.com/diogochaves/omabox/issues/333)).
+- **`wait change --since SHOT` and `wait still --like SHOT`**: the screen against an earlier shot.
+  `--since` is satisfied at once when the screen (`-g`: part of it; a window's shot: that window)
+  already differs from SHOT, so a redraw done before the wait started (after an edit to a file the
+  shell applies, an IPC call) is no longer missed, else at the first change; `--like` waits until it
+  looks like SHOT again. The pointer, a caret blinking alone and `--ignore`'s regions are no
+  difference ([#344](https://github.com/diogochaves/omabox/issues/344)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

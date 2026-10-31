@@ -9,6 +9,7 @@ use crate::cat;
 use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers_in, hypr_json};
+use crate::jail::in_jail;
 use crate::jobs::{Job, job_find, job_how, job_latest, job_procs_now, job_status};
 use crate::jq::{self, Args};
 use crate::jqprog::WIN_DESC_JQ;
@@ -19,6 +20,7 @@ use crate::settle::{
 };
 use crate::shell::{dec, strip_nl};
 use crate::shellnote::shell_note;
+use crate::shotcmp::{Diff, ShotRef};
 use crate::win::{
     box_windows, joined, jq_error_text, jq_length, jq_r, win_desc, win_hits, win_select,
 };
@@ -449,6 +451,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut text, mut layer, mut shot): (Option<Vec<u8>>, Vec<u8>, Vec<u8>) =
         (None, Vec::new(), Vec::new());
     let mut masks: Vec<Vec<u8>> = Vec::new();
+    // --since SHOT (change) or --like SHOT (still): the screen against an earlier shot (#344).
+    let (mut base, mut base_opt): (Vec<u8>, &str) = (Vec::new(), "");
     let mut s = Settle::default();
     let mut i = 0;
     while i < args.len() {
@@ -498,6 +502,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 i += 1;
             }
             b"--strict" => strict = true,
+            b"--since" | b"--like" => {
+                optarg(ctx, a, v)?;
+                crate::shots::two_files(ctx, "wait", &base, &args[i + 1])?;
+                base = args[i + 1].clone();
+                base_opt = if a == b"--since" { "--since" } else { "--like" };
+                i += 1;
+            }
             b"-g" => {
                 optarg(ctx, a, v)?;
                 geom = args[i + 1].clone();
@@ -712,6 +723,49 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if cond == b"change" && !quiet.is_empty() {
         return Err(ctx.die("wait change: no --quiet (that is still's)"));
     }
+    if !base.is_empty() {
+        match (cond.as_slice(), base_opt) {
+            (b"change", "--since") | (b"still", "--like") => {}
+            (b"still", _) => {
+                return Err(ctx.die(
+                    "wait still: --since goes with change (still takes --like SHOT: back as it was)",
+                ));
+            }
+            (b"change", _) => {
+                return Err(ctx.die(
+                    "wait change: --like goes with still (change takes --since SHOT: changed since it)",
+                ));
+            }
+            _ => {
+                return Err(ctx.die(cat!(
+                    "wait ",
+                    cond,
+                    ": ",
+                    base_opt,
+                    " goes with change (--since) or still (--like)"
+                )));
+            }
+        }
+        if !sels.is_empty() {
+            return Err(ctx.die(cat!(
+                "wait: ",
+                base_opt,
+                " SHOT says what is watched: no --window (a shot of a window watches that window)"
+            )));
+        }
+        if !quiet.is_empty() {
+            return Err(ctx.die(
+                "wait still --like: no --quiet (it is satisfied once the screen looks like SHOT)",
+            ));
+        }
+        if in_jail() {
+            return Err(ctx.die(cat!(
+                "wait ",
+                base_opt,
+                ": not for a jailed agent yet (its paths are never opened here)"
+            )));
+        }
+    }
     select_box(ctx, &name)?;
     need_box(ctx)?;
     shell_note(ctx)?;
@@ -853,8 +907,28 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
             r
         }
+        _ if !base.is_empty() => {
+            let mut b = Base::new(ctx, base_opt, &base, &geom, &masks, strict)?;
+            if base_opt == "--like" {
+                return b.like(ctx, tmo, json);
+            }
+            let (g, w) = b.watched();
+            screen(
+                ctx,
+                &mut s,
+                &cond,
+                tmo,
+                &quiet,
+                strict,
+                &g,
+                &w,
+                masks,
+                json,
+                Some(&mut b),
+            )
+        }
         _ => screen(
-            ctx, &mut s, &cond, tmo, &quiet, strict, &geom, &sels, masks, json,
+            ctx, &mut s, &cond, tmo, &quiet, strict, &geom, &sels, masks, json, None,
         ),
     }
 }
@@ -872,6 +946,7 @@ fn screen(
     sels: &[Vec<u8>],
     mut masks: Vec<Vec<u8>>,
     json: bool,
+    base: Option<&mut Base>,
 ) -> Res<()> {
     let mut args: Vec<Vec<u8>> = vec![b"--timeout".to_vec(), tmo.to_string().into_bytes()];
     if !quiet.is_empty() {
@@ -977,8 +1052,294 @@ fn screen(
     let mut tool = vec![cond.to_vec()];
     tool.extend(args);
     s.begin(ctx, &tool)?;
+    // --since SHOT: the screen against it once the tool has its first frame, so a change before
+    // that is the shot's difference and one after it the tool's change (#344).
+    if let Some(b) = base {
+        if s.is_ready() {
+            let d = b.compare(ctx);
+            if !matches!(d, Ok(Ok(_))) {
+                s.stop();
+            }
+            if let Err(w) = d? {
+                let m = cat!(
+                    "changed since ",
+                    b.r.key,
+                    w.since(),
+                    "; seen after ",
+                    ms_s((mono_ms() - b.t0).to_string())
+                );
+                return b.say("change", "satisfied", &m, w.csv.as_deref(), json);
+            }
+        }
+    }
     let rc = s.end(ctx, &c, json, b"")?;
     crate::cmd::hyprctl::code(rc)
+}
+
+/// How a new frame differs from a shot: where (in words: "at X,Y WxH", and as X,Y,W,H on the
+/// screen), or a window of that shot now another size.
+struct Differs {
+    words: Vec<u8>,
+    csv: Option<Vec<u8>>,
+}
+
+impl Differs {
+    /// After "changed since SHOT".
+    fn since(&self) -> Vec<u8> {
+        if self.csv.is_some() {
+            cat!(" at ", self.words)
+        } else {
+            cat!(": ", self.words)
+        }
+    }
+
+    /// In "not like SHOT after T (...)".
+    fn like(&self) -> Vec<u8> {
+        if self.csv.is_some() {
+            cat!("it differs at ", self.words)
+        } else {
+            self.words.clone()
+        }
+    }
+}
+
+/// wait change --since SHOT and wait still --like SHOT (#344, finding 593): the screen (a region of
+/// it, a window) against an earlier shot's image, through shotcmp's grab and differ.
+struct Base {
+    r: ShotRef,
+    label: String,
+    /// What the compare leaves out, in the shot's coordinates: -g's outside, --ignore's, the
+    /// pointer where it was at the shot and where it is now (a screen shot draws it).
+    masks: Vec<[i64; 4]>,
+    /// A screen shot's top left on the screen; 0,0 for a window's.
+    org: (i64, i64),
+    /// What is watched on the screen: -g cut to the shot, else all of it; None for a window's
+    /// (the window, wherever it is).
+    region: Option<[i64; 4]>,
+    strict: bool,
+    t0: i64,
+}
+
+/// "X,Y,W,H" (a --mask, a pointer's rect) as numbers.
+fn rect4(v: &[u8]) -> Option<[i64; 4]> {
+    let f = crate::shell::read_ifs(v, 4, b",");
+    Some([dec(&f[0])?, dec(&f[1])?, dec(&f[2])?, dec(&f[3])?])
+}
+
+impl Base {
+    /// Base OPT FILE GEOM MASKS STRICT: the shot read (shotcmp::load), what is watched and what the
+    /// compare leaves out.
+    fn new(
+        ctx: &Ctx,
+        opt: &str,
+        file: &[u8],
+        geom: &[u8],
+        masks: &[Vec<u8>],
+        strict: bool,
+    ) -> Res<Base> {
+        let t0 = mono_ms();
+        let label = format!("wait {opt}");
+        let r = crate::shotcmp::load(ctx, file, &label)?;
+        let Some([lw, lh, _, _]) = r.sizes() else {
+            return Err(ctx.die(cat!(
+                label,
+                ": ",
+                r.key,
+                ": its record in shots.tsv is not one omabox reads"
+            )));
+        };
+        let mut ign = Vec::new();
+        for m in masks.chunks(2) {
+            if let [k, v] = m {
+                if k == b"--mask" {
+                    ign.push(rect4(v).ok_or_else(|| num_fail(ctx, v))?);
+                }
+            }
+        }
+        let mut m = Vec::new();
+        let (org, region) = if let Some((ox, oy)) = r.screen_at() {
+            let mut reg = [ox, oy, lw, lh];
+            if !geom.is_empty() {
+                let g = geom_parse(geom).and_then(|g| rect4(&geom_csv(&g)));
+                let Some([gx, gy, gw, gh]) = g else {
+                    return Err(ctx.die(cat!("wait: -g is \"X,Y WxH\" (or X,Y,W,H), got ", geom)));
+                };
+                let (x0, y0) = (gx.max(ox), gy.max(oy));
+                let (x1, y1) = (
+                    gx.saturating_add(gw).min(ox + lw),
+                    gy.saturating_add(gh).min(oy + lh),
+                );
+                if x1 <= x0 || y1 <= y0 {
+                    return Err(ctx.die(cat!(
+                        label,
+                        ": -g ",
+                        geom,
+                        " has nothing inside ",
+                        r.key,
+                        " (",
+                        format!("{ox},{oy} {lw}x{lh}"),
+                        " of the screen)"
+                    )));
+                }
+                reg = [x0, y0, x1 - x0, y1 - y0];
+                m.extend(crate::shotcmp::outside(
+                    [x0 - ox, y0 - oy, x1 - x0, y1 - y0],
+                    lw,
+                    lh,
+                ));
+            }
+            let mut ptrs = Vec::new();
+            if let Some(p) = crate::shotcmp::pointer_then(ctx, &r) {
+                ptrs.push(p);
+            }
+            let p = cursor_now(ctx)?;
+            if !p.is_empty() {
+                ptrs.push(p);
+            }
+            for p in ptrs {
+                if let Some(c) = cursor_rect(&p).and_then(|c| rect4(&c)) {
+                    ign.push(c);
+                }
+            }
+            for [x, y, w, h] in ign {
+                m.push([x - ox, y - oy, w, h]);
+            }
+            ((ox, oy), Some(reg))
+        } else {
+            if r.window().is_some_and(|(_, c)| !c.is_empty()) {
+                return Err(ctx.die(cat!(
+                    label,
+                    ": ",
+                    r.key,
+                    " is a crop of a window (-g): it takes a whole shot of a window, or any shot of the screen"
+                )));
+            }
+            if !geom.is_empty() {
+                return Err(ctx.die(cat!(
+                    label,
+                    ": -g goes with a shot of the screen; ",
+                    r.key,
+                    " is a window's (--ignore is in its coordinates)"
+                )));
+            }
+            m = ign;
+            ((0, 0), None)
+        };
+        Ok(Base {
+            r,
+            label,
+            masks: m,
+            org,
+            region,
+            strict,
+            t0,
+        })
+    }
+
+    /// What screen() watches: -g's region, or the shot's window (by its address).
+    fn watched(&self) -> (Vec<u8>, Vec<Vec<u8>>) {
+        match (self.region, self.r.window()) {
+            (Some([x, y, w, h]), _) => (format!("{x},{y},{w},{h}").into_bytes(), Vec::new()),
+            (None, Some((a, _))) => (Vec::new(), vec![a]),
+            (None, None) => (Vec::new(), Vec::new()),
+        }
+    }
+
+    /// One new frame against the shot: Ok (a caret alone's note, or nothing) when it looks the
+    /// same, else how it differs.
+    fn compare(&self, ctx: &Ctx) -> Res<Result<Vec<u8>, Differs>> {
+        let f = match crate::shotcmp::grab(ctx, &self.label, &self.r)? {
+            Ok(f) => f,
+            Err(resized) => {
+                return Ok(Err(Differs {
+                    words: resized,
+                    csv: None,
+                }));
+            }
+        };
+        let _rm = crate::shell::Rm(f.clone());
+        Ok(
+            match crate::shotcmp::differ(ctx, &self.label, &self.r, &f, &self.masks, self.strict)? {
+                Diff::Same(note) => Ok(note),
+                Diff::At([x, y, w, h]) => {
+                    let (sx, sy) = (x + self.org.0, y + self.org.1);
+                    let mut words = format!("{sx},{sy} {w}x{h}").into_bytes();
+                    if self.region.is_none() {
+                        words.extend(b" of the window, in its coordinates");
+                    }
+                    Err(Differs {
+                        words,
+                        csv: Some(format!("{sx},{sy},{w},{h}").into_bytes()),
+                    })
+                }
+            },
+        )
+    }
+
+    /// wait still --like: a new frame every 200 ms until one looks like the shot (0), or --timeout
+    /// (124, saying the last difference).
+    fn like(&mut self, ctx: &Ctx, tmo: i64, json: bool) -> Res<()> {
+        let mut used = std::time::Instant::now();
+        loop {
+            let c = self.compare(ctx)?;
+            let now = ms_s((mono_ms() - self.t0).to_string());
+            match c {
+                Ok(note) => {
+                    let n = if note.is_empty() {
+                        Vec::new()
+                    } else {
+                        cat!("; ", note)
+                    };
+                    let m = cat!("like ", self.r.key, " after ", now, n);
+                    return self.say("still", "satisfied", &m, None, json);
+                }
+                Err(d) if mono_ms() - self.t0 >= tmo => {
+                    let m = cat!("not like ", self.r.key, " after ", now, " (", d.like(), ")");
+                    return self.say("still", "unsatisfied", &m, d.csv.as_deref(), json);
+                }
+                Err(_) => {}
+            }
+            if used.elapsed() >= Duration::from_secs(30) {
+                touch(&ctx.at("used"));
+                used = std::time::Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// The answer, as settle_end has it (a line, or its --json: CHANGE the difference, X,Y,W,H):
+    /// 0 satisfied, 124 unsatisfied.
+    fn say(&self, cond: &str, res: &str, msg: &[u8], change: Option<&[u8]>, json: bool) -> Res<()> {
+        let t = (mono_ms() - self.t0).to_string();
+        if json {
+            let r = Args::new(&["-nc"])
+                .kv("--arg", "res", res)
+                .kv("--arg", "cond", cond)
+                .kv("--arg", "msg", msg)
+                .kv("--arg", "t", &t)
+                .kv("--arg", "first", "-")
+                .kv("--arg", "last", "-")
+                .kv("--arg", "ch", change.unwrap_or(b"-"))
+                .kv("--arg", "ig", "-")
+                .kv("--arg", "why", "-")
+                .kv("--arg", "frames", "")
+                .kv("--arg", "late", "-")
+                .kv("--arg", "facts", "")
+                .kv("--argjson", "changes", "null")
+                .kv("--argjson", "target", "null")
+                .kv("--argjson", "evs", "null")
+                .arg(crate::jqprog::SETTLE_JSON_JQ)
+                .run(None, jq::Err::Inherit);
+            out(&r.out)?;
+        } else {
+            out(cat!(res, ": ", msg, "\n"))?;
+        }
+        if res == "satisfied" {
+            Ok(())
+        } else {
+            Err(Exit(124))
+        }
+    }
 }
 
 #[cfg(test)]

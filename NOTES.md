@@ -24,7 +24,8 @@ say what replaced it.
 $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home/ (-> ~/.cache/omabox/<name>/home),
                                   box.json (options, net, pidns), info.json (bwrap child-pid), pid + pasta.pid
                                   (boxes behind pasta), used (idle clock), launch.sh, box.log, reap.log,
-                                  shots.tsv (what each shot is of, for click --in: 81)
+                                  shots.tsv (what each shot is of, for click --in: 81), layouts.tsv (a
+                                  screen shot's desktop and pointer then: 592)
 [systemd-run --user --scope]      --systemd only: a delegated cgroup the box's user manager owns (61)
 [pasta]                           top-level boxes: own netns, connected (default) or isolated (44, 45, 89);
                                   a nested connected box gets bwrap's --unshare-net instead (net: none)
@@ -11277,6 +11278,51 @@ from them.
     other form. Tests: t_window_size (sizes, the centre, -b before it, --json, the app's smallest,
     --tile, --float, a fullscreen window refused, the usage errors), window.rs's sizes and
     lua_chunks.
+592. **`click --in SHOT` clicked whatever had come over the point since the shot** (2026-10-31, #333).
+    `--in` mapped the shot's pixel to the screen (finding 81) and checked only the file, the mode and
+    a window shot's window; a menu, a dialog or a tiled neighbour that opened since took the click.
+    Now every screen shot (whole, `-g`, `--monitor`, `--changed`'s; not `--burst` frames) reads the
+    desktop beside its capture (desk_snap, started just before grim: one batched hyprctl read) and
+    writes it, with the pointer, to `$D/layouts.tsv` under the shot's path and stamp (the last 20
+    kept past 40; a snapshot is a few KB). `click`, `scroll`, `drag` (both ends) and `pointer` `--in`
+    a screen shot read the desktop now and ask DESK_TARGET_JQ (the click report's, finding 561's
+    fullscreen rule included) what is at the point in each: its kind, window, layer and point in the
+    window, plus the window's size. Any difference is refused before anything is sent, exit 1:
+    "click --in: the screen changed at X,Y since SHOT: then on foot "A" (its 388,238; the window
+    1896x1056), now on layer t333-panel (over foot "A") (since the shot: layer t333-panel opened);
+    take a new shot" (the since part is DESK_FACTS_JQ's line). *Chosen* for the issue's open
+    question: only a change at the point refuses; a toast, a clock or a window opening away from it
+    does not (a screen-wide digest would refuse after every notification). The window's size is in
+    it because a window tiled beside a new one keeps its corner but lays its content out again. A
+    window shot is not checked: its point follows the window and raises it (Raise), and its gone
+    and resized refusals stay. A layer spanning the screen counts by its namespace only (finding
+    562: a toast inside Omarchy 4.5's mapped notifications column is not seen). A shot with no
+    layout line (an older omabox's, a `--burst` frame) or a desktop that cannot be read is not
+    checked. Tests: shotcmp.rs layout_at_the_point (a window over the point, one elsewhere, the
+    window moved, resized, a layer), t_in_changed (a quickshell panel over the point: click,
+    pointer, scroll and drag refused with nothing sent; away from it and after a new shot clicked;
+    a tiled window opening; the panel gone; a window's shot not checked). It fails on the old code.
+593. **`wait change` missed a change made just before it started; there was no "since this shot"**
+    (2026-10-31, #344). omabox-still compares each frame with the one before, from its first: a
+    redraw the shell finished before that frame (after an edit to `shell.json`, an IPC call) was
+    no change, and the wait timed out. Now `wait change --since SHOT` starts the tool, and once it
+    has its first frame takes a new frame of what SHOT covers the way shot took it (grim -l 1, `-g`
+    for a part of the screen, `-T stableId` twice for a window, finding 81) and compares it with
+    SHOT (shots.rs diff_box, as `shot --changed --since`): a difference answers at once ("changed
+    since SHOT at X,Y WxH; seen after 0.16s"), else the tool's first change does; a change between
+    the two frames is in the second, so nothing falls between. `wait still --like SHOT` takes a new
+    frame every 200 ms until one has no difference ("like SHOT after Ns"; 124 says the last
+    difference). Shared with #333 in shotcmp.rs: reading a shot (load, which shot_point now uses),
+    the pointer then (layouts.tsv). No difference: `--ignore`'s regions, the pointer where it was
+    and where it is (a screen shot draws it), `-g`'s outside, and unless `--strict` a caret alone
+    (caret_shaped, the 4 px by 40 rule of tools/still and `--changed`, now one function). A clock in
+    the region is a difference (left to `--ignore`, as for `wait still`). Refused: a shot scaled or
+    zoomed (its image size is not what is captured now), a crop of a window, `-g` with a window's
+    shot or outside the shot, `--window`, `--like` with `--quiet`, from a jailed agent (the path is
+    the jail's, as for `shot --since`). Tests: t_wait_since (the issue's case: a plain `wait change`
+    124, `--since` at once; `-g`, a crop, a window's shot, `--json`, `--like` while different and
+    back after BackSpace, a blinking beam caret alone, refusals), t_unit_wait (the usage refusals).
+    They fail on the old code.
 594. **A plugin into a box that is up: `plugin add`, `plugin remove`** (2026-10-31, #345). To check
     a plugin in a box started without it, an agent linked its folder into the box HOME's
     `plugins/<id>`, ran `omarchy-shell shell rescanPlugins`, then `omarchy plugin enable <id>`, which
