@@ -14,7 +14,19 @@ macro_rules! layer_span_jq { () => { r#"
           | (.y <= $o.y + $r[1] and .y + .h >= $o.y + $mh - $r[3] - 1) as $fh
           | if $fh then (if .x <= $o.x then $r[0] == 0 elif .x + .w >= $o.x + $mw - 1 then $r[2] == 0 else true end)
             elif $fw then (if .y <= $o.y then $r[1] == 0 elif .y + .h >= $o.y + $mh - 1 then $r[3] == 0 else true end)
-            else false end end end;"# }; }
+            else false end end end;
+  def bar_strip($m; $mon): (first($m[]? | select(.name == $mon)) // null) as $o
+    | if (.namespace // "") != "omarchy-bar" or $o == null or ($o.width // null) == null or ($o.reserved // null) == null then .
+      else
+        (if ($o.transform // 0) % 2 == 1 then [$o.height, $o.width] else [$o.width, $o.height] end
+         | map(. / ($o.scale // 1))) as [$mw, $mh]
+        | $o.reserved as $r
+        | if .x > $o.x or .y > $o.y or .x + .w < $o.x + $mw - 1 or .y + .h < $o.y + $mh - 1 then .
+          elif $r[1] > 0 then .h = $r[1]
+          elif $r[3] > 0 then .y = .y + .h - $r[3] | .h = $r[3]
+          elif $r[0] > 0 then .w = $r[0]
+          elif $r[2] > 0 then .x = .x + .w - $r[2] | .w = $r[2]
+          else . end end;"# }; }
 macro_rules! win_sel_jq { () => { r#"
   def m($s; $loose):
     if $s == "active" then .active
@@ -99,7 +111,9 @@ def lh: if (.transform // 0) % 2 == 1 then .width / .scale else .height / .scale
     };
 }
 
-/// Whether a layer may take input on part of it only (#263, finding 398; #311, finding 421).
+/// Whether a layer may take input on part of it only (#263, finding 398; #311, finding 421); and
+/// bar_strip: Omarchy 4.5.0-rc2's bar surface spans its screen, input on the strip along the edge its
+/// output reserves only (#407), so it is that strip.
 pub const LAYER_SPAN_JQ: &str = layer_span_jq!();
 
 /// win_annotate's: the mapped windows, their place, cover and layers (finding 81, #263).
@@ -116,7 +130,7 @@ pub const WIN_JQ: &str = concat!(
     else $o.z > $t.z end;
   [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {}
    | (.["2"] // [] | map(. + {layer: "top"})), (.["3"] // [] | map(. + {layer: "overlay"}))
-   | .[] | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], certain: (spans($m; $mon) | not)}] as $L
+   | .[] | bar_strip($m; $mon) | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], certain: (spans($m; $mon) | not)}] as $L
   | ([$m[] | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0))) as $shown
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
      | .onscreen = (.workspace.id as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
@@ -161,7 +175,7 @@ pub const DESK_TARGET_JQ: &str = concat!(
        else "the click at \($x),\($y) was" end) as $say
       | def at($o): $x >= $o.x and $x < $o.x + $o.w and $y >= $o.y and $y < $o.y + $o.h;
       [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {} | to_entries[] | (.key | tonumber) as $lv | .value | reverse[]
-        | select(.w > 1 and .h > 1 and at(.))
+        | bar_strip($m; $mon) | select(.w > 1 and .h > 1 and at(.))
         | {lv: $lv, ns: (if (.namespace // "") == "" then .address else .namespace end), span: ($lv >= 2 and spans($m; $mon))}] as $L
       | ([(WIN) | .[] | select(.onscreen and at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]})
             and all(.cover[]; at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]}) | not))] | first // null) as $w

@@ -34,6 +34,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ("unknown", exit 1); a wait that did not succeed shows the last lines of the command's stderr; and
   a command naming a host path the box cannot see (this box's folder, your `$TMPDIR`) is said before
   waiting ([#400](https://github.com/diogochaves/omabox/issues/400)).
+- **On Omarchy 4.5.0-rc2 every `click` said it "may go to omarchy-bar"**: the bar's surface now
+  spans the screen, taking input on its strip only. omabox now takes the bar as that strip, along
+  the edge it reserves ([#407](https://github.com/diogochaves/omabox/issues/407)).
 
 ## 1.0.1 — 2026-10-27
 

@@ -10674,6 +10674,25 @@ from them.
     it is wait's documented result word (`help exit-codes`), for still and change too. Tests: wait's
     `until_words` unit test; t_cli_box's wait until cases (not found: at once, 1, its words; one
     still failing: its words; a `!` of a host path: said before).
+549. **Omarchy 4.5.0-rc2's bar surface spans the screen: every click said it "may go to omarchy-bar"**
+    (2026-10-30, #407). rc2's `omarchy-bar` (top level) is as big as its screen, transparent past the
+    strip it draws (Bar.qml: a drag takes input on the whole surface so the pointer stays on it;
+    growing the surface for a drag flashed), with an input mask on the strip while idle
+    (`mask: dragActive ? null : stripInputRegion`) and the strip's thickness as exclusive zone.
+    `hyprctl layers` has no input region, and finding 421's rule took a layer spanning its output
+    for one with input on its items only (the notifications, the dock), so every `click` in a box
+    with the stock bar printed "a layer spanning the screen, \"omarchy-bar\" ... may go to it", and
+    `windows` listed the bar as possibly over every window; t_click_layer failed 3 checks on rc2 (on
+    the code before this too). Finding 421 also said the bar "takes input all over": true while the
+    surface was the strip. **Fix**: LAYER_SPAN_JQ's `bar_strip`: a screen-sized `omarchy-bar` is the
+    strip along the edge its output reserves (`monitors`' `reserved`: top, bottom, left, right, the
+    first non-zero), applied where WIN_JQ (click, windows) and DESK_TARGET_JQ (what got the input)
+    read layers; with no edge reserved (the bar hidden, a fixture without `reserved`) it is left as
+    it is. The strip is then a certain layer on a reserved edge, as the 4.0 and rc1 bar was. By
+    namespace, since an all-screen layer whose output reserves an edge was 4.0's notifications
+    too (finding 398). Tests: t_unit_window_select (rc2's bar at the top and bottom, and with no edge
+    known), the contract (`omarchy_contract_45`: Bar.qml's mask, exclusive zone and screen-sized
+    surface), t_click_layer on rc2 (failed on the old code).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

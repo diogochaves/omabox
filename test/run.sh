@@ -2461,6 +2461,9 @@ omarchy_contract_45() {
     bash -c 'grep -qF "anchors { top: true; bottom: true; right: true }" "$1" && grep -qF "exclusionMode: ExclusionMode.Ignore" "$1" && grep -qF "mask: Region { item: surface.showingNotifications ? deck : null }" "$1" && grep -qF "/live.json" "$1"' _ "$s/plugins/notifications/Service.qml"
   oc "the dock (layer omarchy-dock) reserves no edge and takes input on its items (LAYER_SPAN_JQ)" "not so in plugins/dock/DockWindow.qml" \
     bash -c 'grep -qF "WlrLayershell.namespace: \"omarchy-dock\"" "$1" && grep -qF "exclusiveZone: 0" "$1" && grep -qF "mask: Region {" "$1"' _ "$s/plugins/dock/DockWindow.qml"
+  oc "the bar's surface (omarchy-bar) spans its screen, input on its strip (mask), exclusive zone its thickness (#407: bar_strip in LAYER_SPAN_JQ)" \
+    "not so in plugins/bar/Bar.qml" \
+    bash -c 'grep -qF "mask: dragActive ? null : stripInputRegion" "$1" && grep -qF "exclusiveZone: thickness" "$1" && grep -qF "implicitHeight: root.vertical ? 0 : (screen ? screen.height : thickness)" "$1"' _ "$s/plugins/bar/Bar.qml"
   oc "Print's omarchy-capture-screenshot runs Omasnap (t_cursor_hw_nvidia waits for its layer omasnap)" "not in bin/omarchy-capture-screenshot" \
     oc_has "$o/bin/omarchy-capture-screenshot" 'exec omasnap '
 }
@@ -14873,6 +14876,16 @@ t_unit_window_select() {
   local Wc; Wc=$(probe win_annotate "$c" "$mr" "$act" "$(jq -c '.M.levels["3"] += [{"namespace":"col","pid":2,"x":1455,"y":0,"w":465,"h":1080}]' <<<"$l")")
   check_eq "win_layer: under an idle column (4.5's notifications): possible" 'possible "col" overlay 465x1080 at 1455,0' \
     "$(probe win_layer "$(jq -c '.[] | select(.address == "0xb")' <<<"$Wc")" "$((1600 - $(jq -r '.[] | select(.address == "0xb") | .at[0]' <<<"$Wc")))" 500)"
+  # Omarchy 4.5.0-rc2's bar surface spans the screen, input on its strip only (#407): the strip along
+  # the edge its output reserves; with no edge known, as before (possible). (0xb: 1000,0 900x1000)
+  local lb Wb; lb=$(jq -c '.M.levels["2"] = [{"namespace":"omarchy-bar","pid":1,"x":0,"y":0,"w":1920,"h":1080}] | .M.levels["3"] = []' <<<"$l")
+  Wb=$(probe win_annotate "$c" "$mr" "$act" "$lb" | jq -c '.[] | select(.address == "0xb")')
+  check_eq "rc2's screen-sized bar: nothing over a point below its strip (#407)" "" "$(probe win_layer "$Wb" 100 500)"
+  check_eq "...its strip, the top 26 px its output reserves: certain there" 'certain "omarchy-bar" top 1920x26 at 0,0' "$(probe win_layer "$Wb" 100 10)"
+  Wb=$(probe win_annotate "$c" "$(jq -c '.[0].reserved = [0, 0, 0, 30]' <<<"$mg")" "$act" "$lb" | jq -c '.[] | select(.address == "0xb")')
+  check_eq "...at the bottom: the strip there, over no point of the window" "|" "$(probe win_layer "$Wb" 100 10)|$(probe win_layer "$Wb" 100 990)"
+  Wb=$(probe win_annotate "$c" "$mg" "$act" "$lb" | jq -c '.[] | select(.address == "0xb")')
+  check_eq "...no edge known: the whole screen, possibly (as before)" 'possible "omarchy-bar" top 1920x1080 at 0,0' "$(probe win_layer "$Wb" 100 500)"
   # --in (finding 81): image pixel -> screen pixel under its centre: screen.rs img_px_as_bash.
 }
 
