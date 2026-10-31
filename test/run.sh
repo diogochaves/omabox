@@ -7309,6 +7309,89 @@ protect_ports_nft() {
   HOME=$h ob down "$B" >/dev/null 2>&1
 }
 
+# #399: S10 over UDP and IPv6, and for an address the host gains after up. The host here is a
+# network namespace of the test's own (no root: a user namespace's), its own addresses on dummy
+# links: d0 the one pasta copies into the box (10.239.0.1, fd39::1, the default routes), d1 a second
+# one, as a docker bridge or a VPN is (10.239.1.1, fd39:1::1). up, the box's pasta and reaper, and
+# the servers (TCP and UDP on [::], v4 and v6) all run there, as the user (a user namespace mapped
+# back, as protect_ports_nft's); the real host's network is never touched.
+t_protect_ports_ns() {
+  local B=$P-protns h=$TMP/protns-home r=$TMP/protns q w H a got reached="" control=""
+  rm -rf "$h" "$r"; mkdir -p "$h/.config/omabox" "$r"
+  if ! unshare -Urn true 2>/dev/null; then skip "protect-ports over UDP, IPv6 and addresses gained (#399)" "no user and network namespace of the test's own here"; return; fi
+  unshare -Urn sh -c 'ip link set lo up && ip link add d0 type dummy && ip link set d0 up &&
+    ip link add d1 type dummy && ip link set d1 up &&
+    ip addr add 10.239.0.1/24 dev d0 && ip -6 addr add fd39::1/64 dev d0 nodad &&
+    ip route add default via 10.239.0.254 dev d0 && ip -6 route add default via fd39::fe dev d0 &&
+    ip addr add 10.239.1.1/24 dev d1 && ip -6 addr add fd39:1::1/64 dev d1 nodad &&
+    : > "$1" && exec sleep 600' _ "$r/ready" >/dev/null 2>&1 & H=$!; SERVERS+=("$H")
+  until_ok 5 test -e "$r/ready" || { no "a network namespace of the test's own" "its setup did not finish"; return; }
+  # inns CMD...: CMD in that namespace, as the user; asns CMD...: as its root (its addresses)
+  inns() { nsenter -t "$H" -U -n --preserve-credentials unshare -U --map-user="$(id -u)" --map-group="$(id -g)" -- "$@"; }
+  asns() { nsenter -t "$H" -U -n --preserve-credentials "$@"; }
+  q=$((20000 + RANDOM % 12000)) w=$((20000 + RANDOM % 12000))
+  while [ "$w" = "$q" ]; do w=$((20000 + RANDOM % 12000)); done
+  printf 'protect-ports=%s\n' "$q" > "$h/.config/omabox/config"
+  # (q protected, w not: each "hi" over TCP and UDP, on every address, v4 and v6)
+  local srv='import select, socket, sys
+p = int(sys.argv[1])
+t = socket.socket(socket.AF_INET6); t.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+t.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0); t.bind(("::", p)); t.listen(16)
+u = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+u.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0); u.bind(("::", p))
+while True:
+    for s in select.select([t, u], [], [])[0]:
+        if s is t:
+            c, _ = t.accept(); c.sendall(b"hi\n"); c.close()
+        else:
+            _, a = u.recvfrom(64); u.sendto(b"hi\n", a)'
+  inns python3 -I -c "$srv" "$q" >/dev/null 2>&1 & SERVERS+=($!)
+  inns python3 -I -c "$srv" "$w" >/dev/null 2>&1 & SERVERS+=($!)
+  if ! UP_OUT=$(inns env HOME="$h" "$CLI" up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up in a network namespace of the test's own" "$UP_OUT"; return; fi
+  ok "up in a network namespace of the test's own, with protect-ports"
+  # (from the box, 3 s at most: "hi" when it reached the server. PROTO tcp or udp)
+  probe() { HOME=$h ob run -b "$B" -- timeout 3 bash -c 'exec 3<>"/dev/$1/$2/$3" && { [ "$1" = tcp ] || printf x >&3; } && head -c 2 <&3' _ "$1" "$2" "$3" 2>/dev/null; }
+  check "a port not protected: the box reaches it on d1's address, TCP (the control)" until_ok 10 bash -c "[ \"\$(HOME='$h' '$CLI' run -b '$B' -- timeout 3 bash -c 'exec 3<>/dev/tcp/10.239.1.1/$w && head -c 2 <&3' 2>/dev/null)\" = hi ]"
+  # look ADDR...: each protected (q) and not (w), TCP and UDP; reached and control say where
+  look() {
+    local a p
+    reached="" control=""
+    for a in "$@"; do
+      for p in tcp udp; do
+        got=$(probe "$p" "$a" "$q"); [ -z "$got" ] || reached+="$p/$a "
+        [ "$(probe "$p" "$a" "$w")" = hi ] || control+="$p/$a "
+      done
+    done
+  }
+  look 10.239.1.1 fd39:1::1
+  check_eq "a protected port on d1's IPv4 and IPv6 addresses: not reached, TCP or UDP" "" "$reached"
+  check_eq "...where a port not protected is, each (the control)" "" "$control"
+  sleep 1.5   # (pasta's scan of the host's ports: once a second)
+  look 127.0.0.1
+  check_eq "a protected port over the box's loopback: not reached, TCP or UDP" "" "$reached"
+  check_eq "...where a port not protected is (the control)" "" "$control"
+  # An address the host gains after up: the box's reaper puts it in the rule as it comes. (sets: the
+  # rule's addresses, read where pasta's shell set them, in pasta's namespaces through its child)
+  local pp kid
+  pp=$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid" 2>/dev/null) || pp=""
+  kid=$(pgrep -P "${pp:-0}" | head -1) || kid=""
+  sets() { nsenter -t "${kid:-0}" -U -n --preserve-credentials nft list table inet omabox 2>&1; }
+  check_match "the reaper says it keeps the rule's addresses" "watching it every .* and the host's addresses for its protected ports as they change" "$(cat "$XDG_RUNTIME_DIR/omabox/$B/reap.log" 2>&1)"
+  asns ip addr add 10.239.2.1/24 dev d1 && asns ip -6 addr add fd39:2::1/64 dev d1 nodad
+  check "...the host gains two addresses after up" asns sh -c 'ip -o addr show dev d1 | grep -q 10.239.2.1 && ip -o addr show dev d1 | grep -q fd39:2::1'
+  check "...both in the rule within 5 s (#399)" until_ok 5 bash -c "nsenter -t '${kid:-0}' -U -n --preserve-credentials nft list table inet omabox | grep -q '10\.239\.2\.1' &&nsenter -t '${kid:-0}' -U -n --preserve-credentials nft list table inet omabox | grep -q 'fd39:2::1'"
+  look 10.239.2.1 fd39:2::1
+  check_eq "a protected port on an address the host gained after up: not reached, TCP or UDP (#399)" "" "$reached"
+  check_eq "...where a port not protected is (the control)" "" "$control"
+  # ...and one it loses goes from it: the rule holds the host's addresses, no more.
+  asns ip addr del 10.239.1.1/24 dev d1
+  check "an address the host lost: out of the rule within 5 s" until_ok 5 bash -c "! nsenter -t '${kid:-0}' -U -n --preserve-credentials nft list table inet omabox | grep -q '10\.239\.1\.1'"
+  check_match "...the others still in it" "10\.239\.2\.1" "$(sets)"
+  check_eq "...and nothing failed in reap.log" "" "$(grep "could not set" "$XDG_RUNTIME_DIR/omabox/$B/reap.log" 2>&1)"
+  HOME=$h ob down "$B" >/dev/null 2>&1
+  kill "$H" 2>/dev/null
+}
+
 t_connected() {
   local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out rc ns port tok hport htok gw got
   before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
@@ -18110,7 +18193,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

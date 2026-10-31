@@ -9633,7 +9633,7 @@ from them.
     only omabox's Rust half keeps a box off"). nft is needed only with
     a list ("up: protect-ports ... needs nft"); a rule nft refuses ends the box's start. A config that
     is there but cannot be read refuses every `up` too, exit 2 (finding 482; it was read as none
-    protected). Not covered: an address the host gains after the box started. Tests: net.rs's pasta_opens_what_it_should
+    protected). Not covered: an address the host gains after the box started (until finding 581). Tests: net.rs's pasta_opens_what_it_should
     (proptest: every host-bound rule leaves out each protected port) and rules; t_protect_ports
     (throwaway servers on a port of the test's own, on 127.0.0.1 and 0.0.0.0, tried from a box by
     loopback and by each host address; and nothing in the box can remove the rule: nft refuses it,
@@ -11071,6 +11071,40 @@ from them.
     t_race ("a down in a pid namespace with the host's /proc", "...an up there", both fail at
     df286ca), t_jail_down_race (a real ai-jail: a caller that sleeps a second before it connects, the
     down in that second; at df286ca the box came up).
+581. **Protected ports: an address the host gained after up was reachable** (2026-10-31, #399 item
+    2; S10). The nft rule pasta's shell sets (finding 459) listed the host's addresses as `up` read
+    them, so a server on all addresses (0.0.0.0, `::`) on a protected port was reached from a box
+    through any address the host gained later: a VPN coming up, a docker network made. `fib daddr
+    type local`, the issue's first option, cannot do it: the rule runs in the box's network
+    namespace, whose fib knows the box's own addresses (pasta copies the host's main one onto the
+    box's tap), not the host's bridge or VPN ones. The rule now matches two named sets (`@host4`,
+    `@host6`, both rules there even with no IPv6 address at up), and the box's reaper keeps them the
+    host's: it hears of every address the host gains or loses on a netlink socket
+    (RTMGRP_IPV4_IFADDR, _IPV6_IFADDR; poll(2) wakes it on the event; without the socket, a look
+    every second), reads the addresses again and, when they differ from what it last set, flushes
+    and fills both sets in one nft transaction. nft runs in pasta's user and network namespaces,
+    entered through a pidfd of pasta's child (the box's bwrap; `Entry::pasta`), without root: the
+    user owns pasta's user namespace. Nothing of the box can see or change that process. Addresses
+    the host loses leave the sets. A connected box with a protected port now always gets a reaper
+    (box.json `protect`: true, only that it has the rule, not which ports, #374), which says so in
+    reap.log; a failure to set them is said there once and tried again at the next look. Not
+    covered: a connection in the moment between the host gaining an address and the reaper's nft
+    (15-30 ms here, five addresses added, measured from outside), and addresses gained after the
+    reaper is killed.
+    Tests: t_protect_ports_ns (two addresses added to the test's own network namespace after up,
+    v4 and v6: their protected port not reached, TCP or UDP, within 5 s in the rule, the port not
+    protected reached; one removed leaves the set; failed before: reached on all four, the set
+    unchanged), net.rs `rules` (the sets, protect_sets' transaction).
+582. **Protected ports tested over UDP and IPv6, without root** (2026-10-31, #399 item 1; S10).
+    t_protect_ports checked TCP only, and IPv6 only where the host has a global IPv6 address. The new
+    t_protect_ports_ns runs everything in a network namespace of the test's own (a user namespace's,
+    no root): dummy links with the addresses pasta copies into the box (d0: 10.239.0.1, fd39::1, the
+    default routes) and a second set as a docker bridge's or a VPN's (d1: 10.239.1.1, fd39:1::1). up
+    runs there as the user (a user namespace mapped back, as protect_ports_nft's), so its pasta and
+    reaper take that namespace for the host; the servers (TCP and UDP on `[::]`, v4 and v6) too. The
+    real host's network is never touched. Checked from the box: a protected port on d1's IPv4 and
+    IPv6 addresses and over its loopback not reached, TCP or UDP, the port not protected reached on
+    each (the control).
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one

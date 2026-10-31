@@ -9,7 +9,8 @@
 //! namespace below maps back to the user with no capabilities), an nftables rule in the box's
 //! network namespace that rejects a connection to any of the host's addresses on those ports, as a
 //! server listening on all of them (0.0.0.0) would otherwise take one through the host's docker
-//! bridge or VPN address. An isolated box reaches only its --allow ports, and a protected one is
+//! bridge or VPN address. The box's reaper keeps that rule's addresses the host's as it gains or
+//! loses one (#399). An isolated box reaches only its --allow ports, and a protected one is
 //! refused there.
 
 use crate::cat;
@@ -170,8 +171,10 @@ fn local_v6(table: &[u8]) -> Vec<String> {
 }
 
 /// The nft program, for pasta's shell, that rejects connections from the box to any of the host's
-/// addresses (V4, V6) on a protected port; not to the box's own (oifname lo: its loopback and the
-/// address pasta gave it), whose services are its own. None with no port.
+/// addresses on a protected port; not to the box's own (oifname lo: its loopback and the address
+/// pasta gave it), whose services are its own. The addresses are the sets host4 and host6 (V4 and
+/// V6 at up), which the box's reaper keeps the host's as it gains or loses one (#399,
+/// protect_sets). None with no port.
 pub fn protect_rules(protect: &Ports, v4: &[String], v6: &[String]) -> Option<String> {
     if protect.is_empty() {
         return None;
@@ -183,18 +186,111 @@ pub fn protect_rules(protect: &Ports, v4: &[String], v6: &[String]) -> Option<St
         .collect::<Vec<_>>()
         .join(", ");
     let mut r = String::from(
-        "add table inet omabox; add chain inet omabox out { type filter hook output priority 0; policy accept; }",
+        "add table inet omabox; add chain inet omabox out { type filter hook output priority 0; policy accept; }; add set inet omabox host4 { type ipv4_addr; }; add set inet omabox host6 { type ipv6_addr; }",
     );
-    for (fam, addrs) in [("ip", v4), ("ip6", v6)] {
-        if addrs.is_empty() {
-            continue;
-        }
+    r.push_str(&set_elements(v4, v6));
+    for (fam, set) in [("ip", "host4"), ("ip6", "host6")] {
         r.push_str(&format!(
-            "; add rule inet omabox out oifname != \"lo\" {fam} daddr {{ {} }} meta l4proto {{ tcp, udp }} th dport {{ {ports} }} reject",
-            addrs.join(", ")
+            "; add rule inet omabox out oifname != \"lo\" {fam} daddr @{set} meta l4proto {{ tcp, udp }} th dport {{ {ports} }} reject"
         ));
     }
     Some(r)
+}
+
+/// The nft program that makes protect_rules' sets host4 and host6 the host's addresses V4 and V6
+/// now, in one transaction: no moment with neither the old nor the new ones.
+pub fn protect_sets(v4: &[String], v6: &[String]) -> String {
+    let mut r = String::from("flush set inet omabox host4; flush set inet omabox host6");
+    r.push_str(&set_elements(v4, v6));
+    r
+}
+
+/// `; add element ...` for each set with an address (nft takes no empty element list).
+fn set_elements(v4: &[String], v6: &[String]) -> String {
+    let mut r = String::new();
+    for (set, addrs) in [("host4", v4), ("host6", v6)] {
+        if !addrs.is_empty() {
+            r.push_str(&format!(
+                "; add element inet omabox {set} {{ {} }}",
+                addrs.join(", ")
+            ));
+        }
+    }
+    r
+}
+
+/// A netlink socket that hears of every address this network namespace gains or loses (IPv4 and
+/// IPv6), for the reaper of a box with protected ports (#399): it reads the host's addresses again
+/// as soon as one changes, not at its next poll.
+pub struct AddrEvents(std::os::fd::OwnedFd);
+
+impl AddrEvents {
+    /// None when the socket cannot be had (the reaper then reads the addresses at every look).
+    pub fn open() -> Option<AddrEvents> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        // SAFETY: socket takes numbers; the fd it gives is new and ours alone.
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_NETLINK,
+                libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+                libc::NETLINK_ROUTE,
+            )
+        };
+        if fd < 0 {
+            return None;
+        }
+        // SAFETY: just made, ours alone.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        // SAFETY: an all-zero sockaddr_nl is a valid one (no pid: the kernel picks it).
+        let mut sa: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
+        sa.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+        sa.nl_groups = (libc::RTMGRP_IPV4_IFADDR | libc::RTMGRP_IPV6_IFADDR) as u32;
+        let len = std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
+        // SAFETY: bind reads LEN bytes of SA, ours and filled above.
+        if unsafe { libc::bind(fd.as_raw_fd(), (&raw const sa).cast(), len) } != 0 {
+            return None;
+        }
+        Some(AddrEvents(fd))
+    }
+
+    /// Waits up to MAX for something to read (an event, at once), and says whether there is.
+    pub fn wait(&self, max: std::time::Duration) -> bool {
+        use std::os::fd::AsRawFd;
+        let mut p = libc::pollfd {
+            fd: self.0.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ms = libc::c_int::try_from(max.as_millis()).unwrap_or(libc::c_int::MAX);
+        // SAFETY: poll on one pollfd of ours; a signal's EINTR is a wait that ended early.
+        unsafe { libc::poll(&raw mut p, 1, ms) > 0 }
+    }
+
+    /// Whether anything came since the last call (all of it read): an address event, or the
+    /// socket's buffer overrun (ENOBUFS: events were lost, so one may have changed).
+    pub fn any(&self) -> bool {
+        use std::os::fd::AsRawFd;
+        let mut buf = [0u8; 8192];
+        let mut any = false;
+        loop {
+            // SAFETY: recv into a buffer of ours, at most its length, on our fd, without blocking.
+            let n = unsafe {
+                libc::recv(
+                    self.0.as_raw_fd(),
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            };
+            if n > 0
+                || (n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOBUFS))
+            {
+                any = true;
+                continue;
+            }
+            return any;
+        }
+    }
 }
 
 /// protect-ports from ~/.config/omabox/config: none when unset. Blanks around each port are fine
@@ -305,10 +401,23 @@ mod tests {
         assert!(protect_rules(&Ports::default(), &[], &[]).is_none());
         let p = Ports::parse(b"8080,5432").unwrap_or_default();
         let r = protect_rules(&p, &["172.17.0.1".into()], &[]).unwrap_or_default();
-        assert!(r.contains(
-            "ip daddr { 172.17.0.1 } meta l4proto { tcp, udp } th dport { 5432, 8080 } reject"
-        ));
-        assert!(!r.contains("ip6"));
+        assert!(r.contains("; add element inet omabox host4 { 172.17.0.1 }"));
+        // (no host6 elements, which nft refuses empty; its rule is there for one gained later, #399)
+        assert!(!r.contains("add element inet omabox host6"));
+        for fam in ["ip daddr @host4", "ip6 daddr @host6"] {
+            assert!(r.contains(&format!(
+                "oifname != \"lo\" {fam} meta l4proto {{ tcp, udp }} th dport {{ 5432, 8080 }} reject"
+            )));
+        }
+        // #399: what the reaper sets as the host's addresses change, in one transaction.
+        assert_eq!(
+            protect_sets(&["10.0.0.1".into(), "10.0.0.2".into()], &["fd00::1".into()]),
+            "flush set inet omabox host4; flush set inet omabox host6; add element inet omabox host4 { 10.0.0.1, 10.0.0.2 }; add element inet omabox host6 { fd00::1 }"
+        );
+        assert_eq!(
+            protect_sets(&[], &[]),
+            "flush set inet omabox host4; flush set inet omabox host6"
+        );
     }
 
     proptest! {

@@ -65,6 +65,21 @@ struct Reap {
     agent: Vec<u8>,
     retry_said: bool,
     host: Option<Vec<u8>>,
+    /// A connected box with protected ports (box.json `protect`): the host's addresses in its rule
+    /// kept the host's (#399).
+    guard: Option<Guard>,
+}
+
+/// What the reaper keeps to keep a box's protected ports' rule on the host's addresses (#399): the
+/// rule pasta's shell set at up has the addresses the host had then, and a server listening on all
+/// of them is reached on any the host gains after (a VPN that comes up, a docker network made).
+struct Guard {
+    /// The host's address events (none when the socket cannot be had: then a look every second).
+    events: Option<crate::net::AddrEvents>,
+    /// The addresses last set in the rule (none yet: the first look sets them, whatever they are).
+    last: Option<(Vec<String>, Vec<String>)>,
+    /// A failure said in reap.log, not said again until one works.
+    said: bool,
 }
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
@@ -85,8 +100,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         agent: meta(&d, "agent").0,
         retry_said: false,
         host: None,
+        guard: (meta(&d, "protect").0 == b"true").then(|| Guard {
+            events: crate::net::AddrEvents::open(),
+            last: None,
+            said: false,
+        }),
     };
-    if r.idle <= 0 && r.owner.is_empty() && r.agent.is_empty() && !r.interactive {
+    if r.idle <= 0
+        && r.owner.is_empty()
+        && r.agent.is_empty()
+        && !r.interactive
+        && r.guard.is_none()
+    {
         return Ok(());
     }
     // (its pid and start time in the box dir: a down by another omabox ends it too, #383)
@@ -106,8 +131,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ctx.name,
         "': watching it every ",
         every.to_string(),
-        " s"
+        " s",
+        if r.guard.is_some() {
+            ", and the host's addresses for its protected ports as they change"
+        } else {
+            ""
+        }
     ));
+    // (the host's addresses now, which may have changed since up read them)
+    if let Some(g) = r.guard.as_mut() {
+        guard_look(ctx, g);
+    }
     loop {
         // (every 2 s while its covers wait for their check: a box held by an up that is gone goes
         // soon)
@@ -116,11 +150,127 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         } else {
             every
         };
-        crate::sig::sleep(Duration::from_secs(secs));
+        nap(ctx, &mut r, secs);
         if !poll(ctx, &mut r)? {
             return Ok(());
         }
+        // (at every poll too: a failure tried again, an event the socket lost)
+        if let Some(g) = r.guard.as_mut() {
+            guard_look(ctx, g);
+        }
     }
+}
+
+/// The sleep between polls, SECS long; with a guard, its addresses looked at again as soon as the
+/// host's change (woken by the event; every second when there is no event socket).
+fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
+    let Some(g) = r.guard.as_mut() else {
+        crate::sig::sleep(Duration::from_secs(secs));
+        return;
+    };
+    let end = std::time::Instant::now() + Duration::from_secs(secs);
+    let mut ticks = 0u32;
+    loop {
+        let now = std::time::Instant::now();
+        if now >= end {
+            return;
+        }
+        let step = (end - now).min(Duration::from_millis(100));
+        let look = match &g.events {
+            Some(e) => {
+                e.wait(step);
+                // (a stop on its way parks here, as sig::sleep does)
+                crate::sig::sleep(Duration::ZERO);
+                e.any()
+            }
+            None => {
+                crate::sig::sleep(step);
+                ticks += 1;
+                ticks % 10 == 0
+            }
+        };
+        if look {
+            guard_look(ctx, g);
+        }
+    }
+}
+
+/// The host's addresses into the box's protected ports' rule when they are not what was last set
+/// there. A failure (the box going down, nft refusing) is said once in reap.log and tried again at
+/// the next look.
+fn guard_look(ctx: &Ctx, g: &mut Guard) {
+    let now = crate::net::host_addrs();
+    if g.last.as_ref() == Some(&now) {
+        return;
+    }
+    match guard_set(&ctx.d, &now.0, &now.1) {
+        Ok(()) => {
+            if g.said {
+                say(cat!(
+                    when(),
+                    " box '",
+                    ctx.name,
+                    "': its protected ports' addresses set again"
+                ));
+            }
+            g.last = Some(now);
+            g.said = false;
+        }
+        Err(why) => {
+            if !g.said {
+                say(cat!(
+                    when(),
+                    " box '",
+                    ctx.name,
+                    "': could not set the host's addresses in its protected ports' rule (",
+                    why,
+                    ")"
+                ));
+            }
+            g.said = true;
+        }
+    }
+}
+
+/// net::protect_sets with V4 and V6, run by nft in pasta's user and network namespaces (where pasta's
+/// shell set the rule at up). Err: why not, nft's first line when it was nft.
+fn guard_set(d: &[u8], v4: &[String], v6: &[String]) -> Result<(), Vec<u8>> {
+    use std::io::Write;
+    let e = crate::enter::Entry::pasta(d).map_err(|w| {
+        shell::strip_nl(w.strip_prefix(crate::enter::FAIL.as_bytes()).unwrap_or(&w))
+    })?;
+    // (only its stdio: nothing else of the reaper's goes into pasta's namespaces)
+    let argv = [
+        cat!(crate::cmd::up_box::LAUNCH_PATH, "/nft"),
+        b"-f".to_vec(),
+        b"-".to_vec(),
+    ];
+    let fds = crate::exec::Fds {
+        only: true,
+        enter: Some(e.plan(false, true, None)),
+        ..Default::default()
+    };
+    let mut c = crate::exec::command(&argv, fds);
+    c.env_clear()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let mut ch = c.spawn().map_err(|x| x.to_string().into_bytes())?;
+    if let Some(mut i) = ch.stdin.take() {
+        let _ = i.write_all(crate::net::protect_sets(v4, v6).as_bytes());
+    }
+    let out = ch
+        .wait_with_output()
+        .map_err(|x| x.to_string().into_bytes())?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let first = out.stderr.split(|&c| c == b'\n').next().unwrap_or_default();
+    Err(if first.is_empty() {
+        b"nft failed".to_vec()
+    } else {
+        first.to_vec()
+    })
 }
 
 /// How often it looks: a quarter of the idle limit, 5 s to 60 s; with no idle limit and only its

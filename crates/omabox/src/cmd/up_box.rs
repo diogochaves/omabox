@@ -304,7 +304,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         ),
     );
     boxes::touch(&ctx.at("used"));
-    if u.idle_s != 0 || !u.owner.is_empty() || !u.agent.is_empty() || u.interactive {
+    // (and for a connected box with protected ports, whose rule it keeps on the host's addresses:
+    // #399)
+    if u.idle_s != 0 || !u.owner.is_empty() || !u.agent.is_empty() || u.interactive || guarded(&u) {
         start_reaper(ctx);
     }
     // From here a box may be running.
@@ -655,6 +657,12 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
     }
 }
 
+/// Whether the box gets the protected ports' rule (connected, a port protected): box.json's
+/// `protect`, for its reaper (#399). Only that it has one: which ports is not the box's to tell.
+fn guarded(u: &Up) -> bool {
+    !matches!(u.net.as_slice(), b"none" | b"isolated") && !u.protect.is_empty()
+}
+
 /// `setsid -f "$ROOT/bin/omabox" _reap NAME CREATED </dev/null >>"$D/reap.log" 2>&1`.
 fn start_reaper(ctx: &Ctx) {
     let created = meta(&ctx.d, "created").0;
@@ -731,6 +739,7 @@ fn box_json(
     o.insert("plugin_via".into(), Value::Object(via));
     o.insert("net".into(), s(&u.net));
     o.insert("allow".into(), s(&u.allow));
+    o.insert("protect".into(), Value::Bool(guarded(u)));
     o.insert("idle".into(), Value::from(u.idle_s));
     let bar: &[u8] = if u.stock_bar {
         b"stock"

@@ -76,6 +76,48 @@ impl Entry {
         Ok(Entry { pidfd, ns })
     }
 
+    /// The namespaces pasta made for the box in D (its user and network ones: root there, the
+    /// network the box's), through pasta's child, pinned: the protected ports' rule is changed there
+    /// (#399), where pasta's shell set it and the box's processes have no capability. Err when the
+    /// box has no pasta of its own, or that child is not in a network namespace other than ours.
+    pub fn pasta(d: &[u8]) -> Result<Entry, Vec<u8>> {
+        let esrch = || cat!(FAIL, errno_text(libc::ESRCH), "\n");
+        let pasta = crate::boxes::box_pasta(d).ok_or_else(esrch)?;
+        let kid = crate::procfs::children(&pasta)
+            .into_iter()
+            .next()
+            .ok_or_else(esrch)?;
+        let n: libc::pid_t = std::str::from_utf8(&kid)
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .ok_or_else(esrch)?;
+        // SAFETY: as in open.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, n, 0) };
+        let fd = RawFd::try_from(fd).unwrap_or(-1);
+        if fd < 0 {
+            return Err(esrch());
+        }
+        // SAFETY: just opened, ours alone.
+        let low = unsafe { OwnedFd::from_raw_fd(fd) };
+        let pidfd = crate::exec::dup_hi(low.as_raw_fd()).map_err(|_| esrch())?;
+        drop(low);
+        // Pinned, still that pasta's child (a pid reused before the pidfd was opened is not), in a
+        // network namespace that is not ours.
+        let net =
+            |p: &[u8]| std::fs::read_link(crate::shell::path(&cat!("/proc/", p, "/ns/net"))).ok();
+        if crate::boxes::box_pasta(d).as_ref() != Some(&pasta)
+            || !crate::procfs::children(&pasta).contains(&kid)
+            || net(&kid).is_none()
+            || net(&kid) == net(b"self")
+        {
+            return Err(esrch());
+        }
+        Ok(Entry {
+            pidfd,
+            ns: libc::CLONE_NEWUSER | libc::CLONE_NEWNET,
+        })
+    }
+
     /// The pidfd, for a command line another program runs (`_enter`, box_pty's script).
     pub fn pidfd(&self) -> RawFd {
         self.pidfd.as_raw_fd()
