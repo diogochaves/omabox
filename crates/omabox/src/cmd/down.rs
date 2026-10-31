@@ -10,6 +10,7 @@ use crate::cat;
 use crate::exit::{Ctx, Res, muted, say};
 use crate::jail::{in_jail, jail_id};
 use crate::jq::{self, Args};
+use crate::pidfd::Pidfd;
 use crate::select::{select_box, session_boxes};
 use crate::shell;
 use std::time::Duration;
@@ -165,9 +166,17 @@ fn down_one_with<S: BoxSys + ?Sized>(
         ));
         return Ok(false);
     }
-    // Its peek windows, one per monitor shown (#164).
-    for p in sys.peek_pids(ctx) {
-        signal(&p, libc::SIGTERM);
+    // Its peek windows, one per monitor shown (#164), each pinned by a pidfd, then found a peek of
+    // the box again (#377): a pid that ended after the first look and was reused gets nothing.
+    let mut peeks: Vec<Pidfd> = sys
+        .peek_pids(ctx)
+        .iter()
+        .filter_map(|p| Pidfd::pin(p, || true))
+        .collect();
+    let again = sys.peek_pids(ctx);
+    peeks.retain(|p| again.iter().any(|a| a.as_slice() == p.pid()) && p.alive());
+    for p in peeks {
+        p.signal(libc::SIGTERM);
     }
     let was_interactive = meta(&ctx.d, "mode").0 == b"interactive";
     if !sys.kill_box(ctx) {
@@ -183,19 +192,6 @@ fn down_one_with<S: BoxSys + ?Sized>(
     }
     say(cat!("box '", ctx.name, "' down"));
     Ok(true)
-}
-
-/// `kill -SIG PID`, a pid only, its failure ignored.
-fn signal(pid: &[u8], sig: libc::c_int) {
-    if let Some(n) = shell::dec(pid)
-        .and_then(|n| i32::try_from(n).ok())
-        .filter(|&n| n > 0)
-    {
-        // SAFETY: kill with a positive pid and a signal number.
-        unsafe {
-            libc::kill(n, sig);
-        }
-    }
 }
 
 /// A down that finds no box leaves when it was started (proc_start: clock ticks since boot), for an
@@ -368,10 +364,12 @@ mod tests {
 
     /// bash's stubs for a down (`kill_box() { :; }; peek_pid() { return 1; }; rm_box() {...}`): no
     /// peek window, PID 1 gone at once; rm_box removes the box dir (RM_DIR) or only says it ran;
-    /// START, proc_start's answer when given; a box up while its dir is there.
+    /// START, proc_start's answer when given; a box up while its dir is there. PEEKS: peek_pids'
+    /// answers, one a call (none once they run out).
     struct Fake {
         rm_dir: bool,
         start: Option<Box<dyn Fn() -> Option<Vec<u8>> + Sync>>,
+        peeks: Mutex<Vec<Vec<Vec<u8>>>>,
         log: Mutex<Vec<String>>,
     }
 
@@ -380,6 +378,7 @@ mod tests {
             Fake {
                 rm_dir,
                 start: None,
+                peeks: Mutex::new(Vec::new()),
                 log: Mutex::new(Vec::new()),
             }
         }
@@ -390,7 +389,12 @@ mod tests {
 
     impl BoxSys for Fake {
         fn peek_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
-            Vec::new()
+            let mut p = self.peeks.lock().unwrap();
+            if p.is_empty() {
+                Vec::new()
+            } else {
+                p.remove(0)
+            }
         }
         fn kill_box(&self, _: &Ctx) -> bool {
             self.log.lock().unwrap().push("kill_box".into());
@@ -450,6 +454,46 @@ mod tests {
     /// t_unit_run_named_dead (#115, finding 178): a down whose reaper is gone since it was looked
     /// for is no failure, and the box is cleared (kill_reapers ends what it finds and returns
     /// nothing, so a reaper gone meanwhile cannot fail it).
+    /// t_unit_down_peek (#377): down's SIGTERM reaches a peek window still one once it is pinned,
+    /// never a process that took a peek's pid after the scan (here: one the second scan does not
+    /// find a peek).
+    /// (#[ignore]: it starts and kills processes; test/run.sh's unit tier runs it.)
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn down_ends_only_a_peek_still_one() {
+        let b = tmp("peek");
+        let mut s = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        let sp = s.id().to_string().into_bytes();
+        let gone = |c: &mut std::process::Child| {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < end {
+                if matches!(c.try_wait(), Ok(Some(_))) {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            false
+        };
+        put(&format!("{b}/p1/box.json"), "{\"mode\":\"headless\"}\n");
+        let f = Fake::new(false);
+        *f.peeks.lock().unwrap() = vec![vec![sp.clone()], Vec::new()];
+        let _ = down(&f, &b, &["p1"]);
+        let left = !gone(&mut s);
+        put(&format!("{b}/p2/box.json"), "{\"mode\":\"headless\"}\n");
+        let f = Fake::new(false);
+        *f.peeks.lock().unwrap() = vec![vec![sp.clone()], vec![sp]];
+        let _ = down(&f, &b, &["p2"]);
+        let ended = gone(&mut s);
+        let _ = s.kill();
+        let _ = s.wait();
+        let _ = std::fs::remove_dir_all(&b);
+        assert!(left, "a pid that is no peek once pinned: left");
+        assert!(ended, "...a peek still one: ended");
+    }
+
     #[test]
     fn a_reaper_gone_is_no_failure() {
         let b = tmp("race");

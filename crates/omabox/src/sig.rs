@@ -427,17 +427,25 @@ fn down(name: &[u8], done: &Mutex<bool>) {
 }
 
 /// A follower's processes (follow_start), ended with this one: SIGTERM to each, then exit 130 (INT),
-/// 143 (TERM) or 129 (HUP).
+/// 143 (TERM) or 129 (HUP). Each held by a pidfd (the fd's number + 1; 0 an empty slot), opened as
+/// it was started, kept for this process's life: one that ended and was reaped before the signal
+/// gets nothing, nor whatever took its pid (#377).
 static FOLLOWERS: [AtomicI32; 8] = [const { AtomicI32::new(0) }; 8];
 static FOLLOWING: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn end_followers(sig: libc::c_int) {
     for p in &FOLLOWERS {
-        let pid = p.load(Ordering::Relaxed);
-        if pid > 0 {
-            // SAFETY: kill is async-signal-safe.
+        let fd = p.load(Ordering::Relaxed) - 1;
+        if fd >= 0 {
+            // SAFETY: a raw syscall, async-signal-safe: a signal through a pidfd of ours.
             unsafe {
-                libc::kill(pid, libc::SIGTERM);
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    fd,
+                    libc::SIGTERM,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                );
             }
         }
     }
@@ -466,16 +474,24 @@ pub fn spawned(pid: u32) {
     }
 }
 
-/// Registers PID as one of the follower's processes.
+/// Registers PID, a child just started (not reaped: its pid is its own), as one of the follower's
+/// processes.
 pub fn follower(pid: u32) {
-    let pid = i32::try_from(pid).unwrap_or(0);
+    use std::os::fd::IntoRawFd;
+    let Some(fd) = i32::try_from(pid).ok().and_then(pidfd_open) else {
+        return;
+    };
+    let fd = fd.into_raw_fd();
     for p in &FOLLOWERS {
-        if p.compare_exchange(0, pid, Ordering::Relaxed, Ordering::Relaxed)
+        if p.compare_exchange(0, fd + 1, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
         {
-            break;
+            return;
         }
     }
+    // (no slot left: not followed, as before)
+    // SAFETY: fd is ours alone, just opened.
+    unsafe { libc::close(fd) };
 }
 
 /// Signal cases run in a process of their own (they end it): the test binary again, this one test

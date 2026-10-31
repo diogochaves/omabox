@@ -168,7 +168,7 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // have left: an app's database is whole, as after a crash, not torn by a write during the copy.
     let me = std::process::id().to_string();
     let tmp = cat!(saves, "/.new-", save, "-", me);
-    let Some(pids) = crate::jobs::box_pids_try(ctx) else {
+    let Some(pids) = crate::jobs::box_pins_try(ctx) else {
         return Err(ctx.die(cat!(
             "save: cannot read the pid namespace of box '",
             ctx.name,
@@ -294,18 +294,12 @@ fn alive(pid: &[u8]) -> bool {
             .is_some_and(|n| unsafe { libc::kill(n, 0) } == 0)
 }
 
-/// `kill -SIG PIDS` (each, the ones gone ignored).
-fn signal_all(pids: &[Vec<u8>], sig: libc::c_int) {
+/// `kill -SIG PIDS` (each, the ones gone ignored), through the pidfds that pinned them as the box's
+/// (#377): a box process that ended meanwhile, its pid taken by one of the user's, is not stopped
+/// or continued.
+fn signal_all(pids: &[crate::pidfd::Pidfd], sig: libc::c_int) {
     for p in pids {
-        if let Some(n) = shell::dec(p)
-            .and_then(|n| i32::try_from(n).ok())
-            .filter(|&n| n > 0)
-        {
-            // SAFETY: kill with a positive pid of the box's and a signal number.
-            unsafe {
-                libc::kill(n, sig);
-            }
-        }
+        p.signal(sig);
     }
 }
 

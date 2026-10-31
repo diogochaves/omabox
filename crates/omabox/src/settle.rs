@@ -149,21 +149,28 @@ pub fn ws_text(ws: &[u8]) -> Vec<u8> {
     cat!("workspace ", ws)
 }
 
-/// kill_tree PID: PID and everything under it, the children first.
+/// kill_tree PID: PID, a child of this process, and everything under it, the children first. Each
+/// pinned by a pidfd while it is its parent's child (#377): a pid reaped and reused since it was
+/// stored is no child of ours, and is left.
 pub fn kill_tree(pid: &[u8]) {
-    for c in procfs::children(pid) {
-        kill_tree(&c);
+    let me = std::process::id().to_string().into_bytes();
+    if let Some(p) = pin_child(pid, &me) {
+        kill_pinned(&p);
     }
-    if let Some(p) = std::str::from_utf8(pid)
-        .ok()
-        .and_then(|p| p.parse::<libc::pid_t>().ok())
-        .filter(|&p| p > 0)
-    {
-        // SAFETY: a signal to a pid; nothing of ours is touched.
-        unsafe {
-            libc::kill(p, libc::SIGKILL);
+}
+
+/// PID pinned while PARENT's child.
+fn pin_child(pid: &[u8], parent: &[u8]) -> Option<crate::pidfd::Pidfd> {
+    crate::pidfd::Pidfd::pin(pid, || procfs::proc_ppid(pid).is_some_and(|p| p == parent))
+}
+
+fn kill_pinned(p: &crate::pidfd::Pidfd) {
+    for c in procfs::children(p.pid()) {
+        if let Some(c) = pin_child(&c, p.pid()) {
+            kill_pinned(&c);
         }
     }
+    p.signal(libc::SIGKILL);
 }
 
 /// One line of the tool's, as `IFS= read -r -t 1` gives it: a whole line, what came of one before
@@ -1049,6 +1056,39 @@ impl Settle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #377: kill_tree ends a child of ours and what is under it, and leaves a pid that is no child
+    /// of ours (as one reaped and taken since it was stored would be).
+    /// (#[ignore]: it starts and kills processes; test/run.sh's unit tier runs it.)
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn kill_tree_ends_only_our_children() {
+        let mut sh = std::process::Command::new("sh")
+            .args(["-c", "sleep 300 & echo $!; wait"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(sh.stdout.take().unwrap()),
+            &mut line,
+        )
+        .unwrap();
+        let gc = line.trim().as_bytes().to_vec();
+        let running = |p: &[u8]| procfs::running(p);
+        kill_tree(&gc);
+        std::thread::sleep(Duration::from_millis(200));
+        let left = running(&gc);
+        kill_tree(sh.id().to_string().as_bytes());
+        let _ = sh.wait();
+        let end = Instant::now() + Duration::from_secs(3);
+        while running(&gc) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let ended = !running(&gc);
+        assert!(left, "a pid that is no child of ours: left");
+        assert!(ended, "...our child's tree: ended, its child too");
+    }
 
     #[test]
     fn geometry() {

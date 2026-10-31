@@ -102,9 +102,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the node renders in software only (or has no EGL), how to give a VM 3D, and another GPU when the
   machine has one ([#396](https://github.com/diogochaves/omabox/issues/396)).
 - **`down` signals the box's processes through pidfds**: the continue it sends the commands that
-  entered the box, and the kill of its PID 1 and pasta, went by pid number after the check that
-  they were the box's, so a pid reused in between (a stopped job of yours) could be continued or
-  killed. Now each goes to the process that was checked, or to none
+  entered the box, and the kill of its PID 1, pasta and peek windows, went by pid number after the
+  check that they were the box's, so a pid reused in between (a stopped job of yours) could be
+  continued or killed; so did `save`'s pause of the box, `run --replace`'s stop of the earlier job,
+  `shot`'s end of a stuck capture and `log -f`/`events -f`'s of their followers. Now each goes to
+  the process that was checked, or to none
   ([#377](https://github.com/diogochaves/omabox/issues/377)).
 - **A `down` by another omabox left the box's reaper running** (a package's `down` of a box a
   checkout started, or another worktree's) until its next look. The reaper now records its pid in

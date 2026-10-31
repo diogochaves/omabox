@@ -7384,7 +7384,7 @@ t_reap_race() {
   check_eq "...and leaves the new box alone" up "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   ob down "$B" >/dev/null 2>&1
   # (#383: the reaper records its pid and start time in the box dir, which down ends it by)
-  B=$P-rp
+  B=$P-rrec
   up_ok "$B" --idle 60s --no-shell || { no "up" "$UP_OUT"; return; }
   local rec=$XDG_RUNTIME_DIR/omabox/$B/reaper.pid rp rs
   until_ok 10 test -s "$rec" >/dev/null

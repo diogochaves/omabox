@@ -10953,6 +10953,14 @@ from them.
     it; the wait for PID 1's end is the pidfd's too. Test: ready.rs's kill_box_continues_no_reused_pid
     (re-run in a pid namespace of its own, `unshare -Urpf`, where ns_last_pid makes the pid be
     reused: the stopped job stays stopped), failed on the old code; t_unit_rust_ignored runs it.
+    The same gap, closed the same way: down's SIGTERM to the box's peek windows (pinned, then found
+    peeks again), kill_tree (shot's and settle's stuck tools: each pinned while its parent's child),
+    save's SIGSTOP/SIGCONT of the box and `run --replace`'s TERM/KILL (each pinned while in the box's
+    pid namespace, `jobs.rs`'s `pin_in_box`), and the followers `log -f`/`events -f` end on a
+    signal (a pidfd kept from their start, signalled from the handler). The kills left by number
+    are safe: to this process, to an unreaped child of ours or its group, or a signal-0 probe.
+    Tests: down's down_ends_only_a_peek_still_one and settle's kill_tree_ends_only_our_children,
+    both failed on the old code; jobs' pinned_only_in_the_box.
 573. **A down by another omabox left the box's reaper running** (2026-10-31, #383). kill_reapers
     found a box's reaper by its command line only, `ROOT/bin/omabox _reap NAME ...` with the ROOT of
     the omabox running `down`, so a down from a package of a box a checkout started (or from

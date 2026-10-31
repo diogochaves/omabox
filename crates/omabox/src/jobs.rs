@@ -329,6 +329,28 @@ pub fn box_pids_try(ctx: &Ctx) -> Option<Vec<Vec<u8>>> {
     )
 }
 
+/// The pid namespace of the box's PID 1, None when it cannot be read.
+pub fn box_ns(ctx: &Ctx) -> Option<Vec<u8>> {
+    match box_pid(&ctx.d) {
+        BoxPid::Pid(p) => procfs::pidns(&p),
+        _ => None,
+    }
+}
+
+/// Host pid PID pinned by a pidfd while it is a process of the box whose pid namespace is NS
+/// (box_ns): a signal through it never reaches a process of the user's that took the pid of one
+/// of the box's that ended since it was listed (#377).
+pub fn pin_in_box(ns: &[u8], pid: &[u8]) -> Option<crate::pidfd::Pidfd> {
+    crate::pidfd::Pidfd::pin(pid, || procfs::pidns(pid).is_some_and(|n| n == ns))
+}
+
+/// box_pids_try, each process pinned (pin_in_box).
+pub fn box_pins_try(ctx: &Ctx) -> Option<Vec<crate::pidfd::Pidfd>> {
+    let ns = box_ns(ctx)?;
+    let pids = box_pids_try(ctx)?;
+    Some(pids.iter().filter_map(|p| pin_in_box(&ns, p)).collect())
+}
+
 /// Each live process of the box: "HOST_PID BOX_PID BOX_SID START".
 pub fn box_procs(ctx: &Ctx) -> Vec<[Vec<u8>; 4]> {
     let mut out = Vec::new();
@@ -741,13 +763,12 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
     let wins = windows(&cj);
     let t0 = crate::settle::mono_ms();
     let (mut end, mut killed) = (t0 + 5000, false);
+    // (each through a pidfd, while it is still the box's: #377)
+    let ns = box_ns(ctx).unwrap_or_default();
     let signal = |procs: &[(Vec<u8>, Vec<u8>)], sig: i32| {
         for (h, _) in procs {
-            if let Ok(p) = String::from_utf8_lossy(h).parse::<libc::pid_t>() {
-                // SAFETY: a pid of one of the box's processes; kill only sends a signal.
-                unsafe {
-                    libc::kill(p, sig);
-                }
+            if let Some(p) = pin_in_box(&ns, h) {
+                p.signal(sig);
             }
         }
     };
@@ -1014,6 +1035,22 @@ pub fn run_mark_end(ctx: &Ctx, mark: Option<(i64, bool)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #377: a pid is pinned as the box's only while it is in the box's pid namespace.
+    #[test]
+    fn pinned_only_in_the_box() {
+        let me = std::process::id().to_string().into_bytes();
+        let ns = procfs::pidns(&me).unwrap();
+        assert!(
+            pin_in_box(&ns, &me).is_some(),
+            "a process in that namespace"
+        );
+        assert!(
+            pin_in_box(b"pid:[1]", &me).is_none(),
+            "...not one in another"
+        );
+        assert!(pin_in_box(&ns, b"").is_none(), "...nor no pid");
+    }
 
     fn line(a: &str) -> [Vec<u8>; 4] {
         let w: Vec<Vec<u8>> = a.split(' ').map(|s| s.as_bytes().to_vec()).collect();
