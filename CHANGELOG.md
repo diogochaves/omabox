@@ -267,6 +267,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   shot is the window's box, and Hyprland says nowhere where a window's popups (a GTK or Chromium
   context menu, a dropdown) are, so it cannot grow the shot to them. Take the screen around the
   window with `shot -g`, or a whole shot ([#334](https://github.com/diogochaves/omabox/issues/334)).
+- **A box has `/var/tmp` and `/var/lib`, and its `/run` is 0755 as on a host**: `mktemp -p
+  /var/tmp`, a mount over `/var/lib` in a namespace of the program's own and a check of `/run`'s
+  mode failed in a box only. Six of Omarchy's own tests that failed in a box pass now
+  ([#322](https://github.com/diogochaves/omabox/issues/322)).
+- **`timedatectl` answers its read-only questions in a box** (`list-timezones`, `show -p Timezone`):
+  it failed for want of a system bus, so Omarchy's Elsewhen panel had no zone list and no local zone.
+  Setting the zone still fails: the clock is not the box's to set
+  ([#322](https://github.com/diogochaves/omabox/issues/322)).
+- **A Hyprland started inside a box opened Hyprland's update news over its first frames**: the box
+  HOME now records the box's Hyprland version, as a desk's does after its first session
+  ([#322](https://github.com/diogochaves/omabox/issues/322)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count

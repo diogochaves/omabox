@@ -12127,6 +12127,53 @@ from them.
     goes to a temp in the box dir first (as --changed's), then magick writes OUT.part (renamed) or a
     jailed caller's fd. Tests: t_shot_grid (the margin, the spans, click --cell and X Y through the
     margin, --cell C3:D3's crop, zoom and --json, a window's grid, the refusals), grid.rs's units.
+624. **Omarchy's own suite in a box: its 16 failures sorted; a box had no `/var` and a 0700 `/run`**
+    (2026-10-31, #322). Omarchy's `./test/all` (`quattro` 7075b61) in a throwaway `run` box left 16
+    test files failing; each was rerun alone in a box of its own, traced (`bash -x`) and sorted.
+    **omabox's**, fixed: a box had no `/var` at all (factory-reset-dispatch's `mktemp -d
+    /var/tmp/...`; image-target-platform's `mount --bind ... /var/lib` in an `unshare -rm` namespace:
+    "mount point does not exist"), and its `/run` and `/run/user` were 0700 (the mode bwrap gives a
+    parent it makes; a host's are 0755): nopasswd-sudo-expiry and passwordless-grant-lifecycle mock
+    ownership with a `stat` stub but read the mode, and `omarchy_security_assert_root_directory /run
+    755` refused. bwrap now makes `/var` (0755), `/var/tmp` (a tmpfs, 1777), `/var/lib` (0755, empty)
+    and `/run`, `/run/user` at 0755 before the runtime dir is bound (still 0700). Elsewhen's two
+    `timedatectl` tests: finding 625. The cold-cursor test's update news: finding 626. **A box's by
+    design** (reference.md, "When a box cannot test it"): nothing in a box is root's. The box has one
+    user (pasta's namespace maps only yours), so `/`, `/run`, `/tmp` are yours and the host's root
+    files read as 65534; update-stay-awake-security and update-lock (`omarchy-update-stay-awake`
+    wants `$XDG_RUNTIME_DIR`'s parents root-owned: "Refusing to use an unsafe Omarchy update
+    inhibitor state path") and windows-vm-compose (`ln -s / ~/Windows` must fail the "owned by your
+    uid" preflight; a box's `/` is the user's) cannot pass in one. **Omarchy's own** (for Diogo; not
+    filed): i18n (`da/menu.json` lacked `system.reboot-boot-menu` at that commit); elsewhen-migration
+    and provision-user set `HOME` but keep the session's `XDG_CACHE_HOME`/`XDG_CONFIG_HOME`, which a
+    box sets as the desk's session does (finding 87), so they would fail on such a desk too (both pass
+    with the four unset); background-instant-reload and background-intro-clone read a pixel at 32,256
+    that Omarchy's stock top bar leaves free and the desk's bar, which a box seeds, covers (both pass
+    in `run --stock-bar`); hyprland-startup-cursor-cold's first frames show the fixture's magenta
+    background fading in before its cover in 3 of 6 runs on the RTX's render node, 0 of 3 on the
+    iGPU's (a race in the fixture or the intro cover); lock-appear-budget's 750 ms from shell start
+    took 813-865 ms on the RTX node and 707-720 ms on the iGPU's (`OMABOX_RENDER_NODE`): a budget
+    scaled for CPU speed, not GPU. The host desktop was not compared (it would run the tests there).
+    Tests: t_system_dirs (the modes, mktemp in /var/tmp, an `unshare -rm` mount over /var/lib).
+625. **`timedatectl` failed in every box: no system bus** (2026-10-31, #322). Omarchy 4.5's
+    Elsewhen panel lists zones with `timedatectl list-timezones` and names the local one with
+    `timedatectl show -p Timezone --value`; both ask timedated over the system bus, which a box has
+    not, so the picker was empty and the header had no zone (elsewhen-greetings and elsewhen-model
+    failed). A stand-in in `share/bin` answers those read-only questions from what timedated reads:
+    tzdata.zi's zone and link names in byte order (the host's own list, 598 lines, byte for byte) and
+    `/etc/localtime`'s link (`show -p/-P/--property=Timezone`, `--value`). Anything else, other
+    properties, `status`, `set-timezone`, `-H`/`-M`, goes to the real one and fails as before. Tests:
+    t_system_dirs (both answers against the host's files; set-timezone still fails).
+626. **A Hyprland started in a box opened Hyprland's update news** (2026-10-31, #322). Hyprland
+    keeps the last version it ran in `$XDG_DATA_HOME/hyprland/lastVersion`; with none it writes
+    `0.0.0` and says nothing, and a later Hyprland that reads a lower version than its own writes
+    its version and starts `hyprland-update-screen`. A box HOME starts without the file, so the box's
+    Hyprland wrote 0.0.0 and the first nested Hyprland in the box (Omarchy's
+    hyprland-startup-cursor-cold, one an agent runs) opened "Hyprland updated to 0.56.2!" over its
+    first frames (seen in its capture). A desk's HOME has the version after its first session.
+    `start-hyprland.sh` now writes the version `Hyprland --version` (or `--hyprland`'s build) gives
+    when the file is missing; a save's HOME keeps its own. After it, six runs of that test showed no
+    update window. Tests: t_system_dirs (lastVersion is the installed Hyprland's).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

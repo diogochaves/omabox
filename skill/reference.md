@@ -1429,8 +1429,17 @@ and data cannot be verified in a box: do not report it as tested. (`systemctl --
   --cycles 20`, which stops at the first shell crash; an unplug for good: `omabox monitor remove NAME`.
   On NVIDIA an output the app creates itself (`hyprctl output create headless`) comes up 0x0: a box
   on the other GPU (`OMABOX_RENDER_NODE`, "Screen size and rendering cost").
+- **Nothing in a box is root's**: one user, so `/`, `/run`, `/tmp` are yours and the host's root
+  files read as `nobody` (65534). Code that wants a root-owned parent chain or refuses a path the
+  user owns (Omarchy's update inhibitor, sudo and Windows VM helpers; their update-lock,
+  update-stay-awake-security and windows-vm-compose tests) refuses in a box: not testable there.
+- Omarchy's own suite: `omabox run --stock-bar -- ./test/all` from the checkout (its background tests
+  read a pixel the desk's bar may cover). Besides the three above, a test that sets `HOME` but not
+  the `XDG_*_HOME` vars, or times the shell against a fixed budget (faster on the iGPU's render node,
+  `OMABOX_RENDER_NODE`), fails as it would on a desk like yours.
 - No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit (an
-  agent's dialog: `up --polkit`, "Testing a polkit agent"). No
+  agent's dialog: `up --polkit`, "Testing a polkit agent"; `timedatectl list-timezones` and `show -p
+  Timezone` answer from tzdata; setting it fails). No
   devices: no sound card (`up --audio` gives a box its own PipeWire, with a null sink, omabox-speaker,
   as its only output and a silent mic, omabox-mic: apps play, nobody hears, `omabox audio` and
   `record --audio` read it; real outputs, Bluetooth audio and `wpctl` on the user's devices stay
