@@ -11,6 +11,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   checkout with a `stash` folder, `run -- omarchy-shell stash modules` was told to restart the box
   with `--overlay`. A word now counts only when it reads as a path (a `/` in it, the command itself,
   `cd`'s folder) ([#325](https://github.com/diogochaves/omabox/issues/325)).
+- **Ctrl-D at one of `omabox setup`'s questions ended it silently** (exit 1). It is now a no, said
+  so, and setup goes on; a Ctrl-D at the widget's question is not remembered as a no
+  ([#373](https://github.com/diogochaves/omabox/issues/373)).
 
 ## 1.0.2 — 2026-10-30
 

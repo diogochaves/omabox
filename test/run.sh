@@ -14708,6 +14708,10 @@ t_setup_prompts() {
   check_match "setup again: on, not asked" "bar widget: on in your bar" "$(in_tty "")"
   ob run -b "$B" -- omarchy plugin disable chaves.omabox >/dev/null 2>&1
   until_ok 5 bash -c "! grep -q '\"chaves.omabox\"' '$H/.config/omarchy/shell.json'"
+  # (#373: the end of input at the question, Ctrl-D: a no, said; not remembered, so asked again)
+  out=$(in_tty "")
+  check_match "...Ctrl-D at the question: a no, said (#373)" "end of input: no, to this and any question after it" "$out"
+  check "...not in the bar, and not remembered" bash -c "! grep -q '\"chaves.omabox\"' '$H/.config/omarchy/shell.json' && ! test -e '$H/.config/omabox/widget-declined'"
   out=$(in_tty $'n\n')
   check "...no: not in the bar, and remembered" bash -c "! grep -q '\"chaves.omabox\"' '$H/.config/omarchy/shell.json' && test -e '$H/.config/omabox/widget-declined'"
   check_match "...then not asked again" "bar widget: not asked \(you said no before" "$(in_tty "")"

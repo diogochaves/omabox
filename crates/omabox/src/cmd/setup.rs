@@ -79,8 +79,15 @@ fn terminal() -> bool {
     crate::exec::isatty(0) && crate::exec::isatty(1)
 }
 
+/// Whether a prompt met the end of its input (Ctrl-D): taken as no, never remembered as one.
+static INPUT_ENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn input_ended() -> bool {
+    INPUT_ENDED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `read -r -p PROMPT yn`, then whether the answer is a no (`[[ $yn = [nN]* ]]`). At the end of
-/// input, the command ends, 1, as bash's set -e ended it there.
+/// input (Ctrl-D) a no, said once (#373: bash's set -e ended setup there, 1, without a word).
 fn ask_no(prompt: &str) -> Res<bool> {
     let _ = std::io::Write::write_all(&mut std::io::stderr(), prompt.as_bytes());
     let mut line = Vec::new();
@@ -88,7 +95,16 @@ fn ask_no(prompt: &str) -> Res<bool> {
     loop {
         // SAFETY: b is ours, one byte; fd 0 is the terminal's.
         let n = unsafe { libc::read(0, b.as_mut_ptr().cast(), 1) };
-        if n <= 0 {
+        if n == 0 {
+            if !INPUT_ENDED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    b"\n(end of input: no, to this and any question after it)\n",
+                );
+            }
+            return Ok(true);
+        }
+        if n < 0 {
             return Err(Exit(1));
         }
         if b[0] == b'\n' {
@@ -331,7 +347,10 @@ impl Setup {
             ));
         }
         if ask_no("Show the omabox widget in your bar? [Y/n] ")? {
-            remember(&declined);
+            // (a Ctrl-D is no answer to keep: asked again next time)
+            if !input_ended() {
+                remember(&declined);
+            }
             return Ok(());
         }
         shell_knows_widget();

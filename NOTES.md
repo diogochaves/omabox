@@ -10725,6 +10725,14 @@ from them.
     names a folder (`python3 tests`) is no longer said; one with a `/` (`tests/x.py`) still is.
     Test: t_unit_run_cwd_note (the issue's commands: none; a script's later command: said), failed
     on the old code.
+551. **Ctrl-D at a setup prompt ended setup without a word** (2026-10-30, #373). setup's `[Y/n]`
+    prompts (the widget, a stale `~/.local/bin/omabox` link, the guard) ended the command with exit 1
+    at the end of input, as bash's `set -e` did after `read` failed. Every prompt defaults to yes, so
+    reading Ctrl-D as the default would act on a key that means "stop": it is now a no, said once on
+    its own line ("(end of input: no, to this and any question after it)"), and setup goes on to its
+    end. The widget's no is remembered (`widget-declined`, never asked again); a Ctrl-D is not, so
+    the next setup asks again. Test: t_setup_prompts (Ctrl-D at the widget's question: said, not in
+    the bar, not remembered), failed on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
