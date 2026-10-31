@@ -12586,8 +12586,10 @@ t_dnd_dock() {
   read -r _ y0 h <<<"$at"
   if [ $((y0 + h - 5)) -gt "$out" ]; then
     out=$(ob click -b "$B" --window 'title:^L$' --no-raise 300 $((h - 5)) 2>&1); rc=$?
-    check_match "...a --no-raise click there: sent, said as a may, with dock's way out" \
-      "^0 omabox: a layer spanning the screen, \"omarchy-dock\" .* may go to it .*\(omabox dock says where it takes input; omabox dock off takes it away\)$" "$rc $out"
+    # (#283: where the dock draws no icon, nothing is said; said as a may only when its pixels cannot
+    # tell)
+    check_match "...a --no-raise click there: sent; nothing said, or said as a may with dock's way out" \
+      "^0 ($|omabox: a layer spanning the screen, \"omarchy-dock\" .* may go to it .*\(omabox dock says where it takes input; omabox dock off takes it away\)$)" "$rc $out"
   else skip "a click where the window meets the shown dock" "the floating window ends above the dock"; fi
   out=$(ob dock -b "$B" off 2>&1); rc=$?
   check_match "dock off: said, exit 0" "^0 omabox: box '$B': dock off: its service disabled" "$rc $out"
@@ -14073,7 +14075,7 @@ t_cli_box() {
   cx_case "drag --shot" drag -b "$B" --shot "$o3/d.png" --shot-fit 300 --window rp-k 10 10 60 60
   cx_want=(rc=0 "out=$o3/s.png" err= 'state~^s\.png [0-9]+ [0-9]+$' 'state~	screen 0,0	')
   cx_case "shot -o" shot -b "$B" -o "$o3/s.png"
-  cx_want=(rc=0 "out={\"path\":\"$o3/g.png\",\"kind\":\"region\",\"region\":{\"x\":100,\"y\":100,\"w\":200,\"h\":100},\"image\":{\"w\":200,\"h\":100},\"scale\":1,\"window\":null,\"monitor\":null,\"fit\":null,\"zoom\":null,\"changed\":null}" "err=omabox: 200x100 image of the screen's G; click with --in $o3/g.png" 'state~^g\.png 200 100$')
+  cx_want=(rc=0 "out={\"path\":\"$o3/g.png\",\"kind\":\"region\",\"region\":{\"x\":100,\"y\":100,\"w\":200,\"h\":100},\"image\":{\"w\":200,\"h\":100},\"scale\":1,\"window\":null,\"monitor\":null,\"fit\":null,\"zoom\":null,\"grid\":null,\"changed\":null}" "err=omabox: 200x100 image of the screen's G; click with --in $o3/g.png" 'state~^g\.png 200 100$')
   cx_case "shot --json -g" shot -b "$B" --json -g '100,100 200x100' -o "$o3/g.png"
   cx_want=(rc=0 "out~^\\{\"path\":\"$o3/w\\.png\",\"kind\":\"window\",.*\"window\":\\{\"address\":\"0xA\",\"class\":\"rp-k\",\"title\":\"rpk\"," 'state~^w\.png [0-9]+ [0-9]+$')
   cx_case "shot --window --json" shot -b "$B" --window rp-k --json -o "$o3/w.png"
@@ -14323,7 +14325,7 @@ EOF
   cx_prep=cx_ckc
   cx_want=(rc=0 "out=same     whole"$'\n'"same     part"$'\n'"check: 2 of 2 same; shots in $ck/o/run1" "err~^omabox: check: run 1 of 1: a clean box \\($P-rpc-1\\), then: $ck/scen\$")
   cx_case "check run: against its baseline" check run --base "$ck/base" -o "$ck/o" -- "$ck/scen"
-  cx_want=(rc=0 'out~^\{"result":"same",.*"counts":\{"checkpoints":2,"same":2,"changed":0,"as_another":0,"holes":0,"new":0,"missing":0,"skipped":0\},')
+  cx_want=(rc=0 'out~^\{"result":"same",.*"counts":\{"checkpoints":2,"same":2,"changed":0,"as_another":0,"holes":0,"new":0,"missing":0,"skipped":0,"proof_failed":0\},')
   cx_case "check run --json: against its baseline" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/scen"
   cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit 5\\): trying \\($ck/o/run1\\.log\\)\$")
   cx_case "check run: the scenario failed, exit 3" check run --base "$ck/base" -o "$ck/o" -- "$ck/bad"
@@ -14336,7 +14338,7 @@ EOF
   # (a scenario named like a function of bash's omabox: a program, and there is none, finding 451)
   cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit 127\\): omabox: check: cannot run scenario say: not found in PATH \\($ck/o/run1\\.log\\)\$")
   cx_case "check run: a scenario named like omabox's say" check run --base "$ck/base" -o "$ck/o" -- say
-  cx_want=(rc=1 'out~^\{"result":"changed",.*"counts":\{"checkpoints":4,"same":1,"changed":0,"as_another":0,"holes":0,"new":2,"missing":1,"skipped":0\},' 'state~^== \./o/run1/lz8\.point$' 'state~^ignore 0 0 20 20$' 'state!~^ignore 8 ')
+  cx_want=(rc=1 'out~^\{"result":"changed",.*"counts":\{"checkpoints":4,"same":1,"changed":0,"as_another":0,"holes":0,"new":2,"missing":1,"skipped":0,"proof_failed":0\},' 'state~^== \./o/run1/lz8\.point$' 'state~^ignore 0 0 20 20$' 'state!~^ignore 8 ')
   cx_case "check run --json: checkpoints with 010 and 08 in them" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/lz"
   # Scenarios bash cannot run as they are: not executable, a dir, binary; one with no #! is a
   # script bash runs itself; a path to nothing.
@@ -14792,7 +14794,8 @@ t_widget_mark() {
     until_ok 5 slot_is "$((n > 1 ? 54 : 27))" || return 1
     ob wait -b "$B" still >/dev/null 2>&1
     g=$(ob run -b "$B" -- omarchy-shell shell debugBarGeometry | jq -r '.[] | select(.id == "chaves.omabox") | "\(.x),\(.y) \(.width)x\(.height)"') || return 1
-    ob shot -b "$B" -g "$g" -o "$TMP/wm-$n.png" >/dev/null 2>&1 && magick "$TMP/wm-$n.png" -colorspace gray "$TMP/wm-$n.pgm" || return 1
+    # (-strip: a shot carries its scale in a comment since #267, which a PGM header would hold)
+    ob shot -b "$B" -g "$g" -o "$TMP/wm-$n.png" >/dev/null 2>&1 && magick "$TMP/wm-$n.png" -strip -colorspace gray "$TMP/wm-$n.pgm" || return 1
     python3 -c "$INK_RUNS" "$TMP/wm-$n.pgm"
   }
   local one n out first count last w
