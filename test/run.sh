@@ -7624,7 +7624,7 @@ exec '$f/real-nft' "\$@"
 EOF
   chmod 755 "$f/nft"
   : > "$f/fail"
-  if ! UP_OUT=$(nsenter -t "$H" -U -n --preserve-credentials unshare -m sh -c 'mount --bind "$1" /usr/bin/nft && shift && u=$1 g=$2 && shift 2 && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
+  if ! UP_OUT=$(nsenter -t "$H" -U -n --preserve-credentials unshare -m --propagation slave sh -c 'mount --bind "$1" /usr/bin/nft && shift && u=$1 g=$2 && shift 2 && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
       _ "$f/nft" "$(id -u)" "$(id -g)" env HOME="$h" "$CLI" up "$B2" --no-shell --theme tokyo-night --stock-bar 2>&1); then
     no "up with a stand-in nft for its reaper" "$UP_OUT"; return
   fi
