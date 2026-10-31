@@ -20,6 +20,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
+  `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
+  fullscreen covers it and takes the click. Overlays still count
+  ([#409](https://github.com/diogochaves/omabox/issues/409)).
 - **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
   `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
   Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).

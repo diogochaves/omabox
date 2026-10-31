@@ -153,7 +153,8 @@ pub const WIN_DESC_JQ: &str = win_desc_jq!();
 /// What changed on the desktop between two snapshots (#274).
 pub const DESK_FACTS_JQ: &str = desk_facts_jq!();
 
-/// What got the input, from a snapshot (findings 398, 421); `(WIN)` stands for WIN_JQ.
+/// What got the input, from a snapshot (findings 398, 421); `(WIN)` stands for WIN_JQ. A window in
+/// real fullscreen at the point, on a shown workspace, covers the top level there (#409, finding 561).
 pub const DESK_TARGET_JQ: &str = concat!(
     layer_span_jq!(),
     r#"
@@ -174,7 +175,11 @@ pub const DESK_TARGET_JQ: &str = concat!(
       (if $what == "drag" then "the drag from \($x),\($y) started" elif $what == "scroll" then "the scroll at \($x),\($y) was"
        else "the click at \($x),\($y) was" end) as $say
       | def at($o): $x >= $o.x and $x < $o.x + $o.w and $y >= $o.y and $y < $o.y + $o.h;
-      [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {} | to_entries[] | (.key | tonumber) as $lv | .value | reverse[]
+      ([$m[]? | .activeWorkspace.id] | map(select(. != null and . > 0))) as $act
+      | any($c[]?; .mapped and (.hidden | not) and (.fullscreen // 0) >= 2 and (.workspace.id as $i | any($act[]; . == $i))
+          and at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]})) as $fs
+      | [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {} | to_entries[] | (.key | tonumber) as $lv | .value | reverse[]
+        | select($lv != 2 or ($fs | not))
         | bar_strip($m; $mon) | select(.w > 1 and .h > 1 and at(.))
         | {lv: $lv, ns: (if (.namespace // "") == "" then .address else .namespace end), span: ($lv >= 2 and spans($m; $mon))}] as $L
       | ([(WIN) | .[] | select(.onscreen and at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]})

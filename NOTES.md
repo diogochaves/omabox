@@ -10818,6 +10818,16 @@ from them.
     start in (finding 63), and a note on every `up` from ~ would be noise. Tests: t_unit_jail_policy
     (norepo_note: said for a folder without .git, not for one with, not outside a jail), t_jail (in a
     real ai-jail: said, the box without the folder, then `up --ro-bind` as it says: the box has it).
+561. **The click report named a top layer over a fullscreen window as where the click went** (2026-10-31,
+    #409; from finding 558's reading of 4.5.0's bar). `DESK_TARGET_JQ` (a `--wait` 124's "the click at
+    X,Y was on ...", `--json`'s `target`) counted every top and overlay layer at the point. On a
+    monitor whose workspace has a window in real fullscreen (mode 2) Hyprland passes top layers by
+    (finding 379), and 4.5.0's bar masks itself to no input there too, so a click at the top of a
+    fullscreen window was said, `certain`, to be "on layer omarchy-bar (over ...)". `WIN_JQ` already
+    drops them (`windows`, `--window`). Now the report drops top-level layers at a point inside a
+    mapped window in fullscreen 2 on a monitor's active workspace; overlays still count, a maximized
+    window (mode 1) keeps the bar over it. Test: t_unit_wait_facts (failed on the old code). Not seen
+    in a box: no box test puts a window in fullscreen under the stock bar.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

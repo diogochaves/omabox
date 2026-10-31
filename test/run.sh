@@ -16769,6 +16769,20 @@ t_unit_wait_facts() {
     "$(probe desk_target scroll "$sn" "1500 500" | jq -r '"\(.text)|\(.kind)|\(.namespace)|\(.certain)"')"
   check_eq "...the same layer a toast's size: on it, certain" 'the click at 100,450 was on layer omarchy-notifications (over foot "K")|true' \
     "$(probe desk_target click "$(jq -c '.layers["HEADLESS-2"].levels["3"][-1] += {y: 400, h: 100}' <<<"$sn")" "100 450" | jq -r '"\(.text)|\(.certain)"')"
+  # A window in real fullscreen (mode 2) covers the top level (#409, finding 561): the bar's strip
+  # over its top edge takes none of the click (Hyprland passes top layers by there, and 4.5.0's bar
+  # masks itself); an overlay still does, and a maximized window (mode 1) keeps the bar over it.
+  local sf; sf=$(wf_snap '.clients[0] += {fullscreen: 2, size: [1920, 1080]}
+    | .layers["HEADLESS-2"].levels["2"] = [{address: "0x2", namespace: "omarchy-bar", x: 0, y: 0, w: 1920, h: 34}]')
+  check_eq "fullscreen: the bar's strip over its top edge is not where the click went (#409)" \
+    'the click at 100,10 was on foot "K" (its 100,10)|window|true' \
+    "$(probe desk_target click "$sf" "100 10" | jq -r '"\(.text)|\(.kind)|\(.certain)"')"
+  check_eq "...an overlay there still is" 'the click at 100,10 was on layer t-toast (over foot "K")' \
+    "$(probe desk_target click "$(jq -c '.layers["HEADLESS-2"].levels["3"] += [{address: "0x7", namespace: "t-toast", x: 0, y: 0, w: 300, h: 100}]' <<<"$sf")" "100 10" | jq -r .text)"
+  check_eq "...maximized (mode 1): the bar still is" 'the click at 100,10 was on layer omarchy-bar (over foot "K")' \
+    "$(probe desk_target click "$(jq -c '.clients[0].fullscreen = 1' <<<"$sf")" "100 10" | jq -r .text)"
+  check_eq "...fullscreen on a workspace not shown: the bar is" 'the click at 100,10 was on layer omarchy-bar' \
+    "$(probe desk_target click "$(jq -c '.clients[0].workspace = {id: 2, name: "2"}' <<<"$sf")" "100 10" | jq -r .text)"
   check_eq "run: no window with the job's pid" "no window from pid 99 yet|none" "$(probe desk_target run "$s" 99 | jq -r '"\(.text)|\(.kind)"')"
   check_eq "...its window" "window|0xb" "$(probe desk_target run "$s" 41 | jq -r '"\(.kind)|\(.window.address)"')"
 
