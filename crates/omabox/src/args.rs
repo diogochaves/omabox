@@ -57,7 +57,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"dnd" => Some("-b= --box= --clear"),
         b"dock" => Some("-b= --box= --json"),
         b"click" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --image= --similar= --offset= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
+            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --image= --similar= --offset= --cell= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"scroll" => Some(
             "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
@@ -67,7 +67,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g= --shot-monitor= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"shot" | b"screenshot" => Some(
-            "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --after --json",
+            "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --grid= --cell= --after --json",
         ),
         b"calibrate" => Some("-b= --box= -o= --output= --size= --answer= --json"),
         b"mode" => Some("-b= --box= --json"),
