@@ -426,6 +426,9 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         (b"jail_deep", [p]) => yes(crate::jailpath::jail_deep(p)),
         (b"jail_readable", [f]) => yes(crate::jailpath::jail_readable(f)),
         (b"repo_top", []) => line(&crate::repo::repo_top().ok_or(Exit(1))?),
+        (b"norepo_note", [how]) => {
+            line(&crate::repo::norepo_note(&String::from_utf8_lossy(how)).ok_or(Exit(1))?)
+        }
         // SRC, a tab, DEST; a refusal said, 1 (3 for a jailed caller's).
         (b"seed_spec", [spec]) => match crate::upspec::seed_spec(spec) {
             Ok((src, dest)) => line(&cat!(src, "\t", dest)),

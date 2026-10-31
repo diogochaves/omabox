@@ -4759,6 +4759,17 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   git -C "$d/proj" config core.fsmonitor "touch $d/fsmonitor-ran"
   check_eq "repo_top: the jail's folder with a .git, without git" "$d/proj" "$(jpr repo_top)"
   check_fails "...its core.fsmonitor never ran" test -e "$d/fsmonitor-ran"
+  # A jail's folder with no .git: no project in the box, said with the mount that brings it (#394).
+  check_fails "norepo_note: none for a jail's folder with a .git" jpr norepo_note up
+  mkdir -p "$d/plain/in"
+  local Jp; Jp=$(jq -nc --arg p "$d/plain" --arg c "$d/plain/in" '{id: "1 2", cwd: $c, roots: [{path: $p, masked: false}]}')
+  check_fails "repo_top: none for a jail's folder without a .git" env OMABOX_JAIL="$Jp" "$PROBE" _rust probe repo_top
+  check_eq "norepo_note: one without, with the mount that brings it" \
+    "note: $d/plain is not a git repo, so this box does not have it (a box takes a jail's folder only when it has a .git): up --ro-bind $d/plain (or --overlay, to write in the box) mounts it" \
+    "$(OMABOX_JAIL=$Jp "$PROBE" _rust probe norepo_note up)"
+  check_match "...for a throwaway run too" "^note: .*: run --ro-bind $d/plain " "$(OMABOX_JAIL=$Jp "$PROBE" _rust probe norepo_note run)"
+  check_fails "...none outside a jail (a box never takes the folder it happens to start in, finding 63)" \
+    bash -c 'cd "$1" && "$2" _rust probe norepo_note up' _ "$d/plain/in" "$PROBE"
   check_eq "the default box is the one the caller's omabox sent" mine "$(OMABOX_RELAY_DEFAULT=mine jpr default_name)"
   check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_RELAY_PASS_X=s3 X=host jpr caller_env X)"
   # (broker_check's cases: broker_side.rs's broker_check_allows_and_refuses, #324 wave 6-suite)
@@ -5629,6 +5640,16 @@ EOF
   check_fails "...its .git/config masked in the jail: the real one is not in the box" grep -q SEKRITCFG <<<"$out"
   check_fails "...and the box came up" grep -q up-failed <<<"$out"
   check_match "...the common dir in it, its config empty, git status there (#210)" "(^| )0 ## $P-jailwt" "$(tr '\n' ' ' <<<"$out")"
+  # #394: a jail's folder with no .git is not the box's project, and up says so, with the mount.
+  local NG=$TMP/jailnogit; mkdir -p "$NG"; echo hi > "$NG/README"
+  out=$(cd "$NG" && timeout 120 ai-jail --no-save-config --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" \
+    bash -c '"$1" up "$2" 2>&1 >/dev/null || echo up-failed; "$1" run -b "$2" -- sh -c "pwd; test -e $3/README && echo has-it"; "$1" down "$2" >/dev/null 2>&1
+      "$1" up "$2" --ro-bind "$3" >/dev/null 2>&1 || echo up2-failed; "$1" run -b "$2" -- sh -c "test -e $3/README && echo then-has-it"; "$1" down "$2" >/dev/null 2>&1' \
+    ng "$CLI" "$P-jailng" "$NG" </dev/null 2>&1)
+  check_match "a jail's folder without .git: up says the box does not have it, and how to mount it (#394)" \
+    "note: $NG is not a git repo, so this box does not have it .*: up --ro-bind $NG " "$out"
+  check_fails "...and the box came up, without it" grep -qE "^(up-failed|has-it)" <<<"$out"
+  check_match "...up --ro-bind as it says: the box has it" "then-has-it" "$out"
   # #210: a project the jail hides paths in (ai-jail --mask, and its own .ai-jail, hidden by default) is
   # mounted in its box with those hidden again: a file empty, a folder empty, one below a folder of the
   # project's too, through a link, /proc/self/root and /proc/1/root; still hidden when the jail renames

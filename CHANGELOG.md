@@ -53,6 +53,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   its Hyprland) said "did not answer (hung?)" when the box ended in the moment between two of its
   looks. It now says the box went down and how
   ([#351](https://github.com/diogochaves/omabox/issues/351)).
+- **Inside ai-jail, a project folder without `.git` silently gave a box with no project**: `up` (and
+  a throwaway `run`) started fine, the box had none of the folder's files, and nothing said why. It
+  now says the folder is not a git repo and that `--ro-bind DIR` (or `--overlay`) brings it in
+  ([#394](https://github.com/diogochaves/omabox/issues/394)).
 
 ## 1.0.2 — 2026-10-30
 

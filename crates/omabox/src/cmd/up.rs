@@ -18,7 +18,7 @@ use crate::json;
 use crate::net::Ports;
 use crate::procfs;
 use crate::render::{self, RenderNode};
-use crate::repo::{jail_root, readlink_f, refuse_src, repo_top};
+use crate::repo::{jail_root, norepo_note, readlink_f, refuse_src, repo_top};
 use crate::shell;
 use crate::upspec::{self, SeedRefused, refuse_dest};
 use std::time::Duration;
@@ -1270,6 +1270,8 @@ fn mounts(ctx: &Ctx, u: &mut Up) -> Res<()> {
                 }
             }
         }
+    } else if let Some(n) = norepo_note("up") {
+        say(n);
     }
     // Language toolchains mise installed: interpreters and compilers, no secrets (finding 47). A
     // jailed caller's: holding nothing the jail hides, where nothing hidden can move to (#210).

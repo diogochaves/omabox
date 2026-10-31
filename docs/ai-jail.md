@@ -27,7 +27,8 @@ omabox broker on   # a systemd user socket; prints the lines to add to ~/.ai-jai
 Add those lines (they map omabox, its relay, the skill and the broker's socket into the jail,
 read-only), then run `ai-jail claude` as usual: `omabox up`, `shot`, `keys`, `click` and the rest
 work inside the jail as outside. The broker keeps a jail's boxes to what the jail has: no network
-when the jail has none (`--net isolated`), only the jail's own project mounted (what the jail hides
+when the jail has none (`--net isolated`), only the jail's own project mounted (when it is a git
+repo: `up` says so of one without a `.git`, with the `--ro-bind` that brings it; what the jail hides
 in it, its `.ai-jail` included, hidden in the box too), and only the boxes
 that jail started (never yours, nor another jail's), which go down when the jail exits. Driving a
 box is running code in it, so that is what stops a box from being a way out of the jail. Not for a

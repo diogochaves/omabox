@@ -143,6 +143,15 @@ pub fn repo_top() -> Option<Vec<u8>> {
             .ok()?;
         return o.status.success().then(|| strip_nl(&o.stdout));
     }
+    let r = jail_cwd_root()?;
+    std::path::Path::new(&r)
+        .join(".git")
+        .exists()
+        .then(|| r.into_bytes())
+}
+
+/// The jail's folder a box may mount that a jailed caller's cwd is in, the deepest.
+fn jail_cwd_root() -> Option<String> {
     let cwd = crate::jail::get_raw("cwd");
     if cwd.is_empty() {
         return None;
@@ -165,11 +174,32 @@ pub fn repo_top() -> Option<Vec<u8>> {
             best = Some(r.to_string());
         }
     }
-    let r = best?;
-    std::path::Path::new(&r)
-        .join(".git")
-        .exists()
-        .then(|| r.into_bytes())
+    best
+}
+
+/// norepo_note HOW (#394): a jailed caller in a jail's folder with no .git gets no project in its
+/// box (`up`, or `run`'s throwaway: HOW), and nothing else would say so. Outside a jail a box never
+/// takes the folder it happens to start in (finding 63): nothing said.
+pub fn norepo_note(how: &str) -> Option<Vec<u8>> {
+    if !in_jail() || repo_top().is_some() {
+        return None;
+    }
+    let r = no_cntrl(jail_cwd_root()?.as_bytes());
+    let fix = match refuse_src(&r) {
+        Some(why) => cat!("a box may not mount it (", why, ")"),
+        None => cat!(
+            how,
+            " --ro-bind ",
+            r,
+            " (or --overlay, to write in the box) mounts it"
+        ),
+    };
+    Some(cat!(
+        "note: ",
+        r,
+        " is not a git repo, so this box does not have it (a box takes a jail's folder only when it has a .git): ",
+        fix
+    ))
 }
 
 /// JAIL_COVERABLE: a jail's folder a box may mount with what the jail hides in it covered again: not

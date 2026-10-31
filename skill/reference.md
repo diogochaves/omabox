@@ -404,7 +404,8 @@ with `--keep wallpaper` or after a theme set in the box.
 
 omabox works through the user's broker (no `host`, `peek` or `--interactive`). "this sandbox refuses
 new namespaces": ask the user to run `omabox broker on` outside the jail and add what it prints to
-`~/.ai-jail`. Never try to get around the jail.
+`~/.ai-jail`. Never try to get around the jail. The jail's project goes into the box only when it is a
+git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overlay`) brings it in.
 
 ## Screen size and rendering cost
 

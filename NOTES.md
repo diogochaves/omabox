@@ -10808,6 +10808,16 @@ from them.
     kept the order). Now no pids with the box gone is "went down", with labwc's how. The issue's
     second race, a later call finding the box still up, was finding 527. Test: the unit test
     hypr_lost_box_ends_between_looks (alive at one look, no pids at the next).
+560. **Inside ai-jail, a project without `.git` got no project in the box, and nothing said so**
+    (2026-10-31, #394). A jailed caller's repo is the jail's folder its cwd is in, taken only when it
+    has a `.git` (repo_top runs no git on the jail's folders). In one without, `up` and a throwaway
+    `run` worked and the box had nothing of it. Both now say, once a command: "note: DIR is not a git
+    repo, so this box does not have it (a box takes a jail's folder only when it has a .git): up
+    --ro-bind DIR (or --overlay, to write in the box) mounts it" (a folder a box may not mount: why
+    not). Only in a jail (Diogo, 2026-10-31): outside one a box never takes the folder it happens to
+    start in (finding 63), and a note on every `up` from ~ would be noise. Tests: t_unit_jail_policy
+    (norepo_note: said for a folder without .git, not for one with, not outside a jail), t_jail (in a
+    real ai-jail: said, the box without the folder, then `up --ro-bind` as it says: the box has it).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

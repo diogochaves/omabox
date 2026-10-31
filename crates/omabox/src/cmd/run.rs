@@ -13,7 +13,7 @@ use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jail::in_jail;
 use crate::jobs::{job_ended, job_note, job_record, job_replace, run_mark_begin, run_mark_end};
 use crate::num::ms_duration;
-use crate::repo::{jail_root, refuse_src, repo_top, run_cwd_note, run_link_notes};
+use crate::repo::{jail_root, norepo_note, refuse_src, repo_top, run_cwd_note, run_link_notes};
 use crate::select::{env_names_box, select_box, session_boxes};
 use crate::settle::{Settle, cursor_now, cursor_rect, settle_sent};
 use crate::shell::{self, Re};
@@ -523,6 +523,8 @@ fn throwaway(ctx: &mut Ctx, up_args: Vec<Vec<u8>>, cmd: &[Vec<u8>]) -> Res<()> {
         } else {
             overlay = vec![b"--overlay".to_vec(), top];
         }
+    } else if let Some(n) = norepo_note("run") {
+        say(n);
     }
     // The name keeps its -run<pid> whatever the base's length: two runs in one repo never share a box.
     let me = std::process::id();
