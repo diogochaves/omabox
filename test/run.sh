@@ -2067,7 +2067,7 @@ sneaky.json|a link to api-keys.env: a secret's name"
   check_fails "...but not over a --plugin of its id" grep -q "plugins/omabox" \
     <<<"$(probe desk_plugins "$d/desk" "chaves.omabox	/elsewhere" 2>&1)"
   check_match "...an id that is not a name said" "not mounting plugins/badid: its manifest id '../x'" "$out"
-  check_fails "...a second dir with the same id: left out, unsaid" grep -q dup <<<"$out"
+  check_fails "...a second dir with the same id: left out, unsaid" grep -qF "plugins/dup" <<<"$out"
   # Refused before anything is made.
   check_match "--desk-shell with --stock-bar refused" "--desk-shell or --stock-bar, not both" \
     "$(OMABOX_DESK_CONFIG=$d/desk ob up "$P-ds0" --desk-shell --stock-bar 2>&1)"
