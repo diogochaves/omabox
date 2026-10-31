@@ -445,6 +445,34 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
 `~/.ai-jail`. Never try to get around the jail. The jail's project goes into the box only when it is a
 git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overlay`) brings it in.
 
+## Commands that run without a prompt
+
+The skill's `allowed-tools` pre-approves the verbs that act only inside a box and read none of the
+user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `scroll`, `drag`,
+`pointer`, `wait`, `jobs`, `stop`, `log`, `events`, `hyprctl`, `lua`, `restart-shell`, `reload`,
+`mode`, `output`, `monitor`, `cpu`, `audio`, `gdb`, `calibrate`, `ports`, `ls`, `path`, `brief`,
+`help`. Each is a rule `Bash(omabox VERB *)`, so:
+
+- **Claude Code** applies it during the turn that invoked the skill (a subagent's whole run; in a
+  session, until the user's next message), only to `omabox VERB ...` as typed: `omabox -b NAME shot`,
+  `bin/omabox shot` or `FOO=1 omabox shot` still ask. Put `-b NAME` after the verb. A `&&` chain is
+  pre-approved only when every part is.
+- **Still asked:** `host`, `peek`, `keys-to-box`, `clip` (the real desktop and clipboard); `config`,
+  `guard`, `setup`, `broker` (the user's settings); `up` and `run` (a rule cannot tell `up` from `up
+  --interactive`, or a box's `run` from a throwaway's `--ro-bind`, `--seed`, `--plugin`,
+  `--desk-shell` or `run --env-file FILE`); `down` (`--all`), `save`, `saves`, `gpu` (`gpu release`
+  ends other boxes); `record` (`record sheet VIDEO` reads any video), `check` (`check run` runs a
+  scenario on the host); `env`, `which`, `--version` (harmless, rare).
+- **What the listed ones write on the host:** only the images named with `-o` (`shot`, `drag
+  --shot`; a burst's `-o DIR` replaces its own frames there). `keys --pass VAR` types a variable of
+  the agent's own environment, as the user exported it. `shot --after`'s action takes no
+  `--env-file`. Keys, clicks and `hyprctl dispatch exec` run anything inside the box, which reaches
+  the network as the box does (ref: Network): a box the user started is still theirs.
+- **Codex** reads no grants from a skill: the user adds `prefix_rule(pattern = ["omabox", "shot"],
+  decision = "allow")` lines to `~/.codex/rules/default.rules`. **OpenCode**: `"permission": {"bash":
+  {"omabox shot *": "allow"}}` in `opencode.json`. **pi** asks for nothing; **Hermes** follows its
+  own approval settings. Only the user changes these files.
+
 ## Screen size and rendering cost
 
 - `omabox up --size 3440x1440` for another screen size (@60), `--size 3440x1440@144` for a refresh

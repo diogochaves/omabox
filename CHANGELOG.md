@@ -49,6 +49,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   password the box's helper takes. `omabox polkit agents` lists who registered; `log polkit` is the
   authority's log. It decides nothing for any service (pkexec and pkcheck get no answer from it)
   ([#258](https://github.com/diogochaves/omabox/issues/258)).
+- **The skill pre-approves the omabox commands that stay in a box** (Claude Code's `allowed-tools`):
+  `shot`, `windows`, `tree`, `keys`, `click`, `wait`, `log` and the rest that act only inside a box
+  and read none of your files run without a permission prompt while the skill is in use. `up`,
+  `run`, `down`, `host`, `peek`, `config` and the others that can reach your desktop, your files or
+  other boxes still ask. The skill's reference says which, and what Codex and OpenCode take instead
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

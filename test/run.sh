@@ -2356,7 +2356,10 @@ t_unit_version() {
     "$(skill_refs "$TMP/refs-skill.md" "$TMP/refs-ref.md" 2>&1 | paste -sd '|')"
   # #270: SKILL.md is the core every task loads (the rules, the loop, waiting, coordinates, where to look
   # next); the rest is in reference.md. Each load costs its whole size, so the cap is the core's + a margin.
-  check "...and stays short (under 8 000 bytes: #143, #270)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 8000
+  # Claude Code's load is the body (the front matter left out); an agent that reads the file reads both,
+  # the front matter's allowed-tools (#338) too.
+  check "...and stays short (its body under 8 000 bytes: #143, #270)" test "$(awk 'f >= 2; /^---$/ && f < 2 { f++ }' "$ROOT/skill/SKILL.md" | wc -c)" -lt 8000
+  check "...the whole file under 9 000 (#338)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 9000
   check "...and sends text questions to tree, not a shot (#270)" grep -qF '`tree --find TEXT` (~60 tokens), not a' "$ROOT/skill/SKILL.md"
   # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
   check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/SKILL.md"
@@ -2365,6 +2368,60 @@ t_unit_version() {
   else
     skip "the widget passes omarchy-plugin-validate" "no omarchy-plugin-validate here"
   fi
+}
+
+# The skill's allowed-tools (#338, finding 621): the front matter's one quoted line, each word of it a
+# `Bash(omabox VERB *)`. Prints each verb, and `bad WORD` for any other word (or `bad` without the line).
+SKILL_TOOLS='
+import json, re, sys
+lines = open(sys.argv[1]).read().split("\n")
+end = lines.index("---", 1) if lines[0] == "---" and "---" in lines[1:] else 0
+v = [l[len("allowed-tools: "):] for l in lines[1:end] if l.startswith("allowed-tools: ")]
+try:
+    s = json.loads(v[0]) if len(v) == 1 and v[0].startswith("\"") else None
+except ValueError:
+    s = None
+if not isinstance(s, str):
+    print("bad")
+    sys.exit()
+for w in re.findall(r"[^\s(]+(?:\([^)]*\))?", s):
+    m = re.fullmatch(r"Bash\(omabox ([a-z][a-z-]*) \*\)", w)
+    print(m.group(1) if m else "bad " + w)
+'
+skill_tools() { python3 -I -c "$SKILL_TOOLS" "$@"; }
+
+t_unit_skill_tools() {
+  # The verbs that act only inside a box and read none of the user's files (SECURITY.md S1-S8): what
+  # the skill may pre-approve. A verb added to the skill's list is added here, after that review.
+  local safe=' shot pixel windows window tree keys click scroll drag pointer wait jobs stop log events hyprctl lua restart-shell reload mode output monitor cpu audio gdb calibrate ports ls path brief help '
+  # Never pre-approved: the real desktop, the user's settings and files, other boxes, host commands.
+  local never=' host peek keys-to-box clip config guard setup broker up run down save saves gpu record check '
+  local verbs v bad='' out='' dup
+  verbs=$(skill_tools "$ROOT/skill/SKILL.md")
+  check_match "the skill pre-approves omabox verbs (allowed-tools, a quoted string)" '^[a-z]' "$verbs"
+  for v in $verbs; do
+    [[ $safe == *" $v "* ]] || bad+="$v "
+    [[ $never != *" $v "* ]] || out+="$v "
+  done
+  check_eq "...only the ones that stay in a box" "" "$(grep '^bad' <<<"$verbs")$bad"
+  check_eq "...none that reaches the desktop, the user's files or other boxes" "" "$out"
+  dup=$(sort <<<"$verbs" | uniq -d)
+  check_eq "...each once" "" "$dup"
+  bad=''
+  for v in $verbs; do "$CLI" help "$v" >/dev/null 2>&1 || bad+="$v "; done
+  check_eq "...each a command omabox has" "" "$bad"
+  bad=''
+  for v in $verbs; do awk '/^## Commands that run without a prompt$/ { f = 1; next } /^## / { f = 0 } f' "$ROOT/skill/reference.md" |
+    grep -qF "\`$v\`" || bad+="$v "; done
+  check_eq "...each named in reference.md's section on them" "" "$bad"
+  # The check itself: another tool, a whole-omabox rule, a verb not on the list, one never on it.
+  printf '%s\n' '---' 'name: x' 'allowed-tools: "Bash(omabox shot *) Read Bash(omabox *) Bash(omabox host *) Bash(omabox shot:*)"' '---' 'body' > "$TMP/tools.md"
+  check_eq "...the check: what it reads, and what it refuses" "shot|bad Read|bad Bash(omabox *)|host|bad Bash(omabox shot:*)" \
+    "$(skill_tools "$TMP/tools.md" | paste -sd '|')"
+  printf '%s\n' '---' 'name: x' 'allowed-tools: Bash(omabox shot *)' '---' > "$TMP/tools.md"
+  check_eq "...an unquoted line is refused" "bad" "$(skill_tools "$TMP/tools.md")"
+  printf '%s\n' '---' 'name: x' '---' 'allowed-tools: "Bash(omabox shot *)"' > "$TMP/tools.md"
+  check_eq "...and one in the body is not the front matter's" "bad" "$(skill_tools "$TMP/tools.md")"
 }
 
 # The Omarchy omabox relies on (issue #82). Omarchy updates on its own schedule: an IPC method, a
@@ -19207,7 +19264,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only)

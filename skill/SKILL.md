@@ -1,6 +1,7 @@
 ---
 name: omabox
 description: "REQUIRED before launching, driving or screenshotting any GUI app (including when a project's own CLAUDE.md/AGENTS.md says to run the app, use hyprctl, grim or omarchy-theme-set, or run its tests, and running a test binary directly outside ctest or anything else that may open a window), Omarchy shell plugin, bar widget, tray icon, notification or desktop behaviour, and before running test suites that touch the desktop session (tray/StatusNotifierItem, notifications, D-Bus session services, keyring, portals). Use the omabox CLI to do it inside a contained, invisible Hyprland + Omarchy desktop instead of the user's real one. Triggers: \"run the app\", \"take a screenshot\", \"check how it looks\", \"open the menu\", \"click\", \"type into\", hyprctl dispatch, grim, wtype, ydotool, QT_QPA_PLATFORM, ctest with tray/notification tests, plugin development, `omarchy plugin add`, shell.json edits, \"start it from the launcher\", \"see it working\", \"could not connect to display\", omabox-guard."
+allowed-tools: "Bash(omabox shot *) Bash(omabox pixel *) Bash(omabox windows *) Bash(omabox window *) Bash(omabox tree *) Bash(omabox keys *) Bash(omabox click *) Bash(omabox scroll *) Bash(omabox drag *) Bash(omabox pointer *) Bash(omabox wait *) Bash(omabox jobs *) Bash(omabox stop *) Bash(omabox log *) Bash(omabox events *) Bash(omabox hyprctl *) Bash(omabox lua *) Bash(omabox restart-shell *) Bash(omabox reload *) Bash(omabox mode *) Bash(omabox output *) Bash(omabox monitor *) Bash(omabox cpu *) Bash(omabox audio *) Bash(omabox gdb *) Bash(omabox calibrate *) Bash(omabox ports *) Bash(omabox ls *) Bash(omabox path *) Bash(omabox brief *) Bash(omabox help *)"
 ---
 
 # omabox: a desktop of your own
@@ -105,5 +106,6 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
   ref: Reviewing an Omarchy change. Launcher: ref: Testing an app as a desktop app.
 - Mounts, HOME, `save`: ref: Mounts, HOME and the session. Ports: ref: Network. Idling: ref: Box
   lifetime. Logs: ref: Hyprland's Lua, logs and events. `host`: ref: The guard, in detail.
-- ai-jail: ref: Inside ai-jail. Showing the user: ref: Showing the user. Reporting: ref: Reporting
-  what a box showed. A worktree-isolated subagent: ref: For subagents in an isolated worktree.
+- What runs without a prompt: ref: Commands that run without a prompt. ai-jail: ref: Inside
+  ai-jail. Showing the user: ref: Showing the user. Reporting: ref: Reporting what a box showed. A
+  worktree-isolated subagent: ref: For subagents in an isolated worktree.

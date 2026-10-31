@@ -11627,6 +11627,28 @@ from them.
     registers, a second refused, wrong then right, dismissed, timeout, the agent gone and the other
     registering; no /run/dbus, pkcheck NotSupported, a box's AgentResponse2 refused), t_main (no
     --polkit: no system bus, `polkit` refused), t_unit_cli and the usage errors.
+621. **Every omabox call stalled an agent on a permission prompt** (2026-10-31, #338). The skill now
+    pre-approves, in its front matter's `allowed-tools`, the verbs that act only inside a box and
+    read none of the user's files: `Bash(omabox VERB *)` for shot, pixel, windows, window, tree,
+    keys, click, scroll, drag, pointer, wait, jobs, stop, log, events, hyprctl, lua, restart-shell,
+    reload, mode, output, monitor, cpu, audio, gdb, calibrate, ports, ls, path, brief and help.
+    What Claude Code does with it (its skills docs): the grant lasts the turn that invoked the skill
+    (a subagent's whole run), matches the command text after `omabox VERB` with `*` (so no option can
+    be left out: `up` and `up --interactive` are one rule), splits `&&` chains, and loads only the
+    body (a transcript's skill message starts at the first heading), so SKILL.md's 8 000-byte cap is
+    now on the body, 9 000 on the whole file that Codex and pi read. Left on ask: host, peek,
+    keys-to-box, clip, config, guard, setup, broker, up, run (a throwaway's `--ro-bind`, `--seed`,
+    `--interactive`, `--env-file FILE`), down, save, saves, gpu (`release` ends others' boxes),
+    record (`sheet VIDEO` reads any video), check (`check run` runs a host scenario). One hole had
+    to close first: `shot --burst --after -- run --env-file FILE` read a host file through a
+    pre-approved shot (any KEY=VAL file, `api-keys.env` among them) into a box command's
+    environment; the action now refuses `--env-file` (and `--env-file=`), a CMD's own words after
+    `--` untouched. What a listed verb still writes on the host is the image `-o` names. Codex
+    (`~/.codex/rules` prefix rules), OpenCode (`permission.bash`), pi (no prompts) and Hermes read no
+    grant from a skill: reference.md's "Commands that run without a prompt" says what each takes.
+    Tests: t_unit_skill_tools (the list against the reviewed one and the never list, each verb a
+    command and named in reference.md, the parser on fixtures), t_unit_pixel (the `--after`
+    refusals), t_unit_version (the two caps). Not verified: a Claude Code session using the grant.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
