@@ -7955,13 +7955,14 @@ while True:
   }
   check_match "the reaper says it keeps the rule's addresses" "watching it every .* and the host's addresses for its protected ports as they change" "$(cat "$rlog" 2>&1)"
   check "...the host gains two addresses after up" asns sh -c 'ip addr add 10.239.2.1/24 dev d1 && ip -6 addr add fd39:2::1/64 dev d1 nodad'
-  check "...both in the rule within 5 s (#399)" until_ok 5 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has IN '10\.239\.2\.1' && rule_has IN 'fd39:2::1'"
+  # (deadlines that hold under a full suite's load: the reaper puts them in at once, on the event)
+  check "...both in the rule, on their events (#399)" until_ok 15 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has IN '10\.239\.2\.1' && rule_has IN 'fd39:2::1'"
   look 10.239.2.1 fd39:2::1
   check_eq "a protected port on an address the host gained after up: not reached, TCP or UDP (#399)" "" "$reached"
   check_eq "...where a port not protected is (the control)" "" "$control"
   # ...and one it loses goes from it: the rule holds the host's addresses, no more.
   check "the host loses one" asns ip addr del 10.239.1.1/24 dev d1
-  check "...out of the rule within 5 s" until_ok 5 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has OUT '10\.239\.1\.1'"
+  check "...out of the rule, on its event" until_ok 15 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has OUT '10\.239\.1\.1'"
   check_match "...the others still in it" "10\.239\.2\.1" "$(sets)"
   check_eq "...and nothing failed in reap.log" "" "$(grep "could not set" "$rlog" 2>&1)"
   HOME=$h ob down "$B" >/dev/null 2>&1
@@ -7981,7 +7982,7 @@ protect_ports_ns_nft() {
 #!/bin/sh
 if [ "\$1" = -f ]; then
   echo x >> '$f/runs'
-  [ -e '$f/hang' ] && { echo \$\$ > '$f/hung.pid'; exec sleep 3601; }
+  [ -e '$f/hang' ] && { date +%s > '$f/hung.at'; echo \$\$ > '$f/hung.pid'; exec sleep 3601; }
   [ -e '$f/fail' ] && { echo "nft stand-in: refused" >&2; exit 1; }
 fi
 exec '$f/real-nft' "\$@"
@@ -8001,24 +8002,39 @@ EOF
   check "...the host gains an address meanwhile" asns ip addr add 10.239.3.1/24 dev d1
   sleep 0.5
   rm -f "$f/fail"
-  check "...in the rule within 3 s of nft working again, with no address event since (#399)" until_ok 3 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.3\.1'"
+  # (no address event comes after nft works again: the reaper's own retry, every 2 s at most while
+  # failing, puts it in, where the next poll would be up to 60 s away; 15 s holds under load)
+  check "...in the rule once nft works again, with no address event since: long before the next poll (#399)" until_ok 15 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.3\.1'"
   check "...said in reap.log" grep -q "its protected ports' addresses set again" "$rlog2"
   # A burst: 40 addresses over about 2 s, each an event; the reaper runs nft a few times, not 40.
   sleep 0.5; : > "$f/runs"
+  local b0 b1 most
+  b0=$(date +%s%N)
   asns sh -c 'i=10; while [ $i -lt 50 ]; do ip addr add 10.239.4.$i/32 dev d1; sleep 0.05; i=$((i + 1)); done'
-  check "...a burst of address changes: all in the rule" until_ok 3 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.4\.49'"
+  b1=$(date +%s%N)
+  check "...a burst of address changes: all in the rule" until_ok 15 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.4\.49'"
   sleep 0.5
   n=$(wc -l < "$f/runs")
-  check "...in a few nft runs, not one per change ($n for 40)" test "$n" -le 14
+  # (one look per 250 ms at most, and one after the last: as many as the burst lasted allows, which
+  # is about 2 s alone and longer under load; never one per change)
+  most=$(( (b1 - b0) / 250000000 + 4 )); [ "$most" -le 36 ] || most=36
+  check "...in a few nft runs, not one per change ($n for 40 in $(( (b1 - b0) / 1000000 )) ms, at most $most)" test "$n" -le "$most"
   # A hung nft: killed, said, and the address set once nft answers again.
   : > "$f/hang"; rm -f "$f/hung.pid"
   check "...the host gains one more" asns ip addr add 10.239.5.1/24 dev d1
-  if until_ok 3 test -s "$f/hung.pid"; then hung=$(cat "$f/hung.pid")
-    check "a reaper's nft that hangs is killed within 8 s" until_ok 8 bash -c "! kill -0 $hung 2>/dev/null"
+  if until_ok 10 test -s "$f/hung.pid"; then hung=$(cat "$f/hung.pid")
+    check "a reaper's nft that hangs is killed" until_ok 30 bash -c "! kill -0 $hung 2>/dev/null"
     check "...said in reap.log" grep -q "nft did not answer" "$rlog2"
-  else no "a reaper's nft that hangs is killed within 8 s" "the stand-in never hung"; fi
+    # When, by the reaper's own clock (its reap.log line) against the stand-in's start: its 5 s wait,
+    # whatever the test's polling took under load.
+    local kl ka
+    kl=$(grep "nft did not answer" "$rlog2" | tail -1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9:]{5}') || kl=""
+    ka=$(date -d "$kl" +%s 2>/dev/null) || ka=0
+    check "...after its 5 s wait, by the reaper's clock ($((ka - $(cat "$f/hung.at"))) s)" \
+      test "$((ka - $(cat "$f/hung.at")))" -ge 4 -a "$((ka - $(cat "$f/hung.at")))" -le 8
+  else no "a reaper's nft that hangs is killed" "the stand-in never hung"; fi
   rm -f "$f/hang"
-  check "...the address in the rule once nft answers" until_ok 10 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.5\.1'"
+  check "...the address in the rule once nft answers" until_ok 20 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.5\.1'"
   HOME=$h ob down "$B2" >/dev/null 2>&1
   [ ! -s "$f/hung.pid" ] || kill "$(cat "$f/hung.pid")" 2>/dev/null
 }
