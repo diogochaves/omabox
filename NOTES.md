@@ -11627,6 +11627,19 @@ from them.
     registers, a second refused, wrong then right, dismissed, timeout, the agent gone and the other
     registering; no /run/dbus, pkcheck NotSupported, a box's AgentResponse2 refused), t_main (no
     --polkit: no system bus, `polkit` refused), t_unit_cli and the usage errors.
+    *Review (2026-10-31):* the bus allowed any name to be owned (`allow own="*"`) and the host said
+    what came back raw (up to 1 MB, stderr relayed as is). Now no name on it can be owned but
+    `org.freedesktop.PolicyKit1`, which the stand-in takes first and lets nobody replace (requested
+    with no replacement allowed). That is all a bus policy holds in a box: dbus-daemon tells callers
+    apart by uid (or an LSM label), and every process in a box has the same uid, so one that kills
+    the stand-in takes its name, and one could also replace the bus socket in the box's runtime dir.
+    So `polkit ask` and `agents` take every answer as the box's: stdout read up to 64 KiB, stderr up to
+    4 KiB, both said through term.rs's `plain` (a control character but newline and tab, or a byte
+    that is no UTF-8, as `?`; the cut said), `--json` parsed and written again by serde (an answer
+    that is no JSON fails). Tests: t_polkit (another name refused, the authority's name not taken
+    while held; a python-gobject authority in the stand-in's place answering escapes, 300 KB and an
+    error: plain, bounded, stderr plain, `--json` escaped), polkit.rs answer_is_plain_and_bounded.
+    They fail on the old code.
 621. **Every omabox call stalled an agent on a permission prompt** (2026-10-31, #338). The skill now
     pre-approves, in its front matter's `allowed-tools`, the verbs that act only inside a box and
     read none of the user's files: `Bash(omabox VERB *)` for shot, pixel, windows, window, tree,
@@ -11695,6 +11708,15 @@ from them.
     `activate` and `click` are actions for `shot --burst --after` and `record -- ACTION`, as
     `window` is (finding 591); a bare `tray` (or `tray --json`) only reads, so both refuse it,
     saying which forms act (t_unit_record, t_unit_pixel; tray.rs which_act).
+    *Review (2026-10-31):* an item's Id, Title and Status, a row's label and the bus's error words
+    are the box's, and `tray` said them raw on the terminal; it read every watcher entry, each with
+    5 s of busctl. Now the text (lines, `say`, `eprintln!`, the dies) goes through term.rs's `plain`,
+    `--json` stays serde's; at most 64 entries are read (`the box's tray lists N items: the first 64
+    read, M left out`), and one `tray` call has 15 s on the box's bus in all (each busctl given what
+    is left, at most 5 s; `out of time (15s for one tray call): N of M items left out`). Tests:
+    t_tray (an item with escapes in its Id, Title and a label: plain, `--json` as said, a click's
+    words; 72 items: 64; 5 that do not answer: done in 15 s, said), tray.rs layout_as_text,
+    entries_capped. They fail on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

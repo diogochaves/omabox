@@ -9708,7 +9708,8 @@ t_tray() {
 import sys
 from gi.repository import Gio, GLib
 ID, TITLE = sys.argv[1], sys.argv[2]
-MENU_OF = len(sys.argv) < 4  # "nomenu": an item with no dbusmenu (its host asks ContextMenu)
+MODE = sys.argv[3] if len(sys.argv) > 3 else ""
+MENU_OF = MODE != "nomenu"  # an item with no dbusmenu (its host asks ContextMenu)
 SNI = """<node><interface name="org.kde.StatusNotifierItem">
 <property name="Category" type="s" access="read"/><property name="Id" type="s" access="read"/>
 <property name="Title" type="s" access="read"/><property name="Status" type="s" access="read"/>
@@ -9742,6 +9743,8 @@ rows = {  # id: (properties, children)
     11: ({"label": "Open"}, []),
     12: ({"label": "Open"}, []),
 }
+if MODE == "esc":  # escapes in a row's label (and in its Id and Title, from the command line)
+    rows[1][0]["label"] = "_Show\x1b]0;t343-owned\x07 window"
 
 
 def log(s):
@@ -9877,6 +9880,50 @@ omabox-tray-plain \"Plain demo\" [active] (no menu)" "$rc $out"
   check_eq "shot --burst --after -- tray click: the row clicked once more" 2 "$(grep -c '^omabox-tray-demo event 2 clicked$' "$lg")"
   ob tray -b "$B" click tray-demo quit >/dev/null 2>&1
   check "Quit: the app leaves, the tray lists one" until_ok 10 bash -c "'$CLI' tray -b '$B' --json | jq -e 'length == 1 and .[0].id == \"omabox-tray-plain\"'"
+  # What an item says of itself is the box's: said plain (S7), --json escaped as JSON.
+  ob run -b "$B" -d -q -- python3 /home/sbx/tray-demo.py $'t343-esc\e]0;t343-owned\a' $'Esc\e[2J title' esc >/dev/null
+  until_ok 10 bash -c "'$CLI' tray -b '$B' --json | jq -e 'length == 2'"
+  out=$(ob tray -b "$B" 2>&1)
+  check_eq "an item's escapes never reach the terminal (each as ?)" 0 "$(tr -dc '\033\007' <<<"$out" | wc -c)"
+  check_match "...its Id, Title and labels said plain" $'t343-esc\\?\\]0;t343-owned\\? "Esc\\?\\[2J title" \\[active\\]\n  menu item "Show\\?\\]0;t343-owned\\? window"' "$out"
+  check_eq "...--json: as the item said it" $'Show\e]0;t343-owned\a window' "$(ob tray -b "$B" --json | jq -r '.[] | select(.id | startswith("t343-esc")) | .rows[0].label')"
+  out=$(ob tray -b "$B" click t343-esc 'show' 2>&1)
+  check_eq "...nor through a click's words" 0 "$(tr -dc '\033\007' <<<"$out" | wc -c)"
+  # A tray of more items than any bar shows: the first 64 read, the cut said.
+  cat > "$H/tray-many.py" <<'PY'
+import sys, time
+from gi.repository import Gio, GLib
+N, SLOW = int(sys.argv[1]), len(sys.argv) > 2
+X = """<node><interface name="org.kde.StatusNotifierItem"><property name="Id" type="s" access="read"/>
+<property name="Title" type="s" access="read"/><property name="Status" type="s" access="read"/></interface></node>"""
+def prop(conn, sender, path, iface, name):
+    if SLOW and name == "Id":
+        time.sleep(6)  # past busctl's 5 s: the item does not answer
+    return GLib.Variant("s", {"Id": "many" + path[5:], "Title": "Many", "Status": "Active"}[name])
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+info = Gio.DBusNodeInfo.new_for_xml(X).interfaces[0]
+for i in range(N):
+    bus.register_object("/Item%d" % i, info, None, prop, None)
+    bus.call_sync("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
+                  "RegisterStatusNotifierItem", GLib.Variant("(s)", ("/Item%d" % i,)), None, 0, -1, None)
+GLib.MainLoop().run()
+PY
+  local mp
+  mp=$(ob run -b "$B" -d -- python3 /home/sbx/tray-many.py 70 2>&1 >/dev/null | sed -n 's/.*(pid \([0-9]*\),.*/\1/p')
+  until_ok 15 bash -c "'$CLI' tray -b '$B' --json 2>/dev/null | jq -e 'length >= 64'"
+  out=$(ob tray -b "$B" --json 2>"$TMP/tray-err")
+  check_eq "72 items on the tray: 64 read" 64 "$(jq length <<<"$out")"
+  check_match "...the cut said" "tray: the box's tray lists 72 items: the first 64 read, 8 left out" "$(cat "$TMP/tray-err")"
+  ob stop -b "$B" "$mp" >/dev/null 2>&1
+  until_ok 15 bash -c "'$CLI' tray -b '$B' --json 2>/dev/null | jq -e 'length == 2'"
+  # Items that do not answer: one tray call has a deadline, not 5 s an item.
+  mp=$(ob run -b "$B" -d -- python3 /home/sbx/tray-many.py 5 slow 2>&1 >/dev/null | sed -n 's/.*(pid \([0-9]*\),.*/\1/p')
+  until_ok 15 bash -c "'$CLI' run -b '$B' -- busctl --user get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems | grep -q Item4"
+  local t0=$SECONDS
+  ob tray -b "$B" >/dev/null 2>"$TMP/tray-err"
+  check "5 items that do not answer: the call ends within its 15 s, not 25 s" test $((SECONDS - t0)) -le 18
+  check_match "...the cut said" "tray: out of time \(15s for one tray call\): [0-9]+ of 7 items left out" "$(cat "$TMP/tray-err")"
+  ob stop -b "$B" "$mp" >/dev/null 2>&1
   ob down "$B" >/dev/null
 }
 
@@ -14740,6 +14787,55 @@ t_polkit() {
   pb=$(t258_start "$B" T258b)
   check "...then another agent registers" until_ok 15 \
     bash -c "'$CLI' polkit -b '$B' agents --json | jq -e '.[] | select(.path == \"/org/omabox/T258b\")'"
+  # The box's system bus is the box's: no name on it but the authority's is owned...
+  check_match "no other name can be owned on the box's system bus" "Access ?[Dd]enied|not allowed to own" \
+    "$(ob run -b "$B" -- busctl --address="$bus" call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su org.omabox.T258Squat 4 2>&1)"
+  check_match "...nor the authority's taken while the stand-in holds it" "^u [23]$" \
+    "$(ob run -b "$B" -- busctl --address="$bus" call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su org.freedesktop.PolicyKit1 2 2>&1)"
+  # ...but every process in a box has one uid: one that ends the stand-in takes its name. What omabox
+  # says of the answers is then that process's, so it is said plain and bounded (S7).
+  cat > "$D/home/t258-fake.py" <<'PY'
+import sys
+from gi.repository import Gio, GLib
+X = """<node><interface name="org.omabox.Polkit">
+<method name="Ask"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/>
+<arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="a{ss}" direction="in"/><arg type="t" direction="in"/>
+<arg type="t" direction="in"/><arg type="s" direction="out"/><arg type="u" direction="out"/><arg type="u" direction="out"/>
+<arg type="s" direction="out"/><arg type="s" direction="out"/><arg type="s" direction="out"/></method>
+<method name="Agents"><arg type="a(sssb)" direction="out"/></method></interface></node>"""
+ESC = "\x1b]0;t258-owned\x07\x1b[2J"
+def call(conn, sender, path, iface, method, params, inv):
+    if method == "Agents":
+        inv.return_value(GLib.Variant("(a(sssb))", ([("unix-session:" + ESC, ":1.1", "/x", False)],)))
+    elif params.unpack()[0] == "t258.error":
+        inv.return_dbus_error("org.omabox.T258.Error", "boom " + ESC)
+    else:
+        inv.return_value(GLib.Variant("(suusss)", ("authenticated" + ESC, 1, 0, ":1.1", "/x", "w" * 300000)))
+fl = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
+bus = Gio.DBusConnection.new_for_address_sync(sys.argv[1], fl, None, None)
+bus.register_object("/org/omabox/Polkit", Gio.DBusNodeInfo.new_for_xml(X).interfaces[0], call, None, None)
+bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName",
+              GLib.Variant("(su)", ("org.freedesktop.PolicyKit1", 4)), None, 0, -1, None)
+GLib.MainLoop().run()
+PY
+  if ob run -b "$B" -- python3 -c 'from gi.repository import Gio' >/dev/null 2>&1; then
+    ob run -b "$B" -- pkill -x omabox-polkit >/dev/null 2>&1
+    ob run -b "$B" -d -q -- python3 /home/sbx/t258-fake.py "$bus" >/dev/null 2>&1
+    check "a box process that ended the stand-in owns the authority's name" until_ok 15 \
+      bash -c "'$CLI' polkit -b '$B' agents --json 2>/dev/null | jq -e '.[0].name == \":1.1\"'"
+    out=$(ob polkit -b "$B" ask 2>&1); rc=$?
+    check_eq "...ask: its answer reaches the terminal with no escape (each as ?)" 0 "$(tr -dc '\033\007' <<<"$out" | wc -c)"
+    check_match "...said plain" "^authenticated\?\]0;t258-owned\?\?\[2J: the agent at :1.1 /x" "$out"
+    check "...and bounded (300000 bytes asked)" test "${#out}" -lt 70000
+    out=$(ob polkit -b "$B" agents 2>&1)
+    check_eq "...agents: plain" "unix-session:?]0;t258-owned??[2J	:1.1	/x" "$out"
+    check_eq "...--json: escaped, as JSON" $'unix-session:\e]0;t258-owned\a\e[2J' "$(ob polkit -b "$B" agents --json | jq -r '.[0].subject')"
+    out=$(ob polkit -b "$B" ask --action t258.error 2>&1); rc=$?
+    check_match "...an error it answers: said plain on stderr" "did not answer: boom \?\]0;t258-owned\?\?\[2J" "$out"
+    check_eq "...with no escape" 0 "$(tr -dc '\033\007' <<<"$out" | wc -c)"
+  else
+    skip "polkit: a fake authority's words" "no python-gobject in the box"
+  fi
   ob down "$B" >/dev/null
 }
 

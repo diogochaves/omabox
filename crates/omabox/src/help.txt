@@ -265,12 +265,13 @@ and its own runtime dir (its sockets, never yours). `audio` says whether the box
 --polkit: a polkit agent in the box (the shell's polkit plugin, a copy of it under test, a GTK or Qt
 agent) registers and is asked, as on a desktop, and the end of each request is the agent's own. A
 box has no system bus and no logind session, and never gets yours: it gets a system bus of its own
-whose one service is a stand-in authority, which keeps the agents as polkitd does (one per session,
-dropped when they leave the bus) and makes a request only when `polkit ask` does. In place of PAM it
-answers polkit's agent helper with a password prompt, and takes the one password `ask --accept`
-names (a test's, never yours). It decides nothing for any service: pkexec, pkcheck and mechanisms
-get no answer from it. The box's processes are in a session named "omabox" (XDG_SESSION_ID). Logs:
-`log polkit`.
+where only polkit's name can be owned, by a stand-in authority, which keeps the agents as polkitd
+does (one per session, dropped when they leave the bus) and makes a request only when `polkit ask`
+does. In place of PAM it answers polkit's agent helper with a password prompt, and takes the one
+password `ask --accept` names (a test's, never yours). It decides nothing for any service: pkexec,
+pkcheck and mechanisms get no answer from it. The bus is the box's (its processes share one uid, so
+one can answer in the stand-in's place): what `polkit` prints of it is bounded and plain. The box's
+processes are in a session named "omabox" (XDG_SESSION_ID). Logs: `log polkit`.
 @ up run reload
 --autoreload: the box's Hyprland reloads its config when a file it loaded changes, as a desktop's
 does; a box turns that off, so an update of omabox or Omarchy leaves it as it is. For a project that

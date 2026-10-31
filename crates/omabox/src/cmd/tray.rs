@@ -12,6 +12,7 @@ use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::select::select_box;
 use crate::shell;
+use crate::term::plain_str;
 use serde_json::{Map, Value, json};
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
@@ -19,6 +20,24 @@ use std::time::{Duration, Instant};
 const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 const SNI: &str = "org.kde.StatusNotifierItem";
 const MENU: &str = "com.canonical.dbusmenu";
+/// The most watcher entries one tray call reads: more than any bar shows.
+pub const MAX_ITEMS: usize = 64;
+/// One tray call's time on the box's bus, all its items and menus together (busctl's 5 s each).
+const DEADLINE: Duration = Duration::from_secs(15);
+
+thread_local! {
+    /// When this tray call's time is up.
+    static UNTIL: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The time left of this tray call (5 s, busctl's own, when none was set).
+fn time_left() -> Duration {
+    UNTIL
+        .with(std::cell::Cell::get)
+        .map_or(Duration::from_secs(5), |u| {
+            u.saturating_duration_since(Instant::now())
+        })
+}
 
 /// A tray item as its StatusNotifierItem properties say.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -187,7 +206,7 @@ pub fn row_line(r: &Row) -> String {
             _ => "mixed",
         });
     }
-    let mut s = format!("{} \"{}\"", role(r), r.label);
+    let mut s = format!("{} \"{}\"", role(r), plain_str(&r.label));
     if !states.is_empty() {
         s.push_str(&format!(" [{}]", states.join(" ")));
     }
@@ -203,7 +222,12 @@ fn status_word(s: &str) -> String {
 
 /// An item's own line: `ID "TITLE" [active]`, `(no menu)` when it has none on the bus.
 pub fn item_line(it: &Item) -> String {
-    let mut s = format!("{} \"{}\" [{}]", it.id, it.title, status_word(&it.status));
+    let mut s = format!(
+        "{} \"{}\" [{}]",
+        plain_str(&it.id),
+        plain_str(&it.title),
+        plain_str(&status_word(&it.status))
+    );
     if it.menu.is_none() {
         s.push_str(" (no menu)");
     }
@@ -404,17 +428,16 @@ fn by_id(rows: &[Row], id: i64) -> Option<&Row> {
 
 /// busctl in the box, on its own session bus: its JSON answer (Null for none), or its error words.
 fn bus(ctx: &mut Ctx, words: &[&str]) -> Res<Result<Value, String>> {
-    let argv: Vec<Vec<u8>> = [
-        "/usr/bin/busctl",
-        "--user",
-        "--json=short",
-        "--timeout=5",
-        "--",
-    ]
-    .iter()
-    .chain(words)
-    .map(|w| w.as_bytes().to_vec())
-    .collect();
+    let left = time_left().min(Duration::from_secs(5));
+    if left < Duration::from_millis(50) {
+        return Ok(Err(OUT_OF_TIME.to_string()));
+    }
+    let timeout = format!("--timeout={}ms", left.as_millis());
+    let argv: Vec<Vec<u8>> = ["/usr/bin/busctl", "--user", "--json=short", &timeout, "--"]
+        .iter()
+        .chain(words)
+        .map(|w| w.as_bytes().to_vec())
+        .collect();
     let (r1, w1) = pipe().map_err(|_| ctx.die("tray: no pipe"))?;
     let (r2, w2) = pipe().map_err(|_| ctx.die("tray: no pipe"))?;
     let o = std::thread::spawn(move || read_all(r1, Some(16 << 20)));
@@ -436,10 +459,11 @@ fn bus(ctx: &mut Ctx, words: &[&str]) -> Res<Result<Value, String>> {
     let (o, e) = (o.join().unwrap_or_default(), e.join().unwrap_or_default());
     // What box_exec said of a box it could not enter went into the pipe with busctl's words.
     let rc = rc.inspect_err(|_| {
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), &e);
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), &crate::term::plain(&e));
     })?;
     if rc != 0 {
-        let e = String::from_utf8_lossy(&shell::subst(&e)).into_owned();
+        // (an error's words are the item's, sent on the bus: S7)
+        let e = String::from_utf8_lossy(&crate::term::plain(&shell::subst(&e))).into_owned();
         return Ok(Err(if e.is_empty() {
             format!("busctl exited {rc}")
         } else {
@@ -451,6 +475,16 @@ fn bus(ctx: &mut Ctx, words: &[&str]) -> Res<Result<Value, String>> {
         return Ok(Ok(Value::Null));
     }
     Ok(serde_json::from_slice(&o).map_err(|e| format!("busctl's answer did not parse: {e}")))
+}
+
+/// What bus says once this tray call's time is up.
+const OUT_OF_TIME: &str = "out of time";
+
+/// The first MAX_ITEMS of ENTRIES, and how many were left out.
+pub fn capped(mut entries: Vec<String>) -> (Vec<String>, usize) {
+    let cut = entries.len().saturating_sub(MAX_ITEMS);
+    entries.truncate(MAX_ITEMS);
+    (entries, cut)
 }
 
 /// The watcher's entries, or why there are none to read (no watcher: the box's tray is off).
@@ -493,20 +527,38 @@ fn entries(ctx: &mut Ctx) -> Res<Vec<String>> {
         ],
     )?
     .map_err(|e| ctx.die(cat!("tray: the box's tray watcher did not answer: ", e)))?;
-    Ok(data(&v)
+    let all: Vec<String> = data(&v)
         .as_array()
         .map(|a| {
             a.iter()
                 .filter_map(|e| e.as_str().map(str::to_string))
                 .collect()
         })
-        .unwrap_or_default())
+        .unwrap_or_default();
+    let n = all.len();
+    let (list, cut) = capped(all);
+    if cut > 0 {
+        say(format!(
+            "tray: the box's tray lists {n} items: the first {MAX_ITEMS} read, {cut} left out"
+        ));
+    }
+    Ok(list)
 }
 
 /// Every item on the box's tray, those that answer (one that does not is said and left out).
 fn items(ctx: &mut Ctx) -> Res<Vec<Item>> {
     let mut list = Vec::new();
-    for e in entries(ctx)? {
+    let all = entries(ctx)?;
+    let n = all.len();
+    for (k, e) in all.into_iter().enumerate() {
+        if time_left() < Duration::from_millis(50) {
+            say(format!(
+                "tray: out of time ({}s for one tray call): {} of {n} items left out",
+                DEADLINE.as_secs(),
+                n - k
+            ));
+            break;
+        }
         let (svc, path) = parse_entry(&e);
         match bus(
             ctx,
@@ -521,7 +573,12 @@ fn items(ctx: &mut Ctx) -> Res<Vec<Item>> {
             ],
         )? {
             Ok(v) => list.push(item_from_props(&e, &v)),
-            Err(why) => say(cat!("tray: ", e, " did not answer, left out: ", why)),
+            Err(why) => say(cat!(
+                "tray: ",
+                plain_str(&e),
+                " did not answer, left out: ",
+                why
+            )),
         }
     }
     Ok(list)
@@ -596,7 +653,7 @@ fn the_item(ctx: &mut Ctx, want: &str) -> Res<Item> {
                 " tray items: name one by its id, or by its bus name (each line's last word)"
             ));
             for n in hits {
-                eprintln!("  {} {}", item_line(&list[n]), list[n].entry);
+                eprintln!("  {} {}", item_line(&list[n]), plain_str(&list[n].entry));
             }
             Err(Exit(2))
         }
@@ -723,6 +780,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     )?;
     select_box(ctx, &name)?;
     need_box(ctx)?;
+    UNTIL.with(|u| u.set(Some(Instant::now() + DEADLINE)));
     match sub {
         Sub::List => list(ctx, json, all),
         Sub::Menu(id) => menu(ctx, &id, json, all),
@@ -736,7 +794,12 @@ fn list(ctx: &mut Ctx, json: bool, all: bool) -> Res<()> {
     for it in list.iter_mut() {
         read_menu(ctx, it, false)?;
         if let Some(e) = &it.menu_err {
-            say(cat!("tray: ", it.id, "'s menu did not answer: ", e));
+            say(cat!(
+                "tray: ",
+                plain_str(&it.id),
+                "'s menu did not answer: ",
+                e
+            ));
         }
     }
     if json {
@@ -774,21 +837,26 @@ fn menu(ctx: &mut Ctx, id: &str, json: bool, all: bool) -> Res<()> {
         if let Err(e) = r {
             return Err(ctx.die(cat!(
                 "tray: ",
-                it.id,
+                plain_str(&it.id),
                 " has no menu on the bus, and did not take ContextMenu: ",
                 e
             )));
         }
         say(cat!(
             "tray: ",
-            it.id,
+            plain_str(&it.id),
             " has no menu on the bus: asked it to show its own (ContextMenu); it opens as a window or popup of the app's (omabox windows, omabox tree)"
         ));
         return Ok(());
     };
     read_menu(ctx, &mut it, true)?;
     if let Some(e) = &it.menu_err {
-        return Err(ctx.die(cat!("tray: ", it.id, "'s menu did not answer: ", e)));
+        return Err(ctx.die(cat!(
+            "tray: ",
+            plain_str(&it.id),
+            "'s menu did not answer: ",
+            e
+        )));
     }
     if json {
         return out(cat!(crate::json::compact(&item_json(&it)), "\n"));
@@ -801,9 +869,9 @@ fn activate(ctx: &mut Ctx, id: &str, secondary: bool) -> Res<()> {
     if it.item_is_menu && !secondary {
         return Err(ctx.die(cat!(
             "tray: ",
-            it.id,
+            plain_str(&it.id),
             " is a menu only (ItemIsMenu): a click on it opens its menu, not Activate (omabox tray menu ",
-            it.id,
+            plain_str(&it.id),
             ")"
         )));
     }
@@ -816,9 +884,24 @@ fn activate(ctx: &mut Ctx, id: &str, secondary: bool) -> Res<()> {
         ctx,
         &["call", &it.service, &it.path, SNI, m, "ii", "0", "0"],
     )? {
-        return Err(ctx.die(cat!("tray: ", it.id, " did not take ", m, ": ", e)));
+        return Err(ctx.die(cat!(
+            "tray: ",
+            plain_str(&it.id),
+            " did not take ",
+            m,
+            ": ",
+            e
+        )));
     }
-    say(cat!("tray: ", it.id, ": ", m, " (", what, " on its icon)"));
+    say(cat!(
+        "tray: ",
+        plain_str(&it.id),
+        ": ",
+        m,
+        " (",
+        what,
+        " on its icon)"
+    ));
     Ok(())
 }
 
@@ -827,26 +910,31 @@ fn click(ctx: &mut Ctx, id: &str, label: &str, index: Option<usize>) -> Res<()> 
     let Some(m) = it.menu.clone() else {
         return Err(ctx.die(cat!(
             "tray: ",
-            it.id,
+            plain_str(&it.id),
             " has no menu on the bus to click in (omabox tray menu ",
-            it.id,
+            plain_str(&it.id),
             " asks it to show its own)"
         )));
     };
     let rev = read_menu(ctx, &mut it, true)?;
     if let Some(e) = &it.menu_err {
-        return Err(ctx.die(cat!("tray: ", it.id, "'s menu did not answer: ", e)));
+        return Err(ctx.die(cat!(
+            "tray: ",
+            plain_str(&it.id),
+            "'s menu did not answer: ",
+            e
+        )));
     }
     let f = match pick_row(&it.rows, label, index) {
         Pick::One(f) => f,
         Pick::None => {
             return Err(ctx.die(cat!(
                 "tray: no row of ",
-                it.id,
+                plain_str(&it.id),
                 "'s menu is named \"",
                 label,
                 "\" (omabox tray menu ",
-                it.id,
+                plain_str(&it.id),
                 " lists them)"
             )));
         }
@@ -864,7 +952,7 @@ fn click(ctx: &mut Ctx, id: &str, label: &str, index: Option<usize>) -> Res<()> 
                 "tray: ",
                 hits.len().to_string(),
                 " rows of ",
-                it.id,
+                plain_str(&it.id),
                 "'s menu are named \"",
                 label.to_lowercase(),
                 "\": pick one with --index N"
@@ -885,7 +973,7 @@ fn click(ctx: &mut Ctx, id: &str, label: &str, index: Option<usize>) -> Res<()> 
         None
     };
     if let Some(w) = why {
-        return Err(ctx.die(cat!("tray: ", it.id, ": ", f.line, ": ", w)));
+        return Err(ctx.die(cat!("tray: ", plain_str(&it.id), ": ", f.line, ": ", w)));
     }
     // Each submenu opened on the way, as a host does before it shows one.
     for p in &f.parents {
@@ -923,9 +1011,14 @@ fn click(ctx: &mut Ctx, id: &str, label: &str, index: Option<usize>) -> Res<()> 
         ],
     )?;
     if let Err(e) = r {
-        return Err(ctx.die(cat!("tray: ", it.id, " did not take the click: ", e)));
+        return Err(ctx.die(cat!(
+            "tray: ",
+            plain_str(&it.id),
+            " did not take the click: ",
+            e
+        )));
     }
-    say(cat!("tray: ", it.id, ": clicked ", f.line));
+    say(cat!("tray: ", plain_str(&it.id), ": clicked ", f.line));
     // The row as the app has it after: its menu's revision moves when the click changed it (1 s at
     // most); an app that quit on it has no menu to read.
     let deadline = Instant::now() + Duration::from_secs(1);
@@ -1022,6 +1115,36 @@ mod tests {
             ..Item::default()
         };
         assert_eq!(item_line(&none), " \"\" [needs attention] (no menu)");
+        // What the item says of itself reaches the terminal with no escape (S7); --json keeps it.
+        let odd = Item {
+            id: "t\x1b]0;x\x07".to_string(),
+            title: "T\x1b[2J".to_string(),
+            status: "Active\u{9b}".to_string(),
+            rows: vec![Row {
+                id: 1,
+                label: "L\x1b]52;c;aGk=\x07".to_string(),
+                separator: false,
+                toggle: String::new(),
+                state: -1,
+                enabled: true,
+                visible: true,
+                submenu: false,
+                children: Vec::new(),
+            }],
+            ..none.clone()
+        };
+        assert_eq!(item_line(&odd), "t?]0;x? \"T?[2J\" [active?] (no menu)");
+        assert_eq!(row_line(&odd.rows[0]), "menu item \"L?]52;c;aGk=?\"");
+        assert_eq!(item_json(&odd)["rows"][0]["label"], "L\x1b]52;c;aGk=\x07");
+    }
+
+    /// A watcher that lists more than MAX_ITEMS: the first read, the rest counted.
+    #[test]
+    fn entries_capped() {
+        let e = |n: usize| (0..n).map(|i| format!(":1.{i}/I")).collect::<Vec<_>>();
+        assert_eq!(capped(e(3)), (e(3), 0));
+        let (l, cut) = capped(e(MAX_ITEMS + 9));
+        assert_eq!((l.len(), cut, l[0].as_str()), (MAX_ITEMS, 9, ":1.0/I"));
     }
 
     #[test]

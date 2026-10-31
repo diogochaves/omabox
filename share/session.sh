@@ -101,11 +101,12 @@ fi
 # `up --polkit` (#258, finding 627): a polkit agent (the shell's polkit plugin, one under test) can
 # register and be asked. A box has no system bus and no logind session, so it gets a system bus of its
 # own, a dbus-daemon at $XDG_RUNTIME_DIR/omabox-polkit/bus (never /run/dbus: the box safety invariant,
-# and the input tools' own check), whose one service is omabox-polkit, a stand-in authority: it keeps
-# the agents as polkitd does, answers polkit's agent helper socket (/run/polkit, the box's own) with a
-# password prompt, and makes a request only when `omabox polkit ask` does. It decides nothing for any
-# service. The shim answers logind's session lookup with the box's session ("omabox"), which a box
-# lacks (finding 627). Nothing here reaches the host's polkitd, bus or PAM.
+# and the input tools' own check), on which only polkit's name can be owned (bus.conf), by
+# omabox-polkit, a stand-in authority: it keeps the agents as polkitd does, answers polkit's agent
+# helper socket (/run/polkit, the box's own) with a password prompt, and makes a request only when
+# `omabox polkit ask` does. It decides nothing for any service. The shim answers logind's session
+# lookup with the box's session ("omabox"), which a box lacks (finding 627). Nothing here reaches the
+# host's polkitd, bus or PAM.
 if [ "${OMABOX_POLKIT:-0}" = 1 ]; then
   pk=$XDG_RUNTIME_DIR/omabox-polkit
   mkdir -p "$pk" && rm -f "$pk/ready" "$pk/bus"

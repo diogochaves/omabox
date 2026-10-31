@@ -42,12 +42,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   difference ([#344](https://github.com/diogochaves/omabox/issues/344)).
 - **`up --polkit`: a polkit agent can be tested in a box.** The shell's polkit plugin (or a copy of it
   under test, or a GTK or Qt agent) registers and shows its dialog as on a desktop: the box gets a
-  system bus of its own whose one service is a stand-in authority, never your system bus or polkitd.
+  system bus of its own, never your system bus or polkitd, on which only polkit's name can be owned,
+  taken by a stand-in authority.
   `omabox polkit ask [--action ID] [--message TEXT] [--accept PASSWORD] [--timeout 60s] [--delay
   DURATION]` makes a request and says how the agent ended it (authenticated, cancelled, timeout, the
   agent gone), with the passwords tried and how many were wrong; `--accept` names the one test
   password the box's helper takes. `omabox polkit agents` lists who registered; `log polkit` is the
-  authority's log. It decides nothing for any service (pkexec and pkcheck get no answer from it)
+  authority's log. It decides nothing for any service (pkexec and pkcheck get no answer from it).
+  That bus is the box's (a process in the box can answer in the stand-in's place), so what `polkit`
+  prints of its answers is bounded and plain: an escape sequence in it never reaches your terminal
   ([#258](https://github.com/diogochaves/omabox/issues/258)).
 - **The skill pre-approves the omabox commands that stay in a box** (Claude Code's `allowed-tools`):
   `shot`, `windows`, `tree`, `keys`, `click`, `wait`, `log` and the rest that act only inside a box
@@ -63,7 +66,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   one item's menu as a host does, `tray activate ID` is a left click on its icon (`--secondary` a
   middle one). No pixels: Omarchy's bar publishes no place for its icons, so where a real click on
   one lands is still found from a shot. `tray menu`, `activate` and `click` are actions for `shot
-  --burst --after` and `record -- ACTION`
+  --burst --after` and `record -- ACTION`. What an item says of itself is printed plain (an escape
+  sequence in its name or a label never reaches your terminal); one call reads at most 64 items, in
+  15 s at most, and says what it left out
   ([#343](https://github.com/diogochaves/omabox/issues/343)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
