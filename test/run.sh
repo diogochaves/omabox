@@ -11650,9 +11650,12 @@ t_wait_since() {
   out=$(ob wait -b "$B" --timeout 1s still --like "$o/w.png"); rc=$?
   check_match "still --like while it differs: 124, saying where" "^124 unsatisfied: not like $o/w\.png after 1\.[0-9]+s \(it differs at " "$rc $out"
   # Back as before: the text rubbed out while it waits.
-  (sleep 0.5; ob keys -b "$B" BackSpace BackSpace BackSpace BackSpace BackSpace >/dev/null 2>&1) &
+  # (its own pid waited for: a bare `wait` also waits for the suite's host-event watcher, a child of
+  # the shell a test runs in under -j 1, which ends only with the suite: it hung there)
+  (sleep 0.5; timeout 20 "$CLI" keys -b "$B" BackSpace BackSpace BackSpace BackSpace BackSpace >/dev/null 2>&1) &
+  local kp=$!
   out=$(ob wait -b "$B" --timeout 8s --json still --like "$o/w.png"); rc=$?
-  wait
+  wait "$kp"
   check "...the text rubbed out while it waits: like it again ($out)" jq -e '.result == "satisfied" and .condition == "still"' <<<"$out"
   # A blinking caret alone: no difference.
   ob run -b "$B" -d -q --wait -- foot -T C -o cursor.blink=yes -o cursor.style=beam cat >/dev/null 2>&1
