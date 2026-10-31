@@ -8,8 +8,8 @@
 use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
 use crate::boxes::{box_alive, need_box, touch};
 use crate::cat;
-use crate::cmd::wait_log::{LogWait, for_wait, log_wait};
 use crate::cmd::find::{self, Finder, Frame, NoFrame};
+use crate::cmd::wait_log::{LogWait, for_wait, log_wait};
 use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers_in, hypr_json};
@@ -848,7 +848,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 &cond,
                 "(still, change, window SEL, layer NAMESPACE, image FILE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION)",
                 &[
-                    "still", "change", "window", "layer", "image", "job", "log", "tree", "until", "for",
+                    "still", "change", "window", "layer", "image", "job", "log", "tree", "until",
+                    "for",
                 ],
             ));
         }

@@ -386,9 +386,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ));
         }
         if !find.is_empty() || !xyv.is_empty() || image {
-            return Err(ctx.die(
-                "click: --cell C3, X Y, --find TEXT or --image FILE: one of them",
-            ));
+            return Err(ctx.die("click: --cell C3, X Y, --find TEXT or --image FILE: one of them"));
         }
     }
     if image && !find.is_empty() {

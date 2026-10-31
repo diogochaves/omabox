@@ -2274,7 +2274,9 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 i += 1;
             }
             b"--xwayland" | b"--autoreload" | b"--no-shell" | b"--systemd" | b"--audio"
-            | b"--polkit" | b"--stock-bar" | b"--no-pointer" | b"--dnd" | b"--no-dock" => upopts.push(x.clone()),
+            | b"--polkit" | b"--stock-bar" | b"--no-pointer" | b"--dnd" | b"--no-dock" => {
+                upopts.push(x.clone())
+            }
             b"--desk-shell" => {
                 return Err(ctx.die(
                     "check run: a check's box is clean (--keep bar keeps your bar), not your desk's shell",
