@@ -124,6 +124,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   point, and `--no-raise` refuses; far from one, nothing is said. A click at the screen's X Y names
   it on a toast too. Where the pixels cannot tell (a scaled output), the "may" stays
   ([#283](https://github.com/diogochaves/omabox/issues/283)).
+- **`shot --grid N`** draws N lettered columns and N numbered rows over a shot, the labels in a
+  margin so nothing is hidden, and names each column's and row's span on stderr: aim at a small
+  target on a surface with no accessibility tree. `--grid N --cell C3` is that cell cropped,
+  enlarged and gridded again (`--cell C3:D3` for a target a line cuts), and `click --in GRID.png
+  --cell C3` clicks a cell's middle; `click --in GRID.png X Y` takes the margin off
+  ([#268](https://github.com/diogochaves/omabox/issues/268)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

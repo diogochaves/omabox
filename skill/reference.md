@@ -83,7 +83,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `lua --json` | a line each value Lua returned (any JSON value) |
 | `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames, blinking`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
-| `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
+| `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, grid` (`--grid`: `n, margin, file` (`w, h`), `columns` (`name, x, w`), `rows` (`name, y, h`)), `changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, report_scaled, setup, only, counts` (`skipped`: not named by `--only`), `checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
 | `check diff --json` | `result, size, regions, specks, marked, report, report_scaled` |
 | `record status --json` | `recording, stopped, monitors, fps, file, audio, started` |
@@ -225,6 +225,14 @@ a turn. Five rules keep every omabox call plain:
   centre is, `omabox calibrate --answer "A X,Y B X,Y …"`. It says whether full size reads 1:1, else
   the `--fit N` that maps your readings back within a few pixels and the `config shot-fit N` to
   suggest to the user (never set it), or that no one scale fits (read a new card again).
+- A small target with no tree (a bar icon, a caret), the first look: `shot --grid 8` (2-26) draws
+  lettered columns and numbered rows over the shot, labels in a 28 px margin, stderr naming each
+  column's and row's span; `shot --grid 8 --cell C3` is that cell cropped, enlarged and gridded
+  again (stderr gives the `-g` for a closer look still): two or three small images, not a misclick
+  loop of whole shots. A target a grid line cuts: both cells, `--cell C3:D3`. `click --in GRID.png
+  --cell C3` clicks a cell's middle; `click --in GRID.png X Y` reads the image as drawn, margin
+  included. Once found, a plain `shot -g` of it is what later runs compare with: the grid is for
+  aiming, never a baseline.
 - One image outweighs anything omabox prints as text. Take the smallest that shows it: `shot --window
   SEL` for one app, `-g "X,Y WxH"` for the part under test (a menu, a field, a bar widget), `--fit
   1280` for a whole screen's layout (full size to read small text). `--wait`'s `at X,Y WxH` is the
