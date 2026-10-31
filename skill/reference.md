@@ -626,6 +626,12 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   (`debug:suppress_errors` is on, whatever `looknfeel.lua` says: drawing it can hang Hyprland 0.56):
   a shot never shows the errors, those commands do. A Hyprland that answers the reload and then
   stops answering is said there ("did not answer hyprctl configerrors"), exit 1: `omabox gdb`.
+- Hyprland's own notifications (`omabox hyprctl notify`, and the ones it raises itself, such as "Your
+  monitor layout is set up incorrectly") are drawn at the top right of the focused monitor, below
+  the bar, sliding in over 0.6 s: a shot of the screen's left (`-g 0,0,...`) never has them.
+  `hyprctl notify` says the `shot -g` of that corner. The layout warning is in the Hyprland log as
+  "Monitor NAME: detected overlap with layout" (`omabox log --grep overlap`); a notification's own
+  text is not logged.
 - An error inside a callback (`hl.on`, `hl.timer`) is not in `lua`'s answer, and when the callback
   runs later (a timer, an app's event) it is logged nowhere, not even in the Hyprland log: seen
   nothing, check with `pcall` inside the callback and keep the error in a global to read with

@@ -66,6 +66,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   a throwaway `run`) started fine, the box had none of the folder's files, and nothing said why. It
   now says the folder is not a git repo and that `--ro-bind DIR` (or `--overlay`) brings it in
   ([#394](https://github.com/diogochaves/omabox/issues/394)).
+- **A Hyprland notification looked missing from shots**: `hyprctl notify` (and Hyprland's own
+  warnings, such as the monitor-layout one) draws at the top right of the focused monitor, so a shot
+  of the screen's left never had it. `omabox hyprctl notify` now says where, with the `shot -g` of
+  that corner, and the reference says it
+  ([#359](https://github.com/diogochaves/omabox/issues/359)).
 
 ## 1.0.2 — 2026-10-30
 

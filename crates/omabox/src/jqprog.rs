@@ -360,6 +360,11 @@ pub const SHOT_SAID_JQ: &str = r#"
        monitor: (if $mon == "" then null else $mon end), fit: ($fit | n), zoom: ($zoom | n),
        changed: (if $ch == 1 then {result: $res, since: (if $since == "" then null else $since end),
          why: (if $why == "" then null else $why end)} else null end)}"#;
+/// hyprctl notify (#359): where Hyprland draws its notifications, the focused monitor's top right,
+/// as "NAME X Y W H": the right half of its top third (after JQ_MON).
+pub const NOTIFY_CORNER_JQ: &str = r#"first(.[] | select(.focused and (.disabled | not))) |
+      (lw | floor) as $w | (($w / 2) | floor) as $l |
+      "\(.name) \(.x + $l) \(.y) \($w - $l) \(lh / 3 | floor)""#;
 /// shot --monitor (#122): that monitor's part of the layout (after JQ_MON).
 pub const SHOT_MON_JQ: &str = r#"first(.[] | select(.name == $n and (.disabled | not))) |
       "\(.x) \(.y) \(lw | floor) \(lh | floor)""#;

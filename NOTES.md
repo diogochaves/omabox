@@ -10848,6 +10848,21 @@ from them.
     failed with the call left out), t_wait_facts (the 124's
     button layer said before its click); t_unit_signal_cleanup's `click --mod` cases moved off the
     stand-in bar, which now says itself.
+563. **A Hyprland notification was not missing from shots: it is drawn top right** (2026-10-31, #359).
+    The issue's `hyprctl notify` then `shot -g 0,0,1300,200` of a 3440-wide monitor had none, read
+    as a capture that misses the overlay (its guess: no damage). Not so: Hyprland 0.56's
+    notification overlay (`src/notification/NotificationOverlay.cpp`) draws at the top right of the
+    focused monitor, below its reserved top, sliding in over 600 ms, and damages its box, so grim gets
+    it: a full shot right after `notify` has it half slid in, one 1 s later whole. The monitor-layout
+    warning is the same overlay (`MonitorLayoutController::checkOverlapsAndNotify`, 15 s), logged
+    as "Monitor NAME: detected overlap with layout"; a notify's own text is not logged. The
+    config-error bar never shows in a box (finding 352). Now `omabox hyprctl notify`, after
+    Hyprland's `ok`, says where ("note: Hyprland draws it at the top right of the focused monitor,
+    NAME, sliding in over 0.6 s: omabox shot -b B -g X,Y,W,H shows that corner": the right half of
+    its top third, in layout pixels); a notify Hyprland refuses, or monitors that cannot be read,
+    say nothing. The skill's reference says it beside the config-error bar's line. Tests:
+    t_hypr_notify (the note, its region's shot has the notification, the screen's left none),
+    failed on the old code; hyprctl.rs notify_corner (a scaled, turned second monitor).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
