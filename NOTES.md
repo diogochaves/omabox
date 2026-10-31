@@ -10725,7 +10725,7 @@ from them.
     names a folder (`python3 tests`) is no longer said; one with a `/` (`tests/x.py`) still is.
     Test: t_unit_run_cwd_note (the issue's commands: none; a script's later command: said), failed
     on the old code.
-551. **Ctrl-D at a setup prompt ended setup without a word** (2026-10-30, #373). setup's `[Y/n]`
+552. **Ctrl-D at a setup prompt ended setup without a word** (2026-10-30, #373). setup's `[Y/n]`
     prompts (the widget, a stale `~/.local/bin/omabox` link, the guard) ended the command with exit 1
     at the end of input, as bash's `set -e` did after `read` failed. Every prompt defaults to yes, so
     reading Ctrl-D as the default would act on a key that means "stop": it is now a no, said once on
@@ -10733,7 +10733,7 @@ from them.
     end. The widget's no is remembered (`widget-declined`, never asked again); a Ctrl-D is not, so
     the next setup asks again. Test: t_setup_prompts (Ctrl-D at the widget's question: said, not in
     the bar, not remembered), failed on the old code.
-552. **Setting protect-ports said nothing about boxes up already** (2026-10-30, #374). `up` reads
+553. **Setting protect-ports said nothing about boxes up already** (2026-10-30, #374). `up` reads
     protect-ports once (finding 480, S10): a connected box that is up keeps reaching the ports it
     could reach at its start, and the rule needs nft in /usr/bin. A user who set it after seeing an
     agent's box reach their database would take the database for covered at once. `config
@@ -10743,7 +10743,7 @@ from them.
     when nft is not in /usr/bin, where up then refuses a connected box. Test: t_protect_ports (a
     change names its box; the same set again says nothing), failed on the old code. The nft warning
     is not run here (this machine has nft).
-553. **A run -d job that traps SIGTERM was warned about after `run -- pkill`** (2026-10-30, #329).
+554. **A run -d job that traps SIGTERM was warned about after `run -- pkill`** (2026-10-30, #329).
     #300 (finding 406) left out a job killed while an `omabox run` ran, or 2 s after, but only for
     statuses 130, 137 and 143. foot catches SIGTERM and exits 230 (its own "failure in foot" code),
     so a stop-and-relaunch loop (`run -- pkill -f 'app-id X'`, then `run -d -- foot --app-id X`) got
@@ -10758,7 +10758,7 @@ from them.
     command. Tests: jobs' `job_note_as_bash` (a kill's own mark, a job ending in it, kill_cmd),
     t_replace (a job that exits 230 on SIGTERM, stopped by `run -- pkill`: not said), which failed
     on the old code.
-554. **A foreground run and a plain path skipped the session's box** (2026-10-30, #327). #296 made `run -d`
+555. **A foreground run and a plain path skipped the session's box** (2026-10-30, #327). #296 made `run -d`
     (and `down`) name the session's boxes when the name derived here has no box; a foreground `run`
     went on to a throwaway (an agent's IPC calls answered "Target not found." three times from a box
     without the plugin under test, nothing saying which box), and plain `path` printed the dir of a
@@ -10767,7 +10767,7 @@ from them.
     elsewhere; a throwaway (no session boxes) and a path printed before `up` stay as they were. And
     bare `omabox help` says how the box is picked without -b (it was in `--long` only). Test:
     t_unit_agent_session (both, from another repo with the session's box up), failed on the old code.
-555. **The guard refused `omarchy plugin list` as "omarchy-shell"** (2026-10-30, #332). 45 of Omarchy
+556. **The guard refused `omarchy plugin list` as "omarchy-shell"** (2026-10-30, #332). 45 of Omarchy
     4.5's commands call `omarchy-shell` by name (omarchy-plugin-list's `$(omarchy-shell shell
     listPlugins)`), so the guard's shim answered for them, naming a command the agent never typed;
     under `| grep` the refusal read as "no match". The shim now reads its parent's words
