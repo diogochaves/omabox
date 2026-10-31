@@ -274,7 +274,7 @@ fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
     // S1 and S3 as up's checked_ro has them for a --plugin: refuse_src, the seat's paths.
     let runtime = shell::env_or_empty("XDG_RUNTIME_DIR");
     crate::bwrap::Bwrap::new(&runtime, &ctx.d, Vec::new(), Vec::new())
-        .checked_ro(&p.dir, &dest)
+        .and_then(|mut b| b.checked_ro(&p.dir, &dest))
         .map_err(|r| ctx.die(cat!(ctx.label(), r.0)))?;
     let lock = locked(ctx, b"add")?;
     let bj = box_json(ctx);
