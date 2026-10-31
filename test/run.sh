@@ -8661,7 +8661,7 @@ t_plugin_link() {
 # `plugin remove` takes one out, one up mounted too. A link made by hand is replaced; a folder not
 # omabox's, a dir refused at up, a link swapped in on the mount's way: refused. Throwaway fixtures.
 t_plugin_add() {
-  local B=$P-pa R O=$TMP/pa-out H out f=/home/sbx/.config/omarchy/plugins rt
+  local B=$P-padd R O=$TMP/pa-out H out f=/home/sbx/.config/omarchy/plugins rt
   R=$(tmp_repo pa)
   afix() {   # DIR ID: a bar widget with a helper that reads ../../tools/sibling.txt from its real path
     mkdir -p "$1/helpers"
@@ -12840,7 +12840,7 @@ t_shell_hung() {
 # (exit 1) with one up; the pid it then recorded was a dead one, and every restart after failed alike.
 # Rounds with the kill 0-1.3 s before restart-shell (on the old code each failed), then plain ones.
 t_shell_restart_race() {
-  local B=$P-rr F=$TMP/rr D H S d out rc pids rec side=left badrc="" badone="" baddup=""
+  local B=$P-srr F=$TMP/rr D H S d out rc pids rec side=left badrc="" badone="" baddup=""
   mkdir -p "$F/w"
   jq -n --arg id "$P.rr" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
     entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$F/w/manifest.json"
@@ -13406,7 +13406,7 @@ t_uwsm_app() {
 # mode (finding 624); timedatectl's read-only answers (finding 625); the box Hyprland's version in
 # lastVersion, so a nested Hyprland opens no update news (finding 626).
 t_system_dirs() {
-  local B=$P-sd want
+  local B=$P-sysdirs want
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   check_eq "/var/tmp, /var/lib, /run and /run/user as on a host; the runtime dir still private (finding 624)" \
     "1777 755 755 755 700" "$(ob run -b "$B" -- stat -c %a /var/tmp /var/lib /run /run/user /run/user/"$(id -u)" | tr '\n' ' ' | sed 's/ $//')"
@@ -16966,7 +16966,7 @@ t_special_ws() {
 # boxes nested in it: the clipboard is the stand-in's, never the user's. No agent runs in the box, so
 # what clip refuses there is what it refuses, not the suite's own caller.
 t_clip() {
-  local B=$P-cl
+  local B=$P-clip
   up_ok "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" || { no "up (the stand-in host)" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$B" --) H; H=$(ob path "$B")/home
   UP_OUT=$("${in[@]}" "$CLI" up ib --interactive --no-shell 2>&1) || { no "up --interactive in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return; }
