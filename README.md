@@ -94,7 +94,8 @@ for Claude Code, Codex, OpenCode, pi and Hermes, and the bar widget, and asks wh
 widget in your bar and to turn on the [agent guard](#the-agent-guard). **Update** with
 `git pull && ./install.sh`, after a Hyprland upgrade too. **Remove** with `omabox down --all &&
 omabox setup --remove`, then delete the clone. Every step, upgrading from 0.x and what is left
-behind: [docs/install.md](docs/install.md).
+behind: [docs/install.md](docs/install.md). A box that will not start: `omabox doctor` says what
+this machine lacks and the line that installs it, changing nothing (`--smoke` starts a box too).
 
 ## Quick start
 

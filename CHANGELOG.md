@@ -190,6 +190,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `report@Nx.png` (`baseline@Nx.png` at `--approve`): the same layout N times its size, crops at the
   shots' own pixels on a box of scale N. `report.png` stays sized for an agent at any box scale
   ([#402](https://github.com/diogochaves/omabox/issues/402)).
+- **`omabox doctor [--json] [--smoke]`** says whether this machine can run boxes, changing nothing:
+  Omarchy and your theme, Hyprland (0.56+, Lua), the aquamarine boxes use, labwc, quickshell, bwrap
+  (0.11+), pasta, grim, the programs a box runs, omabox's tools, user namespaces, the render nodes
+  and the one a box uses, socket path length, and which omabox your shell's and your desktop
+  session's PATH find. Each failure or warning has a fix line for your distribution's family (Arch,
+  Debian and Ubuntu, Fedora, openSUSE); exit 1 when something fails. `--smoke` also starts a box,
+  takes a shot and takes it down ([#320](https://github.com/diogochaves/omabox/issues/320)).
 
 ### Fixed
 

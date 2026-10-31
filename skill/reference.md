@@ -95,6 +95,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
 | `pid --json` | `box, process` (hyprland or shell), `pid` (the host's), `box_pid` (the box's own) |
 | `--version --json` | `version, aquamarine` (`kind, version, fixed, message`) |
+| `doctor --json` | `ok, os` (`id, id_like, family`: null for one omabox has no package names for), `checks` (an array: `id, status` ok, warn or fail, `found, fix` an array of lines), `smoke` (null without `--smoke`; else `ok, box, shot, error`) |
 
 ## Handing box work to a subagent
 
@@ -402,6 +403,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | Symptom | Next step |
 |---|---|
 | "could not connect to display", `omabox-guard` | The agent guard: do it in a box ("The guard, in detail"). |
+| `up` refuses or dies before the box is up (a program missing, no render node, user namespaces, "too old") | `omabox doctor` (read-only; `--json`): each failed check with the line that fixes it. Installing is the user's: tell them that line; never sudo. |
 | Your own shell died after `pkill -f PATTERN` | It matched its own command line: kill by PID, or `omabox run -- pkill -x NAME`. |
 | After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |

@@ -11951,6 +11951,42 @@ from them.
     t_unit_omarchy_contract (the IPC, the dock's `shown`, the mode files, setPluginEnabled), omshell's
     hidden_dock_dropped_from_its_monitor_only.
 
+612. **`omabox doctor`: what a box needs, read, with a fix per distribution** (2026-10-31, #320).
+    `install.sh --check` installed first and then tried a box; nothing said, without changing the
+    machine, what was missing. doctor looks where a box looks: a box's start runs with PATH=/usr/bin
+    (up_box's LAUNCH_PATH, #364), so a program on the caller's PATH only (/usr/local/bin) is a
+    failure that names where it is. It reuses up's and setup's checks rather than copies: the
+    aquamarine as up picks it (hypr_aq_soname, aq_resolve) with setup's note (aq_note_text, now
+    shared), render_node's choice (OMABOX_RENDER_NODE, the gpu setting, the first usable), up's
+    `unshare -U true`, no_new_privs and /dev/net/tun tests, check_install's four tools. Versions
+    only where one is known not to work: Hyprland before 0.56 (hyprlang, finding 8), bwrap before
+    0.11 (no --overlay-src, which every box's /etc uses; Debian 12 packages 0.8, Ubuntu 24.04 0.9),
+    grim without -T (a warning: only shot --window, finding 81), a system aquamarine without #415
+    or a private build older than this omabox's (warnings, finding 247). User namespaces are tried
+    as a box makes them, a bwrap `--unshare-user` with /usr and the loader's dirs read-only (no /dev,
+    /run or /proc) running `true`, after unshare: Ubuntu's AppArmor
+    restriction is said to let `unshare -U` through and stop the mounts in it (not seen here: this
+    machine has no AppArmor); the sysctl that turned them off
+    (Debian's unprivileged_userns_clone, max_user_namespaces 0, apparmor_restrict_unprivileged_userns)
+    gives the fix. A render node that renders only in software (a VM's virtio-gpu without virgl) is
+    install.sh's test, now render.rs's software_only_in too. The socket length is the deepest socket
+    the host reaches by path (a 40-byte name's run/wayland-1, the broker's), against sun_path's 107
+    (finding 7). PATH is checked twice, the shell's and the desktop session's (`systemctl --user
+    show-environment`): an agent started from the launcher gets the latter; in a git worktree the
+    fix is "run its bin/omabox", never setup (#182). The fix lines come from one table (program to
+    package, for Arch, Debian/Ubuntu, Fedora, openSUSE: /etc/os-release's ID, then ID_LIKE; Arch's
+    names said as such for any other); setup --aquamarine's "needs git ..." line now comes from it
+    too, the same bytes on Arch. Only Arch's lines ran here; the others are written from those
+    distributions' package names and checked by the unit tests alone. Read-only by construction: it
+    runs --version, ldd, pacman -Q, pkg-config --exists, systemctl show-environment and the two
+    namespace probes, and writes nothing (t_unit_doctor points HOME, the XDG dirs, TMPDIR and the
+    runtime dir at empty stand-ins and finds them empty after). --smoke, only when every check
+    passes, is install.sh --check's box: doctor-PID up, a shot (kept, its path said), down. Not
+    done: install.sh calling doctor instead of assuming pacman (#247's step: install.sh builds
+    omabox after its packages, so doctor is not there yet when it would need it). Inside ai-jail the
+    broker refuses doctor as any command not on its list. Tests: doctor.rs's (families, the table,
+    versions, programs in a stand-in /usr/bin, userns reasons, socket length, PATH, render nodes
+    with a virtio-gpu stand-in, --json), t_unit_doctor, t_doctor_smoke (a real box).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
