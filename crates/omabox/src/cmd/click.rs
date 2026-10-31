@@ -1,14 +1,17 @@
 //! `omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
-//! [--steps N | --glide DURATION] [--mod MODS]` and `omabox scroll ... X Y DY [DX] [--source ...]`
+//! [--steps N | --glide DURATION] [--mod MODS]`, `omabox click ... --find TEXT [--window SEL | --layer
+//! SEL] [--index N] [BTN]` and `omabox scroll ... X Y DY [DX] [--source ...]`
 //! (#134, finding 213): the pointer there, then a click or a scroll. X Y are screen pixels; with
 //! --window the window's own (finding 81), with --in a shot's image's. --steps travels there from
 //! where the pointer is (#38), --glide in that time (#176), --mod holds modifiers down (#25), --wait
-//! watches what it does (finding 82).
+//! watches what it does (finding 82). --find (#318) clicks the middle of what the accessibility tree
+//! names TEXT, read fresh by omabox-tree --click, with the real pointer as X Y would.
 
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::need_box;
 use crate::cat;
 use crate::cmd::hyprctl::code;
+use crate::cmd::tree;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
 use crate::input::{
@@ -22,7 +25,7 @@ use crate::select::select_box;
 use crate::settle::{Settle, cursor_now, cursor_rect};
 use crate::shell;
 use crate::shellnote::shell_note;
-use crate::win::{Raise, win_point};
+use crate::win::{Raise, jq_r, win_point};
 
 /// A button word.
 fn button(w: &[u8]) -> bool {
@@ -87,6 +90,54 @@ fn to_screen(
     Ok((x, y))
 }
 
+/// --find TEXT: where omabox-tree --click says the one node named TEXT is, in the window SELS picks
+/// (none: the active one; to the screen as --window maps X Y, SELS set to it) or on the layer LAYER
+/// (the screen's coordinates already); its line said.
+fn found(
+    ctx: &mut Ctx,
+    st: &mut Settle,
+    raise: bool,
+    sels: &mut Vec<Vec<u8>>,
+    layer: &[u8],
+    find: &[u8],
+    index: Option<i64>,
+) -> Res<(i64, i64)> {
+    let mut targs = vec![b"--click".to_vec(), find.to_vec()];
+    if let Some(n) = index {
+        targs.extend([b"--index".to_vec(), num(n)]);
+    }
+    let r = tree::read(ctx, "click", sels, layer, targs, true)?;
+    match r.rc {
+        0 => {}
+        1 | 9 => {
+            say(cat!("click: ", r.what, ": ", r.why));
+            return Err(Exit(1));
+        }
+        8 => {
+            say(cat!("click: ", r.what, ": ", r.why));
+            return Err(Exit(2));
+        }
+        _ => {
+            tree::fail(ctx, "click", &r)?;
+            return Err(Exit(1));
+        }
+    }
+    let (first, line) = match r.out.iter().position(|&c| c == b'\n') {
+        Some(i) => (&r.out[..i], shell::subst(&r.out[i + 1..])),
+        None => (&r.out[..], Vec::new()),
+    };
+    let (wx, wy) = xy(first);
+    let (Some(x), Some(y)) = (shell::dec(&wx), shell::dec(&wy)) else {
+        return Err(ctx.die(cat!("click: omabox-tree gave no point (", r.out, ")")));
+    };
+    say(cat!("click: ", line, ": at ", num(x), ",", num(y)));
+    if !layer.is_empty() {
+        return Ok((x, y));
+    }
+    *sels = vec![jq_r(".address", &r.win)];
+    to_screen(ctx, st, raise, &[], sels, x, y)
+}
+
 /// --wait: the cursor where it is and where it goes is not the change looked for.
 fn ignore_cursor(ctx: &Ctx, st: &mut Settle, x: i64, y: i64) -> Res<()> {
     let p = cursor_now(ctx)?;
@@ -116,6 +167,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut sels, mut raise, mut inp) = (Vec::new(), true, Vec::new());
     let (mut steps, mut mods, mut glide): (Option<i64>, Vec<u8>, Option<i64>) =
         (None, Vec::new(), None);
+    let (mut find, mut layer, mut index) = (Vec::new(), Vec::new(), None);
     let mut st = Settle::default();
     let mut i = 0;
     while i < args.len() {
@@ -140,6 +192,28 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
             b"--no-raise" => raise = false,
             b"--double" => double = true,
+            b"--find" => {
+                optarg(ctx, a, v)?;
+                if args[i + 1].is_empty() {
+                    return Err(ctx.die("click: --find takes a name (any case, or part of one)"));
+                }
+                find = args[i + 1].clone();
+                i += 1;
+            }
+            b"-l" | b"--layer" => {
+                optarg(ctx, a, v)?;
+                layer = args[i + 1].clone();
+                i += 1;
+            }
+            b"--index" => {
+                optarg(ctx, a, v)?;
+                let n = &args[i + 1];
+                if !shell::re_match("^[1-9][0-9]{0,3}$", n) {
+                    return Err(ctx.die(cat!("click: --index is 1 or more, got ", n)));
+                }
+                index = shell::dec(n);
+                i += 1;
+            }
             b"--steps" => {
                 optarg(ctx, a, v)?;
                 steps = Some(steps_arg(ctx, "click", &args[i + 1])?);
@@ -177,15 +251,28 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         i += 1;
     }
-    st.opts_check(ctx, sels.len())?;
-    if xyv.len() != 2 {
-        let s = if xyv.len() == 1 { "" } else { "s" };
-        return Err(ctx.die(format!("click: need X Y, got {} number{s}", xyv.len())));
+    // --find without --window clicks in the active window: its coordinates, as --window's.
+    let on_window = sels.len() + usize::from(!find.is_empty() && layer.is_empty());
+    st.opts_check(ctx, on_window)?;
+    if find.is_empty() {
+        if !layer.is_empty() || index.is_some() {
+            return Err(ctx.die("click: --layer and --index go with --find TEXT"));
+        }
+        if xyv.len() != 2 {
+            let s = if xyv.len() == 1 { "" } else { "s" };
+            return Err(ctx.die(format!("click: need X Y, got {} number{s}", xyv.len())));
+        }
+    } else if !xyv.is_empty() {
+        return Err(ctx.die("click: --find TEXT or X Y, not both"));
+    } else if !inp.is_empty() {
+        return Err(ctx.die("click: --find TEXT or --in SHOT, not both"));
+    } else if !layer.is_empty() && !sels.is_empty() {
+        return Err(ctx.die("click: --window or --layer, not both"));
     }
     if !inp.is_empty() && !sels.is_empty() {
         return Err(ctx.die("click: --in or --window, not both"));
     }
-    if !raise && inp.is_empty() && sels.is_empty() {
+    if !raise && inp.is_empty() && sels.is_empty() && (find.is_empty() || !layer.is_empty()) {
         return Err(ctx.die("click: --no-raise goes with --window or --in"));
     }
     if steps.is_some() && glide.is_some() {
@@ -198,7 +285,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if steps.is_none() && glide.is_none() {
         glide = rec_glide(ctx).and_then(|g| shell::dec(&g));
     }
-    let (x, y) = to_screen(ctx, &mut st, raise, &inp, &mut sels, xyv[0], xyv[1])?;
+    let (x, y) = if find.is_empty() {
+        to_screen(ctx, &mut st, raise, &inp, &mut sels, xyv[0], xyv[1])?
+    } else {
+        found(ctx, &mut st, raise, &mut sels, &layer, &find, index)?
+    };
     let mut seq = vec![
         b"move".to_vec(),
         num(x),

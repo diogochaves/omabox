@@ -132,20 +132,24 @@ a turn. Five rules keep every omabox call plain:
   each after its ancestors: `check box "Dark mode" [checked] @12,148 1872x26` (~17 tokens against a
   shot's ~1.5k). A line is role, "name", 'text', =value (slider, spin button, combo choice), [states]
   (checked/unchecked, focused, selected, editable, disabled...) and @X,Y WxH in the window's own
-  coordinates: `click --window SEL` at the middle of those bounds lands on it (a control in a Qt dock
-  widget is placed relative to the dock: check with a shot). `tree` alone prints the whole window
+  coordinates: `click --window SEL` at the middle of those bounds lands on it. `click --window SEL
+  --find TEXT` does both: reads the tree again, clicks the one node named TEXT at the middle of what
+  of it is in view (exact name over a part of one, a control over its label), and says its line;
+  several in view is exit 2 with them numbered (`--index N`), and a hidden, scrolled-out or disabled
+  one is refused, exit 1, saying which (scroll first). `tree` alone prints the whole window
   (no SEL: the active one); a dense one (an editor, a long page) costs more than its shot, so ask
   with `--find`. `--json` for a script; exit 1 when nothing holds TEXT. GTK, Qt and egui/winit
   (AccessKit) apps have a tree (`tree` turns Qt's and AccessKit's on). AccessKit needs
   accesskit_unix 0.22+ (eframe 0.37+) on at-spi2-core 2.61+ (Arch has it): an older one never joins
   the bus, `tree` says so, and only updating the app's AccessKit helps; Chromium and Electron only
   when started with `--force-renderer-accessibility` (start them so when you will ask); terminals
-  (foot) have none and say "no accessibility tree": shots for those. An unnamed control (a switch
-  beside its label) matches by its role (`--find switch`), or read the whole tree.
+  (foot) have none and say "no accessibility tree": shots for those. An unnamed control takes its
+  label's name where the app links them; one that does not (a switch beside its label) matches by
+  its role (`--find switch`), or read the whole tree.
 - The shell's bar, panels, menus and plugins are layer surfaces: `omabox tree --layer SEL` (a
   namespace from `omabox hyprctl layers`, `address:0x...` or `pid:PID`), with `--find`, `--json` and
   `--all` as for windows. Its bounds are the **screen's** coordinates: plain `click X Y` at a node's
-  middle lands on it. Quickshell publishes them from 0.3.2 (older: "no accessibility tree", or
+  middle lands on it, and `click --layer SEL --find TEXT` finds and clicks it. Quickshell publishes them from 0.3.2 (older: "no accessibility tree", or
   `--quickshell` a build), and only items that set an `Accessible.role`: a layer without any says
   "publishes no accessible items" (Omarchy's own bar today), exit 1. Its `frame`s have no names, so
   the layer's is the one of its pid that is its size: two layers of one pid and size are told apart

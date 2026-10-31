@@ -10693,6 +10693,27 @@ from them.
     too (finding 398). Tests: t_unit_window_select (rc2's bar at the top and bottom, and with no edge
     known), the contract (`omarchy_contract_45`: Bar.qml's mask, exclusive zone and screen-sized
     surface), t_click_layer on rc2 (failed on the old code).
+550. **click --find: the tree's node clicked by name; a Qt dock's contents placed** (2026-10-30, #318).
+    `omabox-tree --click TEXT [--index N]` walks the window as `tree` does but keeps what `tree` leaves
+    out (hidden nodes, what lies outside the window) to say why a match cannot be clicked, and prints
+    "X Y" (the middle of the node's bounds cut by the window's and every ancestor's that has bounds)
+    and its line; `click --find` clicks there with the real pointer, the input path a test exercises
+    (#318: the AT-SPI action is not used). An exact name (any case) wins over a part of one, and
+    anything else over a `label`/`static` of its name (GTK4 names an entry after its mnemonic label:
+    both match "Email"). Several in view: exit 8 (`click` 2) with the lines; none in view: 9 (`click`
+    1) with why: hidden (not SHOWING and VISIBLE, itself or an ancestor), no bounds, out of view (a
+    GTK4 scrolled window's rows below the fold are inside the window: only the viewport's bounds
+    cut them), disabled. GTK4 does not publish a hidden widget at all: "nothing is named". **Qt dock
+    widgets** (finding 244's exception): the dock's contents are a `frame` that says 0,0 in window
+    coordinates, its children relative to it, while its SCREEN extents are where it is drawn
+    (Designer's Widget Box: window 0,0, screen 0,84; its filter field said `@4,4`, drawn at 4,88).
+    The Qt Quick popup rule (finding 364's offset from the screen coordinates) now takes a nested
+    `frame` too; where a toolkit's screen coordinates equal its window ones the offset is 0 and
+    nothing moves. Also: an unnamed non-container node takes the name of its LABELLED_BY target, and
+    a node is read once (by bus name and path) however many parents list it. Tests: t_click_find
+    (GTK4: active window, part and exact names, label vs entry, two in view and --index, disabled,
+    scrolled out, nothing; Designer: a dialog's Close, the dock's place, four docks' Close buttons),
+    t_tree_layer (`click --layer --find` on the stub panel).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -8331,6 +8331,105 @@ PY
   check "down" ob down "$B"
 }
 
+# click --find TEXT (#318): the one node named TEXT, read fresh, clicked at the middle of what of it
+# is in view with the real pointer; several, hidden, scrolled out or disabled said, nothing clicked.
+t_click_find() {
+  local B=$P-cf H out rc
+  check "up" ob up "$B" --no-shell
+  H=$(ob path -b "$B")/home
+  check_eq "--find and X Y: exit 2" 2 "$(ob click -b "$B" --find x 10 10 >/dev/null 2>&1; echo $?)"
+  check_eq "--index without --find: exit 2" 2 "$(ob click -b "$B" --index 1 10 10 >/dev/null 2>&1; echo $?)"
+  check_eq "--index 0: exit 2" 2 "$(ob click -b "$B" --find x --index 0 >/dev/null 2>&1; echo $?)"
+  check_eq "--find with no name: exit 2" 2 "$(ob click -b "$B" --find "" >/dev/null 2>&1; echo $?)"
+  check_eq "--window and --layer: exit 2" 2 "$(ob click -b "$B" --find x --window a --layer b >/dev/null 2>&1; echo $?)"
+  if ! ob run -b "$B" -- python3 -c 'import gi; gi.require_version("Gtk", "4.0")' >/dev/null 2>&1; then
+    skip "click --find in a GTK4 window" "no GTK4 or python-gobject"; ob down "$B" >/dev/null; return
+  fi
+  cat > "$H/find-demo.py" <<'PY'
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk
+def build(app):
+    win = Gtk.ApplicationWindow(application=app, title="Find demo")
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=12, margin_start=12, margin_end=12)
+    box.append(Gtk.CheckButton(label="Dark mode", active=False))
+    count = Gtk.Button(label="Count 0")
+    count.connect("clicked", lambda b: b.set_label("Count %d" % (int(b.get_label().split()[1]) + 1)))
+    box.append(count)
+    row = Gtk.Box(spacing=6)
+    for n in (1, 2):
+        b = Gtk.Button(label="Save")
+        b.connect("clicked", lambda b, n=n: win.set_title("Saved %d" % n))
+        row.append(b)
+    box.append(row)
+    box.append(Gtk.Button(label="Delete", sensitive=False))
+    lab = Gtk.Label.new_with_mnemonic("_Email")
+    ent = Gtk.Entry()
+    lab.set_mnemonic_widget(ent)
+    box.append(lab)
+    box.append(ent)
+    sw = Gtk.ScrolledWindow(min_content_height=80)
+    inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    for i in range(30):
+        inner.append(Gtk.Label(label="Line %d" % i))
+    inner.append(Gtk.Button(label="Below the fold"))
+    sw.set_child(inner)
+    box.append(sw)
+    win.set_child(box)
+    win.present()
+app = Gtk.Application(application_id="org.omabox.FindDemo")
+app.connect("activate", build)
+app.run(None)
+PY
+  ob run -b "$B" -d -- python3 /home/sbx/find-demo.py >/dev/null 2>&1
+  ob wait -b "$B" --timeout 20s window 'title:^Find demo$' >/dev/null
+  out=$(ob click -b "$B" --find 'dark mode' --wait 2>&1); rc=$?
+  check_match "the active window by default: its line said, and where the pointer went" \
+    '^omabox: click: check box "Dark mode" \[[a-z ]*unchecked\] @[0-9]+,[0-9]+ [0-9]+x[0-9]+: at [0-9]+,[0-9]+' "$out"
+  check "...it checks it" until_ok 5 \
+    bash -c "'$CLI' tree -b '$B' --window 'Find demo' --find 'dark mode' | grep -q '^check box \"Dark mode\" \[focused checked\]'"
+  ob click -b "$B" --window 'Find demo' --find 'count' --wait >/dev/null 2>&1
+  check "a part of a name, any case: the button pressed" until_ok 5 \
+    bash -c "'$CLI' tree -b '$B' --window 'Find demo' --find 'count 1' | grep -q 'button \"Count 1\"'"
+  out=$(ob click -b "$B" --window 'Find demo' --find 'line 1' 2>&1)
+  check_match "an exact name wins over a part of one (Line 1, not Line 10 to 19)" 'label "Line 1" @' "$out"
+  out=$(ob click -b "$B" --window 'Find demo' --find email 2>&1)
+  check_match "a control wins over a label of its name (GTK names the entry after its label)" '^omabox: click: text "Email" ' "$out"
+  out=$(ob click -b "$B" --window 'Find demo' --find save 2>&1); rc=$?
+  check_eq "two in view: exit 2, nothing clicked" "2 Find demo" "$rc $(ob windows -b "$B" --json | jq -r '.[] | select(.class == "org.omabox.FindDemo") | .title')"
+  check_match "...both listed, numbered for --index" $'2 in view are named "save": pick one with --index N\n  1: button "Save" @[^\n]*\n  2: button "Save" @' "$out"
+  ob click -b "$B" --window 'Find demo' --find save --index 2 >/dev/null 2>&1
+  check "...--index 2 clicks the second" until_ok 5 bash -c "'$CLI' windows -b '$B' | grep -q 'Saved 2'"
+  check_eq "...--index past them: exit 2" 2 "$(ob click -b "$B" --window FindDemo --find save --index 3 >/dev/null 2>&1; echo $?)"
+  out=$(ob click -b "$B" --window FindDemo --find delete 2>&1); rc=$?
+  check_eq "a disabled button: exit 1, said" "1 yes" "$rc $(grep -q 'button "Delete" \[disabled\] @.*: disabled' <<<"$out" && echo yes)"
+  out=$(ob click -b "$B" --window FindDemo --find 'below the fold' 2>&1); rc=$?
+  check_eq "a button scrolled out of its scrolled window, though inside the window: exit 1" 1 "$rc"
+  check_match "...said: scroll it into view" 'button "Below the fold" @[^:]*: not in view .*scroll it into view first' "$out"
+  out=$(ob click -b "$B" --window FindDemo --find 'no such words' 2>&1); rc=$?
+  check_eq "nothing named so: exit 1, said" "1 yes" "$rc $(grep -q 'nothing in the window is named "no such words"' <<<"$out" && echo yes)"
+  ob run -b "$B" -- pkill -f find-demo.py >/dev/null 2>&1 || true
+  # Finding 244: a QDockWidget's contents say they are at 0,0, relative to the dock; Qt's screen
+  # coordinates have where they are drawn (its filter field, under the dock's title).
+  if ob run -b "$B" -- sh -c 'command -v designer6' >/dev/null 2>&1; then
+    ob run -b "$B" -d -- designer6 >/dev/null 2>&1
+    if ob wait -b "$B" --timeout 30s window 'title:^New Form' >/dev/null 2>&1; then
+      ob click -b "$B" --window 'title:^New Form' --find close --wait >/dev/null 2>&1
+      check "Qt widgets: click --find close closes Designer's New Form dialog" until_ok 5 \
+        bash -c "! '$CLI' windows -b '$B' | grep -q 'New Form'"
+      out=$(ob tree -b "$B" --window 'title:^Qt Widgets Designer$' 2>&1)
+      check_match "...a dock's contents under its title, not at 0,0 (finding 244)" \
+        $'\n *panel "Widget Box" @0,([0-9]+) [0-9x]+\n *frame @0,[1-9][0-9]* ' $'\n'"$out"
+      out=$(ob click -b "$B" --window 'title:^Qt Widgets Designer$' --find close 2>&1); rc=$?
+      check_eq "...its docks' Close buttons: exit 2, each with its dock" "2 yes" \
+        "$rc $(grep -q '1: panel "Widget Box" > button "Close"' <<<"$out" && echo yes || echo "no: $out")"
+    else no "designer6's New Form dialog opens" "it did not"; fi
+  else
+    skip "click --find in Qt widgets and a dock" "no designer6 (qt6-tools)"
+  fi
+  check "down" ob down "$B"
+}
+
 # tree --layer (#254, finding 384): which layer SEL names, and the hint that tells two frames of one
 # pid and size apart (the launcher over the wallpaper: the one with the keyboard), with Hyprland's
 # keyboard answer and the box stubbed.
@@ -8408,10 +8507,10 @@ ShellRoot {
     Rectangle {
       id: btn
       x: 150; y: 40; width: 120; height: 50; color: "#4060c0"
-      property bool hit: false
+      property int hits: 0
       Accessible.role: Accessible.Button
-      Accessible.name: hit ? "clicked button" : "a named button"
-      MouseArea { anchors.fill: parent; onClicked: btn.hit = true }
+      Accessible.name: ["a named button", "clicked button", "clicked again"][Math.min(hits, 2)]
+      MouseArea { anchors.fill: parent; onClicked: btn.hits++ }
     }
   }
   PanelWindow {
@@ -8440,6 +8539,11 @@ QML
     check "...a plain click at its middle ($mid) lands on it" until_ok 5 \
       bash -c "'$CLI' tree -b '$B' --layer t254 --find clicked | grep -q '^button \"clicked button\"'"
   else no "...a click at its middle lands" "no bounds in [$out]"; fi
+  out=$(ob click -b "$B" --layer t254 --find 'clicked button' 2>&1)
+  check_match "...click --layer --find: its line, at its middle on the screen" \
+    "^omabox: click: button \"clicked button\" @$((x + 150)),$((y + 40)) 120x50: at $((x + 210)),$((y + 65))\$" "$out"
+  check "...it lands on it" until_ok 5 \
+    bash -c "'$CLI' tree -b '$B' --layer t254 --find again | grep -q '^button \"clicked again\"'"
   check_eq "...--find matching nothing: exit 1" 1 "$(ob tree -b "$B" --layer t254 --find zzz >/dev/null 2>&1; echo $?)"
   out=$(ob tree -b "$B" --layer t254-empty 2>&1); rc=$?
   check_eq "a layer whose items set no role: exit 1" 1 "$rc"
@@ -17198,7 +17302,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

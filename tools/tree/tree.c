@@ -2,6 +2,7 @@
 //
 //   omabox-tree --pid PID [--title TITLE] [--size WxH] [--twins N] [--find TEXT] [--json] [--all]
 //   omabox-tree --pid PID --layer --size WxH [--offset X,Y] [--active yes|no] [--find TEXT] [--json] [--all]
+//   omabox-tree ... --click TEXT [--index N]
 //
 // Run by `omabox tree` inside the box (box_exec: the box's session bus and pid numbering), never on the
 // host, where it would read the real desktop's apps: it refuses outside a box. PID is the window's
@@ -31,10 +32,22 @@
 // one of them with the keyboard: applied only when exactly one of them is active. Bounds are the
 // surface's own plus --offset (the layer's place on the screen: what `omabox click X Y` takes).
 //
-// Exit: 0 printed; 1 --find matched nothing; 3 no tree for that window (said why); 4 the box has no
+// --click TEXT (#318): instead of the tree, where `omabox click --find TEXT` clicks: the middle of the
+// visible part of the one node named TEXT (any case; an exact name wins over a part of one, a
+// control over a label), in the coordinates the bounds are in, "X Y" and its line on stdout. Hidden
+// nodes and what is outside the window are read too, to say why one cannot be clicked: not showing
+// and visible (itself or an ancestor), no bounds, nothing of it inside the window and every
+// ancestor's bounds (scrolled out; a Qt dock widget's, placed relative to the dock: finding 244),
+// disabled. Several in view: exit 8 with their lines, numbered for --index N.
+//
+// An unnamed node takes the name of what labels it (LABELLED_BY: an entry and its label), and a node
+// is read once however many parents it has (some Qt WebEngine nodes sit under two).
+//
+// Exit: 0 printed; 1 --find or --click matched nothing; 3 no tree for that window (said why); 4 the box has no
 // accessibility bus; 5 the layer's frame has nothing under it; 6 several frames are the layer's size,
 // or the app's only frame is the size of several of its windows; 7 the app's only frame is not the
-// window's size (that window is not on the bus); 2 usage, or outside a box.
+// window's size (that window is not on the bus); 8 --click: several in view; 9 --click: the one
+// matching cannot be clicked (said why); 2 usage, or outside a box.
 #define _GNU_SOURCE
 #include <atspi/atspi.h>
 #include <gio/gio.h>
@@ -55,9 +68,16 @@
 #define MAX_DEPTH 64
 
 static int opt_all, opt_json, win_w = -1, win_h = -1, opt_layer, layer_ox, layer_oy, active_hint = -1, twins;
-static const char *find;
-static int nodes, lines, matched, truncated;
+static const char *find, *click;
+static int nodes, lines, matched, truncated, click_index;
 static GString *out;
+static GHashTable *seen; // the nodes read, by bus name and path
+
+// --click: whether the node being read is under one that is not showing and visible, and the part
+// of the window in view there (the window's, cut by each ancestor's bounds).
+static int hidden, clip[4], have_clip;
+struct hit { char *line; int exact, label, hidden, disabled, hasb, hasvis, vis[4]; };
+static GPtrArray *hits;
 
 // The printed ancestors of the node being read, for --find's path: as the text view says them, and
 // whole for --json.
@@ -140,6 +160,26 @@ static char *name_of(AtspiAccessible *a, glong n) {
     return s;
 }
 
+// An unnamed node's name from what labels it (LABELLED_BY: an entry and the label beside it).
+static char *label_of(AtspiAccessible *a) {
+    GArray *rels = atspi_accessible_get_relation_set(a, NULL);
+    char *s = NULL;
+    for (guint i = 0; rels && i < rels->len; i++) {
+        AtspiRelation *r = g_array_index(rels, AtspiRelation *, i);
+        if (!s && atspi_relation_get_relation_type(r) == ATSPI_RELATION_LABELLED_BY && atspi_relation_get_n_targets(r) > 0) {
+            AtspiAccessible *t = atspi_relation_get_target(r, 0);
+            if (t) {
+                s = name_of(t, FULL);
+                if (!*s) g_clear_pointer(&s, g_free);
+                g_object_unref(t);
+            }
+        }
+        g_object_unref(r);
+    }
+    if (rels) g_array_free(rels, TRUE);
+    return s;
+}
+
 // The text a shot would be read for, when the name does not carry it.
 static char *text_of(AtspiAccessible *a, const char *role) {
     if (!in(role, TEXT_ROLES)) return g_strdup("");
@@ -212,6 +252,7 @@ static int extents_in(AtspiAccessible *a, AtspiCoordType type, int b[4]) {
 // Quick popup with that role inside the window as one: the popup says 0,0 and its contents are
 // relative to it. Its screen coordinates are right relative to the window's (a Wayland window's
 // screen origin is 0,0 to Qt), so the popup's offset is the difference, and its contents take it.
+// A QDockWidget's contents are a frame that says 0,0 the same way (finding 244, #318).
 static int frame_sx, frame_sy, have_frame_screen, off_x, off_y;
 
 static int extents(AtspiAccessible *a, int depth, const char *role, int b[4]) {
@@ -221,7 +262,7 @@ static int extents(AtspiAccessible *a, int depth, const char *role, int b[4]) {
         have_frame_screen = extents_in(a, ATSPI_COORD_TYPE_SCREEN, s);
         if (have_frame_screen) frame_sx = s[0], frame_sy = s[1];
         off_x = off_y = 0;
-    } else if (b[0] == 0 && b[1] == 0 && have_frame_screen && (!strcmp(role, "dialog") || !strcmp(role, "window")) &&
+    } else if (b[0] == 0 && b[1] == 0 && have_frame_screen && (!strcmp(role, "dialog") || !strcmp(role, "window") || !strcmp(role, "frame")) &&
                extents_in(a, ATSPI_COORD_TYPE_SCREEN, s)) {
         off_x = s[0] - frame_sx, off_y = s[1] - frame_sy;
     }
@@ -307,21 +348,69 @@ static void emit(int depth, const char *role, const char *name, const char *text
     g_string_free(body, TRUE);
 }
 
+// The overlap of rectangles a and b into o; whether there is any.
+static int meet(const int a[4], const int b[4], int o[4]) {
+    int x0 = MAX(a[0], b[0]), y0 = MAX(a[1], b[1]), x1 = MIN(a[0] + a[2], b[0] + b[2]), y1 = MIN(a[1] + a[3], b[1] + b[3]);
+    o[0] = x0, o[1] = y0, o[2] = MAX(x1 - x0, 0), o[3] = MAX(y1 - y0, 0);
+    return o[2] > 0 && o[3] > 0;
+}
+
+// --click: a node named (or partly) TEXT, kept with its line as --find prints it.
+static void hit(const char *role, const char *name, const char *text, const char *val, GPtrArray *states, int *b,
+                int *vis, int disabled) {
+    char *a = g_utf8_casefold(name, -1), *t = g_utf8_casefold(click, -1);
+    int exact = !strcmp(a, t), part = strstr(a, t) != NULL;
+    g_free(a);
+    g_free(t);
+    if (!part) return;
+    struct hit *h = g_new0(struct hit, 1);
+    GString *l = g_string_new(NULL);
+    for (int i = 1; i < path_n; i++) g_string_append_printf(l, "%s > ", path[i]);
+    GString *shown = line_of(role, name, text, val, states, 1);
+    g_string_append(l, shown->str);
+    g_string_free(shown, TRUE);
+    if (b) g_string_append_printf(l, " @%d,%d %dx%d", b[0] + layer_ox, b[1] + layer_oy, b[2], b[3]);
+    h->line = g_string_free(l, FALSE);
+    h->exact = exact, h->hidden = hidden, h->disabled = disabled, h->hasb = b != NULL, h->hasvis = vis != NULL;
+    h->label = !strcmp(role, "label") || !strcmp(role, "static");
+    if (vis) memcpy(h->vis, vis, sizeof h->vis);
+    g_ptr_array_add(hits, h);
+}
+
+// A node already read (under another parent): not again.
+static int read_before(AtspiAccessible *a) {
+    AtspiObject *o = ATSPI_OBJECT(a);
+    if (!o->app || !o->app->bus_name || !o->path) return 0;
+    return !g_hash_table_add(seen, g_strdup_printf("%s %s", o->app->bus_name, o->path));
+}
+
 static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     if (nodes >= BUDGET) { truncated = 1; return; }
+    if (read_before(a)) return;
     nodes++;
     char *role = role_of(a), *name = name_of(a, FULL);
     AtspiStateSet *ss = atspi_accessible_get_state_set(a);
 #define HAS(st) (ss && atspi_state_set_contains(ss, (st)))
-    // A popup's offset (extents) holds for what is under it, and no further.
-    int ox = off_x, oy = off_y;
+    // A popup's offset (extents) holds for what is under it, and no further; so do --click's hidden
+    // and clip.
+    int ox = off_x, oy = off_y, was_hidden = hidden, had_clip = have_clip, was_clip[4];
+    memcpy(was_clip, clip, sizeof clip);
     int b[4], hasb = extents(a, depth, role, b) && b[2] > 0 && b[3] > 0;
+    int vis[4], hasvis = 0;
+    if (hasb) {
+        if (have_clip) hasvis = meet(b, clip, vis);
+        else memcpy(vis, b, sizeof vis), hasvis = 1;
+        memcpy(clip, vis, sizeof clip);
+        have_clip = 1;
+    }
     char *text = NULL, *val = NULL;
     GPtrArray *states = g_ptr_array_new();
     gint n = 0;
     int printed = 0, skip = 0;
 
-    if (ss && !HAS(ATSPI_STATE_SHOWING) && !HAS(ATSPI_STATE_VISIBLE) && depth > 0 && !opt_all) skip = 1;
+    if (click) {
+        if (depth > 0 && ss && !(HAS(ATSPI_STATE_SHOWING) && HAS(ATSPI_STATE_VISIBLE))) hidden = 1;
+    } else if (ss && !HAS(ATSPI_STATE_SHOWING) && !HAS(ATSPI_STATE_VISIBLE) && depth > 0 && !opt_all) skip = 1;
     // Wholly outside the window (scrolled out of a long page): a shot would not show it either.
     else if (depth > 0 && hasb && win_w > 0 && !opt_all &&
              (b[0] >= win_w || b[1] >= win_h || b[0] + b[2] <= 0 || b[1] + b[3] <= 0)) {
@@ -329,6 +418,10 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     }
     if (skip) goto done;
 
+    if (!*name && !in(role, CONTAINERS) && strcmp(role, "label")) {
+        char *l = label_of(a);
+        if (l) g_free(name), name = l;
+    }
     val = value_of(a);
     if (!val && strcmp(role, "combo box") == 0) val = combo_choice(a);
     if (val && strcmp(val, name) == 0) g_clear_pointer(&val, g_free);
@@ -374,7 +467,9 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
 
     int pushed = 0;
     if (printed) {
-        emit(path_n, role, name, text, val, states, hasb ? b : NULL);
+        if (click) hit(role, name, text, val, states, hasb ? b : NULL, hasvis ? vis : NULL,
+                       ss && !HAS(ATSPI_STATE_SENSITIVE) && !HAS(ATSPI_STATE_ENABLED));
+        else emit(path_n, role, name, text, val, states, hasb ? b : NULL);
         // Popped below only when pushed here: past MAX_DEPTH a pop would free an ancestor's slot.
         if (path_n < MAX_DEPTH) {
             char *shown = cut(name, NAME_W);
@@ -398,7 +493,8 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     }
 done:
 #undef HAS
-    off_x = ox, off_y = oy;
+    off_x = ox, off_y = oy, hidden = was_hidden, have_clip = had_clip;
+    memcpy(clip, was_clip, sizeof clip);
     g_ptr_array_free(states, TRUE);
     if (ss) g_object_unref(ss);
     g_free(role);
@@ -682,6 +778,66 @@ static int layer_frame(GPtrArray *apps, long pid, AtspiAccessible **win) {
     return rc;
 }
 
+// Why a node --click found cannot be clicked where it is.
+static const char *out_of_view(const struct hit *h) {
+    if (h->hidden) return "hidden (it, or what it is in, is not showing)";
+    if (!h->hasb) return "it has no bounds";
+    return "not in view (outside its window or what it is in: scroll it into view first)";
+}
+
+// --click: the node to click, as the header says; its exit code.
+static int pick(void) {
+    int exact = 0, other = 0;
+    for (guint i = 0; i < hits->len; i++) exact |= ((struct hit *)hits->pdata[i])->exact;
+    GPtrArray *m = g_ptr_array_new(), *v = g_ptr_array_new();
+    for (guint i = 0; i < hits->len; i++) {
+        struct hit *h = hits->pdata[i];
+        if (h->exact || !exact) g_ptr_array_add(m, h), other |= !h->label;
+    }
+    for (guint i = 0; i < m->len; i++) {
+        struct hit *h = m->pdata[i];
+        if (other && h->label) continue;
+        if (!h->hidden && h->hasvis) g_ptr_array_add(v, h);
+    }
+    const char *in_what = opt_layer ? "layer" : "window";
+    int rc = 0;
+    struct hit *t = NULL;
+    if (m->len == 0) {
+        fprintf(stderr, "nothing in the %s is named \"%s\"%s\n", in_what, click,
+                truncated ? " (in the nodes read: it stopped at its limit)" : "");
+        rc = 1;
+    } else if (click_index > 0 && (guint)click_index > v->len) {
+        fprintf(stderr, "--index %d: %u in view %s named \"%s\"\n", click_index, v->len, v->len == 1 ? "is" : "are", click);
+        for (guint i = 0; i < v->len; i++) fprintf(stderr, "  %u: %s\n", i + 1, ((struct hit *)v->pdata[i])->line);
+        rc = 8;
+    } else if (click_index > 0) {
+        t = v->pdata[click_index - 1];
+    } else if (v->len == 1) {
+        t = v->pdata[0];
+    } else if (v->len > 1) {
+        fprintf(stderr, "%u in view are named \"%s\": pick one with --index N\n", v->len, click);
+        for (guint i = 0; i < v->len; i++) fprintf(stderr, "  %u: %s\n", i + 1, ((struct hit *)v->pdata[i])->line);
+        rc = 8;
+    } else {
+        fprintf(stderr, "nothing named \"%s\" is in view:\n", click);
+        for (guint i = 0; i < MIN(m->len, 8); i++) {
+            struct hit *h = m->pdata[i];
+            fprintf(stderr, "  %s: %s\n", h->line, out_of_view(h));
+        }
+        if (m->len > 8) fprintf(stderr, "  and %u more\n", m->len - 8);
+        rc = 9;
+    }
+    if (t && t->disabled) {
+        fprintf(stderr, "%s: disabled\n", t->line);
+        rc = 9;
+    } else if (t) {
+        printf("%d %d\n%s\n", t->vis[0] + t->vis[2] / 2 + layer_ox, t->vis[1] + t->vis[3] / 2 + layer_oy, t->line);
+    }
+    g_ptr_array_free(m, TRUE);
+    g_ptr_array_free(v, TRUE);
+    return rc;
+}
+
 static int tree_main(int argc, char **argv);
 int main(int argc, char **argv) {
     g_log_set_writer_func(glog_writer, NULL, NULL);
@@ -704,6 +860,8 @@ static int tree_main(int argc, char **argv) {
         else if (!strcmp(a, "--pid") && v) pid = strtol(argv[++i], NULL, 10);
         else if (!strcmp(a, "--title") && v) title = argv[++i];
         else if (!strcmp(a, "--find") && v) find = argv[++i];
+        else if (!strcmp(a, "--click") && v) click = argv[++i];
+        else if (!strcmp(a, "--index") && v) click_index = atoi(argv[++i]);
         else if (!strcmp(a, "--twins") && v) twins = atoi(argv[++i]);
         else if (!strcmp(a, "--size") && v) {
             if (sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) win_w = win_h = -1;
@@ -715,7 +873,7 @@ static int tree_main(int argc, char **argv) {
             active_hint = !strcmp(v, "yes") ? 1 : !strcmp(v, "no") ? 0 : -1;
         } else {
             fprintf(stderr, "usage: omabox-tree --pid PID [--title TITLE | --layer] [--size WxH] [--twins N] [--offset X,Y] [--active yes|no] "
-                            "[--find TEXT] [--json] [--all]\n");
+                            "[--find TEXT | --click TEXT [--index N]] [--json] [--all]\n");
             return 2;
         }
     }
@@ -728,6 +886,14 @@ static int tree_main(int argc, char **argv) {
         return 2;
     }
     if (find && !*find) find = NULL;
+    if (click && (!*click || find || opt_json || opt_all)) {
+        fprintf(stderr, "omabox-tree: --click takes a name, and no --find, --json or --all\n");
+        return 2;
+    }
+    if (click_index < 0 || (click_index && !click)) {
+        fprintf(stderr, "omabox-tree: --index N is 1 or more, with --click\n");
+        return 2;
+    }
     g_log_set_handler("dbind", G_LOG_LEVEL_WARNING, dbind_log, NULL);
     g_log_set_handler("atspi", G_LOG_LEVEL_WARNING, dbind_log, NULL);
 
@@ -765,6 +931,13 @@ static int tree_main(int argc, char **argv) {
     if (rc) return rc;
 
     out = g_string_new(NULL);
+    seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    if (click) {
+        hits = g_ptr_array_new();
+        if (win_w > 0) clip[0] = clip[1] = 0, clip[2] = win_w, clip[3] = win_h, have_clip = 1;
+        walk(win, 0, "");
+        return pick();
+    }
     walk(win, 0, "");
     if (opt_json) g_string_append(out, out->len ? "]\n" : "[]\n");
     fputs(out->str, stdout);

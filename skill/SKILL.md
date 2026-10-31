@@ -62,7 +62,7 @@ omabox run -d --replace --wait -- ./app   # after a rebuild: replaces its earlie
 omabox shot                               # a PNG path: Read it to look
 omabox windows                            # address, workspace, on screen or covered
 omabox shot --window app                  # one window's own pixels, even covered
-omabox click --window app 40 12           # window coordinates, as in its shot
+omabox click --window app 40 12           # window coordinates, as in its shot; or --find NAME
 omabox keys --window app --wait -t hi     # focus it, type, wait until settled
 omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
 omabox wait window app                    # or --gone; wait layer NS; wait until -- CMD
