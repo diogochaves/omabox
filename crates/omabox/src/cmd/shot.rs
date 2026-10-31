@@ -259,6 +259,32 @@ impl Grab {
         let mrc = m.wait().map(|s| crate::exec::status(s).0).unwrap_or(1);
         if mrc != 0 { mrc } else { r.rc }
     }
+
+    /// A window's frame copy that Hyprland failed (finding 605): grim 1.5.0 dies of SIGSEGV then
+    /// (its failed handler reads the output's name, and a window capture has no output); a later
+    /// grim ends 1 saying "failed to copy capture source".
+    fn copy_failed(&self, rc: i32) -> bool {
+        rc == 139
+            || (rc == 1
+                && std::fs::read(shell::path(&self.err))
+                    .is_ok_and(|e| e.windows(29).any(|w| w == b"failed to copy capture source")))
+    }
+
+    /// GRAB of a window, taken again while its copy failed (finding 605: Hyprland fails a window's
+    /// copy when its buffer changes size during it, as when the window was just resized or shown),
+    /// up to 3 more times 100 ms apart; each failed try's words dropped. Its status.
+    fn win_retried(&self, grab: impl Fn() -> i32) -> i32 {
+        let mut rc = grab();
+        for _ in 0..3 {
+            if !self.copy_failed(rc) || self.stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let _ = std::fs::File::create(shell::path(&self.err));
+            std::thread::sleep(Duration::from_millis(100));
+            rc = grab();
+        }
+        rc
+    }
 }
 
 /// `exit $?` under set -e: a status that is not 0 ends the command with it.
@@ -1013,17 +1039,16 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
             // A window's first capture can be a frame from long ago (finding 81): captured twice.
             let mut rc = 0;
             if has_win {
-                let null = dev_null(true).ok();
-                rc = match null {
-                    Some(nl) => g.grab(nl),
-                    None => 1,
-                };
+                rc = g.win_retried(|| match dev_null(true) {
+                    Ok(nl) => g.grab(nl),
+                    Err(_) => 1,
+                });
                 if rc == 0 {
                     std::thread::sleep(Duration::from_millis(100));
                 }
             }
             if rc == 0 {
-                rc = put();
+                rc = if has_win { g.win_retried(&put) } else { put() };
             }
             // Under load grim now and then ends 0 with no image at all (#217, finding 318).
             if rc == 0
@@ -1105,6 +1130,10 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         unput(s);
         if let Some(m) = no_frame_words(ctx, grc) {
             return Err(ctx.die(m));
+        }
+        // A window's copy that kept failing (finding 605): what grim 1.5.0's SIGSEGV means.
+        if why.is_empty() && grc == 139 && has_win {
+            why = b"it died of SIGSEGV (status 139) on each of 4 tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy, as while the window keeps changing size".to_vec();
         }
         // A 0x0 output in an NVIDIA box (#213) fails a whole shot: said why.
         let mut zn = Vec::new();

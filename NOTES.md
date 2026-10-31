@@ -11298,6 +11298,23 @@ from them.
     cmd::plugin's unit tests (linked only through a same-path mount still bound), broker_check (a
     jailed caller refused), t_up_again (the new words). On the old code `plugin` is an unknown
     command (exit 2).
+605. **A window shot failed "grim failed: it ended with status 139" while the window changed size**
+    (2026-10-31, #387). Hyprland fails a window's frame copy (ext-image-copy-capture's `failed`)
+    when its buffer changes size during it, and grim 1.5.0's handler for that prints
+    `capture->output->name`, which a toplevel capture (`-T`) has none of: a NULL dereference, SIGSEGV,
+    nothing said (the box's core limit of 1 byte keeps no core). The backtrace, from grim under gdb in
+    a box (`ext_image_copy_capture_frame_handle_failed+28`, debuginfod-symbolized), confirms it; grim's
+    main fixed it after 1.5.0 (155adb1, "Avoid NULL deref in
+    ext_image_copy_capture_frame_handle_failed()"), where it ends 1 saying "failed to copy capture
+    source". Reproduced: a float resized every 30 ms, shot with `-w`, failed 8 of 40 times. t_window's
+    `--active` failures under the full suite were this: B had just been shown on workspace 5, alone
+    there, and redrew at its new width during the shot. Now a window's grab (the priming one and the
+    one kept) whose copy failed (139, or 1 with those words) is taken again, up to 3 more times 100 ms
+    apart, its failed tries' words dropped; past them, the 139 is said as what it means. Not done: a
+    `--zoom` window shot, whose status is magick's when grim gave it nothing. Tests:
+    t_unit_capture_errors (a stand-in grim ending 139 once, three times: taken; every time: 4 tries,
+    then said; a screen's 139: asked once), t_window_resizing (20 shots of a window resizing every
+    30 ms: none fails; on the old code 4 of 20 did).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -59,6 +59,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A window shot failed with "grim failed: it ended with status 139"** when the window changed size
+  during it (just resized, or shown at a new size): Hyprland fails such a copy, and grim 1.5.0 then
+  crashes. The window is now taken again, up to four tries, and one that keeps failing says why
+  ([#387](https://github.com/diogochaves/omabox/issues/387)).
 - **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count

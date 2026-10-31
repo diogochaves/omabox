@@ -3759,7 +3759,8 @@ case "\$1 \$2" in
 esac
 EOF
   # (grim: a PPM for -t ppm, slow once with ppm.sleep, or with ppm.late after the hold's first look;
-  # a PNG otherwise, `grabbing` once it is asked, slow with grim.sleep; another after grim.alt captures)
+  # a PNG otherwise, `grabbing` once it is asked, slow with grim.sleep; another after grim.alt captures;
+  # a window's (-T) ending 139 saying nothing, as grim 1.5.0's SIGSEGV, for the first grim.segv of them)
   cat > "$fk/bin/grim" <<EOF
 #!/bin/sh
 echo "\$*" >> $fk/grim.args
@@ -3767,6 +3768,7 @@ case " \$* " in *" -t ppm "*) i=grim.ppm; [ ! -f $fk/ppm.sleep ] || { t=\$(cat $
     [ ! -f $fk/ppm.late ] || ! grep -q '^-l 1' $fk/grim.args || { t=\$(cat $fk/ppm.late); rm -f $fk/ppm.late; touch $fk/seen; sleep "\$t"; } ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
 case " \$* " in *" -t ppm "*) ;; *" -g "*) i=grim-small.png ;; *) i=grim.png ;; esac
 [ ! -f $fk/grim.alt ] || [ \$(wc -l < $fk/grim.args) -le \$(cat $fk/grim.alt) ] || i=\$(cat $fk/grim.altimg 2>/dev/null || echo grim2.png)
+case " \$* " in *" -T "*) [ ! -f $fk/grim.segv ] || [ \$(grep -c ' -T ' $fk/grim.args) -gt \$(cat $fk/grim.segv) ] || exit 139 ;; esac
 cat $fk/\$i 2>/dev/null || { echo "stand-in grim: no frame" >&2; exit 1; }
 exit \$(cat $fk/grim.rc 2>/dev/null || echo 0)
 EOF
@@ -3836,7 +3838,7 @@ sd_fix() {
   printf 'ready 1920x1080 area=2073600\nsatisfied still t=300 frames=2\n' > "$fk/still"
   cp "$fk/active.orig" "$fk/active.json"; echo fk-pop > "$fk/kbl"
   for f in still.args grim.args input.args hyprctl.args; do : > "$fk/$f"; done
-  for f in kb.sigign cursor.sleep cursoring ppm.late ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep burst.fail ptr; do rm -f "${fk:?}/$f"; done
+  for f in kb.sigign cursor.sleep cursoring ppm.late ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep grim.segv burst.fail ptr; do rm -f "${fk:?}/$f"; done
   [ ! -f "$fk/grim.png.off" ] || mv "$fk/grim.png.off" "$fk/grim.png"
   chmod +x "$fk/bin/omabox-burst"
   printf '{"option":"input:kb_layout","str":"us","set":true}\n' > "$fk/opt-input:kb_layout.json"
@@ -4087,6 +4089,24 @@ t_unit_capture_errors() {
   cx_want=(rc=1 out= "err=omabox: shot: grim failed: it gave an empty image" 'state!~^\./x\.png')
   cx_case "shot: an empty image, taken twice (#217)" shot -b fk -o "$r/out/x.png"
   check_eq "...grim asked twice" 2 "$(grep -c '^-l 1 -$' "$fk/grim.args")"
+  # A window's copy that Hyprland failed (finding 605: its buffer changed size during it): grim 1.5.0
+  # dies of SIGSEGV, saying nothing. Taken again, up to 4 tries; past them, said what it means.
+  ce_segv() { echo "$1" > "$sd_fk/grim.segv"; }
+  ce_segv1() { ce_segv 1; }; sd_pre=(ce_segv1)
+  cx_want=(rc=0 "out=$r/out/w.png" 'err~^omabox: window 0xa2 fk-a "two" 400x300 at 420,10, workspace 1; image 1920x1080')
+  cx_case "shot -w: grim dying of SIGSEGV once: taken again" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
+  check_eq "...grim asked for it 3 times (the failed try, the priming one, the shot)" 3 "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")"
+  ce_segv3() { ce_segv 3; }; sd_pre=(ce_segv3)
+  cx_want=(rc=0 "out=$r/out/w.png" 'err~^omabox: window 0xa2 fk-a "two" 400x300 at 420,10, workspace 1; image 1920x1080')
+  cx_case "...three times: the fourth try takes it" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
+  ce_segv9() { ce_segv 9; }; sd_pre=(ce_segv9)
+  cx_want=(rc=1 out= "err=omabox: shot: grim failed: it died of SIGSEGV (status 139) on each of 4 tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy, as while the window keeps changing size" 'state!~^\./w\.png')
+  cx_case "...every time: 4 tries, then said what it means" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
+  check_eq "...grim asked 4 times" 4 "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")"
+  ce_rc139() { echo 139 > "$sd_fk/grim.rc"; }; sd_pre=(ce_rc139)
+  cx_want=(rc=1 out= "err=omabox: shot: grim failed: it ended with status 139 and said nothing")
+  cx_case "...a screen's grim ending 139: not a window's copy, asked once" shot -b fk -o "$r/out/x.png"
+  check_eq "...grim asked once" 1 "$(grep -c '^-l 1 -$' "$fk/grim.args")"
   ce_tsvdir() { mkdir -p "$r/rt/omabox/fk/shots.tsv"; }; sd_pre=(ce_tsvdir)
   cx_want=(rc=1 out= "err=omabox: cannot write $r/rt/omabox/fk/shots.tsv: Is a directory")
   cx_case "shot: its record cannot be written: said, 1, nothing on stdout" shot -b fk -o "$r/out/s.png"
@@ -15921,6 +15941,29 @@ t_unit_window_select() {
   # --in (finding 81): image pixel -> screen pixel under its centre: screen.rs img_px_as_bash.
 }
 
+# A window shot while the window changes size (#387, finding 605): Hyprland fails a window's copy
+# whose buffer changed size during it, and grim 1.5.0 then dies of SIGSEGV. A float resized every
+# 30 ms, shot 20 times: none fails (on the old code about one shot in five did).
+t_window_resizing() {
+  local B=$P-wrs i fails=0 out
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  ob run -b "$B" -d -- foot -T R sh -c 'sleep 600' >/dev/null
+  until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.title == \"R\")'"
+  local a; a=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "R") | .address')
+  ob hyprctl -b "$B" dispatch "hl.dsp.window.float({ action = 'enable', window = 'address:$a' })" >/dev/null
+  (for i in $(seq 1000); do
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.resize({ x = $((300 + (i % 2) * 500)), y = 300, window = 'address:$a' })" >/dev/null 2>&1
+    sleep 0.03
+  done) &
+  local rz=$!
+  for i in $(seq 20); do
+    out=$(ob shot -b "$B" -w 'title:^R$' -o "$TMP/wrs.png" 2>&1 >/dev/null) || { fails=$((fails + 1)); echo "       shot $i: $out"; }
+  done
+  kill "$rz" 2>/dev/null; wait "$rz" 2>/dev/null
+  check_eq "20 shots of a window resizing every 30 ms: none failed" 0 "$fails"
+  ob down "$B" >/dev/null 2>&1 || true
+}
+
 # Window-targeted shot, click and keys, and --in (finding 81), with the box's own windows: two
 # tiled terminals, a float over one, others on hidden workspaces.
 t_window() {
@@ -18394,7 +18437,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
