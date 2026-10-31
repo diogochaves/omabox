@@ -46,6 +46,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   made for, and goes only once that box is gone where it was made and nothing uses the HOME; an
   older omabox's HOME only when nothing uses it. An `up` of a name whose HOME is another box's is
   refused instead of taking it (finding 584).
+- **A `save` killed with SIGKILL (or by the OOM killer) during its copy left the box paused**, read
+  as hung until someone resumed it by hand. A watch the save starts in a session of its own now
+  resumes the box when the save dies without letting it go
+  ([#369](https://github.com/diogochaves/omabox/issues/369)).
 - **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
   `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
   Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).

@@ -10972,6 +10972,20 @@ from them.
     before. A down in the moment before a new reaper wrote its record falls back the same way. Test:
     ready.rs's kill_reapers_by_their_record (another ROOT's recorded reaper ended; a record naming
     another box's reaper, or with the wrong start, ends nothing), failed on the old code.
+574. **A save SIGKILLed during its copy left the box paused** (2026-10-31, #369). `save` stops the
+    box (SIGSTOP to its pid namespace, finding 470) and lets it go on every way out a trap sees: a
+    refusal, a failure, INT, TERM, HUP. A SIGKILL (or the OOM killer) runs none, and the box stayed
+    stopped, read as hung by every later call, until someone sent SIGCONT by hand. Now, before it
+    stops the box, the save starts a watch, `omabox _save-watch PID...` (main.rs's first lines, as
+    `_enter`; refused through the broker), in a session of its own (setsid: a kill of the save's
+    process group or session misses it), its stdin a close-on-exec pipe only the save writes. It
+    takes a pidfd of each of the box's processes, says `ready` (no ready, no save: "could not start
+    the watch"), and waits. The save resumes the box, then writes it a byte, and the watch ends; its
+    stdin closing with nothing written means the save died without letting go, and the watch sends
+    SIGCONT through the pidfds (never to a process that took one of their pids since). Test:
+    t_save_killed (a `cp` of the test's first in PATH holds the copy open; the save SIGKILLed in it:
+    the box runs again within 5 s, the watch gone; a save after it works and clears the killed one's
+    copy). It failed before the fix: the box stayed stopped.
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one

@@ -12,6 +12,7 @@ use crate::select::select_box;
 use crate::shell;
 use serde_json::{Map, Value};
 use std::ffi::OsStr;
+use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::process::Stdio;
@@ -175,13 +176,24 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "'"
         )));
     };
+    // A save SIGKILLed (or killed by the OOM killer) runs no trap: a watch of its own resumes the
+    // box then (#369, finding 574). None, no pause.
+    let Some(watch) = start_watch(&pids) else {
+        return Err(ctx.die(cat!(
+            "save: could not start the watch that resumes box '",
+            ctx.name,
+            "' should this save be killed"
+        )));
+    };
     // (bash's EXIT trap: the box let go and the copy removed however the save ends, a signal too)
-    let held = Arc::new(Mutex::new(pids));
+    let held = Arc::new(Mutex::new(Hold {
+        pids,
+        watch: Some(watch),
+    }));
     let (h2, t2) = (held.clone(), tmp.clone());
     let _undo = crate::trap::on_exit(move || {
-        if let Ok(mut p) = h2.lock() {
-            signal_all(&p, libc::SIGCONT);
-            p.clear();
+        if let Ok(mut h) = h2.lock() {
+            h.let_go();
         }
         rm_save(&t2);
     });
@@ -192,8 +204,8 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if let Err(e) = mk {
         return Err(ctx.die(cat!("save: cannot make ", tmp, ": ", e.to_string())));
     }
-    if let Ok(p) = held.lock() {
-        signal_all(&p, libc::SIGSTOP);
+    if let Ok(h) = held.lock() {
+        signal_all(&h.pids, libc::SIGSTOP);
     }
     // All of the HOME but .cache (rebuilt by the apps) and the logs at its top (the box's, run -d's).
     let h = cat!(crate::paths::homes(), "/", ctx.name, "/home");
@@ -207,9 +219,8 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             return Err(ctx.die(cat!("save: could not copy ", e)));
         }
     }
-    if let Ok(mut p) = held.lock() {
-        signal_all(&p, libc::SIGCONT);
-        p.clear();
+    if let Ok(mut h) = held.lock() {
+        h.let_go();
     }
     // The Hyprland and Quickshell builds it ran (findings 116, 358), so an `up --from` on another
     // one can say so.
@@ -282,6 +293,120 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ));
     }
     Ok(())
+}
+
+/// What a save holds while it copies: the box's processes it stops, and the watch that resumes
+/// them should the save die without letting go (#369).
+struct Hold {
+    pids: Vec<Vec<u8>>,
+    watch: Option<std::process::Child>,
+}
+
+impl Hold {
+    /// The box resumed, then its watch told so and ended. In that order: a save killed between the
+    /// two leaves the watch to resume a box already running, which changes nothing.
+    fn let_go(&mut self) {
+        signal_all(&self.pids, libc::SIGCONT);
+        self.pids.clear();
+        if let Some(mut w) = self.watch.take() {
+            if let Some(mut i) = w.stdin.take() {
+                let _ = i.write_all(WATCH_LET_GO);
+            }
+            let _ = w.wait();
+        }
+    }
+}
+
+/// What the save writes its watch once the box runs again.
+const WATCH_LET_GO: &[u8] = b"x";
+/// What the watch says once it holds the box's processes.
+const WATCH_READY: &[u8] = b"ready\n";
+
+/// `omabox _save-watch PID...` in a session of its own (a kill of the save's process group or
+/// session does not reach it), its stdin a pipe only this save writes (close-on-exec: not cp's).
+/// Started and ready (it holds a pidfd of each of PIDS) before the box is stopped; None when not.
+fn start_watch(pids: &[Vec<u8>]) -> Option<std::process::Child> {
+    let mut c = crate::sig::command(crate::root().join("bin/omabox"));
+    c.arg("_save-watch")
+        .args(pids.iter().map(|p| OsStr::from_bytes(p)))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // SAFETY: setsid is async-signal-safe; run between fork and exec.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(&mut c, || {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut w = c.spawn().ok()?;
+    let mut said = [0u8; WATCH_READY.len()];
+    let ready = w
+        .stdout
+        .take()
+        .is_some_and(|mut o| o.read_exact(&mut said).is_ok() && said == WATCH_READY);
+    if !ready {
+        let _ = w.kill();
+        let _ = w.wait();
+        return None;
+    }
+    Some(w)
+}
+
+/// `omabox _save-watch PID...` (#369, finding 574): says it is ready once it holds a pidfd of each
+/// of PIDS (the box's processes a save is about to stop), then waits on its stdin. The save writes
+/// it a byte once it resumed the box; its stdin closing with nothing written means the save died
+/// without that (SIGKILL, the OOM killer), and the watch resumes them. Through the pidfds: never a
+/// process that took one of their pids since.
+pub fn watch_main(args: &[std::ffi::OsString]) -> std::process::ExitCode {
+    enum Held {
+        Fd(std::os::fd::OwnedFd),
+        // (no pidfd for a reason other than its end: too many fds, say)
+        Pid(i32),
+    }
+    let held: Vec<Held> = args
+        .iter()
+        .filter_map(|a| shell::dec(a.as_bytes()).and_then(|n| i32::try_from(n).ok()))
+        .filter(|&p| p > 0)
+        .filter_map(|p| match crate::sig::pidfd_open(p) {
+            Some(fd) => Some(Held::Fd(fd)),
+            None if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) => None,
+            None => Some(Held::Pid(p)),
+        })
+        .collect();
+    let mut o = std::io::stdout();
+    if o.write_all(WATCH_READY).and_then(|()| o.flush()).is_err() {
+        return std::process::ExitCode::from(1);
+    }
+    let mut b = [0u8; 1];
+    let mut stdin = std::io::stdin();
+    let got = loop {
+        match stdin.read(&mut b) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            r => break r.unwrap_or(0),
+        }
+    };
+    if got == 0 {
+        for h in &held {
+            match h {
+                // SAFETY: a signal through a pidfd this process holds.
+                Held::Fd(fd) => unsafe {
+                    libc::syscall(
+                        libc::SYS_pidfd_send_signal,
+                        std::os::fd::AsRawFd::as_raw_fd(fd),
+                        libc::SIGCONT,
+                        std::ptr::null::<libc::siginfo_t>(),
+                        0,
+                    );
+                },
+                // SAFETY: kill with a positive pid and a signal number.
+                Held::Pid(p) => unsafe {
+                    libc::kill(*p, libc::SIGCONT);
+                },
+            }
+        }
+    }
+    std::process::ExitCode::SUCCESS
 }
 
 /// `kill -0 PID`: a process of that pid, whatever its state.

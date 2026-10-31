@@ -204,7 +204,7 @@ fn set_fg_child(v: Option<(std::os::fd::OwnedFd, i32)>) {
 }
 
 /// A pidfd of PID (pidfd_open), or None (a kernel without it, or PID gone).
-fn pidfd_open(pid: i32) -> Option<std::os::fd::OwnedFd> {
+pub fn pidfd_open(pid: i32) -> Option<std::os::fd::OwnedFd> {
     use std::os::fd::FromRawFd;
     // SAFETY: pidfd_open takes a pid and flags; its result is a new fd of ours, or -1.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };

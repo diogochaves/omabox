@@ -4103,7 +4103,7 @@ t_unit_broker_side() {
   cx_want=(rc=1 out= 'err=omabox: omabox saves is not for an agent inside ai-jail'); cx_case "broker: saves rm refused" saves rm s
   # (every internal word refused through the broker, the suite's probe too: read-only, but internal
   # all the same, never a jailed agent's)
-  for c in _reap _rust _rust-jq _rust-opts _rust-jail _ptr-release _enter; do
+  for c in _reap _rust _rust-jq _rust-opts _rust-jail _ptr-release _enter _save-watch; do
     cx_want=(rc=1 out= "err=omabox: omabox $c is not for an agent inside ai-jail"); cx_case "broker: $c refused" "$c" x
   done
   cx_want=(rc=1 out= 'err=omabox: omabox _rust is not for an agent inside ai-jail'); cx_case "broker: _rust probe refused" _rust probe host_session
@@ -7855,6 +7855,48 @@ t_saves() {
     "$(cd "$(tmp_repo sv)" && env -u OMABOX XDG_DATA_HOME="$TMP/data" "$CLI" run --from "$S" --no-shell -- cat /home/sbx/.local/share/app/data 2>/dev/null)"
   check "saves rm" sv saves rm "$S"
   check_fails "...it is gone" test -e "$d"
+}
+
+# #369 (finding 574): a save SIGKILLed during its copy runs no trap. The box it stopped runs again all
+# the same: the save's watch, in a session of its own, resumes it. The copy held open by a cp of the
+# test's (first in PATH), so the kill lands in it.
+svk_stopped() { # NS: how many of the processes in that pid namespace are stopped
+  local p n=0
+  for p in /proc/[0-9]*; do
+    [ "$(readlink "$p/ns/pid" 2>/dev/null)" = "$1" ] && [ "$(awk '/^State:/ {print $2}' "$p/status" 2>/dev/null)" = T ] && n=$((n + 1))
+  done
+  echo "$n"
+}
+svk_none_stopped() { [ "$(svk_stopped "$1")" = 0 ]; }
+svk_no_watch() { [ -z "$(svk_watches "$1")" ]; }
+svk_watches() { # PID: the save watches whose words name PID
+  local p c
+  for p in /proc/[0-9]*; do
+    c=$(tr '\0' ' ' 2>/dev/null < "$p/cmdline") || continue
+    case "$c" in *"omabox _save-watch"*" $1 "*) echo "${p#/proc/}" ;; esac
+  done
+}
+t_save_killed() {
+  local B=$P-svk S=$P-svk fk=$TMP/svk-bin ns pid1 r
+  check "up" ob up "$B" --no-shell || return
+  ns=$(jq -r .pidns "$(ob path "$B")/box.json") pid1=$(cat "$(ob path "$B")/pid")
+  mkdir -p "$fk"
+  printf '#!/bin/sh\necho $$ > "%s/cp.pid"\nexec sleep 120\n' "$fk" > "$fk/cp"; chmod +x "$fk/cp"
+  (PATH=$fk:$PATH exec env XDG_DATA_HOME="$TMP/data" "$CLI" save "$S" -b "$B") >/dev/null 2>&1 & r=$!
+  check "a save's copy begins" until_ok 20 test -s "$fk/cp.pid"
+  check_eq "...the box stopped for it, its watch up" "yes 1" \
+    "$([ "$(svk_stopped "$ns")" -gt 0 ] && echo yes) $(svk_watches "$pid1" | wc -l)"
+  kill -KILL "$r"; wait "$r" 2>/dev/null   # reaped here: no "Killed" job line from bash later
+  check "...SIGKILLed: the box runs again (#369)" until_ok 5 svk_none_stopped "$ns"
+  check_eq "...its watch gone" "" "$(until_ok 5 svk_no_watch "$pid1" >/dev/null; svk_watches "$pid1")"
+  kill "$(cat "$fk/cp.pid")" 2>/dev/null
+  check "...the box answers" ob run -b "$B" -- true
+  check "a save after it" sv save "$S" -b "$B"
+  check_eq "...nothing in the box left stopped" 0 "$(svk_stopped "$ns")"
+  check_eq "...no watch left" "" "$(svk_watches "$pid1")"
+  check_fails "...the killed one's copy cleared" compgen -G "$TMP/data/omabox/saves/.new-$S-*"
+  check "down" ob down "$B"
+  check "...saves rm" sv saves rm "$S"
 }
 
 # finding 87: an app installed per user into a running box (a .desktop with DBusActivatable=true and
@@ -17750,7 +17792,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_mount_replaced t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_mount_replaced t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

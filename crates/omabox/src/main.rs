@@ -88,6 +88,16 @@ fn main() -> ExitCode {
         let rest: Vec<OsString> = std::env::args_os().skip(2).collect();
         return enter::main(&rest);
     }
+    // A save's watch (#369): resumes the box a save paused if that save dies before it lets go. As
+    // `_enter`, never for a broker's caller (the front refuses it there).
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == "_save-watch")
+        && std::env::var_os("OMABOX_BROKER_PEER").is_none_or(|p| p.is_empty())
+    {
+        let rest: Vec<OsString> = std::env::args_os().skip(2).collect();
+        return cmd::save::watch_main(&rest);
+    }
     // Bash ignores SIGQUIT for itself (a Ctrl-\ does not end the script), and what it runs in the
     // foreground gets the default back: a handler that does nothing is that (reset at exec). One
     // that came ignored stays ignored, for it and its children (sig::catch leaves it).

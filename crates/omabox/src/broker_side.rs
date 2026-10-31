@@ -716,6 +716,7 @@ mod tests {
             "_rust-jq",
             "_rust-opts",
             "_ptr-release",
+            "_save-watch",
             "clip",
             "host",
             "peek",
