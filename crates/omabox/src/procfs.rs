@@ -143,8 +143,10 @@ pub fn pid_max() -> i64 {
 
 /// The processes that entered the box whose PID 1 is PID from outside (finding 490): in its user
 /// namespace, not in its pid namespace. An on_box tool, the process outside that waits for a command
-/// in the box (enter.rs), and an nsenter of bash's once it is in; never this one.
-pub fn entered(pid: &[u8]) -> Vec<Vec<u8>> {
+/// in the box (enter.rs), and an nsenter of bash's once it is in; never this one. Each pinned by a
+/// pidfd once found (#377): a signal sent later reaches it or nothing, never a process that took
+/// its pid since.
+pub fn entered(pid: &[u8]) -> Vec<crate::pidfd::Pidfd> {
     let ns = |p: &[u8], n: &str| std::fs::read_link(proc(p, n)).ok();
     let (Some(user), Some(pidns)) = (ns(pid, "ns/user"), ns(pid, "ns/pid")) else {
         return Vec::new();
@@ -153,12 +155,15 @@ pub fn entered(pid: &[u8]) -> Vec<Vec<u8>> {
     let Ok(rd) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
+    let inside = |p: &[u8]| {
+        ns(p, "ns/user").as_ref() == Some(&user) && ns(p, "ns/pid").is_some_and(|n| n != pidns)
+    };
     rd.flatten()
         .map(|e| e.file_name().into_encoded_bytes())
-        .filter(|p| shell::is_num(p) && *p != me)
-        .filter(|p| {
-            ns(p, "ns/user").as_ref() == Some(&user) && ns(p, "ns/pid").is_some_and(|n| n != pidns)
-        })
+        .filter(|p| shell::is_num(p) && *p != me && inside(p))
+        // (looked at again once pinned: the process the first look saw may have gone since, and
+        // its pid been reused)
+        .filter_map(|p| crate::pidfd::Pidfd::pin(&p, || inside(&p)))
         .collect()
 }
 

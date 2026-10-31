@@ -34,6 +34,7 @@ mod mon;
 mod net;
 mod num;
 mod paths;
+mod pidfd;
 mod plugins;
 mod probe;
 mod procfs;

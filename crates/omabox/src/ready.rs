@@ -10,6 +10,7 @@ use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box, pipe, read_all}
 use crate::exit::{Ctx, Exit, Res, muted, say};
 use crate::jq::{self, Args};
 use crate::mon::w;
+use crate::pidfd::Pidfd;
 use crate::settle::{after, mono_ms, past};
 use crate::shell::{self, strip_nl};
 use crate::shellnote::{shell_crash_dirs, shell_crashes, shell_pid, shell_running_with};
@@ -188,7 +189,8 @@ fn signal_ok(pid: &[u8], sig: libc::c_int) -> bool {
 
 /// kill_box: SIGKILL the box's PID 1 (the kernel then kills everything in its pid namespace;
 /// SIGTERM is ignored, finding 6) and pasta's; wait for them, at most 10 s. The dir stays. Whether
-/// PID 1 is gone (bash's status).
+/// PID 1 is gone (bash's status). Each process is signalled through a pidfd opened as it was found
+/// to be the box's (#377): one that went in between, its pid reused, gets nothing.
 pub fn kill_box(ctx: &Ctx) -> bool {
     kill_box_with(&RealBox, ctx)
 }
@@ -198,25 +200,37 @@ pub fn kill_box_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> bool {
         BoxPid::Pid(p) => p,
         BoxPid::None | BoxPid::Unknown => Vec::new(),
     };
-    if !pid.is_empty() {
+    // (still the box's PID 1 once pinned: box_pid again)
+    let one = Pidfd::pin(
+        &pid,
+        || matches!(sys.box_pid(&ctx.d), BoxPid::Pid(p) if p == pid),
+    );
+    if let Some(one) = &one {
         // A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does:
         // each process that entered the box from outside (enter.rs's, bash's nsenter) is continued.
         // (found while PID 1 is there to compare namespaces with)
         let entered = crate::procfs::entered(&pid);
-        signal_ok(&pid, libc::SIGKILL);
-        for p in entered {
-            signal_ok(&p, libc::SIGCONT);
-        }
+        one.signal(libc::SIGKILL);
+        continue_entered(&entered);
     }
     // A box whose pid was never found: pasta's own pid namespace holds it, end that instead.
-    if let Some(pasta) = sys.box_pasta(&ctx.d) {
-        signal_ok(&pasta, libc::SIGKILL);
-        if let Some(c) = crate::procfs::children(&pasta).first() {
-            signal_ok(c, libc::SIGKILL);
+    let pasta = sys
+        .box_pasta(&ctx.d)
+        .and_then(|p| Pidfd::pin(&p, || sys.box_pasta(&ctx.d).as_ref() == Some(&p)));
+    if let Some(pasta) = pasta {
+        // (its child pinned while pasta is there to be its parent)
+        let child = crate::procfs::children(pasta.pid()).first().and_then(|c| {
+            Pidfd::pin(c, || {
+                crate::procfs::proc_ppid(c).as_deref() == Some(pasta.pid())
+            })
+        });
+        pasta.signal(libc::SIGKILL);
+        if let Some(c) = child {
+            c.signal(libc::SIGKILL);
         }
     }
     let end = Instant::now() + Duration::from_secs(10);
-    while !pid.is_empty() && signal_ok(&pid, 0) {
+    while one.as_ref().is_some_and(Pidfd::alive) {
         if Instant::now() >= end {
             let wchan = std::fs::read(shell::path(&cat!("/proc/", pid, "/wchan")))
                 .map(|v| strip_nl(&v))
@@ -237,18 +251,91 @@ pub fn kill_box_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> bool {
     true
 }
 
+/// SIGCONT to each process entered() found, through its pidfd.
+fn continue_entered(entered: &[Pidfd]) {
+    for p in entered {
+        p.signal(libc::SIGCONT);
+    }
+}
+
 /// kill_reapers: the selected box's reaper (`$ROOT/bin/omabox _reap NAME ...`, the binary's since the
 /// switch; bash's `bash $ROOT/bin/omabox _reap NAME ...` before it, or the port's
 /// `$ROOT/build/omabox _reap NAME ...` that bash's hand-off exec'd), unless that is us: nothing
 /// may be left running for a box that is gone (#115, finding 178). pgrep -f's match of its command
-/// line (its words joined by spaces), looked for in /proc here.
+/// line (its words joined by spaces), looked for in /proc here. First the reaper the box dir records
+/// (record_reaper, #383), whichever omabox started it (a package's, a checkout's, another
+/// worktree's), while it is the process that wrote the record (its start time) and still a reaper of
+/// NAME. Each through a pidfd opened as it was checked.
 pub fn kill_reapers(ctx: &Ctx) {
     let me = std::process::id().to_string().into_bytes();
-    for p in reaper_pids(&crate::paths::root(), &ctx.name) {
-        if p != me {
-            signal_ok(&p, libc::SIGTERM);
+    let root = crate::paths::root();
+    let cmdline = |p: &[u8]| std::fs::read(shell::path(&cat!("/proc/", p, "/cmdline"))).ok();
+    let mut pins: Vec<Pidfd> = Vec::new();
+    if let Some((p, start)) = recorded_reaper(&ctx.d)
+        && p != me
+    {
+        pins.extend(Pidfd::pin(&p, || {
+            crate::procfs::proc_start(&p).is_some_and(|s| s == start)
+                && cmdline(&p).is_some_and(|cl| reaper_of(&cl, &ctx.name))
+        }));
+    }
+    for p in reaper_pids(&root, &ctx.name) {
+        if p != me && !pins.iter().any(|x| x.pid() == p) {
+            pins.extend(Pidfd::pin(&p, || {
+                cmdline(&p).is_some_and(|cl| reaper_line(&cl, &root, &ctx.name))
+            }));
         }
     }
+    for p in pins {
+        p.signal(libc::SIGTERM);
+    }
+}
+
+/// The box dir's record of its reaper: `reaper.pid`, its pid and start time (/proc's ticks).
+const REAPER_PID: &str = "reaper.pid";
+
+/// record_reaper: the reaper running this writes its pid and start time into its box dir (written
+/// whole, then renamed into place), for kill_reapers (#383). Whether it did.
+pub fn record_reaper(ctx: &Ctx) -> bool {
+    let me = std::process::id().to_string().into_bytes();
+    let Some(start) = crate::procfs::proc_start(&me).filter(|s| shell::is_num(s)) else {
+        return false;
+    };
+    let tmp = ctx.at(&format!("{REAPER_PID}.{}", std::process::id()));
+    let ok = std::fs::write(&tmp, cat!(me, " ", start, "\n")).is_ok()
+        && std::fs::rename(&tmp, ctx.at(REAPER_PID)).is_ok();
+    if !ok {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    ok
+}
+
+/// The pid and start time record_reaper wrote in box dir D, if it holds two numbers.
+fn recorded_reaper(d: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let t = std::fs::read(shell::path(&cat!(d, "/", REAPER_PID))).ok()?;
+    match <[Vec<u8>; 2]>::try_from(shell::words(&t)) {
+        Ok([p, s]) if shell::is_num(&p) && shell::is_num(&s) => Some((p, s)),
+        _ => None,
+    }
+}
+
+/// Whether CMDLINE (NUL-ended words) is a reaper of box NAME, whichever omabox it runs: `((/usr/bin/)?bash
+/// )?/.../omabox _reap NAME CREATED...` (reaper_line's forms, with any ROOT).
+fn reaper_of(cmdline: &[u8], name: &[u8]) -> bool {
+    let words: Vec<&[u8]> = cmdline
+        .strip_suffix(b"\0")
+        .unwrap_or(cmdline)
+        .split(|&c| c == 0)
+        .collect();
+    let w = match words.first() {
+        Some(&b"bash" | &b"/usr/bin/bash") => &words[1..],
+        _ => &words[..],
+    };
+    w.len() >= 4
+        && w[0].starts_with(b"/")
+        && w[0].ends_with(b"/omabox")
+        && w[1] == b"_reap"
+        && w[2] == name
 }
 
 /// The pids of box NAME's reapers (reaper_line), lowest first.
@@ -1691,6 +1778,163 @@ mod tests {
         assert!(!alive(pasta), "...pasta gone");
     }
 
+    /// A process's state letter (R, S, T, Z...), "" when it is gone.
+    fn state(pid: u32) -> String {
+        crate::procfs::proc_stat(pid.to_string().as_bytes(), 0)
+            .map(|s| String::from_utf8_lossy(&s).into_owned())
+            .unwrap_or_default()
+    }
+
+    fn until(what: &str, f: impl Fn() -> bool) {
+        let end = Instant::now() + Duration::from_secs(5);
+        while !f() {
+            assert!(Instant::now() < end, "waited 5 s for {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// t_unit_kill_box (#377): the SIGCONT kill_box sends the processes that entered the box goes
+    /// to them, never to a process that took one's pid after the list was read (a stopped job of
+    /// the user's stays stopped). The test runs itself again in a pid namespace of its own
+    /// (`unshare -Urpf`), where it sets ns_last_pid to make the pid be reused.
+    /// (#[ignore]: it starts and kills processes; test/run.sh's unit tier runs it.)
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn kill_box_continues_no_reused_pid() {
+        use std::process::{Command, Stdio};
+        const NAME: &str = "ready::tests::kill_box_continues_no_reused_pid";
+        if std::env::var_os("OMABOX_TEST_OWN_PIDNS").is_none() {
+            let o = Command::new("unshare")
+                .args(["-Urpf", "--mount-proc"])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--ignored", "--exact", NAME, "--nocapture"])
+                .args(["--test-threads", "1"])
+                .env("OMABOX_TEST_OWN_PIDNS", "1")
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let out = cat!(o.stdout, o.stderr);
+            let out = String::from_utf8_lossy(&out);
+            assert!(
+                o.status.success() && out.contains("1 passed"),
+                "in a pid namespace of its own: {out}"
+            );
+            return;
+        }
+        let sleep = || {
+            Command::new("sleep")
+                .arg("300")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        // The box: a PID 1 in a pid namespace of its own, in this user namespace.
+        let mut unshare = Command::new("unshare")
+            .args(["-pf", "sleep", "300"])
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let kids = || crate::procfs::children(unshare.id().to_string().as_bytes());
+        until("the box's PID 1", || !kids().is_empty());
+        let one = kids().remove(0);
+        // A process that entered it (a pid namespace other than the box's).
+        let mut e = sleep();
+        let ep = e.id();
+        let entered = crate::procfs::entered(&one);
+        assert!(
+            entered.iter().any(|p| p.pid() == ep.to_string().as_bytes()),
+            "entered() finds the process that entered the box"
+        );
+        // It ends, and a stopped job of the user's takes its pid.
+        e.kill().unwrap();
+        e.wait().unwrap();
+        std::fs::write("/proc/sys/kernel/ns_last_pid", (ep - 1).to_string()).unwrap();
+        let mut job = sleep();
+        assert_eq!(job.id(), ep, "the job took the entered process's pid");
+        // SAFETY: a signal to our own child.
+        unsafe { libc::kill(job.id() as i32, libc::SIGSTOP) };
+        until("the job stopped", || state(job.id()) == "T");
+        continue_entered(&entered);
+        std::thread::sleep(Duration::from_millis(200));
+        let st = state(job.id());
+        let _ = job.kill();
+        let _ = job.wait();
+        let _ = unshare.kill();
+        let _ = unshare.wait();
+        assert_eq!(st, "T", "the job that took the pid stays stopped");
+    }
+
+    /// t_unit_kill_reapers (#383): down ends the reaper its box dir records (pid and start time),
+    /// one started from another ROOT included (a package's vs a checkout's), and never a process
+    /// the record names that is not this box's reaper or not started then.
+    /// (#[ignore]: it starts and kills processes; test/run.sh's unit tier runs it.)
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn kill_reapers_by_their_record() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+        let ctx = uctx("kr");
+        let _ = std::fs::remove_dir_all(shell::path(&ctx.boxes));
+        let other = cat!(ctx.boxes, "/other/bin");
+        std::fs::create_dir_all(shell::path(&other)).unwrap();
+        std::fs::create_dir_all(shell::path(&ctx.d)).unwrap();
+        // A reaper of another ROOT's omabox: its words `/usr/bin/bash OTHER/bin/omabox _reap NAME
+        // CREATED`, as bash's reapers' were (it reads a pipe it is never sent anything on).
+        let script = cat!(other, "/omabox");
+        std::fs::write(shell::path(&script), "#!/usr/bin/bash\nread -r _\n").unwrap();
+        std::fs::set_permissions(shell::path(&script), PermissionsExt::from_mode(0o755)).unwrap();
+        let name = String::from_utf8(ctx.name.clone()).unwrap();
+        let reaper = |n: &str| {
+            Command::new(shell::path(&script))
+                .args(["_reap", n, "2026-10-31T00:00:00"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let mut mine = reaper(&name);
+        let mut theirs = reaper(&format!("{name}0"));
+        let start = |p: u32| {
+            until("its start time", || {
+                crate::procfs::read(p.to_string().as_bytes(), "cmdline")
+                    .is_some_and(|c| crate::exit::contains(&c, b"_reap"))
+            });
+            String::from_utf8(crate::procfs::proc_start(p.to_string().as_bytes()).unwrap()).unwrap()
+        };
+        let record = |p: u32, s: &str| {
+            std::fs::write(ctx.at("reaper.pid"), format!("{p} {s}\n")).unwrap();
+        };
+        let gone = |c: &mut std::process::Child| {
+            let end = Instant::now() + Duration::from_secs(3);
+            loop {
+                if matches!(c.try_wait(), Ok(Some(_))) {
+                    return true;
+                }
+                if Instant::now() >= end {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let (ms, ts) = (start(mine.id()), start(theirs.id()));
+        record(theirs.id(), &ts);
+        kill_reapers(&ctx);
+        assert!(!gone(&mut theirs), "a recorded reaper of another box: left");
+        record(mine.id(), "1");
+        kill_reapers(&ctx);
+        assert!(!gone(&mut mine), "a recorded pid not started then: left");
+        record(mine.id(), &ms);
+        kill_reapers(&ctx);
+        let ended = gone(&mut mine);
+        let _ = mine.kill();
+        let _ = theirs.kill();
+        let _ = mine.wait();
+        let _ = theirs.wait();
+        let _ = std::fs::remove_dir_all(shell::path(&ctx.boxes));
+        assert!(ended, "the box's recorded reaper, another ROOT's: ended");
+    }
+
     /// t_unit_rm_tree (#264): rm_box takes the box dir and its HOME, read-only dirs and all;
     /// sweep_homes a gone box's HOME too, never through a link; a removal that still fails is
     /// said, with rm's first complaint.
@@ -2220,6 +2464,46 @@ mod tests {
             r,
             n
         ));
+    }
+
+    /// #383: a recorded reaper is checked by its words with any ROOT; the record is two numbers.
+    #[test]
+    fn reapers_by_their_record_words() {
+        let n: &[u8] = b"b1";
+        for pre in [&b""[..], b"bash\0", b"/usr/bin/bash\0"] {
+            for exe in ["/r/bin/omabox", "/usr/bin/omabox", "/x/build/omabox"] {
+                let cl = cat!(pre, exe, "\0_reap\0b1\x00123\x00");
+                assert!(reaper_of(&cl, n), "{cl:?}");
+                assert!(!reaper_of(&cat!(pre, exe, "\0_reap\0b10\x00123\x00"), n));
+                assert!(
+                    !reaper_of(&cat!(pre, exe, "\0_reap\0b1\0"), n),
+                    "no CREATED"
+                );
+                assert!(!reaper_of(&cat!(pre, exe, "\0up\0b1\x00123\x00"), n));
+            }
+        }
+        assert!(
+            !reaper_of(b"omabox\0_reap\0b1\x00123\x00", n),
+            "a path only"
+        );
+        assert!(!reaper_of(b"/r/bin/omaboxx\0_reap\0b1\x00123\x00", n));
+        assert!(!reaper_of(b"sh\0/r/bin/omabox\0_reap\0b1\x00123\x00", n));
+        assert!(!reaper_of(b"", n));
+        let ctx = uctx("rr");
+        std::fs::create_dir_all(shell::path(&ctx.d)).unwrap();
+        assert!(record_reaper(&ctx), "record_reaper writes the record");
+        let me = std::process::id().to_string().into_bytes();
+        let start = crate::procfs::proc_start(&me).unwrap();
+        assert_eq!(
+            recorded_reaper(&ctx.d),
+            Some((me, start)),
+            "...its pid, its start"
+        );
+        for bad in ["", "1", "1 2 3", "x 2", "1 -2"] {
+            std::fs::write(ctx.at(REAPER_PID), bad).unwrap();
+            assert_eq!(recorded_reaper(&ctx.d), None, "{bad:?}: no record");
+        }
+        let _ = std::fs::remove_dir_all(shell::path(&ctx.boxes));
     }
 
     #[test]

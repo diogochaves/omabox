@@ -10943,6 +10943,27 @@ from them.
     Tests: t_unit_up_software (ready.rs died_starting_says_a_software_render_node: the reason, the
     node, the VM line, the logs, and as before without them; render_why_cases), t_up_software (a real
     box with no EGL: said, with its node).
+572. **down continued the processes that entered a box by pid number** (2026-10-31, #377). kill_box
+    lists them (procfs `entered`: the box's user namespace, not its pid namespace), SIGKILLs PID 1,
+    then SIGCONTs each so a stopped launcher can reap its command. A pid that ended between the
+    list and the SIGCONT, and was taken by a stopped job of the user's, was continued; PID 1's
+    SIGKILL, pasta's and its child's had the same gap after their checks (box_pid, box_pasta).
+    Each is now pinned by a pidfd (`pidfd.rs`'s `Pidfd::pin`: open, check again through /proc,
+    then the pidfd still alive, so what the check read was that process) and signalled through
+    it; the wait for PID 1's end is the pidfd's too. Test: ready.rs's kill_box_continues_no_reused_pid
+    (re-run in a pid namespace of its own, `unshare -Urpf`, where ns_last_pid makes the pid be
+    reused: the stopped job stays stopped), failed on the old code; t_unit_rust_ignored runs it.
+573. **A down by another omabox left the box's reaper running** (2026-10-31, #383). kill_reapers
+    found a box's reaper by its command line only, `ROOT/bin/omabox _reap NAME ...` with the ROOT of
+    the omabox running `down`, so a down from a package of a box a checkout started (or from
+    another worktree) left the reaper until its next poll saw the box gone. The reaper now writes
+    its pid and start time to `<box dir>/reaper.pid` (written whole, renamed into place) once it
+    knows it stays; kill_reapers ends that one first, while its start time is the recorded one and
+    its words are a reaper of NAME with any ROOT (`reaper_of`), then the command-line matches as
+    before, each through a pidfd. A reaper of an older omabox has no record: the pattern only, as
+    before. A down in the moment before a new reaper wrote its record falls back the same way. Test:
+    ready.rs's kill_reapers_by_their_record (another ROOT's recorded reaper ended; a record naming
+    another box's reaper, or with the wrong start, ends nothing), failed on the old code.
 584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
     live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
     took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one

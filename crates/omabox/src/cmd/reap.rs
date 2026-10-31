@@ -7,7 +7,8 @@
 //! process does. An interactive box closed by its user is cleared; one that died any other way stays,
 //! logs and all, until `down` (finding 71). Exits when the box goes, or when a new box took the name.
 //! Its command line is `ROOT/bin/omabox _reap NAME CREATED` (up's self-spawn; bash's hand-off made
-//! it `ROOT/build/omabox _reap ...` before the switch), which kill_reapers knows.
+//! it `ROOT/build/omabox _reap ...` before the switch), which kill_reapers knows; it also writes its
+//! pid and start time in the box dir (`reaper.pid`), so a down by another omabox ends it (#383).
 
 use crate::boxes::{BoxPid, agent_alive, box_alive, box_pid, meta, touch};
 use crate::cat;
@@ -88,6 +89,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if r.idle <= 0 && r.owner.is_empty() && r.agent.is_empty() && !r.interactive {
         return Ok(());
     }
+    // (its pid and start time in the box dir: a down by another omabox ends it too, #383)
+    crate::ready::record_reaper(ctx);
     let every = poll_every(r.idle, !r.agent.is_empty(), r.interactive);
     // Its host session, found once (keys_ensure asks it every poll).
     if r.interactive {

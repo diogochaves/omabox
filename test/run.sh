@@ -7370,6 +7370,7 @@ t_log_rolling() {
 # The reaper (finding 74): it decides on the box it watches, then waits for the lock in `down`; a box
 # started under the name meanwhile is not the one it decided on. And the "closed by its user" file is
 # for interactive boxes: a headless one that writes it and dies stays dead, logs kept (finding 71).
+# The reaper records its pid and start time in the box dir, and down ends it by that (#383).
 t_reap_race() {
   local B=$P-rr lock
   up_ok "$B" --idle 10s --no-shell || { no "up" "$UP_OUT"; return; }
@@ -7382,6 +7383,17 @@ t_reap_race() {
   until_ok 10 reaper_gone "$B"   # it had decided: it goes once it had the lock
   check_eq "...and leaves the new box alone" up "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   ob down "$B" >/dev/null 2>&1
+  # (#383: the reaper records its pid and start time in the box dir, which down ends it by)
+  B=$P-rp
+  up_ok "$B" --idle 60s --no-shell || { no "up" "$UP_OUT"; return; }
+  local rec=$XDG_RUNTIME_DIR/omabox/$B/reaper.pid rp rs
+  until_ok 10 test -s "$rec" >/dev/null
+  read -r rp rs < "$rec" 2>/dev/null || rp=
+  check_match "the reaper records its pid, its start time" "_reap $B .* ${rs:-none}$" \
+    "$(tr '\0' ' ' < "/proc/${rp:-0}/cmdline" 2>/dev/null) $(awk '{ print $22 }' "/proc/${rp:-0}/stat" 2>/dev/null)"
+  ob down "$B" >/dev/null 2>&1
+  until_ok 5 bash -c "! kill -0 ${rp:-0} 2>/dev/null"
+  check_fails "...down ends it" kill -0 "${rp:-0}"
   B=$P-rc
   up_ok "$B" --idle 20s --no-shell || { no "up" "$UP_OUT"; return; }
   ob run -b "$B" -- sh -c 'echo 1 > "$XDG_RUNTIME_DIR/omabox.closed"; hyprctl dispatch "hl.dsp.exit()"' >/dev/null 2>&1
