@@ -4683,14 +4683,19 @@ print(a.getsockname()[1], b.getsockname()[1])')
   out=$(cd "$repo" && env -u OMABOX "$CLI" run --overlay "$ov" --net isolated --allow "$port" --size 800x600 --plugin "$ROOT/plugin" -- sh -c '
     echo box > "$1/f" && cat "$1/f"
     { rm -f "$1/sub/g"; mkdir "$1/new"; echo n > "$1/new/n"; chmod 700 "$1/sub"; ln -s /etc "$1/l"; mv "$1/f" "$1/f2"; } 2>/dev/null
+    seen=$({ test -e "$1/f" || echo no-f; cat "$1/f2"; test -e "$1/sub/g" || echo no-g; cat "$1/new/n"; stat -c %a "$1/sub"; readlink "$1/l"; } 2>&1 | paste -sd " ")
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$2/" || true
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$3/" || true
     hyprctl -j monitors | jq -r ".[0] | \"\(.width)x\(.height)\""
     test -f ~/.config/omarchy/plugins/chaves.omabox/manifest.json && echo plugin
     echo "run:${OMABOX_OWN_SESSION:-none}"
-    tr "\0" "\n" < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox-shell.pid")/environ" | grep -x OMABOX_OWN_SESSION=1 || echo "shell:none"' sh "$ov" "$port" "$other" 2>/dev/null)
+    tr "\0" "\n" < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox-shell.pid")/environ" | grep -x OMABOX_OWN_SESSION=1 || echo "shell:none"
+    echo "seen: $seen"' sh "$ov" "$port" "$other" 2>/dev/null)
   kill "$s1" "$s2" 2>/dev/null || true
   check_eq "run --overlay: the box writes over the folder" box "$(sed -n 1p <<<"$out")"
+  # (#370: each write took effect in the box, so S4 below tests them all: one the overlay refused
+  # would leave the host folder as it was too)
+  check_eq "...and sees each write: f renamed to f2, sub/g removed, new/n made, sub 700, l a link" "seen: no-f box no-g n 700 /etc" "$(sed -n 8p <<<"$out")"
   check_eq "...the folder itself unchanged" host "$(cat "$ov/f")"
   check_eq "S4: a removal, a new folder and file, a mode, a link and a rename over it: the host folder as it was (#355)" "$ov0" "$(ovsnap)"
   check_eq "run --net isolated --allow PORT: that port reached" 200 "$(sed -n 2p <<<"$out")"
