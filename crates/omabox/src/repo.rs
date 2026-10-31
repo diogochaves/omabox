@@ -850,7 +850,9 @@ pub fn host_path_text(
             "''s folder on the host, which the box does not see"
         ));
     }
-    if in_box(p) {
+    // (the box has a /proc of its own, which the host cannot read as the box does: /proc/self is the
+    // reader's, a pid is another process's; /proc/self/fd/0 is the command's stdin there too)
+    if p == b"/proc" || p.starts_with(b"/proc/") || in_box(p) {
         return None;
     }
     // (the deepest folder it is in that the box has elsewhere: a plugin's, a DIR:DEST bind)
@@ -1238,6 +1240,9 @@ mod tests {
                 "note: /nonexistent-301/f is not in box 'B' (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME): run --ro-bind /nonexistent-301 mounts it"
             )
         );
+        // (/proc is the box's own: /proc/self/fd/0, a command reading its stdin, is not noted)
+        assert_eq!(t("run", "/proc/self/fd/0", false, true), None);
+        assert_eq!(t("run", "/proc", false, true), None);
         let dev = t("run", "/dev/dri/card0", false, true).unwrap_or_default();
         assert!(
             dev.ends_with(

@@ -11143,7 +11143,11 @@ from them.
     `path --home` saying on stderr that the path is the host's (the issue's "could"): every call
     would print it, and the agents' scripts read it with `$(…)`; run's note says it where it matters.
     Tests: repo.rs host_path_words_found, host_path_said; t_host_paths (each shape in a real box and
-    a throwaway); t_cli_box's run -d cases.
+    a throwaway); t_cli_box's run -d cases. A path in /proc is never noted: the box has a /proc of
+    its own, which the host cannot read as the box does (`/proc/PID/root/proc/self` is the reader's),
+    so `run -- readlink /proc/self/fd/0` was told its stdin "is not in the box" (found by the full
+    suite: t_run_stdio, t_jail_record). With #299 the started line reads "(pid N, log: HOST,
+    /home/sbx/run-NS.log in the box)".
 590. **`wait layer` did not say which monitor a layer was on** (2026-10-31, #316). Its probe found
     the first drawn layer of the namespace anywhere in `hyprctl -j layers` (`..|objects`), so the
     monitor (the object's key above `levels`) was lost: `at 0,0 1920x1080` for a full-screen panel
