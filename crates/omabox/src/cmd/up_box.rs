@@ -115,6 +115,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     };
     ready::rm_box(ctx);
     let _ = std::fs::remove_file(ctx.in_boxes(cat!(".expired-", name)));
+    crate::whose::clear_taken(ctx);
     // (the box dir, then the HOME's record of it, then the HOME: sweep_homes never takes a HOME
     // whose box is being made, from any runtime dir)
     let made = std::fs::create_dir_all(ctx.at("run")).is_ok()
@@ -480,7 +481,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         ));
     }
     let _ = std::fs::remove_file(ctx.at("starting"));
-    boxes::touch(&ctx.at("used"));
+    crate::whose::mark_used(ctx);
     let screen = crate::screen::box_screen(ctx)?;
     let live_sc = crate::mon::main_scale_live(ctx).unwrap_or_default();
     let sp = screen
@@ -874,6 +875,9 @@ fn box_json(
         o.insert("jail".into(), s(&crate::jail::jail_id()));
     } else {
         o.insert("dir".into(), s(&shell::pwd()));
+        // Who started it (#295): its agent session, none outside one.
+        let sid = crate::select::agent_session();
+        o.insert("session".into(), sid.map_or(Value::Null, |v| s(&v)));
     }
     if !u.from.is_empty() {
         o.insert("from".into(), s(&u.from));

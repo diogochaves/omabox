@@ -3,7 +3,7 @@
 //! with tail -F, ending with the box. `log gdb --crash` (#233): only the thread a crash hit.
 
 use crate::args::{optarg, unknown_opt, unknown_word};
-use crate::boxes::{box_alive, need_box, take_over, touch};
+use crate::boxes::{box_alive, need_box, take_over};
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Res, out, say};
@@ -412,7 +412,7 @@ pub fn live(ctx: &Ctx) -> Res<bool> {
     if !box_alive(ctx)? {
         return Ok(false);
     }
-    touch(&ctx.at("used"));
+    crate::whose::mark_used(ctx);
     if !take_over(ctx, false)? {
         need_box(ctx)?;
     }

@@ -287,7 +287,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ));
         }
         ctx.envkv.extend(envs); // after --env-file's, so the flag wins; --pass wins over both
-        touch(&ctx.at("used")); // use, for idle expiry (so is its end, below)
+        crate::whose::mark_used(ctx); // use, for idle expiry (so is its end, below)
         if !take_over(ctx, false)? {
             need_box(ctx)?; // gone while it waited: says so
         }
@@ -326,14 +326,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     for kv in envs {
         up_args.extend([b"--env".to_vec(), kv]);
     }
-    // A box asked for by name, one that was up and died, or one that expired is not replaced by a
-    // throwaway: that would hide what happened to it. Nor this session's box up under another
-    // directory's name, as run -d (#327: the command ran in a throwaway without its plugin).
+    // A box asked for by name, one that was up and died, or one that expired or a down took (#295)
+    // is not replaced by a throwaway: that would hide what happened to it. Nor this session's box up
+    // under another directory's name, as run -d (#327: the command ran in a throwaway without its
+    // plugin).
     if !name.is_empty()
         || (ctx.name_derived && !session_boxes(ctx).is_empty())
         || env_names_box()
         || shell::path(&ctx.d).is_dir()
         || ctx.in_boxes(cat!(".expired-", ctx.name)).is_file()
+        || ctx.in_boxes(cat!(".taken-", ctx.name)).is_file()
     {
         need_box(ctx)?;
     }

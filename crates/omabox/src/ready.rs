@@ -48,7 +48,7 @@ const ORPHAN_JQ: &str = r#"select(.mode == "headless" and (.idle // 0) == 0 and 
 /// box_json: one box as `ls --json` lists it.
 const BOX_JSON_JQ: &str = r#"{name: $name, mode, size, scale: (.scale // 1), created, plugins, net: (.net // "host"),
       allowed: (.allow // "" | split(",") | map(select(. != "") | tonumber)), addrs: (.addrs // []), idle: (.idle // 0),
-      dir: (.dir // null),
+      dir: (.dir // null), session: (.session // null),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
         | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), quickshell: (.quickshell // null), quickshell_version: (.quickshell_version // null), aquamarine: (.aquamarine // null), render: (.render // null),

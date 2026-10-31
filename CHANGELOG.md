@@ -12,6 +12,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   know it and enabled, its state said (`ls --json`: plugin_status). `plugin remove ID` takes one out.
   A link made by hand in the box HOME, then `omarchy plugin enable`, said "is not known": the enable
   ran before the shell's rescan was done ([#345](https://github.com/diogochaves/omabox/issues/345)).
+- **Who started a box, and who took it down**
+  ([#295](https://github.com/diogochaves/omabox/issues/295)). A session's subagents share its
+  default box name. `ls` now says under each box where it was started and by which agent session
+  (and who used it last, when another); `down` of a box another caller started or used in the last
+  10 minutes warns that it may be another agent's (it still takes it down); and the name's next
+  command says when a `down` took it and from where, not just `no box is up`.
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

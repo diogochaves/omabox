@@ -11328,6 +11328,35 @@ from them.
     cmd::plugin's unit tests (linked only through a same-path mount still bound), broker_check (a
     jailed caller refused), t_up_again (the new words). On the old code `plugin` is an unknown
     command (exit 2).
+599. **A sibling subagent's `down` ended a box another was using, and nothing said who**
+    (2026-10-31, #295; follows 88, 377, 411). A Claude Code session's subagents share its
+    `CLAUDE_CODE_SESSION_ID` and its process (`CLAUDE_PID`): their shells carry no id of their own
+    (checked: the same env but for PWD, the same parent), so finding 88's name and 93's agent are
+    one for all of them. Agent A ran `up` in a scratch folder (`default-SESSION`); B saw the
+    session's suffix in `ls`, took the box for its own and took it down; A's next command said only
+    `no box '...' is up`. What omabox can tell apart is the agent session and the directory a
+    command runs in, so it records those and says them: `up` writes box.json `session` (the 8
+    characters, null outside a session; not for a jailed caller, whose box goes by its jail), each
+    command's use (need_box, path, log, run, an `up` of a box up, the end of `up`) writes
+    `SESSION<TAB>DIR` into the box's `used` file (its time is still the idle clock; the waits that
+    keep touching it leave it as it is), `ls` prints `  started in ~/a (this agent session)` last
+    under a box (`; last used in ~/b (...)` when another caller; `ls --json`: `session`), and a
+    `down` (not the reaper's) of a box used in the last 10 minutes and started or last used by
+    another caller (another session, none, or this one in another directory) says first `warning:
+    box 'X' may be another agent's: started in ~/a (this agent session), used 40s ago; taking it
+    down (its next command will say who did)`. It still takes it down (Diogo's plan for 1.1: warn,
+    not refuse, inside the 1.x promise). The down leaves `.taken-NAME` (when, its session and
+    directory; pruned after a day, removed by the name's next `up`), and the name's next command,
+    where it said `no box 'X' is up`, says `box 'X' was taken down at 15:54:03 by an omabox down in
+    ~/b (this agent session); start it again with: omabox up X` (and `run` gives no throwaway in its
+    place). A box from before (no `session`) is not warned of. Limits: two subagents in one
+    directory are one caller (only a per-agent id would tell them apart: none is exported), and one
+    agent that `cd`s to a scratch folder for `up` is warned by its own later `down` from its repo
+    ("may be"). Not done (choices for Diogo): refusing without `--force`; the "this session's boxes
+    are ..." hints (need_box, #136) still name a sibling's boxes as the session's; `up` of a name up
+    already does not say it was started elsewhere. Tests: t_unit_agent_session (a stand-in box: ls's
+    line, the warning, the note from `windows -b` and `run -b`; all four fail on the old code),
+    whose.rs (the warning's cases, the note, ls's line).
 605. **A window shot failed "grim failed: it ended with status 139" while the window changed size**
     (2026-10-31, #387). Hyprland fails a window's frame copy (ext-image-copy-capture's `failed`)
     when its buffer changes size during it, and grim 1.5.0's handler for that prints
@@ -11359,6 +11388,7 @@ from them.
     the machine is loaded); the unit test drives it. Test: hypr.rs
     hypr_lost_an_exiting_hyprland_is_going (exiting: went down, before and past 10 looks; running
     and not exiting: still hung; it fails on the old code).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -1467,7 +1467,7 @@ fn robind_line(raw: &[u8]) -> Option<Vec<u8>> {
 /// does not have are refused (finding 134); only those given. Mounts, --env and --idle are not
 /// compared.
 pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
-    boxes::touch(&ctx.at("used"));
+    crate::whose::mark_used(ctx);
     let d = &ctx.d;
     let m = |k: &str| meta(d, k).0;
     let or = |v: Vec<u8>, none: &str| {

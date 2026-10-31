@@ -1,7 +1,7 @@
 //! `omabox path`: the box dir, its HOME, its runtime dir, or where each of its logs is.
 
 use crate::args::name_arg;
-use crate::boxes::{box_alive, need_box, take_over, touch};
+use crate::boxes::{box_alive, need_box, take_over};
 use crate::cat;
 use crate::exit::{Ctx, Res, out};
 use crate::json;
@@ -34,7 +34,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     select_box(ctx, &name)?;
     // Seeding a box's HOME through its path is using it.
     if box_alive(ctx)? {
-        touch(&ctx.at("used"));
+        crate::whose::mark_used(ctx);
         if !take_over(ctx, false)? {
             need_box(ctx)?;
         }

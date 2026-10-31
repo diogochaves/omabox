@@ -434,7 +434,7 @@ pub fn touch(p: &Path) {
 pub fn need_box(ctx: &Ctx) -> Res<()> {
     if box_alive(ctx)? {
         covers_held(ctx)?;
-        touch(&ctx.at("used"));
+        crate::whose::mark_used(ctx);
         if take_over(ctx, false)? {
             jobs::job_note(ctx);
             return Ok(());
@@ -500,6 +500,10 @@ pub fn need_box(ctx: &Ctx) -> Res<()> {
                 " (started from other directories): -b NAME"
             )));
         }
+    }
+    // Taken down by a `down` (#295): when, and by whom.
+    if let Some(n) = crate::whose::taken_note(ctx, &crate::whose::me()) {
+        return Err(ctx.die(cat!(n, "; start it again with: omabox up ", ctx.name)));
     }
     let have: Vec<u8> = list_names(ctx, false)
         .iter()

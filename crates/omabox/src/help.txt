@@ -719,6 +719,11 @@ A headless box at --idle 0 with no agent to go with stays up until `down`. Once 
 gone (the script or agent whose command ran `up`), `ls` says orphan under IDLE (`ls --json`:
 orphan) and `down --orphans` takes those down; nothing does by itself. One you started at a terminal,
 outside an agent session, is yours: never an orphan.
+A session's subagents share its id, so its default name. `ls` says under each box where it was
+started and by which agent session (and who used it last, when another; `ls --json`: dir, session).
+A `down` of a box another caller started or used in the last 10 minutes warns that it may be
+another agent's, and still takes it down; the name's next command says when a down took it, and
+from where.
 @ up mode gpu cpu run
 Sizes: WxH is @60; `host` copies your focused monitor's size and refresh rate (scale stays 1).
 `,scale=S` (1 to 4, as a monitor's) gives the main screen a scale, headless only: `--size 3840x2160,scale=2`

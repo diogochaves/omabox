@@ -6429,12 +6429,28 @@ t_unit_agent_session() {
   check_match "......the old one without a dir" "'$P-q-$sid': omabox down -b $P-q-$sid" "$(dn "$P-r-$sid $P-q-$sid")"
   check_eq "...none of the session's up: no box, as before (exit 0)" "omabox: no box '$P-as-$sid'"$'\n'"rc=0" "$(dn "$P-r-0000beef")"
   check_eq "...a name given: as before" "omabox: no box 'nope'"$'\n'"rc=0" "$(dn "$P-r-$sid" -b nope)"
+  # #295 (finding 599): who started a box (box.json's session and dir) and who used it last (its used
+  # file), said by ls under it; a down from elsewhere warns that it may be another agent's (subagents
+  # share the session's id), and the name's next command says who took it down.
+  local tdir; tdir=$(cd "$TMP" && pwd); tdir=${tdir/#"$HOME"/\~}
+  jq -n --arg d "$HOME/code/proj" --arg s "$sid" '{dir: $d, session: $s}' > "$sr/omabox/$P-r-$sid/box.json"
+  printf '%s\t%s\n' "$sid" "$HOME/code/proj" > "$sr/omabox/$P-r-$sid/used"
+  check_match "ls says who started a box (#295)" $'\n'"  started in ~/code/proj \\(this agent session\\)"$'\n' \
+    "$(se "$P-r-$sid" "$TMP" "$CLI" ls)"$'\n'
   # finding 259: `down` with no name lets select_box derive it, so the fallback above applies to it too
   # (it passed the derived name as if given, and `omabox down` outside a repo found no box). Last: it
   # takes the stand-in down.
-  check_match "down with no name outside a repo: the session's one box, taken down" "box '$P-r-$sid' down" \
-    "$(se "$P-r-$sid" "$TMP" "$CLI" down)"
+  out=$(se "$P-r-$sid" "$TMP" "$CLI" down)
+  check_match "down with no name outside a repo: the session's one box, taken down" "box '$P-r-$sid' down" "$out"
   check_fails "...its dir gone" test -e "$sr/omabox/$P-r-$sid"
+  check_match "...warned first: started elsewhere and used just now, it may be another agent's (#295)" \
+    "omabox: warning: box '$P-r-$sid' may be another agent's: started in ~/code/proj \\(this agent session\\), used [0-9]+s ago; taking it down" \
+    "$out"
+  check_match "...and the name's next command says who took it down" \
+    "^omabox: box '$P-r-$sid' was taken down at [0-9]{2}:[0-9]{2}:[0-9]{2} by an omabox down in $tdir \\(this agent session\\); start it again with: omabox up $P-r-$sid\$" \
+    "$(se "" "$repo" "$CLI" windows -b "$P-r-$sid")"
+  check_match "...run too, not a throwaway in its place" "was taken down at " "$(se "" "$TMP" "$CLI" run -b "$P-r-$sid" -- true)"
+  rm -f "$sr/omabox/.taken-"*
   kill "$su" 2>/dev/null; wait "$su" 2>/dev/null
   rm -f "$sr/omabox/.down-"*
 }

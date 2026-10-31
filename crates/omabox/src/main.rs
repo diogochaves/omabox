@@ -56,6 +56,7 @@ mod shots;
 mod sig;
 mod trap;
 mod upspec;
+mod whose;
 mod win;
 
 use std::ffi::OsString;

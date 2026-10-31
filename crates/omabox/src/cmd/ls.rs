@@ -175,6 +175,7 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
         b"NAME", b"MODE", b"SIZE", b"STATE", b"SHELL", b"NET", b"IDLE", b"PLUGINS",
     ]))?;
     let many = crate::render::render_nodes().len() >= 2;
+    let me = crate::whose::me();
     let mut orphans: Vec<Vec<u8>> = Vec::new();
     for n in list_names(ctx, false) {
         select_box(ctx, &n)?;
@@ -303,6 +304,10 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
             .arg(cat!(ctx.d, "/box.json"))
             .run_file(jq::Err::Null);
         out(&s.out)?;
+        // Who started it and who used it last (#295), last under it.
+        if let Some(l) = crate::whose::ls_line(&ctx.d, &me) {
+            out(l)?;
+        }
     }
     // Orphans (#220), on stderr: what the IDLE column's word means, and what takes them down.
     if !orphans.is_empty() {

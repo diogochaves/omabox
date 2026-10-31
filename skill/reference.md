@@ -107,7 +107,7 @@ they were then). With no box up it prints the same rules for a box the subagent 
 they all have), so two that run `omabox up` get one box, and one's `down` ends the other's test. Give
 each its own: `omabox up --new` (then `-b box-N`, as printed) or `-b` a name of its task; it never
 takes down a box it did not start (a box with your session's suffix in `omabox ls` may be a
-sibling's).
+sibling's: `ls` says where each was started, and `down` warns of one another caller used just now).
 
 ## For subagents in an isolated worktree
 

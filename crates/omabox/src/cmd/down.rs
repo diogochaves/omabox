@@ -166,6 +166,14 @@ fn down_one_with<S: BoxSys + ?Sized>(
         ));
         return Ok(false);
     }
+    // A box another caller started or used just now may be another agent's (#295): said, not
+    // refused. Not the reaper's.
+    let me = crate::whose::me();
+    if cond.created.is_none()
+        && let Some(w) = crate::whose::down_warning(ctx, &me)
+    {
+        say(cat!("warning: ", w));
+    }
     // Its peek windows, one per monitor shown (#164), each pinned by a pidfd, then found a peek of
     // the box again (#377): a pid that ended after the first look and was reused gets nothing.
     let mut peeks: Vec<Pidfd> = sys
@@ -184,6 +192,10 @@ fn down_one_with<S: BoxSys + ?Sized>(
     }
     crate::ready::kill_reapers(ctx);
     sys.rm_box(ctx);
+    // (under the lock: an up waiting on it removes the note as it starts the name's next box)
+    if cond.created.is_none() {
+        crate::whose::write_taken(ctx, &me);
+    }
     let _ = std::fs::remove_file(&lk);
     drop(lock);
     // (a host that does not answer must not fail the down)
@@ -247,7 +259,7 @@ fn user_marker(m: &[u8]) -> bool {
 }
 
 /// The markers nobody reads any more: a down's after 10 minutes, and an idle box's note
-/// (.expired-NAME) after a day (finding 237).
+/// (.expired-NAME) and a down's (.taken-NAME, #295) after a day (finding 237).
 pub fn prune_marks(ctx: &Ctx) {
     let Ok(rd) = std::fs::read_dir(shell::path(&ctx.boxes)) else {
         return;
@@ -257,7 +269,7 @@ pub fn prune_marks(ctx: &Ctx) {
         let n = e.file_name().into_encoded_bytes();
         let max = if n.starts_with(b".down-") {
             600
-        } else if n.starts_with(b".expired-") {
+        } else if n.starts_with(b".expired-") || n.starts_with(b".taken-") {
             86_400
         } else {
             continue;
