@@ -22,7 +22,7 @@ fn words(v: &[&str]) -> Vec<Vec<u8>> {
 /// The host pid of the box's Hyprland: Some(None) when none runs, None when it cannot tell. Its pid
 /// as the box numbers it, from its instance lock (a box-written file: only a number taken), matched
 /// to the host's through NSpid.
-fn hypr_host_pid<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Option<Vec<u8>>> {
+pub fn hypr_host_pid<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Option<Vec<u8>>> {
     let pids = sys.box_pids(ctx);
     if pids.is_empty() {
         return None;

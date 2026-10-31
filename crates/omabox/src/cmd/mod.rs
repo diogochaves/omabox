@@ -29,6 +29,7 @@ pub mod monitor;
 pub mod output;
 pub mod path;
 pub mod peek;
+pub mod pid;
 pub mod pixel;
 pub mod plugin;
 pub mod pointer;

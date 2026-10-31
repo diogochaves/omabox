@@ -4192,7 +4192,7 @@ t_unit_broker_side() {
   cx_want=(rc=2 out= 'err~^omabox: ls takes no -b: it is not about one box'); cx_case "broker: -b N ls: the front's refusal first" -b rpf ls
   cx_want=(rc=0 'out~^  omabox shot \[-b NAME\]' err=); cx_case "broker: shot --help: the front's help first" shot --help
   # (let through: each finds no box here, or refuses its words, as a caller outside a jail is)
-  for c in tree cpu gpu gdb reload log events; do
+  for c in tree cpu gpu gdb pid reload log events; do
     cx_want=(rc=1 out= "err=omabox: no box 'default' is up (start one with: omabox up default)"); cx_case "broker: $c let through" "$c"
   done
   for c in pixel output lua scroll; do
@@ -6167,6 +6167,13 @@ EOF
 # omabox which PID (#172), with no box: what is not in one, and what cannot be told.
 t_unit_which() {
   local out
+  # pid (#331): its words, then the box.
+  out=$(ob pid -b "$P-x" 2>&1); rc=$?
+  check_match "pid: no box, exit 1" "^omabox: no box '$P-x' is up.* 1$" "$out $rc"
+  out=$(ob pid -b "$P-x" labwc 2>&1); rc=$?
+  check_match "...an unknown process: exit 2" "pid: unexpected labwc \(hyprland or shell\).* 2$" "$out $rc"
+  out=$(ob pid -b "$P-x" --box 2>&1); rc=$?
+  check_match "...--box is -b's (--in-box for the box's own pid)" "^omabox: .*--box.* 2$" "$out $rc"
   out=$(ob which $$ 2>&1); rc=$?
   check_eq "which: a host shell is not in a box, exit 1" "not in a box 1" "$out $rc"
   out=$(ob which 1 2>/dev/null); rc=$?
@@ -13343,6 +13350,31 @@ t_which() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #331 (finding 586): `omabox pid` prints the host pid of a box's Hyprland (or shell), --in-box the
+# pid as the box numbers it; agents grepped /proc/*/environ for it and got an empty pid.
+t_pid() {
+  local B=$P-pid h s out rc
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  h=$(ob pid -b "$B"); rc=$?
+  check_eq "pid: the box's Hyprland on the host, exit 0" "0 Hyprland" "$rc $(cat "/proc/${h:-0}/comm" 2>/dev/null)"
+  check_eq "...in this box" "$B" "$(ob which "${h:-0}" 2>/dev/null)"
+  check "...its maps readable here (a plugin's .so would be in them)" grep -q aquamarine "/proc/${h:-0}/maps"
+  check_eq "...--in-box: the pid as the box numbers it" "$(ob run -b "$B" -- pgrep -xo Hyprland)" "$(ob pid -b "$B" --in-box)"
+  s=$(ob pid -b "$B" shell)
+  check_eq "pid shell: the box's quickshell" "quickshell $B" "$(cat "/proc/${s:-0}/comm" 2>/dev/null) $(ob which "${s:-0}" 2>/dev/null)"
+  out=$(ob pid -b "$B" shell --json)
+  check_eq "...--json: box, process, pid, box_pid" \
+    "$B shell ${s:-x} $(awk '/^NSpid:/ {print $NF}' "/proc/${s:-0}/status" 2>/dev/null)" \
+    "$(jq -r '"\(.box) \(.process) \(.pid) \(.box_pid)"' <<<"$out")"
+  ob down "$B" >/dev/null 2>&1
+  B=$P-pid2
+  up_ok "$B" --net isolated --no-shell || { no "up --no-shell" "$UP_OUT"; return; }
+  out=$(ob pid -b "$B" shell 2>"$TMP/pid.err"); rc=$?
+  check_eq "...a box with no shell: nothing on stdout, exit 1" "1 " "$rc $out"
+  check_match "...said" "^omabox: pid: box '$B' has no shell running" "$(cat "$TMP/pid.err")"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # #271: the brief of a box that is up: its name, size, windows (each by a selector that finds it
 # alone), the box HOME's host path, and the rules.
 t_brief() {
@@ -19047,7 +19079,7 @@ t_run_cwd() {
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

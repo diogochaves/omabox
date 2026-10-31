@@ -134,6 +134,7 @@ fn main() -> ExitCode {
         Some("path") => Some(cmd::path::run),
         Some("env") => Some(cmd::env::run),
         Some("which") => Some(cmd::which::run),
+        Some("pid") => Some(cmd::pid::run),
         Some("hyprctl") => Some(cmd::hyprctl::run),
         Some("lua") => Some(cmd::lua::run),
         Some("run") => Some(cmd::run::run),

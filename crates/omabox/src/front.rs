@@ -33,6 +33,7 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"log",
     b"logs",
     b"gdb",
+    b"pid",
     b"events",
     b"peek",
     b"restart-shell",

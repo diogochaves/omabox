@@ -20,6 +20,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"path" => Some("-b= --box= --logs --run --home --json"),
         b"env" | b"brief" | b"reload" | b"restart-shell" => Some("-b= --box="),
         b"which" => Some("--json"),
+        b"pid" => Some("-b= --box= --in-box --json"),
         b"down" => Some("-b= --box= --all --orphans"),
         b"ls" | b"list" | b"saves" | b"--version" | b"config" => Some("--json"),
         b"save" => Some("-b= --box= --force"),

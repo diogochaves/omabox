@@ -51,6 +51,7 @@ pub const COMMANDS: &[&str] = &[
     "down",
     "ls",
     "which",
+    "pid",
     "save",
     "saves",
     "config",

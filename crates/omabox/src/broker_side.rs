@@ -449,9 +449,9 @@ pub fn refusal(cmd: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
     match cmd {
         b"up" | b"run" | b"shot" | b"screenshot" | b"pixel" | b"windows" | b"window" | b"tree"
         | b"keys" | b"click" | b"scroll" | b"pointer" | b"drag" | b"wait" | b"hyprctl" | b"lua"
-        | b"log" | b"logs" | b"gdb" | b"events" | b"restart-shell" | b"reload" | b"mode"
-        | b"output" | b"monitor" | b"gpu" | b"cpu" | b"audio" | b"env" | b"path" | b"down"
-        | b"ls" | b"list" | b"brief" | b"jobs" | b"stop" => None,
+        | b"log" | b"logs" | b"gdb" | b"pid" | b"events" | b"restart-shell" | b"reload"
+        | b"mode" | b"output" | b"monitor" | b"gpu" | b"cpu" | b"audio" | b"env" | b"path"
+        | b"down" | b"ls" | b"list" | b"brief" | b"jobs" | b"stop" => None,
         // record (#224): its files only through fds the caller's omabox opened (record checks
         // them). ports (#93): the jail's own boxes, the host side named by state only.
         b"record" | b"ports" => None,

@@ -89,6 +89,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, confirm_close_available, version, gpus, gpu_auto, gpu_now` |
 | `calibrate --answer --json` | `result` (one, fit, up, none), `card, marks, scale, fit, fit_size, error_px, worst, off, shot_fit` |
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
+| `pid --json` | `box, process` (hyprland or shell), `pid` (the host's), `box_pid` (the box's own) |
 | `--version --json` | `version, aquamarine` (`kind, version, fixed, message`) |
 
 ## Handing box work to a subagent
@@ -868,6 +869,10 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
   pid is in (by its pid namespace, or an ancestor's for a sandbox inside the box; else by
   `OMABOX_BOX`, said so), or `not in a box` with exit 1 (another user's process too); exit 2 for a
   pid that is gone. `grep -z OMABOX_BOX /proc/PID/environ` says the same by hand.
+- The other way: `omabox pid` prints the host PID of the box's Hyprland, `omabox pid shell` its
+  shell's (for `/proc/PID/maps`: is a plugin's `.so` mapped; perf, strace), `--in-box` the PID as the
+  box numbers it (`gdb --pid`, `omabox run -- kill`), `--json` both. Nothing on stdout and exit 1
+  when it is not running: `P=$(omabox pid) || exit`, never a loop over `pgrep` and environ.
 - What that does to the desktop's lock: Omarchy's stranded-lock recovery
   (`omarchy-hyprland-session-lock-stranded`, Omarchy 4.0.5 on) counts any `quickshell`, `qs` or
   `hyprlock` of your user as a live locker, a box's shell included. If the desktop's shell crashes

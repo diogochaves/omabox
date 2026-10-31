@@ -102,6 +102,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
   omabox ls [--json]
   omabox which [--json] PID                              the box a host process is in, or "not in a box" (exit 1)
+  omabox pid [-b NAME] [hyprland|shell] [--in-box] [--json]   the host PID of the box's Hyprland (or shell)
   omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
@@ -126,7 +127,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell plugin reload mode output monitor gpu cpu audio ports env path down save clip brief
+@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -863,6 +864,11 @@ A box's processes look like the desktop's in a host process list (its shell has 
 line): `omabox which PID` names the box a host pid is in, by its pid namespace or an ancestor's, else
 by OMABOX_BOX, which every process a box's session starts carries (said so); `not in a box`, exit 1,
 for anything else, another user's processes too (boxes run as you); exit 2 for a pid that is gone.
+@ pid which gdb
+`omabox pid`, `which` the other way round: the host PID of the box's Hyprland (the default) or its
+shell, for /proc/PID/maps, perf or strace on the host; --in-box the PID as the box numbers it (`gdb
+--pid`, `omabox run -- kill`). --json: {box, process, pid, box_pid}. Nothing on stdout and exit 1
+when it is not running.
 @ save saves up run
 A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOME without .cache and
 its logs, keyring included, paused for the copy. `up --from` starts with it, then seeds your Omarchy

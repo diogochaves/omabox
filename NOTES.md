@@ -11181,6 +11181,19 @@ from them.
     (the refusals, `wait for` without a box); t_wait_log (a new line, one there before: 124 and the
     hint, `--since 0`, the offset chain, a partial line, a log begun anew, a Lua print through the
     rolling log, `wait for`, the box going down: unknown, 1).
+586. **No command printed a box's Hyprland or shell PID** (2026-10-31, #331). An agent checking that
+    a plugin's .so was mapped (`/proc/PID/maps`) looped over `pgrep -x Hyprland` matching environ,
+    got an empty pid and read `/proc//maps`. Now `omabox pid [-b NAME] [hyprland|shell] [--in-box]
+    [--json]`: the host pid of the box's Hyprland (from its instance lock, matched through NSpid
+    among the box's processes, as `ls` finds it: hypr.rs hypr_host_pid) or its shell (the pid
+    shell.sh writes, checked running, matched the same way: jobs.rs box_procs); `--in-box` the pid
+    as the box numbers it (what `gdb --pid` takes), `--json` {box, process, pid, box_pid}. Not
+    running: nothing on stdout, exit 1, said. The issue's `--box` would have been `-b`'s long form
+    (`--box NAME`, in every command), hence `--in-box`; `ls --json` got no pid fields (one command
+    answers it; ls stays one /proc scan lighter). Let through the broker as gdb is. Tests: the unit
+    test hosts; t_unit_which (no box, an unknown word, `--box`); t_pid (Hyprland's comm, `which` of
+    it, its maps read, `--in-box` against pgrep in the box, the shell's comm and box, `--json`
+    against NSpid, a `--no-shell` box: exit 1, nothing printed).
 587. **A `run -d` job could be stopped or waited for only by a host pgrep** (2026-10-31, #299). Five
     agents needed to stop, swap or wait for one job and found no command: one ran a host `pgrep -f`
     loop, telling the box's process from the same program on the desktop by `/proc/PID/environ`, and

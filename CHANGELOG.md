@@ -61,6 +61,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   its start. **`wait for DURATION`** is a fixed wait that says it is one, for agents whose harness
   blocks `sleep`: no more `wait until -- false` as a sleep
   ([#330](https://github.com/diogochaves/omabox/issues/330)).
+- **`omabox pid [hyprland|shell]`** prints the host PID of a box's Hyprland (the default) or its
+  shell, for `/proc/PID/maps`, perf or strace; `--in-box` the PID as the box numbers it, `--json`
+  both. Nothing on stdout and exit 1 when it is not running
+  ([#331](https://github.com/diogochaves/omabox/issues/331)).
 - **`tree` names an unnamed control after its label** (LABELLED_BY), so `--find Email` finds the
   entry its label names, and reads a node once when it sits under two parents (Qt WebEngine)
   ([#318](https://github.com/diogochaves/omabox/issues/318)).
