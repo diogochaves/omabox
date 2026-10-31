@@ -11281,6 +11281,12 @@ from them.
     --wait, the next command's note and `wait window` say it; a plain failure does not; a GTK 4 and
     a Qt 6 fixture make the same bad bind through their toolkit, or shut their connection down: each
     said as a protocol error or as lost; on the old code 5, then 4 checks failed).
+    PATH's and XDG_*_DIRS's lists are not looked into: under the guard every `run` printed 3 notes
+    and "2 more", the host dirs of an `env PATH=…` the box lacks. A missing dir in a list a shell
+    passes routinely is normal, so a `KEY=VAL` whose KEY is PATH or ends in _DIRS and whose value has
+    a `:` is skipped; one path as its value is still said. Other lists (LD_LIBRARY_PATH,
+    PKG_CONFIG_PATH, PYTHONPATH…) are split as before: a host build dir there is what this finding
+    is for (repo.rs host_path_words_found; t_host_paths).
 590. **`wait layer` did not say which monitor a layer was on** (2026-10-31, #316). Its probe found
     the first drawn layer of the namespace anywhere in `hyprctl -j layers` (`..|objects`), so the
     monitor (the object's key above `levels`) was lost: `at 0,0 1920x1080` for a full-screen panel

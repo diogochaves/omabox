@@ -148,7 +148,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`run` says when its command names a host path the box sees elsewhere or not at all**, before it
   runs: the box HOME's host path (`omabox path --home`, the log `run -d` printed) with its path in
   the box (`/home/sbx/…`), a file in a `--plugin` folder with where the box has it, a scratch file in
-  the host's `/tmp` or a build dir in `LD_LIBRARY_PATH` with the mount that brings it in. `run -d`
+  the host's `/tmp` or a build dir in `LD_LIBRARY_PATH` with the mount that brings it in (not the
+  dirs of `PATH` or `XDG_*_DIRS`, where a missing one is normal). `run -d`
   names its log as the box has it too (`/home/sbx/run-NS.log`), and `up` says where a `--plugin`
   folder that is not at its own path is in the box
   ([#301](https://github.com/diogochaves/omabox/issues/301)).

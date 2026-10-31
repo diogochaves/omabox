@@ -748,9 +748,11 @@ pub fn mount_gone_notes(ctx: &Ctx) {
 }
 
 /// host_path_words WORD... (#301): the absolute paths a command names, each once, in order: a word
-/// that is one, the value of a `KEY=VAL` word (or `--opt=VAL`) split on `:` as PATH and
-/// LD_LIBRARY_PATH are, and the same in a script word (`sh -c '...'`), its quotes taken off; 64 words
-/// looked at at most.
+/// that is one, the value of a `KEY=VAL` word (or `--opt=VAL`) split on `:`, and the same in a script
+/// word (`sh -c '...'`), its quotes taken off; 64 words looked at at most. A routine search list's
+/// (KEY search_list's, a `:` in its value) entries are not: a dir it lacks is normal, and a guarded
+/// agent's `env PATH=…` had every run name its host dirs. One path as its value still is, and so is
+/// each of LD_LIBRARY_PATH's and the like's, where a build dir is the point.
 pub fn host_path_words(words: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let mut paths: Vec<Vec<u8>> = Vec::new();
     let mut n = 0;
@@ -776,7 +778,12 @@ pub fn host_path_words(words: &[Vec<u8>]) -> Vec<Vec<u8>> {
             let vals: Vec<&[u8]> = if t.starts_with(b"/") {
                 vec![t]
             } else if let Some(e) = t.iter().position(|&c| c == b'=') {
-                t[e + 1..].split(|&c| c == b':').collect()
+                let (k, v) = (&t[..e], &t[e + 1..]);
+                if search_list(k) && v.contains(&b':') {
+                    Vec::new()
+                } else {
+                    v.split(|&c| c == b':').collect()
+                }
             } else {
                 Vec::new()
             };
@@ -788,6 +795,14 @@ pub fn host_path_words(words: &[Vec<u8>]) -> Vec<Vec<u8>> {
         }
     }
     paths
+}
+
+/// search_list KEY: a search list a shell or the guard passes routinely, PATH or one ending in _DIRS
+/// (XDG_DATA_DIRS, XDG_CONFIG_DIRS). Not LD_LIBRARY_PATH, PKG_CONFIG_PATH, PYTHONPATH…: a host
+/// build dir in one of those is what #301 says.
+fn search_list(k: &[u8]) -> bool {
+    k == b"PATH"
+        || (k.ends_with(b"_DIRS") && k.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_'))
 }
 
 /// What a host path is in box NAME, said by run before its command (#301; HOW: the mount's command,
@@ -1155,6 +1170,30 @@ mod tests {
         );
         // the command itself is one word, spaces and all; "/" alone is no path
         assert_eq!(host_path_words(&w(&["/a b/c", "/"])), w(&["/a b/c"]));
+        // PATH's and XDG_*_DIRS's lists are not looked into: a dir they lack is normal; one path as
+        // the value still is, and other lists (PKG_CONFIG_PATH, MOUNT) are split as before
+        assert_eq!(
+            host_path_words(&w(&[
+                "env",
+                "PATH=/host/only:/usr/bin",
+                "XDG_DATA_DIRS=/x/share:/usr/share",
+                "XDG_CONFIG_DIRS=/x/etc",
+                "PKG_CONFIG_PATH=/p/lib/pkgconfig:/usr/lib/pkgconfig",
+                "MOUNT=/m:/n",
+                "app",
+            ])),
+            w(&[
+                "/x/etc",
+                "/p/lib/pkgconfig",
+                "/usr/lib/pkgconfig",
+                "/m",
+                "/n"
+            ])
+        );
+        assert_eq!(
+            host_path_words(&w(&["sh", "-c", "PATH=/h/bin:/usr/bin app '/h/f'"])),
+            w(&["/h/f"])
+        );
     }
 
     // #301: what a host path is in the box: its HOME's and runtime dir's host paths mapped, the box

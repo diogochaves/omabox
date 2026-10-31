@@ -7580,6 +7580,9 @@ t_host_paths() {
   out=$(ob run -b "$B" -- env "LD_LIBRARY_PATH=$s/lib:/usr/lib" true 2>&1)
   check_match "...a build dir in LD_LIBRARY_PATH" "note: $s/lib is not in box '$B' " "$out"
   check_fails ".../usr/lib, which the box has, not said" grep -q "note: /usr/lib " <<<"$out"
+  # (PATH's and XDG_*_DIRS's dirs are not: one they lack is normal, and a guarded agent's PATH named each)
+  check_eq "...nothing said for PATH's or XDG_DATA_DIRS's dirs" "" \
+    "$(ob run -b "$B" -- env "PATH=$s/lib:/usr/bin" "XDG_DATA_DIRS=$s:/usr/share" true 2>&1)"
   check_eq "...nothing said for paths the box has" "" "$(ob run -b "$B" -- ls /usr/bin/true /etc/hostname 2>&1 >/dev/null)"
   out=$(ob run -b "$B" -d -- sh -c 'echo said-301; exec sleep 30' 2>&1)
   check_match "run -d: its log as the box has it too (#301)" \
