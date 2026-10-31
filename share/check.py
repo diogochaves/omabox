@@ -29,19 +29,22 @@
       touches, "X,Y WxH" a line: what the tree's changes do not account for (#257: two checkpoints
       with the same tree changes and none of these are the same change). Every region when the tree's
       pixels are not the shot's.
-  check.py sheet PLAN OUT.png [FONT]
+  check.py sheet PLAN OUT.png [FONT [SCALE]]
       The report of a check (finding 361): one image of every change, each region cropped with some
       context from the baseline and the new shot side by side, inside what a model sees in one look.
       PLAN: tab-separated lines, "title TEXT", then per changed checkpoint "point ID BASE.png NEW.png
       BASE.tree.json NEW.tree.json UNSTABLE" (empty fields: none) and its "region X Y W H" or "size
       TEXT" lines; "also FIRST ID": ID's change was FIRST's, named on FIRST's card. Prints magick's arguments NUL-separated, the first being what was left out ("" when
-      nothing).
-  check.py overview PLAN OUT.png [FONT]
+      nothing). SCALE (2 to 4, #402): the same sheet, laid out as at 1, drawn SCALE times its size
+      (text, marks and crops; a crop at its shot's own pixels where the box's scale is SCALE), for
+      people (a README, a site, a video); the default 1 is what an agent reads.
+  check.py overview PLAN OUT.png [FONT [SCALE]]
       The baseline in one image (--approve): PLAN's "title TEXT", then per checkpoint "point ID PNG
       TEXT" and its "unstable X Y W H" (amber: left out) and "hole X Y W H" (red) lines; every shot
       scaled to fit one look, but none under OV_MIN_PX in area: then more pages, OUT-2.png...
       (OUT less a .part suffix). Prints magick's arguments as sheet does, the first being the pages
-      after OUT, a line each ("" for one page).
+      after OUT, a line each ("" for one page). SCALE as sheet's; an OUT ending @SCALEx.png has its
+      pages OUT-2@SCALEx.png...
   check.py crop-tree TREE.json X Y W H
       A window's tree for a crop of it (in the window's coordinates): the elements that touch the
       crop, their ancestors, their keys from the whole tree. JSON on stdout.
@@ -282,6 +285,14 @@ PAD, GAP, SEP = 6, 10, 8
 PT, LH, CW = 14, 18, 8.5          # pointsize, line height, a monospace character's width at it
 TEXT_MAX = 560                    # a card wider than its pair for its text, up to this
 RED, BLUE, INK = "#ff2020", "#1a6fe0", "#111111"
+# The scale a sheet is drawn at (#402): laid out at 1, every length drawn F times (an integer, so
+# each one is exact); 1 is the agent's report.
+F = 1
+
+
+def z(v):
+    """A length of the 1x layout as drawn."""
+    return round(v * F)
 
 
 def png_size(path):
@@ -488,7 +499,7 @@ def layout(cards, footer, title):
 def corners(x0, y0, x1, y1):
     """A mark's four corners, not its whole box: its edges would hide what is beside the change (the
     digit before a time's changed ones)."""
-    ax, ay = max(3, min(12, (x1 - x0) // 4)), max(3, min(12, (y1 - y0) // 4))
+    ax, ay = max(3 * F, min(12 * F, (x1 - x0) // 4)), max(3 * F, min(12 * F, (y1 - y0) // 4))
     return " ".join(f"line {x},{y} {x + dx * ax},{y} line {x},{y} {x},{y + dy * ay}"
                     for x, y, dx, dy in ((x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)))
 
@@ -572,34 +583,34 @@ def sheet(plan, out_png, font):
             left.append(f"{cs[0]['pt']['id']} ({n} of {len(cs)} crops)")
     left_text = ", ".join(left)
     placed, W, H, tlines = layout(shown, 2 if left else 0, title)
-    a = ["-size", f"{W}x{H}", "xc:white"] + (["-font", font] if font else []) + ["-pointsize", str(PT)]
+    a = ["-size", f"{z(W)}x{z(H)}", "xc:white"] + (["-font", font] if font else []) + ["-pointsize", str(PT * F)]
 
     def text(x, y, t, colour):
-        a.extend(["-stroke", "none", "-fill", colour, "-annotate", f"+{x}+{y + LH - 5}", esc(t)])
+        a.extend(["-stroke", "none", "-fill", colour, "-annotate", f"+{z(x)}+{z(y + LH - 5)}", esc(t)])
 
     for i, t in enumerate(tlines):
         text(GAP, GAP + i * LH, t, INK)
     for c, x, y in placed:
-        a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {x},{y} {x + c['w'] - 1},{y + c['h'] - 1}"])
+        a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {z(x)},{z(y)} {z(x + c['w']) - 1},{z(y + c['h']) - 1}"])
         for i, (t, colour) in enumerate(c["lines"]):
             text(x + PAD, y + PAD + i * LH, fit(t, c["w"] - 2 * PAD), colour)
         iy = y + PAD + len(c["lines"]) * LH + 4
         cx, cy, cw, ch = c["box"]
-        s = c["s"]
+        s = c["s"] * F   # (a shot's pixel drawn s times)
         for k, path in enumerate((c["pt"]["base"], c["pt"]["new"])):
             ix = x + PAD + k * (c["sw"] + SEP)
             if c["pt"]["sizechange"]:
                 iw, ih = png_size(path)
                 geo, crop = f"{max(1, round(iw * s))}x{max(1, round(ih * s))}!", []
             else:
-                geo, crop = f"{c['sw']}x{c['sh']}!", ["-crop", f"{cw}x{ch}+{cx}+{cy}", "+repage"]
+                geo, crop = f"{z(c['sw'])}x{z(c['sh'])}!", ["-crop", f"{cw}x{ch}+{cx}+{cy}", "+repage"]
             a.extend(["(", path, "-alpha", "off"] + crop + (["-scale", geo] if s >= 1 else ["-resize", geo]))
-            a.extend(["-fill", "none", "-strokewidth", "2"])
+            a.extend(["-fill", "none", "-strokewidth", str(2 * F)])
             for (mx, my, mw, mh), colour, *_ in c["marks"]:
-                x0, y0 = int((mx - cx) * s) - 3, int((my - cy) * s) - 3
-                x1, y1 = int((mx + mw - cx) * s + 0.999) + 2, int((my + mh - cy) * s + 0.999) + 2
+                x0, y0 = int((mx - cx) * s) - 3 * F, int((my - cy) * s) - 3 * F
+                x1, y1 = int((mx + mw - cx) * s + 0.999) + 2 * F, int((my + mh - cy) * s + 0.999) + 2 * F
                 a.extend(["-stroke", colour, "-draw", corners(x0, y0, x1, y1)])
-            a.extend([")", "-geometry", f"+{ix}+{iy}", "-composite"])
+            a.extend([")", "-geometry", f"+{z(ix)}+{z(iy)}", "-composite"])
     if left:
         fy = H - GAP - 2 * LH + 4
         text(GAP, fy, fit("not shown, no room (what changed there is in check's output):", W - 2 * GAP), INK)
@@ -674,31 +685,35 @@ def overview(plan, out_png, font):
             break
         f *= 0.9
     n = len(pages)
-    paths = [out_png] + [out_png.removesuffix(".part").removesuffix(".png") + f"-{k}.png" for k in range(2, n + 1)]
-    a = (["-font", font] if font else []) + ["-pointsize", str(PT)]
+    stem, at = out_png.removesuffix(".part").removesuffix(".png"), ""
+    if F > 1 and stem.endswith(f"@{F}x"):
+        stem, at = stem[: -len(f"@{F}x")], f"@{F}x"
+    paths = [out_png] + [f"{stem}-{k}{at}.png" for k in range(2, n + 1)]
+    a = (["-font", font] if font else []) + ["-pointsize", str(PT * F)]
 
     def text(x, y, t, colour):
-        a.extend(["-stroke", "none", "-fill", colour, "-annotate", f"+{x}+{y + LH - 5}", esc(t)])
+        a.extend(["-stroke", "none", "-fill", colour, "-annotate", f"+{z(x)}+{z(y + LH - 5)}", esc(t)])
 
     for k, page in enumerate(pages):
         placed, W, H, tlines = layout(page, 0, title if n == 1 else f"{title} (page {k + 1} of {n})")
-        a.extend(["(", "-size", f"{W}x{H}", "xc:white"])
+        a.extend(["(", "-size", f"{z(W)}x{z(H)}", "xc:white"])
         for i, t in enumerate(tlines):
             text(GAP, GAP + i * LH, t, INK)
         for c, x, y in placed:
-            a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {x},{y} {x + c['w'] - 1},{y + c['h'] - 1}"])
+            a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {z(x)},{z(y)} {z(x + c['w']) - 1},{z(y + c['h']) - 1}"])
             text(x + PAD, y + PAD, fit(c["lines"][0][0], c["w"] - 2 * PAD), INK)
-            iy, sc = y + PAD + LH + 4, c["s"]
-            a.extend(["(", c["pt"]["png"], "-alpha", "off"] + (["-scale"] if sc >= 1 else ["-resize"]) + [f"{c['sw']}x{c['sh']}!"])
+            iy, sc = y + PAD + LH + 4, c["s"] * F
+            a.extend(["(", c["pt"]["png"], "-alpha", "off"] + (["-scale"] if sc >= 1 else ["-resize"]) + [f"{z(c['sw'])}x{z(c['sh'])}!"])
             for colour, (mx, my, mw, mh) in c["pt"]["marks"]:
                 x0, y0 = int(mx * sc), int(my * sc)
                 x1, y1 = max(x0 + 1, int((mx + mw) * sc + 0.999) - 1), max(y0 + 1, int((my + mh) * sc + 0.999) - 1)
                 if colour == AMBER:
                     # Left out: a see-through fill over it and its edge, so what is under it still reads.
-                    a.extend(["-stroke", colour, "-strokewidth", "1", "-fill", colour + "40", "-draw", f"rectangle {x0},{y0} {x1},{y1}"])
+                    a.extend(["-stroke", colour, "-strokewidth", str(F), "-fill", colour + "40", "-draw", f"rectangle {x0},{y0} {x1},{y1}"])
                 else:
-                    a.extend(["-stroke", colour, "-strokewidth", "2", "-fill", "none", "-draw", corners(x0 - 3, y0 - 3, x1 + 3, y1 + 3)])
-            a.extend([")", "-geometry", f"+{x + PAD}+{iy}", "-composite"])
+                    a.extend(["-stroke", colour, "-strokewidth", str(2 * F), "-fill", "none",
+                              "-draw", corners(x0 - 3 * F, y0 - 3 * F, x1 + 3 * F, y1 + 3 * F)])
+            a.extend([")", "-geometry", f"+{z(x + PAD)}+{z(iy)}", "-composite"])
         a.extend(["-alpha", "off", "-depth", "8"])
         # Every page but the last written on the way (and dropped); the last is magick's output.
         a.extend(["-write", f"PNG:{paths[k]}", "+delete", ")"] if k < n - 1 else [")"])
@@ -708,6 +723,7 @@ def overview(plan, out_png, font):
 
 
 def main():
+    global F
     if len(sys.argv) >= 4 and sys.argv[1] == "regions":
         regions(int(sys.argv[2]), int(sys.argv[3]))
         return 0
@@ -762,11 +778,9 @@ def main():
     if len(sys.argv) == 7 and sys.argv[1] == "crop-tree":
         crop_tree(sys.argv[2], *(int(a) for a in sys.argv[3:7]))
         return 0
-    if len(sys.argv) in (4, 5) and sys.argv[1] == "overview":
-        overview(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else "")
-        return 0
-    if len(sys.argv) in (4, 5) and sys.argv[1] == "sheet":
-        sheet(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else "")
+    if len(sys.argv) in (4, 5, 6) and sys.argv[1] in ("overview", "sheet") and sys.argv[5:] in ([], ["1"], ["2"], ["3"], ["4"]):
+        F = int(sys.argv[5]) if len(sys.argv) == 6 else 1
+        (overview if sys.argv[1] == "overview" else sheet)(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) >= 5 else "")
         return 0
     print(__doc__.strip(), file=sys.stderr)
     return 2

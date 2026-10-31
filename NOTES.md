@@ -11468,6 +11468,42 @@ from them.
     already does not say it was started elsewhere. Tests: t_unit_agent_session (a stand-in box: ls's
     line, the warning, the note from `windows -b` and `run -b`; all four fail on the old code),
     whose.rs (the warning's cases, the note, ls's line).
+600. **`check run` always drove the whole scenario** (2026-10-31, #376). A project's scenario of 37
+    checkpoints cost 2.5 min a run and 7-9 min with --approve, for a change to one screen; one long
+    session spent 1.9 h in `check run`. Now `check run --only ID,GLOB` (repeatable; IDs or fnmatch
+    globs, checked as ID characters plus `* ? [ ] !`) passes the list to the scenario as
+    OMABOX_CHECK_ONLY (cleared when there is none, so an outer run's does not leak in), `check point`
+    of an ID it does not name says "skipped, not in --only" and exits 0 having taken nothing (no
+    wait, no shot, no box asked), and the new `check wants ID...` answers a scenario's "is this
+    section wanted" (exit 0 any of them, always without --only; 1 none): the time is in driving the
+    app to a screen, which only the scenario can skip. The comparison skips the baseline's
+    checkpoints not named (counted, `N skipped (--only)`, `counts.skipped` and `only` in --json), so
+    they are not missing. A check refuses (exit 2, before any box) a pattern matching none of the
+    baseline's IDs, listing them: a typo would otherwise cost a run to learn. --approve --only drops
+    only named checkpoints the scenario no longer takes, keeps the rest byte for byte, takes a
+    window's largest speck from its kept checkpoints too (finding 363's rule), draws baseline.png of
+    the approved ones, and keeps check.json when it says another setup than this run's (said: it
+    stays true of the rest; a whole --approve brings all to this one). Chosen, where the issue left
+    it open: a subcommand (`check wants`) beside the variable, since a glob list is awkward to match
+    in bash. Tests: check.rs only_names_checkpoints_by_id_or_glob, only_checks_and_approves_the_named;
+    t_unit_check (refusals, wants, the skipped point; they fail on the old code); t_check_only (a
+    real run: a section skipped by `check wants`, a check of one, --approve --only).
+601. **report.png was the same small sheet at any box scale** (2026-10-31, #402). check.py lays the
+    report out for a model's look (finding 361: 1456 px wide, pairs at most 706x360, 14 pt), so the
+    shots of a scale-2 or scale-4 box were scaled down into it and its text looked soft beside them:
+    unusable full size in a README or a video. That default stays. `--report-scale N` (2 to 4, on
+    `check run` and on `check diff --report`) draws a second file, REPORT@Nx.png (baseline@Nx.png
+    and its pages baseline-K@Nx.png at --approve): check.py's same plan, laid out at 1 exactly as
+    report.png (the same cards, crops and what fits), then every length drawn N times (an integer, so
+    each exact): text at N x 14 pt, marks, strokes and corners, each crop resampled from its shot to N
+    times its 1x size, so on a box of scale N a crop is at the shot's own pixels and on scale 1 it is
+    pixel-doubled (`-scale`). At scale 1 check.py's arguments are byte for byte the old ones. Said
+    after the report ("report at 2x: PATH (for people ...)"), `report_scaled` in --json. Chosen,
+    where the issue left it open: an option, not an automatic report@2x.png on a scaled box (it costs
+    a magick run nobody may want, and a scale-1 box's report for a video needs it too). Tests:
+    t_unit_check (the 2x copy twice the 1x one each way, report.png unchanged, the overview's 28 pt
+    and its page names; they fail on the old code); check.rs only_checks_and_approves_the_named and
+    t_check_only (report@2x.png of a real check, twice report.png).
 605. **A window shot failed "grim failed: it ended with status 139" while the window changed size**
     (2026-10-31, #387). Hyprland fails a window's frame copy (ext-image-copy-capture's `failed`)
     when its buffer changes size during it, and grim 1.5.0's handler for that prints

@@ -90,6 +90,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   GTK and Qt apps, which write their own line instead, get theirs, said as a protocol error only
   when it says so, else as a lost or failed connection. A `wait window` or `wait layer` that gives up now says a job that ended meanwhile itself, instead
   of leaving it to the next command ([#335](https://github.com/diogochaves/omabox/issues/335)).
+- **`check run --only ID,GLOB`** checks only the named checkpoints, while you work on one screen: the
+  baseline's others are skipped (counted, not missing), `check point` takes no other, and a scenario
+  skips whole sections with **`omabox check wants ID...`** (the list is also in
+  `OMABOX_CHECK_ONLY`). A name that matches none of the baseline's is refused before a box starts.
+  `--approve --only` replaces those checkpoints and keeps every other one as it was
+  ([#376](https://github.com/diogochaves/omabox/issues/376)).
+- **`--report-scale N`** (`check run`, `check diff --report`) also draws the report for people,
+  `report@Nx.png` (`baseline@Nx.png` at `--approve`): the same layout N times its size, crops at the
+  shots' own pixels on a box of scale N. `report.png` stays sized for an agent at any box scale
+  ([#402](https://github.com/diogochaves/omabox/issues/402)).
 
 ### Fixed
 

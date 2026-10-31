@@ -80,7 +80,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "--hold= --for= --sheet --frames= --every= --fit= --json"
         )),
         b"check" => Some(concat!(
-            "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= -w= --window= --active -g= ",
+            "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= --report-scale= --only= -w= --window= --active -g= ",
             "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland --autoreload --no-shell --no-pointer"
         )),
         _ => None,

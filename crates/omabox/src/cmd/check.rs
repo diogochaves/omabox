@@ -1,4 +1,4 @@
-//! `omabox check run | point | diff` (#252, findings 357-363): visual checks. A scenario's
+//! `omabox check run | point | diff | wants` (#252, findings 357-363): visual checks. A scenario's
 //! checkpoints (shots, and with --window the window's tree) against a baseline, compared exactly in
 //! the rendering users see, specks (parts under a checkpoint's speck) left out; holes (see-through
 //! parts inside a surface) found on a clean box's sentinel wallpaper. Every refusal and setup error
@@ -37,14 +37,15 @@ pub const CHK_JQ: &str = r#"def regions: split("\n") | map(select(. != "") | cap
 /// check diff --json's object.
 pub const CHK_DIFF_JQ: &str = r#"
     {result: $res, size: ($size | size), regions: ($regs | regions), specks: ($sp | specks), marked: ($marked | path),
-     report: ($rep | path)}"#;
+     report: ($rep | path), report_scaled: ($rs | path)}"#;
 /// check run --json's object.
 pub const CHK_RUN_JQ: &str = r#"
     ($sum | split("\t")) as $s
     | {result: (if $rc == 0 then "same" else "changed" end), base: $s[0], shots: $s[1], report: ($s[2] | path),
-       setup: ($s[3] | path),
+       setup: ($s[3] | path), report_scaled: ($s[12] | path),
+       only: (if $s[13] == "" then null else $s[13] | split(",") end),
        counts: {checkpoints: ($s[4] | tonumber), same: ($s[5] | tonumber), changed: ($s[6] | tonumber), as_another: ($s[7] | tonumber),
-         holes: ($s[8] | tonumber), new: ($s[9] | tonumber), missing: ($s[10] | tonumber)},
+         holes: ($s[8] | tonumber), new: ($s[9] | tonumber), missing: ($s[10] | tonumber), skipped: ($s[11] | tonumber)},
        checkpoints: .}"#;
 /// One checkpoint of check run --json.
 pub const CHK_POINT_JQ: &str = r#"
@@ -434,10 +435,20 @@ fn check_mark(new: &[u8], outp: &[u8], regions: &[Vec<u8>]) -> bool {
 /// check_report PLAN OUT.png [KIND]: the report of a plan (check.py's layout, magick's drawing);
 /// what was left out of it ("" when nothing). None when check.py or magick fails.
 fn check_report(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
-    check_report_in(plan, png, kind)
+    check_report_in(plan, png, kind, 1)
 }
 
-fn check_report_in(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
+/// The people's copy of a report (#402): the same plan laid out as check_report's, drawn N times its
+/// size, to PNG@Nx.png; its path and what check_report gives (None when N is under 2 or it failed).
+fn scaled_report(plan: &[u8], png: &[u8], kind: &str, n: u32) -> Option<(Vec<u8>, Vec<u8>)> {
+    if n < 2 {
+        return None;
+    }
+    let p = scaled_path(png, n);
+    check_report_in(plan, &p, kind, n).map(|left| (p, left))
+}
+
+fn check_report_in(plan: &[u8], png: &[u8], kind: &str, scale: u32) -> Option<Vec<u8>> {
     let font = jq::tool(
         "fc-match",
         &["-f", "%{file}", "monospace"],
@@ -450,7 +461,11 @@ fn check_report_in(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
     }
     let part = cat!(png, ".part");
     let argsf = cat!(plan, ".args");
-    let r = py(&w(&[kind.as_bytes(), plan, &part, &fontp]), None, false);
+    let mut pa = w(&[kind.as_bytes(), plan, &part, &fontp]);
+    if scale > 1 {
+        pa.push(scale.to_string().into_bytes());
+    }
+    let r = py(&pa, None, false);
     // (`> "$plan.args"`: written whatever the status)
     let _ = std::fs::write(shell::path(&argsf), &r.out);
     if !r.ok() {
@@ -820,6 +835,75 @@ fn s_unless1(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
+/// What check run passes on to its comparison and its reports: --only's patterns (#376; none: all
+/// checkpoints) and --report-scale (#402; 0 or 1: report.png alone).
+#[derive(Default, Clone)]
+struct Opts {
+    only: Vec<Vec<u8>>,
+    scale: u32,
+}
+
+/// An --only pattern: a checkpoint's ID or a glob of IDs (`*`, `?`, `[...]`).
+fn only_ok(p: &[u8]) -> bool {
+    !p.is_empty()
+        && p.len() <= 64
+        && p.iter()
+            .all(|&c| c.is_ascii_alphanumeric() || b"._-*?[]!".contains(&c))
+}
+
+/// --only's value, comma-separated patterns, each checked (None: one is not a pattern).
+fn only_split(v: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let ps: Vec<Vec<u8>> = v
+        .split(|&c| c == b',')
+        .filter(|p| !p.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect();
+    (!ps.is_empty() && ps.iter().all(|p| only_ok(p))).then_some(ps)
+}
+
+/// Whether ID matches the glob PAT (fnmatch, as a shell's case).
+fn glob_match(pat: &[u8], id: &[u8]) -> bool {
+    let (Ok(p), Ok(s)) = (
+        std::ffi::CString::new(pat.to_vec()),
+        std::ffi::CString::new(id.to_vec()),
+    ) else {
+        return false;
+    };
+    // SAFETY: two NUL-ended strings alive for the call.
+    unsafe { libc::fnmatch(p.as_ptr(), s.as_ptr(), 0) == 0 }
+}
+
+/// Whether a run with --only ONLY takes checkpoint ID (no --only: every one).
+fn wanted(only: &[Vec<u8>], id: &[u8]) -> bool {
+    only.is_empty() || only.iter().any(|p| glob_match(p, id))
+}
+
+/// The --only of the run a scenario is in, from OMABOX_CHECK_ONLY (none: every checkpoint).
+fn env_only() -> Vec<Vec<u8>> {
+    let v = shell::env_or_empty("OMABOX_CHECK_ONLY");
+    v.split(|&c| c == b',')
+        .filter(|p| !p.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+/// The IDs of a baseline's checkpoints (its .point files), sorted.
+fn base_ids(base: &[u8]) -> Vec<Vec<u8>> {
+    shell::glob_ext(base, b".point")
+        .iter()
+        .map(|r| {
+            let id = shell::basename(r);
+            id.strip_suffix(b".point").unwrap_or(&id).to_vec()
+        })
+        .collect()
+}
+
+/// REPORT.png's people's copy at N (#402): REPORT@Nx.png beside it.
+fn scaled_path(png: &[u8], n: u32) -> Vec<u8> {
+    let stem = png.strip_suffix(b".png").unwrap_or(png);
+    cat!(stem, "@", n.to_string(), "x.png")
+}
+
 // --- the command ------------------------------------------------------------------------------------
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
@@ -855,6 +939,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             check_point(ctx, &v)
         }
         b"diff" => check_diff(ctx, a),
+        b"wants" => check_wants(ctx, a),
         b"-h" | b"--help" => crate::args::usage("check"),
         b"" => {
             crate::args::usage("check")?;
@@ -865,9 +950,43 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "check",
             "subcommand",
             &sub,
-            "(run, point or diff)",
-            &["run", "point", "diff"],
+            "(run, point, diff or wants)",
+            &["run", "point", "diff", "wants"],
         )),
+    }
+}
+
+/// check wants ID... (#376): whether the run the scenario is in takes any of these checkpoints (its
+/// --only, in OMABOX_CHECK_ONLY; without one, every checkpoint): exit 0 yes, 1 no. A scenario skips
+/// a section with it, where the time is (driving the app to a screen, not the shot).
+fn check_wants(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    let mut ids: Vec<Vec<u8>> = Vec::new();
+    for x in args {
+        match x.as_slice() {
+            b"-h" | b"--help" => return crate::args::usage("check"),
+            y if y.starts_with(b"-") => return Err(unknown_opt(ctx, "check wants", x)),
+            y => {
+                if !shell::re_match(CHECK_ID_RE, y) {
+                    return Err(ctx.die(cat!(
+                        "check wants: an ID is letters, digits, . _ - (64 at most, not starting with . _ -), got ",
+                        y
+                    )));
+                }
+                ids.push(y.to_vec());
+            }
+        }
+    }
+    if ids.is_empty() {
+        return Err(ctx.die(
+            "check wants: which checkpoints? (their IDs: if omabox check wants settings about; then ...)",
+        ));
+    }
+    ctx.parsed();
+    let only = env_only();
+    if ids.iter().any(|id| wanted(&only, id)) {
+        Ok(())
+    } else {
+        Err(Exit(1))
     }
 }
 
@@ -894,6 +1013,7 @@ fn chk_json(pairs: &[(&str, &[u8])], prog: &str) -> Vec<u8> {
 fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut files, mut masks) = (Vec::<Vec<u8>>::new(), Vec::<Vec<u8>>::new());
     let (mut speck, mut outp, mut report, mut json) = (CHECK_SPECK, Vec::new(), Vec::new(), false);
+    let mut scale = 0u32;
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
@@ -930,6 +1050,11 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 report = args[i + 1].clone();
                 i += 1;
             }
+            b"--report-scale" => {
+                optarg(ctx, x, v)?;
+                scale = report_scale(ctx, "check diff", &args[i + 1])?;
+                i += 1;
+            }
             b"-h" | b"--help" => return crate::args::usage("check"),
             y if y.starts_with(b"-") => return Err(unknown_opt(ctx, "check diff", x)),
             _ => files.push(x.clone()),
@@ -938,6 +1063,11 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     if files.len() != 2 {
         return Err(ctx.die("check diff: two shots, A.png B.png"));
+    }
+    if scale > 0 && report.is_empty() {
+        return Err(ctx.die(
+            "check diff: --report-scale goes with --report R.png (it writes R@Nx.png beside it)",
+        ));
     }
     ctx.parsed();
     need_magick(ctx)?;
@@ -989,7 +1119,12 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let plan_g = PlanGuard(plan.clone());
     // (With --json the text lines are not said: the object at the end says it all.)
     let said = |v: &[u8]| -> Res<()> { if json { Ok(()) } else { out(v) } };
-    let diff_json = |res: &str, size: &[u8], regs: &[u8], sp: &[u8], marked: &[u8], rep: &[u8]| {
+    let diff_json = |res: &str,
+                     size: &[u8],
+                     regs: &[u8],
+                     sp: &[u8],
+                     marked: &[u8],
+                     (rep, rs): (&[u8], &[u8])| {
         if json {
             let o = chk_json(
                 &[
@@ -999,6 +1134,7 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     ("sp", sp),
                     ("marked", marked),
                     ("rep", rep),
+                    ("rs", rs),
                 ],
                 CHK_DIFF_JQ,
             );
@@ -1007,15 +1143,17 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     };
     if sa != sb {
         said(&cat!("size ", sa, " -> ", sb, "\n"))?;
-        let mut rep = Vec::new();
+        let (mut rep, mut rs) = (Vec::new(), Vec::new());
         if !plan.is_empty() {
             append(&plan, &cat!("size\t", sa, " -> ", sb, "\n"));
-            if diff_report(&plan, &report, &said) {
+            let (ok, s) = diff_report(&plan, &report, scale, &said);
+            if ok {
                 rep = report.clone();
             }
+            rs = s;
         }
         plan_g.forget();
-        diff_json("changed", &cat!(sa, " -> ", sb), b"", b"", b"", &rep);
+        diff_json("changed", &cat!(sa, " -> ", sb), b"", b"", b"", (&rep, &rs));
         return Err(Exit(1));
     }
     let res = check_regions(&files[0], &files[1], speck.to_string().as_bytes(), &masks)
@@ -1034,7 +1172,7 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             hash_sp(&sp),
             " px)\n"
         ))?;
-        diff_json("same", b"", b"", &spl, b"", b"");
+        diff_json("same", b"", b"", &spl, b"", (b"", b""));
         return Ok(());
     }
     for r in lines(&regions) {
@@ -1052,12 +1190,16 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             return Err(ctx.die(cat!("check diff: could not draw ", outp, " (magick)")));
         }
     }
-    let mut rep = Vec::new();
-    if !plan.is_empty() && diff_report(&plan, &report, &said) {
-        rep = report.clone();
+    let (mut rep, mut rs) = (Vec::new(), Vec::new());
+    if !plan.is_empty() {
+        let (ok, s) = diff_report(&plan, &report, scale, &said);
+        if ok {
+            rep = report.clone();
+        }
+        rs = s;
     }
     plan_g.forget();
-    diff_json("changed", b"", &regions, &spl, &outp, &rep);
+    diff_json("changed", b"", &regions, &spl, &outp, (&rep, &rs));
     Err(Exit(1))
 }
 
@@ -1078,9 +1220,15 @@ impl Drop for PlanGuard {
     }
 }
 
-/// check_diff_report PLAN REPORT: the report of a plan, then the plan gone; a failure said (the
-/// answer stands) and false.
-fn diff_report(plan: &[u8], report: &[u8], said: &dyn Fn(&[u8]) -> Res<()>) -> bool {
+/// check_diff_report PLAN REPORT: the report of a plan (and at --report-scale N its people's copy,
+/// REPORT@Nx.png: #402), then the plan gone; a failure said (the answer stands). Whether the report
+/// was drawn, and the copy's path ("" for none).
+fn diff_report(
+    plan: &[u8],
+    report: &[u8],
+    scale: u32,
+    said: &dyn Fn(&[u8]) -> Res<()>,
+) -> (bool, Vec<u8>) {
     let ok = match check_report(plan, report, "sheet") {
         Some(left) => {
             let more = if left.is_empty() {
@@ -1100,8 +1248,74 @@ fn diff_report(plan: &[u8], report: &[u8], said: &dyn Fn(&[u8]) -> Res<()>) -> b
             false
         }
     };
+    let scaled = people_copy(plan, report, "sheet", scale, "report", "check diff", said);
     rm(plan);
-    ok
+    (ok, scaled)
+}
+
+/// The people's copy of a report or overview at --report-scale N (#402), drawn and said ("LEAD at
+/// Nx: PATH ..."), or why not on stderr (WHO's words); its path, "" for none (N under 2 too).
+fn people_copy(
+    plan: &[u8],
+    png: &[u8],
+    kind: &str,
+    n: u32,
+    lead: &str,
+    who: &str,
+    said: &dyn Fn(&[u8]) -> Res<()>,
+) -> Vec<u8> {
+    if n < 2 {
+        return Vec::new();
+    }
+    match scaled_report(plan, png, kind, n) {
+        Some((p, pages)) => {
+            // (an overview's pages after the first, a line each)
+            let more = if kind == "overview" && !pages.is_empty() {
+                let pl = lines(&pages);
+                let joined: Vec<u8> = pl.iter().flat_map(|l| cat!(" ", l)).collect();
+                cat!(" and ", pl.len().to_string(), " more pages:", joined)
+            } else {
+                Vec::new()
+            };
+            let _ = said(&cat!(
+                lead,
+                " at ",
+                n.to_string(),
+                "x: ",
+                p,
+                more,
+                " (for people: the same, ",
+                n.to_string(),
+                " times its size; agents read the 1x one)\n"
+            ));
+            p
+        }
+        None => {
+            say(cat!(
+                who,
+                ": the ",
+                lead,
+                " at ",
+                n.to_string(),
+                "x could not be drawn (magick, to ",
+                scaled_path(png, n),
+                ")"
+            ));
+            Vec::new()
+        }
+    }
+}
+
+/// --report-scale's value: 2 to 4 (#402).
+fn report_scale(ctx: &Ctx, who: &str, v: &[u8]) -> Res<u32> {
+    if !shell::re_match("^[2-4]$", v) {
+        return Err(ctx.die(cat!(
+            who,
+            ": --report-scale is 2 to 4 (report.png itself is 1, sized for an agent), got ",
+            v
+        )));
+    }
+    Ok(u32::try_from(shell::dec(v).unwrap_or(2)).unwrap_or(2))
 }
 
 // --- check point ---
@@ -1257,6 +1471,18 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Err(ctx.die(
             "check point: outside a check run (omabox check run -- SCENARIO calls it), give -o DIR",
         ));
+    }
+    // A checkpoint the run's --only does not name is not taken (#376): no wait, no shot.
+    let only = env_only();
+    if !wanted(&only, &id) {
+        say(cat!(
+            "check point ",
+            id,
+            ": skipped, not in --only (",
+            only.join(&b','),
+            ")"
+        ));
+        return Ok(());
     }
     mkdirs(ctx, &outd)?;
     let f = |ext: &str| cat!(outd, "/", id, ext);
@@ -1731,6 +1957,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     );
     let mut upopts: Vec<Vec<u8>> = Vec::new();
     let mut scen: Vec<Vec<u8>> = Vec::new();
+    let mut opts = Opts::default();
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
@@ -1738,6 +1965,22 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         match x.as_slice() {
             b"--approve" => approve = true,
             b"--json" => json = true,
+            b"--only" => {
+                optarg(ctx, x, v)?;
+                let Some(ps) = only_split(&args[i + 1]) else {
+                    return Err(ctx.die(cat!(
+                        "check run: --only takes checkpoint IDs or globs of them (letters, digits, . _ - and * ? [ ]), comma-separated, like main,settings-*; got ",
+                        args[i + 1]
+                    )));
+                };
+                opts.only.extend(ps);
+                i += 1;
+            }
+            b"--report-scale" => {
+                optarg(ctx, x, v)?;
+                opts.scale = report_scale(ctx, "check run", &args[i + 1])?;
+                i += 1;
+            }
             b"--runs" => {
                 optarg(ctx, x, v)?;
                 if !shell::re_match("^[2-9]$", &args[i + 1]) {
@@ -1871,6 +2114,24 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         return Err(Exit(4));
     }
+    // A check's --only names checkpoints of its baseline: one that names none (a typo) is said
+    // before a run is spent on it. (--approve may name a new one.)
+    if !approve {
+        let ids = base_ids(&base);
+        for p in &opts.only {
+            if !ids.iter().any(|id| glob_match(p, id)) {
+                return Err(ctx.die(cat!(
+                    "check run: --only ",
+                    p,
+                    " names no checkpoint of the baseline in ",
+                    base,
+                    " (it has: ",
+                    ids.join(&b' '),
+                    "; a new one: --approve --only ID)"
+                )));
+            }
+        }
+    }
     if outd.is_empty() {
         let state = shell::env("XDG_STATE_HOME")
             .filter(|s| !s.is_empty())
@@ -1917,6 +2178,13 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| cat!("check-", std::process::id().to_string()));
     let root_bin = shell::bytes(&crate::root().join("bin")).to_vec();
+    if !opts.only.is_empty() {
+        say(cat!(
+            "check: --only ",
+            opts.only.join(&b','),
+            ": the other checkpoints are skipped (check point does not take them; `omabox check wants ID` tells the scenario)"
+        ));
+    }
     for k in 1..=nruns {
         let bname = cat!(prefix, "-", k.to_string());
         say(cat!(
@@ -1982,7 +2250,8 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let runlog = cat!(outd, "/run", k.to_string(), ".log");
         // (a Ctrl-C from the terminal the scenario outlives lets the run go on, as before:
         // sig::takes_ctrl_c)
-        let rc = crate::sig::takes_ctrl_c(|| scenario(&scen, &path, &bname, &rund, &runlog));
+        let only = opts.only.join(&b',');
+        let rc = crate::sig::takes_ctrl_c(|| scenario(&scen, &path, &bname, &rund, &runlog, &only));
         let mut c = crate::sig::omabox_cmd();
         c.arg("down")
             .arg(OsStr::from_bytes(&bname))
@@ -2014,11 +2283,21 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             return Err(Exit(3));
         }
         if check_ids(&rund).is_empty() {
-            say("check: the scenario took no checkpoint (omabox check point ID in it)");
+            let msg = if opts.only.is_empty() {
+                b"the scenario took no checkpoint (omabox check point ID in it)".to_vec()
+            } else {
+                cat!(
+                    "the scenario took none of the checkpoints --only names (",
+                    only,
+                    ")"
+                )
+            };
+            say(cat!("check: ", msg));
             if json {
                 let o = Args::new(&["-nc"])
                     .kv("--arg", "log", &runlog)
-                    .arg(r#"{result: "failed", exit: 0, log: $log, message: "the scenario took no checkpoint"}"#)
+                    .kv("--arg", "m", &msg)
+                    .arg(r#"{result: "failed", exit: 0, log: $log, message: ($m | sub(" \\(omabox check point ID in it\\)$"; ""))}"#)
                     .run(None, jq::Err::Inherit)
                     .out;
                 let _ = out(&o);
@@ -2033,12 +2312,12 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         Some(ai(&speck))
     };
     if approve {
-        return check_approve(ctx, &outd, &base, spk, nruns);
+        return check_approve(ctx, &outd, &base, spk, nruns, &opts);
     }
     if json {
-        check_compare_json(ctx, &outd, &base, spk)
+        check_compare_json(ctx, &outd, &base, spk, &opts)
     } else {
-        check_compare(ctx, &outd, &base, spk, None).map(|_| ())
+        check_compare(ctx, &outd, &base, spk, None, &opts).map(|_| ())
     }
 }
 
@@ -2056,8 +2335,16 @@ fn enter(ctx: &Ctx, d: &[u8]) -> Res<()> {
 }
 
 /// The scenario, as bash's `PATH=... OMABOX=BOX OMABOX_SESSION="" OMABOX_CHECK_OUT=DIR SCEN... >
-/// LOG 2>&1`: its status (127 when there is none such, 126 when it cannot run).
-fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]) -> i32 {
+/// LOG 2>&1`: its status (127 when there is none such, 126 when it cannot run). ONLY, --only's
+/// patterns comma-separated, is its OMABOX_CHECK_ONLY (#376; none set when empty).
+fn scenario(
+    scen: &[Vec<u8>],
+    path: &[u8],
+    bname: &[u8],
+    rund: &[u8],
+    log: &[u8],
+    only: &[u8],
+) -> i32 {
     let f = match std::fs::File::create(shell::path(log)) {
         Ok(f) => f,
         Err(e) => {
@@ -2116,7 +2403,11 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
         .filter(|(k, _)| {
             !matches!(
                 k.as_slice(),
-                b"PATH" | b"OMABOX" | b"OMABOX_SESSION" | b"OMABOX_CHECK_OUT"
+                b"PATH"
+                    | b"OMABOX"
+                    | b"OMABOX_SESSION"
+                    | b"OMABOX_CHECK_OUT"
+                    | b"OMABOX_CHECK_ONLY"
             )
         })
         .collect();
@@ -2126,6 +2417,9 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
         (b"OMABOX_SESSION".to_vec(), Vec::new()),
         (b"OMABOX_CHECK_OUT".to_vec(), rund.to_vec()),
     ]);
+    if !only.is_empty() {
+        envv.push((b"OMABOX_CHECK_ONLY".to_vec(), only.to_vec()));
+    }
     let envp: Vec<std::ffi::CString> = envv
         .into_iter()
         .filter_map(|(k, v)| std::ffi::CString::new(cat!(k, "=", v)).ok())
@@ -2330,7 +2624,13 @@ fn chk_still(p: &[u8]) -> &'static str {
     }
 }
 
-fn check_compare_json(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>) -> Res<()> {
+fn check_compare_json(
+    ctx: &Ctx,
+    outd: &[u8],
+    base: &[u8],
+    speck: Option<i64>,
+    opts: &Opts,
+) -> Res<()> {
     let jsonl = cat!(outd, "/.check.jsonl");
     put(&jsonl, b"")?;
     let (crc, sum) = {
@@ -2339,7 +2639,7 @@ fn check_compare_json(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>) -
         let _o = (!crate::exit::hearing_out()).then(|| crate::exec::Redir::null(1));
         #[cfg(not(test))]
         let _o = crate::exec::Redir::null(1);
-        match check_compare(ctx, outd, base, speck, Some(&jsonl)) {
+        match check_compare(ctx, outd, base, speck, Some(&jsonl), opts) {
             Ok(s) => (0, s),
             Err(Exit(1)) => (1, LAST_SUM.with(|s| s.borrow().clone())),
             Err(e) => return Err(e),
@@ -2363,13 +2663,15 @@ thread_local! {
 }
 
 /// check_compare OUT BASE SPECK: a run against the baseline: same, changed (regions, tree), new,
-/// missing; Err(1) unless all same. Its CHK_SUM is the Ok's (and LAST_SUM's).
+/// missing; Err(1) unless all same. Its CHK_SUM is the Ok's (and LAST_SUM's). With --only, the
+/// baseline's checkpoints it does not name are skipped (counted, not missing: #376).
 fn check_compare(
     ctx: &Ctx,
     outd: &[u8],
     base: &[u8],
     speck: Option<i64>,
     jsonl: Option<&[u8]>,
+    opts: &Opts,
 ) -> Res<Vec<u8>> {
     let run1 = cat!(outd, "/run1");
     let plan = cat!(outd, "/report.plan");
@@ -2380,7 +2682,11 @@ fn check_compare(
     );
     let mut setup = Vec::new();
     let mut firsts: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+    let mut skipped = 0usize;
     for id in check_ids(&run1) {
+        if !wanted(&opts.only, &id) {
+            continue;
+        }
         n += 1;
         let np = cat!(run1, "/", id, ".point");
         if !shell::path(&cat!(base, "/", id, ".png")).is_file() {
@@ -2647,9 +2953,11 @@ fn check_compare(
             chk_still(&np),
         );
     }
-    for r in shell::glob_ext(base, b".point") {
-        let id = shell::basename(&r);
-        let id = id.strip_suffix(b".point").unwrap_or(&id).to_vec();
+    for id in base_ids(base) {
+        if !wanted(&opts.only, &id) {
+            skipped += 1;
+            continue;
+        }
         if !shell::path(&cat!(run1, "/", id, ".point")).is_file() {
             out(cat!(
                 "missing  ",
@@ -2661,7 +2969,7 @@ fn check_compare(
             point_json(jsonl, &Chk::default(), &id, "missing", b"", b"", b"", 0, "");
         }
     }
-    let mut rep = Vec::new();
+    let (mut rep, mut rscaled) = (Vec::new(), Vec::new());
     if changed + nholed > 0 {
         let mut p = format!(
             "title\tcheck: {} of {n} changed. Each pair: the baseline, then this run; red: pixels that changed, blue: only the tree\n",
@@ -2691,6 +2999,9 @@ fn check_compare(
                 "check: the report could not be drawn (magick); each change is marked in its ID.diff.png",
             ),
         }
+        rscaled = people_copy(&plan, &rp, "sheet", opts.scale, "report", "check", &|v| {
+            out(v)
+        });
     }
     rm(&plan);
     rm(&body);
@@ -2734,6 +3045,9 @@ fn check_compare(
     if missing > 0 {
         e += &format!(", {missing} missing");
     }
+    if skipped > 0 {
+        e += &format!(", {skipped} skipped (--only)");
+    }
     out(cat!(
         "check: ",
         same.to_string(),
@@ -2758,6 +3072,9 @@ fn check_compare(
         nholed.to_string().into_bytes(),
         new.to_string().into_bytes(),
         missing.to_string().into_bytes(),
+        skipped.to_string().into_bytes(),
+        rscaled,
+        opts.only.join(&b','),
     ] {
         sum.extend(v);
         sum.push(b'\t');
@@ -2766,7 +3083,16 @@ fn check_compare(
     if fail { Err(Exit(1)) } else { Ok(sum) }
 }
 
-fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: usize) -> Res<()> {
+/// check_approve OUT BASE SPECK RUNS: the runs made the baseline. With --only (#376), the checkpoints
+/// it names are replaced (or added), every other one kept as it was.
+fn check_approve(
+    ctx: &Ctx,
+    outd: &[u8],
+    base: &[u8],
+    speck: Option<i64>,
+    runs: usize,
+    opts: &Opts,
+) -> Res<()> {
     let cs = speck.unwrap_or(CHECK_SPECK);
     let plan = cat!(outd, "/baseline.plan");
     let body = cat!(plan, ".body");
@@ -2796,10 +3122,27 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             }
         }
     }
-    // A checkpoint the scenario no longer takes leaves the baseline (only the files a check writes).
-    for r in shell::glob_ext(base, b".point") {
-        let id = shell::basename(&r);
-        let id = id.strip_suffix(b".point").unwrap_or(&id).to_vec();
+    // A checkpoint the scenario no longer takes leaves the baseline (only the files a check writes);
+    // one --only does not name is kept as it was.
+    let mut kept = 0usize;
+    let mut wspeck: HashMap<Vec<u8>, i64> = HashMap::new();
+    for id in base_ids(base) {
+        if !wanted(&opts.only, &id) {
+            kept += 1;
+            // (its window's speck stands for the checkpoints of it approved now)
+            let pl = file_lines(&cat!(base, "/", id, ".point"));
+            let win = pl.first().and_then(|l| l.strip_prefix(b"of window "));
+            let sp = pl
+                .iter()
+                .filter_map(|l| l.strip_prefix(b"speck "))
+                .find(|d| shell::re_match("^[0-9]{1,6}$", d))
+                .and_then(shell::dec);
+            if let (Some(l), Some(sp), None) = (win, sp, speck) {
+                let e = wspeck.entry(l.to_vec()).or_insert(0);
+                *e = (*e).max(sp);
+            }
+            continue;
+        }
         if shell::path(&cat!(run(1), "/", id, ".point")).is_file() {
             continue;
         }
@@ -2817,7 +3160,6 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
     let mut holed: Vec<Vec<u8>> = Vec::new();
     let mut hoff = Vec::new();
     let mut pspeck: HashMap<Vec<u8>, i64> = HashMap::new();
-    let mut wspeck: HashMap<Vec<u8>, i64> = HashMap::new();
     let mut wof: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     let cmp_fail = |id: &[u8]| ctx.die(cat!("check: could not compare ", id, "'s runs (magick)"));
     for id in check_ids(&run(1)) {
@@ -3093,24 +3435,87 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             format!("speck {ps}\n").as_bytes(),
         );
     }
-    copy(ctx, &cat!(outd, "/env.json"), &cat!(base, "/check.json"))?;
-    out(cat!(
-        "check: baseline of ",
-        n.to_string(),
-        " checkpoints in ",
-        base,
-        " (",
-        unst.to_string(),
-        " with regions left out); runs in ",
-        outd,
-        "\n"
-    ))?;
-    // The baseline in one image (finding 363): a person or an agent looks before keeping it.
-    let mut p = cat!(
-        "title\tthe baseline in ",
-        base,
-        ", each checkpoint as a check will compare it; amber: unstable, left out; red: holes\n"
-    );
+    // The setup the baseline was made with. A part approved with --only on another setup than the
+    // rest's keeps the rest's (said): the next checks say it, which is true of the rest.
+    let cj = cat!(base, "/check.json");
+    let mut other_setup = Vec::new();
+    if kept > 0 && shell::path(&cj).is_file() {
+        let r = jq::tool(
+            "jq",
+            &Args::new(&["-rn"])
+                .kv("--slurpfile", "a", &cj)
+                .kv("--slurpfile", "b", &cat!(outd, "/env.json"))
+                .arg(CHK_SETUP_JQ)
+                .into_words(),
+            None,
+            jq::Err::Null,
+        );
+        if r.ok() {
+            other_setup = r.text();
+        }
+    }
+    if other_setup.is_empty() {
+        copy(ctx, &cat!(outd, "/env.json"), &cj)?;
+    }
+    if opts.only.is_empty() {
+        out(cat!(
+            "check: baseline of ",
+            n.to_string(),
+            " checkpoints in ",
+            base,
+            " (",
+            unst.to_string(),
+            " with regions left out); runs in ",
+            outd,
+            "\n"
+        ))?;
+    } else {
+        out(cat!(
+            "check: ",
+            n.to_string(),
+            " checkpoint",
+            s_unless1(n),
+            " approved in ",
+            base,
+            " (--only ",
+            opts.only.join(&b','),
+            "; ",
+            unst.to_string(),
+            " with regions left out), ",
+            kept.to_string(),
+            " other",
+            s_unless1(kept),
+            " kept as ",
+            if kept == 1 { "it was" } else { "they were" },
+            "; runs in ",
+            outd,
+            "\n"
+        ))?;
+    }
+    if !other_setup.is_empty() {
+        out(cat!(
+            "note: the baseline's other checkpoints were made with another setup (",
+            other_setup,
+            "): its check.json stays theirs; --approve without --only brings them all to this one\n"
+        ))?;
+    }
+    // The baseline in one image (finding 363): a person or an agent looks before keeping it. With
+    // --only, the checkpoints approved now.
+    let mut p = if opts.only.is_empty() {
+        cat!(
+            "title\tthe baseline in ",
+            base,
+            ", each checkpoint as a check will compare it; amber: unstable, left out; red: holes\n"
+        )
+    } else {
+        cat!(
+            "title\tthe checkpoints approved in ",
+            base,
+            " (--only ",
+            opts.only.join(&b','),
+            "; the others kept), each as a check will compare it; amber: unstable, left out; red: holes\n"
+        )
+    };
     p.extend(std::fs::read(shell::path(&body)).unwrap_or_default());
     put(&plan, &p)?;
     let bpng = cat!(outd, "/baseline.png");
@@ -3152,6 +3557,15 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             " before you keep it"
         )),
     }
+    people_copy(
+        &plan,
+        &bpng,
+        "overview",
+        opts.scale,
+        "overview",
+        "check",
+        &|v| out(v),
+    );
     rm(&plan);
     rm(&body);
     if !hoff.is_empty() {
@@ -3193,7 +3607,7 @@ mod tests {
         let empty = shell::bytes(&d).to_vec();
         let log = cat!(empty, "/log");
         for name in ["say", "shopt", "true"] {
-            let rc = scenario(&[name.as_bytes().to_vec()], &empty, b"b", &empty, &log);
+            let rc = scenario(&[name.as_bytes().to_vec()], &empty, b"b", &empty, &log, b"");
             assert_eq!(rc, 127, "{name}");
             assert_eq!(
                 std::fs::read(shell::path(&log)).unwrap(),
@@ -3205,7 +3619,14 @@ mod tests {
             );
         }
         for (name, want) in [("true", 0), ("false", 1)] {
-            let rc = scenario(&[name.as_bytes().to_vec()], b"/usr/bin", b"b", &empty, &log);
+            let rc = scenario(
+                &[name.as_bytes().to_vec()],
+                b"/usr/bin",
+                b"b",
+                &empty,
+                &log,
+                b"",
+            );
             assert_eq!(rc, want, "{name}");
         }
         let _ = std::fs::remove_dir_all(&d);
@@ -3650,7 +4071,16 @@ mod tests {
         }
         write(&ap.join("env.json"), ENV);
         let approve = |outd: &std::path::Path, base: &str, speck: Option<i64>| {
-            exit::heard_all(|| check_approve(&ctx, &pb(outd), &pb(&d.join(base)), speck, 3))
+            exit::heard_all(|| {
+                check_approve(
+                    &ctx,
+                    &pb(outd),
+                    &pb(&d.join(base)),
+                    speck,
+                    3,
+                    &Opts::default(),
+                )
+            })
         };
         let (rc, out) = approve(&ap, "apbase", None);
         assert_eq!(rc, Ok(()), "{out}");
@@ -3759,7 +4189,9 @@ mod tests {
         write(&c.join("env.json"), ENV);
         let base = d.join("apbase");
         let compare = |speck: Option<i64>| {
-            exit::heard_all(|| check_compare(&ctx, &pb(&c), &pb(&base), speck, None).map(|_| ()))
+            exit::heard_all(|| {
+                check_compare(&ctx, &pb(&c), &pb(&base), speck, None, &Opts::default()).map(|_| ())
+            })
         };
         let (rc, out) = compare(None);
         assert!(
@@ -3843,8 +4275,9 @@ mod tests {
         ]);
         write(&gc.join("env.json"), ENV);
         write(&gb.join("check.json"), ENV);
-        let (rc, out) =
-            exit::heard_all(|| check_compare(&ctx, &pb(&gc), &pb(&gb), None, None).map(|_| ()));
+        let (rc, out) = exit::heard_all(|| {
+            check_compare(&ctx, &pb(&gc), &pb(&gb), None, None, &Opts::default()).map(|_| ())
+        });
         assert!(
             out.lines()
                 .any(|l| l == "changed  s2: as s1 (its 1 region)"),
@@ -3911,7 +4344,13 @@ mod tests {
         write(&d.join("out/run1/p2.point"), "of screen\nsettled no\n");
         let ctx = check_ctx();
         let (rc, out) = exit::heard_all(|| {
-            check_compare_json(&ctx, &pb(&d.join("out")), &pb(&d.join("base")), None)
+            check_compare_json(
+                &ctx,
+                &pb(&d.join("out")),
+                &pb(&d.join("base")),
+                None,
+                &Opts::default(),
+            )
         });
         let j: serde_json::Value =
             serde_json::from_str(out.lines().last().unwrap_or_default()).unwrap();
@@ -3993,5 +4432,170 @@ mod tests {
         assert_eq!(idle_duration(b"30m", "--idle "), Ok(1800));
         assert_eq!(idle_duration(b"1.5", "--idle "), Err(1));
         assert_eq!(idle_duration(b"x", "--idle "), Err(1));
+    }
+
+    // --only's patterns (#376): IDs or globs of them, comma-separated; none: every checkpoint.
+    #[test]
+    fn only_names_checkpoints_by_id_or_glob() {
+        let v = |s: &str| s.as_bytes().to_vec();
+        assert_eq!(
+            only_split(b"main,settings-*"),
+            Some(vec![v("main"), v("settings-*")])
+        );
+        assert_eq!(
+            only_split(b"a,,b"),
+            Some(vec![v("a"), v("b")]),
+            "empty parts"
+        );
+        assert_eq!(only_split(b","), None, "nothing named");
+        assert_eq!(only_split(b"a b"), None, "a blank");
+        assert_eq!(only_split(b"../x"), None, "a path");
+        let only = vec![v("main"), v("settings-*"), v("tab[12]")];
+        let took: Vec<&str> = ["main", "main2", "settings-a", "settings", "tab1", "tab3"]
+            .into_iter()
+            .filter(|id| wanted(&only, id.as_bytes()))
+            .collect();
+        assert_eq!(took, ["main", "settings-a", "tab1"]);
+        assert!(wanted(&[], b"anything"), "no --only: every one");
+        assert_eq!(scaled_path(b"/o/report.png", 2), v("/o/report@2x.png"));
+        assert_eq!(scaled_path(b"r", 3), v("r@3x.png"));
+    }
+
+    // check run --only (#376): a check of the named checkpoints, the baseline's others skipped (not
+    // missing); --approve --only replaces those and keeps every other one as it was.
+    #[test]
+    #[ignore = "runs magick and python: run by test/run.sh (cargo test -- --ignored)"]
+    fn only_checks_and_approves_the_named() {
+        let d = scratch("only");
+        images(&d);
+        let ctx = check_ctx();
+        let only = |ps: &[&str]| Opts {
+            only: ps.iter().map(|p| p.as_bytes().to_vec()).collect(),
+            scale: 0,
+        };
+        let put_point = |dir: &std::path::Path, id: &str, img: &str, point: &str| {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::copy(d.join(img), dir.join(format!("{id}.png"))).unwrap();
+            write(&dir.join(format!("{id}.point")), point);
+        };
+        let base = d.join("base");
+        for id in ["main", "set-a", "set-b"] {
+            put_point(&base, id, "a.png", &format!("{SCREEN}speck 8\n"));
+        }
+        write(&base.join("check.json"), ENV);
+        // A run that took set-a alone (its scenario skipped the rest), changed.
+        let run1 = d.join("c/run1");
+        put_point(&run1, "set-a", "new.png", SCREEN);
+        write(&d.join("c/env.json"), ENV);
+        let (rc, out) = exit::heard_all(|| {
+            check_compare(
+                &ctx,
+                &pb(&d.join("c")),
+                &pb(&base),
+                None,
+                None,
+                &only(&["set-*"]),
+            )
+            .map(|_| ())
+        });
+        assert_eq!(rc, Err(Exit(1)), "{out}");
+        assert!(line_at(&out, "changed  set-a: 1 region"), "{out}");
+        assert!(
+            line_at(&out, "missing  set-b"),
+            "set-b named, not taken: {out}"
+        );
+        assert!(
+            !out.contains("missing  main"),
+            "main not named: skipped: {out}"
+        );
+        assert!(
+            line_at(
+                &out,
+                "check: 0 of 2 same, 1 changed, 1 missing, 1 skipped (--only)"
+            ),
+            "{out}"
+        );
+        // --json: skipped counted, the patterns said.
+        let (_, out) = exit::heard_all(|| {
+            check_compare_json(&ctx, &pb(&d.join("c")), &pb(&base), None, &only(&["set-a"]))
+        });
+        let j: serde_json::Value =
+            serde_json::from_str(out.lines().last().unwrap_or_default()).unwrap();
+        assert_eq!(
+            (
+                j["counts"]["checkpoints"].as_i64(),
+                j["counts"]["skipped"].as_i64(),
+                j["only"].to_string(),
+                j["report_scaled"].is_null()
+            ),
+            (Some(1), Some(2), r#"["set-a"]"#.to_string(), true),
+            "{out}"
+        );
+        // --report-scale 2: report@2x.png beside report.png, twice its size.
+        let (_, out) = exit::heard_all(|| {
+            let o = Opts {
+                scale: 2,
+                ..only(&["set-a"])
+            };
+            check_compare(&ctx, &pb(&d.join("c")), &pb(&base), None, None, &o).map(|_| ())
+        });
+        let (r1, r2) = (d.join("c/report.png"), d.join("c/report@2x.png"));
+        assert!(line_at(&out, "report at 2x: "), "{out}");
+        let size = |p: &std::path::Path| crate::shots::png_size(&pb(p));
+        let (Some((w1, h1)), Some((w2, h2))) = (size(&r1), size(&r2)) else {
+            panic!("no reports: {out}");
+        };
+        assert_eq!(
+            (w2, h2),
+            (2 * w1, 2 * h1),
+            "the same report, twice its size"
+        );
+        // --approve --only set-a: set-a replaced, main and set-b kept as they were (byte for byte).
+        let ap = d.join("ap");
+        for k in 1..=3 {
+            put_point(&ap.join(format!("run{k}")), "set-a", "new.png", SCREEN);
+        }
+        write(&ap.join("env.json"), ENV);
+        let before = std::fs::read(base.join("main.png")).unwrap();
+        let (rc, out) = exit::heard_all(|| {
+            check_approve(&ctx, &pb(&ap), &pb(&base), None, 3, &only(&["set-a"]))
+        });
+        assert_eq!(rc, Ok(()), "{out}");
+        assert!(!out.contains("dropped"), "nothing dropped: {out}");
+        assert!(
+            line_at(&out, "check: 1 checkpoint approved in ")
+                && out.contains("2 others kept as they were"),
+            "{out}"
+        );
+        assert_eq!(
+            (
+                std::fs::read(base.join("main.png")).unwrap() == before,
+                base.join("set-b.point").is_file(),
+                std::fs::read(base.join("set-a.png")).unwrap()
+                    == std::fs::read(d.join("new.png")).unwrap()
+            ),
+            (true, true, true),
+            "main and set-b kept, set-a replaced"
+        );
+        // Another setup: check.json stays the rest's, said.
+        write(
+            &ap.join("env.json"),
+            r#"{"gpu":"y","locale":"en_US.UTF-8","timezone":"UTC"}"#,
+        );
+        let (_, out) = exit::heard_all(|| {
+            check_approve(&ctx, &pb(&ap), &pb(&base), None, 3, &only(&["set-a"]))
+        });
+        assert!(
+            line_at(
+                &out,
+                "note: the baseline's other checkpoints were made with another setup (gpu x -> y)"
+            ),
+            "{out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base.join("check.json")).unwrap(),
+            ENV
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

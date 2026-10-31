@@ -40,11 +40,12 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox jobs [-b NAME] [--json]                         the box's run -d jobs: pid, age, processes, log, command
   omabox stop [-b NAME] (JOB... | --all)                 stop run -d jobs (JOB: a pid jobs lists), their windows gone
   omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
-  omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
-                                                         a visual check: the scenario's checkpoints against a baseline
+  omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [--only ID,GLOB...] [--report-scale N]
+                   [UP OPTIONS] -- SCENARIO [ARG...]     a visual check: the scenario's checkpoints against a baseline
   omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
                                                          a checkpoint, in a scenario: once still, a shot (and the tree)
-  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png] [--json]
+  omabox check wants ID...                               in a scenario: does this run take any of them (--only)? exit 0 yes, 1 no
+  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png [--report-scale N]] [--json]
                                                          what differs, as a check sees it
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
@@ -547,8 +548,15 @@ had), holes, new or missing; when any changed, look at
 report.png first (each change cropped beside its baseline). Exit 0 all same, 1 not, 2 called wrongly or
 could not run (an option, a file, no box, no magick), 3 the scenario failed, 4 no baseline. Shots are compared exactly but for specks (stray parts smaller than the
 approve runs differed by, said under "same"), and searched for holes (the #ff00ff wallpaper inside a
-window, the bar or a popup). `check diff A B` compares two shots of yours the same way. More (times
-and dates, specks, holes): the omabox skill's reference.md, "Visual checks". Not inside ai-jail yet.
+window, the bar or a popup). --only ID,GLOB (while working on one screen; a whole run before the
+work lands) checks only the checkpoints it names, the others skipped (not missing): check point
+takes no other, and the scenario skips a section with `omabox check wants ID...` (exit 1: none of
+them wanted; the list is in OMABOX_CHECK_ONLY); with --approve it replaces those in the baseline,
+every other kept as it was. --report-scale N (2 to 4) also draws report.png (baseline.png at
+--approve) N times its size, report@Nx.png, for people (a README, a site, a video): the same layout,
+crops at the shots' own pixels on a box of scale N; report.png stays the agent's. `check diff A B`
+compares two shots of yours the same way. More (times and dates, specks, holes): the omabox skill's
+reference.md, "Visual checks". Not inside ai-jail yet.
 @ drag
 `drag` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
@@ -851,7 +859,8 @@ app first for a clean save. Saves live in ~/.local/share/omabox/saves until `sav
 Exit codes, the same in every command:
   0         done, or the condition held (wait, events --until; check run: nothing changed)
   1         it ran and failed, or the answer is no: no such box up, a refusal, wait's "unknown" (the
-            box went down), tree finding nothing, which's "not in a box"; check: a checkpoint changed
+            box went down), tree finding nothing, which's "not in a box"; check: a checkpoint changed;
+            check wants: none of its IDs taken this run
   2         called wrong: an unknown option or command (the nearest one named), a value missing or
             not of its form, a word too many or too few; said with omabox help COMMAND. Also: --window
             SEL matching no window or several (listed), which PID for a process gone, check's errors

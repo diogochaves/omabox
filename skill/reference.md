@@ -74,8 +74,8 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
-| `check run --json` | `result` (same, changed), `base, shots, report, setup, counts, checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
-| `check diff --json` | `result, size, regions, specks, marked, report` |
+| `check run --json` | `result` (same, changed), `base, shots, report, report_scaled, setup, only, counts` (`skipped`: not named by `--only`), `checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
+| `check diff --json` | `result, size, regions, specks, marked, report, report_scaled` |
 | `record status --json` | `recording, stopped, monitors, fps, file, audio, started` |
 | `mode --json` | `name, mode, scale` |
 | `window --json` | the window, as an element of `windows --json` |
@@ -311,6 +311,34 @@ Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme, size, loca
 said in the report. A check's tree is a window's: the shell's and its plugins' checks are pixels only. `omabox check
 diff A.png B.png [--ignore G] [--speck N] [--report R.png]` compares two shots of yours the same way
 (32 px specks unless `--speck`; exit 0 same, 1 not, 2 an error). Not inside ai-jail yet.
+
+While you work on one screen, check only its checkpoints: `omabox check run --only settings,settings-*
+-- ./visual.sh` (IDs or globs, comma-separated). A plain run drives the whole scenario every time
+(37 checkpoints: 2.5 min, 7-9 with `--approve`); `--only` skips the others, counted as skipped, not
+missing (`check: 2 of 2 same, 35 skipped (--only)`), and refuses a name that matches none of the
+baseline's before a box starts. `check point` takes no checkpoint it does not name (it says so, exit
+0), but the scenario still drives the app to those screens, where the time is: guard each section
+with `omabox check wants ID...` (exit 0 when the run takes any of them, always without `--only`; 1
+when none), the list is also in `OMABOX_CHECK_ONLY`:
+
+```bash
+if omabox check wants settings settings-dark; then
+  omabox keys --window myapp --wait ctrl+comma
+  omabox check point settings --window myapp
+  # ...
+fi
+```
+
+`--approve --only ID,...` replaces those checkpoints in the baseline (adds a new one) and keeps every
+other one byte for byte; `baseline.png` shows the ones approved. A part approved on another setup
+(GPU, Omarchy...) keeps the rest's `check.json`, said. Run the whole check (no `--only`) before the
+work lands: a change to one screen can move another.
+
+For people (a README, a site, a release video), `--report-scale N` (2 to 4; `check run`, and with
+`check diff --report R.png`) also draws the report N times its size, `report@Nx.png` beside
+`report.png` (`baseline@Nx.png` at `--approve`): the same layout, its text, marks and crops N times,
+a crop at its shot's own pixels on a box of scale N (`--size 3840x2160,scale=2` with 2). Agents read
+`report.png`, kept one look whatever the box's scale.
 
 Each checkpoint is also searched for holes: the `#ff00ff` wallpaper showing through inside a window,
 the bar or a popup (a transparent part, a gap, a card that forgot its background), and in a

@@ -8786,6 +8786,26 @@ t_unit_check() {
     check_match "...another size: a report too (both whole)" "^size 200x100 -> 201x100"$'\n'"report: .*/rs.png\\|1$" "$out|$rc"
     rc=0; out=$(ob check diff "$d/a.png" "$d/a.png" --report "$d/rn.png") || rc=$?
     check_eq "...nothing changed: no report" "same (specks: 0, 0 px)|0|no" "$out|$rc|$([ -e "$d/rn.png" ] && echo yes || echo no)"
+    # A report for people (#402, finding 601): --report-scale N draws the same report N times its
+    # size beside it (R@Nx.png); R.png stays the agent's.
+    rc=0; out=$(ob check diff "$d/big.png" "$d/big2.png" --report "$d/rp.png" --report-scale 2) || rc=$?
+    check_match "check diff --report-scale 2: the report, then its 2x copy, exit 1" \
+      $'\nreport: [^\n]*/rp.png\nreport at 2x: [^\n]*/rp@2x.png \\(for people[^|]*\\|1$' "$out|$rc"
+    local wh2
+    wh2=$(magick identify -format '%w %h' "$d/rp@2x.png" 2>/dev/null) || wh2="0 0"
+    check_eq "...twice the agent's report each way (its layout, drawn at 2x)" "$(( ${wh% *} * 2 )) $(( ${wh#* } * 2 ))" "$wh2"
+    check_eq "...R.png the same as without it" "$(magick identify -format '%#' "$d/r.png" 2>/dev/null)" \
+      "$(magick identify -format '%#' "$d/rp.png" 2>/dev/null)"
+    check_match "...--json: report_scaled" "rp@2x.png$" \
+      "$(ob check diff "$d/big.png" "$d/big2.png" --report "$d/rp.png" --report-scale 2 --json | jq -r .report_scaled)"
+    local ow oh
+    IFS=x read -r ow oh <<<"$(python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov1.png.part" "" | tr '\0' '\n' | sed -n 6p)"
+    check_eq "...an overview at 2x: text at 28 pt, its page twice the 1x one's" $'-pointsize\n28\n(\n-size\n'"$((ow * 2))x$((oh * 2))" \
+      "$(python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov2.png.part" "" 2 | tr '\0' '\n' | sed -n '2,6p')"
+    { printf 'title\tthe baseline\n'; for k in $(seq 1 14); do printf 'point\tc%s\t%s\twindow W\n' "$k" "$d/big.png"; done; } > "$pl"
+    python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov@2x.png.part" "" 2 > "$d/ov.args"
+    mapfile -d '' ova < "$d/ov.args"
+    check_eq "...an overview's pages at 2x: OUT-2@2x.png" "$d/ov-2@2x.png" "$(head -n 1 <<<"${ova[0]}")"
     # check.py sheet: the plan's cards. A tree's line for a region's element, a move only the tree has
     # (blue), what -annotate would read as escapes; seven crops: the whole shots; too many: left out.
     printf '%s' '[{"depth":0,"role":"frame","name":"W","states":[],"x":0,"y":0,"w":1920,"h":1080},
@@ -8831,10 +8851,28 @@ t_unit_check() {
   check_match "omabox -b NAME check run: refused too, -b is check point's" "-b NAME goes with check point" "$(ob -b x check run -- true 2>&1)"
   check_match "omabox -b NAME check point: the box is asked for" "no box '$P-uckb' is up" "$(OMABOX_CHECK_OUT=$d/o ob -b "$P-uckb" check point a 2>&1)"
   check_match "check: help names its commands" "omabox check run" "$(ob help check 2>&1)"
+  # --only (#376, finding 600): a check of the named checkpoints. One that names none of the
+  # baseline's is said before a box is made; the scenario hears the list (check wants), and check
+  # point takes no checkpoint it does not name.
+  mkdir -p "$d/ob"; : > "$d/ob/main.png"; : > "$d/ob/main.point"; : > "$d/ob/set-a.point"
+  rc=0; out=$(ob check run --only 'mian,set-*' --base "$d/ob" -- true 2>&1) || rc=$?
+  check_match "check run --only a typo: said with the baseline's checkpoints, exit 2, no box" \
+    "--only mian names no checkpoint of the baseline in $d/ob \\(it has: main set-a; .*\\|2$" "$out|$rc"
+  check_match "...an ID that is no pattern refused" "--only takes checkpoint IDs or globs" "$(ob check run --only 'a b' -- true 2>&1)"
+  check_match "check run --report-scale: 2 to 4" "--report-scale is 2 to 4" "$(ob check run --report-scale 1 -- true 2>&1)"
+  check_match "check diff --report-scale goes with --report" "--report-scale goes with --report" \
+    "$(ob check diff "$d/x.png" "$d/y.png" --report-scale 2 2>&1)"
+  check_eq "check wants outside a run (no --only): every checkpoint, exit 0" 0 "$(ob check wants main >/dev/null 2>&1; echo $?)"
+  check_eq "...in a run with --only set-*: main not, exit 1; set-b or main, exit 0" "1 0" \
+    "$(OMABOX_CHECK_ONLY='set-*' ob check wants main; echo -n "$? "; OMABOX_CHECK_ONLY='x,set-*' ob check wants set-b main; echo $?)"
+  rc=0; out=$(OMABOX_CHECK_ONLY='set-*' OMABOX_CHECK_OUT=$d/oo ob -b "$P-uckb" check point main 2>&1) || rc=$?
+  check_eq "check point an ID --only does not name: skipped (said), exit 0, no box asked, nothing written" \
+    "check point main: skipped, not in --only (set-*)|0|no" "${out#omabox: }|$rc|$([ -e "$d/oo" ] && echo yes || echo no)"
   # Its refusals and setup errors exit 2, never 1, its "changed" (#281).
   local how hargs
   for how in "check bogus" "check run --bogus" "check run --base $d -- " "check diff $d/nonexistent.png $d/a.png" "check diff --speck x" \
-    "check point ../x" "check point --ignore 1,2" "check point -b $P-uckb a" "-b x check diff a b"; do
+    "check point ../x" "check point --ignore 1,2" "check point -b $P-uckb a" "-b x check diff a b" \
+    "check run --only ../x -- true" "check run --report-scale 5 -- true" "check wants ../x" "check wants"; do
     rc=0; read -r -a hargs <<<"$how"; OMABOX_CHECK_OUT=$d/o ob "${hargs[@]}" >/dev/null 2>&1 || rc=$?
     check_eq "omabox $how: exit 2 (not 1, changed)" 2 "$rc"
   done
@@ -9023,6 +9061,66 @@ SH
   rc=0; out=$(ob check run --base "$d/base" -o "$d/f" -- false 2>&1) || rc=$?
   check_eq "a scenario that fails: exit 3" 3 "$rc"
   check_eq "no check box left" "" "$(ob ls 2>/dev/null | grep -F "$P-chk" || true)"
+  unset OMABOX_CHECK_NAME
+}
+
+# check run --only (#376, finding 600) and --report-scale (#402, finding 601), end to end: a scenario
+# whose window section runs only when `check wants` its checkpoints; a check of one checkpoint skips
+# the others (not missing) and draws the report for people at 2x; --approve --only replaces the named
+# ones and keeps the rest byte for byte.
+t_check_only() {
+  local d=$TMP/cko out rc
+  if ! command -v qml6 >/dev/null 2>&1 || ! command -v magick >/dev/null; then
+    skip "check run --only end to end" "no qml6 (qt6-declarative) or magick"; return
+  fi
+  mkdir -p "$d"
+  cat > "$d/scenario.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "${OMABOX_CHECK_ONLY-unset}" > "$OMABOX_CHECK_OUT/only.txt"
+omabox check point bar -g "0,0 1920x26"
+if omabox check wants win win-crop; then
+  : > "$OMABOX_CHECK_OUT/drove-win"
+  cat > "$(omabox path)/home/o.qml" <<QML
+import QtQuick
+Window { width: 300; height: 160; visible: true; title: "Only demo"; color: "#202030"
+  Rectangle { x: $((20 + ${MOVE:-0})); y: 20; width: 80; height: 30; color: "#c0c0d0" } }
+QML
+  omabox run -d -- qml6 /home/sbx/o.qml
+  omabox wait --timeout 20s window 'title:^Only demo$'
+  omabox check point win --window 'title:^Only demo$'
+  omabox check point win-crop --window 'title:^Only demo$' -g "0,0 150x80"
+fi
+SH
+  chmod +x "$d/scenario.sh"
+  export OMABOX_CHECK_NAME=$P-cko
+  rc=0; out=$(ob check run --approve --runs 2 --base "$d/base" -o "$d/a" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_match "approve the three: exit 0" 'check: baseline of 3 checkpoints in .*\|0$' "$out|$rc"
+  check_eq "...the scenario saw no OMABOX_CHECK_ONLY" "unset" "$(cat "$d/a/run1/only.txt" 2>&1)"
+  rc=0; out=$(MOVE=6 ob check run --only win --report-scale 2 --base "$d/base" -o "$d/c" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_match "--only win, the rectangle 6 px to the right: win changed, exit 1" $'(^|\n)changed  win: [^|]*\\|1$' "$out|$rc"
+  check_match "...the others skipped, not missing" 'check: 0 of 1 same, 1 changed, 2 skipped \(--only\); ' "$out"
+  check_eq "...none said missing; the scenario heard the list; win-crop not taken though its section ran" "|win|yes|no" \
+    "$(grep '^missing' <<<"$out" || true)|$(cat "$d/c/run1/only.txt" 2>&1)|$([ -e "$d/c/run1/drove-win" ] && echo yes || echo no)|$([ -e "$d/c/run1/win-crop.point" ] && echo yes || echo no)"
+  check_match "...the report for people said" $'\nreport at 2x: [^\n]*/c/report@2x.png \\(for people' "$out"
+  local wh wh2
+  wh=$(magick identify -format '%w %h' "$d/c/report.png" 2>/dev/null) || wh="0 0"
+  wh2=$(magick identify -format '%w %h' "$d/c/report@2x.png" 2>/dev/null) || wh2="0 0"
+  check_eq "...twice report.png each way" "$(( ${wh% *} * 2 )) $(( ${wh#* } * 2 ))" "$wh2"
+  check "...report.png still one look" test "${wh% *}" -gt 0 -a "${wh% *}" -le 1456
+  rc=0; out=$(ob check run --only bar --base "$d/base" -o "$d/b" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_eq "--only bar: the window's section not driven (check wants), bar same, exit 0" "no|0" \
+    "$([ -e "$d/b/run1/drove-win" ] && echo yes || echo no)|$rc"
+  check_match "...counted" 'check: 1 of 1 same, 2 skipped \(--only\); ' "$out"
+  cp "$d/base/bar.png" "$d/bar.before.png"
+  rc=0; out=$(MOVE=6 ob check run --approve --only 'win*' --runs 2 --base "$d/base" -o "$d/ap" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_match "--approve --only 'win*': two approved, the bar kept, exit 0" \
+    "check: 2 checkpoints approved in [^ ]*/base \\(--only win\\*; [0-9]+ with regions left out\\), 1 other kept as it was; .*\\|0$" "$out|$rc"
+  check "...the bar's files kept byte for byte" cmp -s "$d/bar.before.png" "$d/base/bar.png"
+  check "...its .point too" test -s "$d/base/bar.point"
+  rc=0; out=$(MOVE=6 ob check run --base "$d/base" -o "$d/f" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_match "a whole check after it, the rectangle moved: all same, exit 0" 'check: 3 of 3 same; .*\|0$' "$out|$rc"
+  check_eq "no check box left" "" "$(ob ls 2>/dev/null | grep -F "$P-cko" || true)"
   unset OMABOX_CHECK_NAME
 }
 
@@ -18864,7 +18962,7 @@ t_run_cwd() {
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
@@ -18875,7 +18973,7 @@ default_jobs() {
   local n m; n=$(($(nproc) / 2)) m=$(awk '/^MemAvailable:/ {print int($2 / 2097152)}' /proc/meminfo)
   [ "$m" -ge "$n" ] || n=$m; [ "$n" -le 8 ] || n=8; [ "$n" -ge 1 ] || n=1; echo "$n"
 }
-SLOW=(t_check t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_peek_monitors t_reap_race t_wait t_pointer t_clip t_replace t_idle)
+SLOW=(t_check t_check_only t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_peek_monitors t_reap_race t_wait t_pointer t_clip t_replace t_idle)
 
 # The host's session through the CLI's own lookup (HOST_SIG, main's: probe host_session), so the suite
 # runs from a guarded shell too. hyprctl itself: the CLI's host_hyprctl is not a probe (it would pass a
