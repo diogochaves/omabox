@@ -46,6 +46,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ran. When one of Omarchy's commands calls it, the guard now names that command, and for `omarchy
   plugin list` says where the installed plugins are
   ([#332](https://github.com/diogochaves/omabox/issues/332)).
+- **A bound folder deleted and made again on the host showed empty in the box**, with every command
+  succeeding. `run` now says so once, with what to do
+  ([#391](https://github.com/diogochaves/omabox/issues/391)).
 
 ## 1.0.2 — 2026-10-30
 

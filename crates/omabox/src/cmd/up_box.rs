@@ -706,6 +706,25 @@ fn box_json(
     o.insert("systemd".into(), Value::Bool(u.systemd));
     o.insert("audio".into(), Value::Bool(u.audio));
     o.insert("overlays".into(), arr(&u.overlays));
+    // The folders bound in, each source's device and inode as up found it (#391): `run` tells one
+    // deleted and made again on the host, which the box keeps as it was (empty).
+    let mounts: Vec<Value> = u
+        .ro_args
+        .iter()
+        .map(|(src, dest)| (src, dest))
+        .chain(u.overlays.iter().map(|p| (p, p)))
+        .filter_map(|(src, dest)| {
+            use std::os::unix::fs::MetadataExt;
+            let m = std::fs::metadata(shell::path(src)).ok()?;
+            let mut e = Map::new();
+            e.insert("src".into(), s(src));
+            e.insert("dest".into(), s(dest));
+            e.insert("dev".into(), Value::from(m.dev()));
+            e.insert("ino".into(), Value::from(m.ino()));
+            Some(Value::Object(e))
+        })
+        .collect();
+    o.insert("mounts".into(), Value::Array(mounts));
     o.insert("wayland_screen".into(), Value::Bool(wayland_screen));
     o.insert("xwayland".into(), Value::Bool(u.xwayland));
     o.insert("autoreload".into(), Value::Bool(u.autoreload));

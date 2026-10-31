@@ -654,6 +654,69 @@ pub fn run_cwd_note(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
     say(cwd_note(&ctx.name, how, &w, &pwd, norepo));
 }
 
+/// mount_gone_notes (#391): a folder bound into the box at up (box.json's mounts) that is no longer
+/// the one bound, deleted and made again on the host or removed, is said once a box and folder. The
+/// box keeps the one it bound (empty, when it was deleted), and every command there succeeds.
+pub fn mount_gone_notes(ctx: &Ctx) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(text) = std::fs::read(ctx.at("box.json")) else {
+        return;
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&text) else {
+        return;
+    };
+    let Some(ms) = v.get("mounts").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    let noted_f = ctx.at("noted-mounts");
+    let noted = std::fs::read(&noted_f).unwrap_or_default();
+    let mut add = Vec::new();
+    for m in ms {
+        let (Some(src), Some(dev), Some(ino)) = (
+            m.get("src").and_then(serde_json::Value::as_str),
+            m.get("dev").and_then(serde_json::Value::as_u64),
+            m.get("ino").and_then(serde_json::Value::as_u64),
+        ) else {
+            continue;
+        };
+        let now = std::fs::metadata(src).ok().map(|n| (n.dev(), n.ino()));
+        if now == Some((dev, ino)) || noted.split(|&c| c == b'\n').any(|l| l == src.as_bytes()) {
+            continue;
+        }
+        let how = if now.is_none() {
+            "removed"
+        } else {
+            "deleted and made again"
+        };
+        let dest = m
+            .get("dest")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(src);
+        say(cat!(
+            "note: ",
+            no_cntrl(src.as_bytes()),
+            ", bound into box '",
+            ctx.name,
+            "' at up, was ",
+            how,
+            " on the host since: the box still has the folder it bound at ",
+            no_cntrl(dest.as_bytes()),
+            ", empty if it was deleted (down, then up again binds the new one; a folder kept, its files remade inside it, needs neither)"
+        ));
+        add.extend_from_slice(&cat!(src, "\n"));
+    }
+    if !add.is_empty() {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&noted_f)
+        {
+            let _ = f.write_all(&add);
+        }
+    }
+}
+
 /// The note run_cwd_note says (NAME's box; HOW the command; WORD the path word, DIR the caller's
 /// dir; NOREPO a throwaway outside any repo), its control characters as ?.
 pub fn cwd_note(name: &[u8], how: &str, word: &[u8], dir: &[u8], norepo: bool) -> Vec<u8> {

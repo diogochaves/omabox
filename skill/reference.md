@@ -665,7 +665,10 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
   path mapping with `--ro-bind ~/nas:/mnt/nas`), mise's toolchains (`omabox run` keeps your PATH, so
   node/python/uv are the host's), `--plugin` dirs and the user's fonts (below); nothing else of the
-  user's HOME is mounted.
+  user's HOME is mounted. A bound folder is the one that was there at `up`: deleted and made again
+  on the host (a build that `rm -rf`s its output folder, another agent sharing it), the box keeps the
+  old one, empty, and every command there succeeds (`run` says so once). Bind a folder you keep and
+  remake the files inside it, not the folder; or `down`, then `up` again.
 - **The user's fonts** (`~/.local/share/fonts`, `~/.fonts`) are mounted read-only at the same place in
   the box HOME, so a theme's or plugin's own faces draw as on the desk (`up` says it; `ls --json`:
   `desk_fonts`). Not in an `up --clean` box (`--keep fonts` brings them), not with `up --no-seed

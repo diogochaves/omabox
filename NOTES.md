@@ -10778,6 +10778,18 @@ from them.
     Exit 4 (0 with -q) as before. Read-only queries still do not pass: they reach the user's shell,
     which the guard keeps an agent from (the issue left that call open; not changed). Test:
     t_unit_guard_omarchy_shell (a stand-in omarchy-plugin-list calling it from `$(...)`).
+557. **A bound folder deleted and made again on the host showed empty in the box, with no word**
+    (2026-10-30, #391). A box binds a `--ro-bind`/`--overlay` folder (and the repo, its git dir, the
+    plugins' and the rest of `up`'s own) as it is at `up`; `rm -rf DIR; mkdir DIR` on the host leaves
+    the box the old, deleted directory: empty, every command succeeding. It hit two of five subagents
+    sharing a built site's folder another agent remade. `up` now writes each bind's source with its
+    device and inode in box.json (`mounts`); `run` (foreground and -d) compares them, and a source
+    that is gone or another directory now is said once a box and folder ("note: DIR, bound into box
+    'B' at up, was deleted and made again on the host since: the box still has the folder it bound
+    at DEST, empty if it was deleted (down, then up again binds the new one; a folder kept, its
+    files remade inside it, needs neither)"; said ones in `<box dir>/noted-mounts`). A box started
+    by an older omabox has no `mounts`: nothing said. The skill's reference says it under Mounts.
+    Test: t_mount_replaced (a folder remade after up: said once, the box sees none of the new one).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

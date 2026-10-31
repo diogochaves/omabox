@@ -294,6 +294,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         job_note(ctx); // (need_box's, when it did not run)
         run_link_notes(ctx, "down, then up", false, &cmd); // through a link out of the repo (#235)
         run_cwd_note(ctx, "down, then up", &cmd); // a path in this dir the box does not have (#251)
+        crate::repo::mount_gone_notes(ctx); // a folder bound at up, replaced on the host since (#391)
         if detach {
             return detached(ctx, &mut st, quiet, print_log, replace, &cmd);
         }
