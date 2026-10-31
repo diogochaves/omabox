@@ -8518,6 +8518,8 @@ t_saves() {
   check "down" ob down "$B3"
   check "...saves rm" sv saves rm "$S2"
   check "down" ob down "$B2"
+  # (the repo's name is $B's, which a down took: its note gives run no throwaway, #295; cleared)
+  rm -f "$XDG_RUNTIME_DIR/omabox/.taken-$B"
   check_eq "run --from: a throwaway box with the save" hello \
     "$(cd "$(tmp_repo sv)" && env -u OMABOX XDG_DATA_HOME="$TMP/data" "$CLI" run --from "$S" --no-shell -- cat /home/sbx/.local/share/app/data 2>/dev/null)"
   check "saves rm" sv saves rm "$S"
@@ -12610,7 +12612,7 @@ t_cli_up() {
   cx_want=(rc=2 out= "err=omabox: restart-shell: one box name, got $U and x (omabox help restart-shell)")
   cx_case "restart-shell -b with a name too" restart-shell -b "$U" x
   cx_env=() cx_prep=""
-  rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; probe box_pid "$U" > "$r/rpu-pid1"; }
+  rpu_up() { (cd "$r/norepo" && ob up "$U" --no-shell --net isolated >/dev/null 2>&1); probe box_pid "$U" > "$r/rpu-pid1"; }
   # (its PID 1 recorded before the down, in rpu_up: gone after it)
   rpu_gone() { echo "== dir $(test -e "$XDG_RUNTIME_DIR/omabox/$U" && echo there || echo gone)"; echo "== reaper $(pgrep -fc "omabox _reap $U " || true)"
     echo "== HOME $(test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$U" && echo there || echo gone)"
@@ -13170,7 +13172,7 @@ EOF
   cx_prep="" cx_sed='s/\(specks: [0-9]+, [0-9]+ px\)/(specks)/; s/^specks: [0-9]+, [0-9]+ px$/specks/'
   cx_want=(rc=0 'out=same (specks)' err=)
   cx_case "check diff: two shots of the box" check diff "$ck/p/s1.png" "$ck/p/s1.png"
-  cx_want=(rc=1 'out={"result":"changed","size":{"from":"1920x1080","to":"300x200"},"regions":[],"specks":null,"marked":null,"report":null}' err=)
+  cx_want=(rc=1 'out={"result":"changed","size":{"from":"1920x1080","to":"300x200"},"regions":[],"specks":null,"marked":null,"report":null,"report_scaled":null}' err=)
   cx_case "check diff: sizes" check diff --json "$ck/p/s1.png" "$ck/p/s2.png"
   # check run: a scenario that takes two checkpoints; its boxes named as the suite's.
   printf '#!/bin/sh\nomabox check point whole && omabox check point part -g "0,0 400x300"\n' > "$ck/scen"; chmod +x "$ck/scen"
@@ -13189,7 +13191,7 @@ EOF
   cx_prep=cx_ckc
   cx_want=(rc=0 "out=same     whole"$'\n'"same     part"$'\n'"check: 2 of 2 same; shots in $ck/o/run1" "err~^omabox: check: run 1 of 1: a clean box \\($P-rpc-1\\), then: $ck/scen\$")
   cx_case "check run: against its baseline" check run --base "$ck/base" -o "$ck/o" -- "$ck/scen"
-  cx_want=(rc=0 'out~^\{"result":"same",.*"counts":\{"checkpoints":2,"same":2,"changed":0,"as_another":0,"holes":0,"new":0,"missing":0\},')
+  cx_want=(rc=0 'out~^\{"result":"same",.*"counts":\{"checkpoints":2,"same":2,"changed":0,"as_another":0,"holes":0,"new":0,"missing":0,"skipped":0\},')
   cx_case "check run --json: against its baseline" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/scen"
   cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit 5\\): trying \\($ck/o/run1\\.log\\)\$")
   cx_case "check run: the scenario failed, exit 3" check run --base "$ck/base" -o "$ck/o" -- "$ck/bad"
@@ -13202,7 +13204,7 @@ EOF
   # (a scenario named like a function of bash's omabox: a program, and there is none, finding 451)
   cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit 127\\): omabox: check: cannot run scenario say: not found in PATH \\($ck/o/run1\\.log\\)\$")
   cx_case "check run: a scenario named like omabox's say" check run --base "$ck/base" -o "$ck/o" -- say
-  cx_want=(rc=1 'out~^\{"result":"changed",.*"counts":\{"checkpoints":4,"same":1,"changed":0,"as_another":0,"holes":0,"new":2,"missing":1\},' 'state~^== \./o/run1/lz8\.point$' 'state~^ignore 0 0 20 20$' 'state!~^ignore 8 ')
+  cx_want=(rc=1 'out~^\{"result":"changed",.*"counts":\{"checkpoints":4,"same":1,"changed":0,"as_another":0,"holes":0,"new":2,"missing":1,"skipped":0\},' 'state~^== \./o/run1/lz8\.point$' 'state~^ignore 0 0 20 20$' 'state!~^ignore 8 ')
   cx_case "check run --json: checkpoints with 010 and 08 in them" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/lz"
   # Scenarios bash cannot run as they are: not executable, a dir, binary; one with no #! is a
   # script bash runs itself; a path to nothing.
@@ -19007,6 +19009,9 @@ t_link_out() {
   check_eq "...run: it is there, no note" "app" "$(cd "$repo" && ob run -b "$B" -- cat target/debug/app 2>"$TMP/lo.err")"
   check_eq "...nothing said" "" "$(cat "$TMP/lo.err")"
   ob down "$B" >/dev/null 2>&1
+  # (a down leaves the name a note that gives run no throwaway in its place, #295: cleared, as the
+  # throwaway is what is checked here)
+  rm -f "$XDG_RUNTIME_DIR/omabox/.taken-$B"
   err=$(cd "$repo" && env -u OMABOX "$CLI" run --no-shell -- cat target/debug/app 2>&1)
   check_match "a throwaway: its up names it, with run --ro-bind" "note: $repo/target -> $out: outside the box, where the link dangles; run --ro-bind $out mounts it" "$err"
   check_eq "...once" 1 "$(grep -c 'outside the box' <<<"$err")"
