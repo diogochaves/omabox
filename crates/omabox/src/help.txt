@@ -10,10 +10,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio] [--polkit]                         its own PipeWire (a silent mic); a polkit agent can register (polkit ask)
-            [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
-            [--dnd] [--no-dock]                          Do Not Disturb on, no toast up; Omarchy 4.5's dock off
-            [--stock]                                    Omarchy as a new user sees it: none of your look, for showcase shots
-            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   --stock, frozen: shots compared across runs
+            [--no-pointer] [--dnd] [--no-dock]           no pointer (pointer show); Do Not Disturb on; 4.5's dock off
+            [--stock | --clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   a new user's look; --clean: frozen too
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
