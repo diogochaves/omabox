@@ -55,6 +55,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `run`, `down`, `host`, `peek`, `config` and the others that can reach your desktop, your files or
   other boxes still ask. The skill's reference says which, and what Codex and OpenCode take instead
   ([#338](https://github.com/diogochaves/omabox/issues/338)).
+- **`omabox tray`** lists the box's tray items and their menus, read over the box's own session
+  bus: each item's id, title and status, and its rows as `tree` words them (`check menu item
+  "Sync" [checked]`, a submenu's rows under it, [disabled]); `--json` for scripts. `tray click ID
+  LABEL` clicks a row by its label, as the bar's menu does, and prints it as the app has it after
+  (several alike: `--index N`; a hidden, disabled or submenu row is refused). `tray menu ID` opens
+  one item's menu as a host does, `tray activate ID` is a left click on its icon (`--secondary` a
+  middle one). No pixels: Omarchy's bar publishes no place for its icons, so where a real click on
+  one lands is still found from a shot ([#343](https://github.com/diogochaves/omabox/issues/343)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

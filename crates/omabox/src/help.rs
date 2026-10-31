@@ -22,6 +22,7 @@ pub const COMMANDS: &[&str] = &[
     "jobs",
     "stop",
     "tree",
+    "tray",
     "check",
     "keys",
     "keys-to-box",

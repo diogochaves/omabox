@@ -9687,6 +9687,195 @@ PY
   check "down" ob down "$B"
 }
 
+# tray (#343, finding 623): the box's StatusNotifierItems and their dbusmenus, read and driven over the
+# box's own session bus, with fixture items of the test's own (python-gobject): one with a menu (a
+# check, radios in a submenu, a disabled row, a hidden one, two named alike), one without.
+t_tray() {
+  local B=$P-tray H out err rc lg
+  if ! python3 -c 'from gi.repository import Gio' >/dev/null 2>&1; then skip "tray" "no python-gobject"; return; fi
+  up_ok "$B-ns" --no-shell --net isolated || { no "up --no-shell" "$UP_OUT"; return; }
+  err=$(ob tray -b "$B-ns" 2>&1); rc=$?
+  check_match "no shell, no watcher: exit 1, said" "^1 omabox: tray: box '$B-ns' has no tray: nothing owns org.kde.StatusNotifierWatcher" "$rc $err"
+  ob down "$B-ns" >/dev/null
+  up_ok "$B" --stock-bar --net isolated || { no "up --stock-bar" "$UP_OUT"; return; }
+  H=$(ob path -b "$B")/home lg=$(ob path -b "$B")/home/tray-demo.log
+  out=$(ob tray -b "$B" 2>"$TMP/tray-err"); rc=$?
+  check_eq "no items yet: exit 0, nothing on stdout, said" "0 [] omabox: tray: box '$B' has no tray items" "$rc [$out] $(cat "$TMP/tray-err")"
+  check_eq "...--json: []" "[]" "$(ob tray -b "$B" --json 2>/dev/null)"
+  cat > "$H/tray-demo.py" <<'PY'
+import sys
+from gi.repository import Gio, GLib
+ID, TITLE = sys.argv[1], sys.argv[2]
+MENU_OF = len(sys.argv) < 4  # "nomenu": an item with no dbusmenu (its host asks ContextMenu)
+SNI = """<node><interface name="org.kde.StatusNotifierItem">
+<property name="Category" type="s" access="read"/><property name="Id" type="s" access="read"/>
+<property name="Title" type="s" access="read"/><property name="Status" type="s" access="read"/>
+<property name="IconName" type="s" access="read"/><property name="ItemIsMenu" type="b" access="read"/>
+%s
+<method name="Activate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+<method name="SecondaryActivate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+<method name="ContextMenu"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+<method name="Scroll"><arg type="i" direction="in"/><arg type="s" direction="in"/></method>
+</interface></node>""" % ('<property name="Menu" type="o" access="read"/>' if MENU_OF else "")
+MENU = """<node><interface name="com.canonical.dbusmenu">
+<property name="Version" type="u" access="read"/><property name="Status" type="s" access="read"/>
+<method name="GetLayout"><arg type="i" direction="in"/><arg type="i" direction="in"/><arg type="as" direction="in"/>
+<arg type="u" direction="out"/><arg type="(ia{sv}av)" direction="out"/></method>
+<method name="Event"><arg type="i" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="in"/><arg type="u" direction="in"/></method>
+<method name="AboutToShow"><arg type="i" direction="in"/><arg type="b" direction="out"/></method>
+<signal name="LayoutUpdated"><arg type="u"/><arg type="i"/></signal></interface></node>"""
+rev = 1
+rows = {  # id: (properties, children)
+    0: ({"children-display": "submenu"}, [1, 2, 3, 4, 5, 6, 10, 12, 9]),
+    1: ({"label": "_Show window"}, []),
+    2: ({"label": "Sync", "toggle-type": "checkmark", "toggle-state": 1}, []),
+    3: ({"type": "separator"}, []),
+    4: ({"label": "Delete all", "enabled": False}, []),
+    5: ({"label": "Stations", "children-display": "submenu"}, [7, 8]),
+    6: ({"label": "Hidden row", "visible": False}, []),
+    7: ({"label": "Jazz", "toggle-type": "radio", "toggle-state": 1}, []),
+    8: ({"label": "Rock", "toggle-type": "radio", "toggle-state": 0}, []),
+    9: ({"label": "Quit"}, []),
+    10: ({"label": "Recent", "children-display": "submenu"}, [11]),
+    11: ({"label": "Open"}, []),
+    12: ({"label": "Open"}, []),
+}
+
+
+def log(s):
+    with open("/home/sbx/tray-demo.log", "a") as f:
+        f.write("%s %s\n" % (ID, s))
+
+
+def var(x):
+    if isinstance(x, bool):
+        return GLib.Variant("b", x)
+    return GLib.Variant("i", x) if isinstance(x, int) else GLib.Variant("s", x)
+
+
+def node(i, depth):
+    p, kids = rows[i]
+    sub = [node(k, depth - 1) for k in kids] if depth != 0 else []
+    return GLib.Variant("(ia{sv}av)", (i, {k: var(x) for k, x in p.items()}, sub))
+
+
+def menu_call(conn, sender, path, iface, method, params, inv):
+    global rev
+    if method == "GetLayout":
+        pid, depth, _ = params.unpack()
+        inv.return_value(GLib.Variant.new_tuple(GLib.Variant("u", rev), node(pid, depth)))
+    elif method == "AboutToShow":
+        log("abouttoshow %d" % params.unpack()[0])
+        inv.return_value(GLib.Variant("(b)", (False,)))
+    elif method == "Event":
+        i, ev, _, _ = params.unpack()
+        log("event %d %s" % (i, ev))
+        inv.return_value(None)
+        if ev == "clicked":
+            if i == 2:
+                rows[2][0]["toggle-state"] ^= 1
+            if i in (7, 8):
+                rows[7][0]["toggle-state"], rows[8][0]["toggle-state"] = int(i == 7), int(i == 8)
+            rev += 1
+            conn.emit_signal(None, "/MenuBar", "com.canonical.dbusmenu", "LayoutUpdated", GLib.Variant("(ui)", (rev, 0)))
+            if i == 9:
+                GLib.idle_add(loop.quit)
+
+
+def sni_call(conn, sender, path, iface, method, params, inv):
+    log("%s %s" % (method.lower(), " ".join(str(a) for a in params.unpack())))
+    inv.return_value(None)
+
+
+def sni_prop(conn, sender, path, iface, name):
+    return {"Category": GLib.Variant("s", "ApplicationStatus"), "Id": GLib.Variant("s", ID),
+            "Title": GLib.Variant("s", TITLE), "Status": GLib.Variant("s", "Active"),
+            "IconName": GLib.Variant("s", "dialog-information"), "ItemIsMenu": GLib.Variant("b", False),
+            "Menu": GLib.Variant("o", "/MenuBar")}[name]
+
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+bus.register_object("/StatusNotifierItem", Gio.DBusNodeInfo.new_for_xml(SNI).interfaces[0], sni_call, sni_prop, None)
+if MENU_OF:
+    bus.register_object("/MenuBar", Gio.DBusNodeInfo.new_for_xml(MENU).interfaces[0], menu_call,
+                        lambda *a: GLib.Variant("u", 3) if a[4] == "Version" else GLib.Variant("s", "normal"), None)
+bus.call_sync("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
+              "RegisterStatusNotifierItem", GLib.Variant("(s)", ("/StatusNotifierItem",)), None, 0, -1, None)
+loop = GLib.MainLoop()
+loop.run()
+PY
+  ob run -b "$B" -d -q -- python3 /home/sbx/tray-demo.py omabox-tray-demo "Tray demo" >/dev/null
+  until_ok 10 bash -c "'$CLI' tray -b '$B' --json | jq -e 'length == 1'"
+  ob run -b "$B" -d -q -- python3 /home/sbx/tray-demo.py omabox-tray-plain "Plain demo" nomenu >/dev/null
+  until_ok 10 bash -c "'$CLI' tray -b '$B' --json | jq -e 'length == 2'"
+  out=$(ob tray -b "$B" 2>&1); rc=$?
+  check_eq "the items and their menus, the hidden row left out" "0 omabox-tray-demo \"Tray demo\" [active]
+  menu item \"Show window\"
+  check menu item \"Sync\" [checked]
+  separator
+  menu item \"Delete all\" [disabled]
+  menu \"Stations\"
+    radio menu item \"Jazz\" [checked]
+    radio menu item \"Rock\" [unchecked]
+  menu \"Recent\"
+    menu item \"Open\"
+  menu item \"Open\"
+  menu item \"Quit\"
+omabox-tray-plain \"Plain demo\" [active] (no menu)" "$rc $out"
+  check_match "...--all keeps it, -b before the command" $'\n  menu item "Hidden row" \\[hidden\\]\n' "$(ob -b "$B" tray --all 2>&1)"
+  out=$(ob tray -b "$B" --json 2>&1)
+  check_eq "...--json: id, title, status, menu, rows" "omabox-tray-demo|Tray demo|Active|/MenuBar|Sync check menu item true|Hidden row false" \
+    "$(jq -r '.[0] | "\(.id)|\(.title)|\(.status)|\(.menu)|\(.rows[1].label) \(.rows[1].role) \(.rows[1].checked)|\(.rows[5].label) \(.rows[5].visible)"' <<<"$out" 2>&1)"
+  check_eq "...one with no menu: null" "null" "$(jq -r '.[1].menu' <<<"$out" 2>&1)"
+  check_fails "a listing sends the app nothing (no AboutToShow, no event)" grep -q 'omabox-tray-demo \(abouttoshow\|event\)' "$lg"
+  out=$(ob tray -b "$B" menu tray-demo 2>&1); rc=$?
+  check_match "menu ID: its menu" "^0 omabox-tray-demo \"Tray demo\" \\[active\\]"$'\n'"  menu item \"Show window\"" "$rc $out"
+  check "...the app asked AboutToShow 0 first, as a host opening it does" grep -q '^omabox-tray-demo abouttoshow 0$' "$lg"
+  out=$(ob tray -b "$B" click tray-demo sync 2>"$TMP/tray-err"); rc=$?
+  check_eq "click ID LABEL: the row as it is after" '0 check menu item "Sync" [unchecked]' "$rc $out"
+  check_match "...said, as it was" 'omabox: tray: omabox-tray-demo: clicked check menu item "Sync" \[checked\]' "$(cat "$TMP/tray-err")"
+  check "...the app got the dbusmenu event" grep -q '^omabox-tray-demo event 2 clicked$' "$lg"
+  out=$(ob tray -b "$B" click tray-demo ROCK 2>"$TMP/tray-err"); rc=$?
+  check_eq "a radio in a submenu, any case" '0 radio menu item "Rock" [checked]' "$rc $out"
+  check_match "...said with its submenu" 'clicked menu "Stations" > radio menu item "Rock" \[unchecked\]' "$(cat "$TMP/tray-err")"
+  check "...its submenu opened first (AboutToShow 5), then the event" grep -qz 'abouttoshow 5.omabox-tray-demo event 8 clicked' "$lg"
+  out=$(ob tray -b "$B" click tray-demo open 2>&1); rc=$?
+  check_match "two named alike: exit 2, both listed for --index" $'^2 .*2 rows of omabox-tray-demo\'s menu are named "open": pick one with --index N\n  1: menu "Recent" > menu item "Open"\n  2: menu item "Open"$' "$rc $out"
+  check_fails "...nothing clicked" grep -q 'event 1[12] clicked' "$lg"
+  ob tray -b "$B" click tray-demo open --index 2 >/dev/null 2>&1
+  check "...--index 2 clicks the second" grep -q '^omabox-tray-demo event 12 clicked$' "$lg"
+  check_eq "...--index past them: exit 2" 2 "$(ob tray -b "$B" click tray-demo open --index 3 >/dev/null 2>&1; echo $?)"
+  check_eq "a part of a name: the one row (Show window, its mnemonic off)" '0 menu item "Show window"' "$(out=$(ob tray -b "$B" click tray-demo 'show win' 2>/dev/null); echo "$? $out")"
+  err=$(ob tray -b "$B" click tray-demo 'delete all' 2>&1); rc=$?
+  check_match "a disabled row: exit 1, said" '^1 .*menu item "Delete all" \[disabled\]: disabled' "$rc $err"
+  err=$(ob tray -b "$B" click tray-demo stations 2>&1); rc=$?
+  check_match "a submenu: exit 1, said" '^1 .*menu "Stations": it opens a submenu' "$rc $err"
+  err=$(ob tray -b "$B" click tray-demo 'hidden row' 2>&1); rc=$?
+  check_match "a hidden row: exit 1, said" '^1 .*menu item "Hidden row" \[hidden\]: hidden' "$rc $err"
+  check_fails "...none of the three sent" grep -q 'event [456] clicked' "$lg"
+  err=$(ob tray -b "$B" click tray-demo 'no such row' 2>&1); rc=$?
+  check_match "nothing named so: exit 1" "^1 .*no row of omabox-tray-demo's menu is named \"no such row\"" "$rc $err"
+  err=$(ob tray -b "$B" click demo sync 2>&1); rc=$?
+  check_match "an ID two items match: exit 2, both named" $'^2 .*"demo" names 2 tray items[^\n]*\n  omabox-tray-demo [^\n]*\n  omabox-tray-plain ' "$rc $err"
+  err=$(ob tray -b "$B" menu nosuch 2>&1); rc=$?
+  check_match "no such item: exit 1, the box's listed" $'^1 .*no tray item is "nosuch"; the box\'s:\n  omabox-tray-demo ' "$rc $err"
+  ob tray -b "$B" activate tray-demo >/dev/null 2>&1
+  check "activate: Activate (a left click)" grep -q '^omabox-tray-demo activate 0 0$' "$lg"
+  ob tray -b "$B" activate tray-demo --secondary >/dev/null 2>&1
+  check "...--secondary: SecondaryActivate (a middle click)" grep -q '^omabox-tray-demo secondaryactivate 0 0$' "$lg"
+  err=$(ob tray -b "$B" menu 'plain demo' 2>&1); rc=$?
+  check_match "menu of an item with no dbusmenu, by its title: ContextMenu, said" '^0 .*omabox-tray-plain has no menu on the bus: asked it to show its own \(ContextMenu\)' "$rc $err"
+  check "...the app was asked" grep -q '^omabox-tray-plain contextmenu 0 0$' "$lg"
+  err=$(ob tray -b "$B" click plain x 2>&1); rc=$?
+  check_match "click on an item with no menu: exit 1" '^1 .*omabox-tray-plain has no menu on the bus' "$rc $err"
+  check_eq "usage: a word tray does not know: exit 2" 2 "$(ob tray -b "$B" bogus >/dev/null 2>&1; echo $?)"
+  check_eq "...click without LABEL: exit 2" 2 "$(ob tray -b "$B" click tray-demo >/dev/null 2>&1; echo $?)"
+  check_eq "...--index 0: exit 2" 2 "$(ob tray -b "$B" click tray-demo open --index 0 >/dev/null 2>&1; echo $?)"
+  ob tray -b "$B" click tray-demo quit >/dev/null 2>&1
+  check "Quit: the app leaves, the tray lists one" until_ok 10 bash -c "'$CLI' tray -b '$B' --json | jq -e 'length == 1 and .[0].id == \"omabox-tray-plain\"'"
+  ob down "$B" >/dev/null
+}
+
 # tree --layer (#254, finding 384): which layer SEL names, and the hint that tells two frames of one
 # pid and size apart (the launcher over the wallpaper: the one with the keyboard), with Hyprland's
 # keyboard answer and the box stubbed.
@@ -19302,7 +19491,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

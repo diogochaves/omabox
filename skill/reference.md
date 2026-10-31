@@ -69,6 +69,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `jobs --json` | an array, oldest first: `pid, age` (seconds), `processes, log, argv` |
 | `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, monitor, certain` (false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all) |
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
+| `tray --json` | an array of items: `id, title, status, category, service, path, menu` (null: none), `item_is_menu, rows` (each `id, label, role, enabled, visible, toggle, checked, rows`); `tray menu --json`: one item |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `lua --json` | a line each value Lua returned (any JSON value) |
 | `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
@@ -1171,6 +1172,17 @@ most people will. Then:
   `~/.local/state/omarchy/current/theme/colors.toml`; `omarchy-theme-set` replaces that whole
   directory (`rm -rf`, then `mv`), so an app watching a file or the directory itself loses track:
   watch `current/`. A malformed theme: edit the box's copy of that file.
+- **Its tray icon and menu** (a row toggled, its checked state, a submenu): `omabox tray` lists the
+  box's items, `ID "TITLE" [status]`, and each one's menu in `tree`'s words (`check menu item
+  "Sync" [checked]`, `menu "Stations"` with its rows indented under it), read over the box's own
+  session bus; `--json` for a script. `omabox tray click ID LABEL` clicks a row as the bar's menu
+  does (any case, exact over a part; several alike: exit 2, `--index N`) and prints it as the app
+  then has it: `check menu item "Sync" [unchecked]`. `tray menu ID` opens the menu as a host does
+  (AboutToShow; an app may fill it then), `tray activate ID` is a left click on the icon,
+  `--secondary` a middle one. Not pixels, and not the bar's menu card: Omarchy's bar publishes no
+  accessible items nor where an icon is (`tree --layer omarchy-bar` has none), so for the look of
+  the icon or the card, a shot (`--stock-bar` if the user's bar has no tray). An item listed
+  `(no menu)` shows a menu of its own: `tray menu ID` asks it (ContextMenu), then `windows`, `tree`.
 - **Fresh profile, first run**: every new box. A state you reach once and test from often: `omabox
   save NAME`, then `up --from NAME`.
 - **Focus loss**: open another window (`omabox run -d -- foot`) or the Omarchy menu (`keys

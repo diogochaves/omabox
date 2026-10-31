@@ -16,6 +16,7 @@ omabox windows                         # the box's windows, where they are, what
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail
 omabox tree --find 'dark mode'         # text, not a shot: check box "Dark mode" [checked] @12,148 1872x26
+omabox tray click myapp sync           # a tray menu's row clicked over the box's bus; omabox tray lists them
 omabox shot --changed --window myapp   # only what changed since its last shot, cropped
 omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames
 omabox up --clean                      # a desktop where only what is tested moves (no clock, pointer, network)

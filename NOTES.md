@@ -11663,6 +11663,35 @@ from them.
     t_burst (in a box: a burst folder with a frame that is not an image, `shot -o` a text file and a
     link, `drag --shot` a text file, refused and untouched; an earlier shot written over),
     t_unit_version (the two caps). Not verified: a Claude Code session using the grant.
+623. **A tray menu took a hand-made walk over the bus and a PNG decoder** (2026-10-31, #343).
+    Omarchy 4.5's bar publishes no accessible items (`tree --layer omarchy-bar`), and its 4.5
+    indicator moved the tray one slot, so a fixed click opened the neighbouring widget. An agent
+    rebuilt it by hand: `run -- busctl` for RegisteredStatusNotifierItems, `Id`, `Menu`,
+    `GetLayout`, a dbusmenu `Event … clicked` for a row, and pixels for the icon (~25 min, ~6 s a
+    lookup). The box owns its watcher (the shell's), so `omabox tray` reads it all over the box's
+    own session bus: busctl `--user --json=short` run as box_sys (the box's DBUS_SESSION_BUS_ADDRESS
+    from omabox.env, never the host's), one NameHasOwner, one get-property, a GetAll per item and
+    a GetLayout per menu, ~16 ms for two items. It lists each item, `ID "TITLE" [status]` (`(no
+    menu)` without a dbusmenu), and its rows in `tree`'s words (`check menu item "Sync" [checked]`,
+    `radio menu item`, `menu "Stations"` for a submenu, `separator`, [disabled]; hidden rows only
+    with --all), mnemonic underscores off; `--json` has every row. A listing sends the apps
+    nothing; `tray menu ID` sends AboutToShow 0 first, as a host opening the menu does. `tray click
+    ID LABEL` picks the row as `click --find` picks a node (any case, exact over a part, several:
+    exit 2 numbered for --index N; hidden, disabled, a submenu: exit 1, nothing sent), sends
+    AboutToShow to each submenu on its way, then `Event(id, "clicked", i 0, now)`; it says the row
+    as it was and prints it as the app has it after, read again until the menu's revision moves (1
+    s at most): a check toggled is seen in the same call. `tray activate ID` is Activate 0 0 (the
+    bar's left click; an ItemIsMenu item is refused: its click opens its menu), `--secondary`
+    SecondaryActivate (the middle click); an item with no dbusmenu gets ContextMenu 0 0 from `tray
+    menu`, the call Quickshell makes for one (it shows a menu of its own). busctl needs `--` before
+    GetLayout's `-1` (else an unknown option). An entry is `SERVICE/PATH` (Quickshell's watcher
+    keeps the unique name), a bare name meaning `/StatusNotifierItem`. Not done: the item's place on
+    the bar, which the issue asked for where the shell allows it: Omarchy's Tray.qml has no IPC
+    handler and no accessible items, and its icons slide into a hover drawer unless pinned, so a
+    real click on an icon is still `click X Y` from a shot. Tests: t_tray (a python-gobject fixture
+    with a dbusmenu and one without: the listing, --all, --json, menu, click on a check, on a radio
+    in a submenu, two alike and --index, the refusals, activate, --secondary, ContextMenu, an item
+    that quits; a --no-shell box has no watcher), tray.rs's parsing, lines and picks.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

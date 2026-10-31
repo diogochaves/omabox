@@ -41,6 +41,10 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox jobs [-b NAME] [--json]                         the box's run -d jobs: pid, age, processes, log, command
   omabox stop [-b NAME] (JOB... | --all)                 stop run -d jobs (JOB: a pid jobs lists), their windows gone
   omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
+  omabox tray [-b NAME] [--json] [--all]                 the box's tray items and their menus (rows, checked, enabled)
+  omabox tray menu ID [-b NAME] [--json] [--all]         one item's menu, opened as a host opens it (AboutToShow)
+  omabox tray activate ID [-b NAME] [--secondary]        a left (--secondary: middle) click on its icon, over the bus
+  omabox tray click ID LABEL [-b NAME] [--index N]       the menu row named LABEL clicked, as the bar's card clicks it
   omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [--only ID,GLOB...] [--report-scale N]
                    [UP OPTIONS] -- SCENARIO [ARG...]     a visual check: the scenario's checkpoints against a baseline
   omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
@@ -132,7 +136,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
+@+ up run shot record pixel calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -555,6 +559,28 @@ only items that set an Accessible role: "the layer publishes no accessible items
 does (Omarchy's own bar). Two layers of one process with one size cannot be told apart (their frames
 have no names) unless one of them holds the keyboard (a launcher, an Omarchy 4.5 bar popup): said
 so, exit 1.
+@ tray
+`tray` reads the box's tray over its own session bus (never yours): each StatusNotifierItem the
+box's watcher has, `ID "TITLE" [status]` (active, passive, needs attention; Omarchy's bar leaves
+passive ones out), then its dbusmenu's rows in `tree`'s words, indented by submenu: `menu item
+"Quit"`, `check menu item "Sync" [checked]`, `radio menu item "Jazz" [unchecked]`, `menu
+"Stations"` (a submenu), `separator`, with [disabled]; hidden rows are left out (--all keeps them,
+[hidden]). An item with no dbusmenu says `(no menu)`. A listing sends the apps nothing. --json: an
+array, an object an item (`id, title, status, category, service, path, menu, item_is_menu, rows`),
+each row `id, label, role, enabled, visible, toggle, checked, rows`, hidden ones too. ID names an
+item: its Id, else its title (any case), else its bus name (`:1.42`), else a part of its Id or
+title; two items matching: exit 2, both listed; none: exit 1, the box's listed.
+`tray menu ID` sends AboutToShow first, as a host opening the menu does (an app may fill it then),
+and prints that item; an item with no dbusmenu is asked ContextMenu instead (it shows a menu of its
+own, a window or popup: omabox windows, tree). `tray activate ID` is Activate (a left click on the
+icon; refused for an ItemIsMenu item, whose click opens its menu), --secondary SecondaryActivate (a
+middle click). `tray click ID LABEL` sends the dbusmenu `clicked` event to the row named LABEL (any
+case; an exact label wins over a part of one), each submenu on its way sent AboutToShow first: its
+line said on stderr, the row as the app then has it on stdout (`check menu item "Sync"
+[unchecked]`). Several named so: exit 2, numbered with their submenus, and --index N clicks that
+one. Exit 1, nothing sent: no row is named LABEL, or the one named so is hidden, disabled (itself
+or its submenu) or a submenu. None of it draws the bar's menu card: the bar publishes no place for
+an icon (no accessible items), so a real click on one is `click X Y` at the icon a shot shows.
 @ click
 `click --find TEXT` clicks the node of the accessibility tree `tree` reads (--window SEL, none: the
 active window; --layer SEL (or -l SEL) a layer's) named TEXT, with the real pointer at the middle of

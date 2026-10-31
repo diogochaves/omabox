@@ -145,6 +145,7 @@ fn main() -> ExitCode {
         Some("window") => Some(cmd::window::run),
         Some("jobs") => Some(cmd::jobs::run),
         Some("stop") => Some(cmd::jobs::stop),
+        Some("tray") => Some(cmd::tray::run),
         Some("tree") => Some(cmd::tree::run),
         Some("pixel") => Some(cmd::pixel::run),
         Some("keys") => Some(cmd::keys::run),

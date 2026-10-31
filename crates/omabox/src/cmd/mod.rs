@@ -44,6 +44,7 @@ pub mod run;
 pub mod save;
 pub mod setup;
 pub mod shot;
+pub mod tray;
 pub mod tree;
 pub mod up;
 pub mod up_box;
