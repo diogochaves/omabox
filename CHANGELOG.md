@@ -9,7 +9,24 @@ Omarchy 4.5.0-rc2 support for `click`, `windows` and `tree --layer` (its bar now
 and a batch of smaller fixes: `wait until` with a command the box cannot run, `tree` names past 80
 characters, `check point` regions, back-to-back `run`s. Update if you run the 4.5 release candidates.
 
+### Added
+
+- **`click --find TEXT`** clicks what the accessibility tree names TEXT, with the real pointer at the
+  middle of what of it is in view, read fresh on every call: no `tree --find`, then working out the
+  middle by hand. An exact name wins over a part of one, and a control over a label of its name;
+  several in view is exit 2 with their lines, numbered for `--index N`. A hidden node, one with no
+  bounds, one scrolled out of its container and a disabled one are refused, saying which, and nothing
+  is clicked. `--window SEL` (none: the active window) or `--layer SEL` for the shell's layers
+  ([#318](https://github.com/diogochaves/omabox/issues/318)).
+- **`tree` names an unnamed control after its label** (LABELLED_BY), so `--find Email` finds the
+  entry its label names, and reads a node once when it sits under two parents (Qt WebEngine)
+  ([#318](https://github.com/diogochaves/omabox/issues/318)).
+
 ### Fixed
+
+- **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
+  `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
+  Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).
 
 - **`check point -g` kept the region as typed**: `-g "010,010 400x300"` went into the checkpoint as
   `010,010`, so the same region typed another way (`10,10,400,300`) read as a different one. It is

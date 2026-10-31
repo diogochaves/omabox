@@ -6,7 +6,7 @@
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::{box_alive, need_box};
 use crate::cat;
-use crate::exec::{ErrTo, Out, on_box};
+use crate::exec::{ErrTo, Out, Redir, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
 use crate::hypr::hypr_json;
 use crate::jq::{self, Args};
@@ -72,6 +72,56 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     select_box(ctx, &name)?;
     need_box(ctx)?;
     shell_note(ctx)?;
+    let mut targs: Vec<Vec<u8>> = Vec::new();
+    if !find.is_empty() {
+        targs.extend([b"--find".to_vec(), find]);
+    }
+    if json {
+        targs.push(b"--json".to_vec());
+    }
+    if all {
+        targs.push(b"--all".to_vec());
+    }
+    let r = read(ctx, "tree", &sels, &layer, targs, false)?;
+    match r.rc {
+        0 => {
+            if !r.why.is_empty() {
+                say(cat!("tree: ", r.why));
+            }
+            Ok(())
+        }
+        1 => {
+            say(cat!("tree: ", r.why));
+            Err(Exit(1))
+        }
+        _ => fail(ctx, "tree", &r),
+    }
+}
+
+/// What `read` read: omabox-tree's status, its words (stderr, each line's prefix off) and, when
+/// captured, its output; the window or layer it read, as said in a message, and the window (its
+/// box_windows object; empty for a layer).
+pub struct Reading {
+    pub rc: i32,
+    pub why: Vec<u8>,
+    pub out: Vec<u8>,
+    pub what: Vec<u8>,
+    pub win: Vec<u8>,
+    layered: bool,
+    l: Vec<u8>,
+    lys: Vec<u8>,
+}
+
+/// omabox-tree with TARGS on the window SELS picks (none: the active one) or the layer LAYER: its
+/// output on stdout, or in Read's `out` when CAPTURE. CMD names the command in what it says.
+pub fn read(
+    ctx: &mut Ctx,
+    cmd: &str,
+    sels: &[Vec<u8>],
+    layer: &[u8],
+    targs: Vec<Vec<u8>>,
+    capture: bool,
+) -> Res<Reading> {
     let t = on_box(
         ctx,
         &[
@@ -86,7 +136,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     .or_exit()?;
     if t.rc != 0 {
         return Err(ctx.die(cat!(
-            "box '",
+            cmd,
+            ": box '",
             ctx.name,
             "' has no ",
             BOX_TREE,
@@ -95,44 +146,37 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ", then up again"
         )));
     }
-    let mut targs: Vec<Vec<u8>> = Vec::new();
-    if !find.is_empty() {
-        targs.extend([b"--find".to_vec(), find]);
-    }
-    if json {
-        targs.push(b"--json".to_vec());
-    }
-    if all {
-        targs.push(b"--all".to_vec());
-    }
-    let (what, rc, mut err, path, l, lys);
+    let (what, rc, mut err, path, l, lys, win, out);
     if !layer.is_empty() {
         lys = strip_nl(&hypr_json(ctx, &["layers"])?);
-        l = layer_select(ctx, &lys, &layer)?;
+        l = layer_select(ctx, &lys, layer)?;
         what = cat!("layer ", layer_desc(&l));
+        win = Vec::new();
         let (f, p) = shell::mktemp()?;
-        rc = layer_read(ctx, &l, &lys, &f, &targs)?;
+        (rc, out) = captured(capture, || layer_read(ctx, &l, &lys, &f, &targs))?;
         (err, path) = (f, p);
     } else {
         (l, lys) = (Vec::new(), Vec::new());
         let wins = box_windows(ctx, None)?;
         if sels.is_empty() && jq_length(&wins) == b"0" {
-            say(
-                "tree: the box has no window; the shell's bar, panels and menus are layers: tree --layer NAMESPACE (omabox hyprctl layers)",
-            );
+            say(cat!(
+                cmd,
+                ": the box has no window; the shell's bar, panels and menus are layers: ",
+                cmd,
+                " --layer NAMESPACE (omabox hyprctl layers)"
+            ));
             return Err(Exit(2));
         }
-        if sels.is_empty() {
-            sels.push(b"active".to_vec());
-        }
-        let w = win_select(ctx, &wins, &sels)?;
+        let active = [b"active".to_vec()];
+        let w = win_select(ctx, &wins, if sels.is_empty() { &active } else { sels })?;
         let pid = jq_r(".pid", &w);
         let title = jq_r(".title", &w);
         let size = jq_r(crate::jqprog::WIN_SIZE_JQ, &w);
         what = win_desc(&w);
         if !shell::re_match("^[1-9][0-9]*$", &pid) {
             return Err(ctx.die(cat!(
-                "tree: window ",
+                cmd,
+                ": window ",
                 what,
                 " has no pid to find its app by (",
                 pid,
@@ -161,8 +205,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             twins,
         ];
         argv.extend(targs);
-        rc = box_sys_err(ctx, &argv, f.as_raw_fd())?;
-        (err, path) = (f, p);
+        (rc, out) = captured(capture, || box_sys_err(ctx, &argv, f.as_raw_fd()))?;
+        (err, path, win) = (f, p, w);
     }
     // `why=$(sed 's/^omabox-tree: //' "$err"); rm -f "$err"`
     let mut text = Vec::new();
@@ -170,22 +214,43 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let _ = err.read_to_end(&mut text);
     let why = tool_words(&text);
     let _ = std::fs::remove_file(shell::path(&path));
-    let (n, layered) = (ctx.name.clone(), !layer.is_empty());
-    match rc {
-        0 => {
-            if !why.is_empty() {
-                say(cat!("tree: ", why));
-            }
-            Ok(())
-        }
-        1 => {
-            say(cat!("tree: ", why));
-            Err(Exit(1))
-        }
+    Ok(Reading {
+        rc,
+        why,
+        out,
+        what,
+        win,
+        layered: !layer.is_empty(),
+        l,
+        lys,
+    })
+}
+
+/// F's result, and what it wrote on stdout when CAPTURE (else it goes to ours).
+fn captured(capture: bool, f: impl FnOnce() -> Res<i32>) -> Res<(i32, Vec<u8>)> {
+    if !capture {
+        return Ok((f()?, Vec::new()));
+    }
+    let (mut file, p) = shell::mktemp()?;
+    let rc = {
+        let _o = Redir::to(1, file.as_raw_fd());
+        f()
+    };
+    let mut out = Vec::new();
+    let _ = file.rewind();
+    let _ = file.read_to_end(&mut out);
+    let _ = std::fs::remove_file(shell::path(&p));
+    Ok((rc?, out))
+}
+
+/// What a read that failed (R's status, not 0 or 1) says: CMD's error, its exit code.
+pub fn fail(ctx: &mut Ctx, cmd: &str, r: &Reading) -> Res<()> {
+    let (n, what, why) = (ctx.name.clone(), &r.what, &r.why);
+    match r.rc {
         3 => {
-            say(cat!("tree: ", what, ": ", why));
-            if layered {
-                layer_qs_note(ctx, &l);
+            say(cat!(cmd, ": ", what, ": ", why));
+            if r.layered {
+                layer_qs_note(ctx, &r.l);
             } else {
                 say(
                     "GTK, Qt and egui/winit (AccessKit) apps have one; Chromium and Electron only when started with --force-renderer-accessibility; terminals (foot) have none: look with a shot (shot --window SEL). The shell's bar, panels and menus are layers: tree --layer NAMESPACE",
@@ -194,21 +259,22 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             Err(Exit(1))
         }
         5 | 7 => {
-            say(cat!("tree: ", what, ": ", why));
+            say(cat!(cmd, ": ", what, ": ", why));
             Err(Exit(1))
         }
         6 => {
-            if layered {
+            if r.layered {
                 say(cat!(
-                    "tree: ",
+                    cmd,
+                    ": ",
                     what,
                     ": ",
                     why,
                     "; the layers of that pid and size:"
                 ));
-                layer_lines(&layer_tied(&l, &lys));
+                layer_lines(&layer_tied(&r.l, &r.lys));
             } else {
-                say(cat!("tree: ", what, ": ", why));
+                say(cat!(cmd, ": ", what, ": ", why));
             }
             Err(Exit(1))
         }
@@ -216,10 +282,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let w: &[u8] = if why.is_empty() {
                 b"no accessibility bus"
             } else {
-                &why
+                why
             };
             Err(ctx.die(cat!(
-                "tree: ",
+                cmd,
+                ": ",
                 w,
                 " (a box started by an omabox before 0.5.3, or with --env ATSPI_DBUS_IMPLEMENTATION=dbus-broker: omabox down ",
                 n,
@@ -227,13 +294,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             )))
         }
         124 => Err(ctx.die(cat!(
-            "tree: ",
+            cmd,
+            ": ",
             what,
             " did not answer in 30 s (busy or hung?)"
         ))),
         _ => {
             if !box_alive(ctx)? {
-                return Err(ctx.die(cat!("tree: box '", n, "' went down")));
+                return Err(ctx.die(cat!(cmd, ": box '", n, "' went down")));
             }
             let w = if why.is_empty() {
                 Vec::new()
@@ -241,10 +309,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 cat!(": ", why)
             };
             Err(ctx.die(cat!(
-                "tree: reading the tree failed",
+                cmd,
+                ": reading the tree failed",
                 w,
                 " (status ",
-                rc.to_string(),
+                r.rc.to_string(),
                 ")"
             )))
         }

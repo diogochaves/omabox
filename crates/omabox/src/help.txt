@@ -46,6 +46,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
+  omabox click [-b NAME] [--window SEL | --layer SEL] --find TEXT [--index N] [BTN] [OPTIONS as above]
+                                                         what the accessibility tree names TEXT, at its middle
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
               [--steps 10 | --glide DURATION] [--hold DURATION] [--mod MODS]  press, move, hold, release
               [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)
@@ -129,7 +131,7 @@ too (omabox -b NAME windows).
 -d (or --detach): the command left running in the box, its log said on stderr; --replace: the same one stopped first
 @short shot
 --monitor NAME: one monitor of the box's (omabox monitor list)
-@short tree
+@short tree click
 --layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N
 @short log events
 -f (or --follow): on until the box goes down
@@ -462,7 +464,8 @@ that window's own pixels (its coordinates, covered or not). --in SHOT maps that 
 `tree` prints a window's accessibility tree as text (--window SEL; none: the active window): a
 line a node, `role "name" 'text' =value [states] @X,Y WxH`, indented by level; anonymous containers,
 hidden nodes and what lies outside the window are left out (--all keeps them). The bounds are the
-window's own coordinates: `click --window SEL` at their middle lands on that node. Ask first, read
+window's own coordinates: `click --window SEL` at their middle lands on that node (`click --find
+TEXT` finds it and clicks there). An unnamed control takes its label's name. Ask first, read
 whole later: --find TEXT prints only the lines holding TEXT (any case, not in the bounds), each after
 its ancestors (`list > list item "Beta" [selected] @12,354 1872x22`); exit 1 when none does.
 The text view cuts a name or text at 80 characters and a value at 40 (ending in …); --find matches
@@ -482,6 +485,16 @@ a plain `click X Y` at their middle lands on that node. Quickshell publishes the
 only items that set an Accessible role: "the layer publishes no accessible items", exit 1, when none
 does (Omarchy's own bar). Two layers of one process with one size cannot be told apart (their frames
 have no names) unless one of them holds the keyboard: said so, exit 1.
+@ click
+`click --find TEXT` clicks the node of the accessibility tree `tree` reads (--window SEL, none: the
+active window; --layer SEL (or -l SEL) a layer's) named TEXT, with the real pointer at the middle of
+what of it is in view, read again on every call. TEXT matches a name in any case: an exact name wins
+over a part of one, and a control over a label of its name. Several in view: exit 2, their lines
+numbered with their ancestors, and --index N clicks that one. Exit 1, nothing clicked: nothing is
+named TEXT, or the one named so is hidden (it or what it is in is not showing), has no bounds, is
+out of view (outside its window or a container's bounds: scroll it into view first) or disabled,
+said which. Its line and where the pointer went are said on stderr; BTN, --double, --mod, --steps,
+--glide and --wait as with X Y.
 @ check
 `check` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
 is a script of yours that sets the box up, drives it with omabox commands and calls `omabox check

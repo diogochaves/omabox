@@ -49,7 +49,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         ),
         b"keys-to-box" => Some("-b= --box="),
         b"click" => Some(
-            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= -l= --layer= --find= --index= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
         ),
         b"scroll" => Some(
             "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
