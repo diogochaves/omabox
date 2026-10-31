@@ -14048,7 +14048,8 @@ monitors_on() {
     check "NVIDIA: a headless output of the program's own is listed 0x0" until_ok 5 bash -c \
       "'$CLI' hyprctl -b '$B' -j monitors | jq -e 'any(.[]; .name == \"ZTEST\" and .width == 0)' >/dev/null"
     check_match "...monitor list says why, and where to test it" "ZTEST listed 0x0: this box draws on NVIDIA.*monitor add makes one" "$(ob monitor -b "$B" list 2>&1 >/dev/null)"
-    check_match "...shot --monitor of it: the same, not grim's error" "^omabox: shot: ZTEST listed 0x0" "$(ob shot -b "$B" --monitor ZTEST 2>&1)"
+    # (a line of its own: under load a warning that the box's shell did not answer can come first, #222)
+    check_match "...shot --monitor of it: the same, not grim's error" "(^|"$'\n'")omabox: shot: ZTEST listed 0x0" "$(ob shot -b "$B" --monitor ZTEST 2>&1)"
   else
     check "elsewhere it takes its mode" until_ok 5 bash -c \
       "'$CLI' hyprctl -b '$B' -j monitors | jq -e 'any(.[]; .name == \"ZTEST\" and .width == 1280 and .height == 720)' >/dev/null"
