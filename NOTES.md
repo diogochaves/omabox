@@ -11143,6 +11143,21 @@ from them.
     would print it, and the agents' scripts read it with `$(…)`; run's note says it where it matters.
     Tests: repo.rs host_path_words_found, host_path_said; t_host_paths (each shape in a real box and
     a throwaway); t_cli_box's run -d cases.
+590. **`wait layer` did not say which monitor a layer was on** (2026-10-31, #316). Its probe found
+    the first drawn layer of the namespace anywhere in `hyprctl -j layers` (`..|objects`), so the
+    monitor (the object's key above `levels`) was lost: `at 0,0 1920x1080` for a full-screen panel
+    could be any screen, and a bar on each of three monitors read as one. Checking which bar's popup
+    opened took parsing `hyprctl layers -j` by hand. Now LAYER_WAIT_JQ keeps the key: `at X,Y WxH
+    on MONITOR`, and `N layers: at …; at …` (the box's monitor order) when several are drawn, in the
+    line and in `--json`'s `detail` (kept a string, as window's is, rather than a new field).
+    `--monitor NAME` (layer only; a name of letters, digits, `_`, `-`) counts only the ones on it:
+    its "no" says where the layer is drawn instead; a monitor the box does not have is not refused
+    (one coming back after `output drop` or `monitor add` is waited for) but said in the answer,
+    with the box's monitors, so a typo shows in the 124 line, and a `--gone` on it is satisfied
+    saying so. `--gone`'s 124 now says where the layer still is. `windows`' layers say `on MONITOR`
+    too, and `--json`'s have `monitor`. Tests: t_unit_wait (wait.rs layer_answers; the refusals),
+    t_unit_window_select (the windows line, `monitor`), t_monitors (three bars named; `--monitor`,
+    `--json`; one it does not have; `--gone` after `monitor remove`, back after `monitor add`).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

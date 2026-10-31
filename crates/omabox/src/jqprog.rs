@@ -130,7 +130,7 @@ pub const WIN_JQ: &str = concat!(
     else $o.z > $t.z end;
   [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {}
    | (.["2"] // [] | map(. + {layer: "top"})), (.["3"] // [] | map(. + {layer: "overlay"}))
-   | .[] | bar_strip($m; $mon) | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], certain: (spans($m; $mon) | not)}] as $L
+   | .[] | bar_strip($m; $mon) | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], monitor: $mon, certain: (spans($m; $mon) | not)}] as $L
   | ([$m[] | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0))) as $shown
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
      | .onscreen = (.workspace.id as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
@@ -233,6 +233,22 @@ pub const WIN_DESC_ONE_JQ: &str = r#""\(.address) \(.class) \(.title | tojson)""
 /// layer_at: where a layer is drawn, a 1x1 one not (finding 146).
 pub const LAYER_AT_JQ: &str = r#"first(.. | objects | select(.namespace? == $n and .w > 1 and .h > 1)
     | "\(.x),\(.y) \(.w)x\(.h)") // empty"#;
+/// wait layer's answer ($want present or gone, $mon one monitor or ""): where the drawn layers of
+/// namespace $n are, each with its monitor (#316); for --monitor, the others named when it is drawn
+/// elsewhere, and a monitor the box does not have said.
+pub const LAYER_WAIT_JQ: &str = r#"[keys_unsorted[]] as $ms
+  | [to_entries[] | .key as $m | .value.levels // {} | .[] | .[]
+     | select(.namespace == $n and .w > 1 and .h > 1) | . + {monitor: $m}] as $all
+  | ($all | map(select($mon == "" or .monitor == $mon))) as $on
+  | def at: "at \(.x),\(.y) \(.w)x\(.h) on \(.monitor)";
+    def where: if length == 1 then .[0] | at else "\(length) layers: \(map(at) | join("; "))" end;
+    (if $mon != "" and all($ms[]; . != $mon) then "no monitor \($mon) in the box (\($ms | join(", ")))" else null end) as $why
+  | if $want == "gone" then
+      if $on == [] then "yes" + (if $why then " \($why)" else "" end) else "no \($on | where)" end
+    elif $on != [] then "yes \($on | where)"
+    elif $why then "no \($why)"
+    elif $all != [] then "no \($all | where)"
+    else "no" end"#;
 /// win_answer focused (after WIN_DESC_JQ).
 pub const WIN_FOCUSED_JQ: &str = r#"
         (first(.[] | select(.active)) // null) as $f
@@ -271,9 +287,9 @@ pub const WINDOWS_TABLE_JQ: &str = r#"def pad($n): tostring | . + (" " * ($n - l
         + (if .active then ",active" else "" end) | pad(20)),
       ("\(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])" | pad(22)), (.class | pad(16)), (.title | tojson)] | join(" ")"#;
 /// windows_layers.
-pub const WINDOWS_LAYERS_JQ: &str = r#"[.[] | .address as $a | .layers[]? | {k: [.namespace, .layer, .at, .size, (.certain != false)], a: $a}]
-    | group_by(.k)[] | .[0].k as [$n, $l, $at, $sz, $c]
-    | "layer \($n | tojson) (\($l) \($sz[0])x\($sz[1]) at \($at[0]),\($at[1])) "
+pub const WINDOWS_LAYERS_JQ: &str = r#"[.[] | .address as $a | .layers[]? | {k: [.namespace, .layer, .at, .size, (.certain != false), .monitor], a: $a}]
+    | group_by(.k)[] | .[0].k as [$n, $l, $at, $sz, $c, $mo]
+    | "layer \($n | tojson) (\($l) \($sz[0])x\($sz[1]) at \($at[0]),\($at[1])\(if $mo then " on \($mo)" else "" end)) "
       + if $c then "is over \(map(.a) | join(", ")): where it takes input, input there goes to it"
         else "spans the screen, possibly over \(map(.a) | join(", ")): input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window" end"#;
 /// layer_select: the layers SEL names.

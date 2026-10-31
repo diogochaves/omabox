@@ -63,7 +63,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
          COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
                | change [-g GEOM | --window SEL] [--ignore GEOM]...
-               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | until -- CMD [ARG...]
+               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] [--monitor NAME]
+               | until -- CMD [ARG...]
                | job [JOB] [--gone] | log [JOB] RE [-i]   a run -d job's end; a line in its log
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
@@ -547,6 +548,10 @@ down, an interactive box's hidden window renders nothing): never 0 for what coul
 Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); --timeout at most
 10m. Waiting counts as using the box.
 @ wait
+`wait layer NAMESPACE`: until a layer of that namespace is drawn (a 1x1 one is a closed menu, not
+drawn); its line says where and on which monitor (`at 0,0 1920x1080 on HEADLESS-2`), each one when
+there are several (a bar on every monitor). --monitor NAME waits for one on that monitor (`omabox
+monitor list`), --gone for none there; one the box does not have is said, with the ones it has.
 `wait until -- CMD`: until CMD, run in the box, exits 0 (tried every 100 ms): a server answering
 (`curl -fsS http://127.0.0.1:PORT/`), a file written, a process gone (`sh -c '! pgrep -x NAME'`).
 CMD runs in the box, where the host's paths are not (its /tmp and HOME are its own): a command not

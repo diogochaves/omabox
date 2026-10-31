@@ -10727,7 +10727,7 @@ t_click_layer() {
   fx=$((1700 - ${at% *})) fy=$((600 - ${at#* }))
   out=$(ob windows -b "$B")
   check_match "windows names the spanning layer as possibly over the window" \
-    "layer \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\) spans the screen, possibly over $(jq -r .address <<<"$w"): input goes to it only where one of its items \(a toast, a dock icon\) is" "$out"
+    "layer \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0 on [A-Z]+-[0-9]+\) spans the screen, possibly over $(jq -r .address <<<"$w"): input goes to it only where one of its items \(a toast, a dock icon\) is" "$out"
   check_eq "...--json: certain false" false \
     "$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | .layers[] | select(.namespace == "omarchy-notifications") | .certain')"
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
@@ -10780,7 +10780,7 @@ QML
     check_match "...a scroll there too" "a layer surface \"t263-panel\" .* is over the screen's 400,250" "$out"
     out=$(ob drag -b "$B" 400 250 410 260 2>&1)
     check_match "...a drag from there too" "a layer surface \"t263-panel\" .* is over the screen's 400,250" "$out"
-    check_match "windows: the panel is over the window" "layer \"t263-panel\" \(top 300x150 at 300,200\) is over $(jq -r .address <<<"$w"): where it takes input" "$(ob windows -b "$B")"
+    check_match "windows: the panel is over the window" "layer \"t263-panel\" \(top 300x150 at 300,200 on [A-Z]+-[0-9]+\) is over $(jq -r .address <<<"$w"): where it takes input" "$(ob windows -b "$B")"
   else no "the panel layer maps" "no t263-panel layer"; fi
   out=$(ob click -b "$B" --window 'title:^L$' "$x" "$y" 2>&1); rc=$?
   check_eq "click --window on the toast: clicked (exit 0)" 0 "$rc"
@@ -13675,6 +13675,16 @@ monitors_on() {
   check_eq "ls --json has them" 3 "$("$CLI" ls --json | jq --arg b "$B" '.[] | select(.name == $b) | .monitors | length')"
   check_match "ls says 3 monitors" "^$B +headless +3 monitors " "$("$CLI" ls | grep "^$B ")"
   check "the shell has a bar on each" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq -r '[to_entries[] | select([.value.levels[][] | .namespace] | index(\"omarchy-bar\")) | .key] | sort | join(\" \")')\" = '$m0 $m1 $m2' ]"
+  # wait layer names the monitor each layer is on, --monitor waits on one (#316, finding 590).
+  local L='[0-9]+,[0-9]+ [0-9]+x[0-9]+' out rc
+  check_match "wait layer omarchy-bar: one on each monitor, each named" \
+    "^satisfied: layer omarchy-bar after [0-9.]+s: 3 layers: at $L on $m0; at $L on $m1; at $L on $m2$" \
+    "$(ob wait -b "$B" layer omarchy-bar 2>&1)"
+  check_match "...--monitor $m1 --json: that one, its monitor in detail" "^satisfied layer at $L on $m1$" \
+    "$(ob wait -b "$B" layer omarchy-bar --monitor "$m1" --json | jq -r '"\(.result) \(.condition) \(.detail)"')"
+  out=$(ob wait -b "$B" layer omarchy-bar --monitor HEADLESS-9 --timeout 300ms 2>&1); rc=$?
+  check_match "...--monitor of one the box does not have: 124, saying which it has" \
+    "^124 unsatisfied: no layer omarchy-bar on HEADLESS-9 after [0-9.]+s \(no monitor HEADLESS-9 in the box \($m0, $m1, $m2\)\)$" "$rc $out"
   check_eq "-b NAME before monitor (#161)" "$ml" "$(ob -b "$B" monitor list --json 2>&1)"
   # A point in the gap below the main screen, left of the others (#161): grim alone failed, and beside
   # a point on a monitor it read black.
@@ -13704,7 +13714,13 @@ monitors_on() {
   check_eq "...gone from the list; the one placed below it goes below the main screen now" "$m0 0 0|$m2 0 1080" \
     "$(ob monitor -b "$B" list --json | jq -r 'map("\(.name) \(.x) \(.y)") | join("|")')"
   check "...an unplug the box's events saw" until_ok 3 bash -c "[ \$('$CLI' log -b '$B' events -n all | grep -c 'monitorremoved>>$m1') -gt $ev0 ]"
+  check_match "...wait layer omarchy-bar --monitor $m1 --gone: its bar went with it, the box's monitors said (#316)" \
+    "^satisfied: layer omarchy-bar on $m1 gone after [0-9.]+s: no monitor $m1 in the box \($m0, $m2\)$" \
+    "$(ob wait -b "$B" layer omarchy-bar --monitor "$m1" --gone 2>&1)"
   check_eq "monitor add again: the free name" "$m1" "$(ob monitor -b "$B" add 800x600,0,3000 2>/dev/null)"
+  check_match "...wait layer omarchy-bar --monitor $m1: the shell put a bar on it (#316)" \
+    "^satisfied: layer omarchy-bar on $m1 after [0-9.]+s: at $L on $m1$" \
+    "$(ob wait -b "$B" layer omarchy-bar --monitor "$m1" 2>&1)"
   check_eq "...at X,Y" "800x600@60 0 3000" "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" '.[] | select(.name == $n) | "\(.mode) \(.x) \(.y)"')"
   check_eq "...the others' modes as they were" "$m0 1920x1080@60|$m2 2560x1440@60" \
     "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" 'map(select(.name != $n) | "\(.name) \(.mode)") | join("|")')"
@@ -15555,11 +15571,12 @@ t_unit_window_select() {
   check_eq "...the edge is outside (x + w)" "" "$(probe win_layer "$A" 120 550)"
   check_eq "...a window without the field: nothing" "" "$(probe win_layer "$(jq -c '.[] | select(.address == "0xa")' <<<"$W")" 10 10)"
   check_eq "windows: one line per layer, naming the windows under it" \
-    'layer "toast" (overlay 400x100 at 1500,0) is over 0xb: where it takes input, input there goes to it' \
+    'layer "toast" (overlay 400x100 at 1500,0 on M) is over 0xb: where it takes input, input there goes to it' \
     "$(probe windows_layers <<<"$Wl" | grep toast)"
   check_eq "...nothing without layers" "" "$(probe windows_layers <<<"$W")"
   check_eq "...each layer certain while the monitors have no geometry" "true" \
     "$(jq -c '[.[] | .layers[]? | .certain] | unique | map(tostring) | join(",")' -r <<<"$Wl")"
+  check_eq "...each names its monitor (#316)" "M" "$(jq -r '[.[] | .layers[]? | .monitor] | unique | join(",")' <<<"$Wl")"
   # A full-screen layer (#263, finding 398: Omarchy's notifications, input on their toasts only) is
   # possibly over a point; one smaller than its output for certain, and a certain one wins.
   local mg ln Wn
@@ -15573,10 +15590,10 @@ t_unit_window_select() {
   check_eq "...a smaller one under it: that one, certain (certain wins over possible)" 'certain "osd" overlay 100x100 at 20,500' "$(probe win_layer "$A" 50 550)"
   check_eq "...a top one (the bar) under it: certain too" 'certain "bar" top 42x1080 at 0,0' "$(probe win_layer "$A" 10 10)"
   check_eq "windows: a full-screen layer spans the screen, possibly over the windows" \
-    'layer "notif" (overlay 1920x1080 at 0,0) spans the screen, possibly over 0xf, 0xa, 0xb, 0x2: input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window' \
+    'layer "notif" (overlay 1920x1080 at 0,0 on M) spans the screen, possibly over 0xf, 0xa, 0xb, 0x2: input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window' \
     "$(probe windows_layers <<<"$Wn" | grep notif)"
   check_eq "...a smaller one still is over them" \
-    'layer "toast" (overlay 400x100 at 1500,0) is over 0xb: where it takes input, input there goes to it' "$(probe windows_layers <<<"$Wn" | grep '^layer "toast"')"
+    'layer "toast" (overlay 400x100 at 1500,0 on M) is over 0xb: where it takes input, input there goes to it' "$(probe windows_layers <<<"$Wn" | grep '^layer "toast"')"
   whole() { jq -r --argjson m "$1" --arg mon "${3:-M}" "$("$PROBE" _rust-jq LAYER_SPAN_JQ) ($2 | spans(\$m; \$mon))" -n; }
   check_eq "whole: the output's size at scale 2 (3840x2160 mode, 1920x1080 logical)" true \
     "$(whole "$(jq -c '.[0] += {width: 3840, height: 2160, scale: 2}' <<<"$mg")" '{x: 0, y: 0, w: 1920, h: 1080}')"
@@ -17163,6 +17180,10 @@ t_unit_wait() {
   check_match "wait for nothing: says what it can wait for" "still, change, window" "$(ob wait -b "$P-x" 2>&1)"
   check_match "an unknown condition refused" "unknown condition" "$(ob wait -b "$P-x" soon 2>&1)"
   check_match "--gone is for window, layer and job" "go with window, layer or job" "$(ob wait -b "$P-x" still --gone 2>&1)"
+  # wait layer --monitor (#316): a monitor's name, with layer only. Its answers: wait.rs layer_answers.
+  check_match "--monitor is for layer" "--monitor goes with layer" "$(ob wait -b "$P-x" window foot --monitor HEADLESS-2 2>&1)"
+  check_match "...a monitor's name" "--monitor takes a monitor's name" "$(ob wait -b "$P-x" layer omarchy-bar --monitor 'a b' 2>&1)"
+  check_match "...read (no box here)" "no box '$P-x'" "$(ob wait -b "$P-x" layer omarchy-bar --monitor HEADLESS-2 2>&1)"
   check_match "until needs a command" "nothing to run" "$(ob wait -b "$P-x" until -- 2>&1)"
   # #272: `wait until` is the name; `wait cmd` (refused by Claude Code's worktree check) was warned in
   # 0.9 and is refused since 1.0 (#287), whatever follows it.

@@ -38,6 +38,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   [PID] RE [-i]` until a line of its log matches. `--replace` with other arguments now says the new
   job starts beside the one still running, and the `omabox stop PID` that stops it
   ([#299](https://github.com/diogochaves/omabox/issues/299)).
+- **`wait layer` says which monitor a layer is on**: `… at 0,0 1920x1080 on HEADLESS-2`, each one
+  when there are several (a bar on every monitor), and `--json`'s `detail` has it. `wait layer NS
+  --monitor NAME` waits for one on that monitor (`--gone`: none left there); a monitor the box does
+  not have is said, with the ones it has. `windows` names the monitor of each layer under its table,
+  and `windows --json`'s `layers` have `monitor`
+  ([#316](https://github.com/diogochaves/omabox/issues/316)).
 
 ### Fixed
 

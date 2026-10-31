@@ -28,7 +28,7 @@ use std::time::Duration;
 /// status 2 a selector never answered (a bad regex), any other failure the box not answering.
 enum Probe<'a> {
     Win(&'a str, &'a [Vec<u8>]),
-    Layer(&'a str, &'a [u8]),
+    Layer(&'a str, &'a [u8], &'a [u8]),
     Until(&'a [Vec<u8>]),
     /// A `run -d` job's end (#299): its command's, or with GONE its whole session's.
     Job(&'a Job, bool),
@@ -62,7 +62,7 @@ impl Probe<'_> {
                     Err(_) => (1, Vec::new()),
                 }
             }
-            Probe::Layer(want, ns) => {
+            Probe::Layer(want, ns, mon) => {
                 let layers = {
                     let _quiet = Redir::null(2);
                     hypr_json(ctx, &["layers"])
@@ -70,17 +70,7 @@ impl Probe<'_> {
                 let Ok(layers) = layers else {
                     return (1, Vec::new());
                 };
-                let l = Args::new(&["-r"])
-                    .kv("--arg", "n", ns)
-                    .arg(crate::jqprog::LAYER_AT_JQ)
-                    .run(Some(&strip_nl(&layers)), jq::Err::Inherit)
-                    .text();
-                let o: Vec<u8> = match (*want, l.is_empty()) {
-                    ("gone", true) => b"yes".to_vec(),
-                    ("gone", false) | (_, true) => b"no".to_vec(),
-                    _ => cat!("yes at ", l),
-                };
-                (0, o)
+                (0, layer_answer(want, &strip_nl(&layers), ns, mon))
             }
             Probe::Job(job, gone) => {
                 match box_alive(ctx) {
@@ -198,6 +188,25 @@ impl Probe<'_> {
                 }
             }
         }
+    }
+}
+
+/// layer_probe's answer from LAYERS (`hyprctl -j layers`), WANT present or gone: "yes at X,Y WxH on
+/// MONITOR" for the drawn layer of namespace NS ("yes N layers: ...; ..." for several), on MON alone
+/// when MON is not empty (#316); "no" with where it is drawn instead, or the monitor the box does not
+/// have. An answer jq could not read is "no".
+fn layer_answer(want: &str, layers: &[u8], ns: &[u8], mon: &[u8]) -> Vec<u8> {
+    let r = Args::new(&["-r"])
+        .kv("--arg", "want", want)
+        .kv("--arg", "n", ns)
+        .kv("--arg", "mon", mon)
+        .arg(crate::jqprog::LAYER_WAIT_JQ)
+        .run(Some(layers), jq::Err::Null);
+    let t = r.text();
+    if r.ok() && (t.starts_with(b"yes") || t.starts_with(b"no")) {
+        t
+    } else {
+        b"no".to_vec()
     }
 }
 
@@ -422,6 +431,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut want = "";
     let (mut jobw, mut logw, mut icase): (Vec<u8>, Vec<Vec<u8>>, bool) =
         (Vec::new(), Vec::new(), false);
+    let mut mon = Vec::new();
     let mut masks: Vec<Vec<u8>> = Vec::new();
     let mut s = Settle::default();
     let mut i = 0;
@@ -483,6 +493,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 i += 1;
             }
             b"--active" => sels.push(b"active".to_vec()),
+            b"--monitor" => {
+                optarg(ctx, a, v)?;
+                if !crate::shell::re_match("^[A-Za-z0-9_-]{1,32}$", &args[i + 1]) {
+                    return Err(ctx.die(cat!(
+                        "wait: --monitor takes a monitor's name (omabox monitor list), got ",
+                        args[i + 1]
+                    )));
+                }
+                mon = args[i + 1].clone();
+                i += 1;
+            }
             b"--gone" => want = "gone",
             b"--focused" => want = "focused",
             b"-i" => icase = true,
@@ -522,6 +543,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if icase && cond != b"log" {
         return Err(ctx.die("wait: -i goes with log (wait log [JOB] RE -i)"));
     }
+    if !mon.is_empty() && cond != b"layer" {
+        return Err(
+            ctx.die("wait: --monitor goes with layer (wait layer NAMESPACE --monitor NAME)")
+        );
+    }
     let plain = sels.is_empty() && none && !strict && masks.is_empty();
     match cond.as_slice() {
         b"still" | b"change" => {
@@ -552,7 +578,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 return Err(ctx.die("wait layer: --gone or nothing"));
             }
             if !(sels.is_empty() && none && !strict && masks.is_empty()) {
-                return Err(ctx.die("wait layer: only --gone"));
+                return Err(ctx.die("wait layer: only --gone and --monitor"));
             }
         }
         b"job" => {
@@ -642,13 +668,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             poll_until(ctx, &yes, &no, 2, tmo, json, probe)
         }
         b"layer" => {
-            let l = cat!("layer ", ns);
+            let mut l = cat!("layer ", ns);
+            if !mon.is_empty() {
+                l = cat!(l, " on ", mon);
+            }
             let (yes, no) = if want == "gone" {
                 (cat!(l, " gone"), cat!(l, " still there"))
             } else {
                 (l.clone(), cat!("no ", l))
             };
-            let probe = Probe::Layer(if want == "gone" { "gone" } else { "present" }, &ns);
+            let probe = Probe::Layer(if want == "gone" { "gone" } else { "present" }, &ns, &mon);
             poll_until(ctx, &yes, &no, 2, tmo, json, probe)
         }
         b"job" | b"log" => {
@@ -863,6 +892,62 @@ fn screen(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #316: wait layer names the monitor each drawn layer is on, and --monitor waits on one.
+    #[test]
+    fn layer_answers() {
+        let l = br#"{"HEADLESS-2": {"levels": {"2": [{"namespace": "bar", "x": 0, "y": 0, "w": 1920, "h": 34},
+              {"namespace": "menu", "x": 0, "y": 0, "w": 1, "h": 1}],
+            "3": [{"namespace": "panel", "x": 0, "y": 0, "w": 1920, "h": 1080}]}},
+          "HEADLESS-10": {"levels": {"2": [{"namespace": "bar", "x": 1920, "y": 0, "w": 1280, "h": 34}],
+            "3": [{"namespace": "menu", "x": 1920, "y": 0, "w": 1, "h": 1}]}}}"#;
+        let a = |want: &str, ns: &str, mon: &str| {
+            String::from_utf8(layer_answer(want, l, ns.as_bytes(), mon.as_bytes())).unwrap()
+        };
+        assert_eq!(
+            a("present", "panel", ""),
+            "yes at 0,0 1920x1080 on HEADLESS-2"
+        );
+        assert_eq!(
+            a("present", "bar", ""),
+            "yes 2 layers: at 0,0 1920x34 on HEADLESS-2; at 1920,0 1280x34 on HEADLESS-10",
+            "one on each monitor, in the box's order"
+        );
+        assert_eq!(
+            a("present", "bar", "HEADLESS-10"),
+            "yes at 1920,0 1280x34 on HEADLESS-10"
+        );
+        assert_eq!(
+            a("present", "panel", "HEADLESS-10"),
+            "no at 0,0 1920x1080 on HEADLESS-2",
+            "not on that monitor: where it is instead"
+        );
+        assert_eq!(
+            a("present", "menu", ""),
+            "no",
+            "1x1 is a closed menu (finding 146)"
+        );
+        assert_eq!(
+            a("present", "bar", "DP-1"),
+            "no no monitor DP-1 in the box (HEADLESS-2, HEADLESS-10)"
+        );
+        assert_eq!(a("gone", "menu", ""), "yes");
+        assert_eq!(
+            a("gone", "panel", "HEADLESS-10"),
+            "yes",
+            "gone from that monitor"
+        );
+        assert_eq!(a("gone", "panel", ""), "no at 0,0 1920x1080 on HEADLESS-2");
+        assert_eq!(
+            a("gone", "bar", "DP-1"),
+            "yes no monitor DP-1 in the box (HEADLESS-2, HEADLESS-10)",
+            "said, not silently gone"
+        );
+        assert_eq!(
+            String::from_utf8(layer_answer("present", b"not json", b"bar", b"")).unwrap(),
+            "no"
+        );
+    }
 
     // #400: the deciding try's last lines; a command naming a path the box cannot see.
     #[test]
