@@ -10733,6 +10733,16 @@ from them.
     end. The widget's no is remembered (`widget-declined`, never asked again); a Ctrl-D is not, so
     the next setup asks again. Test: t_setup_prompts (Ctrl-D at the widget's question: said, not in
     the bar, not remembered), failed on the old code.
+552. **Setting protect-ports said nothing about boxes up already** (2026-10-30, #374). `up` reads
+    protect-ports once (finding 480, S10): a connected box that is up keeps reaching the ports it
+    could reach at its start, and the rule needs nft in /usr/bin. A user who set it after seeing an
+    agent's box reach their database would take the database for covered at once. `config
+    protect-ports VALUE` (and `default`) now names the connected boxes up when the set of ports
+    changed ("boxes up already keep the ports they started with: NAMES (down and up again to apply
+    it to them)"; the same set in another order is no change: config reads it as a set), and warns
+    when nft is not in /usr/bin, where up then refuses a connected box. Test: t_protect_ports (a
+    change names its box; the same set again says nothing), failed on the old code. The nft warning
+    is not run here (this machine has nft).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

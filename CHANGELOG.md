@@ -14,6 +14,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **Ctrl-D at one of `omabox setup`'s questions ended it silently** (exit 1). It is now a no, said
   so, and setup goes on; a Ctrl-D at the widget's question is not remembered as a no
   ([#373](https://github.com/diogochaves/omabox/issues/373)).
+- **`config protect-ports` said nothing about boxes up already**: they keep reaching the ports they
+  could reach at their start. Changing it now names the connected boxes that need a restart, and
+  warns when `nft`, which the rule needs, is missing
+  ([#374](https://github.com/diogochaves/omabox/issues/374)).
 
 ## 1.0.2 — 2026-10-30
 

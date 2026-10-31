@@ -6899,6 +6899,12 @@ while True:
   sleep 0.5
   if ! UP_OUT=$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up with protect-ports" "$UP_OUT"; return; fi
   ok "up with protect-ports"
+  # (#374: a change says which connected boxes up keep what they started with)
+  check_match "config protect-ports: the connected boxes up named, to restart (#374)" \
+    "note: boxes up already keep the ports they started with: .*\b$B\b.* \(down and up again to apply it to (it|them)\)" \
+    "$(HOME=$h ob config protect-ports "$p" 2>&1)"
+  check_fails "...set as it was: nothing said" grep -q "boxes up already" <<<"$(HOME=$h ob config protect-ports "$p" 2>&1)"
+  printf 'protect-ports=%s,%s\n' "$q" "$p" > "$h/.config/omabox/config"
   check_match "...pasta leaves both out of its host rules" "-T ~$p,~$q,auto|-T ~$q,~$p,auto" "$(tr '\0' ' ' < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")/cmdline" 2>/dev/null)"
   # (bash's /dev/tcp in the box, 3 s at most: "hi" when it reached the server)
   tcp() { HOME=$h ob run -b "$B" -- timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2" && head -c 2 <&3' _ "$1" "$2" 2>/dev/null; }
