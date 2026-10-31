@@ -121,7 +121,7 @@ pub fn parse_mode(ctx: &Ctx, given: &[u8]) -> Res<Vec<u8>> {
     let mut m = given.to_vec();
     if m == b"host" {
         crate::host::host_session_die(ctx)?;
-        let (hrc, out) = crate::host::host_hyprctl(ctx, &[b"-j", b"monitors"], false);
+        let (hrc, out) = crate::host::host_query(ctx, crate::host::Query::Monitors, false);
         // (`host_hyprctl ... | jq -r`, pipefail: either one failing fails it)
         let r = jq::tool(
             "jq",

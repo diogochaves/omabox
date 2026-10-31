@@ -8,7 +8,7 @@ use crate::args::{optarg, unexpected, unknown_opt, unknown_word};
 use crate::boxes::{meta, need_box};
 use crate::cat;
 use crate::exit::{Ctx, Res, out, say};
-use crate::host::{PASS_KEY, host_eval, install_passthrough};
+use crate::host::{HostSilent, PASS_KEY};
 use crate::select::select_box;
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
@@ -68,8 +68,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     // Installed again if a reload dropped it, then applied to the window focused now: turned on
     // with the box focused, its keys are the box's at once.
-    install_passthrough(ctx)?;
-    host_eval(ctx, b"omabox_keys_changed()")?;
+    let host = HostSilent::new(ctx);
+    host.passthrough()?;
+    host.keys_changed()?;
     if want == b"on" {
         say(cat!(
             "box '",

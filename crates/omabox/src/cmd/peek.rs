@@ -10,7 +10,7 @@ use crate::boxes::{BoxPid, box_env, box_pid, meta, need_box};
 use crate::cat;
 use crate::deskwin::ws_check;
 use crate::exit::{Ctx, Res, say};
-use crate::host::{host_eval, host_hyprctl, host_session_die, lua_str};
+use crate::host::{HostAsked, HostSilent, Query, host_query, host_session_die, lua_str};
 use crate::hypr::hypr_json;
 use crate::jq::{self, Args};
 use crate::marks::peek_pid;
@@ -79,15 +79,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    host_session_die(ctx)?;
+    // (--focus: the user asked for a change on their desktop, S8's exception: HostAsked)
+    let asked = if focus {
+        Some(HostAsked::user_asked(ctx)?)
+    } else {
+        host_session_die(ctx)?;
+        None
+    };
     if meta(&ctx.d, "mode").0 == b"interactive" {
         // omabox-wlfd connects and execs bwrap, so the host sees the window as the outer bwrap's.
-        if focus {
+        if let Some(asked) = &asked {
             let pid = match box_pid(&ctx.d) {
                 BoxPid::Pid(p) => crate::procfs::proc_ppid(&p).unwrap_or_default(),
                 _ => Vec::new(),
             };
-            return focus_pid(ctx, &pid);
+            return focus_pid(ctx, asked, &pid);
         }
         say(cat!(
             "box '",
@@ -148,8 +154,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         )));
     }
     if let Some(pid) = peek_pid(ctx, Some(&output)) {
-        if focus {
-            return focus_pid(ctx, &pid);
+        if let Some(asked) = &asked {
+            return focus_pid(ctx, asked, &pid);
         }
         let of = if monitor.is_empty() {
             Vec::new()
@@ -214,8 +220,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     };
     // Launched by the host Hyprland: its exec rules put exactly this window on that workspace,
     // unfocused.
-    let lua = cat!(
-        "hl.exec_cmd('",
+    let cmd = cat!(
         env,
         lua_str(ctx, &peek),
         " --box ",
@@ -228,12 +233,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ctx.name,
         mon_t,
         "\" --marks ",
-        lua_str(ctx, shell::bytes(&marks)),
-        "', { workspace = '",
-        ws,
-        " silent', no_initial_focus = true })"
+        lua_str(ctx, shell::bytes(&marks))
     );
-    host_eval(ctx, &lua)?;
+    HostSilent::new(ctx).exec_peek(&cmd, &ws)?;
     say(cat!(
         "peek at box '",
         ctx.name,
@@ -241,14 +243,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ws_text(&ws),
         " (view only; close it with SUPER+W, or it goes with the box)"
     ));
-    if !focus {
+    let Some(asked) = asked else {
         return Ok(());
-    }
+    };
     // (5 s on the monotonic clock: settle::after)
     let deadline = crate::settle::after(5);
     let pid = loop {
         if let Some(pid) = peek_pid(ctx, Some(&output)) {
-            let (rc, cl) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
+            let (rc, cl) = host_query(ctx, Query::Clients, false);
             let seen = Args::new(&["-e"])
                 .kv("--argjson", "p", &pid)
                 .arg("any(.pid == $p)")
@@ -269,7 +271,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         crate::trap::sleep(b"0.05");
     };
-    focus_pid(ctx, &pid)
+    focus_pid(ctx, &asked, &pid)
 }
 
 /// ws_note WS: one line when WS is the scratchpad on an Omarchy whose scratchpad is its Quake
@@ -306,8 +308,9 @@ fn peek_marker(ctx: &Ctx) -> Vec<u8> {
     Vec::new()
 }
 
-/// focus_pid PID: a host window focused by its pid (Hyprland switches to its workspace).
-fn focus_pid(ctx: &Ctx, pid: &[u8]) -> Res<()> {
+/// focus_pid PID: a host window focused by its pid (Hyprland switches to its workspace), on the
+/// user's request (--focus: ASKED).
+fn focus_pid(ctx: &Ctx, asked: &HostAsked, pid: &[u8]) -> Res<()> {
     if !shell::is_num(pid) {
         let lead = if ctx.main_cmd.is_empty() {
             Vec::new()
@@ -319,10 +322,7 @@ fn focus_pid(ctx: &Ctx, pid: &[u8]) -> Res<()> {
             "no window to focus (the box's window is gone? omabox ls)"
         )));
     }
-    host_eval(
-        ctx,
-        &cat!("hl.dispatch(hl.dsp.focus({ window = 'pid:", pid, "' }))"),
-    )
+    asked.focus_pid(ctx, pid)
 }
 
 #[cfg(test)]

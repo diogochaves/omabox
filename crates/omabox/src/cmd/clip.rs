@@ -8,7 +8,7 @@ use crate::boxes::{BoxPid, box_alive, box_pid, list_names, meta, need_box};
 use crate::cat;
 use crate::exec::{ExecOpts, Redir, box_exec, dev_null, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, say};
-use crate::host::host_hyprctl;
+use crate::host::{Query, host_query};
 use crate::jail::in_jail;
 use crate::jq;
 use crate::select::select_box;
@@ -255,7 +255,7 @@ fn clip_select(ctx: &mut Ctx, name: &[u8]) -> Res<()> {
         select_box(ctx, name)?;
         return need_box(ctx);
     }
-    let (rc, aw) = host_hyprctl(ctx, &[b"-j", b"activewindow"], true);
+    let (rc, aw) = host_query(ctx, Query::ActiveWindow, true);
     let win = if rc == 0 {
         let r = jq::tool("jq", &["-r", ".pid // empty"], Some(&aw), jq::Err::Null);
         if r.ok() { r.text() } else { Vec::new() }

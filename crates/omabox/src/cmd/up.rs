@@ -3,8 +3,8 @@
 //! box that is up already is said as such (up_already), or refused when it lacks what was asked for.
 //!
 //! Rules held by construction (#355, SECURITY.md): the bwrap command is built by bwrap.rs (S1, S3,
-//! S4), the network by net.rs (S5, S10), the HOME by seed.rs (S2), the host's Hyprland is reached
-//! only through host::HostSilent (S8), and the started box's mounts are checked for the seat's paths
+//! S4), the network by net.rs (S5, S10), the HOME by seed.rs (S2), the host's Hyprland is acted on
+//! only through host::HostSilent (S8, as everywhere: #366), and the started box's mounts are checked for the seat's paths
 //! (up_box.rs's seat_check, S1).
 
 use crate::args::{optarg, unknown_opt};

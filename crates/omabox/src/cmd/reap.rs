@@ -50,11 +50,6 @@ const fn lua_version(s: &[u8]) -> u32 {
     0
 }
 
-/// keys_ensure's Lua: whether this omabox's passthrough hooks (PASS_VERSION) are on the host.
-fn pass_check() -> String {
-    format!("if (omabox_pass_version or 0) < {PASS_VERSION} then error('omabox-missing', 0) end")
-}
-
 /// What the reaper keeps of its box from the start (cmd__reap's locals).
 struct Reap {
     created: Vec<u8>,
@@ -606,8 +601,9 @@ fn keys_ensure(ctx: &Ctx, sig: Option<&[u8]>) {
             Err(_) => return,
         },
     };
-    if crate::host::host_eval_out(&sig, pass_check().as_bytes()) == b"error: omabox-missing" {
-        let _ = crate::host::install_passthrough(ctx);
+    let host = crate::host::HostSilent::new(ctx);
+    if host.passthrough_missing(&sig, PASS_VERSION) {
+        let _ = host.passthrough();
     }
 }
 
@@ -733,11 +729,11 @@ mod tests {
             "the global the check reads is the one passthrough.lua sets"
         );
         assert!(
-            pass_check().starts_with(&format!(
+            crate::host::pass_check(PASS_VERSION).starts_with(&format!(
                 "if (omabox_pass_version or 0) < {PASS_VERSION} then"
             )),
             "{}",
-            pass_check()
+            crate::host::pass_check(PASS_VERSION)
         );
         assert_eq!(lua_version(b"x\n"), 0);
     }

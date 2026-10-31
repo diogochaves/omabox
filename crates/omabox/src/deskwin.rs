@@ -10,7 +10,7 @@ use crate::boxes::{BoxPid, box_pid, meta};
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
-use crate::host::{host_eval, host_hyprctl};
+use crate::host::{Addr, HostSilent, Query, host_query};
 use crate::hypr::{HYPR_LIMIT, hypr_json};
 use crate::jq::{self, Args};
 use crate::jqprog::JQ_MON;
@@ -62,7 +62,7 @@ pub fn desk_windows(ctx: &Ctx, clients: Option<&[u8]>) -> Option<Vec<u8>> {
     let clients = match clients {
         Some(c) if !c.is_empty() => c.to_vec(),
         _ => {
-            let (rc, c) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
+            let (rc, c) = host_query(ctx, Query::Clients, false);
             if rc != 0 {
                 return None;
             }
@@ -197,6 +197,17 @@ fn ints(ctx: &Ctx, v: &[&[u8]]) -> Res<Vec<i64>> {
     })
 }
 
+/// A window address read from the host's clients, for HostSilent; anything else ends the command.
+fn addr(ctx: &Ctx, a: &[u8]) -> Res<Addr> {
+    Addr::new(a).ok_or_else(|| {
+        ctx.die(cat!(
+            ctx.label(),
+            "not a window's address on your desktop: ",
+            a
+        ))
+    })
+}
+
 /// desk_relay [LINE]: lay an interactive box's windows out on the host as its layout, scaled as a
 /// whole (#174), on the host monitor its main window is on, in that monitor's free area, the
 /// picture centred, one scale for all (desk_picture). The main window is floated for it and made the
@@ -204,12 +215,13 @@ fn ints(ctx: &Ctx, v: &[&[u8]]) -> Res<Vec<i64>> {
 /// monitor about to be made), its window's size and place relative to the host monitor, "W H X Y".
 /// Moves by address: no focus moves.
 pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
-    let (rc, clients) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
+    let host = HostSilent::new(ctx);
+    let (rc, clients) = host_query(ctx, Query::Clients, false);
     if rc != 0 {
         return Err(ctx.die("monitor: cannot read your desktop's windows"));
     }
     let clients = strip_nl(&clients);
-    let (rc, mons) = host_hyprctl(ctx, &[b"-j", b"monitors"], false);
+    let (rc, mons) = host_query(ctx, Query::Monitors, false);
     if rc != 0 {
         return Err(ctx.die("monitor: cannot read your desktop's monitors"));
     }
@@ -261,28 +273,21 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
     if new.is_empty() && shell::grep_lines(&monitors_file(ctx)).is_empty() {
         let mf = std::fs::read(ctx.at("main-window")).map(|v| strip_nl(&v));
         if !main.is_empty() && mf.is_ok_and(|v| v == cat!(main, " tiled")) {
-            host_eval(
-                ctx,
-                &cat!(
-                    "hl.dispatch(hl.dsp.window.float({ action = 'disable', window = 'address:",
-                    main,
-                    "' }))"
-                ),
-            )?;
+            host.float(&addr(ctx, &main)?, false)?;
         }
         let _ = std::fs::remove_file(ctx.at("main-window"));
         return Ok(Vec::new());
     }
-    let opt = |o: &[u8], prog: &str| -> Vec<u8> {
-        let (rc, v) = host_hyprctl(ctx, &[b"-j", b"getoption", o], false);
+    let opt = |o: &'static str, prog: &str| -> Vec<u8> {
+        let (rc, v) = host_query(ctx, Query::Option(o), false);
         let r = jq::tool("jq", &["-r", prog], Some(&v), jq::Err::Null);
         if rc != 0 || !r.ok() {
             return Vec::new();
         }
         r.text()
     };
-    let mut gap = opt(b"general:gaps_out", crate::jqprog::GAPS_JQ);
-    let mut bw = opt(b"general:border_size", ".int // empty");
+    let mut gap = opt("general:gaps_out", crate::jqprog::GAPS_JQ);
+    let mut bw = opt("general:border_size", ".int // empty");
     if !shell::is_num(&gap) {
         gap = b"10".to_vec();
     }
@@ -373,14 +378,7 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
                     crate::shots::cant_write(&cat!(ctx.d, "/main-window"), &e)
                 )));
             }
-            host_eval(
-                ctx,
-                &cat!(
-                    "hl.dispatch(hl.dsp.window.float({ action = 'enable', window = 'address:",
-                    main,
-                    "' }))"
-                ),
-            )?;
+            host.float(&addr(ctx, &main)?, true)?;
         }
     }
     let mut said = Vec::new();
@@ -403,7 +401,7 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
             ));
             continue;
         }
-        let addr = records(&wins)
+        let at = records(&wins)
             .into_iter()
             .find(|l| field1(l) == name.as_slice())
             .map(|l| {
@@ -414,34 +412,14 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
                     .to_vec()
             })
             .unwrap_or_default();
-        if addr.is_empty() {
+        if at.is_empty() {
             continue;
         }
-        host_eval(
-            ctx,
-            &cat!(
-                "hl.dispatch(hl.dsp.window.resize({ window = 'address:",
-                addr,
-                "', x = ",
-                wd,
-                ", y = ",
-                ht,
-                " }))"
-            ),
-        )?;
+        let at = addr(ctx, &at)?;
+        let s = ints(ctx, &[wd, ht])?;
+        host.resize(&at, s[0], s[1])?;
         let v = ints(ctx, &[&a[2], x, &a[3], y])?;
-        host_eval(
-            ctx,
-            &cat!(
-                "hl.dispatch(hl.dsp.window.move({ window = 'address:",
-                addr,
-                "', x = ",
-                (v[0] + v[1]).to_string(),
-                ", y = ",
-                (v[2] + v[3]).to_string(),
-                " }))"
-            ),
-        )?;
+        host.move_to(&at, v[0] + v[1], v[2] + v[3])?;
     }
     // The box's monitors follow their windows' new sizes: wait for the main one, at most 3 s.
     if !main.is_empty() {
@@ -677,27 +655,17 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         "run/omabox.appid.{}",
         String::from_utf8_lossy(&name)
     ));
+    // (its window's size and place, as numbers for HostSilent's rule)
+    let Ok(r4) = ints(ctx, &[&r4[0], &r4[1], &r4[2], &r4[3]]) else {
+        monitors_write(ctx, &rest);
+        return Err(Exit(1));
+    };
+    let r4 = [r4[0], r4[1], r4[2], r4[3]];
     // A half-made monitor removed however this ends (MonUndo).
     let mut undo = MonUndo::arm(ctx, &name, appid.clone());
-    // The rule's `move` is relative to its monitor.
-    let rule = cat!(
-        "hl.window_rule({ name = 'omabox-mon-",
-        tok,
-        "', match = { initial_class = '^",
-        cls,
-        "$' }, workspace = '",
-        ws,
-        " silent', no_initial_focus = true, render_unfocused = true, float = true, size = '",
-        r4[0],
-        " ",
-        r4[1],
-        "', move = '",
-        r4[2],
-        " ",
-        r4[3],
-        "' })"
-    );
-    host_eval(ctx, &rule)?;
+    // The rule (aquamarine-omabox-TOK's, cls): its `move` is relative to its monitor.
+    let host = HostSilent::new(ctx);
+    host.mon_rule(&tok, &ws, r4)?;
     // The token once its rule is on: no window of that class is ever without one.
     if !crate::boxes::box_file(ctx, &appid, &cat!("omabox-", tok)) {
         monitors_write(ctx, &rest);
@@ -709,7 +677,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     }
     // Sent again right before the window is asked for: a config reload of the host's drops every
     // rule.
-    host_eval(ctx, &rule)?;
+    host.mon_rule(&tok, &ws, r4)?;
     undo.creating(true);
     let r = on_box(
         ctx,
@@ -744,7 +712,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     let end = after(5);
     let addr;
     loop {
-        let (rc, c) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
+        let (rc, c) = host_query(ctx, Query::Clients, false);
         if rc == 0 {
             // (its words to /dev/null, as bash's `2>/dev/null`: a reply not JSON, a host mid-reload)
             let j = Args::new(&["-er"])

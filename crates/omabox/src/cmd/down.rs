@@ -17,9 +17,6 @@ use std::time::Duration;
 
 /// down_orphans' word on what started an orphan.
 const STARTER_JQ: &str = r#".starter | "\(.command), pid \(.pid)""#;
-/// submap_release's Lua.
-const SUBMAP_LUA: &str =
-    r#"if hl.get_current_submap() == "omabox" then hl.dispatch(hl.dsp.submap("reset")) end"#;
 
 /// A reaper's down (bash's DOWN_IF_CREATED, DOWN_IF_AGENT_GONE): only the box it decided on, created
 /// then, and, when it decided on an agent that exited, only while no agent of its session took it
@@ -372,7 +369,7 @@ fn submap_release(ctx: &Ctx) {
             return;
         }
     }
-    let _ = crate::host::host_hyprctl(ctx, &[b"eval", SUBMAP_LUA.as_bytes()], true);
+    crate::host::HostSilent::new(ctx).submap_reset();
 }
 
 #[cfg(test)]
