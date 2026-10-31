@@ -10,6 +10,12 @@
 //! write, so where the tree goes is opened with no link followed and no mount crossed (openat2): a
 //! link there never takes the mount elsewhere in the box, and nothing is mounted over a mount.
 //!
+//! The namespaces joined are the ones up recorded in box.json (host-only) as PID 1's when bwrap
+//! named it, before anything of the box ran: a box process that could ptrace PID 1 and have it
+//! unshare a user and mount namespace of the box's own would otherwise have a mount attached there,
+//! which it could make writable (S4). Their inodes now are compared with those, and the child joins
+//! the mount namespace through the fd that was checked, not PID 1's at that later moment.
+//!
 //! Everything run in the child is a plain syscall on values made before the fork (the parent may
 //! have threads); it says which step failed, and its errno, through a pipe.
 
@@ -22,8 +28,62 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 /// A box whose namespaces a mount goes into: a pidfd of its PID 1 and the user namespace that owns
 /// its mount namespace.
 pub struct BoxNs {
-    pidfd: OwnedFd,
+    mntns: OwnedFd,
     userns: OwnedFd,
+}
+
+/// A namespace's inode (nsfs: one per namespace), through an fd of it.
+fn ino(fd: RawFd) -> Option<u64> {
+    // SAFETY: fstat on an fd of ours into a stat of ours.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    (unsafe { libc::fstat(fd, &mut st) } == 0).then_some(st.st_ino)
+}
+
+/// PID's mount namespace and the user namespace that owns it, open.
+fn ns_of(n: libc::pid_t) -> Result<(OwnedFd, OwnedFd), Vec<u8>> {
+    let mnt = std::fs::File::open(format!("/proc/{n}/ns/mnt")).map_err(|e| {
+        cat!(
+            "cannot read the box's mount namespace: ",
+            errno_text(e.raw_os_error().unwrap_or(0))
+        )
+    })?;
+    // SAFETY: NS_GET_USERNS on a namespace fd of ours returns a new fd (close-on-exec) or -1.
+    let userns = owned(libc::c_long::from(unsafe {
+        libc::ioctl(mnt.as_raw_fd(), libc::NS_GET_USERNS)
+    }))
+    .ok_or_else(|| {
+        cat!(
+            "cannot read who owns the box's mount namespace: ",
+            errno_text(errno())
+        )
+    })?;
+    Ok((OwnedFd::from(mnt), userns))
+}
+
+/// What up records of PID (the box's PID 1, as bwrap names it): its mount namespace's inode and
+/// that of the user namespace owning it, for box.json's `mount_ns`.
+pub fn ns_ids(pid: &[u8]) -> Option<(u64, u64)> {
+    let n: libc::pid_t = std::str::from_utf8(pid).ok()?.parse().ok()?;
+    let (m, u) = ns_of(n).ok()?;
+    Some((ino(m.as_raw_fd())?, ino(u.as_raw_fd())?))
+}
+
+/// The namespaces found NOW against what up RECORDED: the same, or why not.
+pub fn ns_check(recorded: Option<(u64, u64)>, now: (u64, u64)) -> Result<(), Vec<u8>> {
+    match recorded {
+        None => Err(b"up recorded no mount namespace for it (an omabox before 1.1 started it): down, then up again"
+            .to_vec()),
+        Some(r) if r == now => Ok(()),
+        Some(_) => Err(b"its PID 1 is in a mount namespace other than the one up made (one a process in the box made?): refused".to_vec()),
+    }
+}
+
+/// box.json's `mount_ns` in the box dir D.
+fn recorded(d: &[u8]) -> Option<(u64, u64)> {
+    let t = std::fs::read(crate::shell::path(&cat!(d, "/box.json"))).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&t).ok()?;
+    let m = v.get("mount_ns")?;
+    Some((m.get("mnt")?.as_u64()?, m.get("owner")?.as_u64()?))
 }
 
 fn errno() -> i32 {
@@ -38,8 +98,8 @@ fn owned(fd: libc::c_long) -> Option<OwnedFd> {
 }
 
 impl BoxNs {
-    /// The box in D, pinned: its PID 1 (box_pid) by a pidfd, and its mount namespace's owner read
-    /// while that pidfd shows it alive (a pid reused meanwhile is never entered).
+    /// The box in D: its PID 1's (box_pid) mount namespace and that namespace's owner, read while a
+    /// pidfd of it shows it alive (a pid reused meanwhile is never entered), and the ones up recorded.
     pub fn open(d: &[u8]) -> Result<BoxNs, Vec<u8>> {
         let gone = || b"the box is not up".to_vec();
         let BoxPid::Pid(pid) = box_pid(d) else {
@@ -51,22 +111,7 @@ impl BoxNs {
             .ok_or_else(gone)?;
         // SAFETY: pidfd_open takes a pid and flags; the result is a new fd (close-on-exec) or -1.
         let pidfd = owned(unsafe { libc::syscall(libc::SYS_pidfd_open, n, 0) }).ok_or_else(gone)?;
-        let mnt = std::fs::File::open(format!("/proc/{n}/ns/mnt")).map_err(|e| {
-            cat!(
-                "cannot read the box's mount namespace: ",
-                errno_text(e.raw_os_error().unwrap_or(0))
-            )
-        })?;
-        // SAFETY: NS_GET_USERNS on a namespace fd of ours returns a new fd (close-on-exec) or -1.
-        let userns = owned(libc::c_long::from(unsafe {
-            libc::ioctl(mnt.as_raw_fd(), libc::NS_GET_USERNS)
-        }))
-        .ok_or_else(|| {
-            cat!(
-                "cannot read who owns the box's mount namespace: ",
-                errno_text(errno())
-            )
-        })?;
+        let (mntns, userns) = ns_of(n)?;
         // (alive now, so the /proc entry read above was its)
         // SAFETY: signal 0 through a pidfd of ours: only whether the process is there.
         let alive = unsafe {
@@ -81,7 +126,11 @@ impl BoxNs {
         if !alive || !matches!(box_pid(d), BoxPid::Pid(p) if p == pid) {
             return Err(gone());
         }
-        Ok(BoxNs { pidfd, userns })
+        let now = ino(mntns.as_raw_fd())
+            .zip(ino(userns.as_raw_fd()))
+            .ok_or_else(|| b"cannot read the box's namespaces".to_vec())?;
+        ns_check(recorded(d), now)?;
+        Ok(BoxNs { mntns, userns })
     }
 
     /// SRC (a folder, its real path) read-only at PARENT/NAME in the box, an empty folder there that
@@ -110,7 +159,7 @@ impl BoxNs {
         let (r, w) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         let job = Job {
             userns: self.userns.as_raw_fd(),
-            pidfd: self.pidfd.as_raw_fd(),
+            mntns: self.mntns.as_raw_fd(),
             src: src_c.as_ref().map(|s| s.as_ptr()),
             parent: parent_c.as_ptr(),
             name: name_c.as_ptr(),
@@ -180,7 +229,7 @@ struct OpenHow {
 /// What the child does, raw: fds and C strings made before the fork.
 struct Job {
     userns: RawFd,
-    pidfd: RawFd,
+    mntns: RawFd,
     /// The folder to mount (None: unmount).
     src: Option<*const libc::c_char>,
     parent: *const libc::c_char,
@@ -267,7 +316,8 @@ impl Job {
                 }
                 None => None,
             };
-            if libc::setns(self.pidfd, libc::CLONE_NEWNS) != 0 {
+            // (the namespace checked, not PID 1's at this moment)
+            if libc::setns(self.mntns, libc::CLONE_NEWNS) != 0 {
                 fail(6);
             }
             let pfd = open(libc::AT_FDCWD, self.parent, 0);
@@ -308,5 +358,30 @@ impl Job {
             }
             libc::_exit(0)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #345: a mount goes only into the namespaces up recorded; another (PID 1 made to unshare its
+    /// own) or none recorded is refused.
+    #[test]
+    fn only_the_namespaces_up_recorded() {
+        assert_eq!(ns_check(Some((5, 7)), (5, 7)), Ok(()));
+        let e = |r| String::from_utf8(ns_check(r, (5, 7)).unwrap_err()).unwrap();
+        assert!(e(Some((6, 7))).contains("other than the one up made"));
+        assert!(e(Some((5, 8))).contains("other than the one up made"));
+        assert!(e(None).contains("down, then up again"));
+    }
+
+    /// up's record of a process's namespaces: this process's own read back as the same.
+    #[test]
+    fn ns_ids_reads_a_process() {
+        let me = std::process::id().to_string();
+        let a = ns_ids(me.as_bytes()).expect("this process's namespaces");
+        assert_eq!(ns_ids(me.as_bytes()), Some(a));
+        assert_eq!(ns_ids(b"not-a-pid"), None);
     }
 }

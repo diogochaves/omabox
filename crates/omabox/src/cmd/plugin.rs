@@ -228,8 +228,37 @@ fn in_box(ctx: &Ctx, script: &str, args: &[&[u8]]) -> Res<(i32, Vec<u8>)> {
         b"sh".to_vec(),
     ];
     argv.extend(args.iter().map(|a| a.to_vec()));
-    let r = on_box(ctx, &argv, true, Out::Capture(Some(65536)), ErrTo::Inherit).or_exit()?;
+    // (its stderr dropped: what the box's names make sh say is the box's; failures go by status)
+    let r = on_box(ctx, &argv, true, Out::Capture(Some(65536)), ErrTo::Null).or_exit()?;
     Ok((r.rc, r.out))
+}
+
+/// What the box wrote, fit for the caller's terminal: a control character (but newline and tab) or a
+/// byte that is no UTF-8 as `?`, at most 400 bytes of it, what is cut said (S7: an escape sequence
+/// the box wrote never reaches the terminal as one).
+fn plain(v: &[u8]) -> Vec<u8> {
+    const CAP: usize = 400;
+    let (head, cut) = if v.len() > CAP {
+        (&v[..CAP], v.len() - CAP)
+    } else {
+        (v, 0)
+    };
+    let mut out = Vec::new();
+    for chunk in head.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            if c.is_control() && c != '\n' && c != '\t' {
+                out.push(b'?');
+            } else {
+                let mut b = [0u8; 4];
+                out.extend_from_slice(c.encode_utf8(&mut b).as_bytes());
+            }
+        }
+        out.extend(std::iter::repeat_n(b'?', chunk.invalid().len()));
+    }
+    if cut > 0 {
+        out.extend_from_slice(format!("... ({cut} bytes more)").as_bytes());
+    }
+    out
 }
 
 /// Whether the box was started with its shell (not --no-shell).
@@ -276,6 +305,15 @@ fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
         .map_err(|r| ctx.die(cat!(ctx.label(), r.0)))?;
     let lock = locked(ctx, b"add")?;
     let bj = box_json(ctx);
+    // A jail's box (S9): what its jail hides is covered on the mounts up makes (jail_cover), never
+    // on one made later, so a plugin goes in there with up --plugin.
+    if bj.get("jail").is_some_and(|j| !j.is_null()) {
+        return Err(ctx.die(cat!(
+            "plugin add: box '",
+            n,
+            "' was started inside ai-jail: what its jail hides is checked on the mounts up makes only; start it with up --plugin there"
+        )));
+    }
     if let Some((_, dir, via)) = box_plugins(&bj).into_iter().find(|(i, _, _)| *i == p.id) {
         if dir == p.dir {
             say(cat!(
@@ -340,7 +378,7 @@ fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
             " in box '",
             n,
             "' (to ",
-            shell::strip_nl(t),
+            plain(&shell::strip_nl(t)),
             ")"
         ));
     }
@@ -410,7 +448,9 @@ fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
         match session_out(ctx, &[b"omarchy", b"plugin", b"enable", &p.id]) {
             Some((0, _)) => {}
             r => {
-                let said = r.map(|(_, o)| shell::strip_nl(&o)).unwrap_or_default();
+                let said = r
+                    .map(|(_, o)| plain(&shell::strip_nl(&o)))
+                    .unwrap_or_default();
                 say(cat!(
                     "plugin add: omarchy plugin enable ",
                     p.id,
@@ -566,6 +606,20 @@ mod tests {
             "a mount from elsewhere over it"
         );
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #345: what the box wrote reaches the terminal with no control character but newline and tab,
+    /// no byte that is not UTF-8, and capped.
+    #[test]
+    fn plain_keeps_escapes_off_the_terminal() {
+        assert_eq!(plain(b"/a/b\tc\nd"), b"/a/b\tc\nd");
+        assert_eq!(plain(b"x\x1b]52;c;aGk=\x07y"), b"x?]52;c;aGk=?y");
+        assert_eq!(plain(b"\x1b[31mred\r"), b"?[31mred?");
+        assert_eq!(plain("a\u{9b}b é".as_bytes()), "a?b é".as_bytes());
+        assert_eq!(plain(b"a\x9bb\xff"), b"a?b?");
+        let long = vec![b'z'; 65536];
+        let p = plain(&long);
+        assert!(p.starts_with(&[b'z'; 400]) && p.ends_with(b"... (65136 bytes more)"));
     }
 
     #[test]

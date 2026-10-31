@@ -11273,14 +11273,28 @@ from them.
     which for a detached tree is "/": every mount was refused. What the box HOME holds is read and
     written from inside the box (on_box). A link made by hand is replaced (said); a folder there
     that is not omabox's (an `omarchy plugin add` clone) is left, refused. Not for a jailed caller
-    (the broker refuses commands it does not list): `up --plugin` there. `up NAME --plugin X` on a
+    (the broker refuses commands it does not list): `up --plugin` there. A security review found
+    three gaps, fixed the same day: (1) the mount joined PID 1's namespaces as they were then; where
+    ptrace is allowed a box process could have PID 1 unshare a user and mount namespace of the box's
+    own, and the mount, attached there, could be made writable. up now records PID 1's mount
+    namespace and its owner's inodes in box.json (`mount_ns`) when bwrap names it, before anything of
+    the box runs; plugin add/remove refuse other ones (a box from before has none: down, up), and the
+    child joins the mount namespace through the fd checked, not PID 1's. (2) An unjailed `plugin
+    add` on a jail's box mounted without the jail's covers (S9): refused now (box.json's `jail`),
+    `up --plugin` there. (3) Text of the box's (a replaced link's target, `omarchy plugin enable`'s
+    words) reached the terminal raw, escape sequences included (OSC 52): its control characters but
+    newline and tab, and bytes that are not UTF-8, are `?`, 400 bytes at most; the in-box scripts'
+    stderr is dropped. `up NAME --plugin X` on a
     box without X (finding 134) now names `omabox plugin add X -b NAME`. Tests: t_plugin_add (one
     outside the box mounted read-only, nosuid, nodev, the box unable to unmount or remount it, in
     the shell and its bar, loaded; one in the repo linked, its helper reaching the repo; the same
     again said, another dir with the id refused; the issue's hand-made link replaced and enabled at
     once; a folder not omabox's left; a plugin in the runtime dir refused; remove of a mounted, a
     linked and an up --plugin one, then added back; a link put on the mount's way by the box: refused,
-    nothing mounted where it leads), t_unit_plugin_cmd (usage errors, a box not up),
+    nothing mounted where it leads; an OSC 52 link target said with ?; a changed mount_ns record
+    and a jail's record refused), t_unit_plugin_cmd (usage errors, a box not up), latemount.rs's
+    only_the_namespaces_up_recorded and ns_ids_reads_a_process, plugin.rs's
+    plain_keeps_escapes_off_the_terminal,
     cmd::plugin's unit tests (linked only through a same-path mount still bound), broker_check (a
     jailed caller refused), t_up_again (the new words). On the old code `plugin` is an unknown
     command (exit 2).

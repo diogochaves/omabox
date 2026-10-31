@@ -8034,10 +8034,12 @@ t_plugin_add() {
     printf '#!/bin/bash\nhere=$(dirname "$(readlink -f "$0")")\ncat "$here/../../tools/sibling.txt"\n' > "$1/helpers/find.sh"
   }
   afix "$R/widget" "$P.aw"; afix "$R/hand" "$P.ah"; afix "$O/widget" "$P.ao"; afix "$O/up" "$P.au"
-  afix "$O/again" "$P.ao"; afix "$O/clone" "$P.ac"; afix "$O/swap" "$P.as"
+  afix "$O/again" "$P.ao"; afix "$O/clone" "$P.ac"; afix "$O/swap" "$P.as"; afix "$R/esc" "$P.ae"
+  afix "$O/ns" "$P.an"
   mkdir -p "$R/tools"; echo sibling > "$R/tools/sibling.txt"
   out=$(cd "$R" && ob up "$B" --net isolated --plugin "$O/up" 2>&1) || { no "up with one plugin, from a repo" "$out"; return; }
-  H=$(ob path "$B")/home
+  H=$(ob path "$B")/home; local bjf; bjf=$(ob path "$B")/box.json
+  bj_set() { local t; t=$(jq "$1" "$bjf") && printf '%s\n' "$t" > "$bjf"; }   # (box.json is the host's)
   listed() { ob run -b "$B" -- omarchy-shell shell listPlugins 2>/dev/null | jq -r --arg i "$1" '[.[] | select(.id == $i)] | length'; }
   st() { ob ls --json | jq -r --arg n "$B" --arg i "$1" '.[] | select(.name == $n) | .plugin_status[$i] | "\(.via) \(.state)"'; }
   # One outside anything the box has: mounted read-only, in the shell and its bar.
@@ -8068,6 +8070,30 @@ t_plugin_add() {
   out=$(ob plugin add "$R/hand" -b "$B" 2>&1)
   check_match "a link made by hand: replaced, said" "replaced the link at ~/.config/omarchy/plugins/$P.ah in box '$B' \(to $R/hand\)" "$out"
   check_eq "...enabled at once (the rescan waited for)" "linked loaded" "$(st "$P.ah")"
+  # What the box wrote never reaches the terminal as an escape sequence (S7): a link whose target
+  # holds OSC 52 (a clipboard write) is said with ? for its control characters.
+  ob run -b "$B" -- sh -c "ln -s \"\$(printf '/nowhere\033]52;c;aGk=\007')\" $f/$P.ae"
+  out=$(ob plugin add "$R/esc" -b "$B" 2>&1)
+  check_match "a link's target with an escape sequence: said with ?" "\(to /nowhere\?\]52;c;aGk=\?\)" "$out"
+  check_fails "...no ESC nor BEL reaches the terminal" grep -q $'[\033\007]' <<<"$out"
+  # The mount goes only into the namespaces up recorded (bwrap's, before anything of the box ran): a
+  # box that made PID 1 unshare its own is refused (faked: the record changed).
+  local mnt; mnt=$(jq -r '.mount_ns.mnt' "$bjf")
+  check_match "up recorded the box's mount namespace" '^[0-9]+$' "$mnt"
+  bj_set '.mount_ns.mnt = 1'
+  out=$(ob plugin add "$O/ns" -b "$B" 2>&1); rc=$?
+  bj_set ".mount_ns.mnt = $mnt"
+  check_eq "PID 1 in a mount namespace other than up's: refused (rc)" 1 "$rc"
+  check_match "...said" "cannot mount $O/ns in box '$B': its PID 1 is in a mount namespace other than the one up made" "$out"
+  check_fails "...nothing left in the box HOME" ob run -b "$B" -- test -e "$f/$P.an"
+  # A jail's box (S9): its covers apply only to up's mounts, so plugin add refuses it (faked: the
+  # box's record names a jail).
+  bj_set '.jail = "t-fake-jail"'
+  out=$(ob plugin add "$O/ns" -b "$B" 2>&1); rc=$?
+  bj_set 'del(.jail)'
+  check_eq "a box a jail started: refused (rc)" 1 "$rc"
+  check_match "...naming up --plugin" "was started inside ai-jail: .*up --plugin there" "$out"
+  check_fails "...nothing made in the box HOME" ob run -b "$B" -- test -e "$f/$P.an"
   # A folder of the box HOME's own (an omarchy plugin add's clone): left, refused.
   ob run -b "$B" -- mkdir -p "$f/$P.ac"
   out=$(ob plugin add "$O/clone" -b "$B" 2>&1); rc=$?
@@ -8098,7 +8124,7 @@ t_plugin_add() {
   check_eq "...the shell no longer lists it" 0 "$(listed "$P.au")"
   out=$(ob plugin remove "$P.au" -b "$B" 2>&1); rc=$?
   check_eq "...again: refused (rc)" 1 "$rc"
-  check_match "...naming what the box has" "has no plugin $P.au \(it has $P.ah\)" "$out"
+  check_match "...naming what the box has" "has no plugin $P.au \(it has $P.ah $P.ae\)" "$out"
   check "...then added back" ob plugin add "$O/up" -b "$B"
   check_eq "...mounted, loaded" "mounted loaded" "$(st "$P.au")"
   # The box HOME is the box's: a link in the mount's way never takes the mount elsewhere.

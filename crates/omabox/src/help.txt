@@ -264,7 +264,7 @@ it) and enabled, its state said (`ls --json`: plugin_status). `plugin remove ID`
 from up's --plugin too): disabled, unmounted or unlinked, rescanned. A link made by hand in the box
 HOME works only for a folder the box has at its own path, and `omarchy plugin enable` right after
 `rescanPlugins` says "is not known" until the rescan is done; `plugin add` does both. Not inside
-ai-jail (up --plugin there).
+ai-jail, nor on a box a jail started (up --plugin there).
 @ up run restart-shell
 --desk-shell: your desktop's shell as it is, to check a plugin against a real desk: every plugin in
 ~/.config/omarchy/plugins (read-only, as --plugin's; a --plugin of the same id wins: your working

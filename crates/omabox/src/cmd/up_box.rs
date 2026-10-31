@@ -401,11 +401,18 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let Some(ns) = procfs::pidns(&pid) else {
         return Err(ready::died_starting(ctx, r.covers));
     };
+    // Its mount namespace and that one's owner, as bwrap made them before anything of the box ran:
+    // the only ones `plugin add` mounts into (#345, latemount.rs).
+    let mns = match crate::latemount::ns_ids(&pid) {
+        Some((m, o)) => format!(r#"{{"mnt": {m}, "owner": {o}}}"#).into_bytes(),
+        None => b"null".to_vec(),
+    };
     if !crate::mon::jq_box_json(
         ctx,
         crate::jq::Args::new(&[])
             .kv("--arg", "ns", &ns)
-            .arg(".pidns = $ns"),
+            .kv("--argjson", "mns", &mns)
+            .arg(".pidns = $ns | .mount_ns = $mns"),
     ) {
         return Err(ctx.die(cat!(
             "up: could not record box '",
