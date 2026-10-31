@@ -1646,6 +1646,10 @@ t_unit_config() {
   local h=$TMP/confhome; mkdir -p "$h"
   # (its ups run with stand-in runtime dirs: a cache and state of their own too, finding 584)
   local -x XDG_CACHE_HOME=$TMP/conf-cache XDG_STATE_HOME=$TMP/conf-state
+  # A runtime dir of its own: config reads the boxes up there (protect-ports names the connected ones,
+  # #374; confirm-close changes the interactive ones live), and those of other sessions are not this
+  # test's to read or change.
+  local -x XDG_RUNTIME_DIR=$TMP/conf-rt; mkdir -m 700 "$XDG_RUNTIME_DIR"
   cfg() { HOME=$h "$CLI" config "$@" 2>&1; }
   # (protect-ports: the Rust half's key, finding 480; bash's half lists the first five)
   local dflt="workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off protect-ports="
