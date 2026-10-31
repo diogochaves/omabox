@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# omabox stand-in for timedatectl, first on the box's PATH (finding 625, #322): a box has no system
+# bus, so timedated never answered and every timedatectl failed. The questions that only read
+# (Omarchy's Elsewhen panel: its zone picker and the local zone; the timezone menu's list; the Windows
+# VM's zone) are answered from the files timedated reads: /usr/share/zoneinfo/tzdata.zi and
+# /etc/localtime (the host's, read-only in a box). Anything else (set-timezone, status, a show of
+# other properties, -H/-M) goes to the real one, which still fails: the clock is not the box's to set.
+set -euo pipefail
+args=("$@")
+real() { exec /usr/bin/timedatectl "${args[@]}"; }
+cmd="" value=0 props=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --no-pager | --no-ask-password) ;;
+    --value) value=1 ;;
+    -p | --property) [ $# -ge 2 ] || real; props+=("$2"); shift ;;
+    -P) [ $# -ge 2 ] || real; props+=("$2"); value=1; shift ;;
+    --property=*) props+=("${1#--property=}") ;;
+    -p?*) props+=("${1#-p}") ;;
+    -*) real ;;
+    *) [ -z "$cmd" ] || real; cmd=$1 ;;
+  esac
+  shift
+done
+case $cmd in
+  list-timezones)
+    [ ${#props[@]} -eq 0 ] && [ "$value" = 0 ] && [ -r /usr/share/zoneinfo/tzdata.zi ] || real
+    # timedated's list: every zone and link name in tzdata.zi, in byte order.
+    awk '$1 == "Z" { print $2 } $1 == "L" { print $3 }' /usr/share/zoneinfo/tzdata.zi | LC_ALL=C sort -u
+    ;;
+  show)
+    [ ${#props[@]} -gt 0 ] || real
+    for p in "${props[@]}"; do [ "$p" = Timezone ] || real; done
+    link=$(readlink /etc/localtime) || real
+    case $link in */zoneinfo/?*) ;; *) real ;; esac
+    zone=${link#*/zoneinfo/}
+    if [ "$value" = 1 ]; then echo "$zone"; else echo "Timezone=$zone"; fi
+    ;;
+  *) real ;;
+esac
