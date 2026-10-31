@@ -41,6 +41,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   warning (`plugin_status`: `off the bar`); with none, the warning says "not in the bar's layout"
   and gives the `putBarWidget` command that puts it there
   ([#326](https://github.com/diogochaves/omabox/issues/326)).
+- **An `up` with another `XDG_RUNTIME_DIR` deleted the HOMEs of boxes still running** (a test's
+  stand-in runtime dir, another login, with the same cache). A box HOME now records the box it was
+  made for, and goes only once that box is gone where it was made and nothing uses the HOME; an
+  older omabox's HOME only when nothing uses it. An `up` of a name whose HOME is another box's is
+  refused instead of taking it (finding 584).
 - **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
   `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
   Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).

@@ -10943,6 +10943,26 @@ from them.
     Tests: t_unit_up_software (ready.rs died_starting_says_a_software_render_node: the reason, the
     node, the VM line, the logs, and as before without them; render_why_cases), t_up_software (a real
     box with no EGL: said, with its node).
+584. **An `up` with another runtime dir removed the HOMEs of running boxes** (2026-10-31). Box HOMEs
+    live in the cache (`~/.cache/omabox/NAME`), box dirs in `$XDG_RUNTIME_DIR/omabox`. `sweep_homes`
+    took a HOME as gone when this runtime dir had no box dir of its name, so an `up` with another one
+    (a test's stand-in, another login) and the same cache removed every running box's HOME: it
+    happened to two of them that day. `up`'s own `rm_box` likewise removed (then shared) the HOME of a
+    box of the same name in another runtime dir. Now `up` writes a record beside the HOME
+    (`NAME/box-dir`: the box dir, written before the HOME is made) and a HOME is swept only when the
+    box dir its record names is not there and no process uses it: no mount namespace has it mounted
+    (each one's mountinfo, by device and root in that file system: a box binds it at `/home/sbx`) and
+    nothing has it as its cwd, root or an open file. A HOME with no record (an older omabox's) goes
+    only when this runtime dir has no box of its name and nothing uses it. `rm_box` takes the HOME only
+    when it is this box's (its record, or for an older one this box dir's `home` link) or no box's,
+    and `up` of a name whose HOME is another box's is refused, saying where that box is or that the
+    HOME is in use. No other sweeper judges by the runtime dir alone: `.down-`/`.expired-` markers live
+    in it, save leftovers go by their writer's pid, failed-run logs by count. Not covered: an omabox
+    in a pid namespace of its own that sees neither the runtime dir a box was made in nor its
+    processes still takes it as gone. Tests: t_home_sweep (a second `up` with a stand-in runtime and
+    state dir and the same cache: the first box's HOME kept, read by the box; a gone box's HOME and an
+    unused older one taken; the same name refused; an older box's HOME, its record removed, kept while
+    the box runs), t_unit_rm_tree's record cases, homeuse.rs's `a_bound_home_is_used`.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

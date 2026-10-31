@@ -57,6 +57,21 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let name = ctx.name.clone();
     let homes = paths::homes();
     let home_dir = cat!(homes, "/", name, "/home");
+    // A HOME under this name that is another box's (one up in another runtime dir, which this up
+    // cannot see): never removed, nor shared (finding 584).
+    if let Some(why) = ready::home_taken(ctx) {
+        return Err(ctx.die(cat!(
+            "up: box '",
+            name,
+            "''s HOME (",
+            homes,
+            "/",
+            name,
+            ") ",
+            why,
+            ": down that box first, or give this one another name"
+        )));
+    }
     // From here a box dir exists, and from launch.sh on a box may be running: if up fails, it is
     // killed rather than left running unseen. Once box.json is written the dir stays, so the logs
     // up's refusal points at can be read; before that it goes (finding 163). Whatever ends up:
@@ -97,7 +112,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     };
     ready::rm_box(ctx);
     let _ = std::fs::remove_file(ctx.in_boxes(cat!(".expired-", name)));
+    // (the box dir, then the HOME's record of it, then the HOME: sweep_homes never takes a HOME
+    // whose box is being made, from any runtime dir)
     let made = std::fs::create_dir_all(ctx.at("run")).is_ok()
+        && std::fs::create_dir_all(shell::path(&cat!(homes, "/", name))).is_ok()
+        && crate::homeuse::write_record(&cat!(homes, "/", name), &d)
         && std::fs::create_dir_all(shell::path(&home_dir)).is_ok()
         && std::os::unix::fs::symlink(shell::path(&home_dir), ctx.at("home")).is_ok();
     if !made {

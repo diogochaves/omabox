@@ -10024,6 +10024,50 @@ t_stale_pid() {
   pkill -P "$decoy"; kill "$decoy" 2>/dev/null
 }
 
+# Finding 584: a box's HOME (on disk, in the cache) goes only once its box is gone in the runtime dir it
+# was made in, and never while a box uses it. An `up` with another runtime dir (a test's stand-in,
+# another login) and the same cache took every box of this one as gone and removed their HOMEs while
+# they ran. Every box here keeps its HOME in a cache of the test's own.
+t_home_sweep() {
+  local B=$P-hs c=$TMP/hs-cache rt=$TMP/hs-rt st=$TMP/hs-state out rc
+  mkdir -p "$c" "$rt" "$st"; chmod 700 "$rt"
+  hs() { XDG_CACHE_HOME=$c "$CLI" "$@"; }
+  hs2() { XDG_CACHE_HOME=$c XDG_RUNTIME_DIR=$rt XDG_STATE_HOME=$st "$CLI" "$@"; }
+  check "up, its HOME in the test's own cache" hs up "$B" --no-shell
+  local H=$c/omabox/$B/home
+  hs run -b "$B" -- sh -c 'echo kept > "$HOME/mark"' >/dev/null 2>&1
+  check_eq "...the box writes its HOME" kept "$(cat "$H/mark" 2>&1)"
+  # What a sweep may take: a HOME whose box is gone in the runtime dir it was made in (neither this one
+  # nor the next up's), and an older omabox's (no record of it) whose box is gone and unused.
+  mkdir -p "$c/omabox/$P-hsgone/home" "$c/omabox/$P-hsold/home"
+  printf '%s\n' "$TMP/hs-gone-rt/omabox/$P-hsgone" > "$c/omabox/$P-hsgone/box-dir"
+  check "an up with another runtime dir (and state), the same cache" hs2 up "$B-2" --no-shell
+  check_eq "...leaves the first box's HOME as it was" kept "$(cat "$H/mark" 2>&1)"
+  check_eq "...which that box still reads" kept "$(hs run -b "$B" -- sh -c 'cat "$HOME/mark"' 2>&1)"
+  check_fails "...and takes a HOME whose box is gone where it was made" test -e "$c/omabox/$P-hsgone"
+  check_fails "...and an older omabox's whose box is gone and unused" test -e "$c/omabox/$P-hsold"
+  check "...its own box comes down" hs2 down "$B-2"
+  # The same name from there: the HOME is the running box's, so that up is refused and changes nothing.
+  rc=0; out=$(hs2 up "$B" --no-shell 2>&1) || rc=$?
+  check_eq "an up of the same name from another runtime dir is refused" 1 "$rc"
+  check_match "...saying whose HOME it is" "box '$B''s HOME .* is a box's in $XDG_RUNTIME_DIR/omabox" "$out"
+  check_fails "...no box made there" test -e "$rt/omabox/$B"
+  check_eq "...the HOME as it was" kept "$(cat "$H/mark" 2>&1)"
+  # A HOME an older omabox made has no record of its runtime dir: while its box uses it, it stays.
+  rm -f "$c/omabox/$B/box-dir"
+  check "an older omabox's box (its HOME's record taken away): an up from another runtime dir" hs2 up "$B-3" --no-shell
+  check_eq "...leaves that HOME, which its box uses" kept "$(cat "$H/mark" 2>&1)"
+  check "...its own box comes down" hs2 down "$B-3"
+  rc=0; out=$(hs2 up "$B" --no-shell 2>&1) || rc=$?
+  check_eq "...and its name from there is refused too" "1" "$rc"
+  check_match "...saying the HOME is in use" "box '$B''s HOME .* is in use" "$out"
+  check_eq "...the HOME as it was" kept "$(cat "$H/mark" 2>&1)"
+  check "down" hs down "$B"
+  check_fails "...takes its own HOME" test -e "$c/omabox/$B"
+  # (what may be left of a refused or failed check's boxes)
+  hs2 down "$B-2" >/dev/null 2>&1; hs2 down "$B-3" >/dev/null 2>&1; hs2 down "$B" >/dev/null 2>&1
+}
+
 # #220: a headless box at --idle 0 with no agent or owner has no reaper. `ls` calls it an orphan once
 # what started it is gone, `down --orphans` takes it down, and nothing else does. Four boxes: one up
 # from a script that exits (an orphan at once), one from a script that stays (not one, then one once it
@@ -17634,7 +17678,7 @@ t_run_cwd() {
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_mount_replaced t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

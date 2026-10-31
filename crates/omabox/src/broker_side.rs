@@ -179,7 +179,7 @@ pub fn policy_of(
 
 /// mountinfo's escapes in a mount point: `\040` a space, `\011` a tab, `\012` a newline, `\134` a
 /// backslash.
-fn unescape(mp: &[u8]) -> Vec<u8> {
+pub fn unescape(mp: &[u8]) -> Vec<u8> {
     let mut o = Vec::new();
     let mut i = 0;
     while i < mp.len() {

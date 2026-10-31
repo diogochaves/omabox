@@ -293,14 +293,52 @@ fn reaper_line(cmdline: &[u8], root: &[u8], name: &[u8]) -> bool {
             .is_some_and(|l| l.starts_with(&cat!("/omabox _reap ", name, " ")))
 }
 
-/// rm_box: the box dir and its HOME; only a dir under BOXES.
+/// rm_box: the box dir and its HOME; only a dir under BOXES, and the HOME only when it is this box's
+/// or no box's (home_taken: never a box's of another runtime dir, finding 584).
 pub fn rm_box(ctx: &Ctx) {
     let pre = cat!(ctx.boxes, "/");
     if !(ctx.d.starts_with(&pre) && ctx.d.len() > pre.len()) {
         return;
     }
     let home = cat!(crate::paths::homes(), "/", ctx.name);
-    rm_tree(&cat!("box '", ctx.name, "'"), &[ctx.d.clone(), home]);
+    let mut paths = vec![ctx.d.clone()];
+    if home_taken(ctx).is_none() {
+        paths.push(home);
+    }
+    rm_tree(&cat!("box '", ctx.name, "'"), &paths);
+}
+
+/// home_taken: why this box's name may not have its HOME (HOMES/NAME), when it is another box's: its
+/// record names another box dir, which is there (that box is up, or being made, in another runtime
+/// dir), or it is in use (a box of an older omabox, which wrote no record, runs on it). None when it
+/// is this box's (its record names this box dir; an older omabox's, this box dir's `home` leads to
+/// it), or no box's.
+pub fn home_taken(ctx: &Ctx) -> Option<Vec<u8>> {
+    let h = cat!(crate::paths::homes(), "/", ctx.name);
+    let p = shell::path(&h);
+    if !p.is_dir() || p.is_symlink() {
+        return None;
+    }
+    match crate::homeuse::record(&h) {
+        Some(r) if r == ctx.d => return None,
+        Some(r) if crate::homeuse::there(&r) => {
+            let at = r
+                .strip_suffix(cat!("/", ctx.name).as_slice())
+                .unwrap_or(&r)
+                .to_vec();
+            return Some(cat!("is a box's in ", at));
+        }
+        Some(_) => {}
+        None => {
+            let link = std::fs::read_link(ctx.at("home")).ok();
+            if link.is_some_and(|l| shell::bytes(&l) == cat!(h, "/home").as_slice()) {
+                return None;
+            }
+        }
+    }
+    crate::homeuse::Users::scan().uses(&h).then(|| {
+        b"is in use (a box this runtime dir does not have runs on it: an older omabox's, or one of another runtime dir)".to_vec()
+    })
 }
 
 /// rm_tree WHAT PATH...: rm -rf, after making each dir writable again (a user manager's mode-000
@@ -354,18 +392,30 @@ fn rm_tree_with(chmod: &str, what: &[u8], paths: &[Vec<u8>]) -> bool {
 }
 
 /// sweep_homes: HOMEs whose box is gone (the runtime dir is cleared at logout or reboot, ~/.cache is
-/// not). The box dir is always made before its HOME, so a box being set up is never swept. In byte
-/// order (bash's glob: the locale's collation, finding 446).
+/// not). Gone where it was made: the box dir its record names is not there (an `up` with another
+/// runtime dir sees none of this one's boxes, finding 584), and no process uses the HOME (no box has
+/// it mounted, nothing has it open). A HOME with no record (an older omabox's) goes only when its box
+/// is not in this runtime dir and nothing uses it either. The box dir and the record are made before
+/// the HOME, so a box being set up is never swept. In byte order (bash's glob: the locale's
+/// collation, finding 446).
 pub fn sweep_homes(ctx: &Ctx) {
     let homes = crate::paths::homes();
+    let mut users: Option<crate::homeuse::Users> = None;
     for n in shell::glob(&shell::path(&homes), true) {
         let h = cat!(homes, "/", n);
         let p = shell::path(&h);
         if !p.is_dir() || p.is_symlink() {
             continue;
         }
-        let b = ctx.in_boxes(&n);
-        if b.exists() || b.is_symlink() {
+        let made_in =
+            crate::homeuse::record(&h).unwrap_or_else(|| shell::bytes(&ctx.in_boxes(&n)).to_vec());
+        if crate::homeuse::there(&made_in) {
+            continue;
+        }
+        if users
+            .get_or_insert_with(crate::homeuse::Users::scan)
+            .uses(&h)
+        {
             continue;
         }
         rm_tree(
@@ -1711,6 +1761,50 @@ mod tests {
         assert!(
             keep.permissions().readonly(),
             "...a link in the cache is not followed (what it points to keeps its modes)"
+        );
+        // Finding 584: a HOME whose record names a box dir of another runtime dir that is there (b7) is
+        // that box's: kept by sweep_homes and by this runtime dir's rm_box of the same name, which up
+        // refuses; one whose record names a gone box dir (b8) goes, though this runtime dir has a box
+        // dir of its name; the box's own (b9: its record names it) goes with it.
+        for (b, made_in) in [("b7", "run2"), ("b8", "gone"), ("b9", "run")] {
+            std::fs::create_dir_all(format!("{r}/cache/omabox/{b}/home")).unwrap();
+            let d = format!("{r}/{made_in}/omabox/{b}").into_bytes();
+            assert!(crate::homeuse::write_record(
+                format!("{r}/cache/omabox/{b}").as_bytes(),
+                &d
+            ));
+        }
+        std::fs::create_dir_all(format!("{r}/run2/omabox/b7")).unwrap();
+        std::fs::create_dir_all(format!("{r}/run/omabox/b8")).unwrap();
+        std::fs::create_dir_all(format!("{r}/run/omabox/b9")).unwrap();
+        let at = |b: &str| {
+            let mut c = Ctx::new(b"up", format!("{r}/run/omabox").into_bytes());
+            c.name = b.as_bytes().to_vec();
+            c.d = format!("{r}/run/omabox/{b}").into_bytes();
+            c
+        };
+        let (c7, c9) = (at("b7"), at("b9"));
+        let taken = shell::with_env(&env, || {
+            sweep_homes(&ctx);
+            let t = home_taken(&c7);
+            rm_box(&c7);
+            rm_box(&c9);
+            t
+        });
+        let there = |p: &str| std::path::Path::new(&format!("{r}/{p}")).exists();
+        assert_eq!(
+            (
+                there("cache/omabox/b7/home"),
+                there("cache/omabox/b8"),
+                there("cache/omabox/b9")
+            ),
+            (true, false, false),
+            "a HOME of a box in another runtime dir is kept; one whose box is gone where it was made goes"
+        );
+        assert_eq!(
+            taken,
+            Some(format!("is a box's in {r}/run2/omabox").into_bytes()),
+            "...and up's name there is refused, saying where that box is"
         );
         // (a chmod as coreutils' before 9.5, Ubuntu 24.04's, which refuses -P: finding 524)
         std::fs::create_dir_all(format!("{r}/old")).unwrap();

@@ -16,6 +16,7 @@ mod front;
 mod gpu;
 mod guard;
 mod help;
+mod homeuse;
 mod host;
 mod hypr;
 mod input;
