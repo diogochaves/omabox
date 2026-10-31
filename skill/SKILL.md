@@ -41,11 +41,13 @@ inside a box.**
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …` | `omabox run -- …` (`omarchy plugin validate` only reads: fine on the host) |
 | `omarchy restart shell` | `omabox restart-shell` |
 | A plugin in `~/.config/omarchy/plugins`, `shell.json` edits | `omabox up --plugin PATH`; `.config/omarchy/shell.json` in `omabox path --home` |
-| A theme in the works; a result that depends on the theme or bar | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
+| A theme in the works; a theme or bar result | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
+| What a new Omarchy user sees (a showcase, shots for others) | `omabox up --stock` |
+| Shots compared across runs | `omabox up --clean` (ref: Visual checks) |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
 
 In a box your checkout is read-only (a throwaway `run`'s writes are discarded): build on the host,
-run in the box (`omabox run -- ctest …`); ref: Tests that touch the desktop.
+run in the box; ref: Tests that touch the desktop.
 
 A step that needs real hardware: the user's. ref: Project instructions, in detail.
 
@@ -101,12 +103,11 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
 
 - A failure: ref: Symptoms; `omabox help exit-codes`. Colours, transitions: ref: Shots. Toasts:
   ref: Toasts and dock.
-- Baselines: ref: Visual checks. `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors,
-  `gpu`/`cpu`: ref: Screen size and rendering cost.
+- `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors, `gpu`/`cpu`: ref: Screen size and
+  rendering cost.
 - Plugins: ref: Testing a shell plugin. `--hyprland`: ref: A Hyprland build of your own. `--omarchy`:
   ref: Reviewing an Omarchy change. Launcher: ref: Testing an app as a desktop app.
 - Mounts, HOME, `save`: ref: Mounts, HOME and the session. Ports: ref: Network. Idling: ref: Box
   lifetime. Logs: ref: Hyprland's Lua, logs and events. `host`: ref: The guard, in detail.
-- What runs without a prompt: ref: Commands that run without a prompt. ai-jail: ref: Inside
-  ai-jail. Showing the user: ref: Showing the user. Reporting: ref: Reporting what a box showed.
-  Worktree subagents: ref: For subagents in an isolated worktree.
+- What runs without a prompt: ref: Commands that run without a prompt. ref: Inside ai-jail. ref:
+  Showing the user. ref: Reporting what a box showed. ref: For subagents in an isolated worktree.

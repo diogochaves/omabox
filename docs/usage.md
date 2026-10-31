@@ -19,7 +19,8 @@ omabox tree --find 'dark mode'         # text, not a shot: check box "Dark mode"
 omabox tray click myapp sync           # a tray menu's row clicked over the box's bus; omabox tray lists them
 omabox shot --changed --window myapp   # only what changed since its last shot, cropped
 omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames
-omabox up --clean                      # a desktop where only what is tested moves (no clock, pointer, network)
+omabox up --stock                      # Omarchy as a new user sees it: none of your look (a showcase)
+omabox up --clean                      # --stock, frozen: a desktop where only what is tested moves (no clock, pointer, network)
 omabox check run --approve -- ./visual.sh   # a scenario's checkpoints (omabox check point ID) as a baseline
 omabox check run -- ./visual.sh        # ...then: same, or what changed (regions, and the tree's moved elements)
 omabox record start -o demo.mp4        # a video of the screen; omabox record stop prints the file
@@ -75,8 +76,11 @@ omabox brief -b box-3                  # ~15 lines for a subagent's prompt: the 
   the regions that changed and, for an app with an accessibility tree, the elements that moved,
   resized or changed; shots are compared exactly, as users see them, leaving out only specks.
   Baselines are per GPU (an AMD iGPU and an NVIDIA card draw text differently).
-- **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours, which `up` names when it
-  is not Omarchy's; `--theme` does not reset it), `--systemd` (a real systemd user manager, for
+- **More**: `--stock` (Omarchy as a new user sees it, for a showcase or a shot for someone else:
+  its bar on tokyo-night with the theme's own wallpaper, English in UTC, none of your terminal
+  configs, branding, themes, wallpapers, plugins' settings or fonts), `--stock-bar` (Omarchy's
+  default bar instead of a copy of yours, which `up` names when it is not Omarchy's; `--theme` does
+  not reset it), `--systemd` (a real systemd user manager, for
   plugins that manage a service or schedule alarms), `--audio` (the box's
   own PipeWire with a speaker nobody hears and a silent mic: `omabox audio` and `record --audio` read
   what played; never your speakers), `--from SAVE` (start

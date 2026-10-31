@@ -15,8 +15,16 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   (`omabox down`). `hyprctl eval EXPR` to read a value → `omabox lua EXPR`, which prints the value.
 - Themes: a theme in `~/.config/omarchy/themes` linked to your working copy → `omabox up --theme-dir
   PATH` (live; else a copy made at `up`). A result that depends on the theme or bar (colours, sizes,
-  shots compared across runs, a theme-switch flow) → `omabox up --theme NAME --stock-bar`; else they
+  a theme-switch flow) on an otherwise normal box → `omabox up --theme NAME --stock-bar`; else they
   are the desktop's.
+- How it looks to a new Omarchy user (a showcase, a screenshot for someone else, "with a default
+  look") → `omabox up --stock`: Omarchy's bar on tokyo-night (or `--theme NAME`) with the theme's
+  own wallpaper, English in UTC, and nothing of the desktop's look (terminal configs, branding, the
+  user's themes and wallpapers, the plugins' settings, Hyprland toggles, fonts); the clock live,
+  animations on, the network as usual; `--plugin`, `--theme-dir` and the rest on top. `--theme NAME
+  --stock-bar` alone still has the rest of the desktop's look. Shots compared across runs →
+  `omabox up --clean` (`--stock` plus the freezes: ref: Visual checks); never for a showcase (a
+  `#ff00ff` wallpaper, the clock frozen at "Friday 12:00", no network, animations off).
 - A step that needs real hardware is not moved into a box: it goes to the user ("When a box cannot
   test it, in detail").
 - A box starts with a fresh HOME: apps start as on first run. A server in a default box also holds
@@ -292,7 +300,7 @@ element's whole box, often wider than its text: an `unstable` tree line says the
 today 02:13" @1512,91 368x15)`); `tree --find TEXT` before.
 
 `omabox check run --approve [--plugin PATH]... -- ./visual.sh` runs it three times (`--runs N`), each
-in a fresh `up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, the bar's clock
+in a fresh `up --clean` box (an `up --stock` box, Omarchy's bar on tokyo-night and none of your look, with a `#ff00ff` wallpaper, the bar's clock
 frozen, English (en_US.UTF-8, else C.UTF-8) in UTC whatever your locale and zone, no pointer, no
 network, no animations; `--keep` takes
 any back, `--keep locale` your locale and timezone, `--keep fonts` your fonts (none by default); `--theme`/`--size`/`--net connected` as `up`),
@@ -863,7 +871,7 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   The command still runs: give it the path the note names.
 - **The user's fonts** (`~/.local/share/fonts`, `~/.fonts`) are mounted read-only at the same place in
   the box HOME, so a theme's or plugin's own faces draw as on the desk (`up` says it; `ls --json`:
-  `desk_fonts`). Not in an `up --clean` box (`--keep fonts` brings them), not with `up --no-seed
+  `desk_fonts`). Not in an `up --stock` box, nor an `up --clean` one (`--keep fonts` brings them), not with `up --no-seed
   fonts`, and not where the box HOME has its own folder (a `--from` save's, a `--seed` into it: kept,
   said). A test's own font: `--seed FILE:.local/share/fonts/NAME.ttf` (that folder is then the box's,
   without the desk's). A link in them that leads out of them leads nowhere in the box (said).
