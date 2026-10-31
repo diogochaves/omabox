@@ -1264,7 +1264,7 @@ most people will. Then:
   the main screen by default): in a box at `--size 3840x2160,scale=2`, a sharp 4K video of a
   1920x1080 layout. `--monitor all`: every monitor in one video, laid out as `shot` takes the screen
   (the highest scale, gaps black), the monitors in step to a frame. Needs wf-recorder and ffmpeg (they run in the box; a stuck ffmpeg step is killed at its time limit and run once more, then `stop` fails keeping the raw files). You cannot watch it: `record
-  stop --sheet` (or `record sheet demo.mp4 [--frames N | --every 2s] [--fit N]`) prints a contact
+  stop --sheet` (or `record sheet demo.mp4 [--frames N | --every 2s] [--fit N]`, any video, no box needed) prints a contact
   sheet, demo.sheet.png, frames labelled with their times: Read it, fix the script, record again.
   A short motion (a 100 ms glitch, a text decode), frame by frame: `record sheet demo.mp4 --from
   1.2s --to 1.6s --every-frame -g "X,Y WxH"` (each frame of that stretch, cropped to the region in

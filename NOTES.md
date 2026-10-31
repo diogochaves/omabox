@@ -11901,6 +11901,28 @@ from them.
     the whole frame 25; a stretch with nothing; --every-frame from 1.3 s to 1.5 s, frames 39-45, the
     region enlarged and its pixels read; --every and --frames in a stretch; the refusals past 100, past
     the end, outside the video), record_stop.rs sheet_ranges, changed_frames_read, sheet_geos.
+604. **`record sheet` with no box up: ffmpeg here, sandboxed** (2026-10-31, #279). A sheet copied the
+    video into a box and ran ffmpeg there, so a video made outside one (an editor's render) needed a
+    box started for it, and agents wrote `select`/`tile` by hand instead. Now, with no box named (-b)
+    and the default box not up, `record sheet` runs the same ffprobe and ffmpeg steps on the host in a
+    bwrap sandbox (host_sandbox): `--unshare-all` (no network, own pid/IPC/user namespaces),
+    `--clearenv` (no WAYLAND_DISPLAY, DISPLAY or runtime dir: nothing to open a window with, and the
+    runtime dir is not there), `/usr` read-only, fresh /proc, /dev and /tmp, `--die-with-parent`,
+    `--new-session`, and one folder bound at /out for the frames. The video goes in as an fd of
+    omabox's own, fd 3 and no other (`-fd 3 -i fd:`, ffmpeg's fd protocol, the only protocol allowed:
+    `-protocol_whitelist fd`; `fd:3` as a URL is refused by ffmpeg 9), rewound before each step; a
+    crafted playlist or concat file can open nothing. A jailed caller's (the broker's `--from-fd`)
+    goes the same way, nothing reopened by name. The folder is `~/.cache/omabox/sheet-XXXXXX` (on
+    disk: /tmp is memory here), the frames in its `frames/`, a jailed caller's marks and sheet beside
+    it out of the sandbox's reach; gone at the end and on a signal (Tmps). The frames are read back
+    as regular files, not links, under a box's bounds (16 MiB each, 256 MiB in all, real PNGs).
+    Cores off (`nocore`). `-b NAME` of a box that is down still says so, as every command does. Same
+    sheets: the host's and the box's made from one video compare equal pixel for pixel (`magick
+    compare -metric AE` 0), the box being only another ffmpeg from the same /usr. Not done: a sheet
+    in a box when one is up but not named stays in that box (a copy of the video into it). Tests:
+    t_record_sheet_frames (no box: --changed -g and --every-frame -g equal to the box's; -b of a down
+    box refused; the cache folder empty after; a jailed caller's fds), record_stop.rs
+    host_sandbox_holds_only_usr_and_the_folder.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -108,6 +108,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   enlarged pixel for pixel) and `--changed` (the frames where the region changes), each tile labelled
   with its time to the ms and its frame number
   ([#260](https://github.com/diogochaves/omabox/issues/260)).
+- **`record sheet VIDEO` needs no box**: with none named and none up, ffmpeg reads the video on the
+  host in a sandbox of its own (no network, no display, only the video) and makes the same sheet
+  ([#279](https://github.com/diogochaves/omabox/issues/279)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

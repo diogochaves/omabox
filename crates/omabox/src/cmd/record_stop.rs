@@ -17,7 +17,7 @@ use crate::num::ms_s;
 use crate::recprog as P;
 use crate::shell::{self, strip_nl};
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -837,7 +837,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         // (`sp=$(record_sheet ...) || sp=""`: a refusal in it ends only the substitution)
         sp = record_sheet(
             ctx,
-            &outmp4,
+            Src::Box(&outmp4),
             &cat!(base, ".marks.tsv"),
             &cat!(base, ".sheet.png"),
             &so.frames,
@@ -1873,7 +1873,15 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
     }
     FF_SECS.store(REC_FF_FLOOR + size / 10_485_760, Ordering::SeqCst);
     let sp = record_sheet(
-        ctx, &bv, &tsv, &outp, &so.frames, so.every, &so.fit, &so.more, &so.as_,
+        ctx,
+        Src::Box(&bv),
+        &tsv,
+        &outp,
+        &so.frames,
+        so.every,
+        &so.fit,
+        &so.more,
+        &so.as_,
     );
     sys_q(ctx, &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]))?;
     let sp = sp.ok().flatten();
@@ -1896,6 +1904,140 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         (true, Some(sp)) => out(cat!(sp, "\n")),
         _ => Err(Exit(1)),
     }
+}
+
+/// record sheet VIDEO with no box up (#279, finding 604): the same sheet, its ffmpeg and ffprobe run
+/// here in host_sandbox, reading the video from an fd this omabox opened (a jailed caller's, its
+/// --from-fd); the frames, and a jailed caller's marks and sheet, in a folder of omabox's cache
+/// (on disk, not /tmp's memory), gone however it ends.
+pub fn sheet_file_host(ctx: &mut Ctx, so: &SheetOpts) -> Res<()> {
+    for has in [
+        crate::exec::executable(b"/usr/bin/ffmpeg"),
+        crate::exec::executable(b"/usr/bin/ffprobe"),
+        crate::exec::executable(b"/usr/bin/bwrap"),
+        crate::exec::executable(b"/usr/bin/timeout"),
+    ] {
+        if !has {
+            return Err(ctx.die(cat!(
+                "record sheet: no box '",
+                ctx.name,
+                "' is up, and a sheet made without one needs ffmpeg, ffprobe, bwrap and timeout in /usr/bin"
+            )));
+        }
+    }
+    let cache = cat!(
+        shell::env("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.cache")),
+        "/omabox"
+    );
+    let mut tmps = Tmps::new();
+    let tmpd = if crate::shots::mkdir_p(&cache) {
+        crate::trap::made(|| {
+            let (_, t) = shell::mktemp_args(&[b"-d", &cat!(cache, "/sheet-XXXXXX")]).ok()?;
+            tmps.add(t.clone());
+            Some(t)
+        })
+    } else {
+        None
+    }
+    .ok_or_else(|| ctx.die(cat!("record sheet: cannot write in ", cache)))?;
+    let r = sheet_host_in(ctx, so, &tmpd);
+    let _ = std::fs::remove_dir_all(shell::path(&tmpd));
+    drop(tmps);
+    r
+}
+
+fn sheet_host_in(ctx: &mut Ctx, so: &SheetOpts, tmpd: &[u8]) -> Res<()> {
+    let (fd, size, tsv, outp) = if so.fromfd.is_empty() {
+        let base = so.video.strip_suffix(b".mp4").unwrap_or(&so.video).to_vec();
+        let f = std::fs::File::open(shell::path(&so.video)).map_err(|e| {
+            ctx.die(cat!(
+                "record sheet: cannot read ",
+                so.video,
+                ": ",
+                crate::shots::why(&e)
+            ))
+        })?;
+        let size = f
+            .metadata()
+            .ok()
+            .and_then(|m| i64::try_from(m.len()).ok())
+            .unwrap_or(0);
+        let outp = if so.out.is_empty() {
+            cat!(base, ".sheet.png")
+        } else {
+            so.out.clone()
+        };
+        (OwnedFd::from(f), size, cat!(base, ".marks.tsv"), outp)
+    } else {
+        // (as the box's way: its marks read in 10 s at most, 1 MiB; the video as the fd is)
+        let tsv = cat!(tmpd, "/v.marks.tsv");
+        if !so.mfromfd.is_empty() {
+            let ok = std::fs::File::create(shell::path(&tsv))
+                .ok()
+                .and_then(|f| {
+                    let fd = dup_hi(num(&so.mfromfd) as i32).ok()?;
+                    let mut c = crate::sig::command("timeout");
+                    c.args(["10", "head", "-c", "1048576"])
+                        .stdin(std::process::Stdio::from(fd))
+                        .stdout(std::process::Stdio::from(f));
+                    crate::sig::run_status(c).ok()
+                })
+                .is_some_and(|rc| rc == 0);
+            if !ok {
+                return Err(ctx.die("record sheet: cannot read the marks"));
+            }
+        }
+        let fd = dup_hi(num(&so.fromfd) as i32).map_err(|_| Exit(1))?;
+        let size = fd_size(&so.fromfd).unwrap_or(0);
+        (fd, size, tsv, cat!(tmpd, "/v.sheet.png"))
+    };
+    // Only the frames' folder goes into the sandbox, not the marks or the sheet beside it.
+    let fdir = cat!(tmpd, "/frames");
+    if std::fs::create_dir(shell::path(&fdir)).is_err() {
+        return Err(ctx.die(cat!("record sheet: cannot write in ", tmpd)));
+    }
+    say(cat!(
+        "record sheet: no box '",
+        ctx.name,
+        "' up: ffmpeg reads the video here, sandboxed (no network, no display, nothing of yours but the video)"
+    ));
+    // Its ffprobe's bound by its size, at 10 MiB/s, as a box's.
+    FF_SECS.store(
+        REC_FF_FLOOR + size.clamp(0, 999_999_999_999_999) / 10_485_760,
+        Ordering::SeqCst,
+    );
+    let sp = record_sheet(
+        ctx,
+        Src::Host {
+            fd: fd.as_raw_fd(),
+            dir: &fdir,
+        },
+        &tsv,
+        &outp,
+        &so.frames,
+        so.every,
+        &so.fit,
+        &so.more,
+        &so.as_,
+    )?;
+    drop(fd);
+    let Some(sp) = sp else {
+        return Err(Exit(1));
+    };
+    if !so.fromfd.is_empty() {
+        let wrote = std::fs::read(shell::path(&outp)).ok().and_then(|d| {
+            let fd = dup_hi(num(&so.tofd) as i32).ok()?;
+            let mut f = std::fs::File::from(fd);
+            f.write_all(&d).ok()
+        });
+        if wrote.is_none() {
+            say("record sheet: could not write the sheet into the caller's file");
+            return Err(Exit(1));
+        }
+    }
+    out(cat!(sp, "\n"))
 }
 
 enum InFrom {
@@ -1941,7 +2083,7 @@ fn copy_in(ctx: &mut Ctx, bv: &[u8], from: InFrom) -> Res<i32> {
 #[allow(clippy::too_many_arguments)]
 fn record_sheet(
     ctx: &mut Ctx,
-    v: &[u8],
+    v: Src,
     tsv: &[u8],
     png: &[u8],
     frames: &[u8],
@@ -1955,23 +2097,20 @@ fn record_sheet(
     } else {
         frames.to_vec()
     };
-    let (rc, j) = rec_ff(
-        ctx,
-        Ff::Out,
-        &w(&[
-            b"/usr/bin/ffprobe".as_slice(),
-            b"-v",
-            b"error",
-            b"-select_streams",
-            b"v:0",
-            b"-count_packets",
-            b"-show_entries",
-            b"stream=nb_read_packets,r_frame_rate,width,height",
-            b"-of",
-            b"json",
-            v,
-        ]),
-    )?;
+    let mut a = w(&[
+        "/usr/bin/ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-count_packets",
+        "-show_entries",
+        "stream=nb_read_packets,r_frame_rate,width,height",
+        "-of",
+        "json",
+    ]);
+    a.extend(v.input(false));
+    let (rc, j) = ff_at(ctx, v, Ff::Out, &a)?;
     let j = if rc == 0 {
         j[..j.len().min(65536)].to_vec()
     } else {
@@ -2114,40 +2253,47 @@ fn record_sheet(
         _ => "",
     };
     let sel: Vec<String> = ks.iter().map(|k| format!("eq(n,{k})")).collect();
-    let bd = format!("{REC_DIR}/sheet-{}", std::process::id());
-    let made = sys_cap(
-        ctx,
-        &w(&["/usr/bin/bash", "-c", P::SHEETDIR_SH, "omabox-record", &bd]),
-        None,
-        Err2::Inherit,
-        false,
-    )
-    .0 == 0
-        && rec_ff(
-            ctx,
-            Ff::Plain { to_err: true },
-            &w(&[
-                b"/usr/bin/ffmpeg".as_slice(),
-                b"-v",
-                b"error",
-                b"-i",
-                v,
-                b"-vf",
-                format!("select='{}'{crop},scale={tw}:-2{up}", sel.join("+")).as_bytes(),
-                b"-fps_mode",
-                b"passthrough",
-                format!("{bd}/t-%03d.png").as_bytes(),
-            ]),
-        )?
-        .0 == 0;
+    // The frames, in a folder of the box's (Src::Box), or (Src::Host, #279) in the sandbox's /out,
+    // which is the host folder the caller made.
+    let bd = match v {
+        Src::Box(_) => format!("{REC_DIR}/sheet-{}", std::process::id()),
+        Src::Host { .. } => "/out".to_string(),
+    };
+    let made = match v {
+        Src::Box(_) => {
+            sys_cap(
+                ctx,
+                &w(&["/usr/bin/bash", "-c", P::SHEETDIR_SH, "omabox-record", &bd]),
+                None,
+                Err2::Inherit,
+                false,
+            )
+            .0 == 0
+        }
+        Src::Host { .. } => true,
+    };
+    let made = made && {
+        let mut a = w(&["/usr/bin/ffmpeg", "-v", "error"]);
+        a.extend(v.input(true));
+        a.extend(w(&[
+            "-vf".to_string(),
+            format!("select='{}'{crop},scale={tw}:-2{up}", sel.join("+")),
+            "-fps_mode".into(),
+            "passthrough".into(),
+            format!("{bd}/t-%03d.png"),
+        ]));
+        ff_at(ctx, v, Ff::Plain { to_err: true }, &a)?.0 == 0
+    };
     let rm_bd = |ctx: &mut Ctx| {
-        let _ = sys_cap(
-            ctx,
-            &w(&["/usr/bin/rm", "-rf", "--", &bd]),
-            None,
-            Err2::Null,
-            false,
-        );
+        if let Src::Box(_) = v {
+            let _ = sys_cap(
+                ctx,
+                &w(&["/usr/bin/rm", "-rf", "--", &bd]),
+                None,
+                Err2::Null,
+                false,
+            );
+        }
     };
     if !made {
         rm_bd(ctx);
@@ -2155,34 +2301,55 @@ fn record_sheet(
         return Ok(None);
     }
     // The frames copied out into a folder of the box dir's (gone with the box, and on any end of
-    // this one), each at most 16 MiB, all of them 256.
+    // this one), each at most 16 MiB, all of them 256. A host sheet's are where ffmpeg wrote them,
+    // read under the same bounds.
     // (its own trap, in its subshell: the main shell's ends with the signal unless a code trap of
     // its own, rec_traps, is on; armed with the making: #360)
-    let Some((tmp, tmp_g)) = crate::trap::made(|| {
-        let (_, tmp) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")]).ok()?;
-        let t = tmp.clone();
-        let undo = move || {
-            let _ = std::fs::remove_dir_all(shell::path(&t));
-        };
-        let g = if crate::trap::code_active() {
-            crate::trap::on_exit_code(undo)
-        } else {
-            crate::trap::on_exit(undo)
-        };
-        Some((tmp, g))
-    }) else {
-        return Ok(None);
+    let (tmp, tmp_g) = match v {
+        Src::Box(_) => {
+            let Some((tmp, g)) = crate::trap::made(|| {
+                let (_, tmp) =
+                    shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")]).ok()?;
+                let t = tmp.clone();
+                let undo = move || {
+                    let _ = std::fs::remove_dir_all(shell::path(&t));
+                };
+                let g = if crate::trap::code_active() {
+                    crate::trap::on_exit_code(undo)
+                } else {
+                    crate::trap::on_exit(undo)
+                };
+                Some((tmp, g))
+            }) else {
+                return Ok(None);
+            };
+            (tmp, Some(g))
+        }
+        Src::Host { dir, .. } => (dir.to_vec(), None),
+    };
+    let frame = |i: usize| match v {
+        Src::Box(_) => format!("{}/{:03}.png", String::from_utf8_lossy(&tmp), i + 1),
+        Src::Host { .. } => format!("{}/t-{:03}.png", String::from_utf8_lossy(&tmp), i + 1),
     };
     let mut total = 0i64;
     let mut ms: Vec<i64> = Vec::new();
     let mut lab: Vec<Vec<u8>> = Vec::new();
     for (i, k) in ks.iter().enumerate() {
-        let f = format!("{}/{:03}.png", String::from_utf8_lossy(&tmp), i + 1);
-        let src = format!("{bd}/t-{:03}.png", i + 1);
-        let got = std::fs::File::create(&f).ok().and_then(|fh| {
-            let _e = crate::exec::Redir::null(2);
-            crate::exit::muted(|| box_copy(ctx, src.as_bytes(), 16_777_216, &fh))
-        });
+        let f = frame(i);
+        let got = match v {
+            Src::Box(_) => {
+                let src = format!("{bd}/t-{:03}.png", i + 1);
+                std::fs::File::create(&f).ok().and_then(|fh| {
+                    let _e = crate::exec::Redir::null(2);
+                    crate::exit::muted(|| box_copy(ctx, src.as_bytes(), 16_777_216, &fh))
+                })
+            }
+            // (a regular file, not a link, as ffmpeg wrote it)
+            Src::Host { .. } => std::fs::symlink_metadata(&f)
+                .ok()
+                .filter(|m| m.file_type().is_file() && m.len() <= 16_777_216)
+                .and_then(|m| i64::try_from(m.len()).ok()),
+        };
         let ok = got.is_some_and(|s| {
             total += s;
             size_of(std::path::Path::new(&f)) == Some(s)
@@ -2258,7 +2425,7 @@ fn record_sheet(
         let l = replace_all(&replace_all(l, b"\\", b"\\\\"), b"%", b"%%");
         args.push(b"-label".to_vec());
         args.push(l);
-        args.push(format!("png:{}/{:03}.png", String::from_utf8_lossy(&tmp), i + 1).into_bytes());
+        args.push(format!("png:{}", frame(i)).into_bytes());
     }
     let part = cat!(png, ".part");
     args.extend(w(&[
@@ -2471,36 +2638,166 @@ fn changed_frames(o: &[u8], kf: i64, kt: i64) -> Vec<i64> {
 /// differs from the frame before; None when ffmpeg could not tell.
 fn sheet_changed(
     ctx: &mut Ctx,
-    v: &[u8],
+    v: Src,
     kf: i64,
     kt: i64,
     geo: Option<(i64, i64, i64, i64)>,
 ) -> Res<Option<Vec<i64>>> {
-    let (rc, o) = rec_ff(
-        ctx,
-        Ff::Out,
-        &w(&[
-            b"/usr/bin/ffmpeg".as_slice(),
-            b"-nostdin",
-            b"-hide_banner",
-            b"-nostats",
-            b"-v",
-            b"error",
-            b"-i",
-            v,
-            b"-map",
-            b"0:v:0",
-            b"-vf",
-            changed_filter(kf, kt, geo).as_bytes(),
-            b"-f",
-            b"null",
-            b"-",
-        ]),
-    )?;
+    let mut a = w(&[
+        "/usr/bin/ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-nostats",
+        "-v",
+        "error",
+    ]);
+    a.extend(v.input(true));
+    a.extend(w(&[
+        "-map".to_string(),
+        "0:v:0".into(),
+        "-vf".into(),
+        changed_filter(kf, kt, geo),
+        "-f".into(),
+        "null".into(),
+        "-".into(),
+    ]));
+    let (rc, o) = ff_at(ctx, v, Ff::Out, &a)?;
     if rc != 0 {
         return Ok(None);
     }
     Ok(Some(changed_frames(&o, kf, kt)))
+}
+
+/// Where a contact sheet's ffmpeg and ffprobe read the video (#279): a file in the box, or here,
+/// with no box up, an fd of this omabox's given to them in a sandbox of their own (host_ff).
+#[derive(Clone, Copy)]
+enum Src<'a> {
+    Box(&'a [u8]),
+    Host { fd: RawFd, dir: &'a [u8] },
+}
+
+impl Src<'_> {
+    /// The input's words: the box's path, or the fd (`fd:`, the only protocol it may open), after
+    /// `-i` for ffmpeg (I).
+    fn input(self, i: bool) -> Vec<Vec<u8>> {
+        let mut a = Vec::new();
+        match self {
+            Src::Box(v) => {
+                if i {
+                    a.push(b"-i".to_vec());
+                }
+                a.push(v.to_vec());
+            }
+            Src::Host { .. } => {
+                a.extend(w(&["-protocol_whitelist", "fd", "-fd", "3"]));
+                if i {
+                    a.push(b"-i".to_vec());
+                }
+                a.push(b"fd:".to_vec());
+            }
+        }
+        a
+    }
+}
+
+/// rec_ff, where V says: in the box, or here in host_ff's sandbox.
+fn ff_at(ctx: &mut Ctx, v: Src, mode: Ff, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
+    match v {
+        Src::Box(_) => rec_ff(ctx, mode, argv),
+        Src::Host { fd, dir } => rec_ff_with(ctx, mode, argv, |_, a| Ok(host_ff(fd, dir, mode, a))),
+    }
+}
+
+/// host_sandbox DIR: bwrap's words for a contact sheet's ffmpeg with no box up (#279, finding 604):
+/// every namespace its own (no network, no host process, no IPC), no environment (no display to
+/// open, no runtime dir), the system's /usr read-only and a fresh /proc, /dev and /tmp, nothing else
+/// of the host but DIR, writable at /out; it dies with omabox.
+fn host_sandbox(dir: &[u8]) -> Vec<Vec<u8>> {
+    let mut a = w(&[
+        "/usr/bin/bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+        "--setenv",
+        "PATH",
+        "/usr/bin",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/bin",
+        "/sbin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib",
+        "/lib64",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--bind",
+    ]);
+    a.push(dir.to_vec());
+    a.extend(w(&["/out", "--chdir", "/out", "--"]));
+    a
+}
+
+/// host_ff FD DIR MODE ARGV (#279): ARGV in host_sandbox(DIR), the video FD its fd 3 and no other fd
+/// of this omabox's, read from its start; its status, and its stdout (with its stderr, Ff::Err)
+/// captured as rec_ff's, 16 MiB at most. A crash makes no core (none to notify the desktop of).
+fn host_ff(fd: RawFd, dir: &[u8], mode: Ff, argv: &[Vec<u8>]) -> (i32, Vec<u8>) {
+    // SAFETY: lseek on an fd of this process; it moves the offset its dup in the child shares.
+    unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
+    let mut a = host_sandbox(dir);
+    a.extend(argv.iter().cloned());
+    let mut c = crate::exec::command(
+        &a,
+        crate::exec::Fds {
+            fd3: Some(fd),
+            only: true,
+            nocore: true,
+            ..crate::exec::Fds::default()
+        },
+    );
+    c.stdin(std::process::Stdio::null());
+    let mut reader = None;
+    match mode {
+        Ff::Plain { to_err } => {
+            if to_err {
+                if let Ok(e) = dup_hi(2) {
+                    c.stdout(std::process::Stdio::from(e));
+                }
+            }
+        }
+        Ff::Out | Ff::Err => {
+            let Ok((r, wr)) = pipe() else {
+                return (1, Vec::new());
+            };
+            if mode == Ff::Err {
+                match wr.try_clone() {
+                    Ok(e) => c.stderr(std::process::Stdio::from(e)),
+                    Err(_) => return (1, Vec::new()),
+                };
+            } else {
+                c.stderr(std::process::Stdio::null());
+            }
+            c.stdout(std::process::Stdio::from(wr));
+            reader = Some(std::thread::spawn(move || {
+                crate::exec::read_all(r, Some(16_777_216))
+            }));
+        }
+    }
+    let rc = crate::sig::run_status(c).unwrap_or(126);
+    let out = reader.and_then(|r| r.join().ok()).unwrap_or_default();
+    (rc, out)
 }
 
 #[cfg(test)]
@@ -2540,6 +2837,38 @@ mod tests {
         assert!(f.starts_with("setpts=N,trim=start_frame=39:end_frame=46,format=yuv444p,crop=100:60:30:30:exact=1,tblend="));
         assert!(f.contains(":value=6:function=greater,"));
         assert!(!changed_filter(0, 9, None).contains("crop"));
+    }
+
+    /// A sheet's sandbox with no box up (#279): every namespace its own, no environment, the host's
+    /// /usr read-only and the frames' folder, nothing else of it.
+    #[test]
+    fn host_sandbox_holds_only_usr_and_the_folder() {
+        let a: Vec<String> = host_sandbox(b"/c/omabox/sheet-x/frames")
+            .iter()
+            .map(|x| String::from_utf8_lossy(x).into_owned())
+            .collect();
+        for f in [
+            "--unshare-all",
+            "--clearenv",
+            "--die-with-parent",
+            "--new-session",
+        ] {
+            assert!(a.iter().any(|x| x == f), "{f}");
+        }
+        assert!(!a.iter().any(|x| x == "--share-net"));
+        let binds: Vec<(&str, &str, &str)> = a
+            .windows(3)
+            .filter(|w| w[0].contains("bind"))
+            .map(|w| (w[0].as_str(), w[1].as_str(), w[2].as_str()))
+            .collect();
+        assert_eq!(
+            binds,
+            vec![
+                ("--ro-bind", "/usr", "/usr"),
+                ("--bind", "/c/omabox/sheet-x/frames", "/out")
+            ]
+        );
+        assert_eq!(a.last().map(String::as_str), Some("--"));
     }
 
     #[test]

@@ -670,8 +670,8 @@ t_unit_rec_ff() {
   check "...the check read them ($calls)" test "${calls% calls}" -ge 14
   # (the check's own: the crate with rec_ff's calls renamed, each of them unbounded)
   m=$TMP/recff-crate; rm -rf "$m"; cp -r "$src" "$m"; chmod -R u+w "$m"   # (an install's tree is read-only)
-  sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g' "$m/cmd/record_stop.rs"
-  check_eq "...it finds the 13 calls finding 356 bounded, rec_ff's taken away" 13 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
+  sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g; s/\bff_at(/sys_at(/g' "$m/cmd/record_stop.rs"
+  check_eq "...it finds the 14 calls bounded (finding 356, and #260's --changed), rec_ff's and ff_at's taken away" 14 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
   # (rec_ff itself, a run out of time run once more, stuck once, a failure not a timeout:
   # record_stop.rs rec_ff_runs_once_more, an #[ignore] test; its bound: bounds; #324 wave 6-suite.)
 }
@@ -1472,7 +1472,7 @@ for root, _, files in sorted(os.walk(sys.argv[1])):
         if not f.endswith(".rs"): continue
         p = os.path.join(root, f); L = open(p).read().split("\n")
         end = next((i for i in range(len(L) - 1) if L[i] == "#[cfg(test)]" and L[i + 1].startswith("mod tests")), len(L))
-        ok_calls = {"rec_ff", "ff_line", "rec_ff_subst"}
+        ok_calls = {"rec_ff", "ff_line", "rec_ff_subst", "ff_at"}
         for i in range(end):
             m = re.match(r"\s*let (\w+) = \|", L[i])
             if m and any("rec_ff(" in x for x in L[i:i + 6]): ok_calls.add(m.group(1))
@@ -14700,6 +14700,20 @@ t_record_sheet_frames() {
   rsf x3 --every-frame -g "300,0 100x100"
   check_match "...-g outside the video" "-g 300,0 100x100 is not inside the video \(320x240\)" "$out"
   ob down "$B" >/dev/null 2>&1 || true
+  # With no box up (#279, finding 604): ffmpeg here, sandboxed, the same sheets.
+  local nb=$P-rsf-none hc=$TMP/$P-rsf-cache
+  rc=0; out=$(XDG_CACHE_HOME=$hc OMABOX=$nb ob record sheet "$v" -o "$o-h1.png" --fit 0 --changed -g "30,30 100x60" 2>&1) || rc=$?
+  check_match "record sheet with no box up: made here, said" "^0 omabox: record sheet: no box '$nb' up: ffmpeg reads the video here, sandboxed .*contact sheet of 3 frames" "$rc $(tr '\n' ' ' <<<"$out")"
+  check_eq "...the same sheet as the box made, pixel for pixel" 0 "$(magick compare -metric AE "$o-h1.png" "$o-c1.png" null: 2>&1 | cut -d' ' -f1)"
+  rc=0; out=$(XDG_CACHE_HOME=$hc OMABOX=$nb ob record sheet "$v" -o "$o-h2.png" --fit 0 --from 1.3s --to 1.5s --every-frame -g "30,30 100x60" 2>&1) || rc=$?
+  check_eq "...--every-frame -g too" "0 0" "$rc $(magick compare -metric AE "$o-h2.png" "$o-ef.png" null: 2>&1 | cut -d' ' -f1)"
+  check_match "...-b NAME of a box not up: still refused" "no box '$nb' is up" "$(ob record -b "$nb" sheet "$v" 2>&1)"
+  check_eq "...its working folders gone" "" "$(ls -A "$hc/omabox" 2>&1)"
+  # A jailed caller's (the broker's form: its fds), with no box up.
+  : > "$o-j.png"
+  rc=0; out=$(XDG_CACHE_HOME=$hc OMABOX_JAIL='{"id": "1 2", "roots": []}' OMABOX_RELAY_DEFAULT=$nb "$CLI" record sheet --from-fd 3 --to-fd 4 --as /j/s.png --fit 0 --changed -g "30,30 100x60" 3<"$v" 4<>"$o-j.png" 2>&1) || rc=$?
+  check_match "...a jailed caller's, through its fds: its name said" "^0 .*contact sheet of 3 frames.*: /j/s\.png /j/s\.png$" "$rc $(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+  check_eq "...the same sheet in its file" 0 "$(magick compare -metric AE "$o-j.png" "$o-c1.png" null: 2>&1 | cut -d' ' -f1)"
 }
 t_record_hold() {
   local n; n=$(gpu_node other)

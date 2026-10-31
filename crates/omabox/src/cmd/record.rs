@@ -967,6 +967,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
     }
     select_box(ctx, &o.name)?;
+    // A sheet needs no box (#279): with none named and none up, its ffmpeg runs here, sandboxed.
+    if s == b"sheet" && ctx.name_derived && !crate::boxes::box_alive(ctx)? {
+        return crate::cmd::record_stop::sheet_file_host(ctx, &o_sheet(&o));
+    }
     need_box(ctx)?;
     let call_us = num(&crate::call_us());
     let mut rec = Rec::default();

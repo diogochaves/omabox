@@ -29,7 +29,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                 [SHEET] [POLISH] -- ACTION...   one action, recorded
   omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--crf 18] [--no-pointer] [--audio] [SHEET] [POLISH]
                 --for DURATION   the screen for that long, no action
-  omabox record [-b NAME] sheet VIDEO [-o PNG] [FRAMES] [--fit N]   a contact sheet of a video
+  omabox record [-b NAME] sheet VIDEO [-o PNG] [FRAMES] [--fit N]   a contact sheet of any video, a box up or not
               SHEET: --sheet [FRAMES] [--fit N]   the recording's contact sheet, FILE.sheet.png
               FRAMES: [--from T] [--to T] [--frames 15 | --every DURATION | --every-frame | --changed] [-g "X,Y WxH"]
               POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut
@@ -459,7 +459,7 @@ shortens the pause the viewer sees (the time before the call is in the video too
 most; --for and hold 60m). A bare number is seconds. `wait still` is no hold: it returns at once
 on a still screen and runs to its timeout under a clock or a spinner.
 `record stop --sheet` (or `record --sheet -- ACTION`) adds FILE.sheet.png, and `record sheet VIDEO` makes
-one of any video (ffmpeg reads it in the box: a box must be up): a contact sheet to read instead of
+one of any video (ffmpeg reads it in the box; with no box named and none up, here, sandboxed): a contact sheet to read instead of
 watching, --frames N (15) from the first to the last or one each --every DURATION, each labelled with
 its time and the marks since the frame before it ("> 4.20s TEXT"), 5 a row, 320 px tiles or --fit N
 (shot-fit's by default) for the whole sheet. An agent checks a take from it and fixes its script.
@@ -470,6 +470,9 @@ times), and `--changed` its first frame, then each frame where the region (witho
 frame) differs from the one before by more than H.264's noise (a pixel 6 of 255 off in Y, U or V):
 a 100 ms glitch is its first frame and the one after its last. Each tile then says its time to the
 ms and its frame number ("12: 9.433s f283"). Marks outside the stretch are left out.
+With no box named (-b) and the default one not up, `record sheet` runs ffmpeg here, in a bwrap
+sandbox of its own (#279): no network, no environment (no display to open), the system's /usr
+read-only, the video as an fd and a working folder in ~/.cache/omabox, nothing else; the same sheet.
 `record --audio` (an up --audio box) adds the box's sound, from its speaker, as AAC in the MP4: in
 step with the picture (ffmpeg's first samples stamped and put in the video's clock: a sound starts
 within ~15 ms of a change drawn at the same moment), with --monitor all too. A player is slower to
