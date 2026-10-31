@@ -72,6 +72,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
   omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
+  omabox plugin [-b NAME] (add PATH|ID | remove ID)      a shell plugin into a box that is up (as up --plugin), or out
   omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
   omabox mode [-b NAME] [--json | WxH[@HZ][,scale=S]|host]   show or change a headless box's screen mode
   omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
@@ -121,7 +122,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief
+@+ up run shot record pixel calibrate windows window jobs stop tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell plugin reload mode output monitor gpu cpu audio ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -250,12 +251,20 @@ and its own runtime dir (its sockets, never yours). `audio` says whether the box
 does; a box turns that off, so an update of omabox or Omarchy leaves it as it is. For a project that
 must see what a file change does (a helper rewriting a file the config loads, on a Hyprland event,
 reloads for ever). Its config is still the box's own copy; an Omarchy update reloads it too.
-@ up run restart-shell
+@ up run restart-shell plugin
 --plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; `up` and
 `restart-shell` warn when Omarchy's validator or the shell refuses it (`ls --json`: plugin_status).
 One the box has at its own path (in the repo `up` runs from, a same-path --ro-bind or an --overlay)
 is linked to there, as on a desk, so readlink -f leads into its repo; any other is mounted
 (plugin_status: via).
+@ up run restart-shell plugin
+`plugin add PATH|ID` puts a plugin in a box that is up as --plugin would have: read-only, linked to
+where the box has it at its own path or mounted, made known to the shell (a rescan, until it lists
+it) and enabled, its state said (`ls --json`: plugin_status). `plugin remove ID` takes one out (one
+from up's --plugin too): disabled, unmounted or unlinked, rescanned. A link made by hand in the box
+HOME works only for a folder the box has at its own path, and `omarchy plugin enable` right after
+`rescanPlugins` says "is not known" until the rescan is done; `plugin add` does both. Not inside
+ai-jail (up --plugin there).
 @ up run restart-shell
 --desk-shell: your desktop's shell as it is, to check a plugin against a real desk: every plugin in
 ~/.config/omarchy/plugins (read-only, as --plugin's; a --plugin of the same id wins: your working

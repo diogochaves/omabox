@@ -27,6 +27,7 @@ mod jobs;
 mod jq;
 mod jqprog;
 mod json;
+mod latemount;
 mod layer;
 mod logs;
 mod marks;
@@ -151,6 +152,7 @@ fn main() -> ExitCode {
         Some("calibrate") => Some(cmd::calibrate::run),
         Some("keys-to-box") => Some(cmd::keys_to_box::run),
         Some("monitor") => Some(cmd::monitor::run),
+        Some("plugin") => Some(cmd::plugin::run),
         Some("output") => Some(cmd::output::run),
         Some("mode") => Some(cmd::mode::run),
         Some("gpu") => Some(cmd::gpu::run),

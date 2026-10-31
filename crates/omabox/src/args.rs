@@ -67,6 +67,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"mode" => Some("-b= --box= --json"),
         b"output" => Some("-b= --box= --for= --cycles="),
         b"monitor" => Some("-b= --box= --name= --json"),
+        b"plugin" => Some("-b= --box="),
         b"gpu" => Some("-b= --box= --json"),
         b"cpu" => Some("-b= --box= --settle= --pid= --app= --threads --json"),
         b"audio" => Some("-b= --box= --json"),

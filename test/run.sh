@@ -1382,8 +1382,10 @@ t_unit_run_named_dead() {
 # construction: a child enters a box only through an enter::Plan applied in exec::command (or in
 # `_enter`'s own exec, enter::main, which box_pty starts with only its fds), and command closes every fd
 # it is not given whenever the plan takes the box's pid namespace (Plan::pid_ns, CLONE_NEWPID); setns
-# only in enter.rs. As FILE:LINE: TEXT, each place that breaks it; then "N calls", the entries
-# (Entry::open) and plans (.plan) it read.
+# only in enter.rs, and in latemount.rs (#345: plugin add's mount), whose child joins the box's user
+# and mount namespaces only, never its pid one, and runs no command (no CLONE_NEWPID there). As
+# FILE:LINE: TEXT, each place that breaks it; then "N calls", the entries (Entry::open) and plans
+# (.plan) it read.
 NS_FDS_RS='
 import os, re, sys
 bad = []; n = 0; rule = pid = False
@@ -1401,8 +1403,10 @@ for root, _, files in sorted(os.walk(sys.argv[1])):
             n += len(re.findall(r"Entry::open\(|\.plan\(", t))
             if re.search(r"\.apply\(&mut ", t) and (rel, fn) not in (("exec.rs", "command"), ("enter.rs", "main")):
                 bad.append("%s:%d: %s (an entry applied outside exec::command)" % (rel, i + 1, t))
-            if "libc::setns(" in t and rel != "enter.rs":
+            if "libc::setns(" in t and rel not in ("enter.rs", "latemount.rs"):
                 bad.append("%s:%d: %s (setns outside enter.rs)" % (rel, i + 1, t))
+            if rel == "latemount.rs" and re.search(r"CLONE_NEWPID|\bexecv|Command::new", t):
+                bad.append("%s:%d: %s (latemount.rs enters no pid namespace and runs no command)" % (rel, i + 1, t))
             if rel == "exec.rs" and fn == "command" and re.search(r"let only = fds\.only \|\| fds\.enter\.is_some_and\(\|p\| p\.pid_ns\(\)\);", t): rule = True
             if rel == "enter.rs" and fn == "pid_ns" and "self.ns & libc::CLONE_NEWPID != 0" in t: pid = True
 if not rule: bad.append("exec.rs: command does not close the fds of a child entering the pid namespace")
@@ -1881,6 +1885,22 @@ t_unit_theme_dir() {
 # The box's shell.json (finding 21) and its workspace numbers (issue #21, finding 115): a bar left
 # with no omarchy.workspaces gets one where a left-out plugin's workspace widget was, else after the
 # menu; never a second one, nor next to a mounted plugin that shows workspaces.
+# #345: plugin add/remove's words read before any box is looked for, as usage errors (2); a box that
+# is not up, 1. (The rest needs a box: t_plugin_add.)
+t_unit_plugin_cmd() {
+  local d=$TMP/upc out
+  mkdir -p "$d/w"; jq -n '{schemaVersion: 1, id: "x.y", name: "x", version: "0.1.0", kinds: ["bar-widget"]}' > "$d/w/manifest.json"
+  rc_of() { out=$("$@" 2>&1); echo "$? $out"; }
+  check_match "plugin, no subcommand: usage (2)" "^2 omabox: plugin: add PATH\|ID or remove ID" "$(rc_of ob plugin)"
+  check_match "...an unknown one, the nearest" "^2 omabox: plugin: unknown subcommand ad \(did you mean add\?\)" "$(rc_of ob plugin ad)"
+  check_match "plugin add, no plugin: usage" "^2 omabox: plugin add: which\?" "$(rc_of ob plugin add)"
+  check_match "...one not there: as up says it" "^2 omabox: plugin not found: $d/none \(a plugin dir with manifest.json" "$(rc_of ob plugin add "$d/none")"
+  check_match "...two: one at a time" "^2 omabox: plugin add: unexpected $d/w \(one plugin at a time\)" "$(rc_of ob plugin add "$d/w" "$d/w")"
+  check_match "plugin remove, not an id: usage" "^2 omabox: plugin remove: not a plugin's id: a@b" "$(rc_of ob plugin remove a@b)"
+  check_match "plugin add on a box that is not up: 1" "^1 omabox: no box '$P-none' is up" "$(rc_of ob plugin add "$d/w" -b "$P-none")"
+  check_match "...-b before the command too" "^1 omabox: no box '$P-none' is up" "$(rc_of ob -b "$P-none" plugin remove x.y)"
+}
+
 # finding 241: a --plugin the box has at its own path (the repo `up` runs from, a same-path --ro-bind)
 # is linked to, not mounted; own_path_visible decides, home_link makes the link.
 t_unit_plugin_link() {
@@ -7996,6 +8016,99 @@ t_plugin_link() {
   out=$(ob restart-shell -b "$B" 2>&1)
   check_match "...fixed, restart-shell: the shell up again" "shell restarted" "$out"
   check_fails "...the plugin loaded (not named as failed)" grep -q "$P.lw" <<<"$out"
+  ob down "$B" >/dev/null
+}
+
+# #345 (finding 594): `plugin add` puts a plugin in a box that is up as --plugin does (linked where the
+# box has it at its own path, else mounted read-only), the shell made to know it and enabled;
+# `plugin remove` takes one out, one up mounted too. A link made by hand is replaced; a folder not
+# omabox's, a dir refused at up, a link swapped in on the mount's way: refused. Throwaway fixtures.
+t_plugin_add() {
+  local B=$P-pa R O=$TMP/pa-out H out f=/home/sbx/.config/omarchy/plugins rt
+  R=$(tmp_repo pa)
+  afix() {   # DIR ID: a bar widget with a helper that reads ../../tools/sibling.txt from its real path
+    mkdir -p "$1/helpers"
+    jq -n --arg id "$2" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
+      entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$1/manifest.json"
+    printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$2" > "$1/W.qml"
+    printf '#!/bin/bash\nhere=$(dirname "$(readlink -f "$0")")\ncat "$here/../../tools/sibling.txt"\n' > "$1/helpers/find.sh"
+  }
+  afix "$R/widget" "$P.aw"; afix "$R/hand" "$P.ah"; afix "$O/widget" "$P.ao"; afix "$O/up" "$P.au"
+  afix "$O/again" "$P.ao"; afix "$O/clone" "$P.ac"; afix "$O/swap" "$P.as"
+  mkdir -p "$R/tools"; echo sibling > "$R/tools/sibling.txt"
+  out=$(cd "$R" && ob up "$B" --net isolated --plugin "$O/up" 2>&1) || { no "up with one plugin, from a repo" "$out"; return; }
+  H=$(ob path "$B")/home
+  listed() { ob run -b "$B" -- omarchy-shell shell listPlugins 2>/dev/null | jq -r --arg i "$1" '[.[] | select(.id == $i)] | length'; }
+  st() { ob ls --json | jq -r --arg n "$B" --arg i "$1" '.[] | select(.name == $n) | .plugin_status[$i] | "\(.via) \(.state)"'; }
+  # One outside anything the box has: mounted read-only, in the shell and its bar.
+  out=$(ob plugin add "$O/widget" -b "$B" 2>&1)
+  check_match "plugin add, a plugin outside the box: mounted" "plugin $P.ao added to box '$B': mounted read-only from $O/widget" "$out"
+  check "...a mount in the box HOME" ob run -b "$B" -- sh -c "test -f $f/$P.ao/manifest.json && mountpoint -q $f/$P.ao"
+  check_fails "...read-only" ob run -b "$B" -- touch "$f/$P.ao/w"
+  check_fails "...the box cannot unmount it" ob run -b "$B" -- umount "$f/$P.ao"
+  check_fails "...nor make it writable" ob run -b "$B" -- mount -o remount,rw "$f/$P.ao"
+  check_match "...nosuid and nodev, as up's --ro-bind" "^ro,nosuid,nodev" \
+    "$(ob run -b "$B" -- awk -v m="$f/$P.ao" '$5 == m {print $6}' /proc/self/mountinfo)"
+  check_eq "...the shell lists it" 1 "$(listed "$P.ao")"
+  check_match "...in the box's bar" "\"$P.ao\"" "$(jq -c .bar.layout "$H/.config/omarchy/shell.json")"
+  check_eq "...ls --json: mounted, loaded" "mounted loaded" "$(st "$P.ao")"
+  check_eq "...box.json has its dir" "$O/widget" "$(jq -r --arg i "$P.ao" '.plugin_dirs[$i]' "$(ob path "$B")/box.json")"
+  # One inside the repo up ran from (in the box at its own path): linked, readlink -f leads into it.
+  out=$(ob plugin add "$R/widget" -b "$B" 2>&1)
+  check_match "a plugin inside the box's repo: linked" "plugin $P.aw added to box '$B': linked to $R/widget" "$out"
+  check_eq "...a link in the box HOME to its own path" "$R/widget" "$(readlink "$H/.config/omarchy/plugins/$P.aw")"
+  check_eq "...its helper reaches the repo" sibling "$(ob run -b "$B" -- bash "$f/$P.aw/helpers/find.sh" 2>&1)"
+  check_eq "...ls --json: linked, loaded" "linked loaded" "$(st "$P.aw")"
+  check_match "the same plugin again: said, nothing done" "has plugin $P.ao already \(mounted: $O/widget\)" "$(ob plugin add "$O/widget" -b "$B" 2>&1)"
+  out=$(ob plugin add "$O/again" -b "$B" 2>&1); local rc=$?
+  check_eq "another dir with the same id: refused (rc)" 1 "$rc"
+  check_match "...naming the one the box has and what to do" "has plugin $P.ao from $O/widget already: omabox plugin remove $P.ao -b $B first" "$out"
+  # The issue's case: a link made by hand in the box HOME, then rescanPlugins and enable at once.
+  ob run -b "$B" -- ln -s "$R/hand" "$f/$P.ah"
+  out=$(ob plugin add "$R/hand" -b "$B" 2>&1)
+  check_match "a link made by hand: replaced, said" "replaced the link at ~/.config/omarchy/plugins/$P.ah in box '$B' \(to $R/hand\)" "$out"
+  check_eq "...enabled at once (the rescan waited for)" "linked loaded" "$(st "$P.ah")"
+  # A folder of the box HOME's own (an omarchy plugin add's clone): left, refused.
+  ob run -b "$B" -- mkdir -p "$f/$P.ac"
+  out=$(ob plugin add "$O/clone" -b "$B" 2>&1); rc=$?
+  check_eq "a folder there not omabox's: refused (rc)" 1 "$rc"
+  check_match "...saying what to do" "has ~/.config/omarchy/plugins/$P.ac already, not one of omabox's" "$out"
+  check_eq "...left as it was, nothing mounted there" "dir no-mount" \
+    "$(ob run -b "$B" -- sh -c "test -d $f/$P.ac && echo dir; mountpoint -q $f/$P.ac && echo mount || echo no-mount" | paste -sd' ')"
+  ob run -b "$B" -- rmdir "$f/$P.ac"
+  # What up refuses to mount, plugin add refuses too (S1: the user's runtime dir).
+  rt=$XDG_RUNTIME_DIR/$P-pa-plugin; afix "$rt" "$P.ar"
+  out=$(ob plugin add "$rt" -b "$B" 2>&1); rc=$?
+  rm -rf "$rt"
+  check_eq "a plugin in the runtime dir: refused (rc)" 1 "$rc"
+  check_match "...as up refuses it" "refusing to mount $rt into a box" "$out"
+  check_fails "...nothing made in the box HOME" test -e "$H/.config/omarchy/plugins/$P.ar"
+  # Remove: one plugin add mounted, one it linked, one up mounted.
+  out=$(ob plugin remove "$P.ao" -b "$B" 2>&1)
+  check_match "plugin remove, a mounted one" "plugin $P.ao removed from box '$B'" "$out"
+  check_fails "...no mount, no folder left" ob run -b "$B" -- test -e "$f/$P.ao"
+  check_eq "...the shell no longer lists it" 0 "$(listed "$P.ao")"
+  check_fails "...nor the bar has it" grep -q "\"$P.ao\"" <(jq -c .bar.layout "$H/.config/omarchy/shell.json")
+  check_eq "...nor ls --json" "" "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.ao" '.[] | select(.name == $n) | (.plugins | index($i)), .plugin_status[$i] | values')"
+  check "plugin remove, a linked one" ob plugin remove "$P.aw" -b "$B"
+  check_fails "...its link gone" test -L "$H/.config/omarchy/plugins/$P.aw"
+  check_eq "...the repo's folder untouched" sibling "$(cat "$R/tools/sibling.txt")"
+  check "plugin remove, one up --plugin mounted" ob plugin remove "$P.au" -b "$B"
+  check_fails "...its mount gone" ob run -b "$B" -- test -e "$f/$P.au"
+  check_eq "...the shell no longer lists it" 0 "$(listed "$P.au")"
+  out=$(ob plugin remove "$P.au" -b "$B" 2>&1); rc=$?
+  check_eq "...again: refused (rc)" 1 "$rc"
+  check_match "...naming what the box has" "has no plugin $P.au \(it has $P.ah\)" "$out"
+  check "...then added back" ob plugin add "$O/up" -b "$B"
+  check_eq "...mounted, loaded" "mounted loaded" "$(st "$P.au")"
+  # The box HOME is the box's: a link in the mount's way never takes the mount elsewhere.
+  ob run -b "$B" -- sh -c "mkdir -p /tmp/$P-elsewhere && mv $f ~/.config/omarchy/plugins.real && ln -s /tmp/$P-elsewhere $f"
+  out=$(ob plugin add "$O/swap" -b "$B" 2>&1); rc=$?
+  check_eq "a link on the way into the box HOME's plugins dir: refused (rc)" 1 "$rc"
+  check_match "...said" "cannot mount $O/swap in box '$B': .*goes through a link" "$out"
+  check_fails "...nothing mounted where the link leads" ob run -b "$B" -- mountpoint -q "/tmp/$P-elsewhere/$P.as"
+  check_fails "...nor left there" ob run -b "$B" -- test -e "/tmp/$P-elsewhere/$P.as"
+  check_fails "...nor in box.json" grep -q "$P.as" "$(ob path "$B")/box.json"
   ob down "$B" >/dev/null
 }
 
@@ -15264,7 +15377,7 @@ t_up_again() {
   check_match "...saying what it lacks" "--size 1280x720@60 \(it is 1920x1080@60\); --systemd \(it has no user manager\)" "$out"
   check_match "...and what to do" "omabox down $B first, or omabox up --new" "$out"
   check_match "--net connected on an isolated box: refused" "--net connected \(it is isolated\)" "$(ob up "$B" --net connected 2>&1)"
-  check_match "--plugin it has not: refused" "--plugin $ROOT/plugin \(not mounted\)" "$(ob up "$B" --plugin "$ROOT/plugin" 2>&1)"
+  check_match "--plugin it has not: refused, naming plugin add (#345)" "--plugin $ROOT/plugin \(not mounted: omabox plugin add $ROOT/plugin -b $B adds it\)" "$(ob up "$B" --plugin "$ROOT/plugin" 2>&1)"
   check_eq "up --json: the box as ls --json has it" "$B up isolated" "$(ob up "$B" --json 2>/dev/null | jq -r '"\(.name) \(.state) \(.net)"')"
   check_eq "...the same object" "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n)')" "$(ob up "$B" --json 2>/dev/null)"
   # #264: an app's read-only folder in the box HOME (a walk testing a destination it cannot write).
@@ -18253,10 +18366,10 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_click_find t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_stock_bar t_saves t_save_killed
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

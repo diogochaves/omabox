@@ -40,6 +40,7 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"mode",
     b"output",
     b"monitor",
+    b"plugin",
     b"gpu",
     b"cpu",
     b"audio",

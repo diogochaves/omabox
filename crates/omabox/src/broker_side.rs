@@ -579,6 +579,9 @@ mod tests {
             assert_eq!(r(c), None, "{c}");
         }
         assert!(r("clip").is_some_and(|m| m.contains("clip is not for agents")));
+        // (#345: a mount made into a box that is up, which the jail's covers are not checked
+        // against; a jailed agent's plugins go in with up --plugin)
+        assert!(r("plugin add /x").is_some_and(|m| m.contains("not for an agent inside ai-jail")));
         for c in [
             "config workspace 5",
             "config workspace default",

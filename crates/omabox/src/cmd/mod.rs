@@ -30,6 +30,7 @@ pub mod output;
 pub mod path;
 pub mod peek;
 pub mod pixel;
+pub mod plugin;
 pub mod pointer;
 pub mod ports;
 pub mod reap;

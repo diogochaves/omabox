@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`omabox plugin add PATH|ID` puts a shell plugin into a box that is already up**, as `up --plugin`
+  would have: read-only, linked where the box has it at its own path or mounted, the shell made to
+  know it and enabled, its state said (`ls --json`: plugin_status). `plugin remove ID` takes one out.
+  A link made by hand in the box HOME, then `omarchy plugin enable`, said "is not known": the enable
+  ran before the shell's rescan was done ([#345](https://github.com/diogochaves/omabox/issues/345)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

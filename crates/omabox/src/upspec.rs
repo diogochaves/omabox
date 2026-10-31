@@ -423,9 +423,16 @@ pub fn own_path_visible(p: &[u8], robinds: &[(Vec<u8>, Vec<u8>)], overlays: &[Ve
     }
     specs.extend(robinds.iter().cloned());
     specs.extend(overlays.iter().map(|x| (x.clone(), x.clone())));
+    own_path_among(&p, &specs)
+}
+
+/// own_path_visible's rule over the mounts SPECS (source, destination), for P resolved: P is at or
+/// under one of their destinations, and each such is a mount of the same path (`plugin add` reads a
+/// running box's from its box.json, #345).
+pub fn own_path_among(p: &[u8], specs: &[(Vec<u8>, Vec<u8>)]) -> bool {
     let mut seen = false;
-    for (src, dest) in &specs {
-        if !at_or_under(&p, dest) {
+    for (src, dest) in specs {
+        if !at_or_under(p, dest) {
             continue;
         }
         if src != dest || (in_jail() && jail_root(src).is_none()) {

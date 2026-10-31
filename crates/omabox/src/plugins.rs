@@ -322,14 +322,23 @@ fn first_line(v: &[u8]) -> Vec<u8> {
 
 /// `$(box_exec omarchy-shell shell listPlugins 2>/dev/null | head -c 1048576)`: its output, None when
 /// it failed (pipefail).
-fn list_plugins(ctx: &mut Ctx) -> Option<Vec<u8>> {
+pub fn list_plugins(ctx: &mut Ctx) -> Option<Vec<u8>> {
+    match session_out(ctx, &[b"omarchy-shell", b"shell", b"listPlugins"]) {
+        Some((0, out)) => Some(out),
+        _ => None,
+    }
+}
+
+/// WORDS in the box's session (box_exec), stderr dropped, stdout read up to 1 MiB:
+/// its status and what it printed, None when it could not run.
+pub fn session_out(ctx: &mut Ctx, words: &[&[u8]]) -> Option<(i32, Vec<u8>)> {
     let (r, wr) = pipe().ok()?;
     let reader = std::thread::spawn(move || read_all(r, Some(1_048_576)));
     let rc = {
         let _e = Redir::null(2);
         box_exec(
             ctx,
-            &crate::mon::w(&[b"omarchy-shell", b"shell", b"listPlugins"]),
+            &crate::mon::w(words),
             ExecOpts {
                 stdout: Some(wr.as_raw_fd()),
                 ..ExecOpts::default()
@@ -338,7 +347,7 @@ fn list_plugins(ctx: &mut Ctx) -> Option<Vec<u8>> {
     };
     drop(wr);
     let out = reader.join().unwrap_or_default();
-    matches!(rc, Ok(0)).then_some(out)
+    rc.ok().map(|rc| (rc, out))
 }
 
 /// `"$VALIDATE" "$DIR" 2>&1 >/dev/null`: whether the validator passed, and what it said.

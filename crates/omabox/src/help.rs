@@ -40,6 +40,7 @@ pub const COMMANDS: &[&str] = &[
     "mode",
     "output",
     "monitor",
+    "plugin",
     "gdb",
     "gpu",
     "cpu",

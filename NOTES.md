@@ -11242,6 +11242,48 @@ from them.
     other form. Tests: t_window_size (sizes, the centre, -b before it, --json, the app's smallest,
     --tile, --float, a fullscreen window refused, the usage errors), window.rs's sizes and
     lua_chunks.
+594. **A plugin into a box that is up: `plugin add`, `plugin remove`** (2026-10-31, #345). To check
+    a plugin in a box started without it, an agent linked its folder into the box HOME's
+    `plugins/<id>`, ran `omarchy-shell shell rescanPlugins`, then `omarchy plugin enable <id>`, which
+    kept saying "plugin '<id>' is not known; run: omarchy-shell shell rescanPlugins". Settled in a box:
+    a hand-made link to a folder the box has at its own path (in its repo) does load; the enable failed
+    because it ran before the rescan was done (the race of finding 539: `rescanPlugins` returns before
+    its scan, and the enable 1 s later worked). A link to a folder the box does not have can never
+    load, and a host `omarchy-shell` reaches the desk's shell, not the box's. `omabox plugin add
+    PATH|ID [-b NAME]` now does what `up --plugin` does: the plugin resolved as up resolves it,
+    refused where up refuses it (bwrap.rs's checked_ro: refuse_src and the seat's paths), linked from
+    the box HOME when the box has it at its own path (finding 241's rule, own_path_among, over
+    box.json's `mounts`, each one's source still the folder up bound: one deleted and made again is
+    the old one in the box, #391), else mounted read-only; then the shell rescans and is listed until
+    it lists the plugin (4 s), `omarchy plugin enable`, and plugin_check's words and plugin_status.
+    `plugin remove ID` takes out one the box has (up's too): `setPluginEnabled false` while it is
+    listed, unmounted or unlinked, rescanned, box.json without it. The mount (latemount.rs): bwrap
+    mounts in the user namespace that owns the box's mount namespace (its first; the box's PID 1 runs
+    in a second one inside it, for --uid), so `setns` straight into the box's user and mount
+    namespaces was refused (EPERM: from the inner one there is no capability over the mount
+    namespace), and an `open_tree` clone made in a user namespace of our own could not be attached
+    there (`move_mount` EPERM). A child joins the owning namespace (found with NS_GET_USERNS on the
+    box's mount namespace, read while a pidfd of its PID 1 shows it alive), makes a mount namespace
+    there, opens the folder with no link followed (openat2 RESOLVE_NO_SYMLINKS) and clones it
+    (open_tree, recursive), sets it read-only, nosuid, nodev as bwrap's --ro-bind is, enters the box's
+    mount namespace through the pidfd and attaches it at `plugins/<id>`, opened with no link followed
+    and no mount crossed (RESOLVE_NO_XDEV): the box HOME is the box's to write, so a link there never
+    takes the mount elsewhere and nothing is mounted over a mount. The box can neither unmount it nor
+    make it writable (checked). A first version checked the clone by reading its fd's path back,
+    which for a detached tree is "/": every mount was refused. What the box HOME holds is read and
+    written from inside the box (on_box). A link made by hand is replaced (said); a folder there
+    that is not omabox's (an `omarchy plugin add` clone) is left, refused. Not for a jailed caller
+    (the broker refuses commands it does not list): `up --plugin` there. `up NAME --plugin X` on a
+    box without X (finding 134) now names `omabox plugin add X -b NAME`. Tests: t_plugin_add (one
+    outside the box mounted read-only, nosuid, nodev, the box unable to unmount or remount it, in
+    the shell and its bar, loaded; one in the repo linked, its helper reaching the repo; the same
+    again said, another dir with the id refused; the issue's hand-made link replaced and enabled at
+    once; a folder not omabox's left; a plugin in the runtime dir refused; remove of a mounted, a
+    linked and an up --plugin one, then added back; a link put on the mount's way by the box: refused,
+    nothing mounted where it leads), t_unit_plugin_cmd (usage errors, a box not up),
+    cmd::plugin's unit tests (linked only through a same-path mount still bound), broker_check (a
+    jailed caller refused), t_up_again (the new words). On the old code `plugin` is an unknown
+    command (exit 2).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

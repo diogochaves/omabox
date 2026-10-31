@@ -1674,7 +1674,16 @@ pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
             .map(|p| p.id)
             .unwrap_or_default();
         if !ids.split(|&c| c == b'\n').any(|l| l == id.as_slice()) {
-            diff.push(cat!("--plugin ", p, " (not mounted)"));
+            // (#345: one can go into the box as it is)
+            diff.push(cat!(
+                "--plugin ",
+                p,
+                " (not mounted: omabox plugin add ",
+                p,
+                " -b ",
+                ctx.name,
+                " adds it)"
+            ));
         }
     }
     if !diff.is_empty() {

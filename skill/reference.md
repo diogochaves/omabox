@@ -995,6 +995,11 @@ most people will. Then:
   desk, so a helper that finds the rest of its repo through `readlink -f "$0"` works; any other PATH
   is mounted there.
   `plugin_status`'s `via` says which (`linked`, `mounted`).
+- **Into a box that is up**: `omabox plugin add PATH|ID [-b NAME]` puts one in as `--plugin` would
+  have (linked or mounted, read-only), has the shell rescan until it lists it, enables it and says
+  its state; `omabox plugin remove ID` takes one out (an `up --plugin` one too). Not a link made by
+  hand in the box HOME: it is seen only for a folder the box has at its own path, and `omarchy plugin
+  enable` right after `rescanPlugins` says "is not known" until the rescan is done.
 - **Edits**: `omabox restart-shell` (linked or mounted, the plugin is live). Nothing reloads by itself in a box (neither
   Quickshell's watcher nor Omarchy's plugin registry's), so a shot never catches a half-reloaded
   plugin: `restart-shell` after edits, then `wait still`, before a shot. A `keepLoaded` plugin or a service needs a restart on any
