@@ -9,8 +9,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
-            [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
-            [--polkit]                                   a polkit agent can register: a stand-in authority (polkit ask)
+            [--audio] [--polkit]                         its own PipeWire (a silent mic); a polkit agent can register (polkit ask)
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
             [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
