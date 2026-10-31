@@ -340,13 +340,19 @@ mod tests {
     }
 
     // t_unit_box_gone: a PID 1 that exited and is not reaped yet is no box (its namespaces are
-    // gone): not running, so not alive, and dead in ls. (Its parent execs a sleep, which never
-    // reaps it.)
+    // gone): not running, so not alive, and dead in ls. Its parent execs a sleep, which never reaps
+    // it; it exits only once that exec is done (this closes the pipe it reads), since a sh still
+    // there reaps it at once and the pid is gone (or another process's) when this reads it.
     #[test]
     #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
     fn a_zombie_is_not_running() {
+        use std::time::{Duration, Instant};
         let mut c = std::process::Command::new("sh")
-            .args(["-c", "sleep 0 & echo $!; exec sleep 10"])
+            .args([
+                "-c",
+                "exec 3<&0; read -r _ <&3 & echo $!; exec sleep 10 <&- 3<&-",
+            ])
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
@@ -357,18 +363,27 @@ mod tests {
         )
         .unwrap();
         let z = out.trim().as_bytes().to_vec();
-        let mut st = Vec::new();
-        for _ in 0..40 {
-            st = read(&z, "stat").unwrap_or_default();
-            if after_comm(&st).starts_with(b"Z") {
-                break;
+        let sh = c.id().to_string().into_bytes();
+        let until = |done: &dyn Fn() -> bool| {
+            let end = Instant::now() + Duration::from_secs(20);
+            while !done() && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(10));
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
+        };
+        until(&|| read(&sh, "comm").as_deref() == Some(b"sleep"));
+        let execd = read(&sh, "comm");
+        drop(c.stdin.take());
+        until(&|| after_comm(&read(&z, "stat").unwrap_or_default()).starts_with(b"Z"));
+        let st = read(&z, "stat").unwrap_or_default();
         let zombie = after_comm(&st).starts_with(b"Z");
         let alive = running(&z);
         let _ = c.kill();
         let _ = c.wait();
+        assert_eq!(
+            execd.as_deref(),
+            Some(&b"sleep"[..]),
+            "its parent execs a sleep"
+        );
         assert!(zombie, "a zombie: {:?}", String::from_utf8_lossy(&st));
         assert!(!alive, "a zombie PID 1 is not alive (nor up in ls)");
     }
