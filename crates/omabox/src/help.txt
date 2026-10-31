@@ -47,6 +47,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [--only ID,GLOB...] [--report-scale N]
                    [UP OPTIONS] -- SCENARIO [ARG...]     a visual check: the scenario's checkpoints against a baseline
   omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
+                     [--expect TEXT]... [--expect-tree TEXT]... [--expect-cmd -- CMD [ARG...]]
                                                          a checkpoint, in a scenario: once still, a shot (and the tree)
   omabox check wants ID...                               in a scenario: does this run take any of them (--only)? exit 0 yes, 1 no
   omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png [--report-scale N]] [--json]
@@ -614,7 +615,16 @@ takes no other, and the scenario skips a section with `omabox check wants ID...`
 them wanted; the list is in OMABOX_CHECK_ONLY); with --approve it replaces those in the baseline,
 every other kept as it was. --report-scale N (2 to 4) also draws report.png (baseline.png at
 --approve) N times its size, report@Nx.png, for people (a README, a site, a video): the same layout,
-crops at the shots' own pixels on a box of scale N; report.png stays the agent's. `check diff A B`
+crops at the shots' own pixels on a box of scale N; report.png stays the agent's. Proofs on a
+checkpoint: --expect TEXT says in words what that screen must show ("the menu is open, Beta
+selected"; not checked: said under its line in check run and --approve, and on its card in
+report.png and baseline.png, for whoever judges a change or approves a baseline); --expect-tree TEXT
+fails it when `tree --find TEXT` of its --window finds nothing; --expect-cmd -- CMD [ARG...] (last:
+the rest is the command) when CMD in the box exits non-zero or outlasts --timeout. A failed proof is
+its own result, "proof ID: proof failed: WHAT (WHY)", apart from changed, even where the pixels are
+the baseline's (exit 1); --approve keeps no run where a checkpoint's proof failed, and when it failed
+in every run approves nothing (exit 1, the baseline as it was). Give both kinds: a command says
+"locked" over a black lock screen, and a wrong screen approved stays "same". `check diff A B`
 compares two shots of yours the same way. More (times and dates, specks, holes): the omabox skill's
 reference.md, "Visual checks". Not inside ai-jail yet.
 @ drag

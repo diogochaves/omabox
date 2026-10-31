@@ -78,6 +78,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   role and name, not their place, so a row put first is one row added. A password field's text is
   never shown. `--json` adds `tree`. Opt-in: it costs a read before the input
   ([#288](https://github.com/diogochaves/omabox/issues/288)).
+- **Proofs on a checkpoint**: `check point --expect TEXT` says in words what that screen must show,
+  kept with it and said under its line in `check run` and `--approve`, on its cards in `report.png`
+  and `baseline.png`, and in `--json`, for whoever judges a change or a baseline. `--expect-tree TEXT`
+  (a `tree --find` of its `--window`) and `--expect-cmd -- CMD...` (run in the box) are checked: a
+  failed one is its own result, `proof ID: proof failed: ...`, even where the pixels are the
+  baseline's, and `--approve` keeps no run where it failed, nor anything when it failed in every
+  run ([#266](https://github.com/diogochaves/omabox/issues/266)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

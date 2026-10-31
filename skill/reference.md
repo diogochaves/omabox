@@ -343,6 +343,31 @@ For people (a README, a site, a release video), `--report-scale N` (2 to 4; `che
 a crop at its shot's own pixels on a box of scale N (`--size 3840x2160,scale=2` with 2). Agents read
 `report.png`, kept one look whatever the box's scale.
 
+A check says a screen is the same or changed, never whether it is right: `--approve` keeps what
+most runs showed. Give each checkpoint proofs of what it must show, both kinds, since state and
+pixels each lie alone (a lock screen whose client died: `hyprctl` says locked, the screen is black):
+
+```bash
+omabox run -- omarchy-system-lock
+omabox check point lock --expect "the lock screen, its password field focused" \
+  --expect-cmd -- omarchy-hyprland-session-locked
+omabox check point menu --window myapp --expect "the menu open, Beta selected" \
+  --expect-tree 'list item "Beta" [selected]'
+```
+
+`--expect TEXT` (repeatable) is for you, not checked: said under the checkpoint's line in `check run`
+(`  expect: ...`, not under `same`) and at `--approve`, on its cards in `report.png` and
+`baseline.png`, and in `--json` (`expect`). Judge a change or a baseline against it. `--expect-tree
+TEXT` (repeatable, needs `--window`) fails the checkpoint when `tree --find TEXT` of its window finds
+nothing; `--expect-cmd -- CMD [ARG...]` (last: the rest is the command) when CMD, run in the box after
+the shot, exits non-zero or outlasts `--timeout`. A failed proof is its own result, even where the
+pixels are the baseline's: `proof    lock: proof failed: command omarchy-hyprland-session-locked
+(exit 1)`, then `  shot: .../run1/lock.png (the same as the baseline's: the baseline shows it too)`
+(exit 1, `1 failed a proof` in the last line; `--json`: result `proof`, each in `proofs` with
+`held` and `why`). `check point` itself says it on stderr and exits 0, so the scenario goes on.
+`--approve` keeps no run where a checkpoint's proof failed (`proof failed in run 2 of 3 ...; run 1,
+where it held, kept`); failed in every run, it approves nothing (exit 1, the baseline as it was).
+
 Each checkpoint is also searched for holes: the `#ff00ff` wallpaper showing through inside a window,
 the bar or a popup (a transparent part, a gap, a card that forgot its background), and in a
 `--window` shot fully transparent pixels. The wallpaper around and between surfaces and rounded

@@ -33,14 +33,15 @@
       The report of a check (finding 361): one image of every change, each region cropped with some
       context from the baseline and the new shot side by side, inside what a model sees in one look.
       PLAN: tab-separated lines, "title TEXT", then per changed checkpoint "point ID BASE.png NEW.png
-      BASE.tree.json NEW.tree.json UNSTABLE" (empty fields: none) and its "region X Y W H" or "size
-      TEXT" lines; "also FIRST ID": ID's change was FIRST's, named on FIRST's card. Prints magick's arguments NUL-separated, the first being what was left out ("" when
+      BASE.tree.json NEW.tree.json UNSTABLE" (empty fields: none) and its "region X Y W H", "size
+      TEXT" and "expect TEXT" (the checkpoint's --expect, on its cards) lines; "also FIRST ID": ID's change was FIRST's, named on FIRST's card. Prints magick's arguments NUL-separated, the first being what was left out ("" when
       nothing). SCALE (2 to 4, #402): the same sheet, laid out as at 1, drawn SCALE times its size
       (text, marks and crops; a crop at its shot's own pixels where the box's scale is SCALE), for
       people (a README, a site, a video); the default 1 is what an agent reads.
   check.py overview PLAN OUT.png [FONT [SCALE]]
       The baseline in one image (--approve): PLAN's "title TEXT", then per checkpoint "point ID PNG
-      TEXT" and its "unstable X Y W H" (amber: left out) and "hole X Y W H" (red) lines; every shot
+      TEXT" and its "unstable X Y W H" (amber: left out), "hole X Y W H" (red) and "expect TEXT"
+      lines; every shot
       scaled to fit one look, but none under OV_MIN_PX in area: then more pages, OUT-2.png...
       (OUT less a .part suffix). Prints magick's arguments as sheet does, the first being the pages
       after OUT, a line each ("" for one page). SCALE as sheet's; an OUT ending @SCALEx.png has its
@@ -50,6 +51,7 @@
       crop, their ancestors, their keys from the whole tree. JSON on stdout.
 """
 import json
+import math
 import sys
 
 
@@ -285,6 +287,7 @@ PAD, GAP, SEP = 6, 10, 8
 PT, LH, CW = 14, 18, 8.5          # pointsize, line height, a monospace character's width at it
 TEXT_MAX = 560                    # a card wider than its pair for its text, up to this
 RED, BLUE, INK = "#ff2020", "#1a6fe0", "#111111"
+EXPECT = "#106030"                # a checkpoint's --expect text (#266)
 # The scale a sheet is drawn at (#402): laid out at 1, every length drawn F times (an integer, so
 # each one is exact); 1 is the agent's report.
 F = 1
@@ -451,6 +454,12 @@ def card(pt, box, marks, whole=False, lim=1):
     if pt.get("also"):
         # The checkpoints whose change was this one's (#257): named here, not a card each.
         lines.append((clean(f"the same in {len(pt['also'])} more: {', '.join(pt['also'])}"), INK))
+    pair = 2 * sw + SEP
+    if pt.get("expect"):
+        # What the scenario says this screen must show (#266): beside the crop, for whoever judges it.
+        text = "expect: " + pt["expect"]
+        width = max(pair, min(max(len(t) for t, _ in lines) * CW, TEXT_MAX), min(len(text) * CW, TEXT_MAX))
+        lines.extend((t, EXPECT) for t in said(text, width))
     seen = []
     for _, colour, line, _ in inside:
         if line and line not in seen:
@@ -459,11 +468,11 @@ def card(pt, box, marks, whole=False, lim=1):
                 lines.append(("tree: " + clean(line), colour))
     if len(seen) > 3:
         lines[-1] = (f"tree: +{len(seen) - 2} more (check run's output lists them)", INK)
-    pair = 2 * sw + SEP
     textw = max(len(t) for t, _ in lines) * CW
     w = max(pair, min(textw, TEXT_MAX)) + 2 * PAD
     h = PAD + len(lines) * LH + 4 + sh + PAD
-    return {"pt": pt, "box": box, "s": s, "sw": sw, "sh": sh, "marks": inside, "lines": lines, "w": int(w), "h": int(h)}
+    # (w rounded up: cut down, a line of an odd length lost its last character to fit's "…")
+    return {"pt": pt, "box": box, "s": s, "sw": sw, "sh": sh, "marks": inside, "lines": lines, "w": math.ceil(w), "h": int(h)}
 
 
 def wrap(text, width):
@@ -473,6 +482,15 @@ def wrap(text, width):
         if lines[-1] and len(lines[-1]) + 1 + len(word) > n:
             lines.append("")
         lines[-1] += (" " if lines[-1] else "") + word
+    return lines
+
+
+def said(text, width, most=3):
+    """A text of the scenario's on a card: wrapped to width, at most `most` lines, the last cut."""
+    lines = [fit(t, width) for t in wrap(clean(text), width)]
+    if len(lines) > most:
+        lines, n = lines[:most], max(4, int(width // CW))
+        lines[-1] = lines[-1][: n - 1] + "…"
     return lines
 
 
@@ -558,6 +576,8 @@ def sheet(plan, out_png, font):
                 points[-1]["regions"].append(tuple(int(v) for v in p[1:5]))
             elif p[0] == "size":
                 points[-1]["sizechange"] = p[1]
+            elif p[0] == "expect":
+                points[-1]["expect"] = p[1]
             elif p[0] == "also":
                 for pt in points:
                     if pt["id"] == p[1]:
@@ -649,6 +669,8 @@ def overview(plan, out_png, font):
                 points[-1]["size"] = png_size(p[2])
             elif p[0] in ("unstable", "hole"):
                 points[-1]["marks"].append((AMBER if p[0] == "unstable" else RED, tuple(int(v) for v in p[1:5])))
+            elif p[0] == "expect":
+                points[-1]["expect"] = p[1]
     room = SHEET_W - 2 * GAP - 2 * PAD
 
     def cards_at(f):
@@ -659,9 +681,11 @@ def overview(plan, out_png, font):
             smin = min(top, (OV_MIN_PX / (w * h)) ** 0.5)
             sc = max(top * f, smin)
             sw, sh = max(1, round(w * sc)), max(1, round(h * sc))
-            cards.append({"pt": pt, "s": sc, "floor": sc <= smin, "sw": sw, "sh": sh,
-                          "lines": [(clean(f"{pt['id']}: {pt['text']}"), INK)],
-                          "w": max(sw, OV_CARD_MIN) + 2 * PAD, "h": PAD + LH + 4 + sh + PAD})
+            lines = [(clean(f"{pt['id']}: {pt['text']}"), INK)]
+            if pt.get("expect"):
+                lines.extend((t, EXPECT) for t in said("expect: " + pt["expect"], max(sw, OV_CARD_MIN)))
+            cards.append({"pt": pt, "s": sc, "floor": sc <= smin, "sw": sw, "sh": sh, "lines": lines,
+                          "w": max(sw, OV_CARD_MIN) + 2 * PAD, "h": PAD + len(lines) * LH + 4 + sh + PAD})
         return cards
 
     # All of them smaller together until they fit one look, each no smaller than its floor; then pages.
@@ -701,8 +725,9 @@ def overview(plan, out_png, font):
             text(GAP, GAP + i * LH, t, INK)
         for c, x, y in placed:
             a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {z(x)},{z(y)} {z(x + c['w']) - 1},{z(y + c['h']) - 1}"])
-            text(x + PAD, y + PAD, fit(c["lines"][0][0], c["w"] - 2 * PAD), INK)
-            iy, sc = y + PAD + LH + 4, c["s"] * F
+            for i, (t, colour) in enumerate(c["lines"]):
+                text(x + PAD, y + PAD + i * LH, fit(t, c["w"] - 2 * PAD), colour)
+            iy, sc = y + PAD + len(c["lines"]) * LH + 4, c["s"] * F
             a.extend(["(", "png:" + c["pt"]["png"], "-alpha", "off"] + (["-scale"] if sc >= 1 else ["-resize"]) + [f"{z(c['sw'])}x{z(c['sh'])}!"])
             for colour, (mx, my, mw, mh) in c["pt"]["marks"]:
                 x0, y0 = int(mx * sc), int(my * sc)

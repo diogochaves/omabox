@@ -11762,6 +11762,39 @@ from them.
     t_wait_tree_diff (GTK4: an entry's text, a check box's states, a label renamed, a password field
     hidden in --json too, nothing changed, no window), t_unit_wait (refusals), treediff.rs (pairing
     by name not place, subtrees, passwords and secrets, values, the cap).
+614. **A checkpoint could say only same or changed, never right** (2026-10-31, #266). `check run`
+    says where a shot differs from its baseline and `--approve` keeps what most runs showed, so a
+    wrong screen approved stays "same", and the agent judging report.png or baseline.png has only
+    the pixels, not what the scenario meant. State alone lies too: a lock screen whose client was
+    killed came back black with `hyprctl` and `omarchy-hyprland-session-locked` both saying locked.
+    `check point` now takes proofs. `--expect TEXT` (repeatable; tabs and newlines as spaces) is
+    kept in the .point as `expect TEXT`, said under the checkpoint's line in check run (not under
+    `same`: nothing to judge) and at --approve, drawn on each of its cards in report.png and
+    baseline.png (check.py's plan line `expect TEXT`, green, up to 3 lines; a report card's width is
+    now rounded up, not down, which had cut the last character of a line of odd length), and in --json
+    (`expect`); not checked. `--expect-tree TEXT` (repeatable, needs --window) runs `tree --window
+    SEL --find TEXT` after the shot, so it matches as tree --find does (with #319, states as a
+    set); `--expect-cmd -- CMD [ARG...]` (last) runs `run -- timeout -k 2 T CMD...` with
+    check point's --timeout, stdin closed. Each is a `proof<TAB>held|failed<TAB>WHAT[<TAB>WHY]`
+    line in the .point; check point says a failed one on stderr and exits 0 (a scenario under set
+    -e goes on: the result is the check's). In check run a failed proof is its own result, before
+    new and the pixel comparison: `proof    ID: proof failed: WHAT (WHY)`, its expect lines, and
+    `shot: PATH (the same as the baseline's: the baseline shows it too | N regions changed from
+    the baseline | size ... | no baseline yet)`; counted as "N failed a proof" (exit 1),
+    `counts.proof_failed` and result `proof` with `proofs` [{proof, held, why}] in --json; no card
+    in report.png. At --approve, a run whose proof failed at a checkpoint is never its baseline
+    (the best run is picked among those where it held, said with the runs it failed in); failed in
+    every run, nothing is approved: each such checkpoint said, "check: not approved: ...", exit 1,
+    the baseline untouched (checked before anything is written). Chosen where the issue left it
+    open: the result word `proof` (the column's other words are one word); a failed proof wins over
+    changed and new, the pixels said after it; `--expect-tree` reads the whole window, not a -g
+    crop. Not done: `--expect-image FILE`, which needs image matching (#267, open). Tests: check.rs
+    proofs_fail_a_checkpoint_and_its_approval (compare, --json, the sheet's card, both --approve
+    cases; it fails on the old code, which has no proofs and says the lock `same`) and
+    proof_options_refused_as_written; t_check_proof (a real check: both proofs held and approved,
+    a command that fails over the baseline's own pixels, a tree text the window lacks in --json,
+    an --approve refused with the baseline kept byte for byte).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

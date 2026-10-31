@@ -46,14 +46,17 @@ pub const CHK_RUN_JQ: &str = r#"
        setup: ($s[3] | path), report_scaled: ($s[12] | path),
        only: (if $s[13] == "" then null else $s[13] | split(",") end),
        counts: {checkpoints: ($s[4] | tonumber), same: ($s[5] | tonumber), changed: ($s[6] | tonumber), as_another: ($s[7] | tonumber),
-         holes: ($s[8] | tonumber), new: ($s[9] | tonumber), missing: ($s[10] | tonumber), skipped: ($s[11] | tonumber)},
+         holes: ($s[8] | tonumber), new: ($s[9] | tonumber), missing: ($s[10] | tonumber), skipped: ($s[11] | tonumber),
+         proof_failed: ($s[14] | tonumber)},
        checkpoints: .}"#;
 /// One checkpoint of check run --json.
 pub const CHK_POINT_JQ: &str = r#"
     {id: $id, result: $res, as: ($as | path), size: ($size | size), regions: ($regs | regions),
      holes: ($holes | regions),
      tree: ($tree | split("\n") | map(select(. != ""))), specks: ($sp | specks), marked: ($marked | path),
-     approved_holes: ($ok | tonumber), still: (if $still == "" then null else $still == "true" end)}"#;
+     approved_holes: ($ok | tonumber), still: (if $still == "" then null else $still == "true" end),
+     expect: ($expect | split("\n") | map(select(. != ""))),
+     proofs: ($proofs | split("\n") | map(select(. != "") | split("\t") | {proof: .[1], held: (.[0] == "held"), why: (.[2] // null)}))}"#;
 /// The box of a run, for the baseline's check.json.
 pub const CHK_ENV_JQ: &str = r#"first(.[] | select(.name == $n)) | {omabox: $v, hyprland: .hyprland_version, omarchy: .omarchy_version, theme,
       size, gpu: (.render.driver // null), locale: (.clean.locale // null), timezone: (.clean.timezone // null), clean}"#;
@@ -1402,6 +1405,8 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut masks: Vec<Vec<u8>> = Vec::new();
     let mut outd = shell::env_or_empty("OMABOX_CHECK_OUT");
     let mut tmo = b"15s".to_vec();
+    // Proofs (#266): what the screen must show, in words (for whoever judges it), and checked.
+    let (mut expects, mut etrees, mut ecmd) = (Vec::new(), Vec::new(), Vec::<Vec<u8>>::new());
     let mut i = 0;
     while i < args.len() {
         let x = &args[i];
@@ -1454,6 +1459,32 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 outd = args[i + 1].clone();
                 i += 1;
             }
+            b"--expect" | b"--expect-tree" => {
+                optarg(ctx, x, v)?;
+                let t = one_line(&args[i + 1]);
+                if t.iter().all(|&c| c == b' ') {
+                    return Err(ctx.die(cat!(
+                        "check point: ",
+                        x,
+                        " takes a text, got an empty one"
+                    )));
+                }
+                if x == b"--expect" {
+                    expects.push(t);
+                } else {
+                    etrees.push(t);
+                }
+                i += 1;
+            }
+            b"--expect-cmd" => {
+                if v.map(Vec::as_slice) != Some(b"--") || i + 2 >= args.len() {
+                    return Err(ctx.die(
+                        "check point: --expect-cmd -- CMD [ARG...], last: everything after -- is the command, run in the box",
+                    ));
+                }
+                ecmd = args[i + 2..].to_vec();
+                break;
+            }
             b"-h" | b"--help" => return crate::args::usage("check"),
             y if y.starts_with(b"-") => return Err(unknown_opt(ctx, "check point", x)),
             y => {
@@ -1477,6 +1508,11 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if outd.is_empty() {
         return Err(ctx.die(
             "check point: outside a check run (omabox check run -- SCENARIO calls it), give -o DIR",
+        ));
+    }
+    if !etrees.is_empty() && sels.is_empty() {
+        return Err(ctx.die(
+            "check point: --expect-tree reads a window's tree: give --window SEL (the shell's layers have no tree a check reads)",
         ));
     }
     // A checkpoint the run's --only does not name is not taken (#376): no wait, no shot.
@@ -1719,6 +1755,66 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             rm(&tj);
         }
     }
+    // The proofs, read as the shot was taken (#266): each held or failed, with why.
+    let mut proofs = Vec::new();
+    for t in &etrees {
+        let mut ta = vec![b"tree".to_vec()];
+        for s in &sels {
+            ta.push(b"--window".to_vec());
+            ta.push(s.clone());
+        }
+        ta.extend([b"--find".to_vec(), t.clone()]);
+        let pf = f(".proof");
+        let rc = self_cmd(ctx, &ta, Some(&pf), &[]);
+        let why = match rc {
+            0 => Vec::new(),
+            _ => {
+                let l = tail1(&pf);
+                let l = l.strip_prefix(b"omabox: ").unwrap_or(&l);
+                let l = l.strip_prefix(b"tree: ").unwrap_or(l);
+                if l.is_empty() {
+                    format!("exit {rc}").into_bytes()
+                } else {
+                    one_line(l)
+                }
+            }
+        };
+        rm(&pf);
+        proofs.push((cat!("tree \"", t, "\""), why));
+    }
+    if !ecmd.is_empty() {
+        let ms = crate::num::ms_duration(&tmo).unwrap_or(15_000);
+        let mut ra = w(&[b"run".as_slice(), b"--", b"timeout", b"-k", b"2"]);
+        ra.push(format!("{}.{:03}", ms / 1000, ms % 1000).into_bytes());
+        ra.extend(ecmd.iter().cloned());
+        let pf = f(".proof");
+        let rc = self_all(ctx, &ra, &pf);
+        let last = one_line(&tail1(&pf));
+        let why = match rc {
+            0 => Vec::new(),
+            124 => cat!("did not end within ", tmo, " (--timeout)"),
+            125 => cat!("not run: ", last),
+            126 | 127 => cat!("cannot run it (exit ", rc.to_string(), "): ", last),
+            _ if last.is_empty() => format!("exit {rc}").into_bytes(),
+            _ => cat!("exit ", rc.to_string(), ": ", last),
+        };
+        rm(&pf);
+        let words: Vec<Vec<u8>> = ecmd.iter().map(|a| one_line(a)).collect();
+        proofs.push((cat!("command ", words.join(&b' ')), why));
+    }
+    for (what, why) in &proofs {
+        if !why.is_empty() {
+            say(cat!(
+                "check point ",
+                id,
+                ": proof failed: ",
+                what,
+                " (",
+                why,
+                ")"
+            ));
+        }
+    }
     // Holes: a window's own transparent pixels; on the screen, the sentinel wallpaper enclosed by
     // surfaces. A region's are the screen's, shot once more whole.
     let (mut hoff, mut hres) = (Vec::new(), Vec::new());
@@ -1807,6 +1903,16 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         point.extend_from_slice(b"of screen\n");
     }
     point.extend_from_slice(&cat!("settled ", settled, "\ntree ", tree, "\n"));
+    for e in &expects {
+        point.extend_from_slice(&cat!("expect ", e, "\n"));
+    }
+    for (what, why) in &proofs {
+        if why.is_empty() {
+            point.extend_from_slice(&cat!("proof\theld\t", what, "\n"));
+        } else {
+            point.extend_from_slice(&cat!("proof\tfailed\t", what, "\t", why, "\n"));
+        }
+    }
     for g in &masks {
         point.extend_from_slice(&cat!("ignore ", g, "\n"));
     }
@@ -1840,9 +1946,79 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     out(cat!(png, "\n"))
 }
 
+/// A text of the scenario's as one line of a .point (#266): tabs, newlines and returns as spaces.
+fn one_line(v: &[u8]) -> Vec<u8> {
+    v.iter()
+        .map(|&c| {
+            if matches!(c, b'\n' | b'\r' | b'\t') {
+                b' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// A .point's `expect` lines: what the scenario says that screen must show (#266).
+fn point_expect(p: &[u8]) -> Vec<Vec<u8>> {
+    file_lines(p)
+        .iter()
+        .filter_map(|l| l.strip_prefix(b"expect ").map(<[u8]>::to_vec))
+        .collect()
+}
+
+/// A .point's proofs that failed, "WHAT (WHY)" each (#266).
+fn failed_proofs(p: &[u8]) -> Vec<Vec<u8>> {
+    file_lines(p)
+        .iter()
+        .filter_map(|l| l.strip_prefix(b"proof\tfailed\t"))
+        .map(|r| {
+            let mut f = r.splitn(2, |&c| c == b'\t');
+            let what = f.next().unwrap_or_default();
+            cat!(what, " (", f.next().unwrap_or_default(), ")")
+        })
+        .collect()
+}
+
+/// `  expect: TEXT` lines of a checkpoint, for check run's output.
+fn say_expect(p: &[u8]) -> Res<()> {
+    for e in point_expect(p) {
+        out(cat!("  expect: ", e, "\n"))?;
+    }
+    Ok(())
+}
+
+/// A plan's `expect` line for a checkpoint's card (none when it has no --expect).
+fn plan_expect(p: &[u8]) -> Vec<u8> {
+    let e = point_expect(p);
+    if e.is_empty() {
+        return Vec::new();
+    }
+    cat!("expect\t", one_line(&e.join(b"; ".as_slice())), "\n")
+}
+
 /// `${V%$'\n'}`.
 fn strip_nl1(v: &[u8]) -> &[u8] {
     v.strip_suffix(b"\n").unwrap_or(v)
+}
+
+/// `"$self" -b NAME ARGS... < /dev/null > FILE 2>&1`: its status (a proof's command, #266).
+fn self_all(ctx: &Ctx, args: &[Vec<u8>], file: &[u8]) -> i32 {
+    let f = match std::fs::File::create(shell::path(file)) {
+        Ok(f) => f,
+        Err(e) => {
+            say(cat!("check: ", crate::shots::cant_write(file, &e)));
+            return 125;
+        }
+    };
+    let Ok(f2) = f.try_clone() else { return 125 };
+    let mut c = crate::sig::omabox_cmd();
+    c.arg("-b").arg(OsStr::from_bytes(&ctx.name));
+    c.args(args.iter().map(|a| OsStr::from_bytes(a)));
+    c.stdin(Stdio::null())
+        .stdout(Stdio::from(f))
+        .stderr(Stdio::from(f2));
+    crate::sig::run_status(c).unwrap_or(127)
 }
 
 /// `"$self" -b NAME ARGS... > FILE 2>/dev/null`: its status.
@@ -2599,10 +2775,17 @@ fn point_json(
     marked: &[u8],
     ok: i64,
     still: &str,
+    point: &[u8],
 ) {
     let Some(f) = jsonl else { return };
     let none = matches!(res, "new" | "missing");
     let e: &[u8] = b"";
+    let expect = point_expect(point).join(b"\n".as_slice());
+    let proofs: Vec<u8> = file_lines(point)
+        .iter()
+        .filter_map(|l| l.strip_prefix(b"proof\t"))
+        .flat_map(|l| cat!(l, "\n"))
+        .collect();
     let o = chk_json(
         &[
             ("id", id),
@@ -2616,6 +2799,8 @@ fn point_json(
             ("regs", if none { e } else { &c.regions }),
             ("tree", if none { e } else { &c.tree }),
             ("sp", if none { e } else { &c.specks }),
+            ("expect", &expect),
+            ("proofs", &proofs),
         ],
         CHK_POINT_JQ,
     );
@@ -2669,6 +2854,19 @@ thread_local! {
     static LAST_SUM: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// A checkpoint's speck: SPECK when given, else its baseline .point's (32 for one from before).
+fn point_speck(base: &[u8], id: &[u8], speck: Option<i64>) -> i64 {
+    if let Some(s) = speck {
+        return s;
+    }
+    file_lines(&cat!(base, "/", id, ".point"))
+        .iter()
+        .filter_map(|l| l.strip_prefix(b"speck "))
+        .find(|d| shell::re_match("^[0-9]{1,6}$", d))
+        .and_then(shell::dec)
+        .unwrap_or(CHECK_SPECK)
+}
+
 /// check_compare OUT BASE SPECK: a run against the baseline: same, changed (regions, tree), new,
 /// missing; Err(1) unless all same. Its CHK_SUM is the Ok's (and LAST_SUM's). With --only, the
 /// baseline's checkpoints it does not name are skipped (counted, not missing: #376).
@@ -2689,39 +2887,89 @@ fn check_compare(
     );
     let mut setup = Vec::new();
     let mut firsts: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
-    let mut skipped = 0usize;
+    let (mut skipped, mut nproof) = (0usize, 0usize);
     for id in check_ids(&run1) {
         if !wanted(&opts.only, &id) {
             continue;
         }
         n += 1;
         let np = cat!(run1, "/", id, ".point");
-        if !shell::path(&cat!(base, "/", id, ".png")).is_file() {
+        let has_base = shell::path(&cat!(base, "/", id, ".png")).is_file();
+        // A proof that failed is the result (#266), whatever the pixels: they are said after it.
+        let pf = failed_proofs(&np);
+        if !pf.is_empty() {
+            fail = true;
+            nproof += 1;
+            out(cat!("proof    ", id, ": proof failed: ", pf[0], "\n"))?;
+            for p in &pf[1..] {
+                out(cat!("  proof failed: ", p, "\n"))?;
+            }
+            say_expect(&np)?;
+            let ps = point_speck(base, &id, speck);
+            let c = has_base
+                .then(|| check_one(base, &run1, &id, ps, &cat!(base, "/", id, ".unstable")))
+                .flatten();
+            let how: Vec<u8> = match &c {
+                _ if !has_base => b"no baseline yet".to_vec(),
+                None => b"not compared (magick)".to_vec(),
+                Some(c) if !c.size.is_empty() => cat!("size ", c.size, " from the baseline"),
+                Some(c) if c.regions.is_empty() && c.tree.is_empty() => {
+                    b"the same as the baseline's: the baseline shows it too".to_vec()
+                }
+                Some(c) => {
+                    let nr = lines(&c.regions).len();
+                    if nr == 0 {
+                        b"its tree changed from the baseline's".to_vec()
+                    } else {
+                        cat!(
+                            nr.to_string(),
+                            " region",
+                            s_unless1(nr),
+                            " changed from the baseline"
+                        )
+                    }
+                }
+            };
+            out(cat!("  shot: ", run1, "/", id, ".png (", how, ")\n"))?;
+            let c = c.unwrap_or_default();
+            point_json(
+                jsonl,
+                &c,
+                &id,
+                "proof",
+                b"",
+                b"",
+                b"",
+                0,
+                chk_still(&np),
+                &np,
+            );
+            continue;
+        }
+        if !has_base {
             out(cat!(
                 "new      ",
                 id,
                 ": no baseline (omabox check run --approve adds it)\n"
             ))?;
+            say_expect(&np)?;
             fail = true;
             new += 1;
-            point_json(jsonl, &Chk::default(), &id, "new", b"", b"", b"", 0, "");
+            point_json(
+                jsonl,
+                &Chk::default(),
+                &id,
+                "new",
+                b"",
+                b"",
+                b"",
+                0,
+                "",
+                &np,
+            );
             continue;
         }
-        let ps = match speck {
-            Some(s) => s,
-            None => {
-                let mut v = None;
-                for l in file_lines(&cat!(base, "/", id, ".point")) {
-                    if let Some(d) = l.strip_prefix(b"speck ") {
-                        if shell::re_match("^[0-9]{1,6}$", d) {
-                            v = shell::dec(d);
-                            break;
-                        }
-                    }
-                }
-                v.unwrap_or(CHECK_SPECK)
-            }
-        };
+        let ps = point_speck(base, &id, speck);
         let c = check_one(base, &run1, &id, ps, &cat!(base, "/", id, ".unstable"))
             .ok_or_else(|| ctx.die(cat!("check: could not compare ", id, " (magick)")))?;
         // Holes the baseline does not have fail it even where the shots match.
@@ -2762,7 +3010,18 @@ fn check_compare(
                     " there: approved)\n"
                 ))?;
             }
-            point_json(jsonl, &c, &id, "same", b"", b"", b"", okn, chk_still(&np));
+            point_json(
+                jsonl,
+                &c,
+                &id,
+                "same",
+                b"",
+                b"",
+                b"",
+                okn,
+                chk_still(&np),
+                &np,
+            );
             continue;
         }
         fail = true;
@@ -2839,6 +3098,7 @@ fn check_compare(
             if file_lines(&np).iter().any(|l| l == b"settled no") {
                 out(cat!("  note: ", id, " was not still when taken\n"))?;
             }
+            say_expect(&np)?;
             point_json(
                 jsonl,
                 &c,
@@ -2849,6 +3109,7 @@ fn check_compare(
                 &mk,
                 okn,
                 chk_still(&np),
+                &np,
             );
             continue;
         }
@@ -2866,6 +3127,7 @@ fn check_compare(
                 unst_col, "\n"
             ),
         );
+        append(&body, &plan_expect(&np));
         if !c.size.is_empty() {
             append(&body, &cat!("size\t", c.size, "\n"));
             out(cat!("changed  ", id, ": size ", c.size, "\n"))?;
@@ -2948,6 +3210,7 @@ fn check_compare(
         if file_lines(&np).iter().any(|l| l == b"settled no") {
             out(cat!("  note: ", id, " was not still when taken\n"))?;
         }
+        say_expect(&np)?;
         point_json(
             jsonl,
             &c,
@@ -2958,6 +3221,7 @@ fn check_compare(
             &mk,
             okn,
             chk_still(&np),
+            &np,
         );
     }
     for id in base_ids(base) {
@@ -2973,7 +3237,19 @@ fn check_compare(
             ))?;
             fail = true;
             missing += 1;
-            point_json(jsonl, &Chk::default(), &id, "missing", b"", b"", b"", 0, "");
+            let bp = cat!(base, "/", id, ".point");
+            point_json(
+                jsonl,
+                &Chk::default(),
+                &id,
+                "missing",
+                b"",
+                b"",
+                b"",
+                0,
+                "",
+                &bp,
+            );
         }
     }
     let (mut rep, mut rscaled) = (Vec::new(), Vec::new());
@@ -3052,6 +3328,9 @@ fn check_compare(
     if missing > 0 {
         e += &format!(", {missing} missing");
     }
+    if nproof > 0 {
+        e += &format!(", {nproof} failed a proof");
+    }
     if skipped > 0 {
         e += &format!(", {skipped} skipped (--only)");
     }
@@ -3082,6 +3361,7 @@ fn check_compare(
         skipped.to_string().into_bytes(),
         rscaled,
         opts.only.join(&b','),
+        nproof.to_string().into_bytes(),
     ] {
         sum.extend(v);
         sum.push(b'\t');
@@ -3129,6 +3409,51 @@ fn check_approve(
             }
         }
     }
+    // A run whose proof failed at a checkpoint is not its baseline (#266); one failed in every run
+    // keeps the whole baseline as it was.
+    let mut held: HashMap<Vec<u8>, Vec<bool>> = HashMap::new();
+    let mut refused = Vec::new();
+    for id in &ids1 {
+        let h: Vec<bool> = (1..=runs)
+            .map(|k| failed_proofs(&cat!(run(k), "/", id, ".point")).is_empty())
+            .collect();
+        if !h.iter().any(|&x| x) {
+            let np = cat!(run(1), "/", id, ".point");
+            let pf = failed_proofs(&np);
+            out(cat!(
+                "proof    ",
+                id,
+                ": proof failed in every run: ",
+                pf.first().cloned().unwrap_or_default(),
+                "\n"
+            ))?;
+            for p in pf.iter().skip(1) {
+                out(cat!("  proof failed: ", p, "\n"))?;
+            }
+            say_expect(&np)?;
+            out(cat!("  shot: ", run(1), "/", id, ".png\n"))?;
+            refused.push(id.clone());
+        }
+        held.insert(id.clone(), h);
+    }
+    if !refused.is_empty() {
+        out(cat!(
+            "check: not approved: ",
+            refused.len().to_string(),
+            " checkpoint",
+            s_unless1(refused.len()),
+            " failed a proof in every run (",
+            refused.join(&b' '),
+            "), so no run of ",
+            if refused.len() == 1 { "it" } else { "them" },
+            " is kept as the baseline: ",
+            base,
+            " is as it was. Fix the screen (or the proof) and approve again; runs in ",
+            outd,
+            "\n"
+        ))?;
+        return Err(Exit(1));
+    }
     // A checkpoint the scenario no longer takes leaves the baseline (only the files a check writes);
     // one --only does not name is kept as it was.
     let mut kept = 0usize;
@@ -3171,9 +3496,14 @@ fn check_approve(
     let cmp_fail = |id: &[u8]| ctx.die(cat!("check: could not compare ", id, "'s runs (magick)"));
     for id in check_ids(&run(1)) {
         n += 1;
-        // Which runs match which: the baseline is the run with the most matches.
+        // Which runs match which: the baseline is the run with the most matches, of those whose
+        // proofs held.
+        let ok = held.get(&id).cloned().unwrap_or_default();
         let (mut best, mut most) = (1usize, -1i64);
         for k in 1..=runs {
+            if !ok.get(k - 1).copied().unwrap_or(true) {
+                continue;
+            }
             let mut agree = 0i64;
             for j in 1..=runs {
                 if j == k {
@@ -3342,6 +3672,33 @@ fn check_approve(
         if file_lines(&rpoint).iter().any(|l| l == b"settled no") {
             out(cat!("  note: ", id, " was not still when taken\n"))?;
         }
+        let bad: Vec<usize> = (1..=runs)
+            .filter(|&k| !ok.get(k - 1).copied().unwrap_or(true))
+            .collect();
+        if let Some(&k) = bad.first() {
+            let ks: Vec<String> = bad.iter().map(ToString::to_string).collect();
+            out(cat!(
+                "proof    ",
+                id,
+                ": proof failed in run ",
+                ks.join(" "),
+                " of ",
+                runs.to_string(),
+                ": ",
+                failed_proofs(&cat!(run(k), "/", id, ".point"))
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+                "; run ",
+                best.to_string(),
+                ", where it held, kept (that run: ",
+                run(k),
+                "/",
+                id,
+                ".png)\n"
+            ))?;
+        }
+        say_expect(&rpoint)?;
         // Holes go into the baseline as they are (a check fails only on new ones): said here.
         if has_line_starting(&rpoint, b"hole ") {
             holed.push(id.clone());
@@ -3403,6 +3760,7 @@ fn check_approve(
                 "point\t", id, "\t", base, "/", id, ".png\t", what, lt, rt, "\n"
             ),
         );
+        append(&body, &plan_expect(&bpoint));
         if shell::path(&bun).is_file() {
             for x in file_lines(&bun) {
                 if let Some(m) = mask_of(&x) {
@@ -4602,6 +4960,209 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(base.join("check.json")).unwrap(),
             ENV
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // Proofs on a checkpoint (#266, finding 614): --expect said with its result and on its card; a
+    // failed proof its own result in a run, and at --approve no run of it kept where it failed.
+    #[test]
+    #[ignore = "runs magick and python: run by test/run.sh (cargo test -- --ignored)"]
+    fn proofs_fail_a_checkpoint_and_its_approval() {
+        let d = scratch("proof");
+        images(&d);
+        let ctx = check_ctx();
+        let put_point = |dir: &std::path::Path, id: &str, img: &str, point: &str| {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::copy(d.join(img), dir.join(format!("{id}.png"))).unwrap();
+            write(&dir.join(format!("{id}.point")), point);
+        };
+        let lock_failed = format!(
+            "{SCREEN}expect the lock screen, its password field\nproof\theld\tcommand omarchy-hyprland-session-locked\nproof\tfailed\ttree \"Password\"\tno line holds it\n"
+        );
+        let main_exp = format!("{SCREEN}expect the menu is open, Beta selected\n");
+        let base = d.join("base");
+        for id in ["lock", "main"] {
+            put_point(&base, id, "a.png", &format!("{SCREEN}speck 8\n"));
+        }
+        write(&base.join("check.json"), ENV);
+        // The lock screen's pixels are the baseline's, but its proof failed: "proof", not "same".
+        let run1 = d.join("c/run1");
+        put_point(&run1, "lock", "a.png", &lock_failed);
+        put_point(&run1, "main", "new.png", &main_exp);
+        write(&d.join("c/env.json"), ENV);
+        let (rc, out) = exit::heard_all(|| {
+            check_compare(
+                &ctx,
+                &pb(&d.join("c")),
+                &pb(&base),
+                None,
+                None,
+                &Opts::default(),
+            )
+            .map(|_| ())
+        });
+        assert_eq!(rc, Err(Exit(1)), "{out}");
+        assert!(
+            out.contains(
+                "proof    lock: proof failed: tree \"Password\" (no line holds it)\n  expect: the lock screen, its password field\n  shot: "
+            ) && out.contains("lock.png (the same as the baseline's: the baseline shows it too)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("changed  main: 1 region")
+                && out.contains("\n  expect: the menu is open, Beta selected\n"),
+            "{out}"
+        );
+        assert!(
+            line_at(&out, "check: 0 of 2 same, 1 changed, 1 failed a proof; "),
+            "{out}"
+        );
+        // --json: the result, each proof, the text.
+        let (_, out) = exit::heard_all(|| {
+            check_compare_json(&ctx, &pb(&d.join("c")), &pb(&base), None, &Opts::default())
+        });
+        let j: serde_json::Value =
+            serde_json::from_str(out.lines().last().unwrap_or_default()).unwrap();
+        let lock = &j["checkpoints"][0];
+        assert_eq!(
+            (
+                lock["result"].as_str(),
+                lock["proofs"].to_string(),
+                lock["expect"].to_string(),
+                j["checkpoints"][1]["proofs"].to_string(),
+                j["counts"]["proof_failed"].as_i64(),
+            ),
+            (
+                Some("proof"),
+                r#"[{"proof":"command omarchy-hyprland-session-locked","held":true,"why":null},{"proof":"tree \"Password\"","held":false,"why":"no line holds it"}]"#.to_string(),
+                r#"["the lock screen, its password field"]"#.to_string(),
+                "[]".to_string(),
+                Some(1),
+            ),
+            "{out}"
+        );
+        // The report's card says the text beside the crop.
+        let plan = d.join("plan");
+        write(
+            &plan,
+            &format!(
+                "title\tt\npoint\tmain\t{}\t{}\t\t\t\nexpect\tthe menu is open, Beta selected\nregion\t120\t20\t41\t21\n",
+                d.join("a.png").display(),
+                d.join("new.png").display()
+            ),
+        );
+        let r = py(
+            &w(&[b"sheet".as_slice(), &pb(&plan), &pb(&d.join("r.png"))]),
+            None,
+            false,
+        );
+        assert!(
+            r.ok()
+                && String::from_utf8_lossy(&r.out)
+                    .contains("expect: the menu is open, Beta selected"),
+            "{}",
+            String::from_utf8_lossy(&r.out)
+        );
+        // --approve: a proof failed in every run keeps the whole baseline as it was.
+        let ap = d.join("ap");
+        for k in 1..=3 {
+            let rk = ap.join(format!("run{k}"));
+            put_point(&rk, "lock", "new.png", &lock_failed);
+            put_point(&rk, "main", "a.png", &main_exp);
+        }
+        write(&ap.join("env.json"), ENV);
+        let before = std::fs::read(base.join("main.png")).unwrap();
+        let (rc, out) = exit::heard_all(|| {
+            check_approve(&ctx, &pb(&ap), &pb(&base), None, 3, &Opts::default())
+        });
+        assert_eq!(rc, Err(Exit(1)), "{out}");
+        assert!(
+            line_at(
+                &out,
+                "proof    lock: proof failed in every run: tree \"Password\" (no line holds it)"
+            ) && line_at(
+                &out,
+                "check: not approved: 1 checkpoint failed a proof in every run (lock)"
+            ),
+            "{out}"
+        );
+        assert_eq!(
+            (
+                std::fs::read(base.join("lock.png")).unwrap()
+                    == std::fs::read(d.join("a.png")).unwrap(),
+                std::fs::read(base.join("main.png")).unwrap() == before,
+                ap.join("baseline.png").exists(),
+            ),
+            (true, true, false),
+            "nothing kept"
+        );
+        // Failed in runs 1 and 2, which agree: run 3, where it held, is the baseline.
+        let held = format!(
+            "{SCREEN}expect the lock screen, its password field\nproof\theld\ttree \"Password\"\n"
+        );
+        put_point(&ap.join("run3"), "lock", "a.png", &held);
+        let (rc, out) = exit::heard_all(|| {
+            check_approve(&ctx, &pb(&ap), &pb(&base), None, 3, &Opts::default())
+        });
+        assert_eq!(rc, Ok(()), "{out}");
+        assert!(
+            line_at(
+                &out,
+                "proof    lock: proof failed in run 1 2 of 3: tree \"Password\" (no line holds it); run 3, where it held, kept"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("\n  expect: the lock screen, its password field\n")
+                && out.contains("\n  expect: the menu is open, Beta selected\n"),
+            "said at --approve: {out}"
+        );
+        assert_eq!(
+            std::fs::read(base.join("lock.png")).unwrap(),
+            std::fs::read(d.join("a.png")).unwrap(),
+            "run 3's shot kept"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // check point's proofs refused before a box is needed.
+    #[test]
+    fn proof_options_refused_as_written() {
+        let d = scratch("proofopts");
+        let o = pb(&d);
+        let mut ctx = check_ctx();
+        let a = |v: &[&str]| -> Vec<Vec<u8>> { v.iter().map(|x| x.as_bytes().to_vec()).collect() };
+        for (args, said) in [
+            (
+                a(&["p", "-o", "", "--expect-tree", "Beta"]),
+                "--expect-tree reads a window's tree: give --window SEL",
+            ),
+            (
+                a(&["p", "-o", "", "--expect-cmd", "true"]),
+                "--expect-cmd -- CMD [ARG...], last",
+            ),
+            (
+                a(&["p", "-o", "", "--window", "x", "--expect-cmd", "--"]),
+                "--expect-cmd -- CMD [ARG...], last",
+            ),
+            (
+                a(&["p", "-o", "", "--expect", " \n"]),
+                "--expect takes a text, got an empty one",
+            ),
+        ] {
+            let args: Vec<Vec<u8>> = args
+                .into_iter()
+                .map(|x| if x.is_empty() { o.clone() } else { x })
+                .collect();
+            let (rc, out) = exit::heard_all(|| check_point(&mut ctx, &args));
+            assert_eq!(rc, Err(Exit(2)), "{out}");
+            assert!(out.contains(said), "{said}: {out}");
+        }
+        assert_eq!(
+            one_line(b"a\tb\nc\rd"),
+            b"a b c d".to_vec(),
+            "one line in a .point"
         );
         let _ = std::fs::remove_dir_all(&d);
     }
