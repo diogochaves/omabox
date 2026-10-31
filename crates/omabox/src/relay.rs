@@ -641,7 +641,11 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
                 }
             }
             b"--sheet" => sheet = true,
-            b"--frames" | b"--every" | b"--fit" => {
+            b"--every-frame" | b"--changed" => {
+                sheet = true;
+                sargs.push(a.clone());
+            }
+            b"--frames" | b"--every" | b"--fit" | b"--from" | b"--to" | b"-g" => {
                 crate::args::optarg(ctx, a, next)?;
                 sheet = true;
                 sargs.extend_from_slice(&args[i..i + 2]);

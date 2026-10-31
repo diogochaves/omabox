@@ -5,8 +5,8 @@
 
 use super::record::{
     Err2, REC_AAC, REC_CRF, REC_DIR, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec,
-    SheetOpts, StopOpts, audio_end, now_us, num, rec_dirs, rec_max, rec_yuv, record_first_us,
-    record_firsts, record_running, record_size, rm, sys_cap, sys_q, sys_run, w,
+    SheetMore, SheetOpts, StopOpts, audio_end, now_us, num, rec_dirs, rec_max, rec_yuv,
+    record_first_us, record_firsts, record_running, record_size, rm, sys_cap, sys_q, sys_run, w,
 };
 use crate::cat;
 use crate::exec::{ExecOpts, box_exec, dup_hi, pipe};
@@ -843,6 +843,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             &so.frames,
             so.every,
             &so.fit,
+            &so.more,
             b"",
         )
         .ok()
@@ -1872,7 +1873,7 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
     }
     FF_SECS.store(REC_FF_FLOOR + size / 10_485_760, Ordering::SeqCst);
     let sp = record_sheet(
-        ctx, &bv, &tsv, &outp, &so.frames, so.every, &so.fit, &so.as_,
+        ctx, &bv, &tsv, &outp, &so.frames, so.every, &so.fit, &so.more, &so.as_,
     );
     sys_q(ctx, &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]))?;
     let sp = sp.ok().flatten();
@@ -1946,6 +1947,7 @@ fn record_sheet(
     frames: &[u8],
     every: Option<i64>,
     fit: &[u8],
+    more: &SheetMore,
     shown: &[u8],
 ) -> Res<Option<Vec<u8>>> {
     let nstr = if frames.is_empty() {
@@ -1990,13 +1992,68 @@ fn record_sheet(
     }
     let (nb, numr, den, vw, vh) = (num(&f[0]), num(&f[1]), num(&f[2]), num(&f[3]), num(&f[4]));
     FF_SECS.store(ff_bound(nb, vw * vh), Ordering::SeqCst);
+    // -g (#260): a region inside the video.
+    if let Some((gx, gy, gw, gh)) = more.geo {
+        if gx + gw > vw || gy + gh > vh {
+            say(format!(
+                "record: the contact sheet: -g {gx},{gy} {gw}x{gh} is not inside the video ({vw}x{vh})"
+            ));
+            return Ok(None);
+        }
+    }
+    // The frames' times as the labels round them, and the range asked for (#260).
+    let ms_of = |k: i64| (k * 1000 * den + numr / 2) / numr;
+    let (kf, kt) = match sheet_range(nb, numr, den, more.from, more.to) {
+        Ok(r) => r,
+        Err(m) => {
+            say(cat!("record: the contact sheet: ", m));
+            return Ok(None);
+        }
+    };
+    let span = kt - kf + 1;
+    let (ft, tt) = (ms_s3(ms_of(kf)), ms_s3(ms_of(kt)));
     let mut ks: Vec<i64> = Vec::new();
-    if let Some(every) = every {
+    let mut nchanged = None;
+    if more.changed {
+        let Some(ch) = sheet_changed(ctx, v, kf, kt, more.geo)? else {
+            say("record: the contact sheet: ffmpeg could not compare the frames");
+            return Ok(None);
+        };
+        if ch.len() > 99 {
+            say(cat!(
+                "record: the contact sheet: ",
+                ch.len().to_string(),
+                " frames change from ",
+                ft,
+                " to ",
+                tt,
+                ": more than 100 with the first (a shorter --from and --to, or a smaller -g)"
+            ));
+            return Ok(None);
+        }
+        nchanged = Some(ch.len());
+        ks.push(kf);
+        ks.extend(ch);
+    } else if more.every_frame {
+        if span > 100 {
+            say(cat!(
+                "record: the contact sheet: --every-frame from ",
+                ft,
+                " to ",
+                tt,
+                " is ",
+                span.to_string(),
+                " frames: more than 100 (a shorter --from and --to)"
+            ));
+            return Ok(None);
+        }
+        ks = (kf..=kt).collect();
+    } else if let Some(every) = every {
         let mut last = -1;
         let mut i = 0i64;
         loop {
-            let k = (2 * i * every * numr + 1000 * den) / (2000 * den);
-            if k >= nb {
+            let k = kf + (2 * i * every * numr + 1000 * den) / (2000 * den);
+            if k > kt {
                 break;
             }
             if k != last {
@@ -2014,15 +2071,15 @@ fn record_sheet(
             i += 1;
         }
     } else {
-        // --frames N (1-100, decimal: `010` is 10), at most the video's frames. Bash's loop read a 0
+        // --frames N (1-100, decimal: `010` is 10), at most the range's frames. Bash's loop read a 0
         // in front as octal: an 08 picked no frame, a 01 divided by 0 and ended the sheet, each in
         // its own words (finding 448).
-        let n = shell::dec(&nstr).unwrap_or(15).min(nb);
+        let n = shell::dec(&nstr).unwrap_or(15).min(span);
         if n == 1 {
-            ks = vec![0];
+            ks = vec![kf];
         } else {
             for i in 0..n {
-                ks.push((2 * i * (nb - 1) + n - 1) / (2 * (n - 1)));
+                ks.push(kf + (2 * i * (span - 1) + n - 1) / (2 * (n - 1)));
             }
         }
     }
@@ -2037,13 +2094,25 @@ fn record_sheet(
         }
         tw = num(fit) / cols - 6;
     }
-    if tw > vw {
-        tw = vw;
+    // -g (#260): that region of each frame, inside the video, made larger (pixel for pixel, up to
+    // 8 times) when it is narrower than a tile.
+    let mut crop = String::new();
+    let mut src_w = vw;
+    if let Some((gx, gy, gw, gh)) = more.geo {
+        crop = format!(",crop={gw}:{gh}:{gx}:{gy}:exact=1");
+        src_w = gw * 8;
+    }
+    if tw > src_w {
+        tw = src_w;
     }
     tw = tw / 2 * 2;
     if tw < 16 {
         tw = 16;
     }
+    let up = match more.geo {
+        Some((_, _, gw, _)) if tw > gw => ":flags=neighbor",
+        _ => "",
+    };
     let sel: Vec<String> = ks.iter().map(|k| format!("eq(n,{k})")).collect();
     let bd = format!("{REC_DIR}/sheet-{}", std::process::id());
     let made = sys_cap(
@@ -2064,7 +2133,7 @@ fn record_sheet(
                 b"-i",
                 v,
                 b"-vf",
-                format!("select='{}',scale={tw}:-2", sel.join("+")).as_bytes(),
+                format!("select='{}'{crop},scale={tw}:-2{up}", sel.join("+")).as_bytes(),
                 b"-fps_mode",
                 b"passthrough",
                 format!("{bd}/t-%03d.png").as_bytes(),
@@ -2133,9 +2202,13 @@ fn record_sheet(
             ));
             return Ok(None);
         }
-        let m = (k * 1000 * den + numr / 2) / numr;
+        let m = ms_of(*k);
         ms.push(m);
-        lab.push(format!("{}: {}.{:02}s", i + 1, m / 1000, m % 1000 / 10).into_bytes());
+        lab.push(if more.any() {
+            format!("{}: {} f{k}", i + 1, String::from_utf8_lossy(&ms_s3(m))).into_bytes()
+        } else {
+            format!("{}: {}.{:02}s", i + 1, m / 1000, m % 1000 / 10).into_bytes()
+        });
     }
     rm_bd(ctx);
     // The marks, each under the first tile at or after it (the last tile for any after that).
@@ -2152,6 +2225,10 @@ fn record_sheet(
                 continue;
             }
             let m = num(&f[0]);
+            // (in a range, only the marks since the frame before it, up to its last: #260)
+            if (kf > 0 && m <= ms_of(kf - 1)) || (kt < nb - 1 && m > ms_of(kt)) {
+                continue;
+            }
             let mut i = 0usize;
             while (i as i64) < cnt - 1 && ms[i] < m {
                 i += 1;
@@ -2238,14 +2315,44 @@ fn record_sheet(
         shown.to_vec()
     };
     let lastm = ms.last().copied().unwrap_or(0);
+    let what = match (nchanged, more.geo) {
+        (Some(0), _) => cat!(" frame: nothing changed from ", ft, " to ", tt),
+        (Some(_), Some((gx, gy, gw, gh))) => cat!(
+            " frames (",
+            ft,
+            ", then each frame where ",
+            format!("{gx},{gy} {gw}x{gh}"),
+            " changed, to ",
+            tt,
+            ")"
+        ),
+        (Some(_), None) => cat!(
+            " frames (",
+            ft,
+            ", then each frame that changed, to ",
+            tt,
+            ")"
+        ),
+        (None, _) if more.from.is_some() || more.to.is_some() => {
+            cat!(" frames (", ft, " to ", tt, ")")
+        }
+        (None, _) => cat!(
+            " frames (",
+            format!("{}.{:02}s", lastm / 1000, lastm % 1000 / 10),
+            " of video)"
+        ),
+    };
     say(cat!(
         "record: a ",
         sz,
         " contact sheet of ",
         cnt.to_string(),
-        " frames (",
-        format!("{}.{:02}s", lastm / 1000, lastm % 1000 / 10),
-        " of video), each labelled with its time",
+        what,
+        if more.any() {
+            ", each labelled with its time and frame number"
+        } else {
+            ", each labelled with its time"
+        },
         if has_marks {
             ", the marks under the frame after them"
         } else {
@@ -2257,9 +2364,199 @@ fn record_sheet(
     Ok(Some(shown))
 }
 
+/// A time in ms as "4.210s".
+fn ms_s3(m: i64) -> Vec<u8> {
+    format!("{}.{:03}s", m / 1000, m % 1000).into_bytes()
+}
+
+/// sheet_range NB NUM DEN FROM TO (#260): the first and last frame of a video of NB frames at
+/// NUM/DEN fps whose times (as the labels round them) are at or after FROM and at or before TO; the
+/// whole video without them. Err(why) when no frame is in it.
+fn sheet_range(
+    nb: i64,
+    numr: i64,
+    den: i64,
+    from: Option<i64>,
+    to: Option<i64>,
+) -> Result<(i64, i64), Vec<u8>> {
+    let ms_of = |k: i64| (k * 1000 * den + numr / 2) / numr;
+    let mut kf = 0;
+    if let Some(f) = from {
+        kf = (f * numr / (1000 * den)).min(nb);
+        while kf > 0 && ms_of(kf - 1) >= f {
+            kf -= 1;
+        }
+        while kf < nb && ms_of(kf) < f {
+            kf += 1;
+        }
+        if kf >= nb {
+            return Err(cat!(
+                "--from ",
+                ms_s3(f),
+                " is past the video's last frame (",
+                ms_s3(ms_of(nb - 1)),
+                ")"
+            ));
+        }
+    }
+    let mut kt = nb - 1;
+    if let Some(t) = to {
+        kt = (t * numr / (1000 * den)).min(nb - 1);
+        while kt >= 0 && ms_of(kt) > t {
+            kt -= 1;
+        }
+        while kt + 1 < nb && ms_of(kt + 1) <= t {
+            kt += 1;
+        }
+    }
+    if kt < kf {
+        return Err(cat!(
+            "no frame from ",
+            ms_s3(from.unwrap_or(0)),
+            " to ",
+            ms_s3(to.unwrap_or(0)),
+            " (one each ",
+            ms_s3(1000 * den / numr),
+            ")"
+        ));
+    }
+    Ok((kf, kt))
+}
+
+/// CHANGED_LEVEL: how far a pixel of the region must move from the frame before (of 255, in Y, U or
+/// V) for the frame to count as changed (#260): H.264's own noise in a still picture stays within 5
+/// (finding 603).
+const CHANGED_LEVEL: i64 = 6;
+
+/// The filter --changed reads (#260): the frames KF to KT numbered by their pts, the region GEO, each
+/// frame's difference from the one before in all three planes side by side, and the frames where one
+/// pixel of it is past CHANGED_LEVEL printed on stdout ("frame:I pts:K ..." lines).
+fn changed_filter(kf: i64, kt: i64, geo: Option<(i64, i64, i64, i64)>) -> String {
+    let crop = geo.map_or(String::new(), |(x, y, w, h)| {
+        format!(",crop={w}:{h}:{x}:{y}:exact=1")
+    });
+    format!(
+        "setpts=N,trim=start_frame={kf}:end_frame={},format=yuv444p{crop},tblend=all_mode=difference,\
+         extractplanes=y+u+v[a][b][c];[a][b][c]hstack=3,signalstats,\
+         metadata=mode=select:key=lavfi.signalstats.YMAX:value={CHANGED_LEVEL}:function=greater,\
+         metadata=mode=print:key=lavfi.signalstats.YMAX:file=-",
+        kt + 1
+    )
+}
+
+/// changed_frames OUT KF KT: the frames changed_filter's output names, in (KF, KT], in order, once.
+fn changed_frames(o: &[u8], kf: i64, kt: i64) -> Vec<i64> {
+    let re = shell::Re::new("^frame:[0-9]{1,9} +pts:([0-9]{1,9}) ");
+    let mut v: Vec<i64> = Vec::new();
+    for l in o.split(|&c| c == b'\n') {
+        let Some(c) = re.as_ref().and_then(|r| r.captures(l, false)) else {
+            continue;
+        };
+        let Some(k) = c
+            .get(1)
+            .copied()
+            .flatten()
+            .and_then(|(a, b)| shell::dec(&l[a..b]))
+        else {
+            continue;
+        };
+        if k > kf && k <= kt && v.last().is_none_or(|&p| k > p) {
+            v.push(k);
+        }
+    }
+    v
+}
+
+/// sheet_changed V KF KT GEO (#260): the frames after KF, to KT, where GEO (the whole frame without it)
+/// differs from the frame before; None when ffmpeg could not tell.
+fn sheet_changed(
+    ctx: &mut Ctx,
+    v: &[u8],
+    kf: i64,
+    kt: i64,
+    geo: Option<(i64, i64, i64, i64)>,
+) -> Res<Option<Vec<i64>>> {
+    let (rc, o) = rec_ff(
+        ctx,
+        Ff::Out,
+        &w(&[
+            b"/usr/bin/ffmpeg".as_slice(),
+            b"-nostdin",
+            b"-hide_banner",
+            b"-nostats",
+            b"-v",
+            b"error",
+            b"-i",
+            v,
+            b"-map",
+            b"0:v:0",
+            b"-vf",
+            changed_filter(kf, kt, geo).as_bytes(),
+            b"-f",
+            b"null",
+            b"-",
+        ]),
+    )?;
+    if rc != 0 {
+        return Ok(None);
+    }
+    Ok(Some(changed_frames(&o, kf, kt)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A contact sheet's range (#260): the frames whose label times are in it, at 30 fps and at an
+    /// fps that is no whole number of ms a frame.
+    #[test]
+    fn sheet_ranges() {
+        assert_eq!(sheet_range(90, 30, 1, None, None), Ok((0, 89)));
+        assert_eq!(sheet_range(90, 30, 1, Some(1300), Some(1500)), Ok((39, 45)));
+        // (frame 1 is at 33 ms as the labels say it: 33 takes it, 34 does not)
+        assert_eq!(sheet_range(90, 30, 1, Some(33), Some(33)), Ok((1, 1)));
+        assert_eq!(sheet_range(90, 30, 1, Some(34), None), Ok((2, 89)));
+        assert_eq!(sheet_range(90, 30, 1, None, Some(99_000)), Ok((0, 89)));
+        assert_eq!(sheet_range(90, 30, 1, Some(2967), None), Ok((89, 89)));
+        assert!(sheet_range(90, 30, 1, Some(2968), None).is_err());
+        assert!(sheet_range(90, 30, 1, Some(1010), Some(1020)).is_err());
+        assert_eq!(
+            sheet_range(1000, 30000, 1001, Some(1001), Some(1035)),
+            Ok((30, 31))
+        );
+    }
+
+    /// --changed's frames (#260): the pts of each line ffmpeg printed, after the first frame and up
+    /// to the last, once each; anything else ignored.
+    #[test]
+    fn changed_frames_read() {
+        let o = b"frame:0    pts:40      pts_time:0.0333\nlavfi.signalstats.YMAX=235\n\
+                  frame:1    pts:43      pts_time:0.0358\nlavfi.signalstats.YMAX=235\n\
+                  frame:2    pts:43      pts_time:0.0358\nframe:x pts:7 \nframe:3    pts:99      pts_time:1\n";
+        assert_eq!(changed_frames(o, 39, 60), vec![40, 43]);
+        assert_eq!(changed_frames(o, 40, 99), vec![43, 99]);
+        assert!(changed_frames(b"", 0, 10).is_empty());
+        let f = changed_filter(39, 45, Some((30, 30, 100, 60)));
+        assert!(f.starts_with("setpts=N,trim=start_frame=39:end_frame=46,format=yuv444p,crop=100:60:30:30:exact=1,tblend="));
+        assert!(f.contains(":value=6:function=greater,"));
+        assert!(!changed_filter(0, 9, None).contains("crop"));
+    }
+
+    #[test]
+    fn sheet_geos() {
+        use super::super::record::sheet_geo;
+        assert_eq!(sheet_geo(b"30,30 100x60"), Some((30, 30, 100, 60)));
+        assert_eq!(sheet_geo(b"0,0 1x1"), Some((0, 0, 1, 1)));
+        for bad in [
+            &b"30,30 0x60"[..],
+            b"30 30 100x60",
+            b"-1,0 10x10",
+            b"1,1 10x10 ",
+            b"",
+        ] {
+            assert_eq!(sheet_geo(bad), None);
+        }
+    }
 
     #[test]
     fn bounds() {

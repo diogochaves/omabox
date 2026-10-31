@@ -11877,6 +11877,30 @@ from them.
     allow, and one number is enough to ask for. x264 writes the CRF into the stream's settings
     (`crf=8.0`), which the test reads. Tests: t_unit_record (the refusals), t_record_hold (the
     default 18, --crf 8 --for, --crf 30 --cut-idle at 30, no record.crf left), record_stop.rs bounds.
+603. **A contact sheet of a stretch, every frame, a region, the frames where it changes** (2026-10-31,
+    #260). `record sheet` spread --frames or --every over the whole video, so checking a 100 ms glitch
+    a second into a take meant ffmpeg by hand: signalstats on a crop to find the frame, then a select
+    of the frames around it. Now `--from T --to T` keep the sheet to a stretch (the frames whose label
+    times are in it; --frames and --every spread over it), `--every-frame` takes each frame of it (100
+    at most), `-g "X,Y WxH"` crops each tile to a region in the video's pixels (`crop=...:exact=1`, so
+    an odd X is not rounded to the chroma grid; a region narrower than a tile is enlarged with
+    `flags=neighbor`, up to 8 times, its pixels seen as they are), and `--changed` takes the stretch's
+    first frame, then each frame where the region differs from the one before. With any of them a
+    tile's label says its time to the ms and its frame number ("12: 9.433s f283"), and marks outside
+    the stretch are left out. They go with `stop --sheet` and `-- ACTION --sheet` too, and through a
+    jail's relay. --changed is one ffmpeg pass in the box: `setpts=N` (each frame's pts its number),
+    `trim` to the stretch, `format=yuv444p`, the crop, `tblend=all_mode=difference`, the three planes
+    side by side (`extractplanes` and `hstack`), `signalstats`, and `metadata` selecting YMAX > 6 then
+    printing the selected frames' pts on stdout: only the frames that changed come back. The level:
+    in a 1080p take of a terminal (CRF 18), a still screen's frames differ from the one before by 0,
+    or by H.264's noise, at most 4 in Y and 5 in U or V (the take's first frames, beside a change
+    elsewhere); a typed character makes 190-220. A pixel 6 of 255 off is a change, so a slow fade of under 6 levels a frame
+    is not one. More than 99 changed frames is refused (a shorter stretch, a smaller region), as
+    --every past 100 is. Tests: t_unit_record (the refusals), t_record_sheet_frames (a video made with
+    ffmpeg: a white box for frames 40-42 and a red one every 5 frames; --changed -g finds 0, 40, 43,
+    the whole frame 25; a stretch with nothing; --every-frame from 1.3 s to 1.5 s, frames 39-45, the
+    region enlarged and its pixels read; --every and --frames in a stretch; the refusals past 100, past
+    the end, outside the video), record_stop.rs sheet_ranges, changed_frames_read, sheet_geos.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

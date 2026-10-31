@@ -1266,6 +1266,11 @@ most people will. Then:
   (the highest scale, gaps black), the monitors in step to a frame. Needs wf-recorder and ffmpeg (they run in the box; a stuck ffmpeg step is killed at its time limit and run once more, then `stop` fails keeping the raw files). You cannot watch it: `record
   stop --sheet` (or `record sheet demo.mp4 [--frames N | --every 2s] [--fit N]`) prints a contact
   sheet, demo.sheet.png, frames labelled with their times: Read it, fix the script, record again.
+  A short motion (a 100 ms glitch, a text decode), frame by frame: `record sheet demo.mp4 --from
+  1.2s --to 1.6s --every-frame -g "X,Y WxH"` (each frame of that stretch, cropped to the region in
+  the video's pixels, a small one enlarged), or `--changed -g "X,Y WxH"` for the frames where that
+  region changes (the stretch's first, then each changed one; tiles say "12: 9.433s f283"). Never
+  ffmpeg's `select`/`signalstats` by hand for this.
   `omabox record mark "scene 2"` just before each scene notes it in the video's own clock (ms from
   the first frame, exact to a few ms); `record hold 2s` holds the picture for the viewer, 2 s of the
   video whatever the script's own time (`record mark "scene 2" --hold 2s`: both; `record -o

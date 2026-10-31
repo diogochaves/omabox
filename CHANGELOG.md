@@ -103,6 +103,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   or encoded again: `record start --crf 8`, or with `-- ACTION` and `--for`. It holds with
   `--cut-idle` and the overlays; 0 is lossless (a profile browsers do not play, said at stop)
   ([#278](https://github.com/diogochaves/omabox/issues/278)).
+- **A contact sheet of a stretch of a video, frame by frame**: `record sheet` (and `stop --sheet`)
+  take `--from T --to T`, `--every-frame`, `-g "X,Y WxH"` (that region of each frame, small ones
+  enlarged pixel for pixel) and `--changed` (the frames where the region changes), each tile labelled
+  with its time to the ms and its frame number
+  ([#260](https://github.com/diogochaves/omabox/issues/260)).
 - **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
   does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
   the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications

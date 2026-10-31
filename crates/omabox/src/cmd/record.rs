@@ -357,6 +357,7 @@ struct Opts {
     frames: Vec<u8>,
     every: Option<i64>,
     fit: Vec<u8>,
+    more: SheetMore,
     glide: Option<i64>,
     show: bool,
     caps: bool,
@@ -533,6 +534,44 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<Opts> {
                 })?);
                 o.sheet = true;
                 i += 1;
+            }
+            // A range of the video, a region of it, every frame, the frames where it changes (#260).
+            b"--from" | b"--to" => {
+                let t = val(ctx)?;
+                let ms = ms_duration(&t).filter(|&m| m <= 360_000_000).ok_or_else(|| {
+                    ctx.die(cat!(
+                        "record: ",
+                        a,
+                        " takes a time in the video, like 1.5s or 900ms (a bare number is seconds), got ",
+                        t
+                    ))
+                })?;
+                if a == b"--from" {
+                    o.more.from = Some(ms);
+                } else {
+                    o.more.to = Some(ms);
+                }
+                o.sheet = true;
+                i += 1;
+            }
+            b"-g" => {
+                let g = val(ctx)?;
+                o.more.geo = Some(sheet_geo(&g).ok_or_else(|| {
+                    ctx.die(cat!(
+                        "record: -g takes a region of the video, in its pixels, like \"100,200 640x80\", got ",
+                        g
+                    ))
+                })?);
+                o.sheet = true;
+                i += 1;
+            }
+            b"--every-frame" => {
+                o.more.every_frame = true;
+                o.sheet = true;
+            }
+            b"--changed" => {
+                o.more.changed = true;
+                o.sheet = true;
             }
             b"--fit" => {
                 let f = val(ctx)?;
@@ -745,6 +784,19 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     if !o.frames.is_empty() && o.every.is_some() {
         return Err(ctx.die("record: --frames or --every, not both"));
+    }
+    if o.more.changed && (!o.frames.is_empty() || o.every.is_some() || o.more.every_frame) {
+        return Err(ctx.die(
+            "record: --changed picks its own frames: not with --frames, --every or --every-frame",
+        ));
+    }
+    if o.more.every_frame && (!o.frames.is_empty() || o.every.is_some()) {
+        return Err(ctx.die("record: --every-frame, --frames or --every, one of them"));
+    }
+    if let (Some(f), Some(t)) = (o.more.from, o.more.to) {
+        if f > t {
+            return Err(ctx.die("record: --from is after --to"));
+        }
     }
     match s {
         b"mark" => {
@@ -1012,6 +1064,7 @@ pub struct StopOpts {
     pub frames: Vec<u8>,
     pub every: Option<i64>,
     pub fit: Vec<u8>,
+    pub more: SheetMore,
     pub show: bool,
     pub caps: bool,
     pub cut: Option<i64>,
@@ -1027,6 +1080,7 @@ fn o_stop(o: &Opts) -> StopOpts {
         frames: o.frames.clone(),
         every: o.every,
         fit: o.fit.clone(),
+        more: o.more.clone(),
         show: o.show,
         caps: o.caps,
         cut: o.cut,
@@ -1048,6 +1102,36 @@ fn o_stop_plain(o: &Opts) -> StopOpts {
     }
 }
 
+/// A contact sheet's frames beyond --frames and --every (#260): a range of the video (ms), a region
+/// of it (X Y W H, the video's pixels), every frame, or the frames where the region changes.
+#[derive(Clone, Default)]
+pub struct SheetMore {
+    pub from: Option<i64>,
+    pub to: Option<i64>,
+    pub geo: Option<(i64, i64, i64, i64)>,
+    pub every_frame: bool,
+    pub changed: bool,
+}
+
+impl SheetMore {
+    /// Any of them: the labels then say each frame's time to the ms and its number.
+    pub fn any(&self) -> bool {
+        self.from.is_some()
+            || self.to.is_some()
+            || self.geo.is_some()
+            || self.every_frame
+            || self.changed
+    }
+}
+
+/// -g "X,Y WxH": a region of the video, in its pixels.
+pub(crate) fn sheet_geo(g: &[u8]) -> Option<(i64, i64, i64, i64)> {
+    let re = shell::Re::new("^([0-9]{1,5}),([0-9]{1,5}) ([1-9][0-9]{0,4})x([1-9][0-9]{0,4})$")?;
+    let c = re.captures(g, false)?;
+    let n = |i: usize| c.get(i).copied().flatten().map(|(a, b)| num(&g[a..b]));
+    Some((n(1)?, n(2)?, n(3)?, n(4)?))
+}
+
 /// What record_sheet_file takes.
 pub struct SheetOpts {
     pub video: Vec<u8>,
@@ -1055,6 +1139,7 @@ pub struct SheetOpts {
     pub frames: Vec<u8>,
     pub every: Option<i64>,
     pub fit: Vec<u8>,
+    pub more: SheetMore,
     pub fromfd: Vec<u8>,
     pub mfromfd: Vec<u8>,
     pub tofd: Vec<u8>,
@@ -1068,6 +1153,7 @@ fn o_sheet(o: &Opts) -> SheetOpts {
         frames: o.frames.clone(),
         every: o.every,
         fit: o.fit.clone(),
+        more: o.more.clone(),
         fromfd: o.fromfd.clone(),
         mfromfd: o.mfromfd.clone(),
         tofd: o.tofd.clone(),

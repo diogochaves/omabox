@@ -721,6 +721,13 @@ t_unit_record() {
   check_match "...--frames and --every" "--frames or --every, not both" "$(ob record stop --frames 3 --every 1s 2>&1)"
   check_match "...--frames 0" "--frames is 1 to 100, got 0" "$(ob record stop --frames 0 2>&1)"
   check_match "...--fit 50" "--fit is 0 \(off\) or the sheet's longest side in pixels \(100-99999\), got 50" "$(ob record stop --fit 50 2>&1)"
+  # A range, a region, every frame, the frames where it changes (#260): refused before any box.
+  check_match "record sheet --changed --every" "--changed picks its own frames: not with --frames, --every or --every-frame" "$(ob record sheet x.mp4 --changed --every 1s 2>&1)"
+  check_match "...--every-frame --frames" "--every-frame, --frames or --every, one of them" "$(ob record sheet x.mp4 --every-frame --frames 3 2>&1)"
+  check_match "...--from after --to" "record: --from is after --to" "$(ob record sheet x.mp4 --from 2s --to 1s 2>&1)"
+  check_match "...--from x" "--from takes a time in the video, like 1.5s or 900ms .*got x" "$(ob record sheet x.mp4 --from x 2>&1)"
+  check_match "...-g of no size" "-g takes a region of the video, in its pixels, like \"100,200 640x80\", got 1,1 0x5" "$(ob record sheet x.mp4 -g "1,1 0x5" 2>&1)"
+  check_match "...start --changed" "record start: --sheet, --frames, --every and --fit go with stop, sheet" "$(ob record start --changed 2>&1)"
   check_match "record sheet without a video" "record sheet: the video, like" "$(ob record sheet 2>&1)"
   check_match "...of no file" "record sheet: no video $TMP/none.mp4" "$(ob record sheet "$TMP/none.mp4" 2>&1)"
   check_match "...two videos" "record sheet: unexpected b.mp4" "$(ob record sheet a.mp4 b.mp4 2>&1)"
@@ -14659,6 +14666,41 @@ ri_ms() { awk -F '\t' -v t="$2" '$3 == t { print $1; exit }' "$1"; }
 # Time in a recording (#259, #280): `record --for` is that long a video, no action; `record hold` in a
 # take puts DURATION into the video between two marks, and, the recorder frozen (no frames for 1.5 s,
 # a box slow to give them), waits for the frames past its end, so a stop right after it keeps them.
+# record sheet's frames (#260, finding 603): a range, every frame, a region, the frames where it
+# changes. A 4 s video made here: a white box at 40,40 for frames 40-42 (a 100 ms glitch), a red one
+# elsewhere every 5 frames.
+t_record_sheet_frames() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "record sheet --changed" "no render node here but NVIDIA's"; return; }
+  if ! command -v ffmpeg >/dev/null || ! command -v magick >/dev/null; then skip "record sheet --changed" "no ffmpeg or magick here"; return; fi
+  local B=$P-rsf v=$TMP/$P-rsf.mp4 o=$TMP/$P-rsf out rc
+  ffmpeg -nostdin -v error -y -f lavfi -i color=c=black:s=320x240:r=30:d=4 -vf "drawbox=x=40:y=40:w=60:h=40:color=white:t=fill:enable='between(n,40,42)',drawbox=x=200:y=150:w=50:h=50:color=red:t=fill:enable='lt(mod(n,10),5)'" \
+    -c:v libx264 -crf 18 -pix_fmt yuv420p "$v" || { no "record sheet --changed: a video" "ffmpeg failed"; return; }
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated || { no "up for record sheet" "$UP_OUT"; return; }
+  rsf() { local f=$1; shift; rc=0; out=$(ob record -b "$B" sheet "$v" -o "$o-$f.png" --fit 0 "$@" 2>&1) || rc=$?; }
+  rsf c1 --changed -g "30,30 100x60"
+  check_match "record sheet --changed -g: the first frame, then the glitch's start and end" \
+    "contact sheet of 3 frames \(0\.000s, then each frame where 30,30 100x60 changed, to 3\.967s\), each labelled with its time and frame number" "$out"
+  rsf c2 --changed
+  check_match "...the whole frame: the red box's 23 changes too (one of them at 40), and 43" "contact sheet of 25 frames" "$out"
+  rsf c3 --changed --from 2s -g "30,30 100x60"
+  check_match "...nothing changed there after 2 s: one frame, said" "of 1 frame: nothing changed from 2\.000s to 3\.967s" "$out"
+  rsf ef --from 1.3s --to 1.5s --every-frame -g "30,30 100x60"
+  check_match "record sheet --from 1.3s --to 1.5s --every-frame -g: frames 39 to 45" "of 7 frames \(1\.300s to 1\.500s\)" "$out"
+  check_match "...the region 3.2 times (320x192 tiles), black in frame 39, white in 40 to 42, black in 43" "^1630 0[0-3]0[0-3]0[0-3]( F[A-F]F[A-F]F[A-F]){3} 0[0-3]0[0-3]0[0-3]$" \
+    "$(magick "$o-ef.png" -alpha off -format '%w %[hex:p{163,99}] %[hex:p{489,99}] %[hex:p{815,99}] %[hex:p{1141,99}] %[hex:p{1467,99}]' info: 2>&1)"
+  rsf ev --from 1s --to 2s --every 100ms
+  check_match "...--every 100ms from 1 s to 2 s: 11 frames" "of 11 frames \(1\.000s to 2\.000s\)" "$out"
+  rsf fr --from 1s --to 2s --frames 3
+  check_match "...--frames 3 in it" "of 3 frames \(1\.000s to 2\.000s\)" "$out"
+  rsf x1 --every-frame
+  check_match "...--every-frame over 120 frames: refused" "--every-frame from 0\.000s to 3\.967s is 120 frames: more than 100" "$rc $out"
+  rsf x2 --from 9s
+  check_match "...--from past the end" "^1 .*--from 9\.000s is past the video's last frame \(3\.967s\)" "$rc $out"
+  rsf x3 --every-frame -g "300,0 100x100"
+  check_match "...-g outside the video" "-g 300,0 100x100 is not inside the video \(320x240\)" "$out"
+  ob down "$B" >/dev/null 2>&1 || true
+}
 t_record_hold() {
   local n; n=$(gpu_node other)
   [ -n "$n" ] || { skip "record --for and record hold" "no render node here but NVIDIA's"; return; }
@@ -19867,7 +19909,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
