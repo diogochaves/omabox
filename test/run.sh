@@ -3730,13 +3730,14 @@ t_unit_signal_cleanup() {
   mkdir -p "$r/home"
   # (RP_LINGER, rp-sig's: half a second for what a case left running, then its group killed)
   cx_env=(-u HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY=rp-none TMPDIR="$r/tmpd" HOME="$r/home" RP_LINGER=0.5)
-  # click --mod: the keyboard tool holds ctrl (the pointer tool slow, 1 s, `held` once there).
+  # click --mod: the keyboard tool holds ctrl (the pointer tool slow, 1 s, `held` once there); at 100,100,
+  # clear of the stand-in bar (a click under it says the layer: #361).
   sd_held() { echo 1 > "$sd_fk/ptr.sleep"; }; sd_pre=(sd_held)
   for sg in group-INT group-QUIT TERM; do
     cx_wrap=("$r/rp-sig" "$sg" "$fk/held")
     # (a QUIT omabox ignores, as bash did: the click goes on to its end)
     if [ "$sg" = group-QUIT ]; then cx_want=(rc=0 out=); else cx_want=("rc=${code[$sg]}" out= err=); fi
-    cx_case "click --mod and $sg while the keys are held: the keyboard tool lets go" click -b fk --mod ctrl 10 10
+    cx_case "click --mod and $sg while the keys are held: the keyboard tool lets go" click -b fk --mod ctrl 100 100
     check "...it did (its stdin closed, not killed)" grep -q ' -m ctrl -p 180000 <>$' "$fk/input.args"
     check_fails "...no signal reached it" grep -q '^kb signalled$' "$fk/input.args"
   done
@@ -3768,7 +3769,7 @@ t_unit_signal_cleanup() {
   for sg in INT QUIT; do
     cx_wrap=(env RP_IGN="INT QUIT" "$r/rp-sig" "group-$sg" "$fk/held")
     cx_want=(rc=0 out= err=)
-    cx_case "click --mod and group-$sg, which came ignored: nothing ends" click -b fk --mod ctrl 10 10
+    cx_case "click --mod and group-$sg, which came ignored: nothing ends" click -b fk --mod ctrl 100 100
   done
   cx_wrap=("$r/rp-sig" group-QUIT "$fk/held")
   cx_want=(rc=0 "out~^$r/out/b/frame-002\\.png ")
@@ -10173,9 +10174,11 @@ QML
   if ob wait -b "$B" layer t274-button >/dev/null 2>&1; then
     l=$(ob hyprctl -b "$B" -j layers | jq -r '[.[].levels[][] | select(.namespace == "t274-button")][0] | "\(.x + 100) \(.y + 40)"')
     # shellcheck disable=SC2086 # X Y
-    out=$(ob click -b "$B" --wait $l 2>&1); rc=$?
+    out=$(ob click -b "$B" --wait $l 2>"$TMP/wf.err"); rc=$?
     check_eq "click --wait that opens a menu layer: settled" 0 "$rc"
     check_match "...said: the layer opened" '^satisfied: settled after .*; layer t274-menu opened$' "$out"
+    check_match "...the button layer said over the window before the click (#361)" \
+      "a layer surface \"t274-button\" \(top 200x80 at [0-9]+,[0-9]+\) is over the screen's ${l/ /,}, on window 0x[0-9a-f]+ foot \"F\"" "$(cat "$TMP/wf.err")"
     # shellcheck disable=SC2086 # X Y
     out=$(ob click -b "$B" --wait --timeout 1s $l 2>/dev/null); rc=$?
     check_eq "click --wait that changes nothing: 124" 124 "$rc"
@@ -10201,6 +10204,9 @@ t_click_layer() {
   ob wait -b "$B" window 'title:^L$' >/dev/null 2>&1
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise 20 20 2>&1); rc=$?
   check_eq "no toast: --no-raise clicks, nothing said" "0 " "$rc $out"
+  at=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | "\(.at[0]) \(.at[1])"')
+  out=$(ob click -b "$B" $((${at% *} + 20)) $((${at#* } + 20)) 2>&1); rc=$?
+  check_eq "...a click at the screen's X Y on it: nothing said either (#361)" "0 " "$rc $out"
   ob run -b "$B" -- notify-send -t 120000 T263 "a toast over the window"
   if ! ob wait -b "$B" layer omarchy-notifications >/dev/null 2>&1; then no "the toast shows" "no omarchy-notifications layer"; ob down "$B" >/dev/null; return; fi
   # 4.5 keeps the layer mapped with no toast: its toasts on screen are in live.json.
@@ -10220,6 +10226,10 @@ t_click_layer() {
   check_eq "--no-raise far from the toast: clicked, exit 0" 0 "$rc"
   check_match "...said: the input may go to the layer" \
     "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at $fx,$fy may go to it if one of its items \(a toast, a dock icon\) is there; elsewhere it goes to the window \(omabox run -- omarchy-shell notifications dismissAll clears the toasts\)" "$out"
+  out=$(ob click -b "$B" 1700 600 2>&1); rc=$?
+  check_eq "a click at the screen's 1700,600, under the spanning layer: clicked, exit 0 (#361)" 0 "$rc"
+  check_match "...said as --window says it, in the screen's coordinates" \
+    "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at the screen's 1700,600 may go to it if one of its items \(a toast, a dock icon\) is there" "$out"
   if omarchy45; then check "...the toast is still up" jq -e 'length == 1' "$live"
   else check "...the toast is still up" ob wait -b "$B" --timeout 1s layer omarchy-notifications; fi   # omarchy<4.5
   px=$((fx + ${at% *})) py=$((fy + ${at#* }))
@@ -10256,6 +10266,14 @@ QML
     check_eq "--no-raise under a panel layer, the toast up too: refused, exit 1" 1 "$rc"
     check_match "...naming the panel, certain, and the way out" \
       "a layer surface \"t263-panel\" \(top 300x150 at 300,200\) is over [0-9]+,[0-9]+ of window 0x[0-9a-f]+ foot \"L\": .*refused under --no-raise.*omabox wait layer t263-panel --gone" "$out"
+    out=$(ob click -b "$B" 400 250 2>&1); rc=$?
+    check_eq "a click at the screen's 400,250, under the panel: clicked, exit 0 (#361)" 0 "$rc"
+    check_match "...the panel named, certain, before the click" \
+      "a layer surface \"t263-panel\" \(top 300x150 at 300,200\) is over the screen's 400,250, on window 0x[0-9a-f]+ foot \"L\": where it takes input .*omabox wait layer t263-panel --gone" "$out"
+    out=$(ob scroll -b "$B" 400 250 15 2>&1)
+    check_match "...a scroll there too" "a layer surface \"t263-panel\" .* is over the screen's 400,250" "$out"
+    out=$(ob drag -b "$B" 400 250 410 260 2>&1)
+    check_match "...a drag from there too" "a layer surface \"t263-panel\" .* is over the screen's 400,250" "$out"
     check_match "windows: the panel is over the window" "layer \"t263-panel\" \(top 300x150 at 300,200\) is over $(jq -r .address <<<"$w"): where it takes input" "$(ob windows -b "$B")"
   else no "the panel layer maps" "no t263-panel layer"; fi
   out=$(ob click -b "$B" --window 'title:^L$' "$x" "$y" 2>&1); rc=$?
@@ -16783,6 +16801,23 @@ t_unit_wait_facts() {
     "$(probe desk_target click "$(jq -c '.clients[0].fullscreen = 1' <<<"$sf")" "100 10" | jq -r .text)"
   check_eq "...fullscreen on a workspace not shown: the bar is" 'the click at 100,10 was on layer omarchy-bar' \
     "$(probe desk_target click "$(jq -c '.clients[0].workspace = {id: 2, name: "2"}' <<<"$sf")" "100 10" | jq -r .text)"
+  # A click at screen X Y (#361, finding 562) says a layer over the window there before it is sent,
+  # as --window does: certain for one smaller than its output, a may for one spanning it; nothing
+  # with no layer there or no window under it (a click meant for the bar, the desktop).
+  local toast='.layers["HEADLESS-2"].levels["3"] += [{address: "0x8", namespace: "omarchy-notifications", x: 600, y: 0, w: 300, h: 100}]'
+  check_eq "screen click under a toast-sized layer over a window: said, certain (#361)" \
+    'a layer surface "omarchy-notifications" (overlay 300x100 at 600,0) is over the screen'"'"'s 700,50, on window 0xa foot "K": where it takes input (a notification, a panel), input there goes to it, not to the window (omabox wait layer omarchy-notifications --gone waits it out)' \
+    "$(probe screen_layer "$(wf_snap "$toast")" "700 50")"
+  check_eq "...a full-screen one: a may" \
+    'a layer spanning the screen, "omarchy-notifications" (overlay 1920x1080 at 0,0), is up over window 0xa foot "K": input at the screen'"'"'s 100,450 may go to it if one of its items (a toast, a dock icon) is there; elsewhere it goes to the window (omabox run -- omarchy-shell notifications dismissAll clears the toasts)' \
+    "$(probe screen_layer "$sn" "100 450")"
+  check_eq "...the floating window's own point, under the toast-sized one: that window named" \
+    'a layer surface "omarchy-notifications" (overlay 300x100 at 600,0) is over the screen'"'"'s 850,50, on window 0xb zenity "Save as": where it takes input (a notification, a panel), input there goes to it, not to the window (omabox wait layer omarchy-notifications --gone waits it out)' \
+    "$(probe screen_layer "$(jq -c "$toast | .clients[1].at = [800, 0]" <<<"$s")" "850 50")"
+  check_eq "...beside the layer: nothing" "" "$(probe screen_layer "$(wf_snap "$toast")" "100 450")"
+  check_eq "...the bar with no window under it: nothing" "" "$(probe screen_layer "$(wf_snap '.clients[0].size = [960, 1000]')" "30 1060")"
+  check_eq "...the bar's strip over a fullscreen window: nothing (#409)" "" "$(probe screen_layer "$sf" "100 10")"
+  check_eq "...a snapshot missing: nothing" "" "$(probe screen_layer "" "700 50")"
   check_eq "run: no window with the job's pid" "no window from pid 99 yet|none" "$(probe desk_target run "$s" 99 | jq -r '"\(.text)|\(.kind)"')"
   check_eq "...its window" "window|0xb" "$(probe desk_target run "$s" 41 | jq -r '"\(.kind)|\(.window.address)"')"
 

@@ -287,7 +287,8 @@ a layer surface over that point (a notification toast, a panel) is said on stder
 (it goes to the layer where the layer takes input; only its rectangle is known), and --no-raise
 refuses (`wait layer NAMESPACE --gone` waits one out); one spanning the screen (Omarchy's
 notifications and dock, input on their items only) is said as one the input may go to, never
-refused; `windows` lists them under its table.
+refused; `windows` lists them under its table. A click, scroll or drag at the screen's X Y says
+a layer over the window there the same way (never refused).
 `keys --window` focuses it, then types.
 @ keys
 `keys --window` focuses the window (the active one again), then types; while a layer holds the

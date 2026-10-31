@@ -10828,6 +10828,24 @@ from them.
     mapped window in fullscreen 2 on a monitor's active workspace; overlays still count, a maximized
     window (mode 1) keeps the bar over it. Test: t_unit_wait_facts (failed on the old code). Not seen
     in a box: no box test puts a window in fullscreen under the stock bar.
+562. **A click at the screen's X Y said nothing of a layer over the point** (2026-10-31, #361). Since
+    finding 379, `--window` input names a top or overlay layer over its point; `click -b BOX X Y`
+    never looked, so an agent's click near a window's top right went to a notification toast, exit 0,
+    nothing said, and only a later `--window` click said why. Now `click`, `scroll` and `drag` (its
+    start: the press's surface keeps the pointer for the drag) at the screen's X Y (and `--in` a
+    screen shot) read one snapshot (desk_snap) before sending, find the window there as the click
+    report does (finding 561's fullscreen rule included, through WIN_JQ's `layers`), and say the
+    layer over it in `--window`'s words, the point given as "the screen's X,Y": certain for one
+    smaller than its output ("is over the screen's X,Y, on window ...: ... input there goes to it"),
+    a may for one spanning it. Never refused (there is no window to raise or keep). Nothing is said
+    where no window is under the layer: a click on the bar or the desktop is meant for the layer.
+    `--wait`'s 124 already named the layer (findings 396, 398). The limit is #283's: on Omarchy 4.5
+    the notifications column and the dock stay mapped while idle and span the screen, so a screen
+    click under either says the may with no toast up, as `--window` does. Tests: t_unit_wait_facts
+    (`probe screen_layer`, new), t_click_layer (a screen click under the spanning layer and under a
+    panel, a scroll and a drag there too; failed with the call left out), t_wait_facts (the 124's
+    button layer said before its click); t_unit_signal_cleanup's `click --mod` cases moved off the
+    stand-in bar, which now says itself.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

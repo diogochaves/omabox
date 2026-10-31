@@ -58,6 +58,8 @@ pub const NAMES: &[(&str, &str)] = &[
         "desk_target",
         "keys|click|scroll|drag|run SNAPSHOT [KB_LAYERS | X_Y | PID]",
     ),
+    // What a click at the screen's X Y says of a layer over the window there (#361).
+    ("screen_layer", "SNAPSHOT X_Y"),
     (
         "record_overlay",
         "INPUT MARKS FIRST X0 Y0 K W H DUR SHOW CAPS [AREA]",
@@ -343,6 +345,10 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
                 _ => return Err(usage()),
             };
             out(crate::desk::desk_target_with(t, snap, || arg.to_vec()))
+        }
+        (b"screen_layer", [snap, xy]) => {
+            let f = crate::shell::read_fields(xy, 2);
+            line(&crate::win::screen_layer_of(snap, &f[0], &f[1]))
         }
         (b"job_exe", [a0]) => line(&crate::jobs::job_exe(a0)),
         (b"layer_select", [lys, sel]) => line(&crate::layer::layer_select(&ctx, lys, sel)?),

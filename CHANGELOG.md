@@ -7,6 +7,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
+  does: a notification toast or a panel over the point is named on stderr before the input is sent
+  (never refused), so a click that went to a toast no longer passes in silence
+  ([#361](https://github.com/diogochaves/omabox/issues/361)).
 - **`click --find TEXT`** clicks what the accessibility tree names TEXT, with the real pointer at the
   middle of what of it is in view, read fresh on every call: no `tree --find`, then working out the
   middle by hand. An exact name wins over a part of one, and a control over a label of its name;

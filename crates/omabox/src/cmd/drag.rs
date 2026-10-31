@@ -23,7 +23,7 @@ use crate::screen::{Point, extent, shot_point};
 use crate::select::select_box;
 use crate::settle::{Lines, Settle};
 use crate::shell;
-use crate::win::{Raise, win_point};
+use crate::win::{Raise, screen_layer, win_point};
 use std::os::fd::AsRawFd;
 use std::time::Duration;
 
@@ -242,6 +242,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 st.in_window(ctx, &num(px.saturating_sub(x)), &num(py.saturating_sub(y)))?;
             }
             (x, y) = (px, py);
+        } else if k == 0 {
+            // The screen's start: a layer over the window there said (#361); the end needs no
+            // word, the press's surface keeps the pointer for the drag.
+            screen_layer(ctx, &num(x), &num(y));
         }
         pts.extend([x, y]);
     }

@@ -25,7 +25,7 @@ use crate::select::select_box;
 use crate::settle::{Settle, cursor_now, cursor_rect};
 use crate::shell;
 use crate::shellnote::shell_note;
-use crate::win::{Raise, jq_r, win_point};
+use crate::win::{Raise, jq_r, screen_layer, win_point};
 
 /// A button word.
 fn button(w: &[u8]) -> bool {
@@ -86,6 +86,9 @@ fn to_screen(
             st.in_window(ctx, &num(px.saturating_sub(x)), &num(py.saturating_sub(y)))?;
         }
         (x, y) = (px, py);
+    } else {
+        // The screen's X Y: a layer over the window there said as --window says it (#361).
+        screen_layer(ctx, &num(x), &num(y));
     }
     Ok((x, y))
 }

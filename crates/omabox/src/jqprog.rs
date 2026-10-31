@@ -202,6 +202,14 @@ pub const DESK_TARGET_JQ: &str = concat!(
     end"#
 );
 
+/// screen_layer_of: the window at a screen point, from a snapshot, as DESK_TARGET_JQ finds it (the
+/// topmost shown there, nothing over it at the point), with WIN_JQ's `layers`; `(WIN)` stands for
+/// WIN_JQ (#361).
+pub const SCREEN_WIN_JQ: &str = r#"$s.clients as $c | $s.monitors as $m | $s.active as $a | $s.layers as $l
+  | def at($o): $x >= $o.x and $x < $o.x + $o.w and $y >= $o.y and $y < $o.y + $o.h;
+    def r: {x: .at[0], y: .at[1], w: .size[0], h: .size[1]};
+  first((WIN) | .[] | select(.onscreen and at(r) and all(.cover[]; at(r) | not))) // empty"#;
+
 /// The layers of `hyprctl -j layers`, one object each.
 pub const LAYER_LIST_JQ: &str = layer_list_jq!();
 
