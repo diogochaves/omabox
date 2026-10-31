@@ -152,6 +152,26 @@ pub fn kb_layers(ctx: &Ctx) -> Vec<u8> {
         .unwrap_or_default()
 }
 
+const KBT_LUA: &str = "local e = {}
+for _, l in ipairs(hl.get_layers()) do
+  if l.mapped and l.interactivity ~= 0 then e[#e + 1] = tostring(l.address) .. '=' .. l.interactivity end
+end
+error('omabox-kbt:' .. table.concat(e, ', '), 0)";
+
+/// kb_takers: the mapped layers that may take the keyboard, `ADDRESS=INTERACTIVITY` (1 exclusive,
+/// 2 on demand), ", " between; empty too when Hyprland did not answer as asked (#315).
+pub fn kb_takers(ctx: &Ctx) -> Vec<u8> {
+    let args: Vec<Vec<u8>> = ["timeout", HYPR_LIMIT, "hyprctl", "eval", KBT_LUA]
+        .iter()
+        .map(|w| w.as_bytes().to_vec())
+        .collect();
+    let r = on_box(ctx, &args, false, Out::Capture(None), ErrTo::Out);
+    let out = shell::subst(&r.out);
+    out.strip_prefix(b"error: omabox-kbt:".as_slice())
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

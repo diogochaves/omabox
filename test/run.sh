@@ -8673,6 +8673,31 @@ QML
     check_eq "...two of one size with nothing in either: the layer publishes nothing, exit 1 (finding 547)" \
       "1 yes" "$rc $(grep -q 'the layer publishes no accessible items' <<<"$out" && echo yes || echo "no: $out")"
   else no "two layers of one size map" "no t254-a / t254-b layer"; fi
+  # #315: Omarchy 4.5's bar popups are a full-screen overlay beside the full-screen wallpaper (one
+  # pid) and take the keyboard on demand, not exclusively: the panel is the one of them that can
+  # hold it, so its frame is the active one.
+  cat > "$D/home/t315.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+ShellRoot {
+  PanelWindow { anchors { top: true; bottom: true; left: true; right: true }
+    WlrLayershell.namespace: "t315-wall"; WlrLayershell.layer: WlrLayer.Background; exclusionMode: ExclusionMode.Ignore }
+  PanelWindow { anchors { top: true; bottom: true; left: true; right: true }
+    WlrLayershell.namespace: "t315-panel"; WlrLayershell.layer: WlrLayer.Overlay; exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand; color: "transparent"
+    Rectangle { x: 600; y: 300; width: 80; height: 40; Accessible.role: Accessible.Button; Accessible.name: "in the panel" } }
+}
+QML
+  ob run -b "$B" -d -q -- qs -p /home/sbx/t315.qml >/dev/null 2>&1
+  if ob wait -b "$B" layer t315-panel >/dev/null 2>&1 && ob wait -b "$B" layer t315-wall >/dev/null 2>&1; then
+    out=$(ob tree -b "$B" --layer t315-panel 2>&1); rc=$?
+    check_eq "a full-screen panel taking the keyboard on demand, beside a wallpaper of its size (#315): its tree" \
+      "0 button \"in the panel\" @600,300 80x40" "$rc $(grep -o 'button.*' <<<"$out")"
+    out=$(ob tree -b "$B" --layer t315-wall 2>&1); rc=$?
+    check_eq "...and the wallpaper's: it publishes nothing, exit 1" \
+      "1 yes" "$rc $(grep -q 'the layer publishes no accessible items' <<<"$out" && echo yes || echo "no: $out")"
+  else no "a full-screen panel and wallpaper map" "no t315-panel / t315-wall layer"; fi
   # The launcher and the wallpaper: one pid, both 1920x1080; the launcher holds the keyboard.
   ob keys -b "$B" super+space >/dev/null
   if ob wait -b "$B" layer omarchy-menu >/dev/null 2>&1; then

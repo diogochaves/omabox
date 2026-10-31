@@ -29,6 +29,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
   fullscreen covers it and takes the click. Overlays still count
   ([#409](https://github.com/diogochaves/omabox/issues/409)).
+- **`tree --layer` could not read an Omarchy 4.5 bar popup**: the popup is a full-screen layer, the
+  size of the wallpaper (and of 4.5's bar), so it refused with "which one is the layer's cannot be
+  told". The popup is the one of them that takes the keyboard (on demand, not exclusively, which was
+  all `tree` looked for), so its tree is read now, and the wallpaper's and the bar's say they publish
+  nothing ([#315](https://github.com/diogochaves/omabox/issues/315)).
 - **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
   `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
   Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).

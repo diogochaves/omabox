@@ -485,7 +485,8 @@ namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the 
 a plain `click X Y` at their middle lands on that node. Quickshell publishes them from 0.3.2 on, and
 only items that set an Accessible role: "the layer publishes no accessible items", exit 1, when none
 does (Omarchy's own bar). Two layers of one process with one size cannot be told apart (their frames
-have no names) unless one of them holds the keyboard: said so, exit 1.
+have no names) unless one of them holds the keyboard (a launcher, an Omarchy 4.5 bar popup): said
+so, exit 1.
 @ click
 `click --find TEXT` clicks the node of the accessibility tree `tree` reads (--window SEL, none: the
 active window; --layer SEL (or -l SEL) a layer's) named TEXT, with the real pointer at the middle of

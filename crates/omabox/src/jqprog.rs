@@ -290,9 +290,6 @@ pub const LAYER_DESC_JQ: &str =
 pub const LAYER_FIELDS_JQ: &str = r#""\(.pid) \(.w) \(.h) \(.x) \(.y)""#;
 /// layer_read: its pid and size (after LAYER_LIST_JQ).
 pub const LAYER_TIED_JQ: &str = r#" | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))"#;
-/// layer_read: the one of them holding the keyboard.
-pub const LAYER_KB_JQ: &str = r#"($kb | split(", ")) as $k | [.[] | select(.namespace as $n | .address as $a
-      | any($k[]; . == $n or . == $a))] | if length == 1 then .[0].address else "" end"#;
 /// tree: its app's other windows of its size (#302).
 pub const TREE_TWINS_JQ: &str =
     r#"[.[] | select(.pid == $w.pid and .address != $w.address and .size == $w.size)] | length"#;

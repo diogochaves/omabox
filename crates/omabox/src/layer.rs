@@ -5,7 +5,7 @@
 
 use crate::boxes::meta;
 use crate::cat;
-use crate::desk::kb_layers;
+use crate::desk::kb_takers;
 use crate::exec::{ExecOpts, Redir, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, say};
 use crate::jq::{self, Args};
@@ -133,7 +133,7 @@ pub fn box_sys_out(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Option<(i32, Vec<u8>)> {
 
 /// layer_read LAYER LAYERS ERR [omabox-tree ARGS]: LAYER's accessibility tree on stdout, in the
 /// screen's coordinates, the tool's words in ERR; its exit code (3: no pid to find its app by). Two
-/// layers of one pid and size are told apart only when exactly one holds the keyboard (kb_layers).
+/// layers of one pid and size are told apart only when exactly one can hold the keyboard (kb_hint).
 pub fn layer_read(
     ctx: &mut Ctx,
     l: &[u8],
@@ -141,7 +141,7 @@ pub fn layer_read(
     err: &std::fs::File,
     args: &[Vec<u8>],
 ) -> Res<i32> {
-    let argv = match layer_argv(l, lys, args, || kb_layers(ctx)) {
+    let argv = match layer_argv(l, lys, args, || kb_takers(ctx)) {
         Ok(a) => a,
         Err(words) => {
             let mut e = err;
@@ -153,13 +153,13 @@ pub fn layer_read(
 }
 
 /// What layer_read runs in the box for LAYER of LAYERS (omabox-tree with its pid, size, place and,
-/// for one of several alike, whether it holds the keyboard as KBL_OF says: kb_layers), ARGS after;
-/// Err: the words for a layer with no pid.
+/// for one of several alike, whether it is the one that can hold the keyboard as KBT_OF says:
+/// kb_takers, kb_hint), ARGS after; Err: the words for a layer with no pid.
 fn layer_argv(
     l: &[u8],
     lys: &[u8],
     args: &[Vec<u8>],
-    kbl_of: impl FnOnce() -> Vec<u8>,
+    kbt_of: impl FnOnce() -> Vec<u8>,
 ) -> Result<Vec<Vec<u8>>, Vec<u8>> {
     let f = shell::read_fields(&jq_r(crate::jqprog::LAYER_FIELDS_JQ, l), 5);
     let (pid, w, h, x, y) = (&f[0], &f[1], &f[2], &f[3], &f[4]);
@@ -174,18 +174,10 @@ fn layer_argv(
     let mut hint: Vec<Vec<u8>> = Vec::new();
     let more = shell::test_int(&crate::win::jq_length(&tied)).is_some_and(|n| n > 1);
     if more {
-        let kb = kbl_of();
-        let ex = Args::new(&["-r"])
-            .kv("--arg", "kb", &kb)
-            .arg(crate::jqprog::LAYER_KB_JQ)
-            .run(Some(&tied), jq::Err::Inherit)
-            .text();
-        if !ex.is_empty() {
-            let yes: &[u8] = if ex == jq_r(".address", l) {
-                b"yes"
-            } else {
-                b"no"
-            };
+        let addrs = jq_r(".[].address", &tied);
+        let addrs: Vec<&[u8]> = addrs.split(|&c| c == b'\n').collect();
+        if let Some(it) = kb_hint(&jq_r(".address", l), &addrs, &kbt_of()) {
+            let yes: &[u8] = if it { b"yes" } else { b"no" };
             hint = vec![b"--active".to_vec(), yes.to_vec()];
         }
     }
@@ -204,6 +196,37 @@ fn layer_argv(
     argv.extend(hint);
     argv.extend(args.iter().cloned());
     Ok(argv)
+}
+
+/// Whether the layer at ADDR is the one of TIED (the addresses of the layers of its pid and size)
+/// that can hold the keyboard, by TAKERS (kb_takers): the one exclusive, else the one that takes it
+/// at all (on demand: Omarchy 4.5's bar popups, #315), as only a layer that can take the keyboard
+/// has an active frame; None when not one of them is that one.
+fn kb_hint(addr: &[u8], tied: &[&[u8]], takers: &[u8]) -> Option<bool> {
+    let modes: Vec<(&[u8], &[u8])> = takers
+        .split(|&c| c == b',')
+        .filter_map(|t| {
+            let t = t.trim_ascii();
+            let i = t.iter().rposition(|&c| c == b'=')?;
+            Some((&t[..i], &t[i + 1..]))
+        })
+        .collect();
+    let of = |pick: &dyn Fn(&[u8]) -> bool| -> Vec<&[u8]> {
+        tied.iter()
+            .copied()
+            .filter(|a| modes.iter().any(|(m, i)| m == a && pick(i)))
+            .collect()
+    };
+    let ex = of(&|i| i == b"1");
+    let one = match ex.len() {
+        1 => ex[0],
+        0 => match of(&|i| i != b"0").as_slice() {
+            [a] => a,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(one == addr)
 }
 
 /// layer_qs_note LAYER: after "no accessibility tree" for a layer of a Quickshell, which releases
@@ -235,8 +258,46 @@ pub fn layer_qs_note(ctx: &mut Ctx, l: &[u8]) {
 mod tests {
     use super::*;
 
-    // t_unit_tree_layer's layer_read (#254): what it asks the box's tools/tree, the layers holding
-    // the keyboard given.
+    // layer_read's layer of several alike (#315): the one that can take the keyboard, given the
+    // layers that may take it (kb_takers: ADDRESS=1 exclusive, =2 on demand).
+    #[test]
+    fn kb_hint_picks_the_one_that_can_hold_the_keyboard() {
+        let tied: &[&[u8]] = &[b"0xa", b"0xb", b"0xc"];
+        assert_eq!(kb_hint(b"0xc", tied, b""), None, "none takes it: no hint");
+        assert_eq!(
+            kb_hint(b"0xc", tied, b"0xc=2"),
+            Some(true),
+            "the one on demand (an Omarchy 4.5 popup beside its bar and wallpaper, #315): it"
+        );
+        assert_eq!(
+            kb_hint(b"0xa", tied, b"0xc=2"),
+            Some(false),
+            "...the others: not it"
+        );
+        assert_eq!(
+            kb_hint(b"0xb", tied, b"0xb=1, 0xc=2"),
+            Some(true),
+            "one exclusive, one on demand: the exclusive one"
+        );
+        assert_eq!(
+            kb_hint(b"0xb", tied, b"0xb=2, 0xc=2"),
+            None,
+            "two on demand: cannot tell"
+        );
+        assert_eq!(
+            kb_hint(b"0xb", tied, b"0xa=1, 0xb=1"),
+            None,
+            "two exclusive: cannot tell"
+        );
+        assert_eq!(
+            kb_hint(b"0xa", tied, b"0xd=1, 0xc=2"),
+            Some(false),
+            "a layer not of the size holding it is not counted"
+        );
+    }
+
+    // t_unit_tree_layer's layer_read (#254): what it asks the box's tools/tree, the layers that may
+    // take the keyboard given.
     #[test]
     fn layer_argv_as_bash() {
         let j = br#"{"DP-1": {"levels": {"0": [{"address": "0xa", "namespace": "omarchy-background", "pid": 7, "x": 0, "y": 0, "w": 1920, "h": 1080}],
@@ -258,17 +319,25 @@ mod tests {
             "a layer alone at its size: its pid, size and place, no hint"
         );
         assert!(
-            read(b"omarchy-launcher", "omarchy-launcher")
-                .ends_with("--offset 0,0 --active yes --json"),
+            read(b"omarchy-launcher", "0xc=1").ends_with("--offset 0,0 --active yes --json"),
             "two of its size, it with the keyboard: its frame is the active one"
         );
         assert!(
-            read(b"omarchy-background", "omarchy-launcher").ends_with("--active no --json"),
+            read(b"omarchy-background", "0xc=1").ends_with("--active no --json"),
             "...the other: not the active one"
         );
         assert!(
             !read(b"omarchy-background", "").contains("--active"),
-            "...neither with the keyboard: no hint (tree says it cannot tell)"
+            "...neither taking the keyboard: no hint (tree says it cannot tell)"
+        );
+        assert!(
+            read(b"omarchy-launcher", "0xc=2").ends_with("--active yes --json")
+                && read(b"omarchy-background", "0xc=2").ends_with("--active no --json"),
+            "...it taking the keyboard on demand, the other not at all (#315): the same"
+        );
+        assert!(
+            read(b"omarchy-launcher", "0xb=1, 0xc=2").ends_with("--active yes --json"),
+            "...another layer's exclusive keyboard does not hide it (not of its size)"
         );
         assert_eq!(
             layer_argv(br#"{"pid": null}"#, j, &[], Vec::new),

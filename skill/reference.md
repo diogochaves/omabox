@@ -153,7 +153,8 @@ a turn. Five rules keep every omabox call plain:
   `--quickshell` a build), and only items that set an `Accessible.role`: a layer without any says
   "publishes no accessible items" (Omarchy's own bar today), exit 1. Its `frame`s have no names, so
   the layer's is the one of its pid that is its size: two layers of one pid and size are told apart
-  only when one holds the keyboard (the launcher over the wallpaper); else `tree` says so.
+  only when one holds the keyboard (the launcher, or an Omarchy 4.5 bar popup, over the wallpaper);
+  else `tree` says so.
 - `click --window SEL X Y` takes the window's own coordinates (0,0 its corner, as in its `shot
   --window`).
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a

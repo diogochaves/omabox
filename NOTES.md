@@ -10863,6 +10863,23 @@ from them.
     say nothing. The skill's reference says it beside the config-error bar's line. Tests:
     t_hypr_notify (the note, its region's shot has the notification, the screen's left none),
     failed on the old code; hyprctl.rs notify_corner (a scaled, turned second monitor).
+564. **`tree --layer` could not read an Omarchy 4.5 bar popup** (2026-10-31, #315). Every 4.5 popup
+    is a `KeyboardPanel`: `omarchy-keyboard-panel`, a full-screen overlay with the card inside it,
+    of the shell's pid, beside `omarchy-background` (and, on rc2, `omarchy-bar`) of the same size,
+    so the tree tool found three frames of that size and refused (exit 6). Read in a box with the
+    clock's popup open: the panel's frame is the only one `active`, with the card's items under it;
+    the other two are empty. `--active` (finding 384) already tells such frames apart, but only for a
+    layer holding the keyboard exclusively (kb_layers, `interactivity == 1`), and the panel takes it
+    exclusively only for a moment on open, then on demand (2). Now layer_read asks Hyprland for
+    every mapped layer that may take the keyboard (kb_takers: address and interactivity) and, among
+    the layers of the pid and size, takes the one exclusive one, else the one that takes it at all:
+    only a layer that can take the keyboard can have the active frame, so `--active yes|no` holds;
+    two of them (or none) still cannot be told. Not done: a frame with items winning over empty ones
+    (the issue's other idea): `tree --layer omarchy-bar` with a popup open would read the popup's.
+    A popup that lost the keyboard (focus moved to a window while it stays open) still cannot be
+    told. Tests: the unit tests kb_hint_picks_the_one_that_can_hold_the_keyboard and
+    layer_argv_as_bash; t_tree_layer (a full-screen overlay on demand beside a full-screen
+    background of one pid: its tree, and the wallpaper's says it publishes nothing).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
