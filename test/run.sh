@@ -11790,6 +11790,61 @@ t_throwaway_killed() {
 # (An up whose `omabox run` is gone, #222, finding 309: ready.rs up_stops_when_its_run_is_gone,
 # #324 wave 6-suite.)
 
+# The fixture client (#336, tools/fixture): input, focus and scale read from what the client got, its
+# log, not inferred from an app. Two windows on a scale-2 screen, their first frame held back: each
+# draws at the scale it is told (its marker's one-buffer-pixel edge is one pixel in a shot); a click
+# reaches the window under it at its surface coordinates, and moves the keyboard there; a lone key's
+# press reaches the client, not its release only (finding 14, once seen with WAYLAND_DEBUG on foot;
+# Hyprland 0.56.2 delivers it whole even without the keyboard tool's spent event, so here it only holds
+# the line); keys sent in calls of their own each arrive, and a click where the pointer already is
+# (finding 41); its exit status is what it was told.
+t_fixture() {
+  local B=$P-fx fx=$ROOT/tools/fixture/omabox-fixture n x0 y0 x1 y1 rc out
+  [ -x "$fx" ] || { no "the fixture is built" "no $fx"; return; }
+  up_ok "$B" --size 1280x720,scale=2 --no-shell --net isolated --ro-bind "${fx%/*}" || { no "up" "$UP_OUT"; return; }
+  # fx_since N JQ...: jq over its log's lines after the first N, as one array (-s); fx_n: how many now.
+  fx_since() { local k=$1; shift; ob run -b "$B" -- tail -n "+$((k + 1))" /tmp/fx.log 2>/dev/null | jq -sc "$@" 2>&1; }
+  fx_n() { ob run -b "$B" -- wc -l /tmp/fx.log 2>/dev/null | awk '{print $1}'; }
+  # shellcheck disable=SC2329 # (called through until_ok)
+  fx_has() { [ "$(fx_since "$1" "$2")" = true ]; }   # FROM JQ: JQ (over the lines after FROM) says true
+  # (Keys: what each one did, as "SYM STATE" lines; buttons: "WIN BUTTON STATE".)
+  local keys='map(select(.ev == "key") | "\(.sym) \(.state)") | join(",")' buttons='map(select(.ev == "button") | "\(.win) \(.button) \(.state)") | join(",")'
+  ob run -b "$B" -d -q -- "$fx" --windows 2 --first-frame 700 --log /tmp/fx.log
+  check "its two windows open" until_ok 10 fx_has 0 '[.[] | select(.ev == "ready")] | length == 2'
+  check_eq "--first-frame 700: no window drew before" "[true,true]" "$(fx_since 0 'map(select(.ev == "draw")) | group_by(.win) | map(.[0].t >= 700)')"
+  check_eq "the scale each window was told: 2" "[[0,2],[1,2]]" "$(fx_since 0 'map(select(.ev == "scale") | [.win, .scale]) | unique')"
+  check_eq "...and each drew its last frame at it" "[2,2]" "$(fx_since 0 'map(select(.ev == "draw")) | group_by(.win) | map(last.scale)')"
+  read -r x0 y0 <<<"$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "omabox-fixture 0") | "\(.x) \(.y)"')"
+  read -r x1 y1 <<<"$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "omabox-fixture 1") | "\(.x) \(.y)"')"
+  if [ -z "$x0" ] || [ -z "$x1" ]; then no "both windows listed" "$(ob windows -b "$B" 2>&1)"; ob down "$B" >/dev/null 2>&1; return; fi
+  if command -v magick >/dev/null; then
+    ob wait -b "$B" still --quiet 500ms >/dev/null 2>&1   # (the windows' opening animation)
+    ob shot -b "$B" -o "$TMP/fx.png" >/dev/null 2>&1
+    px() { magick "$TMP/fx.png" -format "%[pixel:p{$((2 * x0 + $1)),$((2 * y0 + 30))}]" info: 2>&1; }
+    check_eq "a shot: its marker's red edge is one pixel, white before it, its colour after (drawn at scale 2, not scaled up)" \
+      "srgb(255,255,255) srgb(255,0,0) srgb(48,112,192)" "$(px 46) $(px 47) $(px 48)"
+  else skip "its marker in a shot" "no magick"; fi
+  n=$(fx_n); ob click -b "$B" $((x0 + 40)) $((y0 + 50)) >/dev/null
+  check "a click on window 0: its button pressed and released there" until_ok 5 fx_has "$n" "($buttons) == \"0 272 pressed,0 272 released\""
+  check_eq "...where it was clicked, in its surface coordinates" "40 50" "$(fx_since "$n" 'map(select((.ev == "motion" or .ev == "enter") and .win == 0)) | last | "\(.x + 0) \(.y + 0)"' | tr -d '"')"
+  check_eq "...and the keyboard went to it" 0 "$(fx_since 0 'map(select(.ev == "enter" and .device == "keyboard")) | last.win')"
+  n=$(fx_n); ob keys -b "$B" Escape >/dev/null
+  check "a lone key, in a call of its own: its press arrives, not its release only (finding 14)" until_ok 5 fx_has "$n" "($keys) == \"Escape pressed,Escape released\""
+  n=$(fx_n); ob keys -b "$B" a >/dev/null; ob keys -b "$B" b >/dev/null; ob keys -b "$B" shift+c >/dev/null
+  check "keys in calls of their own each arrive, at window 0 (finding 41)" until_ok 5 fx_has "$n" \
+    "($keys) == \"a pressed,a released,b pressed,b released,Shift_L pressed,C pressed,C released,Shift_L released\" and all(.[] | select(.ev == \"key\"); .win == 0)"
+  check_eq "...shift+c with shift held, as the client saw it" '"shift"' "$(fx_since "$n" 'map(select(.ev == "modifiers" and .mods != "")) | first.mods')"
+  n=$(fx_n); ob click -b "$B" $((x1 + 30)) $((y1 + 30)) >/dev/null
+  check "a click on window 1: there, not on window 0" until_ok 5 fx_has "$n" "($buttons) == \"1 272 pressed,1 272 released\""
+  check_eq "...the keyboard went with it" 1 "$(fx_since "$n" 'map(select(.ev == "enter" and .device == "keyboard")) | last.win')"
+  n=$(fx_n); ob click -b "$B" $((x1 + 30)) $((y1 + 30)) >/dev/null
+  check "a click where the pointer already is arrives (finding 41)" until_ok 5 fx_has "$n" "($buttons) == \"1 272 pressed,1 272 released\""
+  out=$(ob run -b "$B" -- "$fx" --for 200 --exit 7 --log /tmp/fx-exit.log 2>&1); rc=$?
+  check_eq "--for 200 --exit 7: its status" 7 "$rc${out:+ $out}"
+  check_eq "...said last in its log" '{"why":"for","code":7}' "$(ob run -b "$B" -- tail -n 1 /tmp/fx-exit.log | jq -c '{why, code}')"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # The keyboard and pointer tools (finding 64): keys named as binds name them, input checked before any
 # of it is sent, spare keycodes X11 apps can see, and a lost box is a failure.
 t_keys() {
@@ -19952,6 +20007,10 @@ t_unit_inspect() {
         --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i "$ROOT/tools/events/omabox-events" /tmp/ev.log 2>&1) || rc=$?
   check_eq "omabox-events refuses outside a box" 2 "$rc"
   check_match "...and says so" "only runs inside an omabox box" "$out"
+  # The suite's fixture client (#336) too: on the host it would open windows on the real desktop.
+  rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp \
+        --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i "$ROOT/tools/fixture/omabox-fixture" 2>&1) || rc=$?
+  check_eq "omabox-fixture refuses outside a box" "2 omabox-fixture: only runs inside an omabox box" "$rc $out"
 }
 
 # lua, log and events (issues #40, #41, #39) in a box of their own.
@@ -20247,7 +20306,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

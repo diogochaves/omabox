@@ -70,7 +70,7 @@ cargo --version >/dev/null 2>&1 ||
 # Built before anything runs omabox (#324 wave 6-flip, proposal D2).
 step "Tools"
 # (Not `make && echo`: set -e ignores a failure on the left of &&, and install.sh would carry on.)
-for t in pointer keyboard wlfd peek still burst tree relay events polkit; do
+for t in pointer keyboard wlfd peek still burst tree relay events polkit fixture; do
   make -s -C "$ROOT/tools/$t" || die "building tools/$t failed"
   echo "tools/$t"
 done
