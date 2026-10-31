@@ -11551,6 +11551,67 @@ from them.
     t_unit_check (the 2x copy twice the 1x one each way, report.png unchanged, the overview's 28 pt
     and its page names; they fail on the old code); check.rs only_checks_and_approves_the_named and
     t_check_only (report@2x.png of a real check, twice report.png).
+602. **`record --crf N`: the video's quality, for footage that will be edited** (2026-10-31, #278).
+    `record` encoded its MP4 at CRF 18 (preset medium) from wf-recorder's CRF 14 ultrafast raw.mkv:
+    right for an agent reading a take, blotchy around text once a video editor zooms it 1.4x and
+    encodes it again. `--crf N` (0-51) goes with start, -- ACTION and --for, as --fps does: the
+    recording's own setting, kept in the box dir's `record.crf` until stop. The fps pass and a layout's
+    compose encode at N; --cut-idle's first pass at N or 12, the lower, and its cut at N; the raw
+    stream at N when below 14 (otherwise it would bound the take). `stop` says it ("at 30 fps, CRF 8").
+    Measured in a 3840x2160 box at scale 2, a 3.3 s take of a terminal typing: 271 KB at 18, 471 KB at
+    8, 384 KB at 0 (lossless: text compresses well). The lossless take encoded again at 18 has
+    a luma PSNR of 56.2 dB against it and SSIM 0.99970; at 8, 64.5 dB and 0.99991. CRF 0 makes H.264's
+    High 4:4:4 Predictive profile, which browsers (an editor rendering in Chromium) do not decode:
+    `stop` says so beside "CRF 0". No `--preset`: medium at a low CRF is what the size and the time
+    allow, and one number is enough to ask for. x264 writes the CRF into the stream's settings
+    (`crf=8.0`), which the test reads. Tests: t_unit_record (the refusals), t_record_hold (the
+    default 18, --crf 8 --for, --crf 30 --cut-idle at 30, no record.crf left), record_stop.rs bounds.
+603. **A contact sheet of a stretch, every frame, a region, the frames where it changes** (2026-10-31,
+    #260). `record sheet` spread --frames or --every over the whole video, so checking a 100 ms glitch
+    a second into a take meant ffmpeg by hand: signalstats on a crop to find the frame, then a select
+    of the frames around it. Now `--from T --to T` keep the sheet to a stretch (the frames whose label
+    times are in it; --frames and --every spread over it), `--every-frame` takes each frame of it (100
+    at most), `-g "X,Y WxH"` crops each tile to a region in the video's pixels (`crop=...:exact=1`, so
+    an odd X is not rounded to the chroma grid; a region narrower than a tile is enlarged with
+    `flags=neighbor`, up to 8 times, its pixels seen as they are), and `--changed` takes the stretch's
+    first frame, then each frame where the region differs from the one before. With any of them a
+    tile's label says its time to the ms and its frame number ("12: 9.433s f283"), and marks outside
+    the stretch are left out. They go with `stop --sheet` and `-- ACTION --sheet` too, and through a
+    jail's relay. --changed is one ffmpeg pass in the box: `setpts=N` (each frame's pts its number),
+    `trim` to the stretch, `format=yuv444p`, the crop, `tblend=all_mode=difference`, the three planes
+    side by side (`extractplanes` and `hstack`), `signalstats`, and `metadata` selecting YMAX > 6 then
+    printing the selected frames' pts on stdout: only the frames that changed come back. The level:
+    in a 1080p take of a terminal (CRF 18), a still screen's frames differ from the one before by 0,
+    or by H.264's noise, at most 4 in Y and 5 in U or V (the take's first frames, beside a change
+    elsewhere); a typed character makes 190-220. A pixel 6 of 255 off is a change, so a slow fade of under 6 levels a frame
+    is not one. More than 99 changed frames is refused (a shorter stretch, a smaller region), as
+    --every past 100 is. Tests: t_unit_record (the refusals), t_record_sheet_frames (a video made with
+    ffmpeg: a white box for frames 40-42 and a red one every 5 frames; --changed -g finds 0, 40, 43,
+    the whole frame 25; a stretch with nothing; --every-frame from 1.3 s to 1.5 s, frames 39-45, the
+    region enlarged and its pixels read; --every and --frames in a stretch; the refusals past 100, past
+    the end, outside the video), record_stop.rs sheet_ranges, changed_frames_read, sheet_geos.
+604. **`record sheet` with no box up: ffmpeg here, sandboxed** (2026-10-31, #279). A sheet copied the
+    video into a box and ran ffmpeg there, so a video made outside one (an editor's render) needed a
+    box started for it, and agents wrote `select`/`tile` by hand instead. Now, with no box named (-b)
+    and the default box not up, `record sheet` runs the same ffprobe and ffmpeg steps on the host in a
+    bwrap sandbox (host_sandbox): `--unshare-all` (no network, own pid/IPC/user namespaces),
+    `--clearenv` (no WAYLAND_DISPLAY, DISPLAY or runtime dir: nothing to open a window with, and the
+    runtime dir is not there), `/usr` read-only, fresh /proc, /dev and /tmp, `--die-with-parent`,
+    `--new-session`, and one folder bound at /out for the frames. The video goes in as an fd of
+    omabox's own, fd 3 and no other (`-fd 3 -i fd:`, ffmpeg's fd protocol, the only protocol allowed:
+    `-protocol_whitelist fd`; `fd:3` as a URL is refused by ffmpeg 9), rewound before each step; a
+    crafted playlist or concat file can open nothing. A jailed caller's (the broker's `--from-fd`)
+    goes the same way, nothing reopened by name. The folder is `~/.cache/omabox/sheet-XXXXXX` (on
+    disk: /tmp is memory here), the frames in its `frames/`, a jailed caller's marks and sheet beside
+    it out of the sandbox's reach; gone at the end and on a signal (Tmps). The frames are read back
+    as regular files, not links, under a box's bounds (16 MiB each, 256 MiB in all, real PNGs).
+    Cores off (`nocore`). `-b NAME` of a box that is down still says so, as every command does. Same
+    sheets: the host's and the box's made from one video compare equal pixel for pixel (`magick
+    compare -metric AE` 0), the box being only another ffmpeg from the same /usr. Not done: a sheet
+    in a box when one is up but not named stays in that box (a copy of the video into it). Tests:
+    t_record_sheet_frames (no box: --changed -g and --every-frame -g equal to the box's; -b of a down
+    box refused; the cache folder empty after; a jailed caller's fds), record_stop.rs
+    host_sandbox_holds_only_usr_and_the_folder.
 605. **A window shot failed "grim failed: it ended with status 139" while the window changed size**
     (2026-10-31, #387). Hyprland fails a window's frame copy (ext-image-copy-capture's `failed`)
     when its buffer changes size during it, and grim 1.5.0's handler for that prints
@@ -11582,70 +11643,329 @@ from them.
     the machine is loaded); the unit test drives it. Test: hypr.rs
     hypr_lost_an_exiting_hyprland_is_going (exiting: went down, before and past 10 looks; running
     and not exiting: still hung; it fails on the old code).
-
-627. **A polkit agent could not be tested in a box** (2026-10-31, #258). A shell plugin that is a polkit
-    agent (Omarchy's `omarchy.polkit`, a copy of it with its own look) loaded in a box but never
-    registered: Quickshell's `PolkitAgent` takes its subject from `polkit_unix_session_new_for_process`,
-    which asks logind's `sd_pid_get_session`, and a box's processes are in a user unit's cgroup (or the
-    box's own), so "No session for pid N"; and with no system bus there was no authority to register
-    with or to send it a request. Its dialog's states could only be faked, which hid the real order of
-    a request's end (Quickshell drops a finished request, `isActive` false, before it emits
-    `authenticationSucceeded`: a `Connections` on its flow never hears the success, which the fixture
-    below shows). The host's polkitd or system bus in a box is out (S1). A real polkitd on a bus of the
-    box's own is out too: it takes an agent's answer (`AuthenticationAgentResponse2`) only from uid 0,
-    and its helper runs PAM as root (since polkit 121 a socket-activated root service behind
-    `/run/polkit/agent-helper.socket`, no longer setuid); nothing in a box is root or can become it
-    (bwrap's no_new_privs). So `up --polkit` is a stand-in that speaks both sides an agent meets, and
-    nothing else:
-    - a system bus of the box's own: dbus-daemon (`share/polkit/bus.conf`) at
-      `$XDG_RUNTIME_DIR/omabox-polkit/bus`, named by `DBUS_SYSTEM_BUS_ADDRESS` for the session; never
-      `/run/dbus`, which the box safety invariant keeps out and the input tools' in-box check reads;
-    - `tools/polkit/omabox-polkit serve` (C, sd-bus) owns `org.freedesktop.PolicyKit1` there and keeps
-      agents as polkitd 128 does: one per subject (`RegisterAuthenticationAgent[WithOptions]`; a
-      session subject must be the box's, "omabox", else polkitd's own "Passed session and the session
-      the caller is in differs"), a second refused with "An authentication agent already exists for
-      the given subject", unregistered only by its owner at its path, dropped when it leaves the bus
-      (NameOwnerChanged). `AuthenticationAgentResponse[2]` from the box gets polkitd's "Only uid 0 may
-      invoke this method."; `CheckAuthorization` NotSupported: it decides nothing, so pkexec, pkcheck
-      and a mechanism get no yes from it;
-    - the same process listens on the box's own `/run/polkit/agent-helper.socket`, which polkit's agent
-      library (`PolkitAgentSession`) tries before the setuid helper: it reads the user and the cookie as
-      polkit-agent-helper-1 does, says `PAM_PROMPT_ECHO_OFF Password: ` (g_strescape'd, as the helper
-      writes it) and answers the response, after `--delay`, with SUCCESS (the request marked
-      authenticated first, as AgentResponse2 marks it before the helper's SUCCESS) or FAILURE: only the
-      one password `ask --accept` names, for the box user. No PAM;
-    - `omabox-polkit-session.so`, preloaded for the whole session (`LD_PRELOAD`), answers
-      `sd_pid_get_session` with `OMABOX_POLKIT_SESSION` ("omabox"), and `XDG_SESSION_ID` is "omabox"
-      for agents that read that. Only that one function: the rest of sd-login still finds no session.
-    `omabox polkit ask` makes a request as polkitd does (BeginAuthentication with a cookie, the box user
-    as the `unix-user` identity, the action, message, icon and details) on the session's agent, waits
-    for the agent's own end and says it: authenticated, not-authenticated, cancelled (the agent's
-    Cancelled error: dismissed), timeout (the authority sent CancelAuthentication after --timeout, as
-    polkitd does when its caller cancels; exit 124), agent-gone (NoReply: it left the bus) or no-agent,
-    with the passwords tried and how many were wrong; `polkit agents` lists them. The tool runs in the
-    box (box_exec `sys`), its answer read here through a pipe, bounded. Verified in a box: Omarchy 4.5's
-    stock `omarchy.polkit` (`up --polkit --stock-bar`) registers at `/org/omarchy/PolkitAgent` and shows
-    its dialog with the message asked; a wrong password, then the right one, end authenticated (2
-    passwords, 1 wrong). A bar seeded from the desk loads the polkit plugin only when its shell.json
-    does. Not covered: a real polkitd's decisions (rules, `auth_admin_keep`, implicit authorizations),
-    the real PAM stack (fingerprint, faillock), identities other than the box user (an admin dialog's
-    list of wheel members), agents of another session. Tests: t_polkit (a throwaway Quickshell agent:
-    registers, a second refused, wrong then right, dismissed, timeout, the agent gone and the other
-    registering; no /run/dbus, pkcheck NotSupported, a box's AgentResponse2 refused), t_main (no
-    --polkit: no system bus, `polkit` refused), t_unit_cli and the usage errors.
-    *Review (2026-10-31):* the bus allowed any name to be owned (`allow own="*"`) and the host said
-    what came back raw (up to 1 MB, stderr relayed as is). Now no name on it can be owned but
-    `org.freedesktop.PolicyKit1`, which the stand-in takes first and lets nobody replace (requested
-    with no replacement allowed). That is all a bus policy holds in a box: dbus-daemon tells callers
-    apart by uid (or an LSM label), and every process in a box has the same uid, so one that kills
-    the stand-in takes its name, and one could also replace the bus socket in the box's runtime dir.
-    So `polkit ask` and `agents` take every answer as the box's: stdout read up to 64 KiB, stderr up to
-    4 KiB, both said through term.rs's `plain` (a control character but newline and tab, or a byte
-    that is no UTF-8, as `?`; the cut said), `--json` parsed and written again by serde (an answer
-    that is no JSON fails). Tests: t_polkit (another name refused, the authority's name not taken
-    while held; a python-gobject authority in the stand-in's place answering escapes, 300 KB and an
-    error: plain, bounded, stderr plain, `--json` escaped), polkit.rs answer_is_plain_and_bounded.
-    They fail on the old code.
+607. **The bwrap builder trusted its box dir by path alone** (2026-10-31, found writing #365's
+    tests). `Bwrap`'s seat check (S1) skips a source inside the box dir, which lies in the runtime
+    dir: the box's own run dir, etc files and placeholders are bound from there. Nothing checked the
+    box dir itself, so a box dir that was the runtime dir, `/`, `/run`, `/dev` or a link to one (a
+    name of `..`, a wrong prefix) would have exempted every seat path under it. Box names are
+    validated and the dir is always `$XDG_RUNTIME_DIR/omabox/NAME`, so no user could reach it:
+    defence in depth, no CHANGELOG line. `Bwrap::new` now refuses a box dir that, as written or
+    canonicalised, is or holds `/`, the runtime dir or HOME, or is or holds a seat path (`/dev`,
+    `/run`, `/dev/dri`, a card node, `/dev/input`, seatd's socket, the system bus); up says so and
+    stops. Test: bwrap.rs's `box_dir_never_covers_the_seat` (each of those, a link to `/run`, and the
+    runtime dir reached by `..`, refused; a box dir of the runtime dir's or of a plain folder taken).
+609. **A small blinker timed every wait out, and an --ignore of it stopped matching when it moved**
+    (2026-10-31, #307). A bar widget's 6x6 animated dot changed in every few frames, so `wait still`
+    and every `click --wait` ended 124 "still changing"; the agent `--ignore`d it on each call, and
+    when the bar re-laid out the dot was 13 px away and the waits timed out again. omabox-still now
+    takes a blinker out as it does a caret: each output remembers 8 spots, places where a change 48
+    px a side at most happened, with their last 16 looks (the spot's pixels, each channel's top four
+    bits, hashed; a pixel under an --ignore, the cursor, as black). A change inside a spot whose look
+    after is one it had is a return; at the third it is a blinker, and from then on its pixels are
+    left out of the frame's change while they take a look it had. A look it never had (a menu over it,
+    another icon there) is a change, and the spot is forgotten; a change holding a spot grows it and
+    starts its looks again; a moved output or a new buffer forgets them all. Why looks, not just "a
+    small place that keeps changing": a counter or a progress bar changes in place too, but never
+    comes back to how it looked, and a wait should go on through it (the box test's `%05d` counter is
+    still 124). The top bits make a pulse's way up meet its way down (the test's colour steps by 15).
+    Choices made where the issue left them: no per-box `ignore add`/`up --ignore` (a fixed rectangle
+    is what broke when the dot moved; learning per wait needs none); BLINK_SIDE 48, 16 looks, 3
+    returns (the first three changes count: about 0.75 s for a dot blinking every 250 ms, paid by
+    each wait, since spots are not kept between calls). The answer line has `blink=X,Y,W,H` (the last
+    spot taken) and `blinks=N`; omabox says `X,Y WxH kept coming back to how it looked: left out as a
+    blinker` on stderr, the ignored change's why is `blinker`, and `--json` adds `blinking` ({x, y, w,
+    h, places}, null without one). `--strict` counts blinkers. A looping counter of 10 states is a
+    blinker now: t_wait's and t_monitors_wait's counter cell (#131's steady animation) cycles through
+    62 glyphs instead, more than the 16 looks kept. Two blinkers changing in the same frame before
+    either is learnt make one change too big to be one (not learnt; an --ignore still works). Tests:
+    t_unit_wait (settle.rs blinker_said: the stderr note, several places, JSON, nothing for an older
+    tool's line; facts_as_bash's key lists), t_wait_blink (a box: a blinking cell and a pulsing one
+    still, said; --strict 124; a blinking cell moving every 2 s still, three times; a counter 124,
+    no note).
+610. **An action's --wait said what moved on screen, not what the app now holds** (2026-10-31, #288).
+    About a third of the shots after an action in the 10-02 study were taken to read the app's own
+    text: did the field get the text, is the box checked, which item is selected. `keys`, `click`,
+    `scroll` and `drag --wait --tree` read one window's whole tree (`omabox-tree --json`, through
+    treewait's probe: read_target, the same pick and retry as `wait tree`) before the input, before
+    the screen's watch starts (the box's first read turns accessibility on, and a Qt app may redraw),
+    and the same window again (by its address) once the screen settled and after any --expect. The
+    window: --window's, click --find's window or layer, else the one under a click's, scroll's or
+    drag's point (WIN_AT_POINT_JQ over box_windows, as a click reaches it), else the active one.
+    treediff.rs keys each node by its printed ancestors' `role "name"` (the frame left out), its role
+    and its name, never by its place: one row put first renumbers every place after it, and a diff by
+    place (check's, role#N) would then say every row renamed. Same keys pair in order; what is left
+    pairs by roles alone only where as many are left on both sides, so a label whose name is its text
+    reads `label "Idle" → "Saving"`, while two rows gone and one come stay `-`, `-`, `+`. A subtree
+    that appeared or went is one line, `+ dialog "Confirm" (and 3 inside)`; the frame's own name (the
+    title) is the desktop facts' to say. Bounds are not compared. The line ends `; no change in the
+    app's tree` or `; the app's tree: N changes` (`the layer's` for a layer), the changes on lines of
+    their own under it, two spaces in, 20 at most then `and N more`: `entry "Name": '' → 'hello'`,
+    `check box "Beta": +checked -unchecked`, `slider "Volume": =40 → =60`, an unnamed node `(in` its
+    nearest named ancestor`)`. A `password text` node's text and value are never printed ("its text
+    changed (not shown)", --json `hidden`), nor any text or value after `keys --pass`. No tree (a
+    terminal, no window, the app hung within 10 s before or the --timeout's end after, 2 s at least):
+    `; no tree to compare (why)`, the input sent all the same, the exit the screen's. Not on unknown.
+    --json adds `tree` {window, changes (each kind changed|appeared|vanished, role, name, path, line;
+    name_was, text/value {from, to}, states_added, states_removed, hidden, inside), why}. Tests:
+    t_wait_tree_diff (GTK4: an entry's text, a check box's states, a label renamed, a password field
+    hidden in --json too, nothing changed, no window), t_unit_wait (refusals), treediff.rs (pairing
+    by name not place, subtrees, passwords and secrets, values, the cap).
+611. **Do Not Disturb and the dock, in the box's own shell** (2026-10-31, #309; verified in boxes on
+    4.5.0rc2 and on the v4.0.6 tree). A project's walk on 4.5 kept its box quiet by hand (a toast over
+    a window's corner took clicks meant for the app), and `click --window` said the dock's layer
+    (1878x245 at 42,835 beside a vertical bar) might take input over a maximised window's status line
+    on a tiled workspace. The dock (`DockWindow.qml`) stays mapped everywhere but is `shown` only on a
+    floating workspace with no fullscreen window (`dock.isFloating(workspaceId) && fullscreenMode < 2`);
+    elsewhere its mask is empty and every click passes through, so that warning was noise. Floating is
+    not a Hyprland layout: Omarchy keeps it in `~/.local/state/omarchy/workspace-layouts/N.lua` (`mode =
+    "floating"`), else `default.lua`'s `default`, as `omarchy-hyprland-workspace-layout-current`
+    reads them. **Added**: `dnd [on|off] [--clear]` and `up --dnd` (the notifications' `setDnd`,
+    `isDnd`, `dismissAll`, the same on 4.0 and 4.5; --dnd also dismisses a toast the start left up,
+    once the shell answers); `dock [on|off|--json]` and `up --no-dock` (`shell setPluginEnabled
+    omarchy.dock`, so the box's shell.json gets `disabledPlugins`, and `dock off` waits for the layer
+    to go). Bare `dock` says per monitor shown (icons), tucked (auto-hide or a maximised window: the
+    edge strip) or hidden (none). `windows` and the --window input commands (omshell's
+    input_layers) drop the dock from the layers of a monitor whose active workspace is not floating,
+    read on the host from the box's HOME through box_home_file; a shown one is still said as a may,
+    now with `omabox dock` as its way out (the notifications' hint names `dnd --clear`). All of it
+    runs `omarchy-shell` inside the box (box_exec, the session's environment), never the host's.
+    Refused before the box starts: `--dnd`/`--no-dock` with `--no-shell`, `--no-dock` (and `dock`) on
+    an Omarchy without a dock (4.0), `--dnd` on one whose notifications have no `setDnd`. Under Do Not
+    Disturb, 4.5 still shows Omarchy's own action toasts (`omarchy-action`: a layout change's) and a
+    critical bare notify-send, and drops a plain notify-send's rather than keeping it in history
+    (`Delivery.js`). `up` of a box already up with --dnd/--no-dock names what differs, as for
+    --no-pointer. Tests: t_dnd_dock (both generations, OM), t_click_layer (the hidden dock not said),
+    t_unit_omarchy_contract (the IPC, the dock's `shown`, the mode files, setPluginEnabled), omshell's
+    hidden_dock_dropped_from_its_monitor_only.
+612. **`omabox doctor`: what a box needs, read, with a fix per distribution** (2026-10-31, #320).
+    `install.sh --check` installed first and then tried a box; nothing said, without changing the
+    machine, what was missing. doctor looks where a box looks: a box's start runs with PATH=/usr/bin
+    (up_box's LAUNCH_PATH, #364), so a program on the caller's PATH only (/usr/local/bin) is a
+    failure that names where it is. It reuses up's and setup's checks rather than copies: the
+    aquamarine as up picks it (hypr_aq_soname, aq_resolve) with setup's note (aq_note_text, now
+    shared), render_node's choice (OMABOX_RENDER_NODE, the gpu setting, the first usable), up's
+    `unshare -U true`, no_new_privs and /dev/net/tun tests, check_install's four tools. Versions
+    only where one is known not to work: Hyprland before 0.56 (hyprlang, finding 8), bwrap before
+    0.11 (no --overlay-src, which every box's /etc uses; Debian 12 packages 0.8, Ubuntu 24.04 0.9),
+    grim without -T (a warning: only shot --window, finding 81), a system aquamarine without #415
+    or a private build older than this omabox's (warnings, finding 247). User namespaces are tried
+    as a box makes them, a bwrap `--unshare-user` with /usr and the loader's dirs read-only (no /dev,
+    /run or /proc) running `true`, after unshare: Ubuntu's AppArmor
+    restriction is said to let `unshare -U` through and stop the mounts in it (not seen here: this
+    machine has no AppArmor); the sysctl that turned them off
+    (Debian's unprivileged_userns_clone, max_user_namespaces 0, apparmor_restrict_unprivileged_userns)
+    gives the fix. A render node that renders only in software (a VM's virtio-gpu without virgl) is
+    install.sh's test, now render.rs's software_only_in too. The socket length is the deepest socket
+    the host reaches by path (a 40-byte name's run/wayland-1, the broker's), against sun_path's 107
+    (finding 7). PATH is checked twice, the shell's and the desktop session's (`systemctl --user
+    show-environment`): an agent started from the launcher gets the latter; in a git worktree the
+    fix is "run its bin/omabox", never setup (#182). The fix lines come from one table (program to
+    package, for Arch, Debian/Ubuntu, Fedora, openSUSE: /etc/os-release's ID, then ID_LIKE; Arch's
+    names said as such for any other); setup --aquamarine's "needs git ..." line now comes from it
+    too, the same bytes on Arch. Only Arch's lines ran here; the others are written from those
+    distributions' package names and checked by the unit tests alone. Read-only by construction: it
+    runs --version, ldd, pacman -Q, pkg-config --exists, systemctl show-environment and the two
+    namespace probes, and writes nothing (t_unit_doctor points HOME, the XDG dirs, TMPDIR and the
+    runtime dir at empty stand-ins and finds them empty after). --smoke, only when every check
+    passes, is install.sh --check's box: doctor-PID up, a shot (kept, its path said), down. Not
+    done: install.sh calling doctor instead of assuming pacman (#247's step: install.sh builds
+    omabox after its packages, so doctor is not there yet when it would need it). Inside ai-jail the
+    broker refuses doctor as any command not on its list. Tests: doctor.rs's (families, the table,
+    versions, programs in a stand-in /usr/bin, userns reasons, socket length, PATH, render nodes
+    with a virtio-gpu stand-in, --json), t_unit_doctor, t_doctor_smoke (a real box).
+613. **`up --stock`: Omarchy as a new user sees it; `--clean` is it plus the freezes** (2026-10-31,
+    #265). Asked for shots of a plugin "with a default look", an agent ran `up --theme tokyo-night
+    --stock-bar` (the skill's row for a theme or bar result), and the box was still the desk's: its
+    terminal configs, branding, the plugins' settings (`extensions/`), the user's themes, their own
+    wallpaper for the theme, the locale and timezone. `--clean` had most of that left out, but it is
+    the opposite of a showcase (a #ff00ff wallpaper, the clock frozen, no network, animations off),
+    and the skill named it only "against a baseline". **`up --stock`** (`run --stock` too; `check
+    run` takes it and has it anyway): Omarchy's bar (`--stock-bar`) on CLEAN_THEME (tokyo-night) or
+    `--theme NAME`, the theme's own wallpaper (seed_backgrounds not run: never the user's for it),
+    English in UTC as a clean box (one code path: `clean_lang`/`clean_zone`, /etc/locale.conf and
+    localtime; `--env TZ=` still wins), and none of seed_home's look: no terminal configs or
+    `*xdg-terminals.list`, branding, `extensions/` (as `--no-seed extensions`), the user's themes,
+    Hyprland toggles, fonts (seed_fonts), and no kept notifications; the HOME is /etc/skel's, as a
+    new user's. The user's commit identity is still seeded (`user.name`/`user.email` only, finding
+    48): not seen in a shot, and an agent committing in the box needs it. A theme of the user's that
+    `--theme` names is the one theme of theirs copied in (only when Omarchy has none of that name:
+    one of theirs of Omarchy's name would change Omarchy's look); `--theme-dir`, `--plugin`, `--seed`
+    work on top; over a `--from` save, what the save's HOME holds stays (as `--no-seed`'s do). The
+    clock, pointer, network and animations are as in any box. Not with
+    `--desk-shell` (refused before anything is made); `--keep` stays `--clean`'s. **`--clean` is
+    `--stock` plus the freezes**: `checks` sets `stock` for it, and seed_home and seed_fonts read
+    `plan.stock` for what both leave out, `plan.clean` only for the sentinel and the clock, so the
+    two cannot drift. That changes a clean box: the desk's look is out of it too, and `--keep
+    wallpaper` gives the theme's wallpaper rather than the user's for it. The words `up` says come
+    from one list (upspec::look_text): "stock: Omarchy's bar, theme tokyo-night with its own
+    wallpaper, locale en_US.UTF-8 in UTC, none of your look (terminal configs, branding, themes,
+    wallpapers, the plugins' settings, Hyprland toggles, fonts)", a clean box's line the same with
+    its freezes. box.json and `ls --json` have `stock` (true for a clean box; one from an older
+    omabox counts as stock when clean); `up` again with `--stock` on a box that is not is refused
+    ("--stock (it has your look)"). The skill's table: "how a new Omarchy user sees it → `up
+    --stock`", "shots compared across runs → `up --clean`", `--theme NAME --stock-bar` left for a
+    theme or bar result on an otherwise normal box. Not `--default`: a box's default is the desk's
+    look. Tests: t_stock (a fake desk with a marker in each part of its look: all of it in a plain
+    box, none in a stock one; the theme's wallpaper, English in UTC, Omarchy's clock format,
+    animations on, the pointer shown; a theme of the user's by `--theme`; `--clean --keep
+    wallpaper`), t_unit_check (`--stock --desk-shell` and `--stock --keep` refused, `run --stock`
+    too), upspec.rs clean_as_bash and clean_words (the words), seed.rs fonts_as_bash.
+614. **A checkpoint could say only same or changed, never right** (2026-10-31, #266). `check run`
+    says where a shot differs from its baseline and `--approve` keeps what most runs showed, so a
+    wrong screen approved stays "same", and the agent judging report.png or baseline.png has only
+    the pixels, not what the scenario meant. State alone lies too: a lock screen whose client was
+    killed came back black with `hyprctl` and `omarchy-hyprland-session-locked` both saying locked.
+    `check point` now takes proofs. `--expect TEXT` (repeatable; tabs and newlines as spaces) is
+    kept in the .point as `expect TEXT`, said under the checkpoint's line in check run (not under
+    `same`: nothing to judge) and at --approve, drawn on each of its cards in report.png and
+    baseline.png (check.py's plan line `expect TEXT`, green, up to 3 lines; a report card's width is
+    now rounded up, not down, which had cut the last character of a line of odd length), and in --json
+    (`expect`); not checked. `--expect-tree TEXT` (repeatable, needs --window) runs `tree --window
+    SEL --find TEXT` after the shot, so it matches as tree --find does (with #319, states as a
+    set); `--expect-cmd -- CMD [ARG...]` (last) runs `run -- timeout -k 2 T CMD...` with
+    check point's --timeout, stdin closed. Each is a `proof<TAB>held|failed<TAB>WHAT[<TAB>WHY]`
+    line in the .point; check point says a failed one on stderr and exits 0 (a scenario under set
+    -e goes on: the result is the check's). In check run a failed proof is its own result, before
+    new and the pixel comparison: `proof    ID: proof failed: WHAT (WHY)`, its expect lines, and
+    `shot: PATH (the same as the baseline's: the baseline shows it too | N regions changed from
+    the baseline | size ... | no baseline yet)`; counted as "N failed a proof" (exit 1),
+    `counts.proof_failed` and result `proof` with `proofs` [{proof, held, why}] in --json; no card
+    in report.png. At --approve, a run whose proof failed at a checkpoint is never its baseline
+    (the best run is picked among those where it held, said with the runs it failed in); failed in
+    every run, nothing is approved: each such checkpoint said, "check: not approved: ...", exit 1,
+    the baseline untouched (checked before anything is written). Chosen where the issue left it
+    open: the result word `proof` (the column's other words are one word); a failed proof wins over
+    changed and new, the pixels said after it; `--expect-tree` reads the whole window, not a -g
+    crop. Not done: `--expect-image FILE`, which needs image matching (#267, open). Tests: check.rs
+    proofs_fail_a_checkpoint_and_its_approval (compare, --json, the sheet's card, both --approve
+    cases; it fails on the old code, which has no proofs and says the lock `same`) and
+    proof_options_refused_as_written; t_check_proof (a real check: both proofs held and approved,
+    a command that fails over the baseline's own pixels, a tree text the window lacks in --json,
+    an --approve refused with the baseline kept byte for byte).
+616. **What has no accessibility tree could only be found in a shot** (2026-10-31, #267). The bar,
+    the shell's panels, plugins and terminals give `tree` nothing, so an agent read points off a shot
+    (~1.5k image tokens each time) and a `check run` scenario hard-coded coordinates. `find --image
+    FILE [--similar 0.95] [-g GEOM | --window SEL] [--all] [--json]` finds a template there:
+    imgfind.rs, plain Rust (no OpenCV, no image crate): grim's PPM of the screen or a window (`-T`,
+    its own pixels) read directly, the PNG template decoded by ImageMagick's PNG reader alone
+    (`png:-` to `pam:-`, alpha kept). The score is `2ΣT'I'/(ΣT'²+ΣI'²)` over the three channels
+    times `1 - max|mean T - mean I|/255`: normalised correlation that also falls with another
+    contrast or tone, since plain NCC is blind to both and took a grey switch for its blue self and a
+    copy at half brightness for the thing (unit tests); a template under 2 levels of spread is scored
+    `1 - RMS/255` (correlation is undefined there); alpha under 128 is left out. The search is coarse
+    to fine: grey NCC over every place on the template halved while it keeps 8 px a side (at most 3
+    times), its local bests over 0.4 (1500 at most) each followed down a level within 2 px, then the
+    colour score at full size; overlapping matches keep the best. Measured in a box, 1080p: 50-100 ms
+    a search including grim (a whole-screen PPM grab is ~30 ms), so `wait image` polls it as `wait
+    window` polls; random crops of a text-heavy screen (two foot windows of `ls` output) were found
+    where cut in 88 of 89 (the miss a slice of a window border, identical all along it: listed
+    elsewhere on it), 32 of them among several (repeated words), at scale 1 and at 1.5. Each shot now
+    records its scale in its PNG comment (`omabox scale=1.5`, image px per layout px: a tEXt chunk
+    `shots.rs`'s `tag_scale` inserts; ImageMagick's crops keep it, as `comment`); a box drawn at
+    another scale resizes the template (magick `-resize`) and says so. Text and icons drawn natively
+    at another scale are not the resized pixels: a 1x crop of foot text scored 0.83 at scale 2 as
+    resized; blurred 3x3 once (both), 0.92 at 2, 0.89 at 1.25, 0.75 at 1.5; twice, 0.94, 0.93 and
+    0.83, the next best place under 0.45. So a resized template and the frame are blurred twice, and
+    the match needs 0.8 by default. The box's pointer is drawn into its frames: right
+    after `click --image` it sat on the match (0.69), and a `wait image --gone` was satisfied at once;
+    40x40 layout px around the pointer (an arrow's and an I-beam's) are left out of the score.
+    Several matches are all listed in reading order and said, never one taken: `click --image`
+    refuses them, exit 2, numbered for `--index N`, as `click --find` does; `--offset DX,DY` clicks
+    beside the match. `wait image FILE [--gone]` is in the `wait` family (0, 124, 1). A jailed agent's
+    FILE is opened by its own omabox and passed as fd 3 (relay.rs, as `--in`'s), never a path the
+    broker opens. Not done: the issue's optional "where it was last found, searched first" (a search
+    is fast enough without), and a scale comment in a shot written to a jailed caller's fd (never
+    read back here: its crops match as if at the box's scale). Tests: t_find_image (where cut, -g,
+    --window, --json, two in view, --index, --offset, wait for it and --gone, scale 2, the
+    refusals), imgfind.rs's tests (crops, noise, colour and contrast, transparency, one colour, the
+    pointer, the PNG comment), relay.rs's wait_image_file_is_the_word_after_image. `check point
+    --expect-image FILE` (finding 614's proofs) runs `find --image FILE` on the screen, or with
+    --window in its own pixels, and fails the checkpoint with find's words when there is no match
+    (t_check_proof).
+618. **A layer spanning the screen counted as over every point it spans, toast or no toast**
+    (2026-10-31, #283; findings 398, 421, 562). Hyprland gives a layer's rectangle only, so while
+    Omarchy's notifications column (or its dock) was up, every `--window` point under it got "may go
+    to it": a click 560 px below a toast warned, and the toast itself was never certain, so
+    `--no-raise` sent a click that landed on it. The issue's plan, the toasts' bounds from `tree
+    --layer` (finding 384), is still shut: on Omarchy 4.5.0rc2 with Quickshell 0.3.2.r7 the layer
+    publishes no accessible items (`Toast.qml` and `Service.qml` set no `Accessible` role; seen in a
+    box). What the box can read is where the layer draws: `drawn.rs` grabs, in the box, the region
+    where the layer and the window meet three times, the window's own pixels (`grim -T`), the
+    screen's, the window's again, and marks 4 px cells where the screen differs from the window by
+    more than 24 in a channel and the window's two grabs agree within 8 (a blinking cursor, an
+    animation are the window's own). Cells within 24 px are one item; the point is on one when it is
+    within 8 px of its box, so a toast's empty middle counts through its border and text. Left out:
+    the pointer (plain grim draws it: 48 px around its hot spot), the window's 48 px corners (its
+    rounding), windows over it and layers certainly over it. On an item: the line becomes `drawn`,
+    said as "a layer spanning the screen, NS (...), draws over X,Y of window ...: one of its items (a
+    toast, a dock icon) is there, and input there goes to it, not to the window", certain, so
+    `--no-raise` refuses it; the way out for the notifications is `omarchy-shell notifications
+    dismissAll` (4.5 keeps the layer mapped, `wait layer --gone` would not return). Nowhere near one:
+    nothing said, nothing refused. It cannot tell (grabs of other sizes, a grab that failed, one item
+    over the whole region: a dimming, a backdrop): the may, as before. A click at the screen's X Y
+    (#361) now names a spanning layer where it draws (finding 562 left it unsaid everywhere). `windows`
+    and a `--wait` 124 still give the rectangle's "possibly" (no grabs there). Cost: three grabs of the
+    region (465x1056 here) and three hyprctl reads, ~0.1 s, only when a spanning layer is over the
+    point. Seen in a box (Omarchy 4.5.0rc2, Hyprland 0.56.2, 1920x1080, scale 1): with a `notify-send`
+    toast at 1472..1914 x 6..76, `--no-raise` at 1700,40 and 1480,20 refused, at 1700,80 refused (the
+    pad), at 1700,100, 1460,40 and 1700,600 clicked silently; the idle column and the idle dock say
+    nothing; a screen click on the toast said it and closed it. Not seen: a scaled output (its grabs
+    should match at an integer scale; at others the sizes differ and it falls back to the may), a
+    light theme, a translucent window over a bright wallpaper (a 0.9 opacity there is near the
+    threshold). Tests: drawn.rs (the clusters, the pad, faint and global differences, the window
+    moving, left-out regions, sizes, the PPM, the line's rectangle), t_unit_wait_facts (`probe
+    screen_layer ... here|nothere|unknown`), t_click_layer (far from the toast: nothing said, also
+    under `pointer --window`, the idle column and dock; on it: refused under `--no-raise`, the toast
+    left up, a plain click said and closed it; failed on the old code).
+619. **`shot --window` cannot grow to a window's popups: Hyprland says nowhere where they are**
+    (2026-10-31, #334). A menu that opens past a window's edge is cut off in its window shot
+    (finding 81 noted it). Checked in a box (Hyprland 0.56.2) with a GTK 4 context menu (zenity
+    `--entry` floated at 300x252, right-click near the entry's right end) and a Chromium one
+    (Wayland, floated at 500x300): both are xdg_popups drawn past the window's right and bottom
+    edges, whole in a `-g` shot of the screen, cut at the edge in `shot --window`. With either open,
+    `hyprctl clients` and `layers` are unchanged (no entry, no size or place grows), and Hyprland's
+    source has no other way to ask: its Lua window object (`hl.get_windows()`) has no popup field,
+    hyprctl no popup request, socket2 no popup event, and its log names a popup by pointer only
+    ("New popup at ..."), never where. The window's extents with its popups exist inside it
+    (`CWindow::getFullWindowBoundingBox`, `popupTreeExtents`) but nothing exports them. The window
+    capture `-T` uses is sized to the window (`m_bufferSize` = the window's size times the scale)
+    and renders its popups into that buffer, so a popup inside the window is in the shot and the
+    part past the edge is lost. Other readings were weighed and left: the accessibility tree (the
+    open GTK 4 menu is not in zenity's tree at all, `tree --find copy` finds nothing in its 5
+    lines; a Qt popup's bounds start at 0,0, finding 364), and pixels past the window's edge (no
+    way to tell a popup from the window or wallpaper beside it). So `help` (the SEL paragraph) and the skill's reference (the `--window` bullet, a
+    Symptoms row) say it: take the screen around the window, `shot -g` in screen coordinates (the
+    window's place is on the shot's stderr line) or a whole shot, and `click --in` that. If
+    Hyprland ever exports a window's popup extents, `shot --window` could take a screen crop of
+    them instead when the window is uncovered. Docs only: no test.
+620. **A small target on a surface with no tree was aimed at by eye, and missed** (2026-10-31, #268).
+    With no accessibility tree and no reference image yet (a bar icon, a caret), an agent reads a
+    point off a shot; on small targets that is a few pixels off, a shot to see nothing happened, and
+    another try. `--fit` and `calibrate` fix the scale between the shot and the model, not the aim.
+    `shot --grid N` (2-26) draws N lettered columns and N numbered rows over the shot (the screen,
+    -g, --monitor or a window) with ImageMagick: lines black 3 px under yellow 1 px, seen on any
+    colour, and the labels (fontconfig's bold monospace) in a 28 px margin spliced on top and left,
+    so nothing under them is hidden; stderr names each column's and row's span in the shot's
+    coordinates (N + N spans rather than N² boxes), how to click a cell and the command for a closer
+    look. `--grid N --cell C3` (stateless: the cell of the N grid over what the rest of the command
+    asks for, so a jailed agent's works without a file) becomes that cell's `-g`, taken again
+    through the same aim as any -g (a window's crop scaled to its buffer), enlarged with `--zoom` to
+    about shot-fit's size (1000 px without one; `--fit` or `--zoom` given choose instead) and
+    gridded again; its stderr gives the `-g` of the cell for the next look. A target a grid line cuts
+    is named as both cells, `--cell C3:D3` (any rectangle of cells, spreadsheet style), so the closer
+    look has it whole. The issue's `shot --grid N --in C3` was not taken: `--in` takes a shot file
+    everywhere else. The margin shifts every image pixel, so a grid shot's shots.tsv line has a
+    sixth field, `grid N M`: `--in` takes M off a point first (a point in the margin is refused, as
+    one past the image is); an older omabox reads that line's geometry as no number and refuses
+    rather than missing by M. `click --in GRID --cell C3` is the cell's middle as an image pixel of
+    that shot, then --in as any point (so a window shot follows the window, and the screen's checks
+    apply). Measured in a box: on a 1920x1080 screen at --fit 1000, C3 of 8 clicks 600,337; a cell
+    of the box's bar enlarged 3 times showed a workspace number cut by a line, which C3:D3 keeps
+    whole. A grid shot is never --changed's baseline nor a --since (lines drawn on it); cells under
+    12 image px (no room for a label) are refused after the capture, which is removed. The capture
+    goes to a temp in the box dir first (as --changed's), then magick writes OUT.part (renamed) or a
+    jailed caller's fd. Tests: t_shot_grid (the margin, the spans, click --cell and X Y through the
+    margin, --cell C3:D3's crop, zoom and --json, a window's grid, the refusals), grid.rs's units.
 621. **Every omabox call stalled an agent on a permission prompt** (2026-10-31, #338). The skill now
     pre-approves, in its front matter's `allowed-tools`, the verbs that act only inside a box and
     read none of the user's files: `Bash(omabox VERB *)` for shot, pixel, windows, window, tree,
@@ -11740,393 +12060,6 @@ from them.
     t_tray (an item with escapes in its Id, Title and a label: plain, `--json` as said, a click's
     words; 72 items: 64; 5 that do not answer: done in 15 s, said), tray.rs layout_as_text,
     entries_capped. They fail on the old code.
-610. **An action's --wait said what moved on screen, not what the app now holds** (2026-10-31, #288).
-    About a third of the shots after an action in the 10-02 study were taken to read the app's own
-    text: did the field get the text, is the box checked, which item is selected. `keys`, `click`,
-    `scroll` and `drag --wait --tree` read one window's whole tree (`omabox-tree --json`, through
-    treewait's probe: read_target, the same pick and retry as `wait tree`) before the input, before
-    the screen's watch starts (the box's first read turns accessibility on, and a Qt app may redraw),
-    and the same window again (by its address) once the screen settled and after any --expect. The
-    window: --window's, click --find's window or layer, else the one under a click's, scroll's or
-    drag's point (WIN_AT_POINT_JQ over box_windows, as a click reaches it), else the active one.
-    treediff.rs keys each node by its printed ancestors' `role "name"` (the frame left out), its role
-    and its name, never by its place: one row put first renumbers every place after it, and a diff by
-    place (check's, role#N) would then say every row renamed. Same keys pair in order; what is left
-    pairs by roles alone only where as many are left on both sides, so a label whose name is its text
-    reads `label "Idle" → "Saving"`, while two rows gone and one come stay `-`, `-`, `+`. A subtree
-    that appeared or went is one line, `+ dialog "Confirm" (and 3 inside)`; the frame's own name (the
-    title) is the desktop facts' to say. Bounds are not compared. The line ends `; no change in the
-    app's tree` or `; the app's tree: N changes` (`the layer's` for a layer), the changes on lines of
-    their own under it, two spaces in, 20 at most then `and N more`: `entry "Name": '' → 'hello'`,
-    `check box "Beta": +checked -unchecked`, `slider "Volume": =40 → =60`, an unnamed node `(in` its
-    nearest named ancestor`)`. A `password text` node's text and value are never printed ("its text
-    changed (not shown)", --json `hidden`), nor any text or value after `keys --pass`. No tree (a
-    terminal, no window, the app hung within 10 s before or the --timeout's end after, 2 s at least):
-    `; no tree to compare (why)`, the input sent all the same, the exit the screen's. Not on unknown.
-    --json adds `tree` {window, changes (each kind changed|appeared|vanished, role, name, path, line;
-    name_was, text/value {from, to}, states_added, states_removed, hidden, inside), why}. Tests:
-    t_wait_tree_diff (GTK4: an entry's text, a check box's states, a label renamed, a password field
-    hidden in --json too, nothing changed, no window), t_unit_wait (refusals), treediff.rs (pairing
-    by name not place, subtrees, passwords and secrets, values, the cap).
-614. **A checkpoint could say only same or changed, never right** (2026-10-31, #266). `check run`
-    says where a shot differs from its baseline and `--approve` keeps what most runs showed, so a
-    wrong screen approved stays "same", and the agent judging report.png or baseline.png has only
-    the pixels, not what the scenario meant. State alone lies too: a lock screen whose client was
-    killed came back black with `hyprctl` and `omarchy-hyprland-session-locked` both saying locked.
-    `check point` now takes proofs. `--expect TEXT` (repeatable; tabs and newlines as spaces) is
-    kept in the .point as `expect TEXT`, said under the checkpoint's line in check run (not under
-    `same`: nothing to judge) and at --approve, drawn on each of its cards in report.png and
-    baseline.png (check.py's plan line `expect TEXT`, green, up to 3 lines; a report card's width is
-    now rounded up, not down, which had cut the last character of a line of odd length), and in --json
-    (`expect`); not checked. `--expect-tree TEXT` (repeatable, needs --window) runs `tree --window
-    SEL --find TEXT` after the shot, so it matches as tree --find does (with #319, states as a
-    set); `--expect-cmd -- CMD [ARG...]` (last) runs `run -- timeout -k 2 T CMD...` with
-    check point's --timeout, stdin closed. Each is a `proof<TAB>held|failed<TAB>WHAT[<TAB>WHY]`
-    line in the .point; check point says a failed one on stderr and exits 0 (a scenario under set
-    -e goes on: the result is the check's). In check run a failed proof is its own result, before
-    new and the pixel comparison: `proof    ID: proof failed: WHAT (WHY)`, its expect lines, and
-    `shot: PATH (the same as the baseline's: the baseline shows it too | N regions changed from
-    the baseline | size ... | no baseline yet)`; counted as "N failed a proof" (exit 1),
-    `counts.proof_failed` and result `proof` with `proofs` [{proof, held, why}] in --json; no card
-    in report.png. At --approve, a run whose proof failed at a checkpoint is never its baseline
-    (the best run is picked among those where it held, said with the runs it failed in); failed in
-    every run, nothing is approved: each such checkpoint said, "check: not approved: ...", exit 1,
-    the baseline untouched (checked before anything is written). Chosen where the issue left it
-    open: the result word `proof` (the column's other words are one word); a failed proof wins over
-    changed and new, the pixels said after it; `--expect-tree` reads the whole window, not a -g
-    crop. Not done: `--expect-image FILE`, which needs image matching (#267, open). Tests: check.rs
-    proofs_fail_a_checkpoint_and_its_approval (compare, --json, the sheet's card, both --approve
-    cases; it fails on the old code, which has no proofs and says the lock `same`) and
-    proof_options_refused_as_written; t_check_proof (a real check: both proofs held and approved,
-    a command that fails over the baseline's own pixels, a tree text the window lacks in --json,
-    an --approve refused with the baseline kept byte for byte).
-616. **What has no accessibility tree could only be found in a shot** (2026-10-31, #267). The bar,
-    the shell's panels, plugins and terminals give `tree` nothing, so an agent read points off a shot
-    (~1.5k image tokens each time) and a `check run` scenario hard-coded coordinates. `find --image
-    FILE [--similar 0.95] [-g GEOM | --window SEL] [--all] [--json]` finds a template there:
-    imgfind.rs, plain Rust (no OpenCV, no image crate): grim's PPM of the screen or a window (`-T`,
-    its own pixels) read directly, the PNG template decoded by ImageMagick's PNG reader alone
-    (`png:-` to `pam:-`, alpha kept). The score is `2ΣT'I'/(ΣT'²+ΣI'²)` over the three channels
-    times `1 - max|mean T - mean I|/255`: normalised correlation that also falls with another
-    contrast or tone, since plain NCC is blind to both and took a grey switch for its blue self and a
-    copy at half brightness for the thing (unit tests); a template under 2 levels of spread is scored
-    `1 - RMS/255` (correlation is undefined there); alpha under 128 is left out. The search is coarse
-    to fine: grey NCC over every place on the template halved while it keeps 8 px a side (at most 3
-    times), its local bests over 0.4 (1500 at most) each followed down a level within 2 px, then the
-    colour score at full size; overlapping matches keep the best. Measured in a box, 1080p: 50-100 ms
-    a search including grim (a whole-screen PPM grab is ~30 ms), so `wait image` polls it as `wait
-    window` polls; random crops of a text-heavy screen (two foot windows of `ls` output) were found
-    where cut in 88 of 89 (the miss a slice of a window border, identical all along it: listed
-    elsewhere on it), 32 of them among several (repeated words), at scale 1 and at 1.5. Each shot now
-    records its scale in its PNG comment (`omabox scale=1.5`, image px per layout px: a tEXt chunk
-    `shots.rs`'s `tag_scale` inserts; ImageMagick's crops keep it, as `comment`); a box drawn at
-    another scale resizes the template (magick `-resize`) and says so. Text and icons drawn natively
-    at another scale are not the resized pixels: a 1x crop of foot text scored 0.83 at scale 2 as
-    resized; blurred 3x3 once (both), 0.92 at 2, 0.89 at 1.25, 0.75 at 1.5; twice, 0.94, 0.93 and
-    0.83, the next best place under 0.45. So a resized template and the frame are blurred twice, and
-    the match needs 0.8 by default. The box's pointer is drawn into its frames: right
-    after `click --image` it sat on the match (0.69), and a `wait image --gone` was satisfied at once;
-    40x40 layout px around the pointer (an arrow's and an I-beam's) are left out of the score.
-    Several matches are all listed in reading order and said, never one taken: `click --image`
-    refuses them, exit 2, numbered for `--index N`, as `click --find` does; `--offset DX,DY` clicks
-    beside the match. `wait image FILE [--gone]` is in the `wait` family (0, 124, 1). A jailed agent's
-    FILE is opened by its own omabox and passed as fd 3 (relay.rs, as `--in`'s), never a path the
-    broker opens. Not done: the issue's optional "where it was last found, searched first" (a search
-    is fast enough without), and a scale comment in a shot written to a jailed caller's fd (never
-    read back here: its crops match as if at the box's scale). Tests: t_find_image (where cut, -g,
-    --window, --json, two in view, --index, --offset, wait for it and --gone, scale 2, the
-    refusals), imgfind.rs's tests (crops, noise, colour and contrast, transparency, one colour, the
-    pointer, the PNG comment), relay.rs's wait_image_file_is_the_word_after_image. `check point
-    --expect-image FILE` (finding 614's proofs) runs `find --image FILE` on the screen, or with
-    --window in its own pixels, and fails the checkpoint with find's words when there is no match
-    (t_check_proof).
-609. **A small blinker timed every wait out, and an --ignore of it stopped matching when it moved**
-    (2026-10-31, #307). A bar widget's 6x6 animated dot changed in every few frames, so `wait still`
-    and every `click --wait` ended 124 "still changing"; the agent `--ignore`d it on each call, and
-    when the bar re-laid out the dot was 13 px away and the waits timed out again. omabox-still now
-    takes a blinker out as it does a caret: each output remembers 8 spots, places where a change 48
-    px a side at most happened, with their last 16 looks (the spot's pixels, each channel's top four
-    bits, hashed; a pixel under an --ignore, the cursor, as black). A change inside a spot whose look
-    after is one it had is a return; at the third it is a blinker, and from then on its pixels are
-    left out of the frame's change while they take a look it had. A look it never had (a menu over it,
-    another icon there) is a change, and the spot is forgotten; a change holding a spot grows it and
-    starts its looks again; a moved output or a new buffer forgets them all. Why looks, not just "a
-    small place that keeps changing": a counter or a progress bar changes in place too, but never
-    comes back to how it looked, and a wait should go on through it (the box test's `%05d` counter is
-    still 124). The top bits make a pulse's way up meet its way down (the test's colour steps by 15).
-    Choices made where the issue left them: no per-box `ignore add`/`up --ignore` (a fixed rectangle
-    is what broke when the dot moved; learning per wait needs none); BLINK_SIDE 48, 16 looks, 3
-    returns (the first three changes count: about 0.75 s for a dot blinking every 250 ms, paid by
-    each wait, since spots are not kept between calls). The answer line has `blink=X,Y,W,H` (the last
-    spot taken) and `blinks=N`; omabox says `X,Y WxH kept coming back to how it looked: left out as a
-    blinker` on stderr, the ignored change's why is `blinker`, and `--json` adds `blinking` ({x, y, w,
-    h, places}, null without one). `--strict` counts blinkers. A looping counter of 10 states is a
-    blinker now: t_wait's and t_monitors_wait's counter cell (#131's steady animation) cycles through
-    62 glyphs instead, more than the 16 looks kept. Two blinkers changing in the same frame before
-    either is learnt make one change too big to be one (not learnt; an --ignore still works). Tests:
-    t_unit_wait (settle.rs blinker_said: the stderr note, several places, JSON, nothing for an older
-    tool's line; facts_as_bash's key lists), t_wait_blink (a box: a blinking cell and a pulsing one
-    still, said; --strict 124; a blinking cell moving every 2 s still, three times; a counter 124,
-    no note).
-602. **`record --crf N`: the video's quality, for footage that will be edited** (2026-10-31, #278).
-    `record` encoded its MP4 at CRF 18 (preset medium) from wf-recorder's CRF 14 ultrafast raw.mkv:
-    right for an agent reading a take, blotchy around text once a video editor zooms it 1.4x and
-    encodes it again. `--crf N` (0-51) goes with start, -- ACTION and --for, as --fps does: the
-    recording's own setting, kept in the box dir's `record.crf` until stop. The fps pass and a layout's
-    compose encode at N; --cut-idle's first pass at N or 12, the lower, and its cut at N; the raw
-    stream at N when below 14 (otherwise it would bound the take). `stop` says it ("at 30 fps, CRF 8").
-    Measured in a 3840x2160 box at scale 2, a 3.3 s take of a terminal typing: 271 KB at 18, 471 KB at
-    8, 384 KB at 0 (lossless: text compresses well). The lossless take encoded again at 18 has
-    a luma PSNR of 56.2 dB against it and SSIM 0.99970; at 8, 64.5 dB and 0.99991. CRF 0 makes H.264's
-    High 4:4:4 Predictive profile, which browsers (an editor rendering in Chromium) do not decode:
-    `stop` says so beside "CRF 0". No `--preset`: medium at a low CRF is what the size and the time
-    allow, and one number is enough to ask for. x264 writes the CRF into the stream's settings
-    (`crf=8.0`), which the test reads. Tests: t_unit_record (the refusals), t_record_hold (the
-    default 18, --crf 8 --for, --crf 30 --cut-idle at 30, no record.crf left), record_stop.rs bounds.
-603. **A contact sheet of a stretch, every frame, a region, the frames where it changes** (2026-10-31,
-    #260). `record sheet` spread --frames or --every over the whole video, so checking a 100 ms glitch
-    a second into a take meant ffmpeg by hand: signalstats on a crop to find the frame, then a select
-    of the frames around it. Now `--from T --to T` keep the sheet to a stretch (the frames whose label
-    times are in it; --frames and --every spread over it), `--every-frame` takes each frame of it (100
-    at most), `-g "X,Y WxH"` crops each tile to a region in the video's pixels (`crop=...:exact=1`, so
-    an odd X is not rounded to the chroma grid; a region narrower than a tile is enlarged with
-    `flags=neighbor`, up to 8 times, its pixels seen as they are), and `--changed` takes the stretch's
-    first frame, then each frame where the region differs from the one before. With any of them a
-    tile's label says its time to the ms and its frame number ("12: 9.433s f283"), and marks outside
-    the stretch are left out. They go with `stop --sheet` and `-- ACTION --sheet` too, and through a
-    jail's relay. --changed is one ffmpeg pass in the box: `setpts=N` (each frame's pts its number),
-    `trim` to the stretch, `format=yuv444p`, the crop, `tblend=all_mode=difference`, the three planes
-    side by side (`extractplanes` and `hstack`), `signalstats`, and `metadata` selecting YMAX > 6 then
-    printing the selected frames' pts on stdout: only the frames that changed come back. The level:
-    in a 1080p take of a terminal (CRF 18), a still screen's frames differ from the one before by 0,
-    or by H.264's noise, at most 4 in Y and 5 in U or V (the take's first frames, beside a change
-    elsewhere); a typed character makes 190-220. A pixel 6 of 255 off is a change, so a slow fade of under 6 levels a frame
-    is not one. More than 99 changed frames is refused (a shorter stretch, a smaller region), as
-    --every past 100 is. Tests: t_unit_record (the refusals), t_record_sheet_frames (a video made with
-    ffmpeg: a white box for frames 40-42 and a red one every 5 frames; --changed -g finds 0, 40, 43,
-    the whole frame 25; a stretch with nothing; --every-frame from 1.3 s to 1.5 s, frames 39-45, the
-    region enlarged and its pixels read; --every and --frames in a stretch; the refusals past 100, past
-    the end, outside the video), record_stop.rs sheet_ranges, changed_frames_read, sheet_geos.
-604. **`record sheet` with no box up: ffmpeg here, sandboxed** (2026-10-31, #279). A sheet copied the
-    video into a box and ran ffmpeg there, so a video made outside one (an editor's render) needed a
-    box started for it, and agents wrote `select`/`tile` by hand instead. Now, with no box named (-b)
-    and the default box not up, `record sheet` runs the same ffprobe and ffmpeg steps on the host in a
-    bwrap sandbox (host_sandbox): `--unshare-all` (no network, own pid/IPC/user namespaces),
-    `--clearenv` (no WAYLAND_DISPLAY, DISPLAY or runtime dir: nothing to open a window with, and the
-    runtime dir is not there), `/usr` read-only, fresh /proc, /dev and /tmp, `--die-with-parent`,
-    `--new-session`, and one folder bound at /out for the frames. The video goes in as an fd of
-    omabox's own, fd 3 and no other (`-fd 3 -i fd:`, ffmpeg's fd protocol, the only protocol allowed:
-    `-protocol_whitelist fd`; `fd:3` as a URL is refused by ffmpeg 9), rewound before each step; a
-    crafted playlist or concat file can open nothing. A jailed caller's (the broker's `--from-fd`)
-    goes the same way, nothing reopened by name. The folder is `~/.cache/omabox/sheet-XXXXXX` (on
-    disk: /tmp is memory here), the frames in its `frames/`, a jailed caller's marks and sheet beside
-    it out of the sandbox's reach; gone at the end and on a signal (Tmps). The frames are read back
-    as regular files, not links, under a box's bounds (16 MiB each, 256 MiB in all, real PNGs).
-    Cores off (`nocore`). `-b NAME` of a box that is down still says so, as every command does. Same
-    sheets: the host's and the box's made from one video compare equal pixel for pixel (`magick
-    compare -metric AE` 0), the box being only another ffmpeg from the same /usr. Not done: a sheet
-    in a box when one is up but not named stays in that box (a copy of the video into it). Tests:
-    t_record_sheet_frames (no box: --changed -g and --every-frame -g equal to the box's; -b of a down
-    box refused; the cache folder empty after; a jailed caller's fds), record_stop.rs
-    host_sandbox_holds_only_usr_and_the_folder.
-611. **Do Not Disturb and the dock, in the box's own shell** (2026-10-31, #309; verified in boxes on
-    4.5.0rc2 and on the v4.0.6 tree). A project's walk on 4.5 kept its box quiet by hand (a toast over
-    a window's corner took clicks meant for the app), and `click --window` said the dock's layer
-    (1878x245 at 42,835 beside a vertical bar) might take input over a maximised window's status line
-    on a tiled workspace. The dock (`DockWindow.qml`) stays mapped everywhere but is `shown` only on a
-    floating workspace with no fullscreen window (`dock.isFloating(workspaceId) && fullscreenMode < 2`);
-    elsewhere its mask is empty and every click passes through, so that warning was noise. Floating is
-    not a Hyprland layout: Omarchy keeps it in `~/.local/state/omarchy/workspace-layouts/N.lua` (`mode =
-    "floating"`), else `default.lua`'s `default`, as `omarchy-hyprland-workspace-layout-current`
-    reads them. **Added**: `dnd [on|off] [--clear]` and `up --dnd` (the notifications' `setDnd`,
-    `isDnd`, `dismissAll`, the same on 4.0 and 4.5; --dnd also dismisses a toast the start left up,
-    once the shell answers); `dock [on|off|--json]` and `up --no-dock` (`shell setPluginEnabled
-    omarchy.dock`, so the box's shell.json gets `disabledPlugins`, and `dock off` waits for the layer
-    to go). Bare `dock` says per monitor shown (icons), tucked (auto-hide or a maximised window: the
-    edge strip) or hidden (none). `windows` and the --window input commands (omshell's
-    input_layers) drop the dock from the layers of a monitor whose active workspace is not floating,
-    read on the host from the box's HOME through box_home_file; a shown one is still said as a may,
-    now with `omabox dock` as its way out (the notifications' hint names `dnd --clear`). All of it
-    runs `omarchy-shell` inside the box (box_exec, the session's environment), never the host's.
-    Refused before the box starts: `--dnd`/`--no-dock` with `--no-shell`, `--no-dock` (and `dock`) on
-    an Omarchy without a dock (4.0), `--dnd` on one whose notifications have no `setDnd`. Under Do Not
-    Disturb, 4.5 still shows Omarchy's own action toasts (`omarchy-action`: a layout change's) and a
-    critical bare notify-send, and drops a plain notify-send's rather than keeping it in history
-    (`Delivery.js`). `up` of a box already up with --dnd/--no-dock names what differs, as for
-    --no-pointer. Tests: t_dnd_dock (both generations, OM), t_click_layer (the hidden dock not said),
-    t_unit_omarchy_contract (the IPC, the dock's `shown`, the mode files, setPluginEnabled), omshell's
-    hidden_dock_dropped_from_its_monitor_only.
-
-612. **`omabox doctor`: what a box needs, read, with a fix per distribution** (2026-10-31, #320).
-    `install.sh --check` installed first and then tried a box; nothing said, without changing the
-    machine, what was missing. doctor looks where a box looks: a box's start runs with PATH=/usr/bin
-    (up_box's LAUNCH_PATH, #364), so a program on the caller's PATH only (/usr/local/bin) is a
-    failure that names where it is. It reuses up's and setup's checks rather than copies: the
-    aquamarine as up picks it (hypr_aq_soname, aq_resolve) with setup's note (aq_note_text, now
-    shared), render_node's choice (OMABOX_RENDER_NODE, the gpu setting, the first usable), up's
-    `unshare -U true`, no_new_privs and /dev/net/tun tests, check_install's four tools. Versions
-    only where one is known not to work: Hyprland before 0.56 (hyprlang, finding 8), bwrap before
-    0.11 (no --overlay-src, which every box's /etc uses; Debian 12 packages 0.8, Ubuntu 24.04 0.9),
-    grim without -T (a warning: only shot --window, finding 81), a system aquamarine without #415
-    or a private build older than this omabox's (warnings, finding 247). User namespaces are tried
-    as a box makes them, a bwrap `--unshare-user` with /usr and the loader's dirs read-only (no /dev,
-    /run or /proc) running `true`, after unshare: Ubuntu's AppArmor
-    restriction is said to let `unshare -U` through and stop the mounts in it (not seen here: this
-    machine has no AppArmor); the sysctl that turned them off
-    (Debian's unprivileged_userns_clone, max_user_namespaces 0, apparmor_restrict_unprivileged_userns)
-    gives the fix. A render node that renders only in software (a VM's virtio-gpu without virgl) is
-    install.sh's test, now render.rs's software_only_in too. The socket length is the deepest socket
-    the host reaches by path (a 40-byte name's run/wayland-1, the broker's), against sun_path's 107
-    (finding 7). PATH is checked twice, the shell's and the desktop session's (`systemctl --user
-    show-environment`): an agent started from the launcher gets the latter; in a git worktree the
-    fix is "run its bin/omabox", never setup (#182). The fix lines come from one table (program to
-    package, for Arch, Debian/Ubuntu, Fedora, openSUSE: /etc/os-release's ID, then ID_LIKE; Arch's
-    names said as such for any other); setup --aquamarine's "needs git ..." line now comes from it
-    too, the same bytes on Arch. Only Arch's lines ran here; the others are written from those
-    distributions' package names and checked by the unit tests alone. Read-only by construction: it
-    runs --version, ldd, pacman -Q, pkg-config --exists, systemctl show-environment and the two
-    namespace probes, and writes nothing (t_unit_doctor points HOME, the XDG dirs, TMPDIR and the
-    runtime dir at empty stand-ins and finds them empty after). --smoke, only when every check
-    passes, is install.sh --check's box: doctor-PID up, a shot (kept, its path said), down. Not
-    done: install.sh calling doctor instead of assuming pacman (#247's step: install.sh builds
-    omabox after its packages, so doctor is not there yet when it would need it). Inside ai-jail the
-    broker refuses doctor as any command not on its list. Tests: doctor.rs's (families, the table,
-    versions, programs in a stand-in /usr/bin, userns reasons, socket length, PATH, render nodes
-    with a virtio-gpu stand-in, --json), t_unit_doctor, t_doctor_smoke (a real box).
-
-613. **`up --stock`: Omarchy as a new user sees it; `--clean` is it plus the freezes** (2026-10-31,
-    #265). Asked for shots of a plugin "with a default look", an agent ran `up --theme tokyo-night
-    --stock-bar` (the skill's row for a theme or bar result), and the box was still the desk's: its
-    terminal configs, branding, the plugins' settings (`extensions/`), the user's themes, their own
-    wallpaper for the theme, the locale and timezone. `--clean` had most of that left out, but it is
-    the opposite of a showcase (a #ff00ff wallpaper, the clock frozen, no network, animations off),
-    and the skill named it only "against a baseline". **`up --stock`** (`run --stock` too; `check
-    run` takes it and has it anyway): Omarchy's bar (`--stock-bar`) on CLEAN_THEME (tokyo-night) or
-    `--theme NAME`, the theme's own wallpaper (seed_backgrounds not run: never the user's for it),
-    English in UTC as a clean box (one code path: `clean_lang`/`clean_zone`, /etc/locale.conf and
-    localtime; `--env TZ=` still wins), and none of seed_home's look: no terminal configs or
-    `*xdg-terminals.list`, branding, `extensions/` (as `--no-seed extensions`), the user's themes,
-    Hyprland toggles, fonts (seed_fonts), and no kept notifications; the HOME is /etc/skel's, as a
-    new user's. The user's commit identity is still seeded (`user.name`/`user.email` only, finding
-    48): not seen in a shot, and an agent committing in the box needs it. A theme of the user's that
-    `--theme` names is the one theme of theirs copied in (only when Omarchy has none of that name:
-    one of theirs of Omarchy's name would change Omarchy's look); `--theme-dir`, `--plugin`, `--seed`
-    work on top; over a `--from` save, what the save's HOME holds stays (as `--no-seed`'s do). The
-    clock, pointer, network and animations are as in any box. Not with
-    `--desk-shell` (refused before anything is made); `--keep` stays `--clean`'s. **`--clean` is
-    `--stock` plus the freezes**: `checks` sets `stock` for it, and seed_home and seed_fonts read
-    `plan.stock` for what both leave out, `plan.clean` only for the sentinel and the clock, so the
-    two cannot drift. That changes a clean box: the desk's look is out of it too, and `--keep
-    wallpaper` gives the theme's wallpaper rather than the user's for it. The words `up` says come
-    from one list (upspec::look_text): "stock: Omarchy's bar, theme tokyo-night with its own
-    wallpaper, locale en_US.UTF-8 in UTC, none of your look (terminal configs, branding, themes,
-    wallpapers, the plugins' settings, Hyprland toggles, fonts)", a clean box's line the same with
-    its freezes. box.json and `ls --json` have `stock` (true for a clean box; one from an older
-    omabox counts as stock when clean); `up` again with `--stock` on a box that is not is refused
-    ("--stock (it has your look)"). The skill's table: "how a new Omarchy user sees it → `up
-    --stock`", "shots compared across runs → `up --clean`", `--theme NAME --stock-bar` left for a
-    theme or bar result on an otherwise normal box. Not `--default`: a box's default is the desk's
-    look. Tests: t_stock (a fake desk with a marker in each part of its look: all of it in a plain
-    box, none in a stock one; the theme's wallpaper, English in UTC, Omarchy's clock format,
-    animations on, the pointer shown; a theme of the user's by `--theme`; `--clean --keep
-    wallpaper`), t_unit_check (`--stock --desk-shell` and `--stock --keep` refused, `run --stock`
-    too), upspec.rs clean_as_bash and clean_words (the words), seed.rs fonts_as_bash.
-607. **The bwrap builder trusted its box dir by path alone** (2026-10-31, found writing #365's
-    tests). `Bwrap`'s seat check (S1) skips a source inside the box dir, which lies in the runtime
-    dir: the box's own run dir, etc files and placeholders are bound from there. Nothing checked the
-    box dir itself, so a box dir that was the runtime dir, `/`, `/run`, `/dev` or a link to one (a
-    name of `..`, a wrong prefix) would have exempted every seat path under it. Box names are
-    validated and the dir is always `$XDG_RUNTIME_DIR/omabox/NAME`, so no user could reach it:
-    defence in depth, no CHANGELOG line. `Bwrap::new` now refuses a box dir that, as written or
-    canonicalised, is or holds `/`, the runtime dir or HOME, or is or holds a seat path (`/dev`,
-    `/run`, `/dev/dri`, a card node, `/dev/input`, seatd's socket, the system bus); up says so and
-    stops. Test: bwrap.rs's `box_dir_never_covers_the_seat` (each of those, a link to `/run`, and the
-    runtime dir reached by `..`, refused; a box dir of the runtime dir's or of a plain folder taken).
-618. **A layer spanning the screen counted as over every point it spans, toast or no toast**
-    (2026-10-31, #283; findings 398, 421, 562). Hyprland gives a layer's rectangle only, so while
-    Omarchy's notifications column (or its dock) was up, every `--window` point under it got "may go
-    to it": a click 560 px below a toast warned, and the toast itself was never certain, so
-    `--no-raise` sent a click that landed on it. The issue's plan, the toasts' bounds from `tree
-    --layer` (finding 384), is still shut: on Omarchy 4.5.0rc2 with Quickshell 0.3.2.r7 the layer
-    publishes no accessible items (`Toast.qml` and `Service.qml` set no `Accessible` role; seen in a
-    box). What the box can read is where the layer draws: `drawn.rs` grabs, in the box, the region
-    where the layer and the window meet three times, the window's own pixels (`grim -T`), the
-    screen's, the window's again, and marks 4 px cells where the screen differs from the window by
-    more than 24 in a channel and the window's two grabs agree within 8 (a blinking cursor, an
-    animation are the window's own). Cells within 24 px are one item; the point is on one when it is
-    within 8 px of its box, so a toast's empty middle counts through its border and text. Left out:
-    the pointer (plain grim draws it: 48 px around its hot spot), the window's 48 px corners (its
-    rounding), windows over it and layers certainly over it. On an item: the line becomes `drawn`,
-    said as "a layer spanning the screen, NS (...), draws over X,Y of window ...: one of its items (a
-    toast, a dock icon) is there, and input there goes to it, not to the window", certain, so
-    `--no-raise` refuses it; the way out for the notifications is `omarchy-shell notifications
-    dismissAll` (4.5 keeps the layer mapped, `wait layer --gone` would not return). Nowhere near one:
-    nothing said, nothing refused. It cannot tell (grabs of other sizes, a grab that failed, one item
-    over the whole region: a dimming, a backdrop): the may, as before. A click at the screen's X Y
-    (#361) now names a spanning layer where it draws (finding 562 left it unsaid everywhere). `windows`
-    and a `--wait` 124 still give the rectangle's "possibly" (no grabs there). Cost: three grabs of the
-    region (465x1056 here) and three hyprctl reads, ~0.1 s, only when a spanning layer is over the
-    point. Seen in a box (Omarchy 4.5.0rc2, Hyprland 0.56.2, 1920x1080, scale 1): with a `notify-send`
-    toast at 1472..1914 x 6..76, `--no-raise` at 1700,40 and 1480,20 refused, at 1700,80 refused (the
-    pad), at 1700,100, 1460,40 and 1700,600 clicked silently; the idle column and the idle dock say
-    nothing; a screen click on the toast said it and closed it. Not seen: a scaled output (its grabs
-    should match at an integer scale; at others the sizes differ and it falls back to the may), a
-    light theme, a translucent window over a bright wallpaper (a 0.9 opacity there is near the
-    threshold). Tests: drawn.rs (the clusters, the pad, faint and global differences, the window
-    moving, left-out regions, sizes, the PPM, the line's rectangle), t_unit_wait_facts (`probe
-    screen_layer ... here|nothere|unknown`), t_click_layer (far from the toast: nothing said, also
-    under `pointer --window`, the idle column and dock; on it: refused under `--no-raise`, the toast
-    left up, a plain click said and closed it; failed on the old code).
-619. **`shot --window` cannot grow to a window's popups: Hyprland says nowhere where they are**
-    (2026-10-31, #334). A menu that opens past a window's edge is cut off in its window shot
-    (finding 81 noted it). Checked in a box (Hyprland 0.56.2) with a GTK 4 context menu (zenity
-    `--entry` floated at 300x252, right-click near the entry's right end) and a Chromium one
-    (Wayland, floated at 500x300): both are xdg_popups drawn past the window's right and bottom
-    edges, whole in a `-g` shot of the screen, cut at the edge in `shot --window`. With either open,
-    `hyprctl clients` and `layers` are unchanged (no entry, no size or place grows), and Hyprland's
-    source has no other way to ask: its Lua window object (`hl.get_windows()`) has no popup field,
-    hyprctl no popup request, socket2 no popup event, and its log names a popup by pointer only
-    ("New popup at ..."), never where. The window's extents with its popups exist inside it
-    (`CWindow::getFullWindowBoundingBox`, `popupTreeExtents`) but nothing exports them. The window
-    capture `-T` uses is sized to the window (`m_bufferSize` = the window's size times the scale)
-    and renders its popups into that buffer, so a popup inside the window is in the shot and the
-    part past the edge is lost. Other readings were weighed and left: the accessibility tree (the
-    open GTK 4 menu is not in zenity's tree at all, `tree --find copy` finds nothing in its 5
-    lines; a Qt popup's bounds start at 0,0, finding 364), and pixels past the window's edge (no
-    way to tell a popup from the window or wallpaper beside it). So `help` (the SEL paragraph) and the skill's reference (the `--window` bullet, a
-    Symptoms row) say it: take the screen around the window, `shot -g` in screen coordinates (the
-    window's place is on the shot's stderr line) or a whole shot, and `click --in` that. If
-    Hyprland ever exports a window's popup extents, `shot --window` could take a screen crop of
-    them instead when the window is uncovered. Docs only: no test.
-
-620. **A small target on a surface with no tree was aimed at by eye, and missed** (2026-10-31, #268).
-    With no accessibility tree and no reference image yet (a bar icon, a caret), an agent reads a
-    point off a shot; on small targets that is a few pixels off, a shot to see nothing happened, and
-    another try. `--fit` and `calibrate` fix the scale between the shot and the model, not the aim.
-    `shot --grid N` (2-26) draws N lettered columns and N numbered rows over the shot (the screen,
-    -g, --monitor or a window) with ImageMagick: lines black 3 px under yellow 1 px, seen on any
-    colour, and the labels (fontconfig's bold monospace) in a 28 px margin spliced on top and left,
-    so nothing under them is hidden; stderr names each column's and row's span in the shot's
-    coordinates (N + N spans rather than N² boxes), how to click a cell and the command for a closer
-    look. `--grid N --cell C3` (stateless: the cell of the N grid over what the rest of the command
-    asks for, so a jailed agent's works without a file) becomes that cell's `-g`, taken again
-    through the same aim as any -g (a window's crop scaled to its buffer), enlarged with `--zoom` to
-    about shot-fit's size (1000 px without one; `--fit` or `--zoom` given choose instead) and
-    gridded again; its stderr gives the `-g` of the cell for the next look. A target a grid line cuts
-    is named as both cells, `--cell C3:D3` (any rectangle of cells, spreadsheet style), so the closer
-    look has it whole. The issue's `shot --grid N --in C3` was not taken: `--in` takes a shot file
-    everywhere else. The margin shifts every image pixel, so a grid shot's shots.tsv line has a
-    sixth field, `grid N M`: `--in` takes M off a point first (a point in the margin is refused, as
-    one past the image is); an older omabox reads that line's geometry as no number and refuses
-    rather than missing by M. `click --in GRID --cell C3` is the cell's middle as an image pixel of
-    that shot, then --in as any point (so a window shot follows the window, and the screen's checks
-    apply). Measured in a box: on a 1920x1080 screen at --fit 1000, C3 of 8 clicks 600,337; a cell
-    of the box's bar enlarged 3 times showed a workspace number cut by a line, which C3:D3 keeps
-    whole. A grid shot is never --changed's baseline nor a --since (lines drawn on it); cells under
-    12 image px (no room for a label) are refused after the capture, which is removed. The capture
-    goes to a temp in the box dir first (as --changed's), then magick writes OUT.part (renamed) or a
-    jailed caller's fd. Tests: t_shot_grid (the margin, the spans, click --cell and X Y through the
-    margin, --cell C3:D3's crop, zoom and --json, a window's grid, the refusals), grid.rs's units.
 624. **Omarchy's own suite in a box: its 16 failures sorted; a box had no `/var` and a 0700 `/run`**
     (2026-10-31, #322). Omarchy's `./test/all` (`quattro` 7075b61) in a throwaway `run` box left 16
     test files failing; each was rerun alone in a box of its own, traced (`bash -x`) and sorted.
@@ -12174,6 +12107,69 @@ from them.
     `start-hyprland.sh` now writes the version `Hyprland --version` (or `--hyprland`'s build) gives
     when the file is missing; a save's HOME keeps its own. After it, six runs of that test showed no
     update window. Tests: t_system_dirs (lastVersion is the installed Hyprland's).
+627. **A polkit agent could not be tested in a box** (2026-10-31, #258). A shell plugin that is a polkit
+    agent (Omarchy's `omarchy.polkit`, a copy of it with its own look) loaded in a box but never
+    registered: Quickshell's `PolkitAgent` takes its subject from `polkit_unix_session_new_for_process`,
+    which asks logind's `sd_pid_get_session`, and a box's processes are in a user unit's cgroup (or the
+    box's own), so "No session for pid N"; and with no system bus there was no authority to register
+    with or to send it a request. Its dialog's states could only be faked, which hid the real order of
+    a request's end (Quickshell drops a finished request, `isActive` false, before it emits
+    `authenticationSucceeded`: a `Connections` on its flow never hears the success, which the fixture
+    below shows). The host's polkitd or system bus in a box is out (S1). A real polkitd on a bus of the
+    box's own is out too: it takes an agent's answer (`AuthenticationAgentResponse2`) only from uid 0,
+    and its helper runs PAM as root (since polkit 121 a socket-activated root service behind
+    `/run/polkit/agent-helper.socket`, no longer setuid); nothing in a box is root or can become it
+    (bwrap's no_new_privs). So `up --polkit` is a stand-in that speaks both sides an agent meets, and
+    nothing else:
+    - a system bus of the box's own: dbus-daemon (`share/polkit/bus.conf`) at
+      `$XDG_RUNTIME_DIR/omabox-polkit/bus`, named by `DBUS_SYSTEM_BUS_ADDRESS` for the session; never
+      `/run/dbus`, which the box safety invariant keeps out and the input tools' in-box check reads;
+    - `tools/polkit/omabox-polkit serve` (C, sd-bus) owns `org.freedesktop.PolicyKit1` there and keeps
+      agents as polkitd 128 does: one per subject (`RegisterAuthenticationAgent[WithOptions]`; a
+      session subject must be the box's, "omabox", else polkitd's own "Passed session and the session
+      the caller is in differs"), a second refused with "An authentication agent already exists for
+      the given subject", unregistered only by its owner at its path, dropped when it leaves the bus
+      (NameOwnerChanged). `AuthenticationAgentResponse[2]` from the box gets polkitd's "Only uid 0 may
+      invoke this method."; `CheckAuthorization` NotSupported: it decides nothing, so pkexec, pkcheck
+      and a mechanism get no yes from it;
+    - the same process listens on the box's own `/run/polkit/agent-helper.socket`, which polkit's agent
+      library (`PolkitAgentSession`) tries before the setuid helper: it reads the user and the cookie as
+      polkit-agent-helper-1 does, says `PAM_PROMPT_ECHO_OFF Password: ` (g_strescape'd, as the helper
+      writes it) and answers the response, after `--delay`, with SUCCESS (the request marked
+      authenticated first, as AgentResponse2 marks it before the helper's SUCCESS) or FAILURE: only the
+      one password `ask --accept` names, for the box user. No PAM;
+    - `omabox-polkit-session.so`, preloaded for the whole session (`LD_PRELOAD`), answers
+      `sd_pid_get_session` with `OMABOX_POLKIT_SESSION` ("omabox"), and `XDG_SESSION_ID` is "omabox"
+      for agents that read that. Only that one function: the rest of sd-login still finds no session.
+    `omabox polkit ask` makes a request as polkitd does (BeginAuthentication with a cookie, the box user
+    as the `unix-user` identity, the action, message, icon and details) on the session's agent, waits
+    for the agent's own end and says it: authenticated, not-authenticated, cancelled (the agent's
+    Cancelled error: dismissed), timeout (the authority sent CancelAuthentication after --timeout, as
+    polkitd does when its caller cancels; exit 124), agent-gone (NoReply: it left the bus) or no-agent,
+    with the passwords tried and how many were wrong; `polkit agents` lists them. The tool runs in the
+    box (box_exec `sys`), its answer read here through a pipe, bounded. Verified in a box: Omarchy 4.5's
+    stock `omarchy.polkit` (`up --polkit --stock-bar`) registers at `/org/omarchy/PolkitAgent` and shows
+    its dialog with the message asked; a wrong password, then the right one, end authenticated (2
+    passwords, 1 wrong). A bar seeded from the desk loads the polkit plugin only when its shell.json
+    does. Not covered: a real polkitd's decisions (rules, `auth_admin_keep`, implicit authorizations),
+    the real PAM stack (fingerprint, faillock), identities other than the box user (an admin dialog's
+    list of wheel members), agents of another session. Tests: t_polkit (a throwaway Quickshell agent:
+    registers, a second refused, wrong then right, dismissed, timeout, the agent gone and the other
+    registering; no /run/dbus, pkcheck NotSupported, a box's AgentResponse2 refused), t_main (no
+    --polkit: no system bus, `polkit` refused), t_unit_cli and the usage errors.
+    *Review (2026-10-31):* the bus allowed any name to be owned (`allow own="*"`) and the host said
+    what came back raw (up to 1 MB, stderr relayed as is). Now no name on it can be owned but
+    `org.freedesktop.PolicyKit1`, which the stand-in takes first and lets nobody replace (requested
+    with no replacement allowed). That is all a bus policy holds in a box: dbus-daemon tells callers
+    apart by uid (or an LSM label), and every process in a box has the same uid, so one that kills
+    the stand-in takes its name, and one could also replace the bus socket in the box's runtime dir.
+    So `polkit ask` and `agents` take every answer as the box's: stdout read up to 64 KiB, stderr up to
+    4 KiB, both said through term.rs's `plain` (a control character but newline and tab, or a byte
+    that is no UTF-8, as `?`; the cut said), `--json` parsed and written again by serde (an answer
+    that is no JSON fails). Tests: t_polkit (another name refused, the authority's name not taken
+    while held; a python-gobject authority in the stand-in's place answering escapes, 300 KB and an
+    error: plain, bounded, stderr plain, `--json` escaped), polkit.rs answer_is_plain_and_bounded.
+    They fail on the old code.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
