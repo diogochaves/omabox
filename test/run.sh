@@ -10462,6 +10462,22 @@ t_up_software() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# doctor --smoke (#320, finding 612): with every check passing, a headless box of its own name up, a
+# shot of it kept, the box down again.
+t_doctor_smoke() {
+  local j rc=0 fails shot b
+  j=$("$CLI" doctor --smoke --json 2>"$TMP/$P-doctor.err") || rc=$?
+  fails=$(jq -r '[.checks[] | select(.status == "fail") | .id] | join(" ")' <<<"$j" 2>/dev/null) || fails="no json: $j"
+  if [ -n "$fails" ]; then no "doctor --smoke: every check passes here first" "failed: $fails"; return 0; fi
+  check_eq "doctor --smoke: a box up, a shot, down; ok, exit 0, nothing on stderr" "true true 0 " \
+    "$(jq -r '"\(.ok) \(.smoke.ok)"' <<<"$j") $rc $(cat "$TMP/$P-doctor.err")"
+  shot=$(jq -r '.smoke.shot // ""' <<<"$j"); b=$(jq -r '.smoke.box // ""' <<<"$j")
+  check_match "...its box named doctor-PID" "^doctor-[0-9]+$" "$b"
+  check_eq "...the shot a PNG, kept" "89504e47" "$(head -c 4 "$shot" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+  check_eq "...the box down again" "" "$(ob ls --json | jq -r --arg n "$b" '.[] | select(.name == $n) | .name')"
+  rm -f "$shot"
+}
+
 # An up that fails before box.json leaves no half-made dir that ls and down --all would not see
 # (finding 163). /dev/dri/card9 is only a path render_node refuses (not a render node): never bound.
 t_up_aborted() {
@@ -12723,6 +12739,57 @@ t_throwaway_dead() {
 
 # (up's waits on a box that died meanwhile, #157, finding 216: ready.rs bar_settle_on_a_dead_box,
 # #324 wave 6-suite.)
+
+# omabox doctor (#320, finding 612): read-only (HOME, the XDG dirs, TMPDIR and the runtime dir all
+# stand-ins: nothing appears in them), its --json, and what it is made to find here: a HOME Omarchy
+# set no theme in (a failure, exit 1), a runtime dir too deep for a box's sockets, a PATH without
+# omabox (a warning); --smoke not started after a failure. The distribution tables are the crate's
+# (doctor.rs's tests). WAYLAND_DISPLAY unset: the front marks the guard's runtime dir otherwise.
+t_unit_doctor() {
+  local h=$TMP/$P-doctor j rc ids deep
+  rm -rf "$h"; mkdir -p "$h/home" "$h/rt"; chmod 700 "$h/rt"
+  _doctor_env() {
+    env -u WAYLAND_DISPLAY HOME="$h/home" XDG_CONFIG_HOME="$h/home/.config" XDG_CACHE_HOME="$h/home/.cache" \
+      XDG_STATE_HOME="$h/home/.state" XDG_DATA_HOME="$h/home/.data" TMPDIR="$h/home/tmp" "$@"
+  }
+  rc=0; j=$(_doctor_env XDG_RUNTIME_DIR="$h/rt" "$CLI" doctor --json) || rc=$?
+  check_eq "doctor --json: ok, os {id, id_like, family}, checks [{id, status, found, fix}], smoke null" "true" \
+    "$(jq '(.ok | type == "boolean") and (.os | has("id") and has("id_like") and has("family")) and (.checks | length > 0)
+      and all(.checks[]; (.id | type == "string") and (.status | IN("ok", "warn", "fail")) and (.found | type == "string")
+      and (.fix | type == "array" and all(.[]; type == "string"))) and .smoke == null' <<<"$j")"
+  ids="omarchy theme hyprland aquamarine labwc quickshell bwrap pasta unshare grim box-programs some-programs tools userns no-new-privs tun render socket-path path session-path"
+  check_eq "...every check, in order" "$ids" "$(jq -r '[.checks[].id] | join(" ")' <<<"$j")"
+  check_eq "...a HOME with no Omarchy theme fails, with up's fix; ok false, exit 1" \
+    "fail log into Omarchy once, or: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME) false 1" \
+    "$(jq -r '(.checks[] | select(.id == "theme") | "\(.status) \(.fix[0])"), .ok' <<<"$j" | paste -sd ' ') $rc"
+  check_eq "...and it wrote nothing (HOME, XDG dirs, TMPDIR, runtime dir)" "" "$(command find "$h/home" "$h/rt" -mindepth 1)"
+  rc=0; _doctor_env XDG_RUNTIME_DIR="$h/rt" "$CLI" doctor > "$h/text" 2>&1 || rc=$?
+  check_match "doctor: says the distribution and that it changes nothing" "^omabox doctor \(.+\): read-only, nothing changed$" "$(head -n 1 "$h/text")"
+  check_match "...a failed check in capitals, its fix under it" \
+    $'FAIL  theme +Omarchy has not set a theme for you yet[^\n]*\n +fix: log into Omarchy once' "$(cat "$h/text")"
+  check_match "...ends with what failed, exit 1" "^[0-9]+ failed, [0-9]+ warnings?: boxes cannot start here until the fixes above are made 1$" \
+    "$(tail -n 1 "$h/text") $rc"
+  if [ -x /usr/bin/omabox ]; then
+    skip "doctor: a PATH without omabox" "/usr/bin has one"
+  else
+    j=$(_doctor_env XDG_RUNTIME_DIR="$h/rt" PATH=/usr/bin "$CLI" doctor --json) || true
+    check_eq "...a PATH that finds no omabox: a warning, how to link it" \
+      "warn your shell's PATH finds no omabox: agents started from there cannot run it|omabox setup links ~/.local/bin/omabox; add ~/.local/bin to PATH" \
+      "$(jq -r '.checks[] | select(.id == "path") | "\(.status) \(.found)|\(.fix[0])"' <<<"$j")"
+  fi
+  # A runtime dir past what a socket path holds (a 40-byte box name's Wayland socket under it): a
+  # failure; --smoke then starts no box. (It need not exist: doctor makes nothing there.)
+  deep=$h/$(printf 'r%.0s' {1..60})
+  rc=0; j=$(_doctor_env XDG_RUNTIME_DIR="$deep" "$CLI" doctor --json --smoke) || rc=$?
+  check_eq "...a runtime dir too deep for a box's sockets fails; --smoke then starts no box" \
+    "fail run omabox with a shorter XDG_RUNTIME_DIR {\"ok\":false,\"error\":\"not started: a check failed\"} 1" \
+    "$(jq -r '.checks[] | select(.id == "socket-path") | "\(.status) \(.fix[0] | sub(" \\(.*"; ""))"' <<<"$j") $(jq -c .smoke <<<"$j") $rc"
+  check_fails "...and made no runtime dir" test -e "$deep"
+  check_eq "doctor takes no -b, nor an option it does not have (exit 2)" \
+    "omabox: doctor takes no -b: it is not about one box 2|omabox: doctor: unknown option --bogus (omabox help doctor) 2" \
+    "$(o=$("$CLI" -b x doctor 2>&1); echo "$o $?")|$(o=$("$CLI" doctor --bogus 2>&1); echo "$o $?")"
+  rm -rf "$h"
+}
 
 # install.sh with a temporary HOME and stubs first on PATH (sudo refuses, so it never installs a
 # package): failures stop it with a message (finding 64), and it links, never nests.
@@ -20026,9 +20093,9 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves
-  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts)
+  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

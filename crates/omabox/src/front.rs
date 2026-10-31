@@ -113,9 +113,8 @@ pub fn global_box(ctx: &Ctx, args: &[Vec<u8>]) -> Res<Vec<Vec<u8>>> {
     }
     if !BOX_CMDS.contains(&c.as_slice()) {
         return Err(match c.as_slice() {
-            b"ls" | b"list" | b"which" | b"saves" | b"config" | b"guard" | b"host" | b"broker" => {
-                not_one_box(c)
-            }
+            b"ls" | b"list" | b"which" | b"saves" | b"config" | b"guard" | b"host" | b"broker"
+            | b"doctor" => not_one_box(c),
             _ => crate::help::unknown_command(c),
         });
     }

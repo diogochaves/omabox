@@ -133,6 +133,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox setup [--remove]                                your links (skill, bar widget), settings dir, agent guard
   omabox setup --feedback-skill|--no-feedback-skill      opt in to the omabox-feedback skill, or out again
   omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
+  omabox doctor [--json] [--smoke]                       can this machine run boxes? what to install if not (read-only)
   omabox --version [--json]                              and which aquamarine new boxes use
   omabox help [COMMAND [--long] | exit-codes]            one command's options (--long: its notes); what each exit code means
 
@@ -826,6 +827,19 @@ boxes already use this omabox's build (--force rebuilds it). `omabox --version` 
 boxes use: a private build, or the system's (with the fix, patched with it, or without it). A git
 worktree of omabox with no build of its own uses its main checkout's build/prefix, and says so.
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
+@ doctor
+`omabox doctor` looks at what a box needs, where a box looks for it (/usr/bin), and changes nothing:
+Omarchy and your theme, Hyprland (0.56+, a Lua config), the aquamarine boxes would use (with or
+without #415), labwc, quickshell, bwrap (0.11+), pasta, grim (-T), the programs a box runs, omabox's
+C tools, user namespaces, no_new_privs, /dev/net/tun, the render nodes (driver, software-only) and
+the one a box uses, socket path length, and which omabox your shell's PATH and your desktop
+session's find (agents started from the desktop get the latter). A check that fails or warns has a
+fix line: the install command for your distribution's family (/etc/os-release's ID, else ID_LIKE:
+Arch, Debian and Ubuntu, Fedora, openSUSE; Arch's package names for any other). It installs, builds
+and asks for nothing. Exit 1 when a check fails, 0 otherwise (warnings too). --json: {ok, os {id,
+id_like, family}, checks [{id, status ok|warn|fail, found, fix [...]}], smoke}. --smoke, when
+every check passes, also starts a headless box (doctor-PID), takes a shot (kept: its path is said)
+and takes the box down.
 @ setup
 `omabox setup --feedback-skill` links the omabox-feedback skill next to the omabox one, for people
 who want to report what omabox got wrong from their own agent sessions: it runs only when you ask

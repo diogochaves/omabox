@@ -66,6 +66,7 @@ pub const COMMANDS: &[&str] = &[
     "broker",
     "brief",
     "setup",
+    "doctor",
     "help",
     "version",
 ];

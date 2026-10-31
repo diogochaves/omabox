@@ -190,6 +190,7 @@ fn main() -> ExitCode {
         Some("broker") => Some(cmd::broker::run),
         Some("guard") => Some(cmd::guard::run),
         Some("setup") => Some(cmd::setup::run),
+        Some("doctor") => Some(cmd::doctor::run),
         Some("reload") => Some(cmd::reload::run),
         Some("restart-shell") => Some(cmd::restart_shell::run),
         Some("help" | "-h" | "--help") => Some(|_, a| help::run(a)),

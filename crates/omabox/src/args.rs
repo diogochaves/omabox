@@ -25,6 +25,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"ls" | b"list" | b"saves" | b"--version" | b"config" => Some("--json"),
         b"save" => Some("-b= --box= --force"),
         b"setup" => Some("--aquamarine --force --remove --feedback-skill --no-feedback-skill"),
+        b"doctor" => Some("--json --smoke"),
         b"run" => Some(concat!(
             "-b= --box= -d --detach -q --print-log --replace --pass= --env-file= ",
             "--wait --start= --quiet= --timeout= --strict --json --ignore= -g= ",

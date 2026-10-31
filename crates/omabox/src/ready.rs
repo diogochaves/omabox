@@ -530,7 +530,7 @@ pub fn box_held(ctx: &Ctx, pid: &[u8]) -> bool {
 }
 
 /// What a VM's render node needs for a box (install.sh says the same, finding 538).
-const VIRGL_HINT: &[u8] = b"in a VM, virtio-gpu with virgl (QEMU's virtio-vga-gl, libvirt's accel3d with an OpenGL display)";
+pub(crate) const VIRGL_HINT: &[u8] = b"in a VM, virtio-gpu with virgl (QEMU's virtio-vga-gl, libvirt's accel3d with an OpenGL display)";
 
 /// render_why (#396, finding 568): why a headless box's labwc could not render on its GPU, from the
 /// head of its log, else empty. wlroots refuses a render node whose EGL device is software (a VM's

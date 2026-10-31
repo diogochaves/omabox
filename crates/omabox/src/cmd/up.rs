@@ -1210,13 +1210,13 @@ pub fn confirm_conf() -> Vec<u8> {
 }
 
 /// `grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status`.
-fn no_new_privs() -> bool {
+pub(crate) fn no_new_privs() -> bool {
     procfs::status(b"self", "NoNewPrivs", 2).is_some_and(|v| v == b"1")
 }
 
 /// `unshare -U true`: whether this process may make a user namespace (a child tries; nothing of
 /// this process changes).
-fn unshare_ok() -> bool {
+pub(crate) fn unshare_ok() -> bool {
     let mut c = crate::sig::command("unshare");
     c.args(["-U", "true"])
         .stdin(std::process::Stdio::inherit())
@@ -1225,7 +1225,7 @@ fn unshare_ok() -> bool {
     crate::sig::run_status(c).is_ok_and(|rc| rc == 0)
 }
 
-fn is_char(p: &str) -> bool {
+pub(crate) fn is_char(p: &str) -> bool {
     use std::os::unix::fs::FileTypeExt;
     std::fs::metadata(p).is_ok_and(|m| m.file_type().is_char_device())
 }

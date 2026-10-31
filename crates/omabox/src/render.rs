@@ -150,6 +150,39 @@ fn render_globbed(root: &[u8]) -> Vec<Vec<u8>> {
     v
 }
 
+/// Every render node's path under ROOT, usable or not (`omabox doctor` lists them all).
+pub fn render_all_in(root: &[u8]) -> Vec<Vec<u8>> {
+    render_globbed(root)
+}
+
+/// Whether node N (its path, read under ROOT) is one a box can use: readable and writable.
+pub fn render_rw_in(n: &[u8], root: &[u8]) -> bool {
+    rw(root, n)
+}
+
+/// Whether render node N (read under ROOT) renders in software only (#395, install.sh's test, kept
+/// in step): virtio-gpu (a VM's) with neither virgl nor context types, as its virtio device's
+/// features say (one 0/1 per bit: 0 virgl, 4 context init). That device is the node's device's child
+/// virtioN on PCI (device/ is virtio-pci's), or device/ itself (virtio-mmio).
+pub fn software_only_in(n: &[u8], root: &[u8]) -> bool {
+    let node = n.rsplit(|&c| c == b'/').next().unwrap_or_default();
+    let dev = at(root, &cat!(SYSDRM, "/", node, "/device"));
+    let mut devs = vec![dev.clone()];
+    devs.extend(
+        shell::glob(&shell::path(&dev), true)
+            .into_iter()
+            .filter(|c| c.starts_with(b"virtio"))
+            .map(|c| cat!(dev, "/", c)),
+    );
+    devs.iter().any(|d| {
+        let drv = crate::repo::readlink_f(&cat!(d, "/driver"))
+            .map(|p| shell::basename(&p))
+            .unwrap_or_default();
+        let f = std::fs::read(shell::path(&cat!(d, "/features"))).unwrap_or_default();
+        drv == b"virtio_gpu" && f.first() == Some(&b'0') && f.get(4) == Some(&b'0')
+    })
+}
+
 /// conf_get gpu: the `gpu` setting (auto by default).
 fn conf_want() -> Vec<u8> {
     crate::conf::conf_get("gpu", conf_gpu, b"auto")

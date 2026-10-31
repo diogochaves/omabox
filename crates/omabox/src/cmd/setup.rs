@@ -681,8 +681,9 @@ impl Setup {
         .collect();
         if !missing.is_empty() {
             return Err(ctx.die(format!(
-                "setup --aquamarine needs {}: sudo pacman -S --needed git cmake ninja hyprwayland-scanner base-devel",
-                missing.join(" ")
+                "setup --aquamarine needs {}: {}",
+                missing.join(" "),
+                super::doctor::install_here(&["aquamarine-build"]).join("; ")
             )));
         }
         // A checkout builds into its own build/ (as install.sh always did); anything else into the
@@ -846,10 +847,18 @@ impl Setup {
     }
 }
 
-/// aq_note: what the boxes' aquamarine lacks that `omabox setup --aquamarine` builds: #415, and
-/// omabox's own patches, which only this omabox's build has (finding 247). Nothing for a current
-/// build.
+/// aq_note: what the boxes' aquamarine lacks that `omabox setup --aquamarine` builds, said.
 pub fn aq_note(aq: &Aq) -> Res<()> {
+    match aq_note_text(aq) {
+        Some(t) => out(cat!("note: ", t, "\n")),
+        None => Ok(()),
+    }
+}
+
+/// What the boxes' aquamarine lacks that `omabox setup --aquamarine` builds: #415, and omabox's own
+/// patches, which only this omabox's build has (finding 247), ending with that command (setup's
+/// note, doctor's warning). None for a current build.
+pub fn aq_note_text(aq: &Aq) -> Option<Vec<u8>> {
     if aq.kind == b"private" {
         // Built by an older omabox (finding 132): it lacks a patch omabox carries now.
         let b = aq
@@ -857,28 +866,28 @@ pub fn aq_note(aq: &Aq) -> Res<()> {
             .iter()
             .position(|&c| c == b'@')
             .map_or(aq.ver.as_slice(), |i| &aq.ver[i + 1..]);
-        if b != AQ_BUILD.as_bytes() {
-            let lib = aq.lib.strip_suffix(b"/lib").unwrap_or(&aq.lib);
-            out(cat!(
-                "note: the aquamarine build in ",
-                lib,
-                " is older than this omabox's (it lacks a fix omabox carries now: ",
-                AQ_OWN,
-                "): omabox setup --aquamarine\n"
-            ))?;
+        if b == AQ_BUILD.as_bytes() {
+            return None;
         }
-        Ok(())
-    } else if !aq.fixed {
-        out(cat!(
-            "note: headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs, and interactive boxes omabox's own fixes (",
+        let lib = aq.lib.strip_suffix(b"/lib").unwrap_or(&aq.lib);
+        Some(cat!(
+            "the aquamarine build in ",
+            lib,
+            " is older than this omabox's (it lacks a fix omabox carries now: ",
             AQ_OWN,
-            "): omabox setup --aquamarine\n"
+            "): omabox setup --aquamarine"
+        ))
+    } else if !aq.fixed {
+        Some(cat!(
+            "headless boxes on NVIDIA and confirm-close need aquamarine's fix for nested Wayland outputs, and interactive boxes omabox's own fixes (",
+            AQ_OWN,
+            "): omabox setup --aquamarine"
         ))
     } else {
-        out(cat!(
-            "note: the system's aquamarine has the fix for nested Wayland outputs, but not omabox's own fixes (",
+        Some(cat!(
+            "the system's aquamarine has the fix for nested Wayland outputs, but not omabox's own fixes (",
             AQ_OWN,
-            "): omabox setup --aquamarine\n"
+            "): omabox setup --aquamarine"
         ))
     }
 }
