@@ -80,6 +80,8 @@ struct Guard {
     last: Option<(Vec<String>, Vec<String>)>,
     /// A failure said in reap.log, not said again until one works.
     said: bool,
+    /// When to look once more after the last event (nap).
+    again: Option<std::time::Instant>,
 }
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
@@ -104,6 +106,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             events: crate::net::AddrEvents::open(),
             last: None,
             said: false,
+            again: None,
         }),
     };
     if r.idle <= 0
@@ -162,8 +165,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 }
 
 /// The sleep between polls, SECS long; with a guard, its addresses looked at again as soon as the
-/// host's change (woken by the event; every second when there is no event socket).
+/// host's change (woken by the event; every second when there is no event socket), and once more
+/// AGAIN after each event: an IPv4 address gone is still in fib_trie for a moment after its event
+/// (net::host_addrs), and that look takes it out of the rule.
 fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
+    const AGAIN: Duration = Duration::from_millis(250);
     let Some(g) = r.guard.as_mut() else {
         crate::sig::sleep(Duration::from_secs(secs));
         return;
@@ -175,8 +181,11 @@ fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
         if now >= end {
             return;
         }
-        let step = (end - now).min(Duration::from_millis(100));
-        let look = match &g.events {
+        let mut step = (end - now).min(Duration::from_millis(100));
+        if let Some(at) = g.again {
+            step = step.min(at.saturating_duration_since(now));
+        }
+        let event = match &g.events {
             Some(e) => {
                 e.wait(step);
                 // (a stop on its way parks here, as sig::sleep does)
@@ -189,7 +198,13 @@ fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
                 ticks % 10 == 0
             }
         };
-        if look {
+        let due = g.again.is_some_and(|at| std::time::Instant::now() >= at);
+        if event {
+            g.again = Some(std::time::Instant::now() + AGAIN);
+        } else if due {
+            g.again = None;
+        }
+        if event || due {
             guard_look(ctx, g);
         }
     }

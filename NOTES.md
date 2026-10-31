@@ -11085,7 +11085,14 @@ from them.
     and fills both sets in one nft transaction. nft runs in pasta's user and network namespaces,
     entered through a pidfd of pasta's child (the box's bwrap; `Entry::pasta`), without root: the
     user owns pasta's user namespace. Nothing of the box can see or change that process. Addresses
-    the host loses leave the sets. A connected box with a protected port now always gets a reaper
+    the host loses leave the sets. The kernel sends an IPv4 address's event before it adds or
+    removes that address's local route (`__inet_insert_ifa`/`__inet_del_ifa` notify, then the
+    inetaddr chain updates the fib), so a reaper woken by it could read /proc/net/fib_trie a moment
+    early: t_protect_ports_ns caught an address the host lost still in the set, once in three runs.
+    host_addrs now adds the links' IPv4 addresses from an RTM_GETADDR dump (already the new list at
+    the event; fib_trie's local routes stay for an address that is only a local route), and the
+    reaper looks once more 250 ms after each event, for a lost one fib_trie still had. Since then
+    nine runs, three at once, passed. A connected box with a protected port now always gets a reaper
     (box.json `protect`: true, only that it has the rule, not which ports, #374), which says so in
     reap.log; a failure to set them is said there once and tried again at the next look. Not
     covered: a connection in the moment between the host gaining an address and the reaper's nft
@@ -11094,7 +11101,8 @@ from them.
     Tests: t_protect_ports_ns (two addresses added to the test's own network namespace after up,
     v4 and v6: their protected port not reached, TCP or UDP, within 5 s in the rule, the port not
     protected reached; one removed leaves the set; failed before: reached on all four, the set
-    unchanged), net.rs `rules` (the sets, protect_sets' transaction).
+    unchanged), net.rs `rules` (the sets, protect_sets' transaction) and `link_addresses` (the
+    dump's parsing; this machine's links' addresses all in fib_trie).
 582. **Protected ports tested over UDP and IPv6, without root** (2026-10-31, #399 item 1; S10).
     t_protect_ports checked TCP only, and IPv6 only where the host has a global IPv6 address. The new
     t_protect_ports_ns runs everything in a network namespace of the test's own (a user namespace's,

@@ -114,11 +114,139 @@ pub fn ephemeral() -> Vec<u8> {
 }
 
 /// The host's own addresses, from its routing tables (`/32 host LOCAL` in /proc/net/fib_trie) and
-/// /proc/net/if_inet6, loopback's left out (a box's loopback is its own), each once, IPv4 then IPv6.
+/// its links' IPv4 addresses (RTM_GETADDR), and /proc/net/if_inet6, loopback's left out (a box's
+/// loopback is its own), each once, IPv4 then IPv6. The links' are asked as well (#399): the kernel
+/// says an IPv4 address came or went before its local route does, so a reaper woken by that event
+/// can read fib_trie a moment early; the links' list is already the new one.
 pub fn host_addrs() -> (Vec<String>, Vec<String>) {
     let v4 = std::fs::read("/proc/net/fib_trie").unwrap_or_default();
     let v6 = std::fs::read("/proc/net/if_inet6").unwrap_or_default();
-    (local_v4(&v4), local_v6(&v6))
+    let mut v4 = local_v4(&v4);
+    for a in link_v4() {
+        if !v4.contains(&a) {
+            v4.push(a);
+        }
+    }
+    (v4, local_v6(&v6))
+}
+
+/// Every link's IPv4 address (an RTM_GETADDR dump's IFA_LOCAL, else IFA_ADDRESS), loopback's left
+/// out; none when netlink does not answer (within a second).
+fn link_v4() -> Vec<String> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    // SAFETY: socket takes numbers; the fd it gives is new and ours alone.
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+            libc::NETLINK_ROUTE,
+        )
+    };
+    if fd < 0 {
+        return Vec::new();
+    }
+    // SAFETY: just made, ours alone.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let tv = libc::timeval {
+        tv_sec: 1,
+        tv_usec: 0,
+    };
+    // SAFETY: setsockopt reads a timeval of ours, of its size.
+    unsafe {
+        libc::setsockopt(
+            fd.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            (&raw const tv).cast(),
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+    // nlmsghdr (len, type, flags, seq, pid) and an ifaddrmsg asking for AF_INET's.
+    let mut req = Vec::with_capacity(24);
+    req.extend_from_slice(&24u32.to_ne_bytes());
+    req.extend_from_slice(&libc::RTM_GETADDR.to_ne_bytes());
+    req.extend_from_slice(&((libc::NLM_F_REQUEST | libc::NLM_F_DUMP) as u16).to_ne_bytes());
+    req.extend_from_slice(&1u32.to_ne_bytes());
+    req.extend_from_slice(&0u32.to_ne_bytes());
+    req.extend_from_slice(&[libc::AF_INET as u8, 0, 0, 0, 0, 0, 0, 0]);
+    // SAFETY: send reads REQ, ours, of its length.
+    if unsafe { libc::send(fd.as_raw_fd(), req.as_ptr().cast(), req.len(), 0) } < 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 32768];
+    loop {
+        // SAFETY: recv into a buffer of ours, at most its length.
+        let n = unsafe { libc::recv(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+        let Ok(n) = usize::try_from(n) else {
+            return out;
+        };
+        if n == 0 {
+            return out;
+        }
+        match addr_dump(&buf[..n], &mut out) {
+            Dump::More => continue,
+            Dump::Done => return out,
+        }
+    }
+}
+
+enum Dump {
+    More,
+    Done,
+}
+
+/// One datagram of an RTM_GETADDR dump: each RTM_NEWADDR's IPv4 address into OUT (loopback's
+/// left out, each once); Done at NLMSG_DONE, an error, or a message that does not parse.
+fn addr_dump(b: &[u8], out: &mut Vec<String>) -> Dump {
+    let u16_at = |i: usize| b.get(i..i + 2).map(|s| u16::from_ne_bytes([s[0], s[1]]));
+    let u32_at = |i: usize| {
+        b.get(i..i + 4)
+            .map(|s| u32::from_ne_bytes([s[0], s[1], s[2], s[3]]))
+    };
+    let mut off = 0usize;
+    while off + 16 <= b.len() {
+        let (Some(len), Some(ty)) = (u32_at(off), u16_at(off + 4)) else {
+            return Dump::Done;
+        };
+        let len = len as usize;
+        if len < 16 || off + len > b.len() {
+            return Dump::Done;
+        }
+        if ty == libc::NLMSG_DONE as u16 || ty == libc::NLMSG_ERROR as u16 {
+            return Dump::Done;
+        }
+        if ty == libc::RTM_NEWADDR && len >= 24 && b[off + 16] == libc::AF_INET as u8 {
+            let (mut local, mut address) = (None, None);
+            let mut a = off + 24;
+            while a + 4 <= off + len {
+                let (Some(alen), Some(aty)) = (u16_at(a), u16_at(a + 2)) else {
+                    break;
+                };
+                let alen = alen as usize;
+                if alen < 4 || a + alen > off + len {
+                    break;
+                }
+                if alen == 8 {
+                    let ip = std::net::Ipv4Addr::new(b[a + 4], b[a + 5], b[a + 6], b[a + 7]);
+                    if aty == libc::IFA_LOCAL {
+                        local = Some(ip);
+                    } else if aty == libc::IFA_ADDRESS {
+                        address = Some(ip);
+                    }
+                }
+                a += (alen + 3) & !3;
+            }
+            if let Some(ip) = local.or(address)
+                && !ip.is_loopback()
+                && !out.contains(&ip.to_string())
+            {
+                out.push(ip.to_string());
+            }
+        }
+        off += (len + 3) & !3;
+    }
+    Dump::More
 }
 
 fn local_v4(trie: &[u8]) -> Vec<String> {
@@ -384,6 +512,53 @@ mod tests {
                 "2001:db8::5".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn link_addresses() {
+        // RTM_NEWADDR (ifaddrmsg AF_INET) with IFA_ADDRESS and IFA_LOCAL (a peer link: LOCAL wins)
+        let msg = |local: [u8; 4], peer: Option<[u8; 4]>| {
+            let mut attrs = Vec::new();
+            if let Some(p) = peer {
+                attrs.extend_from_slice(&8u16.to_ne_bytes());
+                attrs.extend_from_slice(&libc::IFA_ADDRESS.to_ne_bytes());
+                attrs.extend_from_slice(&p);
+            }
+            attrs.extend_from_slice(&8u16.to_ne_bytes());
+            attrs.extend_from_slice(&libc::IFA_LOCAL.to_ne_bytes());
+            attrs.extend_from_slice(&local);
+            let mut m = Vec::new();
+            m.extend_from_slice(&((24 + attrs.len()) as u32).to_ne_bytes());
+            m.extend_from_slice(&libc::RTM_NEWADDR.to_ne_bytes());
+            m.extend_from_slice(&[0; 10]);
+            m.extend_from_slice(&[libc::AF_INET as u8, 24, 0, 0, 1, 0, 0, 0]);
+            m.extend_from_slice(&attrs);
+            m
+        };
+        let mut b = msg([127, 0, 0, 1], None);
+        b.extend(msg([10, 239, 1, 1], Some([10, 239, 1, 2])));
+        b.extend(msg([172, 17, 0, 1], None));
+        let mut out = Vec::new();
+        assert!(matches!(addr_dump(&b, &mut out), Dump::More));
+        assert_eq!(
+            out,
+            vec!["10.239.1.1".to_string(), "172.17.0.1".to_string()]
+        );
+        // NLMSG_DONE ends it; a length past the datagram is no message
+        let mut done = vec![0u8; 20];
+        done[..4].copy_from_slice(&20u32.to_ne_bytes());
+        done[4..6].copy_from_slice(&(libc::NLMSG_DONE as u16).to_ne_bytes());
+        assert!(matches!(addr_dump(&done, &mut out), Dump::Done));
+        let mut bad = msg([10, 0, 0, 9], None);
+        bad[..4].copy_from_slice(&999u32.to_ne_bytes());
+        assert!(matches!(addr_dump(&bad, &mut out), Dump::Done));
+        assert_eq!(out.len(), 2);
+        // and this machine's own: what fib_trie has, the links' list has too (no root needed)
+        let fib = local_v4(&std::fs::read("/proc/net/fib_trie").unwrap_or_default());
+        let links = link_v4();
+        for a in &links {
+            assert!(fib.contains(a), "{a} of {links:?} not in {fib:?}");
+        }
     }
 
     #[test]

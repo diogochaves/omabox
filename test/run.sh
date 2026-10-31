@@ -7375,19 +7375,26 @@ while True:
   local pp kid
   pp=$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid" 2>/dev/null) || pp=""
   kid=$(pgrep -P "${pp:-0}" | head -1) || kid=""
+  local rlog=$XDG_RUNTIME_DIR/omabox/$B/reap.log
   sets() { nsenter -t "${kid:-0}" -U -n --preserve-credentials nft list table inet omabox 2>&1; }
-  check_match "the reaper says it keeps the rule's addresses" "watching it every .* and the host's addresses for its protected ports as they change" "$(cat "$XDG_RUNTIME_DIR/omabox/$B/reap.log" 2>&1)"
-  asns ip addr add 10.239.2.1/24 dev d1 && asns ip -6 addr add fd39:2::1/64 dev d1 nodad
-  check "...the host gains two addresses after up" asns sh -c 'ip -o addr show dev d1 | grep -q 10.239.2.1 && ip -o addr show dev d1 | grep -q fd39:2::1'
-  check "...both in the rule within 5 s (#399)" until_ok 5 bash -c "nsenter -t '${kid:-0}' -U -n --preserve-credentials nft list table inet omabox | grep -q '10\.239\.2\.1' &&nsenter -t '${kid:-0}' -U -n --preserve-credentials nft list table inet omabox | grep -q 'fd39:2::1'"
+  # rule_has IN|OUT REGEX: the rule's sets hold (or not) REGEX; when not, they and reap.log said
+  rule_has() {
+    local t; t=$(sets) || t=""
+    if [ "$1" = IN ] && grep -q "$2" <<<"$t"; then return 0; fi
+    if [ "$1" = OUT ] && [ -n "$t" ] && ! grep -q "$2" <<<"$t"; then return 0; fi
+    echo "$t"; tail -n 3 "$rlog" 2>&1; return 1
+  }
+  check_match "the reaper says it keeps the rule's addresses" "watching it every .* and the host's addresses for its protected ports as they change" "$(cat "$rlog" 2>&1)"
+  check "...the host gains two addresses after up" asns sh -c 'ip addr add 10.239.2.1/24 dev d1 && ip -6 addr add fd39:2::1/64 dev d1 nodad'
+  check "...both in the rule within 5 s (#399)" until_ok 5 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has IN '10\.239\.2\.1' && rule_has IN 'fd39:2::1'"
   look 10.239.2.1 fd39:2::1
   check_eq "a protected port on an address the host gained after up: not reached, TCP or UDP (#399)" "" "$reached"
   check_eq "...where a port not protected is (the control)" "" "$control"
   # ...and one it loses goes from it: the rule holds the host's addresses, no more.
-  asns ip addr del 10.239.1.1/24 dev d1
-  check "an address the host lost: out of the rule within 5 s" until_ok 5 bash -c "! nsenter -t '${kid:-0}' -U -n --preserve-credentials nft list table inet omabox | grep -q '10\.239\.1\.1'"
+  check "the host loses one" asns ip addr del 10.239.1.1/24 dev d1
+  check "...out of the rule within 5 s" until_ok 5 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has OUT '10\.239\.1\.1'"
   check_match "...the others still in it" "10\.239\.2\.1" "$(sets)"
-  check_eq "...and nothing failed in reap.log" "" "$(grep "could not set" "$XDG_RUNTIME_DIR/omabox/$B/reap.log" 2>&1)"
+  check_eq "...and nothing failed in reap.log" "" "$(grep "could not set" "$rlog" 2>&1)"
   HOME=$h ob down "$B" >/dev/null 2>&1
   kill "$H" 2>/dev/null
 }
