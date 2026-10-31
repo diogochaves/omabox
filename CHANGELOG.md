@@ -3,22 +3,41 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.1.0 — 2026-10-31
+
+New ways to drive and check a box: `run -d` jobs listed, stopped and waited for (`jobs`, `stop`,
+`wait job`, `wait log`); waits and checks on the accessibility tree (`wait tree`, `--expect tree`,
+`--wait --tree`) and on a picture where there is none (`find`, `click` and `wait --image`); `click
+--find`; `window --size`; `tray`; `dnd` and `dock`; `doctor`; `plugin add`; `up --stock` and `up
+--polkit`; `shot --grid`; checkpoints with proofs and `check run --only`; `record --crf` and
+frame-by-frame sheets; `omabox pid`; and the skill pre-approves the commands that stay in a box.
+Also security hardening (S1, S8 and S10 held more tightly, signals through pidfds, a box's text made
+safe for your terminal, output paths a box cannot redirect, ImageMagick reading only PNGs) and many
+fixes, among them an `up` with another `XDG_RUNTIME_DIR` that deleted the HOMEs of boxes still
+running. Update.
+
+**Omarchy:** 1.1.0 supports Omarchy 4.0 and the 4.5 release candidates. Dropping 4.0 waits for
+4.5's release ([#312](https://github.com/diogochaves/omabox/issues/312), planned for 1.2.0).
 
 ### Added
 
-- **`omabox plugin add PATH|ID` puts a shell plugin into a box that is already up**, as `up --plugin`
-  would have: read-only, linked where the box has it at its own path or mounted, the shell made to
-  know it and enabled, its state said (`ls --json`: plugin_status). `plugin remove ID` takes one out.
-  A link made by hand in the box HOME, then `omarchy plugin enable`, said "is not known": the enable
-  ran before the shell's rescan was done ([#345](https://github.com/diogochaves/omabox/issues/345)).
-- **Who started a box, and who took it down**
-  ([#295](https://github.com/diogochaves/omabox/issues/295)). A session's subagents share its
-  default box name. `ls` now says under each box where it was started and by which agent session
-  (and who used it last, when another); `down` of a box another caller started or used in the last
-  10 minutes warns that it may be another agent's (it still takes it down); and the name's next
-  command says when another caller's `down` took it and from where, not just `no box is up` (a
-  caller's own `down` leaves nothing to say: its next `run` starts a throwaway as before).
+- **`omabox jobs`, `omabox stop PID`, `wait job` and `wait log`**: a `run -d` job is listed, stopped
+  and waited for by its pid, with no `pgrep` or `kill` on the host (where the same program may run on
+  your desktop). `run -d` says the job's pid; `jobs [--json]` lists the running ones (pid, age,
+  processes, log, command); `stop PID... | --all` stops one as `--replace` does, its windows gone,
+  by its pid or a window's; `wait job [PID] [--gone]` until it ends, with its exit status; `wait log
+  [PID] RE [-i]` until a line of its log matches. `--replace` with other arguments now says the new
+  job starts beside the one still running, and the `omabox stop PID` that stops it
+  ([#299](https://github.com/diogochaves/omabox/issues/299)).
+- **`wait log LOG RE [-i]`** waits for a new line in a box log, by `log`'s names (`shell`,
+  `hyprland`, `apps`, `journal`, ...), as `wait log [JOB] RE` does for a `run -d` job's: a plugin's
+  line, Hyprland's own (from its rolling log, since its file is written late); RE also as `--grep
+  RE`. A line already there does not count, and a 124 says when one was;
+  `--since OFFSET` reads from a byte (`--since 0`: the whole log), and `--json`'s `offset` is where
+  the line found ends, for the next wait. A log begun anew meanwhile (restart-shell's) is read from
+  its start. **`wait for DURATION`** is a fixed wait that says it is one, for agents whose harness
+  blocks `sleep`: no more `wait until -- false` as a sleep
+  ([#330](https://github.com/diogochaves/omabox/issues/330)).
 - **`wait tree TEXT [--window SEL | --layer SEL] [--gone] [--shot FILE]`** waits for the
   accessibility tree to hold TEXT, matched as `tree --find` matches it: satisfied at the first read
   holding it (a toast or a sheet that lasts a second is caught), `--gone` when two reads in a row do
@@ -28,49 +47,6 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   wanted. `tree --find` (and both of these) takes TEXT's `[STATE ...]` as a set: `"Dark mode"
   [checked]` finds a box that is `[focused checked]`
   ([#319](https://github.com/diogochaves/omabox/issues/319)).
-- **`click --in SHOT` refuses when the screen changed at its point since that shot**: a click,
-  scroll, drag or pointer move `--in` a screen shot is refused (exit 1, nothing sent) when what is at
-  the point is not what was there at the shot (a menu or dialog over it, another window, the window
-  moved or resized under it), saying what it was on then and now and what changed since; take a new
-  shot. A change elsewhere on the screen (a toast, a clock, a window away from the point) is not
-  refused. A window's shot follows its window as before
-  ([#333](https://github.com/diogochaves/omabox/issues/333)).
-- **`wait change --since SHOT` and `wait still --like SHOT`**: the screen against an earlier shot.
-  `--since` is satisfied at once when the screen (`-g`: part of it; a window's shot: that window)
-  already differs from SHOT, so a redraw done before the wait started (after an edit to a file the
-  shell applies, an IPC call) is no longer missed, else at the first change; `--like` waits until it
-  looks like SHOT again. The pointer, a caret blinking alone and `--ignore`'s regions are no
-  difference ([#344](https://github.com/diogochaves/omabox/issues/344)).
-- **`up --polkit`: a polkit agent can be tested in a box.** The shell's polkit plugin (or a copy of it
-  under test, or a GTK or Qt agent) registers and shows its dialog as on a desktop: the box gets a
-  system bus of its own, never your system bus or polkitd, on which only polkit's name can be owned,
-  taken by a stand-in authority.
-  `omabox polkit ask [--action ID] [--message TEXT] [--accept PASSWORD] [--timeout 60s] [--delay
-  DURATION]` makes a request and says how the agent ended it (authenticated, cancelled, timeout, the
-  agent gone), with the passwords tried and how many were wrong; `--accept` names the one test
-  password the box's helper takes. `omabox polkit agents` lists who registered; `log polkit` is the
-  authority's log. It decides nothing for any service (pkexec and pkcheck get no answer from it).
-  That bus is the box's (a process in the box can answer in the stand-in's place), so what `polkit`
-  prints of its answers is bounded and plain: an escape sequence in it never reaches your terminal
-  ([#258](https://github.com/diogochaves/omabox/issues/258)).
-- **The skill pre-approves the omabox commands that stay in a box** (Claude Code's `allowed-tools`):
-  `shot`, `windows`, `tree`, `keys`, `click`, `wait`, `log` and the rest that act only inside a box
-  and read none of your files run without a permission prompt while the skill is in use. `up`,
-  `run`, `down`, `host`, `peek`, `config` and the others that can reach your desktop, your files or
-  other boxes still ask. The skill's reference says which, and what Codex and OpenCode take instead
-  ([#338](https://github.com/diogochaves/omabox/issues/338)).
-- **`omabox tray`** lists the box's tray items and their menus, read over the box's own session
-  bus: each item's id, title and status, and its rows as `tree` words them (`check menu item
-  "Sync" [checked]`, a submenu's rows under it, [disabled]); `--json` for scripts. `tray click ID
-  LABEL` clicks a row by its label, as the bar's menu does, and prints it as the app has it after
-  (several alike: `--index N`; a hidden, disabled or submenu row is refused). `tray menu ID` opens
-  one item's menu as a host does, `tray activate ID` is a left click on its icon (`--secondary` a
-  middle one). No pixels: Omarchy's bar publishes no place for its icons, so where a real click on
-  one lands is still found from a shot. `tray menu`, `activate` and `click` are actions for `shot
-  --burst --after` and `record -- ACTION`. What an item says of itself is printed plain (an escape
-  sequence in its name or a label never reaches your terminal); one call reads at most 64 items, in
-  15 s at most, and says what it left out
-  ([#343](https://github.com/diogochaves/omabox/issues/343)).
 - **`--wait --tree`** on `keys`, `click`, `scroll` and `drag` says what changed in the app's own
   accessibility tree: the window's tree is read before the input and again once the screen settled,
   and the line ends with "no change in the app's tree" or "the app's tree: N changes", one line each
@@ -93,25 +69,55 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   fails the checkpoint when `find --image FILE` finds no match on the screen (or in `--window`'s own
   pixels), as `--expect-tree` does for a tree
   ([#267](https://github.com/diogochaves/omabox/issues/267), [#266](https://github.com/diogochaves/omabox/issues/266)).
-- **Proofs on a checkpoint**: `check point --expect TEXT` says in words what that screen must show,
-  kept with it and said under its line in `check run` and `--approve`, on its cards in `report.png`
-  and `baseline.png`, and in `--json`, for whoever judges a change or a baseline. `--expect-tree TEXT`
-  (a `tree --find` of its `--window`) and `--expect-cmd -- CMD...` (run in the box) are checked: a
-  failed one is its own result, `proof ID: proof failed: ...`, even where the pixels are the
-  baseline's, and `--approve` keeps no run where it failed, nor anything when it failed in every
-  run ([#266](https://github.com/diogochaves/omabox/issues/266)).
-- **`record --crf N`** sets the video's H.264 quality (18 by default) for footage that will be zoomed
-  or encoded again: `record start --crf 8`, or with `-- ACTION` and `--for`. It holds with
-  `--cut-idle` and the overlays; 0 is lossless (a profile browsers do not play, said at stop)
-  ([#278](https://github.com/diogochaves/omabox/issues/278)).
-- **A contact sheet of a stretch of a video, frame by frame**: `record sheet` (and `stop --sheet`)
-  take `--from T --to T`, `--every-frame`, `-g "X,Y WxH"` (that region of each frame, small ones
-  enlarged pixel for pixel) and `--changed` (the frames where the region changes), each tile labelled
-  with its time to the ms and its frame number
-  ([#260](https://github.com/diogochaves/omabox/issues/260)).
-- **`record sheet VIDEO` needs no box**: with none named and none up, ffmpeg reads the video on the
-  host in a sandbox of its own (no network, no display, only the video) and makes the same sheet
-  ([#279](https://github.com/diogochaves/omabox/issues/279)).
+- **`click --find TEXT`** clicks what the accessibility tree names TEXT, with the real pointer at
+  the middle of what of it is in view, read fresh on every call: no `tree --find`, then working out
+  the middle by hand. An exact name wins over a part of one, and a control over a label of its name;
+  several in view is exit 2 with their lines, numbered for `--index N`. A hidden node, one with no
+  bounds, one scrolled out of its container and a disabled one are refused, saying which, and
+  nothing is clicked. `--window SEL` (none: the active window) or `--layer SEL` for the shell's
+  layers. Thanks to [@btsouth](https://github.com/btsouth)
+  ([#408](https://github.com/diogochaves/omabox/pull/408),
+  [#318](https://github.com/diogochaves/omabox/issues/318)).
+- **`tree` names an unnamed control after its label** (LABELLED_BY), so `--find Email` finds the
+  entry its label names, and reads a node once when it sits under two parents (Qt WebEngine)
+  ([#318](https://github.com/diogochaves/omabox/issues/318)).
+- **`click --in SHOT` refuses when the screen changed at its point since that shot**: a click,
+  scroll, drag or pointer move `--in` a screen shot is refused (exit 1, nothing sent) when what is at
+  the point is not what was there at the shot (a menu or dialog over it, another window, the window
+  moved or resized under it), saying what it was on then and now and what changed since; take a new
+  shot. A change elsewhere on the screen (a toast, a clock, a window away from the point) is not
+  refused. A window's shot follows its window as before
+  ([#333](https://github.com/diogochaves/omabox/issues/333)).
+- **`wait change --since SHOT` and `wait still --like SHOT`**: the screen against an earlier shot.
+  `--since` is satisfied at once when the screen (`-g`: part of it; a window's shot: that window)
+  already differs from SHOT, so a redraw done before the wait started (after an edit to a file the
+  shell applies, an IPC call) is no longer missed, else at the first change; `--like` waits until it
+  looks like SHOT again. The pointer, a caret blinking alone and `--ignore`'s regions are no
+  difference ([#344](https://github.com/diogochaves/omabox/issues/344)).
+- **`omabox window --size WxH`** floats one window of the box at that size, centred, where `mode`
+  resizes the whole screen: an app checked at a narrow width, again at another. `--window SEL` takes
+  the same selectors as `click --window` (none: the active window); it prints the window as it is
+  then, and a size the app did not take (its smallest or largest) is exit 1, saying the size it
+  took. `--float` floats a window as it is, `--tile` tiles it again, `--json` gives the window as
+  `windows --json` does ([#362](https://github.com/diogochaves/omabox/issues/362)).
+- **`wait layer` says which monitor a layer is on**: `… at 0,0 1920x1080 on HEADLESS-2`, each one
+  when there are several (a bar on every monitor), and `--json`'s `detail` has it. `wait layer NS
+  --monitor NAME` waits for one on that monitor (`--gone`: none left there); a monitor the box does
+  not have is said, with the ones it has. `windows` names the monitor of each layer under its table,
+  and `windows --json`'s `layers` have `monitor`
+  ([#316](https://github.com/diogochaves/omabox/issues/316)).
+- **`omabox tray`** lists the box's tray items and their menus, read over the box's own session
+  bus: each item's id, title and status, and its rows as `tree` words them (`check menu item
+  "Sync" [checked]`, a submenu's rows under it, [disabled]); `--json` for scripts. `tray click ID
+  LABEL` clicks a row by its label, as the bar's menu does, and prints it as the app has it after
+  (several alike: `--index N`; a hidden, disabled or submenu row is refused). `tray menu ID` opens
+  one item's menu as a host does, `tray activate ID` is a left click on its icon (`--secondary` a
+  middle one). No pixels: Omarchy's bar publishes no place for its icons, so where a real click on
+  one lands is still found from a shot. `tray menu`, `activate` and `click` are actions for `shot
+  --burst --after` and `record -- ACTION`. What an item says of itself is printed plain (an escape
+  sequence in its name or a label never reaches your terminal); one call reads at most 64 items, in
+  15 s at most, and says what it left out
+  ([#343](https://github.com/diogochaves/omabox/issues/343)).
 - **`omabox dnd [on|off] [--clear]` and `up --dnd`**: the box's Do Not Disturb, in its own Omarchy
   shell, so no toast lands over a window between steps; `--clear` dismisses the toasts up. **`omabox
   dock [on|off]` and `up --no-dock`**: whether Omarchy 4.5's dock takes input in the box, per
@@ -125,40 +131,87 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   point, and `--no-raise` refuses; far from one, nothing is said. A click at the screen's X Y names
   it on a toast too. Where the pixels cannot tell (a scaled output), the "may" stays
   ([#283](https://github.com/diogochaves/omabox/issues/283)).
+- **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
+  does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
+  the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications
+  column, its dock) is not said there, since it takes input on its items only
+  ([#361](https://github.com/diogochaves/omabox/issues/361)).
+- **`omabox doctor [--json] [--smoke]`** says whether this machine can run boxes, changing nothing:
+  Omarchy and your theme, Hyprland (0.56+, Lua), the aquamarine boxes use, labwc, quickshell, bwrap
+  (0.11+), pasta, grim, the programs a box runs, omabox's tools, user namespaces, the render nodes
+  and the one a box uses, socket path length, and which omabox your shell's and your desktop
+  session's PATH find. Each failure or warning has a fix line for your distribution's family (Arch,
+  Debian and Ubuntu, Fedora, openSUSE); exit 1 when something fails. `--smoke` also starts a box,
+  takes a shot and takes it down ([#320](https://github.com/diogochaves/omabox/issues/320)).
+- **`omabox plugin add PATH|ID` puts a shell plugin into a box that is already up**, as `up --plugin`
+  would have: read-only, linked where the box has it at its own path or mounted, the shell made to
+  know it and enabled, its state said (`ls --json`: plugin_status). `plugin remove ID` takes one out.
+  A link made by hand in the box HOME, then `omarchy plugin enable`, said "is not known": the enable
+  ran before the shell's rescan was done ([#345](https://github.com/diogochaves/omabox/issues/345)).
+- **`up --stock`: Omarchy as a new user sees it**, for a showcase or a shot for someone else:
+  Omarchy's bar on tokyo-night (or `--theme NAME`) with the theme's own wallpaper, English in UTC,
+  and nothing of your desktop's look (terminal configs and choice, branding, your themes and
+  wallpapers, the plugins' settings, Hyprland toggles, fonts); the clock live, animations on, the
+  network and pointer as in any box. `--plugin`, `--theme-dir` and the rest work on top; `ls --json`
+  says `stock` ([#265](https://github.com/diogochaves/omabox/issues/265)).
+- **`up --polkit`: a polkit agent can be tested in a box.** The shell's polkit plugin (or a copy of it
+  under test, or a GTK or Qt agent) registers and shows its dialog as on a desktop: the box gets a
+  system bus of its own, never your system bus or polkitd, on which only polkit's name can be owned,
+  taken by a stand-in authority.
+  `omabox polkit ask [--action ID] [--message TEXT] [--accept PASSWORD] [--timeout 60s] [--delay
+  DURATION]` makes a request and says how the agent ended it (authenticated, cancelled, timeout, the
+  agent gone), with the passwords tried and how many were wrong; `--accept` names the one test
+  password the box's helper takes. `omabox polkit agents` lists who registered; `log polkit` is the
+  authority's log. It decides nothing for any service (pkexec and pkcheck get no answer from it).
+  That bus is the box's (a process in the box can answer in the stand-in's place), so what `polkit`
+  prints of its answers is bounded and plain: an escape sequence in it never reaches your terminal
+  ([#258](https://github.com/diogochaves/omabox/issues/258)).
 - **`shot --grid N`** draws N lettered columns and N numbered rows over a shot, the labels in a
   margin so nothing is hidden, and names each column's and row's span on stderr: aim at a small
   target on a surface with no accessibility tree. `--grid N --cell C3` is that cell cropped,
   enlarged and gridded again (`--cell C3:D3` for a target a line cuts), and `click --in GRID.png
   --cell C3` clicks a cell's middle; `click --in GRID.png X Y` takes the margin off
   ([#268](https://github.com/diogochaves/omabox/issues/268)).
-- **A click, scroll or drag at the screen's X Y says a layer over the window there**, as `--window`
-  does, when the layer certainly covers the point: a panel or menu over it is named on stderr before
-  the input is sent (never refused). A layer spanning the screen (Omarchy 4.5's notifications
-  column, its dock) is not said there, since it takes input on its items only
-  ([#361](https://github.com/diogochaves/omabox/issues/361)).
-- **`click --find TEXT`** clicks what the accessibility tree names TEXT, with the real pointer at the
-  middle of what of it is in view, read fresh on every call: no `tree --find`, then working out the
-  middle by hand. An exact name wins over a part of one, and a control over a label of its name;
-  several in view is exit 2 with their lines, numbered for `--index N`. A hidden node, one with no
-  bounds, one scrolled out of its container and a disabled one are refused, saying which, and nothing
-  is clicked. `--window SEL` (none: the active window) or `--layer SEL` for the shell's layers
-  ([#318](https://github.com/diogochaves/omabox/issues/318)).
-- **`wait log LOG RE [-i]`** waits for a new line in a box log, by `log`'s names (`shell`,
-  `hyprland`, `apps`, `journal`, ...), as `wait log [JOB] RE` does for a `run -d` job's: a plugin's
-  line, Hyprland's own (from its rolling log, since its file is written late); RE also as `--grep
-  RE`. A line already there does not count, and a 124 says when one was;
-  `--since OFFSET` reads from a byte (`--since 0`: the whole log), and `--json`'s `offset` is where
-  the line found ends, for the next wait. A log begun anew meanwhile (restart-shell's) is read from
-  its start. **`wait for DURATION`** is a fixed wait that says it is one, for agents whose harness
-  blocks `sleep`: no more `wait until -- false` as a sleep
-  ([#330](https://github.com/diogochaves/omabox/issues/330)).
+- **`check run --only ID,GLOB`** checks only the named checkpoints, while you work on one screen: the
+  baseline's others are skipped (counted, not missing), `check point` takes no other, and a scenario
+  skips whole sections with **`omabox check wants ID...`** (the list is also in
+  `OMABOX_CHECK_ONLY`). A name that matches none of the baseline's is refused before a box starts.
+  `--approve --only` replaces those checkpoints and keeps every other one as it was
+  ([#376](https://github.com/diogochaves/omabox/issues/376)).
+- **Proofs on a checkpoint**: `check point --expect TEXT` says in words what that screen must show,
+  kept with it and said under its line in `check run` and `--approve`, on its cards in `report.png`
+  and `baseline.png`, and in `--json`, for whoever judges a change or a baseline. `--expect-tree TEXT`
+  (a `tree --find` of its `--window`) and `--expect-cmd -- CMD...` (run in the box) are checked: a
+  failed one is its own result, `proof ID: proof failed: ...`, even where the pixels are the
+  baseline's, and `--approve` keeps no run where it failed, nor anything when it failed in every
+  run ([#266](https://github.com/diogochaves/omabox/issues/266)).
+- **`--report-scale N`** (`check run`, `check diff --report`) also draws the report for people,
+  `report@Nx.png` (`baseline@Nx.png` at `--approve`): the same layout N times its size, crops at the
+  shots' own pixels on a box of scale N. `report.png` stays sized for an agent at any box scale
+  ([#402](https://github.com/diogochaves/omabox/issues/402)).
+- **`record --crf N`** sets the video's H.264 quality (18 by default) for footage that will be zoomed
+  or encoded again: `record start --crf 8`, or with `-- ACTION` and `--for`. It holds with
+  `--cut-idle` and the overlays; 0 is lossless (a profile browsers do not play, said at stop)
+  ([#278](https://github.com/diogochaves/omabox/issues/278)).
+- **A contact sheet of a stretch of a video, frame by frame**: `record sheet` (and `stop --sheet`)
+  take `--from T --to T`, `--every-frame`, `-g "X,Y WxH"` (that region of each frame, small ones
+  enlarged pixel for pixel) and `--changed` (the frames where the region changes), each tile labelled
+  with its time to the ms and its frame number
+  ([#260](https://github.com/diogochaves/omabox/issues/260)).
+- **`record sheet VIDEO` needs no box**: with none named and none up, ffmpeg reads the video on the
+  host in a sandbox of its own (no network, no display, only the video) and makes the same sheet
+  ([#279](https://github.com/diogochaves/omabox/issues/279)).
 - **`omabox pid [hyprland|shell]`** prints the host PID of a box's Hyprland (the default) or its
   shell, for `/proc/PID/maps`, perf or strace; `--in-box` the PID as the box numbers it, `--json`
   both. Nothing on stdout and exit 1 when it is not running
   ([#331](https://github.com/diogochaves/omabox/issues/331)).
-- **`tree` names an unnamed control after its label** (LABELLED_BY), so `--find Email` finds the
-  entry its label names, and reads a node once when it sits under two parents (Qt WebEngine)
-  ([#318](https://github.com/diogochaves/omabox/issues/318)).
+- **Who started a box, and who took it down**
+  ([#295](https://github.com/diogochaves/omabox/issues/295)). A session's subagents share its
+  default box name. `ls` now says under each box where it was started and by which agent session
+  (and who used it last, when another); `down` of a box another caller started or used in the last
+  10 minutes warns that it may be another agent's (it still takes it down); and the name's next
+  command says when another caller's `down` took it and from where, not just `no box is up` (a
+  caller's own `down` leaves nothing to say: its next `run` starts a throwaway as before).
 - **`run` says when its command names a host path the box sees elsewhere or not at all**, before it
   runs: the box HOME's host path (`omabox path --home`, the log `run -d` printed) with its path in
   the box (`/home/sbx/…`), a file in a `--plugin` folder with where the box has it, a scratch file in
@@ -167,57 +220,19 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   names its log as the box has it too (`/home/sbx/run-NS.log`), and `up` says where a `--plugin`
   folder that is not at its own path is in the box
   ([#301](https://github.com/diogochaves/omabox/issues/301)).
-
-- **`omabox jobs`, `omabox stop PID`, `wait job` and `wait log`**: a `run -d` job is listed, stopped
-  and waited for by its pid, with no `pgrep` or `kill` on the host (where the same program may run on
-  your desktop). `run -d` says the job's pid; `jobs [--json]` lists the running ones (pid, age,
-  processes, log, command); `stop PID... | --all` stops one as `--replace` does, its windows gone,
-  by its pid or a window's; `wait job [PID] [--gone]` until it ends, with its exit status; `wait log
-  [PID] RE [-i]` until a line of its log matches. `--replace` with other arguments now says the new
-  job starts beside the one still running, and the `omabox stop PID` that stops it
-  ([#299](https://github.com/diogochaves/omabox/issues/299)).
-- **`wait layer` says which monitor a layer is on**: `… at 0,0 1920x1080 on HEADLESS-2`, each one
-  when there are several (a bar on every monitor), and `--json`'s `detail` has it. `wait layer NS
-  --monitor NAME` waits for one on that monitor (`--gone`: none left there); a monitor the box does
-  not have is said, with the ones it has. `windows` names the monitor of each layer under its table,
-  and `windows --json`'s `layers` have `monitor`
-  ([#316](https://github.com/diogochaves/omabox/issues/316)).
-
-- **`omabox window --size WxH`** floats one window of the box at that size, centred, where `mode`
-  resizes the whole screen: an app checked at a narrow width, again at another. `--window SEL` takes
-  the same selectors as `click --window` (none: the active window); it prints the window as it is
-  then, and a size the app did not take (its smallest or largest) is exit 1, saying the size it
-  took. `--float` floats a window as it is, `--tile` tiles it again, `--json` gives the window as
-  `windows --json` does ([#362](https://github.com/diogochaves/omabox/issues/362)).
 - **An app that died of a Wayland protocol error says so.** Where omabox says a `run -d` job ended
   (its first moments, `run -d --wait`, the next command's warning), a log holding libwayland's line
   for it adds "its Wayland connection was closed for a protocol error: xdg_surface#12: error 3: …".
   GTK and Qt apps, which write their own line instead, get theirs, said as a protocol error only
-  when it says so, else as a lost or failed connection. A `wait window` or `wait layer` that gives up now says a job that ended meanwhile itself, instead
-  of leaving it to the next command ([#335](https://github.com/diogochaves/omabox/issues/335)).
-- **`check run --only ID,GLOB`** checks only the named checkpoints, while you work on one screen: the
-  baseline's others are skipped (counted, not missing), `check point` takes no other, and a scenario
-  skips whole sections with **`omabox check wants ID...`** (the list is also in
-  `OMABOX_CHECK_ONLY`). A name that matches none of the baseline's is refused before a box starts.
-  `--approve --only` replaces those checkpoints and keeps every other one as it was
-  ([#376](https://github.com/diogochaves/omabox/issues/376)).
-- **`--report-scale N`** (`check run`, `check diff --report`) also draws the report for people,
-  `report@Nx.png` (`baseline@Nx.png` at `--approve`): the same layout N times its size, crops at the
-  shots' own pixels on a box of scale N. `report.png` stays sized for an agent at any box scale
-  ([#402](https://github.com/diogochaves/omabox/issues/402)).
-- **`omabox doctor [--json] [--smoke]`** says whether this machine can run boxes, changing nothing:
-  Omarchy and your theme, Hyprland (0.56+, Lua), the aquamarine boxes use, labwc, quickshell, bwrap
-  (0.11+), pasta, grim, the programs a box runs, omabox's tools, user namespaces, the render nodes
-  and the one a box uses, socket path length, and which omabox your shell's and your desktop
-  session's PATH find. Each failure or warning has a fix line for your distribution's family (Arch,
-  Debian and Ubuntu, Fedora, openSUSE); exit 1 when something fails. `--smoke` also starts a box,
-  takes a shot and takes it down ([#320](https://github.com/diogochaves/omabox/issues/320)).
-- **`up --stock`: Omarchy as a new user sees it**, for a showcase or a shot for someone else:
-  Omarchy's bar on tokyo-night (or `--theme NAME`) with the theme's own wallpaper, English in UTC,
-  and nothing of your desktop's look (terminal configs and choice, branding, your themes and
-  wallpapers, the plugins' settings, Hyprland toggles, fonts); the clock live, animations on, the
-  network and pointer as in any box. `--plugin`, `--theme-dir` and the rest work on top; `ls --json`
-  says `stock` ([#265](https://github.com/diogochaves/omabox/issues/265)).
+  when it says so, else as a lost or failed connection. A `wait window` or `wait layer` that gives
+  up now says a job that ended meanwhile itself, instead of leaving it to the next command
+  ([#335](https://github.com/diogochaves/omabox/issues/335)).
+- **The skill pre-approves the omabox commands that stay in a box** (Claude Code's `allowed-tools`):
+  `shot`, `windows`, `tree`, `keys`, `click`, `wait`, `log` and the rest that act only inside a box
+  and read none of your files run without a permission prompt while the skill is in use. `up`,
+  `run`, `down`, `host`, `peek`, `config` and the others that can reach your desktop, your files or
+  other boxes still ask. The skill's reference says which, and what Codex and OpenCode take instead
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
 
 ### Changed
 
@@ -225,38 +240,113 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   leaves out your terminal configs, branding, themes, wallpapers, plugins' settings and Hyprland
   toggles too, and `--keep wallpaper` gives the theme's own wallpaper, not yours for it
   ([#265](https://github.com/diogochaves/omabox/issues/265)).
+- **Only one part of omabox talks to your Hyprland, in words it builds itself** (S8): the rest reads
+  it through a fixed set of `-j` queries, and acts on it only by a window opened `silent` on the
+  configured workspace without focus, a box's own window floated, sized or moved by its address, or
+  the passthrough's hooks; a focus is made only for `peek --focus` and `omabox host`, which you ask
+  for. Nothing omabox sends changed: what it can send is now held by construction, and the suite
+  checks it ([#366](https://github.com/diogochaves/omabox/issues/366)).
 
 ### Fixed
 
+- **An `up` with another `XDG_RUNTIME_DIR` deleted the HOMEs of boxes still running** (a test's
+  stand-in runtime dir, another login, with the same cache). A box HOME now records the box it was
+  made for, and goes only once that box is gone where it was made and nothing uses the HOME; an
+  older omabox's HOME only when nothing uses it. An `up` of a name whose HOME is another box's is
+  refused instead of taking it.
+- **`up`'s check of the started box's own mounts (S1) looked only at where each mount is**: a
+  `/dev/dri` folder bound whole, a seat path bound somewhere else, and a mount inside the runtime
+  dir's path got by it. It now also names each mount's source on the host (a seat path at any
+  destination, or a folder that holds one, ends the box), lists the box's `/dev/dri` (every card
+  there must be the empty placeholder file), refuses a mounted card or input device by its number,
+  and refuses any mount under the runtime dir's path. `up` never made such mounts (its binds refuse
+  them as they are added): this is the second line behind that one. With `XDG_RUNTIME_DIR` outside
+  `/run`, `--ro-bind DIR:DEST` with DEST inside it is now refused
+  ([#363](https://github.com/diogochaves/omabox/issues/363)).
+- **`down` signals the box's processes through pidfds**: the continue it sends the commands that
+  entered the box, and the kill of its PID 1, pasta and peek windows, went by pid number after the
+  check that they were the box's, so a pid reused in between (a stopped job of yours) could be
+  continued or killed; so did `save`'s pause of the box, `run --replace`'s stop of the earlier job,
+  `shot`'s end of a stuck capture and `log -f`/`events -f`'s of their followers. Now each goes to
+  the process that was checked, or to none
+  ([#377](https://github.com/diogochaves/omabox/issues/377)).
+- **`protect-ports` missed an address the host gained after a box started**: a server on all
+  addresses on a protected port was reachable from a connected box through a VPN or docker network
+  that came up later. The box's reaper now keeps the rule on the host's addresses as they change,
+  within a few tens of milliseconds (a failed update is tried again after 250 ms, then up to every
+  2 s while it fails; a hung nft is killed), and drops the ones the host loses ([#399](https://github.com/diogochaves/omabox/issues/399)).
+- **`config protect-ports` said nothing about boxes up already**: they keep reaching the ports they
+  could reach at their start. Changing it now names the connected boxes that need a restart, and
+  warns when `nft`, which the rule needs, is missing
+  ([#374](https://github.com/diogochaves/omabox/issues/374)).
 - **`calibrate CARD --answer` ran what CARD's name told ImageMagick to**: a card named
   `msl:FILE` ran an ImageMagick script, which can write files. The card is now read as the PNG file
   it is (a link to one is no card), and every file omabox gives ImageMagick is read as a PNG
-  ([#338](https://github.com/diogochaves/omabox/issues/338)).
-- **`shot -o` into a box's HOME could be sent elsewhere**: a box that swapped a folder on the way
-  for a link between omabox's checks and the write had the shot written where the link pointed.
-  The shot is now made and renamed in the folder omabox checked, held open
-  ([#338](https://github.com/diogochaves/omabox/issues/338)).
-- **A window shot failed with "grim failed: it ended with status 139"** when the window changed size
-  during it (just resized, or shown at a new size): Hyprland fails such a copy, and grim 1.5.0 then
-  crashes. The window is now taken again, up to four tries, and one that keeps failing says why
-  ([#387](https://github.com/diogochaves/omabox/issues/387)).
-- **A box whose Hyprland crashed was now and then said to be hung** ("did not answer (hung?)")
-  on a loaded machine, while the crashed Hyprland was still exiting. One whose exit is under way
-  now reads as going, and the command says it went down, with its signal
-  ([#222](https://github.com/diogochaves/omabox/issues/222)).
-- **`tree` on a Chromium or Electron window started without `--force-renderer-accessibility`**
-  said it was not on the accessibility bus with a reason about egui apps; it now says it is
-  Chromium's or Electron's and to start it with the flag
-  ([#323](https://github.com/diogochaves/omabox/issues/323)).
-- **`shot --burst --after -- run --env-file FILE` read a host file** into the box command's
-  environment through a shot. The action now refuses `--env-file` (`--env KEY=VAL` still goes),
-  so a pre-approved `shot` reads none of your files
   ([#338](https://github.com/diogochaves/omabox/issues/338)).
 - **`shot -o FILE` wrote over any file there, through a link too**, as did `drag --shot`,
   `calibrate CARD` and a burst's frames in `-o DIR`. They now write over only an earlier image or
   an empty file, and refuse a link, a folder or any other file, saying why, before anything is
   written; a new path is made as before
   ([#338](https://github.com/diogochaves/omabox/issues/338)).
+- **`shot -o` into a box's HOME could be sent elsewhere**: a box that swapped a folder on the way
+  for a link between omabox's checks and the write had the shot written where the link pointed.
+  The shot is now made and renamed in the folder omabox checked, held open
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
+- **`shot --burst --after -- run --env-file FILE` read a host file** into the box command's
+  environment through a shot. The action now refuses `--env-file` (`--env KEY=VAL` still goes),
+  so a pre-approved `shot` reads none of your files
+  ([#338](https://github.com/diogochaves/omabox/issues/338)).
+- **Inside ai-jail, a link in the project to a file outside it had that file opened** before it was
+  refused. It is now refused before anything outside is opened, and a plugin's manifest or a `.git`
+  file read there is read up to 1 MiB ([#367](https://github.com/diogochaves/omabox/issues/367)).
+- **An INT, TERM or HUP while `up` made its box dir could leave a box dir with no box.json**: the
+  stop's cleanup ran alongside up's own work instead of after it. It now waits for that step (at
+  most 10 s, said as a stop that waits is said)
+  ([#367](https://github.com/diogochaves/omabox/issues/367)).
+- **A `down` from another pid namespace (a container of its own) could miss the `up` it raced**: an
+  up started a moment before it, but slower to get going, was taken for one started after it, and
+  its box stayed up. The two are now ordered on one clock all pid namespaces share. A jailed agent's
+  `up` now counts from its own call, not from when the broker took it up, so your `down` in between
+  cancels it; and `up`/`down` in a pid namespace that shows the host's `/proc` read their own start,
+  not the host init's ([#404](https://github.com/diogochaves/omabox/issues/404)).
+- **A `down` by another omabox left the box's reaper running** (a package's `down` of a box a
+  checkout started, or another worktree's) until its next look. The reaper now records its pid in
+  the box's folder, and `down` ends it whichever omabox started it
+  ([#383](https://github.com/diogochaves/omabox/issues/383)).
+- **A `save` killed with SIGKILL (or by the OOM killer) during its copy left the box paused**, read
+  as hung until someone resumed it by hand. A watch the save starts in a session of its own now
+  resumes the box when the save dies without letting it go
+  ([#369](https://github.com/diogochaves/omabox/issues/369)).
+- **A box whose Hyprland crashed was sometimes said to be hung** ("did not answer (hung?)"): on a
+  loaded machine while the crashed Hyprland was still exiting, and when the box ended in the moment
+  between two of a call's looks (`omabox lua`, any call to its Hyprland). One whose exit is under
+  way now reads as going, and the command says the box went down and how, with its signal
+  ([#222](https://github.com/diogochaves/omabox/issues/222),
+  [#351](https://github.com/diogochaves/omabox/issues/351)).
+- **A window shot failed with "grim failed: it ended with status 139"** when the window changed size
+  during it (just resized, or shown at a new size): Hyprland fails such a copy, and grim 1.5.0 then
+  crashes. The window is now taken again, up to four tries, and one that keeps failing says why
+  ([#387](https://github.com/diogochaves/omabox/issues/387)).
+- **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
+  `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
+  fullscreen covers it and takes the click. Overlays still count
+  ([#409](https://github.com/diogochaves/omabox/issues/409)).
+- **`tree --layer` could not read an Omarchy 4.5 bar popup**: the popup is a full-screen layer, the
+  size of the wallpaper (and of 4.5's bar), so it refused with "which one is the layer's cannot be
+  told". The popup is the one of them that takes the keyboard (on demand, not exclusively, which was
+  all `tree` looked for), so its tree is read now, and the wallpaper's and the bar's say they publish
+  nothing ([#315](https://github.com/diogochaves/omabox/issues/315)).
+- **`tree` on a Chromium or Electron window started without `--force-renderer-accessibility`**
+  said it was not on the accessibility bus with a reason about egui apps; it now says it is
+  Chromium's or Electron's and to start it with the flag
+  ([#323](https://github.com/diogochaves/omabox/issues/323)).
+- **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
+  `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
+  Qt Quick dialog's contents do ([#318](https://github.com/diogochaves/omabox/issues/318)).
+- **`tree` printed no text for an editable combo box** (an input with suggestions in Chromium or Qt
+  WebEngine), so a typed value could not be read, found by `--find` or seen in `--json`. It is now
+  its `'text'`; a closed select still says its choice as `=value`
+  ([#341](https://github.com/diogochaves/omabox/issues/341)).
 - **A small blinking or pulsing dot timed every `wait still` and `--wait` out**, and an `--ignore`
   of it stopped matching once a re-layout moved it. A spot 48 px a side at most whose changes keep
   bringing it back to how it looked (a dot blinking or pulsing, a looping spinner) now counts for its
@@ -279,15 +369,6 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A Hyprland started inside a box opened Hyprland's update news over its first frames**: the box
   HOME now records the box's Hyprland version, as a desk's does after its first session
   ([#322](https://github.com/diogochaves/omabox/issues/322)).
-- **A click at the top of a fullscreen window was reported as on the bar**: `--wait`'s answer and
-  `--json`'s `target` named a top layer (Omarchy's bar) over the point, `certain`, where a window in
-  fullscreen covers it and takes the click. Overlays still count
-  ([#409](https://github.com/diogochaves/omabox/issues/409)).
-- **`tree --layer` could not read an Omarchy 4.5 bar popup**: the popup is a full-screen layer, the
-  size of the wallpaper (and of 4.5's bar), so it refused with "which one is the layer's cannot be
-  told". The popup is the one of them that takes the keyboard (on demand, not exclusively, which was
-  all `tree` looked for), so its tree is read now, and the wallpaper's and the bar's say they publish
-  nothing ([#315](https://github.com/diogochaves/omabox/issues/315)).
 - **No "plugin X disabled: listed but not enabled" for a plugin that is running.** A service with a
   bar widget, loaded from its own `plugins[]` entry with its widget off the bar, now reads `loaded`
   with no warning. A widget in no layout of the box's shell.json while another mounted plugin runs
@@ -295,38 +376,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   warning (`plugin_status`: `off the bar`); with none, the warning says "not in the bar's layout"
   and gives the `putBarWidget` command that puts it there
   ([#326](https://github.com/diogochaves/omabox/issues/326)).
-- **An `up` with another `XDG_RUNTIME_DIR` deleted the HOMEs of boxes still running** (a test's
-  stand-in runtime dir, another login, with the same cache). A box HOME now records the box it was
-  made for, and goes only once that box is gone where it was made and nothing uses the HOME; an
-  older omabox's HOME only when nothing uses it. An `up` of a name whose HOME is another box's is
-  refused instead of taking it (finding 584).
-- **A `save` killed with SIGKILL (or by the OOM killer) during its copy left the box paused**, read
-  as hung until someone resumed it by hand. A watch the save starts in a session of its own now
-  resumes the box when the save dies without letting it go
-  ([#369](https://github.com/diogochaves/omabox/issues/369)).
-- **`protect-ports` missed an address the host gained after a box started**: a server on all
-  addresses on a protected port was reachable from a connected box through a VPN or docker network
-  that came up later. The box's reaper now keeps the rule on the host's addresses as they change,
-  within a few tens of milliseconds (a failed update is tried again within 250 ms, a hung nft killed),
-  and drops the ones the host loses ([#399](https://github.com/diogochaves/omabox/issues/399)).
-- **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
-  `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
-  Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).
-- **`tree` printed no text for an editable combo box** (an input with suggestions in Chromium or Qt
-  WebEngine), so a typed value could not be read, found by `--find` or seen in `--json`. It is now
-  its `'text'`; a closed select still says its choice as `=value`
-  ([#341](https://github.com/diogochaves/omabox/issues/341)).
 - **`run`'s note "WORD is relative to DIR" fired on words that only share a folder's name**: from a
   checkout with a `stash` folder, `run -- omarchy-shell stash modules` was told to restart the box
   with `--overlay`. A word now counts only when it reads as a path (a `/` in it, the command itself,
   `cd`'s folder) ([#325](https://github.com/diogochaves/omabox/issues/325)).
-- **Ctrl-D at one of `omabox setup`'s questions ended it silently** (exit 1). It is now a no, said
-  so, and setup goes on; a Ctrl-D at the widget's question is not remembered as a no
-  ([#373](https://github.com/diogochaves/omabox/issues/373)).
-- **`config protect-ports` said nothing about boxes up already**: they keep reaching the ports they
-  could reach at their start. Changing it now names the connected boxes that need a restart, and
-  warns when `nft`, which the rule needs, is missing
-  ([#374](https://github.com/diogochaves/omabox/issues/374)).
 - **A `run -d` job stopped with `omabox run -- pkill` was still warned about when it exits with a
   code of its own** on SIGTERM (foot exits 230). A job that ends while a `run` that kills runs (or
   just after) is no longer said, whatever its status; the warning's hint now reads `(log: omabox
@@ -335,21 +388,20 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `run` quietly started a throwaway box and `path` printed the folder of a box that was not there.
   Both now name the session's boxes, as `run -d` does; `omabox help` says how the box is picked
   without -b ([#327](https://github.com/diogochaves/omabox/issues/327)).
-- **The agent guard refused `omarchy plugin list` naming `omarchy-shell`**, a command the agent never
-  ran. When one of Omarchy's commands calls it, the guard now names that command, and for `omarchy
-  plugin list` says where the installed plugins are
-  ([#332](https://github.com/diogochaves/omabox/issues/332)).
 - **A bound folder deleted and made again on the host showed empty in the box**, with every command
   succeeding. `run` now says so once, with what to do
   ([#391](https://github.com/diogochaves/omabox/issues/391)).
-- **A box whose Hyprland crashed was sometimes reported as hung**: `omabox lua` (or any call to
-  its Hyprland) said "did not answer (hung?)" when the box ended in the moment between two of its
-  looks. It now says the box went down and how
-  ([#351](https://github.com/diogochaves/omabox/issues/351)).
 - **Inside ai-jail, a project folder without `.git` silently gave a box with no project**: `up` (and
   a throwaway `run`) started fine, the box had none of the folder's files, and nothing said why. It
   now says the folder is not a git repo and that `--ro-bind DIR` (or `--overlay`) brings it in
   ([#394](https://github.com/diogochaves/omabox/issues/394)).
+- **Ctrl-D at one of `omabox setup`'s questions ended it silently** (exit 1). It is now a no, said
+  so, and setup goes on; a Ctrl-D at the widget's question is not remembered as a no
+  ([#373](https://github.com/diogochaves/omabox/issues/373)).
+- **The agent guard refused `omarchy plugin list` naming `omarchy-shell`**, a command the agent never
+  ran. When one of Omarchy's commands calls it, the guard now names that command, and for `omarchy
+  plugin list` says where the installed plugins are
+  ([#332](https://github.com/diogochaves/omabox/issues/332)).
 - **A Hyprland notification looked missing from shots**: `hyprctl notify` (and Hyprland's own
   warnings, such as the monitor-layout one) draws at the top right of the focused monitor, so a shot
   of the screen's left never had it. `omabox hyprctl notify` now says where, with the `shot -g` of
@@ -364,39 +416,6 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   without virgl the reason was only in `labwc.log`. It now says a box needs GPU rendering and that
   the node renders in software only (or has no EGL), how to give a VM 3D, and another GPU when the
   machine has one ([#396](https://github.com/diogochaves/omabox/issues/396)).
-- **`down` signals the box's processes through pidfds**: the continue it sends the commands that
-  entered the box, and the kill of its PID 1, pasta and peek windows, went by pid number after the
-  check that they were the box's, so a pid reused in between (a stopped job of yours) could be
-  continued or killed; so did `save`'s pause of the box, `run --replace`'s stop of the earlier job,
-  `shot`'s end of a stuck capture and `log -f`/`events -f`'s of their followers. Now each goes to
-  the process that was checked, or to none
-  ([#377](https://github.com/diogochaves/omabox/issues/377)).
-- **A `down` by another omabox left the box's reaper running** (a package's `down` of a box a
-  checkout started, or another worktree's) until its next look. The reaper now records its pid in
-  the box's folder, and `down` ends it whichever omabox started it
-  ([#383](https://github.com/diogochaves/omabox/issues/383)).
-- **`up`'s check of the started box's own mounts (S1) looked only at where each mount is**: a
-  `/dev/dri` folder bound whole, a seat path bound somewhere else, and a mount inside the runtime
-  dir's path got by it. It now also names each mount's source on the host (a seat path at any
-  destination, or a folder that holds one, ends the box), lists the box's `/dev/dri` (every card
-  there must be the empty placeholder file), refuses a mounted card or input device by its number,
-  and refuses any mount under the runtime dir's path. `up` never made such mounts (its binds refuse
-  them as they are added): this is the second line behind that one. With `XDG_RUNTIME_DIR` outside
-  `/run`, `--ro-bind DIR:DEST` with DEST inside it is now refused
-  ([#363](https://github.com/diogochaves/omabox/issues/363)).
-- **An INT, TERM or HUP while `up` made its box dir could leave a box dir with no box.json**: the
-  stop's cleanup ran alongside up's own work instead of after it. It now waits for that step (at
-  most 10 s, said as a stop that waits is said)
-  ([#367](https://github.com/diogochaves/omabox/issues/367)).
-- **Inside ai-jail, a link in the project to a file outside it had that file opened** before it was
-  refused. It is now refused before anything outside is opened, and a plugin's manifest or a `.git`
-  file read there is read up to 1 MiB ([#367](https://github.com/diogochaves/omabox/issues/367)).
-- **A `down` from another pid namespace (a container of its own) could miss the `up` it raced**: an
-  up started a moment before it, but slower to get going, was taken for one started after it, and
-  its box stayed up. The two are now ordered on one clock all pid namespaces share. A jailed agent's
-  `up` now counts from its own call, not from when the broker took it up, so your `down` in between
-  cancels it; and `up`/`down` in a pid namespace that shows the host's `/proc` read their own start,
-  not the host init's ([#404](https://github.com/diogochaves/omabox/issues/404)).
 
 ## 1.0.2 — 2026-10-30
 
