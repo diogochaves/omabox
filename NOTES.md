@@ -11094,15 +11094,29 @@ from them.
     reaper looks once more 250 ms after each event, for a lost one fib_trie still had. Since then
     nine runs, three at once, passed. A connected box with a protected port now always gets a reaper
     (box.json `protect`: true, only that it has the rule, not which ports, #374), which says so in
-    reap.log; a failure to set them is said there once and tried again at the next look. Not
-    covered: a connection in the moment between the host gaining an address and the reaper's nft
-    (15-30 ms here, five addresses added, measured from outside), and addresses gained after the
-    reaper is killed.
+    reap.log. A security review then found two gaps, both fixed (reap.rs's Sched). (1) A look that
+    failed (the reaper's first, were pasta not up yet; nft refusing) was tried again only at the next
+    address event or poll (5-60 s): an address gained meanwhile stayed out of the rule that long. It
+    is now tried again 250 ms after, doubling to 2 s while it fails, with no event needed; a failure
+    is said once in reap.log, and "set again" once one works. (2) Nothing limited the looks: every
+    batch of address events was a fib read, a dump and maybe an nft run in every protected box's
+    reaper, and the nft run had no timeout, so a hung nft stalled the reaper's polls (its box's
+    teardown among them). Events now make at most one look per 250 ms (the first at once), with one
+    more 250 ms after the last (which also covers fib_trie's lag above); nft is killed after 5 s
+    ("nft did not answer in 5 s: killed"), a failure as any other. Not covered: a connection in the
+    moment between the host gaining an address and the reaper's nft (15-30 ms here for a lone
+    change, five added, measured from outside; up to 250 ms more in a burst), while a failing nft
+    keeps the addresses last set, and after the reaper is killed.
     Tests: t_protect_ports_ns (two addresses added to the test's own network namespace after up,
     v4 and v6: their protected port not reached, TCP or UDP, within 5 s in the rule, the port not
     protected reached; one removed leaves the set; failed before: reached on all four, the set
-    unchanged), net.rs `rules` (the sets, protect_sets' transaction) and `link_addresses` (the
-    dump's parsing; this machine's links' addresses all in fib_trie).
+    unchanged; then a second box whose reaper's nft is a stand-in under a mount namespace of the
+    test's own: failing, an address gained meanwhile is in the rule within 3 s of nft working, with
+    no event since; 40 changes over 2 s are 9 nft runs; one that hangs is killed and the address
+    set after; each failed before: 60 s, 40 runs, never killed), reap.rs `guard_looks_when` (the
+    schedule: at once, one per 250 ms, the trailing look, the failures' waits), net.rs `rules` (the
+    sets, protect_sets' transaction) and `link_addresses` (the dump's parsing; this machine's links'
+    addresses all in fib_trie).
 582. **Protected ports tested over UDP and IPv6, without root** (2026-10-31, #399 item 1; S10).
     t_protect_ports checked TCP only, and IPv6 only where the host has a global IPv6 address. The new
     t_protect_ports_ns runs everything in a network namespace of the test's own (a user namespace's,

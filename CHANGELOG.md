@@ -82,7 +82,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`protect-ports` missed an address the host gained after a box started**: a server on all
   addresses on a protected port was reachable from a connected box through a VPN or docker network
   that came up later. The box's reaper now keeps the rule on the host's addresses as they change,
-  within a few tens of milliseconds, and drops the ones the host loses ([#399](https://github.com/diogochaves/omabox/issues/399)).
+  within a few tens of milliseconds (a failed update is tried again within 250 ms, a hung nft killed),
+  and drops the ones the host loses ([#399](https://github.com/diogochaves/omabox/issues/399)).
 - **`tree` placed a Qt dock widget's contents relative to the dock**: Designer's filter field said
   `@4,4`, drawn at 4,88, so a click at its middle missed. They now have where they are drawn, as a
   Qt Quick dialog's contents do (finding 244, [#318](https://github.com/diogochaves/omabox/issues/318)).

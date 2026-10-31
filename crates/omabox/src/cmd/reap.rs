@@ -80,8 +80,73 @@ struct Guard {
     last: Option<(Vec<String>, Vec<String>)>,
     /// A failure said in reap.log, not said again until one works.
     said: bool,
-    /// When to look once more after the last event (nap).
-    again: Option<std::time::Instant>,
+    /// When looks are due (nap).
+    sched: Sched,
+}
+
+/// When a guard looks at the host's addresses (#399): at once on an address event, but at most one
+/// look per GAP (a burst of changes is a few looks, each a fib read, a dump and maybe an nft run in
+/// every protected box's reaper), with one more look GAP after the last event (an IPv4 address gone
+/// is still in fib_trie for a moment after its event: net::host_addrs); and while the last look
+/// failed (pasta not up yet, nft refusing or hung), again after GAP, doubling to FAILING_MAX, not at
+/// the next poll (up to 60 s), with no event needed.
+#[derive(Default)]
+struct Sched {
+    /// No look before this (the last one's time + GAP, or its failure's wait).
+    next_ok: Option<std::time::Instant>,
+    /// An event came that no look has followed yet.
+    pending: bool,
+    /// The trailing look's time, after the last event.
+    trailing: Option<std::time::Instant>,
+    /// Looks failed in a row.
+    failed: u32,
+}
+
+const GAP: Duration = Duration::from_millis(250);
+const FAILING_MAX: Duration = Duration::from_secs(2);
+/// How long the reaper's nft may take (it takes milliseconds).
+const NFT_WAIT: Duration = Duration::from_secs(5);
+
+impl Sched {
+    /// An event (any number of them) seen at NOW.
+    fn event(&mut self, now: std::time::Instant) {
+        self.pending = true;
+        self.trailing = Some(now + GAP);
+    }
+
+    /// Whether a look is wanted at all (now or later), and when it may be: None when none is.
+    fn due(&self) -> Option<std::time::Instant> {
+        let want = self.pending || self.failed > 0 || self.trailing.is_some();
+        if !want {
+            return None;
+        }
+        let mut at = self.next_ok;
+        if !self.pending
+            && self.failed == 0
+            && let Some(t) = self.trailing
+        {
+            at = Some(at.map_or(t, |a| a.max(t)));
+        }
+        Some(at.unwrap_or_else(std::time::Instant::now))
+    }
+
+    /// A look made at NOW, and whether it worked.
+    fn looked(&mut self, now: std::time::Instant, ok: bool) {
+        self.pending = false;
+        if self.trailing.is_some_and(|t| now >= t) {
+            self.trailing = None;
+        }
+        if ok {
+            self.failed = 0;
+            self.next_ok = Some(now + GAP);
+        } else {
+            self.failed = self.failed.saturating_add(1);
+            let wait = GAP
+                .saturating_mul(1u32 << self.failed.saturating_sub(1).min(4))
+                .min(FAILING_MAX);
+            self.next_ok = Some(now + wait);
+        }
+    }
 }
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
@@ -106,7 +171,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             events: crate::net::AddrEvents::open(),
             last: None,
             said: false,
-            again: None,
+            sched: Sched::default(),
         }),
     };
     if r.idle <= 0
@@ -164,12 +229,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
 }
 
-/// The sleep between polls, SECS long; with a guard, its addresses looked at again as soon as the
-/// host's change (woken by the event; every second when there is no event socket), and once more
-/// AGAIN after each event: an IPv4 address gone is still in fib_trie for a moment after its event
-/// (net::host_addrs), and that look takes it out of the rule.
+/// The sleep between polls, SECS long; with a guard, its addresses looked at when its Sched says:
+/// woken by the host's address events (every second when there is no event socket).
 fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
-    const AGAIN: Duration = Duration::from_millis(250);
     let Some(g) = r.guard.as_mut() else {
         crate::sig::sleep(Duration::from_secs(secs));
         return;
@@ -182,7 +244,7 @@ fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
             return;
         }
         let mut step = (end - now).min(Duration::from_millis(100));
-        if let Some(at) = g.again {
+        if let Some(at) = g.sched.due() {
             step = step.min(at.saturating_duration_since(now));
         }
         let event = match &g.events {
@@ -198,27 +260,28 @@ fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
                 ticks % 10 == 0
             }
         };
-        let due = g.again.is_some_and(|at| std::time::Instant::now() >= at);
+        let now = std::time::Instant::now();
         if event {
-            g.again = Some(std::time::Instant::now() + AGAIN);
-        } else if due {
-            g.again = None;
+            g.sched.event(now);
         }
-        if event || due {
+        if g.sched.due().is_some_and(|at| now >= at) {
             guard_look(ctx, g);
         }
     }
 }
 
 /// The host's addresses into the box's protected ports' rule when they are not what was last set
-/// there. A failure (the box going down, nft refusing) is said once in reap.log and tried again at
-/// the next look.
+/// there. A failure (pasta not up yet, the box going down, nft refusing or hung) is said once in
+/// reap.log and tried again soon (Sched).
 fn guard_look(ctx: &Ctx, g: &mut Guard) {
     let now = crate::net::host_addrs();
     if g.last.as_ref() == Some(&now) {
+        g.sched.looked(std::time::Instant::now(), true);
         return;
     }
-    match guard_set(&ctx.d, &now.0, &now.1) {
+    let res = guard_set(&ctx.d, &now.0, &now.1);
+    g.sched.looked(std::time::Instant::now(), res.is_ok());
+    match res {
         Ok(()) => {
             if g.said {
                 say(cat!(
@@ -274,13 +337,42 @@ fn guard_set(d: &[u8], v4: &[String], v6: &[String]) -> Result<(), Vec<u8>> {
     if let Some(mut i) = ch.stdin.take() {
         let _ = i.write_all(crate::net::protect_sets(v4, v6).as_bytes());
     }
-    let out = ch
-        .wait_with_output()
-        .map_err(|x| x.to_string().into_bytes())?;
-    if out.status.success() {
+    // (an nft that hangs is killed: the reaper has its box's polls to keep, its down among them)
+    let end = std::time::Instant::now() + NFT_WAIT;
+    let status = loop {
+        match ch.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if std::time::Instant::now() < end => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = ch.kill();
+                let _ = ch.wait();
+                return Err(cat!(
+                    "nft did not answer in ",
+                    NFT_WAIT.as_secs().to_string(),
+                    " s: killed"
+                ));
+            }
+            Err(x) => return Err(x.to_string().into_bytes()),
+        }
+    };
+    if status.success() {
         return Ok(());
     }
-    let first = out.stderr.split(|&c| c == b'\n').next().unwrap_or_default();
+    // (what it said, read without waiting: anything it left holding the pipe cannot stall this)
+    let mut err = Vec::new();
+    if let Some(mut e) = ch.stderr.take() {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        // SAFETY: fcntl on our pipe's fd, setting O_NONBLOCK on it.
+        unsafe {
+            let fl = libc::fcntl(e.as_raw_fd(), libc::F_GETFL);
+            libc::fcntl(e.as_raw_fd(), libc::F_SETFL, fl | libc::O_NONBLOCK);
+        }
+        let _ = e.read_to_end(&mut err);
+    }
+    let first = err.split(|&c| c == b'\n').next().unwrap_or_default();
     Err(if first.is_empty() {
         b"nft failed".to_vec()
     } else {
@@ -579,6 +671,47 @@ fn record_pidns(ctx: &Ctx, ns: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #399: when a guard looks. ms(N): N ms after T0.
+    #[test]
+    fn guard_looks_when() {
+        let t0 = std::time::Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut s = Sched::default();
+        assert!(s.due().is_none(), "nothing to look at");
+        // the first event: at once; then nothing until the trailing look GAP after it
+        s.event(ms(0));
+        assert!(s.due().is_some_and(|at| at <= std::time::Instant::now()));
+        s.looked(ms(5), true);
+        assert_eq!(s.due(), Some(ms(255)), "the trailing look");
+        // a burst: events every 10 ms wait for GAP after the last look, then one look for all
+        for i in 1..20 {
+            s.event(ms(5 + 10 * i));
+        }
+        assert_eq!(
+            s.due(),
+            Some(ms(255)),
+            "one look per GAP, whatever the events"
+        );
+        s.looked(ms(255), true);
+        // (the trailing one: GAP after the last event, 445, but not before GAP after the last look)
+        assert_eq!(s.due(), Some(ms(505)), "and the trailing one");
+        s.looked(ms(505), true);
+        assert!(s.due().is_none(), "then nothing");
+        // failures: tried again with no event, GAP, then doubling to FAILING_MAX
+        let mut f = Sched::default();
+        let mut at = ms(1000);
+        let mut waits = Vec::new();
+        for _ in 0..7 {
+            f.looked(at, false);
+            let next = f.due().unwrap_or(at);
+            waits.push((next - at).as_millis());
+            at = next;
+        }
+        assert_eq!(waits, vec![250, 500, 1000, 2000, 2000, 2000, 2000]);
+        f.looked(at, true);
+        assert!(f.due().is_none(), "a look that works ends the retries");
+    }
 
     #[test]
     fn polls() {

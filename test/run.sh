@@ -7396,7 +7396,62 @@ while True:
   check_match "...the others still in it" "10\.239\.2\.1" "$(sets)"
   check_eq "...and nothing failed in reap.log" "" "$(grep "could not set" "$rlog" 2>&1)"
   HOME=$h ob down "$B" >/dev/null 2>&1
+  protect_ports_ns_nft
   kill "$H" 2>/dev/null
+}
+
+# t_protect_ports_ns's second box, its reaper's nft a stand-in (a mount namespace of the test's own
+# over /usr/bin/nft, in that network namespace) that fails, hangs or counts as the test says, and
+# runs the real one otherwise (pasta's shell's rule at up goes through). Uses its caller's H, h, q,
+# asns. A failed look is tried again soon, not at the next poll (up to 60 s); a burst of address
+# changes is a few looks, not one each; a hung nft is killed and tried again.
+protect_ports_ns_nft() {
+  local B2=$P-protns2 f=$TMP/protns-nft kid2 rlog2 n hung
+  rm -rf "$f"; mkdir -p "$f"; cp /usr/bin/nft "$f/real-nft"
+  cat > "$f/nft" <<EOF
+#!/bin/sh
+if [ "\$1" = -f ]; then
+  echo x >> '$f/runs'
+  [ -e '$f/hang' ] && { echo \$\$ > '$f/hung.pid'; exec sleep 3601; }
+  [ -e '$f/fail' ] && { echo "nft stand-in: refused" >&2; exit 1; }
+fi
+exec '$f/real-nft' "\$@"
+EOF
+  chmod 755 "$f/nft"
+  : > "$f/fail"
+  if ! UP_OUT=$(nsenter -t "$H" -U -n --preserve-credentials unshare -m sh -c 'mount --bind "$1" /usr/bin/nft && shift && u=$1 g=$2 && shift 2 && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
+      _ "$f/nft" "$(id -u)" "$(id -g)" env HOME="$h" "$CLI" up "$B2" --no-shell --theme tokyo-night --stock-bar 2>&1); then
+    no "up with a stand-in nft for its reaper" "$UP_OUT"; return
+  fi
+  kid2=$(pgrep -P "$(cat "$XDG_RUNTIME_DIR/omabox/$B2/pasta.pid" 2>/dev/null || echo 0)" | head -1) || kid2=""
+  rlog2=$XDG_RUNTIME_DIR/omabox/$B2/reap.log
+  sets2() { nsenter -t "${kid2:-0}" -U -n --preserve-credentials nft list table inet omabox 2>&1; }
+  # in2 REGEX: the second box's rule holds REGEX (when not: it, and reap.log's end)
+  in2() { local t; t=$(sets2) || t=""; grep -q "$1" <<<"$t" && return 0; echo "$t"; tail -n 3 "$rlog2" 2>&1; return 1; }
+  check "a reaper whose nft fails says so" until_ok 5 grep -q "could not set the host's addresses in its protected ports' rule (nft stand-in: refused)" "$rlog2"
+  check "...the host gains an address meanwhile" asns ip addr add 10.239.3.1/24 dev d1
+  sleep 0.5
+  rm -f "$f/fail"
+  check "...in the rule within 3 s of nft working again, with no address event since (#399)" until_ok 3 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.3\.1'"
+  check "...said in reap.log" grep -q "its protected ports' addresses set again" "$rlog2"
+  # A burst: 40 addresses over about 2 s, each an event; the reaper runs nft a few times, not 40.
+  sleep 0.5; : > "$f/runs"
+  asns sh -c 'i=10; while [ $i -lt 50 ]; do ip addr add 10.239.4.$i/32 dev d1; sleep 0.05; i=$((i + 1)); done'
+  check "...a burst of address changes: all in the rule" until_ok 3 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.4\.49'"
+  sleep 0.5
+  n=$(wc -l < "$f/runs")
+  check "...in a few nft runs, not one per change ($n for 40)" test "$n" -le 14
+  # A hung nft: killed, said, and the address set once nft answers again.
+  : > "$f/hang"; rm -f "$f/hung.pid"
+  check "...the host gains one more" asns ip addr add 10.239.5.1/24 dev d1
+  if until_ok 3 test -s "$f/hung.pid"; then hung=$(cat "$f/hung.pid")
+    check "a reaper's nft that hangs is killed within 8 s" until_ok 8 bash -c "! kill -0 $hung 2>/dev/null"
+    check "...said in reap.log" grep -q "nft did not answer" "$rlog2"
+  else no "a reaper's nft that hangs is killed within 8 s" "the stand-in never hung"; fi
+  rm -f "$f/hang"
+  check "...the address in the rule once nft answers" until_ok 10 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.5\.1'"
+  HOME=$h ob down "$B2" >/dev/null 2>&1
+  [ ! -s "$f/hung.pid" ] || kill "$(cat "$f/hung.pid")" 2>/dev/null
 }
 
 t_connected() {
