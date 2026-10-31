@@ -6797,6 +6797,24 @@ t_unit_agent_session() {
     "$(se "" "$repo" "$CLI" windows -b "$P-r-$sid")"
   check_match "...run too, not a throwaway in its place" "was taken down at " "$(se "" "$TMP" "$CLI" run -b "$P-r-$sid" -- true)"
   rm -f "$sr/omabox/.taken-"*
+  # A caller's own down leaves no note (#295, finding 599): a box this caller started and used last,
+  # taken down by it, is no other agent's, so its next `run` there starts a throwaway as before. (A
+  # new stand-in: the down above took the first.)
+  kill "$su" 2>/dev/null; wait "$su" 2>/dev/null
+  unshare -Urpf --mount-proc --propagation slave sleep 300 >/dev/null 2>&1 & su=$!
+  for i in $(seq 100); do
+    sb=$(pgrep -P "$su") && [ "$(readlink "/proc/$sb/ns/pid")" != "$(readlink /proc/self/ns/pid)" ] && break
+    sb=""; sleep 0.1
+  done
+  local own=$P-q-$sid treal; treal=$(cd "$TMP" && pwd)
+  jq -n --arg d "$treal" --arg s "$sid" '{dir: $d, session: $s}' > "$sr/omabox/$own/box.json"
+  printf '%s\t%s\n' "$sid" "$treal" > "$sr/omabox/$own/used"
+  out=$(se "$own" "$TMP" "$CLI" down -b "$own")
+  check_match "a caller's own down of the box it started: down" "box '$own' down" "$out"
+  check_fails "...no warning" grep -q 'warning' <<<"$out"
+  check_fails "...and no note of it left (#295)" test -e "$sr/omabox/.taken-$own"
+  check_fails "...so its next command says nothing of a down" grep -q 'was taken down' <<<"$(se "" "$TMP" "$CLI" windows -b "$own")"
+  rm -f "$sr/omabox/.taken-"*
   kill "$su" 2>/dev/null; wait "$su" 2>/dev/null
   rm -f "$sr/omabox/.down-"*
 }

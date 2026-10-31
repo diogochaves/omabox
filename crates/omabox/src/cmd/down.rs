@@ -166,6 +166,8 @@ fn down_one_with<S: BoxSys + ?Sized>(
     // A box another caller started or used just now may be another agent's (#295): said, not
     // refused. Not the reaper's.
     let me = crate::whose::me();
+    // (read now: the box dir, which says who started and used it, goes with the box)
+    let noted = cond.created.is_none() && crate::whose::by_another(&ctx.d, &me);
     if cond.created.is_none()
         && let Some(w) = crate::whose::down_warning(ctx, &me)
     {
@@ -189,8 +191,9 @@ fn down_one_with<S: BoxSys + ?Sized>(
     }
     crate::ready::kill_reapers(ctx);
     sys.rm_box(ctx);
-    // (under the lock: an up waiting on it removes the note as it starts the name's next box)
-    if cond.created.is_none() {
+    // (under the lock: an up waiting on it removes the note as it starts the name's next box; a
+    // caller's own down leaves none, #295)
+    if noted {
         crate::whose::write_taken(ctx, &me);
     }
     let _ = std::fs::remove_file(&lk);

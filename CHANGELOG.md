@@ -17,7 +17,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   default box name. `ls` now says under each box where it was started and by which agent session
   (and who used it last, when another); `down` of a box another caller started or used in the last
   10 minutes warns that it may be another agent's (it still takes it down); and the name's next
-  command says when a `down` took it and from where, not just `no box is up`.
+  command says when another caller's `down` took it and from where, not just `no box is up` (a
+  caller's own `down` leaves nothing to say: its next `run` starts a throwaway as before).
 - **`wait tree TEXT [--window SEL | --layer SEL] [--gone] [--shot FILE]`** waits for the
   accessibility tree to hold TEXT, matched as `tree --find` matches it: satisfied at the first read
   holding it (a toast or a sheet that lasts a second is caught), `--gone` when two reads in a row do

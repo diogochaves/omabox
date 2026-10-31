@@ -11503,8 +11503,12 @@ from them.
     another caller (another session, none, or this one in another directory) says first `warning:
     box 'X' may be another agent's: started in ~/a (this agent session), used 40s ago; taking it
     down (its next command will say who did)`. It still takes it down (Diogo's plan for 1.1: warn,
-    not refuse, inside the 1.x promise). The down leaves `.taken-NAME` (when, its session and
-    directory; pruned after a day, removed by the name's next `up`), and the name's next command,
+    not refuse, inside the 1.x promise). A down by another caller (the warning's test, at any age:
+    another session, none, or another directory than the box's starter or last user) leaves
+    `.taken-NAME` (when, its session and directory; pruned after a day, removed by the name's next
+    `up`); a caller's own down leaves none (it did at first, so the next `run` in that directory
+    gave no throwaway but "was taken down ... by an omabox down in ~/a (this agent session)", of its
+    own down). The name's next command,
     where it said `no box 'X' is up`, says `box 'X' was taken down at 15:54:03 by an omabox down in
     ~/b (this agent session); start it again with: omabox up X` (and `run` gives no throwaway in its
     place). A box from before (no `session`) is not warned of. Limits: two subagents in one
@@ -11513,8 +11517,9 @@ from them.
     ("may be"). Not done (choices for Diogo): refusing without `--force`; the "this session's boxes
     are ..." hints (need_box, #136) still name a sibling's boxes as the session's; `up` of a name up
     already does not say it was started elsewhere. Tests: t_unit_agent_session (a stand-in box: ls's
-    line, the warning, the note from `windows -b` and `run -b`; all four fail on the old code),
-    whose.rs (the warning's cases, the note, ls's line).
+    line, the warning, the note from `windows -b` and `run -b`; all four fail on the old code; a
+    caller's own down: no note), whose.rs (the warning's cases, the note, ls's line,
+    only_another_callers_down_is_noted).
 600. **`check run` always drove the whole scenario** (2026-10-31, #376). A project's scenario of 37
     checkpoints cost 2.5 min a run and 7-9 min with --approve, for a change to one screen; one long
     session spent 1.9 h in `check run`. Now `check run --only ID,GLOB` (repeatable; IDs or fnmatch

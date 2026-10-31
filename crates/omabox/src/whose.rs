@@ -144,15 +144,12 @@ fn ago_text(s: u64) -> String {
 /// refused (1.x keeps `down` as it was): the agent is told, and the box's next command says who took
 /// it (taken_note). None for a box from before, a jailed caller's, or one this caller alone used.
 pub fn down_warning(ctx: &Ctx, me: &Caller) -> Option<Vec<u8>> {
-    if in_jail() {
+    if !by_another(&ctx.d, me) {
         return None;
     }
     let st = started(&ctx.d)?;
     let ago = used_ago(&ctx.d).filter(|&s| s <= RECENT_S)?;
     let last = last_user(&ctx.d);
-    if st == *me && last.as_ref().is_none_or(|l| l == me) {
-        return None;
-    }
     let mut m = cat!(
         "box '",
         ctx.name,
@@ -169,12 +166,27 @@ pub fn down_warning(ctx: &Ctx, me: &Caller) -> Option<Vec<u8>> {
     Some(m)
 }
 
+/// Whether ME is another caller than box dir D's: its starter (box.json) or its last user (`used`) is
+/// another agent session, none, or this one in another directory. Never for a box from before
+/// (no `session`) or a jailed caller's. down_warning's test, and whether a down leaves its note.
+pub fn by_another(d: &[u8], me: &Caller) -> bool {
+    if in_jail() {
+        return false;
+    }
+    let Some(st) = started(d) else {
+        return false;
+    };
+    st != *me || last_user(d).is_some_and(|l| l != *me)
+}
+
 fn taken_file(ctx: &Ctx) -> std::path::PathBuf {
     ctx.in_boxes(cat!(".taken-", ctx.name))
 }
 
 /// A `down` by ME took the box selected down: when, by whom, for its next command (`.taken-NAME`,
-/// pruned after a day; a new `up` of the name removes it).
+/// pruned after a day; a new `up` of the name removes it). Only for a down by another caller
+/// (by_another, read before the box dir went): a caller's own down leaves none, so its next `run`
+/// there starts a throwaway as before.
 pub fn write_taken(ctx: &Ctx, me: &Caller) {
     let _ = std::fs::write(
         taken_file(ctx),
@@ -357,6 +369,40 @@ mod tests {
             "none",
             "an up of the name clears it"
         );
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
+    // Whether a down leaves its note (#295's own-down fix): only another caller's, at any age.
+    #[test]
+    fn only_another_callers_down_is_noted() {
+        let b = tmp("own");
+        let me = c(Some("1a2b3c4d"), "/repo");
+        let put_json = |j: &str| std::fs::write(format!("{b}/b/box.json"), j).unwrap();
+        let used = |who: &Caller| std::fs::write(format!("{b}/b/used"), line(who)).unwrap();
+        let d = cat!(b.as_str(), "/b");
+        put_json(r#"{"name":"b","dir":"/repo","session":"1a2b3c4d"}"#);
+        used(&me);
+        assert!(
+            !by_another(&d, &me),
+            "started and used by this caller: its own down"
+        );
+        std::fs::write(format!("{b}/b/used"), "").unwrap();
+        assert!(!by_another(&d, &me), "...no user said: still its own");
+        used(&c(Some("1a2b3c4d"), "/repo/scratch-a"));
+        assert!(
+            by_another(&d, &me),
+            "last used in another directory: another's"
+        );
+        used(&me);
+        put_json(r#"{"name":"b","dir":"/repo","session":"0000beef"}"#);
+        assert!(by_another(&d, &me), "started by another session: another's");
+        put_json(r#"{"name":"b","dir":"/repo","session":null}"#);
+        assert!(
+            by_another(&d, &me),
+            "started outside any session: another's"
+        );
+        put_json(r#"{"name":"b","dir":"/repo"}"#);
+        assert!(!by_another(&d, &me), "a box from before: none");
         std::fs::remove_dir_all(&b).unwrap();
     }
 
