@@ -679,6 +679,11 @@ t_unit_record() {
   # Refused before any box is looked at (finding 297).
   check_match "record alone: what it takes" "start, stop, status, mark, hold, sheet, -- ACTION or --for DURATION" "$(ob record 2>&1)"
   check_match "...--fps 0 refused" "--fps is 1 to 120, got 0" "$(ob record start --fps 0 2>&1)"
+  # --crf (#278): a start's, 0 to 51.
+  check_match "...--crf 52 refused" "--crf is the video's H.264 quality, 0 \(lossless\) to 51 .*got 52" "$(ob record start --crf 52 2>&1)"
+  check_match "...--crf x" "--crf is the video's H.264 quality.*got x" "$(ob record --crf x --for 1s 2>&1)"
+  check_match "...stop --crf (the start's)" "record stop: --crf goes with start, -- ACTION or --for" "$(ob record stop --crf 8 2>&1)"
+  check_match "...sheet --crf" "record sheet: --crf goes with start" "$(ob record sheet x.mp4 --crf 8 2>&1)"
   check_match "...an action that does not act" "an omabox command that acts .*got shot" "$(ob record -- shot 2>&1)"
   check_eq "...tray menu, activate and click act (#343): on to the box" 3 "$({ ob -b "$P-x" record -- tray click x y; ob -b "$P-x" record -- tray menu x; ob -b "$P-x" record -- tray activate x; } 2>&1 | grep -c "^omabox: no box '$P-x' is up")"
   check_match "...a tray listing does not" "an omabox command that acts .*got tray \(a listing" "$(ob record -- tray --json 2>&1)"
@@ -14666,6 +14671,15 @@ t_record_hold() {
   d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$v" 2>/dev/null) || d=0
   check "...2 s of video, the stop's frame or two more (${d:-none} s)" awk -v d="$d" 'BEGIN { exit !(d >= 1.99 && d <= 2.25) }'
   check_eq "...and it stopped" "box '$B': not recording" "$(ob record -b "$B" status)"
+  # --crf (#278, finding 602): the quality x264 wrote into the video's own settings.
+  local q=$TMP/$P-rh-crf.mp4 qc=$TMP/$P-rh-crfcut.mp4
+  check_eq "record: CRF 18 by default" "crf=18.0" "$(grep -aoE 'crf=[0-9.]+' "$v" | head -n 1)"
+  out=$(ob record -b "$B" -o "$q" --crf 8 --for 1s 2>&1)
+  check_match "record --crf 8 --for 1s: said at stop" "at 30 fps, CRF 8" "$out"
+  check_eq "...the video at CRF 8" "crf=8.0" "$(grep -aoE 'crf=[0-9.]+' "$q" | head -n 1)"
+  ob record -b "$B" -o "$qc" --crf 30 --cut-idle 300ms --for 2s >/dev/null 2>&1
+  check_eq "...--crf 30 --cut-idle: the cut's pass at CRF 30 (its first at 12)" "crf=30.0" "$(grep -aoE 'crf=[0-9.]+' "$qc" | head -n 1)"
+  check_fails "...no record.crf left for the next take" test -e "$(ob path -b "$B")/record.crf"
   ob record -b "$B" start -o "$w" >/dev/null 2>&1 || { no "record start for record hold" "failed"; ob down "$B" >/dev/null 2>&1; return; }
   ob record -b "$B" mark a >/dev/null 2>&1
   h=$(ob record -b "$B" hold 2s 2>&1)

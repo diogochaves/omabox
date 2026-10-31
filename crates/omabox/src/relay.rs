@@ -647,7 +647,7 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
                 sargs.extend_from_slice(&args[i..i + 2]);
                 i += 1;
             }
-            b"--monitor" | b"--fps" => {
+            b"--monitor" | b"--fps" | b"--crf" => {
                 crate::args::optarg(ctx, a, next)?;
                 rest.extend_from_slice(&args[i..i + 2]);
                 unpol.extend_from_slice(&args[i..i + 2]);

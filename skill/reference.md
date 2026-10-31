@@ -1258,7 +1258,8 @@ most people will. Then:
   user's). Without the pointer: `shot --no-pointer` and `record --no-pointer` (it comes back after),
   or `omabox pointer hide` once for a series (kept over reloads and theme switches; it still moves
   and gives focus) and `pointer show` after. Video: `omabox record start -o demo.mp4`, act, `omabox record stop` (prints the file: an
-  H.264 MP4 at a steady `--fps`, 30 by default), or `omabox record -o demo.mp4 -- keys super+space`
+  H.264 MP4 at a steady `--fps`, 30 by default, at CRF 18; footage someone will zoom or encode
+  again (a video editor's): `record start --crf 8`), or `omabox record -o demo.mp4 -- keys super+space`
   for one action (and `--hold 1s` after it). It records one output at its pixels (`--monitor NAME`;
   the main screen by default): in a box at `--size 3840x2160,scale=2`, a sharp 4K video of a
   1920x1080 layout. `--monitor all`: every monitor in one video, laid out as `shot` takes the screen

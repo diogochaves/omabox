@@ -11862,6 +11862,21 @@ from them.
     tool's line; facts_as_bash's key lists), t_wait_blink (a box: a blinking cell and a pulsing one
     still, said; --strict 124; a blinking cell moving every 2 s still, three times; a counter 124,
     no note).
+602. **`record --crf N`: the video's quality, for footage that will be edited** (2026-10-31, #278).
+    `record` encoded its MP4 at CRF 18 (preset medium) from wf-recorder's CRF 14 ultrafast raw.mkv:
+    right for an agent reading a take, blotchy around text once a video editor zooms it 1.4x and
+    encodes it again. `--crf N` (0-51) goes with start, -- ACTION and --for, as --fps does: the
+    recording's own setting, kept in the box dir's `record.crf` until stop. The fps pass and a layout's
+    compose encode at N; --cut-idle's first pass at N or 12, the lower, and its cut at N; the raw
+    stream at N when below 14 (otherwise it would bound the take). `stop` says it ("at 30 fps, CRF 8").
+    Measured in a 3840x2160 box at scale 2, a 3.3 s take of a terminal typing: 271 KB at 18, 471 KB at
+    8, 384 KB at 0 (lossless: text compresses well). The lossless take encoded again at 18 has
+    a luma PSNR of 56.2 dB against it and SSIM 0.99970; at 8, 64.5 dB and 0.99991. CRF 0 makes H.264's
+    High 4:4:4 Predictive profile, which browsers (an editor rendering in Chromium) do not decode:
+    `stop` says so beside "CRF 0". No `--preset`: medium at a low CRF is what the size and the time
+    allow, and one number is enough to ask for. x264 writes the CRF into the stream's settings
+    (`crf=8.0`), which the test reads. Tests: t_unit_record (the refusals), t_record_hold (the
+    default 18, --crf 8 --for, --crf 30 --cut-idle at 30, no record.crf left), record_stop.rs bounds.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

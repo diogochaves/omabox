@@ -23,11 +23,11 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
-  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [--glide DURATION]
+  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--crf 18] [--no-pointer] [--audio] [--glide DURATION]
                 | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status [--json])   a video of the screen
-  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--crf 18] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
                 [SHEET] [POLISH] -- ACTION...   one action, recorded
-  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [SHEET] [POLISH]
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--crf 18] [--no-pointer] [--audio] [SHEET] [POLISH]
                 --for DURATION   the screen for that long, no action
   omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
               SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
@@ -430,6 +430,10 @@ a box at `--size 3840x2160,scale=2` gives a 4K video. `record stop` ends it and 
 MP4 (H.264) at a steady --fps (30), -o FILE or a new one in $TMPDIR. `record -- ACTION` (an omabox
 command: keys, click, run -d ...) records that one action and --hold (1s) after it. Needs wf-recorder
 and ffmpeg; both run in the box. One recording a box at a time; `record status` says if one runs.
+`--crf N` (with start, -- ACTION or --for) is the video's H.264 quality, 18 by default: small files,
+easy to read. Footage that will be zoomed or encoded again wants 8-10 (finding 602: a 4K terminal
+take at 8 is 1.7 times the size, 64 dB PSNR where 18 has 56); 0 is lossless, but H.264's High 4:4:4
+Predictive, which browsers do not play. The raw stream it is made from takes the same when lower than 14.
 `--monitor all` records every monitor as one video of the whole layout, as `shot` takes it: each
 at its place, at the highest scale of them (a lower-scale one scaled up), turned as it is shown,
 black between them; the video the size of the screen's shot (one black edge more if a side is odd).

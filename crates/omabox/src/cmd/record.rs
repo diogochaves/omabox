@@ -86,6 +86,8 @@ pub(crate) struct Rec {
     pub start: Vec<u8>,
     pub file: Vec<u8>,
     pub n: usize,
+    /// --crf (#278): the video's H.264 quality, None for REC_CRF.
+    pub crf: Option<i64>,
 }
 
 /// Where a box_sys call's stderr goes.
@@ -341,6 +343,7 @@ struct Opts {
     out: Vec<u8>,
     monitor: Vec<u8>,
     fps: Vec<u8>,
+    crf: Option<i64>,
     hold: i64,
     holdset: bool,
     ract: Vec<Vec<u8>>,
@@ -366,6 +369,24 @@ struct Opts {
     mfromfd: Vec<u8>,
     sfile: bool,
     json: bool,
+}
+
+/// REC_CRF: the video's H.264 quality unless --crf says (#278): small files, easy to read.
+pub(crate) const REC_CRF: i64 = 18;
+/// The raw stream's (wf-recorder's, ultrafast): 14, or the video's own when --crf asks for more.
+pub(crate) fn raw_crf(crf: Option<i64>) -> i64 {
+    crf.map_or(14, |c| c.min(14))
+}
+
+/// --crf N: 0 (lossless) to 51, as libx264 takes it.
+fn crf_arg(ctx: &Ctx, c: &[u8]) -> Res<i64> {
+    match shell::dec(c) {
+        Some(n) if shell::re_match("^[0-9]{1,2}$", c) && n <= 51 => Ok(n),
+        _ => Err(ctx.die(cat!(
+            "record: --crf is the video's H.264 quality, 0 (lossless) to 51 (18 by default; lower is better and larger), got ",
+            c
+        ))),
+    }
 }
 
 fn say_exit2(m: impl AsRef<[u8]>) -> Exit {
@@ -455,6 +476,12 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<Opts> {
             }
             b"--fps" => {
                 o.fps = val(ctx)?;
+                i += 1;
+            }
+            // --crf N (#278): the video's quality, for footage that will be edited.
+            b"--crf" => {
+                let c = val(ctx)?;
+                o.crf = Some(crf_arg(ctx, &c)?);
                 i += 1;
             }
             b"--hold" => {
@@ -684,6 +711,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "record ",
             sub,
             ": --audio goes with start, -- ACTION or --for"
+        )));
+    }
+    if any(later) && o.crf.is_some() {
+        return Err(ctx.die(cat!(
+            "record ",
+            sub,
+            ": --crf goes with start, -- ACTION or --for"
         )));
     }
     if any(later) && o.glide.is_some() {
@@ -1369,6 +1403,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         "record.input",
         "record.geo",
         "record.glide",
+        "record.crf",
         "record.as",
     ] {
         rm(&ctx.at(f));
@@ -1524,6 +1559,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         drop(w0);
         let reader = std::thread::spawn(move || read_all(r, Some(4096)));
         let mut a = w(&["/usr/bin/bash", "-c", P::START_SH, "omabox-record"]);
+        a.push(raw_crf(o.crf).to_string().into_bytes());
         a.extend(pairs.iter().cloned());
         let _ = box_exec(
             ctx,
@@ -1606,6 +1642,9 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     if let Some(g) = o.glide {
         put("record.glide", format!("{g}\n").into_bytes())?;
     }
+    if let Some(c) = o.crf {
+        put("record.crf", format!("{c}\n").into_bytes())?;
+    }
     // Still running half a second on: not ended at once (a bad output or codec).
     if sh_quiet(ctx, "/usr/bin/sh", P::ALIVE_SH, &pids)? != 0 {
         for f in [
@@ -1614,6 +1653,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
             "record.audio",
             "record.geo",
             "record.glide",
+            "record.crf",
             "record.as",
         ] {
             rm(&ctx.at(f));

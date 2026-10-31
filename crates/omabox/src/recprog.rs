@@ -26,12 +26,13 @@ pub const START_SH: &str = r###"
           next }
         { print; fflush() }"
     }
+    c=$1; shift
     while [ $# -ge 2 ]; do
       d=$1 o=$2; shift 2
       case $d in */m[0-9]*) rm -rf "$d" ;; esac
       mkdir -p "$d" && rm -f "$d"/raw.mkv "$d"/out.mp4 "$d"/first-frame "$d"/last-frame || exit 125
       (exec >"$d/wf-recorder.log" 2>&1 3>&-; trap - INT QUIT; export WAYLAND_DEBUG=client
-        exec setsid -- wf-recorder -y -D -o "$o" -c libx264 -x yuvj420p -p preset=ultrafast -p crf=14 -f "$d/raw.mkv" 2> >(first "$d")) &
+        exec setsid -- wf-recorder -y -D -o "$o" -c libx264 -x yuvj420p -p preset=ultrafast -p crf="$c" -f "$d/raw.mkv" 2> >(first "$d")) &
       echo "$!" >&3
     done"###;
 pub const ALIVE_SH: &str = r###"for i in 1 2 3 4 5; do sleep 0.1; for p; do kill -0 "$p" 2>/dev/null || exit 1; done; done"###;

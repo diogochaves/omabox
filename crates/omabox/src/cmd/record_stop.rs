@@ -4,9 +4,9 @@
 //! bytes of the box's `cat` (box_copy, finding 297).
 
 use super::record::{
-    Err2, REC_AAC, REC_DIR, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec, SheetOpts,
-    StopOpts, audio_end, now_us, num, rec_dirs, rec_max, rec_yuv, record_first_us, record_firsts,
-    record_running, record_size, rm, sys_cap, sys_q, sys_run, w,
+    Err2, REC_AAC, REC_CRF, REC_DIR, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec,
+    SheetOpts, StopOpts, audio_end, now_us, num, rec_dirs, rec_max, rec_yuv, record_first_us,
+    record_firsts, record_running, record_size, rm, sys_cap, sys_q, sys_run, w,
 };
 use crate::cat;
 use crate::exec::{ExecOpts, box_exec, dup_hi, pipe};
@@ -141,9 +141,11 @@ fn bytes_h(b: &[u8]) -> Vec<u8> {
     awk_begin(&[("b", b)], P::BYTES_H_AWK)
 }
 
-/// rec_crf CUT: the first pass's quality, 12 when --cut-idle encodes it once more.
-fn rec_crf(cut: Option<i64>) -> &'static str {
-    if cut.is_some() { "12" } else { "18" }
+/// rec_crf CUT CRF: the first pass's quality, the video's (--crf's, #278, or REC_CRF), 12 at most when
+/// --cut-idle encodes it once more.
+fn rec_crf(cut: Option<i64>, crf: Option<i64>) -> String {
+    let c = crf.unwrap_or(REC_CRF);
+    if cut.is_some() { c.min(12) } else { c }.to_string()
 }
 
 /// box_copy's reading of the box's stat (ST: "%F|%s|%b|%B"): the size to copy, or None when FILE is
@@ -443,7 +445,12 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     if !alive && rec.n <= 1 {
         audio_end(ctx, &apid)?;
     }
-    for f in ["record", "record.audio", "record.as"] {
+    // Its --crf (#278), read before the files go.
+    rec.crf = std::fs::read(ctx.at("record.crf"))
+        .ok()
+        .and_then(|v| shell::dec(&strip_nl(&v)))
+        .filter(|c| (0..=51).contains(c));
+    for f in ["record", "record.audio", "record.as", "record.crf"] {
         rm(&ctx.at(f));
     }
     // The bound on its ffmpeg runs (finding 356): as many frames as it ran for, of its size.
@@ -650,7 +657,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             "-preset",
             "medium",
             "-crf",
-            rec_crf(so.cut),
+            &rec_crf(so.cut, rec.crf),
         ]));
         a.extend(w(&REC_TAGS));
         if !afilt.is_empty() {
@@ -885,6 +892,13 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             " at ",
             fps,
             " fps",
+            match rec.crf {
+                Some(0) =>
+                    ", CRF 0 (lossless: H.264's High 4:4:4 Predictive, which browsers do not play)"
+                        .to_string(),
+                Some(c) => format!(", CRF {c}"),
+                None => String::new(),
+            },
             if afilt.is_empty() { "" } else { ", with sound" }
         ));
     }
@@ -1105,7 +1119,7 @@ fn record_compose(
         "-preset",
         "medium",
         "-crf",
-        rec_crf(cut),
+        &rec_crf(cut, rec.crf),
     ]));
     args.extend(w(&REC_TAGS));
     args.extend(amap);
@@ -1704,7 +1718,14 @@ fn record_cut(
     ]);
     a.push(fc);
     a.extend(w(&[
-        "-map", "[v]", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-map",
+        "[v]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        &rec.crf.unwrap_or(REC_CRF).to_string(),
     ]));
     a.extend(w(&REC_TAGS));
     a.extend(amap);
@@ -2250,8 +2271,15 @@ mod tests {
             (61, 360),
             "the bound: 60 s, and 5 s a second of 1080p at 30 fps"
         );
-        assert_eq!(rec_crf(Some(1)), "12");
-        assert_eq!(rec_crf(None), "18");
+        assert_eq!(rec_crf(Some(1), None), "12");
+        assert_eq!(rec_crf(None, None), "18");
+        // --crf (#278): the video's, the first pass of a cut 12 at most.
+        assert_eq!(rec_crf(None, Some(8)), "8");
+        assert_eq!(rec_crf(Some(1), Some(8)), "8");
+        assert_eq!(rec_crf(Some(1), Some(30)), "12");
+        assert_eq!(super::super::record::raw_crf(None), 14);
+        assert_eq!(super::super::record::raw_crf(Some(8)), 8);
+        assert_eq!(super::super::record::raw_crf(Some(30)), 14);
         assert_eq!(replace_all(b"a=pass,b=pass", b"pass", b"x"), b"a=x,b=x");
     }
 

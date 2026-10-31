@@ -83,7 +83,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"gdb" => Some("-b= --box= --shell --pid= --watch"),
         b"record" => Some(concat!(
             "-b= --box= -o= --output= --monitor= --no-pointer --audio --glide= --show-input --captions --cut-idle? --fps= ",
-            "--hold= --for= --sheet --frames= --every= --fit= --json"
+            "--crf= --hold= --for= --sheet --frames= --every= --fit= --json"
         )),
         b"check" => Some(concat!(
             "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= --report-scale= --only= -w= --window= --active -g= --expect= --expect-tree= --expect-image= --expect-cmd ",
