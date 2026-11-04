@@ -10,6 +10,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#410](https://github.com/diogochaves/omabox/issues/410)). The bind kept the frozen clock from
   a race in Omarchy 4.0's shell, which 4.5 fixed; on 4.0 it stays.
 
+### Deprecated
+- **Omarchy 4.0** ([#411](https://github.com/diogochaves/omabox/issues/411)): `up` and `setup` say
+  `omabox: deprecated: Omarchy 4.0.x: omabox 1.3 needs Omarchy 4.5 or later; ...` on stderr when the
+  box's Omarchy (yours, or `--omarchy`'s tree) is older than 4.5. Not refused under
+  `OMABOX_STRICT=1`: nothing in the call can change it. omabox 1.3 drops 4.0
+  ([#312](https://github.com/diogochaves/omabox/issues/312)), four weeks after 4.5 reaches Omarchy's
+  stable channel, not in 1.2.0 as 1.1.0 planned: Omarchy 4.5.0 came out on 2026-11-04 on the rc
+  channel only, and users on stable cannot update to it before it gets there.
+
 ## 1.1.0 — 2026-10-31
 
 New ways to drive and check a box: `run -d` jobs listed, stopped and waited for (`jobs`, `stop`,

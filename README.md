@@ -79,8 +79,9 @@ do not trust at all, use a VM.
 
 ## Install
 
-You need **Omarchy 4** (Hyprland 0.56+, the Lua config) and a GPU render node: AMD and Intel iGPUs
-and NVIDIA RTX cards are tested.
+You need **Omarchy 4.5** (Hyprland 0.56+, the Lua config) and a GPU render node: AMD and Intel iGPUs
+and NVIDIA RTX cards are tested. Omarchy 4.0 still works but is deprecated: omabox 1.3 drops it, four
+weeks after 4.5 reaches Omarchy's stable channel ([#312](https://github.com/diogochaves/omabox/issues/312)).
 
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox

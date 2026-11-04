@@ -5,7 +5,9 @@ What a machine needs, what `install.sh` does, updating and removing. Back to the
 
 ## What you need
 
-- **Omarchy 4** on Arch, with Hyprland 0.56+ (the Lua config).
+- **Omarchy 4.5** on Arch, with Hyprland 0.56+ (the Lua config). Omarchy 4.0 still works but is
+  deprecated (`up` and `setup` say so on a `deprecated:` line): omabox 1.3 drops it, four weeks after
+  4.5 reaches Omarchy's stable channel ([#312](https://github.com/diogochaves/omabox/issues/312)).
 - **A GPU render node** (`/dev/dri/renderD*`). Tested on AMD and Intel iGPUs, an NVIDIA RTX 4070
   SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
   the first usable node, or the GPU `omabox config gpu` names (`OMABOX_RENDER_NODE` overrides); an

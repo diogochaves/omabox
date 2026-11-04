@@ -51,6 +51,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     } else if !fb.is_empty() {
         s.feedback(ctx, fb)
     } else {
+        // #411: an Omarchy before 4.5 is deprecated (1.3 drops it, #312). omarchy<4.5
+        if let Some(what) = crate::install::omarchy_before_45(b"") {
+            ctx.deprecated_omarchy(&what);
+        }
         s.user(ctx)
     }
 }

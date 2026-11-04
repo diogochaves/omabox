@@ -1032,6 +1032,33 @@ fn omarchy_host_gaps_with(t: &[u8], have: impl Fn(&[u8]) -> bool, so: &[u8]) -> 
     v
 }
 
+/// omarchy_before_45 OMARCHY (#411): what to call the box's Omarchy (OMARCHY, `--omarchy`'s tree, else
+/// the installed one) in deprecated's line when it is older than 4.5, which omabox 1.3 drops (#312);
+/// none on 4.5 or later, or where no Omarchy shell is there to tell (doctor and up say that). Told by
+/// the tree, as center_split tells it, never by a version number (a dev tree has none).
+/// omarchy<4.5: removed with the 4.0 paths.
+pub fn omarchy_before_45(omarchy: &[u8]) -> Option<Vec<u8>> {
+    let tree: &[u8] = if omarchy.is_empty() {
+        b"/usr/share/omarchy"
+    } else {
+        omarchy
+    };
+    if !shell::path(&cat!(tree, "/shell/plugins/bar/Bar.qml")).is_file()
+        || crate::shelljson::center_split(omarchy)
+    {
+        return None;
+    }
+    if !omarchy.is_empty() {
+        return Some(cat!("--omarchy ", omarchy, " (an Omarchy before 4.5)"));
+    }
+    let v = omarchy_version();
+    Some(if v.is_empty() {
+        b"Omarchy before 4.5".to_vec()
+    } else {
+        cat!("Omarchy ", v)
+    })
+}
+
 /// omarchy_version: the installed Omarchy's version, as Omarchy's omarchy-version reads it
 /// (omarchy-dev on the edge channel, else omarchy), for the box's stand-in: a box has no pacman
 /// database. Inside a box (the suite's stand-in hosts), the box's own (OMABOX_OMARCHY_VERSION).
@@ -1326,6 +1353,34 @@ fn box_output(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #411: an --omarchy tree whose bar has no split centre is named as before 4.5; one with it, or
+    /// a folder with no Omarchy shell at all, is not.
+    #[test]
+    fn omarchy_before_45_by_tree() {
+        let d = std::env::temp_dir().join(format!("omabox-b45-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let d = shell::bytes(&d).to_vec();
+        let tree = |name: &str, bar: Option<&str>| {
+            let t = cat!(d, "/", name);
+            std::fs::create_dir_all(shell::path(&cat!(t, "/shell/plugins/bar"))).unwrap();
+            if let Some(text) = bar {
+                std::fs::write(shell::path(&cat!(t, "/shell/plugins/bar/Bar.qml")), text).unwrap();
+            }
+            t
+        };
+        let t40 = tree("t40", Some("property var center: []\n"));
+        assert_eq!(
+            omarchy_before_45(&t40),
+            Some(cat!("--omarchy ", t40, " (an Omarchy before 4.5)")),
+            "a 4.0 tree: named"
+        );
+        let t45 = tree("t45", Some("property var centerBegin: []\n"));
+        assert_eq!(omarchy_before_45(&t45), None, "a 4.5 tree: none");
+        let none = tree("none", None);
+        assert_eq!(omarchy_before_45(&none), None, "no Omarchy shell: none");
+        let _ = std::fs::remove_dir_all(shell::path(&d));
+    }
 
     /// t_unit_omarchy45's omarchy_host_gaps (#291, #293): each piece an --omarchy tree uses and the
     /// host lacks, saying what goes; none on a host with them, none for a tree that uses none.

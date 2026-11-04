@@ -978,6 +978,7 @@ t_unit_flag_forms() {
 
 # #287: every deprecation warning goes through one helper, `omabox: deprecated: OLD: write NEW
 # (refused in X.Y)`; OMABOX_STRICT=1 refuses the form at once. 1.0 has no live deprecation: called here.
+# (Its sibling deprecated_omarchy, #411, names an Omarchy before 4.5: skipped by the scan too.)
 t_unit_deprecated() {
   # (deprecated itself: one line naming the new form and the release that refuses it, OMABOX_STRICT=1
   # refusing it at once: exit.rs deprecated_as_bash; #324 wave 6-suite.)
@@ -991,7 +992,7 @@ for root, _, files in sorted(os.walk(sys.argv[1])):
         p = os.path.join(root, f); L = open(p).read().split("\n"); skip = False
         for i, l in enumerate(L):
             if l == "#[cfg(test)]" and i + 1 < len(L) and L[i + 1].startswith("mod tests"): break
-            if re.match(r"\s*pub fn deprecated\(", l): skip = True
+            if re.match(r"\s*pub fn deprecated(_\w+)?\(", l): skip = True
             elif skip and re.match(r"    \}$", l): skip = False; continue
             if not skip and re.search(r"\"[^\"]*(refused in |deprecat)", l): print("%s:%d: %s" % (p, i + 1, l.strip()))
 '

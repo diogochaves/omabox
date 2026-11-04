@@ -190,6 +190,18 @@ impl Ctx {
         Ok(())
     }
 
+    /// deprecated_omarchy WHAT (#411): deprecated's line for the Omarchy a box runs (WHAT, as
+    /// install::omarchy_before_45 names it), which omabox 1.3 no longer supports (#312). Not a form
+    /// the caller wrote, so OMABOX_STRICT=1 does not refuse it: nothing in the call can change it.
+    /// omarchy<4.5: removed with the 4.0 paths.
+    pub fn deprecated_omarchy(&self, what: &[u8]) {
+        say(crate::cat!(
+            "deprecated: ",
+            what,
+            ": omabox 1.3 needs Omarchy 4.5 or later; update once 4.5 reaches your Omarchy channel"
+        ));
+    }
+
     /// Exit as die would, for a refusal a helper has said already.
     pub fn refused(&self) -> Exit {
         match self.die_rc {
@@ -300,5 +312,23 @@ mod tests {
             Some(125),
             "...under run: run's own failure, 125"
         );
+    }
+
+    // #411: an Omarchy before 4.5 named on one deprecated: line, never refused (not the caller's form).
+    #[test]
+    fn deprecated_omarchy_line() {
+        let ctx = Ctx::new(b"up", Vec::new());
+        for strict in [None, Some("1")] {
+            let ((), said) = heard(|| {
+                crate::shell::with_env(&[("OMABOX_STRICT", strict)], || {
+                    ctx.deprecated_omarchy(b"Omarchy 4.0.6-1")
+                })
+            });
+            assert_eq!(
+                said,
+                "omabox: deprecated: Omarchy 4.0.6-1: omabox 1.3 needs Omarchy 4.5 or later; update once 4.5 reaches your Omarchy channel\n",
+                "one line, the same under OMABOX_STRICT={strict:?}"
+            );
+        }
     }
 }
