@@ -140,9 +140,6 @@ ROOT/tools/tree/omabox-tree
 /opt/omabox/bin/omabox-tree
 --tmpfs
 /run/systemd/journal
---ro-bind
-BOXDIR/shell-defaults.json
-/usr/share/omarchy/config/omarchy/shell.json
 --setenv
 PATH
 /opt/omabox/share/bin:/usr/bin

@@ -9376,11 +9376,18 @@ t_clean() {
   # Finding 400: the shell reads Omarchy's defaults and the user's file each on its own; when the
   # defaults came first under load, the bar was built from them and the frozen format was lost.
   # (As `up` wrote it: Omarchy 4.5's shell writes a widget's settings into the HOME's file once it runs,
-  # omarchy.elsewhen's cities.)
-  check_eq "...and the shell's defaults are the box's shell.json, so either may load first" "same" \
-    "$(ob run -b "$B" -- cat /usr/share/omarchy/config/omarchy/shell.json 2>&1 | cmp -s - "$(ob path -b "$B")/shell-defaults.json" && echo same || echo differ)"
-  check_eq "...which is the box's own (its bar's left side the same)" null \
-    "$(jq -c --slurpfile b "$H/.config/omarchy/shell.json" '.bar.layout.left as $l | if $l == $b[0].bar.layout.left then null else $l end' "$(ob path -b "$B")/shell-defaults.json" 2>&1)"
+  # omarchy.elsewhen's cities.) Omarchy 4.5's shell no longer loses it (#410): no bind there.
+  if omarchy45; then
+    check_fails "...Omarchy 4.5: no frozen shell defaults (its shell keeps the box's settings, #410)" \
+      test -e "$(ob path -b "$B")/shell-defaults.json"
+    check_eq "...the shell's defaults Omarchy's own" "same" \
+      "$(ob run -b "$B" -- cat /usr/share/omarchy/config/omarchy/shell.json 2>&1 | cmp -s - /usr/share/omarchy/config/omarchy/shell.json && echo same || echo differ)"
+  else # omarchy<4.5
+    check_eq "...and the shell's defaults are the box's shell.json, so either may load first" "same" \
+      "$(ob run -b "$B" -- cat /usr/share/omarchy/config/omarchy/shell.json 2>&1 | cmp -s - "$(ob path -b "$B")/shell-defaults.json" && echo same || echo differ)"
+    check_eq "...which is the box's own (its bar's left side the same)" null \
+      "$(jq -c --slurpfile b "$H/.config/omarchy/shell.json" '.bar.layout.left as $l | if $l == $b[0].bar.layout.left then null else $l end' "$(ob path -b "$B")/shell-defaults.json" 2>&1)"
+  fi
   out=$(ob run -b "$B" -- date +%s 2>&1)
   check "...and the box's processes on the real clock (the bar's text alone is frozen)" test "$(( $(date +%s) - ${out:-0} ))" -lt 30
   check_eq "...animations off" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"

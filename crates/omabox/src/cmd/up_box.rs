@@ -165,11 +165,15 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             .ok_or_else(|| ctx.die(cat!("--seed: DEST must be inside the box HOME, got ", rel)))?;
         crate::seed::seed_copy_in(ctx, &h, &crate::seed::Src::asked(src.clone()), &dest)?;
     }
-    // A clean box's shell.json is also the defaults its shell reads (finding 400).
+    // A clean box's shell.json is also the defaults its shell reads (finding 400), on an Omarchy
+    // whose shell can lose it: omarchy<4.5. 4.5's shell no longer remakes a widget when its
+    // settings change (omacom/omarchy#15517, the commit that split the bar's centre, which is how
+    // center_split tells it), so there the box's shell.json alone keeps the frozen clock (#410).
     let defaults = cat!(d, "/shell-defaults.json");
     let _ = std::fs::remove_file(shell::path(&defaults));
     if u.clean
         && !u.clean_has("clock")
+        && !crate::shelljson::center_split(&u.omarchy)
         && shell::path(&cat!(u.tree(), "/config/omarchy/shell.json")).is_file()
         && std::fs::copy(
             shell::path(&cat!(d, "/home/.config/omarchy/shell.json")),
@@ -1279,7 +1283,8 @@ fn bwrap_args(
     for p in &u.overlays {
         b.tmp_overlay(p).map_err(refused)?;
     }
-    // A clean box's shell.json as its shell's defaults too (finding 400; after the overlays).
+    // A clean box's shell.json as its shell's defaults too (finding 400; after the overlays; only
+    // made before Omarchy 4.5, #410).
     let defaults = cat!(d, "/shell-defaults.json");
     if shell::path(&defaults).is_file() {
         b.own_ro(&defaults, &cat!(u.tree(), "/config/omarchy/shell.json"))

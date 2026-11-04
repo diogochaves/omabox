@@ -8399,7 +8399,8 @@ from them.
     box made from a desk whose bar has the defaults' widgets but other inline settings could lose them
     the same way; not seen). **Checked** under the same load: 24 runs of the scenario, all 24 bar
     shots identical with "Friday 12:00"; three t_check in parallel, 147/0 each. Tests: t_clean (the
-    shell's defaults in a clean box are its shell.json; with `--keep clock` Omarchy's own).
+    shell's defaults in a clean box are its shell.json; with `--keep clock` Omarchy's own). Since
+    finding 628 (#410) only before Omarchy 4.5, whose shell no longer loses the settings.
 
 401. **The kernel SIGKILLed a box's shell now and then under load: PipeWire had set its
     RLIMIT_RTTIME to 0** (2026-10-20, #222's load flakes). Three full suites in four failed one `up`
@@ -12177,6 +12178,18 @@ from them.
     while held; a python-gobject authority in the stand-in's place answering escapes, 300 KB and an
     error: plain, bounded, stderr plain, `--json` escaped), polkit.rs answer_is_plain_and_bounded.
     They fail on the old code.
+628. **A clean box's shell-defaults bind is only needed before Omarchy 4.5** (2026-11-04, #410).
+    Finding 400's race (the shell building the bar from Omarchy's defaults, then losing the clock's
+    inline settings in `applySettingsDelta`) went with omacom/omarchy#15517 (`b7e900ced`, "stops
+    recreating widgets on rearrange"), the same commit that split the bar's centre, first in 4.5.0-rc1.
+    So `up --clean` binds its `shell.json` over the defaults' path only where `center_split` says the
+    box's Omarchy (the host's or `--omarchy`'s tree) has no split centre: omarchy<4.5, removed with
+    4.0 (#312). **Checked** on Omarchy 4.5.0 final, the RTX on nvidia and two VMs running beside it:
+    30 clean boxes one after another under 32 CPU busy loops, each box's clock (`shot -g "860,0
+    200x26"`, 2 s after `up`) compared with a bound 1.1.0 box's "Friday 12:00": 0 of 30 differ, none
+    bound (#410 measured 7/30 wrong on 4.0.6 without the bind, 0/30 on rc1). A 4.0.6 tree (`git
+    archive v4.0.6`) given as `--omarchy` still gets the bind. t_clean checks either branch
+    (`omarchy45`); the `up --clean` goldens lost the bind.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

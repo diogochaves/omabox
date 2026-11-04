@@ -3,6 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+- **A clean box no longer binds its `shell.json` over Omarchy's defaults on Omarchy 4.5**
+  ([#410](https://github.com/diogochaves/omabox/issues/410)). The bind kept the frozen clock from
+  a race in Omarchy 4.0's shell, which 4.5 fixed; on 4.0 it stays.
+
 ## 1.1.0 — 2026-10-31
 
 New ways to drive and check a box: `run -d` jobs listed, stopped and waited for (`jobs`, `stop`,
