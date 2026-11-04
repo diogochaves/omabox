@@ -12208,7 +12208,10 @@ from them.
     those addresses into the repository. RPU_NORM now writes them as `HOSTADDRS`. (b)
     t_protect_ports_ns defined a `probe()` of its own over the suite's, which `-j 1` (one shell for
     every test) reports as "the test leaves the suite's functions as they were"; it is `ppn_probe`
-    now.
+    now. (c) The cargo test `a_bound_home_is_used` skipped its namespace half only where `unshare`
+    was missing; where it is refused (a container without user namespaces: omarchy-pkgs' bin/build,
+    GitHub's runners) it spawned, exited at once, and the test failed after 5 s. It now skips when
+    `unshare` has exited (checked: fails before, passes after, under `bwrap --disable-userns`).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

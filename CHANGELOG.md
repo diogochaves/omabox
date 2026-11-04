@@ -10,6 +10,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#410](https://github.com/diogochaves/omabox/issues/410)). The bind kept the frozen clock from
   a race in Omarchy 4.0's shell, which 4.5 fixed; on 4.0 it stays.
 
+### Fixed
+- **`cargo test` failed in a container without user namespaces** (a package build's `check()`):
+  `a_bound_home_is_used` now skips its namespace half when `unshare` is refused, as when it is
+  missing.
+
 ### Deprecated
 - **Omarchy 4.0** ([#411](https://github.com/diogochaves/omabox/issues/411)): `up` and `setup` say
   `omabox: deprecated: Omarchy 4.0.x: omabox 1.3 needs Omarchy 4.5 or later; ...` on stderr when the

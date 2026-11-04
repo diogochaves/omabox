@@ -183,7 +183,9 @@ mod tests {
         let hb = shell::bytes(&r.join("cache/omabox/b")).to_vec();
         let free = shell::bytes(&r.join("free")).to_vec();
         let cwd = shell::bytes(&r.join("cwd")).to_vec();
-        // (a namespace of its own with the HOME bound in, as bwrap makes; skipped where unshare can't)
+        // (a namespace of its own with the HOME bound in, as bwrap makes; skipped where unshare is
+        // missing, or refused and gone at once: a container without user namespaces, as
+        // omarchy-pkgs' bin/build)
         let mut c = std::process::Command::new("unshare");
         c.args([
             "-Urm",
@@ -207,6 +209,13 @@ mod tests {
         while held.is_some() && std::time::Instant::now() < end {
             if Users::scan().uses(&hb) {
                 bound = true;
+                break;
+            }
+            if held
+                .as_mut()
+                .is_some_and(|c| c.try_wait().ok().flatten().is_some())
+            {
+                held = None;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
