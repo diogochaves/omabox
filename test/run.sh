@@ -7932,7 +7932,7 @@ while True:
   if ! UP_OUT=$(inns env HOME="$h" "$CLI" up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up in a network namespace of the test's own" "$UP_OUT"; return; fi
   ok "up in a network namespace of the test's own, with protect-ports"
   # (from the box, 3 s at most: "hi" when it reached the server. PROTO tcp or udp)
-  probe() { HOME=$h ob run -b "$B" -- timeout 3 bash -c 'exec 3<>"/dev/$1/$2/$3" && { [ "$1" = tcp ] || printf x >&3; } && head -c 2 <&3' _ "$1" "$2" "$3" 2>/dev/null; }
+  ppn_probe() { HOME=$h ob run -b "$B" -- timeout 3 bash -c 'exec 3<>"/dev/$1/$2/$3" && { [ "$1" = tcp ] || printf x >&3; } && head -c 2 <&3' _ "$1" "$2" "$3" 2>/dev/null; }
   check "a port not protected: the box reaches it on d1's address, TCP (the control)" until_ok 10 bash -c "[ \"\$(HOME='$h' '$CLI' run -b '$B' -- timeout 3 bash -c 'exec 3<>/dev/tcp/10.239.1.1/$w && head -c 2 <&3' 2>/dev/null)\" = hi ]"
   # look ADDR...: each protected (q) and not (w), TCP and UDP; reached and control say where
   look() {
@@ -7940,8 +7940,8 @@ while True:
     reached="" control=""
     for a in "$@"; do
       for p in tcp udp; do
-        got=$(probe "$p" "$a" "$q"); [ -z "$got" ] || reached+="$p/$a "
-        [ "$(probe "$p" "$a" "$w")" = hi ] || control+="$p/$a "
+        got=$(ppn_probe "$p" "$a" "$q"); [ -z "$got" ] || reached+="$p/$a "
+        [ "$(ppn_probe "$p" "$a" "$w")" = hi ] || control+="$p/$a "
       done
     done
   }
@@ -13530,6 +13530,9 @@ subs = [(a, b) for a, b in zip(pairs[0::2], pairs[1::2]) if a]
 def norm(w):
     for a, b in subs:
         w = w.replace(a, b)
+    # (protect-ports: the host addresses in its nft sets, which change with its interfaces: a VM
+    # link, a container bridge, the provider IPv6 prefix; never written into a golden)
+    w = re.sub(r"(element\\? inet\\? omabox\\? host[46]\\? \\?\{\\? )[^}]*?(\\? \\?\})", r"\1HOSTADDRS\2", w)
     return re.sub(r"omabox-" + re.escape(name) + r"-[0-9]+", "omabox-NAME-PID", w).replace(name, "NAME")
 text = open(launch, encoding="utf-8", errors="surrogateescape").read()
 words = [w for line in text.splitlines() for w in shlex.split(line, comments=False)]

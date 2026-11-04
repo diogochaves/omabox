@@ -12202,6 +12202,13 @@ from them.
     form the caller wrote. Tests: exit.rs `deprecated_omarchy_line`, install.rs
     `omarchy_before_45_by_tree`; by hand, a box with `--omarchy` a 4.0.6 tree says it, a box on 4.5.0
     does not.
+630. **Two suite checks that only failed on this machine's state** (2026-11-04). (a) t_cli_up's
+    protect-ports golden held the host's addresses in its nft sets (finding 459's rule lists them), so
+    it failed once the host's interfaces changed (a VM's link, the provider's IPv6 prefix), and it put
+    those addresses into the repository. RPU_NORM now writes them as `HOSTADDRS`. (b)
+    t_protect_ports_ns defined a `probe()` of its own over the suite's, which `-j 1` (one shell for
+    every test) reports as "the test leaves the suite's functions as they were"; it is `ppn_probe`
+    now.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
