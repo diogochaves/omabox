@@ -232,7 +232,6 @@ OMABOX_CLEAN_WALLPAPER
     "locale": "en_US.UTF-8",
     "timezone": "UTC"
   },
-  "client_render": "X",
   "dir": "R/norepo",
   "from": "rp-save",
   "hyprland_version": "X",

@@ -12212,6 +12212,19 @@ from them.
     was missing; where it is refused (a container without user namespaces: omarchy-pkgs' bin/build,
     GitHub's runners) it spawned, exited at once, and the test failed after 5 s. It now skips when
     `unshare` has exited (checked: fails before, passes after, under `bwrap --disable-userns`).
+631. **The installed suite failed on any machine but the dev host** (2026-11-04, #413, #414, #415,
+    #417; seen running the 1.1.0 package's `/usr/lib/omabox/test/run.sh` in fresh 4.0.6 and 4.5.0
+    VMs). (a) The session-leak check (#336) called the guard's mark, `$XDG_RUNTIME_DIR/omabox-guard`,
+    a leak: the first guarded omabox of a session makes it (#290), which in a fresh session is the
+    suite's `guard exec` cases; it is the session's, so it is left out. (b) t_cli_up's goldens held
+    three facts of the dev host: the box's `/etc/omarchy.conf` bind (only where the host has one),
+    the box HOMEs' cache dir (the test's own HOME moved it where `XDG_CACHE_HOME` is unset) and
+    `client_render` (only where `eglinfo` is): RPU_NORM leaves out the bind and the key, and the test
+    pins `XDG_CACHE_HOME`. (c) t_fixture bound the fixture's folder, which in an install is under
+    /usr, the box's own, and `up` refuses that; it binds a checkout's only. (d) t_gdb's
+    process-directed SIGSEGV went to whichever thread the kernel picked, at times a glib worker of
+    Hyprland whose stack does not end in `main()` (2 of 5 runs in a VM); it is sent to the main thread
+    with tgkill. (a) fails before and passes after (t_unit_session_scan); t_gdb 3 of 3 here.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

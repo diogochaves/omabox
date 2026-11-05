@@ -93,9 +93,6 @@ usr/lib
 --ro-bind
 /etc
 /etc
---ro-bind
-BOXDIR/etc/omarchy.conf
-/etc/omarchy.conf
 --proc
 /proc
 --dev
@@ -238,7 +235,6 @@ NAME
   "audio": false,
   "autoreload": false,
   "bar": "user",
-  "client_render": "X",
   "dir": "R/norepo",
   "hyprland_version": "X",
   "idle": 7200,

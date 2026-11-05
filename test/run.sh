@@ -672,8 +672,11 @@ session_scan() {
     done
   fi
   while read -r t p; do
-    # (A unit of another box's, systemd/transient/omabox-NAME-PID.scope, comes and goes with it.)
-    if [[ $p == *"$pre"* ]] || { [[ $p != systemd/* ]] && [[ ${p,,} == *omabox* ]]; }; then
+    # (A unit of another box's, systemd/transient/omabox-NAME-PID.scope, comes and goes with it. The
+    # guard's mark, omabox-guard, is the session's: the first guarded omabox makes it, and keeps it,
+    # #290; a run that made it in a fresh session leaves nothing of its own, #413.)
+    if [ "$t" = f ] && [ "$p" = omabox-guard ]; then continue
+    elif [[ $p == *"$pre"* ]] || { [[ $p != systemd/* ]] && [[ ${p,,} == *omabox* ]]; }; then
       echo "leak: new in your runtime dir, named for omabox or this run: $p"
     elif [ "$t" = d ] && [[ $p == hypr/* ]] && ! session_live "$rt/$p"; then
       echo "leak: a Hyprland session dir in your runtime dir that no live process holds: $p (a box's compositor, killed with its box?)"
@@ -4819,7 +4822,7 @@ t_unit_session_scan() {
     "$(grep -E '^(d hypr/|s |. omabox)' "$s/a.rt" | paste -sd' ' -)"
   # The leaks, on purpose.
   printf 'HOME=/home/u\nWAYLAND_DISPLAY=wayland-9\nDISPLAY=:0\nOMABOX_BOX=t1-x\nFOO=bar\nPATH=%s/bin:/usr/bin\n' "$TMP/ss-tmp" > "$env"
-  touch "$rt/t1-left"; mkdir "$rt/omabox-stray"; rm "$rt/gone-file"
+  touch "$rt/t1-left" "$rt/omabox-guard"; mkdir "$rt/omabox-stray"; rm "$rt/gone-file"
   touch "$rt/systemd/transient/omabox-t1-x-9.scope" "$rt/systemd/transient/omabox-other-1.scope"
   python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$rt/wayland-7"   # (bound, then its process gone)
   sleep 0 & dead=$!; wait "$dead"
@@ -4837,6 +4840,7 @@ t_unit_session_scan() {
   check_match "...a value naming the run's temporary dir" "leak: your user manager's environment, changed: PATH=$TMP/ss-tmp/bin" "$out"
   check_match "a new entry named for the run: a leak" "leak: new in your runtime dir, named for omabox or this run: t1-left" "$out"
   check_match "...for omabox" "leak: new in your runtime dir, named for omabox or this run: omabox-stray" "$out"
+  check_fails "...but not the guard's mark, the session's (#413)" grep -q 'omabox-guard' <<<"$out"
   check_match "...a scope of the run's left" "leak: new in your runtime dir, named for omabox or this run: systemd/transient/omabox-t1-x-9.scope" "$out"
   check_match "a Hyprland session dir no live process holds: a leak" "leak: a Hyprland session dir in your runtime dir that no live process holds: hypr/b_5_5" "$out"
   check_match "a Wayland socket nothing serves: a leak" "leak: a Wayland socket in your runtime dir that nothing serves: wayland-7 " "$out"
@@ -12032,7 +12036,10 @@ t_throwaway_killed() {
 t_fixture() {
   local B=$P-fx fx=$ROOT/tools/fixture/omabox-fixture n x0 y0 x1 y1 rc out
   [ -x "$fx" ] || { no "the fixture is built" "no $fx"; return; }
-  up_ok "$B" --size 1280x720,scale=2 --no-shell --net isolated --ro-bind "${fx%/*}" || { no "up" "$UP_OUT"; return; }
+  # (a checkout's fixture bound in; an install's is under /usr, the box's own already, and up refuses
+  # a bind there: #415)
+  local fxbind=(--ro-bind "${fx%/*}"); [[ $fx != /usr/* ]] || fxbind=()
+  up_ok "$B" --size 1280x720,scale=2 --no-shell --net isolated "${fxbind[@]}" || { no "up" "$UP_OUT"; return; }
   # fx_since N JQ...: jq over its log's lines after the first N, as one array (-s); fx_n: how many now.
   fx_since() { local k=$1; shift; ob run -b "$B" -- tail -n "+$((k + 1))" /tmp/fx.log 2>/dev/null | jq -sc "$@" 2>&1; }
   fx_n() { ob run -b "$B" -- wc -l /tmp/fx.log 2>/dev/null | awk '{print $1}'; }
@@ -13546,6 +13553,9 @@ while i < len(words):
         i += 3; continue
     if w == "--ro-bind" and i + 2 < len(words) and words[i + 2] == "/opt/omabox/lib":
         i += 3; continue
+    # (the box its own /etc/omarchy.conf only where the host has one, Omarchy 4.5: #414)
+    if w == "--ro-bind" and i + 2 < len(words) and words[i + 2] == "/etc/omarchy.conf":
+        i += 3; continue
     if w == "--hostname" or (w in ("--uid", "--gid") and nxt == uid):
         out += [w, "X"]; i += 2; continue
     if w == "--setenv" and nxt in gone:
@@ -13563,9 +13573,11 @@ for k in ("created", "pidns"):
 if isinstance(b.get("starter"), dict):
     for k in ("pid", "start", "command"):
         b["starter"].pop(k, None)
-for k in ("aquamarine", "render", "client_render", "wayland_screen", "hyprland_version", "quickshell_version", "omarchy_version"):
+for k in ("aquamarine", "render", "wayland_screen", "hyprland_version", "quickshell_version", "omarchy_version"):
     if k in b:
         b[k] = "X"
+# (written only where eglinfo is, an optional mesa-utils: #414)
+b.pop("client_render", None)
 for m in b.get("mounts") or []:
     for k in ("dev", "ino"):
         if k in m:
@@ -13587,6 +13599,9 @@ print(norm(json.dumps(b, indent=2, sort_keys=True, ensure_ascii=False)))
 # out by RPU_NORM; OMABOX_GOLDEN=write writes them instead (then read their diff before committing).
 t_cli_up() {
   local U=$P-rpu r=$TMP/rpu
+  # (the box HOMEs where the user's are, whatever the test's own HOME: without XDG_CACHE_HOME they
+  # would move into it, and the goldens with them, #414)
+  local -x XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}
   rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
   # A HOME of the test's own, so the user's own ~/.config/omabox/config (protect-ports, a gpu) cannot
   # change what up does: its theme the user's current one, its config empty.
@@ -19092,7 +19107,10 @@ os.write(os.open("/proc/self/comm", os.O_WRONLY), b"x\x1b[1my\nz"); open("/tmp/t
   check "the first watch's process killed: its gdb done" until_ok 10 bash -c "'$CLI' log -b '$B' gdb -n all | grep -q '^== omabox: end'"
   check_match "...log gdb --crash: no crash" "has no crash in its gdb log" "$(ob log -b "$B" gdb --crash 2>&1)"
   check_match "log --crash: the gdb log's alone" "the gdb log's alone" "$(ob log -b "$B" shell --crash 2>&1)"
-  ob run -b "$B" -- pkill -SEGV -xo Hyprland
+  # (to its main thread: tgkill with the tid its pid; a process-directed signal goes to any thread
+  # the kernel picks, a worker's at times, whose stack does not end in main, #417; 234: x86_64's tgkill)
+  ob run -b "$B" -- python3 -I -c 'import ctypes, signal, sys; p = int(sys.argv[1]); ctypes.CDLL(None, use_errno=True).syscall(234, p, p, signal.SIGSEGV)' \
+    "$(ob run -b "$B" -- pgrep -xo Hyprland)"
   check "...a crash: the box goes down as it would have" until_ok 15 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | .state == \"dead\"'"
   out=$(ob log -b "$B" gdb -n all 2>&1)
   check_match "...the gdb log has the signal" "received signal SIGSEGV" "$out"
