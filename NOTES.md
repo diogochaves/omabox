@@ -12286,6 +12286,15 @@ from them.
     for what sysfs cannot see (a real GPU with no EGL, t_up_software). Not seen in a VM here: the
     test's stand-in sysfs only. Test: doctor.rs's render_nodes (a software node first then a GPU:
     auto takes the GPU; alone: refused unless forced; with virgl: taken).
+638. **`up --stock` kept two things of the user's without saying so** (2026-11-05, #265's questions
+    to Diogo, finding 613). (a) The git identity (two values of `git config --global`) stays in a
+    stock box, so a commit in it works; but --stock is for a shot someone else sees, where a git log
+    shows the name and email. Kept (Diogo's call), and the help says it. (b) Over `--from SAVE` the
+    save's HOME stays (its files, configs and their look) while the bar, theme and locale are made
+    stock, yet up said only "none of your look". Kept (--from means that state), and up now says it
+    under its stock line: `...over save 'S': its HOME as saved (its files, configs and their look);
+    the bar, theme and locale above are stock`. Tests: upspec.rs's clean_as_bash
+    (stock_over_save_text), t_stock_bar (said, a file of the save's in the box).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

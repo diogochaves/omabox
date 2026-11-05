@@ -8371,6 +8371,7 @@ t_stock_bar() {
     "up: seeded the bar from $d/desk: its shell.json layout and shell.toml \\[font\\], \\[bar\\] \\(--stock-bar starts from Omarchy's default\\)" "$out"
   check_eq "...the box has the desk's bar and shell.toml" "left 20" \
     "$(ob run -b "$B" -- sh -c "jq -r .bar.position $c/shell.json; sed -n 's/^icon-canvas = //p' $c/shell.toml" | paste -sd ' ')"
+  ob run -b "$B" -- sh -c 'echo 265 > "$HOME/kept-265"' >/dev/null 2>&1
   check "a save of it" sv save "$S" -b "$B"
   ob down "$B" >/dev/null 2>&1
   out=$(OMABOX_DESK_CONFIG=$d/desk sv up "$B" --from "$S" --stock-bar --no-shell 2>&1) || { no "up --from --stock-bar" "$out"; sv saves rm "$S" >/dev/null 2>&1; return; }
@@ -8379,6 +8380,12 @@ t_stock_bar() {
   check_eq "...Omarchy's default layout seeded" "top omarchy.workspaces" \
     "$(jq -r '"\(.bar.position) \(.bar.layout.left[1].id)"' "$H/.config/omarchy/shell.json")"
   check_fails "...no shell.toml, not even the save's" test -e "$H/.config/omarchy/shell.toml"
+  check "down" ob down "$B"
+  # #265 (finding 638): --stock over --from keeps the save's HOME, and says so under its stock line.
+  out=$(OMABOX_DESK_CONFIG=$d/desk sv up "$B" --from "$S" --stock --no-shell --net isolated 2>&1) || { no "up --from --stock" "$out"; sv saves rm "$S" >/dev/null 2>&1; return; }
+  check_match "up --stock --from: says the save's HOME stays" \
+    "stock: .*\\.\\.\\.over save '$S': its HOME as saved \\(its files, configs and their look\\); the bar, theme and locale above are stock" "$out"
+  check_eq "...a file of the save's in it" 265 "$(cat "$(ob path -b "$B")/home/kept-265" 2>&1)"
   check "down" ob down "$B"
   sv saves rm "$S" >/dev/null 2>&1
 }

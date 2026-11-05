@@ -541,6 +541,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             crate::upspec::stock_text(&u.theme, &u.clean_lang, &u.clean_zone)
         ));
     }
+    if u.stock && !u.from.is_empty() {
+        say(crate::upspec::stock_over_save_text(&u.from));
+    }
     // A Hyprland that stops answering here (finding 353): said, the box left up, exit 1 at the end.
     let unanswered = !crate::hypr::hypr_errors_note(ctx)?;
     // No idle limit and no agent or owner to go with (#220): it outlives its caller, said to a caller

@@ -10,6 +10,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - A headless box's GPU, with `gpu auto`, is the first render node that renders on the GPU: a VM's
   virtio-gpu without virgl comes after any other, and when it is the only one `up` refuses it
   before starting a box that would die there (`OMABOX_RENDER_NODE` forces it) (#396).
+- `up --stock --from SAVE` says under its stock line that the save's HOME stays as saved; the
+  `--stock` help says your git name and email stay (#265).
 - `up` no longer orders a `down` marker of the old pre-1.0 form (its start alone) by the file's
   time: in a tie it counts as a down that came, so the `up` is cancelled (#404).
 

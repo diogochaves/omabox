@@ -265,7 +265,9 @@ not your terminal configs and terminal choice, branding, themes (but the one --t
 is yours and not Omarchy's), wallpapers, plugins' settings (as --no-seed extensions), Hyprland
 toggles or fonts; a new user's HOME (/etc/skel's) instead. The clock, pointer, network and animations
 are as in any box; --plugin, --theme-dir and the rest work on top (`ls --json`: stock, a clean box's too).
-Not with --desk-shell.
+Your git name and email stay (git config --global user.name and user.email, so a commit in the box
+works): a shot of a git log shows them. Over a --from save, the save's HOME stays as saved (said);
+the bar, theme and locale are stock. Not with --desk-shell.
 @ up run check
 --clean: --stock plus the run-to-run freezes, a desktop where only what is tested moves, for shots
 compared across runs (`check`): a #ff00ff wallpaper (no theme has it: any of it inside a window or

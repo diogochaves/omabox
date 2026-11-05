@@ -551,6 +551,16 @@ pub fn clean_text(
     look_text(true, keep, theme, net, clean_lang, clean_zone)
 }
 
+/// What up says under its stock (or clean) line when the box starts --from SAVE (#265, finding
+/// 638): --from keeps the save's HOME, so "none of your look" holds for the desk's, not the save's.
+pub fn stock_over_save_text(save: &[u8]) -> Vec<u8> {
+    cat!(
+        "...over save '",
+        save,
+        "': its HOME as saved (its files, configs and their look); the bar, theme and locale above are stock"
+    )
+}
+
 /// stock_text THEME CLEAN_LANG CLEAN_ZONE: what a stock box is (#265, finding 613), as up says it.
 pub fn stock_text(theme: &[u8], clean_lang: &[u8], clean_zone: &[u8]) -> Vec<u8> {
     look_text(false, b"", theme, b"", clean_lang, clean_zone)
@@ -763,6 +773,12 @@ mod tests {
             .unwrap(),
             "your bar, theme nord with its own wallpaper, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles), no pointer",
             "...what --keep takes back, and a network"
+        );
+        // up --stock over --from (#265, finding 638): the save's HOME stays, said.
+        assert_eq!(
+            String::from_utf8(stock_over_save_text(b"demo")).unwrap(),
+            "...over save 'demo': its HOME as saved (its files, configs and their look); the bar, theme and locale above are stock",
+            "stock_over_save_text"
         );
         // up --stock (#265, finding 613): the same words, less the freezes.
         assert_eq!(
