@@ -385,7 +385,10 @@ number there is refused (milliseconds up to 0.9, seconds everywhere else): write
 layout times the scale: 2560 px for a 1280 px layout at 2). --zoom N (2-16, with -g) shows each pixel of
 a small crop as N x N, unblended: a 1 px border, a glyph's edge; `click --in` maps it back.
 -g "X,Y WxH" (or X,Y,W,H) crops: the screen's, or with --window the window's own coordinates; a
-region past the edge is cut to it, said on stderr (one with nothing inside is refused).
+region past the edge is cut to it, said on stderr (one with nothing inside is refused). At a
+fractional scale the image is the screen's own pixels from the one its start rounds to (30 at 1.25
+is 37.5 px: from 38), not grim's blend, so find --image finds a crop where it was cut; the region
+recorded (stderr, --json, click --in) is the one asked.
 A cropped or scaled shot says so on stderr: `click --in SHOT X Y` (and `drag`, `pointer --in`)
 take that image's pixels (a window shot follows the window if it moved). Screen shots show the
 pointer (--no-pointer: not this one; `pointer hide`: none until `pointer show`); window shots never

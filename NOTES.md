@@ -12404,6 +12404,43 @@ from them.
     stand-in checkout of its own with copied tools, keyboard and still replaced with `install`:
     keys, `wait still`, click and events say it, once a command; a box up after says nothing; it
     fails before, nothing said).
+641. **At a fractional scale a region off a whole pixel was grim's blend, not the screen's pixels**
+    (2026-11-05, #423, finding 635's last part). grim takes a region whose start is not on a whole
+    pixel of its monitor (30 at 1.25 is 37.5 px) by resampling the screen, so each pixel of the image
+    is a blend of two: a `shot -g` crop scored under 0.95 against the screen it was cut from, at
+    once, and `find --image` at the same scale missed it; `pixel` read blends too. Measured here
+    (1920x1200, grim's region against its whole screen's grab): a region that starts on a whole pixel
+    is the screen's pixels exactly, whatever its width (grim's size is the region's times the scale,
+    truncated: 101 at 1.25 is 126); one that starts off it differs. **Fix:** screen.rs's px_cut: a
+    region inside one monitor, at a scale whose layout pixels do not all start on whole ones (not 1
+    or 2), starting off one, is grabbed from the whole pixel at or before it (a multiple of the
+    scale's denominator from the monitor's edge, 4 at 1.25 and 2 at 1.5; the edge itself for a scale
+    with none under 120) and cut: the screen's pixels from the one its start rounds to (37.5 to 38,
+    as win_buf_geom rounds a window's edges), as many as grim made before. So the image's size, its
+    shots.tsv record, `--json`'s region, the stderr line and `click --in` stay the region asked for:
+    the image starts at most half a pixel from it (0.4 layout px at 1.25), as grim's blend did.
+    Taken so: `shot -g` (ImageMagick cuts it in the grab's pipe, before `--zoom` scales it; `--grid
+    --cell` aims the same way; `--burst` cuts each frame after, with no date chunks, so identical
+    frames stay identical bytes, #191; without magick shot says so and takes grim's), `find`,
+    `click` and `wait image` with `-g` (the PPM cut in Rust), `pixel`, and shotcmp's new frame of a
+    crop for `wait change --since` and `wait still --like` (cut as the shot was, else every pixel
+    would differ). Left: a `--fit`-scaled crop (grim's -s resamples it anyway), a region over two
+    monitors (grim draws both at one scale), `--window -g` (whole buffer pixels already, finding
+    300), `wait still|change -g` and the bar's settle (each compares its own frames), drawn.rs (the
+    screen against the window's own by cells; at a fractional scale their sizes differ: Unknown).
+    Also a crop's scale comment, and `--json`'s scale, was its width over the region's, a pixel off
+    for a small one (23 at 1.25 is 28 px: 1.217), which `find --image` took for another scale under
+    about 30 px (its 0.02); now it is the monitor's when grim's size at it is the image's
+    (size_scale), and find's own scale for a `-g` region too. Before and after, each target of
+    finding 635 (its GTK card, foot text; the tree box or cell + 2 px) cut and searched at once at
+    its own scale: at 1.25 GTK 0.857-0.980 (all 13 under 1; labels 0.877-0.891) to 1.000, foot
+    0.976-0.986 to 1.000; at 1.5 GTK labels and buttons 0.918-0.934 to 1.000 (icons and foot started
+    on whole pixels there: 1.000 both); `pixel` #b1b1b0 for the screen's #c9c9c8, then #c9c9c8.
+    Tests: screen.rs's a_region_off_a_whole_pixel_is_cut_on_whole_pixels (the rounding: 1.25, 1.5,
+    4/3, the far edge, a second monitor, one turned, over two; size_scale),
+    imgfind.rs's a_grab_is_cut_to_the_region_and_kept_a_ppm, t_find_image at 1.25 (a crop off a
+    whole pixel: the screen's pixels, found at 1 at the default 0.95, `-g` around it, `pixel` along a
+    row of it, `wait change --since` it; 4 of these fail before: best 0.950, colours blended).
 642. **A host Hyprland on a `.conf` config failed every host-side action with its raw answer**
     (2026-11-05, #422, 1.2.1 part; Diogo's call: a clear message, no `.conf` passthrough until
     someone asks). Everything omabox does on the user's Hyprland is Lua sent with `hyprctl eval`
@@ -12447,10 +12484,6 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   daemon: no video wallpapers or intros (an opt-in `up --owe` for footage would be #309).
 - 1.0.1 runs on Omarchy 4.0.x and 4.5 (finding 422); 1.1 drops 4.0 (#312): every 4.0-only spot
   carries `omarchy<4.5` (`grep -rn 'omarchy<4.5'`).
-- Image search at a fractional scale (finding 635): a `shot -g` crop whose region does not start
-  on a whole pixel is resampled by grim, and scores 0.82-0.98 against its own screen, under
-  `find`'s 0.95. Grabbing the whole output and cutting it on whole pixels would keep a crop's
-  pixels the screen's; not done (#423).
 
 - Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
   noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the

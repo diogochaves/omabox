@@ -39,6 +39,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   they need a Lua config (`hyprland.lua`) and that headless boxes work as they are;
   `up --interactive` says it before it makes anything (it left a dead box), and `doctor` warns of
   it (`host-config`, read from Hyprland's status, nothing sent).
+- **A `shot -g` crop at a fractional scale is the screen's own pixels** ([#423](https://github.com/diogochaves/omabox/issues/423)):
+  at 1.25 or 1.5 a region that did not start on a whole pixel (30 at 1.25 is 37.5 px) was
+  resampled by grim, so `find --image`, `click --image` and `wait image` missed a crop taken in the
+  same box (GTK text 0.82-0.93 against the screen it was cut from, under the 0.95 it needs). Such a
+  region is now taken from a whole pixel and cut there, by `shot -g` (`--zoom`, `--burst`, `--grid
+  --cell` too), `find -g`, `pixel` and `wait change --since` a crop; the region it records, its
+  image size and `click --in` are as before, and a small crop's scale comment is its screen's.
 
 ## 1.2.0 — 2026-11-05
 
