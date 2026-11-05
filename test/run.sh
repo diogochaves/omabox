@@ -251,7 +251,7 @@ EV_NESTED='for d in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/omabox/*/; do
   [ -f "$d/box.json" ] || continue
   n=${d%/}; n=${n##*/}
   for f in "$d/box.log" "$d"/home/*.log "$d"/run/hypr/*/hyprland.log "$d/run/events.log"; do
-    [ -f "$f" ] && { printf "\036%s/%s\n" "$n" "${f##*/}"; tail -n 200 "$f"; }
+    [ -f "$f" ] && { printf "\036%s/%s\n" "$n" "${f##*/}"; tail -n 200 "$f"; [ -z "$(tail -c 1 "$f")" ] || echo; }
   done
 done; true'
 ev_nested() {
@@ -264,7 +264,8 @@ ev_nested() {
     rm -f "$d/.used"
   done
 }
-# (The read prints each file as a line "\036INNER/FILE", then its tail.)
+# (The read prints each file as a line "\036INNER/FILE", then its tail, ended by a newline: a log cut
+# mid-line swallowed the next file's marker, #406.)
 ev_nested_read() {
   local line f=""
   while IFS= read -r line; do

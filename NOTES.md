@@ -12479,6 +12479,12 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
+- t_guard's nested `up --interactive` under load (#406): in the 1.2.1 package test's VMs it failed 1
+  run in 4 alone on 1.2.1 and 3 in 5 on 1.2.0 once the host's load was about 13: the same on both, so
+  load, not a change. In 11 of 12 failed nested boxes the inner Hyprland's log stops inside its XCursor
+  load of the Adwaita theme, after EGL init, for the whole 30 s, while the outer box answers. Cause not
+  found (only 200 lines kept). The evidence read now ends each log with a newline: one cut mid-line
+  swallowed the next file's marker.
 - Omarchy 4.5 on the host (#292, findings 415-423): the default stays workspace 9 (the first
   monitor's); `special:omabox` is offered for a place of omabox's own (finding 423). Boxes run no OWE
   daemon: no video wallpapers or intros (an opt-in `up --owe` for footage would be #309).
