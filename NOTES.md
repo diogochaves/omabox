@@ -12227,6 +12227,20 @@ from them.
     process-directed SIGSEGV went to whichever thread the kernel picked, at times a glib worker of
     Hyprland whose stack does not end in `main()` (2 of 5 runs in a VM); it is sent to the main thread
     with tgkill. (a) fails before and passes after (t_unit_session_scan); t_gdb 3 of 3 here.
+632. **t_monitors_wait held one wait's --ignore to another's** (2026-11-04, #416; `want [124 13,17
+    9x12] got [124 13,17 8x12]` every run in fresh 4.0.6 and 4.5.0 VMs since 1.1.0, never on the dev
+    host). The CLI is right: a `wait still --window` answer names the box of what changed in the
+    second half of its --timeout in the layout and, moved by the window's place, in the window's
+    coordinates (`1945,29 8x12 (the window's 13,17 8x12)`, the window at 1932,12; the same in 24 of
+    24 answers by hand). The test compared that with `$g`, the box an earlier 2 s wait named, and
+    since #307 (finding 609) the cell cycles 62 glyphs, not 10 digits (a 10-look loop is a blinker
+    now): each wait's second half sees 15 or 20 of them, so the box differs from wait to wait (7x10 to
+    9x12 at scale 1.6 here, as much between two plain waits; v1.0.1's binary given the 62 glyphs does
+    the same). Bisected on the case (both answers, twice each): 8df3e8f, where the cell changed; with
+    10 digits every half saw all of them. The VMs' foot draws JetBrainsMono at size 9 (Omarchy's), the
+    dev host's at 11 (its foot.ini, seeded into the box): there every wait named 1945,30 10x14, which
+    is why it only failed in VMs. The check now holds the window's --ignore to the layout box in the
+    same answer, and that box to the window (3 of 3 in a VM, and on the host, after).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

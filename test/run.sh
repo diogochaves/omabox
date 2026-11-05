@@ -16053,7 +16053,7 @@ t_monitors_wait_nvidia() {
   monitors_wait_on "$n" "$P-monwnv"
 }
 monitors_wait_on() {
-  local n=$1 B=$2 out rc g w when c gx gy gw gh i gn tx ty
+  local n=$1 B=$2 out rc g gl w when c gx gy gw gh i gn tx ty
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
     --monitor 1080x1920,below || { no "up with two more monitors" "$UP_OUT"; return; }
   check_match "up's line names every monitor, a scale where it is not 1 (#308)" \
@@ -16082,10 +16082,14 @@ monitors_wait_on() {
     check_eq "...--ignore it: still$when" 0 "$(ob wait -b "$B" still --ignore "$g" >/dev/null; echo $?)"
     # (#287, F8: beside --window, --ignore is the window's own; the 124 names it so)
     out=$(ob wait -b "$B" still --window 'title:^N$' --timeout 1500ms); rc=$?
+    # (Held to the place the same answer names in the layout, not to $g: each wait names the glyphs
+    # its own second half saw, and of 62 those differ, a pixel wider or taller in another wait, #416.)
+    gl=$(sed -n 's/.* it changed only at \([0-9]*,[0-9]* [0-9]*x[0-9]*\) (the window.s .*/\1/p' <<<"$out")
     gn=$(sed -n 's/.*(the window.s \([^)]*\)): --ignore "\([^"]*\)".*/\2/p' <<<"$out")
-    read -r gx gy gw gh <<<"${g//[,x]/ }"
+    read -r gx gy gw gh <<<"${gl//[,x]/ }"
     check_eq "...--window on it: 124, naming the --ignore in the window's coordinates$when" \
       "124 $((gx - ${w%% *})),$((gy - $(cut -d' ' -f2 <<<"$w"))) ${gw}x${gh}" "$rc $gn"
+    check "...a cell inside its window ($gl in $w)$when" cell_in "$gl" "$w"
     check_eq "...still with that --ignore$when" 0 "$(ob wait -b "$B" still --window 'title:^N$' --ignore "$gn" >/dev/null; echo $?)"
     # One digit to the next, inside $g (all the digits over 2 s): a narrow pair is a pixel narrower.
     out=$(ob wait -b "$B" change -g "1920,0 800x450" --json)
