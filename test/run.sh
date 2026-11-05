@@ -2201,9 +2201,9 @@ t_unit_shell_warnings() {
     $'Plugin widget x.qml failed: boom\nbad' "$(probe shell_warnings "$f")"
 }
 
-# (shell_crash_dirs, shell_crashes and shell_note, #303, finding 408: shellnote.rs
-# shell_reports_as_bash, an #[ignore] test t_unit_rust_ignored runs, the box's answers stand-ins;
-# #324 wave 6-suite.)
+# (shell_crash_dirs, shell_crashes and shell_note, #303, finding 408, and another Quickshell's crash,
+# #420, finding 639: shellnote.rs shell_reports_as_bash and crash_dialog_told_and_said, cargo tests,
+# the box's answers stand-ins; #324 wave 6-suite.)
 
 # #294 (finding 407): the box's Xwayland stand-in keeps the core limit at 1 byte (hard too, so
 # Xwayland's -core cannot raise it), and passes a limit the user raised on as it is. A fake Xwayland
@@ -12836,7 +12836,9 @@ t_shell_crash() {
 # #303 (finding 408): another Quickshell in the box (a project's own, crashed on purpose to test its
 # crash handling) is not the box's shell: its crash is not said as the shell's, and its dialog is left to
 # it. The box's shell killed outright (no report) and started again by its launcher is said, once; and
-# a `run` command killed by a signal is said in words, not by bash's job-control line.
+# a `run` command killed by a signal is said in words, not by bash's job-control line. #420 (finding
+# 639): that crash is said by the next command as itself, once, and a click its dialog covers names
+# the dialog.
 t_shell_other_crash() {
   local B=$P-ocrash D H out rc qp dp sp i
   up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
@@ -12850,19 +12852,43 @@ t_shell_other_crash() {
   done
   [ -n "$qp" ] || { no "a Quickshell of the test's own started" "$(cat "$H"/run-*.log 2>/dev/null | tail -n 5)"; ob down "$B" >/dev/null; return; }
   sp=$(cat "$D/run/omabox-shell.pid")
+  # #420: a window under where its dialog will open (a floating one, centred).
+  ob run -b "$B" -q -d --wait -- foot -a oc-under -T under sleep 600 >/dev/null 2>&1
   ob windows -b "$B" >/dev/null 2>&1
   shell_segv "$B" "$qp"
   check "the test's Quickshell crashed: its report written" until_ok 10 bash -c "grep -qx 'Config Path: /tmp/qt/shell.qml' '$H'/.cache/quickshell/crashes/*/report.txt"
+  # (Its stderr kept: the first command after the crash says it, #420.)
+  : > "$TMP/ocrash.err"
   # shellcheck disable=SC2016 # jq's
-  check "...its dialog opens" until_ok 10 bash -c "'$CLI' windows -b '$B' --json 2>/dev/null | jq -e 'any(.[]; .class == \"org.quickshell\")'"
+  check "...its dialog opens" until_ok 10 bash -c "'$CLI' windows -b '$B' --json 2>>'$TMP/ocrash.err' | jq -e 'any(.[]; .class == \"org.quickshell\")'"
+  out=$(cat "$TMP/ocrash.err")
+  check_match "...the next command says it as itself, not as the shell's (#420: said nothing)" \
+    "warning: a Quickshell in the box crashed since the last command \(not its shell: /tmp/qt/shell\.qml; report: $H/\.cache/quickshell/crashes/[A-Za-z0-9_.-]+/report\.txt\)" "$out"
+  check_eq "...once" 1 "$(grep -c "Quickshell in the box crashed" <<<"$out")"
+  check_fails "...never as the shell's (#303)" grep -q "the shell crashed" <<<"$out"
   sleep 1.5   # (omabox's closer would have taken it by now: it did within ms)
   dp=$(ob windows -b "$B" --json 2>/dev/null | jq -r 'first(.[] | select(.class == "org.quickshell") | .pid) // empty')
   check "...and stays: not the box shell's to close (#303)" test -n "$dp"
   check_fails "...shell.log says no dialog closed" grep -q "closed the shell's crash dialog" "$H/shell.log"
   out=$(ob windows -b "$B" 2>&1 >/dev/null)
-  check_fails "...the next command says no shell crash (was: \"the shell crashed since the last command\")" grep -q "shell" <<<"$out"
+  check_fails "...the next command says nothing more (no shell crash: was \"the shell crashed since the last command\")" grep -q "crashed" <<<"$out"
   check_match "...ls: the shell running, no crash counted" "^$B +headless +[^ ]+ +up +running " "$(ob ls | grep "^$B ")"
   check_eq "...the shell untouched" "$sp" "$(cat "$D/run/omabox-shell.pid")"
+  # #420: a click its dialog covers names it as Quickshell's crash dialog, whose, its report, the way out.
+  local fa da
+  fa=$(ob windows -b "$B" --json 2>/dev/null | jq -r 'first(.[] | select(.class == "oc-under") | .address) // empty')
+  da=$(ob windows -b "$B" --json 2>/dev/null | jq -r 'first(.[] | select(.class == "org.quickshell") | .address) // empty')
+  if [ -n "$fa" ] && [ -n "$dp" ]; then
+    # (its centre, where the dialog is: window coordinates of a window near the whole screen)
+    out=$(ob click -b "$B" --window "$fa" 900 520 2>&1); rc=$?
+    check_match "click under the dialog: refused, the dialog named as Quickshell's crash dialog of that config (#420: a plain \"quickshell\" window)" \
+      "^omabox: window $fa oc-under \"under\" is still covered there by $da org\.quickshell \"[^\"]*\" after focusing it: move or close that window first; $da is Quickshell's crash dialog of /tmp/qt/shell\.qml, not the box's shell \(report: $H/\.cache/quickshell/crashes/[A-Za-z0-9_.-]+/report\.txt; closing it is its app's, or omabox run -b $B -- kill $dp\)$" "$out"
+    check_eq "...exit 1" 1 "$rc"
+    out=$(ob shot -b "$B" --window "$fa" -o "$TMP/ocrash.png" 2>&1 >/dev/null)
+    check_match "...shot --window says it too" "covered by $da org\.quickshell \"[^\"]*\"; $da is Quickshell's crash dialog of /tmp/qt/shell\.qml, not the box's shell \(" "$out"
+  else
+    no "a window under the dialog, and the dialog" "under [$fa] dialog pid [$dp]"
+  fi
   [ -z "$dp" ] || ob run -b "$B" -- kill "$dp"
   # The box's shell killed outright: no crash handler, no report; Omarchy's launcher starts it again.
   ob run -b "$B" -- kill -KILL "$sp"

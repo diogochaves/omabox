@@ -10,8 +10,6 @@ use crate::exit::{Ctx, Res, say};
 use crate::jobs::job_how;
 use crate::repo::readlink_e;
 use crate::shell::{self, strip_nl};
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 
 fn words(v: &[&[u8]]) -> Vec<Vec<u8>> {
     v.iter().map(|w| w.to_vec()).collect()
@@ -110,14 +108,59 @@ fn shell_state_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, given: &str) -> &'st
     }
 }
 
-/// The awk of shell_crash_dirs: each report whose first Config Path is the box's shell's.
-const CRASH_AWK: &str = r#"FNR == 1 { seen = 0 }
-    !seen && /^Config Path: / { seen = 1; c = substr($0, 14); gsub(/\/+/, "/", c); sub(/\/[^\/]*$/, "", c)
-      if (c == want) { n = FILENAME; sub(/\/report\.txt$/, "", n); sub(/.*\//, "", n); print n } }"#;
+/// `tr -s /`: runs of slashes squeezed to one.
+fn squeeze(v: &[u8]) -> Vec<u8> {
+    let mut w: Vec<u8> = Vec::new();
+    for &c in v {
+        if !(c == b'/' && w.last() == Some(&b'/')) {
+            w.push(c);
+        }
+    }
+    w
+}
 
-/// shell_crash_dirs: the box's Quickshell crash report folders (each a line) of this box's shell:
-/// no link, under the box HOME, a name on one line.
-pub fn shell_crash_dirs(ctx: &Ctx) -> Vec<u8> {
+/// A Quickshell crash report in the box HOME (#303, #420): its folder's name, its time, the
+/// crashed process it names (the child the handler forked to dump, `__QUICKSHELL_CRASH_DUMP_PID`
+/// of the dialog's process), the crashed instance's config (its first `Config Path`, slashes
+/// squeezed), and whether that config is the box's shell's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Report {
+    pub name: Vec<u8>,
+    pub mtime: Option<std::time::SystemTime>,
+    pub dump: Vec<u8>,
+    pub config: Vec<u8>,
+    pub shell: bool,
+}
+
+impl Report {
+    /// Its report.txt, as the host sees it.
+    pub fn path(&self, ctx: &Ctx) -> Vec<u8> {
+        cat!(
+            ctx.d,
+            "/home/.cache/quickshell/crashes/",
+            self.name,
+            "/report.txt"
+        )
+    }
+}
+
+/// The folder the box's shell's config is in (the Omarchy tree's `shell`), slashes squeezed, no
+/// trailing one.
+fn shell_config_dir(ctx: &Ctx) -> Vec<u8> {
+    let want = meta(&ctx.d, "omarchy").0;
+    let want = if want.is_empty() {
+        b"/usr/share/omarchy".to_vec()
+    } else {
+        want
+    };
+    let w = strip_nl(&squeeze(&cat!(want, "/shell")));
+    w.strip_suffix(b"/").unwrap_or(&w).to_vec()
+}
+
+/// crash_reports: the box's Quickshell crash reports with their config, oldest first (by time,
+/// then name): no link, under the box HOME, a name on one line. One whose config is not written
+/// yet is none yet (it counts once it is).
+pub fn crash_reports(ctx: &Ctx) -> Vec<Report> {
     let (Some(dir), Some(home)) = (
         readlink_e(&cat!(ctx.d, "/home/.cache/quickshell/crashes")),
         readlink_e(&cat!(ctx.d, "/home")),
@@ -127,7 +170,8 @@ pub fn shell_crash_dirs(ctx: &Ctx) -> Vec<u8> {
     if !dir.starts_with(&cat!(home, "/")) {
         return Vec::new();
     }
-    let mut files: Vec<Vec<u8>> = Vec::new();
+    let want = shell_config_dir(ctx);
+    let mut out = Vec::new();
     for rep in shell::glob(&shell::path(&dir), false) {
         let d = cat!(dir, "/", rep);
         let f = cat!(d, "/report.txt");
@@ -138,34 +182,130 @@ pub fn shell_crash_dirs(ctx: &Ctx) -> Vec<u8> {
         {
             continue;
         }
-        files.push(f);
+        let Ok(text) = std::fs::read(shell::path(&f)) else {
+            continue;
+        };
+        let first = |lead: &[u8]| {
+            text.split(|&c| c == b'\n')
+                .find_map(|l| l.strip_prefix(lead))
+                .map(<[u8]>::to_vec)
+        };
+        let Some(config) = first(b"Config Path: ").map(|c| squeeze(&c)) else {
+            continue;
+        };
+        // (`sub(/\/[^\/]*$/, "", c)`: its folder)
+        let cdir = match config.iter().rposition(|&c| c == b'/') {
+            Some(i) => &config[..i],
+            None => &config[..],
+        };
+        out.push(Report {
+            mtime: shell::path(&f).metadata().and_then(|m| m.modified()).ok(),
+            dump: first(b"Crashed process ID: ").unwrap_or_default(),
+            shell: cdir == want.as_slice(),
+            config,
+            name: rep,
+        });
     }
-    if files.is_empty() {
-        return Vec::new();
+    out.sort_by(|a, b| (a.mtime, &a.name).cmp(&(b.mtime, &b.name)));
+    out
+}
+
+/// shell_crash_dirs: the box's Quickshell crash report folders (each a line) of this box's shell:
+/// no link, under the box HOME, a name on one line, in name order.
+pub fn shell_crash_dirs(ctx: &Ctx) -> Vec<u8> {
+    let mut names: Vec<Vec<u8>> = crash_reports(ctx)
+        .into_iter()
+        .filter(|r| r.shell)
+        .map(|r| r.name)
+        .collect();
+    names.sort();
+    names.into_iter().flat_map(|n| cat!(n, "\n")).collect()
+}
+
+/// A Quickshell crash dialog (#420): the crashed instance's report when it is written, and whether
+/// that instance is the box's shell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dialog {
+    pub shell: bool,
+    pub report: Option<Report>,
+}
+
+/// crash_dialog PID: whether the window of process PID (the box's numbering) is Quickshell's crash
+/// dialog, told as share/crash-dialog.sh tells it (#303): its process has the reporter's
+/// `__QUICKSHELL_CRASH_DUMP_PID`, and the report naming that pid says whose; with none written
+/// yet, the shell's when the reporter's parent (the crashed process) is the box's shell. Never by its
+/// class or title: the class is the crashed instance's app id (`org.quickshell`, or a pragma's, as
+/// an app built on Quickshell sets), the title Quickshell's name.
+pub fn crash_dialog(ctx: &Ctx, pid: &[u8]) -> Option<Dialog> {
+    crash_dialog_with(&RealBox, ctx, pid)
+}
+
+fn crash_dialog_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, pid: &[u8]) -> Option<Dialog> {
+    if !shell::is_num(pid) {
+        return None;
     }
-    let want = meta(&ctx.d, "omarchy").0;
-    let want = if want.is_empty() {
-        b"/usr/share/omarchy".to_vec()
-    } else {
-        want
+    let env = sys.on_box(ctx, &words(&[b"cat", &cat!("/proc/", pid, "/environ")]));
+    if env.rc != 0 {
+        return None;
+    }
+    let dump = env
+        .out
+        .split(|&c| c == 0)
+        .find_map(|e| e.strip_prefix(b"__QUICKSHELL_CRASH_DUMP_PID=".as_slice()))
+        .filter(|v| shell::is_num(v))?
+        .to_vec();
+    if let Some(r) = crash_reports(ctx)
+        .into_iter()
+        .rev()
+        .find(|r| r.dump == dump)
+    {
+        return Some(Dialog {
+            shell: r.shell,
+            report: Some(r),
+        });
+    }
+    let st = sys.on_box(ctx, &words(&[b"cat", &cat!("/proc/", pid, "/status")]));
+    let ppid = st.out.split(|&c| c == b'\n').find_map(|l| {
+        l.strip_prefix(b"PPid:".as_slice())
+            .map(|v| v.trim_ascii().to_vec())
+    });
+    Some(Dialog {
+        shell: st.rc == 0 && ppid.is_some() && ppid == shell_pid(ctx),
+        report: None,
+    })
+}
+
+/// What a cover warning adds of a crash dialog (#420): whose it is, its report, and the way out.
+/// The box shell's is closed as it opens (one left is one omabox missed); another's is its app's.
+pub fn dialog_words(ctx: &Ctx, d: &Dialog, pid: &[u8]) -> Vec<u8> {
+    let whose = match (&d.report, d.shell) {
+        (_, true) => b"the box's shell".to_vec(),
+        (Some(r), false) => cat!(
+            crate::term::plain_cap(&r.config, 200),
+            ", not the box's shell"
+        ),
+        (None, false) => b"another Quickshell, not the box's shell".to_vec(),
     };
-    // (`printf '%s' "$want/shell" | tr -s /`, then one trailing / off)
-    let mut w: Vec<u8> = Vec::new();
-    for &c in &cat!(want, "/shell") {
-        if !(c == b'/' && w.last() == Some(&b'/')) {
-            w.push(c);
-        }
+    let rep = match &d.report {
+        Some(r) => cat!("report: ", crate::term::plain(&r.path(ctx)), "; "),
+        None => b"its report not written yet; ".to_vec(),
+    };
+    let kill = cat!("omabox run -b ", ctx.name, " -- kill ", pid);
+    let way = if d.shell {
+        cat!(kill, " closes it")
+    } else {
+        cat!("closing it is its app's, or ", kill)
+    };
+    cat!("Quickshell's crash dialog of ", whose, " (", rep, way, ")")
+}
+
+/// cover_note PID ADDRESS: what a cover warning says after itself when the window covering is a
+/// Quickshell crash dialog (`; ADDRESS is Quickshell's crash dialog of ...`), else nothing.
+pub fn cover_note(ctx: &Ctx, pid: &[u8], address: &[u8]) -> Vec<u8> {
+    match crash_dialog(ctx, pid) {
+        Some(d) => cat!("; ", address, " is ", dialog_words(ctx, &d, pid)),
+        None => Vec::new(),
     }
-    let w = strip_nl(&w);
-    let w = w.strip_suffix(b"/").unwrap_or(&w).to_vec();
-    let mut c = crate::sig::command("awk");
-    c.arg("-v")
-        .arg(OsStr::from_bytes(&cat!("want=", w)))
-        .arg(CRASH_AWK)
-        .args(files.iter().map(|f| OsStr::from_bytes(f)))
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    c.output().map(|o| o.stdout).unwrap_or_default()
 }
 
 /// shell_crashes: how many crash reports since `up`.
@@ -226,10 +366,66 @@ pub fn shell_note(ctx: &Ctx) -> Res<()> {
 }
 
 fn shell_note_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<()> {
-    if meta(&ctx.d, "shell").0 != b"true" {
-        return Ok(());
+    let reps = crash_reports(ctx);
+    if meta(&ctx.d, "shell").0 == b"true" {
+        shell_note_shell(sys, ctx, &reps)?;
     }
-    let n = shell_crashes(ctx);
+    others_note(ctx, &reps);
+    Ok(())
+}
+
+/// The file others_note compares with: how many reports of other Quickshells it has seen.
+const OTHERS_SEEN: &str = "other-crashes-seen";
+
+/// others_note: a Quickshell in the box that is not its shell (an app built on Quickshell, a config
+/// of the caller's) crashed since the last command (#420): said once, as itself, never as the
+/// shell's (#303), with its config and report. A first look (no count kept: a box an older omabox
+/// started) says nothing.
+fn others_note(ctx: &Ctx, reps: &[Report]) {
+    let others: Vec<&Report> = reps.iter().filter(|r| !r.shell).collect();
+    let seen = std::fs::read(ctx.at(OTHERS_SEEN))
+        .ok()
+        .map(|s| strip_nl(&s))
+        .and_then(|s| shell::test_int(&s));
+    let _ = std::fs::write(ctx.at(OTHERS_SEEN), format!("{}\n", others.len()));
+    let (Some(seen), Some(last)) = (seen, others.last()) else {
+        return;
+    };
+    let new = (others.len() as i64).saturating_sub(seen);
+    if new <= 0 {
+        return;
+    }
+    let what = cat!(
+        crate::term::plain_cap(&last.config, 200),
+        "; report: ",
+        crate::term::plain(&last.path(ctx))
+    );
+    say(if new == 1 {
+        cat!(
+            "warning: a Quickshell in the box crashed since the last command (not its shell: ",
+            what,
+            ")"
+        )
+    } else {
+        cat!(
+            "warning: Quickshells in the box crashed ",
+            new.to_string(),
+            " times since the last command (not its shell; the last: ",
+            what,
+            ")"
+        )
+    });
+}
+
+/// others_seen: what the next others_note compares with, as things are now (`up`: a crash before
+/// the box was up is no news).
+pub fn others_seen(ctx: &Ctx) {
+    let n = crash_reports(ctx).iter().filter(|r| !r.shell).count();
+    let _ = std::fs::write(ctx.at(OTHERS_SEEN), format!("{n}\n"));
+}
+
+fn shell_note_shell<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, reps: &[Report]) -> Res<()> {
+    let n = reps.iter().filter(|r| r.shell).count();
     let seen = std::fs::read(ctx.at("shell-crashes-seen"))
         .map(|s| strip_nl(&s))
         .unwrap_or(b"0".to_vec());
@@ -294,10 +490,18 @@ fn shell_note_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<()> {
             ")"
         ));
     } else if seen_n.is_some_and(|s| (n as i64) > s) {
+        // (#420: its report named, the newest)
+        let rep = reps
+            .iter()
+            .rfind(|r| r.shell)
+            .map(|r| cat!("report: ", crate::term::plain(&r.path(ctx)), "; "))
+            .unwrap_or_default();
         say(cat!(
             "warning: the shell crashed since the last command and was started again",
             starting,
-            " (omabox log -b ",
+            " (",
+            rep,
+            "omabox log -b ",
             name,
             " shell)"
         ));
@@ -364,9 +568,9 @@ mod tests {
 
     // t_unit_shell_reports (#303, finding 408): the shell's crash reports are its own, not another
     // Quickshell's in the box, told by the report's config; a shell its launcher started again
-    // (killed: no report) is said by the next command, once.
+    // (killed: no report) is said by the next command, once. Another Quickshell's crash is said as
+    // itself, once (#420, finding 639).
     #[test]
-    #[ignore = "runs awk: run by test/run.sh (cargo test -- --ignored)"]
     fn shell_reports_as_bash() {
         let d = std::env::temp_dir().join(format!("omabox-shrep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -473,10 +677,194 @@ mod tests {
         add("omarchy-shell: Omarchy shell exited with status 134; relaunching.\n");
         assert_eq!(
             note(),
-            "omabox: warning: the shell crashed since the last command and was started again (omabox log -b sr shell)\n",
-            "...a crash and its relaunch: the crash said, once"
+            format!(
+                "omabox: warning: the shell crashed since the last command and was started again (report: {}/home/.cache/quickshell/crashes/mine/report.txt; omabox log -b sr shell)\n",
+                d.display()
+            ),
+            "...a crash and its relaunch: the crash said, its report named (#420), once"
         );
         assert_eq!(note(), "", "...and not again");
+        // #420: another Quickshell (an app built on it) crashing since the last command: said as
+        // itself, never as the shell's, its config and report named, once.
+        std::fs::create_dir_all(c.join("x1")).unwrap();
+        w(
+            &c.join("x1/report.txt"),
+            "Crashed process ID: 90\nConfig Path: /opt/app//ui/boot/shell.qml\n",
+        );
+        assert_eq!(
+            note(),
+            format!(
+                "omabox: warning: a Quickshell in the box crashed since the last command (not its shell: /opt/app/ui/boot/shell.qml; report: {}/home/.cache/quickshell/crashes/x1/report.txt)\n",
+                d.display()
+            ),
+            "another Quickshell's crash: said as itself"
+        );
+        assert_eq!(note(), "", "...once");
+        let stamp = |n: &str, secs: u64| {
+            std::fs::File::options()
+                .write(true)
+                .open(c.join(n).join("report.txt"))
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(secs))
+                .unwrap();
+        };
+        std::fs::create_dir_all(c.join("x2")).unwrap();
+        std::fs::create_dir_all(c.join("x0")).unwrap();
+        w(&c.join("x2/report.txt"), "Config Path: /opt/b/shell.qml\n");
+        // (the later one said, whatever the names' order; its config made plain)
+        w(
+            &c.join("x0/report.txt"),
+            "Config Path: /opt/\x1b[2Jc/shell.qml\n",
+        );
+        stamp("x2", 5);
+        stamp("x0", 10);
+        let said = note();
+        assert!(
+            said.starts_with(
+                "omabox: warning: Quickshells in the box crashed 2 times since the last command (not its shell; the last: /opt/?[2Jc/shell.qml; report: "
+            ) && said.ends_with("/x0/report.txt)\n"),
+            "...several: how many, the last named: {said}"
+        );
+        // A box with no shell of its own: another Quickshell's crash is said all the same.
+        w(&d.join("box.json"), "{\"shell\": false}");
+        std::fs::create_dir_all(c.join("x4")).unwrap();
+        w(&c.join("x4/report.txt"), "Config Path: /opt/d/shell.qml\n");
+        stamp("x4", 15);
+        assert!(
+            note().contains(
+                "a Quickshell in the box crashed since the last command (not its shell: /opt/d/shell.qml;"
+            ),
+            "...in a --no-shell box too"
+        );
+        // A first look (no count kept: a box an older omabox started) says nothing.
+        std::fs::remove_file(d.join("other-crashes-seen")).unwrap();
+        std::fs::create_dir_all(c.join("x5")).unwrap();
+        w(&c.join("x5/report.txt"), "Config Path: /opt/e/shell.qml\n");
+        assert_eq!(note(), "", "...a first look says nothing");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A box's process with its environment and status (cat /proc/PID/environ, status).
+    struct Proc {
+        env: &'static [u8],
+        status: &'static [u8],
+    }
+
+    impl BoxSys for Proc {
+        fn on_box_io(&self, _: &Ctx, args: &[Vec<u8>], _: Out, _: ErrTo) -> crate::exec::Ran {
+            let a = args.get(1).cloned().unwrap_or_default();
+            let (rc, out) = if a.ends_with(b"/environ") {
+                (0, self.env.to_vec())
+            } else if a.ends_with(b"/status") {
+                (0, self.status.to_vec())
+            } else {
+                (1, Vec::new())
+            };
+            crate::exec::Ran {
+                rc,
+                out,
+                refused: false,
+                gone_said: false,
+            }
+        }
+    }
+
+    // #420 (finding 639): a window covering a click told as Quickshell's crash dialog by its
+    // process's environment and the report naming its dump pid, never by its class or title (the
+    // class is the crashed instance's app id: an app's own, as flea's, or org.quickshell).
+    #[test]
+    fn crash_dialog_told_and_said() {
+        let d = std::env::temp_dir().join(format!("omabox-crdlg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let c = d.join("home/.cache/quickshell/crashes");
+        for x in ["app", "sh"] {
+            std::fs::create_dir_all(c.join(x)).unwrap();
+        }
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        let w = |p: &std::path::Path, t: &str| std::fs::write(p, t).unwrap();
+        w(
+            &c.join("app/report.txt"),
+            "Crashed process ID: 1942\nConfig Path: /usr/share/flea/ui/boot/shell.qml\n",
+        );
+        w(
+            &c.join("sh/report.txt"),
+            "Crashed process ID: 77\nConfig Path: /usr/share/omarchy/shell/shell.qml\n",
+        );
+        w(&d.join("box.json"), "{\"shell\": true}");
+        w(&d.join("run/omabox-shell.pid"), "50\n");
+        let mut ctx = Ctx::new(b"click", shell::bytes(&std::env::temp_dir()).to_vec());
+        ctx.parsed();
+        ctx.name = b"cd".to_vec();
+        ctx.d = shell::bytes(&d).to_vec();
+        let p = |env: &'static [u8], status: &'static [u8]| Proc { env, status };
+        let rep = |n: &str| {
+            format!(
+                "{}/home/.cache/quickshell/crashes/{n}/report.txt",
+                d.display()
+            )
+        };
+        let words = |dl: &Dialog| String::from_utf8(dialog_words(&ctx, dl, b"1943")).unwrap();
+        // An app's own Quickshell, crashed: its report says whose.
+        let app = crash_dialog_with(
+            &p(
+                b"A=1\0__QUICKSHELL_CRASH_DUMP_PID=1942\0B=2\0",
+                b"PPid:\t1891\n",
+            ),
+            &ctx,
+            b"1943",
+        )
+        .expect("a dialog");
+        assert!(!app.shell, "another Quickshell's dialog");
+        assert_eq!(
+            words(&app),
+            format!(
+                "Quickshell's crash dialog of /usr/share/flea/ui/boot/shell.qml, not the box's shell (report: {}; closing it is its app's, or omabox run -b cd -- kill 1943)",
+                rep("app")
+            )
+        );
+        // The box's shell's, by its report.
+        let sh = crash_dialog_with(
+            &p(b"__QUICKSHELL_CRASH_DUMP_PID=77\0", b"PPid:\t9\n"),
+            &ctx,
+            b"1943",
+        )
+        .expect("a dialog");
+        assert!(sh.shell, "the shell's, by its report's config");
+        assert_eq!(
+            words(&sh),
+            format!(
+                "Quickshell's crash dialog of the box's shell (report: {}; omabox run -b cd -- kill 1943 closes it)",
+                rep("sh")
+            )
+        );
+        // No report written yet: the shell's when the reporter's parent is the box's shell.
+        let early = |st: &'static [u8]| {
+            crash_dialog_with(&p(b"__QUICKSHELL_CRASH_DUMP_PID=5\0", st), &ctx, b"1943")
+        };
+        assert_eq!(
+            early(b"Name:\tquickshell\nPPid:\t50\n"),
+            Some(Dialog {
+                shell: true,
+                report: None
+            }),
+            "no report: the shell's by its parent"
+        );
+        let other = early(b"PPid:\t51\n").expect("a dialog");
+        assert_eq!(
+            words(&other),
+            "Quickshell's crash dialog of another Quickshell, not the box's shell (its report not written yet; closing it is its app's, or omabox run -b cd -- kill 1943)"
+        );
+        // Not a dialog: no reporter's variable, no pid.
+        assert_eq!(
+            crash_dialog_with(
+                &p(b"QUICKSHELL=1\0__QUICKSHELL_CRASH_DUMP_PIDX=3\0", b""),
+                &ctx,
+                b"1943"
+            ),
+            None,
+            "an ordinary window"
+        );
+        assert_eq!(crash_dialog_with(&Running, &ctx, b"x"), None, "no pid");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

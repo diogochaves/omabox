@@ -1423,7 +1423,15 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         k = cat!(" (zoomed ", s.zoom, " times)");
     }
     if !s.win.is_empty() {
-        let state = jq_r(crate::jqprog::WIN_STATE_JQ, &s.win);
+        let mut state = jq_r(crate::jqprog::WIN_STATE_JQ, &s.win);
+        // (#420: the window over it Quickshell's crash dialog, said as one)
+        let (cp, ca) = (
+            jq_r(".cover[0].pid // empty", &s.win),
+            jq_r(".cover[0].address // empty", &s.win),
+        );
+        if !cp.is_empty() {
+            state = cat!(state, crate::shellnote::cover_note(ctx, &cp, &ca));
+        }
         let crop = if s.g.is_some() {
             cat!("; ", s.lw, "x", s.lh, " of it at ", s.gx, ",", s.gy)
         } else {

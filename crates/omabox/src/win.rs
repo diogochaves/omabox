@@ -349,7 +349,8 @@ pub fn win_point(ctx: &Ctx, raise: Raise, x: &[u8], y: &[u8], sels: &[Vec<u8>]) 
                 desc,
                 " is ",
                 why,
-                " (click --window raises it; --no-raise and pointer do not)"
+                " (click --window raises it; --no-raise and pointer do not)",
+                blocker_note(ctx, &w, x, y)
             )));
         }
         win_raise(ctx, &w)?;
@@ -362,7 +363,8 @@ pub fn win_point(ctx: &Ctx, raise: Raise, x: &[u8], y: &[u8], sels: &[Vec<u8>]) 
                 desc,
                 " is still ",
                 why,
-                " after focusing it: move or close that window first"
+                " after focusing it: move or close that window first",
+                blocker_note(ctx, &w, x, y)
             )));
         }
     }
@@ -389,6 +391,16 @@ pub fn win_point(ctx: &Ctx, raise: Raise, x: &[u8], y: &[u8], sels: &[Vec<u8>]) 
         say(with_way(said, &way));
     }
     Ok(jq_xy(crate::jqprog::WIN_AT_JQ, &w, x, y).text())
+}
+
+/// blocker_note WINDOW X Y: what a refusal says after itself of the window covering X,Y of WINDOW when
+/// that is Quickshell's crash dialog (#420): whose, its report, the way out; else nothing.
+fn blocker_note(ctx: &Ctx, w: &[u8], x: &[u8], y: &[u8]) -> Vec<u8> {
+    let b = jq_xy(crate::jqprog::WIN_BLOCKER_JQ, w, x, y).text();
+    match b.splitn(2, |&c| c == b' ').collect::<Vec<_>>()[..] {
+        [pid, addr] => crate::shellnote::cover_note(ctx, pid, addr),
+        _ => Vec::new(),
+    }
 }
 
 /// Whose X,Y a layer's sentence names: the window's own (--window) or the screen's (#361).

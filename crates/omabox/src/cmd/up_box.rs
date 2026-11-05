@@ -463,6 +463,8 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     };
     // Crashes said here are not said again by the next command (shell_note, #147).
     crate::shellnote::shell_seen(ctx);
+    // ...nor another Quickshell's (#420).
+    crate::shellnote::others_seen(ctx);
     if crashed.is_none() {
         crate::plugins::plugin_check(ctx, &install::git_rev)?;
     }
