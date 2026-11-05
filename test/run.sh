@@ -703,23 +703,29 @@ session_served() {
 # Hyprland (host, --size host), which must never reach the real one (#372). RT is a new runtime dir
 # whose only session is SIG: a socket that writes each request to RT/requests.log and answers version
 # and monitors (STANDIN_MODE the focused one's mode), its Wayland socket wayland-sti beside it.
-# STANDIN_PID is its server's (declare it local first); kill it when done.
+# STANDIN_PID is its server's (declare it local first); kill it when done. STANDIN_CONFIG (lua or
+# hyprlang) makes it answer status with that configProvider, and eval as Hyprland 0.56 does on that
+# config (#422, finding 642); unset, both are unknown requests, as before.
 STANDIN_MODE=2560x1440@59.95
 stand_in_host() {
   local rt=$1 sig=$2 i
   mkdir -m 700 "$rt"; mkdir -p "$rt/hypr/$sig"
-  python3 - "$rt/hypr/$sig/.socket.sock" "$rt/wayland-sti" "$rt/requests.log" <<'PY' &
+  python3 - "$rt/hypr/$sig/.socket.sock" "$rt/wayland-sti" "$rt/requests.log" "${STANDIN_CONFIG:-}" <<'PY' &
 import socket, sys
 w = socket.socket(socket.AF_UNIX); w.bind(sys.argv[2])
 s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)
 mons = (b'[{"name": "DP-8", "width": 1920, "height": 1080, "refreshRate": 60.0, "focused": false},'
         b' {"name": "DP-9", "width": 2560, "height": 1440, "refreshRate": 59.951, "focused": true}]')
+cfg = sys.argv[4].encode()
+status = b'\n{\n    "configProvider": "' + cfg + b'",\n    "backend": "wayland"\n}\n\n'
+evals = b"ok" if cfg == b"lua" else b"eval is only supported with the lua config manager\n"
 while True:
     c, _ = s.accept()
     d = c.recv(1 << 16).decode("utf-8", "replace")
     with open(sys.argv[3], "a") as h:
         h.write(d + "\n")
-    c.sendall(b'{"tag": "stand-in"}' if d.startswith("j/version") else mons if d.startswith("j/monitors") else b"unknown request")
+    c.sendall(b'{"tag": "stand-in"}' if d.startswith("j/version") else mons if d.startswith("j/monitors")
+              else status if cfg and d == "j/status" else evals if cfg and d.startswith("/eval ") else b"unknown request")
     c.close()
 PY
   STANDIN_PID=$!
@@ -13225,6 +13231,26 @@ t_unit_doctor() {
     "fail run omabox with a shorter XDG_RUNTIME_DIR {\"ok\":false,\"error\":\"not started: a check failed\"} 1" \
     "$(jq -r '.checks[] | select(.id == "socket-path") | "\(.status) \(.fix[0] | sub(" \\(.*"; ""))"' <<<"$j") $(jq -c .smoke <<<"$j") $rc"
   check_fails "...and made no runtime dir" test -e "$deep"
+  # A desktop whose Hyprland reads a .conf config (#422, finding 642), a stand-in host's (#372), never
+  # your session: its check after hyprland's, a warning, read with status alone (no eval); up
+  # --interactive refused in the same words before it makes anything. A Lua one: ok.
+  local STANDIN_PID hrt=$h/conf-rt out
+  STANDIN_CONFIG=hyprlang stand_in_host "$hrt" a_4_2
+  j=$(_doctor_env XDG_RUNTIME_DIR="$hrt" "$CLI" doctor --json) || true
+  check_eq "doctor on a .conf host: host-config after hyprland, a warning that says what needs Lua (#422)" \
+    "hyprland host-config|warn your Hyprland reads a .conf config (hyprlang): interactive mode, peek and keys-to-box need a Hyprland with a Lua config (hyprland.lua); headless boxes work as they are" \
+    "$(jq -r '[.checks[].id] | .[index("hyprland"):index("hyprland") + 2] | join(" ")' <<<"$j")|$(jq -r '.checks[] | select(.id == "host-config") | "\(.status) \(.found)"' <<<"$j")"
+  check_eq "...read with status, no eval sent" "j/status|" "$(grep -x j/status "$hrt/requests.log" | sort -u)|$(grep '^/eval' "$hrt/requests.log")"
+  rc=0; out=$(_doctor_env XDG_RUNTIME_DIR="$hrt" HYPRLAND_INSTANCE_SIGNATURE=a_4_2 "$CLI" up "$P-conf" --interactive --no-shell 2>&1) || rc=$?
+  check_eq "up --interactive there: refused in those words, exit 1, nothing made" \
+    "omabox: up: your Hyprland reads a .conf config (hyprlang): interactive mode, peek and keys-to-box need a Hyprland with a Lua config (hyprland.lua); headless boxes work as they are|1|" \
+    "$out|$rc|$(ls -A "$hrt/omabox" 2>/dev/null)"
+  check_eq "...no eval sent there either" "" "$(grep '^/eval' "$hrt/requests.log")"
+  kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null || true
+  STANDIN_CONFIG=lua stand_in_host "$h/lua-rt" a_4_3
+  j=$(_doctor_env XDG_RUNTIME_DIR="$h/lua-rt" "$CLI" doctor --json) || true
+  check_eq "...on a Lua one: ok" ok "$(jq -r '.checks[] | select(.id == "host-config") | .status' <<<"$j")"
+  kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null || true
   check_eq "doctor takes no -b, nor an option it does not have (exit 2)" \
     "omabox: doctor takes no -b: it is not about one box 2|omabox: doctor: unknown option --bogus (omabox help doctor) 2" \
     "$(o=$("$CLI" -b x doctor 2>&1); echo "$o $?")|$(o=$("$CLI" doctor --bogus 2>&1); echo "$o $?")"
@@ -17059,6 +17085,42 @@ t_special_ws() {
   ob down "$B" >/dev/null
 }
 
+# A host whose Hyprland reads a .conf config (#422, finding 642), in a box standing in for the host
+# (finding 26): a Hyprland on a minimal hyprland.conf nested in it, and omabox run there pointed at
+# that one. Its eval answers Hyprland's refusal; up --interactive is refused before it makes a box,
+# peek of a headless box says what needs Lua instead of that answer, doctor warns; headless boxes
+# work.
+t_conf_host() {
+  local B=$P-ch h sig out rc; local in=("$CLI" run -b "$B" --)
+  up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
+  h=$(ob path "$B")/home
+  printf 'monitor = , 800x600, auto, 1\nmisc {\n    disable_hyprland_logo = true\n}\n' > "$h/conf-host.conf"
+  ob run -b "$B" -d -q -- sh -c 'unset HYPRLAND_INSTANCE_SIGNATURE; HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 exec Hyprland --config /home/sbx/conf-host.conf > /home/sbx/conf-host.log 2>&1' >/dev/null 2>&1
+  # shellcheck disable=SC2329 # called through until_ok
+  nested() { "${in[@]}" sh -c 'hyprctl -j instances | jq -er --arg o "$HYPRLAND_INSTANCE_SIGNATURE" "first(.[] | select(.instance != \$o) | .instance)"'; }
+  until_ok 20 nested || { no "a Hyprland on a .conf config in the stand-in" "$(tail -n 5 "$h/conf-host.log")"; ob down "$B" >/dev/null; return; }
+  sig=$(nested)
+  local at=("$CLI" run -b "$B" -- env HYPRLAND_INSTANCE_SIGNATURE="$sig")
+  check_eq "a .conf Hyprland's eval answers its refusal, exit 0 (0.56)" "eval is only supported with the lua config manager 0" \
+    "$(out=$("${at[@]}" hyprctl eval 'x = 1' 2>&1); echo "$out $?")"
+  check_eq "...and its status says hyprlang" hyprlang "$("${at[@]}" hyprctl -j status | jq -r .configProvider)"
+  rc=0; out=$("${at[@]}" "$CLI" up ch-i --interactive --no-shell 2>&1) || rc=$?
+  check_eq "up --interactive there: refused, what needs Lua and that headless boxes work, exit 1 (#422)" \
+    "omabox: up: your Hyprland reads a .conf config (hyprlang): interactive mode, peek and keys-to-box need a Hyprland with a Lua config (hyprland.lua); headless boxes work as they are 1" "$out $rc"
+  check_eq "...no box left" "" "$("${in[@]}" "$CLI" ls --json 2>/dev/null | jq -r '.[].name' 2>/dev/null)"
+  check "a headless box there works" "${at[@]}" "$CLI" up ch-h --no-shell --idle 0
+  check "...a shot of it" "${at[@]}" "$CLI" shot -b ch-h -o /tmp/ch-h.png
+  rc=0; out=$("${at[@]}" "$CLI" peek -b ch-h 2>&1) || rc=$?
+  check_eq "peek of it: the same words, not Hyprland's answer, exit 1" \
+    "omabox: your Hyprland reads a .conf config (hyprlang): interactive mode, peek and keys-to-box need a Hyprland with a Lua config (hyprland.lua); headless boxes work as they are 1" "$out $rc"
+  check_eq "doctor there: host-config a warning" warn \
+    "$("${at[@]}" "$CLI" doctor --json 2>/dev/null | jq -r '.checks[] | select(.id == "host-config") | .status')"
+  check_eq "...on the stand-in's own (Lua): ok" ok \
+    "$("${in[@]}" "$CLI" doctor --json 2>/dev/null | jq -r '.checks[] | select(.id == "host-config") | .status')"
+  "${in[@]}" "$CLI" down --all >/dev/null 2>&1
+  ob down "$B" >/dev/null
+}
+
 # `omabox clip` (issue #23, finding 119) with a box standing in for the host (finding 26) and interactive
 # boxes nested in it: the clipboard is the stand-in's, never the user's. No agent runs in the box, so
 # what clip refuses there is what it refuses, not the suite's own caller.
@@ -20874,7 +20936,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
