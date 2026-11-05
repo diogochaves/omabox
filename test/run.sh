@@ -12050,13 +12050,18 @@ t_fixture() {
   # a bind there: #415)
   local fxbind=(--ro-bind "${fx%/*}"); [[ $fx != /usr/* ]] || fxbind=()
   up_ok "$B" --size 1280x720,scale=2 --no-shell --net isolated "${fxbind[@]}" || { no "up" "$UP_OUT"; return; }
+  # (Its windows opaque, active or not: Omarchy 4.0 gives every window 0.985 and 0.96, a theme or the
+  # user's config may too, and the shot's colours are the client's own, #419)
+  ob lua -b "$B" 'hl.window_rule({ match = { class = "omabox-fixture" }, opacity = "1 override 1 override" })' >/dev/null
   # fx_since N JQ...: jq over its log's lines after the first N, as one array (-s); fx_n: how many now.
   fx_since() { local k=$1; shift; ob run -b "$B" -- tail -n "+$((k + 1))" /tmp/fx.log 2>/dev/null | jq -sc "$@" 2>&1; }
   fx_n() { ob run -b "$B" -- wc -l /tmp/fx.log 2>/dev/null | awk '{print $1}'; }
   # shellcheck disable=SC2329 # (called through until_ok)
   fx_has() { [ "$(fx_since "$1" "$2")" = true ]; }   # FROM JQ: JQ (over the lines after FROM) says true
-  # (Keys: what each one did, as "SYM STATE" lines; buttons: "WIN BUTTON STATE".)
-  local keys='map(select(.ev == "key") | "\(.sym) \(.state)") | join(",")' buttons='map(select(.ev == "button") | "\(.win) \(.button) \(.state)") | join(",")'
+  # (Keys: what each one did, as "SYM STATE" lines, a release named by its press's sym: the client reads
+  # a release in the state it ends, and with Omarchy 4.0's shift:both_capslock_cancel Shift_L's under
+  # shift is Caps_Lock, #419; buttons: "WIN BUTTON STATE".)
+  local keys='map(select(.ev == "key")) | reduce .[] as $k ({p: {}, l: []}; (if $k.state == "pressed" then .p[$k.code | tostring] = $k.sym else . end) | .l += ["\(.p[$k.code | tostring] // $k.sym) \($k.state)"]) | .l | join(",")' buttons='map(select(.ev == "button") | "\(.win) \(.button) \(.state)") | join(",")'
   ob run -b "$B" -d -q -- "$fx" --windows 2 --first-frame 700 --log /tmp/fx.log
   check "its two windows open" until_ok 10 fx_has 0 '[.[] | select(.ev == "ready")] | length == 2'
   check_eq "--first-frame 700: no window drew before" "[true,true]" "$(fx_since 0 'map(select(.ev == "draw")) | group_by(.win) | map(.[0].t >= 700)')"

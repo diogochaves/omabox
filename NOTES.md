@@ -12254,6 +12254,17 @@ from them.
     installed suite's `-j 1 t_cli_box` fails it, its default -j (2) passes it. Now two cases, each
     with the disposition set by `env`: 130 with nothing said, and 0 with the command going on (both
     pass under the VM's `-j 1`, where the old case failed).
+634. **t_fixture read Omarchy 4.0's window opacity and Shift_L's shifted sym** (2026-11-05, #419;
+    a fresh 4.0.6 VM, both checks failing alone, passing on 4.5.0). The CLI is right twice. (a) 4.0's
+    `default/hypr/windows.lua` gives every window `opacity 0.985 0.96` (4.5 only windows that opt in,
+    `o.transparent_window`); window 0 is inactive in the shot, so its white is 246 (`hyprctl getprop`
+    0.985 and 0.96; an `opacity 1 override 1 override` rule gave 255 0 0 / 48 112 192 at once). The
+    test now gives the fixture's windows that rule. (b) The keys in calls of their own all arrived, at
+    window 0, in order; the client named Shift_L's release `Caps_Lock`, which the test did not want:
+    4.0's `kb_options` has `shift:both_capslock_cancel`, whose `<LFSH>` is `[Shift_L, Caps_Lock]`
+    (xkbcli), and a release is read in the state it ends, with shift still down. The test now names
+    a release by its press's sym. Both are a theme's or a user's to set on 4.5 as well, so fixed
+    rather than left to #312. In the VM: the installed t_fixture 19 passed, 2 failed; the branch's 21, 0.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
