@@ -12371,7 +12371,7 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
 - Image search at a fractional scale (finding 635): a `shot -g` crop whose region does not start
   on a whole pixel is resampled by grim, and scores 0.82-0.98 against its own screen, under
   `find`'s 0.95. Grabbing the whole output and cutting it on whole pixels would keep a crop's
-  pixels the screen's; not done (no issue yet).
+  pixels the screen's; not done (#423).
 
 - Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
   noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the
