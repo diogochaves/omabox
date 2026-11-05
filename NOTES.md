@@ -12242,6 +12242,18 @@ from them.
     dev host's at 11 (its foot.ini, seeded into the box): there every wait named 1945,30 10x14, which
     is why it only failed in VMs. The check now holds the window's --ignore to the layout box in the
     same answer, and that box to the window (3 of 3 in a VM, and on the host, after).
+633. **t_cli_box's `run: by SIGINT` held the SIGINT a parallel test inherits** (2026-11-05, #418;
+    `rc: [130], not [0]` in 4 GB VMs since 1.1.0, never on the dev host). The CLI is right: `run`
+    passes SIGINT's disposition on into the box as the caller has it, so `sh -c 'kill -INT $$'` dies
+    of it (130, nothing said, as bash) where the caller leaves it default, and goes on (0) where the
+    caller ignores it. The case was a parity check frozen at the 0 the dev host saw: the runner starts
+    parallel tests with bash's `&`, which ignores SIGINT in them, while `-j 1` runs them in the
+    foreground, and the default -j is 1 where `MemAvailable` is under 4 GB (the 4 GB VMs; the 8 GB
+    one had 2 and passed). By hand in a 4.0.6 VM box: SigIgn 0x4 and 130 plain or under
+    `env --default-signal=INT`, 0x6 and 0 under `env --ignore-signal=INT` or as a `&` job; the
+    installed suite's `-j 1 t_cli_box` fails it, its default -j (2) passes it. Now two cases, each
+    with the disposition set by `env`: 130 with nothing said, and 0 with the command going on (both
+    pass under the VM's `-j 1`, where the old case failed).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

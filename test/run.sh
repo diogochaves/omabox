@@ -13871,8 +13871,14 @@ t_cli_box() {
   cx_case "run: by SIGTERM" run -b "$B" -- sh -c 'kill -TERM $$'
   cx_want=(rc=139 out= 'err=omabox: the command was killed by SIGSEGV (139)')
   cx_case "run: by SIGSEGV" run -b "$B" -- sh -c 'kill -SEGV $$'
-  cx_want=(rc=0 out= err=)
-  cx_case "run: by SIGINT" run -b "$B" -- sh -c 'kill -INT $$'
+  # (SIGINT as the caller has it, passed on into the box: default, the command dies of it and run says
+  # nothing, as bash; ignored, as in a background job of bash's, it goes on. The case held the 0 of a
+  # suite's parallel tests, which bash starts with it ignored: -j 1 runs them in the foreground, 130, #418)
+  cx_wrap=(env --default-signal=INT); cx_want=(rc=130 out= err=)
+  cx_case "run: by SIGINT (the caller's default)" run -b "$B" -- sh -c 'kill -INT $$; echo went on'
+  cx_wrap=(env --ignore-signal=INT); cx_want=(rc=0 'out=went on' err=)
+  cx_case "run: by SIGINT, which the caller ignores: the command does too" run -b "$B" -- sh -c 'kill -INT $$; echo went on'
+  cx_wrap=()
   printf 'A=1\nexport B="b b"\n' > "$TMP/rp-env"
   cx_env=(RPP=p1); cx_want=(rc=0 'out=2 b b p1' err=)
   cx_case "run --env-file, --env, --pass" run -b "$B" --env-file "$TMP/rp-env" --env A=2 --pass RPP -- sh -c 'echo "$A $B $RPP"'; cx_env=()
