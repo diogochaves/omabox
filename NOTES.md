@@ -12265,6 +12265,56 @@ from them.
     (xkbcli), and a release is read in the state it ends, with shift still down. The test now names
     a release by its press's sym. Both are a theme's or a user's to set on 4.5 as well, so fixed
     rather than left to #312. In the VM: the installed t_fixture 19 passed, 2 failed; the branch's 21, 0.
+635. **A scaled template's score cannot tell the image from a look-alike: a near tie is refused**
+    (2026-11-05, #267; finding 616's 0.8 rested on one foot text, its next best place a stranger).
+    Measured in one box (1920x1200, `mode` at scale 1, 1.25, 1.5 and 2): crops at each scale of a
+    GTK 4 window (labels, buttons, 24 px symbolic icons, each beside a look-alike: "Save As…" and
+    "Save All", Apply and Reply, Settings and "Setting up", document-save and document-save-as) and
+    of foot text (the host's JetBrainsMono 11: "MARK one" and "MARK ore", "[ Apply ]" and "[ Reply
+    ]", "Settings" and "Setting up", a 16-cell prompt and its look-alike), each searched at every
+    scale with `find --similar 0.3 --all --json`, the true place by the tree or the cell grid.
+    Lowest true score, highest look-alike's (GTK's other targets: their best wrong place):
+
+    | crop → box | GTK true | GTK look-alike | GTK other | foot true | foot look-alike |
+    |---|---|---|---|---|---|
+    | 1 → 1.25 | 0.976 | 0.933 | 0.777 | 0.892-0.958 | 0.951 |
+    | 1 → 1.5 | 0.971 | 0.929 | 0.749 | 0.720-0.899 | 0.883, once over its own |
+    | 1 → 2 | 0.974 | 0.919 | 0.711 | 0.952-0.962 | 0.942 |
+    | 1.25 → 1 | 0.984 | 0.960 | 0.802 | 0.937-0.986 | 0.966 |
+    | 1.5 → 1 | 0.994 | 0.958 | 0.808 | 0.846-0.953 | 0.928 |
+    | 2 → 1 | 0.994 | 0.957 | 0.809 | 0.974-0.983 | 0.959 |
+    | 1.5 → 2 | 0.978 | 0.923 | 0.700 | 0.619-0.864 | 0.807 |
+    | 2 → 1.5 | 0.974 | 0.932 | 0.738 | 0.684-0.886 | 0.874, once over its own |
+    | same scale | 1 (0.817 at 1.25, below) | 0.926 | 0.677 | 1 (0.976 at 1.25) | 0.974 |
+
+    GTK draws at the scale itself (its layout scales exactly): every true match 0.96 or more, its
+    look-alikes 0.91-0.96, anything else 0.81 at most. foot rounds its cell to whole pixels (9, 11,
+    13, 18 px wide), so text drifts along a line: 0.62 for the prompt from 1.5 to 2, under 0.8 in 4 of
+    60 scaled cases, and "MARK ore" outscored "MARK one" from 1 to 1.5 and 2 to 1.5. So no score
+    separates the two: 0.8 misses foot's long lines and passes nearly every look-alike; 0.9 would
+    miss 20 of the 60 foot cases (0.95: 37) and still pass look-alikes at 0.96. **0.8 stays**:
+    terminals, like the shell and the bar, have no tree, and they are what `find --image` is for (the
+    bar was not measured: with no tree its items could not be placed at each scale). What a score
+    cannot do, refusing can: two places that both pass are listed and `click` refuses them (finding
+    616); one passing with another place close behind it was taken. The search now keeps its best
+    place apart from the best one (`runner`: corners half the template or more apart, as overlaps
+    are told), passing or not, and a scaled template's one match with it within 0.05 (`find::NEAR`)
+    is a **near tie**: `find` lists the match and says the tie on stderr (where, both scores, a crop
+    shot in this box, or the `--similar` that takes both) and in `--json`'s `near_tie`; `click
+    --image` refuses it, exit 2 as for several, `--index` too (the other place is no match to pick);
+    `wait image` is not satisfied by it (`--gone` still by no match only), its 124 saying the tie.
+    At 0.8, 2 of the 60 foot cases were near ties ("[ Apply ]" 1 to 1.5, 0.840 and 0.793) and none
+    of GTK's: its look-alikes pass and are listed. Same-scale templates keep 0.95 and no near tie:
+    the true place scores 1 there and a look-alike over 0.95 is a second match. Except at a
+    fractional scale: `shot -g` whose region does not start on a whole pixel (30 x 1.25 = 37.5) is
+    resampled by grim, so a crop scored 0.817 (GTK text) and 0.954 (foot) against the screen it was
+    cut from, at once; one at 76 (95 px), 1 (under Open). Raw numbers and the scripts: the main
+    checkout's `.local/grind-2026-10-31-267/`. Tests: imgfind.rs's
+    a_look_alike_close_behind_the_one_match_is_a_near_tie, find.rs's
+    a_scaled_templates_near_tie_is_said_a_same_scale_ones_is_not (neither builds before: no
+    runner-up was kept), t_find_image's near tie ("MARK ore" below "MARK one" in foot at scale 2,
+    `--similar` between their scores: find's note and `near_tie`, click's 2 with and without
+    `--index`, wait's 124, the said `--similar` taking both; it fails before, click clicking).
 636. **A down marker of its start alone was still ordered by its file's mtime** (2026-11-05, #404's
     left item, Diogo's call). Only bash's down (omabox before 1.0) wrote a `.down-NAME` line of its
     start alone; finding 579 kept reading one, in a tie, by the marker's mtime against this up's
@@ -12318,6 +12368,10 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   daemon: no video wallpapers or intros (an opt-in `up --owe` for footage would be #309).
 - 1.0.1 runs on Omarchy 4.0.x and 4.5 (finding 422); 1.1 drops 4.0 (#312): every 4.0-only spot
   carries `omarchy<4.5` (`grep -rn 'omarchy<4.5'`).
+- Image search at a fractional scale (finding 635): a `shot -g` crop whose region does not start
+  on a whole pixel is resampled by grim, and scores 0.82-0.98 against its own screen, under
+  `find`'s 0.95. Grabbing the whole output and cutting it on whole pixels would keep a crop's
+  pixels the screen's; not done (no issue yet).
 
 - Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
   noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the
