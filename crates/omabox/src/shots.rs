@@ -499,6 +499,31 @@ pub fn tag_scale(f: &[u8], scale: f64) {
     }
 }
 
+/// png_crop FILE X Y W H: FILE cut to that part of it, in place, by ImageMagick (#423: a region
+/// grabbed from a whole pixel): read as the regular file it is and written again with no link at its
+/// name, magick between on its stdin and stdout; no date chunks, so the same pixels still give the
+/// same bytes (#191). Whether it was.
+pub fn png_crop(f: &[u8], [x, y, w, h]: [i64; 4]) -> bool {
+    let Some(src) = open_regular(f) else {
+        return false;
+    };
+    let r = crate::sig::command("magick")
+        .arg("png:-")
+        .args(["-crop", &format!("{w}x{h}+{x}+{y}"), "+repage"])
+        .args(["-define", "png:compression-level=1"])
+        .args(["-define", "png:exclude-chunks=date,time", "png:-"])
+        .stdin(Stdio::from(src))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    match r {
+        Ok(o) if o.status.success() && !o.stdout.is_empty() => create_nofollow(f)
+            .and_then(|mut t| t.write_all(&o.stdout))
+            .is_ok(),
+        _ => false,
+    }
+}
+
 pub fn png_size(f: &[u8]) -> Option<(i64, i64)> {
     let data = match std::fs::read(shell::path(f)) {
         Ok(d) => d,

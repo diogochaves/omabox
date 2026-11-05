@@ -114,6 +114,13 @@ struct Shot {
     win: Vec<u8>,
     where_: Vec<u8>,
     grim: Vec<Vec<u8>>,
+    /// A region off a whole pixel at a fractional scale (#423): what grim takes, and the image cut
+    /// out of it.
+    cut: Option<crate::screen::PxCut>,
+    /// The scale a screen crop records, when not its image's width over its own (#423).
+    scale: Option<f64>,
+    /// The box's monitors as a screen crop was aimed (#423).
+    mons: Vec<crate::screen::MonPx>,
     masks: Vec<Vec<u8>>,
     sref: Option<[Vec<u8>; 7]>,
     /// A screen shot's desktop, being read (desk_snap) for layouts.tsv (#333).
@@ -175,6 +182,11 @@ impl Shot {
             .kv("--arg", "h", v[4])
             .kv("--arg", "iw", v[5])
             .kv("--arg", "ih", v[6])
+            .kv(
+                "--arg",
+                "sc",
+                self.scale.map(|v| v.to_string()).unwrap_or_default(),
+            )
             .kv("--argjson", "win", win)
             .kv("--arg", "mon", &self.monitor)
             .kv("--arg", "fit", &self.fit)
@@ -227,6 +239,8 @@ struct Grab {
     ctx: Ctx,
     grim: Vec<Vec<u8>>,
     zoom: Vec<u8>,
+    /// The image's part of grim's (#423): cut by ImageMagick, before --zoom's scaling.
+    crop: Option<[i64; 4]>,
     err: Vec<u8>,
     pid: Arc<AtomicI32>,
     mpid: Arc<AtomicI32>,
@@ -251,7 +265,7 @@ impl Grab {
         let mut a = vec![b"timeout".to_vec(), b"10".to_vec()];
         a.extend(self.grim.iter().cloned());
         a.push(b"-".to_vec());
-        if self.zoom.is_empty() {
+        if self.zoom.is_empty() && self.crop.is_none() {
             let r = crate::exec::on_box_bg(
                 &self.ctx,
                 &a,
@@ -267,10 +281,18 @@ impl Grab {
         };
         let Ok(ef2) = ef.try_clone() else { return 1 };
         let mut mc = crate::sig::command("magick");
-        mc.arg("png:-")
-            .arg("-scale")
-            .arg(format!("{}00%", String::from_utf8_lossy(&self.zoom)))
-            .args(["-define", "png:compression-level=1", "png:-"])
+        mc.arg("png:-");
+        if let Some([x, y, w, h]) = self.crop {
+            mc.arg("-crop")
+                .arg(format!("{w}x{h}+{x}+{y}"))
+                .arg("+repage");
+        }
+        if !self.zoom.is_empty() {
+            mc.arg("-scale")
+                .arg(format!("{}00%", String::from_utf8_lossy(&self.zoom)));
+        }
+        mc.args(["-define", "png:compression-level=1"])
+            .args(["-define", "png:exclude-chunks=date,time", "png:-"])
             .stdin(std::process::Stdio::from(pr))
             .stdout(std::process::Stdio::from(to))
             .stderr(std::process::Stdio::from(ef2));
@@ -873,6 +895,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let fitn = awk_num(&s.fit);
         if awk_num(&native) > fitn + 1e-9 {
             scaled = true;
+            // (scaled, no pixel is the screen's: grim takes the region asked for, uncut)
+            if s.cut.take().is_some()
+                && let Some(i) = s.grim.iter().position(|w| w == b"-g")
+            {
+                s.grim[i + 1] = cat!(s.gx, ",", s.gy, " ", s.lw, "x", s.lh);
+            }
             let f = ((fitn / awk_num(&base) * 1e6 + 1.0).trunc()) / 1e6;
             s.grim.extend([b"-s".to_vec(), fixed(f, 6).into_bytes()]);
         }
@@ -928,6 +956,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 fn aim(ctx: &mut Ctx, s: &mut Shot, sels: &[Vec<u8>]) -> Res<Vec<u8>> {
     // PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
     s.grim = vec![b"grim".to_vec(), b"-l".to_vec(), b"1".to_vec()];
+    s.cut = None;
     let mut wgeo = Vec::new();
     if let Some(g) = &s.g {
         [s.gx, s.gy, s.lw, s.lh] = g.clone();
@@ -1036,8 +1065,22 @@ fn aim(ctx: &mut Ctx, s: &mut Shot, sels: &[Vec<u8>]) -> Res<Vec<u8>> {
                 note
             ));
         }
-        s.grim
-            .extend([b"-g".to_vec(), cat!(s.gx, ",", s.gy, " ", s.lw, "x", s.lh)]);
+        // Off a whole pixel at a fractional scale grim would resample it: taken from one and cut
+        // (#423, finding 641). The record stays the region asked for.
+        let g = [bi(&s.gx)?, bi(&s.gy)?, bi(&s.lw)?, bi(&s.lh)?];
+        s.mons = crate::screen::mons_px(&strip_nl(&hypr_json(ctx, &["monitors"])?));
+        s.cut = crate::screen::px_cut_in(&s.mons, g);
+        if s.cut.is_some() && !on_path("magick") {
+            say(
+                "shot: this region starts off a whole pixel at the box's scale, so grim resamples it; ImageMagick's magick (package imagemagick, part of Omarchy) would cut it on whole pixels",
+            );
+            s.cut = None;
+        }
+        let r = s.cut.map_or(g, |c| c.grab);
+        s.grim.extend([
+            b"-g".to_vec(),
+            format!("{},{} {}x{}", r[0], r[1], r[2], r[3]).into_bytes(),
+        ]);
         s.where_ = cat!("screen ", s.gx, ",", s.gy);
     } else {
         let ext = extent(ctx)?;
@@ -1158,6 +1201,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         ctx: ctx.clone(),
         grim: s.grim.clone(),
         zoom: s.zoom.clone(),
+        crop: s.cut.map(|c| c.crop),
         err: gerr.clone(),
         pid,
         mpid,
@@ -1376,10 +1420,19 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     // Its scale in its comment (#267, finding 616), image pixels to the layout's, which a crop of it
     // keeps: find --image scales it to a box drawn at another. (Not into a jailed caller's fd, which
     // is never read back here.)
-    if s.tofd.is_empty()
-        && let Some(w) = shell::dec(&s.lw).filter(|&w| w > 0)
-    {
-        crate::shots::tag_scale(&s.file, iw as f64 / w as f64);
+    // A screen crop's is its monitor's when grim's size says so: a small crop's sizes are a pixel off
+    // it (#423); --json says the same.
+    if let Some(w) = shell::dec(&s.lw).filter(|&w| w > 0) {
+        let mut sc = iw as f64 / w as f64;
+        if s.g.is_some() && s.win.is_empty() && s.zoom.is_empty() && !scaled {
+            let at = |v: &[u8]| shell::dec(v).unwrap_or(0);
+            let g = [at(&s.gx), at(&s.gy), w, at(&s.lh)];
+            sc = crate::screen::size_scale_in(&s.mons, g, iw);
+            s.scale = Some(sc);
+        }
+        if s.tofd.is_empty() {
+            crate::shots::tag_scale(&s.file, sc);
+        }
     }
     let screen = box_screen(ctx)?;
     let mode = split_at(&screen, b' ').1;
@@ -2335,6 +2388,18 @@ fn burst_run(
     let mut arc = 0;
     if let Some(mut a) = act.take() {
         arc = a.wait().map(|s| crate::exec::status(s).0).unwrap_or(1);
+    }
+    // A region off a whole pixel at a fractional scale (#423): each frame cut as one shot is.
+    if let Some(c) = s.cut {
+        for f in &files {
+            if !crate::shots::png_crop(f, c.crop) {
+                return Err(ctx.die(cat!(
+                    "shot --burst: could not cut ",
+                    f,
+                    " to the region (ImageMagick)"
+                )));
+            }
+        }
     }
     let screen = box_screen(ctx)?;
     let mode = split_at(&screen, b' ').1;

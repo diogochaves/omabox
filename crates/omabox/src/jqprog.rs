@@ -381,7 +381,7 @@ pub const SHOT_SAID_JQ: &str = r#"
     | {path: (if $img then $p else null end), kind: $k,
        region: (if $img then {x: ($x | n), y: ($y | n), w: ($w | n), h: ($h | n)} else null end),
        image: (if $img then {w: ($iw | n), h: ($ih | n)} else null end),
-       scale: (if $img then (($iw | n) / ($w | n) * 10000 | round / 10000) else null end),
+       scale: (if $img then ((if $sc != "" then $sc | n else ($iw | n) / ($w | n) end) * 10000 | round / 10000) else null end),
        window: ($win | if . == null then null else {address, class, title, workspace, x: .at[0], y: .at[1], w: .size[0], h: .size[1]} end),
        monitor: (if $mon == "" then null else $mon end), fit: ($fit | n), zoom: ($zoom | n), grid: $grid,
        changed: (if $ch == 1 then {result: $res, since: (if $since == "" then null else $since end),

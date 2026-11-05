@@ -283,9 +283,16 @@ pub fn grab(ctx: &Ctx, label: &str, r: &ShotRef) -> Res<Result<Vec<u8>, Vec<u8>>
         .iter()
         .map(|w| w.as_bytes().to_vec())
         .collect();
+    let mut cut = None;
     let win = if let Some((x, y)) = r.screen_at() {
         if r.kind != b"screen 0,0" || lw.to_string().into_bytes() != whole_w(ctx)? {
-            grim.extend([b"-g".to_vec(), format!("{x},{y} {lw}x{lh}").into_bytes()]);
+            // Off a whole pixel at a fractional scale, as shot -g took it: from one, cut (#423).
+            cut = crate::screen::px_cut(ctx, [x, y, lw, lh])?;
+            let g = cut.map_or([x, y, lw, lh], |c| c.grab);
+            grim.extend([
+                b"-g".to_vec(),
+                format!("{},{} {}x{}", g[0], g[1], g[2], g[3]).into_bytes(),
+            ]);
         }
         false
     } else if let Some((addr, crop)) = r.window() {
@@ -369,6 +376,18 @@ pub fn grab(ctx: &Ctx, label: &str, r: &ShotRef) -> Res<Result<Vec<u8>, Vec<u8>>
         if std::fs::write(shell::path(&tmp), &g.out).is_err() {
             return Err(ctx.die(cat!(label, ": cannot write ", tmp)));
         }
+    }
+    if let Some(c) = cut
+        && !crate::shots::png_crop(&tmp, c.crop)
+    {
+        return Err(ctx.die(cat!(
+            label,
+            ": could not cut a frame of box '",
+            ctx.name,
+            "' to ",
+            r.key,
+            "'s region (ImageMagick)"
+        )));
     }
     std::mem::forget(gone);
     Ok(Ok(tmp))

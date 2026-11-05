@@ -101,6 +101,137 @@ pub fn win_buf_geom(v: [&[u8]; 7]) -> Vec<u8> {
     .into_bytes()
 }
 
+/// A monitor as px_cut reads it: its place in the layout, its scale and its size in pixels as laid
+/// out (turned with its transform).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MonPx {
+    pub x: i64,
+    pub y: i64,
+    pub scale: f64,
+    pub pw: i64,
+    pub ph: i64,
+}
+
+/// The enabled monitors of `hyprctl -j monitors`.
+pub fn mons_px(json: &[u8]) -> Vec<MonPx> {
+    let Ok(serde_json::Value::Array(a)) = serde_json::from_slice(json) else {
+        return Vec::new();
+    };
+    a.iter()
+        .filter(|m| m["disabled"].as_bool() != Some(true))
+        .filter_map(|m| {
+            let i = |k: &str| m[k].as_f64().map(|v| v as i64);
+            let (w, h) = (i("width")?, i("height")?);
+            let scale = m["scale"].as_f64().filter(|s| *s > 0.0)?;
+            let (pw, ph) = if i("transform").unwrap_or(0) % 2 == 1 {
+                (h, w)
+            } else {
+                (w, h)
+            };
+            Some(MonPx {
+                x: i("x")?,
+                y: i("y")?,
+                scale,
+                pw,
+                ph,
+            })
+        })
+        .collect()
+}
+
+/// How a region of the screen is taken on whole pixels (#423, finding 641): grim takes GRAB, which
+/// starts on a whole pixel of its monitor, and the image is CROP of grim's image (X, Y, W, H in its
+/// pixels), the screen's own pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PxCut {
+    pub grab: [i64; 4],
+    pub crop: [i64; 4],
+}
+
+/// The monitor that holds the region X Y W H (in the layout) whole; None for one over more than one
+/// monitor, or of no size.
+fn holder(mons: &[MonPx], [x, y, w, h]: [i64; 4]) -> Option<&MonPx> {
+    if w < 1 || h < 1 {
+        return None;
+    }
+    mons.iter().find(|m| {
+        let (lw, lh) = (m.pw as f64 / m.scale, m.ph as f64 / m.scale);
+        x >= m.x && y >= m.y && (x + w) as f64 <= m.x as f64 + lw + 1e-3 && {
+            (y + h) as f64 <= m.y as f64 + lh + 1e-3
+        }
+    })
+}
+
+/// size_scale_in MONS X Y W H IW: an image IW px wide of the region's scale, image pixels per layout
+/// pixel: its monitor's when grim's size at it (truncated) is IW, else IW / W. A crop's own sizes
+/// are off by up to a pixel (23 at 1.25 is 28 px: 1.217), which find --image took for another
+/// scale under 30 px or so (#423, finding 641).
+pub fn size_scale_in(mons: &[MonPx], g: [i64; 4], iw: i64) -> f64 {
+    let by_size = iw as f64 / g[2].max(1) as f64;
+    match holder(mons, g) {
+        Some(m) if (g[2] as f64 * m.scale + 1e-4) as i64 == iw => m.scale,
+        _ => by_size,
+    }
+}
+
+/// A whole number, as a scale's product is one (hyprctl writes 4/3 as 1.333333).
+fn whole(v: f64) -> bool {
+    (v - v.round()).abs() < 1e-3
+}
+
+/// px_cut_in MONS X Y W H: how the region (in the layout, inside one monitor) is taken on whole
+/// pixels; None when grim takes it so itself: a scale whose every layout pixel starts on a whole
+/// pixel (1, 2), a region starting on one, or a region over more than one monitor (grim draws them at
+/// one scale: not the screen's pixels whatever is done).
+///
+/// grim takes a region that does not start on a whole pixel (30 at 1.25 is 37.5) by resampling the
+/// screen, so no pixel of it is the screen's. The image is the screen's pixels from where the
+/// region starts, rounded (38), as many as grim makes (its size truncated: 100 at 1.25, 125), so its
+/// size and every record of the shot are as before; grim takes the region from the whole pixel at or
+/// before that (28, 35 px: a multiple of the scale's denominator, 4 at 1.25, from the monitor's
+/// edge), wide enough to hold it.
+pub fn px_cut_in(mons: &[MonPx], g: [i64; 4]) -> Option<PxCut> {
+    let [x, y, w, h] = g;
+    let m = holder(mons, g)?;
+    let s = m.scale;
+    if whole(s) {
+        return None;
+    }
+    let (rx, ry) = (x - m.x, y - m.y);
+    if whole(rx as f64 * s) && whole(ry as f64 * s) {
+        return None;
+    }
+    // The scale's denominator: layout pixels that make whole pixels (at most 120ths: Wayland's
+    // fractional scales); none, and the grab starts at the monitor's edge.
+    let q = (1..=120i64).find(|&k| whole(k as f64 * s));
+    // One axis: grim's start and width in layout pixels, the crop's start and size in its pixels.
+    let axis = |r: i64, len: i64, pmax: i64, lmax: i64| -> (i64, i64, i64, i64) {
+        let size = ((len as f64 * s + 1e-4) as i64).clamp(1, pmax);
+        let p0 = ((r as f64 * s + 0.5) as i64).min(pmax - size);
+        let r0 = match q {
+            Some(q) => (r / q) * q,
+            None => 0,
+        };
+        let g0 = (r0 as f64 * s).round() as i64;
+        let end = (((p0 + size) as f64 / s) - 1e-4).ceil() as i64;
+        let gw = (end - r0).min(lmax - r0).max(1);
+        (r0, gw, p0 - g0, size)
+    };
+    let lmax = |p: i64| (p as f64 / s + 1e-4) as i64;
+    let (x0, gw, cx, cw) = axis(rx, w, m.pw, lmax(m.pw));
+    let (y0, gh, cy, ch) = axis(ry, h, m.ph, lmax(m.ph));
+    Some(PxCut {
+        grab: [m.x + x0, m.y + y0, gw, gh],
+        crop: [cx, cy, cw, ch],
+    })
+}
+
+/// px_cut X Y W H: px_cut_in on the box's monitors now.
+pub fn px_cut(ctx: &Ctx, g: [i64; 4]) -> Res<Option<PxCut>> {
+    let m = strip_nl(&hypr_json(ctx, &["monitors"])?);
+    Ok(px_cut_in(&mons_px(&m), g))
+}
+
 /// img_px P IMAGE SCREEN: the screen pixel under the centre of image pixel P; None for a number that
 /// is none, or an image of no size.
 fn img_px(p: &[u8], image: &[u8], screen: &[u8]) -> Option<i64> {
@@ -357,6 +488,100 @@ mod tests {
             px("101", "200", "100"),
             Some(50),
             "x0.5 (an image larger than the screen)"
+        );
+    }
+
+    // #423, finding 641: a region off a whole pixel at a fractional scale is grabbed from one and cut.
+    #[test]
+    fn a_region_off_a_whole_pixel_is_cut_on_whole_pixels() {
+        let mon = |x, y, scale, pw, ph| MonPx {
+            x,
+            y,
+            scale,
+            pw,
+            ph,
+        };
+        let one = |scale| vec![mon(0, 0, scale, 1920, 1200)];
+        let cut = |g, crop| Some(PxCut { grab: g, crop });
+        // 30 at 1.25 is 37.5: grim takes it from 28 (35 px), the image from 38, 125x62 as grim's.
+        assert_eq!(
+            px_cut_in(&one(1.25), [30, 40, 100, 50]),
+            cut([28, 40, 103, 50], [3, 0, 125, 62]),
+            "x off, y on"
+        );
+        assert_eq!(
+            px_cut_in(&one(1.25), [76, 100, 40, 20]),
+            None,
+            "76 and 100 are 95 and 125 px: grim's own"
+        );
+        assert_eq!(
+            px_cut_in(&one(1.25), [31, 33, 10, 10]),
+            cut([28, 32, 13, 11], [4, 1, 12, 12]),
+            "both off: 38.75 and 41.25 rounded to 39 and 41"
+        );
+        assert_eq!(
+            px_cut_in(&one(1.5), [31, 3, 101, 7]),
+            cut([30, 2, 102, 8], [2, 2, 151, 10]),
+            "1.5: whole every 2, 46.5 to 47, 4.5 to 5"
+        );
+        for s in [1.0, 2.0, 3.0] {
+            assert_eq!(px_cut_in(&one(s), [31, 33, 10, 10]), None, "scale {s}");
+        }
+        // At the far edge: 1917.5 rounded to 1918, 2 px, the image ends on the screen's last pixel.
+        let c = px_cut_in(&one(1.25), [1534, 957, 2, 3]).unwrap();
+        assert_eq!(c.grab[0] + c.grab[2], 1536, "the grab inside the layout");
+        assert_eq!((c.crop[2], c.crop[3]), (2, 3));
+        assert_eq!(1532 * 5 / 4 + c.crop[0] + c.crop[2], 1920);
+        // A second monitor: its own edge is where its pixels start.
+        let two = vec![mon(0, 0, 1.0, 1920, 1200), mon(1920, 0, 1.25, 1920, 1200)];
+        assert_eq!(
+            px_cut_in(&two, [1950, 40, 100, 50]),
+            cut([1948, 40, 103, 50], [3, 0, 125, 62])
+        );
+        assert_eq!(
+            px_cut_in(&two, [30, 40, 100, 50]),
+            None,
+            "on the scale-1 one"
+        );
+        assert_eq!(
+            px_cut_in(&two, [1900, 40, 100, 50]),
+            None,
+            "over both: left to grim"
+        );
+        // 4/3, as hyprctl writes it: whole every 3 layout pixels.
+        let c = px_cut_in(&[mon(0, 0, 1.333333, 1920, 1200)], [31, 30, 30, 30]).unwrap();
+        assert_eq!((c.grab[0], c.crop), (30, [1, 0, 40, 40]));
+        // A turned monitor: its pixels as laid out.
+        let m = mons_px(
+            br#"[{"x":0,"y":0,"width":1920,"height":1200,"scale":1.25,"transform":1},
+            {"x":5,"y":0,"width":10,"height":10,"scale":1,"disabled":true}]"#,
+        );
+        assert_eq!(m, vec![mon(0, 0, 1.25, 1200, 1920)]);
+        assert_eq!(
+            px_cut_in(&m, [30, 1400, 100, 50]),
+            cut([28, 1400, 103, 50], [3, 0, 125, 62])
+        );
+        assert_eq!(px_cut_in(&m, [30, 1500, 100, 50]), None, "past its 1536");
+        // The scale a crop records: its monitor's when grim's size says so.
+        assert_eq!(
+            size_scale_in(&one(1.25), [30, 40, 23, 9], 28),
+            1.25,
+            "not 28/23"
+        );
+        assert_eq!(
+            size_scale_in(&one(1.5), [30, 40, 11, 9], 16),
+            1.5,
+            "not 16/11"
+        );
+        assert_eq!(
+            size_scale_in(&one(1.25), [30, 40, 20, 9], 10),
+            0.5,
+            "--fit's: by its size"
+        );
+        assert_eq!(
+            size_scale_in(&two, [1900, 40, 100, 9], 125),
+            1.25,
+            "over two: by its size"
         );
     }
 
