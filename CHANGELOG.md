@@ -3,7 +3,12 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.2.2 — 2026-11-05
+
+One fix on top of 1.2.1: at a fractional scale, `find --image` names a `shot -g` crop's region where
+it was cut, and `pixel` reads each point's own pixel. Update.
+
+**Omarchy:** as 1.2.1, Omarchy 4.5 and, deprecated, 4.0, on Hyprland 0.56.2.
 
 ### Fixed
 - **At a fractional scale a crop is found where it was cut** ([#425](https://github.com/diogochaves/omabox/issues/425)):
