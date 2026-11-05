@@ -13563,8 +13563,9 @@ while i < len(words):
         i += 3; continue
     if w == "--ro-bind" and i + 2 < len(words) and words[i + 2] == "/opt/omabox/lib":
         i += 3; continue
-    # (the box its own /etc/omarchy.conf only where the host has one, Omarchy 4.5: #414)
-    if w == "--ro-bind" and i + 2 < len(words) and words[i + 2] == "/etc/omarchy.conf":
+    # (the box its own /etc/omarchy.conf only where the host has one, Omarchy 4.5: #414; a clean
+    # box its shell-defaults only before 4.5, #410, which t_clean checks)
+    if w == "--ro-bind" and i + 2 < len(words) and words[i + 2] in ("/etc/omarchy.conf", "/usr/share/omarchy/config/omarchy/shell.json"):
         i += 3; continue
     if w == "--hostname" or (w in ("--uid", "--gid") and nxt == uid):
         out += [w, "X"]; i += 2; continue
