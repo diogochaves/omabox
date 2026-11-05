@@ -12192,8 +12192,8 @@ from them.
     (`omarchy45`); the `up --clean` goldens lost the bind.
 629. **Omarchy 4.0 is deprecated** (2026-11-04, #411). omabox 1.3 drops it (#312), four weeks after
     Omarchy 4.5.0 reaches the stable channel (Diogo): 4.5.0 final came out on rc only, and stable
-    users cannot update before it gets there. `up` (after its options are read) and `setup` (not
-    `--remove`) say `omabox: deprecated: Omarchy 4.0.6-1: omabox 1.3 needs Omarchy 4.5 or later;
+    users cannot update before it gets there. `up` (once the box is up, after its own lines) and
+    `setup` (once done; not `--remove`) say `omabox: deprecated: Omarchy 4.0.6-1: omabox 1.3 needs Omarchy 4.5 or later;
     update once 4.5 reaches your Omarchy channel` when `install::omarchy_before_45` finds an Omarchy
     shell (`shell/plugins/bar/Bar.qml`) without the split centre; an `--omarchy` tree is named by its
     path ("an Omarchy before 4.5"). Told by the tree, as center_split tells it, never by the version.
@@ -12201,7 +12201,9 @@ from them.
     t_unit_deprecated's scan now skips as well), and is not refused under `OMABOX_STRICT=1`: it is no
     form the caller wrote. Tests: exit.rs `deprecated_omarchy_line`, install.rs
     `omarchy_before_45_by_tree`; by hand, a box with `--omarchy` a 4.0.6 tree says it, a box on 4.5.0
-    does not.
+    does not. First said before up's option checks, so on a 4.0 host a refused `up` gave two lines
+    where five unit checks want its one (seen in the 1.2.0 package's suite in a 4.0.6 VM); now after
+    them, and t_unit_deprecated refuses an `up --omarchy` of a 4.0 tree to check it stays one line.
 630. **Two suite checks that only failed on this machine's state** (2026-11-04). (a) t_cli_up's
     protect-ports golden held the host's addresses in its nft sets (finding 459's rule lists them), so
     it failed once the host's interfaces changed (a VM's link, the provider's IPv6 prefix), and it put

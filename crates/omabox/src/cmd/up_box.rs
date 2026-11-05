@@ -585,6 +585,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             ));
         }
     }
+    // #411: an Omarchy before 4.5 is deprecated (1.3 drops it, #312), said once the box is up, after
+    // up's own lines: a refusal stays the one line it is. omarchy<4.5
+    if let Some(what) = crate::install::omarchy_before_45(&u.omarchy) {
+        ctx.deprecated_omarchy(&what);
+    }
     if u.json {
         out(ready::box_json(ctx, false, "", ""))?;
     } else if u.new {

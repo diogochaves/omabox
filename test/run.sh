@@ -1009,6 +1009,16 @@ for root, _, files in sorted(os.walk(sys.argv[1])):
          awk '/^## Stability$/ {on = 1; next} on && /^## / {exit} on' "$ROOT/README.md" | grep -c OMABOX_STRICT; } | grep -c '^[1-9]')"
   check_eq "...and no claim of semantic versioning anywhere" "" \
     "$(grep -rliE 'semantic versioning|semver' "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$ROOT/skill" "$ROOT/crates" 2>/dev/null)"
+  # #411: Omarchy 4.0's deprecated: line comes once a box is up, after up's own lines; a refusal on a
+  # 4.0 tree stays its one line (the line came first, before the refusal, on a 4.0 host's suite).
+  # omarchy<4.5
+  local t40=$TMP/dep-t40 out rc=0
+  mkdir -p "$t40/bin" "$t40/default/hypr" "$t40/shell/plugins/bar"
+  : > "$t40/default/hypr/bootstrap.lua"; : > "$t40/shell/shell.qml"
+  echo 'property var center: []' > "$t40/shell/plugins/bar/Bar.qml"
+  out=$(ob up "$P-dep" --omarchy "$t40" --idle 45 2>&1) || rc=$?
+  check_eq "a refused up on an Omarchy 4.0 tree: its one line, no deprecated: before it (#411)" \
+    "2|omabox: --idle 45 is refused since 1.0 (a bare number was minutes there, and is seconds everywhere else): write --idle 45m" "$rc|$out"
 }
 
 # #273 part B: one meaning per exit code. A usage error (an unknown option or word, a value missing

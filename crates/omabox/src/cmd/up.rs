@@ -779,10 +779,6 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     if !u.omarchy.is_empty() && u.omarchy_bind {
         u.robinds.push((u.omarchy.clone(), u.omarchy.clone()));
     }
-    // #411: an Omarchy before 4.5 is deprecated (1.3 drops it, #312). omarchy<4.5
-    if let Some(what) = install::omarchy_before_45(&u.omarchy) {
-        ctx.deprecated_omarchy(&what);
-    }
     // (bash's `read -r size scale < <(split_scale ...)` said the refusal and went on with no size,
     // which parse_mode refused again: one refusal here, finding 456)
     (u.size, u.scale) = crate::mon::split_scale(ctx, "--size", &u.size)?;
