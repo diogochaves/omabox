@@ -21,6 +21,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   alone, in a tie, counts as a down that came, so the `up` is cancelled.
 
 ### Fixed
+- **A crash of another Quickshell in the box is said, and its dialog named** ([#420](https://github.com/diogochaves/omabox/issues/420)): when an app
+  built on Quickshell crashes, the next command says `a Quickshell in the box crashed since the last
+  command (not its shell: CONFIG; report: PATH)`, once, never as the shell's. A click or `shot
+  --window` that its crash dialog covers calls it Quickshell's crash dialog, whose, with its report
+  and how to close it (the dialog takes the app's id as its class and `quickshell` as its title). The
+  shell's own crash warning names its report too.
 - **A box kept its helpers from before a rebuild or an upgrade, unsaid** ([#421](https://github.com/diogochaves/omabox/issues/421)): `up` binds each
   helper as one file, which keeps the old one when the host's is replaced. `up` now records which
   file it bound, and a command that runs a replaced one in the box (`keys`, `click`, `wait still`,

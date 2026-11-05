@@ -12345,6 +12345,43 @@ from them.
     under its stock line: `...over save 'S': its HOME as saved (its files, configs and their look);
     the bar, theme and locale above are stock`. Tests: upspec.rs's clean_as_bash
     (stock_over_save_text), t_stock_bar (said, a file of the save's in the box).
+639. **Another Quickshell's crash was said by nothing, and its dialog only as a "quickshell" window**
+    (2026-11-05, #420). A test script driving an app built on Quickshell (flea: a config with `//@
+    pragma AppId com.thisisgm.flea`, run with `qs`) got, after a crash, only `... is still covered
+    there by 0x... com.thisisgm.flea "quickshell" after focusing it`, and took it for the box's shell
+    crashing unsaid. **What crashed was the app's own Quickshell, not the box's shell.** Checked in a
+    box with a config of our own carrying an AppId pragma, SIGSEGVed in a thread in poll:
+    Quickshell's crash reporter sets its desktop file name to the crashed instance's app id
+    (`org.quickshell` with no pragma), so its dialog's class is the app's (`com.example.qsapp`), and
+    sets no title, so Hyprland shows Qt's application name, `quickshell`: the reporter's covering
+    window, exactly. Every Quickshell writes its report under the reporter's own cache location,
+    `~/.cache/quickshell/crashes/`, whatever its `CacheDir` pragma, with the crashed instance's
+    `Config Path` (here the app's `shell.qml`). Omarchy's shell sets no AppId, so the box shell's
+    dialog is `org.quickshell` and closed as it opens (finding 183); one left with another class is
+    never the shell's. The box's shell crashed mid-run (after several commands, up past 10 s, so
+    Quickshell restarts it itself) is said by the next `click`, `keys` or `windows`, once, as
+    finding 408 has it: no path missed it, here or on the reporter's four runs. So #303's rule held
+    and nothing said the app's crash at all. **Fix:** shellnote.rs reads the reports in Rust
+    (crash_reports: name, time, dump pid, config, whether the shell's; the awk is gone, the same
+    reports counted); shell_note says another Quickshell's new report once, after the shell's own
+    note, in a box with no shell too: `warning: a Quickshell in the box crashed since the last
+    command (not its shell: CONFIG; report: PATH)` (several: `Quickshells in the box crashed N
+    times ... the last: ...`), its config made plain and cut at 200 bytes; `other-crashes-seen`
+    holds the count, written by `up` (others_seen) and every note, not by `restart-shell` or output's
+    cycles (they say only the shell's), and a first look with no count says nothing. A cover refusal
+    (click and pointer's `covered there by`, before and after the raise) and `shot --window`'s
+    `covered by` add `; ADDRESS is Quickshell's crash dialog of CONFIG, not the box's shell (report:
+    PATH; closing it is its app's, or omabox run -b B -- kill PID)` (the shell's: `of the box's
+    shell (report: PATH; omabox run -b B -- kill PID closes it)`), told as crash-dialog.sh tells it:
+    the window's process has `__QUICKSHELL_CRASH_DUMP_PID`, the report naming that pid says whose,
+    with none yet the shell's when the reporter's parent is the shell; never by class or title. The
+    window list's covers carry their pid for it. The shell's own crash warning names its newest
+    report now too. `ls`'s SHELL column is unchanged: it was right (the shell running, no crash).
+    Not reproduced: the reporter's NVIDIA swapchain failure itself (the RTX here is on vfio).
+    Tests: shellnote.rs's shell_reports_as_bash (another's crash said once, several, a box with no
+    shell, a first look; now a plain cargo test) and crash_dialog_told_and_said;
+    t_shell_other_crash (the next command's line, once; a click under the dialog and `shot
+    --window` name it; both failed before).
 640. **A box that is up kept the old copy of a helper replaced on the host** (2026-11-05, #421).
     `up` binds each helper as one file (keyboard, pointer, still, events, burst, tree; polkit and
     its session shim with `--polkit`), and a file bind pins the inode it found. `make`, `install`
