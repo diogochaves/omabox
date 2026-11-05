@@ -215,10 +215,7 @@ pub fn render_node_in(ctx: &Ctx, n: Vec<u8>, root: &[u8]) -> Res<RenderNode> {
             fell = n.is_empty();
         }
         if n.is_empty() {
-            n = render_globbed(root)
-                .into_iter()
-                .find(|x| rw(root, x))
-                .unwrap_or_default();
+            n = first_usable_in(root);
         }
         if fell && !n.is_empty() {
             let node = n.rsplit(|&c| c == b'/').next().unwrap_or_default();
@@ -245,6 +242,40 @@ pub fn render_node_in(ctx: &Ctx, n: Vec<u8>, root: &[u8]) -> Res<RenderNode> {
             "/renderD*); set OMABOX_RENDER_NODE"
         ))),
     }
+}
+
+/// The first render node under ROOT a box may use that renders on the GPU, else the first it may
+/// use at all (a VM's virtio-gpu without virgl, which up then refuses: software_refused), else empty
+/// (#396: a software-only node first no longer hides a GPU after it).
+pub fn first_usable_in(root: &[u8]) -> Vec<u8> {
+    let usable: Vec<Vec<u8>> = render_globbed(root)
+        .into_iter()
+        .filter(|x| rw(root, x))
+        .collect();
+    usable
+        .iter()
+        .find(|x| !software_only_in(x, root))
+        .or_else(|| usable.first())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Whether `up` refuses render node N before it starts a box (#396, finding 637): N renders in
+/// software only, where a box dies while starting, and nobody asked for it: not FORCED
+/// (OMABOX_RENDER_NODE), nor the GPU the `gpu` setting WANT names.
+pub fn software_refused(n: &RenderNode) -> bool {
+    let forced = !shell::env_or_empty("OMABOX_RENDER_NODE").is_empty();
+    software_refused_with(n.as_bytes(), forced, b"/")
+}
+
+/// software_refused for node N under ROOT, FORCED or not, with the `gpu` setting's WANT.
+pub fn software_refused_with(n: &[u8], forced: bool, root: &[u8]) -> bool {
+    software_refused_in(n, forced, &conf_want(), root)
+}
+
+/// software_refused, the devices under ROOT.
+pub fn software_refused_in(n: &[u8], forced: bool, want: &[u8], root: &[u8]) -> bool {
+    !forced && (want == b"auto" || !gpu_is_in(n, want, root)) && software_only_in(n, root)
 }
 
 /// render_nodes: every usable render node, for an interactive box, whose Hyprland renders on the GPU

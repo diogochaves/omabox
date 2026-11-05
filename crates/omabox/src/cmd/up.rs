@@ -956,6 +956,23 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     }
     // The render node, resolved once, before anything is made (finding 163).
     let render = render::render_node(ctx)?;
+    // A node that renders in software only, which nobody asked for (#396, finding 637): said now,
+    // not after a box died starting on it.
+    if render::software_refused(&render) {
+        let node = render.as_bytes();
+        let name = node.rsplit(|&c| c == b'/').next().unwrap_or_default();
+        return Err(ctx.die(cat!(
+            "a box needs GPU rendering: ",
+            name,
+            " (",
+            crate::gpu::render_driver(node),
+            ") renders in software only (no 3D acceleration), and no other render node here does; ",
+            crate::ready::VIRGL_HINT,
+            " (OMABOX_RENDER_NODE=",
+            node,
+            " to try it anyway)"
+        )));
+    }
     u.aq = install::check_install(
         ctx,
         &render,

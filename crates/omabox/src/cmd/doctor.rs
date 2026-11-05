@@ -836,6 +836,7 @@ fn render_check(ctx: &Ctx, root: &[u8], forced: Vec<u8>, aq_fixed: bool) -> Chec
         }
         parts.push(p);
     }
+    let asked = !forced.is_empty();
     let chosen = muted(|| render::render_node_in(ctx, forced, root)).ok();
     let Some(chosen) = chosen else {
         return check(
@@ -871,7 +872,13 @@ fn render_check(ctx: &Ctx, root: &[u8], forced: Vec<u8>, aq_fixed: bool) -> Chec
         return check(
             "render",
             if usable_hw > 0 { St::Warn } else { St::Fail },
-            format!("{found}, which renders in software only: a box there dies while starting"),
+            if render::software_refused_with(chosen.as_bytes(), asked, root) {
+                format!(
+                    "{found}, which renders in software only: up refuses it (a box there dies while starting)"
+                )
+            } else {
+                format!("{found}, which renders in software only: a box there dies while starting")
+            },
             fix,
         );
     }
@@ -1691,6 +1698,11 @@ mod tests {
         assert_eq!(c.st, St::Fail, "only a software node: {}", c.found);
         assert!(c.found.contains("renders in software only"), "{}", c.found);
         assert!(c.fix[0].contains("virgl"));
+        // #396: up refuses it unless it was asked for (OMABOX_RENDER_NODE, or the gpu setting naming
+        // it), before it starts a box that would die
+        assert_eq!(crate::render::first_usable_in(&r), n128);
+        assert!(crate::render::software_refused_in(n128, false, b"auto", &r));
+        assert!(!crate::render::software_refused_in(n128, true, b"auto", &r));
         // with virgl (bit 0 on): it renders
         std::fs::write(pci.join("virtio0/features"), "1000100000\n").unwrap();
         assert!(!crate::render::software_only_in(n128, &r));
@@ -1702,6 +1714,25 @@ mod tests {
             "{}",
             c.found
         );
+        assert!(!crate::render::software_refused_in(
+            n128, false, b"auto", &r
+        ));
+        // #396: a GPU that renders, renderD129, after a software-only renderD128: auto takes 129
+        std::fs::write(pci.join("virtio0/features"), "0000000000\n").unwrap();
+        put(&d, "/dev/dri/renderD129", "");
+        let gpu = d.join("sys/devices/pci0000:00/0000:00:03.0");
+        std::fs::create_dir_all(&gpu).unwrap();
+        std::fs::create_dir_all(d.join("sys/bus/pci/drivers/amdgpu")).unwrap();
+        symlink(d.join("sys/bus/pci/drivers/amdgpu"), gpu.join("driver")).unwrap();
+        std::fs::create_dir_all(d.join("sys/class/drm/renderD129")).unwrap();
+        symlink(&gpu, d.join("sys/class/drm/renderD129/device")).unwrap();
+        assert_eq!(
+            crate::render::first_usable_in(&r),
+            b"/dev/dri/renderD129".to_vec()
+        );
+        // (with virgl, the first node again)
+        std::fs::write(pci.join("virtio0/features"), "1000100000\n").unwrap();
+        assert_eq!(crate::render::first_usable_in(&r), n128);
         let _ = std::fs::remove_dir_all(&d);
     }
 

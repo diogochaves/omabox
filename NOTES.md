@@ -12274,6 +12274,18 @@ from them.
     came, so the up is cancelled rather than a box left up (the safe side, bash's own `dt >= t0`).
     Test: up.rs's a_down_over_before_the_up_is_not_one_that_came (a start-only tie came whatever
     the times).
+637. **`gpu auto` took a software-only render node and the box died on it** (2026-11-05, #396's
+    question to Diogo, finding 568). render_node took the first render node a box may open; a VM's
+    virtio-gpu without virgl (doctor's software_only_in: its virtio features, virgl and context init
+    both off) renders in software only, labwc falls back to pixman and the box's Hyprland aborts,
+    which up explained only afterwards from labwc.log (finding 568). Doctor already knew it before.
+    **Fix:** render.rs's first_usable_in takes the first node that renders, a software-only one only
+    when no other is usable; `up` refuses that one before it makes anything (software_refused: not
+    asked for by OMABOX_RENDER_NODE nor the `gpu` setting naming it), with what doctor says (virgl)
+    and how to force it; doctor's render check says up refuses it. The labwc-log explanation stays
+    for what sysfs cannot see (a real GPU with no EGL, t_up_software). Not seen in a VM here: the
+    test's stand-in sysfs only. Test: doctor.rs's render_nodes (a software node first then a GPU:
+    auto takes the GPU; alone: refused unless forced; with virgl: taken).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
