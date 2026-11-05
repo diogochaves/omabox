@@ -12345,6 +12345,28 @@ from them.
     under its stock line: `...over save 'S': its HOME as saved (its files, configs and their look);
     the bar, theme and locale above are stock`. Tests: upspec.rs's clean_as_bash
     (stock_over_save_text), t_stock_bar (said, a file of the save's in the box).
+640. **A box that is up kept the old copy of a helper replaced on the host** (2026-11-05, #421).
+    `up` binds each helper as one file (keyboard, pointer, still, events, burst, tree; polkit and
+    its session shim with `--polkit`), and a file bind pins the inode it found. `make`, `install`
+    and a package upgrade each put a new file in its place, so after a rebuild or an omabox upgrade
+    the new CLI drove every box already up through the old helpers, unsaid (seen on #323: a rebuilt
+    `tools/tree` was not the box's). Binding `tools/` as a folder was left out (Diogo's call): it
+    would swap helpers under a running box, the same mismatch the other way. **Fix:** `up` records
+    each bound helper's source, device and inode in box.json's `helpers` (helper_binds: one list
+    for the bind and the record). The inode is the signal because it is what the bind holds: a
+    file rewritten in place keeps it, and the box then has the new bytes too, so size or mtime
+    would warn wrongly there. A command that runs one in the box (on_box naming
+    `/opt/omabox/bin/omabox-*`: keys, click, drag, pointer, scroll, `--wait`, `wait still`, tree,
+    find, shot --burst, polkit; and `events`, whose log the events helper writes) compares them
+    with the host's path now and says, once in that command, `warning: box 'B' started with older
+    omabox helpers (keyboard, still), replaced on the host since: omabox down B, then up again`,
+    naming every one replaced. A box from before (no record) and a source gone from the host (a
+    rebuild under way, `make clean`) say nothing. `ls` does not show it. Tests: helpers.rs's six
+    (an inode or device differing is stale, the same file and a missing one or record are not,
+    the words, what runs a helper, a record replaced by rename), t_helpers_replaced (from a
+    stand-in checkout of its own with copied tools, keyboard and still replaced with `install`:
+    keys, `wait still`, click and events say it, once a command; a box up after says nothing; it
+    fails before, nothing said).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

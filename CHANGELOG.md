@@ -20,6 +20,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A pre-1.0 `down` marker is no longer ordered by its file's time** ([#404](https://github.com/diogochaves/omabox/issues/404)): one of its start
   alone, in a tie, counts as a down that came, so the `up` is cancelled.
 
+### Fixed
+- **A box kept its helpers from before a rebuild or an upgrade, unsaid** ([#421](https://github.com/diogochaves/omabox/issues/421)): `up` binds each
+  helper as one file, which keeps the old one when the host's is replaced. `up` now records which
+  file it bound, and a command that runs a replaced one in the box (`keys`, `click`, `wait still`,
+  `tree`, `events`…) warns once: `box 'B' started with older omabox helpers (keyboard, still),
+  replaced on the host since: omabox down B, then up again`. Boxes up before this release say
+  nothing.
+
 ## 1.2.0 — 2026-11-05
 
 Omarchy 4.5.0 final, and Omarchy 4.0 deprecated: `up` and `setup` say so on a `deprecated:` line,
