@@ -3,6 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+- **At a fractional scale a crop is found where it was cut** ([#425](https://github.com/diogochaves/omabox/issues/425)):
+  `find --image` (and `click` and `wait image`) named a `shot -g` crop's region a pixel off, in the
+  screen or a `-g` region around it (`66,59 62x16` for `66,59 63x16` at 1.25), and `pixel` could read
+  a neighbouring pixel. Every path now maps layout and pixels the same way.
+
 ## 1.2.1 — 2026-11-05
 
 Fixes on top of 1.2.0: a crash of an app built on Quickshell is said as itself, a box started before

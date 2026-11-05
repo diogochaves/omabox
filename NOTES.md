@@ -12461,6 +12461,32 @@ from them.
     answering as 0.56 does: the warning, up refused with no box dir, no eval sent), t_conf_host
     (the nested `.conf` Hyprland: eval's answer, up refused and no box left, a headless box up and
     shot, peek's words, doctor's warning and the stand-in's own ok).
+643. **At a fractional scale a crop was found a pixel off where it was cut, and pixel read a
+    neighbour** (2026-11-05, #425; found by the 1.2.1 package test in two VMs, then on the host once
+    t_find_image pinned the case). Finding 641 made a `shot -g` crop the screen's pixels, but each
+    path turned pixels back into the layout by its own rule: `find --image` by the image's size over
+    the region's (a crop 63 wide at 1.25 is 78 px, 62.4, rounded to 62), a `-g` search by its grab's
+    ratio rather than the monitor's scale (131 px over 105: 1.2476, so 27 px in is 22, a pixel past
+    66), and `pixel` by that ratio cut short. Where it showed depended on where the glyphs fell, so
+    the dev host passed. **Fix:** one mapping in screen.rs, every path's: a layout pixel L of a
+    monitor is the pixel L x S rounded (to_px, as px_cut cuts); a size is cut short, as grim's
+    (px_len); a pixel's layout pixel is the one under its centre (to_layout, the inverse of to_px at
+    any scale of 1 or more, and img_px's rule); a size in pixels is the fewest layout pixels that
+    hold it (layout_len: 78 is 63, 79 is 64). A grab's PxMap says where its first pixel is from its
+    monitor's corner (by the image's size for a window's own pixels or a region over two monitors,
+    as before at a whole scale); find's matches and pixel's points go through it, so a crop is found
+    at the region it was cut from, in the screen or any `-g` region around it. Scales hyprctl writes
+    to 6 places (1.333333) are read as the 120th they stand for. Also: grim's size, cut short, can
+    end before the pixel of a region's last layout pixel (8..10 at 1.25 is 10-12 px; 10 starts in
+    13), so `pixel` at a fractional scale cuts its own (px_hold_in) from the first point's pixel
+    through the last's. Left: `click --in` a shot's pixel maps by the image's size (img_px), at most a
+    layout pixel off near a cut crop's far end. Tests: screen.rs's
+    a_crop_maps_back_to_where_it_was_cut (the issue's numbers; at 1.25, 1.5, 4/3, 1 and 2 every crop
+    1-29 wide at both edges of the monitor is found where it was cut, in the screen and every `-g`
+    region around it, and each of its points read from its own pixel, inside pixel's cut, each cut
+    inside grim's grab); t_find_image's crop now starts on 4k+2 and is 4k+3 wide at 1.25, where the
+    old rules were wrong whatever the glyphs: 3 fail before on the host (`74,67 78x17` for 79, `75,67`
+    in `-g`, `pixel` reading neighbours).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
