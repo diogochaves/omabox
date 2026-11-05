@@ -12367,6 +12367,26 @@ from them.
     stand-in checkout of its own with copied tools, keyboard and still replaced with `install`:
     keys, `wait still`, click and events say it, once a command; a box up after says nothing; it
     fails before, nothing said).
+642. **A host Hyprland on a `.conf` config failed every host-side action with its raw answer**
+    (2026-11-05, #422, 1.2.1 part; Diogo's call: a clear message, no `.conf` passthrough until
+    someone asks). Everything omabox does on the user's Hyprland is Lua sent with `hyprctl eval`
+    (host.rs: the passthrough, HostSilent's window opens, moves and sizes, `peek --focus`).
+    Measured on a Hyprland 0.56.2 started with `--config min.conf` nested in a box standing in for
+    the host (finding 26): every eval, whatever its Lua, answers `eval is only supported with the
+    lua config manager` with exit 0, and `hyprctl -j status` says `"configProvider": "hyprlang"`
+    (the box's own Hyprland: `"lua"`); a read, nothing dispatched. Before, `up --interactive` died
+    with `host hyprctl eval failed: eval is only supported ...` after it had made the box's dir, so
+    `ls` showed a dead interactive box until a `down`. **Fix:** host_eval tells that answer (else
+    the status, when eval failed otherwise) and says `your Hyprland reads a .conf config (hyprlang):
+    interactive mode, peek and keys-to-box need a Hyprland with a Lua config (hyprland.lua);
+    headless boxes work as they are`; `up --interactive` reads the status first and refuses with
+    those words before it makes anything; `doctor` has a `host-config` check after `hyprland`
+    (status alone, never eval: Lua ok, another a warning with that text; no check without a
+    session or a status). Tests: host.rs's a_conf_host_is_told_by_evals_answer_and_status,
+    doctor.rs's a_conf_host_is_a_warning, t_unit_doctor (a stand-in host, `STANDIN_CONFIG`,
+    answering as 0.56 does: the warning, up refused with no box dir, no eval sent), t_conf_host
+    (the nested `.conf` Hyprland: eval's answer, up refused and no box left, a headless box up and
+    shot, peek's words, doctor's warning and the stand-in's own ok).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -27,6 +27,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `tree`, `events`…) warns once: `box 'B' started with older omabox helpers (keyboard, still),
   replaced on the host since: omabox down B, then up again`. Boxes up before this release say
   nothing.
+- **A desktop whose Hyprland reads a `.conf` config gets a clear refusal** ([#422](https://github.com/diogochaves/omabox/issues/422)):
+  interactive mode, `peek` and keys-to-box act on your Hyprland with Lua, which a `.conf`
+  (hyprlang) config does not run, and they failed with Hyprland's raw answer. They now say that
+  they need a Lua config (`hyprland.lua`) and that headless boxes work as they are;
+  `up --interactive` says it before it makes anything (it left a dead box), and `doctor` warns of
+  it (`host-config`, read from Hyprland's status, nothing sent).
 
 ## 1.2.0 — 2026-11-05
 
