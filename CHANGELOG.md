@@ -3,6 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+
+- `up` no longer orders a `down` marker of the old pre-1.0 form (its start alone) by the file's
+  time: in a tie it counts as a down that came, so the `up` is cancelled (#404).
+
 ## 1.2.0 — 2026-11-05
 
 Omarchy 4.5.0 final, and Omarchy 4.0 deprecated: `up` and `setup` say so on a `deprecated:` line,

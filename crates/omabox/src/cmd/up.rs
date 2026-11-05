@@ -1055,7 +1055,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
         timens: procfs::timens(),
     };
     if let (true, Some(d), Some(t0)) = (mine, DownLine::read(&dline), num(&u.t0))
-        && down_came(&d, t0, &me, marker_us(&mpath))
+        && down_came(&d, t0, &me)
     {
         return Err(ctx.die(cat!(
             "up: cancelled: omabox down ",
@@ -1105,7 +1105,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
 /// A down marker's first line (down.rs's down_mark): its start in clock ticks, then, from a Rust
 /// down (finding 513), the pid its pid namespace made last as it wrote the marker, that namespace
 /// and its CALL_US, and (#404) CLOCK_BOOTTIME in µs as it wrote the marker and the time namespace
-/// that was read in. Bash's down writes the start alone.
+/// that was read in. A marker of its start alone (bash's down, before 1.0) reads with the rest None.
 #[derive(Debug, Default, PartialEq)]
 struct DownLine {
     dt: i64,
@@ -1158,9 +1158,9 @@ struct UpSelf {
 /// first if it was made, at the latest (procfs::made_us), by the time on CLOCK_BOOTTIME the down
 /// wrote its marker at, read in the same time namespace (#404; the calls' times compared before
 /// were the fault above, and a wall-clock step could flip them). Without those, the calls' times;
-/// one from bash (its start alone) by when its marker was written against this call's time; with
-/// none of them, it came (bash's `dt >= t0`).
-fn down_came(d: &DownLine, t0: i64, me: &UpSelf, marker_us: Option<i64>) -> bool {
+/// with none of them (a marker of its start alone, which no omabox since 1.0 writes), it came: the
+/// up is cancelled rather than a box left up.
+fn down_came(d: &DownLine, t0: i64, me: &UpSelf) -> bool {
     match d.dt.cmp(&t0) {
         std::cmp::Ordering::Greater => true,
         std::cmp::Ordering::Less => false,
@@ -1177,20 +1177,12 @@ fn down_came(d: &DownLine, t0: i64, me: &UpSelf, marker_us: Option<i64>) -> bool
             {
                 return made <= db;
             }
-            match (d.call_us, marker_us, me.call_us) {
-                (Some(dc), _, Some(c)) => dc >= c,
-                (None, Some(m), Some(c)) => m >= c,
+            match (d.call_us, me.call_us) {
+                (Some(dc), Some(c)) => dc >= c,
                 _ => true,
             }
         }
     }
-}
-
-/// When a marker was written, in µs of the wall clock (as CALL_US is).
-fn marker_us(p: &std::path::Path) -> Option<i64> {
-    let t = std::fs::metadata(p).ok()?.modified().ok()?;
-    let d = t.duration_since(std::time::UNIX_EPOCH).ok()?;
-    i64::try_from(d.as_micros()).ok()
 }
 
 /// A `.down-NAME` marker: the down's start, and the jail of a jailed caller's down (its second line).
@@ -1785,7 +1777,7 @@ mod tests {
 
     #[test]
     fn a_down_over_before_the_up_is_not_one_that_came() {
-        let bash = |dt| DownLine {
+        let start_only = |dt| DownLine {
             dt,
             ..DownLine::default()
         };
@@ -1797,12 +1789,13 @@ mod tests {
             made_us: Some(5),
             timens: Some(b"time:[1]".to_vec()),
         };
-        assert!(down_came(&bash(11), 10, &me(500, None), None));
-        assert!(!down_came(&bash(9), 10, &me(500, Some(1)), Some(5)));
-        // (a tie, a bash down's: the marker written after the up was called, or no times to tell)
-        assert!(down_came(&bash(10), 10, &me(500, Some(1000)), Some(2000)));
-        assert!(!down_came(&bash(10), 10, &me(500, Some(1000)), Some(999)));
-        assert!(down_came(&bash(10), 10, &me(500, Some(1000)), None));
+        assert!(down_came(&start_only(11), 10, &me(500, None)));
+        assert!(!down_came(&start_only(9), 10, &me(500, Some(1))));
+        // (a tie with a marker of its start alone, which no omabox since 1.0 writes: it came, so
+        // the up is cancelled rather than a box left up; never by when the file was written, a
+        // wall-clock time a clock step could flip, #404)
+        assert!(down_came(&start_only(10), 10, &me(500, Some(1000))));
+        assert!(down_came(&start_only(10), 10, &me(500, None)));
     }
 
     /// Finding 513 (#380): in a tie, the order the pids were made in, whatever the clocks say.
@@ -1825,26 +1818,25 @@ mod tests {
         };
         // `up B & down B`: the up made first, slower to its first line than the whole down: it came
         // (its call and its marker both before the up's call, which said otherwise)
-        assert!(down_came(&ours(510), 10, &me(500, b"pid:[1]"), Some(950)));
-        assert!(down_came(&ours(500), 10, &me(500, b"pid:[1]"), Some(950)));
+        assert!(down_came(&ours(510), 10, &me(500, b"pid:[1]")));
+        assert!(down_came(&ours(500), 10, &me(500, b"pid:[1]")));
         // `down B; up B`: the up made after the down's marker: it did not
-        assert!(!down_came(&ours(499), 10, &me(500, b"pid:[1]"), Some(1100)));
+        assert!(!down_came(&ours(499), 10, &me(500, b"pid:[1]")));
         // pids that wrapped between the two
-        assert!(down_came(&ours(3), 10, &me(4_194_300, b"pid:[1]"), None));
-        assert!(!down_came(&ours(4_194_300), 10, &me(3, b"pid:[1]"), None));
+        assert!(down_came(&ours(3), 10, &me(4_194_300, b"pid:[1]")));
+        assert!(!down_came(&ours(4_194_300), 10, &me(3, b"pid:[1]")));
         // another pid namespace's, from a down with no boot time: the calls' times, like with like
-        assert!(!down_came(&ours(510), 10, &me(500, b"pid:[2]"), Some(2000)));
+        assert!(!down_came(&ours(510), 10, &me(500, b"pid:[2]")));
         let later = DownLine {
             call_us: Some(1000),
             ..ours(510)
         };
-        assert!(down_came(&later, 10, &me(500, b"pid:[2]"), None));
+        assert!(down_came(&later, 10, &me(500, b"pid:[2]")));
         // ticks still decide when they differ
         assert!(!down_came(
             &DownLine { dt: 9, ..ours(510) },
             10,
-            &me(500, b"pid:[1]"),
-            None
+            &me(500, b"pid:[1]")
         ));
     }
 
@@ -1870,40 +1862,20 @@ mod tests {
         };
         // an up made first, slower to its first line than the down to its marker: it came (the
         // calls' times, 900 before 1000, said it was over)
-        assert!(down_came(
-            &theirs(7000, b"time:[1]"),
-            10,
-            &me(Some(6000)),
-            None
-        ));
-        assert!(down_came(
-            &theirs(7000, b"time:[1]"),
-            10,
-            &me(Some(7000)),
-            None
-        ));
+        assert!(down_came(&theirs(7000, b"time:[1]"), 10, &me(Some(6000))));
+        assert!(down_came(&theirs(7000, b"time:[1]"), 10, &me(Some(7000))));
         // `down B; up B`: the up made after the marker: it did not
-        assert!(!down_came(
-            &theirs(7000, b"time:[1]"),
-            10,
-            &me(Some(7001)),
-            None
-        ));
+        assert!(!down_came(&theirs(7000, b"time:[1]"), 10, &me(Some(7001))));
         // another time namespace (another offset), or no made time: the calls' times
-        assert!(!down_came(
-            &theirs(7000, b"time:[2]"),
-            10,
-            &me(Some(6000)),
-            None
-        ));
-        assert!(!down_came(&theirs(7000, b"time:[1]"), 10, &me(None), None));
+        assert!(!down_came(&theirs(7000, b"time:[2]"), 10, &me(Some(6000))));
+        assert!(!down_came(&theirs(7000, b"time:[1]"), 10, &me(None)));
         // the same pid namespace still goes by the pids' order
         let same = DownLine {
             pidns: Some(b"pid:[1]".to_vec()),
             last_pid: Some(499),
             ..theirs(7000, b"time:[1]")
         };
-        assert!(!down_came(&same, 10, &me(Some(6000)), None));
+        assert!(!down_came(&same, 10, &me(Some(6000))));
     }
 
     #[test]

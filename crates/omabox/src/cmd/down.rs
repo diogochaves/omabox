@@ -216,8 +216,6 @@ fn down_one_with<S: BoxSys + ?Sized>(
 /// 513): the pid its pid namespace made last as the marker is written, that namespace, and this
 /// call's time (CALL_US); then, for an up of another pid namespace, CLOCK_BOOTTIME in µs as the
 /// marker is written and the time namespace it was read in (#404); each `-` when it cannot be told.
-/// Bash's up reads a marker of one number only, so it takes these for none (a bash up is a
-/// fallback's, with a bash down).
 fn down_mark<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, cond: &DownIf) {
     if cond.created.is_none() {
         let mark = ctx.in_boxes(cat!(".down-", ctx.name));

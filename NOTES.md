@@ -11059,7 +11059,7 @@ from them.
     clock for all pid namespaces and no wall-clock step moves it. Measured: 10 cancels in 10; `down
     B` (other namespace) then `up B`, 7 of 8 in one tick: 8 boxes up in 8. Left: a marker of the
     start alone (a bash down's, an omabox older than 1.0) is still read against its mtime, the
-    issue's case 2, until 0.x relays are no longer expected (Diogo's call). An older 1.0.x up reads
+    issue's case 2, until 0.x relays are no longer expected (Diogo's call; dropped, finding 636). An older 1.0.x up reads
     the first four fields only. Tests: t_race ("a down of another pid namespace while its up starts",
     fails at 24d53d6), up.rs's a_down_of_another_pid_namespace_by_boot_time, down_lines,
     made_us_is_before_now_and_after_boot.
@@ -12265,6 +12265,15 @@ from them.
     (xkbcli), and a release is read in the state it ends, with shift still down. The test now names
     a release by its press's sym. Both are a theme's or a user's to set on 4.5 as well, so fixed
     rather than left to #312. In the VM: the installed t_fixture 19 passed, 2 failed; the branch's 21, 0.
+636. **A down marker of its start alone was still ordered by its file's mtime** (2026-11-05, #404's
+    left item, Diogo's call). Only bash's down (omabox before 1.0) wrote a `.down-NAME` line of its
+    start alone; finding 579 kept reading one, in a tie, by the marker's mtime against this up's
+    CALL_US: two wall-clock times, which a clock step can flip, the fault #404 was about. Markers are
+    swept after 10 minutes and no omabox since 1.0 writes that form. **Fix:** down_came no longer
+    reads the mtime; a tie with no times to compare (that form, or fields `-`) counts as a down that
+    came, so the up is cancelled rather than a box left up (the safe side, bash's own `dt >= t0`).
+    Test: up.rs's a_down_over_before_the_up_is_not_one_that_came (a start-only tie came whatever
+    the times).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
