@@ -131,6 +131,32 @@ pub fn ppm(b: &[u8]) -> Option<Rgb> {
     })
 }
 
+impl Rgb {
+    /// The part at X, Y of W x H, cut to the image (#423: a region taken on whole pixels).
+    pub fn crop(&self, [x, y, w, h]: [i64; 4]) -> Rgb {
+        let c = |v: i64, max: usize| usize::try_from(v.max(0)).unwrap_or(0).min(max);
+        let (x0, y0) = (c(x, self.w), c(y, self.h));
+        let (x1, y1) = (
+            c(x.saturating_add(w), self.w),
+            c(y.saturating_add(h), self.h),
+        );
+        let (cw, ch) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+        let mut px = Vec::with_capacity(cw * ch * 3);
+        for r in y0..y0 + ch {
+            let at = (r * self.w + x0) * 3;
+            px.extend_from_slice(&self.px[at..at + cw * 3]);
+        }
+        Rgb { w: cw, h: ch, px }
+    }
+
+    /// As a PPM (P6, maxval 255), as grim writes one.
+    pub fn to_ppm(&self) -> Vec<u8> {
+        let mut b = format!("P6\n{} {}\n255\n", self.w, self.h).into_bytes();
+        b.extend_from_slice(&self.px);
+        b
+    }
+}
+
 /// ImageMagick's PAM (`pam:-`): RGB_ALPHA, RGB, GRAYSCALE(_ALPHA), 8 bits. Alpha under 128 is a
 /// pixel that does not count; a template all opaque has no mask.
 pub fn pam(b: &[u8]) -> Option<Tpl> {
@@ -1274,5 +1300,23 @@ pub(crate) mod tests {
         assert!(png_with_comment(b"GIF89a", b"x").is_none());
         // the CRC is the standard one
         assert_eq!(crc32(&[b"IEND"]), 0xae42_6082);
+    }
+
+    // #423: a region taken on whole pixels is cut out of grim's grab.
+    #[test]
+    fn a_grab_is_cut_to_the_region_and_kept_a_ppm() {
+        let px: Vec<u8> = (0..4 * 3).flat_map(|i| [i as u8, 0, 0]).collect();
+        let g = Rgb { w: 4, h: 3, px };
+        let c = g.crop([1, 1, 2, 2]);
+        assert_eq!((c.w, c.h), (2, 2));
+        assert_eq!(
+            c.px.chunks(3).map(|p| p[0]).collect::<Vec<_>>(),
+            vec![5, 6, 9, 10]
+        );
+        let p = ppm(&c.to_ppm()).expect("a PPM");
+        assert_eq!((p.w, p.h, p.px), (2, 2, c.px.clone()));
+        let past = g.crop([3, 2, 5, 5]);
+        assert_eq!((past.w, past.h, past.px[0]), (1, 1, 11), "cut to the image");
+        assert_eq!(g.crop([9, 0, 2, 2]).w, 0, "nothing of it");
     }
 }

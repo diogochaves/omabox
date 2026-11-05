@@ -18907,6 +18907,46 @@ t_find_image() {
     out=$(ob find -b "$B" --image "$o/mark.png" --similar "$lo" 2>/dev/null); rc=$?
     check_eq "...--similar $lo (as said): both matches" "0 2" "$rc $(wc -l <<<"$out")"
   fi
+  # At scale 1.25 (#423, finding 641) a crop off a whole pixel (x 30 is 37.5 px) was resampled by
+  # grim, 0.82-0.98 against the screen it was cut from: now the screen's own pixels, from the one
+  # its start rounds to, found where it was cut at 1 at the default 0.95; -g and pixel read so too.
+  ob stop -b "$B" --all >/dev/null 2>&1
+  ob mode -b "$B" "${W}x$H,scale=1.25" >/dev/null 2>&1
+  ob run -b "$B" -d -q --wait -- "${mark[@]}" >/dev/null 2>&1
+  ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1
+  ob wait -b "$B" still >/dev/null
+  ob shot -b "$B" --fit 0 -o "$o/s125.png" >/dev/null 2>&1
+  g=$(magick "$o/s125.png" -fuzz 20% -fill black +opaque '#ff8800' -format %@ info: 2>/dev/null)
+  if [[ ! $g =~ ^([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)$ ]]; then
+    no "the mark at scale 1.25" "no orange text ($g)"
+  else
+    # (in layout px, 3 around it, its start moved left onto one that is no whole pixel: not 4k)
+    x=$((BASH_REMATCH[3] * 4 / 5 - 3)) y=$((BASH_REMATCH[4] * 4 / 5 - 3))
+    w=$((BASH_REMATCH[1] * 4 / 5 + 7)) h=$((BASH_REMATCH[2] * 4 / 5 + 7))
+    (( x % 4 )) || { x=$((x - 1)); w=$((w + 1)); }
+    (( y % 4 )) || { y=$((y - 1)); h=$((h + 1)); }
+    ob shot -b "$B" -g "$x,$y ${w}x$h" -o "$o/m125.png" >/dev/null 2>&1
+    check_eq "scale 1.25, shot -g off a whole pixel: its comment says 1.25" "omabox scale=1.25" "$(magick identify -format %c "$o/m125.png")"
+    local px=$(((x * 5 + 2) / 4)) py=$(((y * 5 + 2) / 4)) sz
+    sz=$(magick identify -format %wx%h "$o/m125.png")
+    magick "$o/s125.png" -crop "$sz+$px+$py" +repage "$o/c125.png"
+    check_eq "...the screen's own pixels, from $px,$py (its start rounded)" "0" \
+      "$(magick compare -metric AE "$o/m125.png" "$o/c125.png" null: 2>&1 | cut -d' ' -f1)"
+    out=$(ob find -b "$B" --image "$o/m125.png" 2>&1); rc=$?
+    check_eq "...find --image: where it was cut, score 1, at the default 0.95" "0 $x,$y ${w}x$h 1.000" "$rc $out"
+    check_eq "...-g around it, off a whole pixel too: found" "$x,$y ${w}x$h 1.000" \
+      "$(ob find -b "$B" --image "$o/m125.png" -g "$((x - 21)),$((y - 11)) $((w + 42))x$((h + 22))" 2>/dev/null)"
+    # pixel: a row through the text, each the screen pixel its point rounds to
+    local pts=() want=() k qx qy
+    for k in 0 1 2 3 4 5 6 7 8 9; do
+      qx=$((x + 3 + k * (w - 6) / 10)) qy=$((y + h / 2))
+      pts+=("$qx" "$qy")
+      want+=("$(magick "$o/s125.png" -format "#%[hex:p{$(((qx * 5 + 2) / 4)),$(((qy * 5 + 2) / 4))}]" info: | cut -c1-7 | tr 'A-F' 'a-f')")
+    done
+    check_eq "...pixel: the screen's colours, none blended" "${want[*]}" "$(ob pixel -b "$B" "${pts[@]}" 2>/dev/null | awk '{ print $NF }' | tr '\n' ' ' | sed 's/ $//')"
+    out=$(ob wait -b "$B" --timeout 1s change --since "$o/m125.png" 2>&1); rc=$?
+    check_match "...wait change --since it: nothing changed (its frame cut the same way)" "^124 unsatisfied: nothing changed" "$rc $out"
+  fi
   ob down "$B" >/dev/null 2>&1
 }
 

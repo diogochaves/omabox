@@ -276,7 +276,11 @@ pub fn prepare(ctx: &Ctx, label: &str, spec: &Spec) -> Res<(Finder, Frame)> {
         }
     };
     let lw = frame.at[2].max(1) as f64;
-    let here = frame.img.w as f64 / lw;
+    // (a region's: its monitor's scale when grim's size says so, a small one's sizes a pixel off it)
+    let here = match f.area {
+        Area::Screen(g) => crate::screen::size_scale(ctx, g, frame.img.w as i64)?,
+        Area::Window { .. } => frame.img.w as f64 / lw,
+    };
     let mut size = None;
     if let Some(s) = imgfind::png_scale(&bytes) {
         let k = here / s;
@@ -384,11 +388,16 @@ impl Finder {
             .iter()
             .map(|w| w.as_bytes().to_vec())
             .collect();
+        // A region off a whole pixel at a fractional scale: grabbed from one and cut, the screen's
+        // own pixels, as shot -g takes it (#423, finding 641).
+        let mut cut = None;
         let (at, window) = match &self.area {
             Area::Screen(g) => {
+                cut = crate::screen::px_cut(ctx, *g)?;
+                let r = cut.map_or(*g, |c| c.grab);
                 grim.extend([
                     b"-g".to_vec(),
-                    format!("{},{} {}x{}", g[0], g[1], g[2], g[3]).into_bytes(),
+                    format!("{},{} {}x{}", r[0], r[1], r[2], r[3]).into_bytes(),
                 ]);
                 (*g, None)
             }
@@ -431,7 +440,11 @@ impl Finder {
         // click --image leaves it on the match). Its place no match is judged by.
         let p = crate::exit::muted(|| crate::settle::cursor_now(ctx)).unwrap_or_default();
         let r = on_box(ctx, &grim, true, Out::Capture(Some(cap)), ErrTo::Null).or_exit()?;
-        match imgfind::ppm(&r.out) {
+        let img = imgfind::ppm(&r.out).map(|i| match cut {
+            Some(c) => i.crop(c.crop),
+            None => i,
+        });
+        match img {
             Some(img) if r.rc == 0 => {
                 let ptr = ptr_region(&p, at, img.w, img.h);
                 Ok(Ok(Frame {

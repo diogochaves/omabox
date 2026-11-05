@@ -174,6 +174,12 @@ pub fn size_scale_in(mons: &[MonPx], g: [i64; 4], iw: i64) -> f64 {
     }
 }
 
+/// size_scale X Y W H IW: size_scale_in on the box's monitors now.
+pub fn size_scale(ctx: &Ctx, g: [i64; 4], iw: i64) -> Res<f64> {
+    let m = strip_nl(&hypr_json(ctx, &["monitors"])?);
+    Ok(size_scale_in(&mons_px(&m), g, iw))
+}
+
 /// A whole number, as a scale's product is one (hyprctl writes 4/3 as 1.333333).
 fn whole(v: f64) -> bool {
     (v - v.round()).abs() < 1e-3

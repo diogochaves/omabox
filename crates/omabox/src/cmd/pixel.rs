@@ -16,7 +16,7 @@ use crate::select::select_box;
 use crate::shell::{self, strip_nl};
 use crate::shellnote::shell_note;
 use crate::win::{box_windows, jq_r, win_desc, win_select};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 
 /// `[ A -lt B ]`.
@@ -174,6 +174,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         y1 = y1.max(pts[k + 1]);
     }
     let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+    let mut cut = None;
     let mut grim: Vec<Vec<u8>> = vec![
         b"timeout".to_vec(),
         b"10".to_vec(),
@@ -201,7 +202,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ]);
         grim.extend([b"-T".to_vec(), id.clone(), b"-g".to_vec(), g]);
     } else {
-        grim.extend([b"-g".to_vec(), format!("{x0},{y0} {bw}x{bh}").into_bytes()]);
+        // Off a whole pixel at a fractional scale: grabbed from one and cut, so a colour read is a
+        // pixel of the screen's, not grim's blend of two (#423, finding 641).
+        cut = crate::screen::px_cut(ctx, [x0, y0, bw, bh])?;
+        let r = cut.map_or([x0, y0, bw, bh], |c| c.grab);
+        grim.extend([
+            b"-g".to_vec(),
+            format!("{},{} {}x{}", r[0], r[1], r[2], r[3]).into_bytes(),
+        ]);
     }
     grim.push(b"-".to_vec());
     // (Both removed on every return, and on INT, TERM or HUP: bash's set -e exits left the image in
@@ -258,6 +266,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             cat!(" (", why, ")")
         };
         return Err(ctx.die(cat!("pixel: no frame from box '", ctx.name, "'", w)));
+    }
+    if let Some(c) = cut {
+        let Some(i) = crate::imgfind::ppm(&img) else {
+            return Err(ctx.die("pixel: grim's image is not a PPM it reads"));
+        };
+        img = i.crop(c.crop).to_ppm();
+        let put = f.rewind().and_then(|()| f.set_len(0));
+        if put.and_then(|()| f.write_all(&img)).is_err() {
+            return Err(ctx.die(cat!("pixel: cannot write ", fp)));
+        }
     }
     // grim's PPM: "P6\nW H\n255\n", then RGB. At an output scale over 1 the grab is larger than the
     // box.
