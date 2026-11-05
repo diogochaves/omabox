@@ -803,6 +803,11 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     if u.interactive {
         u.idle_s = 0;
     }
+    // A host whose Hyprland reads a .conf config (#422): refused before anything is made, as the
+    // passthrough's eval would be after the box's dir was (a dead box left).
+    if u.interactive && crate::host::host_config(ctx).is_some_and(|p| p != b"lua") {
+        return Err(ctx.die(cat!("up: ", crate::host::CONF_HOST, crate::host::NEEDS_LUA)));
+    }
     // (a bad $OMABOX_READY_TIMEOUT is said now, before any box starts)
     crate::ready::ready_timeout(ctx)?;
     if !u.interactive && !(u.ws.is_empty() && u.confirm.is_empty()) {

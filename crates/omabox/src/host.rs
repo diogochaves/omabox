@@ -108,6 +108,8 @@ pub enum Query {
     ActiveWindow,
     /// `getoption NAME`, NAME a literal of omabox's.
     Option(&'static str),
+    /// `status`: its configProvider, the config it loaded (host_config).
+    Status,
 }
 
 /// `$(host_hyprctl -j Q)`: one of the host's reads (host_hyprctl's status and stdout; QUIET as there).
@@ -117,6 +119,7 @@ pub fn host_query(ctx: &Ctx, q: Query, quiet: bool) -> (i32, Vec<u8>) {
         Query::Monitors => vec![b"monitors"],
         Query::ActiveWindow => vec![b"activewindow"],
         Query::Option(o) => vec![b"getoption", o.as_bytes()],
+        Query::Status => vec![b"status"],
     };
     let mut args: Vec<&[u8]> = vec![b"-j"];
     args.extend(what);
@@ -216,9 +219,43 @@ fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {
         }
     };
     if out != b"ok" {
+        // (a .conf host: eval's answer says so, else the config the host says it loaded; #422)
+        if no_lua(&out) || host_config(ctx).is_some_and(|p| p != b"lua") {
+            return Err(ctx.die(cat!(CONF_HOST, NEEDS_LUA)));
+        }
         return Err(ctx.die(cat!("host hyprctl eval failed: ", out)));
     }
     Ok(())
+}
+
+/// What omabox says of a host whose Hyprland reads a .conf config (#422, finding 642), then
+/// NEEDS_LUA: everything it does there is Lua sent with eval, which only a Lua config runs.
+pub const CONF_HOST: &str = "your Hyprland reads a .conf config (hyprlang): ";
+pub const NEEDS_LUA: &str = "interactive mode, peek and keys-to-box need a Hyprland with a Lua config (hyprland.lua); headless boxes work as they are";
+
+/// Whether eval's answer OUT is Hyprland's refusal on a .conf config (0.56: `eval is only supported
+/// with the lua config manager`, its whole answer, exit 0).
+fn no_lua(out: &[u8]) -> bool {
+    let w = b"only supported with the lua config manager";
+    out.windows(w.len()).any(|x| x == w)
+}
+
+/// The config the host's Hyprland loaded, as `hyprctl -j status` says it: `lua` or `hyprlang`
+/// (0.56). None when it does not say: no session, or a Hyprland without status. A read, quiet.
+pub fn host_config(ctx: &Ctx) -> Option<Vec<u8>> {
+    let (rc, out) = host_query(ctx, Query::Status, true);
+    if rc != 0 {
+        return None;
+    }
+    config_provider(&out)
+}
+
+/// status's configProvider in OUT (`hyprctl -j status`), when OUT is its object and that a word.
+fn config_provider(out: &[u8]) -> Option<Vec<u8>> {
+    let v: serde_json::Value = serde_json::from_slice(out).ok()?;
+    let p = v.get("configProvider")?.as_str()?;
+    (!p.is_empty() && p.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-'))
+        .then(|| p.as_bytes().to_vec())
 }
 
 /// lua_str V: V for a Lua string literal, or (said) nothing: no quote, backslash or newline.
@@ -704,6 +741,49 @@ mod tests {
         ] {
             assert!(Addr::new(v).is_none(), "{}", String::from_utf8_lossy(v));
         }
+    }
+
+    /// #422, finding 642: eval's answer on a .conf Hyprland 0.56 (as a nested one gave it, with and
+    /// without its newline) is the refusal; ok, a Lua error and a session not found are not. And
+    /// `hyprctl -j status`'s configProvider as two 0.56 configs gave it; an older Hyprland's answer
+    /// to a request it has not, an empty one, or anything else: none.
+    #[test]
+    fn a_conf_host_is_told_by_evals_answer_and_status() {
+        assert!(no_lua(
+            b"eval is only supported with the lua config manager"
+        ));
+        assert!(no_lua(
+            b"eval is only supported with the lua config manager\n"
+        ));
+        for a in [
+            &b"ok"[..],
+            b"",
+            b"error: omabox-missing",
+            b"error: [string \"x\"]:1: attempt to call a nil value (global 'y')",
+            b"omabox: no Hyprland session in /run/user/1000/hypr: this needs the user's desktop",
+        ] {
+            assert!(!no_lua(a), "{}", String::from_utf8_lossy(a));
+        }
+        let st = |p: &str| {
+            format!("\n{{\n    \"configProvider\": \"{p}\",\n    \"backend\": \"wayland\"\n}}\n\n")
+        };
+        assert_eq!(
+            config_provider(st("hyprlang").as_bytes()),
+            Some(b"hyprlang".to_vec())
+        );
+        assert_eq!(config_provider(st("lua").as_bytes()), Some(b"lua".to_vec()));
+        for o in [
+            &b"unknown request"[..],
+            b"",
+            b"{}",
+            b"[]",
+            b"{\"configProvider\": 1}",
+            b"{\"configProvider\": \"\"}",
+            b"{\"configProvider\": \"a b\"}",
+        ] {
+            assert_eq!(config_provider(o), None, "{}", String::from_utf8_lossy(o));
+        }
+        assert!(CONF_HOST.ends_with(": ") && NEEDS_LUA.contains("hyprland.lua"));
     }
 
     #[test]
