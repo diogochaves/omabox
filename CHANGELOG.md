@@ -3,7 +3,17 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.2.0 — 2026-11-05
+
+Omarchy 4.5.0 final, and Omarchy 4.0 deprecated: `up` and `setup` say so on a `deprecated:` line,
+and omabox 1.3 drops 4.0, not before 2026-12-02. Also omabox's test suite as a package installs it
+(`/usr/lib/omabox/test/run.sh`) runs on any machine, and a package build's `cargo test` passes in a
+container. Update.
+
+**Omarchy:** 1.2.0 supports Omarchy 4.5 and, deprecated, 4.0. 1.1.0 planned to drop 4.0 here
+([#312](https://github.com/diogochaves/omabox/issues/312)); it moved to 1.3, four weeks after 4.5
+reached Omarchy's stable channel (2026-11-04), so that users on stable have time to update
+(`omarchy update`).
 
 ### Changed
 - **A clean box no longer binds its `shell.json` over Omarchy's defaults on Omarchy 4.5**
@@ -14,15 +24,20 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`cargo test` failed in a container without user namespaces** (a package build's `check()`):
   `a_bound_home_is_used` now skips its namespace half when `unshare` is refused, as when it is
   missing.
+- **The installed test suite failed on any machine but omabox's own** ([#413](https://github.com/diogochaves/omabox/issues/413),
+  [#414](https://github.com/diogochaves/omabox/issues/414), [#415](https://github.com/diogochaves/omabox/issues/415),
+  [#416](https://github.com/diogochaves/omabox/issues/416), [#417](https://github.com/diogochaves/omabox/issues/417)):
+  a fresh session's guard mark taken for a leak, `up`'s goldens holding that machine's facts, a
+  fixture bind under /usr that `up` refuses, a wait check that compared two waits' answers, and a
+  crash check that assumed which thread a signal lands on.
 
 ### Deprecated
-- **Omarchy 4.0** ([#411](https://github.com/diogochaves/omabox/issues/411)): `up` and `setup` say
-  `omabox: deprecated: Omarchy 4.0.x: omabox 1.3 needs Omarchy 4.5 or later; ...` on stderr when the
-  box's Omarchy (yours, or `--omarchy`'s tree) is older than 4.5. Not refused under
-  `OMABOX_STRICT=1`: nothing in the call can change it. omabox 1.3 drops 4.0
-  ([#312](https://github.com/diogochaves/omabox/issues/312)), four weeks after 4.5 reaches Omarchy's
-  stable channel, not in 1.2.0 as 1.1.0 planned: Omarchy 4.5.0 came out on 2026-11-04 on the rc
-  channel only, and users on stable cannot update to it before it gets there.
+- **Omarchy 4.0** ([#411](https://github.com/diogochaves/omabox/issues/411)): `up` (once the box is
+  up) and `setup` say `omabox: deprecated: Omarchy 4.0.x: omabox 1.3 needs Omarchy 4.5 or later
+  (omarchy update brings it)` on stderr when the box's Omarchy (yours, or `--omarchy`'s tree) is older
+  than 4.5. Not refused under `OMABOX_STRICT=1`: nothing in the call can change it. omabox 1.3 drops
+  4.0 ([#312](https://github.com/diogochaves/omabox/issues/312)), not before 2026-12-02: four weeks
+  after Omarchy 4.5.0 reached the stable channel, not in 1.2.0 as 1.1.0 planned.
 
 ## 1.1.0 — 2026-10-31
 
