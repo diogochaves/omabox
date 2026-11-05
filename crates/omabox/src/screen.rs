@@ -169,7 +169,7 @@ fn holder(mons: &[MonPx], [x, y, w, h]: [i64; 4]) -> Option<&MonPx> {
 pub fn size_scale_in(mons: &[MonPx], g: [i64; 4], iw: i64) -> f64 {
     let by_size = iw as f64 / g[2].max(1) as f64;
     match holder(mons, g) {
-        Some(m) if (g[2] as f64 * m.scale + 1e-4) as i64 == iw => m.scale,
+        Some(m) if px_len(g[2], m.scale) == iw => m.scale,
         _ => by_size,
     }
 }
@@ -183,6 +183,113 @@ pub fn size_scale(ctx: &Ctx, g: [i64; 4], iw: i64) -> Res<f64> {
 /// A whole number, as a scale's product is one (hyprctl writes 4/3 as 1.333333).
 fn whole(v: f64) -> bool {
     (v - v.round()).abs() < 1e-3
+}
+
+// Layout and pixels (#425, finding 643): the one mapping shot -g's cut, find's regions (-g or the
+// screen) and pixel take, so a crop is found where it was cut and a point read where its crop has it.
+// A layout pixel L (from its monitor's edge) starts at L x S, rounded: its pixel (30 at 1.25 is 37.5,
+// 38); the layout pixel of a pixel P is the one under its centre, so of L's own pixel it is L at any
+// scale of 1 or more. A size is cut short to whole pixels, as grim's (63 at 1.25 is 78), and a size
+// in pixels is the fewest layout pixels that hold it (78 is 63, 79 is 64: a match's region covers it).
+
+/// A scale as hyprctl writes it, to the 120th it stands for (Wayland's fractional scales: 4/3 is
+/// written 1.333333, a 1920 px monitor 1440.0004 layout px at that); any other as it is.
+fn exact(s: f64) -> f64 {
+    let n = (s * 120.0).round();
+    if (s * 120.0 - n).abs() < 1e-3 && n > 0.0 {
+        n / 120.0
+    } else {
+        s
+    }
+}
+
+/// to_px L S: the pixel layout pixel L starts in, rounded.
+pub fn to_px(l: i64, s: f64) -> i64 {
+    (l as f64 * exact(s) + 0.5 + 1e-6).floor() as i64
+}
+
+/// px_len L S: L layout pixels in whole pixels, cut short (grim's sizes).
+pub fn px_len(l: i64, s: f64) -> i64 {
+    (l as f64 * exact(s) + 1e-4).floor() as i64
+}
+
+/// to_layout P S: the layout pixel under the centre of pixel P.
+pub fn to_layout(p: i64, s: f64) -> i64 {
+    ((p as f64 + 0.5) / exact(s) + 1e-6).floor() as i64
+}
+
+/// layout_len P S: the fewest layout pixels P pixels fit in.
+pub fn layout_len(p: i64, s: f64) -> i64 {
+    (p as f64 / exact(s) - 1e-4).ceil() as i64
+}
+
+/// start_px R LEN S PMAX: where a region R from its monitor's edge, LEN long, starts in pixels and
+/// its size in them, kept on a monitor PMAX pixels long (at the far edge it ends on the last one).
+fn start_px(r: i64, len: i64, s: f64, pmax: i64) -> (i64, i64) {
+    let size = px_len(len, s).clamp(1, pmax.max(1));
+    (to_px(r, s).min(pmax - size), size)
+}
+
+/// How a grab's pixels sit on the layout: pixel 0 of the image is pixel P0 from AT (a monitor's
+/// corner, or the region's own when there is no one monitor's), S pixels to a layout pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PxMap {
+    pub at: [i64; 2],
+    pub p0: [i64; 2],
+    pub s: [f64; 2],
+}
+
+impl PxMap {
+    /// A grab of region G, IW x IH, by its size: a window's own pixels, or a region over more than
+    /// one monitor (grim draws it at one scale).
+    pub fn by_size([x, y, w, h]: [i64; 4], iw: usize, ih: usize) -> PxMap {
+        PxMap {
+            at: [x, y],
+            p0: [0, 0],
+            s: [iw as f64 / w.max(1) as f64, ih as f64 / h.max(1) as f64],
+        }
+    }
+
+    /// The layout region that holds the image's X Y W H: where its first pixel is, as many layout
+    /// pixels as hold it.
+    pub fn region(&self, [x, y, w, h]: [i64; 4]) -> [i64; 4] {
+        [
+            self.at[0] + to_layout(self.p0[0] + x, self.s[0]),
+            self.at[1] + to_layout(self.p0[1] + y, self.s[1]),
+            layout_len(w, self.s[0]).max(1),
+            layout_len(h, self.s[1]).max(1),
+        ]
+    }
+
+    /// The image's pixel of layout point X Y.
+    pub fn pixel(&self, x: i64, y: i64) -> [i64; 2] {
+        [
+            to_px(x - self.at[0], self.s[0]) - self.p0[0],
+            to_px(y - self.at[1], self.s[1]) - self.p0[1],
+        ]
+    }
+}
+
+/// px_map_in MONS G IW IH: how the image of region G (IW x IH, as shot -g, find -g and pixel take
+/// it: cut by px_cut_in, or grim's own) sits on the layout: from its monitor's corner, at its scale,
+/// when one holds it; else by its size.
+pub fn px_map_in(mons: &[MonPx], g: [i64; 4], iw: usize, ih: usize) -> PxMap {
+    match holder(mons, g) {
+        Some(m) => PxMap {
+            at: [m.x, m.y],
+            p0: [
+                start_px(g[0] - m.x, g[2], m.scale, m.pw).0,
+                start_px(g[1] - m.y, g[3], m.scale, m.ph).0,
+            ],
+            s: [m.scale, m.scale],
+        },
+        None => PxMap::by_size(g, iw, ih),
+    }
+}
+
+/// The box's monitors now, as px_cut_in and px_map_in read them.
+pub fn mons(ctx: &Ctx) -> Res<Vec<MonPx>> {
+    Ok(mons_px(&strip_nl(&hypr_json(ctx, &["monitors"])?)))
 }
 
 /// px_cut_in MONS X Y W H: how the region (in the layout, inside one monitor) is taken on whole
@@ -207,29 +314,58 @@ pub fn px_cut_in(mons: &[MonPx], g: [i64; 4]) -> Option<PxCut> {
     if whole(rx as f64 * s) && whole(ry as f64 * s) {
         return None;
     }
+    let ((px, cw), (py, ch)) = (start_px(rx, w, s, m.pw), start_px(ry, h, s, m.ph));
+    Some(cut_px(m, [rx, ry], [px, py], [px + cw, py + ch]))
+}
+
+/// px_hold_in MONS X Y W H: pixel's cut of a region at a fractional scale (#425): from the pixel of
+/// its first layout pixel through that of its last (to_px), each point's own, where grim's size, cut
+/// short, can end before the last's (8..10 at 1.25 is 10-12 px, and 10 starts in 13), or a region
+/// grim takes itself (from 4 at 1.25) end so too; with how its pixels map. None as px_cut_in for a
+/// whole scale or more than one monitor.
+pub fn px_hold_in(mons: &[MonPx], g: [i64; 4]) -> Option<(PxCut, PxMap)> {
+    let [x, y, w, h] = g;
+    let m = holder(mons, g)?;
+    let s = m.scale;
+    if whole(s) {
+        return None;
+    }
+    let (rx, ry) = (x - m.x, y - m.y);
+    let a = [to_px(rx, s), to_px(ry, s)];
+    let b = [to_px(rx + w - 1, s) + 1, to_px(ry + h - 1, s) + 1];
+    let map = PxMap {
+        at: [m.x, m.y],
+        p0: a,
+        s: [s, s],
+    };
+    Some((cut_px(m, [rx, ry], a, b), map))
+}
+
+/// cut_px M R A B: grim's grab of monitor M from the whole pixel at or before layout point R (from
+/// its corner) through pixel B (not B itself), and the crop of it from pixel A: a grab starts on a
+/// multiple of the scale's denominator (4 at 1.25, from the monitor's edge) and ends on the layout
+/// pixel that holds B's start.
+fn cut_px(m: &MonPx, r: [i64; 2], a: [i64; 2], b: [i64; 2]) -> PxCut {
+    let s = m.scale;
     // The scale's denominator: layout pixels that make whole pixels (at most 120ths: Wayland's
     // fractional scales); none, and the grab starts at the monitor's edge.
     let q = (1..=120i64).find(|&k| whole(k as f64 * s));
     // One axis: grim's start and width in layout pixels, the crop's start and size in its pixels.
-    let axis = |r: i64, len: i64, pmax: i64, lmax: i64| -> (i64, i64, i64, i64) {
-        let size = ((len as f64 * s + 1e-4) as i64).clamp(1, pmax);
-        let p0 = ((r as f64 * s + 0.5) as i64).min(pmax - size);
+    let axis = |r: i64, a: i64, b: i64, pmax: i64| -> (i64, i64, i64, i64) {
         let r0 = match q {
             Some(q) => (r / q) * q,
             None => 0,
         };
-        let g0 = (r0 as f64 * s).round() as i64;
-        let end = (((p0 + size) as f64 / s) - 1e-4).ceil() as i64;
-        let gw = (end - r0).min(lmax - r0).max(1);
-        (r0, gw, p0 - g0, size)
+        let lmax = (pmax as f64 / exact(s) + 1e-4) as i64;
+        let gw = (layout_len(b, s) - r0).min(lmax - r0).max(1);
+        (r0, gw, a - to_px(r0, s), b - a)
     };
-    let lmax = |p: i64| (p as f64 / s + 1e-4) as i64;
-    let (x0, gw, cx, cw) = axis(rx, w, m.pw, lmax(m.pw));
-    let (y0, gh, cy, ch) = axis(ry, h, m.ph, lmax(m.ph));
-    Some(PxCut {
+    let (x0, gw, cx, cw) = axis(r[0], a[0], b[0], m.pw);
+    let (y0, gh, cy, ch) = axis(r[1], a[1], b[1], m.ph);
+    PxCut {
         grab: [m.x + x0, m.y + y0, gw, gh],
         crop: [cx, cy, cw, ch],
-    })
+    }
 }
 
 /// px_cut X Y W H: px_cut_in on the box's monitors now.
@@ -601,5 +737,107 @@ mod tests {
         assert_eq!(g(["100", "0", "5", "1", "1", "100", "100"]), "100,0 1x1");
         assert_eq!(img_px(b"3", b"100", b"200"), Some(7));
         assert_eq!(img_px(b"3", b"0", b"200"), None);
+    }
+
+    // #425, finding 643: one mapping, so a crop is found where it was cut, in the whole screen or a
+    // -g region around it, and pixel reads a point where its crop has it.
+    #[test]
+    fn a_crop_maps_back_to_where_it_was_cut() {
+        let mon = |scale| {
+            vec![MonPx {
+                x: 0,
+                y: 0,
+                scale,
+                pw: 1920,
+                ph: 1200,
+            }]
+        };
+        // t_find_image's in a VM at 1.25: 66,59 63x16 is 78x20 px from 83,74 (82.5 and 73.75 rounded)
+        let m = mon(1.25);
+        let screen = px_map_in(&m, [0, 0, 1536, 960], 1920, 1200);
+        assert_eq!((to_px(66, 1.25), to_px(59, 1.25)), (83, 74));
+        assert_eq!((px_len(63, 1.25), px_len(16, 1.25)), (78, 20));
+        assert_eq!(
+            screen.region([83, 74, 78, 20]),
+            [66, 59, 63, 16],
+            "not 62 wide"
+        );
+        let g = [45, 48, 105, 38];
+        let around = px_map_in(&m, g, px_len(105, 1.25) as usize, px_len(38, 1.25) as usize);
+        assert_eq!(around.p0, [56, 60], "56.25 and 60 rounded");
+        assert_eq!(
+            around.region([83 - 56, 74 - 60, 78, 20]),
+            [66, 59, 63, 16],
+            "not 67"
+        );
+        assert_eq!(
+            layout_len(79, 1.25),
+            64,
+            "a size between two: the region that holds it"
+        );
+        // Every crop at 1.25, 1.5 and 4/3 (as hyprctl writes it), anywhere, any size: found where it
+        // was cut in the screen and in any region around it, and each of its points read from the
+        // pixel its cut has there.
+        for s in [1.25, 1.5, 1.333333, 1.0, 2.0] {
+            let m = mon(s);
+            let (lw, lh) = ((1920.0 / s + 1e-3) as i64, (1200.0 / s + 1e-3) as i64);
+            let full = px_map_in(&m, [0, 0, lw, lh], 1920, 1200);
+            assert_eq!(
+                full.p0,
+                [0, 0],
+                "scale {s}: the whole screen is its monitor's"
+            );
+            for x in (7..47).chain(lw - 40..lw) {
+                for w in (1..30).filter(|w| x + w <= lw) {
+                    let cut = [x, 9, w, 5];
+                    let (p, len) = (px_map_in(&m, cut, 0, 0).p0[0], px_len(w, s));
+                    assert_eq!(
+                        p,
+                        to_px(x, s),
+                        "scale {s}: {cut:?} starts on its rounded pixel"
+                    );
+                    assert_eq!(full.region([p, 0, len, 1])[0], x, "scale {s}: {cut:?}");
+                    assert_eq!(full.region([p, 0, len, 1])[2], w, "scale {s}: {cut:?}");
+                    for gx in (x - 30).max(0)..=x {
+                        let gw = (x + w - gx + 3).min(lw - gx);
+                        let a = px_map_in(&m, [gx, 0, gw, 50], 0, 0);
+                        let r = a.region([p - a.p0[0], 0, len, 1]);
+                        assert_eq!((r[0], r[2]), (x, w), "scale {s}: {cut:?} in -g {gx} {gw}");
+                    }
+                    // (each cut inside what grim makes of its grab)
+                    let in_grab = |c: PxCut| {
+                        let (g0, cx) = (to_px(c.grab[0], s), c.crop[0]);
+                        cx >= 0 && g0 + cx + c.crop[2] <= g0 + px_len(c.grab[2], s)
+                    };
+                    if let Some(k) = px_cut_in(&m, cut) {
+                        assert!(in_grab(k), "scale {s}: {cut:?} {k:?}");
+                    }
+                    let Some((k, h)) = px_hold_in(&m, cut) else {
+                        assert!(whole(s), "scale {s}: pixel's cut of {cut:?}");
+                        continue;
+                    };
+                    assert!(in_grab(k), "scale {s}: pixel's {cut:?} {k:?}");
+                    for q in x..x + w {
+                        let i = h.pixel(q, 9)[0];
+                        assert!(
+                            (0..k.crop[2]).contains(&i),
+                            "scale {s}: {q} of {cut:?} in {k:?}"
+                        );
+                        assert_eq!(i + h.p0[0], to_px(q, s), "scale {s}: {q} of {cut:?}");
+                        assert_eq!(
+                            full.region([to_px(q, s), 0, 1, 1])[0],
+                            q,
+                            "scale {s}: back to {q}"
+                        );
+                    }
+                }
+            }
+        }
+        // Over two monitors, or a window's own pixels: by the image's size, as before at a whole scale.
+        let w = PxMap::by_size([100, 50, 300, 200], 600, 400);
+        assert_eq!(w.region([40, 20, 41, 10]), [120, 60, 21, 5]);
+        assert_eq!(w.pixel(120, 60), [40, 20]);
+        assert_eq!(exact(1.333333), 160.0 / 120.0);
+        assert_eq!(exact(1.07), 1.07, "not a 120th: as it is");
     }
 }

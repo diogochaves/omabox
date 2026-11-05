@@ -175,6 +175,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
     let mut cut = None;
+    let (mut mons, mut held) = (None, None);
     let mut grim: Vec<Vec<u8>> = vec![
         b"timeout".to_vec(),
         b"10".to_vec(),
@@ -202,9 +203,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ]);
         grim.extend([b"-T".to_vec(), id.clone(), b"-g".to_vec(), g]);
     } else {
-        // Off a whole pixel at a fractional scale: grabbed from one and cut, so a colour read is a
-        // pixel of the screen's, not grim's blend of two (#423, finding 641).
-        cut = crate::screen::px_cut(ctx, [x0, y0, bw, bh])?;
+        // At a fractional scale: grabbed from a whole pixel and cut, so a colour read is a pixel of
+        // the screen's, not grim's blend of two (#423, finding 641), through the pixel of the last
+        // point, which grim's size can stop short of (#425, finding 643).
+        let m = crate::screen::mons(ctx)?;
+        if let Some((c, map)) = crate::screen::px_hold_in(&m, [x0, y0, bw, bh]) {
+            (cut, held) = (Some(c), Some(map));
+        }
+        mons = Some(m);
         let r = cut.map_or([x0, y0, bw, bh], |c| c.grab);
         grim.extend([
             b"-g".to_vec(),
@@ -305,10 +311,28 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (Some(iw), Some(ih)) = (shell::dec(iw), shell::dec(ih)) else {
         return Err(ctx.die("pixel: grim's image is not a PPM it reads"));
     };
+    // A point on the screen is read from the pixel its monitor maps it to, as shot -g cuts and find
+    // reports (#425); a window's by its buffer's size.
+    let map = held.or_else(|| {
+        let (w, h) = (
+            usize::try_from(iw).unwrap_or(0),
+            usize::try_from(ih).unwrap_or(0),
+        );
+        let m = mons.as_ref()?;
+        Some(crate::screen::px_map_in(m, [x0, y0, bw, bh], w, h))
+    });
     let mut text = Vec::new();
     for k in (0..pts.len()).step_by(2) {
-        let px = (pts[k] - x0).saturating_mul(iw) / bw;
-        let py = (pts[k + 1] - y0).saturating_mul(ih) / bh;
+        let (px, py) = match &map {
+            Some(m) => {
+                let [px, py] = m.pixel(pts[k], pts[k + 1]);
+                (px.clamp(0, (iw - 1).max(0)), py.clamp(0, (ih - 1).max(0)))
+            }
+            None => (
+                (pts[k] - x0).saturating_mul(iw) / bw,
+                (pts[k + 1] - y0).saturating_mul(ih) / bh,
+            ),
+        };
         let at = hdr + (py * iw + px) * 3;
         let mut rgb = [0u8; 3];
         let got = u64::try_from(at)

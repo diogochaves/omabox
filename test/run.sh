@@ -18921,10 +18921,12 @@ t_find_image() {
   if [[ ! $g =~ ^([0-9]+)x([0-9]+)\+([0-9]+)\+([0-9]+)$ ]]; then
     no "the mark at scale 1.25" "no orange text ($g)"
   else
-    # (in layout px, 3 around it, its start moved left onto one that is no whole pixel: not 4k)
+    # (in layout px, 3 around it, its start moved left onto one that is no whole pixel: not 4k; x
+    # on 4k+2, 37.5 rounded up, and w on 4k+3, 78.75 px cut short to 78, where a region read back
+    # by the image's size was a pixel off whatever the glyphs, #425)
     x=$((BASH_REMATCH[3] * 4 / 5 - 3)) y=$((BASH_REMATCH[4] * 4 / 5 - 3))
     w=$((BASH_REMATCH[1] * 4 / 5 + 7)) h=$((BASH_REMATCH[2] * 4 / 5 + 7))
-    (( x % 4 )) || { x=$((x - 1)); w=$((w + 1)); }
+    local d=$(((x + 2) % 4)); x=$((x - d)) w=$((w + d + (3 - (w + d) % 4) % 4))
     (( y % 4 )) || { y=$((y - 1)); h=$((h + 1)); }
     ob shot -b "$B" -g "$x,$y ${w}x$h" -o "$o/m125.png" >/dev/null 2>&1
     check_eq "scale 1.25, shot -g off a whole pixel: its comment says 1.25" "omabox scale=1.25" "$(magick identify -format %c "$o/m125.png")"

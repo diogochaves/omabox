@@ -73,6 +73,8 @@ enum Area {
 pub struct Frame {
     img: Rgb,
     at: [i64; 4],
+    /// How its pixels sit on the layout (#425).
+    map: crate::screen::PxMap,
     window: Option<Vec<u8>>,
     /// Where the pointer is drawn, in the image's pixels: not compared.
     ptr: imgfind::Ignore,
@@ -391,9 +393,12 @@ impl Finder {
         // A region off a whole pixel at a fractional scale: grabbed from one and cut, the screen's
         // own pixels, as shot -g takes it (#423, finding 641).
         let mut cut = None;
+        let mut mons = None;
         let (at, window) = match &self.area {
             Area::Screen(g) => {
-                cut = crate::screen::px_cut(ctx, *g)?;
+                let m = crate::screen::mons(ctx)?;
+                cut = crate::screen::px_cut_in(&m, *g);
+                mons = Some(m);
                 let r = cut.map_or(*g, |c| c.grab);
                 grim.extend([
                     b"-g".to_vec(),
@@ -447,9 +452,14 @@ impl Finder {
         match img {
             Some(img) if r.rc == 0 => {
                 let ptr = ptr_region(&p, at, img.w, img.h);
+                let map = match &mons {
+                    Some(m) => crate::screen::px_map_in(m, at, img.w, img.h),
+                    None => crate::screen::PxMap::by_size(at, img.w, img.h),
+                };
                 Ok(Ok(Frame {
                     img,
                     at,
+                    map,
                     window,
                     ptr,
                 }))
@@ -499,21 +509,17 @@ impl Finder {
             flat,
             ..
         } = found;
-        let (rx, ry) = (
-            fr.img.w as f64 / fr.at[2].max(1) as f64,
-            fr.img.h as f64 / fr.at[3].max(1) as f64,
-        );
-        let (tw, th) = (self.tpl.w, self.tpl.h);
+        let (tw, th) = (self.tpl.w as i64, self.tpl.h as i64);
+        // (the layout region that holds it, as its pixels map: a crop cut at a fractional scale is
+        // found where it was cut, #425)
         let to = |h: imgfind::Hit| {
-            let (lx, ly) = (
-                (h.x as f64 / rx).round() as i64,
-                (h.y as f64 / ry).round() as i64,
-            );
+            let [x, y, w, h_] = fr.map.region([h.x as i64, h.y as i64, tw, th]);
+            let (lx, ly) = (x - fr.at[0], y - fr.at[1]);
             Match {
-                x: fr.at[0] + lx,
-                y: fr.at[1] + ly,
-                w: ((tw as f64 / rx).round() as i64).max(1),
-                h: ((th as f64 / ry).round() as i64).max(1),
+                x,
+                y,
+                w,
+                h: h_,
                 score: h.score,
                 win: fr.window.as_ref().map(|a| (a.clone(), lx, ly)),
             }
@@ -784,6 +790,7 @@ mod tests {
             score(400).expect("its look-alike"),
         );
         let fr = Frame {
+            map: crate::screen::PxMap::by_size([0, 0, 600, 300], img.w, img.h),
             img,
             at: [0, 0, 600, 300],
             window: None,
