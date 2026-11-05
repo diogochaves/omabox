@@ -7593,10 +7593,13 @@ t_helpers_replaced() {
   local B=$P-hr B2=$P-hr2 fr=$TMP/$P-hroot e out
   rm -rf "$fr"; mkdir -p "$fr/build"
   for e in "$ROOT"/* "$ROOT"/.git; do
+    [ -e "$e" ] || continue
     case ${e##*/} in build | tools) ;; *) ln -s "$e" "$fr/${e##*/}" ;; esac
   done
-  cp -a "$ROOT/tools" "$fr/tools"
-  cp "$ROOT/build/omabox" "$fr/build/omabox"
+  # (writable, an install's are not; and the binary the suite runs, a checkout's build/omabox or an
+  # install's bin/omabox, which has no build/: #426)
+  cp -a "$ROOT/tools" "$fr/tools" && chmod -R u+w "$fr/tools"
+  cp "$(readlink -f "$CLI")" "$fr/build/omabox"
   [ ! -e "$ROOT/build/prefix" ] || ln -s "$ROOT/build/prefix" "$fr/build/prefix"
   hr() { "$fr/build/omabox" "$@"; }
   UP_OUT=$(hr up "$B" --no-shell --net isolated 2>&1) || { no "up" "$UP_OUT"; rm -rf "$fr"; return; }
