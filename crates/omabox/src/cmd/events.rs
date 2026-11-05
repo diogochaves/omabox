@@ -321,6 +321,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         re: Vec::new(),
         icase: false,
     };
+    // Its log is the events helper's (#421): one replaced on the host since up is said.
+    if rd.live {
+        crate::helpers::warn_stale(ctx);
+    }
     if !rd.there(ctx, Kind::Box, EVENTS_LOG)? {
         return Err(ctx.die(cat!(
             "box '", ctx.name,

@@ -18,6 +18,7 @@ mod gpu;
 mod grid;
 mod guard;
 mod help;
+mod helpers;
 mod homeuse;
 mod host;
 mod hypr;

@@ -251,6 +251,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     // session is a person's, on purpose: never an orphan.
     let starter = crate::upspec::box_starter().unwrap_or_default();
     let at_term = crate::exec::isatty(0) && crate::select::agent_var().is_none() && !in_jail();
+    let helpers = helper_binds(u.polkit);
     let bj = box_json(
         ctx,
         &u,
@@ -261,6 +262,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         at_term,
         &desk_files,
         &desk_fonts,
+        &helpers,
     );
     if !write(&cat!(d, "/box.json"), &bj) {
         return Err(ctx.die(cat!("up: could not write ", d, "/box.json")));
@@ -294,6 +296,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         wayland_screen,
         &etc,
         &desk_fonts,
+        &helpers,
     )?;
     let script = launch_script(ctx, &u, &args, &protect)?;
     if !write(&cat!(d, "/launch.sh"), &script) {
@@ -737,6 +740,7 @@ fn box_json(
     at_term: bool,
     desk_files: &[u8],
     desk_fonts: &[(Vec<u8>, Vec<u8>)],
+    helpers: &[HelperBind],
 ) -> Vec<u8> {
     let s = |v: &[u8]| Value::String(String::from_utf8_lossy(v).into_owned());
     let arr = |v: &[Vec<u8>]| Value::Array(v.iter().map(|x| s(x)).collect());
@@ -813,6 +817,10 @@ fn box_json(
         })
         .collect();
     o.insert("mounts".into(), Value::Array(mounts));
+    // The helpers bound one file each, with their sources' device and inode (#421): a command that
+    // runs one tells it replaced on the host since, which the box keeps as it was.
+    let binds: Vec<(&str, Vec<u8>)> = helpers.iter().map(|h| (h.name, h.src.clone())).collect();
+    o.insert("helpers".into(), crate::helpers::record(&binds));
     o.insert("wayland_screen".into(), Value::Bool(wayland_screen));
     o.insert("xwayland".into(), Value::Bool(u.xwayland));
     o.insert("autoreload".into(), Value::Bool(u.autoreload));
@@ -1101,6 +1109,53 @@ fn hostname() -> Vec<u8> {
     }
 }
 
+/// One in-box helper `up` binds as a single file: its name, its host file, where the box has it.
+pub(crate) struct HelperBind {
+    pub name: &'static str,
+    pub src: Vec<u8>,
+    pub dest: &'static str,
+}
+
+/// The helpers a box gets, read once a box: bwrap_args binds them and box.json records them (#421),
+/// so the two never disagree on one built in between.
+pub(crate) fn helper_binds(polkit: bool) -> Vec<HelperBind> {
+    let mut v: Vec<HelperBind> = [
+        ("keyboard", BOX_KEYBOARD),
+        ("pointer", BOX_POINTER),
+        ("still", BOX_STILL),
+        ("events", BOX_EVENTS),
+    ]
+    .into_iter()
+    .map(|(name, dest)| HelperBind {
+        name,
+        src: paths::tool(name),
+        dest,
+    })
+    .collect();
+    // shot --burst's one capture client (#196), `tree`'s reader (#178): when built.
+    for (name, dest) in [("burst", BOX_BURST), ("tree", BOX_TREE)] {
+        let src = paths::tool(name);
+        if crate::exec::executable(&src) {
+            v.push(HelperBind { name, src, dest });
+        }
+    }
+    // `up --polkit` (#258, finding 627): the stand-in authority share/session.sh starts on the box's
+    // own system bus, and the shim that gives the box's processes a session.
+    if polkit {
+        v.push(HelperBind {
+            name: "polkit",
+            src: paths::tool("polkit"),
+            dest: BOX_POLKIT,
+        });
+        v.push(HelperBind {
+            name: "polkit-session",
+            src: paths::polkit_session(),
+            dest: BOX_POLKIT_SESSION,
+        });
+    }
+    v
+}
+
 /// cmd_up's `args`: the bwrap words after `--unshare-user --uid --gid --die-with-parent`, through
 /// Bwrap's checked methods (S1, S3, S4), in bash's order; ends with the session's command.
 #[allow(clippy::too_many_arguments)]
@@ -1114,6 +1169,7 @@ fn bwrap_args(
     wayland_screen: bool,
     etc: &Etc,
     desk_fonts: &[(Vec<u8>, Vec<u8>)],
+    helpers: &[HelperBind],
 ) -> Res<Vec<Vec<u8>>> {
     let d = &ctx.d;
     let run = cat!("/run/user/", procfs::uid().to_string());
@@ -1194,29 +1250,9 @@ fn bwrap_args(
     b.own_rw(&home_dir, b"/home/sbx").map_err(refused)?;
     b.own_ro(&cat!(root, "/share"), b"/opt/omabox/share")
         .map_err(refused)?;
-    for (tool, dest) in [
-        ("keyboard", BOX_KEYBOARD),
-        ("pointer", BOX_POINTER),
-        ("still", BOX_STILL),
-        ("events", BOX_EVENTS),
-    ] {
-        b.own_ro(&paths::tool(tool), dest.as_bytes())
-            .map_err(refused)?;
-    }
-    // shot --burst's one capture client (#196), `tree`'s reader (#178): when built.
-    for (tool, dest) in [("burst", BOX_BURST), ("tree", BOX_TREE)] {
-        let t = paths::tool(tool);
-        if crate::exec::executable(&t) {
-            b.own_ro(&t, dest.as_bytes()).map_err(refused)?;
-        }
-    }
-    // `up --polkit` (#258, finding 627): the stand-in authority share/session.sh starts on the box's
-    // own system bus, and the shim that gives the box's processes a session.
-    if u.polkit {
-        b.own_ro(&paths::tool("polkit"), BOX_POLKIT.as_bytes())
-            .map_err(refused)?;
-        b.own_ro(&paths::polkit_session(), BOX_POLKIT_SESSION.as_bytes())
-            .map_err(refused)?;
+    // The helpers, one file each (#421: box.json's `helpers` records the same list).
+    for h in helpers {
+        b.own_ro(&h.src, h.dest.as_bytes()).map_err(refused)?;
     }
     // A private aquamarine (finding 125), which share/start-hyprland.sh puts first.
     if !u.aq.lib.is_empty() {
@@ -2398,6 +2434,7 @@ mod tests {
                         false,
                         &etc,
                         &fonts,
+                        &helper_binds(u.polkit),
                     )
                 });
                 match r {

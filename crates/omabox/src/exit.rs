@@ -36,6 +36,11 @@ pub fn muted<T>(f: impl FnOnce() -> T) -> T {
     r
 }
 
+/// Whether this thread's words are held back (inside muted).
+pub fn is_muted() -> bool {
+    MUTE.with(std::cell::Cell::get)
+}
+
 /// `say`: one line on stderr.
 pub fn say(m: impl AsRef<[u8]>) {
     if MUTE.with(std::cell::Cell::get) {

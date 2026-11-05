@@ -658,6 +658,10 @@ fn on_box_with(
             ),
         );
     };
+    // One of the helpers up bound: whether the box still has the host's (#421).
+    if crate::helpers::runs_helper(args) {
+        crate::helpers::warn_stale(ctx);
+    }
     let lang = shell::env("LANG")
         .filter(|l| !l.is_empty())
         .unwrap_or(b"C.UTF-8".to_vec());
