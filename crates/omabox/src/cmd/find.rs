@@ -31,6 +31,10 @@ const MAX_FILE: u64 = 32 << 20;
 pub const SIM: f64 = 0.95;
 pub const SCALED_SIM: f64 = 0.8;
 
+/// A scaled template's one match with another place (apart from it) scoring within NEAR of it is a
+/// near tie: look-alikes (one letter or one stroke apart) score that close once softened (#267).
+pub const NEAR: f64 = 0.05;
+
 /// What to look for and where: the template's file (a jailed caller's /dev/fd/N), the score a match
 /// needs (--similar; None: SIM, SCALED_SIM for a scaled template), a region of the screen or a window.
 #[derive(Clone, Default)]
@@ -108,12 +112,14 @@ impl Match {
     }
 }
 
-/// The matches of one frame, the best score seen (with where), whether there were more than kept.
+/// The matches of one frame, the best score seen (with where), whether there were more than kept;
+/// TIE: the place a scaled template's one match is in a near tie with (NEAR).
 pub struct Seen {
     pub hits: Vec<Match>,
     pub best: Option<Match>,
     pub more: bool,
     pub flat: bool,
+    pub tie: Option<Match>,
 }
 
 /// A template read and scaled for its area: what grab and look need.
@@ -467,12 +473,19 @@ impl Finder {
 
     /// The matches in FRAME.
     pub fn look(&self, fr: &Frame) -> Seen {
+        let found = imgfind::search(&fr.img, &self.tpl, self.sim, fr.ptr, self.soften);
+        let tie = if self.soften {
+            found.near_tie(NEAR)
+        } else {
+            None
+        };
         let Found {
             hits,
             best,
             more,
             flat,
-        } = imgfind::search(&fr.img, &self.tpl, self.sim, fr.ptr, self.soften);
+            ..
+        } = found;
         let (rx, ry) = (
             fr.img.w as f64 / fr.at[2].max(1) as f64,
             fr.img.h as f64 / fr.at[3].max(1) as f64,
@@ -497,6 +510,7 @@ impl Finder {
             best: best.map(to),
             more,
             flat,
+            tie: tie.map(to),
         }
     }
 
@@ -538,13 +552,40 @@ pub fn seen_words(s: &Seen) -> Vec<u8> {
         0 => s.best.as_ref().map_or_else(Vec::new, |b| {
             format!("best {:.3} at {},{} {}x{}", b.score, b.x, b.y, b.w, b.h).into_bytes()
         }),
-        1 => format!("at {}", one(&s.hits[0])).into_bytes(),
+        1 => match &s.tie {
+            Some(t) => format!("at {}, a near tie with {}", one(&s.hits[0]), one(t)).into_bytes(),
+            None => format!("at {}", one(&s.hits[0])).into_bytes(),
+        },
         n => {
             let l: Vec<String> = s.hits.iter().take(3).map(one).collect();
             let more = if n > 3 { "; ..." } else { "" };
             format!("{n} matches: {}{more}", l.join("; ")).into_bytes()
         }
     }
+}
+
+/// A near tie, as said: "a near tie: X,Y WxH scores S, within 0.05 of the match (S1) as it is
+/// scaled: a crop shot in this box ..., or --similar S2 takes both"; None when there is none.
+pub fn tie_words(s: &Seen) -> Option<Vec<u8>> {
+    let (t, m) = (s.tie.as_ref()?, s.hits.first()?);
+    // (a --similar that takes both: the runner-up's score, down to the hundredth)
+    let both = ((t.score * 100.0).floor() / 100.0).max(0.01);
+    Some(
+        format!(
+            "a near tie: {},{} {}x{} scores {:.3}, within {} of the match ({:.3}) as it is scaled: a \
+             crop shot in this box (omabox shot -g) matches at its own scale, or --similar {} takes \
+             both (--index N picks one)",
+            t.x,
+            t.y,
+            t.w,
+            t.h,
+            t.score,
+            fmt_scale(NEAR),
+            m.score,
+            fmt_scale(both)
+        )
+        .into_bytes(),
+    )
 }
 
 /// The lines of several matches, numbered for --index, at most CAP (and how many more).
@@ -647,8 +688,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if json {
         let ms: Vec<String> = s.hits.iter().map(match_json).collect();
         let best = s.best.as_ref().map_or("null".to_string(), match_json);
+        let tie = s.tie.as_ref().map_or("null".to_string(), match_json);
         out(format!(
-            "{{\"image\":{},\"similar\":{},\"matches\":[{}],\"more\":{},\"best\":{best}}}\n",
+            "{{\"image\":{},\"similar\":{},\"matches\":[{}],\"more\":{},\"best\":{best},\"near_tie\":{tie}}}\n",
             crate::json::quote(&String::from_utf8_lossy(&f.name)),
             fmt_scale(f.sim),
             ms.join(","),
@@ -670,6 +712,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         t.extend_from_slice(&cat!(m.line(), "\n"));
     }
     out(t)?;
+    if let Some(w) = tie_words(&s) {
+        say(cat!("find: ", w, ": click --image refuses it"));
+    }
     let n = s.hits.len();
     if n > 1 {
         let many = if s.more { "more than " } else { "" };
@@ -689,4 +734,66 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::imgfind::tests::{card, icon, paste, resized, small_dot};
+
+    fn finder(tpl: Tpl, sim: f64, soften: bool) -> Finder {
+        Finder {
+            area: Area::Screen([0, 0, 600, 300]),
+            tpl,
+            name: b"t.png".to_vec(),
+            sim,
+            note: Vec::new(),
+            soften,
+        }
+    }
+
+    #[test]
+    fn a_scaled_templates_near_tie_is_said_a_same_scale_ones_is_not() {
+        // (#267) an icon and its look-alike apart; the icon's template drawn at 1.5, scaled to the box
+        let mut img = card(600, 300);
+        paste(&mut img, &icon(32, 32), 100, 120);
+        paste(&mut img, &small_dot(32, 32), 400, 120);
+        let t = resized(&icon(48, 48), 32, 32);
+        let both = imgfind::search(&img, &t, 0.3, None, true);
+        let score = |x: usize| {
+            both.hits
+                .iter()
+                .find(|h| h.x.abs_diff(x) < 3 && h.y.abs_diff(120) < 3)
+                .map(|h| h.score)
+        };
+        let (a, b) = (
+            score(100).expect("the icon"),
+            score(400).expect("its look-alike"),
+        );
+        let fr = Frame {
+            img,
+            at: [0, 0, 600, 300],
+            window: None,
+            ptr: None,
+        };
+        let s = finder(t.clone(), (a + b) / 2.0, true).look(&fr);
+        assert_eq!(s.hits.len(), 1);
+        let tie = s.tie.as_ref().expect("a near tie");
+        assert_eq!((tie.x, tie.y), (400, 120));
+        let w = String::from_utf8(seen_words(&s)).unwrap_or_default();
+        assert!(
+            w.starts_with("at 100,120 32x32 (") && w.contains(", a near tie with 400,120 32x32 ("),
+            "{w}"
+        );
+        let w = String::from_utf8(tie_words(&s).unwrap_or_default()).unwrap_or_default();
+        let lower = fmt_scale((b * 100.0).floor() / 100.0);
+        assert!(
+            w.starts_with("a near tie: 400,120 32x32 scores ")
+                && w.contains(&format!("--similar {lower} takes both")),
+            "{w}"
+        );
+        // the same template not scaled (a crop of this box): today's one match, no tie said
+        let s = finder(t, (a + b) / 2.0, false).look(&fr);
+        assert!(s.tie.is_none() && tie_words(&s).is_none());
+    }
 }

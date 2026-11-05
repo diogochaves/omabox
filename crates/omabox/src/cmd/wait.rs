@@ -79,7 +79,12 @@ impl Probe<'_> {
                     },
                 };
                 let s = f.look(&fr);
-                let yes = s.hits.is_empty() == *gone;
+                // (a near tie is not the image seen: --gone is still a frame with no match at all)
+                let yes = if *gone {
+                    s.hits.is_empty()
+                } else {
+                    !s.hits.is_empty() && s.tie.is_none()
+                };
                 (
                     0,
                     cat!(if yes { "yes " } else { "no " }, find::seen_words(&s)),

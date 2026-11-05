@@ -147,7 +147,8 @@ fn found(
 
 /// --image FILE: the middle of the one match of SPEC (--index N: the Nth in reading order), moved by
 /// OFFSET; in the window SELS picks, to the screen as --window maps X Y; its line said. None is exit 1,
-/// several without --index exit 2 with their lines, numbered (as --find's).
+/// several without --index exit 2 with their lines, numbered (as --find's), a near tie (a scaled
+/// template's one match with a look-alike within find::NEAR of it) exit 2 with both.
 fn found_image(
     ctx: &mut Ctx,
     st: &mut Settle,
@@ -165,6 +166,18 @@ fn found_image(
     if s.hits.is_empty() {
         say(cat!("click: ", f.none_words(&s)));
         return Err(Exit(1));
+    }
+    // (a near tie is refused with --index too: the place it ties with is no match to pick)
+    if let Some(w) = find::tie_words(&s) {
+        say(cat!(
+            "click: ",
+            f.name,
+            " matched at ",
+            s.hits[0].line(),
+            ", but ",
+            w
+        ));
+        return Err(Exit(2));
     }
     let n = s.hits.len();
     let m = match index {

@@ -652,11 +652,14 @@ best score seen and where. Several: all listed (20, --all every one) and said on
 taken for you. --similar (0.95) is the score a match needs: normalised correlation of the colours,
 less for another contrast or tone (a grey switch is not its blue self); an image of one colour by its
 difference, transparent pixels not compared. A box drawn at another scale than FILE's resizes it and
-says so, then needs 0.8 unless --similar says. -g looks in a region, --window SEL in that window's own
-pixels (covered or not). `click --image FILE` clicks the middle of the one match (--offset DX,DY
-beside it: a label's field), several exit 2 numbered for --index N; `wait image FILE [--gone]` polls
-for it (0, 124, 1 as the other waits). Each takes a frame and searches it in about 50-100 ms. A
-jailed agent's FILE is read by its own omabox.
+says so, then needs 0.8 unless --similar says; its one match with another place within 0.05 of it
+is a near tie (a look-alike scores that close once scaled), said on stderr and as --json's near_tie.
+-g looks in a region, --window SEL in that window's own pixels (covered or not). `click --image FILE`
+clicks the middle of the one match (--offset DX,DY beside it: a label's field), several exit 2
+numbered for --index N, a near tie exit 2 with both (a crop shot in this box tells them apart);
+`wait image FILE [--gone]` polls for it, a near tie not counted as there (0, 124, 1 as the other
+waits). Each takes a frame and searches it in about 50-100 ms. A jailed agent's FILE is read by its
+own omabox.
 @ check
 `check` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
 is a script of yours that sets the box up, drives it with omabox commands and calls `omabox check

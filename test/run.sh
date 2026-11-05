@@ -18754,6 +18754,33 @@ t_find_image() {
   out=$(ob find -b "$B" --image "$o/mark.png" 2>&1); rc=$?
   check_match "at scale 2: the crop scaled to the box, said, and found" \
     "^0 omabox: find: .*mark.png was shot at scale 1, the box draws at 2: matched at $((w * 2))x$((h * 2)), --similar 0.8 as it is scaled.[0-9]+,[0-9]+ ${w}x$h 0\.[89]" "$rc $out"
+  # A look-alike below it (#267, finding 635): softened, "MARK ore" scores close behind "MARK one". A
+  # --similar between the two leaves one match and the other its near tie: find says it, click
+  # refuses it (exit 2, both named), wait image is not satisfied by it; under both, two matches.
+  ob stop -b "$B" --all >/dev/null 2>&1
+  ob run -b "$B" -d -q --wait -- foot -T M4 -o colors-dark.background=101418 -o colors-dark.regular3=ff8800 sh -c "printf '\n\n      \033[33mMARK one\033[0m\n\n\n      \033[33mMARK ore\033[0m\n\n'; sleep 600" >/dev/null 2>&1
+  ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1
+  ob wait -b "$B" still >/dev/null
+  local a b ay by mid lo
+  read -r a ay b by < <(ob find -b "$B" --image "$o/mark.png" --similar 0.3 --json 2>/dev/null |
+    jq -r '[.matches[]] | sort_by(-.score) | "\(.[0].score) \(.[0].y) \(.[1].score) \(.[1].y)"')
+  if [[ ! $b =~ ^[0-9.]+$ ]] || (( ay >= by )) || awk -v a="$a" -v b="$b" 'BEGIN { exit !(a - b >= 0.05) }'; then
+    skip "a near tie in a box" "the look-alike is not within 0.05 behind it here: $a at y $ay, $b at y $by"
+  else
+    mid=$(awk -v a="$a" -v b="$b" 'BEGIN { printf "%.4f", (a + b) / 2 }')
+    lo=$(awk -v b="$b" 'BEGIN { s = sprintf("%.2f", int(b * 100) / 100); sub(/0+$/, "", s); sub(/\.$/, "", s); print s }')
+    out=$(ob find -b "$B" --image "$o/mark.png" --similar "$mid" 2>&1); rc=$?
+    check_match "a near tie: find lists the one match, exit 0, the tie said with the --similar that takes both" \
+      "^0 .*[0-9]+,$ay ${w}x$h 0\.[0-9]+.*omabox: find: a near tie: [0-9]+,$by ${w}x$h scores 0\.[0-9]+, within 0.05 of the match \(0\.[0-9]+\) as it is scaled: .* --similar $lo takes both .*: click --image refuses it" "$rc $out"
+    check_eq "...--json: near_tie, the look-alike" "1 $by" "$(ob find -b "$B" --image "$o/mark.png" --similar "$mid" --json 2>/dev/null | jq -r '"\(.matches | length) \(.near_tie.y)"')"
+    out=$(ob click -b "$B" --image "$o/mark.png" --similar "$mid" 2>&1); rc=$?
+    check_match "...click --image: exit 2, both named" "^2 .*omabox: click: .*mark.png matched at [0-9]+,$ay ${w}x$h 0\.[0-9]+, but a near tie: [0-9]+,$by " "$rc $out"
+    check_eq "...--index 1 too" 2 "$(ob click -b "$B" --image "$o/mark.png" --similar "$mid" --index 1 >/dev/null 2>&1; echo $?)"
+    out=$(ob wait -b "$B" --timeout 1s image "$o/mark.png" --similar "$mid" 2>&1); rc=$?
+    check_match "...wait image: not satisfied by it, 124, the tie said" "^124 .*unsatisfied: no image .*mark.png after .* \(at [0-9]+,$ay ${w}x$h \(0\.[0-9]+\), a near tie with [0-9]+,$by " "$rc $out"
+    out=$(ob find -b "$B" --image "$o/mark.png" --similar "$lo" 2>/dev/null); rc=$?
+    check_eq "...--similar $lo (as said): both matches" "0 2" "$rc $(wc -l <<<"$out")"
+  fi
   ob down "$B" >/dev/null 2>&1
 }
 

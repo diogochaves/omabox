@@ -6,14 +6,19 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ## Unreleased
 
 ### Changed
-
-- A headless box's GPU, with `gpu auto`, is the first render node that renders on the GPU: a VM's
-  virtio-gpu without virgl comes after any other, and when it is the only one `up` refuses it
-  before starting a box that would die there (`OMABOX_RENDER_NODE` forces it) (#396).
-- `up --stock --from SAVE` says under its stock line that the save's HOME stays as saved; the
-  `--stock` help says your git name and email stay (#265).
-- `up` no longer orders a `down` marker of the old pre-1.0 form (its start alone) by the file's
-  time: in a tie it counts as a down that came, so the `up` is cancelled (#404).
+- **A scaled image's near tie is refused** ([#267](https://github.com/diogochaves/omabox/issues/267)):
+  when a template shot at another scale has one match and another place scores within 0.05 of it
+  (a look-alike: "MARK ore" for "MARK one"), `click --image` refuses it (exit 2, both places named,
+  `--index` too), `find --image` lists the match and says the tie on stderr and in `--json`'s
+  `near_tie`, and `wait image` is not satisfied by it. Measured across scales 1, 1.25, 1.5 and 2,
+  a scaled template's score does not tell the image from a look-alike, so the 0.8 it needs stays.
+- **`gpu auto` takes a render node that renders** ([#396](https://github.com/diogochaves/omabox/issues/396)): a VM's virtio-gpu without virgl
+  comes after any other, and when it is the only one `up` refuses it before starting a box that
+  would die there (`OMABOX_RENDER_NODE` or the `gpu` setting naming it still forces it).
+- **`up --stock --from SAVE` says the save's HOME stays** ([#265](https://github.com/diogochaves/omabox/issues/265)), under its stock line; the
+  `--stock` help says your git name and email stay.
+- **A pre-1.0 `down` marker is no longer ordered by its file's time** ([#404](https://github.com/diogochaves/omabox/issues/404)): one of its start
+  alone, in a tie, counts as a down that came, so the `up` is cancelled.
 
 ## 1.2.0 — 2026-11-05
 

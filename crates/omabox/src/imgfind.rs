@@ -52,9 +52,23 @@ pub struct Hit {
 pub struct Found {
     pub hits: Vec<Hit>,
     pub best: Option<Hit>,
+    /// The best place seen apart from the best (not overlapping it), passing or not: what a near tie
+    /// is told by. None for a template of one colour (only its matches are kept).
+    pub runner: Option<Hit>,
     pub more: bool,
     /// The template is of one colour: scored by difference.
     pub flat: bool,
+}
+
+impl Found {
+    /// The runner-up, when the one match has it within MARGIN of its score: two places that look
+    /// alike to the search, one taken only by a hair (#267).
+    pub fn near_tie(&self, margin: f64) -> Option<Hit> {
+        let [m] = self.hits.as_slice() else {
+            return None;
+        };
+        self.runner.filter(|r| r.score >= m.score - margin)
+    }
 }
 
 /// At most this many matches are kept (a template of one colour on a plain background matches
@@ -854,28 +868,35 @@ pub fn search(img: &Rgb, tpl: &Tpl, sim: f64, ign: Ignore, soften: bool) -> Foun
         next.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
         cands = next;
     }
-    let mut scored = Vec::new();
+    let mut all = Vec::new();
     for (x, y, _) in cands {
         let score = score_at(img, tpl, &col, x, y, ign);
         let h = Hit { x, y, score };
         if f.best.is_none_or(|b| score > b.score) {
             f.best = Some(h);
         }
-        if score >= sim {
-            scored.push(h);
-        }
+        all.push(h);
     }
+    // (apart: as keep_apart tells an overlap, corners half the template or more apart one way)
+    let (hw, hh) = (tpl.w.div_ceil(2).max(1), tpl.h.div_ceil(2).max(1));
+    f.runner = f.best.and_then(|b| {
+        all.iter()
+            .filter(|h| h.x.abs_diff(b.x) >= hw || h.y.abs_diff(b.y) >= hh)
+            .copied()
+            .max_by(|a, c| a.score.total_cmp(&c.score))
+    });
+    let scored: Vec<Hit> = all.into_iter().filter(|h| h.score >= sim).collect();
     (f.hits, f.more) = keep_apart(scored, tpl.w, tpl.h);
     reading_order(&mut f.hits, tpl.h);
     f
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A busy test card: soft gradients, a grid of small marks of several colours, text-like bars.
-    fn card(w: usize, h: usize) -> Rgb {
+    pub(crate) fn card(w: usize, h: usize) -> Rgb {
         let mut px = vec![0u8; w * h * 3];
         for y in 0..h {
             for x in 0..w {
@@ -909,7 +930,7 @@ mod tests {
         }
     }
 
-    fn paste(img: &mut Rgb, t: &Tpl, x: usize, y: usize) {
+    pub(crate) fn paste(img: &mut Rgb, t: &Tpl, x: usize, y: usize) {
         for yy in 0..t.h {
             for xx in 0..t.w {
                 if t.opaque.as_ref().is_some_and(|m| !m[yy * t.w + xx]) {
@@ -923,7 +944,7 @@ mod tests {
     }
 
     /// A template drawn in nowhere else: a ring with a dot, in orange.
-    fn icon(w: usize, h: usize) -> Tpl {
+    pub(crate) fn icon(w: usize, h: usize) -> Tpl {
         let mut px = vec![0u8; w * h * 3];
         let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
         for y in 0..h {
@@ -1105,6 +1126,83 @@ mod tests {
                 assert!(a.x.abs_diff(b.x) >= 2 || a.y.abs_diff(b.y) >= 2);
             }
         }
+    }
+
+    /// T resampled to W x H (bilinear, at each pixel's middle): a template drawn at another scale.
+    pub(crate) fn resized(t: &Tpl, w: usize, h: usize) -> Tpl {
+        let mut px = vec![0u8; w * h * 3];
+        let (kx, ky) = (t.w as f64 / w as f64, t.h as f64 / h as f64);
+        for y in 0..h {
+            for x in 0..w {
+                let sx = ((x as f64 + 0.5) * kx - 0.5).clamp(0.0, (t.w - 1) as f64);
+                let sy = ((y as f64 + 0.5) * ky - 0.5).clamp(0.0, (t.h - 1) as f64);
+                let (x0, y0) = (sx as usize, sy as usize);
+                let (x1, y1) = ((x0 + 1).min(t.w - 1), (y0 + 1).min(t.h - 1));
+                let (fx, fy) = (sx - x0 as f64, sy - y0 as f64);
+                for c in 0..3 {
+                    let p = |xx: usize, yy: usize| f64::from(t.px[(yy * t.w + xx) * 3 + c]);
+                    let v = p(x0, y0) * (1.0 - fx) * (1.0 - fy)
+                        + p(x1, y0) * fx * (1.0 - fy)
+                        + p(x0, y1) * (1.0 - fx) * fy
+                        + p(x1, y1) * fx * fy;
+                    px[(y * w + x) * 3 + c] = v.round() as u8;
+                }
+            }
+        }
+        Tpl {
+            w,
+            h,
+            px,
+            opaque: None,
+        }
+    }
+
+    /// The icon with a smaller dot: a look-alike, one stroke apart.
+    pub(crate) fn small_dot(w: usize, h: usize) -> Tpl {
+        let mut t = icon(w, h);
+        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+        for y in 0..h {
+            for x in 0..w {
+                let d = ((x as f64 + 0.5 - cx).powi(2) + (y as f64 + 0.5 - cy).powi(2)).sqrt();
+                if d >= cx * 0.12 && d < cx * 0.2 {
+                    t.px[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[12, 14, 18]);
+                }
+            }
+        }
+        t
+    }
+
+    #[test]
+    fn a_look_alike_close_behind_the_one_match_is_a_near_tie() {
+        // (#267) the icon and its look-alike apart, the icon's template drawn at 1.5 and scaled to
+        // the box: softened, the look-alike scores within a hair of it
+        let mut img = card(600, 300);
+        paste(&mut img, &icon(32, 32), 100, 120);
+        paste(&mut img, &small_dot(32, 32), 400, 120);
+        let t = resized(&icon(48, 48), 32, 32);
+        let both = search(&img, &t, 0.3, None, true);
+        let at = |x: usize| {
+            both.hits
+                .iter()
+                .find(|h| h.x.abs_diff(x) < 3 && h.y.abs_diff(120) < 3)
+        };
+        let (a, b) = (at(100).expect("the icon"), at(400).expect("its look-alike"));
+        assert!(a.score > b.score && a.score - b.score < 0.05, "{a:?} {b:?}");
+        // a score between them: the icon alone matches, the look-alike its near tie
+        let f = search(&img, &t, (a.score + b.score) / 2.0, None, true);
+        assert_eq!(f.hits.len(), 1, "{:?}", f.hits);
+        assert_eq!((f.hits[0].x, f.hits[0].y), (a.x, a.y));
+        let tie = f.near_tie(0.05).expect("a near tie");
+        assert_eq!((tie.x, tie.y), (b.x, b.y));
+        // no near tie when the runner-up is further behind, or when both match (two matches)
+        assert!(f.near_tie((a.score - b.score) / 2.0).is_none());
+        assert!(both.near_tie(0.05).is_none());
+        // nothing like it apart: the runner-up is far behind
+        let mut lone = card(600, 300);
+        paste(&mut lone, &icon(32, 32), 100, 120);
+        let f = search(&lone, &t, (a.score + b.score) / 2.0, None, true);
+        assert_eq!(f.hits.len(), 1, "{:?}", f.hits);
+        assert!(f.near_tie(0.05).is_none(), "{:?}", f.runner);
     }
 
     #[test]
