@@ -393,6 +393,33 @@ fn prog_check(
     check(id, St::Ok, shown, Vec::new())
 }
 
+/// The config your desktop's Hyprland loaded, as it says it (`hyprctl -j status`, a read: host_config;
+/// PROVIDER). Lua: ok. Another (hyprlang, a .conf): a warning, as everything omabox does there is Lua
+/// sent with eval (#422, finding 642). No check when it does not say: no session here (a tty, ssh),
+/// or a Hyprland without status.
+fn host_config_check(provider: Option<&[u8]>) -> Option<Check> {
+    let p = s(provider?);
+    if p == "lua" {
+        return Some(check(
+            "host-config",
+            St::Ok,
+            "your Hyprland reads a Lua config: interactive mode, peek and keys-to-box can act there",
+            Vec::new(),
+        ));
+    }
+    let what = if p == "hyprlang" {
+        crate::host::CONF_HOST.trim_end_matches(": ").to_string()
+    } else {
+        format!("your Hyprland reads a config of {p}, not Lua")
+    };
+    Some(check(
+        "host-config",
+        St::Warn,
+        format!("{what}: {}", crate::host::NEEDS_LUA),
+        vec!["move your Hyprland config to Lua (~/.config/hypr/hyprland.lua) for those".into()],
+    ))
+}
+
 /// Hyprland 0.56 or later: its config is Lua (finding 8), which a box's config is.
 fn hyprland_check(root: &[u8], fam: Option<Family>) -> Check {
     let mut c = prog_check(
@@ -1033,6 +1060,7 @@ fn gather(ctx: &Ctx, os: &OsRelease) -> Vec<Check> {
         v.push(theme_check(&home));
     }
     v.push(hyprland_check(root, fam));
+    v.extend(host_config_check(crate::host::host_config(ctx).as_deref()));
     // (`up` picks it so: the installed Hyprland's soname, then aq_resolve; their words held)
     let (aq, why) = muted(|| match crate::install::hypr_aq_soname(ctx) {
         Ok(so) => match crate::install::aq_resolve(ctx, &so) {
@@ -1556,6 +1584,25 @@ mod tests {
         std::fs::create_dir_all(d.join(".local/state/omarchy/current/theme")).unwrap();
         assert_eq!(theme_check(&r).st, St::Ok);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #422, finding 642: the host's config as status says it. hyprlang (a .conf): a warning that
+    /// says what needs Lua and that headless boxes do not; Lua: ok; nothing said: no check.
+    #[test]
+    fn a_conf_host_is_a_warning() {
+        let c = host_config_check(Some(b"hyprlang")).expect("a check");
+        assert_eq!((c.id, c.st), ("host-config", St::Warn));
+        assert_eq!(
+            c.found,
+            "your Hyprland reads a .conf config (hyprlang): interactive mode, peek and keys-to-box need a Hyprland with a Lua config (hyprland.lua); headless boxes work as they are"
+        );
+        assert!(c.fix[0].contains("hyprland.lua"), "{:?}", c.fix);
+        let c = host_config_check(Some(b"lua")).expect("a check");
+        assert_eq!((c.st, c.fix.len()), (St::Ok, 0));
+        let c = host_config_check(Some(b"toml")).expect("a check");
+        assert_eq!(c.st, St::Warn);
+        assert!(c.found.contains("config of toml, not Lua"), "{}", c.found);
+        assert!(host_config_check(None).is_none());
     }
 
     #[test]

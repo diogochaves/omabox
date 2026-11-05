@@ -858,8 +858,9 @@ worktree of omabox with no build of its own uses its main checkout's build/prefi
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
 @ doctor
 `omabox doctor` looks at what a box needs, where a box looks for it (/usr/bin), and changes nothing:
-Omarchy and your theme, Hyprland (0.56+, a Lua config), the aquamarine boxes would use (with or
-without #415), labwc, quickshell, bwrap (0.11+), pasta, grim (-T), the programs a box runs, omabox's
+Omarchy and your theme, Hyprland (0.56+, a Lua config), the config your desktop's Hyprland loaded
+(its status, a read: a .conf one warns, as interactive mode, peek and keys-to-box need Lua), the
+aquamarine boxes would use (with or without #415), labwc, quickshell, bwrap (0.11+), pasta, grim (-T), the programs a box runs, omabox's
 C tools, user namespaces, no_new_privs, /dev/net/tun, the render nodes (driver, software-only) and
 the one a box uses, socket path length, and which omabox your shell's PATH and your desktop
 session's find (agents started from the desktop get the latter). A check that fails or warns has a
