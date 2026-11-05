@@ -3,7 +3,18 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.2.1 — 2026-11-05
+
+Fixes on top of 1.2.0: a crash of an app built on Quickshell is said as itself, a box started before
+a rebuild or an upgrade says its helpers are old, a desktop on a `.conf` Hyprland config gets a clear
+refusal, and a `shot -g` crop at a fractional scale is the screen's own pixels. Also the decisions
+left open in 1.1.0's work: a scaled image's near tie refused, `gpu auto` past a software-only render
+node, and what `up --stock` keeps said. Update.
+
+**Omarchy:** as 1.2.0, Omarchy 4.5 and, deprecated, 4.0. Tested on Hyprland 0.56.2, which Omarchy's
+package mirror serves; Hyprland 0.57 comes with 1.3.0 ([#424](https://github.com/diogochaves/omabox/issues/424)).
+A visual check approved at a fractional scale from a `shot -g` crop may now differ slightly: its
+crops are the screen's pixels, where grim blended them (approve it again).
 
 ### Changed
 - **A scaled image's near tie is refused** ([#267](https://github.com/diogochaves/omabox/issues/267)):
