@@ -12191,10 +12191,11 @@ from them.
     archive v4.0.6`) given as `--omarchy` still gets the bind. t_clean checks either branch
     (`omarchy45`); the `up --clean` goldens lost the bind.
 629. **Omarchy 4.0 is deprecated** (2026-11-04, #411). omabox 1.3 drops it (#312), four weeks after
-    Omarchy 4.5.0 reaches the stable channel (Diogo): 4.5.0 final came out on rc only, and stable
-    users cannot update before it gets there. `up` (once the box is up, after its own lines) and
-    `setup` (once done; not `--remove`) say `omabox: deprecated: Omarchy 4.0.6-1: omabox 1.3 needs Omarchy 4.5 or later;
-    update once 4.5 reaches your Omarchy channel` when `install::omarchy_before_45` finds an Omarchy
+    Omarchy 4.5.0 reached the stable channel (Diogo): 4.5.0 final came out on rc first, and stable
+    users could not update before it got there; stable had it the same evening (4.5.0-2), so not
+    before 2026-12-02. `up` (once the box is up, after its own lines) and
+    `setup` (once done; not `--remove`) say `omabox: deprecated: Omarchy 4.0.6-1: omabox 1.3 needs Omarchy 4.5 or later
+    (omarchy update brings it)` (no hint for an `--omarchy` tree) when `install::omarchy_before_45` finds an Omarchy
     shell (`shell/plugins/bar/Bar.qml`) without the split centre; an `--omarchy` tree is named by its
     path ("an Omarchy before 4.5"). Told by the tree, as center_split tells it, never by the version.
     The line goes through `Ctx::deprecated_omarchy`, a sibling of `deprecated` (#287, which

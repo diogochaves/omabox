@@ -55,7 +55,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // #411: an Omarchy before 4.5 is deprecated (1.3 drops it, #312), said after setup's own
         // lines, once it is done. omarchy<4.5
         if let Some(what) = crate::install::omarchy_before_45(b"") {
-            ctx.deprecated_omarchy(&what);
+            ctx.deprecated_omarchy(&what, true);
         }
         Ok(())
     }
