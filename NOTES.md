@@ -13154,6 +13154,40 @@ from them.
     conflict: one at a time on a machine. DankMaterialShell is the suite's t_plain_dms (on this
     machine). end-4's dots (illogical-impulse) not tried: its installer rewrites ~/.config and its
     Hyprland config, a VM of its own.
+682. **A box's HOME removed while its up seeded it: another up's sweep, judged 75 ms before**
+    (2026-11-06, #433). Four sightings in full suites under load (t_desk_fonts, t_cli_up,
+    t_keys_down_up; each passing alone): `could not write .../home/.config/omarchy/shell.json`
+    (ENOENT), bwrap's `Can't find source path` for the HOME, and `could not make
+    .../current/theme: File exists` (Rust's create_dir_all: mkdir said EEXIST, then the dir was gone
+    before its is_dir check: an rm -rf running through the tree). Each of those tests downs a box and
+    ups its name again at once. Every HOME removal now writes a line to HOMES/.removed.log (hidden:
+    never taken for a box's): time, pid, command line, runtime dir, pid namespace and why it judged
+    the HOME free; an up that fails making or seeding its HOME says another process's line for it.
+    Three suites of the three tests at once (-j 8, the machine at load 10) failed t_desk_fonts' `up
+    --clean` in the first round, and the log named the remover: `omabox up t…-df` of another suite,
+    `sweep_homes: no record; no <rt>/omabox/t…-df, not there 75 ms ago, and nothing uses it`. The
+    `down` before had removed the box dir and was removing the HOME (rm -rf had taken its record,
+    not yet the dir): the sweep found a HOME with no record and no box dir, judged it gone, scanned
+    /proc for its users and spawned chmod and rm, and by then the down had finished and the next
+    `up` of the name had made its box dir and HOME and was seeding it, which rm took. Not finding
+    584's pid-namespace gap: every line of the log was the suite's own runtime dir and pid namespace.
+    Now sweep_homes takes a HOME judged gone (sweep_one) only under its name's lock where its box
+    would be made (the record's runtime dir: an `up` holds it while it makes a box, a `down` while it
+    removes one; held, the HOME is left), looks at the record and the box dir again under it, and
+    moves the HOME aside in one rename (HOMES/.swept-PID-NAME) before letting go; rm takes it from
+    there, so no new box can meet a half-removed HOME. A lock file it made for no box goes, as
+    down's. A runtime dir that is not there has no up to wait for: no lock then; a rename refused
+    (HOMES not writable) removes in place under the lock. `up` makes the HOME whole, record and
+    `home` in it, under HOMES/.new-PID-NAME and renames it into place (homeuse::make_home), so no
+    sweep of another runtime dir ever sees it record-less (taken then for an older omabox's HOME and
+    judged by that sweep's own runtime dir); one there and not empty, another box's made meanwhile,
+    fails the up. Leftovers of either, their process gone, go at the next sweep. After the fix,
+    three rounds of the same three suites at once (load 13) passed, 27 runs of the three tests, and
+    no sweep removed a HOME in them: a HOME half removed is under its `down`'s lock. Not proven by
+    them alone (one failure in six suites before); the unit test stages the race. Tests: the unit
+    tests sweep_keeps_a_home_made_again (the race staged between the judgement and the removal: a HOME
+    made again by an up that holds the lock or has let it go, kept; a down's held lock, left; a gone
+    one taken and logged; leftovers), make_home_whole and removal_log; t_home_sweep's log checks.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -32,6 +32,35 @@ pub fn write_record(h: &[u8], d: &[u8]) -> bool {
         && std::fs::rename(shell::path(&new), shell::path(&f)).is_ok()
 }
 
+/// The name a sweep moves a gone box's HOME to before it removes it, then PID-NAME (#433).
+pub const SWEPT: &str = ".swept-";
+/// The name a box's HOME is made under, with its record, before it is moved to HOMES/NAME in one
+/// rename, then PID-NAME (#433).
+pub const MAKING: &str = ".new-";
+
+/// make_home HOMES NAME D: HOMES/NAME made for box dir D, its record and its `home` in it from the
+/// first moment it is there: made under a name of its own and renamed into place, so no sweep, of
+/// any runtime dir, ever sees it without its record (taken then for an older omabox's HOME and
+/// judged by the sweeper's own runtime dir: #433). False when it could not be made, or HOMES/NAME
+/// is there and not empty (another box's, made meanwhile).
+pub fn make_home(homes: &[u8], name: &[u8], d: &[u8]) -> bool {
+    let new = cat!(
+        homes,
+        "/",
+        MAKING,
+        std::process::id().to_string(),
+        "-",
+        name
+    );
+    let ok = std::fs::create_dir_all(shell::path(&cat!(new, "/home"))).is_ok()
+        && write_record(&new, d)
+        && std::fs::rename(shell::path(&new), shell::path(&cat!(homes, "/", name))).is_ok();
+    if !ok {
+        let _ = std::fs::remove_dir_all(shell::path(&new));
+    }
+    ok
+}
+
 /// The log beside the HOMEs (HOMES/.removed.log; hidden, so never taken for a box's) of every HOME
 /// omabox removes (#433): when, which process (its pid, command line, runtime dir and pid namespace)
 /// and why it judged the HOME free to go. A HOME that vanishes under a box names its remover there.
@@ -354,6 +383,39 @@ mod tests {
             removed_note(&h, b"y", before),
             None,
             "...another box's: none"
+        );
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    /// #433: a HOME made whole, its record and `home` in it, under its own name for nothing but
+    /// the rename; never over another box's HOME made meanwhile.
+    #[test]
+    fn make_home_whole() {
+        let r = std::env::temp_dir().join(format!("omabox-mh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        let homes = shell::bytes(&r.join("cache/omabox")).to_vec();
+        assert!(make_home(&homes, b"x", b"/run/user/1/omabox/x"));
+        assert_eq!(
+            (
+                record(&cat!(homes, "/x")),
+                r.join("cache/omabox/x/home").is_dir()
+            ),
+            (Some(b"/run/user/1/omabox/x".to_vec()), true),
+            "made with its record and its home"
+        );
+        assert!(
+            !make_home(&homes, b"x", b"/run/user/2/omabox/x"),
+            "...not over one there"
+        );
+        let names: Vec<_> = std::fs::read_dir(r.join("cache/omabox"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            (names, record(&cat!(homes, "/x"))),
+            (vec!["x".into()], Some(b"/run/user/1/omabox/x".to_vec())),
+            "...which keeps its record, nothing left beside it"
         );
         let _ = std::fs::remove_dir_all(&r);
     }

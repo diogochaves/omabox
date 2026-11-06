@@ -128,12 +128,10 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     };
     let _ = std::fs::remove_file(ctx.in_boxes(cat!(".expired-", name)));
     crate::whose::clear_taken(ctx);
-    // (the box dir, then the HOME's record of it, then the HOME: sweep_homes never takes a HOME
-    // whose box is being made, from any runtime dir)
+    // (the box dir, then the HOME, there with its record of it from its first moment: sweep_homes
+    // never takes a HOME whose box is being made, from any runtime dir, #433)
     let made = std::fs::create_dir_all(ctx.at("run")).is_ok()
-        && std::fs::create_dir_all(shell::path(&cat!(homes, "/", name))).is_ok()
-        && crate::homeuse::write_record(&cat!(homes, "/", name), &d)
-        && std::fs::create_dir_all(shell::path(&home_dir)).is_ok()
+        && crate::homeuse::make_home(&homes, &name, &d)
         && std::os::unix::fs::symlink(shell::path(&home_dir), ctx.at("home")).is_ok();
     if !made {
         return Err(gone(ctx.die(cat!(
