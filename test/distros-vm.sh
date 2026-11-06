@@ -161,9 +161,19 @@ EOF
   g "sudo sh -c '$prep' && sudo loginctl enable-linger user" >"$out/prep.log" 2>&1 || { tail -n 20 "$out/prep.log"; return 1; }
   # A reboot, as after any update: the packages may have replaced the running kernel, whose modules
   # are then gone (nft and a dummy link failed so on Arch's cloud image).
+  # virt-install --cloud-init treats the first boot as an install: the guest powers off at its first
+  # reboot, and is started again here.
   echo "==> reboot"
+  local boot st
+  boot=$(g 'cat /proc/sys/kernel/random/boot_id') || boot=
   g 'sudo systemctl reboot' >/dev/null 2>&1 || true
-  sleep 10
+  for i in $(seq 1 60); do
+    st=$(virsh_ domstate "$name" 2>/dev/null) || st=
+    if [ "$st" = "shut off" ]; then virsh_ start "$name" >/dev/null || return 1; break; fi
+    [ "$st" = running ] && [ "$(g 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)" != "$boot" ] &&
+      [ -n "$(g true 2>/dev/null && echo y)" ] && break
+    sleep 2
+  done
   ssh_up || return 1
   g 'uname -r'
   g 'Hyprland --version 2>&1 | head -n 1; qs --version 2>&1 | head -n 1 || true'
