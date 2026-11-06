@@ -142,6 +142,37 @@ impl DevNode {
     }
 }
 
+/// root_links ROOT (#247): the links a sandbox over the system's /usr makes at /bin, /sbin, /lib and
+/// /lib64, as `(target, link)`: where ROOT's own is a link into /usr, that one, so a program finds
+/// its loader where it was linked to look (Arch's /lib64 is usr/lib, Debian's and openSUSE's
+/// usr/lib64, whose ld-linux is not in usr/lib: an exec there failed with ENOENT); else Arch's
+/// (none for /sbin). A link only ever leads into /usr, the one system tree a sandbox has.
+pub fn root_links(root: &[u8]) -> Vec<(Vec<u8>, &'static str)> {
+    let into_usr = |t: &[u8]| {
+        let r = t.strip_prefix(b"/").unwrap_or(t);
+        r.starts_with(b"usr/")
+            && r.split(|&c| c == b'/')
+                .all(|s| !s.is_empty() && s != b"." && s != b"..")
+            && r.iter()
+                .all(|c| c.is_ascii_alphanumeric() || b"/._-".contains(c))
+    };
+    [
+        ("/bin", Some("usr/bin")),
+        ("/sbin", None),
+        ("/lib", Some("usr/lib")),
+        ("/lib64", Some("usr/lib")),
+    ]
+    .into_iter()
+    .filter_map(|(link, arch)| {
+        let host = std::fs::read_link(crate::shell::path(&cat!(root, link)))
+            .ok()
+            .map(|t| crate::shell::bytes(&t).to_vec())
+            .filter(|t| into_usr(t));
+        Some((host.or(arch.map(|a| a.as_bytes().to_vec()))?, link))
+    })
+    .collect()
+}
+
 /// A bind the bwrap command is refused (one S1, S3 or S4 does not allow), in words.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Refused(pub Vec<u8>);
@@ -445,6 +476,96 @@ mod tests {
     use proptest::prelude::*;
 
     const RT: &[u8] = b"/run/user/1000";
+
+    /// The box's top links follow the host's (#247): Arch's, Debian's and openSUSE's layouts, a
+    /// host whose top dirs are dirs, and links that lead anywhere but into /usr.
+    #[test]
+    fn root_links_follow_the_hosts() {
+        let base = std::env::temp_dir().join(format!("omabox-rootlinks-{}", std::process::id()));
+        let root = |name: &str, links: &[(&str, &str)]| {
+            let r = base.join(name);
+            std::fs::create_dir_all(&r).unwrap();
+            for (l, t) in links {
+                std::os::unix::fs::symlink(t, r.join(l)).unwrap();
+            }
+            crate::shell::bytes(&r).to_vec()
+        };
+        let got = |r: &[u8]| -> Vec<(String, &str)> {
+            root_links(r)
+                .into_iter()
+                .map(|(t, l)| (String::from_utf8(t).unwrap(), l))
+                .collect()
+        };
+        let own = |v: &[(&str, &'static str)]| -> Vec<(String, &'static str)> {
+            v.iter().map(|(t, l)| (t.to_string(), *l)).collect()
+        };
+        let arch = root(
+            "arch",
+            &[
+                ("bin", "usr/bin"),
+                ("sbin", "usr/bin"),
+                ("lib", "usr/lib"),
+                ("lib64", "usr/lib"),
+            ],
+        );
+        assert_eq!(
+            got(&arch),
+            own(&[
+                ("usr/bin", "/bin"),
+                ("usr/bin", "/sbin"),
+                ("usr/lib", "/lib"),
+                ("usr/lib", "/lib64")
+            ])
+        );
+        let debian = root(
+            "debian",
+            &[
+                ("bin", "usr/bin"),
+                ("sbin", "usr/sbin"),
+                ("lib", "usr/lib"),
+                ("lib64", "/usr/lib64"),
+            ],
+        );
+        assert_eq!(
+            got(&debian),
+            own(&[
+                ("usr/bin", "/bin"),
+                ("usr/sbin", "/sbin"),
+                ("usr/lib", "/lib"),
+                ("/usr/lib64", "/lib64")
+            ])
+        );
+        // No links at all (dirs, or nothing): Arch's, no /sbin.
+        let none = root("none", &[]);
+        std::fs::create_dir_all(base.join("none/lib64")).unwrap();
+        assert_eq!(
+            got(&none),
+            own(&[
+                ("usr/bin", "/bin"),
+                ("usr/lib", "/lib"),
+                ("usr/lib", "/lib64")
+            ])
+        );
+        // A link out of /usr, or climbing out of it, is not followed.
+        let odd = root(
+            "odd",
+            &[
+                ("bin", "/home/x/bin"),
+                ("sbin", "usr/../etc"),
+                ("lib", "usr"),
+                ("lib64", "usr/lib64 "),
+            ],
+        );
+        assert_eq!(
+            got(&odd),
+            own(&[
+                ("usr/bin", "/bin"),
+                ("usr/lib", "/lib"),
+                ("usr/lib", "/lib64")
+            ])
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn seat_paths() {

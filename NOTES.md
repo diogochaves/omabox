@@ -12828,6 +12828,37 @@ from them.
     `clean_ids_renames_only_me`; check `holes_off_as_bash` (plain cases); t_unit_config (the key,
     its refusal wording, an Omarchy box refused without Omarchy); t_plain (the copy, reload, tray,
     `--keep clock`), t_plain_clean, t_plain_auto, t_clean (identity), t_cli_up's clean golden.
+657. **No box started on Debian or openSUSE: a box's /lib64 was Arch's** (2026-11-06, #247, the
+    acceptance run: a plain box on machines without Omarchy). `test/distros.sh --boxes` (rootless
+    podman, as a user of the container: install.sh, setup, doctor, then real boxes; the render node
+    and /dev/net/tun only, `--init` so a box's pasta and reaper are reaped as under systemd) ran a
+    plain box end to end on archlinux at once (Hyprland 0.57.1, aquamarine 0.16.0's private build):
+    up, foot by `run -d --wait`, `wait window`, `windows`, `keys` typed and run, SUPER+RETURN's
+    terminal, a shot, down leaving no folder, HOME or process; and a plain box with a one-PanelWindow
+    Quickshell bar as `--shell 'qs -p BAR'`. On debian:sid (0.57.0, aquamarine 0.15.1's `.so.14`
+    build) and opensuse/tumbleweed (0.57.1, `.so.15`) every `up` died at once: `bwrap: execvp
+    /opt/omabox/share/session.sh: No such file or directory`. The box made its top links as Arch has
+    them (`/bin` usr/bin, `/lib` and `/lib64` usr/lib), and Debian's and openSUSE's programs ask for
+    their loader at /lib64/ld-linux-x86-64.so.2, which is in their usr/lib64 (Debian's a link to
+    usr/lib/x86_64-linux-gnu), not usr/lib: the exec of `env` failed with ENOENT. **Now:**
+    bwrap.rs's `root_links` makes /bin, /sbin, /lib and /lib64 the host's own links when they lead
+    into /usr (a relative or absolute `usr/...` path, no `..`; anything else gets Arch's, and no
+    /sbin), for a box (up_box.rs) and for `record sheet`'s host sandbox (record_stop.rs, which had
+    the same links). A box now has /sbin as the host does (Arch's usr/bin). Then a second failure
+    on both: `run -d --wait foot` gave 124: Hyprland's "Your system does not have hyprland-guiutils
+    installed" notice (Arch's Hyprland depends on it; Debian's and openSUSE's do not) sat at the top
+    right with a shrinking bar for 10 s, so the screen never settled (282x2 at y 33). plain.lua sets
+    `misc.disable_hyprland_guiutils_check` (in 0.56 and 0.57), as it turns off update news and the
+    donation prompt; omabox runs no hyprland-dialog itself. What the containers needed besides
+    install.sh's packages: a terminal and a font (foot and DejaVu: `ttf-dejavu`,
+    `fonts-dejavu-core`, `dejavu-fonts`), which a desktop machine has. Quickshell is packaged on Arch
+    and Debian (0.3.2), not on Tumbleweed (no box with a shell there). Not done: nft is
+    /usr/sbin/nft on Debian and openSUSE, and omabox looks for it in up_box's LAUNCH_PATH
+    (/usr/bin) only (up, config, doctor, the reaper), so `protect-ports` cannot be used there and
+    doctor's "install nftables" fix does not clear its warning; without Omarchy a bare `omabox up`,
+    `doctor --smoke` and `install.sh --check` still ask for an Omarchy theme until `up` picks plain
+    by itself. Tests: bwrap.rs `root_links_follow_the_hosts` (Arch's, Debian's, no links, links out
+    of /usr), t_plain (the guiutils check off), `test/distros.sh --boxes` (test/distros-boxes.sh).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

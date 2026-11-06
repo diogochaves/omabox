@@ -50,6 +50,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`setup` and `doctor` no longer suggest `setup --aquamarine` where it builds nothing**: for a
   Hyprland whose aquamarine omabox has no build for, they say what boxes use and what they go
   without. `tray` on a plain box says it has no shell, not `--no-shell`.
+- **Boxes on Debian and openSUSE** ([#247](https://github.com/diogochaves/omabox/issues/247)): no box
+  started there (`bwrap: execvp /opt/omabox/share/session.sh: No such file or directory`): a box's
+  `/lib64` led where Arch keeps its loader, not where they do. A box's `/bin`, `/sbin`, `/lib` and
+  `/lib64` are now your system's own links into `/usr`. A plain box also hides Hyprland's
+  "hyprland-guiutils is not installed" notice, which kept its screen from settling for 10 s.
 - **`install.sh` and `omabox setup --aquamarine` on Hyprland 0.57** ([#48](https://github.com/diogochaves/omabox/issues/48)):
   omabox's aquamarine build was for Hyprland 0.56 only (aquamarine 0.15.1), so on Arch and openSUSE,
   whose Hyprland 0.57 links aquamarine 0.16, `setup --aquamarine` failed and `install.sh` stopped

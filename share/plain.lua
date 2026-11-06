@@ -38,6 +38,10 @@ hl.config({
   ecosystem = { no_update_news = true, no_donation_nag = true },
   general = { gaps_in = 4, gaps_out = 8, border_size = 2 },
   misc = {
+    -- No "hyprland-guiutils is not installed" over the first frames either: Debian's and openSUSE's
+    -- Hyprland come without it (Arch's depends on it), and its notice's shrinking bar kept the screen
+    -- changing for its 10 s, so `run --wait` never saw it settle.
+    disable_hyprland_guiutils_check = true,
     disable_hyprland_logo = true,
     disable_splash_rendering = true,
     background_color = background(),

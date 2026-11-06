@@ -1277,17 +1277,10 @@ fn bwrap_args(
     if u.desktop == Desktop::Plain && std::path::Path::new(PLAIN_HIDDEN).is_dir() {
         b.words(&[b"--tmpfs", PLAIN_HIDDEN.as_bytes()]);
     }
-    b.words(&[
-        b"--symlink",
-        b"usr/bin",
-        b"/bin",
-        b"--symlink",
-        b"usr/lib",
-        b"/lib",
-        b"--symlink",
-        b"usr/lib",
-        b"/lib64",
-    ]);
+    // /bin, /sbin, /lib, /lib64 as the host's links into /usr (#247: Debian's /lib64 is usr/lib64).
+    for (target, link) in crate::bwrap::root_links(b"") {
+        b.words(&[b"--symlink", &target, link.as_bytes()]);
+    }
     if etc.overlay {
         b.etc_overlay(&cat!(d, "/etc")).map_err(refused)?;
     } else {

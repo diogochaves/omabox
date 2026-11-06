@@ -11248,6 +11248,8 @@ t_plain() {
   check_fails "no /etc/omarchy.conf of its own" test -e "$D/etc/omarchy.conf"
   check_eq "no layer: nothing drew a bar" "0" "$(ob hyprctl -b "$B" -j layers | jq '[.. | objects | select(has("namespace"))] | length')"
   check_eq "no config errors" "" "$(ob hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  check_eq "no hyprland-guiutils notice (Debian's and openSUSE's Hyprland lack it)" true \
+    "$(ob hyprctl -b "$B" -j getoption misc:disable_hyprland_guiutils_check | jq -r .bool)"
   local want; want=$(sed -n 's/^[[:space:]]*XKBLAYOUT=//p' /etc/vconsole.conf 2>/dev/null | tr -d '"' | head -n 1)
   check_eq "its keyboard layout is the machine's (vconsole.conf)" "${want:-us}" "$(ob hyprctl -b "$B" -j getoption input:kb_layout | jq -r .str)"
   check "the stand-ins first on the session's PATH (S7: Xwayland)" ob run -b "$B" -- sh -c '[ "$(command -v Xwayland)" = /opt/omabox/share/bin/Xwayland ]'
