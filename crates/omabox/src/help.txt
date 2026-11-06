@@ -865,7 +865,10 @@ headless box on an NVIDIA render node and confirm-close need it, and `up` refuse
 omabox's own fixes for interactive boxes on top: a key held when the window loses focus is released,
 and in a monitor's window your pointer lands on that monitor and your cursor stays shown. No system
 aquamarine has those, so it builds even when the system's has the fix; it builds nothing only when
-boxes already use this omabox's build (--force rebuilds it). `omabox --version` says which one new
+boxes already use this omabox's build (--force rebuilds it). It builds the aquamarine the installed
+Hyprland links: 0.15.1 with the fix for Hyprland 0.56 (libaquamarine.so.14), 0.16.0 for Hyprland
+0.57 (.so.15; there Hyprland itself puts the pointer on the right monitor). For a Hyprland that links
+another, it builds nothing, says so and exits 0: boxes use the system's. `omabox --version` says which one new
 boxes use: a private build, or the system's (with the fix, patched with it, or without it). A git
 worktree of omabox with no build of its own uses its main checkout's build/prefix, and says so.
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).

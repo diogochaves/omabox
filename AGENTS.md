@@ -73,6 +73,8 @@ enforced and its test. A change that adds or weakens one updates its row there.
 
 Hyprland 0.56.2 (Lua config, `hyprctl eval`, dispatch syntax `hl.dsp.*`), aquamarine 0.15.0
 system + patched 0.15.1@7bb8bdf4 in `build/prefix` (headless NVIDIA boxes and confirm-close need it
-until a release has PR #415; everything else runs on the system's),
+until a release has PR #415; everything else runs on the system's); since 2026-11-06 `setup
+--aquamarine` builds by the soname Hyprland links: that for 0.56 (`.so.14`), patched v0.16.0 for 0.57
+(`.so.15`, `install::AQ_SOURCES`, NOTES 652),
 labwc 0.20.2 as parent compositor, quickshell 0.3.1. The binary (since 2026-10-25): Rust 1.99 (edition 2024,
 `rust-version` 1.85).

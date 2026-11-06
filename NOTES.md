@@ -12674,7 +12674,45 @@ from them.
     key is let go all the same); a layer's `interactivity` is `keyboard_interactivity`. Two binds of
     F9, both unbound, no longer crash 0.57, so t_hyprland_crash's Lua sends its Hyprland a SIGSEGV
     through the shell `os.execute` runs (its parent), which ends any version inside the call.
-    t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).
+    t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).652. **`setup --aquamarine` built only for Hyprland 0.56: install.sh stopped where 0.57 is** (2026-11-06,
+    #48). omabox's private aquamarine was one commit, `7bb8bdf4` (0.15.1 with #415), whose soname is
+    `libaquamarine.so.14`. Arch and openSUSE ship Hyprland 0.57.1 linking aquamarine 0.16.0
+    (`.so.15`, which has #415), so `setup --aquamarine` built a library their Hyprland could not load
+    and refused ("omabox needs a newer AQ_COMMIT"), install.sh stopped there (finding 646), and their
+    interactive boxes had none of omabox's own fixes. **Now:** `install::AQ_SOURCES` names one source
+    per soname: `.so.14` `7bb8bdf4` with all four patches (`7bb8bdf4+keys+layout+cursor+appid`, the
+    build this desk has, still current), `.so.15` v0.16.0 (`b77d6764`). setup builds the one for the
+    soname the installed Hyprland links (one clone, `checkout -f` of that commit); a soname with no
+    source is no failure: it says so, what boxes use and what interactive boxes go without, and exits
+    0. A build counts as this omabox's when its record is any source's build (each names its commit,
+    and setup records it only on a library with that source's soname). install.sh goes on when setup
+    fails, saying what boxes use (`--version`'s line) and what they lose. A `--hyprland` folder whose
+    lib dir holds omabox's build records it beside it (`<lib>/../.omabox-commit`, as a prefix of
+    setup's does), and folder_aq reads it, so `--version`, `up --monitor` and `monitor add` (+appid)
+    see it. **The patches on v0.16.0:** Wayland.cpp is the same in both commits, so 0001-0004 applied
+    unchanged; v0.16.0 has #415, so nothing was dropped. But in a 0.57.1 box with that build the
+    pointer in a monitor's window landed on the right monitor at the wrong place (middles at 576,220,
+    2749,698, 2944,2541 for 960,540, 2460,960, 2560,2280) and the cursor never showed: 0.57 takes a
+    warp as local to the output `SWarpEvent::output` names, which 0.56 ignored, so 0002's mapping
+    over the whole layout was applied twice (576 = 960/3200 x 1920). The `.so.15` source leaves 0002
+    out (`b77d6764+keys+cursor+appid`; AqSource::patches); 0004, written on top of 0002, was rebased
+    so it applies with or without it (appIdFor before CWaylandOutput's constructor, its own
+    `<fstream>`), checked on both commits with and without 0002. Without 0002 both checks pass on
+    0.57.1. The suite's gates take a folder carrying omabox's build (`the --hyprland folder's, ...+keys`)
+    as they take a private build, and t_monitors_window's pointer check runs on 0.57 whatever the
+    build. Soname of the build: `libaquamarine.so.15` (`libaquamarine.so.0.16.0`). Verified: in boxes
+    on this desk's 0.56.2 (t_held_keys, t_monitors_window, t_up_signals_window, t_hyprland_folder) on
+    the `.so.14` build setup made; with OMABOX_HYPRLAND on a copy of the 0.57.1 folder holding the
+    `.so.15` build setup made (t_held_keys, t_monitors_window, t_up_signals_window); test/distros.sh:
+    install.sh passes end to end on archlinux and opensuse/tumbleweed, building the `.so.15` one.
+    Not done: doctor's and setup's note still say `omabox setup --aquamarine` for a soname with no
+    source (setup then says why it builds nothing); a box on 0.57 with stock 0.16.0 was not checked
+    for the pointer (the numbers say Hyprland maps it, not aquamarine). Tests: install.rs
+    aq_sources_one_per_soname (each build is its commit and its patches' tags, every patch file has a
+    tag) and new_box_follows_omabox_hyprland (a folder's record read, a foreign one not);
+    t_unit_aquamarine (a stand-in Hyprland linking `.so.14`, `.so.15`, `.so.99`: the source each gets,
+    nothing built and rc 0 for the last).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

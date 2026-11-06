@@ -31,7 +31,10 @@ What a machine needs, what `install.sh` does, updating and removing. Back to the
   monitor's window has a class of its own, which keeps it off your workspace (since 1.0; monitors
   on an interactive box need it). No system aquamarine has those, so `omabox setup --aquamarine`
   builds them even when yours has PR #415 (enough on its own for headless NVIDIA boxes and
-  confirm-close, not for those).
+  confirm-close, not for those). It builds the version your Hyprland links: aquamarine 0.15.1 with
+  the fix for Hyprland 0.56, 0.16.0 for Hyprland 0.57 (Arch, openSUSE). For a Hyprland newer than
+  this omabox knows, or when the build fails, `install.sh` goes on: boxes run on your system's
+  aquamarine, and it says what interactive boxes go without.
 
 ## Install and update
 
