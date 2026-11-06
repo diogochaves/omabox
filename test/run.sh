@@ -5966,9 +5966,10 @@ t_jail_record() {
   check_fails "...nothing at the name" test -e "$p/s.png"
   # Stopped from outside the jail: never at the name, a link out of the project.
   jo record -b "$N" start --as "$p/link.mp4" >/dev/null 2>&1
-  out=$(env -u OMABOX_JAIL XDG_CACHE_HOME="$d/cache" "$CLI" record -b "$N" stop 2>"$d/host.err")
+  out=$(env -u OMABOX_JAIL XDG_DATA_HOME="$d/data" "$CLI" record -b "$N" stop 2>"$d/host.err")
   check_match "a jailed agent's recording stopped outside the jail: said" "written to .* instead \\(never at a path a jail named\\)" "$(cat "$d/host.err")"
-  check_match "...to a new file in omabox's cache folder (on disk, not \$TMPDIR)" "^$d/cache/omabox/records/omabox-$N-[0-9-]+\\.mp4$" "$out"
+  check_match "...to a new file in omabox's data folder (on disk, not \$TMPDIR; never among the box HOMEs, #433)" "^$d/data/omabox/records/omabox-$N-[0-9-]+\\.mp4$" "$out"
+  check "...the video there" test -s "$out"
   check_eq "...the link's file outside the project untouched" HOSTVIDEO "$(cat "$d/host/v.mp4")"
   # A recording the user started on the jail's box stays the user's: its name not said to the jail,
   # nor stopped by it.
@@ -5994,7 +5995,7 @@ exec /usr/bin/head -c 50000000 /dev/zero'
   jo run -b "$N" -- sh -c 'mkdir -p ~/.local/bin && for t in head cat sh bash stat ffprobe; do printf "%s\n" "$1" > ~/.local/bin/$t && chmod +x ~/.local/bin/$t; done' _ "$fake"
   check_eq "...(the planted head is what a box command gets)" 50000000 "$(jo run -b "$N" -- head 2>/dev/null | wc -c)"
   jo record -b "$N" start --as "$p/planted.mp4" >/dev/null 2>&1; sleep 1
-  out=$(env -u OMABOX_JAIL XDG_CACHE_HOME="$d/cache" "$CLI" record -b "$N" stop 2>/dev/null)
+  out=$(env -u OMABOX_JAIL XDG_DATA_HOME="$d/data" "$CLI" record -b "$N" stop 2>/dev/null)
   check_eq "a jailed recording stopped outside the jail, with helpers planted in the box: an H.264 video" h264 \
     "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$out" 2>&1)"
   check "...of a video's size, not the planted 50 MB" test "$(stat -c %s "$out" 2>/dev/null || echo 0)" -lt 20000000

@@ -72,6 +72,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the drop target), so a folder dragged onto a Nautilus bookmark gave "You cannot move a file over
   itself". The path now takes 150 ms at least and ends with a 1 px nudge and back, so the drag starts
   and drops where it ends; other drags end where they did.
+- **A jailed agent's recording stopped outside the jail is no longer deleted at the next `up`** ([#433](https://github.com/diogochaves/omabox/issues/433)):
+  its video went to `~/.cache/omabox/records`, the folder of box HOMEs, whose sweep of gone boxes'
+  HOMEs took `records` for one. It now goes to `~/.local/share/omabox/records`; videos already in
+  the old folder are moved there at the next `up`.
 - **A box ends with its pasta under SELinux too** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   on Fedora, SELinux refuses pasta the death signal that ends a box when pasta does, so a box whose
   pasta died stayed up without its network. Its reaper now ends it within a second or two, the box

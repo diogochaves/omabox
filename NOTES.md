@@ -13273,6 +13273,24 @@ from them.
     tests sweep_keeps_a_home_made_again (the race staged between the judgement and the removal: a HOME
     made again by an up that holds the lock or has let it go, kept; a down's held lock, left; a gone
     one taken and logged; leftovers), make_home_whole and removal_log; t_home_sweep's log checks.
+684. **A jailed agent's videos, stopped outside the jail, were kept among the box HOMEs** (2026-11-06,
+    #433; found while fixing finding 682). `record stop` of a jailed agent's recording, run outside
+    the jail, wrote the video to `$XDG_CACHE_HOME/omabox/records` (finding 323): that is
+    paths::homes(), the box HOMEs' folder. sweep_homes took `records` for a gone box's HOME (no
+    record, no box of that name in this runtime dir, nothing using it) and removed the videos at the
+    next `up`; a box named `records` would have had its HOME there, and its rm_box removed them too.
+    The videos now go to paths::records(), `$XDG_DATA_HOME/omabox/records` (beside the saves; a box
+    sees neither). Videos an older omabox left in the old folder are moved there, once, not kept
+    in place: the old folder is told from a box HOME by having no record and no `home` (every box
+    HOME has its `home`, an older omabox's too), and sweep_homes moves its plain files before its
+    loop, as does home_whose for a box named `records` (so `up records` and its rm_box). A move never
+    replaces a file: a hard link then the old name removed; across filesystems (a cache on tmpfs) a
+    copy under a hidden `.moving-PID-NAME` linked into place. What cannot be moved (a name taken
+    there, a subfolder) stays, and with it the folder, which the sweep then skips and a box named
+    `records` is refused ("holds videos an older omabox's `record stop` wrote there"); emptied, it
+    goes. Tests: the unit tests sweep_keeps_old_records (fails on the code before: the folder
+    swept) and move_no_replace_across (/dev/shm to the temp dir); t_jail_record's outside stops
+    with a stand-in XDG_DATA_HOME, the video in its records folder.
 
 683. **record's fallback encoder where ffmpeg has no libx264: openh264** (2026-11-06, #442). What
     the two distributions ship (rootless podman, Fedora 45 with `ffmpeg-free` 9.0.2, Tumbleweed's

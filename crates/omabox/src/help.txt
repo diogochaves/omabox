@@ -556,7 +556,7 @@ runs out is killed and run once more, then said, the recording's raw files kept 
 ai-jail all of it works through the broker: the jail's own omabox resolves -o and opens the video,
 its marks, captions and sheet (and `record sheet`'s video) itself, and the broker writes and
 reads them only through those, never at a path the jail names; one stopped outside the jail goes
-to ~/.cache/omabox/records.
+to ~/.local/share/omabox/records.
 @ audio
 `audio [DURATION]` listens to the box's speaker for DURATION (3s, up to 10m) from now, 100 ms at a time: "sound for
 1.1s of 3s: peak -21.1 dBFS, RMS -24.5 dBFS while it sounded; at 0.4-1.5s", or "silence for 3s".
