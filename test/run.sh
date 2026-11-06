@@ -15049,7 +15049,8 @@ t_cli_box() {
   cx_case "hyprctl version" hyprctl -b "$B" version
   cx_want=(rc=0 'out~^\[\{$' 'out~^\}\]$' 'out~"name": "(WAYLAND|HEADLESS)-[0-9]+"' err=)
   cx_case "hyprctl -j monitors" hyprctl -b "$B" -j monitors
-  cx_want=(rc=7 'out~^error: ' err=)
+  # #427: a word that is no Lua dispatch gets omabox's hint on stderr, hyprctl's status kept.
+  cx_want=(rc=7 'out~^error: ' 'err~old dispatcher syntax')
   cx_case "hyprctl: a bad dispatch, hyprctl's own status" hyprctl -b "$B" dispatch rp-bogus
   cx_want=(rc=0 'out=no such option' err=)
   cx_case "hyprctl getoption of none" hyprctl -b "$B" getoption rp:none
