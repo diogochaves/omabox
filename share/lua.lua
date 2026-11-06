@@ -12,8 +12,45 @@ local OK, ERR = "omabox-lua-ok:", "omabox-lua-error:"
 local fn, err = load("return " .. src, "=lua", "t")
 if not fn then fn, err = load(src, "=lua", "t") end
 if not fn then error(ERR .. err, 0) end
+
+-- A dispatch Hyprland refused is exit 1 (#427, finding 686), known by what hl.dispatch handed back,
+-- so a table of the source's own that reads ok = false is not one. hl.dispatch is wrapped while the
+-- source runs (put back unless the source replaced it): the tables it returned are noted, and a call
+-- that returned nothing, Hyprland's "expected a dispatcher" (an hl.dsp call given arguments it does
+-- not take is nil), whose words this channel cannot carry back.
+
+-- Hyprland's own answer to a refused dispatch: { ok = false, error, level, code }, nothing else.
+local function refusal(v)
+  if type(v) ~= "table" or rawget(v, "ok") ~= false then return false end
+  local n = 0
+  for k, x in next, v do
+    n = n + 1
+    if k ~= "ok" and not ((k == "error" or k == "level" or k == "code") and type(x) == "string") then return false end
+  end
+  return n == 4
+end
+
+-- The call is made from a line of a chunk named as the source is: hl.dispatch's own errors name the
+-- line that called it ("=lua:1: hl.dispatch: …"), that one; the caller's line is put back, but for
+-- a tail call (`return hl.dispatch(…)`), whose caller's line is gone: 1, as on one line it is.
+local hl_dispatch, from_dispatch, refused_nil = hl and hl.dispatch, setmetatable({}, { __mode = "k" }), false
+local call = load("local d = ... return function(...) return table.pack(d(...)) end", "=lua", "t")(hl_dispatch)
+local function wrapped(...)
+  local r = call(...)
+  if r.n == 0 then refused_nil = true end
+  local v = r[1]
+  if type(v) == "table" then from_dispatch[v] = true end
+  if refusal(v) and v.error:sub(1, 21) == "=lua:1: hl.dispatch: " then
+    local at = debug and debug.getinfo(2, "Sl")
+    if at and at.currentline > 0 then v.error = at.source:gsub("^@", "") .. ":" .. at.currentline .. v.error:sub(7) end
+  end
+  return table.unpack(r, 1, r.n)
+end
+if type(hl_dispatch) == "function" then hl.dispatch = wrapped end
 local res = table.pack(pcall(fn))
+if hl and rawequal(hl.dispatch, wrapped) then hl.dispatch = hl_dispatch end
 if not res[1] then error(ERR .. tostring(res[2]), 0) end
+local function refused(v) return from_dispatch[v] and refusal(v) end
 
 -- Hyprland's objects (a window, a workspace, a monitor) are userdata whose fields cannot be listed
 -- from Lua; Hyprland's own type stubs name them (`---@class HL.Window`, `---@field address string`).
@@ -113,14 +150,17 @@ end
 -- Encoding runs the values' metamethods (__len, __pairs, __tostring): an error there is the agent's
 -- Lua error too, not an answer the host cannot read (finding 176).
 -- Before the values, one letter each (#130): d a dispatcher (hl.dsp.*, a userdata Hyprland names
--- HL.Dispatcher; returned, it does not run), f a function (not called), - anything else.
+-- HL.Dispatcher; returned, it does not run), f a function (not called), x a dispatch Hyprland
+-- refused (#427), - anything else. Then z when a dispatch was refused with nothing returned.
 local out, kinds = {}, {}
 local ok, e = pcall(function()
   for i = 2, res.n do
     local v = res[i]
     out[i - 1] = enc(v, 0, true)
-    kinds[i - 1] = (type(v) == "userdata" and tostring(v):match("^HL%.Dispatcher") and "d") or (type(v) == "function" and "f") or "-"
+    kinds[i - 1] = (type(v) == "userdata" and tostring(v):match("^HL%.Dispatcher") and "d") or (type(v) == "function" and "f")
+      or (type(v) == "table" and refused(v) and "x") or "-"
   end
+  if refused_nil then kinds[#kinds + 1] = "z" end
 end)
 if not ok then error(ERR .. tostring(e), 0) end
 error(OK .. table.concat(kinds) .. ":[" .. table.concat(out, ",") .. "]", 0)

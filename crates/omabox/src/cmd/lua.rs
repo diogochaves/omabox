@@ -1,7 +1,8 @@
 //! `omabox lua [-b NAME] [--json] (EXPR | -)`: Lua in the box's Hyprland, and what it returns (issue
 //! #40, finding 106). share/lua.lua runs the source and raises its answer as an error on purpose, the
 //! one thing `hyprctl eval` hands back. One line per value: strings and numbers as they are, nil as
-//! nil, tables as JSON; --json prints strings quoted too.
+//! nil, tables as JSON; --json prints strings quoted too. A dispatch Hyprland refused is exit 1
+//! (#427, finding 686).
 
 use crate::args::{optarg, unknown_opt_hint};
 use crate::boxes::{box_alive, need_box};
@@ -133,7 +134,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if kinds.contains(&b'f') {
         say("lua: a function, returned and not called");
     }
-    print_values(vals, as_json)
+    // A dispatch Hyprland refused (#427, finding 686): x its answer returned, `{"ok":false,…}`,
+    // printed as it came; z one that returned nothing, whose words this channel loses.
+    if kinds.contains(&b'z') {
+        say(
+            "lua: hl.dispatch was refused: what it was given is not a dispatcher (an hl.dsp call given arguments it does not take is nil); omabox hyprctl dispatch 'EXPR' prints Hyprland's error",
+        );
+    }
+    print_values(vals, as_json)?;
+    if kinds.iter().any(|k| matches!(k, b'x' | b'z')) {
+        return Err(Exit(1));
+    }
+    Ok(())
 }
 
 /// `jq -c '.[]'` (--json) or `jq -r '.[] | if type == "string" then . elif type == "null" then
