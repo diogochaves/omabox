@@ -12651,6 +12651,30 @@ from them.
     4 s, said so, its animations off once and back), t_window_resizing (20 shots of a window resized
     every 30 ms: 0 failed on 0.56.2 and in 3 runs on 0.57.1; 19 of 20 failed before, 1 of 20 with
     retries alone).
+651. **The suite under OMABOX_HYPRLAND: what a folder changes on purpose, and 0.57's own words**
+    (2026-11-06, #424). A whole suite with OMABOX_HYPRLAND on Hyprland 0.57.1's folder failed 117
+    checks, most of them the suite's. **A refusal that was not one:** t_unit_aquamarine's `up
+    --interactive --confirm-close`, meant to be refused on the system's aquamarine, went up on the
+    folder's (0.16.0 has #415) and opened a window, silent, on the user's workspace 9 for ~700 s. Every
+    check that expects an `up` refused (an interactive box's above all) now runs without the variable
+    (NOHYPR), and so do what a folder changes by design: a jailed `up` (the jail rightly refuses a
+    folder outside it), the system aquamarine's refusals, t_cli_up's goldens. **The version mix:** a
+    nested box in a stand-in host got no OMABOX_HYPRLAND (`run` does not carry it), so it ran the box's
+    `/usr/bin/Hyprland` 0.56.2 under the folder's hyprctl (bound over `/usr/bin/hyprctl`) and libraries
+    (`/opt/omabox/lib`, whose `.so.15` the nested omabox skips for 0.56.2's soname): it fell back to
+    the system's aquamarine 0.15.1 and refused a headless NVIDIA box, or never came up, so
+    t_leak_control could not prove the detector. The stand-ins now hand the variable on (HYPR_IN): the
+    folder is mounted at its own path in every box, so the nested box runs it whole. The suite reads
+    the folder (HYPR_BIN, HYPR_LIB, HYPR_V; provenance names it and its aquamarine), expects
+    session.sh's line naming it (box.log, `ls`, `windows`), and follows the version the boxes run
+    (hypr_ge) where 0.57 says things otherwise: a log line carries the C++ function (`[hlPrint] [Lua]
+    msg`, `[CCompositor::initManagers] Creating the ...`); `tostring` of a dispatcher names it
+    (`HL.Dispatcher(exec_cmd)`); a headless output the program makes takes its mode on NVIDIA (no
+    longer 0x0); a pointer move between a key's press and release cancels a `release = true` bind (the
+    key is let go all the same); a layer's `interactivity` is `keyboard_interactivity`. Two binds of
+    F9, both unbound, no longer crash 0.57, so t_hyprland_crash's Lua sends its Hyprland a SIGSEGV
+    through the shell `os.execute` runs (its parent), which ends any version inside the call.
+    t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

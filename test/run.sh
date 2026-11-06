@@ -15,6 +15,9 @@
 #                            t_widget_mark, t_click_layer, t_tree_layer and t_cursor_hw_nvidia run on
 #                            (default /usr/share/omarchy): a checkout, to see what an Omarchy update
 #                            moves before it is released, or an older one (4.0.x) for its branch
+#   OMABOX_HYPRLAND=PATH:    every box on that Hyprland (`up --hyprland PATH`, #424): the suite on
+#                            another version; checks whose words differ between versions follow the
+#                            folder's, the few about what the folder changes on purpose run without it
 #   test/run.sh --installed [ARGS...]   the same against omabox installed as a package would be:
 #                            read-only at /usr/lib/omabox, /usr/bin/omabox (a throwaway namespace)
 #
@@ -184,6 +187,43 @@ up_ok() { UP_OUT=$(ob up "$@" 2>&1); }
 # checks differ between the two, so their 4.0 branch runs on a 4.5 host too.
 omarchy45() { grep -qs centerBegin "${1:-${OMABOX_TEST_OMARCHY:-/usr/share/omarchy}}/shell/plugins/bar/Bar.qml"; }
 OM=(); [ -z "${OMABOX_TEST_OMARCHY:-}" ] || OM=(--omarchy "$OMABOX_TEST_OMARCHY")
+# OMABOX_HYPRLAND=PATH (#424, finding 651): every box of the run starts on that Hyprland (a folder or a
+# binary), as `up --hyprland PATH`. HYPR_BIN and HYPR_LIB: its binary and library dir (the folder's
+# layouts, as up's hypr_target reads them); HYPR_V: the version the boxes run, for the checks whose
+# words differ between versions (hypr_ge). HYPR_IN: the variable handed on to an omabox run inside a
+# box (a nested box in a stand-in host), which `run` does not carry: the folder is mounted at its own
+# path in every box, so the nested box runs it whole, not the box's /usr/bin/Hyprland under the
+# folder's hyprctl and libraries (a mix that fails). NOHYPR: an omabox run without it, for the checks
+# of what the folder changes on purpose (a jail refuses it, the system aquamarine's refusals, the
+# goldens).
+HYPR_BIN=/usr/bin/Hyprland HYPR_LIB="" HYPR_IN=() NOHYPR=(env -u OMABOX_HYPRLAND)
+if [ -n "${OMABOX_HYPRLAND:-}" ]; then
+  OMABOX_HYPRLAND=$(readlink -f "$OMABOX_HYPRLAND"); export OMABOX_HYPRLAND
+  HYPR_BIN=$OMABOX_HYPRLAND
+  if [ -d "$OMABOX_HYPRLAND" ]; then
+    for t in usr/bin/Hyprland:usr/lib bin/Hyprland:lib Hyprland:; do
+      [ -f "$OMABOX_HYPRLAND/${t%%:*}" ] || continue
+      HYPR_BIN=$OMABOX_HYPRLAND/${t%%:*}; [ -z "${t#*:}" ] || HYPR_LIB=$OMABOX_HYPRLAND/${t#*:}; break
+    done
+  fi
+  HYPR_BIN=$(readlink -f "$HYPR_BIN") HYPR_IN=(env OMABOX_HYPRLAND="$OMABOX_HYPRLAND")
+fi
+HYPR_V=$(env ${HYPR_LIB:+LD_LIBRARY_PATH="$HYPR_LIB"} "$HYPR_BIN" --version 2>/dev/null | awk 'NR == 1 {print $2}')
+# HYPR_RE: what names such a box's Hyprland in its box.log (session.sh's line), `ls` and `windows`: the
+# binary and its version, as an ERE; "" for the installed one, which none of them names.
+HYPR_RE=""
+# shellcheck disable=SC2001 # (one sed for every ERE character a path may hold)
+[ -z "${OMABOX_HYPRLAND:-}" ] || HYPR_RE="$(sed 's/[][\.*^$+?(){}|]/\\&/g' <<<"$HYPR_BIN"):? \(?Hyprland ${HYPR_V//./\\.} "
+# no_hypr_line: STDIN without session.sh's box.log line naming OMABOX_HYPRLAND's Hyprland.
+no_hypr_line() { if [ -n "$HYPR_RE" ]; then grep -Ev "^session\.sh: Hyprland $HYPR_RE" || true; else cat; fi; }
+# lua_print_re: what comes before a Lua print's words in Hyprland's log, as an ERE (0.57 puts the C++
+# function first). hl_dispatcher NAME: how `tostring` says a dispatcher (0.57 names it).
+lua_print_re() { if hypr_ge 0.57; then echo '\[hlPrint\] \[Lua\] '; else echo '\[Lua\] '; fi; }
+hl_dispatcher() { if hypr_ge 0.57; then echo "HL.Dispatcher($1)"; else echo HL.Dispatcher; fi; }
+# hypr_ge V: the boxes' Hyprland is V or later. folder_aq: their aquamarine is OMABOX_HYPRLAND's
+# folder's (its library dir has one), not omabox's build nor the system's, whatever --version says.
+hypr_ge() { [ "$(printf '%s\n%s\n' "$1" "${HYPR_V:-0}" | sort -V | head -n 1)" = "$1" ]; }
+folder_aq() { [ -n "$HYPR_LIB" ] && compgen -G "$HYPR_LIB/libaquamarine.so.*" >/dev/null; }
 # Notes from inside checks (a slow wait), whose output is captured: shown before the next result.
 # (NOTES and UNTIL are per test when tests run in parallel.)
 NOTES=$TMP/notes UNTIL=$TMP/until.last
@@ -322,6 +362,19 @@ check_box_safety() {
 # Finding 125: whether the boxes an omabox starts lack aquamarine's fix for nested Wayland outputs
 # (the system's 0.15.1 or older, no private build or OMABOX_AQUAMARINE=system). ARGS: that omabox.
 aq_unfixed() { "$@" --version 2>/dev/null | grep -q '^aquamarine: .*without the fix'; }
+# box_aq_unfixed ARGS: the same for the boxes an omabox in a stand-in starts with HYPR_IN: under an
+# OMABOX_HYPRLAND folder with an aquamarine of its own, that one's (fixed from 0.15.2, as up counts it
+# by the version its soname links to), which `--version` does not describe (finding 651).
+box_aq_unfixed() {
+  local v
+  if folder_aq; then
+    v=$(readlink -f "$(compgen -G "$HYPR_LIB/libaquamarine.so.*" | head -n 1)"); v=${v##*/libaquamarine.so.}
+    if [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      [ "$(printf '0.15.2\n%s\n' "$v" | sort -V | head -n 1)" != 0.15.2 ]; return
+    fi
+  fi
+  aq_unfixed "$@"
+}
 # Issue #45 (finding 121): a peek window you opened on one of the run's boxes (bar widget, omabox
 # peek; its process marked OMABOX_PEEK_BY=you) makes that box in use, by design: it is not reaped for
 # idling or for its agent's exit, and click/keys write marks for it. `held BOX CHECK...` runs a check
@@ -962,7 +1015,7 @@ t_unit_flag_forms() {
   out=$(ob up "$P-f1" -i --bogus 2>&1); rc=$?
   check_eq "up -i: refused (2), one line naming --interactive (#287)" \
     "2|omabox: up -i is refused since 1.0: write up --interactive (-i is ignore-case in log and events) (omabox help up)" "$rc|$out"
-  check_match "...--interactive: read (then the unknown option stops it)" "up: unknown option --bogus" "$(ob up "$P-f1" --interactive --bogus 2>&1)"
+  check_match "...--interactive: read (then the unknown option stops it)" "up: unknown option --bogus" "$("${NOHYPR[@]}" "$CLI" up "$P-f1" --interactive --bogus 2>&1)"
   out=$(ob save -f --bogus 2>&1); rc=$?
   check_eq "save -f: refused (2), one line naming --force" \
     "2|omabox: save -f is refused since 1.0: write save --force (-f is follow in log and events) (omabox help save)" "$rc|$out"
@@ -1450,10 +1503,11 @@ t_unit_refusals() {
     "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --seed "$TMP/rf-td/s.toml:.config/omarchy/themes/t/s.toml" 2>&1)"
   check_fails "...SRC's path not said" grep -q "$TMP/rf-td/s.toml" <<<"$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --seed "$TMP/rf-td/s.toml:~/.config/omarchy/themes/t/s.toml" 2>&1)"
   check_fails "...no box dir for any of them" test -e "$XDG_RUNTIME_DIR/omabox/$P-r30"
-  # (#123) Only where it is refused: with the fix it would open a window on the real desktop.
+  # (#123) Only where it is refused: with the fix it would open a window on the real desktop. Never
+  # under OMABOX_HYPRLAND (NOHYPR): a folder's aquamarine can have the fix (finding 651).
   if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
     check_match "--monitor on an interactive box without aquamarine's fix: refused" "opens a window per monitor, which needs aquamarine's fix" \
-      "$(OMABOX_AQUAMARINE=system ob up "$P-r28" --interactive --monitor 800x600 2>&1)"
+      "$(OMABOX_AQUAMARINE=system "${NOHYPR[@]}" "$CLI" up "$P-r28" --interactive --monitor 800x600 2>&1)"
   fi
   # (finding 429) ...and on one with the fix but not omabox's +appid (a private build an older
   # `omabox setup --aquamarine` made): each window needs a class of its own. The box's aquamarine is
@@ -1468,7 +1522,7 @@ t_unit_refusals() {
     echo 7bb8bdf4+keys+layout+cursor > "$aqo/.omabox-commit"
     check_match "--monitor on an interactive box, an omabox build without +appid: refused, naming setup" \
       "up: --monitor on an interactive box needs omabox's aquamarine build.*\(boxes use a private build, 0\.15\.1@7bb8bdf4\+keys\+layout\+cursor .*omabox setup --aquamarine" \
-      "$("$fr/build/omabox" up "$P-r31" --interactive --monitor 800x600 2>&1)"
+      "$("${NOHYPR[@]}" "$fr/build/omabox" up "$P-r31" --interactive --monitor 800x600 2>&1)"
     check_fails "...nothing made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r31"
   fi
   check_match "--monitor with a bad SPEC refused" "a size is WxH" "$(ob up "$P-r29" --monitor big 2>&1)"
@@ -1805,7 +1859,7 @@ t_unit_down_jail_race() {
   # as a headless box on NVIDIA with no aquamarine fix is refused before it (an install with no build
   # of its own, #381).
   local rn=(); [ -z "$(gpu_node other)" ] || rn=(OMABOX_RENDER_NODE="$(gpu_node other)")
-  jx() { (cd "$r/norepo" && env -u OMABOX XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" XDG_STATE_HOME="$r/state" "${rn[@]}" "$@"); }
+  jx() { (cd "$r/norepo" && env -u OMABOX -u OMABOX_HYPRLAND XDG_RUNTIME_DIR="$r/rt" XDG_CACHE_HOME="$r/cache" XDG_STATE_HOME="$r/state" "${rn[@]}" "$@"); }
   # hold NAME: the name's lock taken, as an up holds it, until $r/release-NAME exists.
   hold() {
     rm -f "$r/held-$1" "$r/release-$1"
@@ -1959,7 +2013,7 @@ t_unit_config() {
   check_match "a bad value in the file is ignored, said" "ignoring workspace" "$(cfg workspace)"
   check_eq "...and the default used" 9 "$(HOME=$h "$CLI" config workspace 2>/dev/null)"
   check_fails "up --workspace needs --interactive" "$CLI" up "$P-cfg" --workspace 3
-  check_fails "up --workspace refuses a bad one" "$CLI" up "$P-cfg" --interactive --workspace "9 silent"
+  check_fails "up --workspace refuses a bad one" "${NOHYPR[@]}" "$CLI" up "$P-cfg" --interactive --workspace "9 silent"
   check_fails "up --new picks the name: one given is refused" "$CLI" up "$P-cfg" --new
   # A config linked from a dotfiles repo stays a link (finding 74)
   mv "$h/.config/omabox/config" "$h/dotconfig"; ln -s "$h/dotconfig" "$h/.config/omabox/config"
@@ -5207,7 +5261,7 @@ t_leak_control() {
   # the bar widget runs it (the box's environment has no OMABOX_SUITE) is yours, a note; the same with
   # the suite's OMABOX_SUITE is a leak; and a peek the stand-in's Hyprland starts with no marker (what
   # a command other than `omabox peek` opening one would look like) is a leak.
-  local in=("$CLI" run -b "$S" --) C=$P-cin wd
+  local in=("$CLI" run -b "$S" -- "${HYPR_IN[@]}") C=$P-cin wd
   ob run -b "$S" -- pkill -x foot   # (focus coming back to it would be a leak of its own)
   # (Started with a file open as fd 7, which no process of the nested box may hold: #112.)
   UP_OUT="$("${in[@]}" bash -c 'echo x > /tmp/omabox-t112; exec 7</tmp/omabox-t112; exec "$@"' _ "$CLI" up "$C" --no-shell --idle 0 2>&1)" ||
@@ -5350,7 +5404,7 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_RELAY_PASS_X=s3 X=host jpr caller_env X)"
   # (broker_check's cases: broker_side.rs's broker_check_allows_and_refuses, #324 wave 6-suite)
   # A save that does not exist: were --from let through, up would stop at "no save", no box started.
-  check_match "up --from refused to a jailed agent (finding 100)" "saves are the user's" "$(OMABOX_JAIL=$J "$CLI" up "$P-jf" --from nosuch 2>&1)"
+  check_match "up --from refused to a jailed agent (finding 100)" "saves are the user's" "$(OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" up "$P-jf" --from nosuch 2>&1)"
   # (ports for a jailed caller, the host side by state only, #93; a port a box outside the jail
   # serves on too reads as taken, finding 237: ports.rs ports_for_a_jailed_caller; #324.)
   # A path ai-jail hides inside a folder (--mask/--deny-path: a mount inside it that is not a sub-root):
@@ -5518,7 +5572,7 @@ t_unit_jail_covers() {
   # its themes are listed, the same words as without --theme.
   mkdir -p "$p/hid/bin" "$p/hid/default/hypr" "$p/hid/shell" "$p/hid/themes/secret-client-name"
   : > "$p/hid/default/hypr/bootstrap.lua"; : > "$p/hid/shell/shell.qml"
-  out=$(cd "$p" && OMABOX_JAIL=$(jq -c --arg p "$p" '.masks += ["\($p)/hid"]' <<<"$J") "$CLI" up "$P-th" --omarchy "$p/hid" --theme nope 2>&1)
+  out=$(cd "$p" && OMABOX_JAIL=$(jq -c --arg p "$p" '.masks += ["\($p)/hid"]' <<<"$J") "${NOHYPR[@]}" "$CLI" up "$P-th" --omarchy "$p/hid" --theme nope 2>&1)
   check_match "up --omarchy TREE --theme from a jail: TREE refused first, no theme names (#210 review)" "up: --omarchy $p/hid is not " "$out"
   check_fails "...secret-client-name not said" grep -q secret-client-name <<<"$out"
   # jail_read: not a file the jail hides, whatever led there.
@@ -5718,7 +5772,7 @@ t_jail_record() {
   local jpid; jpid=$(jq '."child-pid"' "$d/jinfo")
   J=$(jq -nc --arg p "$p" --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" \
     '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}], masks: [], mntpid: $j, mntns: $ns}')
-  jo() { (cd "$p" && OMABOX_JAIL=$J "$CLI" "$@"); }
+  jo() { (cd "$p" && OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" "$@"); }
   UP_OUT=$(jo up "$N" --no-shell --net isolated 2>&1) || { no "record for a jailed agent: up in the stand-in jail" "$UP_OUT"; kill "$jb"; return; }
   local as=$p/new/demo.mp4
   check "a jailed agent's record start --as NAME" jo record -b "$N" start --as "$as"
@@ -5864,7 +5918,7 @@ t_jail_held() {
   J=$(jq -nc --arg p "$p" --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" \
     '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: true}], masks: ["\($p)/a/.env"], mntpid: $j, mntns: $ns}')
   mv "$p/a" "$p/c"; mv "$p/b" "$p/a"
-  jo() { (cd "$p" && OMABOX_JAIL=$J "$CLI" "$@"); }
+  jo() { (cd "$p" && OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" "$@"); }
   # A run looped while up checks: never in, never the hidden file.
   jo up "$N" >"$d/up.out" 2>&1 & up=$!
   out=""
@@ -5875,7 +5929,7 @@ t_jail_held() {
   check_match "...said why it waits instead" "still starting" "$out"
   # The same up killed while its box is held: nothing enters it, and its reaper takes it down.
   jo down "$N" >/dev/null 2>&1
-  (cd "$p" && OMABOX_JAIL=$J exec "$CLI" up "$N" >/dev/null 2>&1) & up=$!
+  (cd "$p" && OMABOX_JAIL=$J exec "${NOHYPR[@]}" "$CLI" up "$N" >/dev/null 2>&1) & up=$!
   until_ok 10 bash -c '[ -e "$1/covers-pending" ] && [ -s "$1/pid" ]' _ "$BD" >/dev/null
   kill -KILL "$up"; wait "$up" 2>/dev/null
   out=$(jo run -b "$N" -- cat "$p/c/.env" 2>&1)
@@ -5955,7 +6009,7 @@ t_unit_jail_paths() {
   local t; for t in "$d/out/tree" "$d/proj/tree"; do
     mkdir -p "$t/bin" "$t/default/hypr" "$t/shell"; touch "$t/default/hypr/bootstrap.lua" "$t/shell/shell.qml"
   done
-  ju() { (cd / && OMABOX_JAIL=$J "$CLI" up "$P-jpath" "$@" --size huge 2>&1); }
+  ju() { (cd / && OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" up "$P-jpath" "$@" --size huge 2>&1); }
   local opt out in sfx a b g
   for opt in --seed --theme-dir --overlay --ro-bind --plugin --hyprland --omarchy; do
     sfx=""; case $opt in
@@ -8146,7 +8200,8 @@ t_connected() {
   check_eq "...and succeeds" 0 "$rc"
   # -D none: with --no-map-gw pasta cannot hand the box a loopback nameserver (the host's 127.0.0.53),
   # and would say so on every start.
-  check_eq "pasta printed no warning (box.log is empty)" "" "$(cat "$D/box.log" 2>&1)"
+  # (but for the line naming OMABOX_HYPRLAND's Hyprland, which session.sh writes there: finding 651)
+  check_eq "pasta printed no warning (box.log is empty)" "" "$(no_hypr_line < "$D/box.log" 2>&1)"
   check_eq "no abstract X11 socket of the box's on the host" "" "$(new_x11 "$before" "$(jq -r .pidns "$D/box.json")")"
   # #211 (finding 288): labwc makes no Xwayland now, so a box without --xwayland has no X server at
   # all, in its network namespace or its /tmp; an X client that sets DISPLAY=:0 itself finds none.
@@ -8322,7 +8377,7 @@ t_log_rolling() {
     no "a line Hyprland logged but has not written to its file yet" "each mark was in the file at once"
   else
     check_match "...in its rolling log" "\[Lua\] $m" "$(ob hyprctl -b "$B" rollinglog)"
-    check_match "log hyprland: the line not yet in the file, from the rolling log" "^DEBUG \]: \[Lua\] $m$" \
+    check_match "log hyprland: the line not yet in the file, from the rolling log" "^DEBUG \]: $(lua_print_re)$m$" \
       "$(ob log -b "$B" --grep "$m" 2>/dev/null)"
     check_eq "...once, in -n all too" 1 "$(ob log -b "$B" -n all 2>/dev/null | grep -cF "$m")"
   fi
@@ -8371,7 +8426,7 @@ t_wait_log() {
   ob run -b "$B" -d -q -- sh -c "sleep 1; hyprctl eval \"print('$m hypr')\""
   out=$(ob wait -b "$B" --timeout 10s log hyprland --grep "$m hypr"); rc=$?
   check_eq "wait log hyprland: a Lua print during the wait, exit 0" 0 "$rc"
-  check_match "...its line, as log hyprland has it" "^satisfied: a line matching $m hypr in the hyprland log after .*: DEBUG \]: \[Lua\] $m hypr$" "$out"
+  check_match "...its line, as log hyprland has it" "^satisfied: a line matching $m hypr in the hyprland log after .*: DEBUG \]: $(lua_print_re)$m hypr$" "$out"
   check_eq "...waited for again: logged before, 124" 124 \
     "$(ob wait -b "$B" --timeout 1s log hyprland --grep "$m hypr" >/dev/null 2>&1; echo $?)"
   # wait for: a fixed time, said as one, counted as use
@@ -10969,8 +11024,8 @@ t_up_signals() {
 t_up_signals_window() {
   local S=$P-usw
   up_ok "$S" --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
-  local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
-  if aq_unfixed "${in[@]}"; then skip "up -i --monitor and a signal" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
+  local in=("$CLI" run -b "$S" -- "${HYPR_IN[@]}" "${GUARDED[@]}" "$CLI")
+  if box_aq_unfixed "${in[@]}"; then skip "up -i --monitor and a signal" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
   if ! "${in[@]}" --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+appid'; then
     skip "up -i --monitor and a signal" "not omabox's aquamarine build with +appid (omabox setup --aquamarine)"; ob down "$S" >/dev/null; return
   fi
@@ -11037,7 +11092,10 @@ t_hyprland_dies() {
 # went, and lua read the box as up. Under gdb --watch, it names the backtrace instead.
 t_hyprland_crash() {
   local B=$P-hcrash out rc
-  local crash='local a = hl.bind("F9", function() end, {}); local b = hl.bind("F9", function() end, {}); a:unbind(); b:unbind(); return "x"'
+  # (A SIGSEGV the Lua call sends its Hyprland, through the shell os.execute runs, whose parent it is:
+  # any version dies of it, inside the call. Two binds of F9, both unbound, crashed 0.56 by a bug of
+  # its own; 0.57 survives them, finding 651.)
+  local crash='os.execute("kill -SEGV $PPID"); return "x"'
   check "up" ob up "$B" --no-shell --net isolated
   rc=0; out=$(timeout 30 "$CLI" lua -b "$B" "$crash" 2>&1) || rc=$?
   check_eq "lua that crashes Hyprland: exit 1" 1 "$rc"
@@ -11066,7 +11124,7 @@ t_hyprland_crash() {
   # An interactive box has no labwc: session.sh writes how its Hyprland ended (in a box standing in
   # for the host, finding 26).
   check "up (the stand-in host)" ob up "$B" --no-shell --net isolated
-  local in=("$CLI" run -b "$B" -- "$CLI")
+  local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "$CLI")
   if UP_OUT=$("${in[@]}" up hc --interactive --no-shell 2>&1); then
     rc=0; out=$(timeout 30 "${in[@]}" lua -b hc "$crash" 2>&1) || rc=$?
     check_match "an interactive box's crash: said with its signal" "^omabox: box 'hc' went down: its Hyprland crashed \\(SIGSEGV\\)" "$out"
@@ -11402,11 +11460,13 @@ t_unit_aquamarine() {
   aq_symbol_checks "$d"
   check_match "a soname the system lacks" "Hyprland links libaquamarine.so.99, which is not in $d/sys" "$(pick libaquamarine.so.99 "$d/sys")"
   check_fails "no soname at all: no answer (not a match on the dir)" probe aq_pick_dirs "" "$d/sys" "$d/user/lib"
-  # What needs the fix, on this machine's system aquamarine (OMABOX_AQUAMARINE=system).
+  # What needs the fix, on this machine's system aquamarine (OMABOX_AQUAMARINE=system), never a folder's
+  # (NOHYPR): under OMABOX_HYPRLAND an up --interactive --confirm-close expected to be refused here went
+  # up, a window on your workspace 9 (finding 651).
   if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
     check_match "without the fix: up --confirm-close refused, saying why and what to run" \
       "--confirm-close .*needs aquamarine's fix .*hyprwm/aquamarine#415.*omabox setup --aquamarine" \
-      "$(OMABOX_AQUAMARINE=system ob up "$P-aq" --interactive --confirm-close 2>&1)"
+      "$(OMABOX_AQUAMARINE=system "${NOHYPR[@]}" "$CLI" up "$P-aq" --interactive --confirm-close 2>&1)"
     check_fails "...nothing made" test -e "$XDG_RUNTIME_DIR/omabox/$P-aq"
     check_match "...config confirm-close on: set, with a note" "note: confirm-close needs aquamarine's fix.*confirm-close=on" \
       "$(HOME=$d/home OMABOX_AQUAMARINE=system "$CLI" config confirm-close on 2>&1 | tr '\n' ' ')"
@@ -11414,7 +11474,7 @@ t_unit_aquamarine() {
     for n in /dev/dri/renderD*; do [ "$(probe render_driver "$n")" != nvidia ] || { nv=$n; break; }; done
     if [ -n "$nv" ]; then
       check_match "...a headless box on NVIDIA refused, saying what to run" "a headless box on NVIDIA \($nv\) needs aquamarine's fix.*omabox setup --aquamarine" \
-        "$(OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=$nv ob up "$P-aq" 2>&1)"
+        "$(OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=$nv "${NOHYPR[@]}" "$CLI" up "$P-aq" 2>&1)"
       check_fails "...nothing made" test -e "$XDG_RUNTIME_DIR/omabox/$P-aq"
     else
       skip "a headless box on NVIDIA without the fix is refused" "no NVIDIA render node"
@@ -11582,7 +11642,8 @@ aq_symbol_checks() {
 # version said is the system's), with a scratch HOME and runtime dir. Refused: before its lock (no
 # lock file, nothing made); let through: as far as its lock, where a down marker from the future
 # cancels it (the lock taken, no box). The marker is there for a refusal too: an up that should have
-# refused and did not stops at its lock, never starting a box on the fake GPU.
+# refused and did not stops at its lock, never starting a box on the fake GPU. Never with
+# OMABOX_HYPRLAND: a folder's aquamarine would be the box's, not the system's under test (finding 651).
 aq_up_gate() {
   local d=$1 dir=$2 so=$3 refused=$4 rt=$1/up-$2 out
   [ -e "/usr/lib/$so" ] || { skip "...up itself on the $dir system's aquamarine" "no /usr/lib/$so here"; return; }
@@ -11593,7 +11654,7 @@ aq_up_gate() {
   out=$(unshare -r -m --propagation slave bash -c '
     gt=$1/gt; mount --bind "$gt/dev/dri" /dev/dri && mount --bind "$gt/sys/class/drm" /sys/class/drm &&
       mount --bind "$(readlink -f "$1/$2/$3")" "/usr/lib/$3" || exit 99
-    env HOME="$1/up-home" XDG_RUNTIME_DIR="$4" XDG_CACHE_HOME="$1/up-home/.cache" XDG_STATE_HOME="$1/up-home/.local/state" OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=/dev/dri/renderD129 "$5" up "$6"
+    env -u OMABOX_HYPRLAND HOME="$1/up-home" XDG_RUNTIME_DIR="$4" XDG_CACHE_HOME="$1/up-home/.cache" XDG_STATE_HOME="$1/up-home/.local/state" OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=/dev/dri/renderD129 "$5" up "$6"
   ' _ "$d" "$dir" "$so" "$rt/run" "$CLI" "$P-aqs" 2>&1; echo "rc=$?")
   if [ "$refused" = 1 ]; then
     check_match "...up itself refuses it" "^omabox: a headless box on NVIDIA \(/dev/dri/renderD129\) needs aquamarine's fix.*rc=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
@@ -11812,7 +11873,7 @@ t_unit_quickshell() {
   local J; J=$(jq -nc --arg p "$d/proj" --arg c "$d/proj" '{id: "1 2", net: false, cwd: $c, roots: [{path: $p, masked: false}]}')
   check_match "jail: a build outside the jail's folders is refused" "not in this jail's project nor in a folder it was given whole \(or is not a Quickshell" \
     "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/other/quickshell" --size huge 2>&1)"
-  check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/proj/build/quickshell" --size huge 2>&1)"
+  check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" up "$P-q2" --quickshell "$d/proj/build/quickshell" --size huge 2>&1)"
   # (relay: --quickshell goes absolute: t_unit_jailed_caller's.)
   # (The version line, from inside the box, every box's, the build's run by its path: install.rs
   # qs_version_as_bash, the box's answers given; #324 wave 6-suite.)
@@ -11835,7 +11896,8 @@ t_quickshell() {
   check_match "ls says so, under its line" "^  Quickshell: $q \(Quickshell [0-9.]+" "$(ob ls | grep -A3 "^$B " | grep '^  Quickshell')"
   check_eq "ls --json has the binary and its version line" "$q true" \
     "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | "\(.quickshell) \(.quickshell_version | test("^Quickshell [0-9]"))"')"
-  check_match "windows says so first" "^box $B runs its shell on Quickshell $q \(Quickshell " "$(ob windows -b "$B" | head -n 1)"
+  # (after the line naming OMABOX_HYPRLAND's Hyprland, which comes first: finding 651)
+  check_match "windows says so first" "^box $B runs its shell on Quickshell $q \(Quickshell " "$(ob windows -b "$B" | grep -v "^box $B runs Hyprland " | head -n 1)"
   check "restart-shell" ob restart-shell -b "$B"
   check_eq "...keeps it" "$q" "$(ob run -b "$B" -- sh -c "$exe")"
   # Omarchy's own restart (its launcher, through the systemd-cat stand-in), from the box's session.
@@ -13233,7 +13295,7 @@ t_peek_monitors() {
   n=$(gpu_node other)
   [ -n "$n" ] || { skip "peek with monitors" "no render node here but NVIDIA's (a stand-in there is not tried; finding 234)"; return; }
   OMABOX_RENDER_NODE="$n" up_ok "$S" --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
-  local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
+  local in=("$CLI" run -b "$S" -- "${HYPR_IN[@]}" "${GUARDED[@]}" "$CLI")
   # (The stand-in renders on that node, and so does a box in it.) The second monitor is 1280x720
   # logical, 1600x900 pixels, at 1920,0.
   check "up a box with a second monitor at scale 1.25 in the stand-in" "${in[@]}" up "$C" --no-shell --idle 0 --monitor 1600x900,scale=1.25
@@ -13694,10 +13756,17 @@ t_uwsm_app() {
   check_eq "...in a terminal's bash too (Omarchy's bin is on its PATH)" "${ov#* }" "$(ob run -b "$B" -- bash -ic omarchy-version 2>/dev/null)"
   check_eq "...and ls --json has it (finding 139)" "${ov#* }" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
   # #238: the installed Hyprland's version too, as the box's says it; `hyprland` (a build's path) null.
+  # Under OMABOX_HYPRLAND (finding 651), the folder's binary, and ls names it.
   local hj; hj=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | [.hyprland, .hyprland_version]')
-  check_eq "ls --json has the installed Hyprland's version line, hyprland null (#238)" \
-    "$(jq -nc --arg v "$(ob hyprctl -b "$B" version | head -n 1)" '[null, $v]')" "$hj"
-  check_fails "...and ls says no Hyprland line for it" bash -c "'$CLI' ls | grep -A1 '^$B ' | grep -q '^  Hyprland:'"
+  if [ -z "${OMABOX_HYPRLAND:-}" ]; then
+    check_eq "ls --json has the installed Hyprland's version line, hyprland null (#238)" \
+      "$(jq -nc --arg v "$(ob hyprctl -b "$B" version | head -n 1)" '[null, $v]')" "$hj"
+    check_fails "...and ls says no Hyprland line for it" bash -c "'$CLI' ls | grep -A1 '^$B ' | grep -q '^  Hyprland:'"
+  else
+    check_eq "ls --json has OMABOX_HYPRLAND's binary and its version line (#238)" \
+      "$(jq -nc --arg b "$HYPR_BIN" --arg v "$(ob hyprctl -b "$B" version | head -n 1)" '[$b, $v]')" "$hj"
+    check_match "...and ls says it on its Hyprland line" "^  Hyprland: $HYPR_RE" "$("$CLI" ls | grep -A1 "^$B " | grep '^  Hyprland:')"
+  fi
   ob down "$B" >/dev/null
 }
 
@@ -13720,6 +13789,7 @@ t_system_dirs() {
     "$(awk '$1 == "Z" { print $2 } $1 == "L" { print $3 }' /usr/share/zoneinfo/tzdata.zi | LC_ALL=C sort -u | md5sum)" \
     "$(ob run -b "$B" -- timedatectl list-timezones 2>&1 | md5sum)"
   check_fails "...set-timezone still goes to the real one, which fails" ob run -b "$B" -- timedatectl set-timezone UTC
+  # (HYPR_V: the installed one's, or OMABOX_HYPRLAND's that the box runs)
   check_eq "the box HOME's Hyprland lastVersion is the box's Hyprland, not 0.0.0 (finding 626)" \
     "$(box_hypr_version "$B")" "$(ob run -b "$B" -- cat /home/sbx/.local/share/hyprland/lastVersion 2>&1)"
   ob down "$B" >/dev/null
@@ -13893,6 +13963,9 @@ t_cli_up() {
   # (the box HOMEs where the user's are, whatever the test's own HOME: without XDG_CACHE_HOME they
   # would move into it, and the goldens with them, #414)
   local -x XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}
+  # (the goldens are boxes on the installed Hyprland: OMABOX_HYPRLAND's folder adds its own mounts,
+  # finding 651; empty is unset to up)
+  local -x OMABOX_HYPRLAND=""
   rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
   # A HOME of the test's own, so the user's own ~/.config/omabox/config (protect-ports, a gpu) cannot
   # change what up does: its theme the user's current one, its config empty.
@@ -14070,6 +14143,8 @@ t_cli_box() {
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
   cx_rt=$XDG_RUNTIME_DIR cx_dir=/ cx_env=() cx_prep="" cx_snap=0
+  # (box.log: empty, but for session.sh's line naming OMABOX_HYPRLAND's Hyprland, finding 651)
+  local boxlog=(out=); [ -z "$HYPR_RE" ] || boxlog=("out~^session\.sh: Hyprland $HYPR_RE" 'out!~^([^s]|$)')
   # (the box's socket, hard-linked into its dir, which only the host writes: finding 493)
   cx_want=(rc=0 "out=export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/wayland"$'\n''unset DISPLAY WAYLAND_SOCKET HYPRLAND_INSTANCE_SIGNATURE' err=)
   cx_case "env of a box up" env -b "$B"
@@ -14107,7 +14182,7 @@ t_cli_box() {
   cx_case "events --until: none in time, 124" events -b "$B" --until 'rp-never' --timeout 300ms
   cx_wrap=(timeout -s TERM 1); cx_want=(rc=124 out= err=)
   cx_case "events -f: ended by TERM" events -b "$B" -f
-  cx_want=(rc=124 out= err=)
+  cx_want=(rc=124 "${boxlog[@]}" err=)
   cx_case "log -f box: ended by TERM" log -b "$B" -f box; cx_wrap=()
   cx_want=(rc=0 'out~^Hyprland [0-9.]+ built from branch ' err=)
   cx_case "hyprctl version" hyprctl -b "$B" version
@@ -14134,7 +14209,7 @@ t_cli_box() {
   cx_case "lua: a source with ]] in it" lua -b "$B" 'return "]]", "]=]"'
   cx_want=(rc=0 'out~^function: 0x[0-9a-f]+$' 'err=omabox: lua: a function, returned and not called')
   cx_case "lua: a function returned" lua -b "$B" 'return print'
-  cx_sed='s/0x[0-9a-f]+/0xADDR/g'; cx_want=(rc=0 'out=HL.Dispatcher' "err=omabox: lua: a dispatcher, returned and not run: omabox lua 'hl.dispatch(EXPR)' (or omabox hyprctl dispatch 'EXPR')")
+  cx_sed='s/0x[0-9a-f]+/0xADDR/g'; cx_want=(rc=0 "out=$(hl_dispatcher close)" "err=omabox: lua: a dispatcher, returned and not run: omabox lua 'hl.dispatch(EXPR)' (or omabox hyprctl dispatch 'EXPR')")
   cx_case "lua: a dispatcher returned" lua -b "$B" 'hl.dsp.window.close()'; cx_sed=""
   echo 'return 6 * 7' > "$TMP/rp-lua"; cx_in=$TMP/rp-lua; cx_want=(rc=0 'out=42' err=)
   cx_case "lua -: the source on stdin" lua -b "$B" -; cx_in=/dev/null
@@ -14183,7 +14258,7 @@ t_cli_box() {
   cx_case "run -d --replace -q: none of this command" run -b "$B" -d --replace -q -- true
   cx_prep="" cx_sed=""
   ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1
-  cx_want=(rc=0 out= err=)
+  cx_want=(rc=0 "${boxlog[@]}" err=)
   cx_case "log box" log -b "$B" box
   cx_want=(rc=0 out= err=)
   cx_case "log: a --grep that matches nothing" log -b "$B" shell --grep 'rp-never-said'
@@ -14896,6 +14971,7 @@ t_omarchy_restart() {
 # Whether the box's keyboard panel (Omarchy's KeyboardPanel, the widget's) is open and takes keys
 # (#116): a closing one stays mapped through its fade-out with no keyboard interactivity, so a layer
 # there is not enough: keys sent then were lost, and a keyed row of the widget's flaked under load.
+# (Hyprland 0.57 renamed the field keyboard_interactivity, finding 651.)
 panel_takes_keys() {
   [ "$(ob lua -b "$1" 'for _, l in ipairs(hl.get_layers()) do
     if l.namespace == "omarchy-keyboard-panel" and l.mapped and (l.keyboard_interactivity or l.interactivity or 0) > 0 then return true end
@@ -15481,7 +15557,7 @@ scale_on() {
     check_fails "...gone with the box" test -n "$wp" -a -d "/proc/${wp:-0}"
   fi
   ob down "$B" >/dev/null 2>&1 || true
-  check_match "an interactive box takes no scale" "takes no scale there" "$(ob up "$B-i" --interactive --size 1920x1080,scale=2 2>&1)"
+  check_match "an interactive box takes no scale" "takes no scale there" "$("${NOHYPR[@]}" "$CLI" up "$B-i" --interactive --size 1920x1080,scale=2 2>&1)"
   check_fails "...and none is left" test -e "$XDG_RUNTIME_DIR/omabox/$B-i/box.json"
 }
 # record mark and record sheet (#176, finding 306), in scale_on's box B (2560x1440 at scale 2): a
@@ -16306,10 +16382,11 @@ monitors_on() {
       "$(cat "$(ob path "$B")/run/labwc/rc.xml")"
   fi
   # A headless output the program under test makes itself (#213): on NVIDIA it is listed 0x0, and
-  # monitor list and shot --monitor say why; elsewhere it takes its mode and nothing is said.
+  # monitor list and shot --monitor say why; elsewhere, and on NVIDIA since Hyprland 0.57 (finding
+  # 645), it takes its mode and nothing is said.
   ob hyprctl -b "$B" output create headless ZTEST >/dev/null
   ob lua -b "$B" 'hl.monitor({ output = "ZTEST", mode = "1280x720@60", position = "0x5000", scale = 1 })' >/dev/null 2>&1
-  if [ "$m0" = WAYLAND-1 ]; then
+  if [ "$m0" = WAYLAND-1 ] && ! hypr_ge 0.57; then
     check "NVIDIA: a headless output of the program's own is listed 0x0" until_ok 5 bash -c \
       "'$CLI' hyprctl -b '$B' -j monitors | jq -e 'any(.[]; .name == \"ZTEST\" and .width == 0)' >/dev/null"
     check_match "...monitor list says why, and where to test it" "ZTEST listed 0x0: this box draws on NVIDIA.*monitor add makes one" "$(ob monitor -b "$B" list 2>&1 >/dev/null)"
@@ -16424,8 +16501,8 @@ t_monitors_window() {
   # The stand-in at the size of the screen #174 was found on (3440x1440, scale 1).
   local S=$P-monh
   up_ok "$S" --size 3440x1440 --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
-  local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
-  if aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
+  local in=("$CLI" run -b "$S" -- "${HYPR_IN[@]}" "${GUARDED[@]}" "$CLI")
+  if box_aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
   # (finding 429: a monitor's window needs a class of its own, which only omabox's build gives)
   if ! "${in[@]}" --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+appid'; then
     skip "monitors as windows" "not omabox's aquamarine build with +appid (omabox setup --aquamarine)"; ob down "$S" >/dev/null; return
@@ -17091,7 +17168,7 @@ t_guard() {
   check_match "...and the box session's PATH" '^PATH=/' "$spath"
   check_fails "...lacks the guard's" grep share/guard <<<"$spath"
   # Inside the stand-in host: the guard as an agent's shell there would have it.
-  local in=("$CLI" run -b "$B" -- "${GUARDED[@]}")
+  local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "${GUARDED[@]}")
   # A Wayland client says so too, and exits cleanly.
   check_match "a Wayland client under the guard fails with no display" "Failed to connect to a Wayland server" \
     "$("${in[@]}" wl-paste 2>&1)"
@@ -17163,7 +17240,7 @@ t_guard() {
   gone() { [ "$(state "$1")" = gone ]; }
   # shellcheck disable=SC2329
   is() { [ "$(state "$1")" = "$2" ]; }
-  if aq_unfixed "${in[@]}" "$CLI"; then
+  if box_aq_unfixed "${in[@]}" "$CLI"; then
     # finding 125: without aquamarine's fix the box cannot open its window again
     check_match "no aquamarine fix: --confirm-close refused, saying why" "--confirm-close .*needs aquamarine's fix" \
       "$("${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close 2>&1)"
@@ -17249,7 +17326,7 @@ t_guard() {
 # is opened by the widget's Show (peek --focus) and hidden by a workspace switch, and keeps drawing
 # while hidden and after it is shown again; a peek window goes there too.
 t_special_ws() {
-  local B=$P-sw out; local in=("$CLI" run -b "$B" --)
+  local B=$P-sw out; local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}")
   up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
   # shellcheck disable=SC2329 # called through until_ok
   shown() { [ "$(ob hyprctl -b "$B" -j monitors | jq -r '.[0].specialWorkspace.name')" = "$1" ]; }
@@ -17295,7 +17372,7 @@ t_special_ws() {
 # peek of a headless box says what needs Lua instead of that answer, doctor warns; headless boxes
 # work.
 t_conf_host() {
-  local B=$P-ch h sig out rc; local in=("$CLI" run -b "$B" --)
+  local B=$P-ch h sig out rc; local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}")
   up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
   h=$(ob path "$B")/home
   printf 'monitor = , 800x600, auto, 1\nmisc {\n    disable_hyprland_logo = true\n}\n' > "$h/conf-host.conf"
@@ -17304,7 +17381,7 @@ t_conf_host() {
   nested() { "${in[@]}" sh -c 'hyprctl -j instances | jq -er --arg o "$HYPRLAND_INSTANCE_SIGNATURE" "first(.[] | select(.instance != \$o) | .instance)"'; }
   until_ok 20 nested || { no "a Hyprland on a .conf config in the stand-in" "$(tail -n 5 "$h/conf-host.log")"; ob down "$B" >/dev/null; return; }
   sig=$(nested)
-  local at=("$CLI" run -b "$B" -- env HYPRLAND_INSTANCE_SIGNATURE="$sig")
+  local at=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" env HYPRLAND_INSTANCE_SIGNATURE="$sig")
   check_eq "a .conf Hyprland's eval answers its refusal, exit 0 (0.56)" "eval is only supported with the lua config manager 0" \
     "$(out=$("${at[@]}" hyprctl eval 'x = 1' 2>&1); echo "$out $?")"
   check_eq "...and its status says hyprlang" hyprlang "$("${at[@]}" hyprctl -j status | jq -r .configProvider)"
@@ -17331,7 +17408,7 @@ t_conf_host() {
 t_clip() {
   local B=$P-clip
   up_ok "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" || { no "up (the stand-in host)" "$UP_OUT"; return; }
-  local in=("$CLI" run -b "$B" --) H; H=$(ob path "$B")/home
+  local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}") H; H=$(ob path "$B")/home
   UP_OUT=$("${in[@]}" "$CLI" up ib --interactive --no-shell 2>&1) || { no "up --interactive in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return; }
   local inb=("${in[@]}" "$CLI" run -b ib --) out rc
   local wins0 aw0; wins0=$(ob hyprctl -b "$B" -j clients | jq length); aw0=$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')
@@ -17442,7 +17519,7 @@ t_clip() {
 t_keys_to_box() {
   local B=$P-kb
   up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
-  local in=("$CLI" run -b "$B" -- "$CLI")
+  local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "$CLI")
   check_match "keys-to-box refuses a headless box" "is headless" "$(ob keys-to-box -b "$B" on 2>&1)"
   if ! UP_OUT=$("${in[@]}" up ka --interactive --no-shell 2>&1) || ! UP_OUT=$("${in[@]}" up kb --interactive --no-shell 2>&1); then
     no "up --interactive twice in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return
@@ -17573,7 +17650,7 @@ t_keys_to_box() {
   check "...focus drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
   check "keys-to-box off with the box focused: the keys are the host's at once" "${in[@]}" keys-to-box -b ka off
   check "...submap, border and file off" until_ok 5 kis "|aquamarine|plain|"
-  if aq_unfixed "${in[@]}"; then
+  if box_aq_unfixed "${in[@]}"; then
     skip "a confirm-close keep keeps the keys-to-box box (issue #24)" "aquamarine without the fix for nested Wayland outputs: no keep (t_guard checks that)"
   else
     # issue #24: a confirm-close keep recreates the box's output (a new window, the same client).
@@ -17619,9 +17696,12 @@ t_keys_down_up() {
   check "...the holder runs in the box (its pid namespace)" ob run -b "$B" -- pgrep -f 'omabox-keyboard .*down:XF86Tools'
   check "pointer move with the key held" ob pointer -b "$B" -- move 100 100 move 400 300
   check_eq "...no release yet" "custom>>tools-press" "$(evs)"
+  # (Hyprland 0.57 cancels a release bind once the pointer moves between its press and release, finding
+  # 645: there the up below fires none. The key is let go all the same: the later presses show it.)
+  local r1=" custom>>tools-release" r1say="once, after the press"; ! hypr_ge 0.57 || r1="" r1say="none: the pointer moved (0.57)"
   check_match "a second down: of it: refused" "down:XF86Tools: held already \(up:XF86Tools lets go\)" "$(ob keys -b "$B" down:XF86Tools 2>&1)"
   check "keys up:XF86Tools" ob keys -b "$B" up:XF86Tools
-  check "...its release bind fires, once, after the press, and nothing else" until_ok 5 evs_are "custom>>tools-press custom>>tools-release"
+  check "...its release bind fires $r1say, and nothing else" until_ok 5 evs_are "custom>>tools-press$r1"
   check_fails "...the holder is gone with the last held key" ob run -b "$B" -- pgrep -f 'omabox-keyboard .*down:'
   local out; out=$(ob keys -b "$B" up:XF86Tools 2>&1); local rc=$?
   check_eq "up: of a key not held: exit 1" 1 "$rc"
@@ -17634,9 +17714,9 @@ t_keys_down_up() {
   ob keys -b "$B" a >/dev/null
   check_match "up:KEY not held, with another held: names what is" "up:shift: not held \(held: Super_L\)" "$(ob keys -b "$B" up:shift 2>&1)"
   ob keys -b "$B" up:super >/dev/null
-  check "down:super, then keys a: SUPER+A" until_ok 5 evs_are "custom>>tools-press custom>>tools-release custom>>super-a"
+  check "down:super, then keys a: SUPER+A" until_ok 5 evs_are "custom>>tools-press$r1 custom>>super-a"
   # A holder killed outright (finding 347): its key let go once, by the next keys, never twice.
-  local e0="custom>>tools-press custom>>tools-release custom>>super-a" tp="custom>>tools-press custom>>tools-release"
+  local e0="custom>>tools-press$r1 custom>>super-a" tp="custom>>tools-press custom>>tools-release"
   # shellcheck disable=SC2329
   kill_holder() { ob run -b "$B" -- sh -c 'kill -KILL $(pgrep -f "^/opt/omabox/bin/omabox-keyboard")'; }
   ob keys -b "$B" down:XF86Tools >/dev/null; kill_holder
@@ -17684,8 +17764,13 @@ t_keys_down_up() {
 t_held_keys() {
   local B=$P-hk
   up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
-  local in=("$CLI" run -b "$B" -- "$CLI")
-  # (Asked of this omabox: the stand-in's own sees the build it binds at /opt/omabox/lib, not its name.)
+  local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "$CLI")
+  # (Asked of this omabox: the stand-in's own sees the build it binds at /opt/omabox/lib, not its name.
+  # An OMABOX_HYPRLAND folder with an aquamarine of its own runs that one, never omabox's build.)
+  if folder_aq; then
+    skip "a key held when focus leaves an interactive box is released there" "OMABOX_HYPRLAND's folder brings its own aquamarine, not omabox's build with +keys"
+    ob down "$B" >/dev/null; return
+  fi
   if ! ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+keys'; then
     skip "a key held when focus leaves an interactive box is released there" "not omabox's aquamarine build (omabox setup --aquamarine)"
     ob down "$B" >/dev/null; return
@@ -17974,7 +18059,7 @@ t_theme() {
 t_submap_release() {
   local B=$P-sr
   up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
-  local in=("$CLI" run -b "$B" -- "$CLI")
+  local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "$CLI")
   # Another tool's host rule (finding 136): every aquamarine window floating, on a workspace of its own.
   ob hyprctl -b "$B" eval 'hl.window_rule({ name = "nested-float", match = { class = "aquamarine" }, float = true, workspace = "name:nested silent" })' >/dev/null
   UP_OUT=$("${in[@]}" up sa --interactive --no-shell 2>&1) || { no "up --interactive in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return; }
@@ -18089,7 +18174,7 @@ t_omarchy_tree() {
   check_eq "...+dirty once edited" "dev $(git -C "$T" rev-parse --short HEAD)+dirty" "$(ov)"
   check_match "up again with another tree: refused" "--omarchy /usr/share/omarchy" "$(ob up "$B" --omarchy /usr/share/omarchy 2>&1)"
   # A box in that box, on the installed Omarchy: the outer /etc/omarchy.conf names the tree.
-  local in=("$CLI" run -b "$B" -- "$CLI")
+  local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "$CLI")
   if UP_OUT=$("${in[@]}" up oi --no-shell 2>&1); then
     check_eq "a box started where /etc/omarchy.conf names another tree runs the installed Omarchy" "/usr/share/omarchy" \
       "$("${in[@]}" run -b oi -- bash -ic 'echo "$OMARCHY_PATH"' 2>/dev/null)"
@@ -20932,7 +21017,7 @@ t_inspect() {
   ob run -b "$B" -- rm -f /tmp/omabox-t130
   out=$(ob lua -b "$B" 'hl.dsp.exec_cmd("touch /tmp/omabox-t130")' 2>&1 >/dev/null)
   check_match "lua: a dispatcher returned is said not run (#130)" "a dispatcher, returned and not run: omabox lua 'hl\.dispatch\(EXPR\)'" "$out"
-  check_eq "...its value as before, exit 0" "0 HL.Dispatcher" "$(v=$(ob lua -b "$B" 'hl.dsp.exec_cmd("true")' 2>/dev/null); echo "$? $v")"
+  check_eq "...its value as before, exit 0" "0 $(hl_dispatcher exec_cmd)" "$(v=$(ob lua -b "$B" 'hl.dsp.exec_cmd("true")' 2>/dev/null); echo "$? $v")"
   sleep 0.5
   check_fails "...and it did not run" ob run -b "$B" -- test -e /tmp/omabox-t130
   check_match "lua: a function, said not called" "a function, returned and not called" "$(ob lua -b "$B" 'function() end' 2>&1 >/dev/null)"
@@ -21002,8 +21087,10 @@ t_inspect() {
   ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '5' })" >/dev/null
   # log (finding 107): Hyprland's by default, the others by name, followed until the box goes.
   check_eq "log: Hyprland's, -n lines" 5 "$(ob log -b "$B" -n 5 | wc -l)"
-  check_match "log --grep" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep 'creating the' -i -n 1)"
-  check_match "log --grep -i RE, as grep users type it (#130)" "^DEBUG \]: Creating the " "$(ob log -b "$B" --grep -i 'creating the' -n 1)"
+  # (0.57 puts the logging C++ function before the words, finding 651)
+  local fn=""; ! hypr_ge 0.57 || fn='\[CCompositor::initManagers\] '
+  check_match "log --grep" "^DEBUG \]: ${fn}Creating the " "$(ob log -b "$B" --grep 'creating the' -i -n 1)"
+  check_match "log --grep -i RE, as grep users type it (#130)" "^DEBUG \]: ${fn}Creating the " "$(ob log -b "$B" --grep -i 'creating the' -n 1)"
   check_match "path --logs: where each is" "^hyprland +$(ob path -b "$B")/run/hypr/[^/]+/hyprland\.log$" "$(ob path -b "$B" --logs | grep '^hyprland')"
   # path --run (#208): the box's /run/user/$UID on the host, where what the box writes there is.
   check_eq "path --run: <dir>/run" "$(ob path -b "$B")/run" "$(ob path -b "$B" --run)"
@@ -21218,11 +21305,12 @@ provenance() {
   local sha dirty="" so aq rn drv
   sha=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null) || sha=unknown
   [ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ] || dirty=+dirty
-  so=$(ldd "$(command -v Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}')
-  aq=$(readlink -f "$ROOT/build/prefix/lib/$so" 2>/dev/null); aq=${aq##*.so.}
+  # (OMABOX_HYPRLAND's folder: its Hyprland and the aquamarine of its library dir, which the boxes run.)
+  so=$(env ${HYPR_LIB:+LD_LIBRARY_PATH="$HYPR_LIB"} ldd "$HYPR_BIN" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}')
+  aq=$(readlink -f "${HYPR_LIB:-$ROOT/build/prefix/lib}/$so" 2>/dev/null); aq=${aq##*.so.}
   rn=$(probe render_node 2>/dev/null); drv=$(readlink -f "/sys/class/drm/${rn##*/}/device/driver" 2>/dev/null)
-  printf 'omabox %s %s%s, Hyprland %s (host session %s), aquamarine %s (system %s), quickshell %s, labwc %s, bwrap %s, %s (%s), kernel %s\n' \
-    "$(cat "$ROOT/VERSION")" "$sha" "$dirty" "$(Hyprland --version 2>/dev/null | awk 'NR == 1 {print $2}')" \
+  printf 'omabox %s %s%s, Hyprland %s%s (host session %s), aquamarine %s (system %s), quickshell %s, labwc %s, bwrap %s, %s (%s), kernel %s\n' \
+    "$(cat "$ROOT/VERSION")" "$sha" "$dirty" "${HYPR_V:-?}" "${OMABOX_HYPRLAND:+ from OMABOX_HYPRLAND=$OMABOX_HYPRLAND}" \
     "$(hostctl -j version | jq -r '.tag // "?"')" "${aq:-?}" "$(pkg-config --modversion aquamarine 2>/dev/null || echo ?)" \
     "$(quickshell --version 2>/dev/null | awk 'NR == 1 {print $2}')" "$(labwc --version 2>/dev/null | awk 'NR == 1 {print $2}')" \
     "$(bwrap --version | awk '{print $2}')" "${rn:-no render node}" "${drv##*/}" "$(uname -r)"
