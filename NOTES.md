@@ -13109,7 +13109,9 @@ from them.
     some-programs warns, and the suite's record tests skip without it (rec_tools; REC_WHY). Another
     encoder where libx264 is missing (openh264, VP9) is not done. Fedora's run never got a session:
     its cloud image's console is the serial port, nothing starts getty@tty1, so the autologin drop-in
-    never ran; distros-vm.sh enables getty@tty1. Then what failed alone there: the suite's own
+    never ran; distros-vm.sh enables getty@tty1, and disables kmsconvt@tty1 (Fedora 45's preset enables
+    kmscon's console there, which conflicts with getty@tty1 and won at boot: ConditionResult no).
+    Then what failed alone there: the suite's own
     sandbox (t_unit_jail_covers) linked /lib64 to usr/lib as on Arch, where openSUSE's loader is in
     usr/lib64 (bwrap: execvp sh: ENOENT): USRLINKS, the machine's own links; the goldens are Arch's
     /usr layout (skipped on another); install.sh's later cases read the machine's os-release and
