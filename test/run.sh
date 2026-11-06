@@ -14761,7 +14761,7 @@ t_omarchy_restart() {
 # there is not enough: keys sent then were lost, and a keyed row of the widget's flaked under load.
 panel_takes_keys() {
   [ "$(ob lua -b "$1" 'for _, l in ipairs(hl.get_layers()) do
-    if l.namespace == "omarchy-keyboard-panel" and l.mapped and l.interactivity > 0 then return true end
+    if l.namespace == "omarchy-keyboard-panel" and l.mapped and (l.keyboard_interactivity or l.interactivity or 0) > 0 then return true end
   end return false')" = true ]
 }
 
@@ -18088,6 +18088,16 @@ t_unit_window_select() {
   check_eq "a hidden special workspace is off screen" false "$(on "$W" 0xd)"
   check_eq "a shown one is on screen" true "$(on "$Wsp" 0xd)"
   check_eq "...above the workspace under it" "0xf 0x2 0xd" "$(cov "$Wsp" 0xa)"
+  # Hyprland 0.57 (finding 645): a special workspace has no id anywhere (a window's, a monitor's
+  # specialWorkspace), only its name; none shown is {"name": ""}.
+  local c57 W57 W57sp
+  c57=$(jq -c 'map(.workspace |= (if .id < 0 then {address: "special:scratch", type: "special", name: "special:scratch"} else . + {address: .name, type: "normal"} end))' <<<"$c")
+  W57=$(probe win_annotate "$c57" '[{"activeWorkspace":{"address":"1","id":1,"type":"normal","name":"1"},"specialWorkspace":{"address":"","type":"","name":""}}]' "$act")
+  W57sp=$(probe win_annotate "$c57" '[{"activeWorkspace":{"address":"1","id":1,"type":"normal","name":"1"},"specialWorkspace":{"address":"special:scratch","type":"special","name":"special:scratch"}}]' "$act")
+  check_eq "0.57: a hidden special workspace is off screen" false "$(on "$W57" 0xd)"
+  check_eq "...a shown one on screen" true "$(on "$W57sp" 0xd)"
+  check_eq "...above the workspace under it" "0xf 0x2 0xd" "$(cov "$W57sp" 0xa)"
+  check_eq "...and not over it while hidden" "0xf 0x2" "$(cov "$W57" 0xa)"
   local Wfs; Wfs=$(probe win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act")
   check_eq "a fullscreen window: nothing covers it" "" "$(cov "$Wfs" 0xa)"
   check_eq "...it covers the rest" 0xa "$(cov "$Wfs" 0xf | tr ' ' '\n' | grep -x 0xa)"

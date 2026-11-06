@@ -1,6 +1,15 @@
 //! The jq programs bash's omabox kept in variables, byte for byte as it had them until the port
 //! ended (#324): the desktop's windows, layers and changes are jq's answers, so jq runs them.
 
+// A workspace's key (finding 645): its id, or on Hyprland 0.57, where a special workspace has no id,
+// its name; none (a monitor's specialWorkspace with nothing shown: id 0, or name "") null or 0.
+macro_rules! ws_key_jq {
+    () => {
+        r#"
+  def wsk: .id // (if (.name // "") == "" then null else .name end);
+  def wspecial: (.id // 0) < 0 or ((.name // "") | startswith("special:"));"#
+    };
+}
 macro_rules! layer_span_jq { () => { r#"
   def spans($m; $mon): (first($m[]? | select(.name == $mon)) // null) as $o
     | if $o == null or ($o.width // null) == null then false else
@@ -41,13 +50,13 @@ macro_rules! win_sel_jq { () => { r#"
   hits(false) as $h | if $h | length > 0 then $h else hits(true) end"# }; }
 macro_rules! win_desc_jq { () => { r#"def n: "\(.address) \(.class) \(.title | tojson)";
   def d: "\(.address) \(.class) \(.title | tojson) at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" + (if .active then ", focused" else "" end);"# }; }
-macro_rules! desk_facts_jq { () => { r#"
+macro_rules! desk_facts_jq { () => { concat!(ws_key_jq!(), r#"
   def cut: if length > 40 then .[:39] + "…" else . end;
   def win: {address, class, title, workspace: (.workspace.name // null)};
   def wins: [.clients[]? | select(.mapped)];
   def lays: [.layers | objects | .[] | .levels? // {} | .[] | .[]
     | select(.w > 1 and .h > 1) | {ns: (if (.namespace // "") == "" then .address else .namespace end), address, at: {x, y, w, h}}];
-  def shown: [.monitors[]? | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0 and . != null));
+  def shown: [.monitors[]? | .activeWorkspace, .specialWorkspace | wsk] | map(select(. != 0 and . != null));
   ($b | wins) as $bw | ($a | wins) as $aw | ($bw + $aw) as $all
   | def name: if (.class // "") == "" then "a window \"\(.title // "" | cut)\"" else "\(.class) \"\(.title | cut)\"" end
       + (. as $w | if any($all[]; .address != $w.address and .class == $w.class and .title == $w.title) then " (\(.address))" else "" end);
@@ -58,7 +67,7 @@ macro_rules! desk_facts_jq { () => { r#"
   | [$aw[] | . as $w | select(all($bw[]; .address != $w.address))] as $opened
   | [ ($opened[] | (.address == $fa) as $f
         | {kind: "window_opened", window: win, focused: $f, rank: 1,
-           text: ("window opened" + (. as $w | if any($ashown[]; . == $w.workspace.id) then "" else " on workspace \($w.workspace.name)" end)
+           text: ("window opened" + (. as $w | if any($ashown[]; . == ($w.workspace | wsk)) then "" else " on workspace \($w.workspace.name)" end)
              + (if $f then ", focused" else "" end) + ": \(name)")}),
       ($bw[] | . as $w | select(all($aw[]; .address != $w.address))
         | {kind: "window_closed", window: win, rank: 2, text: "window closed: \(name)"}),
@@ -100,7 +109,7 @@ macro_rules! desk_facts_jq { () => { r#"
        then .shown += [$t] else .open = false end)) as $cap
   | (($texts | length) - ($cap.shown | length)) as $more
   | {changes: ($all_changes[:50] | map(del(.rank, .text))),
-     line: ($cap.shown | join("; ") + (if $more > 0 then "; +\($more) more (omabox events --since \($since // "0"))" else "" end))}"# }; }
+     line: ($cap.shown | join("; ") + (if $more > 0 then "; +\($more) more (omabox events --since \($since // "0"))" else "" end))}"#) }; }
 macro_rules! layer_list_jq { () => { r#"[to_entries[] | .key as $m | .value.levels // {} | to_entries[] | (.key | tonumber) as $lv
   | .value[] | {namespace, address, pid, x, y, w, h, monitor: $m,
     level: (["background", "bottom", "top", "overlay"][$lv] // "level \($lv)")}]"# }; }
@@ -118,29 +127,30 @@ pub const LAYER_SPAN_JQ: &str = layer_span_jq!();
 
 /// win_annotate's: the mapped windows, their place, cover and layers (finding 81, #263).
 pub const WIN_JQ: &str = concat!(
+    ws_key_jq!(),
     layer_span_jq!(),
     r#"
   def overlaps($o): .at[0] < $o.at[0] + $o.size[0] and $o.at[0] < .at[0] + .size[0]
     and .at[1] < $o.at[1] + $o.size[1] and $o.at[1] < .at[1] + .size[1];
   def above($o; $t):
-    if $o.workspace.id < 0 and $t.workspace.id > 0 then true
-    elif $o.workspace.id != $t.workspace.id then false
+    if ($o.workspace | wspecial) and ($t.workspace | wspecial | not) then true
+    elif ($o.workspace | wsk) != ($t.workspace | wsk) then false
     elif ($o.fullscreen > 0) != ($t.fullscreen > 0) then $o.fullscreen > 0
     elif $o.floating != $t.floating then $o.floating
     else $o.z > $t.z end;
   [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {}
    | (.["2"] // [] | map(. + {layer: "top"})), (.["3"] // [] | map(. + {layer: "overlay"}))
    | .[] | bar_strip($m; $mon) | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], monitor: $mon, certain: (spans($m; $mon) | not)}] as $L
-  | ([$m[] | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0))) as $shown
+  | ([$m[] | .activeWorkspace, .specialWorkspace | wsk] | map(select(. != 0 and . != null))) as $shown
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
-     | .onscreen = (.workspace.id as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
+     | .onscreen = ((.workspace | wsk) as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
   | [$all[] | . as $t | {address, stableId, class, title, initialClass, initialTitle, pid,
       workspace: .workspace.name, at, size, floating, fullscreen: (.fullscreen > 0), xwayland,
       active: (.address == $a.address), onscreen,
       cover: [$all[] | select(.address != $t.address and .onscreen and above(.; $t) and overlaps($t))
               | {address, class, title, pid, at, size}]}
      + if $l == null then {} else {layers: (if $t.onscreen | not then [] else
-         any($all[]; .onscreen and .workspace.id == $t.workspace.id and .fullscreen >= 2) as $fs
+         any($all[]; .onscreen and (.workspace | wsk) == ($t.workspace | wsk) and .fullscreen >= 2) as $fs
          | [$L[] | select((.layer == "overlay" or ($fs | not)) and overlaps($t))] end)} end]"#
 );
 

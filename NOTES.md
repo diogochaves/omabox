@@ -12512,6 +12512,21 @@ from them.
     taken, a file as before, a folder with none refused); t_unit_hyprland's folder refusals and the
     default; t_hyprland_folder (a folder of copies of the installed Hyprland, hyprctl and the boxes'
     aquamarine, started by OMABOX_HYPRLAND: the same files in the box by inode, no IPC warning).
+645. **On Hyprland 0.57 a layer's keyboard interactivity and a special workspace's id were gone**
+    (2026-11-06, #434). 0.57.1 renamed `HL.LayerSurface.interactivity` to `keyboard_interactivity`
+    (the other name is nil on each, probed in a box of each), so kb_layers and kb_takers
+    (desk.rs's KBL_LUA, KBT_LUA) found no layer: `keys --window` sent keys into a launcher that held
+    the keyboard, `tree --layer` could not tell two same-size layers of one pid apart, and the settle
+    line never said "the keys went to layer X". And a special workspace has no id any more, in
+    `-j clients`, `-j monitors`' `specialWorkspace` (`{"address":"","type":"","name":""}` with none
+    shown) and Lua: WIN_JQ took the null of a hidden special workspace for a shown one, so a window
+    there was on screen and covered the windows under it. The other `-j` changes (an `address` and
+    `type` on each workspace, `hardwareDetails.backend`, a bind's `mouse`) touch nothing of omabox's.
+    **Now:** both Lua readers take `keyboard_interactivity or interactivity`; WIN_JQ and
+    DESK_FACTS_JQ key a workspace by its id or, with none, its name (`wsk`), a special one by a
+    negative id or a `special:` name. Tests: desk.rs layers_keyboard_on_each_hyprland (both Lua
+    readers under a host Lua, layers of each shape), t_unit_window_select (0.57-shaped special
+    workspaces, hidden and shown), t_keys_layer and t_tree_layer on 0.56.2 and 0.57.1.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

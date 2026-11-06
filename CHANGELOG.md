@@ -12,6 +12,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the box's) and its `hyprctl` is the box's, so a box can run Hyprland 0.57 on a desktop that still has
   0.56. `OMABOX_HYPRLAND=PATH` makes it the default for every `up`.
 
+### Fixed
+- **Hyprland 0.57: layers that hold the keyboard, and special workspaces** ([#434](https://github.com/diogochaves/omabox/issues/434)):
+  0.57 renamed a layer's `interactivity`, so `keys --window` typed into a launcher that held the
+  keyboard and `tree --layer` could not tell two same-size layers apart; and a special workspace has
+  no id any more, so a window on a hidden one was listed on screen. Both read on 0.56 and 0.57.
+
 ## 1.2.2 — 2026-11-05
 
 One fix on top of 1.2.1: at a fractional scale, `find --image` names a `shot -g` crop's region where
