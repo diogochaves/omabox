@@ -11,8 +11,8 @@
 # then over SSH as that user: this checkout's HEAD as a release tarball has it (git archive, its
 # export-ignore honoured), install.sh until it passes (each `sudo CMD` it stops with run with the
 # guest's sudo, made non-interactive), omabox setup and doctor, test/distros-boxes.sh's plain boxes,
-# and with --suite the whole of test/run.sh. The VM is destroyed afterwards unless --keep (then
-# `ssh -i DIR/<distro>/key user@IP`, printed).
+# and with --suite the whole of test/run.sh, from a Hyprland session autologged in on tty1. The VM
+# is destroyed afterwards unless --keep (then `ssh -i DIR/<distro>/key user@IP`, printed).
 #
 # Boxes in a guest need GPU acceleration: virgl, rendered by QEMU's egl-headless on a host render
 # node, an NVIDIA one first (OMABOX_VM_RENDERNODE picks another). Never an AMD node: QEMU (11.1)
@@ -187,8 +187,21 @@ EOF
   g "$P OMABOX_DISTROS_VM=1 bash test/distros-boxes.sh ~/out" 2>&1 || rc=1
   g 'tar -cf - -C ~/out .' | tar -xf - -C "$out" 2>/dev/null || true
   if [ $suite = 1 ]; then
+    # The suite runs from a Hyprland session (it checks that boxes leave that desktop alone): the
+    # user's own, as a desktop user has one, by autologin on tty1 on the VM's virgl monitor.
+    echo "==> a Hyprland session on tty1"
+    # shellcheck disable=SC2016 # expanded in the guest
+    g 'sudo mkdir -p /etc/systemd/system/getty@tty1.service.d &&
+      printf "[Service]\nExecStart=\nExecStart=-/sbin/agetty -o \"-p -f -- \\\\\\\\u\" --noclear --autologin user %%I \$TERM\n" |
+        sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf >/dev/null &&
+      echo "[ \"\$(tty)\" = /dev/tty1 ] && [ -z \"\${WAYLAND_DISPLAY:-}\" ] && exec start-hyprland > ~/hyprland-session.log 2>&1" >> ~/.bash_profile &&
+      sudo systemctl daemon-reload && sudo systemctl restart getty@tty1 &&
+      for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/hypr/*/.socket.sock >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1' ||
+      { echo "no Hyprland session on tty1"; return 1; }
     echo "==> the suite"
-    g "$P test/run.sh" > "$out/suite.log" 2>&1 || rc=1
+    # shellcheck disable=SC2016 # expanded in the guest
+    g "$P"' export HYPRLAND_INSTANCE_SIGNATURE=$(ls -t "$XDG_RUNTIME_DIR"/hypr/ | head -n 1) WAYLAND_DISPLAY=wayland-1;
+      test/run.sh' > "$out/suite.log" 2>&1 || rc=1
     tail -n 30 "$out/suite.log"
     g 'tar -cf - -C ~/.local/state/omabox test 2>/dev/null' | tar -xf - -C "$out" 2>/dev/null || true
   fi
