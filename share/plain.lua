@@ -55,5 +55,9 @@ hl.config({
 -- The two binds a bare desktop needs to be used by hand (an interactive box): a terminal (the
 -- session's $TERMINAL), and closing a window. Anything else is the agent's (`omabox keys`, `omabox
 -- hyprctl dispatch`).
+-- No zoom when an output appears (Hyprland's default monitorAdded animation): a plain box's up is
+-- ready in half a second, and its first shots, the pointer hidden or not, caught the screen still
+-- zooming in for most of a second (finding 670). The same for `monitor add`'s outputs.
+hl.animation({ leaf = "monitorAdded", enabled = false })
 hl.bind("SUPER + RETURN", hl.dsp.exec_cmd(os.getenv("TERMINAL") or "xdg-terminal-exec"))
 hl.bind("SUPER + W", hl.dsp.window.close())
