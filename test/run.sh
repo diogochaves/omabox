@@ -15723,6 +15723,18 @@ record_layout_on() {
     "$(ob record -b "$B" -o "$v" --monitor all --hold 300ms -- pointer -- move 100 100 2>/dev/null) $(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
   check_eq "...and it stopped, its folders gone from the box" "box '$B': not recording|" \
     "$(ob record -b "$B" status)|$(ob run -b "$B" -- sh -c 'ls -d /home/sbx/.cache/omabox-record/m* 2>/dev/null')"
+  # The portrait monitor alone (#435, finding 652: Hyprland 0.57's frames come upright, and
+  # wf-recorder turned them again): upright at its size, its last frame its shot (4x8 cells).
+  local fm=$TMP/$B-m1.png
+  ob record -b "$B" -o "$v" --monitor "$m1" --hold 300ms -- pointer -- move 1640 300 >/dev/null 2>&1
+  ob shot -b "$B" --no-pointer --monitor "$m1" -o "$fm" >/dev/null 2>&1
+  check_eq "record --monitor $m1 (transform 1): a 720x1280 video" "720,1280" \
+    "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
+  a=$(magick "$fm" -background black -alpha remove -alpha off -scale '4x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '4x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  check "...its last frame is $m1's shot: 32 cells' colours within 12 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 8) <(tr ' ' '\n' <<<"$b" | head -n 8) | paste -sd ' ') ...)" \
+    awk -v a="$a" -v b="$b" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 96 || nb != 96) exit 1
+      for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 12 || d < -12) exit 1 } }'
   ob monitor -b "$B" remove "$m1" >/dev/null 2>&1; ob monitor -b "$B" remove "$m2" >/dev/null 2>&1
   out=$(ob record -b "$B" start --monitor all -o "$v" 2>&1)
   check_match "--monitor all with the main screen alone: its own recording" "recording $m0 of box '$B' to $v" "$out"

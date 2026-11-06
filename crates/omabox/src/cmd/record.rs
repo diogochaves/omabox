@@ -1442,6 +1442,30 @@ fn record_hold(ctx: &mut Ctx, rec: &mut Rec, dur: i64, from: i64, quiet: bool) -
 
 // --- start -----------------------------------------------------------------------------------------------
 
+/// record_turns NAMES MONS: each recorded output's turn as its wf-recorder takes it (#435, finding
+/// 652), "T W H" (its transform and mode, from MONS' "NAME T W H" lines), a line each in the order of
+/// its recorders; nothing when none is turned by a quarter (record stop turns back a raw video that
+/// came turned twice, record_stop's turn_back).
+pub(crate) fn record_turns(names: &[Vec<u8>], mons: &[u8]) -> Vec<u8> {
+    let lines: Vec<Vec<u8>> = names
+        .iter()
+        .map(|n| {
+            mons.split(|&c| c == b'\n')
+                .find_map(|l| {
+                    let f = shell::read_fields(l, 4);
+                    (f[0] == *n).then(|| cat!(f[1], " ", f[2], " ", f[3]))
+                })
+                .unwrap_or_else(|| b"0 0 0".to_vec())
+        })
+        .collect();
+    let quarter = |l: &Vec<u8>| num(&shell::read_fields(l, 3)[0]) & 1 == 1;
+    if lines.iter().any(quarter) {
+        lines.join(&b'\n')
+    } else {
+        Vec::new()
+    }
+}
+
 /// `$(jq -r PROG <<<INPUT)`.
 pub(crate) fn jq_r(prog: &str, input: &[u8]) -> (i32, Vec<u8>) {
     let r = jq::jq(&["-r", prog], Some(input), jq::Err::Inherit);
@@ -1489,6 +1513,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         "record",
         "record.marks",
         "record.layout",
+        "record.turn",
         "record.audio",
         "record.input",
         "record.geo",
@@ -1554,6 +1579,14 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     if layout.is_empty() {
         names = vec![mon.clone()];
     }
+    let turns = record_turns(
+        &names,
+        &jq_r(
+            r#".[] | "\(.name) \(.transform) \(.width) \(.height)""#,
+            &mons,
+        )
+        .1,
+    );
     // Where the layout's pixels are in the video (#176, for --show-input): "X0 Y0 K", then in a
     // layout's video "X Y W H", the main screen's place in it, where the captions go.
     let geo = if !layout.is_empty() {
@@ -1728,6 +1761,9 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     if !layout.is_empty() {
         put("record.layout", cat!(layout, "\n"))?;
     }
+    if !turns.is_empty() {
+        put("record.turn", cat!(turns, "\n"))?;
+    }
     put("record.geo", cat!(geo, "\n"))?;
     if let Some(g) = o.glide {
         put("record.glide", format!("{g}\n").into_bytes())?;
@@ -1740,6 +1776,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         for f in [
             "record",
             "record.layout",
+            "record.turn",
             "record.audio",
             "record.geo",
             "record.glide",
