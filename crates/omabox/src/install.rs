@@ -1294,9 +1294,10 @@ fn omarchy_host_gaps_with(t: &[u8], have: impl Fn(&[u8]) -> bool, so: &[u8]) -> 
 }
 
 /// omarchy_before_45 OMARCHY (#411): what to call the box's Omarchy (OMARCHY, `--omarchy`'s tree, else
-/// the installed one) in deprecated's line when it is older than 4.5, which omabox 1.3 drops (#312);
-/// none on 4.5 or later, or where no Omarchy shell is there to tell (doctor and up say that). Told by
-/// the tree, as center_split tells it, never by a version number (a dev tree has none).
+/// the installed one) in deprecated's line when it is older than 4.5, which omabox drops in its
+/// first release after 2026-12-04 (#312); none on 4.5 or later, or where no Omarchy shell is there
+/// to tell (doctor and up say that). Told by the tree, as center_split tells it, never by a version
+/// number (a dev tree has none).
 /// omarchy<4.5: removed with the 4.0 paths.
 pub fn omarchy_before_45(omarchy: &[u8]) -> Option<Vec<u8>> {
     let tree: &[u8] = if omarchy.is_empty() {

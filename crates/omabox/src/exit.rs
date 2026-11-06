@@ -196,7 +196,8 @@ impl Ctx {
     }
 
     /// deprecated_omarchy WHAT INSTALLED (#411): deprecated's line for the Omarchy a box runs (WHAT,
-    /// as install::omarchy_before_45 names it), which omabox 1.3 no longer supports (#312); for the
+    /// as install::omarchy_before_45 names it), whose support ends in omabox's first release after
+    /// 2026-12-04, a month after Omarchy 4.5 reached its stable channel (#312); for the
     /// installed one (not an --omarchy tree), how to update it. Not a form
     /// the caller wrote, so OMABOX_STRICT=1 does not refuse it: nothing in the call can change it.
     /// omarchy<4.5: removed with the 4.0 paths.
@@ -209,7 +210,7 @@ impl Ctx {
         say(crate::cat!(
             "deprecated: ",
             what,
-            ": omabox 1.3 needs Omarchy 4.5 or later",
+            ": omabox's first release after 2026-12-04 needs Omarchy 4.5 or later",
             how
         ));
     }
@@ -339,7 +340,7 @@ mod tests {
             });
             assert_eq!(
                 said,
-                "omabox: deprecated: Omarchy 4.0.6-1: omabox 1.3 needs Omarchy 4.5 or later (omarchy update brings it)\n",
+                "omabox: deprecated: Omarchy 4.0.6-1: omabox's first release after 2026-12-04 needs Omarchy 4.5 or later (omarchy update brings it)\n",
                 "one line, the same under OMABOX_STRICT={strict:?}"
             );
         }
@@ -347,7 +348,7 @@ mod tests {
             heard(|| ctx.deprecated_omarchy(b"--omarchy /t (an Omarchy before 4.5)", false));
         assert_eq!(
             said,
-            "omabox: deprecated: --omarchy /t (an Omarchy before 4.5): omabox 1.3 needs Omarchy 4.5 or later\n",
+            "omabox: deprecated: --omarchy /t (an Omarchy before 4.5): omabox's first release after 2026-12-04 needs Omarchy 4.5 or later\n",
             "...a tree: no update hint"
         );
     }

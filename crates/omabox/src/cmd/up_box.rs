@@ -602,8 +602,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             ));
         }
     }
-    // #411: an Omarchy before 4.5 is deprecated (1.3 drops it, #312), said once the box is up, after
-    // up's own lines: a refusal stays the one line it is. omarchy<4.5
+    // #411: an Omarchy before 4.5 is deprecated (dropped in the first release after 2026-12-04,
+    // #312), said once the box is up, after up's own lines: a refusal stays the one line it is.
+    // omarchy<4.5
     if u.desktop == Desktop::Omarchy
         && let Some(what) = crate::install::omarchy_before_45(&u.omarchy)
     {

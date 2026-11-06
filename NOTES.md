@@ -12924,6 +12924,14 @@ from them.
     with CMD a sleep: up times out naming CMD), shellnote's `plain_shell_is_its_slot` and
     `slot_pids_as_sh` (a setsid daemon whose launcher left, another slot's, a dialog's), ready's
     `plain_shell_layer_and_configs`.
+660. **Omarchy 4.0's drop goes by a date, not a version** (2026-11-06, #312). Finding 629's line said
+    `omabox 1.3 needs Omarchy 4.5 or later`, but 1.3.0 became the release of plain boxes and
+    Hyprland 0.57 (#247), and 4.0's removal its own milestone, due one month after Omarchy 4.5.0
+    reached the stable channel (2026-11-04). **Now:** `Ctx::deprecated_omarchy` says `omabox:
+    deprecated: Omarchy 4.0.6-1: omabox's first release after 2026-12-04 needs Omarchy 4.5 or later
+    (omarchy update brings it)` (an `--omarchy` tree as before, without the hint); README and
+    docs/install.md say the same. When it is said is unchanged. Tests: exit.rs
+    `deprecated_omarchy_line`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
