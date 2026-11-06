@@ -557,31 +557,53 @@ fn box_progs_check(root: &[u8], fam: Option<Family>) -> Check {
     )
 }
 
-fn some_progs_check(root: &[u8], fam: Option<Family>) -> Check {
-    let missing: Vec<(&str, &str)> = SOME_PROGS
-        .iter()
-        .copied()
-        .filter(|(n, _)| in_launch(root, n).is_none())
-        .collect();
-    if missing.is_empty() {
-        let names: Vec<&str> = SOME_PROGS.iter().map(|(n, _)| *n).collect();
-        return check(
-            "some-programs",
-            St::Ok,
-            format!("{} in {}", names.join(", "), launch_dir()),
-            Vec::new(),
-        );
+/// PROG of SOME_PROGS under ROOT: where it is, or Err(why not, when more than missing). nft is looked
+/// for where omabox runs it from, /usr/bin or /usr/sbin (#439, S10), the rest in the launch dir.
+fn some_prog(root: &[u8], name: &str) -> Result<Vec<u8>, Option<String>> {
+    if name == "nft" {
+        return crate::exec::nft_at(root);
     }
-    let names: Vec<&str> = missing.iter().map(|(n, _)| *n).collect();
+    in_launch(root, name).ok_or(None)
+}
+
+fn some_progs_check(root: &[u8], fam: Option<Family>) -> Check {
+    let mut found: Vec<&str> = Vec::new();
+    let mut elsewhere: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    let mut install: Vec<&str> = Vec::new();
+    for (n, why) in SOME_PROGS.iter().copied() {
+        match some_prog(root, n) {
+            Ok(p) if p == at(root, format!("{}/{n}", launch_dir()).as_bytes()) => found.push(n),
+            Ok(p) => elsewhere.push(format!(
+                "{n} in {}",
+                s(p.strip_prefix(root.strip_suffix(b"/").unwrap_or(root))
+                    .and_then(|r| r.strip_suffix(format!("/{n}").as_bytes()))
+                    .unwrap_or(&p))
+            )),
+            Err(None) if n == "nft" => {
+                missing.push(format!(
+                    "no nft in {} ({why})",
+                    crate::exec::nft_dirs_said()
+                ));
+                install.push(n);
+            }
+            Err(None) => {
+                missing.push(format!("no {n} ({why})"));
+                install.push(n);
+            }
+            Err(Some(w)) => missing.push(format!("{w} ({why})")),
+        }
+    }
+    if missing.is_empty() {
+        let mut said = vec![format!("{} in {}", found.join(", "), launch_dir())];
+        said.extend(elsewhere);
+        return check("some-programs", St::Ok, said.join("; "), Vec::new());
+    }
     check(
         "some-programs",
         St::Warn,
-        missing
-            .iter()
-            .map(|(n, why)| format!("no {n} ({why})"))
-            .collect::<Vec<_>>()
-            .join("; "),
-        install_lines(fam, &names),
+        missing.join("; "),
+        install_lines(fam, &install),
     )
 }
 
@@ -1632,6 +1654,44 @@ mod tests {
             "{}",
             c.found
         );
+        assert!(
+            c.found
+                .contains("no nft in /usr/bin or /usr/sbin (the protect-ports setting)"),
+            "{}",
+            c.found
+        );
+        // #439: nft in /usr/sbin (Debian, openSUSE) is found there, the rest in /usr/bin
+        for p in ["wlr-randr", "ip", "python3"] {
+            prog(&d, p, "true");
+        }
+        put(&d, "/usr/sbin/nft", "#!/bin/sh\n");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let p = d.join("usr/sbin/nft");
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let c = some_progs_check(&r, arch);
+            assert_eq!(c.st, St::Ok, "{}", c.found);
+            assert_eq!(
+                c.found,
+                "wlr-randr, ip, python3 in /usr/bin; nft in /usr/sbin"
+            );
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let c = some_progs_check(&r, arch);
+            assert_eq!(c.st, St::Warn);
+            assert!(
+                c.found.contains("/usr/sbin/nft is writable by others"),
+                "{}",
+                c.found
+            );
+            assert!(
+                c.fix.is_empty(),
+                "installing nftables is no fix: {:?}",
+                c.fix
+            );
+        }
+        prog(&d, "nft", "true");
+        let c = some_progs_check(&r, arch);
+        assert_eq!(c.found, "wlr-randr, ip, nft, python3 in /usr/bin");
         let _ = std::fs::remove_dir_all(&d);
     }
 

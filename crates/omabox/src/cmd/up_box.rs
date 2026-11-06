@@ -1557,11 +1557,21 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
         }
         // The protected ports' rule (#355, S10), likewise before anything of the box runs, by the
         // same shell: nothing in the box can take it out. Its words are numbers and addresses only.
+        // nft by the path up found it at (#439: /usr/sbin on Debian and openSUSE), not by PATH.
         if let Net::Connected { protect } = &netmode {
             let (v4, v6) = net::host_addrs();
             if let Some(rules) = net::protect_rules(protect, &v4, &v6) {
+                let nft = crate::exec::nft().map_err(|why| {
+                    ctx.die(cat!(
+                        "up: protect-ports needs nft in ",
+                        crate::exec::nft_dirs_said(),
+                        ": ",
+                        crate::exec::nft_fix(&why)
+                    ))
+                })?;
                 wrap = cat!(
-                    "nft ",
+                    quote_q(&nft),
+                    " ",
                     quote_q(rules.as_bytes()),
                     " || { echo '",
                     NFT_FAILED,

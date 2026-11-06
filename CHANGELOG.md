@@ -50,6 +50,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`setup` and `doctor` no longer suggest `setup --aquamarine` where it builds nothing**: for a
   Hyprland whose aquamarine omabox has no build for, they say what boxes use and what they go
   without. `tray` on a plain box says it has no shell, not `--no-shell`.
+- **`protect-ports` on Debian and openSUSE** ([#439](https://github.com/diogochaves/omabox/issues/439)):
+  omabox looked for `nft` in `/usr/bin` only, where those distributions do not put it, so `up`
+  refused every connected box once the setting was on, and `doctor` kept asking for nftables after
+  it was installed. omabox now runs `/usr/bin/nft` or else `/usr/sbin/nft` (never one found on your
+  `PATH`), and refuses one another user could change.
 - **Boxes on Debian and openSUSE** ([#247](https://github.com/diogochaves/omabox/issues/247)): no box
   started there (`bwrap: execvp /opt/omabox/share/session.sh: No such file or directory`): a box's
   `/lib64` led where Arch keeps its loader, not where they do. A box's `/bin`, `/sbin`, `/lib` and

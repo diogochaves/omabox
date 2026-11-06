@@ -313,11 +313,11 @@ fn guard_set(d: &[u8], v4: &[String], v6: &[String]) -> Result<(), Vec<u8>> {
         shell::strip_nl(w.strip_prefix(crate::enter::FAIL.as_bytes()).unwrap_or(&w))
     })?;
     // (only its stdio: nothing else of the reaper's goes into pasta's namespaces)
-    let argv = [
-        cat!(crate::cmd::up_box::LAUNCH_PATH, "/nft"),
-        b"-f".to_vec(),
-        b"-".to_vec(),
-    ];
+    let nft = crate::exec::nft().map_err(|why| {
+        why.map(String::into_bytes)
+            .unwrap_or_else(|| cat!("no nft in ", crate::exec::nft_dirs_said()))
+    })?;
+    let argv = [nft, b"-f".to_vec(), b"-".to_vec()];
     let fds = crate::exec::Fds {
         only: true,
         enter: Some(e.plan(false, true, None)),

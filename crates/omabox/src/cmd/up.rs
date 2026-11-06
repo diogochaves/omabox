@@ -1087,16 +1087,18 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     if !u.net_addrs.is_empty() && !crate::exec::executable_on_path(b"ip") {
         return Err(ctx.die("up: --addr needs ip: sudo pacman -S iproute2"));
     }
-    // A protected port's rule is nft's (#355), which the box's start runs with its own PATH, not the
-    // caller's (#364): one only on the caller's would leave it "bwrap did not start" after 10 s.
+    // A protected port's rule is nft's (#355), which the box's start runs from the system's folders,
+    // never the caller's PATH (#364, #439): one only on the caller's would leave it "bwrap did not
+    // start" after 10 s.
     if u.net == b"connected"
         && !protect.is_empty()
-        && !crate::exec::executable_in(crate::cmd::up_box::LAUNCH_PATH, b"nft")
+        && let Err(why) = crate::exec::nft()
     {
         return Err(ctx.die(cat!(
             "up: protect-ports (~/.config/omabox/config) needs nft in ",
-            crate::cmd::up_box::LAUNCH_PATH,
-            " (where a box's start looks for it) to keep a box off them: sudo pacman -S nftables"
+            crate::exec::nft_dirs_said(),
+            " (where a box's start looks for it, never your PATH) to keep a box off them: ",
+            crate::exec::nft_fix(&why)
         )));
     }
     // A sandbox that refuses new namespaces (ai-jail's seccomp filter) cannot start a box.

@@ -18,9 +18,7 @@ What a machine needs, what `install.sh` does, updating and removing. Back to the
   `./install.sh` again. Without Omarchy, boxes are plain Hyprland (no Omarchy bar, theme or plugins),
   `setup` links no bar widget, and `omabox doctor` says so as information, not failures. A plain
   box's SUPER+RETURN opens your terminal (foot, alacritty, kitty or ghostty; `install.sh` installs
-  none). On Debian and openSUSE `nft` is in `/usr/sbin`, where omabox does not look yet, so the
-  `protect-ports` setting is not available there. NixOS is not supported yet: a box looks for its
-  programs in `/usr/bin`.
+  none). NixOS is not supported yet: a box looks for its programs in `/usr/bin`.
 - **A GPU render node** (`/dev/dri/renderD*`). Tested on AMD and Intel iGPUs, an NVIDIA RTX 4070
   SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
   the first usable node, or the GPU `omabox config gpu` names (`OMABOX_RENDER_NODE` overrides); an
