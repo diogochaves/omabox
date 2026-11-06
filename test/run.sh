@@ -220,6 +220,41 @@ QML
   # (by its path: a stub quickshell in the box HOME's ~/.local/bin, t_main's, is not the box's shell)
   PSHELL=(--ro-bind "$TMP.bar/plain-bar" --shell "$(command -v quickshell || echo /usr/bin/quickshell) -p $TMP.bar/plain-bar")
 fi
+# no_pshell: why a plain box cannot get PSHELL's shell here (no Quickshell: openSUSE packages none), or
+# fails where it can (Omarchy is here, or Quickshell). The tests of a plain box's shell skip with it.
+no_pshell() {
+  omarchy_here && return 1
+  command -v quickshell >/dev/null && return 1
+  echo "no Quickshell here: a plain box's stand-in shell is a Quickshell bar"
+}
+# no_qs: why there is no Quickshell here (openSUSE packages none), or fails where there is: the tests
+# that run one of their own in a box skip with it.
+no_qs() {
+  command -v quickshell >/dev/null && return 1
+  echo "no Quickshell here (openSUSE packages none)"
+}
+# USRLINKS: bwrap's options for this machine's /bin, /sbin, /lib and /lib64 links into /usr, as they
+# are (Arch's go to usr/bin and usr/lib; openSUSE's /sbin and /lib64 to usr/sbin and usr/lib64): a
+# sandbox of the suite's own that binds /usr loads its programs through them.
+USRLINKS=()
+for _d in bin sbin lib lib64; do [ ! -L "/$_d" ] || USRLINKS+=(--symlink "$(readlink "/$_d")" "/$_d"); done
+unset _d
+# no_cursor: why a box draws no pointer here (no cursor theme in /usr/share/icons: openSUSE's minimal
+# image), or fails where it draws one.
+no_cursor() {
+  compgen -G '/usr/share/icons/*/cursors' >/dev/null && return 1
+  echo "no cursor theme here (/usr/share/icons/*/cursors): a box draws no pointer"
+}
+# rec_tools: whether record can run here: wf-recorder, and an ffmpeg with libx264 (Fedora's
+# ffmpeg-free and openSUSE's ffmpeg have none). Its reason: REC_WHY.
+REC_WHY="no wf-recorder, ffmpeg, or ffmpeg's libx264 here"
+rec_tools() {
+  # (ffmpeg's list read whole first: grep -q ending the pipe early made ffmpeg's SIGPIPE the status
+  # under pipefail, and every record test skipped on a machine that has it)
+  local enc
+  command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null &&
+    enc=$(ffmpeg -hide_banner -encoders 2>/dev/null) && grep -q ' libx264 ' <<<"$enc"
+}
 # BAR_NS: the layer namespace of a box's bar, Omarchy's or PSHELL's.
 BAR_NS=omarchy-bar; omarchy_here || BAR_NS="t-plainbar"
 # "${NOOM[@]}" CMD...: CMD as on a machine without Omarchy: under a bwrap that hides /usr/share/omarchy
@@ -3119,7 +3154,9 @@ print(p.pid, flush=True); time.sleep(60)' "$1" env OMABOX_OWN_SESSION="${2-1}" "
   kill -KILL "$parent"
   check "...and ends within a second of its shell (end of its stdin)" gone_within "$pid" 10
   { read -r parent; read -r pid; } < <(standin null)
-  check_eq "a stdin that ends (/dev/null): still no process" "none" "$(kids "$pid")"
+  if [ -e /usr/lib/bash/sleep ] || [ -e /usr/lib64/bash/sleep ]; then
+    check_eq "a stdin that ends (/dev/null): still no process" "none" "$(kids "$pid")"
+  else skip "a stdin that ends (/dev/null): still no process" "no bash loadable sleep here (bash's loadables, /usr/lib/bash/sleep)"; fi
   check "...still waiting, not ended (the registry would start it again a second later)" kill -0 "$pid"
   kill -KILL "$parent"
   check "...and ends within 5 s of its shell" gone_within "$pid" 60
@@ -5282,7 +5319,7 @@ t_unit_parallel() {
 # the folder is unchanged), --net isolated --allow (that port reached, another not), --size, --plugin.
 # Two throwaway servers of the suite's own on free ports.
 t_run_options() {
-  local repo ov=$TMP/run-ov port other s1 s2 out
+  local repo ov=$TMP/run-ov port other s1 s2 out why
   repo=$(tmp_repo ro); mkdir -p "$ov/sub"; echo host > "$ov/f"; echo kept > "$ov/sub/g"
   # (S4, #355: what the folder holds, its modes and contents, before the box writes over it)
   ovsnap() { (cd "$ov" && command find . -printf '%p %y %m %s\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort); }
@@ -5295,6 +5332,7 @@ print(a.getsockname()[1], b.getsockname()[1])')
   until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$port/" >/dev/null; until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$other/" >/dev/null
   # (a plugin only where Omarchy is; a plain box gets a shell of PSHELL's, #247)
   local plug=(--plugin "$ROOT/plugin"); omarchy_here || plug=("${PSHELL[@]}")
+  if why=$(no_pshell); then skip "run with its shell, the overlay and --allow" "$why"; return; fi
   # shellcheck disable=SC2016 # expanded in the box
   out=$(cd "$repo" && env -u OMABOX "$CLI" run --overlay "$ov" --net isolated --allow "$port" --size 800x600 "${plug[@]}" -- sh -c '
     echo box > "$1/f" && cat "$1/f"
@@ -5606,7 +5644,7 @@ t_unit_jail_covers() {
     unbox
     rm -f "$binfo" "$d/go"; mkfifo "$d/go"
     bash -c 'exec 4<>"$1"; shift; exec "$@"' _ "$d/go" bwrap --unshare-user --unshare-pid --die-with-parent --info-fd 3 --block-fd 4 \
-      --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --proc /proc --dev /dev \
+      --ro-bind /usr /usr "${USRLINKS[@]}" --proc /proc --dev /dev \
       --ro-bind "$p" "$p" "$@" sh -c 'grep -R SEKRIT "$1" /proc/self/root"$1" /proc/1/root"$1"; echo "rc=$?"' _ "$p" 3>"$binfo" >"$d/boxout" 2>&1 & bb=$!
     until_ok 5 jq -e '."child-pid"' "$binfo" >/dev/null
     bpid=$(jq '."child-pid"' "$binfo")
@@ -5859,7 +5897,7 @@ while True:
 '
 
 t_jail_record() {
-  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record for a jailed agent" "no wf-recorder or ffmpeg"; return; fi
+  if ! rec_tools; then skip "record for a jailed agent" "$REC_WHY"; return; fi
   local d=$TMP/jrec p jb J N=$P-jrs out v
   p=$d/proj; mkdir -p "$p" "$d/host"; git -C "$p" init -q
   echo HOSTVIDEO > "$d/host/v.mp4"; ln -s "$d/host/v.mp4" "$p/link.mp4"
@@ -7308,6 +7346,7 @@ t_unit_uwsm_guard() {
 t_main() {
   local B=$P-main s0=$SECONDS
   # (A secret-looking variable in up's environment, which the box session must not get: #111.)
+  local why; if why=$(no_pshell); then skip "the main box, with its shell" "$why"; return; fi
   check "up" env T111_API_TOKEN="leak-$P" "$CLI" up "$B" --env OMABOX_TEST=yes --seed "$ROOT/VERSION:.config/seeded/v" --seed "$ROOT/plugin:~/seeded-dir" "${PSHELL[@]}"
   local D; D=$(ob path -b "$B")
   check_eq "box.json mode headless" headless "$(jq -r .mode "$D/box.json")"
@@ -7323,9 +7362,9 @@ t_main() {
   check_eq "ls --json: no audio" false "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .audio')"
   check_fails "...no pipewire in it" ob run -b "$B" -- pgrep -x pipewire
   # (record asks for its tools first, optional ones: #405)
-  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null; then
+  if rec_tools; then
     check_match "...record --audio refused" "record --audio: box '$B' has no audio" "$(ob record -b "$B" start --audio 2>&1)"
-  else skip "...record --audio refused" "no wf-recorder or ffmpeg here"; fi
+  else skip "...record --audio refused" "$REC_WHY"; fi
   check_match "...audio refused" "audio: box '$B' has no audio" "$(ob audio -b "$B" 2>&1)"
   check_match "...up --audio again refused" "without what you asked for: --audio \(it has no audio\)" "$(ob up "$B" --audio 2>&1)"
   # No --polkit (#258): no system bus at all, and polkit refused.
@@ -10720,6 +10759,7 @@ t_unit_tree_layer() {
 # full-screen, one pid) by the keyboard; two layers of one size that cannot be told apart.
 t_tree_layer() {
   local B=$P-tl D out rc v x y mid
+  local why; if why=$(no_pshell); then skip "tree of the shell's layers" "$why"; return; fi
   up_ok "$B" --net isolated "${OM[@]}" "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   out=$(ob tree -b "$B" 2>&1); rc=$?
@@ -11257,6 +11297,7 @@ t_hyprland_crash() {
   check_match "...a later call: dead, and why" "box '$B' is dead: its Hyprland crashed \\(SIGSEGV\\)" "$(ob lua -b "$B" 'return 1' 2>&1)"
   ob down "$B" >/dev/null 2>&1
   check "up again" ob up "$B" --no-shell --net isolated
+  command -v gdb >/dev/null || { skip "a crash under gdb --watch" "no gdb here (a box runs the host's)"; ob down "$B" >/dev/null 2>&1; return; }
   check "gdb --watch" ob gdb -b "$B" --watch
   rc=0; out=$(timeout 30 "$CLI" lua -b "$B" "$crash" 2>&1) || rc=$?
   check_eq "...under gdb --watch: exit 1" 1 "$rc"
@@ -11488,6 +11529,7 @@ t_plain_auto() {
 # stay refused, in plain words; a shell that exits or draws nothing fails up, naming it.
 t_plain_shell() {
   local B=$P-pshell D bar=$TMP/$P-pshell-bar old p out rc
+  local why; if why=$(no_qs); then skip "a plain box with a Quickshell bar as its shell" "$why"; return; fi
   mkdir -p "$bar"
   cat > "$bar/shell.qml" <<'QML'
 import QtQuick
@@ -12250,6 +12292,7 @@ t_unit_hyprland() {
 t_hyprland() {
   local B=$P-hyp h=$TMP/$P-hbuild/Hyprland D=$XDG_RUNTIME_DIR/omabox/$P-hyp
   mkdir -p "${h%/*}"; cp /usr/bin/Hyprland "$h"
+  local why; if why=$(no_pshell); then skip "up --hyprland, shell and bar up" "$why"; return; fi
   check "up --hyprland (a copy of the installed one), shell and bar up" ob up "$B" --hyprland "$h" "${PSHELL[@]}"
   check_box_safety "$B"
   check_eq "the box's Hyprland runs it" "$h" "$(ob run -b "$B" -- sh -c 'readlink /proc/$(pgrep -x Hyprland)/exe')"
@@ -12298,6 +12341,7 @@ t_hyprland_folder() {
 # finding 358: `up --quickshell PATH`'s refusals, before any box starts, and what it records.
 t_unit_quickshell() {
   local d=$TMP/$P-qs out a
+  local why; if why=$(no_qs); then skip "the quickshell a box runs" "$why"; return; fi
   mkdir -p "$d/fh" "$d/proj/build" "$d/other"
   printf '#!/bin/sh\nexec /usr/bin/quickshell "$@"\n' > "$d/wrapper"; chmod +x "$d/wrapper"
   # (a plain box runs a build of Quickshell only as the shell --shell starts, #247: one is given there)
@@ -12806,8 +12850,9 @@ t_keys() {
   check_eq "--xwayland: run's DISPLAY is Hyprland's Xwayland on :0" ":0" "$(ob run -b "$B" -- printenv DISPLAY 2>&1)"
   # #294 (finding 407): Hyprland starts it with -core, which raised its soft core limit to the hard one
   # (unlimited): a box going down made it abort with a core the desktop announced. Now 1 byte, hard too.
-  check_match "...its core limit stays 1 byte, the hard one too (its -core raised it)" "^Max core file size +1 +1 +bytes" \
-    "$(ob run -b "$B" -- sh -c 'p=$(pidof Xwayland) && grep "^Max core file size" "/proc/$p/limits"' 2>&1)"
+  if ! command -v Xwayland >/dev/null; then skip "...its core limit stays 1 byte, the hard one too (its -core raised it)" "no Xwayland here"
+  else check_match "...its core limit stays 1 byte, the hard one too (its -core raised it)" "^Max core file size +1 +1 +bytes" \
+    "$(ob run -b "$B" -- sh -c 'p=$(pidof Xwayland) && grep "^Max core file size" "/proc/$p/limits"' 2>&1)"; fi
   ob hyprctl -b "$B" eval "hl.bind('SUPER + CTRL + ALT + J', hl.dsp.exec_cmd('touch /tmp/lower'))
     hl.bind('SUPER + CTRL + ALT + SHIFT + J', hl.dsp.exec_cmd('touch /tmp/upper'))
     hl.bind('SUPER + CTRL + ALT + slash', hl.dsp.exec_cmd('touch /tmp/slash'))" >/dev/null
@@ -12885,6 +12930,7 @@ t_keys() {
 # as an on-demand layer clicked does: keys --window focuses the active window again, the pointer kept.
 t_keys_layer() {
   local B=$P-kl D out rc pos l
+  local why; if why=$(no_qs); then skip "keys and a layer that takes the keyboard" "$why"; return; fi
   up_ok "$B" --net isolated --monitor 1080x1920 || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   ob click -b "$B" 2400 900 >/dev/null   # the second monitor: the terminal opens there
@@ -12942,6 +12988,7 @@ QML
 # key opens, a layer a click opens; a 124 says where the keys and the click went and that nothing moved.
 t_wait_facts() {
   local B=$P-wf D out rc l
+  local why; if why=$(no_qs); then skip "wait on a layer and its facts" "$why"; return; fi
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   out=$(ob run -b "$B" -d -q --wait -- foot -T F sh -c 'read x; exec foot -T G sleep 600' 2>&1); rc=$?
@@ -13122,6 +13169,7 @@ QML
 # or a window's, is not checked. Nothing is sent when it is refused.
 t_in_changed() {
   local B=$P-inch o=$TMP/inch D out rc
+  local why; if why=$(no_qs); then skip "a layer of its own that changes" "$why"; return; fi
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   # (a new window tiles to the right: Omarchy's force_split, set here on a plain box, #247)
   omarchy_here || ob lua -b "$B" 'hl.config({ dwindle = { force_split = 2 } })' >/dev/null
@@ -13885,6 +13933,10 @@ t_unit_doctor() {
       and all(.checks[]; (.id | type == "string") and (.status | IN("ok", "info", "warn", "fail")) and (.found | type == "string")
       and (.fix | type == "array" and all(.[]; type == "string"))) and .smoke == null' <<<"$j")"
   ids="omarchy theme hyprland aquamarine labwc quickshell bwrap pasta unshare grim box-programs some-programs tools userns no-new-privs tun render socket-path path session-path"
+  # (crash-watch only where Omarchy's crash watcher is, #441: after socket-path)
+  local u; for u in /etc/systemd/user /usr/local/lib/systemd/user /usr/lib/systemd/user; do
+    [ -f "$u/omarchy-crash-watch.service" ] && { ids=${ids/socket-path path/socket-path crash-watch path}; break; }
+  done
   check_eq "...every check, in order" "$ids" "$(jq -r '[.checks[].id] | join(" ")' <<<"$j")"
   if omarchy_here; then
     check_eq "...a HOME with no Omarchy theme fails, with up's fix; ok false, exit 1" \
@@ -14026,6 +14078,9 @@ t_unit_install() {
   check_match "an unknown ID: the package manager there tells the family (pacman here)" \
     "sudo pacman -S --needed omabox-no-such-package" "$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null)"
   rm -f "$stub/dpkg-query" "$stub/rpm" "$stub/sudo-called"
+  # (the rest as on Arch, whatever this machine is: its pacman stubs and pacman's commands, #247)
+  local OMABOX_TEST_OS_RELEASE=$TMP/ih-os-arch; printf 'ID=arch\n' > "$OMABOX_TEST_OS_RELEASE"
+  export OMABOX_TEST_OS_RELEASE
   # Hyprland's version by sort -V, not pacman's vercmp (#247): 0.56 and later, 0.100 after 0.99.
   local hv
   for hv in 0.55.9:1 0.56.0:0 0.57.1:0 0.100.0:0; do
@@ -14488,6 +14543,10 @@ t_cli_up() {
 open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \"HEADLESS-%d\"" % (int(m[1]) + 1), t))' "$got"
     if [ "${OMABOX_GOLDEN:-}" = write ]; then
       mkdir -p "${g%/*}"; cp "$got" "$g"; ok "$1: golden written ($slug)"
+    elif [ "$(readlink /sbin)|$(readlink /lib64)" != "usr/bin|usr/lib" ]; then
+      # (the goldens are of Arch's merged /usr, /sbin and /lib64 links into usr/bin and usr/lib, which
+      # a box's launch.sh repeats; openSUSE's go to usr/sbin and usr/lib64)
+      skip "$1: launch.sh and box.json as their golden" "/sbin and /lib64 are not Arch's links (goldens are Arch's)"
     elif [ ! -f "$g" ]; then
       no "$1: launch.sh and box.json as their golden" "no golden ${g#"$ROOT/"} (OMABOX_GOLDEN=write writes it)"
     elif cmp -s "$g" "$got"; then
@@ -14505,7 +14564,8 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
   cx_case "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
   cx_want=(rc=0 "out~^\\{\"name\":\"$U\",\"mode\":\"headless\",\"size\":\"1920x1080@60\",\"scale\":1,\"created\":T,.*\"net\":\"isolated\"" "$(rpu_said 1920x1080@60)" 'state~^  "shell": true,$')
   # (without Omarchy a box has a shell when --shell names one, #247: PSHELL's)
-  cx_case "up --json: with its shell" up "$U" --net isolated --json "${PSHELL[@]}"
+  local why; if why=$(no_pshell); then skip "up --json: with its shell" "$why"
+  else cx_case "up --json: with its shell" up "$U" --net isolated --json "${PSHELL[@]}"; fi
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "net": "connected",$')
   cx_case "up: connected" up "$U" --no-shell
   if omarchy_here; then
@@ -14620,7 +14680,9 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
   rpu_down
   # restart-shell on a box with its shell: it restarts it, then brief and reload see the box as it is.
   cx_prep="" cx_also="" cx_env=("HOME=$h")
-  if HOME=$h ob up "$U" --net isolated "${PSHELL[@]}" >/dev/null 2>&1; then
+  if why=$(no_pshell); then
+    skip "restart-shell, brief and reload of a box with its shell" "$why"
+  elif HOME=$h ob up "$U" --net isolated "${PSHELL[@]}" >/dev/null 2>&1; then
     cx_want=(rc=0 out= "err=omabox: shell restarted in box '$U'")
     cx_case "restart-shell: the box's shell restarted" restart-shell -b "$U"
     cx_want=(rc=0 "out~^You drive omabox box '$U' \\(1920x1080, scale 1\\)" err=)
@@ -14648,7 +14710,8 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
 # shots, monitors, gdb, check and record. What a box's run gives every time is stated whole; what
 # hangs on the moment (times, addresses, pids, the desk's bar) is evened out or left to a pattern.
 t_cli_box() {
-  local B=$P-rp sp="" p ns
+  local B=$P-rp sp="" p ns why
+  if why=$(no_pshell); then skip "the box commands of a box with its shell" "$why"; return; fi
   up_ok "$B" --net isolated "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
@@ -15334,8 +15397,8 @@ EOF
   # record on the box: wf-recorder and ffmpeg for real (the numbers of a take's length, its
   # times and sizes left out: they are the take's). Both are optional: skipped without them (#405).
   local rv=$TMP/rp-rec rvN
-  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
-    skip "record on the box (8 cases)" "no wf-recorder or ffmpeg here"
+  if ! rec_tools; then
+    skip "record on the box (8 cases)" "$REC_WHY"
   else
     rm -rf "$rv"; mkdir -p "$rv"
     # (its path as the cases' sed leaves it, every number an N)
@@ -15384,7 +15447,8 @@ EOF
 # omabox which PID (#172): a box's shell has the desktop's command line on the host; OMABOX_BOX in
 # every process of its session and `which` tell them apart.
 t_which() {
-  local B=$P-which out rc sp="" p ns
+  local B=$P-which out rc sp="" p ns why
+  if why=$(no_pshell); then skip "which, on a box with its shell" "$why"; return; fi
   up_ok "$B" --net isolated "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
@@ -15406,7 +15470,8 @@ t_which() {
 # #331 (finding 586): `omabox pid` prints the host pid of a box's Hyprland (or shell), --in-box the
 # pid as the box numbers it; agents grepped /proc/*/environ for it and got an empty pid.
 t_pid() {
-  local B=$P-pid h s out rc
+  local B=$P-pid h s out rc why
+  if why=$(no_pshell); then skip "pid, on a box with its shell" "$why"; return; fi
   up_ok "$B" --net isolated "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   h=$(ob pid -b "$B"); rc=$?
   check_eq "pid: the box's Hyprland on the host, exit 0" "0 Hyprland" "$rc $(cat "/proc/${h:-0}/comm" 2>/dev/null)"
@@ -16022,7 +16087,7 @@ scale_on() {
     ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
   else no "a foot window for shot --window --fit" "none listed"; fi
   # record (finding 297): a video of the screen at its pixels, a steady frame rate, made in the box.
-  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null; then
+  if rec_tools; then
     local v=$TMP/$B.mp4 t0
     check_eq "record status: not recording" "box '$B': not recording" "$(ob record -b "$B" status)"
     t0=$SECONDS
@@ -16044,7 +16109,7 @@ scale_on() {
     record_marks_on
     record_colours_on
   else
-    skip "record" "no wf-recorder or ffmpeg here"
+    skip "record" "$REC_WHY"
   fi
   ob reload -b "$B" >/dev/null 2>&1
   check_eq "a reload keeps the scale" "$m0 2560x1440@60,scale=2" "$(ob mode -b "$B")"
@@ -16067,7 +16132,7 @@ scale_on() {
   check_eq "...box.json 1" 1 "$(jq -r .scale "$(ob path -b "$B")/box.json")"
   check_match "up of it at another scale: refused, said" "--size 1280x720@60,scale=2 \(it is 1280x720@60\)" "$(ob up "$B" --size 1280x720,scale=2 2>&1)"
   # A down while it records takes its wf-recorder too: it runs in the box's pid namespace.
-  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null && ob record -b "$B" start -o "$TMP/$B-down.mp4" >/dev/null 2>&1; then
+  if rec_tools && ob record -b "$B" start -o "$TMP/$B-down.mp4" >/dev/null 2>&1; then
     local wp="" p; for p in $(probe box_pids "$B"); do
       [ "$(cat "/proc/$p/comm" 2>/dev/null)" != wf-recorder ] || wp=$p; done
     check "a recording's wf-recorder is in the box's pid namespace" test -n "$wp"
@@ -16190,7 +16255,7 @@ t_record_layout_nvidia() {
 # on its own clock; a recording out of step by the time its recorders started apart would be more).
 record_layout_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
-  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --monitor all" "no wf-recorder or ffmpeg here"; return; fi
+  if ! rec_tools; then skip "record --monitor all" "$REC_WHY"; return; fi
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
     --monitor 1280x720,scale=2,0,720 || { no "up with two more monitors" "$UP_OUT"; return; }
   ob lua -b "$B" "hl.monitor({ output = \"$m1\", mode = \"1280x720@60\", position = \"1280x0\", scale = 1, transform = 1 })" >/dev/null 2>&1
@@ -16288,6 +16353,7 @@ t_record_sheet_frames() {
   local n; n=$(gpu_node other)
   [ -n "$n" ] || { skip "record sheet --changed" "no render node here but NVIDIA's"; return; }
   if ! command -v ffmpeg >/dev/null || ! command -v magick >/dev/null; then skip "record sheet --changed" "no ffmpeg or magick here"; return; fi
+  rec_tools || { skip "record sheet --changed" "$REC_WHY"; return; }
   local B=$P-rsf v=$TMP/$P-rsf.mp4 o=$TMP/$P-rsf out rc
   ffmpeg -nostdin -v error -y -f lavfi -i color=c=black:s=320x240:r=30:d=4 -vf "drawbox=x=40:y=40:w=60:h=40:color=white:t=fill:enable='between(n,40,42)',drawbox=x=200:y=150:w=50:h=50:color=red:t=fill:enable='lt(mod(n,10),5)'" \
     -c:v libx264 -crf 18 -pix_fmt yuv420p "$v" || { no "record sheet --changed: a video" "ffmpeg failed"; return; }
@@ -16333,7 +16399,7 @@ t_record_sheet_frames() {
 t_record_hold() {
   local n; n=$(gpu_node other)
   [ -n "$n" ] || { skip "record --for and record hold" "no render node here but NVIDIA's"; return; }
-  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --for and record hold" "no wf-recorder or ffmpeg here"; return; fi
+  if ! rec_tools; then skip "record --for and record hold" "$REC_WHY"; return; fi
   local B=$P-rh v=$TMP/$P-rh-for.mp4 w=$TMP/$P-rh-take.mp4 out rc=0 t0 t1 a b c h e d
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated || { no "up for record hold" "$UP_OUT"; return; }
   out=$(ob record -b "$B" hold 1s 2>&1) || rc=$?
@@ -16375,7 +16441,7 @@ t_record_hold() {
 }
 record_input_on() {
   local n=$1 B=$2 D v1=$TMP/$2-input.mp4 v2=$TMP/$2-glide.mp4 v3=$TMP/$2-cut.mp4 out m1 m2 c
-  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --show-input" "no wf-recorder or ffmpeg here"; return; fi
+  if ! rec_tools; then skip "record --show-input" "$REC_WHY"; return; fi
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --size 2560x1440,scale=2 || { no "up for record --show-input" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   # A terminal of one colour all over (no caret, no echo), turning red on a trigger.
@@ -16846,7 +16912,8 @@ monitors_turned_on() {
 monitors_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
   # (Omarchy's stock bar; a plain box's PSHELL one, #247: BAR_NS, one on each screen too)
-  local bar=(--stock-bar); omarchy_here || bar=("${PSHELL[@]}")
+  local bar=(--stock-bar) why; omarchy_here || bar=("${PSHELL[@]}")
+  if why=$(no_pshell); then skip "monitors, a bar on each" "$why"; return; fi
   check "up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below" env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" "${bar[@]}" \
     --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below
   local ml; ml=$(ob monitor -b "$B" list --json)
@@ -17582,7 +17649,8 @@ t_unit_guard_exec_host() {
   check_match "host: and hyprctl reaches it" '"tag": "stand-in"' "$("${GUARDED[@]}" "$CLI" host -- hyprctl -j version 2>/dev/null)"
   check "...the stand-in heard it" grep -qx j/version "$hrt/requests.log"
   local open; open=$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v xdg-open; echo "${BROWSER-unset}"' 2>/dev/null)
-  check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
+  if command -v xdg-open >/dev/null; then check_match "host: the real xdg-open (finding 92)" '^/' "$(head -1 <<<"$open")"
+  else skip "host: the real xdg-open (finding 92)" "no xdg-open here"; fi
   check_fails "...not the guard's" grep -q share/guard <<<"$open"
   check_fails "host: the real quickshell and qs, not the guard's (#141)" grep -q share/guard \
     <<<"$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v quickshell; command -v qs' 2>/dev/null)"
@@ -17698,7 +17766,9 @@ t_guard() {
   check "hyprctl under the guard" "${GUARDED[@]}" "$CLI" hyprctl -b "$B" -j version
   check "shot under the guard" "${GUARDED[@]}" "$CLI" shot -b "$B" -o "$TMP/guard.png"
   # finding 92: the guard's xdg-open stays out of a box (this repo is mounted in it, so it could be seen).
-  check_match "a box's xdg-open is its own" '^/usr/' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'command -v xdg-open')"
+  if command -v xdg-open >/dev/null; then
+    check_match "a box's xdg-open is its own" '^/usr/' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'command -v xdg-open')"
+  else skip "a box's xdg-open is its own" "no xdg-open here"; fi
   # (Its PATH line first: a failed read would have no share/guard in it either.)
   local spath; spath=$("$CLI" run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ | grep "^PATH="')
   check_match "...and the box session's PATH" '^PATH=/' "$spath"
@@ -17712,6 +17782,9 @@ t_guard() {
   # Qt offscreen (what ctest sets) under the guard: runs, because the guard also blanks Omarchy's
   # QT_QPA_PLATFORMTHEME=gtk3, which starts GTK and needs a display. Run under a name
   # omarchy-crash-watch never announces, with no core file, in case it ever aborts.
+  if [ ! -x /usr/lib/qt6/bin/qml ]; then
+    skip "Qt under the guard: offscreen, the gtk3 theme, an app with no display" "no /usr/lib/qt6/bin/qml (qt6-declarative)"
+  else
   local qt='cp /usr/lib/qt6/bin/qml /tmp/omarchy-crash-omabox-qt
     printf "import QtQuick\nWindow { visible: true; Component.onCompleted: Qt.quit() }\n" > /tmp/q.qml
     exec timeout 10 /tmp/omarchy-crash-omabox-qt /tmp/q.qml'
@@ -17724,7 +17797,11 @@ t_guard() {
   check_match "a Qt app under the guard says why it fails" "could not connect to display" \
     "$("${in[@]}" QT_QPA_PLATFORM='wayland;xcb' bash -c "${qt//exec timeout/timeout}" 2>&1)"
   sleep 1
-  check_eq "...and its abort is not a journaled crash" 0 "$(journalctl --since "$since" MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 -o json --no-pager 2>/dev/null | grep -c omarchy-crash-omabox)"
+  # (where systemd's coredump socket records it anyway, #441: with the box's 1-byte core limit, which
+  # setup's filter for Omarchy's crash watcher leaves out, finding 672)
+  check_eq "...and its abort is not a journaled crash, or one the crash watcher's filter leaves out" 0 \
+    "$(journalctl --since "$since" MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 -o json --no-pager 2>/dev/null | grep omarchy-crash-omabox | grep -vc '"COREDUMP_RLIMIT":"1"')"
+  fi
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
   check_box_safety inner "${in[@]}" "$CLI"
   # finding 95: it renders on the GPU its host names, so it gets every render node the host has (and
@@ -19407,6 +19484,7 @@ t_burst() {
   # burst. The square's colour is the Timer's count (red + 256 green); over a burst it moves about one
   # step per 40 ms of the burst's span.
   local D st sp; D=$(ob path -b "$B")
+  local nq; if nq=$(no_qs); then skip "--every 0 beside a client busy on each Hyprland event" "$nq"; ob down "$B" >/dev/null 2>&1; return; fi
   cat > "$D/home/t191.qml" <<'QML'
 import QtQuick
 import Quickshell
@@ -19868,7 +19946,8 @@ t_output_nvidia() {
 }
 # output_on NODE BOX MAIN MONITOR: drop and back on a box on NODE with a monitor below the main screen.
 output_on() {
-  local n=$1 B=$2 m0=$3 m1=$4 out rc ml before
+  local n=$1 B=$2 m0=$3 m1=$4 out rc ml before why
+  if why=$(no_pshell); then skip "output drop and back, with the shell's bars" "$why"; return; fi
   out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below "${PSHELL[@]}" 2>&1) ||
     { no "up with a monitor" "failed: $out"; return; }
   # Its apps' renderer (#204, findings 290, 294): on the GPU, NVIDIA's too since its card placeholder;
@@ -20122,6 +20201,7 @@ t_gdb() {
   check_match "gdb: --watch and -- ARGS refused" "--watch runs its own" "$(ob gdb -b "$P-x" --watch -- -ex bt 2>&1)"
   check_match "gdb: --pid junk refused" "--pid takes a pid" "$(ob gdb -b "$P-x" --pid x 2>&1)"
   check_match "gdb: gdb's options after --" "after --" "$(ob gdb -b "$P-x" -ex bt 2>&1)"
+  command -v gdb >/dev/null || { skip "gdb in a box" "no gdb here (a box runs the host's)"; return; }
   # (gdb is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path "$B")
@@ -20549,17 +20629,20 @@ np_less() { awk -v d="$(np_diff "$1" "$2" "${4:-0}")" -v s="$3" 'BEGIN { exit !(
 np_live() { ob lua -b "$1" "return hl.get_config('cursor.invisible')" 2>&1; }
 np_gone() { [ ! -e "$1/pointer" ] && [ ! -e "$1/run/omabox.pointer" ]; }
 no_pointer_on() {
-  local n=$1 B=$2 out D f=$TMP/$2
+  local n=$1 B=$2 out D f=$TMP/$2 nc
+  # (with no cursor theme a box draws no pointer at all: the checks that it shows skip, #247)
+  nc=$(no_cursor) || nc=""
+  drawn() { if [ -n "$nc" ]; then skip "$2" "$nc"; else "$@"; fi; }
   out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 2560x1440,scale=2 --net isolated 2>&1) || { no "up for the pointer hidden" "failed: $out"; return; }
   D=$(ob path -b "$B")
   ob pointer -b "$B" move 640 360 >/dev/null 2>&1
   ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
   np_crop "$B" "$f-p1.png"; np_crop "$B" "$f-n1.png" --no-pointer
-  check "a shot has the pointer, shot --no-pointer not: they differ there" np_more "$f-p1.png" "$f-n1.png" 0.02
+  drawn check "a shot has the pointer, shot --no-pointer not: they differ there" np_more "$f-p1.png" "$f-n1.png" 0.02
   check_eq "...shown again after it (cursor:invisible)" false "$(np_live "$B")"
   check "...nothing left that keeps it hidden" np_gone "$D"
   np_crop "$B" "$f-p2.png"
-  check "...and drawn again: the next shot has it" np_more "$f-p2.png" "$f-n1.png" 0.02
+  drawn check "...and drawn again: the next shot has it" np_more "$f-p2.png" "$f-n1.png" 0.02
   # pointer hide: none in any shot until pointer show, over a reload and a theme switch.
   out=$(ob pointer -b "$B" hide 2>&1)
   check_match "pointer hide says until when" "hidden in box '$B' .* until omabox pointer show" "$out"
@@ -20614,7 +20697,7 @@ no_pointer_on() {
   check_eq "...a TERM ends it (143), shown again" "143 false" "$rc $(np_live "$B")"
   check "...nothing left that keeps it hidden" np_gone "$D"
   # record --no-pointer: no pointer in its frames; a plain recording's have it.
-  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null; then
+  if rec_tools; then
     ob pointer -b "$B" move 640 360 >/dev/null 2>&1
     ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
     np_crop "$B" "$f-n2.png" --no-pointer
@@ -20643,7 +20726,7 @@ no_pointer_on() {
     ob record -b "$B" stop >/dev/null 2>&1
     check_eq "...shown again by record stop" false "$(np_live "$B")"
   else
-    skip "record --no-pointer" "no wf-recorder or ffmpeg here"
+    skip "record --no-pointer" "$REC_WHY"
   fi
   ob down "$B" >/dev/null 2>&1
   # up --no-pointer: hidden from its first frame.
