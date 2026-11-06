@@ -13,7 +13,7 @@ use crate::exec::{Relayed, stdio_relay};
 use crate::exit::{Ctx, Res, say};
 use crate::select::select_box;
 use crate::shell;
-use crate::shellnote::{shell_pid, shell_running, shell_state};
+use crate::shellnote::{shell_live_pid, shell_state};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Target {
@@ -157,7 +157,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             pid = shell::strip_nl(&r.out);
         }
         Target::Shell => {
-            let p = shell_pid(ctx).filter(|p| shell_running(ctx, p));
+            let p = shell_live_pid(ctx);
             match p {
                 Some(p) => pid = p,
                 None => {

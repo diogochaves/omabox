@@ -32,13 +32,80 @@ pub fn shell_pid(ctx: &Ctx) -> Option<Vec<u8>> {
 }
 
 /// shell_running PID: a process in the box, and not one that exited and was not reaped yet.
-pub fn shell_running(ctx: &Ctx, pid: &[u8]) -> bool {
-    shell_running_with(&RealBox, ctx, pid)
-}
-
 pub fn shell_running_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, pid: &[u8]) -> bool {
     let r = sys.on_box(ctx, &words(&[b"cat", &cat!("/proc/", pid, "/stat")]));
     r.rc == 0 && !crate::exit::contains(&shell::subst(&r.out), b") Z ")
+}
+
+/// The box's runtime dir's file naming the slot share/shell.sh started a plain box's shell under
+/// (#438): CMD runs with `OMABOX_SHELL_SLOT=` it, and so does everything CMD starts, whatever it does
+/// with its session or its parent (a launcher that starts the shell and exits, `qs -d`'s setsid).
+pub const SHELL_SLOT: &str = "omabox-shell.slot";
+
+/// The box's processes started under slot $1 (their environment as they were started has
+/// `OMABOX_SHELL_SLOT=$1`), a pid a line; a Quickshell crash dialog (`__QUICKSHELL_CRASH_DUMP_PID`)
+/// is the crash's, not the shell. A zombie's environment reads empty: none. In the box, run by omabox
+/// with a clean environment, so the grep itself is never one.
+const SLOT_PIDS_SH: &str = r#"/usr/bin/grep -lsFxz -e "OMABOX_SHELL_SLOT=$1" /proc/[0-9]*/environ |
+  while IFS= read -r f; do
+    /usr/bin/grep -qsz '^__QUICKSHELL_CRASH_DUMP_PID=' "$f" || { f=${f#/proc/}; echo "${f%/environ}"; }
+  done"#;
+
+/// shell_slot: a plain box's shell's slot (SHELL_SLOT; letters, digits, `.`, `_`, `-`), None on an
+/// Omarchy box or one whose shell.sh wrote none.
+pub fn shell_slot(ctx: &Ctx) -> Option<Vec<u8>> {
+    if meta(&ctx.d, "shell_cmd").0.is_empty() {
+        return None;
+    }
+    let s = strip_nl(&run_read(&ctx.d, SHELL_SLOT)?);
+    (!s.is_empty()
+        && s.iter()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')))
+    .then_some(s)
+}
+
+/// shell_slot_pids SLOT: the box's processes of that slot (SLOT_PIDS_SH), in pid order.
+pub fn shell_slot_pids_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, slot: &[u8]) -> Vec<Vec<u8>> {
+    let r = sys.on_box(
+        ctx,
+        &words(&[b"/usr/bin/sh", b"-c", SLOT_PIDS_SH.as_bytes(), b"sh", slot]),
+    );
+    let mut v: Vec<(i64, Vec<u8>)> = r
+        .out
+        .split(|&c| c == b'\n')
+        .filter(|l| shell::is_num(l))
+        .filter_map(|l| Some((shell::dec(l)?, l.to_vec())))
+        .collect();
+    v.sort();
+    v.dedup();
+    v.into_iter().map(|(_, p)| p).collect()
+}
+
+/// shell_live_pid: the box's shell's process while it runs: its recorded pid (shell_pid) while that
+/// runs; on a plain box (#438), else the first process left of its slot (CMD a launcher that started
+/// the shell and left). None: the shell is gone.
+pub fn shell_live_pid(ctx: &Ctx) -> Option<Vec<u8>> {
+    shell_live_pid_with(&RealBox, ctx)
+}
+
+pub fn shell_live_pid_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
+    if let Some(p) = shell_pid(ctx).filter(|p| shell_running_with(sys, ctx, p)) {
+        return Some(p);
+    }
+    let slot = shell_slot(ctx)?;
+    shell_slot_pids_with(sys, ctx, &slot).into_iter().next()
+}
+
+/// shell_pids: a plain box's shell's processes (#438): its slot's and its recorded pid while that
+/// runs, in pid order; None when it has no slot (an Omarchy box, or a shell.sh that wrote none).
+pub fn shell_pids_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<Vec<u8>>> {
+    let slot = shell_slot(ctx)?;
+    let mut v = shell_slot_pids_with(sys, ctx, &slot);
+    if let Some(p) = shell_pid(ctx).filter(|p| !v.contains(p) && shell_running_with(sys, ctx, p)) {
+        v.push(p);
+        v.sort_by_key(|p| shell::dec(p));
+    }
+    Some(v)
 }
 
 /// shell_hung PID: no answer over its IPC in 2 s, from a shell up for 10 s or more.
@@ -92,7 +159,7 @@ fn shell_state_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, given: &str) -> &'st
     if meta(&ctx.d, "shell").0 != b"true" {
         return "none";
     }
-    if let Some(p) = shell_pid(ctx).filter(|p| shell_running_with(sys, ctx, p)) {
+    if let Some(p) = shell_live_pid_with(sys, ctx) {
         return if given == "hung" || (given.is_empty() && shell_hung_with(sys, ctx, &p)) {
             "hung"
         } else {
@@ -249,7 +316,8 @@ pub struct Dialog {
 /// crash_dialog PID: whether the window of process PID (the box's numbering) is Quickshell's crash
 /// dialog, told as share/crash-dialog.sh tells it (#303): its process has the reporter's
 /// `__QUICKSHELL_CRASH_DUMP_PID`, and the report naming that pid says whose; with none written
-/// yet, the shell's when the reporter's parent (the crashed process) is the box's shell. Never by its
+/// yet, the shell's when it has a plain box's shell's slot (#438) or the reporter's parent (the
+/// crashed process) is the box's shell. Never by its
 /// class or title: the class is the crashed instance's app id (`org.quickshell`, or a pragma's, as
 /// an app built on Quickshell sets), the title Quickshell's name.
 pub fn crash_dialog(ctx: &Ctx, pid: &[u8]) -> Option<Dialog> {
@@ -278,6 +346,18 @@ fn crash_dialog_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, pid: &[u8]) -> Opti
         return Some(Dialog {
             shell: r.shell,
             report: Some(r),
+        });
+    }
+    // A plain box's shell's dialog (#438): forked from the crashed shell, it has its slot.
+    if let Some(slot) = shell_slot(ctx)
+        && env
+            .out
+            .split(|&c| c == 0)
+            .any(|e| e == cat!("OMABOX_SHELL_SLOT=", slot).as_slice())
+    {
+        return Some(Dialog {
+            shell: true,
+            report: None,
         });
     }
     let st = sys.on_box(ctx, &words(&[b"cat", &cat!("/proc/", pid, "/status")]));
@@ -882,5 +962,202 @@ mod tests {
         );
         assert_eq!(crash_dialog_with(&Running, &ctx, b"x"), None, "no pid");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A plain box's processes (#438): SLOT_PIDS_SH answers OUT, and /proc/PID/stat reads for the
+    /// pids in RUNNING; the slot it was asked for kept.
+    struct Slot {
+        out: &'static [u8],
+        running: &'static [&'static [u8]],
+        asked: std::cell::RefCell<Vec<Vec<u8>>>,
+    }
+
+    impl BoxSys for Slot {
+        fn on_box_io(&self, _: &Ctx, args: &[Vec<u8>], _: Out, _: ErrTo) -> crate::exec::Ran {
+            let a = |i: usize| args.get(i).cloned().unwrap_or_default();
+            let ran = |rc: i32, out: Vec<u8>| crate::exec::Ran {
+                rc,
+                out,
+                refused: false,
+                gone_said: false,
+            };
+            if a(0) == b"/usr/bin/sh" && a(2) == SLOT_PIDS_SH.as_bytes() {
+                self.asked.borrow_mut().push(a(4));
+                return ran(0, self.out.to_vec());
+            }
+            if a(0) == b"cat"
+                && let Some(p) = a(1)
+                    .strip_prefix(b"/proc/".as_slice())
+                    .and_then(|r| r.strip_suffix(b"/stat".as_slice()))
+                && self.running.contains(&p)
+            {
+                return ran(0, cat!(p, " (qs) S 1\n"));
+            }
+            ran(1, Vec::new())
+        }
+    }
+
+    // #438: a plain box's shell is its slot's processes, CMD a launcher that started it and left: the
+    // shell's pid while it runs, else the slot's first; gone when nothing of it is left. An Omarchy box
+    // (no shell_cmd) and a shell.sh that wrote no slot keep the recorded pid alone.
+    #[test]
+    fn plain_shell_is_its_slot() {
+        let d = std::env::temp_dir().join(format!("omabox-slot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        let w = |p: &str, t: &str| std::fs::write(d.join(p), t).unwrap();
+        w(
+            "box.json",
+            r#"{"shell": true, "shell_cmd": "caelestia shell -d"}"#,
+        );
+        w("run/omabox-shell.pid", "40\n");
+        w("run/omabox-shell.slot", "40-1762400000123456\n");
+        let mut ctx = Ctx::new(b"ls", shell::bytes(&std::env::temp_dir()).to_vec());
+        ctx.parsed();
+        ctx.name = b"sl".to_vec();
+        ctx.d = shell::bytes(&d).to_vec();
+        let sys = |out: &'static [u8], running: &'static [&'static [u8]]| Slot {
+            out,
+            running,
+            asked: std::cell::RefCell::new(Vec::new()),
+        };
+        assert_eq!(shell_slot(&ctx), Some(b"40-1762400000123456".to_vec()));
+        let s = sys(b"40\n", &[b"40"]);
+        assert_eq!(
+            shell_live_pid_with(&s, &ctx),
+            Some(b"40".to_vec()),
+            "CMD running: its pid"
+        );
+        assert!(s.asked.borrow().is_empty(), "...the slot not asked");
+        let s = sys(b"212\n57\n57\nx\n", &[b"57", b"212"]);
+        assert_eq!(
+            shell_live_pid_with(&s, &ctx),
+            Some(b"57".to_vec()),
+            "the launcher gone: the slot's first process"
+        );
+        assert_eq!(
+            s.asked.borrow().as_slice(),
+            &[b"40-1762400000123456".to_vec()],
+            "...asked by the slot's name"
+        );
+        assert_eq!(shell_state_with(&s, &ctx, "ok"), "running", "...running");
+        assert_eq!(
+            shell_pids_with(&s, &ctx),
+            Some(vec![b"57".to_vec(), b"212".to_vec()]),
+            "shell_pids: the slot's, in pid order, once each"
+        );
+        let s = sys(b"57\n", &[b"40", b"57"]);
+        assert_eq!(
+            shell_pids_with(&s, &ctx),
+            Some(vec![b"40".to_vec(), b"57".to_vec()]),
+            "...and CMD's recorded pid while it runs (one that cleared its environment)"
+        );
+        let s = sys(b"", &[]);
+        assert_eq!(shell_live_pid_with(&s, &ctx), None, "nothing left: none");
+        assert_eq!(shell_state_with(&s, &ctx, "ok"), "gone", "...gone");
+        assert_eq!(shell_pids_with(&s, &ctx), Some(Vec::new()));
+        // A slot the box wrote oddly is none: the recorded pid alone.
+        for bad in ["", "a b", "x;rm", "-\n-"] {
+            w("run/omabox-shell.slot", bad);
+            assert_eq!(shell_slot(&ctx), None, "an odd slot: none ({bad:?})");
+        }
+        let s = sys(b"57\n", &[b"57"]);
+        assert_eq!(shell_live_pid_with(&s, &ctx), None, "...not asked");
+        assert_eq!(shell_pids_with(&s, &ctx), None);
+        // An Omarchy box: no slot, whatever the file says.
+        w("run/omabox-shell.slot", "40-1\n");
+        w("box.json", r#"{"shell": true}"#);
+        assert_eq!(shell_slot(&ctx), None, "an Omarchy box: no slot");
+        // A crash dialog with no report yet: the shell's by its slot (its parent gone, PPid 1).
+        w("box.json", r#"{"shell": true, "shell_cmd": "x"}"#);
+        let dl = |env: &'static [u8]| {
+            crash_dialog_with(
+                &Proc {
+                    env,
+                    status: b"PPid:\t1\n",
+                },
+                &ctx,
+                b"300",
+            )
+        };
+        assert_eq!(
+            dl(b"__QUICKSHELL_CRASH_DUMP_PID=5\0OMABOX_SHELL_SLOT=40-1\0"),
+            Some(Dialog {
+                shell: true,
+                report: None
+            }),
+            "a dialog with the shell's slot: the shell's"
+        );
+        assert_eq!(
+            dl(b"__QUICKSHELL_CRASH_DUMP_PID=5\0OMABOX_SHELL_SLOT=40-12\0"),
+            Some(Dialog {
+                shell: false,
+                report: None
+            }),
+            "...another slot's (an old start's): not"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // SLOT_PIDS_SH as it runs in a box, here on the test's own processes: the ones started under a
+    // slot, whatever they did with their session or parent (a setsid daemon whose launcher left);
+    // not another slot's, not a crash dialog's, not the grep's.
+    #[test]
+    fn slot_pids_as_sh() {
+        use std::process::{Command, Stdio};
+        let slot = format!("t{}-{}", std::process::id(), crate::settle::mono_ms());
+        let other = format!("{slot}0");
+        // A launcher that starts a daemon in a session of its own and leaves; and one of another slot,
+        // and a crash dialog of this one.
+        let out = Command::new("/usr/bin/sh")
+            .args(["-c", "setsid sleep 30 </dev/null >/dev/null 2>&1 & echo $!"])
+            .env("OMABOX_SHELL_SLOT", &slot)
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        let daemon = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        let mut oth = Command::new("sleep")
+            .arg("30")
+            .env("OMABOX_SHELL_SLOT", &other)
+            .spawn()
+            .unwrap();
+        let mut dlg = Command::new("sleep")
+            .arg("30")
+            .env("OMABOX_SHELL_SLOT", &slot)
+            .env("__QUICKSHELL_CRASH_DUMP_PID", "5")
+            .spawn()
+            .unwrap();
+        let run = || {
+            let o = Command::new("/usr/bin/sh")
+                .args(["-c", SLOT_PIDS_SH, "sh", &slot])
+                .env_clear()
+                .output()
+                .unwrap();
+            String::from_utf8(o.stdout).unwrap()
+        };
+        // (setsid forks when its caller leads a group; its child is the daemon, the pid echoed its parent
+        // or itself.)
+        let got = run();
+        let pids: Vec<&str> = got.lines().collect();
+        assert_eq!(pids.len(), 1, "one process of the slot: {got:?}");
+        let d = pids[0].to_string();
+        assert!(
+            std::fs::read(format!("/proc/{d}/cmdline"))
+                .unwrap_or_default()
+                .starts_with(b"sleep\0"),
+            "...the daemon (echoed {daemon}, found {d})"
+        );
+        let _ = Command::new("kill").arg(&d).status();
+        let _ = oth.kill();
+        let _ = dlg.kill();
+        let _ = oth.wait();
+        let _ = dlg.wait();
+        for _ in 0..50 {
+            if run().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(run(), "", "...none once it is gone");
     }
 }

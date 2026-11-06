@@ -12,7 +12,7 @@ use crate::cat;
 use crate::exit::{Ctx, Res, out};
 use crate::procfs;
 use crate::select::select_box;
-use crate::shellnote::{shell_pid, shell_running, shell_state};
+use crate::shellnote::{shell_live_pid, shell_state};
 use serde_json::{Map, Value};
 
 /// The host pid of the box process whose own pid (in the box) is INNER, among the box's processes
@@ -65,7 +65,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let inner = procfs::status_last(&s, "NSpid");
         (host, inner)
     } else {
-        let Some(inner) = shell_pid(ctx).filter(|p| shell_running(ctx, p)) else {
+        let Some(inner) = shell_live_pid(ctx) else {
             return Err(ctx.die(cat!(
                 "pid: box '",
                 ctx.name,
