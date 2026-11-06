@@ -448,6 +448,18 @@ static const struct zwlr_screencopy_frame_v1_listener sc_listener = {sc_buffer, 
 // render. A whole output, not a pixel of it: Hyprland 0.56 keeps a region's session for the next frame
 // only at scale 1 (it compares the asked box with the one it scaled), so a region on a scaled monitor
 // was four events a frame again.
+// The turn a frame of O still needs. wlr-screencopy's frames came unturned (the output's buffer as
+// scanned out) and a client turned them by wl_output's transform, as grim did; Hyprland 0.57 hands
+// them over upright already while wl_output still says the turn (#435, finding 653), and turned
+// again they were the picture squeezed into a band. A quarter turn changes the size: a frame of the
+// turned size, not the mode's, is upright. (A half turn or a flip keeps it: those still turn.)
+static enum wl_output_transform frame_transform(const struct output *o) {
+    if ((o->transform & WL_OUTPUT_TRANSFORM_90) && o->mode_width != o->mode_height &&
+        o->buf.width == o->mode_height && o->buf.height == o->mode_width)
+        return WL_OUTPUT_TRANSFORM_NORMAL;
+    return o->transform;
+}
+
 static void sc_capture(struct output *o, int nudge) {
     o->done = o->failed = 0;
     o->flags = 0;
@@ -645,7 +657,7 @@ static void take_frame(long index) {
     ncaps = 0;
     for (int i = 0; i < nouts; i++) {
         struct output *o = &outs[i];
-        if (o->captured && !o->gone && o->done) caps[ncaps++] = (struct capture){&o->buf, o->logical, o->transform, o->flags};
+        if (o->captured && !o->gone && o->done) caps[ncaps++] = (struct capture){&o->buf, o->logical, frame_transform(o), o->flags};
     }
 }
 

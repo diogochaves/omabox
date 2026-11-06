@@ -450,44 +450,29 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         .ok()
         .and_then(|v| shell::dec(&strip_nl(&v)))
         .filter(|c| (0..=51).contains(c));
-    for f in ["record", "record.audio", "record.as", "record.crf"] {
+    // Its outputs' turns (#435), read before the files go.
+    let turns = std::fs::read(ctx.at("record.turn")).unwrap_or_default();
+    for f in [
+        "record",
+        "record.audio",
+        "record.as",
+        "record.crf",
+        "record.turn",
+    ] {
         rm(&ctx.at(f));
     }
     // The bound on its ffmpeg runs (finding 356): as many frames as it ran for, of its size.
+    let raw1 = if rec.n > 1 {
+        None
+    } else {
+        raw_size(ctx, REC_DIR.as_bytes())?
+    };
     let px = if rec.n > 1 {
         let s = record_size(ctx);
         let (a, b) = s.split_at(s.iter().position(|&c| c == b'x').unwrap_or(0));
         num(a) * num(b.get(1..).unwrap_or_default())
     } else {
-        let l = ff_line(
-            ctx,
-            &w(&[
-                "/usr/bin/ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "csv=p=0",
-                &format!("{REC_DIR}/raw.mkv"),
-            ]),
-            usize::MAX,
-        )?;
-        let re = shell::Re::new("^([1-9][0-9]{0,4}),([1-9][0-9]{0,4})$");
-        match re.as_ref().and_then(|r| r.captures(&l, false)) {
-            Some(c) => {
-                let g = |i: usize| {
-                    c.get(i)
-                        .copied()
-                        .flatten()
-                        .map_or(0, |(a, b)| num(&l[a..b]))
-                };
-                g(1) * g(2)
-            }
-            None => 3840 * 2160,
-        }
+        raw1.map_or(3840 * 2160, |(w, h)| w * h)
     };
     let mut fr = 0;
     if shell::re_match("^[0-9]{1,17} [0-9]{1,3}$", &cat!(rec.start, " ", rec.fps)) {
@@ -624,7 +609,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         }
     }
     if rec.n > 1 {
-        if !record_compose(ctx, rec, &afilt, &vass, so.cut)? {
+        if !record_compose(ctx, rec, &afilt, &vass, so.cut, &turns)? {
             return Err(ctx.die(cat!(
                 "record: ffmpeg could not make the video (the monitors' raw.mkv in ",
                 REC_DIR,
@@ -650,7 +635,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             a.extend(w(&["-i", &format!("{REC_DIR}/audio.mka")]));
         }
         a.push(b"-vf".to_vec());
-        a.push(cat!("fps=", fps, ",", rec_yuv(), vass));
+        let back = raw1.map_or("", |wh| {
+            turn_back(turns.split(|&c| c == b'\n').next().unwrap_or_default(), wh)
+        });
+        a.push(cat!(back, "fps=", fps, ",", rec_yuv(), vass));
         a.extend(w(&[
             "-c:v",
             "libx264",
@@ -949,6 +937,58 @@ fn audio_filter(ctx: &mut Ctx, first: i64) -> Option<Vec<u8>> {
     }
 }
 
+/// raw_size DIR: the size of DIR/raw.mkv in the box, as ffprobe reads it; None when it cannot.
+fn raw_size(ctx: &mut Ctx, dir: &[u8]) -> Res<Option<(i64, i64)>> {
+    let l = ff_line(
+        ctx,
+        &w(&[
+            b"/usr/bin/ffprobe".as_slice(),
+            b"-v",
+            b"error",
+            b"-select_streams",
+            b"v:0",
+            b"-show_entries",
+            b"stream=width,height",
+            b"-of",
+            b"csv=p=0",
+            &cat!(dir, "/raw.mkv"),
+        ]),
+        usize::MAX,
+    )?;
+    let re = shell::Re::new("^([1-9][0-9]{0,4}),([1-9][0-9]{0,4})$");
+    Ok(re.as_ref().and_then(|r| r.captures(&l, false)).map(|c| {
+        let g = |i: usize| {
+            c.get(i)
+                .copied()
+                .flatten()
+                .map_or(0, |(a, b)| num(&l[a..b]))
+        };
+        (g(1), g(2))
+    }))
+}
+
+/// turn_back TURN RAW: the filter that turns a raw video of RAW's size back upright, for an output
+/// whose record.turn line is TURN ("T W H": its transform and mode), or "" when it came upright
+/// (#435, finding 653). wf-recorder turns each frame by the output's transform, as wlr-screencopy's
+/// frames once came unturned; Hyprland 0.57 hands them over upright already, so a quarter-turned
+/// output's video came turned twice: its mode's size, not the turned one. Then the turn wf-recorder
+/// made (its transpose_from_transform) is undone. A half turn or a flip keeps the size: not told
+/// apart, left as wf-recorder made it.
+pub(crate) fn turn_back(turn: &[u8], raw: (i64, i64)) -> &'static str {
+    let f = shell::read_fields(turn, 3);
+    let (t, mw, mh) = (num(&f[0]), num(&f[1]), num(&f[2]));
+    if t & 1 == 0 || mw == mh || raw != (mw, mh) {
+        return "";
+    }
+    match t {
+        1 => "transpose=2,",
+        3 => "transpose=1,",
+        5 => "hflip,transpose=2,",
+        7 => "hflip,transpose=1,",
+        _ => "",
+    }
+}
+
 /// record_compose: the layout's recordings in one video (#225), in step by their first frames.
 fn record_compose(
     ctx: &mut Ctx,
@@ -956,6 +996,7 @@ fn record_compose(
     afilt: &[u8],
     vass: &[u8],
     cut: Option<i64>,
+    turns: &[u8],
 ) -> Res<bool> {
     let lay = std::fs::read(ctx.at("record.layout")).unwrap_or_default();
     if !lay.contains(&b'\n') {
@@ -1033,10 +1074,16 @@ fn record_compose(
         }
         args.push(b"-i".to_vec());
         args.push(cat!(dirs[i], "/raw.mkv"));
+        let back = match raw_size(ctx, &dirs[i])? {
+            Some(wh) => turn_back(turns.split(|&c| c == b'\n').nth(i).unwrap_or_default(), wh),
+            None => "",
+        };
         fc.extend_from_slice(&cat!(
             "[",
             k.to_string(),
-            ":v]setpts=PTS-STARTPTS+(",
+            ":v]",
+            back,
+            "setpts=PTS-STARTPTS+(",
             off,
             ")/TB,fps=",
             fps,
@@ -2898,6 +2945,43 @@ mod tests {
         ] {
             assert_eq!(sheet_geo(bad), None);
         }
+    }
+
+    /// #435, finding 653: a raw video turned back only when it came turned twice (its mode's size on
+    /// a quarter-turned output), by the inverse of wf-recorder's turn; record_turns' lines.
+    #[test]
+    fn turned_twice_turned_back() {
+        assert_eq!(turn_back(b"1 1280 720", (1280, 720)), "transpose=2,");
+        assert_eq!(turn_back(b"1 1280 720", (720, 1280)), "");
+        assert_eq!(turn_back(b"3 1280 720", (1280, 720)), "transpose=1,");
+        assert_eq!(turn_back(b"5 1280 720", (1280, 720)), "hflip,transpose=2,");
+        assert_eq!(
+            turn_back(b"7 1920 1080", (1920, 1080)),
+            "hflip,transpose=1,"
+        );
+        assert_eq!(turn_back(b"7 1920 1080", (1080, 1920)), "");
+        assert_eq!(turn_back(b"0 1280 720", (1280, 720)), "");
+        assert_eq!(turn_back(b"2 1280 720", (1280, 720)), "");
+        assert_eq!(turn_back(b"1 1080 1080", (1080, 1080)), "");
+        assert_eq!(turn_back(b"", (1280, 720)), "");
+        let names = [b"A".to_vec(), b"B".to_vec(), b"C".to_vec()];
+        let mons = b"A 0 1280 720\nB 1 1280 720\nC 3 1280 720";
+        assert_eq!(
+            super::super::record::record_turns(&names, mons),
+            b"0 1280 720\n1 1280 720\n3 1280 720".to_vec()
+        );
+        assert_eq!(
+            super::super::record::record_turns(&names[..1], mons),
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            super::super::record::record_turns(&[b"Z".to_vec(), b"B".to_vec()], mons),
+            b"0 0 0\n1 1280 720".to_vec()
+        );
+        assert_eq!(
+            super::super::record::record_turns(&names, b"A 2 1280 720\nB 4 1280 720"),
+            Vec::<u8>::new()
+        );
     }
 
     #[test]

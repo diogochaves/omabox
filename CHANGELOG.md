@@ -60,6 +60,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   0.57 fails a window's copy all through its size animation, so `shot --window` of a window resized
   over and over failed nearly every time. It is now tried for up to 4 s while the window changes
   size, with the window's own animations off after half a second of it, and back after the shot.
+- **Hyprland 0.57: a turned monitor in `shot --burst` and `record`** ([#435](https://github.com/diogochaves/omabox/issues/435)):
+  0.57 hands a turned monitor's frames over upright already, and the burst and wf-recorder turned
+  them again: the screen squeezed into a band, a portrait monitor recorded sideways. A frame that
+  already has the turned size is now taken as it is, on 0.56 and 0.57 alike.
 
 ## 1.2.2 — 2026-11-05
 
