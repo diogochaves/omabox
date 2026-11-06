@@ -12860,6 +12860,36 @@ from them.
     by itself. Tests: bwrap.rs `root_links_follow_the_hosts` (Arch's, Debian's, no links, links out
     of /usr), t_plain (the guiutils check off), `test/distros.sh --boxes` (test/distros-boxes.sh).
 
+658. **protect-ports could not be used on Debian or openSUSE: omabox looked for nft in /usr/bin
+    only** (2026-11-06, #439, left open by finding 657). Their nftables installs `/usr/sbin/nft` and
+    no /usr/bin/nft (/usr/sbin is a folder of its own there, not Arch's link to usr/bin). up,
+    `config protect-ports`, the reaper and doctor all looked in up_box's LAUNCH_PATH (/usr/bin), and
+    pasta's shell ran a bare `nft` with that PATH, so up refused every connected box once the setting
+    was on, `config` said to `pacman -S nftables`, and doctor's "install nftables" fix never cleared
+    its warning. **Now:** one resolver, exec.rs's `nft_at`/`nft`, looks in a fixed list, /usr/bin
+    then /usr/sbin (`NFT_DIRS`), never PATH: S10's rule is set by nft on the host, as the user, and a
+    PATH lookup would let anything earlier on PATH (~/.local/bin) stand in for it. It takes the first
+    executable regular file and refuses it (saying why) when another user could change it: writable
+    by its group or by anyone, or owned by someone other than root and the caller. An owner a user
+    namespace leaves unmapped (the overflow uid, nobody) counts as root when this is not the host's
+    own user namespace: t_protect_ports_ns runs up in one of the test's own, where /usr/bin/nft is
+    nobody's; on the host's, nobody is a real owner and is refused. A stand-in the caller owns
+    passes, as the suite's (a bind over /usr/bin/nft) must. up checks with it, up_box's launch
+    script runs pasta's shell's nft by the path it found (quoted), the reaper runs that path in
+    pasta's namespaces, `config` notes it, and doctor's some-programs check uses it, its found line
+    saying where nft is when not in /usr/bin (`wlr-randr, ip, python3 in /usr/bin; nft in
+    /usr/sbin`) and why it refuses one, without an install fix then. Verified in a debian:sid
+    container (rootless podman, no device; the binary and checkout bind-mounted read-only, nftables,
+    iproute2, python3, wlr-randr and passt installed): before, doctor warned "no nft" with
+    nftables installed, `config protect-ports 9999` noted nft missing and `up` refused with "needs
+    nft in /usr/bin"; after, doctor's some-programs is ok with nft in /usr/sbin, `config` adds no
+    note, and `up` goes past the check (to the missing /dev/net/tun the container had not been
+    given). Not verified: a connected box with protect-ports running there (`test/distros.sh
+    --boxes` has none). Tests: exec.rs `nft_from_the_system_folders_only` (a root of the test's own:
+    none, one on no system folder, /usr/sbin's, /usr/bin's first, not executable, group- and
+    world-writable, a folder), doctor.rs `programs_where_a_box_looks` (nft in /usr/sbin, a
+    world-writable one, /usr/bin's), t_protect_ports (a stand-in /usr/bin/nft as before).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

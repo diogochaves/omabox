@@ -130,11 +130,15 @@ fn set(ctx: &Ctx, key: &[u8], given: &[u8], value: Vec<u8>) -> Res<()> {
 /// needs nft for the rule. Said, as a user who set it after seeing a box reach a service would take
 /// it for covered now.
 fn protect_notes(ctx: &Ctx, before: &[u8], v: &[u8]) {
-    if !v.is_empty() && !crate::exec::executable_in(crate::cmd::up_box::LAUNCH_PATH, b"nft") {
+    if !v.is_empty()
+        && let Err(why) = crate::exec::nft()
+    {
         say(cat!(
             "note: protect-ports needs nft in ",
-            crate::cmd::up_box::LAUNCH_PATH,
-            ", where a box's start runs it: until then up refuses a connected box (sudo pacman -S nftables)"
+            crate::exec::nft_dirs_said(),
+            ", where a box's start runs it: until then up refuses a connected box (",
+            crate::exec::nft_fix(&why),
+            ")"
         ));
     }
     if before == v {

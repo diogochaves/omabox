@@ -1420,6 +1420,72 @@ pub fn executable_in(path: &[u8], name: &[u8]) -> bool {
         .any(|p| executable(&p) && shell::path(&p).is_file())
 }
 
+/// Where omabox looks for nft (S10, #439), in this order: the system's own folders, never the
+/// caller's PATH. nft sets the protected ports' rule on the host, as the user: a PATH lookup would let
+/// anything earlier on PATH stand in for it. Debian and openSUSE put it in /usr/sbin.
+pub const NFT_DIRS: [&str; 2] = ["/usr/bin", "/usr/sbin"];
+
+/// "/usr/bin or /usr/sbin": what a message says omabox looked in.
+pub fn nft_dirs_said() -> String {
+    NFT_DIRS.join(" or ")
+}
+
+/// nft_at ROOT: the nft omabox runs, under ROOT ("" for this machine; doctor's tests give a tree of
+/// their own): the first executable file nft in NFT_DIRS. Err(None) when there is none; Err(why) when
+/// the first is one another user could change: writable by its group or by anyone, or owned by
+/// someone other than root and the caller (an owner a user namespace leaves unmapped, as nobody,
+/// counts as root: the host's own nft, seen from one).
+pub fn nft_at(root: &[u8]) -> Result<Vec<u8>, Option<String>> {
+    use std::os::unix::fs::MetadataExt;
+    for d in NFT_DIRS {
+        let p = crate::gpu::at(root, format!("{d}/nft").as_bytes());
+        let Ok(m) = std::fs::metadata(shell::path(&p)) else {
+            continue;
+        };
+        if !m.is_file() || !executable(&p) {
+            continue;
+        }
+        let shown = String::from_utf8_lossy(&p).into_owned();
+        if m.mode() & 0o022 != 0 {
+            return Err(Some(format!(
+                "{shown} is writable by others than its owner: omabox will not run it"
+            )));
+        }
+        if m.uid() != 0 && m.uid() != procfs::euid() && !unmapped(m.uid()) {
+            return Err(Some(format!(
+                "{shown} is owned by uid {}, neither root nor you: omabox will not run it",
+                m.uid()
+            )));
+        }
+        return Ok(p);
+    }
+    Err(None)
+}
+
+/// nft_at for this machine.
+pub fn nft() -> Result<Vec<u8>, Option<String>> {
+    nft_at(b"")
+}
+
+/// What a message that found no nft to run (nft's Err) tells the user to do.
+pub fn nft_fix(why: &Option<String>) -> String {
+    why.clone()
+        .unwrap_or_else(|| "sudo pacman -S nftables".into())
+}
+
+/// UID is what an owner this user namespace does not map shows as (the overflow uid, 65534 by
+/// default), and this is not the host's own user namespace, which maps every uid: there that uid is a
+/// real owner (nobody's).
+fn unmapped(uid: u32) -> bool {
+    let overflow = std::fs::read_to_string("/proc/sys/kernel/overflowuid")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(65534);
+    let map = std::fs::read_to_string("/proc/self/uid_map").unwrap_or_default();
+    let init = map.split_whitespace().collect::<Vec<_>>() == ["0", "0", "4294967295"];
+    uid == overflow && !init
+}
+
 /// tools_or_skip TEST TOOL... (tests only): every TOOL is on PATH, or TEST says it skips and which
 /// are missing. A test that runs a host tool omabox runs (tar, grep, awk) checks it first: a package's
 /// clean chroot has only the recipe's depends on PATH (#324).
@@ -1647,6 +1713,50 @@ mod tests {
         assert!(!executable_in(&dir("c"), b"prog"), "a folder");
         assert!(!executable_in(&dir("b"), b"other"));
         assert!(!executable_in(b"", b"no-such-prog-here"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // #439: nft from /usr/bin, else /usr/sbin (Debian, openSUSE), under a root of the test's own; never
+    // from PATH, and never one another user could change.
+    #[test]
+    fn nft_from_the_system_folders_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("omabox-nft-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for sub in ["usr/bin", "usr/sbin", "path"] {
+            std::fs::create_dir_all(d.join(sub)).unwrap();
+        }
+        let put = |rel: &str, mode: u32| {
+            std::fs::write(d.join(rel), "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(d.join(rel), std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let r = d.clone().into_os_string().into_encoded_bytes();
+        let at = |rel: &str| d.join(rel).into_os_string().into_encoded_bytes();
+        assert_eq!(nft_at(&r), Err(None), "none");
+        put("path/nft", 0o755);
+        assert_eq!(nft_at(&r), Err(None), "one on no system folder is none");
+        put("usr/sbin/nft", 0o755);
+        assert_eq!(nft_at(&r), Ok(at("usr/sbin/nft")), "Debian's, openSUSE's");
+        assert_eq!(nft_at(&cat!(r.clone(), "/")), Ok(at("usr/sbin/nft")));
+        put("usr/bin/nft", 0o644);
+        assert_eq!(
+            nft_at(&r),
+            Ok(at("usr/sbin/nft")),
+            "/usr/bin's not executable"
+        );
+        put("usr/bin/nft", 0o755);
+        assert_eq!(nft_at(&r), Ok(at("usr/bin/nft")), "/usr/bin's first");
+        for mode in [0o775, 0o757] {
+            put("usr/bin/nft", mode);
+            let e = nft_at(&r).unwrap_err().expect("a reason");
+            assert!(
+                e.contains("writable by others than its owner"),
+                "{mode:o}: {e}"
+            );
+        }
+        std::fs::remove_file(d.join("usr/bin/nft")).unwrap();
+        std::fs::create_dir(d.join("usr/bin/nft")).unwrap();
+        assert_eq!(nft_at(&r), Ok(at("usr/sbin/nft")), "a folder is no nft");
         let _ = std::fs::remove_dir_all(&d);
     }
 
