@@ -61,6 +61,22 @@ fi
 export DBUS_SESSION_BUS_ADDRESS
 echo "$DBUS_SESSION_BUS_ADDRESS" > "$XDG_RUNTIME_DIR/dbus-address"
 
+# What reaches the box's notification server (#430, finding 680): omabox-notices monitors this bus
+# (BecomeMonitor, on the box's own bus only) and writes each Notify with the id it got, each close and
+# action to ~/notifications.log (`omabox log notifications`, `wait notification`). Before anything
+# else of the session joins the bus, so an app's first notice is seen whatever server takes it (the
+# shell's, a plain box's, none yet): up to 2 s for the bus to make it a monitor. A box without the tool
+# (not built) records none, said in box.log.
+nt=/opt/omabox/bin/omabox-notices nr=$XDG_RUNTIME_DIR/omabox-notices.ready
+if [ -x "$nt" ]; then
+  rm -f "$nr"
+  without_host_fd "$nt" "$HOME/notifications.log" "$nr" &
+  for _ in $(seq 40); do [ -e "$nr" ] && break; sleep 0.05; done
+  [ -e "$nr" ] || echo "session.sh: omabox-notices is not listening yet: notices sent now may be missed" >&2
+else
+  echo "session.sh: no $nt: the box records no notifications (build tools/notices)" >&2
+fi
+
 # Throwaway keyring on the private bus: a default "login" keyring with an empty password, which
 # gnome-keyring keeps as an unencrypted file and never locks, so apps store and read secrets without a
 # prompt. (`--unlock` with an empty password does not create one: the first store then waits on a

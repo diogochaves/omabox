@@ -15,6 +15,7 @@ tools/burst/*-protocol.[ch]
 .local/
 tools/relay/omabox-relay
 tools/events/omabox-events
+tools/notices/omabox-notices
 tools/tree/omabox-tree
 tools/polkit/omabox-polkit
 tools/polkit/omabox-polkit-session.so

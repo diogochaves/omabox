@@ -141,6 +141,9 @@ ROOT/tools/burst/omabox-burst
 --ro-bind
 ROOT/tools/tree/omabox-tree
 /opt/omabox/bin/omabox-tree
+--ro-bind
+ROOT/tools/notices/omabox-notices
+/opt/omabox/bin/omabox-notices
 --tmpfs
 /run/systemd/journal
 --setenv

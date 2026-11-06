@@ -37,6 +37,7 @@ folder: its libraries first, its `hyprctl` bound over the box's.
 | `tools/burst` | takes a `shot --burst`'s frames through one capture client (Hyprland's screencast events once a burst) |
 | `tools/tree` | reads a window's accessibility (AT-SPI) tree in a box, as text (`omabox tree`) |
 | `tools/events` | records a box's Hyprland events, stamped, from its start (`omabox events`) |
+| `tools/notices` | records what reaches a box's notification server, from its start (`omabox log notifications`, `wait notification`) |
 | `tools/relay` | carries an omabox command from inside ai-jail to the broker outside (`omabox broker`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
 | `skill-feedback/` | opt-in: the `omabox-feedback` skill, to report what omabox got wrong in your sessions ([CONTRIBUTING](../CONTRIBUTING.md#reporting-a-problem)) |
