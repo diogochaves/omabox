@@ -168,7 +168,7 @@ cleanup() {
   rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox"/.{lock,down,expired}-"$P"-* 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
-  rm -rf "$TMP" "$TMP.bar"
+  rm -rf "$TMP" "$TMP.bar" "$TMP.bin"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -227,6 +227,28 @@ no_pshell() {
   command -v quickshell >/dev/null && return 1
   echo "no Quickshell here: a plain box's stand-in shell is a Quickshell bar"
 }
+# script: util-linux's, which the tests run things "in a terminal" with; where there is none (Fedora's
+# cloud image), a stand-in of the suite's: `script [-q] [-e] -c CMD FILE` runs CMD by sh under a
+# pseudo-terminal of its own (Python's pty), its status script's, FILE unused (always /dev/null here).
+if ! command -v script >/dev/null; then
+  mkdir -p "$TMP.bin"
+  cat > "$TMP.bin/script" <<'PYEOF'
+#!/usr/bin/env python3
+import os, pty, sys
+a, cmd = sys.argv[1:], None
+while a:
+    w = a.pop(0)
+    if w.startswith("-") and not w.startswith("--") and "c" in w[1:]:
+        cmd = a.pop(0)
+    elif w == "--command":
+        cmd = a.pop(0)
+if cmd is None:
+    sys.exit("script (the suite's stand-in): only -c CMD")
+st = pty.spawn(["/bin/sh", "-c", cmd])
+sys.exit(os.waitstatus_to_exitcode(st))
+PYEOF
+  chmod +x "$TMP.bin/script"; PATH=$TMP.bin:$PATH
+fi
 # no_qs: why there is no Quickshell here (openSUSE packages none), or fails where there is: the tests
 # that run one of their own in a box skip with it.
 no_qs() {
@@ -7439,8 +7461,10 @@ t_main() {
   # finding 98: a Qt app with no terminal logs to the journal, which a box has none of; the box
   # sends it to stderr, so a `run -d` log has what the app printed.
   printf '%s\n' 'import QtQml' 'QtObject { Component.onCompleted: { console.warn("omabox-t98"); Qt.quit() } }' > "$D/home/t98.qml"
+  if command -v qml6 >/dev/null; then
   local qlog; qlog=$(ob run -b "$B" -d -- qml6 -platform offscreen /home/sbx/t98.qml 2>&1 >/dev/null | sed -n 's/.*[( ]log: \(\/[^,)]*\)[,)].*/\1/p')
   check "run -d: a Qt app's warning reaches its log" until_ok 10 grep -qs omabox-t98 "$qlog"
+  else skip "run -d: a Qt app's warning reaches its log" "no qml6 here (qt6-declarative's)"; fi
   # The session itself (what the bar and apps launched from binds get), through a Hyprland exec.
   ob hyprctl -b "$B" dispatch "hl.dsp.exec_cmd('sh -c \"{ echo \$SHELL; echo \$OMABOX_TEST; echo \$LC_TIME; echo \$PATH; } > /tmp/sess\"')" >/dev/null
   until_ok 5 ob run -b "$B" -- test -s /tmp/sess
@@ -7899,7 +7923,7 @@ t_host_paths() {
   # (PATH's and XDG_*_DIRS's dirs are not: one they lack is normal, and a guarded agent's PATH named each)
   check_eq "...nothing said for PATH's or XDG_DATA_DIRS's dirs" "" \
     "$(ob run -b "$B" -- env "PATH=$s/lib:/usr/bin" "XDG_DATA_DIRS=$s:/usr/share" true 2>&1)"
-  check_eq "...nothing said for paths the box has" "" "$(ob run -b "$B" -- ls /usr/bin/true /etc/hostname 2>&1 >/dev/null)"
+  check_eq "...nothing said for paths the box has" "" "$(ob run -b "$B" -- ls /usr/bin/true /etc/os-release 2>&1 >/dev/null)"
   out=$(ob run -b "$B" -d -- sh -c 'echo said-301; exec sleep 30' 2>&1)
   check_match "run -d: its log as the box has it too (#301)" \
     "^omabox: started in box '$B' \(pid [0-9]+, log: $h/run-[0-9]+\.log, /home/sbx/run-[0-9]+\.log in the box\)\$" "$out"
@@ -8798,7 +8822,7 @@ t_desk_fonts() {
   out=$(OMABOX_DESK_HOME=$d/desk ob up "$B" --no-shell --net isolated 2>&1) || { no "up on a fake desk with fonts" "$out"; return; }
   check_match "up says the desk's fonts are in the box" \
     "up: your desk's fonts are in the box, read-only: $d/desk/.local/share/fonts \(--no-seed fonts starts without them\)" "$out"
-  check_eq "...fontconfig in the box finds them" "$font" "$(ob run -b "$B" -- fc-list -f '%{file}\n' | grep -Fx "$font")"
+  check_eq "...fontconfig in the box finds them" "$font" "$(ob run -b "$B" -- fc-list -f '%{file}\n' | grep -Fx "$font" | sort -u)"
   check_fails "...read-only" ob run -b "$B" -- touch /home/sbx/.local/share/fonts/x
   check_eq "...ls --json: desk_fonts" '["~/.local/share/fonts"]' "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | .desk_fonts')"
   check_match "up --no-seed fonts on that box: refused (seeded only at start)" "already up, without what you asked for: --no-seed fonts" \
@@ -15244,6 +15268,7 @@ EOF
   # Wave 4b, live: gdb with the real gdb (its attach chatter left out: the values it prints, its
   # status kept), --watch (the watcher ended before each case), check point/diff on the box's shots
   # and check run with clean boxes of its own (approve, then a check against that baseline).
+  if ! command -v gdb >/dev/null; then skip "gdb on the box: values, --pid, --watch" "no gdb here (a box runs the host's)"; else
   cx_sed='/^\$[0-9]+ = /!d'
   cx_want=(rc=0 'out=$1 = 42' err=)
   cx_case "gdb: a value printed from Hyprland" gdb -b "$B" -- -ex 'print 6*7'
@@ -15260,6 +15285,7 @@ EOF
   cx_want=(rc=0 out= "err~^omabox: gdb watches Hyprland \\(pid [0-9]+ in box '$B'\\)")
   cx_case "gdb: traced already by the watcher" gdb -b "$B" --watch
   cx_gdbw; cx_prep=""
+  fi
   local ck=$TMP/rp-check; rm -rf "$ck"; mkdir -p "$ck"
   local r_sig=$TMP/rp-sig-live; rp_sig_write "$r_sig"
   cx_ckp() { rm -rf "$ck/p"; mkdir -p "$ck/p"; }
@@ -19182,7 +19208,7 @@ t_window() {
   check_match "-g past the screen: the part on it" "20 x 80," "$(file "$o/gc.png")"
   check_match "...said, by edge" "-g clipped to 1900,1000 20x80 of the screen \(1920x1080\): 30 px past the right edge, 20 px past the bottom edge" "$err"
   check_match "-g with nothing on the screen refused in words" "has nothing on the screen \(1920x1080\)" "$(ob shot -b "$B" -g "1920,0 10x10" 2>&1)"
-  check_match "--in a file that is not a shot: refused" "not a shot of box" "$(ob click -b "$B" --in /etc/hostname 1 1 2>&1)"
+  check_match "--in a file that is not a shot: refused" "not a shot of box" "$(ob click -b "$B" --in /etc/os-release 1 1 2>&1)"
   check_match "--in outside the image: refused" "outside the image" "$(ob click -b "$B" --in "$o/g.png" 400 1 2>&1)"
   touch "$o/g.png"
   check_match "--in a file changed since: refused" "changed since" "$(ob click -b "$B" --in "$o/g.png" 1 1 2>&1)"
