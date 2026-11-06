@@ -11,6 +11,26 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   prefix (`bin/Hyprland`) or a build folder (`Hyprland`). Its libraries load first (its aquamarine is
   the box's) and its `hyprctl` is the box's, so a box can run Hyprland 0.57 on a desktop that still has
   0.56. `OMABOX_HYPRLAND=PATH` makes it the default for every `up`.
+- **Setting omabox up on a distribution other than Arch** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  `install.sh` knows Debian and Ubuntu, Fedora, openSUSE and NixOS besides Arch. It checks that
+  distribution's packages under their own names and, for what is missing, prints the command that
+  installs them (`sudo apt install …`, `sudo dnf install …`, `sudo zypper install …`) and stops; it
+  runs sudo itself only on Arch, as before. NixOS is not supported yet (a box looks for its
+  programs in `/usr/bin`): it says so and what it would need. Hyprland 0.56 or later, compared
+  without pacman.
+- **`omabox doctor` on a machine without Omarchy** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  the Omarchy and theme checks are information (`info`, a new status in `--json`), not failures:
+  plain boxes only. quickshell is information there too (only a shell in a box needs it); on
+  Omarchy it is still required. Package names for NixOS, and Debian's quickshell and openSUSE's
+  dbus packages corrected.
+
+### Fixed
+- **The system's aquamarine is found on Debian, Fedora and openSUSE** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  omabox looked for it in `/usr/lib` only; now in `/usr/lib64` and the multiarch dir too. And
+  `omabox setup --aquamarine` installs its build where omabox looks for it there too (`lib/`, not
+  CMake's `lib64`).
+- **`omabox setup` without Omarchy links no bar widget** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  it says it skipped it, instead of making `~/.config/omarchy/plugins`.
 
 ## 1.2.2 — 2026-11-05
 
