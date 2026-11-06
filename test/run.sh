@@ -3057,7 +3057,9 @@ print(p.pid, flush=True); time.sleep(60)' "$1" env OMABOX_OWN_SESSION="${2-1}" "
   kill -KILL "$pid" 2>/dev/null || true
   o=$(grep -hv "^[0-9]*$" "$d/pipe.pid" "$d/null.pid" || true)
   check_eq "...said nothing" "" "$o"
-  # Not the box's own session (finding 424): the same watch is the real inotifywait's.
+  # Not the box's own session (finding 424): the same watch is the real inotifywait's (inotify-tools:
+  # Omarchy installs it, a plain machine may not have it).
+  if [ ! -x /usr/bin/inotifywait ]; then skip "outside the box's session (omabox run): the real inotifywait watches" "no /usr/bin/inotifywait (inotify-tools)"; return; fi
   { read -r parent; read -r pid; } < <(standin pipe "")
   local exe="" i; for i in $(seq 50); do exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true); [ "$exe" != /usr/bin/inotifywait ] || break; sleep 0.1; done
   check_eq "outside the box's session (omabox run): the real inotifywait watches" /usr/bin/inotifywait "$exe"
@@ -9397,7 +9399,8 @@ t_unit_check() {
     # The baseline's overview (#256): each shot 90000 px at least, more pages past one look.
     local k pl=$d/ov.plan pages=() pw ph ova=()
     { printf 'title\tthe baseline\n'; for k in $(seq 1 14); do printf 'point\tc%s\t%s\twindow W\n' "$k" "$d/big.png"; done; } > "$pl"
-    python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov.png.part" "" > "$d/ov.args"
+    # (the font as check.rs gives it: magick's default font is not on every machine)
+    python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov.png.part" "$(fc-match -f '%{file}' monospace 2>/dev/null)" > "$d/ov.args"
     mapfile -d '' ova < "$d/ov.args"
     mapfile -t pages <<<"${ova[0]}"
     magick "${ova[@]:1}" 2>/dev/null && mv "$d/ov.png.part" "$d/ov.png"
@@ -11957,7 +11960,8 @@ aq_setup_checks() {
   done
   # What setup decides over the stub as the system's (its root's /usr/lib), from no checkout build.
   local sr=$d/setup-root; mkdir -p "$sr/usr"; ln -sfn "$d/stub" "$sr/usr/lib"
-  out=$(probe aq_build_needed 0 "$d/noco" "$sr" 2>&1; echo "rc=$?")
+  # (the data dir a scratch one: a private build in yours, an install's, is not the stub's system one)
+  out=$(XDG_DATA_HOME=$data probe aq_build_needed 0 "$d/noco" "$sr" 2>&1; echo "rc=$?")
   check_fails "setup --aquamarine over a system aquamarine with #415: not \"nothing to build\"" grep -q "nothing to build" <<<"$out"
   check_match "...says it lacks omabox's own fixes, and builds them" \
     "has the fix for nested Wayland outputs but not omabox's own \(keys held .*\).*rc=0$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
