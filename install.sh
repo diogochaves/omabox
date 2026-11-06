@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# install.sh: set up omabox on an Omarchy machine. Idempotent: re-run after pulling.
+# install.sh: set up omabox on an Omarchy machine, or on another Linux with Hyprland 0.56+ (#247).
+# Idempotent: re-run after pulling.
 #
-#   ./install.sh           packages (sudo only if some are missing; Arch's rust when there is no
-#                          cargo), the tools and omabox itself (cargo, into build/omabox), aquamarine's
-#                          fix, then omabox setup: links, settings dir, the agent guard (asked)
+#   ./install.sh           packages (on Arch, sudo pacman only if some are missing, and Arch's rust
+#                          when there is no cargo; on another distribution, the command that installs
+#                          them, then it stops), the tools and omabox itself (cargo, into build/omabox),
+#                          aquamarine's fix, then omabox setup: links, settings dir, the agent guard (asked)
 #   ./install.sh --check   the same, then start a box, screenshot it and tear it down
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-PKGS=(
+# What install.sh installs, by the distribution's family (doctor's: crates/omabox/src/cmd/doctor.rs,
+# whose unit test holds these lists to its own names). Arch's are the ones Omarchy machines run;
+# Debian sid's and openSUSE Tumbleweed's were installed in containers (NOTES finding 645); Fedora's
+# are from its package lists (no Hyprland there but COPR's); NixOS's are named, not installed.
+PKGS_arch=(
   labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret   # run a box
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
   passt                                                                  # every box's network (pasta)
@@ -17,14 +23,86 @@ PKGS=(
   git cmake ninja hyprwayland-scanner hyprutils seatd libdisplay-info hwdata libinput   # aquamarine
   libdrm mesa pixman
 )
+PKGS_debian=(
+  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret-tools
+  quickshell libgtk-3-0t64 xdg-terminal-exec dbus dbus-daemon dbus-bin dbus-user-session
+  passt
+  python3
+  build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev
+  git cmake ninja-build hyprwayland-scanner libhyprutils-dev libseat-dev libdisplay-info-dev hwdata libinput-dev
+  libdrm-dev libgbm-dev libegl-dev libgles-dev libudev-dev wayland-protocols
+)
+PKGS_fedora=(
+  labwc wlr-randr bubblewrap util-linux iproute jq grim gnome-keyring libsecret
+  gtk3 xdg-terminal-exec dbus-daemon dbus-tools                          # (no quickshell but COPR's)
+  passt
+  python3
+  gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel
+  git cmake ninja-build hyprwayland-scanner gcc-c++ hyprutils-devel libseat-devel libdisplay-info-devel hwdata libinput-devel
+  libdrm-devel mesa-libgbm-devel mesa-libEGL-devel libglvnd-devel systemd-devel wayland-protocols-devel
+)
+PKGS_suse=(
+  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring secret-tool
+  libgtk-3-0 xdg-terminal-exec dbus-1 dbus-1-daemon dbus-1-tools         # (no quickshell)
+  passt
+  python3
+  gcc make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel
+  git cmake ninja hyprwayland-scanner gcc-c++ hyprutils-devel seatd-devel libdisplay-info-devel hwdata libinput-devel
+  libdrm-devel libgbm-devel Mesa-libEGL-devel Mesa-libGLESv2-devel systemd-devel wayland-protocols-devel
+)
+PKGS_nix=(
+  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret
+  quickshell gtk3 xdg-terminal-exec dbus
+  passt
+  python3
+  gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib
+  git cmake ninja hyprwayland-scanner
+)
 
 step() { printf '\n==> %s\n' "$*"; }
 die() { echo "install.sh: $*" >&2; exit 1; }
 
+# The distribution's family, as doctor tells it: os-release's ID, else the first of ID_LIKE's words
+# that is one (Omarchy: ID=omarchy, ID_LIKE=arch); with neither, the package manager there.
+# (OMABOX_TEST_OS_RELEASE: the suite's stand-in for /etc/os-release.)
+os_family() {
+  local f=${OMABOX_TEST_OS_RELEASE:-/etc/os-release} id="" like="" w
+  [ -r "$f" ] || f=/usr/lib/os-release
+  if [ -r "$f" ]; then
+    id=$(sed -n 's/^ID=//p' "$f" | tr -d "\"'") || id=
+    like=$(sed -n 's/^ID_LIKE=//p' "$f" | tr -d "\"'") || like=
+  fi
+  for w in $id $like; do
+    case $w in
+      arch) echo arch; return ;;
+      debian | ubuntu) echo debian; return ;;
+      fedora | rhel | centos) echo fedora; return ;;
+      suse | sles | opensuse*) echo suse; return ;;
+      nixos) echo nix; return ;;
+    esac
+  done
+  for w in pacman:arch apt-get:debian dnf:fedora zypper:suse nixos-rebuild:nix; do
+    if command -v "${w%%:*}" >/dev/null; then echo "${w#*:}"; return; fi
+  done
+}
+
 check=0
 case ${1:-} in --check) check=1 ;; "") ;; *) die "usage: ./install.sh [--check]" ;; esac
-command -v pacman >/dev/null || die "this expects Arch/Omarchy (pacman)"
-command -v Hyprland >/dev/null || die "Hyprland is not installed"
+family=$(os_family)
+case $family in
+  arch) PKGS=("${PKGS_arch[@]}") install="sudo pacman -S --needed" rust=rust ;;
+  debian) PKGS=("${PKGS_debian[@]}") install="sudo apt install" rust=cargo ;;
+  fedora) PKGS=("${PKGS_fedora[@]}") install="sudo dnf install" rust=cargo ;;
+  suse) PKGS=("${PKGS_suse[@]}") install="sudo zypper install" rust=cargo ;;
+  nix) PKGS=("${PKGS_nix[@]}") install="" rust=cargo ;;
+  *) die "this distribution is not one omabox knows the packages of (Arch, Debian, Fedora, openSUSE, NixOS):" \
+    "install Hyprland 0.56+ and what omabox doctor names, then build by hand (docs/install.md)" ;;
+esac
+[ "$family" != arch ] || command -v pacman >/dev/null || die "this expects Arch/Omarchy (pacman)"
+# NixOS has no /usr/bin, where a box's start looks for every program it runs (#247).
+[ "$family" != nix ] || die "NixOS is not supported yet: a box's start looks for its programs in /usr/bin." \
+  "What it would need, in environment.systemPackages: hyprland ${PKGS[*]} cargo"
+command -v Hyprland >/dev/null || die "Hyprland is not installed${install:+: $install hyprland}"
 compgen -G "/dev/dri/renderD*" >/dev/null || die "no GPU render node (/dev/dri/renderD*): a box renders on the GPU"
 # A node that renders in software only passes that, and a box then dies "while starting" (#395):
 # virtio-gpu (a VM's) with neither virgl nor context types (venus), as its virtio device's features
@@ -45,14 +123,30 @@ done
 [ $hw = 1 ] || die "every render node renders in software only (${soft[*]}: virtio-gpu without virgl):" \
   "a box needs GPU rendering; in a VM, virtio-gpu with virgl (QEMU's virtio-vga-gl, libvirt's accel3d with an OpenGL display)"
 hv=$(Hyprland --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
-[ "$(vercmp "${hv:-0}" 0.56.0)" -ge 0 ] || die "Hyprland ${hv:-?} is too old: omabox needs 0.56+ (Lua config)"
+# (sort -V, not pacman's vercmp: every distribution's coreutils has it; Hyprland says X.Y.Z only)
+# A Hyprland that does not run says no version: what it says instead (Debian's, with its file
+# capability, in a container that may not grant it: "Operation not permitted").
+[ -n "$hv" ] || die "Hyprland --version says no version: $(Hyprland --version 2>&1 | head -n 1 || true)"
+[ "$(printf '%s\n' 0.56.0 "$hv" | sort -V | head -n 1)" = 0.56.0 ] || die "Hyprland $hv is too old: omabox needs 0.56+ (Lua config)"
 
 step "Packages"
-mapfile -t missing < <(pacman -T "${PKGS[@]}" || true)
-# omabox is built from crates/ (#324): Arch's rust, unless a rustup or another cargo is already on PATH.
-command -v cargo >/dev/null || missing+=(rust)
+case $family in
+  arch) mapfile -t missing < <(pacman -T "${PKGS[@]}" || true) ;;
+  debian) mapfile -t missing < <(for p in "${PKGS[@]}"; do
+    [ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null)" = "ii " ] || echo "$p"
+  done) ;;
+  # (--whatprovides: a name another package provides, as python3 on openSUSE, counts)
+  fedora | suse) mapfile -t missing < <(for p in "${PKGS[@]}"; do
+    rpm -q --whatprovides "$p" >/dev/null 2>&1 || echo "$p"
+  done) ;;
+esac
+# omabox is built from crates/ (#324): the distribution's rust, unless a rustup or another cargo is
+# already on PATH.
+command -v cargo >/dev/null || missing+=("$rust")
 if [ ${#missing[@]} -gt 0 ]; then
   echo "missing: ${missing[*]}"
+  # Elsewhere than Arch, no sudo of install.sh's: the command, to run and come back (#247).
+  [ "$family" = arch ] || die "run this, then $0 again: $install ${missing[*]}"
   # With no terminal (an agent's run, `./install.sh </dev/null`) sudo can only fail, in words of its
   # own that vary: the command to run instead (#395). Stdin, where pacman reads its [Y/n].
   [ -t 0 ] || die "no terminal for sudo's password: run this, then $0 again: sudo pacman -S --needed ${missing[*]}"

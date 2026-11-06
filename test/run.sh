@@ -13364,6 +13364,46 @@ t_unit_install() {
     "$stub" "$ROOT" "$stub" "$stub" > "$stub/cargo"   # ($stub/omabox-bin while there: a stand-in, for --check)
   chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell" "$stub/cargo"
   local tty=(env SHELL=/bin/bash script -qec "$(printf %q "$c/install.sh")" /dev/null)
+  # #247 (finding 645): on another distribution (os-release's stand-in), install.sh asks that one's
+  # package database with its names and, for what is missing, says the command and stops: no sudo of
+  # its own, in a terminal or not. dpkg-query and rpm here are stand-ins: every package installed but
+  # one.
+  local osr=$TMP/ih-os-release rc
+  printf '#!/bin/sh\n[ "$3" = libsecret-tools ] && exit 1; printf "ii "\n' > "$stub/dpkg-query"
+  printf '#!/bin/sh\n[ "$3" = secret-tool ] && exit 1; exit 0\n' > "$stub/rpm"
+  chmod +x "$stub/dpkg-query" "$stub/rpm"
+  printf 'NAME="Debian GNU/Linux"\nID=debian\n' > "$osr"
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null); rc=$?
+  check_eq "Debian, a package missing: install.sh says apt's command and stops, without sudo (#247)" \
+    "1|missing: libsecret-tools|install.sh: run this, then $c/install.sh again: sudo apt install libsecret-tools|" \
+    "$rc|$(grep '^missing:' <<<"$out")|$(tail -n 1 <<<"$out")|$(cat "$stub/sudo-called" 2>/dev/null)"
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "${tty[@]}" 2>&1 </dev/null); rc=$?
+  check_eq "...in a terminal too: no sudo" "1 " "$rc $(cat "$stub/sudo-called" 2>/dev/null)"
+  printf 'ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n' > "$osr"
+  check_match "openSUSE (ID_LIKE): rpm asked, zypper's command" "again: sudo zypper install secret-tool$" \
+    "$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null)"
+  printf 'ID=nixos\n' > "$osr"
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null); rc=$?
+  check_match "NixOS: not supported yet, said with why (no /usr/bin) and what it would need" \
+    "^install.sh: NixOS is not supported yet: a box's start looks for its programs in /usr/bin\..*environment.systemPackages: hyprland labwc .* 1$" "$out $rc"
+  # An ID of no family, no ID_LIKE: the package manager there tells (pacman, on this machine).
+  printf 'ID=someos\n' > "$osr"
+  echo omabox-no-such-package > "$stub/missing"
+  check_match "an unknown ID: the package manager there tells the family (pacman here)" \
+    "sudo pacman -S --needed omabox-no-such-package" "$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null)"
+  rm -f "$stub/dpkg-query" "$stub/rpm" "$stub/sudo-called"
+  # Hyprland's version by sort -V, not pacman's vercmp (#247): 0.56 and later, 0.100 after 0.99.
+  local hv
+  for hv in 0.55.9:1 0.56.0:0 0.57.1:0 0.100.0:0; do
+    printf '#!/bin/sh\necho "Hyprland %s built from branch v%s at commit x"\n' "${hv%:*}" "${hv%:*}" > "$stub/Hyprland"
+    chmod +x "$stub/Hyprland"
+    out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 </dev/null)
+    check_eq "Hyprland ${hv%:*}: too old? ${hv#*:}" "${hv#*:}" "$(grep -c 'is too old: omabox needs 0.56+' <<<"$out")"
+  done
+  printf '#!/bin/sh\necho "Hyprland: Operation not permitted" >&2; exit 126\n' > "$stub/Hyprland"
+  check_match "a Hyprland that says no version: what it says instead" \
+    "^install.sh: Hyprland --version says no version: Hyprland: Operation not permitted$" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 </dev/null)"
+  rm "$stub/Hyprland"
   echo omabox-no-such-package > "$stub/missing"
   # #395: with no terminal, sudo can only fail (in words of its own, which vary): the command to run.
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 </dev/null); local rc=$?
@@ -13520,7 +13560,7 @@ EOF
     "$rc $(grep -o 'screenshot: .*' <<<"$out") $(grep -c '^down install-check-' "$stub/omabox-called" 2>&1) $(test -e "$kept" && echo kept || echo no)"
   rm -f "$stub/omabox-bin" "$stub/up-ok" "$stub/omabox-called"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
-  check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
+  check_match "an unreadable Hyprland version says so (was silent), as what it says (#247)" "Hyprland --version says no version: Hyprland dev build$" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
   check_fails "...and none of it reached a shell (omarchy, omarchy-shell)" test -e "$stub/shell-called"
 }
 
