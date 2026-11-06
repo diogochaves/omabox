@@ -64,6 +64,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   0.57 hands a turned monitor's frames over upright already, and the burst and wf-recorder turned
   them again: the screen squeezed into a band, a portrait monitor recorded sideways. A frame that
   already has the turned size is now taken as it is, on 0.56 and 0.57 alike.
+- **The keys come back when a focused interactive box goes** ([#437](https://github.com/diogochaves/omabox/issues/437)):
+  when the box's window was focused and nothing else on its workspace took focus, `down` left your
+  Hyprland in omabox's submap (every key but the toggle swallowed) while another interactive box was
+  still up: on Hyprland 0.57 with keys-to-box on and the pointer over the window, and on 0.56 too
+  after the toggle key. A closing window no longer counts as the focused box.
 
 ## 1.2.2 — 2026-11-05
 

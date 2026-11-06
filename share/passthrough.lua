@@ -24,7 +24,7 @@
 -- colour (its red, the bar's "active" modules' colour) and <boxes>/.keys names the box (the bar
 -- widget lights its icon); both go back when the submap ends.
 local boxes, key, colors = ...
-local VERSION = 5
+local VERSION = 6
 if (omabox_pass_version or 0) >= VERSION then return end
 for _, sub in ipairs(omabox_pass_subs or {}) do sub:remove() end
 if omabox_pass_timer then omabox_pass_timer:set_enabled(false) end
@@ -164,9 +164,12 @@ end
 -- submap ends (both modes); on a keys-to-box box the pointer decides (follow), unless the toggle key
 -- got out on that window; on another box, a sticky submap ends, a one-shot one stays (as it always
 -- has, box to box). (window.active says false itself: while a closing window's event runs, Hyprland
--- still names it.)
+-- still names it.) A window no longer mapped is no window (issue #437): when the focused window closes
+-- with nothing to take focus, Hyprland's window.active names the closing window itself, and its box
+-- can still read as keys-to-box with the pointer over it (on 0.57 its outer bwrap is still there).
 local function check(w)
   if w == nil then w = hl.get_active_window() end
+  if w and not w.mapped then w = nil end
   w = w or nil
   if not (w and w.address == omabox_keys_paused) then omabox_keys_paused = nil end
   if not aq(w) then
