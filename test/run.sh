@@ -267,15 +267,26 @@ no_cursor() {
   compgen -G '/usr/share/icons/*/cursors' >/dev/null && return 1
   echo "no cursor theme here (/usr/share/icons/*/cursors): a box draws no pointer"
 }
-# rec_tools: whether record can run here: wf-recorder, and an ffmpeg with libx264 (Fedora's
-# ffmpeg-free and openSUSE's ffmpeg have none). Its reason: REC_WHY.
-REC_WHY="no wf-recorder, ffmpeg, or ffmpeg's libx264 here"
+# rec_tools: whether record can run here: wf-recorder, and an ffmpeg with libx264 or, where it has
+# none (Fedora's ffmpeg-free, openSUSE's ffmpeg), a working libopenh264 (#442, finding 683), as
+# record chooses: OMABOX_RECORD_ENCODER=libopenh264 takes openh264 only, for both. REC_ENC: the one
+# record uses; REC_VARGS: its arguments for a video of the suite's own. Its reason: REC_WHY.
+REC_WHY="no wf-recorder, ffmpeg, or an H.264 encoder record uses (libx264, openh264) in ffmpeg here"
+REC_ENC="" REC_VARGS=()
 rec_tools() {
   # (ffmpeg's list read whole first: grep -q ending the pipe early made ffmpeg's SIGPIPE the status
   # under pipefail, and every record test skipped on a machine that has it)
   local enc
   command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null &&
-    enc=$(ffmpeg -hide_banner -encoders 2>/dev/null) && grep -q ' libx264 ' <<<"$enc"
+    enc=$(ffmpeg -hide_banner -encoders 2>/dev/null) || return 1
+  if [ "${OMABOX_RECORD_ENCODER:-}" != libopenh264 ] && grep -q ' libx264 ' <<<"$enc"; then
+    REC_ENC=libx264 REC_VARGS=(-c:v libx264 -crf 18)
+    return 0
+  fi
+  # (listed over a stub library, Fedora's noopenh264, it encodes nothing: a frame tells)
+  grep -q ' libopenh264 ' <<<"$enc" &&
+    ffmpeg -nostdin -v error -f lavfi -i color=s=64x64:d=0.1 -c:v libopenh264 -f null - 2>/dev/null || return 1
+  REC_ENC=libopenh264 REC_VARGS=(-c:v libopenh264 -rc_mode quality -qmin 18 -qmax 18)
 }
 # BAR_NS: the layer namespace of a box's bar, Omarchy's or PSHELL's.
 BAR_NS=omarchy-bar; omarchy_here || BAR_NS="t-plainbar"
@@ -16296,10 +16307,13 @@ record_layout_on() {
     "$(ob hyprctl -b "$B" -j clients | jq -r --argjson m "$(ob hyprctl -b "$B" -j monitors)" --arg a "$m0" --arg b "$m1" --arg c "$m2" \
       '. as $w | [$a, $b, $c] | map(. as $n | ($m[] | select(.name == $n) | .id) as $id | [$w[] | select(.monitor == $id)] | length) | join(" ")' 2>/dev/null)"
   local v=$TMP/$B.mp4 out f=$TMP/$B.png sz
+  # (openh264's frames are smaller, 4096x2304's pixels at most: the layout scaled to fit, #442)
+  local vw=4000 vh=2560 how="the layout at scale 2"
+  [ "$REC_ENC" != libopenh264 ] || vw=3840 vh=2458 how="the layout at scale 2, scaled by 0[.]96 to fit H[.]264's largest frame, a black edge making 3840x2457 even"
   out=$(ob record -b "$B" start --monitor all -o "$v" 2>&1)
   check_match "record start --monitor all: one video of the three, at the layout's highest scale" \
-    "recording $m0, $m1, $m2 of box '$B' as one 4000x2560 video \(the layout at scale 2\)" "$out"
-  check_match "...status says so" "^recording $m0, $m1, $m2 of box '$B' as one 4000x2560 video at 30 fps, to $v" "$(ob record -b "$B" status)"
+    "recording $m0, $m1, $m2 of box '$B' as one ${vw}x$vh video \($how\)" "$out"
+  check_match "...status says so" "^recording $m0, $m1, $m2 of box '$B' as one ${vw}x$vh video at 30 fps, to $v" "$(ob record -b "$B" status)"
   sleep 0.7
   ob record -b "$B" mark "white" >/dev/null 2>&1
   ob run -b "$B" -- sh -c 'echo > /tmp/g1 & echo > /tmp/g2 & echo > /tmp/g3; wait'
@@ -16307,7 +16321,7 @@ record_layout_on() {
   check_eq "record stop prints the video, then its sheet" "$v|${v%.mp4}.sheet.png" "$(ob record -b "$B" stop --sheet --frames 3 2>/dev/null | paste -sd '|')"
   ob shot -b "$B" -o "$f" >/dev/null 2>&1
   sz=$(magick identify -format '%wx%h' "$f" 2>&1)
-  check_eq "...an H.264 video at 30 fps, the size of a shot of the screen ($sz)" "h264,4000,2560,30/1 4000x2560" \
+  check_eq "...an H.264 video at 30 fps, the size of a shot of the screen ($sz)" "h264,$vw,$vh,30/1 4000x2560" \
     "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$v" 2>&1) $sz"
   # Its last frame and the shot, 10x8 cells' mean colours (the gaps transparent in the shot: black).
   local a b
@@ -16328,7 +16342,7 @@ record_layout_on() {
   check "...the mark just before it in the video's clock: the first white at most a frame before it, 500 ms after at most (mark ${m:-none} ms)" \
     awk -v m="${m:--1}" -v f="${fr[0]:--1}" 'BEGIN { t = f * 1000 / 30; exit !(m >= 0 && f >= 0 && t >= m - 1000 / 30 && t <= m + 500) }'
   check_eq "...the sheet: 3 tiles 320 px wide" 978 "$(magick identify -format '%w' "${v%.mp4}.sheet.png" 2>&1)"
-  check_eq "record --monitor all -- ACTION: the layout too" "$v 4000,2560" \
+  check_eq "record --monitor all -- ACTION: the layout too" "$v $vw,$vh" \
     "$(ob record -b "$B" -o "$v" --monitor all --hold 300ms -- pointer -- move 100 100 2>/dev/null) $(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
   check_eq "...and it stopped, its folders gone from the box" "box '$B': not recording|" \
     "$(ob record -b "$B" status)|$(ob run -b "$B" -- sh -c 'ls -d /home/sbx/.cache/omabox-record/m* 2>/dev/null')"
@@ -16382,7 +16396,7 @@ t_record_sheet_frames() {
   rec_tools || { skip "record sheet --changed" "$REC_WHY"; return; }
   local B=$P-rsf v=$TMP/$P-rsf.mp4 o=$TMP/$P-rsf out rc
   ffmpeg -nostdin -v error -y -f lavfi -i color=c=black:s=320x240:r=30:d=4 -vf "drawbox=x=40:y=40:w=60:h=40:color=white:t=fill:enable='between(n,40,42)',drawbox=x=200:y=150:w=50:h=50:color=red:t=fill:enable='lt(mod(n,10),5)'" \
-    -c:v libx264 -crf 18 -pix_fmt yuv420p "$v" || { no "record sheet --changed: a video" "ffmpeg failed"; return; }
+    "${REC_VARGS[@]}" -pix_fmt yuv420p "$v" || { no "record sheet --changed: a video" "ffmpeg failed"; return; }
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated || { no "up for record sheet" "$UP_OUT"; return; }
   rsf() { local f=$1; shift; rc=0; out=$(ob record -b "$B" sheet "$v" -o "$o-$f.png" --fit 0 "$@" 2>&1) || rc=$?; }
   rsf c1 --changed -g "30,30 100x60"
@@ -16434,15 +16448,37 @@ t_record_hold() {
   d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$v" 2>/dev/null) || d=0
   check "...2 s of video, the stop's frame or two more (${d:-none} s)" awk -v d="$d" 'BEGIN { exit !(d >= 1.99 && d <= 2.25) }'
   check_eq "...and it stopped" "box '$B': not recording" "$(ob record -b "$B" status)"
-  # --crf (#278, finding 602): the quality x264 wrote into the video's own settings.
+  # --crf (#278, finding 602): the quality x264 wrote into the video's own settings; openh264 writes
+  # none (#442, finding 683): its quantiser, by the first frame's bytes, the same screen each time.
   local q=$TMP/$P-rh-crf.mp4 qc=$TMP/$P-rh-crfcut.mp4
-  check_eq "record: CRF 18 by default" "crf=18.0" "$(grep -aoE 'crf=[0-9.]+' "$v" | head -n 1)"
+  i1() { ffprobe -v error -select_streams v:0 -read_intervals '%+#1' -show_entries packet=size -of csv=p=0 "$1" 2>/dev/null | head -n 1; }
+  [ "$REC_ENC" != libx264 ] || check_eq "record: CRF 18 by default" "crf=18.0" "$(grep -aoE 'crf=[0-9.]+' "$v" | head -n 1)"
   out=$(ob record -b "$B" -o "$q" --crf 8 --for 1s 2>&1)
   check_match "record --crf 8 --for 1s: said at stop" "at 30 fps, CRF 8" "$out"
-  check_eq "...the video at CRF 8" "crf=8.0" "$(grep -aoE 'crf=[0-9.]+' "$q" | head -n 1)"
+  if [ "$REC_ENC" = libx264 ]; then
+    check_eq "...the video at CRF 8" "crf=8.0" "$(grep -aoE 'crf=[0-9.]+' "$q" | head -n 1)"
+    check_fails "...libx264's: no openh264 said" grep -q openh264 <<<"$out"
+  else
+    check_match "...by openh264, said at start and at stop" "H\.264 by openh264, as this ffmpeg has no libx264.*CRF 8, by openh264 \(this ffmpeg has no libx264\)" "$(paste -sd ' ' <<<"$out")"
+    check "...openh264 at QP 8: a first frame larger than at 18 ($(i1 "$q") > $(i1 "$v") bytes)" test "$(i1 "$q")" -gt "$(i1 "$v")"
+  fi
   ob record -b "$B" -o "$qc" --crf 30 --cut-idle 300ms --for 2s >/dev/null 2>&1
-  check_eq "...--crf 30 --cut-idle: the cut's pass at CRF 30 (its first at 12)" "crf=30.0" "$(grep -aoE 'crf=[0-9.]+' "$qc" | head -n 1)"
+  if [ "$REC_ENC" = libx264 ]; then
+    check_eq "...--crf 30 --cut-idle: the cut's pass at CRF 30 (its first at 12)" "crf=30.0" "$(grep -aoE 'crf=[0-9.]+' "$qc" | head -n 1)"
+  else
+    check "...--crf 30 --cut-idle: the cut's pass at QP 30, a first frame smaller than at 18 ($(i1 "$qc") < $(i1 "$v") bytes)" test "$(i1 "$qc")" -lt "$(i1 "$v")"
+    out=$(ob record -b "$B" start --crf 0 2>&1)
+    check_match "...--crf 0 with openh264: refused, lossless is libx264's" "--crf 0 is lossless, which only libx264 makes" "$out"
+    check_eq "...nothing recording" "box '$B': not recording" "$(ob record -b "$B" status)"
+  fi
   check_fails "...no record.crf left for the next take" test -e "$(ob path -b "$B")/record.crf"
+  # Neither encoder (#442): forced onto openh264 where ffmpeg has none, record refuses up front.
+  if [ "$REC_ENC" = libx264 ] && ! OMABOX_RECORD_ENCODER=libopenh264 rec_tools; then
+    out=$(OMABOX_RECORD_ENCODER=libopenh264 ob record -b "$B" start 2>&1)
+    check_match "record start with no encoder of its: refused, naming openh264's packages" "neither libx264 nor a working libopenh264.*the openh264 package on Fedora" "$out"
+    check_eq "...nothing recording" "box '$B': not recording" "$(ob record -b "$B" status)"
+    rec_tools
+  fi
   ob record -b "$B" start -o "$w" >/dev/null 2>&1 || { no "record start for record hold" "failed"; ob down "$B" >/dev/null 2>&1; return; }
   ob record -b "$B" mark a >/dev/null 2>&1
   h=$(ob record -b "$B" hold 2s 2>&1)

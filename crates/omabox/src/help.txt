@@ -489,6 +489,10 @@ and ffmpeg; both run in the box. One recording a box at a time; `record status` 
 easy to read. Footage that will be zoomed or encoded again wants 8-10 (finding 602: a 4K terminal
 take at 8 is 1.7 times the size, 64 dB PSNR where 18 has 56); 0 is lossless, but H.264's High 4:4:4
 Predictive, which browsers do not play. The raw stream it is made from takes the same when lower than 14.
+The H.264 is libx264's; an ffmpeg without it (Fedora's ffmpeg-free, openSUSE's ffmpeg) makes it with
+openh264, said at start and stop (doctor says which): still an MP4 (H.264), --crf N its fixed
+quantiser (QP N: about libx264's CRF N quality, at about 1.7 times the bytes), no --crf 0, and at
+most 4096x2304's pixels a frame (a monitor past it refused, a layout past it scaled down to fit).
 `--monitor all` records every monitor as one video of the whole layout, as `shot` takes it: each
 at its place, at the highest scale of them (a lower-scale one scaled up), turned as it is shown,
 black between them; the video the size of the screen's shot (one black edge more if a side is odd).

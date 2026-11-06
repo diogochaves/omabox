@@ -4,8 +4,8 @@
 //! bytes of the box's `cat` (box_copy, finding 297).
 
 use super::record::{
-    Err2, REC_AAC, REC_CRF, REC_DIR, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec,
-    SheetMore, SheetOpts, StopOpts, audio_end, now_us, num, rec_dirs, rec_max, rec_yuv,
+    Enc, Err2, REC_AAC, REC_CRF, REC_DIR, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec,
+    SheetMore, SheetOpts, StopOpts, audio_end, now_us, num, rec_dirs, rec_enc, rec_max, rec_yuv,
     record_first_us, record_firsts, record_running, record_size, rm, sys_cap, sys_q, sys_run, w,
 };
 use crate::cat;
@@ -639,14 +639,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             turn_back(turns.split(|&c| c == b'\n').next().unwrap_or_default(), wh)
         });
         a.push(cat!(back, "fps=", fps, ",", rec_yuv(), vass));
-        a.extend(w(&[
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            &rec_crf(so.cut, rec.crf),
-        ]));
+        a.extend(rec_enc().video_args(&rec_crf(so.cut, rec.crf)));
         a.extend(w(&REC_TAGS));
         if !afilt.is_empty() {
             a.extend(w(&["-map", "0:v:0", "-map", "1:a:0", "-af"]));
@@ -888,7 +881,12 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 Some(c) => format!(", CRF {c}"),
                 None => String::new(),
             },
-            if afilt.is_empty() { "" } else { ", with sound" }
+            if afilt.is_empty() { "" } else { ", with sound" },
+            if rec_enc() == Enc::OpenH264 {
+                ", by openh264 (this ffmpeg has no libx264)"
+            } else {
+                ""
+            }
         ));
     }
     out(cat!(rec.file, "\n"))?;
@@ -1159,16 +1157,8 @@ fn record_compose(
     }
     args.push(b"-filter_complex".to_vec());
     args.push(fc);
-    args.extend(w(&[
-        "-map",
-        "[v]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        &rec_crf(cut, rec.crf),
-    ]));
+    args.extend(w(&["-map", "[v]"]));
+    args.extend(rec_enc().video_args(&rec_crf(cut, rec.crf)));
     args.extend(w(&REC_TAGS));
     args.extend(amap);
     args.extend(tlim);
@@ -1765,16 +1755,8 @@ fn record_cut(
         "-filter_complex",
     ]);
     a.push(fc);
-    a.extend(w(&[
-        "-map",
-        "[v]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        &rec.crf.unwrap_or(REC_CRF).to_string(),
-    ]));
+    a.extend(w(&["-map", "[v]"]));
+    a.extend(rec_enc().video_args(&rec.crf.unwrap_or(REC_CRF).to_string()));
     a.extend(w(&REC_TAGS));
     a.extend(amap);
     a.extend(w(&[

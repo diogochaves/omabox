@@ -48,10 +48,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   on Fedora, SELinux refuses pasta the death signal that ends a box when pasta does, so a box whose
   pasta died stayed up without its network. Its reaper now ends it within a second or two, the box
   then dead as anywhere else.
-- **`record` says at once when ffmpeg has no libx264** ([#247](https://github.com/diogochaves/omabox/issues/247)):
-  Fedora's `ffmpeg-free` and openSUSE's `ffmpeg` leave the H.264 encoder out, and `record start`
-  failed with wf-recorder's "Failed to find the given codec". It now refuses before starting, naming
-  where an ffmpeg with it comes from (RPM Fusion, Packman), and `omabox doctor` warns.
+- **`record` works where ffmpeg has no libx264** ([#247](https://github.com/diogochaves/omabox/issues/247), [#442](https://github.com/diogochaves/omabox/issues/442)):
+  Fedora's `ffmpeg-free` and openSUSE's `ffmpeg` leave libx264 out, and `record start` failed with
+  wf-recorder's "Failed to find the given codec". There it now records with openh264, which both
+  distributions install with their ffmpeg: still an H.264 MP4, about 1.7 times the bytes at the same
+  quality, `--crf N` its fixed quantiser, no `--crf 0` (lossless), and at most 4096x2304's pixels a
+  frame (a larger monitor is refused, a larger `--monitor all` layout scaled down to fit).
+  `record` says so at start and stop, and `omabox doctor` says which encoder record uses. With
+  neither, `record` refuses before starting, naming the packages that bring one.
 - **A crash inside a box no longer shows as a crash notification on your desktop where systemd's coredump socket is in use** ([#441](https://github.com/diogochaves/omabox/issues/441)):
   systemd 262's socket (a fresh install's default) records a crash whatever the box's core limit,
   and Omarchy's crash watcher announced it. `omabox setup` offers a filter for what the watcher
