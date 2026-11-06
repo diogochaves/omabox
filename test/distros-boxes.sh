@@ -44,6 +44,34 @@ gone() {
   [ -z "$left" ] || { echo "      left running:"; echo "        ${left//$'\n'/$'\n'        }"; return 1; }
 }
 
+# record_steps BOX (#442): where wf-recorder and ffmpeg are installed, record in BOX with the
+# distribution's own ffmpeg (libx264, or openh264 where it has none: Fedora's ffmpeg-free,
+# openSUSE's): a take, its contact sheet, a take with --cut-idle, and two monitors as one video.
+# Each an H.264 MP4 that this ffmpeg reads.
+record_steps() {
+  local b=$1 v=$out/rec.mp4 o
+  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
+    echo "      (no wf-recorder or ffmpeg: no record)"; return 0
+  fi
+  echo "      record's encoder: $(omabox doctor 2>&1 | grep -o "record's H.264 by [a-z0-9]*" || echo none)"
+  o=$(omabox record -b "$b" -o "$v" --for 2s 2>&1)
+  echo "      ${o//$'\n'/$'\n'      }"
+  step "record --for 2s" same file "$v" "$(tail -n 1 <<<"$o")" || keep "$b"
+  step "...an H.264 video at 30 fps" same video "h264 30/1" \
+    "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,r_frame_rate -of csv=p=0 "$v" 2>&1 | tr , ' ')"
+  step "record sheet" omabox record -b "$b" sheet "$v" -o "$out/rec.sheet.png" --frames 3
+  step "record --cut-idle" omabox record -b "$b" -o "$out/cut.mp4" --cut-idle 300ms --for 2s
+  step "...an H.264 video" same video h264 \
+    "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$out/cut.mp4" 2>&1)"
+  if step "monitor add" omabox monitor -b "$b" add 800x600; then
+    step "record --monitor all" omabox record -b "$b" -o "$out/all.mp4" --monitor all --for 1s || keep "$b"
+    # (the 800x600 right of the main screen: the video as wide as both)
+    step "...one H.264 video of both" same video "h264 $(omabox monitor -b "$b" list --json | jq '[.[] | .x + (.mode | split("x")[0] | tonumber)] | max')" \
+      "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width -of csv=p=0 "$out/all.mp4" 2>&1 | tr , ' ')"
+    omabox monitor -b "$b" remove "$(omabox monitor -b "$b" list --json | jq -r '.[-1].name')" >/dev/null 2>&1
+  fi
+}
+
 echo "==> a plain box"
 B=c1
 if step "up --desktop plain" omabox up "$B" --desktop plain; then
@@ -59,6 +87,7 @@ if step "up --desktop plain" omabox up "$B" --desktop plain; then
   step "...not empty" test -s "$out/plain.png"
   step "SUPER+RETURN opens a terminal" omabox keys -b "$B" --wait super+Return
   step "...a second window" same windows 2 "$(omabox windows -b "$B" --json | jq length)" || keep "$B"
+  record_steps "$B"
   step "down" omabox down "$B"
   step "...leaves nothing" gone "$B"
 else

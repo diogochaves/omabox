@@ -8,8 +8,9 @@
 # when one failed.
 #
 # --boxes then starts real boxes there, as that user (test/distros-boxes.sh, the acceptance run of
-# #247): a terminal and a font installed first (foot and DejaVu, which install.sh does not name), then
-# a plain box driven and a plain box with a Quickshell bar as its shell. Its shots, and the logs of a
+# #247): a terminal and a font installed first (foot and DejaVu, which install.sh does not name), and
+# the distribution's wf-recorder and ffmpeg (#442), then a plain box driven and recorded, and a plain
+# box with a Quickshell bar as its shell. Its shots, and the logs of a
 # box whose step failed, are copied out to <image>/ next to the log.
 #
 # The container gets what a box gets and no more (AGENTS.md's box invariant): the first render node
@@ -78,10 +79,10 @@ Hyprland --version 2>&1 | head -n 1; labwc --version 2>&1 | head -n 1
 qs --version 2>&1 | head -n 1; as_user omabox --version
 [ "$ok" = 1 ] || exit 1
 [ "$BOXES" = 1 ] || exit 0
-echo "==> boxes: a terminal and a font (install.sh names neither)"
-if command -v pacman >/dev/null; then pkg pacman -S --needed foot ttf-dejavu
-elif command -v apt-get >/dev/null; then pkg apt install foot fonts-dejavu-core
-else pkg zypper install foot dejavu-fonts
+echo "==> boxes: a terminal and a font (install.sh names neither), wf-recorder and ffmpeg"
+if command -v pacman >/dev/null; then pkg pacman -S --needed foot ttf-dejavu wf-recorder ffmpeg
+elif command -v apt-get >/dev/null; then pkg apt install foot fonts-dejavu-core wf-recorder ffmpeg
+else pkg zypper install foot dejavu-fonts wf-recorder ffmpeg
 fi || exit 1
 as_user bash /work/test/distros-boxes.sh /home/user/out; rc=$?
 cp -r /home/user/out/. /out/ 2>/dev/null
