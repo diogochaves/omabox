@@ -860,11 +860,13 @@ the backtrace of the thread it hit (-n and --grep then apply to those).
 `log notifications` (#430): what reached the box's notification server from up on, whatever server
 it is (the shell's, a plain box's, none yet), a line each: `notify #ID APP: "SUMMARY" "BODY"` with its
 hints (urgency, category, desktop-entry, ...), actions and timeout, the id its server answered with
-(`(no id)` and why when none did: no server, no reply in 5 s); `close #ID` (an app's
+(`(no id)` and why when none did: no server, no reply in 5 s; one that comes later, up to 25 s, is
+joined: `notify #ID (replied after 6.0 s)`); `close #ID` (an app's
 CloseNotification), `closed #ID expired|dismissed|closed by CloseNotification` and `action #ID KEY`
-(the server's). --json: one JSON object a record (time, event, id, error, sender, app_name,
-replaces_id, app_icon, summary, body, actions, hints, expire_timeout). -n and --grep count records,
---grep matching the text line. Texts are cut at 16 KiB; the log stops at 16 MB.
+(the server's). GTK's GNotification is recorded too (GLib sends it as a Notify in a box). --json:
+one JSON object a record (time, event, id, error, serial, sender, app_name, replaces_id, app_icon,
+summary, body, actions, hints, expire_timeout; reply_time when the id came late). -n and --grep
+count records, --grep matching the text line. Texts are cut at 16 KiB; the log stops at 16 MB.
 @ gdb
 `gdb` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a
 process of the box), stopped or deadlocked too, and leaves it as it was; -- ARGS replace the backtrace

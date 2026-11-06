@@ -13255,7 +13255,9 @@ from them.
     `--shell`, a test's stand-in) or none yet. It reads each message with sd-bus's typed readers,
     not text: a Notify waits (a cookie table of 64) for the reply from its destination with its serial,
     then one JSON line goes to ~/notifications.log with the id, or the error's name and text, or after
-    5 s with neither (id null, "no reply in 5 s"); a call that wants no reply at once. CloseNotification
+    5 s with neither (id null, "no reply in 5 s"; its reply is still waited for until 25 s, and one
+    that comes is a `reply` line that `log` joins to it: finding 688); a call that wants no reply at
+    once. CloseNotification
     (the app's), NotificationClosed and ActionInvoked (the server's) are lines too. Hints keep basic
     values; a structured one (image-data) is its signature; strings are cut at 16 KiB (summary,
     body) or 1 KiB, at a character, ending in "…". Lines go out in one O_APPEND write each, never
@@ -13268,8 +13270,10 @@ from them.
     notification` then refuses (no log) rather than wait for nothing. libnotify (notify-send) with no
     server never sends Notify (its GetServerInformation fails first), so that case is logged only for
     clients that call Notify straight (gdbus, Qt's, Electron's): `(no id) ... -- not shown:
-    ServiceUnknown`. Not recorded: org.gtk.Notifications (GNotification on GNOME) and the portal's
-    AddNotification, which reach org.freedesktop.Notifications only through a backend that forwards.
+    ServiceUnknown`. GTK's GNotification is recorded: in a box nothing owns org.gtk.Notifications and
+    no app is sandboxed, so GLib sends it as a Notify (finding 688). Not recorded: a call to
+    org.gtk.Notifications itself or the portal's AddNotification, which reach
+    org.freedesktop.Notifications only through a backend that forwards.
     Read: `log notifications` (a text line a record, made plain on the terminal, S7; `--json` the
     record written again by omabox, `-n`/`--grep` counting records, `-f` formatting as it follows,
     before --grep), `wait notification RE [-i] [--since OFFSET]` (wait_log.rs's reading of a box log,
@@ -13471,6 +13475,33 @@ from them.
     t_hypr_old_dispatch's refused cases (failed on the old code; on 0.56.2 and 0.57.1) and its
     1023-byte source (timed out on the old code), hyprctl.rs's batch_split and refused_dispatch and
     lua.rs's eval_off_1023 unit tests.
+
+688. **A notification server's late id is kept; GTK's GNotification is recorded** (2026-11-06, #430,
+    after finding 680). (1) The recorder wrote a Notify with no reply in 5 s as `id: null` and
+    forgot it, but D-Bus waits 25 s for a reply (libdbus's, GDBus's and sd-bus's default timeout),
+    and a shell slow at startup can answer after 5 s: the app had its id, the log never did. The 5 s
+    line stays (a hung server still shows the attempt, and `wait notification` has the notice then,
+    unchanged), and now carries the call's `serial`; the call stays in the pending table, without
+    its text, until 25 s after it. A reply by then is a line of its own, `{"event":"reply",
+    "serial":N,"sender":..,"call_time":S,"id":N|null,"error":..}`. `log notifications` (text and
+    --json, before --grep and -n) joins it to the notify with that sender and serial: the notify
+    takes its id (or error) and `reply_time`, the text says `notify #45 (replied after 6.0 s)`, and
+    the reply is no line of its own. One whose notify is not in the log (it stopped at 16 MB) stays a
+    line: `reply #45 to the notify of HH:MM:SS.mmm (:1.5's call 7, 6.0 s after it)`, which is also
+    what `log -f` prints as it comes (a line already out is not changed). The table stays 64 long;
+    full, a call already written goes first, then the oldest unwritten one as before. (2) GTK: a
+    GApplication's `g_application_send_notification` (Python gi, GLib 2.90.1) in an Omarchy box went
+    out as a Notify from the app itself, recorded with GLib's freedesktop backend's fields: app_name
+    the program's name, `desktop-entry` the application id, the button's action as its key
+    (`app.open:"Open"`), urgency normal. Nothing in a box owns org.gtk.Notifications (no GNOME
+    Shell; no activatable service on this machine either) and the app is not sandboxed, so GLib
+    takes neither the gtk nor the portal backend. Forced through the portal (GIO_USE_PORTALS=1) it
+    was recorded too, as xdg-desktop-portal-gtk forwards it: sender the portal backend, app_name
+    and desktop-entry empty (an unsandboxed app has no app id for the portal). So only a box whose
+    shell owns org.gtk.Notifications itself would miss them. Tests: t_notifications (its stand-in
+    answers a "slow " summary 6 s late: no id at 5 s, the id after; failed on the old recorder;
+    and a GApplication's GNotification, skipped without gi as the whole test is), notices.rs's
+    late_reply_joined.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -2,7 +2,9 @@
 //! notifications.log, a JSON object a line (each Notify with the id its server gave, each close,
 //! closed and action), read by `log notifications` as a line of text each (or --json) and matched by
 //! `wait notification RE`. What the box wrote is the box's: each line is read as JSON, written again
-//! by omabox (--json), its text made plain (term.rs), never passed on as it came.
+//! by omabox (--json), its text made plain (term.rs), never passed on as it came. A reply that came
+//! after the recorder wrote its Notify without an id is a line of its own (`reply`, finding 688),
+//! which `log notifications` joins to the Notify.
 
 use crate::json;
 use serde_json::Value;
@@ -35,7 +37,12 @@ fn word(v: &Value) -> String {
 
 /// "HH:MM:SS.mmm" of a record's time (SECONDS.MILLIS), local time.
 fn when(v: &Value) -> String {
-    let t = v.get("time").map(ToString::to_string).unwrap_or_default();
+    clock(v.get("time"))
+}
+
+/// "HH:MM:SS.mmm" of a time (SECONDS.MILLIS), local time.
+fn clock(t: Option<&Value>) -> String {
+    let t = t.map(ToString::to_string).unwrap_or_default();
     let (int, frac) = t.split_once('.').unwrap_or((&t, "000"));
     let secs: i64 = int.parse().unwrap_or(0);
     format!("{}.{frac}", crate::cmd::events::hms(secs))
@@ -50,6 +57,12 @@ fn reason(r: &Value) -> String {
         Some(4) => "closed (reason undefined)".into(),
         _ => format!("closed (reason {})", json::compact(r)),
     }
+}
+
+/// "6.0 s": how long after time A time B is (None when either is not a number).
+fn after(a: &Value, b: &Value) -> Option<String> {
+    let d = b.as_f64()? - a.as_f64()?;
+    Some(format!("{d:.1} s"))
 }
 
 /// Urgency's byte, named.
@@ -76,6 +89,9 @@ pub fn text(v: &Value) -> Vec<u8> {
     match s(v, "event") {
         "notify" => {
             l.push_str(&id(v));
+            if let Some(t) = v.get("reply_time").and_then(|t| after(&v["time"], t)) {
+                l.push_str(&format!(" (replied after {t})"));
+            }
             if v.get("replaces_id").and_then(Value::as_u64).unwrap_or(0) != 0 {
                 l.push_str(&format!(" (replaces #{})", v["replaces_id"]));
             }
@@ -128,6 +144,22 @@ pub fn text(v: &Value) -> Vec<u8> {
             reason(v.get("reason").unwrap_or(&Value::Null))
         )),
         "action" => l.push_str(&format!("{} {}", id(v), word(&v["action"]))),
+        "reply" => {
+            l.push_str(&format!(
+                "{} to the notify of {} ({}'s call {}",
+                id(v),
+                clock(v.get("call_time")),
+                s(v, "sender"),
+                word(v.get("serial").unwrap_or(&Value::Null))
+            ));
+            if let Some(t) = v.get("call_time").and_then(|c| after(c, &v["time"])) {
+                l.push_str(&format!(", {t} after it"));
+            }
+            l.push(')');
+            if let Some(Value::String(e)) = v.get("error") {
+                l.push_str(&format!(" -- not shown: {e}"));
+            }
+        }
         _ => l.push_str(&json::compact(v)),
     }
     crate::term::plain(l.as_bytes())
@@ -145,6 +177,36 @@ pub fn records(data: &[u8]) -> Vec<(usize, Value)> {
         if let Some(v) = record(&l[..l.len() - 1]) {
             out.push((at, v));
         }
+    }
+    out
+}
+
+/// RECORDS with each late reply joined to its Notify (finding 688): a Notify written without an id
+/// takes the id (or the error) of the `reply` that names its sender and serial, and the reply's time
+/// as "reply_time"; that reply is then no record of its own. One whose Notify is not there stays.
+pub fn joined(recs: Vec<(usize, Value)>) -> Vec<(usize, Value)> {
+    let key = |v: &Value| Some((s(v, "sender").to_string(), v.get("serial")?.as_u64()?));
+    let mut out: Vec<(usize, Value)> = Vec::with_capacity(recs.len());
+    let mut waiting = std::collections::HashMap::new();
+    for (at, v) in recs {
+        match s(&v, "event") {
+            "notify" if v.get("id").is_some_and(Value::is_null) => {
+                if let Some(k) = key(&v) {
+                    waiting.insert(k, out.len());
+                }
+            }
+            "reply" => {
+                if let Some(i) = key(&v).and_then(|k| waiting.remove(&k)) {
+                    let n = &mut out[i].1;
+                    n["id"] = v.get("id").cloned().unwrap_or(Value::Null);
+                    n["error"] = v.get("error").cloned().unwrap_or(Value::Null);
+                    n["reply_time"] = v.get("time").cloned().unwrap_or(Value::Null);
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push((at, v));
     }
     out
 }
@@ -213,11 +275,11 @@ pub fn first_notify(re: &[u8], icase: bool, data: &[u8]) -> Option<(usize, Value
     recs.into_iter().nth(i / 2)
 }
 
-/// `log notifications`: the records of DATA as text lines (with JSON, as JSON lines written again),
-/// only those whose text line RE matches when there is one, the last N (None: all), each line
-/// ending in a newline.
+/// `log notifications`: the records of DATA, late replies joined, as text lines (with JSON, as JSON
+/// lines written again), only those whose text line RE matches when there is one, the last N (None:
+/// all), each line ending in a newline.
 pub fn show(data: &[u8], json: bool, re: &[u8], icase: bool, n: Option<usize>) -> Vec<u8> {
-    let recs = records(data);
+    let recs = joined(records(data));
     let lines: Vec<Vec<u8>> = recs.iter().map(|(_, v)| text(v)).collect();
     let keep: Vec<usize> = if re.is_empty() {
         (0..recs.len()).collect()
@@ -327,6 +389,48 @@ mod tests {
         );
         assert_eq!(show(LOG, false, b"", false, Some(0)), b"");
         assert_eq!(show(b"", false, b"x", false, None), b"");
+    }
+
+    #[test]
+    fn late_reply_joined() {
+        const LATE: &[u8] = br#"{"time":100.000,"event":"notify","id":null,"error":"no reply in 5 s","serial":7,"sender":":1.5","app_name":"a","replaces_id":0,"app_icon":"","summary":"slow","body":"","actions":[],"hints":{},"expire_timeout":-1}
+{"time":101.000,"event":"notify","id":null,"error":"no reply in 5 s","serial":8,"sender":":1.5","app_name":"a","replaces_id":0,"app_icon":"","summary":"never","body":"","actions":[],"hints":{},"expire_timeout":-1}
+{"time":106.012,"event":"reply","serial":7,"sender":":1.5","call_time":100.000,"id":45,"error":null}
+{"time":107.000,"event":"reply","serial":9,"sender":":1.5","call_time":102.000,"id":null,"error":"E: no"}
+"#;
+        // (before its reply: no id; the wait reads the notify as it was written)
+        let two: usize = LATE
+            .split_inclusive(|&c| c == b'\n')
+            .take(2)
+            .map(<[u8]>::len)
+            .sum();
+        let t = show(&LATE[..two], false, b"", false, None);
+        assert!(String::from_utf8_lossy(&t).contains("notify (no id) a: \"slow\""));
+        let t = String::from_utf8_lossy(&show(LATE, false, b"", false, None)).into_owned();
+        let l: Vec<String> = t.lines().map(|l| body(l.as_bytes())).collect();
+        assert_eq!(l.len(), 3, "{t}");
+        assert_eq!(l[0], r#"notify #45 (replied after 6.0 s) a: "slow""#);
+        assert_eq!(
+            l[1],
+            r#"notify (no id) a: "never" -- not shown: no reply in 5 s"#
+        );
+        // (a reply whose notify is not in the log stays a line)
+        assert!(
+            l[2].starts_with("reply (no id) to the notify of ")
+                && l[2].ends_with("(:1.5's call 9, 5.0 s after it) -- not shown: E: no"),
+            "{}",
+            l[2]
+        );
+        let j = show(LATE, true, b"slow", false, None);
+        let v: Value = serde_json::from_slice(j.strip_suffix(b"\n").unwrap()).unwrap();
+        assert_eq!(
+            (&v["id"], &v["error"], &v["reply_time"]),
+            (&Value::from(45), &Value::Null, &serde_json::json!(106.012))
+        );
+        assert_eq!(
+            first_notify(b"slow", false, LATE).unwrap().1["id"],
+            Value::Null
+        );
     }
 
     #[test]
