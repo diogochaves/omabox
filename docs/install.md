@@ -12,13 +12,17 @@ What a machine needs, what `install.sh` does, updating and removing. Back to the
   2026-12-04, a month after 4.5 reached Omarchy's stable channel
   ([#312](https://github.com/diogochaves/omabox/issues/312)). `omarchy update` brings 4.5.
 - **Or another Linux with Hyprland 0.56+** ([#247](https://github.com/diogochaves/omabox/issues/247)):
-  Arch without Omarchy, Debian sid and openSUSE Tumbleweed are tested (`install.sh` and real boxes,
-  each in a container, [below](#checking-other-distributions)). There `install.sh` checks your
-  distribution's packages under their own names and, if some are missing, prints the command that
-  installs them (`sudo apt install …`, `sudo zypper install …`) and stops: run it, then
-  `./install.sh` again (on Arch without Omarchy it installs them itself, as on Omarchy). No package
-  for Arch without Omarchy yet: install from a clone or a release's tarball. Fedora has Hyprland only
-  from a COPR: `install.sh` names its packages, untried. NixOS is not supported yet: a box looks for
+  Arch without Omarchy, Fedora 45, Debian sid and openSUSE Tumbleweed are tested (`install.sh` and
+  real boxes, each in a VM and a container, [below](#checking-other-distributions); plain Arch also
+  runs the whole suite). There `install.sh` checks your distribution's packages under their own
+  names and, if some are missing, prints the command that installs them (`sudo apt install …`,
+  `sudo dnf install …`, `sudo zypper install …`) and stops: run it, then `./install.sh` again (on
+  Arch without Omarchy it installs them itself, as on Omarchy). No package for Arch without Omarchy
+  yet: install from a clone or a release's tarball. Fedora has Hyprland only from a COPR (pm4rcin/
+  Hyprland builds 0.57 for Fedora 45). Debian sid's Hyprland 0.57.0 disconnects every GPU app and
+  shell in a box as it starts (a dmabuf bug fixed in 0.57.1; `omabox doctor` warns). On a machine
+  with no one logged in on its screen (an SSH-only box host), the render node may be the `render`
+  group's alone (Tumbleweed): `omabox doctor` says to join it. NixOS is not supported yet: a box looks for
   its programs in `/usr/bin` (`install.sh` says what it would need). Ubuntu 26.04 LTS, Alpine and
   Void ship no Hyprland with the Lua config. Without Omarchy, boxes are plain Hyprland (no Omarchy
   bar, theme or plugins; `--shell CMD` runs a shell of yours), `setup` links no bar widget, and
@@ -87,6 +91,15 @@ Quickshell bar.
 test/distros.sh --boxes                                 # all three
 test/distros.sh --boxes docker.io/library/debian:sid    # one
 ```
+
+`test/distros-vm.sh [--suite] [--keep] [arch|fedora|tumbleweed|debian]` does the same in a throwaway
+libvirt VM made from the distribution's official cloud image, where a container falls short: the
+guest's own kernel and security module (SELinux on Fedora), a real sudo, and a user logged in on the
+VM's screen (autologin into Hyprland on tty1), as a desktop user is. It installs HEAD as a release
+tarball has it; `--suite` then runs the whole of `test/run.sh` there, from that desktop session.
+Boxes in the guest need GPU acceleration: virgl on a host NVIDIA render node (QEMU crashes on exit
+on an AMD one); its header says what else it needs. Logs and shots go to
+`~/.local/state/omabox/distros-vm/<distro>/`.
 
 Logs go to `~/.local/state/omabox/distros/<image>.log`, the boxes' shots (and a failed box's logs)
 to `<image>/` beside it. A container gets what a box gets: the first render node and `/dev/net/tun`,

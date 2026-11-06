@@ -14,10 +14,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # What install.sh installs, by the distribution's family (doctor's: crates/omabox/src/cmd/doctor.rs,
 # whose unit test holds these lists to its own names). Arch's are the ones Omarchy machines run;
-# Debian sid's and openSUSE Tumbleweed's were installed in containers (NOTES finding 646); Fedora's
-# are from its package lists (no Hyprland there but COPR's); NixOS's are named, not installed.
+# Debian sid's and openSUSE Tumbleweed's were installed in containers (NOTES finding 646); Fedora 45's
+# in a VM (finding 665; no Hyprland there but COPR's); NixOS's are named, not installed.
 PKGS_arch=(
   labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret   # run a box
+  imagemagick wl-clipboard wf-recorder ffmpeg                            # shot's options, check, clip, record (Omarchy has them)
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
   passt                                                                  # every box's network (pasta)
   python                                                                 # the agent guard's Codex check, a jailed box's covers
@@ -26,7 +27,7 @@ PKGS_arch=(
   libdrm mesa pixman
 )
 PKGS_debian=(
-  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret-tools
+  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret-tools imagemagick wl-clipboard wf-recorder ffmpeg
   quickshell libgtk-3-0t64 xdg-terminal-exec dbus dbus-daemon dbus-bin dbus-user-session
   passt
   python3
@@ -35,16 +36,16 @@ PKGS_debian=(
   libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev libopengl-dev libudev-dev wayland-protocols
 )
 PKGS_fedora=(
-  labwc wlr-randr bubblewrap util-linux iproute jq grim gnome-keyring libsecret
+  labwc wlr-randr bubblewrap util-linux iproute jq grim gnome-keyring libsecret ImageMagick wl-clipboard wf-recorder ffmpeg-free
   gtk3 xdg-terminal-exec dbus-daemon dbus-tools                          # (no quickshell but COPR's)
   passt
   python3
   gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel
-  git cmake ninja-build hyprwayland-scanner gcc-c++ hyprutils-devel libseat-devel libdisplay-info-devel hwdata libinput-devel
+  git cmake ninja-build hyprwayland-scanner-devel gcc-c++ hyprutils-devel libseat-devel libdisplay-info-devel hwdata-devel libinput-devel
   libdrm-devel mesa-libgbm-devel mesa-libEGL-devel mesa-libGL-devel libglvnd-devel systemd-devel wayland-protocols-devel
 )
 PKGS_suse=(
-  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring secret-tool
+  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring secret-tool ImageMagick wl-clipboard wf-recorder ffmpeg
   libgtk-3-0 xdg-terminal-exec dbus-1 dbus-1-daemon dbus-1-tools         # (no quickshell)
   passt
   python3
@@ -53,7 +54,7 @@ PKGS_suse=(
   libdrm-devel libgbm-devel Mesa-libEGL-devel Mesa-libGL-devel Mesa-libGLESv2-devel Mesa-libGLESv3-devel systemd-devel wayland-protocols-devel
 )
 PKGS_nix=(
-  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret
+  labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret imagemagick wl-clipboard wf-recorder ffmpeg
   quickshell gtk3 xdg-terminal-exec dbus
   passt
   python3

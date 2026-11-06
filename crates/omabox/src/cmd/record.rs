@@ -1483,7 +1483,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         || !crate::exec::executable(b"/usr/bin/ffmpeg")
     {
         return Err(ctx.die(
-            "record: needs wf-recorder and ffmpeg in /usr/bin (sudo pacman -S wf-recorder ffmpeg)",
+            "record: needs wf-recorder and ffmpeg in /usr/bin (omabox doctor names their packages)",
         ));
     }
     if record_running(ctx, rec)? {

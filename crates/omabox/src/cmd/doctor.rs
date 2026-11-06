@@ -196,6 +196,22 @@ const PKGS: &[(&str, [&str; 5])] = &[
         ["iproute2", "iproute2", "iproute", "iproute2", "iproute2"],
     ),
     ("nft", ["nftables"; 5]),
+    (
+        "magick",
+        [
+            "imagemagick",
+            "imagemagick",
+            "ImageMagick",
+            "ImageMagick",
+            "imagemagick",
+        ],
+    ),
+    ("wl-copy", ["wl-clipboard"; 5]),
+    ("wf-recorder", ["wf-recorder"; 5]),
+    (
+        "ffmpeg",
+        ["ffmpeg", "ffmpeg", "ffmpeg-free", "ffmpeg", "ffmpeg"],
+    ),
     // tools/ (C, wayland-scanner, pkg-config's modules: the Makefiles')
     (
         "tools-build",
@@ -213,7 +229,7 @@ const PKGS: &[(&str, [&str; 5])] = &[
         [
             "git cmake ninja hyprwayland-scanner base-devel",
             "git cmake ninja-build hyprwayland-scanner build-essential",
-            "git cmake ninja-build hyprwayland-scanner gcc-c++",
+            "git cmake ninja-build hyprwayland-scanner-devel gcc-c++",
             "git cmake ninja hyprwayland-scanner gcc-c++",
             "git cmake ninja hyprwayland-scanner gcc",
         ],
@@ -464,6 +480,17 @@ fn hyprland_check(root: &[u8], fam: Option<Family>) -> Check {
                 .unwrap_or_default()
                 .trim_end()
         );
+        // 0.57.0 hands GPU clients a dmabuf format table it has just replaced, after any reset (a
+        // box resets it as it starts): every EGL app and shell in a box is disconnected
+        // (finding 667; Hyprland 7a648e3ed, in 0.57.1). Debian sid shipped it.
+        if c.found.split_whitespace().nth(1) == Some("0.57.0") {
+            c.st = St::Warn;
+            c.found = format!(
+                "{}: in a box its GPU apps and shells are disconnected as they start (fixed in 0.57.1)",
+                c.found
+            );
+            c.fix = vec!["update Hyprland to 0.57.1 or later".into()];
+        }
     }
     c
 }
@@ -529,6 +556,13 @@ const SOME_PROGS: &[(&str, &str)] = &[
         "python3",
         "a box's journal socket, the agent guard's Codex check",
     ),
+    (
+        "magick",
+        "check, calibrate, find, shot --zoom/--grid/--changed/--diff, record's sheet",
+    ),
+    ("wl-copy", "clip"),
+    ("wf-recorder", "record"),
+    ("ffmpeg", "record"),
 ];
 
 fn box_progs_check(root: &[u8], fam: Option<Family>) -> Check {
@@ -1613,6 +1647,22 @@ mod tests {
             (c.st, c.found.as_str()),
             (St::Ok, "Hyprland 0.56.2 (Lua config)")
         );
+        // finding 667: 0.57.0's dmabuf format table, a warning; 0.57.1 none
+        prog(
+            &d,
+            "Hyprland",
+            "echo 'Hyprland 0.57.0 built from branch v0.57.0 at commit x'",
+        );
+        let c = hyprland_check(&r, Some(Family::Debian));
+        assert_eq!(c.st, St::Warn, "{}", c.found);
+        assert!(c.found.contains("fixed in 0.57.1"), "{}", c.found);
+        assert_eq!(c.fix, ["update Hyprland to 0.57.1 or later"]);
+        prog(
+            &d,
+            "Hyprland",
+            "echo 'Hyprland 0.57.1 built from branch v0.57.1 at commit x'",
+        );
+        assert_eq!(hyprland_check(&r, arch).st, St::Ok);
         prog(&d, "bwrap", "echo 'bubblewrap 0.9.0'");
         let c = prog_check(
             &r,
@@ -1661,7 +1711,15 @@ mod tests {
             c.found
         );
         // #439: nft in /usr/sbin (Debian, openSUSE) is found there, the rest in /usr/bin
-        for p in ["wlr-randr", "ip", "python3"] {
+        for p in [
+            "wlr-randr",
+            "ip",
+            "python3",
+            "magick",
+            "wl-copy",
+            "wf-recorder",
+            "ffmpeg",
+        ] {
             prog(&d, p, "true");
         }
         put(&d, "/usr/sbin/nft", "#!/bin/sh\n");
@@ -1673,7 +1731,7 @@ mod tests {
             assert_eq!(c.st, St::Ok, "{}", c.found);
             assert_eq!(
                 c.found,
-                "wlr-randr, ip, python3 in /usr/bin; nft in /usr/sbin"
+                "wlr-randr, ip, python3, magick, wl-copy, wf-recorder, ffmpeg in /usr/bin; nft in /usr/sbin"
             );
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o777)).unwrap();
             let c = some_progs_check(&r, arch);
@@ -1691,7 +1749,10 @@ mod tests {
         }
         prog(&d, "nft", "true");
         let c = some_progs_check(&r, arch);
-        assert_eq!(c.found, "wlr-randr, ip, nft, python3 in /usr/bin");
+        assert_eq!(
+            c.found,
+            "wlr-randr, ip, nft, python3, magick, wl-copy, wf-recorder, ffmpeg in /usr/bin"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1791,6 +1852,10 @@ mod tests {
             "python3",
             "wlr-randr",
             "ip",
+            "magick",
+            "wl-copy",
+            "wf-recorder",
+            "ffmpeg",
             "tools-build",
             "aquamarine-build",
         ];

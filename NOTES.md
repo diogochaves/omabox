@@ -12955,6 +12955,79 @@ from them.
     schedule's own 250 ms-2 s is reap.rs's `guard_looks_when`. Without the fix the new checks fail
     on one CPU (8 of them); with it: alone 5/5 (34/0), under 16 CPU burners and two unit tiers 3/3,
     on one CPU 3/3.
+662. **ImageMagick was never installed off Omarchy** (2026-11-06, #247). The first full suite on
+    plain Arch (test/distros-vm.sh, a real VM from Arch's cloud image) failed every `check`,
+    `calibrate`, `find` and `shot --zoom/--grid/--changed/--diff` case with "needs ImageMagick's
+    magick (package imagemagick, part of Omarchy)": omabox runs `magick` on the host for all of them,
+    and install.sh's lists, doctor's checks and the containers' boxes (which never ran those
+    commands) all took it for granted, Omarchy having it. **Now** install.sh installs it in every
+    family (imagemagick; Fedora and openSUSE ImageMagick; each gives /usr/bin/magick, checked in
+    debian:sid, fedora:45 and tumbleweed containers) and doctor's some-programs check warns
+    without it, naming what needs it, with the install line. The same for `clip`'s wl-copy and
+    wl-paste (wl-clipboard) and `record`'s wf-recorder and ffmpeg (Fedora: ffmpeg-free), whose
+    refusal named `sudo pacman -S` on every distribution and now says doctor names the packages.
+663. **A box with no shell never gave its session bus the compositor's environment** (2026-11-06,
+    #247). shell.sh ran `dbus-update-activation-environment --all` (and `--systemd` with `up
+    --systemd`) before starting the shell, and hyprland.lua starts shell.sh only when the box has
+    one: `up --no-shell` on Omarchy and every plain box without `--shell` (plain.lua's default)
+    gave D-Bus-activated apps and the user manager's units no WAYLAND_DISPLAY, so they started
+    blind and died. t_systemd's "manager has the session environment" failed on plain Arch. **Now**
+    share/session-env.sh does the import, run by shell.sh as before and by hyprland.lua itself when
+    there is no shell. Same release: plain.lua sets `misc.initial_workspace_tracking = 0`, as
+    Omarchy does: Hyprland's default opens a window on the workspace its launcher started on, and
+    `omabox run` launches through one process that began on workspace 1, so a window opened there
+    while workspace 2 was in front (t_monitors_wait, t_keys_layer on plain Arch).
+664. **A contact sheet failed on plain Arch, and said nothing of why** (2026-11-06, #247). `shot
+    --burst --sheet`'s and `record`'s `magick montage` label each frame with no `-font`, and
+    ImageMagick's default there is a Ghostscript font that is not installed: "unable to read font",
+    exit 1 (the sheet half written). Both threw magick's stderr away. **Now** both pass the file
+    fontconfig picks for `sans` (grid.rs `font`, which the grid's labels used for a monospace
+    already; check's report does the same), and a failure ends with magick's last line.
+665. **install.sh asked Fedora for a package it already had, for ever** (2026-11-06, #247). Fedora 45
+    in a VM (test/distros-vm.sh; Hyprland 0.57.1 from the pm4rcin/Hyprland COPR, Fedora having none
+    and solopasha/hyprland building only rawhide): its hyprwayland-scanner is the package
+    `hyprwayland-scanner-devel`. `dnf install hyprwayland-scanner` resolves to it, but install.sh's
+    check, `rpm -q --whatprovides hyprwayland-scanner`, does not, so every run said it was missing
+    and stopped there. **Now** Fedora's list (and doctor's) names hyprwayland-scanner-devel. Then
+    omabox's aquamarine build failed there, CMake finding no `hwdata` module: Fedora's hwdata.pc is
+    in `hwdata-devel`, now on the list (the build then passed, and the boxes ran on it).
+666. **Boxes under SELinux (Fedora 45, enforcing): they work; two kinds of denial are logged** (2026-11-06,
+    #247). test/distros-vm.sh's plain boxes (21 checks) passed on Fedora 45 with SELinux enforcing,
+    on Fedora's aquamarine and on omabox's. The journal then held two kinds of AVC denial, neither
+    with an effect found: (1) `nnp_transition nosuid_transition` from unconfined_t to
+    unconfined_dbusd_t for bash and at-spi-bus-launcher: a box runs with no_new_privs, and the
+    policy moves dbus-daemon into its own domain, which NNP forbids; the box's session bus and its
+    accessibility bus (at-spi-bus-launcher's dbus-daemon) both ran and answered (`busctl --user
+    list`, org.a11y.Bus GetAddress), so only the domain change is refused. (2) `sigkill` for
+    pasta_t on an unconfined_t process: Fedora confines pasta (passt-selinux), and pasta's kill of
+    what it started is refused; a box's teardown is omabox's KILL of its namespace PID 1, and
+    `down` left nothing (the checks' `gone`). Untried there: the full suite, --systemd boxes,
+    interactive boxes. If a box misbehaves only on Fedora, start from these.
+667. **Hyprland 0.57.0 disconnects every GPU client in a box: doctor warns** (2026-11-06, #247). On
+    Debian sid (a VM; Hyprland 0.57.0+ds-1) a plain box with a Quickshell bar as its shell died
+    starting, and the plain box with foot passed. The box's Hyprland logged `error marshalling
+    arguments for format_table: dup failed: Bad file descriptor` for each client: 0.57.0's
+    `resetFormatTable` sends feedback naming the table it is replacing, and a box resets it as it
+    starts (FALLBACK, then HEADLESS-2), so each EGL client gets a format table whose fd is gone and
+    is dropped; foot draws with shm and never asks. Not omabox's aquamarine (the same with Debian's
+    0.15.1, `OMABOX_AQUAMARINE=system`), and the same Hyprland as the VM's desktop session ran the
+    bar fine. Fixed in 0.57.1 (Hyprland 7a648e3ed, 04d93b8f3); Arch's 0.57.1 passes the same run.
+    **Now** doctor's hyprland check warns on 0.57.0 and says to update. Tracked privately until
+    Debian ships 0.57.1.
+668. **Open: with systemd's coredump socket, a box's crash is journaled whatever its core limit**
+    (2026-11-06, #247). A box runs its programs with RLIMIT_CORE at 1 byte (finding 401's rule: a
+    crash in a box must not reach the user's crash notifier, Omarchy's omarchy-crash-watch), which
+    the kernel's pipe handler (`|/usr/lib/systemd/systemd-coredump ...`) takes as "no core, no
+    report". systemd 262's preset enables systemd-coredumpd.service, whose
+    systemd-coredump-register.service sets `kernel.core_pattern=@@/run/systemd/coredumpd/kernel`
+    (the coredump socket): there systemd-coredump journals the crash ("terminated abnormally without
+    generating a coredump", the crash MESSAGE_ID) at any limit, `--core=0` included (t_guard's
+    "its abort is not a journaled crash" fails on plain Arch's cloud image, fresh with 262).
+    PR_SET_DUMPABLE is reset by exec. This machine is still on the pipe: it upgraded from 261, and
+    an upgrade applies no new preset (systemd-coredumpd.service disabled). A fresh install with 262
+    (Omarchy's ISO included) would have the socket, and a box's crash would then reach
+    omarchy-crash-watch on the real desktop. Not fixed; to decide: a way for a box's processes to
+    stay out of the journal's crash records, or the notifier skipping them (its side).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

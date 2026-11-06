@@ -264,11 +264,20 @@ pub fn draw_args(sizes: [i64; 4], n: i64, font: &[u8]) -> Vec<Vec<u8>> {
     a.into_iter().map(String::into_bytes).collect()
 }
 
-/// A bold monospace font's file, as fontconfig picks it; empty when it cannot say (magick's own
-/// default then).
-fn font() -> Vec<u8> {
+/// The last non-empty line of a program's stderr, trimmed: what a failure said, for its message.
+pub fn last_line(err: &[u8]) -> &[u8] {
+    err.split(|&c| c == b'\n')
+        .map(|l| l.trim_ascii())
+        .rfind(|l| !l.is_empty())
+        .unwrap_or_default()
+}
+
+/// The file of the font fontconfig picks for PATTERN (`monospace:bold`, `sans`); empty when it
+/// cannot say (magick's own default then, which can be a font it cannot read: plain Arch has no
+/// Ghostscript fonts, and a label then fails the whole command, finding 664).
+pub fn font(pattern: &str) -> Vec<u8> {
     let mut c = crate::sig::command("fc-match");
-    c.args(["-f", "%{file}", "monospace:bold"])
+    c.args(["-f", "%{file}", pattern])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     match crate::sig::run_output(c) {
@@ -283,7 +292,7 @@ pub fn draw(src: &[u8], to: OwnedFd, sizes: [i64; 4], n: i64) -> Result<(), Vec<
     let mut c = crate::sig::command("magick");
     c.arg(std::ffi::OsStr::from_bytes(&cat!("png:", src)))
         .args(
-            draw_args(sizes, n, &font())
+            draw_args(sizes, n, &font("monospace:bold"))
                 .iter()
                 .map(|w| std::ffi::OsStr::from_bytes(w)),
         )

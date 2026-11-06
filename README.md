@@ -88,15 +88,17 @@ render node: AMD and Intel iGPUs and NVIDIA RTX cards are tested. Where it runs:
 - **Omarchy 4.5**: boxes are Omarchy's desktop. Omarchy 4.0 still works but is deprecated: omabox
   drops it in its first release after 2026-12-04, a month after 4.5 reached Omarchy's stable channel
   ([#312](https://github.com/diogochaves/omabox/issues/312)). `omarchy update` brings 4.5.
-- **Arch without Omarchy, Debian sid, openSUSE Tumbleweed**: boxes are plain. Each is tested in a
-  container, `install.sh` through to real boxes ([#247](https://github.com/diogochaves/omabox/issues/247)).
-  `install.sh` checks your distribution's packages under their own names; on Arch it installs what
-  is missing (sudo), elsewhere it prints the command that does (`sudo apt install …`, `sudo zypper
-  install …`) and stops: run it, then `./install.sh` again. There is no package for Arch without
-  Omarchy yet: install from a clone or a release tarball, as below.
-- **Not yet**: Fedora (Hyprland only from a COPR; its packages are named, untried), NixOS (a box
-  looks for its programs in `/usr/bin`). Ubuntu 26.04 LTS, Alpine and Void ship no Hyprland with the
-  Lua config.
+- **Arch without Omarchy, Fedora 45, Debian sid, openSUSE Tumbleweed**: boxes are plain. Each is
+  tested in a VM of its own, `install.sh` through to real boxes, and plain Arch runs the whole test
+  suite ([#247](https://github.com/diogochaves/omabox/issues/247)). Fedora has Hyprland only from a
+  COPR (pm4rcin/Hyprland); Debian sid's Hyprland 0.57.0 drops every GPU app in a box (fixed in
+  0.57.1: `omabox doctor` warns). `install.sh` checks your distribution's packages under their own
+  names; on Arch it installs what is missing (sudo), elsewhere it prints the command that does
+  (`sudo apt install …`, `sudo dnf install …`, `sudo zypper install …`) and stops: run it, then
+  `./install.sh` again. There is no package for Arch without Omarchy yet: install from a clone or a
+  release tarball, as below.
+- **Not yet**: NixOS (a box looks for its programs in `/usr/bin`). Ubuntu 26.04 LTS, Alpine and Void
+  ship no Hyprland with the Lua config.
 
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox
