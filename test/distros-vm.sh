@@ -198,7 +198,11 @@ EOF
       sudo systemctl daemon-reload && sudo systemctl restart getty@tty1 &&
       for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/hypr/*/.socket.sock >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1' ||
       { echo "no Hyprland session on tty1"; return 1; }
+    # (from a git repo, as a developer runs it: a box mounts the git repo it is started from, and
+    # the suite's stand-ins run this omabox inside boxes; a tarball has no .git)
     echo "==> the suite"
+    g 'cd ~/omabox && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m tarball' ||
+      { echo "no git repo for the suite"; return 1; }
     # shellcheck disable=SC2016 # expanded in the guest
     g "$P"' export HYPRLAND_INSTANCE_SIGNATURE=$(ls -t "$XDG_RUNTIME_DIR"/hypr/ | head -n 1) WAYLAND_DISPLAY=wayland-1;
       test/run.sh' > "$out/suite.log" 2>&1 || rc=1
