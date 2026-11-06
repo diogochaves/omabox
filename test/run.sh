@@ -402,18 +402,21 @@ check_box_safety() {
   check_eq "$b: nothing of your runtime dir is mounted in it but its own dir" "" \
     "$("$CLI" run -b "$b" -- awk -v d="$dev" '$3 == d { print $4 " at " $5 }' /proc/self/mountinfo | grep -v "^/omabox/$b/")"
 }
-# vgpu: why the boxes' render node is a virtual GPU (a VM's virtio-gpu, its driver as doctor's render
-# line says it), or fails where it is not. A few checks come out otherwise in such a VM (grim's capture,
-# the pointer drawn into --no-pointer shots, a shot's size off by the border, a peek's CPU ticks, which
-# line Qt prints for a protocol error, a terminal that binds an output just gone): those are skipped
-# there (on_gpu), with that reason, and nowhere else. The same checks pass in plain boxes on a real
-# GPU, on Hyprland 0.56 and 0.57.
+# vgpu: why the boxes run in a VM (a virtual GPU, a VM's virtio-gpu, its driver as doctor's render
+# line says it; or any GPU in a guest systemd-detect-virt names), or fails where they do not. A few
+# checks come out otherwise in such a VM (grim's capture, the pointer drawn into --no-pointer shots,
+# a shot's size off by the border, a window's corners, a peek's CPU ticks, which line Qt prints for a
+# protocol error, find's score at scale 2, a terminal that binds an output just gone): those are
+# skipped there (on_gpu), with that reason, and nowhere else. They came out so in plain Arch guests
+# on virgl and on a passed-through RTX 5070 Ti alike (2026-11-06, finding 669), and pass on this
+# machine's own GPUs, Omarchy's boxes and plain ones, Hyprland 0.56 and 0.57.
 vgpu() {
-  local rn d
+  local rn d v
   rn=$(probe render_node 2>/dev/null) || return 1
   d=$(readlink -f "/sys/class/drm/${rn##*/}/device/driver" 2>/dev/null) || return 1
-  [[ ${d##*/} == virtio* ]] || return 1
-  echo "a virtual GPU (${d##*/}): a VM's, where this comes out otherwise"
+  if [[ ${d##*/} == virtio* ]]; then echo "a virtual GPU (${d##*/}): a VM's, where this comes out otherwise"; return 0; fi
+  v=$(systemd-detect-virt --vm 2>/dev/null) || return 1
+  echo "a VM ($v, its GPU ${d##*/}), where this comes out otherwise"
 }
 # on_gpu CHECK NAME ARGS...: `CHECK NAME ARGS...` (check, check_eq, check_match), skipped under vgpu, naming it.
 on_gpu() { local c=$1 n=$2 why; shift 2; if why=$(vgpu); then skip "$n" "$why"; else "$c" "$n" "$@"; fi; }
@@ -9677,7 +9680,7 @@ t_clean() {
   # #247: no name of the user's in a shot (a shell's greeting, a terminal's title): user@omabox, in
   # the passwd entry a shell reads too, and the user's uid.
   check_eq "...as user@omabox: id, hostname, USER, the passwd entry" "user|omabox|user|user:x:$(id -u):$(id -g)::/home/sbx" \
-    "$(ob run -b "$B" -- sh -c 'echo "$(id -un)|$(hostname)|$USER|$(getent passwd "$(id -u)" | cut -d: -f1-6)"' 2>&1)"
+    "$(ob run -b "$B" -- sh -c 'echo "$(id -un)|$(uname -n)|$USER|$(getent passwd "$(id -u)" | cut -d: -f1-6)"' 2>&1)"
   check_eq "...and in the shell's environment" "USER=user" \
     "$(ob run -b "$B" -- sh -c 'tr "\0" "\n" < "/proc/$(pgrep -x quickshell | head -n 1)/environ" | grep "^USER="' 2>&1)"
   check_match "up again with another --keep: refused, saying what it keeps" "--keep clock \\(it keeps nothing\\)" \
@@ -9765,7 +9768,9 @@ SH
   check_eq "approve: exit 0" 0 "$rc"
   check_match "...the bar's checkpoint is a plain baseline" $'(^|\n)baseline desk' "$out"
   # (#342: a checkpoint with --ignore regions counts as one with regions left out, as an unstable one)
-  local nleft; nleft=$( { grep -l '^ignore ' "$d/base/"*.point; ls "$d/base/"*.unstable 2>/dev/null | sed 's/\.unstable$/.point/'; } | sort -u | wc -l)
+  local nleft
+  # shellcheck disable=SC2012 # the names are the suite's own
+  nleft=$( { grep -l '^ignore ' "$d/base/"*.point; ls "$d/base/"*.unstable 2>/dev/null | sed 's/\.unstable$/.point/'; } | sort -u | wc -l)
   check_match "...the summary counts the checkpoints with regions left out, --ignore's too ($nleft)" "check: baseline of 4 checkpoints in [^ ]* \\($nleft with regions left out\\)" "$out"
   check_match "...each run's box start said" 'check: run 2 of 2: box up in [0-9]+ s' "$out"
   check_match "...a crop of the window: its tree only what touches it (the random label is outside)" $'(^|\n)baseline democrop \(' "$out"
@@ -11013,8 +11018,10 @@ t_failed_up() {
   local B=$P-fail
   local out
   # Disable the shell inside the box while up still expects it. A one-second timeout alone can pass
-  # on a fast machine, so it does not reliably exercise failed-start cleanup.
-  if out=$(env OMABOX_READY_TIMEOUT=2 "$CLI" up "$B" --env OMABOX_SHELL=0 2>&1); then
+  # on a fast machine, so it does not reliably exercise failed-start cleanup. A plain box has no shell
+  # to disable (#247): its --shell is one that never draws.
+  local never=(--env OMABOX_SHELL=0); omarchy_here || never=(--shell "sleep 999")
+  if out=$(env OMABOX_READY_TIMEOUT=2 "$CLI" up "$B" "${never[@]}" 2>&1); then
     no "up fails when the expected shell never starts" "$out"
   else
     ok "up fails when the expected shell never starts"
@@ -11035,7 +11042,7 @@ t_failed_up() {
   # A throwaway that fails the same way keeps its logs outside the box dir its own `down` removes, and
   # says where (finding 167). The suite's own state dir: never the user's failed-runs.
   local repo st=$TMP/state-fr kept; repo=$(tmp_repo fr)
-  out=$(cd "$repo" && exec env -u OMABOX XDG_STATE_HOME="$st" OMABOX_READY_TIMEOUT=2 "$CLI" run --env OMABOX_SHELL=0 -- true 2>&1) &&
+  out=$(cd "$repo" && exec env -u OMABOX XDG_STATE_HOME="$st" OMABOX_READY_TIMEOUT=2 "$CLI" run "${never[@]}" -- true 2>&1) &&
     no "a throwaway whose up fails fails" "$out"
   check_match "a failed throwaway says where its logs are kept" "logs are kept in $st/omabox/failed-runs/$P-fr-run[0-9]+-[0-9]{8}-[0-9]{6}$" "$out"
   kept=${out##*logs are kept in }
@@ -11433,7 +11440,7 @@ t_plain_clean() {
   check_match "...no pointer" '^hidden' "$(cat "$(ob path -b "$B")/pointer" 2>&1)"
   check_eq "...UTC, the clean locale" "UTC|$(probe clean_locale)" "$(ob run -b "$B" -- sh -c 'echo "$(date +%Z)|$LANG"' 2>&1)"
   check_eq "...as user@omabox: id, hostname, USER, the passwd entry, /etc/hostname" "user|omabox|user|user:x:$(id -u):$(id -g)::/home/sbx|omabox" \
-    "$(ob run -b "$B" -- sh -c 'echo "$(id -un)|$(hostname)|$USER|$(getent passwd "$(id -u)" | cut -d: -f1-6)|$(cat /etc/hostname 2>/dev/null || echo omabox)"' 2>&1)"
+    "$(ob run -b "$B" -- sh -c 'echo "$(id -un)|$(uname -n)|$USER|$(getent passwd "$(id -u)" | cut -d: -f1-6)|$(cat /etc/hostname 2>/dev/null || echo omabox)"' 2>&1)"
   ob check point -b "$B" -o "$TMP/plcl" bare >/dev/null 2>&1
   check_eq "check point looks for holes there, and the bare screen has none" "holes checked|" \
     "$(grep '^holes' "$TMP/plcl/bare.point" 2>&1)|$(grep '^hole ' "$TMP/plcl/bare.point" || true)"
@@ -11448,7 +11455,7 @@ t_plain_clean() {
   if ! up_ok "$K" --desktop plain --clean --keep wallpaper,identity --net connected; then no "up --desktop plain --clean --keep wallpaper,identity" "$UP_OUT"; return; fi
   ok "up --desktop plain --clean --keep wallpaper,identity"
   check_eq "...its own background, not the sentinel" "4279900966" "$(ob hyprctl -b "$K" -j getoption misc:background_color | jq .int)"
-  check_eq "...the user's names" "$(id -un)|$(uname -n)" "$(ob run -b "$K" -- sh -c 'echo "$(id -un)|$(hostname)"' 2>&1)"
+  check_eq "...the user's names" "$(id -un)|$(uname -n)" "$(ob run -b "$K" -- sh -c 'echo "$(id -un)|$(uname -n)"' 2>&1)"
   ob check point -b "$K" -o "$TMP/plcl" kept >/dev/null 2>&1
   check_eq "...so check point looks for no holes" "holes off: --keep wallpaper" "$(grep '^holes' "$TMP/plcl/kept.point" 2>&1)"
   check "down" ob down "$K"
@@ -14475,6 +14482,10 @@ t_cli_up() {
     python3 -c "$RPU_NORM" "$d/launch.sh" "$d/box.json" "$g" "$U" \
       "$r" R "$TMP" TMP "$d" BOXDIR "$XDG_RUNTIME_DIR" RT "${XDG_CACHE_HOME:-$HOME/.cache}" CACHE \
       "$ROOT" ROOT "$HOME" HOME "$resolv" RESOLV "${eph:+$eph,}" EPHEMERAL, "${pp:-}" PP > "$got" 2>&1
+    # (an NVIDIA box's monitors are its labwc's Wayland outputs, WAYLAND-1 on, where a headless
+    # box's are HEADLESS-2 on: the goldens' names, finding 77)
+    python3 -c 'import re, sys; p = sys.argv[1]; t = open(p).read()
+open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \"HEADLESS-%d\"" % (int(m[1]) + 1), t))' "$got"
     if [ "${OMABOX_GOLDEN:-}" = write ]; then
       mkdir -p "${g%/*}"; cp "$got" "$g"; ok "$1: golden written ($slug)"
     elif [ ! -f "$g" ]; then
@@ -14511,7 +14522,7 @@ t_cli_up() {
     cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "xwayland": true$' 'state~^\./pointer f$')
     cx_case "up --no-pointer --xwayland" up "$U" --no-pointer --xwayland --net isolated
   fi
-  cx_want=(rc=0 out= "$(rpu_said '1920x1080@60 \+ 800x600@60 \+ 1024x768@60')" 'state~^      "name": "HEADLESS-3",$' 'state~^      "name": "HEADLESS-4",$' 'state~^    "1024x768,below"$')
+  cx_want=(rc=0 out= "$(rpu_said '1920x1080@60 \+ 800x600@60 \+ 1024x768@60')" 'state~^      "name": "(HEADLESS-3|WAYLAND-2)",$' 'state~^      "name": "(HEADLESS-4|WAYLAND-3)",$' 'state~^    "1024x768,below"$')
   cx_case "up --monitor: two more, placed" up "$U" --no-shell --net isolated --monitor 800x600 --monitor 1024x768,below
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^\.config/rp d $' "state~^\\.config/omarchy/themes/rp-theme l $r/td/rp-theme\$")
   if omarchy_here; then
@@ -14670,8 +14681,14 @@ t_cli_box() {
   cx_want=(rc=0 'out~^\{"time":[0-9]+\.[0-9]+,"event":"[a-z0-9]+","data":".*"\}$' err=)
   cx_case "events --json -n 2" events -b "$B" --json -n 2
   cx_want=(rc=0 'out~^[0-9:.]+ [a-z0-9]+>>.*(monitor|workspace)' 'out!~^[0-9:.]+ [a-z0-9]+>>[^mw]*$' err=)
-  # (a plain box's last such events are its monitors' own, the words in their names, #247)
-  omarchy_here || cx_want=(rc=0 'out~^[0-9:.]+ [a-z0-9]+>>' 'out~(monitor|workspace)' 'out!~^[0-9:.]+ [^mw]*$' err=)
+  # (a plain box's last such events are its monitors' own, the words in their names, #247; on NVIDIA
+  # its screen is labwc's output, there before the events log, so none: a workspace there and back)
+  if ! omarchy_here; then
+    cx_want=(rc=0 'out~^[0-9:.]+ [a-z0-9]+>>' 'out~(monitor|workspace)' 'out!~^[0-9:.]+ [^mw]*$' err=)
+    ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '2' })" >/dev/null 2>&1
+    ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null 2>&1
+    until_ok 5 bash -c "'$CLI' events -b '$B' --grep workspace -n 1 | grep -q ." >/dev/null || true
+  fi
   cx_case "events --grep" events -b "$B" --grep 'monitor|workspace' -n 2
   cx_want=(rc=0 'out~^[0-9]+$' "err~^omabox: events: mark 'rp' at byte [0-9]+ \\(--since rp\\)\$")
   cx_case "events --mark" events -b "$B" --mark rp
@@ -16843,10 +16860,10 @@ monitors_on() {
   local L='[0-9]+,[0-9]+ [0-9]+x[0-9]+' out rc
   check_match "wait layer $BAR_NS: one on each monitor, each named" \
     "^satisfied: layer $BAR_NS after [0-9.]+s: 3 layers: at $L on $m0; at $L on $m1; at $L on $m2$" \
-    "$(ob wait -b "$B" layer $BAR_NS 2>&1)"
+    "$(ob wait -b "$B" layer "$BAR_NS" 2>&1)"
   check_match "...--monitor $m1 --json: that one, its monitor in detail" "^satisfied layer at $L on $m1$" \
-    "$(ob wait -b "$B" layer $BAR_NS --monitor "$m1" --json | jq -r '"\(.result) \(.condition) \(.detail)"')"
-  out=$(ob wait -b "$B" layer $BAR_NS --monitor HEADLESS-9 --timeout 300ms 2>&1); rc=$?
+    "$(ob wait -b "$B" layer "$BAR_NS" --monitor "$m1" --json | jq -r '"\(.result) \(.condition) \(.detail)"')"
+  out=$(ob wait -b "$B" layer "$BAR_NS" --monitor HEADLESS-9 --timeout 300ms 2>&1); rc=$?
   check_match "...--monitor of one the box does not have: 124, saying which it has" \
     "^124 unsatisfied: no layer $BAR_NS on HEADLESS-9 after [0-9.]+s \(no monitor HEADLESS-9 in the box \($m0, $m1, $m2\)\)$" "$rc $out"
   check_eq "-b NAME before monitor (#161)" "$ml" "$(ob -b "$B" monitor list --json 2>&1)"
@@ -16880,11 +16897,11 @@ monitors_on() {
   check "...an unplug the box's events saw" until_ok 3 bash -c "[ \$('$CLI' log -b '$B' events -n all | grep -c 'monitorremoved>>$m1') -gt $ev0 ]"
   check_match "...wait layer $BAR_NS --monitor $m1 --gone: its bar went with it, the box's monitors said (#316)" \
     "^satisfied: layer $BAR_NS on $m1 gone after [0-9.]+s: no monitor $m1 in the box \($m0, $m2\)$" \
-    "$(ob wait -b "$B" layer $BAR_NS --monitor "$m1" --gone 2>&1)"
+    "$(ob wait -b "$B" layer "$BAR_NS" --monitor "$m1" --gone 2>&1)"
   check_eq "monitor add again: the free name" "$m1" "$(ob monitor -b "$B" add 800x600,0,3000 2>/dev/null)"
   check_match "...wait layer $BAR_NS --monitor $m1: the shell put a bar on it (#316)" \
     "^satisfied: layer $BAR_NS on $m1 after [0-9.]+s: at $L on $m1$" \
-    "$(ob wait -b "$B" layer $BAR_NS --monitor "$m1" 2>&1)"
+    "$(ob wait -b "$B" layer "$BAR_NS" --monitor "$m1" 2>&1)"
   check_eq "...at X,Y" "800x600@60 0 3000" "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" '.[] | select(.name == $n) | "\(.mode) \(.x) \(.y)"')"
   check_eq "...the others' modes as they were" "$m0 1920x1080@60|$m2 2560x1440@60" \
     "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" 'map(select(.name != $n) | "\(.name) \(.mode)") | join("|")')"
@@ -20512,10 +20529,14 @@ t_cursor_hw_nvidia() {
   ob pointer -b "$B" move 600 400 >/dev/null 2>&1
   check "...hardware cursors forced on, two pointer moves: the box still answers" ob hyprctl -b "$B" monitors
   ob lua -b "$B" 'hl.config({cursor = {no_hardware_cursors = 2}})' >/dev/null 2>&1
-  ob keys -b "$B" Print >/dev/null 2>&1
-  check "Print: Omarchy's region selection (layer $sel)" ob wait -b "$B" --timeout 10s layer "$sel"
-  ob keys -b "$B" Escape >/dev/null 2>&1
-  check "...Escape: gone" ob wait -b "$B" --timeout 10s layer "$sel" --gone
+  if omarchy_here; then
+    ob keys -b "$B" Print >/dev/null 2>&1
+    check "Print: Omarchy's region selection (layer $sel)" ob wait -b "$B" --timeout 10s layer "$sel"
+    ob keys -b "$B" Escape >/dev/null 2>&1
+    check "...Escape: gone" ob wait -b "$B" --timeout 10s layer "$sel" --gone
+  else
+    skip "Print: Omarchy's region selection" "no Omarchy here: boxes are plain"
+  fi
   ob pointer -b "$B" move 320 240 >/dev/null 2>&1
   check "...and the box still answers (it died here)" ob hyprctl -b "$B" monitors
 }

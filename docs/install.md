@@ -98,8 +98,10 @@ guest's own kernel and security module (SELinux on Fedora), a real sudo, and a u
 VM's screen (autologin into Hyprland on tty1), as a desktop user is. It installs HEAD as a release
 tarball has it; `--suite` then runs the whole of `test/run.sh` there, from that desktop session.
 Boxes in the guest need GPU acceleration: virgl on a host NVIDIA render node (QEMU crashes on exit
-on an AMD one); its header says what else it needs. Logs and shots go to
-`~/.local/state/omabox/distros-vm/<distro>/`.
+on an AMD one); its header says what else it needs. With `OMABOX_VM_GPU=<PCI address>` (a card
+bound to vfio-pci) the guest gets that whole card instead and runs everything on its own driver
+(arch only, with NVIDIA's open driver): plain Arch on a real NVIDIA GPU. Logs and shots go to
+`~/.local/state/omabox/distros-vm/<distro>/` (`<distro>-gpu/` for the card's run).
 
 Logs go to `~/.local/state/omabox/distros/<image>.log`, the boxes' shots (and a failed box's logs)
 to `<image>/` beside it. A container gets what a box gets: the first render node and `/dev/net/tun`,
