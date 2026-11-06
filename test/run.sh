@@ -8985,7 +8985,8 @@ t_hypr_notify() {
 
 # #427: a box's Hyprland runs a Lua config, where `dispatch fullscreen 0` (the old dispatcher syntax)
 # is run as Lua and dispatches nothing. hyprctl fails it, --batch too (hyprctl's own 0), saying the
-# Lua for it; each line it gives does what the old words did. Lua dispatches pass as they were.
+# Lua for it; each line it gives does what the old words did. Lua dispatches pass as they were, but
+# for one Hyprland refuses, through hyprctl or lua (finding 686).
 t_hypr_old_dispatch() {
   local B=$P-hod out err rc l
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
@@ -9023,6 +9024,50 @@ t_hypr_old_dispatch() {
   out=$(ob hyprctl -b "$B" --batch 'dispatch hl.dsp.focus({ workspace = "1" }) ; dispatch hl.dsp.focus({ workspace = "3" })' 2>&1); rc=$?
   check_eq "...a --batch of them too" "0 ok ok" "$rc $(tr -s '\n' ' ' <<<"$out" | sed 's/ $//')"
   check_eq "...which did what they say" "false false 3" "$(win)"
+  # Finding 686: a Lua dispatch Hyprland refuses (no such window) was exit 0, hyprctl's `warning: …`
+  # or lua's {"ok":false,…} read by nothing; now non-zero, the answer as it came.
+  local nosuch='hl.dsp.focus({ window = "class:nosuch" })' okd='hl.dsp.focus({ workspace = "3" })'
+  out=$(ob hyprctl -b "$B" dispatch "$nosuch" 2>&1); rc=$?
+  check_match "a refused Lua dispatch: exit 1, Hyprland's warning as it came" '^1 warning: .*window not found$' "$rc $out"
+  out=$(ob hyprctl -b "$B" dispatch 'hl.dsp.window.fullscreen({ mode = "nosuch" })' 2>&1); rc=$?
+  check_match "...one Hyprland errors on: hyprctl's 7" '^7 error: .*invalid mode' "$rc $out"
+  out=$(ob hyprctl -b "$B" -q dispatch "$nosuch" 2>&1); rc=$?
+  check_eq "...with -q: exit 1, nothing printed" "1 " "$rc $out"
+  out=$(ob hyprctl -b "$B" dispatch "$okd" --quiet 2>&1); rc=$?
+  check_eq "...and one that works with -q: 0, nothing printed" "0 " "$rc $out"
+  out=$(ob hyprctl -b "$B" -q dispatch fullscreen 0 2>&1 >/dev/null); rc=$?
+  check_match "...an old one with -q: non-zero, its Lua said" '^[1-9]+ omabox: hyprctl: dispatch fullscreen 0 is the old' "$rc $out"
+  out=$(ob hyprctl -b "$B" --batch "dispatch $okd ; dispatch $nosuch" 2>&1); rc=$?
+  check_match "...in a --batch: exit 1 (hyprctl's 0), every answer" $'^1 ok\n\n\nwarning: .*window not found$' "$rc $out"
+  out=$(ob hyprctl -b "$B" --batch "dispatch $okd ; clients ; dispatch $nosuch" 2>&1); rc=$?
+  check_match "...after another command's answer: exit 1" '^1 ok.*Window .*warning: .*window not found$' "$rc $(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+  out=$(ob hyprctl -b "$B" --batch "dispatch $okd ; clients ; dispatch $okd" 2>/dev/null); rc=$?
+  check_match "...a batch whose dispatches worked, with another command between: 0" '^0 ok.*Window .* ok$' "$rc $(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+  out=$(ob lua -b "$B" "hl.dispatch($nosuch)" 2>&1); rc=$?
+  check_eq "lua: a refused hl.dispatch, exit 1, Hyprland's answer" \
+    '1 {"code":"not_found","error":"=[C]:-1: hl.focus: window not found","level":"warning","ok":false}' "$rc $out"
+  out=$(ob lua -b "$B" "return hl.dispatch($okd), hl.dispatch($nosuch)" 2>&1); rc=$?
+  check_match "...among others: exit 1, all printed" $'^1 \\{"ok":true,"pass_event":false\\}\n\\{"code":"not_found",' "$rc $out"
+  out=$(ob lua -b "$B" 'hl.dispatch(hl.dsp.window.fullscreen({ mode = "nosuch" }))' 2>&1); rc=$?
+  check_eq "...one given no dispatcher (Hyprland's words lost on lua's way): exit 1, said" \
+    "1 omabox: lua: hl.dispatch was refused: what it was given is not a dispatcher (an hl.dsp call given arguments it does not take is nil); omabox hyprctl dispatch 'EXPR' prints Hyprland's error" "$rc $out"
+  out=$(ob lua -b "$B" 'return { ok = false, error = "mine", level = "warning", code = "not_found" }' 2>&1); rc=$?
+  check_eq "...a table of the source's own in that shape: 0" '0 {"code":"not_found","error":"mine","level":"warning","ok":false}' "$rc $out"
+  out=$(ob lua -b "$B" "local r = hl.dispatch($nosuch) return r.ok, r.code" 2>&1); rc=$?
+  check_eq "...a refusal the source read: 0" $'0 false\nnot_found' "$rc $out"
+  out=$(ob lua -b "$B" "hl.dispatch($okd)" 2>&1); rc=$?
+  check_eq "...one that worked: 0" '0 {"ok":true,"pass_event":false}' "$rc $out"
+  ob lua -b "$B" 'error("boom")' >/dev/null 2>&1
+  # (read through hyprctl's repl: inside a lua call it is lua's own wrapper)
+  check_eq "...hl.dispatch Hyprland's own again after each, an error too" "C" "$(ob hyprctl -b "$B" repl 'return debug.getinfo(hl.dispatch, "S").what')"
+  # Hyprland reads a request 1023 bytes at a time until a read is short: one of 8 × 1023 waited until
+  # hyprctl gave up (5 s). A source that makes lua's request a multiple of 1023 (`return "x…"`, 9
+  # bytes and the x's) answers at once.
+  local pre k
+  pre=$(printf '/eval (function(...)\n%s\nend)([[\n\n]])' "$(cat "$ROOT/share/lua.lua")" | wc -c)
+  k=$(( (1023 - (pre + 9) % 1023) % 1023 ))
+  out=$(timeout 4 "$CLI" lua -b "$B" "return \"$(head -c "$k" /dev/zero | tr '\0' x)\"" 2>&1); rc=$?
+  check_eq "lua: a request a multiple of 1023 bytes long answers at once" "0 $k" "$rc ${#out}"
   ob down "$B" >/dev/null
 }
 

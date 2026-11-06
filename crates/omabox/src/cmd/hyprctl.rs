@@ -2,7 +2,7 @@
 //! held until it is known not to be hyprctl's own "didn't respond" (#166): a box gone, or one not
 //! answering a ping, is said in words; a failure of a box that answers is hyprctl's, as it came.
 //! A dispatch in the old syntax, which the box's Lua config dispatches nothing for, fails with the
-//! Lua for it (#427, finding 677).
+//! Lua for it (#427, finding 677); a Lua one Hyprland refused fails with its answer (finding 686).
 
 use crate::args::optarg;
 use crate::boxes::{box_alive, need_box};
@@ -53,7 +53,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         HYPR_LIMIT.as_bytes().to_vec(),
         b"hyprctl".to_vec(),
     ];
-    argv.extend(rest.iter().cloned());
+    // A dispatch's -q is omabox's to keep (#427): hyprctl's answer is read to know whether Hyprland
+    // refused it, and not printed. hyprctl takes its options anywhere before a `--`.
+    let opts = rest.iter().position(|a| a == b"--").unwrap_or(rest.len());
+    let is_q = |a: &Vec<u8>| a == b"-q" || a == b"--quiet";
+    let quiet =
+        rest[..opts].iter().any(is_q) && commands(rest).iter().any(|c| verb(c).0 == "dispatch");
+    argv.extend(
+        rest.iter()
+            .enumerate()
+            .filter(|(j, a)| !(quiet && *j < opts && is_q(a)))
+            .map(|(_, a)| a.clone()),
+    );
     let r = on_box(ctx, &argv, false, Out::Fd(w), ErrTo::Inherit).or_exit()?;
     ctx.box_gone_said |= r.gone_said;
     let mut rc = r.rc;
@@ -78,13 +89,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let _ = f.read_to_end(&mut held);
     let said_ok = shell::strip_nl(&held) == b"ok";
     let legacy = crate::exit::contains(&held, LEGACY_NOTE);
-    out(held)?;
+    let refused = !legacy && dispatch_refused(rest, &held);
+    if !quiet {
+        out(held)?;
+    }
     // The old dispatcher syntax, which a box's Lua config runs as Lua: nothing dispatched (#427). A
     // single dispatch is hyprctl's 7 already, a --batch's 0: non-zero either way, with the Lua for it.
     if legacy {
         for line in legacy_hint(&ctx.name, rest) {
             say(line);
         }
+        return code(if rc == 0 { 1 } else { rc });
+    }
+    // A Lua dispatch Hyprland refused (no such window): its answer, as it came, and non-zero where
+    // hyprctl said 0 (a warning, a batch's), as the script reading the status would go on.
+    if refused {
         return code(if rc == 0 { 1 } else { rc });
     }
     // A reload loads the box HOME's ~/.config/hypr modules again (#246): the config's errors said.
@@ -106,9 +125,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// Lua error its words made: `dispatch X` runs `hl.dispatch(X)` there (#427).
 const LEGACY_NOTE: &[u8] = b"Note: dispatch in lua is a shorthand for hl.dispatch(";
 
-/// The words of each dispatch in hyprctl's ARGS that is not Lua (`hl.…`): the one command, or each
-/// of --batch's `;`-separated ones. hyprctl's own options come before the command.
-fn old_dispatches(args: &[Vec<u8>]) -> Vec<String> {
+/// The commands of hyprctl's ARGS, each trimmed: the one, or --batch's, split on each `;` outside
+/// `[]` as Hyprland's dispatchBatch splits them (an empty one dropped, and the last when a `[` is
+/// left open). hyprctl's own options come before the command.
+fn commands(args: &[Vec<u8>]) -> Vec<String> {
     let (mut batch, mut words, mut i) = (false, Vec::new(), 0);
     while i < args.len() {
         let a = &args[i];
@@ -122,19 +142,82 @@ fn old_dispatches(args: &[Vec<u8>]) -> Vec<String> {
         i += 1;
     }
     let text = words.join(" ");
-    let cmds: Vec<&str> = if batch {
-        text.split(';').collect()
-    } else {
-        vec![&text]
-    };
-    cmds.iter()
+    if !batch {
+        return vec![text.trim().into()];
+    }
+    let (mut cmds, mut depth, mut start) = (Vec::new(), 0i32, 0);
+    for (i, c) in text.bytes().chain(*b";").enumerate() {
+        match c {
+            b'[' => depth += 1,
+            b']' => depth -= 1,
+            b';' if depth == 0 => {
+                if start < i {
+                    cmds.push(text[start..i].trim().into());
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    cmds
+}
+
+/// A command's verb and the words after it.
+fn verb(c: &str) -> (&str, &str) {
+    let (v, a) = c.split_once(char::is_whitespace).unwrap_or((c, ""));
+    (v, a.trim())
+}
+
+/// The words of each dispatch in hyprctl's ARGS that is not Lua (`hl.…`).
+fn old_dispatches(args: &[Vec<u8>]) -> Vec<String> {
+    commands(args)
+        .iter()
         .filter_map(|c| {
-            let c = c.trim();
-            let (verb, arg) = c.split_once(char::is_whitespace).unwrap_or((c, ""));
-            let arg = arg.trim();
-            (verb == "dispatch" && !arg.is_empty() && !arg.starts_with("hl.")).then(|| arg.into())
+            let (v, arg) = verb(c);
+            (v == "dispatch" && !arg.is_empty() && !arg.starts_with("hl.")).then(|| arg.into())
         })
         .collect()
+}
+
+/// Whether Hyprland refused a dispatch of hyprctl's ARGS, by its answer HELD (#427, finding 686). A
+/// Lua dispatch answers `ok`, or what went wrong: `warning: …` or `info: …` (hyprctl's exit 0) and
+/// `error: …` (7), a line each. A --batch's answers are joined by three newlines, which another
+/// command's answer (`clients`) may hold too: only the dispatches before the first other command
+/// and after the last are read. An empty answer is not judged.
+fn dispatch_refused(args: &[Vec<u8>], held: &[u8]) -> bool {
+    const SEP: &str = "\n\n\n";
+    let cmds = commands(args);
+    let held = String::from_utf8_lossy(held);
+    let mut rest = held.strip_suffix('\n').unwrap_or(&held);
+    if rest.is_empty() {
+        return false;
+    }
+    let disp = |i: usize| verb(&cmds[i]).0 == "dispatch";
+    let (mut lo, mut hi) = (0, cmds.len());
+    while lo < hi && disp(lo) {
+        let (one, after) = if lo + 1 == hi {
+            (rest, "")
+        } else {
+            match rest.split_once(SEP) {
+                Some(p) => p,
+                None => return false,
+            }
+        };
+        if one != "ok" {
+            return true;
+        }
+        (rest, lo) = (after, lo + 1);
+    }
+    while hi > lo + 1 && disp(hi - 1) {
+        let Some((before, one)) = rest.rsplit_once(SEP) else {
+            return false;
+        };
+        if one != "ok" {
+            return true;
+        }
+        (rest, hi) = (before, hi - 1);
+    }
+    false
 }
 
 /// V as a Lua string: None for one with a control character.
@@ -325,10 +408,66 @@ fn temp_file() -> Option<std::fs::File> {
 
 #[cfg(test)]
 mod tests {
-    use super::{legacy_hint, lua_for, notify_text, old_dispatches};
+    use super::{commands, dispatch_refused, legacy_hint, lua_for, notify_text, old_dispatches};
 
     fn w(v: &[&str]) -> Vec<Vec<u8>> {
         v.iter().map(|s| s.as_bytes().to_vec()).collect()
+    }
+
+    #[test]
+    fn batch_split() {
+        // As Hyprland's dispatchBatch: `;` inside [] kept, an empty command dropped, a blank one
+        // kept, the last dropped when a [ is left open.
+        assert_eq!(
+            commands(&w(&["--batch", "dispatch exec [a;b] foot ; ;; clients ;"])),
+            ["dispatch exec [a;b] foot", "", "clients"]
+        );
+        assert_eq!(
+            commands(&w(&["--batch", "clients ; dispatch exec [x"])),
+            ["clients"]
+        );
+        assert_eq!(commands(&w(&["-j", "dispatch", "x"])), ["dispatch x"]);
+    }
+
+    #[test]
+    fn refused_dispatch() {
+        let r = |a: &[&str], held: &str| dispatch_refused(&w(a), held.as_bytes());
+        let d = ["dispatch", "hl.dsp.focus({ window = 'class:x' })"];
+        // A Lua dispatch answers ok, or what went wrong.
+        assert!(!r(&d, "ok\n"));
+        assert!(r(&d, "warning: =[C]:-1: hl.focus: window not found\n"));
+        assert!(r(
+            &d,
+            "info: =[C]:-1: Nothing to focus to in direction left\n"
+        ));
+        assert!(r(&d, "error: a\nerror: b\n"));
+        // Nothing to judge: an empty answer; not a dispatch.
+        assert!(!r(&d, ""));
+        assert!(!r(&["clients"], "warning: a window's title\n"));
+        assert!(!r(&["getoption", "x"], "no such option\n"));
+        // A batch: each dispatch's answer, three newlines between.
+        fn b(c: &str) -> [&str; 2] {
+            ["--batch", c]
+        }
+        assert!(!r(&b("dispatch a ; dispatch b"), "ok\n\n\nok\n"));
+        assert!(r(&b("dispatch a ; dispatch b"), "ok\n\n\nwarning: x\n"));
+        assert!(r(&b("dispatch a ; dispatch b"), "warning: x\n\n\nok\n"));
+        // Another command's answer between, three newlines in it too: the ones on either side read.
+        let clients = "Window 1 -> A:\n\ttitle: A\n\n";
+        let ok3 = format!("ok\n\n\n{clients}\n\n\nok\n");
+        assert!(!r(&b("dispatch a ; clients ; dispatch b"), &ok3));
+        let last = format!("ok\n\n\n{clients}\n\n\nwarning: x\n");
+        assert!(r(&b("dispatch a ; clients ; dispatch b"), &last));
+        let first = format!("warning: x\n\n\n{clients}\n\n\nok\n");
+        assert!(r(&b("dispatch a ; clients ; dispatch b"), &first));
+        // A title that reads like a refusal, in another command's answer: not one.
+        let titled = "ok\n\n\nWindow 1 -> warning: x:\n\n\n\nwarning: x\n\n\nok\n";
+        assert!(!r(
+            &b("dispatch a ; clients ; clients ; dispatch b"),
+            titled
+        ));
+        // Fewer answers than dispatches (not Hyprland's shape): not judged.
+        assert!(!r(&b("dispatch a ; dispatch b"), "ok\n"));
     }
 
     #[test]

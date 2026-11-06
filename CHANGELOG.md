@@ -174,6 +174,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   for a batch, hyprctl's own status otherwise) and prints the `omabox lua 'hl.dispatch(…)'` line for
   it: fullscreen, togglefloating, setfloating, settiled, workspace, focuswindow, killactive,
   closewindow, movetoworkspace(silent) and exec are translated; the rest are pointed at `hl.dsp`.
+  A Lua dispatch Hyprland refuses (no such window), which also exited 0, is now exit 1 with its
+  answer as it came: `omabox hyprctl dispatch`'s `warning: …` (with `-q` too, and in a `--batch`)
+  and `omabox lua 'hl.dispatch(…)'`'s `{"ok":false,…}`, or a dispatch given no dispatcher, which
+  `lua` printed nothing for. And an `omabox lua` source whose request came to a multiple of 1023
+  bytes no longer stalls the box's Hyprland for 5 s and fails ("Hyprland IPC didn't respond in
+  time"), as Hyprland read it 1023 bytes at a time.
 
 ### Deprecated
 - **Omarchy 4.0 goes by date, not in 1.3** ([#312](https://github.com/diogochaves/omabox/issues/312)):

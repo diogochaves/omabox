@@ -841,7 +841,9 @@ hl.timer) that runs later is logged nowhere: catch it with pcall.
 @ hyprctl lua
 A box's Hyprland runs a Lua config: `hyprctl dispatch` takes a Lua dispatcher (dispatch
 'hl.dsp.window.close()'). The old syntax (dispatch fullscreen 0) dispatches nothing: hyprctl fails
-it (1 for a --batch, where hyprctl says 0) and prints the `omabox lua 'hl.dispatch(…)'` for it.
+it (1 for a --batch, where hyprctl says 0) and prints the `omabox lua 'hl.dispatch(…)'` for it. A
+Lua dispatch Hyprland refuses (no such window) is exit 1 too, its answer as it came: hyprctl's
+`warning: …`, lua's {"ok":false,…} (only what hl.dispatch returned, not a table of yours).
 @ log
 `log` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
 `run -d`'s (`run JOB`: that job's, by its pid as `jobs` and `run -d` say it or any pid of its

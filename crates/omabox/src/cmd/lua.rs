@@ -1,7 +1,8 @@
 //! `omabox lua [-b NAME] [--json] (EXPR | -)`: Lua in the box's Hyprland, and what it returns (issue
 //! #40, finding 106). share/lua.lua runs the source and raises its answer as an error on purpose, the
 //! one thing `hyprctl eval` hands back. One line per value: strings and numbers as they are, nil as
-//! nil, tables as JSON; --json prints strings quoted too.
+//! nil, tables as JSON; --json prints strings quoted too. A dispatch Hyprland refused is exit 1
+//! (#427, finding 686).
 
 use crate::args::{optarg, unknown_opt_hint};
 use crate::boxes::{box_alive, need_box};
@@ -78,7 +79,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         lvl.push(b'=');
     }
     let body = std::fs::read(crate::root().join("share/lua.lua")).unwrap_or_default();
-    let eval = cat!(
+    let eval = eval_padded(cat!(
         "(function(...)\n",
         shell::strip_nl(&body),
         "\nend)([",
@@ -88,7 +89,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         "\n]",
         lvl,
         "])"
-    );
+    ));
     let argv = vec![
         b"timeout".to_vec(),
         HYPR_LIMIT.as_bytes().to_vec(),
@@ -133,7 +134,28 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if kinds.contains(&b'f') {
         say("lua: a function, returned and not called");
     }
-    print_values(vals, as_json)
+    // A dispatch Hyprland refused (#427, finding 686): x its answer returned, `{"ok":false,…}`,
+    // printed as it came; z one that returned nothing, whose words this channel loses.
+    if kinds.contains(&b'z') {
+        say(
+            "lua: hl.dispatch was refused: what it was given is not a dispatcher (an hl.dsp call given arguments it does not take is nil); omabox hyprctl dispatch 'EXPR' prints Hyprland's error",
+        );
+    }
+    print_values(vals, as_json)?;
+    if kinds.iter().any(|k| matches!(k, b'x' | b'z')) {
+        return Err(Exit(1));
+    }
+    Ok(())
+}
+
+/// EVAL, a space longer when hyprctl's request for it, `/eval EVAL`, is a multiple of 1023 bytes:
+/// Hyprland reads a request 1023 bytes at a time until a read comes back short, so it waited on one
+/// that size until hyprctl gave up, 5 s later ("Hyprland IPC didn't respond in time"; finding 686).
+fn eval_padded(mut eval: Vec<u8>) -> Vec<u8> {
+    if (b"/eval ".len() + eval.len()) % 1023 == 0 {
+        eval.push(b' ');
+    }
+    eval
 }
 
 /// `jq -c '.[]'` (--json) or `jq -r '.[] | if type == "string" then . elif type == "null" then
@@ -170,4 +192,18 @@ fn print_values(vals: &[u8], as_json: bool) -> Res<()> {
     }
     let (rc, _) = child.wait().map(crate::exec::status).unwrap_or((1, None));
     crate::cmd::hyprctl::code(rc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eval_padded;
+
+    #[test]
+    fn eval_off_1023() {
+        // "/eval " and 1017 bytes is 1023: one space more; 8184 (8 × 1023) too; the rest as they are.
+        assert_eq!(eval_padded(vec![b'x'; 1017]).len(), 1018);
+        assert_eq!(eval_padded(vec![b'x'; 8178]).len(), 8179);
+        assert_eq!(eval_padded(vec![b'x'; 1016]).len(), 1016);
+        assert_eq!(eval_padded(vec![b'x'; 1018]).len(), 1018);
+    }
 }
