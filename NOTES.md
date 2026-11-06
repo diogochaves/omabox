@@ -12988,7 +12988,9 @@ from them.
     and solopasha/hyprland building only rawhide): its hyprwayland-scanner is the package
     `hyprwayland-scanner-devel`. `dnf install hyprwayland-scanner` resolves to it, but install.sh's
     check, `rpm -q --whatprovides hyprwayland-scanner`, does not, so every run said it was missing
-    and stopped there. **Now** Fedora's list (and doctor's) names hyprwayland-scanner-devel.
+    and stopped there. **Now** Fedora's list (and doctor's) names hyprwayland-scanner-devel. Then
+    omabox's aquamarine build failed there, CMake finding no `hwdata` module: Fedora's hwdata.pc is
+    in `hwdata-devel`, now on the list (the build then passed, and the boxes ran on it).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

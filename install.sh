@@ -41,7 +41,7 @@ PKGS_fedora=(
   passt
   python3
   gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel
-  git cmake ninja-build hyprwayland-scanner-devel gcc-c++ hyprutils-devel libseat-devel libdisplay-info-devel hwdata libinput-devel
+  git cmake ninja-build hyprwayland-scanner-devel gcc-c++ hyprutils-devel libseat-devel libdisplay-info-devel hwdata-devel libinput-devel
   libdrm-devel mesa-libgbm-devel mesa-libEGL-devel mesa-libGL-devel libglvnd-devel systemd-devel wayland-protocols-devel
 )
 PKGS_suse=(
