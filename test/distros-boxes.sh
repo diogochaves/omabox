@@ -20,12 +20,15 @@ step() {
   else echo "FAIL  $what (exit $?)"; fail=$((fail + 1)); return 1; fi
 }
 same() { [ "$2" = "$3" ] || { echo "      $1: want '$2', got '$3'"; return 1; }; }
-# keep BOX: its box.log and HOME logs, before down removes them.
+# keep BOX: its box.log, HOME logs and Hyprland's log, before down removes them, and its screen as
+# it is now (a step that failed: what was on it).
 keep() {
-  local d=${XDG_RUNTIME_DIR:?}/omabox/$1
-  mkdir -p "$out/kept-$1/home"
-  cp -P "$d/box.log" "$out/kept-$1/" 2>/dev/null
-  cp -P "$d"/home/*.log "$out/kept-$1/home/" 2>/dev/null
+  local d=${XDG_RUNTIME_DIR:?}/omabox/$1 k=$out/kept-$1
+  mkdir -p "$k/home"
+  cp -P "$d/box.log" "$k/" 2>/dev/null
+  cp -P "$d"/home/*.log "$k/home/" 2>/dev/null
+  cp -P "$d"/run/hypr/*/hyprland.log "$k/" 2>/dev/null
+  omabox shot -b "$1" -o "$k/screen-$(date +%s%N).png" >/dev/null 2>&1
   return 0
 }
 # gone BOX: down left nothing of it: no folder, no HOME, no process of this user but ours.
@@ -34,14 +37,14 @@ gone() {
   [ ! -e "$XDG_RUNTIME_DIR/omabox/$1" ] || { echo "      its folder is left"; return 1; }
   [ ! -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$1" ] || { echo "      its HOME is left"; return 1; }
   left=$(ps -u "$(id -u)" -o pid=,stat=,args= | awk -v me=$$ '$1 != me && $2 !~ /^Z/ && $3 !~ /^(ps|awk|bash|runuser)$/')
-  [ -z "$left" ] || { echo "      left running:"; echo "$left" | sed 's/^/        /'; return 1; }
+  [ -z "$left" ] || { echo "      left running:"; echo "        ${left//$'\n'/$'\n'        }"; return 1; }
 }
 
 echo "==> a plain box"
 B=c1
 if step "up --desktop plain" omabox up "$B" --desktop plain; then
   step "no config errors" same configerrors "" "$(omabox hyprctl -b "$B" configerrors | tr -d '[:space:]')" || keep "$B"
-  step "the box's Hyprland" omabox hyprctl -b "$B" version
+  step "the box's Hyprland" sh -c "omabox hyprctl -b $B version | head -n 1"
   step "run -d foot" omabox run -b "$B" -d --wait -- foot -a c1-term || keep "$B"
   step "wait window" omabox wait -b "$B" --timeout 10s window c1-term || keep "$B"
   step "windows lists it" sh -c "omabox windows -b $B | grep -q c1-term"

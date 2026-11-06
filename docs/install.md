@@ -10,13 +10,17 @@ What a machine needs, what `install.sh` does, updating and removing. Back to the
   2026-12-02, four weeks after 4.5 reached Omarchy's stable channel
   ([#312](https://github.com/diogochaves/omabox/issues/312)). `omarchy update` brings 4.5.
 - **Or another Linux with Hyprland 0.56+** ([#247](https://github.com/diogochaves/omabox/issues/247)):
-  Arch without Omarchy, Debian sid, openSUSE Tumbleweed (aimed at: checked in containers before a
-  release), Fedora (its packages named, untested: Hyprland only from COPR). There `install.sh`
+  Arch without Omarchy, Debian sid, openSUSE Tumbleweed (aimed at: `install.sh` and real boxes
+  checked in containers before a release, [below](#checking-other-distributions)), Fedora (its
+  packages named, untested: Hyprland only from COPR). There `install.sh`
   checks your distribution's packages under their own names and, if some are missing, prints the
   command that installs them (`sudo apt install …`, `sudo zypper install …`) and stops: run it, then
   `./install.sh` again. Without Omarchy, boxes are plain Hyprland (no Omarchy bar, theme or plugins),
-  `setup` links no bar widget, and `omabox doctor` says so as information, not failures. NixOS is
-  not supported yet: a box looks for its programs in `/usr/bin`.
+  `setup` links no bar widget, and `omabox doctor` says so as information, not failures. A plain
+  box's SUPER+RETURN opens your terminal (foot, alacritty, kitty or ghostty; `install.sh` installs
+  none). On Debian and openSUSE `nft` is in `/usr/sbin`, where omabox does not look yet, so the
+  `protect-ports` setting is not available there. NixOS is not supported yet: a box looks for its
+  programs in `/usr/bin`.
 - **A GPU render node** (`/dev/dri/renderD*`). Tested on AMD and Intel iGPUs, an NVIDIA RTX 4070
   SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
   the first usable node, or the GPU `omabox config gpu` names (`OMABOX_RENDER_NODE` overrides); an
@@ -60,6 +64,28 @@ already up keep the Hyprland config they started with: `omabox reload` gives one
 the new one, or `down` and `up`.
 
 Upgrading from 0.x, step by step: [omabox.app/install](https://omabox.app/install).
+
+## Checking other distributions
+
+`test/distros.sh` runs `install.sh` on Arch without Omarchy, Debian sid and openSUSE Tumbleweed (or
+the images you name), each in a throwaway rootless podman container, as a user of that container:
+each command `install.sh` stops with is run as the container's root, then `install.sh` again until it
+passes, then `omabox setup` and `omabox doctor`. With `--boxes` it then starts real boxes there:
+foot and DejaVu installed (a plain box's SUPER+RETURN terminal, and a font for it; `install.sh` names
+neither), a plain box with foot started, typed into and screenshotted, SUPER+RETURN, `down` leaving
+nothing, and, where the distribution packages Quickshell, a plain box whose shell is a small
+Quickshell bar.
+
+```bash
+test/distros.sh --boxes                                 # all three
+test/distros.sh --boxes docker.io/library/debian:sid    # one
+```
+
+Logs go to `~/.local/state/omabox/distros/<image>.log`, the boxes' shots (and a failed box's logs)
+to `<image>/` beside it. A container gets what a box gets: the first render node and `/dev/net/tun`,
+never a `/dev/dri/card*`, `/dev/input`, your runtime dir, the system bus or a display socket. Inside
+it seccomp is off and `/proc` unmasked (bwrap and pasta need them, as on a host), and it has
+`CAP_SYS_NICE` in its own user namespace (Debian's Hyprland carries it as a file capability).
 
 ## Remove
 
