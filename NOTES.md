@@ -12685,9 +12685,9 @@ from them.
     it as up once any layer is drawn (more than 1x1, as `wait layer` counts it), with the usual crash
     check, and skip Omarchy's bar, tray, cover and notification waits; one that draws nothing fails
     at OMABOX_READY_TIMEOUT naming the command. CMD must stay in the foreground: one that forks off
-    and exits (`caelestia shell -d`) is taken as exited. Once drawn, the Quickshell configs of this
-    start (`qs list --all -j`: its pid, or one after its mark) are kept in the box's runtime dir as
-    omabox-shell.configs (written from inside the box, as shell_adopt's pid: S7); a crash report
+    and exits (`caelestia shell -d`) is taken as exited (finding 659 lifts that). Once drawn, the
+    Quickshell configs of this start (`qs list --all -j`: its pid, or one after its mark) are kept
+    in the box's runtime dir as omabox-shell.configs (written from inside the box, as shell_adopt's pid: S7); a crash report
     of one of them is the shell's (shellnote's crash_reports, ls's `+N`, "has no shell (gone after N
     crash(es))"), and share/crash-dialog.sh closes its dialog as for Omarchy's. shell_adopt (finding
     248) is Omarchy's only. `--quickshell PATH` goes with `--shell` (refused on plain without it):
@@ -12889,6 +12889,41 @@ from them.
     none, one on no system folder, /usr/sbin's, /usr/bin's first, not executable, group- and
     world-writable, a folder), doctor.rs `programs_where_a_box_looks` (nft in /usr/sbin, a
     world-writable one, /usr/bin's), t_protect_ports (a stand-in /usr/bin/nft as before).
+659. **A plain box's shell started by a launcher that exits was taken as exited** (2026-11-06, #438).
+    `up --desktop plain --shell CMD` (finding 652) recorded CMD's pid and counted the shell gone when
+    it went, so a launcher that starts the shell and exits (`caelestia shell -d`, Quickshell's own
+    `qs -d`, any script with `qs -p DIR &`) failed `up` as "the shell exited while
+    starting", and `up` was ready on any drawn layer, not one of the shell's. A process group or a
+    session would not follow such a shell: Quickshell's `--daemonize` forks, calls setsid
+    (src/launch/command.cpp) and its first process exits once the child is up, so the shell is in
+    neither and its parent is the box's PID 1. A cgroup needs a delegated, writable cgroupfs (only
+    `--systemd` boxes have one); a subreaper needs a new helper in every box. **Now:** share/shell.sh
+    starts CMD under a slot: `OMABOX_SHELL_SLOT=<its pid>-<µs>` in CMD's environment (kept in the
+    runtime dir as omabox-shell.slot), which everything CMD starts inherits whatever it does with its
+    session or parent. A process's slot is read in the box from /proc/PID/environ (its environment as
+    it was exec'd; a zombie's reads empty), one grep over all of them, a Quickshell crash dialog
+    (`__QUICKSHELL_CRASH_DUMP_PID`) left out (shellnote's SLOT_PIDS_SH, run with a clean environment,
+    so the grep is never one). The shell runs while its recorded pid runs or anything of its slot is
+    left (shellnote's shell_live_pid: shell_state, ls, `pid shell`, `gdb shell`, restart-shell's hung
+    kill name that process; ready's shell_crash says "exited" only once both are gone); `up` and
+    `restart-shell` wait for a layer whose client pid (`layers -j`'s `pid`, the box's numbering) is
+    one of the slot's or the recorded pid (SHELL_LAYER_JQ; a box whose shell.sh wrote no slot: any
+    layer, as before), and the Quickshell configs noted for crash reports are those processes'
+    (SHELL_CONFIGS_JQ). restart-shell's shell.sh stops the old recorded pid's tree and each of the old
+    slot's processes' trees, what the slot starts meanwhile too, TERM once each, KILL after 5 s. A
+    crash dialog of the shell is told by its slot as well (crash-dialog.sh, shellnote's crash_dialog),
+    its crashed parent gone. Limits, in help: an app the shell starts itself inherits the slot and
+    counts as the shell (keeps it "running", stopped by restart-shell; one started through `hyprctl
+    dispatch exec` is Hyprland's child and does not), and so would a service the shell's environment
+    reached through `dbus-update-activation-environment`; a CMD that clears its environment (`env
+    -i`) is followed by its recorded pid only. Caelestia is not installed here: `qs -d -p BAR` and a
+    script (`qs -p BAR &`, exit 0) stand in. Tests: t_plain_shell (the launcher: up, its layer, `ls
+    --json` running, `pid shell --in-box` the qs it left, its config noted, restart-shell a new qs and
+    the old gone, its SIGSEGV's dialog closed and "gone after 1 crash(es)", killed after a restart:
+    gone; `qs -d`: up and restart-shell; a qs CMD starts out of its slot (`env -u OMABOX_SHELL_SLOT`)
+    with CMD a sleep: up times out naming CMD), shellnote's `plain_shell_is_its_slot` and
+    `slot_pids_as_sh` (a setsid daemon whose launcher left, another slot's, a dialog's), ready's
+    `plain_shell_layer_and_configs`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

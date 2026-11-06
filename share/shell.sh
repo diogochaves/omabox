@@ -14,33 +14,46 @@ if [ -S "$XDG_RUNTIME_DIR/systemd/private" ]; then
   systemctl --user reset-failed
 fi
 pidfile=$XDG_RUNTIME_DIR/omabox-shell.pid
-# `up --desktop plain --shell CMD` (#247): a shell of the user's, not Omarchy's. The last start's
-# process and all it started (`dms run` starts quickshell) are stopped, TERM then KILL after 5 s; then
-# CMD runs in this process, so its pid is the one recorded, with the mark and token files `up` and
-# `restart-shell` read as for Omarchy's. `up --quickshell`'s build is `qs` and `quickshell` on PATH.
+# `up --desktop plain --shell CMD` (#247): a shell of the user's, not Omarchy's. CMD runs in this
+# process, so its pid is the one recorded, with the mark and token files `up` and `restart-shell` read
+# as for Omarchy's, and under a slot of its own (#438): OMABOX_SHELL_SLOT in its environment, which
+# all it starts inherits, whatever it does with its session or its parent: a launcher that starts the
+# shell and exits (`caelestia shell -d`; `qs -d` calls setsid) leaves its shell in the slot, and omabox
+# counts the shell gone when nothing of the slot is left (the slot is in omabox-shell.slot). The last
+# start's slot and the tree of each of its processes (`dms run` starts quickshell) are stopped, TERM
+# then KILL after 5 s. `up --quickshell`'s build is `qs` and `quickshell` on PATH.
 if [ -n "${OMABOX_SHELL_CMD:-}" ]; then
+  slotfile=$XDG_RUNTIME_DIR/omabox-shell.slot
   tree() { local c; for c in $(pgrep -P "$1"); do tree "$c"; done; echo "$1"; }
+  # The processes of slot $1, crash dialogs and all (this script is none: Hyprland started it).
+  slot_pids() {
+    [[ $1 =~ ^[A-Za-z0-9._-]+$ ]] || return 0
+    grep -lsFxz -e "OMABOX_SHELL_SLOT=$1" /proc/[0-9]*/environ | sed -n 's|^/proc/\([0-9]*\)/environ$|\1|p'
+  }
   old=$(cat "$pidfile" 2>/dev/null) || old=""
-  alive=""
-  if [ -n "$old" ] && [ -d "/proc/$old" ]; then
-    pids=$(tree "$old")
-    # shellcheck disable=SC2086 # pid lists
-    kill $pids 2>/dev/null
-    deadline=$((SECONDS + 5))
-    while [ $SECONDS -lt $deadline ]; do
-      alive=""; for p in $pids; do [ -d "/proc/$p" ] && alive="$alive $p"; done
-      [ -n "$alive" ] || break
-      sleep 0.05
-    done
-    # shellcheck disable=SC2086 # pid lists
-    [ -z "$alive" ] || kill -KILL $alive 2>/dev/null
-  fi
-  rm -f "$pidfile"
+  oldslot=$(cat "$slotfile" 2>/dev/null) || oldslot=""
+  pids=""
+  [[ ! $old =~ ^[0-9]+$ ]] || [ ! -d "/proc/$old" ] || pids=$(tree "$old")
+  for p in $(slot_pids "$oldslot"); do pids="$pids $(tree "$p")"; done
+  # (Each asked once; what the slot started meanwhile too, a launcher stopped as it forked.)
+  alive=$pids sent=" "
+  deadline=$((SECONDS + 5))
+  while [ -n "$alive" ] && [ $SECONDS -lt $deadline ]; do
+    for p in $alive; do [[ $sent == *" $p "* ]] || { kill "$p" 2>/dev/null; sent="$sent$p "; }; done
+    sleep 0.05
+    alive=""; for p in $pids $(slot_pids "$oldslot"); do [ -d "/proc/$p" ] && alive="$alive $p"; done
+  done
+  # shellcheck disable=SC2086 # pid lists
+  [ -z "$alive" ] || kill -KILL $alive 2>/dev/null
+  rm -f "$pidfile" "$slotfile"
   : > "$HOME/shell.log"
   sh -c 'echo $$' > "$XDG_RUNTIME_DIR/omabox-shell.mark"
   echo "${1:-}" > "$XDG_RUNTIME_DIR/omabox-shell.start"
+  # (This process's pid and the time in µs: no later start's, and no old one's whose pid came again.)
+  slot=$$-${EPOCHREALTIME//[!0-9]/}
+  echo "$slot" > "$slotfile"
   echo $$ > "$pidfile"
-  exec sh -c "$OMABOX_SHELL_CMD" >> "$HOME/shell.log" 2>&1
+  OMABOX_SHELL_SLOT=$slot exec sh -c "$OMABOX_SHELL_CMD" >> "$HOME/shell.log" 2>&1
 fi
 # The Omarchy shell only: its recorded pid and any other instance of its config, which the new one's
 # `-n` would meet ("An instance of this configuration is already running", finding 248). A quickshell

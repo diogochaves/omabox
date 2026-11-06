@@ -11438,6 +11438,62 @@ QML
   check_eq "--quickshell: CMD's qs is the build's link" "$qsb" "$(ob run -b "$B" -- sh -c 'readlink "$(command -v qs)"')"
   check "...its bar drawn" ob wait -b "$B" --timeout 5s layer t-plainbar
   ob down "$B" >/dev/null
+  # #438: a launcher that starts the shell and exits (caelestia's `shell -d`; caelestia is not
+  # installed here, so a script stands in: `qs -p BAR &`, exit 0). The shell is all CMD started
+  # (shell.sh's slot): up keeps it and counts its layer, pid shell names it, restart-shell stops all
+  # of it and runs the launcher again, its crash is the shell's, its death after the launcher left is
+  # said; `qs -d` (setsid, the launcher's own parent gone) the same; a layer of another process is none.
+  local lp lp2 la=$bar/launch
+  printf '#!/bin/sh\nqs -p "$1" >/dev/null 2>&1 &\nexit 0\n' > "$la"; chmod +x "$la"
+  bar_pid() { ob hyprctl -b "$1" -j layers | jq -r '[.. | objects | select(.namespace? == "t-plainbar") | .pid] | join(" ")'; }
+  plain_shell_is() { [ "$("$CLI" ls --json | jq -r --arg b "$1" '.[] | select(.name == $b) | .shell_state')" = "$2" ]; }
+  B=$P-pshell7
+  up_ok "$B" --desktop plain --net isolated --ro-bind "$bar" --shell "$la $bar" || { no "up --shell LAUNCHER (qs -p BAR &; exit 0)" "$UP_OUT"; return; }
+  ok "up --shell LAUNCHER (qs -p BAR &; exit 0): up, not taken as exited"
+  D=$(ob path -b "$B")
+  old=$(cat "$D/run/omabox-shell.pid")
+  check_fails "...the launcher gone (pid $old)" ob run -b "$B" -- test -d "/proc/$old"
+  lp=$(bar_pid "$B")
+  check_match "...its bar drawn by the qs it left" '^[0-9]+$' "$lp"
+  check_eq "...ls --json: the shell running" running "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .shell_state')"
+  check_eq "...pid shell --in-box: that qs" "$lp" "$(ob pid -b "$B" shell --in-box 2>&1)"
+  check_eq "...its config noted as the shell's" "$bar" "$(cat "$D/run/omabox-shell.configs")"
+  out=$(ob restart-shell -b "$B" 2>&1); rc=$?
+  check_eq "restart-shell: exit 0, restarted" "0 yes" "$rc $(grep -q "shell restarted in box '$B'" <<<"$out" && echo yes)"
+  lp2=$(bar_pid "$B")
+  check_match "...one bar, a new qs (was $lp, now $lp2)" '^[0-9]+$' "$lp2"
+  check "...not the old one" test "$lp2" != "$lp"
+  check_fails "...the old qs stopped" ob run -b "$B" -- test -d "/proc/$lp"
+  shell_segv "$B" "$lp2"
+  check "its crash: the dialog closed as the shell's" until_ok 10 grep -q "closed the shell's crash dialog" "$D/home/shell.log"
+  check_match "...the next command says the shell is gone, after its crash" \
+    "warning: box '$B' has no shell \(gone after 1 crash\(es\);" "$(ob windows -b "$B" 2>&1 >/dev/null)"
+  check "restart-shell brings it back" ob restart-shell -b "$B"
+  lp=$(bar_pid "$B")
+  check "...killed (no crash)" ob run -b "$B" -- kill "$lp"
+  check "...ls --json: gone once nothing of it is left" until_ok 5 plain_shell_is "$B" gone
+  check_match "...the next command says so" "warning: box '$B' has no shell \(gone after 1 crash\(es\);" "$(ob windows -b "$B" 2>&1 >/dev/null)"
+  ob down "$B" >/dev/null
+  check_fails "...no qs of it left on the host" pgrep -f "qs -p $bar"
+  B=$P-pshell8
+  up_ok "$B" --desktop plain --net isolated --ro-bind "$bar" --shell "qs -d -p $bar" || { no "up --shell 'qs -d -p BAR'" "$UP_OUT"; return; }
+  ok "up --shell 'qs -d -p BAR' (it daemonises: setsid, its first process gone)"
+  D=$(ob path -b "$B")
+  old=$(cat "$D/run/omabox-shell.pid")
+  lp=$(bar_pid "$B")
+  check "...its bar drawn by another process than CMD's ($old, $lp)" test -n "$lp" -a "$lp" != "$old"
+  check_eq "...the shell running" running "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .shell_state')"
+  check "restart-shell" ob restart-shell -b "$B"
+  lp2=$(bar_pid "$B")
+  check "...one bar, a new qs ($lp, now $lp2)" test -n "$lp2" -a "$lp2" != "$lp" -a "${lp2#* }" = "$lp2"
+  ob down "$B" >/dev/null
+  # A layer up, but not the shell's: a qs CMD starts out of its slot (its environment cleared of it),
+  # CMD itself a sleep: up waits for the shell's own, and times out naming it.
+  out=$(OMABOX_READY_TIMEOUT=4s ob up "$P-pshell9" --desktop plain --net isolated --ro-bind "$bar" \
+    --shell "env -u OMABOX_SHELL_SLOT qs -p $bar & exec sleep 300" 2>&1); rc=$?
+  check_eq "a layer of a process out of the shell's slot: up fails" 1 "$rc"
+  check_match "...the shell drew none of its own" "the shell \(env -u OMABOX_SHELL_SLOT qs -p .* & exec sleep 300\) drew no layer in 4s" "$out"
+  ob down "$P-pshell9" >/dev/null 2>&1
 }
 
 # #247 (finding 652): DankMaterialShell (`dms run`, Go + Quickshell) as a plain box's shell, when it

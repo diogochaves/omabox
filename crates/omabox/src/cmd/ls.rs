@@ -82,11 +82,11 @@ enum Kind {
 }
 
 fn ask_one(c: &Ctx) -> (Vec<u8>, Option<Kind>) {
-    use crate::shellnote::{shell_hung, shell_pid, shell_running};
+    use crate::shellnote::{shell_hung, shell_live_pid};
     let k = crate::exit::muted(|| {
         if crate::hypr::hypr_answers_in(c, "1").unwrap_or(false) {
             let hung = meta(&c.d, "shell").0 == b"true"
-                && shell_pid(c).is_some_and(|p| shell_running(c, &p) && shell_hung(c, &p));
+                && shell_live_pid(c).is_some_and(|p| shell_hung(c, &p));
             hung.then_some(Kind::Shell)
         } else if let Some(w) = crate::hypr::hypr_gone(c) {
             Some(Kind::Gone(w))

@@ -1002,10 +1002,12 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   sentinel is the Hyprland background colour (`#ff00ff`), not a wallpaper, and `check run --desktop
   plain` checks on such boxes.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
-  DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD stays in the foreground (not `-d`): `up`
-  waits until it draws a layer, `omabox log shell` is its output, `restart-shell` stops its whole
-  tree and starts it again, a crash is said as the shell's. `--quickshell PATH` makes the build
-  CMD's `qs`. `dnd`, `dock` and `plugin` stay refused (they ask Omarchy's shell).
+  DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
+  and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
+  left. `up` waits until one of its processes draws a layer, `omabox log shell` is its output,
+  `restart-shell` stops all of it and starts CMD again, a crash is said as the shell's. An app the
+  shell launches itself counts as the shell. `--quickshell PATH` makes the build CMD's `qs`. `dnd`,
+  `dock` and `plugin` stay refused (they ask Omarchy's shell).
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
 - Logs: `omabox log` prints them (below); `omabox path --logs` says where each file is.

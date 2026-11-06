@@ -265,11 +265,13 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
   plugin commands on the box. Without --desktop: `omabox config desktop`'s, else omarchy where Omarchy
   is installed and plain where it is not (up says so; doctor and setup test the same); --omarchy DIR
   is an Omarchy box. ls says a plain box's desktop (and shell) under its line.
---shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`), run by sh in the
-  session, in the foreground (one that forks off and exits is taken as exited): up waits until it
-  draws a layer (OMABOX_READY_TIMEOUT), says when it exits or crashes on the way; log shell is its
-  output, restart-shell stops its whole tree and starts it again, a Quickshell crash of its config is
-  the shell's. --quickshell PATH: the build is CMD's `qs` and `quickshell` (on the session's PATH).
+--shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`, `caelestia shell
+  -d`), run by sh in the session; the shell is all CMD starts (#438): a launcher may start it and
+  exit, and the shell is gone once nothing of it is left. up waits until one of its processes draws
+  a layer (OMABOX_READY_TIMEOUT), says when it exits or crashes on the way; log shell is its output,
+  restart-shell stops all of it and starts CMD again, a Quickshell crash of its config is the
+  shell's. An app the shell starts itself counts as the shell (not one through `hyprctl dispatch
+  exec`). --quickshell PATH: the build is CMD's `qs` and `quickshell` (on the session's PATH).
 @ up run
 --stock: Omarchy as a new user sees it, for a showcase or a shot for someone else: Omarchy's bar
 (--stock-bar) on tokyo-night (or --theme) with the theme's own wallpaper (never yours for it),

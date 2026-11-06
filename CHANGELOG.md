@@ -44,6 +44,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   before that show your name or host name will differ once.
 
 ### Fixed
+- **A plain box's shell may be a launcher that starts it and exits** ([#438](https://github.com/diogochaves/omabox/issues/438)):
+  `up --desktop plain --shell 'caelestia shell -d'` (or `qs -d`, or any script that starts the shell
+  in the background) was taken as the shell exiting. The shell is now all its command starts, gone
+  once nothing of it is left: `up` waits for a layer of the shell's own (not any process's),
+  `restart-shell` stops all of it, and `pid shell` and `gdb shell` find the process it left.
 - **A plain box keeps the config it started with across an omabox update**: its desktop
   (`plain.lua`) is copied into the box as the rest of its config is, and `omabox reload` refreshes
   both, so an update no longer mixes an old copy with a new file.

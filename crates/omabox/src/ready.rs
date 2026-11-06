@@ -26,13 +26,18 @@ const INTRO_COVER_JQ: &str = r#"first(.[].levels["3"][]? | select(.namespace == 
 /// shell_adopt: the pid of the shell another start brought up (finding 248).
 const ADOPT_JQ: &str = "first(.[].pid) // empty";
 /// A layer drawn (not a hidden 1x1 nor an empty one, as LAYER_AT_JQ has it) in `hyprctl -j layers`'
-/// answer, whatever its namespace: a plain box's shell (`up --shell CMD`, #247) is up. Its namespace.
-const ANY_LAYER_JQ: &str = r#"first(.. | objects | select(has("namespace") and .w > 1 and .h > 1)
+/// answer, whatever its namespace, of one of the shell's processes ($pids, the box's numbering:
+/// Hyprland's `pid` is its client's): a plain box's shell (`up --shell CMD`, #247, #438) is up. $pids
+/// null (a shell.sh that wrote no slot): any process's. Its namespace.
+const SHELL_LAYER_JQ: &str = r#"first(.. | objects | select(has("namespace") and .w > 1 and .h > 1
+      and ($pids == null or (.pid as $p | any($pids[]; . == $p))))
     | .namespace) // empty"#;
-/// `qs list --all -j`'s instances of this start of the shell: its own pid ($shell, shell.sh's, which
-/// CMD's exec keeps) or one started after its mark ($mark; both the box's numbering). The folders of
-/// their configs, one a line (#247: a plain box's shell's, as its crash reports name them).
-const SHELL_CONFIGS_JQ: &str = r#".[]? | select((.pid // 0) > $mark or .pid == $shell)
+/// `qs list --all -j`'s instances of this start of the shell: one of its processes ($pids, #438),
+/// or, with no slot ($pids null), its own pid ($shell, shell.sh's, which CMD's exec keeps) or one
+/// started after its mark ($mark; all the box's numbering). The folders of their configs, one a line
+/// (#247: a plain box's shell's, as its crash reports name them).
+const SHELL_CONFIGS_JQ: &str = r#".[]? | select(if $pids != null then (.pid as $p | any($pids[]; . == $p))
+      else (.pid // 0) > $mark or .pid == $shell end)
     | .config_path // empty | sub("/[^/]*$"; "")"#;
 /// shell_adopt's write of that pid where shell.sh keeps it, in the box.
 const ADOPT_SH: &str =
@@ -842,13 +847,17 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     if !want_shell {
         return Ok(());
     }
-    // A plain box's shell (`up --shell CMD`, #247): up once it has drawn a layer, whatever its
-    // namespace; Omarchy's bar, tray, cover and notification waits are not its.
+    // A plain box's shell (`up --shell CMD`, #247): up once one of its processes (#438: CMD's slot,
+    // what a launcher left) has drawn a layer, whatever its namespace; Omarchy's bar, tray, cover and
+    // notification waits are not its.
     let cmd = meta(&ctx.d, "shell_cmd").0;
     if !cmd.is_empty() {
         loop {
             let l = layers(ctx, ErrTo::Null);
-            if !Args::new(&["-r", ANY_LAYER_JQ])
+            let pids = pids_json(crate::shellnote::shell_pids_with(&RealBox, ctx));
+            if !Args::new(&["-r", "--argjson", "pids"])
+                .arg(&pids)
+                .arg(SHELL_LAYER_JQ)
                 .run(Some(&l.out), jq::Err::Null)
                 .text()
                 .is_empty()
@@ -1054,7 +1063,13 @@ fn shell_crash_with<S: BoxSys + ?Sized>(
     if let Some(c) = shell_crash_report(ctx, &r.shell_before) {
         return Some(c);
     }
-    let gone = || pid.is_some_and(|p| !p.is_empty() && !shell_running_with(sys, ctx, p));
+    // (A plain box's shell, #438: gone once nothing of its slot is left either, CMD a launcher that
+    // started it and left.)
+    let gone = || {
+        pid.is_some_and(|p| !p.is_empty() && !shell_running_with(sys, ctx, p))
+            && crate::shellnote::shell_slot(ctx)
+                .is_none_or(|s| crate::shellnote::shell_slot_pids_with(sys, ctx, &s).is_empty())
+    };
     if !shell_crash_logged(ctx) && !gone() {
         return None;
     }
@@ -1184,12 +1199,14 @@ fn shell_configs_note(ctx: &Ctx) {
         .filter(|m| shell::is_num(m))
         .unwrap_or_else(|| b"0".to_vec());
     let pid = shell_pid(ctx).unwrap_or_else(|| b"0".to_vec());
+    let pids = pids_json(crate::shellnote::shell_pids_with(&RealBox, ctx));
     let qs = crate::shellnote::box_qs(ctx);
     let l = RealBox.on_box(ctx, &w(&[&qs, b"list", b"--all", b"-j"]));
     let dirs = if l.rc == 0 {
         let j = Args::new(&["-r", "--argjson", "mark"])
             .arg(&mark)
             .kv("--argjson", "shell", &pid)
+            .kv("--argjson", "pids", &pids)
             .arg(SHELL_CONFIGS_JQ)
             .run(Some(&l.out), jq::Err::Null);
         if j.ok() { j.out } else { Vec::new() }
@@ -1200,6 +1217,22 @@ fn shell_configs_note(ctx: &Ctx) {
         ctx,
         &w(&[b"sh", b"-c", CONFIGS_SH.as_bytes(), b"sh", &dirs]),
     );
+}
+
+/// A plain box's shell's processes (shellnote's shell_pids) as jq's `$pids`: `[1,2]`, or `null`
+/// with no slot.
+fn pids_json(pids: Option<Vec<Vec<u8>>>) -> Vec<u8> {
+    match pids {
+        None => b"null".to_vec(),
+        Some(v) => {
+            let n: Vec<String> = v
+                .iter()
+                .filter_map(|p| shell::dec(p))
+                .map(|n| n.to_string())
+                .collect();
+            format!("[{}]", n.join(",")).into_bytes()
+        }
+    }
 }
 
 /// shell_adopt (finding 248): this start's shell exited at once as a duplicate of one that something
@@ -1534,40 +1567,55 @@ mod tests {
 
     use std::sync::Mutex;
 
-    // #247: a plain box's shell is up once any layer is drawn (not a hidden 1x1 one, nor an empty
-    // one), and its Quickshell configs are its own pid's and those started after its mark.
+    // #247, #438: a plain box's shell is up once a layer of one of its processes is drawn (not a
+    // hidden 1x1 one, nor an empty one; with no slot known, anyone's), and its Quickshell configs are
+    // its processes' (with no slot: its own pid's and those started after its mark).
     #[test]
     fn plain_shell_layer_and_configs() {
-        let any = |l: &str| {
+        let drawn = |l: &str, pids: &str| {
             String::from_utf8(
-                Args::new(&["-r", ANY_LAYER_JQ])
+                Args::new(&["-r", "--argjson", "pids", pids, SHELL_LAYER_JQ])
                     .run(Some(l.as_bytes()), jq::Err::Inherit)
                     .text(),
             )
             .unwrap()
         };
         assert_eq!(
-            any(r#"{"HEADLESS-2":{"levels":{"0":[],"3":[]}}}"#),
+            drawn(r#"{"HEADLESS-2":{"levels":{"0":[],"3":[]}}}"#, "null"),
             "",
             "no layer"
         );
         assert_eq!(
-            any(
-                r#"{"HEADLESS-2":{"levels":{"3":[{"namespace":"menu","x":0,"y":0,"w":1,"h":1},{"namespace":"osd","w":0,"h":0}]}}}"#
+            drawn(
+                r#"{"HEADLESS-2":{"levels":{"3":[{"namespace":"menu","x":0,"y":0,"w":1,"h":1,"pid":40},{"namespace":"osd","w":0,"h":0,"pid":40}]}}}"#,
+                "[40]"
             ),
             "",
             "...a hidden 1x1 one and an empty one are none"
         );
+        let bar = r#"{"HEADLESS-2":{"levels":{"2":[{"namespace":"dms:bar","x":0,"y":0,"w":1920,"h":64,"pid":107}]}}}"#;
         assert_eq!(
-            any(
-                r#"{"HEADLESS-2":{"levels":{"2":[{"namespace":"dms:bar","x":0,"y":0,"w":1920,"h":64}]}}}"#
-            ),
+            drawn(bar, "[79,107]"),
             "dms:bar",
-            "...a drawn one is"
+            "...a drawn one of the shell's is"
         );
-        let cfgs = |l: &str, mark: &str, shell: &str| {
+        assert_eq!(
+            drawn(bar, "[79]"),
+            "",
+            "...one of another process is not the shell's (#438)"
+        );
+        assert_eq!(drawn(bar, "[]"), "", "...nor with none of the shell's left");
+        assert_eq!(drawn(bar, "null"), "dms:bar", "...no slot known: anyone's");
+        assert_eq!(pids_json(None), b"null");
+        assert_eq!(
+            pids_json(Some(vec![b"79".to_vec(), b"0107".to_vec(), b"x".to_vec()])),
+            b"[79,107]",
+            "pids_json: numbers, as JSON has them"
+        );
+        let cfgs = |l: &str, mark: &str, shell: &str, pids: &str| {
             String::from_utf8(
                 Args::new(&["-r", "--argjson", "mark", mark, "--argjson", "shell", shell])
+                    .kv("--argjson", "pids", pids)
                     .arg(SHELL_CONFIGS_JQ)
                     .run(Some(l.as_bytes()), jq::Err::Inherit)
                     .out,
@@ -1577,11 +1625,16 @@ mod tests {
         let list = r#"[{"config_path":"/a/bar/shell.qml","pid":79},{"config_path":"/old/x.qml","pid":50},
             {"config_path":"/run/user/1000/dms/84f/shell.qml","pid":107},{"pid":120}]"#;
         assert_eq!(
-            cfgs(list, "86", "79"),
+            cfgs(list, "86", "79", "null"),
             "/a/bar\n/run/user/1000/dms/84f\n",
-            "the shell's own pid (below its mark) and what came after the mark; not an older one"
+            "no slot: the shell's own pid (below its mark) and what came after the mark; not an older one"
         );
-        assert_eq!(cfgs("[]", "86", "79"), "", "...none running: none");
+        assert_eq!(cfgs("[]", "86", "79", "null"), "", "...none running: none");
+        assert_eq!(
+            cfgs(list, "86", "79", "[107,120]"),
+            "/run/user/1000/dms/84f\n",
+            "a slot (#438): its processes' only (CMD a launcher gone, a qs of the user's after the mark not)"
+        );
     }
 
     // wait layer (finding 146; t_unit_wait's): a hidden menu mapped at 1x1 is not the menu.

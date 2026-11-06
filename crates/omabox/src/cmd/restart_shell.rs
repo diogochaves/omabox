@@ -13,7 +13,7 @@ use crate::exit::{Ctx, Exit, Res, say};
 use crate::ready::{Ready, shell_watch, wait_ready};
 use crate::select::select_box;
 use crate::shell;
-use crate::shellnote::{shell_crash_dirs, shell_hung, shell_running, shell_seen};
+use crate::shellnote::{shell_crash_dirs, shell_hung, shell_live_pid, shell_seen};
 
 /// What kills a hung shell, in the box's pid namespace: its launcher first (it relaunches one killed
 /// by a signal; stopped, it ends at its next turn), then the shell.
@@ -37,8 +37,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         .map(|v| shell::strip_nl(&v))
         .unwrap_or_default();
     // A hung shell (#209) is killed here, as a dead one would be gone: shell.sh asks it to quit first
-    // and would wait 5 s on it, then 5 s more.
-    if shell::is_num(&old) && shell_running(ctx, &old) && shell_hung(ctx, &old) {
+    // and would wait 5 s on it, then 5 s more. (Its process that runs: a plain box's launcher may
+    // have left, its shell running on, #438.)
+    if let Some(live) = shell_live_pid(ctx).filter(|p| shell_hung(ctx, p)) {
         // In the box's pid namespace, never on_box's (user and mount only): there /proc is the box's,
         // but a kill takes the pid as the host's, and would signal whatever host process has that
         // number.
@@ -55,7 +56,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 b"-c",
                 KILL_SH.as_bytes(),
                 b"sh",
-                &old,
+                &live,
             ]
             .iter()
             .map(|w| w.to_vec())
@@ -66,7 +67,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "box '",
             n,
             "': its shell (pid ",
-            old,
+            live,
             ") did not answer (hung): killed"
         ));
     }
