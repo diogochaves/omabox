@@ -168,7 +168,7 @@ cleanup() {
   rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox"/.{lock,down,expired}-"$P"-* 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
-  rm -rf "$TMP"
+  rm -rf "$TMP" "$TMP.bar"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -187,6 +187,49 @@ up_ok() { UP_OUT=$(ob up "$@" 2>&1); }
 # checks differ between the two, so their 4.0 branch runs on a 4.5 host too.
 omarchy45() { grep -qs centerBegin "${1:-${OMABOX_TEST_OMARCHY:-/usr/share/omarchy}}/shell/plugins/bar/Bar.qml"; }
 OM=(); [ -z "${OMABOX_TEST_OMARCHY:-}" ] || OM=(--omarchy "$OMABOX_TEST_OMARCHY")
+# omarchy_here (#247): the Omarchy under test is there, told as up tells it (install::omarchy_at: the
+# Hyprland bootstrap a box's Omarchy config loads), so boxes can be Omarchy's. Without it every box is
+# plain: the tests of what only Omarchy has are skipped (OMARCHY_ONLY, at the runner) and so are the
+# Omarchy checks of the others (`omarchy_here || skip ...`). OMABOX_TEST_OMARCHY's tree counts as there.
+omarchy_here() { [ -f "${OMABOX_TEST_OMARCHY:-/usr/share/omarchy}/default/hypr/bootstrap.lua" ]; }
+NO_OMARCHY="no Omarchy here: boxes are plain"
+# PSHELL: up's options that give a box a shell where boxes are plain (#247): a Quickshell bar on each
+# screen, as Omarchy's is, run by --shell: for the tests of a box's shell, its process, its restart and
+# its bars. None where Omarchy is (an Omarchy box runs Omarchy's shell).
+PSHELL=()
+if ! omarchy_here; then
+  # (beside $TMP, not in it: a box that mounts it does not have $TMP, which tests count on)
+  mkdir -p "$TMP.bar/plain-bar"
+  cat > "$TMP.bar/plain-bar/shell.qml" <<'QML'
+import Quickshell
+import Quickshell.Wayland
+ShellRoot {
+  Variants {
+    model: Quickshell.screens
+    PanelWindow {
+      required property var modelData
+      screen: modelData
+      WlrLayershell.namespace: "t-plainbar"
+      anchors { top: true; left: true; right: true }
+      implicitHeight: 30
+      color: "#336699"
+    }
+  }
+}
+QML
+  # (by its path: a stub quickshell in the box HOME's ~/.local/bin, t_main's, is not the box's shell)
+  PSHELL=(--ro-bind "$TMP.bar/plain-bar" --shell "$(command -v quickshell || echo /usr/bin/quickshell) -p $TMP.bar/plain-bar")
+fi
+# BAR_NS: the layer namespace of a box's bar, Omarchy's or PSHELL's.
+BAR_NS=omarchy-bar; omarchy_here || BAR_NS="t-plainbar"
+# "${NOOM[@]}" CMD...: CMD as on a machine without Omarchy: under a bwrap that hides /usr/share/omarchy
+# (a tmpfs over it) where it is installed, as is where it is not (bwrap cannot put a tmpfs on a path
+# that is not there, so on such a machine the "without Omarchy" checks were skipped). Where bwrap cannot
+# hide it, it fails without running CMD ("${NOOM[@]}" true tells). An array, not a function: env runs it.
+NOOM=(); [ ! -e /usr/share/omarchy ] || NOOM=(bwrap --dev-bind / / --tmpfs /usr/share/omarchy)
+# omre RE OPT: what up's refusal of an option that needs Omarchy must say: RE where Omarchy is here;
+# where it is not, the box is plain and that refusal of OPT comes first (#247), the right answer there.
+omre() { if omarchy_here; then printf '%s' "$1"; else printf 'up: %s needs Omarchy, and this machine has none' "$2"; fi; }
 # OMABOX_HYPRLAND=PATH (#424, finding 651): every box of the run starts on that Hyprland (a folder or a
 # binary), as `up --hyprland PATH`. HYPR_BIN and HYPR_LIB: its binary and library dir (the folder's
 # layouts, as up's hypr_target reads them); HYPR_V: the version the boxes run, for the checks whose
@@ -358,6 +401,29 @@ check_box_safety() {
   local dev; dev=$(awk -v m="$XDG_RUNTIME_DIR" '$5 == m { print $3; exit }' /proc/self/mountinfo)
   check_eq "$b: nothing of your runtime dir is mounted in it but its own dir" "" \
     "$("$CLI" run -b "$b" -- awk -v d="$dev" '$3 == d { print $4 " at " $5 }' /proc/self/mountinfo | grep -v "^/omabox/$b/")"
+}
+# vgpu: why the boxes' render node is a virtual GPU (a VM's virtio-gpu, its driver as doctor's render
+# line says it), or fails where it is not. A few checks come out otherwise in such a VM (grim's capture,
+# the pointer drawn into --no-pointer shots, a shot's size off by the border, a peek's CPU ticks, which
+# line Qt prints for a protocol error, a terminal that binds an output just gone): those are skipped
+# there (on_gpu), with that reason, and nowhere else. The same checks pass in plain boxes on a real
+# GPU, on Hyprland 0.56 and 0.57.
+vgpu() {
+  local rn d
+  rn=$(probe render_node 2>/dev/null) || return 1
+  d=$(readlink -f "/sys/class/drm/${rn##*/}/device/driver" 2>/dev/null) || return 1
+  [[ ${d##*/} == virtio* ]] || return 1
+  echo "a virtual GPU (${d##*/}): a VM's, where this comes out otherwise"
+}
+# on_gpu CHECK NAME ARGS...: `CHECK NAME ARGS...` (check, check_eq, check_match), skipped under vgpu, naming it.
+on_gpu() { local c=$1 n=$2 why; shift 2; if why=$(vgpu); then skip "$n" "$why"; else "$c" "$n" "$@"; fi; }
+# ws_binds BOX [OMABOX...]: SUPER+1..9 switch BOX's workspaces, as Omarchy's binds do, set on a box
+# where boxes are plain (#247; nothing where Omarchy is): the tests of keys a box or its stand-in host
+# takes for itself. OMABOX: how to reach the box (default this omabox; a nested box's: run -b S -- omabox).
+ws_binds() {
+  local b=$1; shift
+  local via=("$@"); [ ${#via[@]} -gt 0 ] || via=("$CLI")
+  omarchy_here || "${via[@]}" lua -b "$b" 'for i = 1, 9 do hl.bind("SUPER + " .. i, hl.dsp.focus({ workspace = tostring(i) })) end' >/dev/null
 }
 # Finding 125: whether the boxes an omabox starts lack aquamarine's fix for nested Wayland outputs
 # (the system's 0.15.1 or older, no private build or OMABOX_AQUAMARINE=system). ARGS: that omabox.
@@ -1484,13 +1550,13 @@ t_unit_refusals() {
   # --theme-dir (#170): refused as --ro-bind is, as named and where it leads; a theme's own name.
   mkdir -p "$fh/.config/omarchy/themes/t" "$fh/.gnupg/t" "$TMP/rf-td/a/t" "$TMP/rf-td/b/t" "$TMP/rf-td/.hidden"
   ln -s "$fh/.gnupg/t" "$TMP/rf-td/linked"
-  check_match "--theme-dir of a hook's folder refused" "refusing to mount $fh/.config/omarchy/hooks into a box: it is inside" \
+  check_match "--theme-dir of a hook's folder refused" "$(omre "refusing to mount $fh/.config/omarchy/hooks into a box: it is inside" --theme-dir)" \
     "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$fh/.config/omarchy/hooks" 2>&1)"
-  check_match "...of a dir in a secret store" "refusing to mount $fh/.gnupg/t into a box: it is inside $fh/.gnupg/" \
+  check_match "...of a dir in a secret store" "$(omre "refusing to mount $fh/.gnupg/t into a box: it is inside $fh/.gnupg/" --theme-dir)" \
     "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$fh/.gnupg/t" 2>&1)"
-  check_match "...of a link to one" "refusing to mount $TMP/rf-td/linked into a box: it is inside $fh/.gnupg/" \
+  check_match "...of a link to one" "$(omre "refusing to mount $TMP/rf-td/linked into a box: it is inside $fh/.gnupg/" --theme-dir)" \
     "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$TMP/rf-td/linked" 2>&1)"
-  check_match "...of ~/.config/omarchy itself" "refusing to mount $fh/.config/omarchy into a box: it contains" \
+  check_match "...of ~/.config/omarchy itself" "$(omre "refusing to mount $fh/.config/omarchy into a box: it contains" --theme-dir)" \
     "$(HOME=$fh ob up "$P-r30" --no-shell --theme-dir "$fh/.config/omarchy" 2>&1)"
   check_match "...of a dir that is not there" "--theme-dir: no such directory: $TMP/rf-td/none" "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/none" 2>&1)"
   check_match "...of a file" "--theme-dir: no such directory" "$(ob up "$P-r30" --theme-dir "$fh/.ssh/id_test" 2>&1)"
@@ -1499,7 +1565,7 @@ t_unit_refusals() {
   # #199: a --seed into a --theme-dir theme (a link in the box HOME) refused, naming the theme, not where SRC leads.
   echo s > "$TMP/rf-td/s.toml"
   check_match "--seed into a --theme-dir theme refused" \
-    "--seed ~/.config/omarchy/themes/t/s.toml is inside theme t \(--theme-dir\).*Write the file in the theme's folder instead, or seed outside it" \
+    "$(omre "--seed ~/.config/omarchy/themes/t/s.toml is inside theme t \(--theme-dir\).*Write the file in the theme's folder instead, or seed outside it" --theme-dir)" \
     "$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --seed "$TMP/rf-td/s.toml:.config/omarchy/themes/t/s.toml" 2>&1)"
   check_fails "...SRC's path not said" grep -q "$TMP/rf-td/s.toml" <<<"$(ob up "$P-r30" --theme-dir "$TMP/rf-td/a/t" --seed "$TMP/rf-td/s.toml:~/.config/omarchy/themes/t/s.toml" 2>&1)"
   check_fails "...no box dir for any of them" test -e "$XDG_RUNTIME_DIR/omabox/$P-r30"
@@ -1543,9 +1609,9 @@ t_unit_refusals() {
   check_match "--allow 0 refused" "ports from 1 to 65535, got 0" "$(ob up "$P-r23" --net isolated --allow 0 2>&1)"
   check_match "--allow 70000 refused" "ports from 1 to 65535, got 8081,70000" "$(ob up "$P-r24" --net isolated --allow 8081,70000 2>&1)"
   mkdir -p "$TMP/badid"; echo '{"id":"../x"}' > "$TMP/badid/manifest.json"
-  check_match "a plugin whose manifest id is a path refused" "manifest id '../x' must be letters, digits" "$(ob up "$P-r25" --plugin "$TMP/badid" 2>&1)"
+  check_match "a plugin whose manifest id is a path refused" "$(omre "manifest id '../x' must be letters, digits" --plugin)" "$(ob up "$P-r25" --plugin "$TMP/badid" 2>&1)"
   echo '{"id":"a b"}' > "$TMP/badid/manifest.json"
-  check_match "...or has a space" "manifest id 'a b' must be" "$(ob up "$P-r26" --plugin "$TMP/badid" 2>&1)"
+  check_match "...or has a space" "$(omre "manifest id 'a b' must be" --plugin)" "$(ob up "$P-r26" --plugin "$TMP/badid" 2>&1)"
   check_match "run --pass of the box session's own refused" "--pass cannot set PATH" "$(ob run -b "$P-x" --pass PATH -- true 2>&1)"
   printf 'A=1\nexport HOME=/x\n' > "$TMP/reserved.env"
   check_match "...--env-file's too, by line" "line 2 sets HOME: it is the box session's own" "$(ob run -b "$P-x" --env-file "$TMP/reserved.env" -- true 2>&1)"
@@ -1986,10 +2052,10 @@ t_unit_config() {
   check_fails "desktop takes auto, omarchy or plain" env HOME="$h" "$CLI" config desktop desk
   check_match "...up --plugin under it: refused, naming the setting" "^omabox: up: --plugin needs Omarchy, and the box is plain \(omabox config desktop plain\): --desktop omarchy for an Omarchy box" \
     "$(HOME=$h "$CLI" up "$P-cfgd" --plugin "$ROOT/plugin" 2>&1)"
-  if bwrap --dev-bind / / --tmpfs /usr/share/omarchy true >/dev/null 2>&1; then
+  if "${NOOM[@]}" true >/dev/null 2>&1; then
     check_eq "desktop omarchy" desktop=omarchy "$(cfg desktop omarchy)"
     check_match "...up where Omarchy is not installed: refused, naming the setting" "^omabox: up: an Omarchy box needs Omarchy, and this machine has none \(.*; omabox config desktop says omarchy\)" \
-      "$(HOME=$h bwrap --dev-bind / / --tmpfs /usr/share/omarchy "$CLI" up "$P-cfgd" 2>&1)"
+      "$(HOME=$h "${NOOM[@]}" "$CLI" up "$P-cfgd" 2>&1)"
   else
     skip "config desktop omarchy without Omarchy" "bwrap cannot hide /usr/share/omarchy here"
   fi
@@ -2393,9 +2459,9 @@ sneaky.json|a link to api-keys.env: a secret's name"
   check_match "...an id that is not a name said" "not mounting plugins/badid: its manifest id '../x'" "$out"
   check_fails "...a second dir with the same id: left out, unsaid" grep -qF "plugins/dup" <<<"$out"
   # Refused before anything is made.
-  check_match "--desk-shell with --stock-bar refused" "--desk-shell or --stock-bar, not both" \
+  check_match "--desk-shell with --stock-bar refused" "$(omre "--desk-shell or --stock-bar, not both" --stock-bar)" \
     "$(OMABOX_DESK_CONFIG=$d/desk ob up "$P-ds0" --desk-shell --stock-bar 2>&1)"
-  check_match "...one with no config folder" "--desk-shell: no Omarchy config folder at $d/none" \
+  check_match "...one with no config folder" "$(omre "--desk-shell: no Omarchy config folder at $d/none" --desk-shell)" \
     "$(OMABOX_DESK_CONFIG=$d/none ob up "$P-ds0" --desk-shell 2>&1)"
   check_match "...inside a jail" "not for an agent inside ai-jail" "$(OMABOX_JAIL='{"roots":[]}' ob up "$P-ds0" --desk-shell 2>&1)"
   check_fails "...none of them made the box" test -e "$(ob path "$P-ds0" 2>/dev/null || echo /nonexistent)"
@@ -3057,7 +3123,9 @@ print(p.pid, flush=True); time.sleep(60)' "$1" env OMABOX_OWN_SESSION="${2-1}" "
   kill -KILL "$pid" 2>/dev/null || true
   o=$(grep -hv "^[0-9]*$" "$d/pipe.pid" "$d/null.pid" || true)
   check_eq "...said nothing" "" "$o"
-  # Not the box's own session (finding 424): the same watch is the real inotifywait's.
+  # Not the box's own session (finding 424): the same watch is the real inotifywait's (inotify-tools:
+  # Omarchy installs it, a plain machine may not have it).
+  if [ ! -x /usr/bin/inotifywait ]; then skip "outside the box's session (omabox run): the real inotifywait watches" "no /usr/bin/inotifywait (inotify-tools)"; return; fi
   { read -r parent; read -r pid; } < <(standin pipe "")
   local exe="" i; for i in $(seq 50); do exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true); [ "$exe" != /usr/bin/inotifywait ] || break; sleep 0.1; done
   check_eq "outside the box's session (omabox run): the real inotifywait watches" /usr/bin/inotifywait "$exe"
@@ -4596,7 +4664,13 @@ t_unit_broker_side() {
   for c in pixel output lua scroll; do
     cx_want=(rc=2 out= "err~^omabox: $c: .*\\(omabox help $c\\)\$"); cx_case "broker: $c let through" "$c"
   done
-  cx_want=(rc=125 out= 'err~^omabox: throwaway box failed to start$'); cx_case "broker: run from a jail with no box: run's 125" run -- true
+  # (it fails for want of an Omarchy theme in the broker's HOME; a plain box wants none and would
+  # start, which a unit test does not do, #247)
+  if omarchy_here; then
+    cx_want=(rc=125 out= 'err~^omabox: throwaway box failed to start$'); cx_case "broker: run from a jail with no box: run's 125" run -- true
+  else
+    skip "broker: run from a jail with no box: run's 125" "$NO_OMARCHY: its throwaway would start"
+  fi
   local notjail='err~^omabox: the omabox broker serves agents inside ai-jail; this caller is not in one\.'
   cx_want=(rc=1 out= "$notjail"); JAIL_OUT=1 cx_case "broker: a caller in no ai-jail" ls
   cx_want=(rc=125 out= "$notjail"); JAIL_OUT=1 cx_case "broker: ...run's own code then" run -- true
@@ -5216,15 +5290,17 @@ print(a.getsockname()[1], b.getsockname()[1])')
   python3 -m http.server --bind 127.0.0.1 "$port" --directory "$ov" >/dev/null 2>&1 & s1=$!; SERVERS+=("$s1")
   python3 -m http.server --bind 127.0.0.1 "$other" --directory "$ov" >/dev/null 2>&1 & s2=$!; SERVERS+=("$s2")
   until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$port/" >/dev/null; until_ok 5 curl -fs -o /dev/null "http://127.0.0.1:$other/" >/dev/null
+  # (a plugin only where Omarchy is; a plain box gets a shell of PSHELL's, #247)
+  local plug=(--plugin "$ROOT/plugin"); omarchy_here || plug=("${PSHELL[@]}")
   # shellcheck disable=SC2016 # expanded in the box
-  out=$(cd "$repo" && env -u OMABOX "$CLI" run --overlay "$ov" --net isolated --allow "$port" --size 800x600 --plugin "$ROOT/plugin" -- sh -c '
+  out=$(cd "$repo" && env -u OMABOX "$CLI" run --overlay "$ov" --net isolated --allow "$port" --size 800x600 "${plug[@]}" -- sh -c '
     echo box > "$1/f" && cat "$1/f"
     { rm -f "$1/sub/g"; mkdir "$1/new"; echo n > "$1/new/n"; chmod 700 "$1/sub"; ln -s /etc "$1/l"; mv "$1/f" "$1/f2"; } 2>/dev/null
     seen=$({ test -e "$1/f" || echo no-f; cat "$1/f2"; test -e "$1/sub/g" || echo no-g; cat "$1/new/n"; stat -c %a "$1/sub"; readlink "$1/l"; } 2>&1 | paste -sd " ")
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$2/" || true
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$3/" || true
     hyprctl -j monitors | jq -r ".[0] | \"\(.width)x\(.height)\""
-    test -f ~/.config/omarchy/plugins/chaves.omabox/manifest.json && echo plugin
+    test -f ~/.config/omarchy/plugins/chaves.omabox/manifest.json && echo plugin || echo no-plugin
     echo "run:${OMABOX_OWN_SESSION:-none}"
     tr "\0" "\n" < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox-shell.pid")/environ" | grep -x OMABOX_OWN_SESSION=1 || echo "shell:none"
     echo "seen: $seen"' sh "$ov" "$port" "$other" 2>/dev/null)
@@ -5238,7 +5314,8 @@ print(a.getsockname()[1], b.getsockname()[1])')
   check_eq "run --net isolated --allow PORT: that port reached" 200 "$(sed -n 2p <<<"$out")"
   check_eq "...another host port not" 000 "$(sed -n 3p <<<"$out")"
   check_eq "run --size 800x600" 800x600 "$(sed -n 4p <<<"$out")"
-  check_eq "run --plugin: mounted in the box HOME" plugin "$(sed -n 5p <<<"$out")"
+  if omarchy_here; then check_eq "run --plugin: mounted in the box HOME" plugin "$(sed -n 5p <<<"$out")"
+  else skip "run --plugin: mounted in the box HOME" "$NO_OMARCHY"; fi
   check_eq "run: the command is not the box's session (finding 424)" run:none "$(sed -n 6p <<<"$out")"
   check_eq "...the box's shell is" OMABOX_OWN_SESSION=1 "$(sed -n 7p <<<"$out")"
 }
@@ -6046,7 +6123,9 @@ t_unit_jail_paths() {
     g=${a//"$d/proj/lout"/L}
     check_fails "...the link's target not named" grep -qF "$d/out" <<<"$g"
     check_eq "...the same answer for one not there" "${a//"$d/proj/lout/$out"/P}" "${b//"$d/proj/lout/none"/P}"
-    check_match "...inside the jail: past the checks" "a size is WxH" "$(ju "$opt" "$d/proj/$in$sfx")"
+    # (on a plain machine an Omarchy option is refused right after: the box is plain, #247)
+    a="a size is WxH"; case $opt in --theme-dir|--plugin) a=$(omre "$a" "$opt") ;; esac
+    check_match "...inside the jail: past the checks" "$a" "$(ju "$opt" "$d/proj/$in$sfx")"
   done
   # The issue's own: a host file, and a host link outside, named as given (not /usr/share/zoneinfo/...).
   a=$(ju --seed "$d/out/flink:x"); b=$(ju --seed "$d/out/nolink:x")
@@ -7226,7 +7305,7 @@ t_unit_uwsm_guard() {
 t_main() {
   local B=$P-main s0=$SECONDS
   # (A secret-looking variable in up's environment, which the box session must not get: #111.)
-  check "up" env T111_API_TOKEN="leak-$P" "$CLI" up "$B" --env OMABOX_TEST=yes --seed "$ROOT/VERSION:.config/seeded/v" --seed "$ROOT/plugin:~/seeded-dir"
+  check "up" env T111_API_TOKEN="leak-$P" "$CLI" up "$B" --env OMABOX_TEST=yes --seed "$ROOT/VERSION:.config/seeded/v" --seed "$ROOT/plugin:~/seeded-dir" "${PSHELL[@]}"
   local D; D=$(ob path -b "$B")
   check_eq "box.json mode headless" headless "$(jq -r .mode "$D/box.json")"
   check_eq "box.json size WxH@HZ" "1920x1080@60" "$(jq -r .size "$D/box.json")"
@@ -7251,18 +7330,22 @@ t_main() {
   check_eq "...no system bus in it" "" "$(ob run -b "$B" -- printenv DBUS_SYSTEM_BUS_ADDRESS)"
   check_match "...polkit refused" "polkit: box '$B' has no polkit: a box gets it at up \(omabox up --polkit" "$(ob polkit -b "$B" agents 2>&1)"
   # finding 62: up waits for the shell (bar layer + notification server) before returning
-  check "bar is up when up returns" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-bar"
-  check "notify-send works right after up" ob run -b "$B" -- notify-send omabox-test
+  check "bar is up when up returns" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q '$BAR_NS'"
+  # (Omarchy's shell is the notification server; a plain box's shell is not, #247)
+  if omarchy_here; then check "notify-send works right after up" ob run -b "$B" -- notify-send omabox-test
+  else skip "notify-send works right after up" "$NO_OMARCHY: no notification server in the box"; fi
   # What the box's Hyprland starts (the bar, binds, terminals) has omabox's stand-ins ahead of
   # Omarchy's bin, which Omarchy's envs.lua puts first (finding 149).
   ob hyprctl -b "$B" dispatch "hl.dsp.exec_cmd('sh -c \"command -v omarchy-version > ~/t149\"')" >/dev/null
   ob wait -b "$B" --timeout 5s until -- test -s /home/sbx/t149 >/dev/null
   check_eq "a bind's omarchy-version is omabox's stand-in" /opt/omabox/share/bin/omarchy-version "$(ob run -b "$B" -- cat /home/sbx/t149)"
   # The theme's light or dark mode in the box's dconf (finding 148), for portal dialogs, GTK and Qt.
-  local mode; mode=$(ob run -b "$B" -- sh -c 'omarchy-theme-color --file ~/.local/state/omarchy/current/theme/colors.toml mode')
-  [ "$mode" = light ] || mode=dark
-  ob wait -b "$B" --timeout 5s until -- sh -c "gsettings get org.gnome.desktop.interface color-scheme | grep -q prefer-$mode" >/dev/null
-  check_eq "dconf has the theme's colour mode" "'prefer-$mode'" "$(ob run -b "$B" -- gsettings get org.gnome.desktop.interface color-scheme)"
+  if omarchy_here; then
+    local mode; mode=$(ob run -b "$B" -- sh -c 'omarchy-theme-color --file ~/.local/state/omarchy/current/theme/colors.toml mode')
+    [ "$mode" = light ] || mode=dark
+    ob wait -b "$B" --timeout 5s until -- sh -c "gsettings get org.gnome.desktop.interface color-scheme | grep -q prefer-$mode" >/dev/null
+    check_eq "dconf has the theme's colour mode" "'prefer-$mode'" "$(ob run -b "$B" -- gsettings get org.gnome.desktop.interface color-scheme)"
+  else skip "dconf has the theme's colour mode" "$NO_OMARCHY: no Omarchy theme"; fi
   check "up on a running box is a no-op" ob up "$B"
   # From another user namespace (a sandbox's, the suite's --installed): unknown, the list not refused (#87).
   if unshare -Ur true 2>/dev/null; then
@@ -7399,10 +7482,12 @@ print(*r)' 2>&1)"
   ob click -b "$B" 700 400 >/dev/null
   check_eq "click moves the pointer there" "700, 400" "$(ob hyprctl -b "$B" cursorpos)"
   # --wait with the shell (finding 82): the menu's key settles, and its layer is there, then gone
-  check "keys --wait super+space settles (the menu)" ob keys -b "$B" --wait super+space
-  check "...and wait layer omarchy-menu" ob wait -b "$B" layer omarchy-menu
-  ob keys -b "$B" --wait Escape >/dev/null
-  check "wait layer omarchy-menu --gone" ob wait -b "$B" layer omarchy-menu --gone
+  if omarchy_here; then
+    check "keys --wait super+space settles (the menu)" ob keys -b "$B" --wait super+space
+    check "...and wait layer omarchy-menu" ob wait -b "$B" layer omarchy-menu
+    ob keys -b "$B" --wait Escape >/dev/null
+    check "wait layer omarchy-menu --gone" ob wait -b "$B" layer omarchy-menu --gone
+  else skip "keys --wait super+space settles (the menu), its layer there, then gone" "$NO_OMARCHY: no menu"; fi
   # mode and gpu (finding 56)
   check_eq "mode changes live" "$screen_name 1280x720@120" "$(ob mode -b "$B" 1280x720@120)"
   reload_landed "$D/home/events.log" ob hyprctl -b "$B" reload
@@ -7455,7 +7540,7 @@ print(*r)' 2>&1)"
   ob run -b "$B" -d -- /tmp/quickshell 300 >/dev/null
   check "restart-shell" ob restart-shell -b "$B"
   rm -f "$D/home/.local/bin/quickshell"
-  check "the bar is the Omarchy shell after restart (stub ignored)" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-bar"
+  check "the bar is the Omarchy shell after restart (stub ignored)" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q '$BAR_NS'"
   check "a project's own quickshell survives restart-shell" ob run -b "$B" -- pgrep -f '^/tmp/quickshell 300'
   # run from a directory that exists in the box but is not the caller's: the box HOME instead
   check_eq "run from ~ runs in the box HOME" /home/sbx "$(cd "$HOME" && "$CLI" run -b "$B" -- pwd)"
@@ -7517,9 +7602,11 @@ print(*r)' 2>&1)"
   ob run -b "$B" -- mv -f "$tn.t159" "$tn"
   th=$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .theme // ""') || th=failed
   check_eq "...and the file back, its name" "$(head -n 1 "$D/home/.local/state/omarchy/current/theme.name")" "$th"
-  ob run -b "$B" -- omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1
-  check "an Omarchy toggle applies (gaps off)" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j getoption general:gaps_out | jq -e '.css == \"0 0 0 0\"'"
-  ob run -b "$B" -- omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1
+  if omarchy_here; then
+    ob run -b "$B" -- omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1
+    check "an Omarchy toggle applies (gaps off)" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j getoption general:gaps_out | jq -e '.css == \"0 0 0 0\"'"
+    ob run -b "$B" -- omarchy-hyprland-window-gaps-toggle >/dev/null 2>&1
+  else skip "an Omarchy toggle applies (gaps off)" "$NO_OMARCHY"; fi
   # down cleans everything (finding 50, 59)
   check "down" ob down "$B"
   check_fails "box dir gone" test -e "$D"
@@ -7744,9 +7831,13 @@ t_host_paths() {
   local B=$P-hp s=$TMP/hp-src h out lg
   rm -rf "$s"; mkdir -p "$s/plug" "$s/lib" "$TMP/$P-hpt"; echo one > "$s/a"
   echo '{"id": "hp.plug", "schemaVersion": 1}' > "$s/plug/manifest.json"; echo 'echo helper' > "$s/plug/h.sh"
-  up_ok "$B" --no-shell --net isolated --plugin "$s/plug" || { no "up" "$UP_OUT"; return; }
-  check_match "up: a --plugin folder mounted at its id, said (#301)" \
-    "note: plugin hp.plug: $s/plug is /home/sbx/.config/omarchy/plugins/hp.plug in the box, not at its own path" "$UP_OUT"
+  # (a plugin only where Omarchy is, #247: a plain box's checks leave its out)
+  local plug=(--plugin "$s/plug"); omarchy_here || plug=()
+  up_ok "$B" --no-shell --net isolated "${plug[@]}" || { no "up" "$UP_OUT"; return; }
+  if omarchy_here; then
+    check_match "up: a --plugin folder mounted at its id, said (#301)" \
+      "note: plugin hp.plug: $s/plug is /home/sbx/.config/omarchy/plugins/hp.plug in the box, not at its own path" "$UP_OUT"
+  fi
   h=$(ob path -b "$B" --home)
   out=$(ob run -b "$B" -- cat "$s/a" 2>&1)
   check_match "run: a scratch file the box has not, said (#301)" \
@@ -7754,10 +7845,12 @@ t_host_paths() {
   out=$(ob run -b "$B" -- test -e "$h/x" 2>&1)
   check_match "...the box HOME's host path: where it is in the box" \
     "note: $h/x is box '$B''s HOME as the host has it \(omabox path --home\): in the box it is /home/sbx/x" "$out"
-  out=$(ob run -b "$B" -- sh "$s/plug/h.sh" 2>&1)
-  check_match "...a --plugin folder's file: its path in the box" \
-    "note: $s/plug/h.sh is in $s/plug, plugin hp.plug's folder, which box '$B' has at /home/sbx/.config/omarchy/plugins/hp.plug: in the box it is /home/sbx/.config/omarchy/plugins/hp.plug/h.sh" "$out"
-  check_eq "...which runs there" helper "$(ob run -b "$B" -- sh /home/sbx/.config/omarchy/plugins/hp.plug/h.sh 2>&1)"
+  if omarchy_here; then
+    out=$(ob run -b "$B" -- sh "$s/plug/h.sh" 2>&1)
+    check_match "...a --plugin folder's file: its path in the box" \
+      "note: $s/plug/h.sh is in $s/plug, plugin hp.plug's folder, which box '$B' has at /home/sbx/.config/omarchy/plugins/hp.plug: in the box it is /home/sbx/.config/omarchy/plugins/hp.plug/h.sh" "$out"
+    check_eq "...which runs there" helper "$(ob run -b "$B" -- sh /home/sbx/.config/omarchy/plugins/hp.plug/h.sh 2>&1)"
+  else skip "up and run: a --plugin folder mounted at its id, its files' paths in the box said (#301)" "$NO_OMARCHY"; fi
   out=$(ob run -b "$B" -- env "LD_LIBRARY_PATH=$s/lib:/usr/lib" true 2>&1)
   check_match "...a build dir in LD_LIBRARY_PATH" "note: $s/lib is not in box '$B' " "$out"
   check_fails ".../usr/lib, which the box has, not said" grep -q "note: /usr/lib " <<<"$out"
@@ -7905,7 +7998,7 @@ EOF
     # shellcheck disable=SC2046 # (pkg-config's words)
     if c++ -std=c++17 -fPIC -o "$s/qt" "$s/qt.cpp" $(pkg-config --cflags --libs Qt6Gui wayland-client); then
       err=$(pe_tk env QT_QPA_PLATFORM=wayland LANG=C.UTF-8 "$s/qt")
-      check_match "Qt 6: its own fatal-error line, Protocol error: said as a protocol error" \
+      on_gpu check_match "Qt 6: its own fatal-error line, Protocol error: said as a protocol error" \
         "omabox: its Wayland connection was closed for a protocol error: The Wayland connection experienced a fatal error: Protocol error" "$err"
       err=$(pe_tk env QT_QPA_PLATFORM=wayland LANG=C.UTF-8 "$s/qt" lost)
       check_match "...its connection shut down: lost" \
@@ -7923,6 +8016,9 @@ EOF
 
 t_protect_ports() {
   local B=$P-prot h=$TMP/prot-home p q r w a got reached="" control=""
+  # (the HOME is the test's own, with no Omarchy theme or bar of the user's: Omarchy's then, which a
+  # plain box has none of, #247)
+  local look=(--theme tokyo-night --stock-bar); omarchy_here || look=()
   rm -rf "$h"; mkdir -p "$h/.config/omabox"
   p=$(free_port) q=$(free_port) r=$(free_port) w=$(free_port)
   while [ "$q" = "$p" ] || [ "$r" = "$p" ] || [ "$r" = "$q" ] || [ "$w" = "$p" ] || [ "$w" = "$q" ] || [ "$w" = "$r" ]; do q=$(free_port) r=$(free_port) w=$(free_port); done
@@ -7939,7 +8035,7 @@ while True:
   python3 -I -c "$srv" 127.0.0.1 "$r" >/dev/null 2>&1 & SERVERS+=($!)
   python3 -I -c "$srv" 0.0.0.0 "$w" >/dev/null 2>&1 & SERVERS+=($!)
   sleep 0.5
-  if ! UP_OUT=$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up with protect-ports" "$UP_OUT"; return; fi
+  if ! UP_OUT=$(HOME=$h ob up "$B" --no-shell "${look[@]}" 2>&1); then no "up with protect-ports" "$UP_OUT"; return; fi
   ok "up with protect-ports"
   # (#374: a change says which connected boxes up keep what they started with)
   check_match "config protect-ports: the connected boxes up named, to restart (#374)" \
@@ -7973,7 +8069,7 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(s
   until v=$(free_port) && [ "$v" != "$s" ] && [ "$v" != "$p" ] && [ "$v" != "$q" ] && [ "$v" != "$r" ] && [ "$v" != "$w" ]; do :; done
   HOME=$h ob down "$B" >/dev/null 2>&1
   printf 'protect-ports=%s,%s,%s\n' "$q" "$p" "$s" > "$h/.config/omabox/config"
-  if ! UP_OUT=$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up with a protected port nothing on the host holds" "$UP_OUT"; return; fi
+  if ! UP_OUT=$(HOME=$h ob up "$B" --no-shell "${look[@]}" 2>&1); then no "up with a protected port nothing on the host holds" "$UP_OUT"; return; fi
   check_match "...pasta leaves it out of its -t and -u rules too" "-t 127\.0\.0\.1/(~[0-9]+,)*~$s,(~[0-9]+,)*auto .*-u 127\.0\.0\.1/(~[0-9]+,)*~$s,(~[0-9]+,)*auto" \
     "$(tr '\0' ' ' < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")/cmdline" 2>/dev/null)"
   HOME=$h ob run -b "$B" -d -- python3 -I -c "$srv" 127.0.0.1 "$s" >/dev/null
@@ -7988,12 +8084,12 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(s
   check_eq "...and does not take the host's 127.0.0.1:$s, TCP or UDP" "" "$(ss -Htuln "sport = :$s")"
   HOME=$h ob down "$B" >/dev/null 2>&1
   # An isolated box's --allow of a protected port is refused.
-  check_match "--allow of a protected port: refused" "up: --allow $q: a protected port" "$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --net isolated --allow "$q" 2>&1)"
+  check_match "--allow of a protected port: refused" "up: --allow $q: a protected port" "$(HOME=$h ob up "$B" --no-shell "${look[@]:0:2}" --net isolated --allow "$q" 2>&1)"
   check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
   # A value that is not a list of ports refuses every up (exit 2), where a setting's bad value is
   # otherwise ignored: ignored, the box would reach the ports meant to be kept (fails closed).
   printf 'protect-ports=%s,x\n' "$p" > "$h/.config/omabox/config"
-  local out rc=0; out=$(HOME=$h "$CLI" up "$B" --no-shell --theme tokyo-night --net isolated 2>&1) || rc=$?
+  local out rc=0; out=$(HOME=$h "$CLI" up "$B" --no-shell "${look[@]:0:2}" --net isolated 2>&1) || rc=$?
   check_eq "a protect-ports that is not ports: refused, exit 2" 2 "$rc"
   check_match "...saying which line, and why" "protect-ports=$p,x is not a list of ports .*no box starts until it is one" "$out"
   check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
@@ -8008,6 +8104,7 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(s
 # protect_ports_nft HOME
 protect_ports_nft() {
   local h=$1 B=$P-protnft fake=$TMP/protnft out rc t0 t
+  local look=(--theme tokyo-night); omarchy_here || look=()   # (t_protect_ports')
   # with_nft FILE CMD...: CMD with FILE as /usr/bin/nft
   with_nft() {
     unshare -Urm --propagation slave sh -c 'f=$1 u=$2 g=$3; shift 3; mount --bind "$f" /usr/bin/nft && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
@@ -8022,7 +8119,7 @@ protect_ports_nft() {
   # (the caller's PATH has an nft; /usr/bin's is a file that is not executable)
   rc=0; t0=$(now_ms)
   out=$(with_nft "$fake/none" env HOME="$h" PATH="$fake/bin:$PATH" \
-    "$CLI" up "$B" --no-shell --theme tokyo-night 2>&1) || rc=$?
+    "$CLI" up "$B" --no-shell "${look[@]:0:2}" 2>&1) || rc=$?
   t=$(( $(now_ms) - t0 ))
   check_match "no nft in /usr/bin, one on the caller's PATH: refused (#364)" "^1 .*protect-ports .*needs nft in /usr/bin" "$rc $out"
   check "...at once (${t} ms)" test "$t" -lt 3000
@@ -8030,7 +8127,7 @@ protect_ports_nft() {
   HOME=$h ob down "$B" >/dev/null 2>&1
   rc=0; t0=$(now_ms)
   out=$(with_nft "$fake/failing" env HOME="$h" \
-    "$CLI" up "$B" --no-shell --theme tokyo-night 2>&1) || rc=$?
+    "$CLI" up "$B" --no-shell "${look[@]:0:2}" 2>&1) || rc=$?
   t=$(( $(now_ms) - t0 ))
   check_match "an nft that fails: up says so (#364)" "^1 .*could not set the protected ports rule in the box network .*nft stand-in: refused" "$rc $out"
   check_fails "...not that bwrap did not start" grep -q "bwrap did not start" <<<"$out"
@@ -8049,6 +8146,9 @@ protect_ports_nft() {
 # back, as protect_ports_nft's); the real host's network is never touched.
 t_protect_ports_ns() {
   local B=$P-protns h=$TMP/protns-home r=$TMP/protns q w H a got reached="" control=""
+  # (the HOME is the test's own, with no Omarchy theme or bar of the user's: Omarchy's then, which a
+  # plain box has none of, #247)
+  local look=(--theme tokyo-night --stock-bar); omarchy_here || look=()
   rm -rf "$h" "$r"; mkdir -p "$h/.config/omabox" "$r"
   if ! unshare -Urn true 2>/dev/null; then skip "protect-ports over UDP, IPv6 and addresses gained (#399)" "no user and network namespace of the test's own here"; return; fi
   unshare -Urn sh -c 'ip link set lo up && ip link add d0 type dummy && ip link set d0 up &&
@@ -8079,7 +8179,7 @@ while True:
             _, a = u.recvfrom(64); u.sendto(b"hi\n", a)'
   inns python3 -I -c "$srv" "$q" >/dev/null 2>&1 & SERVERS+=($!)
   inns python3 -I -c "$srv" "$w" >/dev/null 2>&1 & SERVERS+=($!)
-  if ! UP_OUT=$(inns env HOME="$h" "$CLI" up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up in a network namespace of the test's own" "$UP_OUT"; return; fi
+  if ! UP_OUT=$(inns env HOME="$h" "$CLI" up "$B" --no-shell "${look[@]}" 2>&1); then no "up in a network namespace of the test's own" "$UP_OUT"; return; fi
   ok "up in a network namespace of the test's own, with protect-ports"
   # (from the box, 3 s at most: "hi" when it reached the server. PROTO tcp or udp)
   ppn_probe() { HOME=$h ob run -b "$B" -- timeout 3 bash -c 'exec 3<>"/dev/$1/$2/$3" && { [ "$1" = tcp ] || printf x >&3; } && head -c 2 <&3' _ "$1" "$2" "$3" 2>/dev/null; }
@@ -8154,7 +8254,7 @@ EOF
   chmod 755 "$f/nft"
   : > "$f/fail"
   if ! UP_OUT=$(nsenter -t "$H" -U -n --preserve-credentials unshare -m --propagation slave sh -c 'mount --bind "$1" /usr/bin/nft && shift && u=$1 g=$2 && shift 2 && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
-      _ "$f/nft" "$(id -u)" "$(id -g)" env HOME="$h" "$CLI" up "$B2" --no-shell --theme tokyo-night --stock-bar 2>&1); then
+      _ "$f/nft" "$(id -u)" "$(id -g)" env HOME="$h" "$CLI" up "$B2" --no-shell "${look[@]}" 2>&1); then
     no "up with a stand-in nft for its reaper" "$UP_OUT"; return
   fi
   kid2=$(pgrep -P "$(cat "$XDG_RUNTIME_DIR/omabox/$B2/pasta.pid" 2>/dev/null || echo 0)" | head -1) || kid2=""
@@ -9044,7 +9144,8 @@ t_saves() {
   local B=$P-sv B2=$P-sv2 S=$P-s d=$TMP/data/omabox/saves/$P-s
   check "up" ob up "$B" --no-shell
   ob run -b "$B" -- sh -c 'mkdir -p ~/.local/share/app ~/.cache/app && echo hello > ~/.local/share/app/data &&
-    echo junk > ~/.cache/app/x && echo "# mine" >> ~/.config/btop/btop.conf && echo "{\"junk\": 1}" > ~/.config/omarchy/shell.json &&
+    echo junk > ~/.cache/app/x && mkdir -p ~/.config/btop ~/.config/omarchy && echo "# mine" >> ~/.config/btop/btop.conf &&
+    echo "{\"junk\": 1}" > ~/.config/omarchy/shell.json &&
     printf pw | secret-tool store --label t service omabox-test' >/dev/null 2>&1
   check_match "save" "saved box '$B' as '$S'.*keyring secrets included" "$(sv save "$S" -b "$B" 2>&1)"
   check_eq "...nothing in the box left stopped" "" "$(ob run -b "$B" -- ps -eo stat= | grep '^T')"
@@ -9060,8 +9161,11 @@ t_saves() {
   check_eq "...with the app's data" hello "$(ob run -b "$B2" -- cat /home/sbx/.local/share/app/data)"
   check_eq "...and its keyring secret" pw "$(ob run -b "$B2" -- secret-tool lookup service omabox-test)"
   check_eq "...an app config changed in the box kept (no /etc/skel over it)" "# mine" "$(ob run -b "$B2" -- tail -n 1 /home/sbx/.config/btop/btop.conf)"
-  check_eq "...the bar's config seeded again, not the save's" null "$(ob run -b "$B2" -- jq .junk /home/sbx/.config/omarchy/shell.json)"
-  check "...the theme seeded again (not copied into the save's)" ob run -b "$B2" -- sh -c 't=/home/sbx/.local/state/omarchy/current/theme; test -d $t && test ! -e $t/theme'
+  # (Omarchy's bar and theme, seeded at up: a plain box has neither, #247)
+  if omarchy_here; then
+    check_eq "...the bar's config seeded again, not the save's" null "$(ob run -b "$B2" -- jq .junk /home/sbx/.config/omarchy/shell.json)"
+    check "...the theme seeded again (not copied into the save's)" ob run -b "$B2" -- sh -c 't=/home/sbx/.local/state/omarchy/current/theme; test -d $t && test ! -e $t/theme'
+  else skip "...the bar's config and the theme seeded again, not the save's" "$NO_OMARCHY"; fi
   check_eq "...box.json says where it came from" "$S" "$(jq -r .from "$(ob path "$B2")/box.json")"
   # finding 168: a save keeps the links the box made in its HOME, and seed_home, on the host, wrote
   # through them. Links where it writes, to a file and a dir of the suite's: up --from leaves both as
@@ -9075,11 +9179,14 @@ t_saves() {
   check_eq "...the file a link pointed at untouched" "the host's line" "$(cat "$hf")"
   check_eq "...the dir a link pointed at untouched" "theme theme/keep sentinel" "$(find "$hd" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$hd/theme/keep")"
   H=$(ob path "$B3")/home
-  check "...its shell.json a real file" test -f "$H/.config/omarchy/shell.json" -a ! -L "$H/.config/omarchy/shell.json"
-  check "...its current theme a real dir, seeded" test -d "$H/.local/state/omarchy/current/theme" -a ! -L "$H/.local/state/omarchy/current"
+  if omarchy_here; then
+    check "...its shell.json a real file" test -f "$H/.config/omarchy/shell.json" -a ! -L "$H/.config/omarchy/shell.json"
+    check "...its current theme a real dir, seeded" test -d "$H/.local/state/omarchy/current/theme" -a ! -L "$H/.local/state/omarchy/current"
+  else skip "...its shell.json a real file, its current theme a real dir, seeded" "$NO_OMARCHY"; fi
   # finding 241: a linked --plugin's link stays in a save; without that plugin asked for, it would load.
   check_fails "...no link of the save's left in its plugins dir" test -L "$H/.config/omarchy/plugins/stale"
-  check "...and the box runs" ob run -b "$B3" -- test -s /home/sbx/.local/state/omarchy/current/theme.name
+  if omarchy_here; then check "...and the box runs" ob run -b "$B3" -- test -s /home/sbx/.local/state/omarchy/current/theme.name
+  else check "...and the box runs" ob run -b "$B3" -- true; fi
   check "down" ob down "$B3"
   check "...saves rm" sv saves rm "$S2"
   check "down" ob down "$B2"
@@ -9397,7 +9504,8 @@ t_unit_check() {
     # The baseline's overview (#256): each shot 90000 px at least, more pages past one look.
     local k pl=$d/ov.plan pages=() pw ph ova=()
     { printf 'title\tthe baseline\n'; for k in $(seq 1 14); do printf 'point\tc%s\t%s\twindow W\n' "$k" "$d/big.png"; done; } > "$pl"
-    python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov.png.part" "" > "$d/ov.args"
+    # (the font as check.rs gives it: magick's default font is not on every machine)
+    python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov.png.part" "$(fc-match -f '%{file}' monospace 2>/dev/null)" > "$d/ov.args"
     mapfile -d '' ova < "$d/ov.args"
     mapfile -t pages <<<"${ova[0]}"
     magick "${ova[@]:1}" 2>/dev/null && mv "$d/ov.png.part" "$d/ov.png"
@@ -9472,11 +9580,11 @@ t_unit_check() {
   fi
   # Refused before any box is made.
   check_match "up --keep without --clean refused" "--keep goes with --clean" "$(ob up "$P-uck" --keep clock 2>&1)"
-  check_match "up --clean --desk-shell refused" "--clean or --desk-shell, not both" "$(ob up "$P-uck" --clean --desk-shell 2>&1)"
+  check_match "up --clean --desk-shell refused" "$(omre "--clean or --desk-shell, not both" --desk-shell)" "$(ob up "$P-uck" --clean --desk-shell 2>&1)"
   # up --stock (#265, finding 613): a new user's desktop, not the desk's; --keep is --clean's.
-  check_match "up --stock --desk-shell refused" "--stock or --desk-shell, not both" "$(ob up "$P-uck" --stock --desk-shell 2>&1)"
-  check_match "up --stock --keep refused: --keep goes with --clean" "--keep goes with --clean" "$(ob up "$P-uck" --stock --keep fonts 2>&1)"
-  check_match "run --stock --desk-shell refused as up's" "--stock or --desk-shell, not both" "$(env -u OMABOX "$CLI" run --stock --desk-shell -- true 2>&1)"
+  check_match "up --stock --desk-shell refused" "$(omre "--stock or --desk-shell, not both" --stock)" "$(ob up "$P-uck" --stock --desk-shell 2>&1)"
+  check_match "up --stock --keep refused: --keep goes with --clean" "$(omre "--keep goes with --clean" --stock)" "$(ob up "$P-uck" --stock --keep fonts 2>&1)"
+  check_match "run --stock --desk-shell refused as up's" "$(omre "--stock or --desk-shell, not both" --stock)" "$(env -u OMABOX "$CLI" run --stock --desk-shell -- true 2>&1)"
   check_match "check point outside a run refused" "outside a check run" "$(env -u OMABOX_CHECK_OUT "$CLI" check point a 2>&1)"
   check_match "check point: a bad ID refused" "an ID is letters" "$(OMABOX_CHECK_OUT=$d/o ob check point ../x 2>&1)"
   rc=0; out=$(ob check run --base "$d/none" -- true 2>&1) || rc=$?
@@ -9669,7 +9777,7 @@ SH
   check_eq "...check.json: the locale and timezone" "$(probe clean_locale) UTC" "$(jq -r '"\(.locale) \(.timezone)"' "$d/base/check.json" 2>&1)"
   check_match "...the random label: unstable, every run differing" $'unstable demo: every run differed[^\n]*\n  [0-9]+,[0-9]+ [0-9]+x[0-9]+' "$out"
   check "...the baseline's files" test -s "$d/base/demo.png" -a -s "$d/base/demo.tree.json" -a -s "$d/base/demo.unstable" -a -s "$d/base/check.json"
-  check_eq "...no holes: the window's rounded corners are not one" "|holes checked" "$(grep -E '^holes ' <<<"$out" || true)|$(grep '^holes' "$d/base/screen.point")"
+  on_gpu check_eq "...no holes: the window's rounded corners are not one" "|holes checked" "$(grep -E '^holes ' <<<"$out" || true)|$(grep '^holes' "$d/base/screen.point")"
   # (OMABOX_SHOT_FIT: a user's shot-fit changes no checkpoint's shot, #281)
   rc=0; out=$(OMABOX_SHOT_FIT=800 ob check run --base "$d/base" -o "$d/b" -- "$d/scenario.sh" 2>&1) || rc=$?
   check_eq "check, nothing changed (OMABOX_SHOT_FIT=800 set): same, the label left out, exit 0" $'same     desk\nsame     demo\nsame     democrop\nsame     screen|0' \
@@ -10607,7 +10715,7 @@ t_unit_tree_layer() {
 # full-screen, one pid) by the keyboard; two layers of one size that cannot be told apart.
 t_tree_layer() {
   local B=$P-tl D out rc v x y mid
-  up_ok "$B" --net isolated "${OM[@]}" || { no "up" "$UP_OUT"; return; }
+  up_ok "$B" --net isolated "${OM[@]}" "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   out=$(ob tree -b "$B" 2>&1); rc=$?
   check_eq "tree with no window at all: exit 2" 2 "$rc"
@@ -10615,19 +10723,19 @@ t_tree_layer() {
   check_eq "--window and --layer: exit 2" 2 "$(ob tree -b "$B" --window x --layer y >/dev/null 2>&1; echo $?)"
   out=$(ob tree -b "$B" --layer nope 2>&1); rc=$?
   check_eq "--layer naming no layer: exit 2" 2 "$rc"
-  check_match "...the box's layers listed" '"omarchy-bar"  pid [0-9]+  top ' "$out"
+  check_match "...the box's layers listed" "\"$BAR_NS\"  pid [0-9]+  top " "$out"
   v=$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .quickshell_version // ""')
   if ! [[ $v =~ Quickshell\ 0\.([4-9]|3\.([2-9]|[1-9][0-9])) ]] && ! [[ $v =~ Quickshell\ [1-9] ]]; then
-    out=$(ob tree -b "$B" --layer omarchy-bar 2>&1); rc=$?
+    out=$(ob tree -b "$B" --layer "$BAR_NS" 2>&1); rc=$?
     check_eq "the bar on a Quickshell before 0.3.2 ($v): exit 1" 1 "$rc"
     check_match "...no tree, which releases have one" "no accessibility tree.*Quickshell publishes its windows' accessibility trees from 0.3.2 on" "$(tr '\n' ' ' <<<"$out")"
     skip "tree --layer on a stub panel" "the installed Quickshell publishes no tree ($v)"
     ob down "$B" >/dev/null; return
   fi
-  out=$(ob tree -b "$B" --layer omarchy-bar 2>&1); rc=$?
+  out=$(ob tree -b "$B" --layer "$BAR_NS" 2>&1); rc=$?
   check_eq "the shell's bar ($v): exit 1" 1 "$rc"
   check_match "...it publishes no accessible items (Omarchy's QML sets no roles)" \
-    'tree: layer "omarchy-bar" \(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\): the layer publishes no accessible items \(nothing in it sets an Accessible role\)' "$out"
+    "tree: layer \"$BAR_NS\""' \(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\): the layer publishes no accessible items \(nothing in it sets an Accessible role\)' "$out"
   cat > "$D/home/t254.qml" <<'QML'
 import QtQuick
 import Quickshell
@@ -10735,9 +10843,10 @@ QML
     check_eq "...and the wallpaper's: it publishes nothing, exit 1" \
       "1 yes" "$rc $(grep -q 'the layer publishes no accessible items' <<<"$out" && echo yes || echo "no: $out")"
   else no "a full-screen panel and wallpaper map" "no t315-panel / t315-wall layer"; fi
-  # The launcher and the wallpaper: one pid, both 1920x1080; the launcher holds the keyboard.
-  ob keys -b "$B" super+space >/dev/null
-  if ob wait -b "$B" layer omarchy-menu >/dev/null 2>&1; then
+  # The launcher and the wallpaper: one pid, both 1920x1080; the launcher holds the keyboard. (Omarchy's:
+  # a plain box has neither, #247.)
+  if ! omarchy_here; then skip "the launcher (the size of the wallpaper): its tree, and the wallpaper's" "$NO_OMARCHY"
+  elif ob keys -b "$B" super+space >/dev/null && ob wait -b "$B" layer omarchy-menu >/dev/null 2>&1; then
     out=$(ob tree -b "$B" --layer omarchy-menu --all 2>&1); rc=$?
     # 4.5's launcher has a search field first, focused (#311); 4.0's starts with its rows.
     if omarchy45; then
@@ -10765,7 +10874,9 @@ t_systemd() {
   check "...with the box's name, for what its units start (#172)" bash -c "'$CLI' run -b '$B' -- systemctl --user show-environment | grep -qx 'OMABOX_BOX=$B'"
   ob run -b "$B" -- systemd-run --user --on-active=1 --timer-property=AccuracySec=100ms --unit t1 touch /tmp/fired >/dev/null 2>&1
   check "a timer fires" until_ok 10 ob run -b "$B" -- test -e /tmp/fired
-  check "notify-send works" ob run -b "$B" -- notify-send omabox-test
+  # (Omarchy's shell is the notification server: a plain box has none, #247)
+  if omarchy_here; then check "notify-send works" ob run -b "$B" -- notify-send omabox-test
+  else skip "notify-send works" "$NO_OMARCHY: no notification server in the box"; fi
   # The browser bind's shape with a real user manager: omabox's uwsm-app detaches the app, and a unit
   # around it ended with the app inside (finding 131).
   ob run -b "$B" -- systemd-run --user --quiet --collect --unit=omarchy-browser-1 uwsm-app -- foot --app-id=omabox.sdrun sleep 60 >/dev/null
@@ -11285,7 +11396,10 @@ t_plain() {
     "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-plain.lua"' 2>&1 | cmp -s - "$ROOT/share/plain.lua" && echo same || echo differ)"
   check_eq "...still no config errors" "" "$(ob hyprctl -b "$B" configerrors | tr -d '[:space:]')"
   check_match "tray: no tray, said as plain" "has no tray: .*\(a plain box has no shell to have one: up --shell CMD runs one\)" "$(ob tray -b "$B" 2>&1)"
-  check_match "up --desktop omarchy on it: refused, said" "without what you asked for: --desktop omarchy \(it runs plain\)" "$(ob up "$B" --desktop omarchy 2>&1)"
+  # (where Omarchy is not, up refuses an Omarchy box before it looks for this one, #247)
+  local om_re="without what you asked for: --desktop omarchy \(it runs plain\)"
+  omarchy_here || om_re="up: an Omarchy box needs Omarchy, and this machine has none"
+  check_match "up --desktop omarchy on it: refused, said" "$om_re" "$(ob up "$B" --desktop omarchy 2>&1)"
   local o
   for o in "--theme tokyo-night" --stock --stock-bar --dnd --no-dock "--plugin $ROOT/plugin"; do
     # shellcheck disable=SC2086 # an option and its value
@@ -11345,7 +11459,7 @@ t_plain_clean() {
 # says so; an Omarchy box there is refused, and so is what needs Omarchy, saying why the box is plain.
 t_plain_auto() {
   local B=$P-plau out
-  local hide=(bwrap --dev-bind / / --tmpfs /usr/share/omarchy)
+  local hide=("${NOOM[@]}")
   if ! out=$("${hide[@]}" true 2>&1); then skip "plain chosen without Omarchy" "bwrap cannot hide /usr/share/omarchy here: $out"; return; fi
   out=$("${hide[@]}" "$CLI" up "$B" 2>&1) || { no "up without Omarchy" "$out"; return; }
   ok "up without Omarchy (none asked)"
@@ -11420,14 +11534,19 @@ QML
   check_fails "no box process left" pgrep -f "omabox/$B/"
   check_fails "no shell of it left on the host" pgrep -f "qs -p $bar"
   # The refusals, before a box starts.
-  check_match "--shell on an Omarchy box: refused" "up: --shell needs --desktop plain: an Omarchy box runs Omarchy's shell" "$(ob up "$P-pshell2" --shell "qs -p $bar" 2>&1)"
+  # (where Omarchy is not there is no Omarchy box, and an up without --desktop is a plain one, #247)
+  if omarchy_here; then
+    check_match "--shell on an Omarchy box: refused" "up: --shell needs --desktop plain: an Omarchy box runs Omarchy's shell" "$(ob up "$P-pshell2" --shell "qs -p $bar" 2>&1)"
+  else skip "--shell on an Omarchy box: refused" "$NO_OMARCHY"; fi
   check_match "--shell with --no-shell: refused" "up: --shell runs a shell, and --no-shell starts none" "$(ob up "$P-pshell2" --desktop plain --no-shell --shell qs 2>&1)"
   check_match "--quickshell on plain without --shell: refused" "up: --quickshell runs the box's shell, and --desktop plain has none without --shell CMD" \
     "$(ob up "$P-pshell2" --desktop plain --quickshell /usr/bin/quickshell 2>&1)"
   check_match "--shell with no command: refused" "up: --shell takes the command that starts the shell" "$(ob up "$P-pshell2" --desktop plain --shell ' ' 2>&1)"
   # (check run hands --desktop and --shell to up since #247, whose refusal it says)
-  check_match "check run --shell on an Omarchy box: up's refusal, said" "did not start: omabox: up: --shell needs --desktop plain" \
-    "$(ob check run --approve --base "$TMP/pshell-base" --shell qs -- true 2>&1)"
+  if omarchy_here; then
+    check_match "check run --shell on an Omarchy box: up's refusal, said" "did not start: omabox: up: --shell needs --desktop plain" \
+      "$(ob check run --approve --base "$TMP/pshell-base" --shell qs -- true 2>&1)"
+  else skip "check run --shell on an Omarchy box: up's refusal, said" "$NO_OMARCHY"; fi
   # A plain box with no shell: restart-shell and log shell say why, in plain words.
   B=$P-pshell3
   up_ok "$B" --desktop plain --net isolated || { no "up --desktop plain" "$UP_OUT"; return; }
@@ -11570,8 +11689,10 @@ EOF
   check_eq "setup in a clean HOME" 0 "$rc"
   # (No ~/.local/bin/omabox for a system install: its command is /usr/bin/omabox.)
   local bin="$ROOT/bin/omabox "; [[ $ROOT != /usr/* ]] || bin=""
+  # (the widget only where Omarchy is, #247: without it setup links none, as below)
+  local wl=" $ROOT/plugin"; omarchy_here || wl=""
   check_eq "...omabox, the skill (Claude Code, the shared dir, Codex: it is there) and the widget linked" \
-    "$bin$ROOT/skill $ROOT/skill $ROOT/skill $ROOT/plugin" \
+    "$bin$ROOT/skill $ROOT/skill $ROOT/skill$wl" \
     "$(readlink "$h/.local/bin/omabox" "$h/.claude/skills/omabox" "$h/.agents/skills/omabox" "$h/.codex/skills/omabox" "$h/.config/omarchy/plugins/chaves.omabox" | tr '\n' ' ' | sed 's/ $//')"
   [[ $ROOT != /usr/* ]] || check_fails "...no ~/.local/bin/omabox for a system install" test -e "$h/.local/bin/omabox"
   check_fails "...not for an agent that is not installed" test -e "$h/.hermes"
@@ -11581,22 +11702,24 @@ EOF
   # running shell had not seen the new link yet, so `omarchy plugin enable` said "is not known". A shell
   # that does not list the widget is asked to rescan, and setup waits until it lists it.
   local sl
-  setup_shell() { rm -f "$h/shell.log" "$h/rescanned" "$h/listed"; if [ "$1" = none ]; then rm -f "$h/shell-mode"; else echo "$1" > "$h/shell-mode"; fi; out=$(in_h setup); sl=$(cat "$h/shell.log" 2>/dev/null); }
-  check_match "...no shell running: the line as it was" "bar widget: not asked \(no terminal\): omarchy plugin enable chaves\.omabox" "$out"
-  setup_shell unknown
-  check_match "a shell that has not seen the new link: the same line" "bar widget: not asked \(no terminal\): omarchy plugin enable chaves\.omabox" "$out"
-  check_eq "...after a rescan, and a wait until the shell lists the widget (#397)" \
-    "omarchy-shell shell listPlugins|omarchy-shell -q shell rescanPlugins|omarchy-shell shell listPlugins|omarchy-shell shell listPlugins" "$(tr '\n' '|' <<<"$sl" | sed 's/|$//')"
-  setup_shell known
-  check_eq "a shell that lists it already: no rescan (it reloads every plugin)" "omarchy-shell shell listPlugins" "$sl"
-  setup_shell none
-  check_eq "no shell running: asked once, no rescan" "omarchy-shell shell listPlugins" "$sl"
-  setup_shell stuck
-  check_match "a shell that still does not list it after the rescan: the line names both steps" \
-    "bar widget: not asked \(no terminal\): omarchy-shell shell rescanPlugins, then omarchy plugin enable chaves\.omabox" "$out"
-  date -Is > "$h/.config/omabox/widget-declined"; setup_shell unknown
-  check_eq "...a no remembered: not a call to the shell" "" "$sl"
-  rm -f "$h/.config/omabox/widget-declined" "$h/shell-mode" "$h/shell.log"
+  if omarchy_here; then
+    setup_shell() { rm -f "$h/shell.log" "$h/rescanned" "$h/listed"; if [ "$1" = none ]; then rm -f "$h/shell-mode"; else echo "$1" > "$h/shell-mode"; fi; out=$(in_h setup); sl=$(cat "$h/shell.log" 2>/dev/null); }
+    check_match "...no shell running: the line as it was" "bar widget: not asked \(no terminal\): omarchy plugin enable chaves\.omabox" "$out"
+    setup_shell unknown
+    check_match "a shell that has not seen the new link: the same line" "bar widget: not asked \(no terminal\): omarchy plugin enable chaves\.omabox" "$out"
+    check_eq "...after a rescan, and a wait until the shell lists the widget (#397)" \
+      "omarchy-shell shell listPlugins|omarchy-shell -q shell rescanPlugins|omarchy-shell shell listPlugins|omarchy-shell shell listPlugins" "$(tr '\n' '|' <<<"$sl" | sed 's/|$//')"
+    setup_shell known
+    check_eq "a shell that lists it already: no rescan (it reloads every plugin)" "omarchy-shell shell listPlugins" "$sl"
+    setup_shell none
+    check_eq "no shell running: asked once, no rescan" "omarchy-shell shell listPlugins" "$sl"
+    setup_shell stuck
+    check_match "a shell that still does not list it after the rescan: the line names both steps" \
+      "bar widget: not asked \(no terminal\): omarchy-shell shell rescanPlugins, then omarchy plugin enable chaves\.omabox" "$out"
+    date -Is > "$h/.config/omabox/widget-declined"; setup_shell unknown
+    check_eq "...a no remembered: not a call to the shell" "" "$sl"
+    rm -f "$h/.config/omabox/widget-declined" "$h/shell-mode" "$h/shell.log"
+  else skip "setup's bar widget line, the running shell asked (#397)" "$NO_OMARCHY: setup links no widget"; fi
   # finding 326: the feedback skill is opt-in. No link from a plain setup; --feedback-skill links it
   # where the omabox skill goes, a later plain setup keeps it, --no-feedback-skill takes it out.
   local fbl=(.claude/skills/omabox-feedback .agents/skills/omabox-feedback .codex/skills/omabox-feedback) l
@@ -11620,7 +11743,8 @@ EOF
   # An answer with blanks around it is read as bash's read took it (finding 482): " n" and "n " are a
   # no. In a terminal (script's pty), the widget's question; omarchy and omarchy-shell stand-ins that
   # log, on a HOME of its own.
-  if command -v script >/dev/null; then
+  if ! omarchy_here; then skip "setup's answers with blanks" "$NO_OMARCHY: setup asks nothing of the widget"
+  elif command -v script >/dev/null; then
     local sh2=$TMP/$P-setup-pty sst=$TMP/$P-setup-stub a
     mkdir -p "$sst"
     for a in omarchy omarchy-shell; do printf '#!/bin/sh
@@ -11666,7 +11790,7 @@ echo "%s $*" >> "$HOME/stub.log"
   local hp=$TMP/$P-setup-plain
   rm -rf "$hp"; mkdir -p "$hp"
   out=$(HOME=$hp XDG_DATA_HOME=$hp/.local/share XDG_CACHE_HOME=$hp/.cache XDG_CONFIG_HOME=$hp/.config XDG_STATE_HOME=$hp/.local/state \
-    PATH=$hst:$PATH bwrap --dev-bind / / --tmpfs /usr/share/omarchy "$CLI" setup 2>&1 </dev/null); rc=$?
+    PATH=$hst:$PATH "${NOOM[@]}" "$CLI" setup 2>&1 </dev/null); rc=$?
   if [ "$rc" = 0 ] || grep -q 'bar widget' <<<"$out"; then
     check_eq "setup without Omarchy: the widget skipped, said; no omarchy asked; exit 0 (#247)" \
       "bar widget: skipped, no Omarchy here (it lives in Omarchy's bar)|0|" \
@@ -11684,8 +11808,25 @@ echo "%s $*" >> "$HOME/stub.log"
 t_unit_no_theme() {
   local h=$TMP/$P-notheme rt=$TMP/$P-notheme-run out rc
   mkdir -p "$h/.local/state/omarchy" "$rt"; chmod 700 "$rt"
-  out=$(HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
-    OMABOX_AQUAMARINE=system "$CLI" up nt 2>&1); rc=$?
+  # (the user's dirs all in the test's; a box nt that started anyway, a plain one or a regression's,
+  # is taken down at the end: it would be left up past the run, outside its names)
+  nt() {
+    HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
+      OMABOX_AQUAMARINE=system "$CLI" "$@"
+  }
+  if ! omarchy_here; then
+    # A plain box (#247) has no Omarchy theme to want: up goes past where the check was, to a down's
+    # marker from the future (finding 147) that cancels it before anything starts.
+    mkdir -p "$rt/omabox"; echo 9999999999999 > "$rt/omabox/.down-nt"
+    out=$(nt up nt 2>&1)
+    check_match "without Omarchy: up of a plain box needs no Omarchy theme (#247)" "up: cancelled: omabox down nt came|a headless box on NVIDIA" "$out"
+    check_fails "...(and is not refused for one)" grep -q "has not set a theme" <<<"$out"
+    rm -f "$rt/omabox/.down-nt"
+    skip "up with no Omarchy theme fails" "$NO_OMARCHY"
+    nt down nt >/dev/null 2>&1
+    return
+  fi
+  out=$(nt up nt 2>&1); rc=$?
   check_eq "up with no Omarchy theme fails" 1 "$rc"
   check_match "...saying why and what to do" "has not set a theme for you yet .*log into Omarchy once" "$out"
   check_fails "...before the box's dirs are made" test -e "$h/.cache/omabox/nt"
@@ -11695,15 +11836,14 @@ t_unit_no_theme() {
   # aquamarine without #415's fix (the earlier stop, `--monitor` on an interactive box, is only
   # refused without that fix; with it a unit test would have started an interactive box).
   mkdir -p "$rt/omabox"; echo 9999999999999 > "$rt/omabox/.down-nt"
-  out=$(HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
-    OMABOX_AQUAMARINE=system "$CLI" up nt --theme tokyo-night 2>&1)
+  out=$(nt up nt --theme tokyo-night 2>&1)
   check_match "with --theme: not refused for want of a theme of the user's" "up: cancelled: omabox down nt came|a headless box on NVIDIA" "$out"
   check_fails "...(and not for the theme)" grep -q "has not set a theme" <<<"$out"
   rm -f "$rt/omabox/.down-nt"
-  out=$(HOME=$h XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$h/.cache XDG_DATA_HOME=$h/.local/share XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state \
-    OMABOX_AQUAMARINE=system "$CLI" up nt --theme nope 2>&1)
+  out=$(nt up nt --theme nope 2>&1)
   check_match "...one that is not there refused" "--theme: no theme nope in " "$out"
   check_fails "...neither makes the box's dirs" test -e "$h/.cache/omabox/nt" -o -e "$rt/omabox/nt"
+  nt down nt >/dev/null 2>&1
 }
 
 # finding 125 (issue #47): which aquamarine a box runs (aq_pick), and what is refused without the fix.
@@ -11957,7 +12097,8 @@ aq_setup_checks() {
   done
   # What setup decides over the stub as the system's (its root's /usr/lib), from no checkout build.
   local sr=$d/setup-root; mkdir -p "$sr/usr"; ln -sfn "$d/stub" "$sr/usr/lib"
-  out=$(probe aq_build_needed 0 "$d/noco" "$sr" 2>&1; echo "rc=$?")
+  # (the data dir a scratch one: a private build in yours, an install's, is not the stub's system one)
+  out=$(XDG_DATA_HOME=$data probe aq_build_needed 0 "$d/noco" "$sr" 2>&1; echo "rc=$?")
   check_fails "setup --aquamarine over a system aquamarine with #415: not \"nothing to build\"" grep -q "nothing to build" <<<"$out"
   check_match "...says it lacks omabox's own fixes, and builds them" \
     "has the fix for nested Wayland outputs but not omabox's own \(keys held .*\).*rc=0$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
@@ -12102,10 +12243,12 @@ t_unit_hyprland() {
 t_hyprland() {
   local B=$P-hyp h=$TMP/$P-hbuild/Hyprland D=$XDG_RUNTIME_DIR/omabox/$P-hyp
   mkdir -p "${h%/*}"; cp /usr/bin/Hyprland "$h"
-  check "up --hyprland (a copy of the installed one), shell and bar up" ob up "$B" --hyprland "$h"
+  check "up --hyprland (a copy of the installed one), shell and bar up" ob up "$B" --hyprland "$h" "${PSHELL[@]}"
   check_box_safety "$B"
   check_eq "the box's Hyprland runs it" "$h" "$(ob run -b "$B" -- sh -c 'readlink /proc/$(pgrep -x Hyprland)/exe')"
-  check_match "ls says so, under its line" "^  Hyprland: $h \(Hyprland [0-9.]+ built from" "$(ob ls | grep -A1 "^$B " | tail -n 1)"
+  # (its line among the box's own: a plain box's first says its desktop, #247)
+  check_match "ls says so, under its line" "^  Hyprland: $h \(Hyprland [0-9.]+ built from" \
+    "$(ob ls | awk -v b="$B" '$1 == b { on = 1; next } /^[^ ]/ { on = 0 } on && /^  Hyprland:/')"
   check_eq "ls --json has the binary" "$h" "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .hyprland')"
   check_match "windows says so first" "^box $B runs Hyprland $h \(Hyprland " "$(ob windows -b "$B" | head -n 1)"
   check "box.log has hyprctl version's first line, from inside" until_ok 10 grep -qF "session.sh: Hyprland $h: Hyprland " "$D/box.log"
@@ -12147,17 +12290,20 @@ t_hyprland_folder() {
 
 # finding 358: `up --quickshell PATH`'s refusals, before any box starts, and what it records.
 t_unit_quickshell() {
-  local d=$TMP/$P-qs out
+  local d=$TMP/$P-qs out a
   mkdir -p "$d/fh" "$d/proj/build" "$d/other"
   printf '#!/bin/sh\nexec /usr/bin/quickshell "$@"\n' > "$d/wrapper"; chmod +x "$d/wrapper"
+  # (a plain box runs a build of Quickshell only as the shell --shell starts, #247: one is given there)
+  local qs=(); omarchy_here || qs=(--shell qs)
   cp /usr/bin/true "$d/noqt"; cp /usr/bin/true "$d/fh/quickshell"; : > "$d/plain"
   check_match "a missing file" "--quickshell: no such file" "$(ob up "$P-q1" --quickshell "$d/nosuch" 2>&1)"
   check_match "a file that is not executable" "--quickshell: .* is not executable" "$(ob up "$P-q1" --quickshell "$d/plain" 2>&1)"
   check_match "a script is not an ELF binary" "--quickshell: .* is not an ELF binary" "$(ob up "$P-q1" --quickshell "$d/wrapper" 2>&1)"
-  check_match "an ELF with no Qt" "links no libQt6Core.so.6 \(readelf -d\): not a Quickshell build" "$(ob up "$P-q1" --quickshell "$d/noqt" 2>&1)"
+  check_match "an ELF with no Qt" "links no libQt6Core.so.6 \(readelf -d\): not a Quickshell build" "$(ob up "$P-q1" --quickshell "$d/noqt" "${qs[@]}" 2>&1)"
   check_match "its folder is refused as --ro-bind's are (here: all of HOME)" "refusing to mount $d/fh \(the binary's folder\).*it contains" \
-    "$(HOME=$d/fh "$CLI" up "$P-q1" --quickshell "$d/fh/quickshell" 2>&1)"
-  check_match "...and with --no-shell, which starts no shell" "--quickshell runs the box's shell, and --no-shell starts none" \
+    "$(HOME=$d/fh "$CLI" up "$P-q1" --quickshell "$d/fh/quickshell" "${qs[@]}" 2>&1)"
+  a="--quickshell runs the box's shell, and --no-shell starts none"; omarchy_here || a="--quickshell runs the box's shell, and --desktop plain has none without --shell CMD"
+  check_match "...and with --no-shell, which starts no shell" "$a" \
     "$(ob up "$P-q1" --quickshell /usr/bin/quickshell --no-shell 2>&1)"
   check_match "run takes it for a throwaway (and refuses the same)" "is not an ELF binary" "$(ob run --quickshell "$d/wrapper" -- true 2>&1)"
   if command -v cc >/dev/null && [ -n "$(probe qt_box)" ]; then
@@ -12167,13 +12313,13 @@ t_unit_quickshell() {
     printf 'extern const char qt_version_tag;\n__asm__(".symver qt_version_tag, qt_version_tag@Qt_%s");\nconst char *const tag = &qt_version_tag;\nint main(void) { return tag == 0; }\n' "6.0" > "$d/old.c"
     cc -fPIC -pie -o "$d/b0/quickshell" "$d/old.c" -l:libQt6Core.so.6 2>/dev/null
     check_match "a build against another Qt is refused, naming both" \
-      "was built against Qt 6.0, but the box has Qt $(probe qt_version).*Qt's private API" "$(ob up "$P-q1" --quickshell "$d/b0/quickshell" 2>&1)"
+      "was built against Qt 6.0, but the box has Qt $(probe qt_version).*Qt's private API" "$(ob up "$P-q1" --quickshell "$d/b0/quickshell" "${qs[@]}" 2>&1)"
     # The box's Qt, but a library the box lacks.
     sed "s/Qt_6\.0/Qt_$qt/" "$d/old.c" > "$d/same.c"; echo 'int aq(void) { return 0; }' > "$d/miss.c"
     cc -shared -fPIC -Wl,-soname,libomaboxmissing.so.1 -o "$d/lib/libomaboxmissing.so" "$d/miss.c" &&
       cc -fPIC -pie -o "$d/b1/quickshell" "$d/same.c" -l:libQt6Core.so.6 -L"$d/lib" -Wl,--no-as-needed -lomaboxmissing 2>/dev/null
     check_match "...and one needing a library the box lacks" "needs libomaboxmissing.so.1, which the box lacks" \
-      "$(ob up "$P-q1" --quickshell "$d/b1/quickshell" 2>&1)"
+      "$(ob up "$P-q1" --quickshell "$d/b1/quickshell" "${qs[@]}" 2>&1)"
   else
     skip "builds against another Qt are refused" "no C compiler, or no Qt 6 (libQt6Core)"
   fi
@@ -12184,7 +12330,7 @@ t_unit_quickshell() {
   local J; J=$(jq -nc --arg p "$d/proj" --arg c "$d/proj" '{id: "1 2", net: false, cwd: $c, roots: [{path: $p, masked: false}]}')
   check_match "jail: a build outside the jail's folders is refused" "not in this jail's project nor in a folder it was given whole \(or is not a Quickshell" \
     "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/other/quickshell" --size huge 2>&1)"
-  check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" up "$P-q2" --quickshell "$d/proj/build/quickshell" --size huge 2>&1)"
+  check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" up "$P-q2" --quickshell "$d/proj/build/quickshell" "${qs[@]}" --size huge 2>&1)"
   # (relay: --quickshell goes absolute: t_unit_jailed_caller's.)
   # (The version line, from inside the box, every box's, the build's run by its path: install.rs
   # qs_version_as_bash, the box's answers given; #324 wave 6-suite.)
@@ -12738,20 +12884,26 @@ t_keys_layer() {
   ob run -b "$B" -d -q -- foot -T K sh -c 'cat > /tmp/typed'
   ob wait -b "$B" window 'title:^K$' >/dev/null 2>&1
   check_eq "the terminal is on the second monitor" true "$(ob windows -b "$B" --json | jq '.[] | select(.title == "K") | .at[0] >= 1920')"
-  ob click -b "$B" 960 540 >/dev/null
-  ob keys -b "$B" super+space >/dev/null
-  if ! ob wait -b "$B" layer omarchy-menu >/dev/null 2>&1; then no "the launcher opens (super+space)" "no omarchy-menu layer"; ob down "$B" >/dev/null; return; fi
-  pos=$(ob hyprctl -b "$B" cursorpos)
-  out=$(ob keys -b "$B" --window 'title:^K$' -t 'echo hi' Return 2>&1); rc=$?
-  check_eq "keys --window with the launcher open: refused, exit 1" 1 "$rc"
-  check_match "...said: the launcher's layer has the keyboard, nothing sent" \
-    "keys --window: a layer \(omarchy-menu\) has the keyboard: the keys would go to it, not to 0x[0-9a-f]+ foot \"K\"; nothing sent" "$out"
-  check_eq "...the terminal not focused (a focus would have moved the pointer to it)" "$pos" "$(ob hyprctl -b "$B" cursorpos)"
-  ob keys -b "$B" Escape >/dev/null
-  # With text in its field, the first Escape only clears it.
-  check "...the launcher's field untouched: one Escape closes it" ob wait -b "$B" --timeout 3s layer omarchy-menu --gone
-  check "...then keys --window to the terminal, still the active window, goes on" ob keys -b "$B" --window 'title:^K$' -t hi Return
-  check_eq "...the pointer left where it was" "$pos" "$(ob hyprctl -b "$B" cursorpos)"
+  # Omarchy's launcher (a plain box has none, #247: the layer below stands in for what it shows).
+  if omarchy_here; then
+    ob click -b "$B" 960 540 >/dev/null
+    ob keys -b "$B" super+space >/dev/null
+    if ! ob wait -b "$B" layer omarchy-menu >/dev/null 2>&1; then no "the launcher opens (super+space)" "no omarchy-menu layer"; ob down "$B" >/dev/null; return; fi
+    pos=$(ob hyprctl -b "$B" cursorpos)
+    out=$(ob keys -b "$B" --window 'title:^K$' -t 'echo hi' Return 2>&1); rc=$?
+    check_eq "keys --window with the launcher open: refused, exit 1" 1 "$rc"
+    check_match "...said: the launcher's layer has the keyboard, nothing sent" \
+      "keys --window: a layer \(omarchy-menu\) has the keyboard: the keys would go to it, not to 0x[0-9a-f]+ foot \"K\"; nothing sent" "$out"
+    check_eq "...the terminal not focused (a focus would have moved the pointer to it)" "$pos" "$(ob hyprctl -b "$B" cursorpos)"
+    ob keys -b "$B" Escape >/dev/null
+    # With text in its field, the first Escape only clears it.
+    check "...the launcher's field untouched: one Escape closes it" ob wait -b "$B" --timeout 3s layer omarchy-menu --gone
+    check "...then keys --window to the terminal, still the active window, goes on" ob keys -b "$B" --window 'title:^K$' -t hi Return
+    check_eq "...the pointer left where it was" "$pos" "$(ob hyprctl -b "$B" cursorpos)"
+  else
+    skip "the launcher opens (super+space): keys --window refused while it has the keyboard" "$NO_OMARCHY: no launcher"
+    ob keys -b "$B" --window 'title:^K$' -t hi Return >/dev/null   # (what its last check typed, read below)
+  fi
   # An overlay with the keyboard on demand, given it by a click; the terminal stays the active window.
   cat > "$D/home/t201.qml" <<'QML'
 import QtQuick
@@ -12964,6 +13116,8 @@ QML
 t_in_changed() {
   local B=$P-inch o=$TMP/inch D out rc
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  # (a new window tiles to the right: Omarchy's force_split, set here on a plain box, #247)
+  omarchy_here || ob lua -b "$B" 'hl.config({ dwindle = { force_split = 2 } })' >/dev/null
   D=$(ob path -b "$B"); mkdir -p "$o"
   ob run -b "$B" -d -q --wait -- foot -T A -o cursor.blink=no cat >/dev/null 2>&1
   ob shot -b "$B" -o "$o/s1.png" >/dev/null 2>&1
@@ -13592,7 +13746,7 @@ t_peek() {
   ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ workspace = '5', follow = false })" >/dev/null; sleep 0.5
   printf 'combo super+space\nptr 1920x1080 move 5 5 click\n' >> "$D/run/marks-in"   # nothing to show them on
   local hidden; hidden=$(ticks)
-  check "peek idles while hidden (CPU ticks: $hidden)" test "$hidden" -le 2
+  on_gpu check "peek idles while hidden (CPU ticks: $hidden)" test "$hidden" -le 2
   check_fails "peek refuses junk --fps" "$ROOT/tools/peek/omabox-peek" --box /nonexistent --fps abc
   ob down "$B" >/dev/null
 }
@@ -13725,14 +13879,20 @@ t_unit_doctor() {
       and (.fix | type == "array" and all(.[]; type == "string"))) and .smoke == null' <<<"$j")"
   ids="omarchy theme hyprland aquamarine labwc quickshell bwrap pasta unshare grim box-programs some-programs tools userns no-new-privs tun render socket-path path session-path"
   check_eq "...every check, in order" "$ids" "$(jq -r '[.checks[].id] | join(" ")' <<<"$j")"
-  check_eq "...a HOME with no Omarchy theme fails, with up's fix; ok false, exit 1" \
-    "fail log into Omarchy once, or: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME) false 1" \
-    "$(jq -r '(.checks[] | select(.id == "theme") | "\(.status) \(.fix[0])"), .ok' <<<"$j" | paste -sd ' ') $rc"
+  if omarchy_here; then
+    check_eq "...a HOME with no Omarchy theme fails, with up's fix; ok false, exit 1" \
+      "fail log into Omarchy once, or: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME) false 1" \
+      "$(jq -r '(.checks[] | select(.id == "theme") | "\(.status) \(.fix[0])"), .ok' <<<"$j" | paste -sd ' ') $rc"
+  else
+    # (#247: plain boxes want no Omarchy theme)
+    check_eq "...a HOME with no Omarchy theme, on a machine without Omarchy: information, no fix" "info 0" \
+      "$(jq -r '.checks[] | select(.id == "theme") | "\(.status) \(.fix | length)"' <<<"$j")"
+  fi
   check_eq "...and it wrote nothing (HOME, XDG dirs, TMPDIR, runtime dir)" "" "$(command find "$h/home" "$h/rt" -mindepth 1)"
   # #247 (finding 646): a machine without Omarchy (its tree hidden here under a tmpfs, bwrap's): the
   # Omarchy and theme checks are information, plain boxes only, not failures; quickshell would be
   # information too (it is installed here).
-  j=$(_doctor_env XDG_RUNTIME_DIR="$h/rt" bwrap --dev-bind / / --tmpfs /usr/share/omarchy "$CLI" doctor --json 2>/dev/null) || true
+  j=$(_doctor_env XDG_RUNTIME_DIR="$h/rt" "${NOOM[@]}" "$CLI" doctor --json 2>/dev/null) || true
   if [ -n "$j" ]; then
     check_eq "...without Omarchy: omarchy and theme are information, no fix (#247)" \
       "omarchy info plain boxes only: no Omarchy here (/usr/share/omarchy is missing): a box runs Hyprland without Omarchy's desktop, bar, theme or plugins 0|theme info 0" \
@@ -13740,10 +13900,14 @@ t_unit_doctor() {
   else
     skip "doctor without Omarchy" "bwrap cannot hide /usr/share/omarchy here"
   fi
-  rc=0; _doctor_env XDG_RUNTIME_DIR="$h/rt" "$CLI" doctor > "$h/text" 2>&1 || rc=$?
+  # The text, with a check that fails: the theme's where Omarchy is; where it is not (#247), a runtime
+  # dir too deep for a box's sockets (as below: doctor makes nothing there).
+  deep=$h/$(printf 'r%.0s' {1..60})
+  local trt=$h/rt want=$'FAIL  theme +Omarchy has not set a theme for you yet[^\n]*\n +fix: log into Omarchy once'
+  omarchy_here || trt=$deep want=$'FAIL  socket-path +[^\n]*\n +fix: run omabox with a shorter XDG_RUNTIME_DIR'
+  rc=0; _doctor_env XDG_RUNTIME_DIR="$trt" "$CLI" doctor > "$h/text" 2>&1 || rc=$?
   check_match "doctor: says the distribution and that it changes nothing" "^omabox doctor \(.+\): read-only, nothing changed$" "$(head -n 1 "$h/text")"
-  check_match "...a failed check in capitals, its fix under it" \
-    $'FAIL  theme +Omarchy has not set a theme for you yet[^\n]*\n +fix: log into Omarchy once' "$(cat "$h/text")"
+  check_match "...a failed check in capitals, its fix under it" "$want" "$(cat "$h/text")"
   check_match "...ends with what failed, exit 1" "^[0-9]+ failed, [0-9]+ warnings?: boxes cannot start here until the fixes above are made 1$" \
     "$(tail -n 1 "$h/text") $rc"
   if [ -x /usr/bin/omabox ]; then
@@ -13756,7 +13920,6 @@ t_unit_doctor() {
   fi
   # A runtime dir past what a socket path holds (a 40-byte box name's Wayland socket under it): a
   # failure; --smoke then starts no box. (It need not exist: doctor makes nothing there.)
-  deep=$h/$(printf 'r%.0s' {1..60})
   rc=0; j=$(_doctor_env XDG_RUNTIME_DIR="$deep" "$CLI" doctor --json --smoke) || rc=$?
   check_eq "...a runtime dir too deep for a box's sockets fails; --smoke then starts no box" \
     "fail run omabox with a shorter XDG_RUNTIME_DIR {\"ok\":false,\"error\":\"not started: a check failed\"} 1" \
@@ -14034,7 +14197,8 @@ t_uwsm_app() {
   local B=$P-uw
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   check_eq "session TERMINAL is Omarchy's" xdg-terminal-exec "$(ob run -b "$B" -- sh -c 'echo $TERMINAL')"
-  check_eq "session EDITOR is Omarchy's" "omarchy-launch-editor --inline" "$(ob run -b "$B" -- sh -c 'echo $EDITOR')"
+  if omarchy_here; then check_eq "session EDITOR is Omarchy's" "omarchy-launch-editor --inline" "$(ob run -b "$B" -- sh -c 'echo $EDITOR')"
+  else skip "session EDITOR is Omarchy's" "$NO_OMARCHY"; fi
   # Whether the terminal applies it is xdg-terminal-exec's business (foot's entry has no
   # TerminalArgAppId, so neither it nor real uwsm passes it on); the stand-in must hand it over.
   ob run -b "$B" -- uwsm-app -T --app-id=omabox.term -- sleep 60 >/dev/null
@@ -14065,7 +14229,9 @@ t_uwsm_app() {
   local ov; ov=$(pacman -Q omarchy-dev 2>/dev/null || pacman -Q omarchy 2>/dev/null) || ov=${OMABOX_OMARCHY_VERSION:-}
   check_eq "omarchy-version says the installed Omarchy's version" "${ov#* }" "$(ob run -b "$B" -- omarchy-version)"
   check_eq "...in a terminal's bash too (Omarchy's bin is on its PATH)" "${ov#* }" "$(ob run -b "$B" -- bash -ic omarchy-version 2>/dev/null)"
-  check_eq "...and ls --json has it (finding 139)" "${ov#* }" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
+  # (a plain box, #247: none)
+  local lov="${ov#* }"; omarchy_here || lov=null
+  check_eq "...and ls --json has it (finding 139)" "$lov" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
   # #238: the installed Hyprland's version too, as the box's says it; `hyprland` (a build's path) null.
   # Under OMABOX_HYPRLAND (finding 651), the folder's binary, and ls names it.
   local hj; hj=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | [.hyprland, .hyprland_version]')
@@ -14282,7 +14448,7 @@ t_cli_up() {
   # change what up does: its theme the user's current one, its config empty.
   local h=$r/home st=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current
   mkdir -p "$h/.config/omabox" "$h/.local/state/omarchy/current"; : > "$h/.config/omabox/config"
-  ln -s "$(readlink -f "$st/theme")" "$h/.local/state/omarchy/current/theme"
+  [ ! -e "$st/theme" ] || ln -s "$(readlink -f "$st/theme")" "$h/.local/state/omarchy/current/theme"
   cp "$st/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null
   # (and the user's bar, as up seeds it from the desk)
   mkdir -p "$h/.config/omarchy"; cp "$HOME/.config/omarchy/shell.json" "$HOME/.config/omarchy/shell.toml" "$h/.config/omarchy/" 2>/dev/null
@@ -14300,7 +14466,8 @@ t_cli_up() {
   rpu_golden() {
     local d=$XDG_RUNTIME_DIR/omabox/$U slug g got=$TMP/rpu-golden.$BASHPID eph resolv
     slug=$(tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
-    g=$ROOT/test/golden/up/$slug
+    # (a plain machine's boxes, #247: goldens of their own, up-plain/, written on one)
+    g=$ROOT/test/golden/up$(omarchy_here || echo -plain)/$slug
     # (a connected box's: the host's ephemeral ports, pasta's to forward, and its resolver file)
     eph=$(tr -s '\t ' '-' < /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null) || eph=""
     resolv=$(readlink -f /etc/resolv.conf 2>/dev/null) || resolv=""
@@ -14311,7 +14478,7 @@ t_cli_up() {
     if [ "${OMABOX_GOLDEN:-}" = write ]; then
       mkdir -p "${g%/*}"; cp "$got" "$g"; ok "$1: golden written ($slug)"
     elif [ ! -f "$g" ]; then
-      no "$1: launch.sh and box.json as their golden" "no golden test/golden/up/$slug (OMABOX_GOLDEN=write writes it)"
+      no "$1: launch.sh and box.json as their golden" "no golden ${g#"$ROOT/"} (OMABOX_GOLDEN=write writes it)"
     elif cmp -s "$g" "$got"; then
       ok "$1: launch.sh and box.json as their golden"
     else
@@ -14326,17 +14493,33 @@ t_cli_up() {
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "net": "isolated",$' 'state~^  "shell": false,$' 'state~^  "size": "1920x1080@60",$')
   cx_case "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
   cx_want=(rc=0 "out~^\\{\"name\":\"$U\",\"mode\":\"headless\",\"size\":\"1920x1080@60\",\"scale\":1,\"created\":T,.*\"net\":\"isolated\"" "$(rpu_said 1920x1080@60)" 'state~^  "shell": true,$')
-  cx_case "up --json: with its shell" up "$U" --net isolated --json
+  # (without Omarchy a box has a shell when --shell names one, #247: PSHELL's)
+  cx_case "up --json: with its shell" up "$U" --net isolated --json "${PSHELL[@]}"
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "net": "connected",$')
   cx_case "up: connected" up "$U" --no-shell
-  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" "err~^omabox: clean: Omarchy's bar, theme tokyo-night, wallpaper #ff00ff .*, no network, animations off, as user@omabox$" 'state~^  "bar": "stock",$' 'state~^  "clean": \{$' 'state~^  "net": "isolated",$')
+  if omarchy_here; then
+    cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" "err~^omabox: clean: Omarchy's bar, theme tokyo-night, wallpaper #ff00ff .*, no network, animations off, as user@omabox$" 'state~^  "bar": "stock",$' 'state~^  "clean": \{$' 'state~^  "net": "isolated",$')
+  else
+    # (a plain box's --clean: the generic part, no bar or theme of Omarchy's, #247)
+    cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" "err~^omabox: clean: background #ff00ff \(any of it inside a window is a hole\), locale [^ ]+ in UTC, none of your fonts, no pointer, no network, animations off, as user@omabox$" 'state~^  "clean": \{$' 'state~^  "net": "isolated",$')
+  fi
   cx_case "up --clean" up "$U" --clean
-  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "bar": "stock",$' 'state~^  "xwayland": true$' 'state~^\./pointer f$')
-  cx_case "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated
+  if omarchy_here; then
+    cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "bar": "stock",$' 'state~^  "xwayland": true$' 'state~^\./pointer f$')
+    cx_case "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated
+  else
+    cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "xwayland": true$' 'state~^\./pointer f$')
+    cx_case "up --no-pointer --xwayland" up "$U" --no-pointer --xwayland --net isolated
+  fi
   cx_want=(rc=0 out= "$(rpu_said '1920x1080@60 \+ 800x600@60 \+ 1024x768@60')" 'state~^      "name": "HEADLESS-3",$' 'state~^      "name": "HEADLESS-4",$' 'state~^    "1024x768,below"$')
   cx_case "up --monitor: two more, placed" up "$U" --no-shell --net isolated --monitor 800x600 --monitor 1024x768,below
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^\.config/rp d $' "state~^\\.config/omarchy/themes/rp-theme l $r/td/rp-theme\$")
-  cx_case "up --seed and --theme-dir" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt" --theme-dir "$r/td/rp-theme"
+  if omarchy_here; then
+    cx_case "up --seed and --theme-dir" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt" --theme-dir "$r/td/rp-theme"
+  else
+    cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^\.config/rp d $')
+    cx_case "up --seed" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt"
+  fi
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "allow": "18080,18081",$' 'state~^    "192\.0\.2\.7",?$' 'state~^    "2001:db8::7",?$' 'state~ -T 18080\\,18081 ')
   cx_case "up --addr and --allow" up "$U" --no-shell --net isolated --addr 192.0.2.7 --addr 2001:db8::7 --allow 18081,18080
   cx_want=(rc=0 out= "err~^omabox: note: box '$U' has no idle limit and goes with no agent: nothing takes it down but omabox down $U; " 'state~^  "idle": 0,$')
@@ -14371,8 +14554,13 @@ t_cli_up() {
   cx_case "up of the box up already" up "$U"
   cx_want=(rc=0 "out~^\\{\"name\":\"$U\",\"mode\":\"headless\",.*\"net\":\"connected\"" "err=omabox: box '$U' is already up")
   cx_case "up --json of the box up already" up "$U" --json
-  cx_want=(rc=1 out= "err=omabox: box '$U' is already up, without what you asked for: --size 800x600@60 (it is 1920x1080@60); --stock-bar (it has your bar). omabox down $U first, or omabox up --new for a box of your own")
-  cx_case "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
+  if omarchy_here; then
+    cx_want=(rc=1 out= "err=omabox: box '$U' is already up, without what you asked for: --size 800x600@60 (it is 1920x1080@60); --stock-bar (it has your bar). omabox down $U first, or omabox up --new for a box of your own")
+    cx_case "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
+  else
+    cx_want=(rc=1 out= "err=omabox: box '$U' is already up, without what you asked for: --size 800x600@60 (it is 1920x1080@60). omabox down $U first, or omabox up --new for a box of your own")
+    cx_case "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected
+  fi
   # On the box up: ls (its own line or entry; other boxes come and go), save and saves (in a data dir
   # of the test's own; sizes evened out: its HOME moves), then down.
   # (cx_check: its stdout, its entry of the box alone)
@@ -14421,7 +14609,7 @@ t_cli_up() {
   rpu_down
   # restart-shell on a box with its shell: it restarts it, then brief and reload see the box as it is.
   cx_prep="" cx_also="" cx_env=("HOME=$h")
-  if HOME=$h ob up "$U" --net isolated >/dev/null 2>&1; then
+  if HOME=$h ob up "$U" --net isolated "${PSHELL[@]}" >/dev/null 2>&1; then
     cx_want=(rc=0 out= "err=omabox: shell restarted in box '$U'")
     cx_case "restart-shell: the box's shell restarted" restart-shell -b "$U"
     cx_want=(rc=0 "out~^You drive omabox box '$U' \\(1920x1080, scale 1\\)" err=)
@@ -14450,7 +14638,7 @@ t_cli_up() {
 # hangs on the moment (times, addresses, pids, the desk's bar) is evened out or left to a pattern.
 t_cli_box() {
   local B=$P-rp sp="" p ns
-  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  up_ok "$B" --net isolated "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
   cx_rt=$XDG_RUNTIME_DIR cx_dir=/ cx_env=() cx_prep="" cx_snap=0
@@ -14482,6 +14670,8 @@ t_cli_box() {
   cx_want=(rc=0 'out~^\{"time":[0-9]+\.[0-9]+,"event":"[a-z0-9]+","data":".*"\}$' err=)
   cx_case "events --json -n 2" events -b "$B" --json -n 2
   cx_want=(rc=0 'out~^[0-9:.]+ [a-z0-9]+>>.*(monitor|workspace)' 'out!~^[0-9:.]+ [a-z0-9]+>>[^mw]*$' err=)
+  # (a plain box's last such events are its monitors' own, the words in their names, #247)
+  omarchy_here || cx_want=(rc=0 'out~^[0-9:.]+ [a-z0-9]+>>' 'out~(monitor|workspace)' 'out!~^[0-9:.]+ [^mw]*$' err=)
   cx_case "events --grep" events -b "$B" --grep 'monitor|workspace' -n 2
   cx_want=(rc=0 'out~^[0-9]+$' "err~^omabox: events: mark 'rp' at byte [0-9]+ \\(--since rp\\)\$")
   cx_case "events --mark" events -b "$B" --mark rp
@@ -14585,8 +14775,8 @@ t_cli_box() {
   cx_case "windows: none yet" windows -b "$B"
   cx_want=(rc=0 'out=[]' err=)
   cx_case "windows --json: none" windows -b "$B" --json
-  cx_want=(rc=0 'out~^satisfied: layer omarchy-bar after Ts: at ' err=)
-  cx_case "wait layer: the bar" wait -b "$B" layer omarchy-bar
+  cx_want=(rc=0 "out~^satisfied: layer $BAR_NS after Ts: at " err=)
+  cx_case "wait layer: the bar" wait -b "$B" layer "$BAR_NS"
   cx_want=(rc=0 'out={"result":"satisfied","condition":"layer","message":"layer rp-none gone after Ts","elapsed":T,"detail":null}' err=)
   cx_case "wait layer --gone --json: none such" wait -b "$B" layer rp-none --gone --json
   cx_want=(rc=124 'out=unsatisfied: no layer rp-none after Ts' err=)
@@ -14619,9 +14809,9 @@ t_cli_box() {
   cx_case "pixel: off the screen" pixel -b "$B" 5000 1
   cx_want=(rc=2 out= "err=omabox: tree: the box has no window; the shell's bar, panels and menus are layers: tree --layer NAMESPACE (omabox hyprctl layers)")
   cx_case "tree: no window" tree -b "$B"
-  cx_want=(rc=1 out= 'err~^omabox: tree: layer "omarchy-bar" \(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\): the layer publishes no accessible items')
-  cx_case "tree --layer: the bar" tree -b "$B" --layer omarchy-bar
-  cx_want=(rc=2 out= "err~^omabox: no layer matches rp-none \\(a namespace, address:0x\\.\\.\\. or pid:PID\\); the box's layers:\$" 'err~"omarchy-bar"')
+  cx_want=(rc=1 out= "err~^omabox: tree: layer \"$BAR_NS\" \\(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\\): the layer publishes no accessible items")
+  cx_case "tree --layer: the bar" tree -b "$B" --layer "$BAR_NS"
+  cx_want=(rc=2 out= "err~^omabox: no layer matches rp-none \\(a namespace, address:0x\\.\\.\\. or pid:PID\\); the box's layers:\$" "err~\"$BAR_NS\"")
   cx_case "tree --layer: none such, 2" tree -b "$B" --layer rp-none
   # Windows of its own, the same for both sides: two of one class.
   ob run -b "$B" -d -q -- foot -a rp-a -T 'rp "one"' sleep 600 >/dev/null 2>&1
@@ -15178,7 +15368,7 @@ EOF
 # every process of its session and `which` tell them apart.
 t_which() {
   local B=$P-which out rc sp="" p ns
-  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  up_ok "$B" --net isolated "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
   [ -n "$sp" ] || { no "the box's shell on the host" "no quickshell in $ns"; ob down "$B" >/dev/null 2>&1; return; }
@@ -15200,7 +15390,7 @@ t_which() {
 # pid as the box numbers it; agents grepped /proc/*/environ for it and got an empty pid.
 t_pid() {
   local B=$P-pid h s out rc
-  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  up_ok "$B" --net isolated "${PSHELL[@]}" || { no "up" "$UP_OUT"; return; }
   h=$(ob pid -b "$B"); rc=$?
   check_eq "pid: the box's Hyprland on the host, exit 0" "0 Hyprland" "$rc $(cat "/proc/${h:-0}/comm" 2>/dev/null)"
   check_eq "...in this box" "$B" "$(ob which "${h:-0}" 2>/dev/null)"
@@ -16563,6 +16753,8 @@ monitors_turned_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
     --monitor 1280x720,scale=2 || { no "up with two more monitors" "$UP_OUT"; return; }
+  # (a second window tiles below the first: Omarchy's force_split, set here on a plain box, #247)
+  omarchy_here || ob lua -b "$B" 'hl.config({ dwindle = { force_split = 2 } })' >/dev/null
   ob lua -b "$B" "hl.monitor({ output = \"$m1\", mode = \"1280x720@60\", position = \"1280x0\", scale = 1, transform = 1 })" >/dev/null 2>&1
   ob lua -b "$B" "hl.monitor({ output = \"$m2\", mode = \"1280x720@60\", position = \"2000x0\", scale = 2, transform = 3 })" >/dev/null 2>&1
   check "$m1 turned by transform 1, $m2 by 3, side by side" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j monitors |
@@ -16636,7 +16828,9 @@ monitors_turned_on() {
 # monitors_on NODE BOX MAIN SECOND THIRD: a box on NODE with two more monitors, by their names there.
 monitors_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
-  check "up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below" env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --stock-bar \
+  # (Omarchy's stock bar; a plain box's PSHELL one, #247: BAR_NS, one on each screen too)
+  local bar=(--stock-bar); omarchy_here || bar=("${PSHELL[@]}")
+  check "up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below" env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" "${bar[@]}" \
     --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below
   local ml; ml=$(ob monitor -b "$B" list --json)
   check_eq "three monitors: modes, scales, positions" \
@@ -16644,17 +16838,17 @@ monitors_on() {
     "$(jq -r 'map("\(.name) \(.mode) \(.scale) \(.x) \(.y)") | join("|")' <<<"$ml")"
   check_eq "ls --json has them" 3 "$("$CLI" ls --json | jq --arg b "$B" '.[] | select(.name == $b) | .monitors | length')"
   check_match "ls says 3 monitors" "^$B +headless +3 monitors " "$("$CLI" ls | grep "^$B ")"
-  check "the shell has a bar on each" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq -r '[to_entries[] | select([.value.levels[][] | .namespace] | index(\"omarchy-bar\")) | .key] | sort | join(\" \")')\" = '$m0 $m1 $m2' ]"
+  check "the shell has a bar on each" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq -r '[to_entries[] | select([.value.levels[][] | .namespace] | index(\"$BAR_NS\")) | .key] | sort | join(\" \")')\" = '$m0 $m1 $m2' ]"
   # wait layer names the monitor each layer is on, --monitor waits on one (#316, finding 590).
   local L='[0-9]+,[0-9]+ [0-9]+x[0-9]+' out rc
-  check_match "wait layer omarchy-bar: one on each monitor, each named" \
-    "^satisfied: layer omarchy-bar after [0-9.]+s: 3 layers: at $L on $m0; at $L on $m1; at $L on $m2$" \
-    "$(ob wait -b "$B" layer omarchy-bar 2>&1)"
+  check_match "wait layer $BAR_NS: one on each monitor, each named" \
+    "^satisfied: layer $BAR_NS after [0-9.]+s: 3 layers: at $L on $m0; at $L on $m1; at $L on $m2$" \
+    "$(ob wait -b "$B" layer $BAR_NS 2>&1)"
   check_match "...--monitor $m1 --json: that one, its monitor in detail" "^satisfied layer at $L on $m1$" \
-    "$(ob wait -b "$B" layer omarchy-bar --monitor "$m1" --json | jq -r '"\(.result) \(.condition) \(.detail)"')"
-  out=$(ob wait -b "$B" layer omarchy-bar --monitor HEADLESS-9 --timeout 300ms 2>&1); rc=$?
+    "$(ob wait -b "$B" layer $BAR_NS --monitor "$m1" --json | jq -r '"\(.result) \(.condition) \(.detail)"')"
+  out=$(ob wait -b "$B" layer $BAR_NS --monitor HEADLESS-9 --timeout 300ms 2>&1); rc=$?
   check_match "...--monitor of one the box does not have: 124, saying which it has" \
-    "^124 unsatisfied: no layer omarchy-bar on HEADLESS-9 after [0-9.]+s \(no monitor HEADLESS-9 in the box \($m0, $m1, $m2\)\)$" "$rc $out"
+    "^124 unsatisfied: no layer $BAR_NS on HEADLESS-9 after [0-9.]+s \(no monitor HEADLESS-9 in the box \($m0, $m1, $m2\)\)$" "$rc $out"
   check_eq "-b NAME before monitor (#161)" "$ml" "$(ob -b "$B" monitor list --json 2>&1)"
   # A point in the gap below the main screen, left of the others (#161): grim alone failed, and beside
   # a point on a monitor it read black.
@@ -16684,13 +16878,13 @@ monitors_on() {
   check_eq "...gone from the list; the one placed below it goes below the main screen now" "$m0 0 0|$m2 0 1080" \
     "$(ob monitor -b "$B" list --json | jq -r 'map("\(.name) \(.x) \(.y)") | join("|")')"
   check "...an unplug the box's events saw" until_ok 3 bash -c "[ \$('$CLI' log -b '$B' events -n all | grep -c 'monitorremoved>>$m1') -gt $ev0 ]"
-  check_match "...wait layer omarchy-bar --monitor $m1 --gone: its bar went with it, the box's monitors said (#316)" \
-    "^satisfied: layer omarchy-bar on $m1 gone after [0-9.]+s: no monitor $m1 in the box \($m0, $m2\)$" \
-    "$(ob wait -b "$B" layer omarchy-bar --monitor "$m1" --gone 2>&1)"
+  check_match "...wait layer $BAR_NS --monitor $m1 --gone: its bar went with it, the box's monitors said (#316)" \
+    "^satisfied: layer $BAR_NS on $m1 gone after [0-9.]+s: no monitor $m1 in the box \($m0, $m2\)$" \
+    "$(ob wait -b "$B" layer $BAR_NS --monitor "$m1" --gone 2>&1)"
   check_eq "monitor add again: the free name" "$m1" "$(ob monitor -b "$B" add 800x600,0,3000 2>/dev/null)"
-  check_match "...wait layer omarchy-bar --monitor $m1: the shell put a bar on it (#316)" \
-    "^satisfied: layer omarchy-bar on $m1 after [0-9.]+s: at $L on $m1$" \
-    "$(ob wait -b "$B" layer omarchy-bar --monitor "$m1" 2>&1)"
+  check_match "...wait layer $BAR_NS --monitor $m1: the shell put a bar on it (#316)" \
+    "^satisfied: layer $BAR_NS on $m1 after [0-9.]+s: at $L on $m1$" \
+    "$(ob wait -b "$B" layer $BAR_NS --monitor "$m1" 2>&1)"
   check_eq "...at X,Y" "800x600@60 0 3000" "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" '.[] | select(.name == $n) | "\(.mode) \(.x) \(.y)"')"
   check_eq "...the others' modes as they were" "$m0 1920x1080@60|$m2 2560x1440@60" \
     "$(ob monitor -b "$B" list --json | jq -r --arg n "$m1" 'map(select(.name != $n) | "\(.name) \(.mode)") | join("|")')"
@@ -17596,8 +17790,9 @@ t_guard() {
     "${cl[@]}" >/dev/null
     check "confirm-close: the box stays after a close" holds 2 is cc up
     check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
-    check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
-    check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
+    # (in a VM the terminal shown dies as the window opens again: it binds the old output just gone)
+    on_gpu check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
+    on_gpu check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
       "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
     # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
     check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
@@ -17655,6 +17850,8 @@ t_special_ws() {
   up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
   # shellcheck disable=SC2329 # called through until_ok
   shown() { [ "$(ob hyprctl -b "$B" -j monitors | jq -r '.[0].specialWorkspace.name')" = "$1" ]; }
+  # (a workspace switch hides a special workspace: Omarchy's setting, set here on a plain box, #247)
+  omarchy_here || ob lua -b "$B" 'hl.config({ binds = { hide_special_on_workspace_change = true } })' >/dev/null
   out=$("${in[@]}" "$CLI" up sw --interactive --no-shell --workspace special:omabox 2>&1) || { no "up --interactive --workspace special:omabox" "$out"; ob down "$B" >/dev/null; return; }
   check_match "up --interactive --workspace special:omabox: says how it shows and hides" \
     "is a window on special workspace omabox, which the bar widget's Show opens and a workspace switch hides" "$out"
@@ -17707,6 +17904,13 @@ t_conf_host() {
   until_ok 20 nested || { no "a Hyprland on a .conf config in the stand-in" "$(tail -n 5 "$h/conf-host.log")"; ob down "$B" >/dev/null; return; }
   sig=$(nested)
   local at=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" env HYPRLAND_INSTANCE_SIGNATURE="$sig")
+  # (that Hyprland is the box's /usr/bin/Hyprland, the system's whatever OMABOX_HYPRLAND says: from 0.57
+  # it reads a Lua config even under --config X.conf, so a .conf host is not to be had there)
+  local sysv; sysv=$(/usr/bin/Hyprland --version 2>/dev/null | awk 'NR == 1 {print $2}')
+  if [ "$(printf '0.57\n%s\n' "${sysv:-0}" | sort -V | head -n 1)" = 0.57 ] && [ "$("${at[@]}" hyprctl -j status | jq -r .configProvider)" != hyprlang ]; then
+    skip "a .conf Hyprland host: eval, up --interactive, peek and doctor there (#422)" "the system's Hyprland $sysv reads Lua under --config X.conf: no .conf host"
+    "${in[@]}" "$CLI" down --all >/dev/null 2>&1; ob down "$B" >/dev/null; return
+  fi
   check_eq "a .conf Hyprland's eval answers its refusal, exit 0 (0.56)" "eval is only supported with the lua config manager 0" \
     "$(out=$("${at[@]}" hyprctl eval 'x = 1' 2>&1); echo "$out $?")"
   check_eq "...and its status says hyprlang" hyprlang "$("${at[@]}" hyprctl -j status | jq -r .configProvider)"
@@ -17732,7 +17936,9 @@ t_conf_host() {
 # what clip refuses there is what it refuses, not the suite's own caller.
 t_clip() {
   local B=$P-clip
-  up_ok "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" || { no "up (the stand-in host)" "$UP_OUT"; return; }
+  # (the bar widget's rows, below, where Omarchy is; a plain stand-in has neither bar nor widget, #247)
+  local wg=(--stock-bar --plugin "$ROOT/plugin"); omarchy_here || wg=()
+  up_ok "$B" --net isolated "${wg[@]}" || { no "up (the stand-in host)" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}") H; H=$(ob path "$B")/home
   UP_OUT=$("${in[@]}" "$CLI" up ib --interactive --no-shell 2>&1) || { no "up --interactive in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return; }
   local inb=("${in[@]}" "$CLI" run -b ib --) out rc
@@ -17772,8 +17978,10 @@ t_clip() {
   "${in[@]}" "$CLI" clip --from-box -b ib >/dev/null 2>&1
   check "clip --from-box: a secret stays marked on the host" "${in[@]}" sh -c 'wl-paste --list-types | grep -qx x-kde-passwordManagerHint'
   local hist=$H/.local/state/omarchy/clipboard-history.json
-  check "...the host's clipboard history (Omarchy's) has the box's text" until_ok 5 grep -q "from the box" "$hist"
-  check_fails "...not its secret" grep -q "box secret" "$hist"
+  if omarchy_here; then
+    check "...the host's clipboard history (Omarchy's) has the box's text" until_ok 5 grep -q "from the box" "$hist"
+    check_fails "...not its secret" grep -q "box secret" "$hist"
+  else skip "...the host's clipboard history (Omarchy's) has the box's text, not its secret" "$NO_OMARCHY"; fi
   "${inb[@]}" sh -c 'grim /tmp/b.png && wl-copy --type image/png < /tmp/b.png'
   "${in[@]}" "$CLI" clip --from-box -b ib >/dev/null 2>&1
   check_eq "clip --from-box: an image, the same bytes" "image/png $("${inb[@]}" sh -c 'md5sum < /tmp/b.png' | xargs)" "$("${in[@]}" sh -c 'wl-paste --list-types | xargs; wl-paste -n | md5sum' | xargs)"
@@ -17789,26 +17997,28 @@ t_clip() {
   check_eq "...no process holds the item's file (wl-copy's stderr file: its own)" 0 "$("${in[@]}" sh -c 'ls -l /proc/[0-9]*/fd 2>/dev/null | grep -c omabox-clip-item')"
   check_eq "...the host's windows" "$wins0" "$(ob hyprctl -b "$B" -j clients | jq length)"
   check_eq "...and its focus unchanged" "$aw0" "$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')"
-  # The bar widget's rows (Paste in, Copy out) run the real CLI in the stand-in
-  printf '#!/bin/sh\nexec %q "$@"\n' "$CLI" > "$H/.local/bin/omabox"; chmod +x "$H/.local/bin/omabox"
-  "${in[@]}" sh -c 'printf "via the widget" | wl-copy'
-  # shellcheck disable=SC2329 # called through until_ok
-  panel() { panel_takes_keys "$B"; }
-  # shellcheck disable=SC2329 # called through until_ok
-  has() { [ "$("${inb[@]}" wl-paste -n 2>/dev/null)" = "$1" ]; }
-  # shellcheck disable=SC2329 # called through until_ok
-  opens() { ob run -b "$B" -- omarchy-shell chaves.omabox open >/dev/null 2>&1; until_ok 1 panel >/dev/null; }
-  # The stand-in had no omabox until now, so its widget draws nothing (#207) until a poll runs the
-  # one just written: opened before that, it stays shut (and polls).
-  listed() { until_ok 10 opens >/dev/null && ob keys -b "$B" Escape >/dev/null && sleep 2.5; }
-  listed   # (the panel polls every 2 s while open: ib is in its list after that)
-  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
-  ob keys -b "$B" Down v >/dev/null
-  check "the widget's v pastes your clipboard into the box" until_ok 10 has "via the widget"
-  "${inb[@]}" sh -c 'printf "out via the widget" | wl-copy'
-  ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
-  ob keys -b "$B" Down c >/dev/null
-  check "...its c copies the box's out" until_ok 10 bash -c "[ \"\$('$CLI' run -b '$B' -- wl-paste -n)\" = 'out via the widget' ]"
+  if omarchy_here; then
+    # The bar widget's rows (Paste in, Copy out) run the real CLI in the stand-in
+    printf '#!/bin/sh\nexec %q "$@"\n' "$CLI" > "$H/.local/bin/omabox"; chmod +x "$H/.local/bin/omabox"
+    "${in[@]}" sh -c 'printf "via the widget" | wl-copy'
+    # shellcheck disable=SC2329 # called through until_ok
+    panel() { panel_takes_keys "$B"; }
+    # shellcheck disable=SC2329 # called through until_ok
+    has() { [ "$("${inb[@]}" wl-paste -n 2>/dev/null)" = "$1" ]; }
+    # shellcheck disable=SC2329 # called through until_ok
+    opens() { ob run -b "$B" -- omarchy-shell chaves.omabox open >/dev/null 2>&1; until_ok 1 panel >/dev/null; }
+    # The stand-in had no omabox until now, so its widget draws nothing (#207) until a poll runs the
+    # one just written: opened before that, it stays shut (and polls).
+    listed() { until_ok 10 opens >/dev/null && ob keys -b "$B" Escape >/dev/null && sleep 2.5; }
+    listed   # (the panel polls every 2 s while open: ib is in its list after that)
+    ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+    ob keys -b "$B" Down v >/dev/null
+    check "the widget's v pastes your clipboard into the box" until_ok 10 has "via the widget"
+    "${inb[@]}" sh -c 'printf "out via the widget" | wl-copy'
+    ob run -b "$B" -- omarchy-shell chaves.omabox open; until_ok 3 panel
+    ob keys -b "$B" Down c >/dev/null
+    check "...its c copies the box's out" until_ok 10 bash -c "[ \"\$('$CLI' run -b '$B' -- wl-paste -n)\" = 'out via the widget' ]"
+  else skip "the widget's v pastes your clipboard into the box, its c copies the box's out" "$NO_OMARCHY: no bar widget"; fi
   # Refused: a headless box (an agent's); several interactive ones and none focused; an agent
   "${in[@]}" "$CLI" up hb --no-shell >/dev/null 2>&1
   check_match "clip: a headless box refused" "box 'hb' is headless: clip is for interactive boxes only" "$("${in[@]}" "$CLI" clip -b hb 2>&1)"
@@ -17853,6 +18063,9 @@ t_keys_to_box() {
   # shellcheck disable=SC2329 # called through until_ok
   has_foot() { ob hyprctl -b "$B" -j clients | jq -e 'any(.class == "foot")' >/dev/null; }
   until_ok 10 has_foot
+  # (binds set at run time: a reload drops them, and an interactive box reloads when its window is
+  # resized, so ka's are set again below before each key that needs them)
+  ws_binds "$B"; ws_binds ka "${in[@]}"; ws_binds kb "${in[@]}"
   # Each box's window by its client's pid: the box's outer bwrap, whose command line binds its run dir
   # (the first such bwrap; the one it forks has the same command line).
   local pa pb
@@ -17933,6 +18146,7 @@ t_keys_to_box() {
   until_ok 5 kis "|aquamarine|plain|" >/dev/null
   to_mid "pid:$pa"
   check "...the pointer back over the box: the submap, border and file again" until_ok 5 kis "omabox|aquamarine|border|ka"
+  ws_binds ka "${in[@]}"   # (again on a plain box: its window's resize reloaded its config, #247)
   ob keys -b "$B" super+3 >/dev/null
   check "...SUPER+3 goes to the box" until_ok 5 box_ws ka 3
   check_eq "...not to the stand-in" 5 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)"
@@ -17947,6 +18161,7 @@ t_keys_to_box() {
   until_ok 5 kis "|aquamarine|plain|" >/dev/null
   ob lua -b "$B" 'omabox_pass_timer:set_enabled(false)' >/dev/null
   to_mid "pid:$pa"
+  ws_binds ka "${in[@]}"
   ob keys -b "$B" super+4 >/dev/null
   check "...the other way: SUPER+4 goes to the box" until_ok 5 box_ws ka 4
   check_eq "...not to the stand-in" 5 "$(ob hyprctl -b "$B" -j activeworkspace | jq -r .name)"
@@ -18161,7 +18376,7 @@ t_up_again() {
   check_match "...saying what it lacks" "--size 1280x720@60 \(it is 1920x1080@60\); --systemd \(it has no user manager\)" "$out"
   check_match "...and what to do" "omabox down $B first, or omabox up --new" "$out"
   check_match "--net connected on an isolated box: refused" "--net connected \(it is isolated\)" "$(ob up "$B" --net connected 2>&1)"
-  check_match "--plugin it has not: refused, naming plugin add (#345)" "--plugin $ROOT/plugin \(not mounted: omabox plugin add $ROOT/plugin -b $B adds it\)" "$(ob up "$B" --plugin "$ROOT/plugin" 2>&1)"
+  check_match "--plugin it has not: refused, naming plugin add (#345)" "$(omre "--plugin $ROOT/plugin \(not mounted: omabox plugin add $ROOT/plugin -b $B adds it\)" --plugin)" "$(ob up "$B" --plugin "$ROOT/plugin" 2>&1)"
   check_eq "up --json: the box as ls --json has it" "$B up isolated" "$(ob up "$B" --json 2>/dev/null | jq -r '"\(.name) \(.state) \(.net)"')"
   check_eq "...the same object" "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n)')" "$(ob up "$B" --json 2>/dev/null)"
   # #264: an app's read-only folder in the box HOME (a walk testing a destination it cannot write).
@@ -18423,6 +18638,7 @@ t_submap_release() {
     "[ \"\$('$CLI' lua -b '$B' 'return hl.get_current_submap() .. \",\" .. tostring(omabox_pass_version)')\" = omabox,nil ]"
   "${in[@]}" down sa >/dev/null 2>&1
   check "down of the last interactive box resets it" until_ok 3 submap_is ""
+  ws_binds "$B"   # (after the reload, which drops binds set since)
   ob keys -b "$B" super+1 >/dev/null
   check "...and the stand-in's SUPER+1 works again" until_ok 3 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j activeworkspace | jq -r .name)\" = 1 ]"
   ob down "$B" >/dev/null
@@ -18833,10 +19049,10 @@ t_window() {
   check_eq "click on a window on workspace 5 shows 5" 5 "$(ob hyprctl -b "$B" -j activeworkspace | jq .id)"
   check_eq "...and lands in it" "$(at B 20 30)" "$(pos)"
   err=$(ob shot -b "$B" --active -o "$o/act.png" 2>&1 >/dev/null)
-  check_match "--active is the active window" "window $b " "$err"
-  check_match "...its size" "$(size B)," "$(file "$o/act.png")"
+  on_gpu check_match "--active is the active window" "window $b " "$err"
+  on_gpu check_match "...its size" "$(size B)," "$(file "$o/act.png")"
   ob click -b "$B" --in "$o/act.png" 0 0 >/dev/null 2>&1
-  check_eq "click --in a window shot: 0,0 is its corner" "$(at B)" "$(pos)"
+  on_gpu check_eq "click --in a window shot: 0,0 is its corner" "$(at B)" "$(pos)"
   # Priming (finding 81): a window off screen that keeps redrawing stops getting frames; the first
   # capture after a while is from long ago. Its colour comes from a file.
   term P 'while :; do printf "\033[4%sm\033[2J" "$(cat /tmp/col 2>/dev/null || echo 1)"; sleep 0.05; done'
@@ -18952,7 +19168,7 @@ t_window_size() {
   out=$(ob -b "$B" window -w 'title:^A$' --size 540x400 --json); rc=$?
   check_eq "again at 540x400, -b before it, --json: windows --json's object" "0 540 400 true" "$rc $(jq -r '"\(.w) \(.h) \(.floating)"' <<<"$out")"
   ob shot -b "$B" -w 'title:^A$' -o "$TMP/wsz.png" >/dev/null 2>&1
-  check_match "...a shot of it is that size" "540 x 400," "$(file "$TMP/wsz.png")"
+  on_gpu check_match "...a shot of it is that size" "540 x 400," "$(file "$TMP/wsz.png")"
   err=$(ob window -b "$B" -w 'title:^A$' --size 5x5 2>&1 >/dev/null); rc=$?
   check_eq "a size below the app's smallest: exit 1" 1 "$rc"
   check_match "...saying the size it took" "asked for 5x5, the window took [0-9]+x[0-9]+: its app's smallest" "$err"
@@ -19496,7 +19712,7 @@ t_find_image() {
   ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1
   ob wait -b "$B" still >/dev/null
   out=$(ob find -b "$B" --image "$o/mark.png" 2>&1); rc=$?
-  check_match "at scale 2: the crop scaled to the box, said, and found" \
+  on_gpu check_match "at scale 2: the crop scaled to the box, said, and found" \
     "^0 omabox: find: .*mark.png was shot at scale 1, the box draws at 2: matched at $((w * 2))x$((h * 2)), --similar 0.8 as it is scaled.[0-9]+,[0-9]+ ${w}x$h 0\.[89]" "$rc $out"
   # A look-alike below it (#267, finding 635): softened, "MARK ore" scores close behind "MARK one". A
   # --similar between the two leaves one match and the other its near tie: find says it, click
@@ -19636,7 +19852,7 @@ t_output_nvidia() {
 # output_on NODE BOX MAIN MONITOR: drop and back on a box on NODE with a monitor below the main screen.
 output_on() {
   local n=$1 B=$2 m0=$3 m1=$4 out rc ml before
-  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below 2>&1) ||
+  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below "${PSHELL[@]}" 2>&1) ||
     { no "up with a monitor" "failed: $out"; return; }
   # Its apps' renderer (#204, findings 290, 294): on the GPU, NVIDIA's too since its card placeholder;
   # nothing said.
@@ -20318,24 +20534,26 @@ no_pointer_on() {
   ob pointer -b "$B" move 640 360 >/dev/null 2>&1
   ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
   np_crop "$B" "$f-p1.png"; np_crop "$B" "$f-n1.png" --no-pointer
-  check "a shot has the pointer, shot --no-pointer not: they differ there" np_more "$f-p1.png" "$f-n1.png" 0.02
+  on_gpu check "a shot has the pointer, shot --no-pointer not: they differ there" np_more "$f-p1.png" "$f-n1.png" 0.02
   check_eq "...shown again after it (cursor:invisible)" false "$(np_live "$B")"
   check "...nothing left that keeps it hidden" np_gone "$D"
   np_crop "$B" "$f-p2.png"
-  check "...and drawn again: the next shot has it" np_more "$f-p2.png" "$f-n1.png" 0.02
+  on_gpu check "...and drawn again: the next shot has it" np_more "$f-p2.png" "$f-n1.png" 0.02
   # pointer hide: none in any shot until pointer show, over a reload and a theme switch.
   out=$(ob pointer -b "$B" hide 2>&1)
   check_match "pointer hide says until when" "hidden in box '$B' .* until omabox pointer show" "$out"
   np_crop "$B" "$f-h1.png"
-  check_eq "...shots without it" 0 "$(np_diff "$f-h1.png" "$f-n1.png")"
+  on_gpu check_eq "...shots without it" 0 "$(np_diff "$f-h1.png" "$f-n1.png")"
   ob hyprctl -b "$B" reload >/dev/null 2>&1; sleep 1
   check_eq "...a config reload keeps it hidden" true "$(np_live "$B")"
   np_crop "$B" "$f-h2.png"
-  check_eq "...and drawn nowhere after it" 0 "$(np_diff "$f-h2.png" "$f-n1.png")"
+  on_gpu check_eq "...and drawn nowhere after it" 0 "$(np_diff "$f-h2.png" "$f-n1.png")"
   local cur t mark
   cur=$(ob run -b "$B" -- omarchy-theme-current 2>/dev/null) || cur=""
   t=$(ob run -b "$B" -- omarchy-theme-list 2>/dev/null | grep -vxF -- "$cur" | head -n 1) || t=""
-  if [ -n "$t" ]; then
+  # (Omarchy's themes: a plain box has none, #247)
+  if ! omarchy_here; then skip "omarchy-theme-set: the pointer stays hidden" "$NO_OMARCHY"
+  elif [ -n "$t" ]; then
     mark=$(ob events -b "$B" --mark 2>/dev/null) || mark=0
     ob run -b "$B" -- omarchy-theme-set "$t" >/dev/null 2>&1
     check_match "omarchy-theme-set $t reloads the box's config" configreloaded "$(ob events -b "$B" --since "$mark" --grep configreloaded 2>&1)"
@@ -20459,7 +20677,9 @@ t_pointer() {
   ob pointer -b "$B" -- move 350 500 >/dev/null
   ob click -b "$B" --steps 20 1500 500 >/dev/null
   check_eq "click --steps travels there too" R "$(active)"
-  # Modifiers held across the click (#25).
+  # Modifiers held across the click (#25). (SUPER+drag moves a window: Omarchy's bind, Hyprland's
+  # bindm; a plain box gets it here, #247.)
+  omarchy_here || ob lua -b "$B" 'hl.bind("SUPER + mouse:272", hl.dsp.window.drag(), { mouse = true })' >/dev/null
   ob click -b "$B" --window R 50 50 >/dev/null
   ob click -b "$B" --window R 50 50 --mod ctrl >/dev/null
   ob click -b "$B" --window R 50 50 --mod alt --mod ctrl >/dev/null
@@ -20896,6 +21116,8 @@ thin_check() {
 t_wait() {
   local B=$P-wait out rc
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  # (a key press hides the cursor: Omarchy's setting, set here on a plain box, #247)
+  omarchy_here || ob lua -b "$B" 'hl.config({ cursor = { hide_on_key_press = true } })' >/dev/null
   local D; D=$(ob path "$B")
   out=$(ob wait -b "$B" still); rc=$?
   check_eq "an idle screen is still: exit 0" 0 "$rc"
@@ -21627,6 +21849,15 @@ UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_c
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
+# The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's
+# look, its Hyprland modules. Where Omarchy is not (omarchy_here) every box is plain and refuses what
+# they need, so each is one skip line, not run. A test with some Omarchy checks among plain ones runs,
+# and skips those.
+OMARCHY_ONLY=(t_widget t_widget_list t_widget_mark t_plugin_check t_plugin_hosted t_plugin_link t_plugin_add t_no_seed
+  t_shell_restart_race t_shell_restart_dup t_shell_crash t_shell_hung t_shell_other_crash t_omarchy_restart t_quickshell
+  t_click_layer t_dnd_dock t_desk_backgrounds t_stock t_stock_bar t_desk_shell t_theme t_theme_dir t_omarchy_tree t_lock
+  t_setup_prompts t_extensions_secret t_user_hypr t_clean)
+
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
 # run in ~1.5 min; -j 1: ~8.5 min). No test ran slower beside 7 others than alone. These run alone first: none so far (a test that cannot share the machine,
@@ -21814,6 +22045,10 @@ main() {
     tests=("${_sel[@]}")
   fi
 
+  for _t in "${OMARCHY_ONLY[@]}"; do
+    [[ " ${UNIT[*]} ${BOX[*]} " == *" $_t "* ]] || { echo "OMARCHY_ONLY names $_t, which is no test"; exit 2; }
+  done
+
   if [ "$INSTALLED" = 1 ]; then tools_ready installed; else tools_ready; fi || exit 2
   # The host's session, as omabox finds it (the probe is the build tools_ready made).
   HOST_SIG=$(probe host_session 2>/dev/null) && HOST_SIG=${HOST_SIG%% *}
@@ -21834,6 +22069,17 @@ main() {
   HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG python3 -c "$WATCHER" "$XDG_RUNTIME_DIR/hypr/$HOST_SIG/.socket2.sock" $$ >> "$EVID/host-events.log" 2>&1 &
   WATCH_PID=$!
   until_ok 5 grep -q ' == watching$' "$EVID/host-events.log" || { echo "cannot listen to the host's events: $(cat "$EVID/host-events.log")"; exit 2; }
+
+  # Without Omarchy, its own tests are one skip each (OMARCHY_ONLY), the rest run.
+  if ! omarchy_here; then
+    local _run=()
+    for _t in "${tests[@]}"; do
+      if [[ " ${OMARCHY_ONLY[*]} " == *" $_t "* ]]; then
+        CUR=$_t; echo "${_t#t_}"; skip "${_t#t_}: what only Omarchy has" "$NO_OMARCHY"
+      else _run+=("$_t"); fi
+    done
+    tests=("${_run[@]}")
+  fi
 
   # One box first (finding 130): when none can start here (refused: a headless box on NVIDIA without
   # aquamarine's fix, no pasta, ...), say why once and run the unit tests only, instead of every box
