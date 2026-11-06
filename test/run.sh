@@ -404,12 +404,12 @@ check_box_safety() {
 }
 # vgpu: why the boxes run in a VM (a virtual GPU, a VM's virtio-gpu, its driver as doctor's render
 # line says it; or any GPU in a guest systemd-detect-virt names), or fails where they do not. A few
-# checks come out otherwise in such a VM (grim's capture, the pointer drawn into --no-pointer shots,
-# a shot's size off by the border, a window's corners, a peek's CPU ticks, which line Qt prints for a
-# protocol error, find's score at scale 2, a terminal that binds an output just gone): those are
-# skipped there (on_gpu), with that reason, and nowhere else. They came out so in plain Arch guests
-# on virgl and on a passed-through RTX 5070 Ti alike (2026-11-06, finding 669), and pass on this
-# machine's own GPUs, Omarchy's boxes and plain ones, Hyprland 0.56 and 0.57.
+# checks come out otherwise in such a VM (grim's capture, a shot's size off by the border, a
+# window's corners, a peek's CPU ticks, which line Qt prints for a protocol error, find's score at
+# scale 2, a terminal that binds an output just gone): those are skipped there (on_gpu), with that
+# reason, and nowhere else. They came out so in plain Arch guests on virgl and on a passed-through
+# RTX 5070 Ti alike (2026-11-06, finding 669), and pass on this machine's own GPUs, Omarchy's boxes
+# and plain ones, Hyprland 0.56 and 0.57. (--no-pointer was one: finding 670 fixed it.)
 vgpu() {
   local rn d v
   rn=$(probe render_node 2>/dev/null) || return 1
@@ -20555,20 +20555,20 @@ no_pointer_on() {
   ob pointer -b "$B" move 640 360 >/dev/null 2>&1
   ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
   np_crop "$B" "$f-p1.png"; np_crop "$B" "$f-n1.png" --no-pointer
-  on_gpu check "a shot has the pointer, shot --no-pointer not: they differ there" np_more "$f-p1.png" "$f-n1.png" 0.02
+  check "a shot has the pointer, shot --no-pointer not: they differ there" np_more "$f-p1.png" "$f-n1.png" 0.02
   check_eq "...shown again after it (cursor:invisible)" false "$(np_live "$B")"
   check "...nothing left that keeps it hidden" np_gone "$D"
   np_crop "$B" "$f-p2.png"
-  on_gpu check "...and drawn again: the next shot has it" np_more "$f-p2.png" "$f-n1.png" 0.02
+  check "...and drawn again: the next shot has it" np_more "$f-p2.png" "$f-n1.png" 0.02
   # pointer hide: none in any shot until pointer show, over a reload and a theme switch.
   out=$(ob pointer -b "$B" hide 2>&1)
   check_match "pointer hide says until when" "hidden in box '$B' .* until omabox pointer show" "$out"
   np_crop "$B" "$f-h1.png"
-  on_gpu check_eq "...shots without it" 0 "$(np_diff "$f-h1.png" "$f-n1.png")"
+  check_eq "...shots without it" 0 "$(np_diff "$f-h1.png" "$f-n1.png")"
   ob hyprctl -b "$B" reload >/dev/null 2>&1; sleep 1
   check_eq "...a config reload keeps it hidden" true "$(np_live "$B")"
   np_crop "$B" "$f-h2.png"
-  on_gpu check_eq "...and drawn nowhere after it" 0 "$(np_diff "$f-h2.png" "$f-n1.png")"
+  check_eq "...and drawn nowhere after it" 0 "$(np_diff "$f-h2.png" "$f-n1.png")"
   local cur t mark
   cur=$(ob run -b "$B" -- omarchy-theme-current 2>/dev/null) || cur=""
   t=$(ob run -b "$B" -- omarchy-theme-list 2>/dev/null | grep -vxF -- "$cur" | head -n 1) || t=""

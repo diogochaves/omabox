@@ -44,6 +44,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   before that show your name or host name will differ once.
 
 ### Fixed
+- **A plain box's first shots no longer catch its screen zooming in** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  Hyprland's default animation for a new output zoomed a plain box's screen in for most of a second
+  after `up` returned, so a shot right after it was mid-zoom and `shot --no-pointer` could still show
+  the pointer. Plain boxes turn that animation off (also for `monitor add`'s outputs).
 - **A plain box's shell may be a launcher that starts it and exits** ([#438](https://github.com/diogochaves/omabox/issues/438)):
   `up --desktop plain --shell 'caelestia shell -d'` (or `qs -d`, or any script that starts the shell
   in the background) was taken as the shell exiting. The shell is now all its command starts, gone

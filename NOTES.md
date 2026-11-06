@@ -13050,6 +13050,19 @@ from them.
     machine's own GPUs in Omarchy and plain boxes; whether a plain machine on bare metal passes
     them is untried (the laptop's plain Arch is the test).
 
+670. **A plain box's screen zoomed in after `up` returned: Hyprland's monitorAdded animation**
+    (2026-11-06, #247). Found chasing finding 669's `--no-pointer` shots: right after `up`, the 64x64
+    around the pointer changed every frame for 640 ms on this machine (a plain box at
+    2560x1440,scale=2; an Omarchy box: no change, its up waits seconds for the shell) and for over a
+    second in a VM, the pointer shrinking frame by frame: Hyprland's default monitorAdded animation
+    zooming the new output in (`hyprctl animations`: not overridden; Omarchy's looknfeel.lua leaves
+    it too). ptr_seen (finding 305) waits for the pointer's area to change and took the zoom's next
+    frame for the pointer gone: `--no-pointer` and `pointer hide` shots still had it, 5 of 5 right
+    after up in the VM, 0 of 5 after a 3 s pause. plain.lua turns monitorAdded off: one change at 6 ms
+    here, and 5 of 5 in the VM; t_no_pointer's four shot checks run in VMs again (34/0 there). The
+    other finding-669 checks still fail in a VM with the zoom gone (a window's size and corners in a
+    shot, find at scale 2, Qt's line, peek's ticks, peek_monitors' titles): not this.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
