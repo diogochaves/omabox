@@ -39,7 +39,8 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
 │                        ~/.config/omarchy/plugins/<id>, --overlay dirs (discarded writes); every source
 │                        and DEST checked (refuse_src/refuse_dest, finding 63)
 └ share/session.sh       the session (bwrap's init is PID 1): private session bus (dbus-daemon, or
-  │                      systemd's dbus.service with --systemd), gnome-keyring, PATH, env, then:
+  │                      systemd's dbus.service with --systemd), omabox-notices on it (680),
+  │                      gnome-keyring, PATH, env, then:
   ├ [systemd --user]     --systemd only
   └ labwc -S (headless)  invisible parent compositor (WLR_BACKENDS=headless, 1 output); ends with Hyprland
     └ Hyprland (nested)  real Omarchy config minus autostart, or a plain box's plain.lua (645, 656);
@@ -13154,6 +13155,45 @@ from them.
     conflict: one at a time on a machine. DankMaterialShell is the suite's t_plain_dms (on this
     machine). end-4's dots (illogical-impulse) not tried: its installer rewrites ~/.config and its
     Hyprland config, a VM of its own.
+
+680. **What an app notified: the box records what reaches its notification server** (2026-11-06,
+    #430). A project's walks each ran `dbus-monitor --session` in the box by `run -d` and grepped
+    its text by hand: started after `up`, it missed what came first; a Notify's arguments are spread
+    over many lines; the id the server gave is in a method return lines away; and there was no wait,
+    so they polled the file. Now every box records from its start. tools/notices (C, sd-bus, as
+    tools/polkit) becomes a monitor on the box's own bus (org.freedesktop.DBus.Monitoring
+    .BecomeMonitor, what dbus-monitor and `busctl monitor` use: no eavesdrop flags, nothing it can
+    send) with five match rules: the Notifications interface's calls and its signals, method returns
+    and errors whose sender owns org.freedesktop.Notifications (dbus-daemon matches a well-known
+    sender by its primary owner at the time, so whichever server is up), and the bus driver's errors
+    (a Notify to no server gets ServiceUnknown from the bus, and dbus-daemon passes its own
+    errors to monitors too). So the server can be anything (Omarchy's shell, a plain box's
+    `--shell`, a test's stand-in) or none yet. It reads each message with sd-bus's typed readers,
+    not text: a Notify waits (a cookie table of 64) for the reply from its destination with its serial,
+    then one JSON line goes to ~/notifications.log with the id, or the error's name and text, or after
+    5 s with neither (id null, "no reply in 5 s"); a call that wants no reply at once. CloseNotification
+    (the app's), NotificationClosed and ActionInvoked (the server's) are lines too. Hints keep basic
+    values; a structured one (image-data) is its signature; strings are cut at 16 KiB (summary,
+    body) or 1 KiB, at a character, ending in "…". Lines go out in one O_APPEND write each, never
+    truncated (offsets stay places, as events.log's: `wait notification --since`), and it stops at 16
+    MB. Idle it sleeps in sd_bus_wait with no timeout: no timer runs unless a Notify waits for its
+    reply, and a box's bus has no per-frame traffic, so it wakes only when a notice moves. The race
+    with readiness: share/session.sh starts it right after the bus (before the keyring, systemd's
+    units aside, Hyprland and the shell) and waits up to 2 s for its READY file, made once
+    BecomeMonitor returned; ~5 ms here. Not built: the box records none, box.log says so; `wait
+    notification` then refuses (no log) rather than wait for nothing. libnotify (notify-send) with no
+    server never sends Notify (its GetServerInformation fails first), so that case is logged only for
+    clients that call Notify straight (gdbus, Qt's, Electron's): `(no id) ... -- not shown:
+    ServiceUnknown`. Not recorded: org.gtk.Notifications (GNotification on GNOME) and the portal's
+    AddNotification, which reach org.freedesktop.Notifications only through a backend that forwards.
+    Read: `log notifications` (a text line a record, made plain on the terminal, S7; `--json` the
+    record written again by omabox, `-n`/`--grep` counting records, `-f` formatting as it follows,
+    before --grep), `wait notification RE [-i] [--since OFFSET]` (wait_log.rs's reading of a box log,
+    RE matched with grep -E against the summary and the body, newlines as spaces; --json adds the
+    record). omabox-notices refuses outside a box (box.h, S8), so it can never watch the host's bus.
+    Verified in boxes here: an Omarchy box (the shell's server: id, critical urgency, actions, the
+    `closed #1 dismissed` that `dnd --clear` caused), and t_notifications (no shell, a stand-in server
+    in Python's gi: ids, actions, CloseNotification, the no-server error, both waits).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

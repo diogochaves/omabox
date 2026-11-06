@@ -6,6 +6,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ## Unreleased
 
 ### Added
+- **What an app notified: `log notifications` and `wait notification RE`** ([#430](https://github.com/diogochaves/omabox/issues/430)):
+  every box records what reaches its notification server from `up` on, whatever server that is (the
+  shell's, a plain box's, none yet): each notice with its app, summary, body, hints, actions and the
+  id the server gave, and each close, dismissal and action. `omabox log notifications` prints a line
+  each (`--json`: a JSON object each); `omabox wait notification RE` waits for one whose summary or
+  body matches. No more `dbus-monitor` in the box and grepping its output.
 - **`up --hyprland DIR` runs another Hyprland version whole** ([#424](https://github.com/diogochaves/omabox/issues/424)):
   besides a binary, `--hyprland` takes a folder: an unpacked package (`usr/bin/Hyprland`), an install
   prefix (`bin/Hyprland`) or a build folder (`Hyprland`). Its libraries load first (its aquamarine is

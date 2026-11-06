@@ -81,8 +81,9 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `find --json` | `image, similar, matches` (an array in reading order: `x, y, w, h, middle` ([x, y]), `score`, and `window` (`address, x, y`: the window's own coordinates) with `--window`), `more` (true: past 1000, not all listed), `best` (the best place seen, a match's shape, null for none), `near_tie` (a scaled template's one match with another place within 0.05 of it: that place, a match's shape; null for none) |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames, blinking`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames, blinking`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `notification` also `log, offset, notification` (the record, as `log notifications --json` has it; null when none came); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
+| `log notifications --json` | a line each record: `time, event` (notify, close, closed, action, omabox); notify: `id` (null: none came), `error` (null, or why there is no id), `sender, app_name, replaces_id, app_icon, summary, body, actions` (each `key, label`), `hints` (a basic value each; a structured one, image-data, as its D-Bus signature), `expire_timeout`; close: `id, sender`; closed: `id, reason` (1 expired, 2 dismissed, 3 CloseNotification); action: `id, action`; omabox: `note` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, grid` (`--grid`: `n, margin, file` (`w, h`), `columns` (`name, x, w`), `rows` (`name, y, h`)), `changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, report_scaled, setup, only, counts` (`skipped`: not named by `--only`), `checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
 | `check diff --json` | `result, size, regions, specks, marked, report, report_scaled` |
@@ -739,6 +740,11 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   OFFSET` takes the lines after it, so two lines in a row are never missed. A log begun anew during
   the wait is read from its start (said). Hyprland's lines come from its rolling log (its file is
   written 8 KiB late): no `--since` there.
+- A notification an app sends: `omabox wait notification 'RE'`, RE (grep -E, `-i`) matched against
+  its summary and its body (each with its newlines as spaces; not its app name), whatever server
+  the box has. Only one sent after the wait began counts (`--since 0` counts the whole log; `--json`'s
+  `offset` is the next wait's `--since`, `notification` the record: id, hints, actions). Trigger it
+  first, then wait; a 124 says one that came before the wait. ref: Toasts and dock.
 - A time that really is fixed (a timer under test, a debounce of 2 s): `omabox wait for 2s`, where a
   foreground `sleep` is blocked. Its line says it was a fixed time; not for letting an app settle.
 - Time that is part of a video is the only time you let pass, and never with a sleep: `omabox record
@@ -840,7 +846,7 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
   `--systemd`), `audio` (PipeWire's, with `--audio`), `polkit` (the stand-in authority's, with `--polkit`), `events` (Hyprland's events, which `omabox events` reads), `journal` (what programs
   sent the box's journal sockets: dbus-broker, `logger` and `logger --journald` (not `-t omarchy-shell`: `shell`), `/usr/bin/systemd-cat` (the bare name writes `~/ID.log`), Qt with `QT_FORCE_STDERR_LOGGING=0`, units' output; at most 4 MB, then
-  `journal.1.log`), `box` (bwrap), `reap` (the
+  `journal.1.log`), `notifications` (what reached the notification server: ref: Toasts and dock), `box` (bwrap), `reap` (the
   reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
   `-f` follows until the box goes down (exit 0). `-i` (ignore case) goes anywhere, `--grep -i RE`
   too. Hyprland writes its log file 8 KiB at a time: `log hyprland` of a live box adds the lines
@@ -1191,6 +1197,17 @@ Disturb; the dock is 4.5's.
   its service in the box's shell.json, its layer gone; `dock on` brings it back. An app's bottom bar
   under a shown dock: `dock off`, or put the workspace back to tiling.
 - A box with no shell (`--no-shell`) refuses both; `dock` and `--no-dock` refuse an Omarchy before 4.5.
+- **What an app notified** (a "download finished" notice, an error, its actions): every box records
+  what reaches its notification server from `up` on, whatever server that is (the shell's, a plain
+  box's `--shell`, a test's own, none yet). `omabox log notifications` prints a line each: `notify
+  #ID APP: "SUMMARY" "BODY"` with its urgency, category, desktop-entry and other hints, its actions
+  and timeout, and the id the server answered with (`(no id) ... -- not shown: WHY` when none did: no
+  server, no reply); `close #ID` (the app closed it), `closed #ID expired|dismissed|closed by
+  CloseNotification` and `action #ID KEY` (the server's: a click on a toast's button). `--json`: a
+  JSON object a record; `--grep RE`, `-n N` and `-f` as for the other logs. `omabox wait
+  notification 'RE'` waits for one whose summary or body matches (ref: Waiting, in detail). Never run
+  your own `dbus-monitor` in the box and parse it: it misses what came before it started and spreads
+  each call over many lines.
 
 ## The Omarchy shell's IPC (direct routes)
 
