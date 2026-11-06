@@ -30,7 +30,7 @@ PKGS_debian=(
   python3
   build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev
   git cmake ninja-build hyprwayland-scanner libhyprutils-dev libseat-dev libdisplay-info-dev hwdata libinput-dev
-  libdrm-dev libgbm-dev libegl-dev libgles-dev libudev-dev wayland-protocols
+  libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev libopengl-dev libudev-dev wayland-protocols
 )
 PKGS_fedora=(
   labwc wlr-randr bubblewrap util-linux iproute jq grim gnome-keyring libsecret
@@ -39,7 +39,7 @@ PKGS_fedora=(
   python3
   gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel
   git cmake ninja-build hyprwayland-scanner gcc-c++ hyprutils-devel libseat-devel libdisplay-info-devel hwdata libinput-devel
-  libdrm-devel mesa-libgbm-devel mesa-libEGL-devel libglvnd-devel systemd-devel wayland-protocols-devel
+  libdrm-devel mesa-libgbm-devel mesa-libEGL-devel mesa-libGL-devel libglvnd-devel systemd-devel wayland-protocols-devel
 )
 PKGS_suse=(
   labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring secret-tool
@@ -48,7 +48,7 @@ PKGS_suse=(
   python3
   gcc make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel
   git cmake ninja hyprwayland-scanner gcc-c++ hyprutils-devel seatd-devel libdisplay-info-devel hwdata libinput-devel
-  libdrm-devel libgbm-devel Mesa-libEGL-devel Mesa-libGLESv2-devel systemd-devel wayland-protocols-devel
+  libdrm-devel libgbm-devel Mesa-libEGL-devel Mesa-libGL-devel Mesa-libGLESv2-devel Mesa-libGLESv3-devel systemd-devel wayland-protocols-devel
 )
 PKGS_nix=(
   labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret

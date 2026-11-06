@@ -811,6 +811,9 @@ impl Setup {
                 b"Ninja",
                 b"-DCMAKE_BUILD_TYPE=Release",
                 &cat!("-DCMAKE_INSTALL_PREFIX=", prefix),
+                // (lib/, where aq_resolve looks: CMake's default is lib64 on openSUSE and
+                // Fedora, finding 645)
+                b"-DCMAKE_INSTALL_LIBDIR=lib",
             ],
             None,
             true,
