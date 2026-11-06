@@ -727,7 +727,8 @@ reference.md, "Visual checks". Not inside ai-jail yet.
 @ drag
 `drag` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
-number is seconds, as for every duration.
+number is seconds, as for every duration. A toolkit's drag-and-drop (GTK, Chromium, Qt) starts and
+drops at X2 Y2: the path takes 150 ms at least, and ends with a 1 px nudge and back.
 --shot FILE takes a shot while the button is still down, as `shot` takes one: the whole layout
 (--shot-fit N, --shot-g "X,Y WxH" and --shot-monitor NAME are shot's --fit, -g and --monitor; a
 scaled or cropped one says so, for `click --in`). --wait ignores the cursor along the drag's path

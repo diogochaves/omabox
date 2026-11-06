@@ -3,7 +3,7 @@
 // or zenity seemed to do (findings 14 and 41 needed WAYLAND_DEBUG for it).
 //
 //   omabox-fixture [--windows N] [--first-frame MS] [--for MS] [--exit CODE] [--title T] [--app-id ID]
-//                  [--size WxH] [--log FILE]
+//                  [--size WxH] [--dnd] [--log FILE]
 //
 // N xdg toplevels (default 1), window i titled "T i" (just T when there is one; T defaults to
 // omabox-fixture, ID too), each one solid colour of its own (COLOURS[i]) with a corner marker at its
@@ -28,6 +28,14 @@
 //            key {win, code, sym, utf8, state}  modifiers {mods, depressed, latched, locked, group}
 //            (code: evdev; sym: xkb's name; mods: the active ones of shift, ctrl, alt, super, joined by +)
 //   touch: down {win, id, x, y}  up {id}  motion {id, x, y}  cancel
+//   --dnd (#428): every window is a drag source and a drop target, as a toolkit's widgets are. A drag
+//   starts as GTK 4's GtkDragSource starts one: on a motion past 8 px from the left press that comes
+//   100 ms or more after it (MIN_TIME_TO_DND), never on a motion sooner nor on a timer. It offers
+//   text/plain and accepts it anywhere, copy or move.
+//            dnd-start {win, x, y, from_x, from_y}: the motion that started it, and where the press was
+//            dnd-enter {win, x, y}  dnd-motion {win, x, y}  dnd-leave {win}
+//            dnd-drop {win, x, y}: where the last enter or motion put it (where a toolkit drops)
+//            dnd-source {what: cancelled|performed|finished}: what the compositor told the source
 //
 // --first-frame MS: each window draws its first frame MS after its first configure (an app slow to
 // show; it maps then). --for MS: ends MS after every window drew its first frame. Otherwise it ends
@@ -130,6 +138,10 @@ static struct {
     int n;
     int def_w, def_h;
     int first_frame_ms;
+    int dnd;
+    struct wl_data_device_manager *ddm;
+    uint32_t ddm_version;
+    struct wl_data_device *dd;
 } app;
 
 struct out { struct wl_output *o; int scale; char name[64]; struct out *next; };
@@ -250,9 +262,13 @@ static const struct xdg_wm_base_listener wm_listener = {wm_ping};
 // ---- input ----------------------------------------------------------------------------------------
 
 static int pointer_win = -1;
+static double ptr_x, ptr_y;
+static void dnd_motion(double x, double y);
+static void dnd_button(uint32_t serial, uint32_t button, uint32_t state);
 static void p_enter(void *d, struct wl_pointer *p, uint32_t serial, struct wl_surface *s, wl_fixed_t x, wl_fixed_t y) {
     (void)d; (void)p; (void)serial;
     pointer_win = win_index(s);
+    ptr_x = wl_fixed_to_double(x), ptr_y = wl_fixed_to_double(y);
     say("enter", ",\"device\":\"pointer\",\"win\":%d,\"x\":%.2f,\"y\":%.2f", pointer_win, wl_fixed_to_double(x), wl_fixed_to_double(y));
 }
 static void p_leave(void *d, struct wl_pointer *p, uint32_t serial, struct wl_surface *s) {
@@ -263,11 +279,14 @@ static void p_leave(void *d, struct wl_pointer *p, uint32_t serial, struct wl_su
 static void p_motion(void *d, struct wl_pointer *p, uint32_t time, wl_fixed_t x, wl_fixed_t y) {
     (void)d; (void)p; (void)time;
     say("motion", ",\"win\":%d,\"x\":%.2f,\"y\":%.2f", pointer_win, wl_fixed_to_double(x), wl_fixed_to_double(y));
+    ptr_x = wl_fixed_to_double(x), ptr_y = wl_fixed_to_double(y);
+    dnd_motion(ptr_x, ptr_y);
 }
 static void p_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
     (void)d; (void)p; (void)serial; (void)time;
     say("button", ",\"win\":%d,\"button\":%u,\"state\":\"%s\"", pointer_win, button,
         state == WL_POINTER_BUTTON_STATE_PRESSED ? "pressed" : "released");
+    dnd_button(serial, button, state);
 }
 static void p_axis(void *d, struct wl_pointer *p, uint32_t time, uint32_t axis, wl_fixed_t v) {
     (void)d; (void)p; (void)time;
@@ -282,6 +301,123 @@ static void p_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t v) { (
 static const struct wl_pointer_listener pointer_listener = {
     .enter = p_enter, .leave = p_leave, .motion = p_motion, .button = p_button, .axis = p_axis,
     .frame = p_frame, .axis_source = p_source, .axis_stop = p_stop, .axis_discrete = p_discrete};
+
+// ---- drag and drop (--dnd) ------------------------------------------------------------------------
+
+#define DND_MIME "text/plain;charset=utf-8"
+#define DND_THRESHOLD 8      // px: GTK's default gtk-dnd-drag-threshold
+#define DND_MIN_TIME 100     // ms after the press: GTK 4's MIN_TIME_TO_DND
+#define DND_BUTTON 0x110     // BTN_LEFT
+static struct {
+    int pressed, dragging, win;
+    uint32_t serial;
+    double x, y;
+    int64_t at;
+    struct wl_data_source *source;
+    struct wl_data_offer *offer;   // the drag's offer while it is over one of our windows
+    uint32_t offer_action;
+    int over;                      // the window it is over, -1 none
+    double ox, oy;                 // where the last enter or motion put it
+} dnd = {.over = -1};
+
+static void src_target(void *d, struct wl_data_source *s, const char *mime) { (void)d; (void)s; (void)mime; }
+static void src_send(void *d, struct wl_data_source *s, const char *mime, int32_t fd) {
+    (void)d; (void)s; (void)mime;
+    ssize_t w = write(fd, "omabox-fixture", 14);
+    (void)w;
+    close(fd);
+}
+static void src_end(const char *what) {
+    say("dnd-source", ",\"what\":\"%s\"", what);
+    if (!strcmp(what, "performed")) return;
+    if (dnd.source) wl_data_source_destroy(dnd.source);
+    dnd.source = NULL;
+    dnd.dragging = 0;
+}
+static void src_cancelled(void *d, struct wl_data_source *s) { (void)d; (void)s; src_end("cancelled"); }
+static void src_performed(void *d, struct wl_data_source *s) { (void)d; (void)s; src_end("performed"); }
+static void src_finished(void *d, struct wl_data_source *s) { (void)d; (void)s; src_end("finished"); }
+static void src_action(void *d, struct wl_data_source *s, uint32_t a) { (void)d; (void)s; (void)a; }
+static const struct wl_data_source_listener source_listener = {
+    .target = src_target, .send = src_send, .cancelled = src_cancelled,
+    .dnd_drop_performed = src_performed, .dnd_finished = src_finished, .action = src_action};
+
+static void dnd_button(uint32_t serial, uint32_t button, uint32_t state) {
+    if (!app.dnd || button != DND_BUTTON) return;
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED)
+        dnd.pressed = 1, dnd.serial = serial, dnd.x = ptr_x, dnd.y = ptr_y, dnd.at = now_ms(), dnd.win = pointer_win;
+    else
+        dnd.pressed = 0;
+}
+
+// GTK 4's rule (gtk_drag_source_update): past the threshold, and not before MIN_TIME_TO_DND.
+static void dnd_motion(double x, double y) {
+    if (!app.dd || !dnd.pressed || dnd.dragging || dnd.win < 0) return;
+    if (now_ms() - dnd.at < DND_MIN_TIME) return;
+    if (x - dnd.x <= DND_THRESHOLD && dnd.x - x <= DND_THRESHOLD && y - dnd.y <= DND_THRESHOLD && dnd.y - y <= DND_THRESHOLD) return;
+    dnd.source = wl_data_device_manager_create_data_source(app.ddm);
+    wl_data_source_add_listener(dnd.source, &source_listener, NULL);
+    wl_data_source_offer(dnd.source, DND_MIME);
+    if (app.ddm_version >= 3)
+        wl_data_source_set_actions(dnd.source, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE);
+    wl_data_device_start_drag(app.dd, dnd.source, app.wins[dnd.win].surface, NULL, dnd.serial);
+    // (the drag takes the press: the compositor sends its release to no one)
+    dnd.dragging = 1, dnd.pressed = 0;
+    say("dnd-start", ",\"win\":%d,\"x\":%.2f,\"y\":%.2f,\"from_x\":%.2f,\"from_y\":%.2f", dnd.win, x, y, dnd.x, dnd.y);
+}
+
+static void offer_offer(void *d, struct wl_data_offer *o, const char *mime) { (void)d; (void)o; (void)mime; }
+static void offer_source_actions(void *d, struct wl_data_offer *o, uint32_t a) { (void)d; (void)o; (void)a; }
+static void offer_action(void *d, struct wl_data_offer *o, uint32_t a) {
+    (void)d;
+    if (o == dnd.offer) dnd.offer_action = a;
+}
+static const struct wl_data_offer_listener offer_listener = {
+    .offer = offer_offer, .source_actions = offer_source_actions, .action = offer_action};
+
+static void dd_data_offer(void *d, struct wl_data_device *dd, struct wl_data_offer *o) {
+    (void)d; (void)dd;
+    wl_data_offer_add_listener(o, &offer_listener, NULL);
+}
+static void dd_enter(void *d, struct wl_data_device *dd, uint32_t serial, struct wl_surface *s, wl_fixed_t x, wl_fixed_t y,
+                     struct wl_data_offer *o) {
+    (void)d; (void)dd;
+    if (dnd.offer && dnd.offer != o) wl_data_offer_destroy(dnd.offer);
+    dnd.offer = o, dnd.offer_action = 0, dnd.over = win_index(s);
+    dnd.ox = wl_fixed_to_double(x), dnd.oy = wl_fixed_to_double(y);
+    say("dnd-enter", ",\"win\":%d,\"x\":%.2f,\"y\":%.2f", dnd.over, dnd.ox, dnd.oy);
+    if (!o) return;
+    wl_data_offer_accept(o, serial, DND_MIME);
+    if (app.ddm_version >= 3)
+        wl_data_offer_set_actions(o, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE,
+                                  WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+}
+static void dd_leave(void *d, struct wl_data_device *dd) {
+    (void)d; (void)dd;
+    say("dnd-leave", ",\"win\":%d", dnd.over);
+    if (dnd.offer) wl_data_offer_destroy(dnd.offer);
+    dnd.offer = NULL, dnd.over = -1;
+}
+static void dd_motion(void *d, struct wl_data_device *dd, uint32_t t, wl_fixed_t x, wl_fixed_t y) {
+    (void)d; (void)dd; (void)t;
+    dnd.ox = wl_fixed_to_double(x), dnd.oy = wl_fixed_to_double(y);
+    say("dnd-motion", ",\"win\":%d,\"x\":%.2f,\"y\":%.2f", dnd.over, dnd.ox, dnd.oy);
+}
+static void dd_drop(void *d, struct wl_data_device *dd) {
+    (void)d; (void)dd;
+    say("dnd-drop", ",\"win\":%d,\"x\":%.2f,\"y\":%.2f", dnd.over, dnd.ox, dnd.oy);
+    // (finish needs an action the compositor chose; without one the drop is only logged)
+    if (dnd.offer && app.ddm_version >= 3 && dnd.offer_action) wl_data_offer_finish(dnd.offer);
+    if (dnd.offer) wl_data_offer_destroy(dnd.offer);
+    dnd.offer = NULL;
+}
+static void dd_selection(void *d, struct wl_data_device *dd, struct wl_data_offer *o) {
+    (void)d; (void)dd;
+    if (o && o != dnd.offer) wl_data_offer_destroy(o);
+}
+static const struct wl_data_device_listener data_device_listener = {
+    .data_offer = dd_data_offer, .enter = dd_enter, .leave = dd_leave, .motion = dd_motion,
+    .drop = dd_drop, .selection = dd_selection};
 
 static int keyboard_win = -1;
 static void k_keymap(void *d, struct wl_keyboard *k, uint32_t format, int32_t fd, uint32_t size) {
@@ -417,6 +553,9 @@ static void global(void *data, struct wl_registry *reg, uint32_t name, const cha
     } else if (!strcmp(iface, wl_seat_interface.name) && !app.seat) {
         app.seat = wl_registry_bind(reg, name, &wl_seat_interface, min_u(version, 5));
         wl_seat_add_listener(app.seat, &seat_listener, NULL);
+    } else if (!strcmp(iface, wl_data_device_manager_interface.name) && app.dnd) {
+        app.ddm_version = min_u(version, 3);
+        app.ddm = wl_registry_bind(reg, name, &wl_data_device_manager_interface, app.ddm_version);
     } else if (!strcmp(iface, wl_output_interface.name) && version >= 2) {
         struct out *o = calloc(1, sizeof(*o));
         if (!o) return;
@@ -436,7 +575,7 @@ static void on_signal(int s) { (void)s; signalled = 1; }
 
 static int usage(void) {
     fprintf(stderr, "usage: omabox-fixture [--windows N] [--first-frame MS] [--for MS] [--exit CODE] [--title T]\n"
-                    "                      [--app-id ID] [--size WxH] [--log FILE]\n");
+                    "                      [--app-id ID] [--size WxH] [--dnd] [--log FILE]\n");
     return 2;
 }
 
@@ -456,6 +595,7 @@ int main(int argc, char **argv) {
     app.def_h = 300;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
+        if (!strcmp(a, "--dnd")) { app.dnd = 1; continue; }
         if (!v) return usage();
         i++;
         if (!strcmp(a, "--windows")) { if ((n = (int)num(v, 1, MAX_WINDOWS)) < 0) return usage(); }
@@ -492,6 +632,14 @@ int main(int argc, char **argv) {
     if (!app.compositor || !app.shm || !app.wm) {
         fprintf(stderr, "omabox-fixture: the compositor lacks wl_compositor, wl_shm or xdg_wm_base\n");
         return 1;
+    }
+    if (app.dnd) {
+        if (!app.ddm || !app.seat) {
+            fprintf(stderr, "omabox-fixture: --dnd: the compositor lacks wl_data_device_manager or a seat\n");
+            return 1;
+        }
+        app.dd = wl_data_device_manager_get_data_device(app.ddm, app.seat);
+        wl_data_device_add_listener(app.dd, &data_device_listener, NULL);
     }
     say("start", ",\"windows\":%d", n);
     app.n = n;

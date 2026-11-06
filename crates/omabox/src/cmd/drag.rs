@@ -88,6 +88,56 @@ fn drag_shot(ctx: &mut Ctx, ext: &[u8], seq: &[Vec<u8>], shot: &[Vec<u8>]) -> Re
     Ok(rc)
 }
 
+/// A toolkit's drag-and-drop starts late (#428, finding 681): GTK 4 only on a motion 100 ms or more
+/// after the press, and Hyprland enters the drag's target at the surface's centre, so a drag that
+/// began on the path's last motion (or after it, in an app slow to answer) dropped there. The path
+/// takes at least DND_START_MS; then a 1 px nudge and back at the end, a motion that starts a drag not
+/// yet begun and moves a begun one to the end point; again before the release when time passed there
+/// (--hold, --shot).
+const DND_START_MS: i64 = 150;
+/// The pointer tool's wait after each move (pointer.c).
+const MOVE_MS: i64 = 40;
+
+/// The pointer tool's sequence for a drag along WAY (move X Y triples) from P's first point to its
+/// second: press, the path, the end's nudge, the hold, the shot's pause, release.
+fn drag_seq(p: [i64; 4], way: &[Vec<u8>], btn: &[u8], hold: i64, shot: bool) -> Vec<Vec<u8>> {
+    let [x1, y1, x2, y2] = p;
+    // (x2 is on the screen: one to its left, or right at its left edge)
+    let nx = if x2 >= 1 { x2 - 1 } else { x2 + 1 };
+    let nudge = [
+        b"move".to_vec(),
+        num(nx),
+        num(y2),
+        b"move".to_vec(),
+        num(x2),
+        num(y2),
+    ];
+    let mut seq = vec![
+        b"move".to_vec(),
+        num(x1),
+        num(y1),
+        b"down".to_vec(),
+        btn.to_vec(),
+    ];
+    seq.extend(way.iter().cloned());
+    let spent = MOVE_MS.saturating_mul(i64::try_from(way.len() / 3).unwrap_or(i64::MAX));
+    if spent < DND_START_MS {
+        seq.extend([b"sleep".to_vec(), num(DND_START_MS - spent)]);
+    }
+    seq.extend(nudge.iter().cloned());
+    if hold != 0 {
+        seq.extend([b"sleep".to_vec(), num(hold)]);
+    }
+    if shot {
+        seq.push(b"pause".to_vec());
+    }
+    if hold != 0 || shot {
+        seq.extend(nudge.iter().cloned());
+    }
+    seq.extend([b"up".to_vec(), btn.to_vec()]);
+    seq
+}
+
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut name, mut btn, mut xyv, mut sels) =
         (Vec::new(), b"left".to_vec(), Vec::new(), Vec::new());
@@ -260,21 +310,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         None => steps_to(&mut way, [x1, y1, x2, y2], steps),
     }
-    let mut seq = vec![
-        b"move".to_vec(),
-        num(x1),
-        num(y1),
-        b"down".to_vec(),
-        btn.clone(),
-    ];
-    seq.extend(way.iter().cloned());
-    if hold != 0 {
-        seq.extend([b"sleep".to_vec(), num(hold)]);
-    }
-    if !shot.is_empty() {
-        seq.push(b"pause".to_vec());
-    }
-    seq.extend([b"up".to_vec(), btn.clone()]);
+    let seq = drag_seq([x1, y1, x2, y2], &way, &btn, hold, !shot.is_empty());
     let ext = extent(ctx)?;
     on_screen(ctx, "drag", &num(x1), &num(y1), &ext)?;
     on_screen(ctx, "drag", &num(x2), &num(y2), &ext)?;
@@ -370,4 +406,41 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return code(st.end(ctx, "settle", json, b"the drag was sent")?);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(seq: &[Vec<u8>]) -> String {
+        String::from_utf8_lossy(&seq.join(&b' ')).into_owned()
+    }
+
+    // #428, finding 681: a path shorter than 150 ms waits out the rest, then the end's nudge; a hold
+    // and a shot's pause are nudged again before the release.
+    #[test]
+    fn drag_seq_nudges_the_end() {
+        let mut way = Vec::new();
+        steps_to(&mut way, [10, 20, 110, 20], 2);
+        assert_eq!(
+            line(&drag_seq([10, 20, 110, 20], &way, b"left", 0, false)),
+            "move 10 20 down left move 60 20 move 110 20 sleep 70 move 109 20 move 110 20 up left"
+        );
+        let mut way = Vec::new();
+        steps_to(&mut way, [10, 20, 110, 20], 10);
+        let s = line(&drag_seq([10, 20, 110, 20], &way, b"right", 300, true));
+        assert!(!s.contains(" sleep 1"), "{s}");
+        assert!(
+            s.ends_with(
+                "move 100 20 move 110 20 move 109 20 move 110 20 sleep 300 pause move 109 20 move 110 20 up right"
+            ),
+            "{s}"
+        );
+        // (at the screen's left edge the nudge goes right)
+        let s = line(&drag_seq([10, 20, 0, 5], &[], b"left", 0, false));
+        assert_eq!(
+            s,
+            "move 10 20 down left sleep 150 move 1 5 move 0 5 up left"
+        );
+    }
 }
