@@ -120,6 +120,12 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         }
     };
     ready::rm_box(ctx);
+    // (from here, a HOME another process removes is named with its remover: #433)
+    let since = crate::homeuse::now_ns();
+    let gone = |e: Exit| {
+        home_gone_note(&name, since);
+        e
+    };
     let _ = std::fs::remove_file(ctx.in_boxes(cat!(".expired-", name)));
     crate::whose::clear_taken(ctx);
     // (the box dir, then the HOME's record of it, then the HOME: sweep_homes never takes a HOME
@@ -130,7 +136,12 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         && std::fs::create_dir_all(shell::path(&home_dir)).is_ok()
         && std::os::unix::fs::symlink(shell::path(&home_dir), ctx.at("home")).is_ok();
     if !made {
-        return Err(ctx.die(cat!("up: could not make box '", name, "''s dir in ", d)));
+        return Err(gone(ctx.die(cat!(
+            "up: could not make box '",
+            name,
+            "''s dir in ",
+            d
+        ))));
     }
     // (no run -d job has ended yet: job_note)
     write(&cat!(d, "/jobs-noted"), b"");
@@ -162,11 +173,12 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     ready::sweep_homes(ctx);
     let h = cat!(d, "/home");
     let plan = seed_plan(&u);
-    let desk_files = crate::seed::seed_home(ctx, &plan, &h)?;
+    let desk_files = crate::seed::seed_home(ctx, &plan, &h).map_err(gone)?;
     for (src, rel) in &u.seeds {
         let dest = crate::seed::Dest::new(rel)
             .ok_or_else(|| ctx.die(cat!("--seed: DEST must be inside the box HOME, got ", rel)))?;
-        crate::seed::seed_copy_in(ctx, &h, &crate::seed::Src::asked(src.clone()), &dest)?;
+        crate::seed::seed_copy_in(ctx, &h, &crate::seed::Src::asked(src.clone()), &dest)
+            .map_err(gone)?;
     }
     // A clean box's shell.json is also the defaults its shell reads (finding 400), on an Omarchy
     // whose shell can lose it: omarchy<4.5. 4.5's shell no longer remakes a widget when its
@@ -190,7 +202,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         );
     }
     // (after the seeds: one into its folder keeps the box's own)
-    let desk_fonts = crate::seed::seed_fonts(ctx, &plan, &h)?;
+    let desk_fonts = crate::seed::seed_fonts(ctx, &plan, &h).map_err(gone)?;
     let shell_before = crate::shellnote::shell_crash_dirs(ctx);
     // Read again as late as possible: a change made while this box was being set up would otherwise
     // be lost for it; once box.json exists, confirm_live sees the box.
@@ -670,6 +682,19 @@ fn launch_delay() -> Option<Vec<u8>> {
     let v = shell::env("OMABOX_TEST_LAUNCH_DELAY")?;
     let n = shell::dec(&v).filter(|n| (1..=30).contains(n) && v.iter().all(u8::is_ascii_digit))?;
     Some(n.to_string().into_bytes())
+}
+
+/// After up failed making or seeding box NAME's HOME: the process that removed it meanwhile (since
+/// SINCE, now_ns), from the removal log, when another did (#433).
+fn home_gone_note(name: &[u8], since: u128) {
+    if let Some(l) = crate::homeuse::removed_note(&paths::homes(), name, since) {
+        say(cat!(
+            "up: box '",
+            name,
+            "''s HOME was removed while up made it: ",
+            l
+        ));
+    }
 }
 
 /// The cover file and folder, 444 and 555, the go pipe and covers-pending (#210).

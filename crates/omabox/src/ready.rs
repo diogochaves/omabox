@@ -404,9 +404,17 @@ pub fn rm_box(ctx: &Ctx) {
     if !(ctx.d.starts_with(&pre) && ctx.d.len() > pre.len()) {
         return;
     }
-    let home = cat!(crate::paths::homes(), "/", ctx.name);
+    let homes = crate::paths::homes();
+    let home = cat!(homes, "/", ctx.name);
     let mut paths = vec![ctx.d.clone()];
-    if home_taken(ctx).is_none() {
+    if let Ok(why) = home_whose(ctx) {
+        if crate::homeuse::there(&home) {
+            crate::homeuse::note_removed(
+                &homes,
+                &ctx.name,
+                &cat!("with its box dir ", ctx.d, " (rm_box): ", why),
+            );
+        }
         paths.push(home);
     }
     rm_tree(&cat!("box '", ctx.name, "'"), &paths);
@@ -418,30 +426,42 @@ pub fn rm_box(ctx: &Ctx) {
 /// is this box's (its record names this box dir; an older omabox's, this box dir's `home` leads to
 /// it), or no box's.
 pub fn home_taken(ctx: &Ctx) -> Option<Vec<u8>> {
+    home_whose(ctx).err()
+}
+
+/// home_whose: Ok(why this box's name may have its HOME, as the removal log says it) or
+/// Err(home_taken's why not).
+fn home_whose(ctx: &Ctx) -> Result<&'static [u8], Vec<u8>> {
     let h = cat!(crate::paths::homes(), "/", ctx.name);
     let p = shell::path(&h);
     if !p.is_dir() || p.is_symlink() {
-        return None;
+        return Ok(b"no HOME dir there");
     }
-    match crate::homeuse::record(&h) {
-        Some(r) if r == ctx.d => return None,
-        Some(r) if crate::homeuse::there(&r) => {
+    let rec = crate::homeuse::record(&h);
+    match &rec {
+        Some(r) if *r == ctx.d => return Ok(b"its record names this box dir"),
+        Some(r) if crate::homeuse::there(r) => {
             let at = r
                 .strip_suffix(cat!("/", ctx.name).as_slice())
-                .unwrap_or(&r)
+                .unwrap_or(r)
                 .to_vec();
-            return Some(cat!("is a box's in ", at));
+            return Err(cat!("is a box's in ", at));
         }
         Some(_) => {}
         None => {
             let link = std::fs::read_link(ctx.at("home")).ok();
             if link.is_some_and(|l| shell::bytes(&l) == cat!(h, "/home").as_slice()) {
-                return None;
+                return Ok(b"no record (an older omabox's), and this box dir's home leads to it");
             }
         }
     }
-    crate::homeuse::Users::scan().uses(&h).then(|| {
-        b"is in use (a box this runtime dir does not have runs on it: an older omabox's, or one of another runtime dir)".to_vec()
+    if crate::homeuse::Users::scan().uses(&h) {
+        return Err(b"is in use (a box this runtime dir does not have runs on it: an older omabox's, or one of another runtime dir)".to_vec());
+    }
+    Ok(if rec.is_some() {
+        b"its record names a box dir that is not there, and nothing uses it"
+    } else {
+        b"no record (an older omabox's), and nothing uses it"
     })
 }
 
@@ -503,6 +523,12 @@ fn rm_tree_with(chmod: &str, what: &[u8], paths: &[Vec<u8>]) -> bool {
 /// the HOME, so a box being set up is never swept. In byte order (bash's glob: the locale's
 /// collation, finding 446).
 pub fn sweep_homes(ctx: &Ctx) {
+    sweep_homes_with(ctx, &|_| {});
+}
+
+/// sweep_homes with BETWEEN called with a HOME's name once it is judged gone, before anything is
+/// done about it (a test's stand-in for what other processes do meanwhile).
+fn sweep_homes_with(ctx: &Ctx, between: &dyn Fn(&[u8])) {
     let homes = crate::paths::homes();
     let mut users: Option<crate::homeuse::Users> = None;
     for n in shell::glob(&shell::path(&homes), true) {
@@ -511,17 +537,37 @@ pub fn sweep_homes(ctx: &Ctx) {
         if !p.is_dir() || p.is_symlink() {
             continue;
         }
-        let made_in =
-            crate::homeuse::record(&h).unwrap_or_else(|| shell::bytes(&ctx.in_boxes(&n)).to_vec());
+        let rec = crate::homeuse::record(&h);
+        let made_in = rec
+            .clone()
+            .unwrap_or_else(|| shell::bytes(&ctx.in_boxes(&n)).to_vec());
         if crate::homeuse::there(&made_in) {
             continue;
         }
+        let judged = Instant::now();
         if users
             .get_or_insert_with(crate::homeuse::Users::scan)
             .uses(&h)
         {
             continue;
         }
+        between(&n);
+        crate::homeuse::note_removed(
+            &homes,
+            &n,
+            &cat!(
+                "sweep_homes: ",
+                if rec.is_some() {
+                    "its record names "
+                } else {
+                    "no record; no "
+                },
+                made_in,
+                ", not there ",
+                judged.elapsed().as_millis().to_string(),
+                " ms ago, and nothing uses it"
+            ),
+        );
         rm_tree(
             &cat!("the HOME of box '", n, "', which is gone"),
             std::slice::from_ref(&h),

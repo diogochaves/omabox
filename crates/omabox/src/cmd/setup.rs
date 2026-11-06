@@ -725,8 +725,15 @@ impl Setup {
             out(cat!("removed the aquamarine build in ", aq_user, "\n"))?;
         }
         // The dirs boxes' homes and the build lived in, once nothing is left in them (a box's home
-        // stays while it is up; saves stay, said below).
-        let _ = std::fs::remove_dir(shell::path(&crate::paths::homes()));
+        // stays while it is up; saves stay, said below). The HOMEs' removal log (#433) goes with
+        // the last of them.
+        let homes = crate::paths::homes();
+        if shell::glob(&shell::path(&homes), true).is_empty() {
+            let log = cat!(homes, "/", crate::homeuse::REMOVED_LOG);
+            let _ = std::fs::remove_file(shell::path(&log));
+            let _ = std::fs::remove_file(shell::path(&cat!(log, ".old")));
+        }
+        let _ = std::fs::remove_dir(shell::path(&homes));
         if let Some(i) = aq_user.iter().rposition(|&c| c == b'/') {
             let _ = std::fs::remove_dir(shell::path(&aq_user[..i]));
         }
