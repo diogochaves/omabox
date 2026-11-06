@@ -16,6 +16,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   on SUPER+RETURN) and sees no Omarchy tree; it has no shell and a HOME with git's name and email
   only. Options that need Omarchy are refused. `ls` and `ls --json` say each box's desktop; Omarchy
   stays the default.
+- **`up --desktop plain --shell CMD`: your shell in a plain box** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  the box's shell is CMD (`dms run`, `qs -p DIR`, ...). `up` waits until it draws, says when it
+  exits or crashes on the way, `omabox log shell` is its output, `restart-shell` starts it again and
+  its crash is said as the shell's; `--quickshell` makes a build its `qs`. `ls` names it.
 
 ### Fixed
 - **`keys` on a Hyprland config that leaves `kb_variant`, `kb_model` or `kb_options` unset**: xkb was
