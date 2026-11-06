@@ -8938,7 +8938,16 @@ t_hypr_old_dispatch() {
   out=$(ob lua -b "$B" "hl.dispatch($okd)" 2>&1); rc=$?
   check_eq "...one that worked: 0" '0 {"ok":true,"pass_event":false}' "$rc $out"
   ob lua -b "$B" 'error("boom")' >/dev/null 2>&1
-  check_eq "...hl.dispatch Hyprland's own again after each, an error too" "C" "$(ob lua -b "$B" 'return debug.getinfo(hl.dispatch, "S").what')"
+  # (read through hyprctl's repl: inside a lua call it is lua's own wrapper)
+  check_eq "...hl.dispatch Hyprland's own again after each, an error too" "C" "$(ob hyprctl -b "$B" repl 'return debug.getinfo(hl.dispatch, "S").what')"
+  # Hyprland reads a request 1023 bytes at a time until a read is short: one of 8 × 1023 waited until
+  # hyprctl gave up (5 s). A source that makes lua's request a multiple of 1023 (`return "x…"`, 9
+  # bytes and the x's) answers at once.
+  local pre k
+  pre=$(printf '/eval (function(...)\n%s\nend)([[\n\n]])' "$(cat "$ROOT/share/lua.lua")" | wc -c)
+  k=$(( (1023 - (pre + 9) % 1023) % 1023 ))
+  out=$(timeout 4 "$CLI" lua -b "$B" "return \"$(head -c "$k" /dev/zero | tr '\0' x)\"" 2>&1); rc=$?
+  check_eq "lua: a request a multiple of 1023 bytes long answers at once" "0 $k" "$rc ${#out}"
   ob down "$B" >/dev/null
 }
 

@@ -79,7 +79,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         lvl.push(b'=');
     }
     let body = std::fs::read(crate::root().join("share/lua.lua")).unwrap_or_default();
-    let eval = cat!(
+    let eval = eval_padded(cat!(
         "(function(...)\n",
         shell::strip_nl(&body),
         "\nend)([",
@@ -89,7 +89,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         "\n]",
         lvl,
         "])"
-    );
+    ));
     let argv = vec![
         b"timeout".to_vec(),
         HYPR_LIMIT.as_bytes().to_vec(),
@@ -148,6 +148,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     Ok(())
 }
 
+/// EVAL, a space longer when hyprctl's request for it, `/eval EVAL`, is a multiple of 1023 bytes:
+/// Hyprland reads a request 1023 bytes at a time until a read comes back short, so it waited on one
+/// that size until hyprctl gave up, 5 s later ("Hyprland IPC didn't respond in time"; finding 686).
+fn eval_padded(mut eval: Vec<u8>) -> Vec<u8> {
+    if (b"/eval ".len() + eval.len()) % 1023 == 0 {
+        eval.push(b' ');
+    }
+    eval
+}
+
 /// `jq -c '.[]'` (--json) or `jq -r '.[] | if type == "string" then . elif type == "null" then
 /// "nil" else tojson end'` of VALS: here for the array lua.lua writes, by jq itself for anything
 /// else (its errors and its exit code as they are).
@@ -182,4 +192,18 @@ fn print_values(vals: &[u8], as_json: bool) -> Res<()> {
     }
     let (rc, _) = child.wait().map(crate::exec::status).unwrap_or((1, None));
     crate::cmd::hyprctl::code(rc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eval_padded;
+
+    #[test]
+    fn eval_off_1023() {
+        // "/eval " and 1017 bytes is 1023: one space more; 8184 (8 × 1023) too; the rest as they are.
+        assert_eq!(eval_padded(vec![b'x'; 1017]).len(), 1018);
+        assert_eq!(eval_padded(vec![b'x'; 8178]).len(), 8179);
+        assert_eq!(eval_padded(vec![b'x'; 1016]).len(), 1016);
+        assert_eq!(eval_padded(vec![b'x'; 1018]).len(), 1018);
+    }
 }
