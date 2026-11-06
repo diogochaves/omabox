@@ -671,6 +671,11 @@ impl Settle {
     /// the answer is unknown (1), never the action done unwatched.
     pub fn ready(&mut self, ctx: &Ctx, json: bool) -> Res<()> {
         self.snap_take();
+        // (what a point's input may have met: the idle notifications layer not, #431; asked here,
+        // before the input, not in the snapshot's thread, as the shell's ipc mutes stderr)
+        if !matches!(self.facts, "" | "keys" | "run") {
+            self.before = crate::desk::judge_toasts(ctx, std::mem::take(&mut self.before));
+        }
         if self.line.starts_with(b"ready") {
             return Ok(());
         }

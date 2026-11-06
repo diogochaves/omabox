@@ -438,9 +438,20 @@ fn narrow(ctx: &Ctx, w: &[u8], lay: Vec<u8>, at: &[u8]) -> Vec<u8> {
     }
 }
 
-/// A layer over a point (WIN_LAYER_JQ's line: `certain|possible "NAMESPACE" LAYER WxH at X,Y`, only
-/// its rectangle known, or narrow's `drawn` for one spanning the screen that draws there) in words:
-/// whether it is certain, the sentence, and the way out to say after it.
+/// A layer's `span` (WIN_JQ's) as what the layer is: "spanning the screen", or a strip's "full height
+/// at the right edge" (#431, findings 678, 685).
+fn span_phrase(span: &[u8]) -> Vec<u8> {
+    match span {
+        b"height" | b"width" => cat!("full ", span),
+        b"left" | b"right" => cat!("full height at the ", span, " edge"),
+        b"top" | b"bottom" => cat!("full width at the ", span, " edge"),
+        _ => b"spanning the screen".to_vec(),
+    }
+}
+
+/// A layer over a point (WIN_LAYER_JQ's line: `certain|possible SPAN "NAMESPACE" LAYER WxH at X,Y`,
+/// only its rectangle known, or narrow's `drawn SPAN` for one spanning its output that draws there)
+/// in words: whether it is certain, the sentence, and the way out to say after it.
 fn layer_words(
     lay: &[u8],
     whose: Whose,
@@ -451,6 +462,13 @@ fn layer_words(
     let (how, lay) = match lay.iter().position(|&c| c == b' ') {
         Some(i) => (lay[..i].to_vec(), lay[i + 1..].to_vec()),
         None => (lay.to_vec(), lay.to_vec()),
+    };
+    // (one spanning its output: what it spans, its `span`, next, #431)
+    let (spans, lay) = match lay.iter().position(|&c| c == b' ') {
+        Some(i) if how == b"possible" || how == b"drawn" => {
+            (span_phrase(&lay[..i]), lay[i + 1..].to_vec())
+        }
+        _ => (span_phrase(b"screen"), lay),
     };
     let (first, rest) = match lay.iter().position(|&c| c == b' ') {
         Some(i) => (lay[..i].to_vec(), lay[i + 1..].to_vec()),
@@ -474,7 +492,9 @@ fn layer_words(
     };
     if how == b"possible" {
         let said = cat!(
-            "a layer spanning the screen, ",
+            "a layer ",
+            spans,
+            ", ",
             first,
             " (",
             rest,
@@ -496,7 +516,9 @@ fn layer_words(
     };
     if how == b"drawn" {
         let said = cat!(
-            "a layer spanning the screen, ",
+            "a layer ",
+            spans,
+            ", ",
             first,
             " (",
             rest,
