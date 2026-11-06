@@ -628,21 +628,41 @@ fn some_progs_check(root: &[u8], fam: Option<Family>) -> Check {
             Err(Some(w)) => missing.push(format!("{w} ({why})")),
         }
     }
-    // (an ffmpeg without libx264, Fedora's ffmpeg-free and openSUSE's: record's videos are H.264 by
-    // it, #247, finding 673; on this machine only, as record asks its /usr/bin/ffmpeg)
-    let mut fix_x264 = None;
-    if root == b"/" && some_prog(root, "ffmpeg").is_ok() && !crate::cmd::record::has_x264() {
-        missing.push("ffmpeg without libx264 (record)".into());
-        fix_x264 = Some(crate::cmd::record::X264_WHY.to_string());
+    // Record's H.264 encoder (#247, finding 673; #442, finding 683): libx264, else openh264 (Fedora's
+    // ffmpeg-free and openSUSE's ffmpeg), else none; on this machine only, as record asks its
+    // /usr/bin/ffmpeg.
+    let mut fix_enc = None;
+    let mut enc_said = None;
+    if root == b"/" && some_prog(root, "ffmpeg").is_ok() {
+        use crate::cmd::record::{NO_H264_WHY, encoder};
+        match encoder() {
+            None => {
+                missing.push("ffmpeg without libx264 or libopenh264 (record)".into());
+                fix_enc = Some(NO_H264_WHY.to_string());
+            }
+            Some(e) => enc_said = Some(enc_said_of(e).to_string()),
+        }
     }
     if missing.is_empty() {
         let mut said = vec![format!("{} in {}", found.join(", "), launch_dir())];
         said.extend(elsewhere);
+        said.extend(enc_said);
         return check("some-programs", St::Ok, said.join("; "), Vec::new());
     }
     let mut fix = install_lines(fam, &install);
-    fix.extend(fix_x264);
+    fix.extend(fix_enc);
+    missing.extend(enc_said);
     check("some-programs", St::Warn, missing.join("; "), fix)
+}
+
+/// What doctor says of record's encoder.
+fn enc_said_of(e: crate::cmd::record::Enc) -> &'static str {
+    match e {
+        crate::cmd::record::Enc::X264 => "record's H.264 by libx264",
+        crate::cmd::record::Enc::OpenH264 => {
+            "record's H.264 by openh264, as this ffmpeg has no libx264 (larger videos, 4096x2304's pixels a frame at most)"
+        }
+    }
 }
 
 /// What a machine without Omarchy has: plain boxes (#247).

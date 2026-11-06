@@ -1472,25 +1472,131 @@ pub(crate) fn jq_r(prog: &str, input: &[u8]) -> (i32, Vec<u8>) {
     (r.rc, r.text())
 }
 
-/// What record says, and doctor, of an ffmpeg without libx264 (#247, finding 673).
-pub const X264_WHY: &str = "this ffmpeg has no libx264, which record's videos are made with (Fedora's ffmpeg-free and openSUSE's ffmpeg leave it out: RPM Fusion's or Packman's ffmpeg has it)";
+/// What record says, and doctor, of an ffmpeg with no H.264 encoder record can use (#247, finding
+/// 673; #442, finding 683).
+pub const NO_H264_WHY: &str = "this ffmpeg has neither libx264 nor a working libopenh264, which record's videos are made with (Fedora's ffmpeg-free and openSUSE's ffmpeg use Cisco's openh264, from a repository both enable by default: the openh264 package on Fedora, libopenh264 on openSUSE; or RPM Fusion's or Packman's ffmpeg, which has libx264)";
 
-/// Whether /usr/bin/ffmpeg has the libx264 encoder (wf-recorder's raw stream and every video of
-/// record's are H.264 by it); an ffmpeg that does not answer in 5 s is taken as having none.
-pub fn has_x264() -> bool {
-    // (bounded, as every ffmpeg of record's is: ffmpeg 9.0.1 deadlocks now and then, finding 356)
+/// What record start says when its videos are openh264's (#442, finding 683).
+pub const OPENH264_SAID: &str = "H.264 by openh264, as this ffmpeg has no libx264: about 1.7 times the bytes at the same --crf (openh264's QP), 4096x2304's pixels a frame at most";
+
+/// The H.264 encoder of record's raw stream and videos (#442, finding 683): libx264 where ffmpeg has
+/// it; else openh264, which Fedora's ffmpeg-free and openSUSE's ffmpeg have instead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Enc {
+    X264,
+    OpenH264,
+}
+
+impl Enc {
+    /// Its ffmpeg (and wf-recorder) name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Enc::X264 => "libx264",
+            Enc::OpenH264 => "libopenh264",
+        }
+    }
+    /// The most pixels a frame it encodes: H.264's level 6.2 for libx264 (8192x4352's), openh264's
+    /// own check (4096x2304's, level 5.1's).
+    pub fn max_px(self) -> i64 {
+        match self {
+            Enc::X264 => 35_651_584,
+            Enc::OpenH264 => 9_437_184,
+        }
+    }
+    /// ffmpeg's arguments for a video at quality Q: libx264's CRF, or openh264's QP at Q (it has no
+    /// CRF: a fixed quantiser, which at 18 matched libx264's CRF 18 in SSIM and PSNR, finding 683).
+    pub fn video_args(self, q: &str) -> Vec<Vec<u8>> {
+        match self {
+            Enc::X264 => w(&["-c:v", "libx264", "-preset", "medium", "-crf", q]),
+            Enc::OpenH264 => w(&[
+                "-c:v",
+                "libopenh264",
+                "-rc_mode",
+                "quality",
+                "-qmin",
+                q,
+                "-qmax",
+                q,
+            ]),
+        }
+    }
+}
+
+/// enc_choose FORCED ENCODERS WORKS: libx264 when `ffmpeg -encoders` lists it (and FORCED,
+/// $OMABOX_RECORD_ENCODER, is not libopenh264), else openh264 when listed and WORKS() (Fedora's
+/// ffmpeg-free lists it with only a stub library, noopenh264, under it: a trial frame tells).
+fn enc_choose(forced: &[u8], encoders: &[u8], works: impl FnOnce() -> bool) -> Option<Enc> {
+    let has = |n: &[u8]| {
+        encoders
+            .split(|&b| b == b'\n')
+            .any(|l| crate::shell::words(l).get(1).is_some_and(|w| w == n))
+    };
+    if forced != b"libopenh264" && has(b"libx264") {
+        return Some(Enc::X264);
+    }
+    if forced != b"libx264" && has(b"libopenh264") && works() {
+        return Some(Enc::OpenH264);
+    }
+    None
+}
+
+/// `/usr/bin/ffmpeg ARGS`'s status and stdout, bounded (as every ffmpeg of record's is: ffmpeg 9.0.1
+/// deadlocks now and then, finding 356): one that does not end in 5 s is a failure.
+fn ffmpeg_out(args: &[&str]) -> Option<Vec<u8>> {
     let mut c = crate::sig::command("/usr/bin/timeout");
-    c.args(["-k", "1", "5"]);
-    c.args(["/usr/bin/ffmpeg", "-hide_banner", "-encoders"])
+    c.args(["-k", "1", "5", "/usr/bin/ffmpeg", "-hide_banner"])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    crate::sig::run_output(c).is_ok_and(|(rc, o)| {
-        rc == 0
-            && o.split(|&b| b == b'\n').any(|l| {
-                crate::shell::words(l)
-                    .get(1)
-                    .is_some_and(|w| w == b"libx264")
-            })
+    match crate::sig::run_output(c) {
+        Ok((0, o)) => Some(o),
+        _ => None,
+    }
+}
+
+/// The encoder record uses with /usr/bin/ffmpeg (wf-recorder's raw stream and every video: Enc),
+/// None when it has none of them. $OMABOX_RECORD_ENCODER (libx264 or libopenh264, for the suite)
+/// takes only that one. Asked once a process.
+pub fn encoder() -> Option<Enc> {
+    static E: std::sync::OnceLock<Option<Enc>> = std::sync::OnceLock::new();
+    *E.get_or_init(|| {
+        let enc = ffmpeg_out(&["-encoders"])?;
+        enc_choose(&shell::env_or_empty("OMABOX_RECORD_ENCODER"), &enc, || {
+            ffmpeg_out(&[
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=64x64:d=0.1",
+                "-c:v",
+                "libopenh264",
+                "-f",
+                "null",
+                "-",
+            ])
+            .is_some()
+        })
+    })
+}
+
+/// LAYOUT_JQ for ENC: a layout past its largest frame scaled down to fit.
+pub(crate) fn layout_jq(enc: Enc) -> String {
+    P::LAYOUT_JQ.replace("35651584", &enc.max_px().to_string())
+}
+
+/// The encoder of a recording being made into a video (start chose it the same way).
+pub(crate) fn rec_enc() -> Enc {
+    encoder().unwrap_or(Enc::X264)
+}
+
+/// The first of NAMES (MONS: "NAME W H" lines) with more pixels than ENC encodes in a frame, said.
+fn too_big(names: &[Vec<u8>], mons: &[u8], enc: Enc) -> Option<Vec<u8>> {
+    mons.split(|&c| c == b'\n').find_map(|l| {
+        let f = shell::read_fields(l, 3);
+        let (wd, ht) = (shell::dec(&f[1])?, shell::dec(&f[2])?);
+        (names.contains(&f[0]) && wd * ht > enc.max_px())
+            .then(|| cat!(f[0], " is ", wd.to_string(), "x", ht.to_string()))
     })
 }
 
@@ -1508,8 +1614,13 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
             "record: needs wf-recorder and ffmpeg in /usr/bin (omabox doctor names their packages)",
         ));
     }
-    if !has_x264() {
-        return Err(ctx.die(cat!("record: ", X264_WHY)));
+    let Some(enc) = encoder() else {
+        return Err(ctx.die(cat!("record: ", NO_H264_WHY)));
+    };
+    if enc == Enc::OpenH264 && o.crf == Some(0) {
+        return Err(ctx.die(
+            "record: --crf 0 is lossless, which only libx264 makes: this ffmpeg has none, and openh264 has no lossless mode (--crf 1 is its best)",
+        ));
     }
     if record_running(ctx, rec)? {
         if in_jail() && !ctx.at("record.as").is_file() {
@@ -1554,7 +1665,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     let mut names: Vec<Vec<u8>> = Vec::new();
     let jq_mon = crate::jqprog::JQ_MON;
     if mon == b"all" {
-        let (rc, l) = jq_r(&format!("{jq_mon}{}", P::LAYOUT_JQ), &mons);
+        let (rc, l) = jq_r(&format!("{jq_mon}{}", layout_jq(enc)), &mons);
         if rc != 0 || l.is_empty() {
             return Err(ctx.die(cat!(
                 "record: box '",
@@ -1603,6 +1714,22 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     }
     if layout.is_empty() {
         names = vec![mon.clone()];
+    }
+    // (each monitor's own stream is a frame of its pixels: past openh264's largest, no video)
+    if let Some(m) = too_big(
+        &names,
+        &jq_r(r#".[] | "\(.name) \(.width) \(.height)""#, &mons).1,
+        enc,
+    ) {
+        return Err(ctx.die(cat!(
+            "record: ",
+            m,
+            ", more pixels than ",
+            enc.name(),
+            " encodes in a frame (",
+            enc.max_px().to_string(),
+            "): a smaller --size or a lower scale"
+        )));
     }
     let turns = record_turns(
         &names,
@@ -1707,6 +1834,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         drop(w0);
         let reader = std::thread::spawn(move || read_all(r, Some(4096)));
         let mut a = w(&["/usr/bin/bash", "-c", P::START_SH, "omabox-record"]);
+        a.push(enc.name().as_bytes().to_vec());
         a.push(raw_crf(o.crf).to_string().into_bytes());
         a.extend(pairs.iter().cloned());
         let _ = box_exec(
@@ -1831,6 +1959,9 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     } else {
         b" and its sound"
     };
+    if enc == Enc::OpenH264 {
+        say(cat!("record: ", OPENH264_SAID));
+    }
     if !layout.is_empty() {
         say(cat!(
             "record: recording ",
@@ -1951,12 +2082,84 @@ mod tests {
     use super::*;
 
     fn layout(mons: &str) -> String {
+        layout_for(mons, Enc::X264)
+    }
+
+    fn layout_for(mons: &str, enc: Enc) -> String {
         let (rc, l) = jq_r(
-            &format!("{}{}", crate::jqprog::JQ_MON, P::LAYOUT_JQ),
+            &format!("{}{}", crate::jqprog::JQ_MON, layout_jq(enc)),
             mons.as_bytes(),
         );
         assert_eq!(rc, 0);
         String::from_utf8(l).unwrap()
+    }
+
+    /// #442 (finding 683): libx264 where ffmpeg lists it, else openh264 if it encodes a frame (a
+    /// stub library under it does not), else none; $OMABOX_RECORD_ENCODER takes only the one named.
+    #[test]
+    fn encoder_choice() {
+        let both = b" V....D libx264              libx264 H.264\n V....D libopenh264          OpenH264 H.264\n";
+        let oh = b" V..... libsvtav1  SVT\n V....D libopenh264          OpenH264 H.264\n";
+        let none = b" V.S..D ffv1                 FFmpeg video codec #1\n";
+        let works = || true;
+        let stub = || false;
+        assert_eq!(enc_choose(b"", both, works), Some(Enc::X264));
+        assert_eq!(
+            enc_choose(b"", both, || panic!("no trial with libx264")),
+            Some(Enc::X264)
+        );
+        assert_eq!(enc_choose(b"", oh, works), Some(Enc::OpenH264));
+        assert_eq!(enc_choose(b"", oh, stub), None);
+        assert_eq!(enc_choose(b"", none, works), None);
+        assert_eq!(enc_choose(b"libopenh264", both, works), Some(Enc::OpenH264));
+        assert_eq!(enc_choose(b"libopenh264", both, stub), None);
+        assert_eq!(enc_choose(b"libx264", oh, works), None);
+        assert_eq!(enc_choose(b"anything", both, works), Some(Enc::X264));
+        // (a word in a description is not an encoder's name)
+        assert_eq!(
+            enc_choose(b"", b" V....D x  libx264 in words\n", works),
+            None
+        );
+    }
+
+    /// Each encoder's arguments: libx264's CRF, openh264's quantiser fixed at the same number.
+    #[test]
+    fn encoder_args() {
+        let s = |v: Vec<Vec<u8>>| String::from_utf8(v.join(&b' ')).unwrap();
+        assert_eq!(
+            s(Enc::X264.video_args("18")),
+            "-c:v libx264 -preset medium -crf 18"
+        );
+        assert_eq!(
+            s(Enc::OpenH264.video_args("18")),
+            "-c:v libopenh264 -rc_mode quality -qmin 18 -qmax 18"
+        );
+        assert_eq!(Enc::OpenH264.name(), "libopenh264");
+    }
+
+    /// openh264's largest frame (4096x2304's pixels): a monitor past it said, a layout past it
+    /// scaled down to fit (t_record_layout's 2000x1280 at scale 2: 4000x2560 for libx264).
+    #[test]
+    fn openh264_frames() {
+        let mons = b"A 2560 1440\nB 5120 2880\nC 4096 2304\n";
+        let n = |v: &[&str]| v.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>();
+        assert_eq!(too_big(&n(&["A", "C"]), mons, Enc::OpenH264), None);
+        assert_eq!(
+            too_big(&n(&["A", "B"]), mons, Enc::OpenH264),
+            Some(b"B is 5120x2880".to_vec())
+        );
+        assert_eq!(too_big(&n(&["B"]), mons, Enc::X264), None);
+        let m = [
+            mon("A", 1280, 720, 0, 0, "1", 0, false),
+            mon("B", 1280, 720, 1280, 0, "1", 1, false),
+            mon("C", 1280, 720, 0, 720, "2", 0, false),
+        ];
+        let all = format!("[{}]", m.join(","));
+        assert_eq!(layout(&all).lines().next(), Some("4000 2560 2 1"));
+        assert_eq!(
+            layout_for(&all, Enc::OpenH264).lines().next(),
+            Some("3840 2457 2 0.96")
+        );
     }
 
     #[allow(clippy::too_many_arguments)]

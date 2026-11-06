@@ -13273,6 +13273,49 @@ from them.
     made again by an up that holds the lock or has let it go, kept; a down's held lock, left; a gone
     one taken and logged; leftovers), make_home_whole and removal_log; t_home_sweep's log checks.
 
+683. **record's fallback encoder where ffmpeg has no libx264: openh264** (2026-11-06, #442). What
+    the two distributions ship (rootless podman, Fedora 45 with `ffmpeg-free` 9.0.2, Tumbleweed's
+    `ffmpeg` 9.0.2): neither has libx264; both have libopenh264, libvpx-vp9, libsvtav1, libaom-av1,
+    librav1e, ffv1, utvideo, and Cisco's openh264 library came in with ffmpeg on both (Fedora's
+    `fedora-cisco-openh264` and openSUSE's `repo-openh264` are enabled in the stock images; Fedora's
+    `noopenh264` stub, swapped in, lists the encoder and fails to open it: "Unable to create encoder"). Neither has ffmpeg's own
+    H.264 decoder: H.264 is decoded by openh264 there (it read libx264's High CRF 18 videos, not CRF
+    0's High 4:4:4 Predictive). wf-recorder is packaged on both (Tumbleweed's links ffmpeg 8.1's
+    libavcodec62, which has libopenh264 too). openh264 refuses a frame past 9437184 pixels
+    (4096x2304's): 3840x2160 encodes, 4000x2560 and 5120x2880 do not. Measured on one clip (19.27 s
+    of a 1920x1080 box, terminals scrolling and opening, recorded at --crf 0 and turned into ffv1 so
+    both ffmpegs read it; SSIM/PSNR against it, frames paired by index; this machine's 16 CPUs). The
+    raw stream, live (on decoded frames, one thread): libx264 ultrafast CRF 14 1.8 CPU-s (9% of a
+    core), 21.5 MB, 59.0 dB; openh264 at QP 14 1.3 CPU-s, 13.7 MB, 53.1 dB; VP9 realtime cpu-used 8
+    and SVT-AV1 preset 12 about 5 CPU-s; ffv1 154 MB and utvideo 356 MB (8 and 18 MB/s into the
+    box's HOME, which is in the runtime dir's tmpfs: a lossless raw stream fills it in minutes, out).
+    The video: libx264 medium CRF 18 6.39 MB, SSIM 0.99895, 50.7 dB, 1.6 s (20 CPU-s); openh264 has
+    no CRF (bitrate modes, or rc_mode quality with qmin=qmax: a fixed QP, the bitrate then
+    irrelevant), at QP 18 10.7 MB, 0.99866, 49.9 dB, 1.3 s; QP 12 14.0 MB 54.7 dB, QP 24 7.9 MB
+    45.1 dB, QP 30 5.6 MB 39.8 dB. The whole chain (raw, then stop's encode): libx264 6.40 MB,
+    0.99730, 42.9 dB; openh264 10.40 MB (1.62x), 0.99675, 42.5 dB. AV1 (SVT preset 8 CRF 30) 2.6 MB
+    at 54.9 dB in 3.4 s, VP9 (good, cpu-used 4, CRF 32) 4.4 MB at 46.9 dB in 11.7 s: both in MP4,
+    but no longer H.264 (Safari plays AV1 only with a hardware decoder; agents, the docs and the
+    suite take H.264 for granted), and each with its own CRF scale. Chosen: openh264 for the raw
+    stream and every encode (stop's, record_compose, record_cut) where ffmpeg has no libx264 (Enc in
+    cmd/record.rs: `ffmpeg -encoders`, then a 64x64 trial frame for openh264), libx264 wherever it
+    is; still `.mp4`, H.264, nothing beyond each distribution's stock packages. `--crf N` is its QP
+    N (about the same quality, 1.6-1.7x the bytes), `--crf 0` refused (openh264 has no lossless),
+    a monitor past its frame refused at start, a `--monitor all` layout scaled down to fit it (the
+    layout's 35651584 becomes 9437184: t_record_layout's 4000x2560 is 3840x2458 there). record start
+    and stop say "by openh264", doctor's some-programs says which encoder record uses (a warning only
+    with neither, naming the openh264 packages and RPM Fusion's or Packman's ffmpeg).
+    `OMABOX_RECORD_ENCODER=libopenh264` (for tests) takes openh264 only; this machine's ffmpeg (Arch's)
+    has no libopenh264, so here it tests the refusal (t_record_hold), and the fallback itself ran in
+    Tumbleweed's container (test/distros.sh --boxes, now with wf-recorder and ffmpeg and a record
+    step: a take, its sheet, --cut-idle, two monitors as one, 22/22 there; every video h264
+    Constrained Baseline, `yuv420p,tv,bt709,bt709,bt709` as libx264's, read by this machine's
+    ffmpeg too). The suite's record tests run on openh264 where libx264 is missing (rec_tools:
+    REC_ENC; t_record_hold checks openh264's QP by the first frame's bytes, as it writes no settings;
+    t_record_layout expects the 3840x2458 layout), but not run that way yet: the suite wants a
+    Hyprland session, which a container has not (Fedora's and Tumbleweed's VMs, distros-vm.sh
+    --suite, have one).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
