@@ -20,6 +20,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A `--hyprland DIR` box knows its Hyprland's version** ([#424](https://github.com/diogochaves/omabox/issues/424)):
   the version written to the box HOME was asked without the folder's libraries, so a folder's
   Hyprland wrote 0.0.0, and the next Hyprland started in the box opened its update news.
+- **`--version` and `config --json` describe OMABOX_HYPRLAND's Hyprland** ([#424](https://github.com/diogochaves/omabox/issues/424)):
+  with it set they named the aquamarine of the installed Hyprland, not the folder's that boxes load.
+  They now say the folder's (kind `folder`), and name the Hyprland (`hyprland` in both `--json`s).
 
 ## 1.2.2 — 2026-11-05
 

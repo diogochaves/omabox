@@ -229,5 +229,11 @@ fn json_line(ctx: &Ctx) -> String {
     m.insert("gpus".into(), render::gpu_json());
     m.insert("gpu_auto".into(), slot(auto));
     m.insert("gpu_now".into(), slot(now));
+    // The Hyprland every up runs when OMABOX_HYPRLAND names one (#424, finding 647); null for the
+    // installed one. confirm_close_available above is its aquamarine's.
+    m.insert(
+        "hyprland".into(),
+        slot(shell::env_or_empty("OMABOX_HYPRLAND")),
+    );
     json::compact(&Value::Object(m))
 }

@@ -98,11 +98,11 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `ports --json` | an array: `box, port, addresses, process, host` |
 | `path --logs --json` | `{NAME: PATH}`, each log there is |
 | `saves --json` | an array: `name, box, saved, size, size_kb, keyring` |
-| `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, confirm_close_available, version, gpus, gpu_auto, gpu_now` |
+| `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, confirm_close_available, version, gpus, gpu_auto, gpu_now, hyprland` (OMABOX_HYPRLAND's path, or null) |
 | `calibrate --answer --json` | `result` (one, fit, up, none), `card, marks, scale, fit, fit_size, error_px, worst, off, shot_fit` |
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
 | `pid --json` | `box, process` (hyprland or shell), `pid` (the host's), `box_pid` (the box's own) |
-| `--version --json` | `version, aquamarine` (`kind, version, fixed, message`) |
+| `--version --json` | `version, aquamarine` (`kind, version, fixed, message`), `hyprland` (null, or with OMABOX_HYPRLAND set `given, binary, message`) |
 | `doctor --json` | `ok, os` (`id, id_like, family`: null for one omabox has no package names for), `checks` (an array: `id, status` ok, warn or fail, `found, fix` an array of lines), `smoke` (null without `--smoke`; else `ok, box, shot, error`) |
 
 ## Handing box work to a subagent

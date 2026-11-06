@@ -12536,6 +12536,21 @@ from them.
     host's `Hyprland --version`; it now asks the box's own Hyprland (box_hypr_version), so it holds
     under OMABOX_HYPRLAND. Tests: t_system_dirs under OMABOX_HYPRLAND=0.57.1 (failed with 0.0.0
     before), t_hyprland_folder (its folder's lastVersion).
+647. **`--version` and `config --json` described build/prefix while OMABOX_HYPRLAND's folder was what
+    boxes ran** (2026-11-06, #424). Both asked which aquamarine the installed Hyprland's soname
+    resolves to; with OMABOX_HYPRLAND set, `up` loads the folder's own (kind `folder`, whatever
+    OMABOX_AQUAMARINE says), so `--version` named omabox's 0.15.1 build and `confirm_close_available`
+    its answer, while boxes ran 0.16.0 (the suite's aq_unfixed said unfixed and `up` went ahead).
+    **Now:** install::new_box_in is what `up` would run: with OMABOX_HYPRLAND, that build's
+    aquamarine as check_install picks it (the folder's own, else the one omabox finds for the soname it
+    links), else the installed Hyprland's as before. `--version` adds a line `hyprland: BINARY
+    (OMABOX_HYPRLAND=PATH)` (or that up cannot run it), `--version --json` a `hyprland` object
+    (`given, binary, message`; null when unset), `config --json` a `hyprland` key (the path or
+    null), and `confirm_close_available` is the folder's aquamarine's. Not done: a jailed caller's
+    `--version` still describes the installed one (a jailed `up` takes the path through the jail's
+    view). Tests: install.rs new_box_follows_omabox_hyprland (a folder's link and soname-only copy,
+    OMABOX_AQUAMARINE=system, a folder with none, a path that holds nothing), version.rs
+    omabox_hyprland_is_said and json_as_jq_writes_it.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
