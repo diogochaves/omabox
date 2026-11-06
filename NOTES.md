@@ -12955,6 +12955,15 @@ from them.
     schedule's own 250 ms-2 s is reap.rs's `guard_looks_when`. Without the fix the new checks fail
     on one CPU (8 of them); with it: alone 5/5 (34/0), under 16 CPU burners and two unit tiers 3/3,
     on one CPU 3/3.
+662. **ImageMagick was never installed off Omarchy** (2026-11-06, #247). The first full suite on
+    plain Arch (test/distros-vm.sh, a real VM from Arch's cloud image) failed every `check`,
+    `calibrate`, `find` and `shot --zoom/--grid/--changed/--diff` case with "needs ImageMagick's
+    magick (package imagemagick, part of Omarchy)": omabox runs `magick` on the host for all of them,
+    and install.sh's lists, doctor's checks and the containers' boxes (which never ran those
+    commands) all took it for granted, Omarchy having it. **Now** install.sh installs it in every
+    family (imagemagick; Fedora and openSUSE ImageMagick; each gives /usr/bin/magick, checked in
+    debian:sid, fedora:45 and tumbleweed containers) and doctor's some-programs check warns
+    without it, naming what needs it, with the install line.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
