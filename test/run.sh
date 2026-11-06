@@ -8144,6 +8144,7 @@ protect_ports_ns_nft() {
   cat > "$f/nft" <<EOF
 #!/bin/sh
 if [ "\$1" = -f ]; then
+  [ -e '$f/fail' ] && exec 0<&-   # (its rule unread, gone as soon as it can be: #440)
   echo x >> '$f/runs'
   [ -e '$f/hang' ] && { date +%s > '$f/hung.at'; echo \$\$ > '$f/hung.pid'; exec sleep 3601; }
   [ -e '$f/fail' ] && { echo "nft stand-in: refused" >&2; exit 1; }
@@ -8163,13 +8164,23 @@ EOF
   in2() { local t; t=$(sets2) || t=""; grep -q "$1" <<<"$t" && return 0; echo "$t"; tail -n 3 "$rlog2" 2>&1; return 1; }
   # (its first look comes as the reaper starts, after up; 20 s holds under a full suite's load)
   check "a reaper whose nft fails says so" until_ok 20 grep -q "could not set the host's addresses in its protected ports' rule (nft stand-in: refused)" "$rlog2"
+  # An nft gone before it read its rule (the stand-in's failure) made the reaper's write of it a
+  # SIGPIPE, which ended the reaper when it lost that race (#440: a loaded machine, or one CPU).
+  local rp2 every2
+  rp2=$(awk '{print $1}' "$XDG_RUNTIME_DIR/omabox/$B2/reaper.pid" 2>/dev/null) || rp2=""
+  check "...it ignores SIGPIPE: an nft that ends before reading its rule cannot end it (#440)" \
+    bash -c "s=\$(awk '/^SigIgn:/ {print \$2}' /proc/${rp2:-0}/status) && (( 0x\$s & 0x1000 ))"
   check "...the host gains an address meanwhile" asns ip addr add 10.239.3.1/24 dev d1
   sleep 0.5
+  check "...the reaper still there after its failed looks (#440)" kill -0 "${rp2:-none}"
   rm -f "$f/fail"
   # (no address event comes after nft works again: the reaper's own retry, every 2 s at most while
-  # failing, puts it in, where the next poll would be up to 60 s away; 15 s holds under load)
-  check "...in the rule once nft works again, with no address event since: long before the next poll (#399)" until_ok 15 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.3\.1'"
-  check "...said in reap.log" grep -q "its protected ports' addresses set again" "$rlog2"
+  # failing, puts it in, where the next poll is the reaper's interval away; "long before" is within
+  # half of it, its words in reap.log, whatever the load does to the 2 s)
+  every2=$(grep -oE 'watching it every [0-9]+ s' "$rlog2" | grep -oE '[0-9]+') || every2=60
+  check "...in the rule once nft works again, with no address event since: long before the next poll, in $((every2 / 2)) s of its $every2 s (#399)" until_ok "$((every2 / 2))" bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.3\.1'"
+  # (said once nft has answered, after the rule is in: a moment later)
+  check "...said in reap.log" until_ok 10 grep -q "its protected ports' addresses set again" "$rlog2"
   # A burst: 40 addresses over about 2 s, each an event; the reaper runs nft a few times, not 40.
   sleep 0.5; : > "$f/runs"
   local b0 b1 most
@@ -8186,9 +8197,10 @@ EOF
   # A hung nft: killed, said, and the address set once nft answers again.
   : > "$f/hang"; rm -f "$f/hung.pid"
   check "...the host gains one more" asns ip addr add 10.239.5.1/24 dev d1
-  if until_ok 10 test -s "$f/hung.pid"; then hung=$(cat "$f/hung.pid")
+  if until_ok 20 test -s "$f/hung.pid"; then hung=$(cat "$f/hung.pid")
     check "a reaper's nft that hangs is killed" until_ok 30 bash -c "! kill -0 $hung 2>/dev/null"
-    check "...said in reap.log" grep -q "nft did not answer" "$rlog2"
+    # (said once the reaper has waited for what it killed: a moment after)
+    check "...said in reap.log" until_ok 10 grep -q "nft did not answer" "$rlog2"
     # When, by the reaper's own clock (its reap.log line) against the stand-in's start: its 5 s wait,
     # whatever the test's polling took under load.
     local kl ka
@@ -8199,6 +8211,7 @@ EOF
   else no "a reaper's nft that hangs is killed" "the stand-in never hung"; fi
   rm -f "$f/hang"
   check "...the address in the rule once nft answers" until_ok 20 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.5\.1'"
+  check "...and the reaper still there (#440)" kill -0 "${rp2:-none}"
   HOME=$h ob down "$B2" >/dev/null 2>&1
   [ ! -s "$f/hung.pid" ] || kill "$(cat "$f/hung.pid")" 2>/dev/null
 }

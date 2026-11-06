@@ -12924,6 +12924,26 @@ from them.
     with CMD a sleep: up times out naming CMD), shellnote's `plain_shell_is_its_slot` and
     `slot_pids_as_sh` (a setsid daemon whose launcher left, another slot's, a dialog's), ready's
     `plain_shell_layer_and_configs`.
+660. **A reaper whose nft failed could die of SIGPIPE, its box left unguarded** (2026-11-06, #440;
+    S10). t_protect_ports_ns failed five checks in two loaded full suites and passed alone, which
+    looked like the reaper's retry (finding 581) running late. It was not late: the suite's output
+    said 0 nft runs for the 40-change burst, and nothing in 60 s; the reaper was gone. guard_set
+    writes the rule to nft's stdin after spawn, and the reaper ran with SIGPIPE at its default
+    (main sets it back, as bash's commands have it): an nft that ended before reading its stdin
+    (the test's failing stand-in; a real nft that dies early) made that write end the reaper on the
+    spot, the box then with no address guard and no idle limit. The race is lost only when the
+    reaper is descheduled between spawn and write long enough for the child to exit: a loaded
+    machine, or one CPU (`taskset -c 5 test/run.sh t_protect_ports_ns` failed it 3 times in 3, the
+    reaper gone after its second nft run). **Now** the reaper ignores SIGPIPE from its start (its
+    output is reap.log, a file; its children still get the default, sig::command going by how the
+    process came). The test checks it (SigIgn on the reaper), that the reaper is still there after
+    its failed looks and at the end, and its stand-in closes stdin first when failing. Its waits
+    now follow what the reaper writes: "set again" and "nft did not answer" waited for in reap.log
+    (the rule is seen before the line is written), the stand-in's hang waited 20 s, and "long before
+    the next poll" is within half the interval reap.log states (30 s of 60), not a fixed 15 s; the
+    schedule's own 250 ms-2 s is reap.rs's `guard_looks_when`. Without the fix the new checks fail
+    on one CPU (8 of them); with it: alone 5/5 (34/0), under 16 CPU burners and two unit tiers 3/3,
+    on one CPU 3/3.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
