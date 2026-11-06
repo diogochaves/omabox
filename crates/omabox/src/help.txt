@@ -82,6 +82,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
                | job [JOB] [--gone] | log [JOB] RE [-i]   a run -d job's end; a line in its log
                | tree TEXT [--window SEL | --layer SEL] [--gone] [--shot FILE]
                | log LOG (RE | --grep RE) [-i] [--since OFFSET]   a new line in a box log: shell, hyprland, ...
+               | notification RE [-i] [--since OFFSET]   a notice whose summary or body RE matches
   omabox wait [-b NAME] [--json] for DURATION            a fixed time, said as one (no box needed)
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
@@ -109,7 +110,8 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
                                                          a box's logs: hyprland (the default), shell, apps, run,
                                                          events, keyring, labwc, systemd, audio, polkit,
-                                                         gdb, journal, box, reap
+                                                         gdb, journal, notifications, box, reap
+  omabox log [-b NAME] notifications [--json] [-n N] [--grep RE [-i]] [-f]   what apps sent the notification server
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
   omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
@@ -808,6 +810,12 @@ says one that was there (`--since 0` counts the whole log). --since OFFSET reads
 --json's offset is where the line found ends, for the next wait's --since. A log begun anew
 meanwhile (restart-shell starts the shell's) is read from its start, said. Hyprland's new lines come
 from `hyprctl rollinglog` (its file is written 8 KiB late), every 250 ms: no --since there.
+`wait notification RE [-i]` (#430): until a notification reaches the box's server (as `log
+notifications` has it) whose summary or body RE matches (grep -E, each with its newlines as spaces;
+not its app name), printed with it; --json adds the record (`notification`: its id, hints, actions).
+One sent before the wait does not count, and a 124 says one that was there (`--since 0` counts the
+whole log; --json's offset is the next wait's --since). One sent with no server counts too: its line
+says `(no id) ... -- not shown: WHY`.
 `wait for DURATION`: that long, then "satisfied: waited ..., a fixed time": for a time that is the
 point (a timer under test), where a foreground sleep is blocked. Not to let an app settle: wait for
 what it does (still, change, window, job, log, until).
@@ -836,6 +844,14 @@ line. -f (or --follow) follows them until the box goes down (-n then counts line
 its log file 8 KiB at a time: `log hyprland` adds the newest lines from `hyprctl rollinglog` (its last
 4 KiB; stderr says when the file is further behind), while -f gets them late. `log gdb --crash`: only each crash's signal and
 the backtrace of the thread it hit (-n and --grep then apply to those).
+`log notifications` (#430): what reached the box's notification server from up on, whatever server
+it is (the shell's, a plain box's, none yet), a line each: `notify #ID APP: "SUMMARY" "BODY"` with its
+hints (urgency, category, desktop-entry, ...), actions and timeout, the id its server answered with
+(`(no id)` and why when none did: no server, no reply in 5 s); `close #ID` (an app's
+CloseNotification), `closed #ID expired|dismissed|closed by CloseNotification` and `action #ID KEY`
+(the server's). --json: one JSON object a record (time, event, id, error, sender, app_name,
+replaces_id, app_icon, summary, body, actions, hints, expire_timeout). -n and --grep count records,
+--grep matching the text line. Texts are cut at 16 KiB; the log stops at 16 MB.
 @ gdb
 `gdb` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a
 process of the box), stopped or deadlocked too, and leaves it as it was; -- ARGS replace the backtrace

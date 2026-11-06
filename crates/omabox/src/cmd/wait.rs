@@ -487,6 +487,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut grep, mut since, mut tmo_set, mut dur): (Option<Vec<u8>>, Option<i64>, bool, Vec<u8>) =
         (None, None, false, Vec::new());
     let (mut imgw, mut sim): (Vec<u8>, Option<f64>) = (Vec::new(), None);
+    // wait notification RE (#430)
+    let mut notew: Option<Vec<u8>> = None;
     let mut masks: Vec<Vec<u8>> = Vec::new();
     // --since SHOT (change) or --like SHOT (still): the screen against an earlier shot (#344).
     let (mut base, mut base_opt): (Vec<u8>, &str) = (Vec::new(), "");
@@ -636,6 +638,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     dur = a.clone();
                 } else if cond == b"image" && imgw.is_empty() {
                     imgw = a.clone();
+                } else if cond == b"notification" && notew.is_none() {
+                    notew = Some(a.clone());
                 } else {
                     return Err(unexpected(ctx, cat!("wait ", cond), a, ""));
                 }
@@ -644,8 +648,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         i += 1;
     }
     let none = geom.is_empty() && quiet.is_empty();
-    if icase && cond != b"log" {
-        return Err(ctx.die("wait: -i goes with log (wait log [JOB] RE -i)"));
+    let logish = cond == b"log" || cond == b"notification";
+    if icase && !logish {
+        return Err(ctx.die(
+            "wait: -i goes with log and notification (wait log [JOB] RE -i, wait notification RE -i)",
+        ));
     }
     if sim.is_some() && cond != b"image" {
         return Err(ctx.die("wait: --similar goes with image (wait image FILE --similar 0.9)"));
@@ -661,18 +668,20 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ));
     }
     // --since is a SHOT for change (#344) and a byte offset into the log for log (#330).
-    if cond == b"log" && base_opt == "--since" {
+    if logish && base_opt == "--since" {
         if !crate::shell::re_match("^[0-9]{1,15}$", &base) {
             return Err(ctx.die(cat!(
-                "wait log: --since takes a byte offset into the log (0: its start; --json's offset: where the line waited for ends), got ",
+                "wait ",
+                cond,
+                ": --since takes a byte offset into the log (0: its start; --json's offset: where the line waited for ends), got ",
                 base
             )));
         }
         since = dec(&base);
         (base, base_opt) = (Vec::new(), "");
     }
-    if cond != b"log" && grep.is_some() {
-        return Err(ctx.die("wait: --grep goes with log"));
+    if !logish && grep.is_some() {
+        return Err(ctx.die("wait: --grep goes with log and notification"));
     }
     // wait log's source (#330): none, a job's pid or `run` (a run -d job's log, #299), or a box log.
     let mut boxlog: Option<Vec<u8>> = None;
@@ -781,6 +790,39 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 )));
             }
         }
+        b"notification" => {
+            if !want.is_empty() || !plain {
+                return Err(ctx.die("wait notification: only -i and --since OFFSET"));
+            }
+            if let Some(g) = grep.take() {
+                if notew.is_some() {
+                    return Err(
+                        ctx.die("wait notification: RE once: --grep RE or a word, not both")
+                    );
+                }
+                notew = Some(g);
+            }
+            let re = notew.clone().unwrap_or_default();
+            if re.is_empty() {
+                return Err(ctx.die(
+                    "wait notification: for which? a regular expression (grep -E) its summary or body matches: wait notification RE",
+                ));
+            }
+            let st = crate::sig::command("grep")
+                .arg("-E")
+                .arg("-e")
+                .arg(std::ffi::OsStr::from_bytes(&re))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            if st.as_ref().map_or(true, |s| s.code() == Some(2)) {
+                return Err(ctx.die(cat!(
+                    "wait notification: RE is a regular expression (grep -E), got ",
+                    re
+                )));
+            }
+        }
         b"tree" => {
             if text.as_deref().is_none_or(<[u8]>::is_empty) {
                 return Err(ctx.die(
@@ -842,7 +884,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         b"" => {
             return Err(ctx.die(
-                "wait: for what? still, change, window SEL, layer NAMESPACE, image FILE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION (omabox help)",
+                "wait: for what? still, change, window SEL, layer NAMESPACE, image FILE, job [JOB], log [JOB | LOG] RE, notification RE, tree TEXT, until -- CMD or for DURATION (omabox help)",
             ));
         }
         _ => {
@@ -851,9 +893,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "wait",
                 "condition",
                 &cond,
-                "(still, change, window SEL, layer NAMESPACE, image FILE, job [JOB], log [JOB | LOG] RE, tree TEXT, until -- CMD or for DURATION)",
+                "(still, change, window SEL, layer NAMESPACE, image FILE, job [JOB], log [JOB | LOG] RE, notification RE, tree TEXT, until -- CMD or for DURATION)",
                 &[
-                    "still", "change", "window", "layer", "image", "job", "log", "tree", "until",
+                    "still",
+                    "change",
+                    "window",
+                    "layer",
+                    "image",
+                    "job",
+                    "log",
+                    "notification",
+                    "tree",
+                    "until",
                     "for",
                 ],
             ));
@@ -933,6 +984,19 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             re: logw.pop().unwrap_or_default(),
             icase,
             since,
+            notice: false,
+        };
+        return log_wait(ctx, &w, tmo, json);
+    }
+    // (#430: the notifications log's next Notify, read as `wait log` reads a box log)
+    if cond == b"notification" {
+        crate::helpers::warn_stale(ctx);
+        let w = LogWait {
+            log: b"notifications".to_vec(),
+            re: notew.unwrap_or_default(),
+            icase,
+            since,
+            notice: true,
         };
         return log_wait(ctx, &w, tmo, json);
     }

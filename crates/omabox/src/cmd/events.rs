@@ -179,7 +179,7 @@ impl Show {
 }
 
 /// strftime("%H:%M:%S", T), local time.
-fn hms(t: i64) -> String {
+pub(crate) fn hms(t: i64) -> String {
     // SAFETY: localtime_r fills plain data of ours.
     unsafe {
         let tt: libc::time_t = t;
