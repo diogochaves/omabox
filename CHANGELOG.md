@@ -44,6 +44,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   before that show your name or host name will differ once.
 
 ### Fixed
+- **`doctor` names the right file for the desktop session's PATH off Omarchy** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  its fix for a session that cannot find omabox named Omarchy's `~/.config/uwsm/env` everywhere; on
+  other machines it now names `~/.config/environment.d/`, which the systemd user manager reads.
 - **A plain box's first shots no longer catch its screen zooming in** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   Hyprland's default animation for a new output zoomed a plain box's screen in for most of a second
   after `up` returned, so a shot right after it was mid-zoom and `shot --no-pointer` could still show
