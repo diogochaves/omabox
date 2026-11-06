@@ -138,6 +138,8 @@ pub struct Up {
     /// --desktop's (#247), and the desktop the box gets (upspec::resolve_desktop, in checks).
     pub desktop_given: Option<Desktop>,
     pub desktop: Desktop,
+    /// How it was chosen: --desktop, the config, or what the machine has (up says a plain one).
+    pub chosen: upspec::Chosen,
     /// `--shell CMD` (#247): a plain box's shell is CMD, run by share/shell.sh's slot.
     pub shell_cmd: Vec<u8>,
     pub nopointer: bool,
@@ -566,16 +568,18 @@ fn base_of(g: &[u8]) -> Vec<u8> {
 }
 
 /// What a plain box (#247) cannot have: each option that needs Omarchy's tree, its shell or the
-/// user's Omarchy look, refused as given.
+/// user's Omarchy look, refused as given, saying why the box is plain. --clean is the generic part
+/// of it there (no bar or clock of Omarchy's to freeze: --keep bar and clock refused).
 fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
+    let keeps = |w| u.clean && upspec::clean_has(&u.clean_keep, w);
     for (opt, given) in [
         ("--plugin", !u.plugin_args.is_empty()),
         ("--theme", !u.theme.is_empty()),
         ("--theme-dir", !u.theme_dirs.is_empty()),
         ("--stock-bar", u.stock_bar),
         ("--stock", u.stock),
-        ("--clean", u.clean),
-        ("--keep", !u.clean_keep.is_empty()),
+        ("--keep bar", keeps("bar")),
+        ("--keep clock", keeps("clock")),
         ("--desk-shell", u.desk_shell),
         ("--omarchy", !u.omarchy.is_empty()),
         ("--dnd", u.dnd),
@@ -585,7 +589,8 @@ fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
             return Err(ctx.usage_die(cat!(
                 "up: ",
                 opt,
-                " needs Omarchy, and --desktop plain has none of it"
+                " needs Omarchy, and ",
+                upspec::plain_why(u.chosen)
             )));
         }
     }
@@ -627,7 +632,24 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let jailed = in_jail();
     // --desktop plain (#247): Omarchy's tree is hidden in the box, so what needs it is refused, and
     // the box has no shell unless --shell names one. An Omarchy box runs Omarchy's own.
-    u.desktop = upspec::resolve_desktop(u.desktop_given);
+    // Without --desktop: the config's (omabox config desktop), else Omarchy's where it is installed
+    // and plain where it is not, by the test doctor and setup use (install::omarchy_at), so the three
+    // agree. An Omarchy box on a machine without Omarchy is refused: its config would load nothing.
+    let conf = upspec::conf_desktop(&crate::conf::get(b"desktop"));
+    let here = install::omarchy_at(b"/");
+    (u.desktop, u.chosen) =
+        upspec::resolve_desktop(u.desktop_given, !u.omarchy.is_empty(), conf, here);
+    if u.desktop == Desktop::Omarchy && !here && u.omarchy.is_empty() {
+        return Err(ctx.die(cat!(
+            "up: an Omarchy box needs Omarchy, and this machine has none (no /usr/share/omarchy/default/hypr/bootstrap.lua",
+            if u.chosen == upspec::Chosen::Config {
+                "; omabox config desktop says omarchy"
+            } else {
+                ""
+            },
+            "): --desktop plain, or --omarchy DIR for a checkout of it"
+        )));
+    }
     plain_shell(ctx, u)?;
     // --stock (#265, finding 613): Omarchy as a new user sees it. Omarchy's own bar on CLEAN_THEME
     // with its own wallpaper, English in UTC (finding 363), none of the desk's look (seed_home); the
@@ -635,8 +657,15 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // plus the freezes, a desktop where only what is tested moves: a sentinel wallpaper, the clock
     // frozen, no pointer, no network, animations off; --keep takes any of them back (and the bar, the
     // locale, the fonts), --theme and --net choose their own.
-    if u.clean {
+    // A plain box's --clean (#247) is the generic part: no stock bar or theme (Omarchy's), its own
+    // sentinel (plain.lua's background colour), the locale, pointer, network, animations, fonts and
+    // identity as on any clean box.
+    if u.clean && u.desktop != Desktop::Plain {
         u.stock = true;
+    }
+    if u.clean && u.desktop == Desktop::Plain && !u.clean_has("locale") {
+        u.clean_lang = upspec::clean_locale().as_bytes().to_vec();
+        u.clean_zone = upspec::CLEAN_TZ.as_bytes().to_vec();
     }
     if u.stock {
         if u.desk_shell {

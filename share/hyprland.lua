@@ -3,10 +3,10 @@
 -- Settings come from the environment `omabox up` sets: OMABOX_SIZE (WxH@HZ), OMABOX_INTERACTIVE, OMABOX_XWAYLAND,
 -- OMABOX_AUTORELOAD, OMABOX_DESKTOP (`up --desktop`, #247: omarchy or plain).
 if os.getenv("OMABOX_DESKTOP") == "plain" then
-  -- omabox's own small config and nothing of Omarchy's (its tree is an empty tmpfs in the box). Read
-  -- from share/ at every load, not copied as this file is (#140): omabox's own, a few lines.
+  -- omabox's own small config and nothing of Omarchy's (its tree is an empty tmpfs in the box): the
+  -- box's copy of share/plain.lua, made with this file's (#140; start-hyprland.sh, `omabox reload`).
   -- PATH stays the session's, omabox's stand-ins first (finding 149): nothing here puts a bin ahead.
-  dofile("/opt/omabox/share/plain.lua")
+  dofile((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox-plain.lua")
 else
   -- Omarchy's: its real defaults, minus its session autostart.
   dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")

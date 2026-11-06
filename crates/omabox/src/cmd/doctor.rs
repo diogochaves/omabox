@@ -649,7 +649,7 @@ fn theme_check(home: &[u8], omarchy: bool) -> Check {
 }
 
 /// aquamarine (aq_resolve's, as `up` picks it): with or without #415, and omabox's own build.
-fn aq_check(aq: Option<&crate::install::Aq>, why_none: &str) -> Check {
+fn aq_check(aq: Option<&crate::install::Aq>, soname: &[u8], why_none: &str) -> Check {
     let Some(aq) = aq else {
         return check(
             "aquamarine",
@@ -659,7 +659,7 @@ fn aq_check(aq: Option<&crate::install::Aq>, why_none: &str) -> Check {
         );
     };
     let found = s(&aq.desc());
-    match crate::cmd::setup::aq_note_text(aq) {
+    match crate::cmd::setup::aq_note_text(aq, soname) {
         None => check("aquamarine", St::Ok, found, Vec::new()),
         Some(note) => check("aquamarine", St::Warn, found, vec![s(&note)]),
     }
@@ -1112,21 +1112,23 @@ fn gather(ctx: &Ctx, os: &OsRelease) -> Vec<Check> {
     v.push(hyprland_check(root, fam));
     v.extend(host_config_check(crate::host::host_config(ctx).as_deref()));
     // (`up` picks it so: the installed Hyprland's soname, then aq_resolve; their words held)
-    let (aq, why) = muted(|| match crate::install::hypr_aq_soname(ctx) {
+    let (aq, so, why) = muted(|| match crate::install::hypr_aq_soname(ctx) {
         Ok(so) => match crate::install::aq_resolve(ctx, &so) {
-            Some(a) => (Some(a), String::new()),
+            Some(a) => (Some(a), so, String::new()),
             None => (
                 None,
+                Vec::new(),
                 format!("Hyprland links {}, which no aquamarine here has", s(&so)),
             ),
         },
         Err(_) => (
             None,
+            Vec::new(),
             "ldd cannot read which libaquamarine Hyprland links".into(),
         ),
     });
     let aq_fixed = aq.as_ref().is_some_and(|a| a.fixed);
-    v.push(aq_check(aq.as_ref(), &why));
+    v.push(aq_check(aq.as_ref(), &so, &why));
     v.push(prog_check(root, fam, "labwc", "labwc", None));
     v.push(quickshell_check(root, fam, omarchy));
     v.push(prog_check(

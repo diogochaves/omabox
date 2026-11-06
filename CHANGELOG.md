@@ -32,8 +32,24 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the box's shell is CMD (`dms run`, `qs -p DIR`, ...). `up` waits until it draws, says when it
   exits or crashes on the way, `omabox log shell` is its output, `restart-shell` starts it again and
   its crash is said as the shell's; `--quickshell` makes a build its `qs`. `ls` names it.
+- **Plain boxes where Omarchy is not installed, and `--clean` on them** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  without `--desktop`, `up` starts a plain box on a machine without Omarchy (the same test `doctor`
+  and `setup` make) and says so; on Omarchy it is still Omarchy's. `omabox config desktop omarchy`
+  or `plain` sets your default (`--desktop` wins). `up --clean` works on a plain box: its
+  background is the `#ff00ff` sentinel `check` finds holes on, with the locale, pointer, network,
+  animations and fonts frozen as on an Omarchy box.
+- **`up --clean` shows no name of yours**: the box's user is `user` (no full name, in its own
+  `/etc/passwd` and `/etc/group`) and its host `omabox`, so a greeting, a terminal's title or a
+  prompt in a shot to publish carries neither. `--keep identity` keeps yours. Baselines approved
+  before that show your name or host name will differ once.
 
 ### Fixed
+- **A plain box keeps the config it started with across an omabox update**: its desktop
+  (`plain.lua`) is copied into the box as the rest of its config is, and `omabox reload` refreshes
+  both, so an update no longer mixes an old copy with a new file.
+- **`setup` and `doctor` no longer suggest `setup --aquamarine` where it builds nothing**: for a
+  Hyprland whose aquamarine omabox has no build for, they say what boxes use and what they go
+  without. `tray` on a plain box says it has no shell, not `--no-shell`.
 - **`install.sh` and `omabox setup --aquamarine` on Hyprland 0.57** ([#48](https://github.com/diogochaves/omabox/issues/48)):
   omabox's aquamarine build was for Hyprland 0.56 only (aquamarine 0.15.1), so on Arch and openSUSE,
   whose Hyprland 0.57 links aquamarine 0.16, `setup --aquamarine` failed and `install.sh` stopped

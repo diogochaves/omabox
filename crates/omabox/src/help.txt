@@ -11,7 +11,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio] [--polkit]                         its own PipeWire (a silent mic); a polkit agent can register (polkit ask)
             [--no-pointer] [--dnd] [--no-dock]           no pointer (pointer show); Do Not Disturb on; 4.5's dock off
-            [--stock | --clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   a new user's look; --clean: frozen too
+            [--stock | --clean [--keep animations,bar,clock,fonts,identity,locale,pointer,wallpaper]]   a new user's look; --clean: frozen too
             [--hyprland PATH]                            a Hyprland build or folder of yours, not the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR | --desktop plain [--shell CMD]]   an Omarchy tree (a checkout); plain: nothing of Omarchy's, CMD its shell
@@ -124,7 +124,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
-  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit, protect-ports
+  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit, protect-ports, desktop
   omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
   omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
@@ -261,9 +261,10 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
   keyboard layout from /etc/vconsole.conf, SUPER+RETURN a terminal, SUPER+W closes) and sees an empty
   /usr/share/omarchy, as on a machine without Omarchy: no shell but --shell's, and a HOME with none of
   your Omarchy look (git's name and email only). --plugin, --theme, --theme-dir, --stock-bar, --stock,
-  --clean, --keep, --desk-shell, --omarchy, --dnd and --no-dock need Omarchy and are refused, as are
-  the dnd, dock and plugin commands on the box. omarchy, the default, is the Omarchy desktop. ls says
-  a plain box's desktop (and shell) under its line.
+  --desk-shell, --omarchy, --dnd and --no-dock need Omarchy and are refused, as are the dnd, dock and
+  plugin commands on the box. Without --desktop: `omabox config desktop`'s, else omarchy where Omarchy
+  is installed and plain where it is not (up says so; doctor and setup test the same); --omarchy DIR
+  is an Omarchy box. ls says a plain box's desktop (and shell) under its line.
 --shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`), run by sh in the
   session, in the foreground (one that forks off and exits is taken as exited): up waits until it
   draws a layer (OMABOX_READY_TIMEOUT), says when it exits or crashes on the way; log shell is its
@@ -284,9 +285,12 @@ the bar, theme and locale are stock. Not with --desk-shell.
 --clean: --stock plus the run-to-run freezes, a desktop where only what is tested moves, for shots
 compared across runs (`check`): a #ff00ff wallpaper (no theme has it: any of it inside a window or
 the bar is a hole), the bar's clock frozen at "Friday 12:00" (in its place, at its width), no
-pointer, no network (--net connected gives it back), animations off (over reloads too). --keep LIST
-takes any of animations, bar (yours), clock, fonts (yours), locale (yours and your timezone),
-pointer, wallpaper (the theme's) back. A theme set later in the box brings that theme's wallpaper.
+pointer, no network (--net connected gives it back), animations off (over reloads too), and no name
+of yours: the user is `user` (no full name) and the host `omabox`. --keep LIST takes any of
+animations, bar (yours), clock, fonts (yours), identity (your user and host names), locale (yours
+and your timezone), pointer, wallpaper (the theme's) back. A theme set later in the box brings that
+theme's wallpaper. On a plain box: no bar, theme or clock (--keep bar and clock refused), and the
+sentinel is its Hyprland's background colour (misc:background_color), not a wallpaper.
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
 its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
@@ -863,6 +867,8 @@ uses, whatever the setting.
 `omabox config protect-ports 8080,5432` keeps those host ports from every connected box, through
 any of the host's addresses (an isolated box's --allow refuses them; `default` removes them; it
 needs nft).
+`omabox config desktop plain` (or omarchy) is the desktop of a box up gets without --desktop; auto,
+the default, is Omarchy's where Omarchy is installed and plain where it is not.
 @ up setup --version
 aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until the system's has it: a
 release, or a package patched with it; omabox looks for what the fix added, not the version): a

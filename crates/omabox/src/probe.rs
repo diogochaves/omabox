@@ -309,13 +309,27 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             let aq = crate::install::aq_resolve_in(&ctx, &w, b"", co, r).ok_or(Exit(1))?;
             yes(crate::install::aq_build_needed(&aq, *force == b"1"))
         }
-        (b"aq_note", [kind, lib, ver, fixed]) => crate::cmd::setup::aq_note(&crate::install::Aq {
-            kind: kind.to_vec(),
-            lib: lib.to_vec(),
-            ver: ver.to_vec(),
-            fixed: *fixed == b"1",
-            main: Vec::new(),
-        }),
+        (b"aq_note", [kind, lib, ver, fixed]) => crate::cmd::setup::aq_note(
+            &crate::install::Aq {
+                kind: kind.to_vec(),
+                lib: lib.to_vec(),
+                ver: ver.to_vec(),
+                fixed: *fixed == b"1",
+                main: Vec::new(),
+            },
+            b"",
+        ),
+        // (with the soname the installed Hyprland links: one omabox has no source for, finding 655)
+        (b"aq_note", [kind, lib, ver, fixed, so]) => crate::cmd::setup::aq_note(
+            &crate::install::Aq {
+                kind: kind.to_vec(),
+                lib: lib.to_vec(),
+                ver: ver.to_vec(),
+                fixed: *fixed == b"1",
+                main: Vec::new(),
+            },
+            so,
+        ),
         // (the render node is checked after the helpers: a placeholder one, never opened here)
         (b"check_install", []) => {
             let n = crate::render::RenderNode::new(b"/dev/dri/renderD128").ok_or(Exit(2))?;
