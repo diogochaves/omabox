@@ -1090,6 +1090,13 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
 - `hyprctl`, `hyprpm` and the rest stay the installed ones; `up` warns when the box's Hyprland
   version (as it says over IPC) differs from theirs: the IPC may not match then. A patched build of
   the installed version is fine.
+- **Another version whole: `--hyprland DIR`.** DIR is an unpacked package (`usr/bin/Hyprland`, e.g.
+  Arch's `hyprland` and the `aquamarine`, `hyprutils`, `hyprgraphics` it needs, each `bsdtar -xf` into
+  DIR), an install prefix (`bin/Hyprland`, `lib/`) or a build folder (`Hyprland`, `hyprctl/hyprctl`).
+  It is mounted whole; its libraries load first (its aquamarine is the box's: on NVIDIA it needs the
+  #415 fix, aquamarine 0.16.0 or later), and its `hyprctl` is the box's `/usr/bin/hyprctl`, so no
+  IPC warning. `OMABOX_HYPRLAND=DIR` makes it every `up`'s default (a whole suite on another
+  Hyprland); `--hyprland` on the line wins.
 - `omabox ls` shows the build under the box's line with `hyprctl version`'s first line (commit,
   dirty or clean), `ls --json` has `hyprland` (null for the installed one) and `hyprland_version`
   (every box's, the installed one's too), `omabox windows` starts with it, and `<box dir>/box.log`

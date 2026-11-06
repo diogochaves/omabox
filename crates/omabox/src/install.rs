@@ -21,6 +21,9 @@ pub const AQ_BUILD: &str = "7bb8bdf4+keys+layout+cursor+appid";
 pub const AQ_OWN: &str = "keys held when an interactive box's window loses focus, the pointer and cursor in its monitors' windows, and those windows kept off your workspace";
 /// What a refusal of aquamarine's fix says to do.
 pub const AQ_HOWTO: &str = "omabox setup --aquamarine builds it for you (a minute or two)";
+/// AQ_HOWTO for a `--hyprland` folder's aquamarine (#424).
+pub const AQ_FOLDER_HOWTO: &str =
+    "put aquamarine 0.16.0 or later in the folder (or a build of it with the fix)";
 /// What #415 added that the library exports: a system aquamarine with it has the fix whatever its
 /// version says (a package patched with #415 keeps the version it patched; finding 246).
 pub const AQ_FIX_SYMBOL: &str = "_ZN10Aquamarine14CWaylandOutput14applyConfigureEv";
@@ -61,9 +64,9 @@ pub trait JailView {
 /// Which aquamarine a box runs (aq_resolve's AQ_KIND, AQ_LIB, AQ_VER, AQ_FIXED, AQ_MAIN).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Aq {
-    /// `private` or `system`.
+    /// `private`, `system`, or `folder`: a `--hyprland DIR`'s own (#424).
     pub kind: Vec<u8>,
-    /// A private build's lib dir; empty for the system's (the box's loader finds it).
+    /// A private build's or a folder's lib dir; empty for the system's (the box's loader finds it).
     pub lib: Vec<u8>,
     pub ver: Vec<u8>,
     /// It has the fix for nested Wayland outputs (hyprwm/aquamarine#415, finding 125).
@@ -86,6 +89,8 @@ impl Aq {
         } else if self.kind == b"private" {
             let l = self.lib.strip_suffix(b"/lib").unwrap_or(&self.lib);
             cat!("a private build, ", self.ver, " (", l, ")")
+        } else if self.kind == b"folder" {
+            cat!("the --hyprland folder's, ", self.ver, " (", self.lib, ")")
         } else if self.fixed && aq_ver_fixed(&self.ver) {
             cat!("the system's, ", self.ver)
         } else if self.fixed {
@@ -105,11 +110,28 @@ impl Aq {
 
     /// aq_lacks: what a refusal says when it has not the fix (only the system's can lack it).
     pub fn lacks(&self) -> Vec<u8> {
+        let whose = if self.kind == b"folder" {
+            "the --hyprland folder's"
+        } else {
+            "the system's"
+        };
         cat!(
-            "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415), which the system's aquamarine ",
+            "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415), which ",
+            whose,
+            " aquamarine ",
             self.ver,
             " lacks"
         )
+    }
+
+    /// How to get the fix: omabox's build (AQ_HOWTO); a --hyprland folder's Hyprland loads the
+    /// folder's aquamarine, so the fix goes in the folder.
+    pub fn howto(&self) -> &'static str {
+        if self.kind == b"folder" {
+            AQ_FOLDER_HOWTO
+        } else {
+            AQ_HOWTO
+        }
     }
 }
 
@@ -203,6 +225,74 @@ fn elf_bin(ctx: &Ctx, opt: &str, given: &[u8], what: &str) -> Res<Vec<u8>> {
         return Err(ctx.die(cat!(opt, ": ", p, " is not an ELF binary (", what, ")")));
     }
     Ok(p)
+}
+
+/// What `up --hyprland PATH` runs (finding 116): a binary, or a folder holding one (#424).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Hypr {
+    /// The Hyprland binary.
+    pub bin: Vec<u8>,
+    /// What the box mounts read-only at its own path: the binary's folder, or the folder given.
+    pub root: Vec<u8>,
+    /// A folder's library dir, which the box's Hyprland loads first; empty for none.
+    pub lib: Vec<u8>,
+    /// A folder's own hyprctl, the box's /usr/bin/hyprctl; empty for the installed one.
+    pub ctl: Vec<u8>,
+}
+
+/// The folders `--hyprland DIR` takes, first match: (binary, library dir, hyprctl) under DIR.
+pub const HYPR_TREES: [(&str, &str, &str); 3] = [
+    // An unpacked package (bsdtar -xf hyprland-*.pkg.tar.zst, its dependencies beside it).
+    ("usr/bin/Hyprland", "usr/lib", "usr/bin/hyprctl"),
+    // An install prefix (cmake --install --prefix DIR).
+    ("bin/Hyprland", "lib", "bin/hyprctl"),
+    // A CMake build folder.
+    ("Hyprland", "", "hyprctl/hyprctl"),
+];
+
+/// hypr_target PATH: `up --hyprland PATH`, resolved. A file is hypr_bin's. A folder is one of
+/// HYPR_TREES: its Hyprland, its library dir when it has one, its hyprctl when that is an executable
+/// ELF. What the binary links is check_install's.
+pub fn hypr_target(ctx: &Ctx, given: &[u8]) -> Res<Hypr> {
+    let dir = crate::repo::readlink_f(given).filter(|p| shell::path(p).is_dir());
+    let Some(dir) = dir else {
+        let bin = hypr_bin(ctx, given)?;
+        let root = crate::cmd::up::dir_of(&bin);
+        return Ok(Hypr {
+            bin,
+            root,
+            ..Hypr::default()
+        });
+    };
+    let Some((b, l, c)) = HYPR_TREES
+        .iter()
+        .find(|(b, _, _)| shell::path(&cat!(dir, "/", b)).is_file())
+    else {
+        return Err(ctx.die(cat!(
+            "--hyprland: ",
+            dir,
+            " holds no Hyprland: a folder is an unpacked package (usr/bin/Hyprland), an install prefix (bin/Hyprland) or a build folder (Hyprland)"
+        )));
+    };
+    let bin = hypr_bin(ctx, &cat!(dir, "/", b))?;
+    let lib = cat!(dir, "/", l);
+    let lib = if !l.is_empty() && shell::path(&lib).is_dir() {
+        lib
+    } else {
+        Vec::new()
+    };
+    let ctl = cat!(dir, "/", c);
+    let ctl = if access(&ctl, libc::X_OK) && is_elf(&ctl) {
+        ctl
+    } else {
+        Vec::new()
+    };
+    Ok(Hypr {
+        bin,
+        root: dir,
+        lib,
+        ctl,
+    })
 }
 
 /// hypr_bin PATH: `up --hyprland PATH` (finding 116), resolved, when it is an executable ELF file.
@@ -548,7 +638,7 @@ pub fn nvidia_needs_fix_in(ctx: &Ctx, aq: &Aq, render: &RenderNode, root: &[u8])
         ") needs ",
         aq.lacks(),
         ": ",
-        AQ_HOWTO,
+        aq.howto(),
         tail
     )))
 }
@@ -622,7 +712,15 @@ fn ldd_missing(file: &[u8], lib: Option<&[u8]>) -> Vec<u8> {
 /// check_install RENDER [HYPRLAND]: what `up` needs from install.sh: the helpers, and an aquamarine
 /// with the soname the box's Hyprland links (aq_resolve): the installed Hyprland's, or `up
 /// --hyprland`'s build (finding 116), which is refused here rather than left to crash in the box.
-pub fn check_install(ctx: &Ctx, render: &RenderNode, hyprland: Option<&[u8]>) -> Res<Aq> {
+///
+/// LIB: a `--hyprland DIR`'s library dir (#424), where the aquamarine its Hyprland links is looked
+/// for first; empty for none.
+pub fn check_install(
+    ctx: &Ctx,
+    render: &RenderNode,
+    hyprland: Option<&[u8]>,
+    lib: &[u8],
+) -> Res<Aq> {
     let root = crate::paths::root();
     // A linked worktree (.git a file) builds its own with make, as test/run.sh does: install.sh there
     // would point your omabox, skill and widget at the worktree (issue #182).
@@ -677,7 +775,25 @@ pub fn check_install(ctx: &Ctx, render: &RenderNode, hyprland: Option<&[u8]>) ->
             " links no libaquamarine (readelf -d): not a Hyprland build?"
         )));
     };
-    let Some(aq) = muted(|| aq_resolve(ctx, &want)) else {
+    let own = cat!(lib, "/", want);
+    let folder = (!lib.is_empty() && shell::path(&own).exists()).then(|| {
+        // The file the soname links to names the version (libaquamarine.so.0.16.0); a copy under the
+        // soname itself (.so.15) names none, and only #415's symbol can say it has the fix.
+        let ver = after_so(&crate::repo::readlink_f(&own).unwrap_or_default());
+        let ver = if ver.contains(&b'.') {
+            ver
+        } else {
+            b"unknown".to_vec()
+        };
+        Aq {
+            kind: b"folder".to_vec(),
+            lib: lib.to_vec(),
+            fixed: aq_ver_fixed(&ver) || aq_has_fix(&own),
+            ver,
+            main: Vec::new(),
+        }
+    });
+    let Some(aq) = folder.or_else(|| muted(|| aq_resolve(ctx, &want))) else {
         let sys = muted(|| hypr_aq_soname(ctx)).unwrap_or(b"no libaquamarine".to_vec());
         return Err(ctx.die(cat!(
             "--hyprland ",
@@ -872,7 +988,8 @@ fn hypr_version_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) {
             .arg(&line)
             .arg(JQ_INLINE[0]),
     );
-    if own.is_empty() {
+    // A --hyprland folder's box runs that folder's hyprctl (#424): nothing to warn of.
+    if own.is_empty() || !crate::boxes::meta(&ctx.d, "hyprctl").0.is_empty() {
         return;
     }
     let a: Vec<Vec<u8>> = [&b"timeout"[..], b"6", b"hyprctl", b"version", b"-j"]
@@ -1686,6 +1803,58 @@ mod tests {
             }
             ran(1, Vec::new())
         }
+    }
+
+    // #424: `--hyprland DIR` takes an unpacked package, an install prefix or a build folder (first
+    // match), with its library dir when there is one and its hyprctl when that is an ELF; a file is
+    // as before (its folder mounted, nothing else); a folder with none of them is refused.
+    #[test]
+    fn hypr_target_reads_each_folder() {
+        let t = std::env::temp_dir().join(format!("omabox-htree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let elf = |p: &str| {
+            let p = t.join(p);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::copy("/usr/bin/true", &p).unwrap();
+        };
+        elf("pkg/usr/bin/Hyprland");
+        elf("pkg/usr/bin/hyprctl");
+        std::fs::create_dir_all(t.join("pkg/usr/lib")).unwrap();
+        elf("pkg/bin/Hyprland"); // usr/bin comes first
+        elf("pre/bin/Hyprland");
+        std::fs::write(t.join("pre/bin/hyprctl"), "#!/bin/sh\n").unwrap(); // not an ELF: not taken
+        elf("bld/Hyprland");
+        elf("bld/hyprctl/hyprctl");
+        std::fs::create_dir_all(t.join("none/usr")).unwrap();
+        let ctx = Ctx::new(b"up", Vec::new());
+        let at = |p: &str| shell::bytes(&t.join(p)).to_vec();
+        let got = |p: &str| hypr_target(&ctx, &at(p)).ok();
+        let h = |bin: &str, root: &str, lib: &str, ctl: &str| {
+            let o = |p: &str| if p.is_empty() { Vec::new() } else { at(p) };
+            Some(Hypr {
+                bin: at(bin),
+                root: at(root),
+                lib: o(lib),
+                ctl: o(ctl),
+            })
+        };
+        assert_eq!(
+            got("pkg"),
+            h(
+                "pkg/usr/bin/Hyprland",
+                "pkg",
+                "pkg/usr/lib",
+                "pkg/usr/bin/hyprctl"
+            )
+        );
+        assert_eq!(got("pre"), h("pre/bin/Hyprland", "pre", "", ""));
+        assert_eq!(
+            got("bld"),
+            h("bld/Hyprland", "bld", "", "bld/hyprctl/hyprctl")
+        );
+        assert_eq!(got("bld/Hyprland"), h("bld/Hyprland", "bld", "", ""));
+        assert_eq!(got("none"), None);
+        let _ = std::fs::remove_dir_all(&t);
     }
 
     fn vbox(tag: &str, json: &str) -> (Ctx, std::path::PathBuf) {

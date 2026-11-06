@@ -199,7 +199,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             "confirm-close is on in your settings, but it needs ",
             u.aq.lacks(),
             ": off for this box (closing its window ends it). ",
-            install::AQ_HOWTO
+            u.aq.howto()
         ));
     }
     let render = u
@@ -929,6 +929,9 @@ fn box_json(
     if !u.hyprland.is_empty() {
         o.insert("hyprland".into(), s(&u.hyprland));
     }
+    if !u.hypr.ctl.is_empty() {
+        o.insert("hyprctl".into(), s(&u.hypr.ctl));
+    }
     if !u.quickshell.is_empty() {
         o.insert("quickshell".into(), s(&u.quickshell));
     }
@@ -1256,9 +1259,19 @@ fn bwrap_args(
     for h in helpers {
         b.own_ro(&h.src, h.dest.as_bytes()).map_err(refused)?;
     }
-    // A private aquamarine (finding 125), which share/start-hyprland.sh puts first.
-    if !u.aq.lib.is_empty() {
+    // A private aquamarine (finding 125), which share/start-hyprland.sh puts first; or a --hyprland
+    // folder's library dir (#424), mounted with the folder, under its rule (refuse_src).
+    if u.aq.kind == b"folder" {
+        b.checked_ro(&u.aq.lib, b"/opt/omabox/lib")
+            .map_err(refused)?;
+    } else if !u.aq.lib.is_empty() {
         b.own_ro(&u.aq.lib, b"/opt/omabox/lib").map_err(refused)?;
+    }
+    // A --hyprland folder's own hyprctl is the box's (#424): omabox's calls, the shell's and an
+    // agent's `omabox hyprctl` speak the IPC of the Hyprland that runs.
+    if !u.hypr.ctl.is_empty() {
+        b.checked_ro(&u.hypr.ctl, b"/usr/bin/hyprctl")
+            .map_err(refused)?;
     }
     let dev = |p: &[u8]| {
         DevNode::new(p).ok_or_else(|| ctx.die(cat!(p, " is not a device a box may have")))

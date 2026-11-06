@@ -12,7 +12,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--audio] [--polkit]                         its own PipeWire (a silent mic); a polkit agent can register (polkit ask)
             [--no-pointer] [--dnd] [--no-dock]           no pointer (pointer show); Do Not Disturb on; 4.5's dock off
             [--stock | --clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   a new user's look; --clean: frozen too
-            [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
+            [--hyprland PATH]                            a Hyprland build or folder of yours, not the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
@@ -324,7 +324,11 @@ in and what did not, and why (`ls --json`: desk_shell). Not with --stock-bar or 
 @ up run
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
 box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
-starts); hyprctl and hyprpm stay the installed ones (a warning when the versions differ). `ls` and
+starts); hyprctl and hyprpm stay the installed ones (a warning when the versions differ). PATH may
+be a folder, mounted whole: an unpacked package (usr/bin/Hyprland, as `bsdtar -xf` leaves one, its
+libraries in usr/lib), an install prefix (bin/Hyprland, lib) or a build folder (Hyprland,
+hyprctl/hyprctl); its libraries come first (its aquamarine is the box's) and its hyprctl is the
+box's. OMABOX_HYPRLAND=PATH is the default for every `up` (a suite on another Hyprland). `ls` and
 `windows` name it. Compositor logic runs for real (layouts, focus, input routing, the Lua config,
 IPC, protocols); DRM/KMS, real monitors, HDR/VRR, multi-GPU, libinput with real devices and the
 session and suspend paths never run in a box (the lock screen does, without a real password).

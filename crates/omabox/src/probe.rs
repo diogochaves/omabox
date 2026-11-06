@@ -319,7 +319,7 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         // (the render node is checked after the helpers: a placeholder one, never opened here)
         (b"check_install", []) => {
             let n = crate::render::RenderNode::new(b"/dev/dri/renderD128").ok_or(Exit(2))?;
-            let aq = crate::install::check_install(&ctx, &n, None)?;
+            let aq = crate::install::check_install(&ctx, &n, None, b"")?;
             line(&aq.desc())
         }
         (b"clean_locale", []) => line(crate::upspec::clean_locale().as_bytes()),

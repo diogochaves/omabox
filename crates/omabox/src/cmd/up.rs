@@ -103,6 +103,9 @@ pub struct Up {
     pub from: Vec<u8>,
     pub from_dir: Vec<u8>,
     pub hyprland: Vec<u8>,
+    /// --hyprland's (or OMABOX_HYPRLAND's): the binary is `hyprland`; a folder's libraries and
+    /// hyprctl (#424).
+    pub hypr: install::Hypr,
     pub hypr_given: Vec<u8>,
     pub hypr_bind: bool,
     pub quickshell: Vec<u8>,
@@ -237,6 +240,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Ok(());
     }
     crate::cmd::up_box::make(ctx, u)
+}
+
+/// `--hyprland PATH` (or OMABOX_HYPRLAND's PATH) into U: a binary or a folder (install::hypr_target).
+fn set_hyprland(ctx: &Ctx, u: &mut Up, val: &[u8], jailed: bool) -> Res<()> {
+    let h = if jailed {
+        jail_path(val)
+            .and_then(|g| exit::muted(|| install::hypr_target(ctx, &g).ok()))
+            .ok_or_else(|| jail_refuse(ctx, "--hyprland", val, W_HYPR))?
+    } else {
+        install::hypr_target(ctx, val)?
+    };
+    u.hyprland = h.bin.clone();
+    u.hypr = h;
+    u.hypr_given = val.to_vec();
+    Ok(())
 }
 
 /// Reads the words into U: true for --help (said).
@@ -411,14 +429,7 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
             }
             b"--hyprland" => {
                 optarg(ctx, a, v)?;
-                u.hyprland = if jailed {
-                    jail_path(&val)
-                        .and_then(|g| exit::muted(|| install::hypr_bin(ctx, &g).ok()))
-                        .ok_or_else(|| jail_refuse(ctx, "--hyprland", &val, W_HYPR))?
-                } else {
-                    install::hypr_bin(ctx, &val)?
-                };
-                u.hypr_given = val;
+                set_hyprland(ctx, u, &val, jailed)?;
             }
             b"--quickshell" => {
                 optarg(ctx, a, v)?;
@@ -511,6 +522,13 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
             }
         }
         i += if takes { 2 } else { 1 };
+    }
+    // OMABOX_HYPRLAND=PATH: --hyprland's default, for every box this environment starts (a suite run
+    // on another Hyprland, #424). A --hyprland on the line wins.
+    if u.hypr_given.is_empty()
+        && let Some(v) = shell::env("OMABOX_HYPRLAND").filter(|v| !v.is_empty())
+    {
+        set_hyprland(ctx, u, &v, jailed)?;
     }
     Ok(false)
 }
@@ -625,7 +643,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                     && p.starts_with(&cat!(top, "/"))
             })
         };
-        if !u.hyprland.is_empty() && jail_root(&dir_of(&u.hyprland)).is_none() {
+        if !u.hyprland.is_empty() && jail_root(&u.hypr.root).is_none() {
             if !in_top(&u.hyprland) {
                 return Err(jail_refuse(ctx, "--hyprland", &u.hypr_given, W_HYPR));
             }
@@ -739,26 +757,43 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     }
     // --hyprland (finding 116): the build's folder, read-only at its own path, refused as --ro-bind's
     // are. Not one under /usr: the box has it.
-    for (bin, bind, opt) in [
-        (u.hyprland.clone(), u.hypr_bind, "--hyprland"),
-        (u.quickshell.clone(), u.qs_bind, "--quickshell"),
+    // A --hyprland folder (#424) is mounted whole: its libraries and hyprctl with the binary.
+    let hypr_dir = if u.hypr.root.is_empty() {
+        dir_of(&u.hyprland)
+    } else {
+        u.hypr.root.clone()
+    };
+    for (bin, d, bind, opt) in [
+        (u.hyprland.clone(), hypr_dir, u.hypr_bind, "--hyprland"),
+        (
+            u.quickshell.clone(),
+            dir_of(&u.quickshell),
+            u.qs_bind,
+            "--quickshell",
+        ),
     ] {
         if opt == "--quickshell" && !u.quickshell.is_empty() && !u.shell {
             return Err(
                 ctx.usage_die("up: --quickshell runs the box's shell, and --no-shell starts none")
             );
         }
-        if bin.is_empty() || !bind || bin.starts_with(b"/usr/") {
+        if bin.is_empty() || !bind || d.starts_with(b"/usr/") {
             continue;
         }
-        let d = dir_of(&bin);
+        let what = if d == dir_of(&bin) {
+            "the binary's folder"
+        } else {
+            "the folder given"
+        };
         if let Some(why) = refuse_src(&d) {
             return Err(ctx.die(cat!(
                 "up: ",
                 opt,
                 ": refusing to mount ",
                 d,
-                " (the binary's folder) into a box: ",
+                " (",
+                what,
+                ") into a box: ",
                 why,
                 "; put the build in a folder of its own"
             )));
@@ -769,7 +804,9 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 opt,
                 ": refusing to mount ",
                 d,
-                " (the binary's folder) at its own path in a box: ",
+                " (",
+                what,
+                ") at its own path in a box: ",
                 why
             )));
         }
@@ -982,6 +1019,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
         ctx,
         &render,
         (!u.hyprland.is_empty()).then_some(u.hyprland.as_slice()),
+        &u.hypr.lib,
     )?;
     if !u.quickshell.is_empty() {
         install::qs_check(ctx, &u.quickshell)?;
@@ -1006,7 +1044,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 "up: --monitor on an interactive box opens a window per monitor, which needs ",
                 u.aq.lacks(),
                 ": ",
-                install::AQ_HOWTO
+                u.aq.howto()
             )));
         }
         if !crate::exit::contains(&u.aq.ver, b"+appid") {
@@ -1028,7 +1066,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 "--confirm-close (the window it opens again) needs ",
                 u.aq.lacks(),
                 ": ",
-                install::AQ_HOWTO
+                u.aq.howto()
             )));
         }
     }

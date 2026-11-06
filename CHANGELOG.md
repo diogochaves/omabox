@@ -3,6 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+- **`up --hyprland DIR` runs another Hyprland version whole** ([#424](https://github.com/diogochaves/omabox/issues/424)):
+  besides a binary, `--hyprland` takes a folder: an unpacked package (`usr/bin/Hyprland`), an install
+  prefix (`bin/Hyprland`) or a build folder (`Hyprland`). Its libraries load first (its aquamarine is
+  the box's) and its `hyprctl` is the box's, so a box can run Hyprland 0.57 on a desktop that still has
+  0.56. `OMABOX_HYPRLAND=PATH` makes it the default for every `up`.
+
 ## 1.2.2 — 2026-11-05
 
 One fix on top of 1.2.1: at a fractional scale, `find --image` names a `shot -g` crop's region where

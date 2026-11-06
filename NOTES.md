@@ -12487,6 +12487,31 @@ from them.
     inside grim's grab); t_find_image's crop now starts on 4k+2 and is 4k+3 wide at 1.25, where the
     old rules were wrong whatever the glyphs: 3 fail before on the host (`74,67 78x17` for 79, `75,67`
     in `-g`, `pixel` reading neighbours).
+644. **A box runs another Hyprland version whole: `--hyprland DIR`, and OMABOX_HYPRLAND** (2026-11-06,
+    #424). Arch had Hyprland 0.57.1 (aquamarine 0.16.0, a new soname, `.so.15`; hyprgraphics 0.6.0)
+    from 2026-11-03 while Omarchy's mirror, and so this desk, stayed on 0.56.2: `--hyprland FILE`
+    could not run it (its aquamarine is found only in omabox's own dirs and the system's, its other
+    libraries not at all), and `hyprctl` stayed the installed one. A spike with the three libraries
+    put in omabox's per-user aquamarine dir (removed after) showed 0.57.1 boots Omarchy's Lua config
+    as the box's compositor, takes keys, draws, and answers the 0.56.2 hyprctl (`version`, `-j
+    monitors`, `lua`); on the RTX it ran on Arch's aquamarine 0.16.0 with no build of omabox's (#48).
+    **Now:** `--hyprland` also takes a folder (install::HYPR_TREES, first match): an unpacked package
+    (`usr/bin/Hyprland`, `usr/lib`, `usr/bin/hyprctl`), an install prefix (`bin/`, `lib/`) or a CMake
+    build folder (`Hyprland`, `hyprctl/hyprctl`). It is mounted whole, under `--ro-bind`'s rules; its
+    library dir, when it has the soname the binary links, is the box's `/opt/omabox/lib` (aquamarine
+    kind `folder`: start-hyprland.sh puts it first, so hyprgraphics and hyprutils come from it too);
+    its hyprctl, when an ELF, is bound over the box's `/usr/bin/hyprctl` (every caller's: omabox's,
+    the shell's, `omabox hyprctl`; box.json `hyprctl`), so `up` no longer warns of the IPC.
+    `OMABOX_HYPRLAND=PATH` on the host is `--hyprland`'s default for every `up` (the box starts from
+    `env -i`, so it never reaches the box's own variable of that name); the flag wins. A folder's
+    aquamarine counts as fixed (#415) by the version the soname links to, or by #415's symbol; a copy
+    under the soname itself names no version (`unknown`): the first cut read `.so.14` as version 14,
+    newer than 0.15.1, and a headless NVIDIA box on an unfixed copy hung 30 s where it is refused.
+    The refusal names the folder's aquamarine and says to put 0.16.0 or later in the folder. Tests:
+    install.rs hypr_target_reads_each_folder (the three layouts, the order, a script hyprctl not
+    taken, a file as before, a folder with none refused); t_unit_hyprland's folder refusals and the
+    default; t_hyprland_folder (a folder of copies of the installed Hyprland, hyprctl and the boxes'
+    aquamarine, started by OMABOX_HYPRLAND: the same files in the box by inode, no IPC warning).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
