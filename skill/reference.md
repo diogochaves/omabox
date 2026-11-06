@@ -993,6 +993,11 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   idle one for up to 2 h): the user is left at Hyprland's "lockscreen app died" screen until every
   box is down (`omabox ls`, `omabox down -b NAME`). It fails closed: nothing unlocks.
 - `--no-shell` starts Hyprland only (no bar, tray or notifications): faster for plain app work.
+- `--desktop plain` is a box with nothing of Omarchy's: Hyprland on omabox's own small config
+  (Hyprland's defaults, the machine's keyboard layout, SUPER+RETURN a terminal, SUPER+W closes), an
+  empty `/usr/share/omarchy`, no shell, a HOME with git's name and email only. For an app or a
+  compositor bug that must not depend on Omarchy. What needs Omarchy (`--plugin`, `--theme`,
+  `--stock`, `--clean`, `--dnd`...) is refused; `check` boxes stay Omarchy's.
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
 - Logs: `omabox log` prints them (below); `omabox path --logs` says where each file is.

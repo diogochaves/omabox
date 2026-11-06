@@ -21,7 +21,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 
 /// up's options, for a throwaway box: those that take a value, and the flags.
-const UP_VALUED: [&str; 18] = [
+const UP_VALUED: [&str; 19] = [
     "--size",
     "--plugin",
     "--ro-bind",
@@ -40,6 +40,7 @@ const UP_VALUED: [&str; 18] = [
     "--quickshell",
     "--omarchy",
     "--keep",
+    "--desktop",
 ];
 const UP_FLAGS: [&str; 13] = [
     "--xwayland",

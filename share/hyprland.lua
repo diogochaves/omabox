@@ -1,49 +1,58 @@
--- omabox nested Hyprland: real Omarchy defaults, minus Omarchy's session autostart.
+-- omabox nested Hyprland: the box's desktop, then what every box gets (the screen, monitors, debug,
+-- the hidden pointer, the crash hook, the startup).
 -- Settings come from the environment `omabox up` sets: OMABOX_SIZE (WxH@HZ), OMABOX_INTERACTIVE, OMABOX_XWAYLAND,
--- OMABOX_AUTORELOAD.
-dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")
-package.loaded["default.hypr.autostart"] = true -- skip: systemd/dbus env import, first-run, monitor-watch, udiskie
-require("default.hypr.omarchy")
--- The box HOME's own ~/.config/hypr modules (#246), where stock ~/.config/hypr/hyprland.lua loads them
--- (after Omarchy's defaults, before the toggles), so an edit there and `hyprctl reload` do what they do
--- on a desktop (a plugin's "add this to bindings.lua"). Before everything omabox sets below, which
--- wins: PATH, the screen, debug/misc/xwayland, the hidden pointer. Not ~/.config/hypr/hyprland.lua
--- itself (this file stands in for it). Skipped: autostart (as default.hypr.autostart), and monitors:
--- a new user's is not comments only (GDK_SCALE=2 and a catch-all rule at scale auto), and its rules
--- are for real screens; the box's are omabox's (`--size`, `--monitor`, `mode`). Hyprland's require
--- keeps a module's error from ending the load: it is a config error (`hyprctl configerrors`; no red
--- bar in a box, below), which `up`, `reload` and `hyprctl reload` say. The pcall is for a require
--- that raises instead (another build): the rest of the config still loads, and the error goes to
--- Hyprland's log. A module with no file is skipped (a HOME without them, from an Omarchy with no
--- /etc/skel: not an error).
-for _, m in ipairs({ "hypr.input", "hypr.bindings", "hypr.looknfeel" }) do
-  local ok, err = true, nil
-  if package.searchpath(m, package.path) then ok, err = pcall(require, m) end
-  if not ok then
-    local run = os.getenv("XDG_RUNTIME_DIR") or ""
-    local log = io.open(run .. "/hypr/" .. (os.getenv("HYPRLAND_INSTANCE_SIGNATURE") or "") .. "/hyprland.log", "a")
-    if log then log:write("ERR from omabox ]: require(\"" .. m .. "\"): " .. tostring(err):gsub("%s+", " ") .. "\n"); log:close() end
+-- OMABOX_AUTORELOAD, OMABOX_DESKTOP (`up --desktop`, #247: omarchy or plain).
+if os.getenv("OMABOX_DESKTOP") == "plain" then
+  -- omabox's own small config and nothing of Omarchy's (its tree is an empty tmpfs in the box). Read
+  -- from share/ at every load, not copied as this file is (#140): omabox's own, a few lines.
+  -- PATH stays the session's, omabox's stand-ins first (finding 149): nothing here puts a bin ahead.
+  dofile("/opt/omabox/share/plain.lua")
+else
+  -- Omarchy's: its real defaults, minus its session autostart.
+  dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")
+  package.loaded["default.hypr.autostart"] = true -- skip: systemd/dbus env import, first-run, monitor-watch, udiskie
+  require("default.hypr.omarchy")
+  -- The box HOME's own ~/.config/hypr modules (#246), where stock ~/.config/hypr/hyprland.lua loads them
+  -- (after Omarchy's defaults, before the toggles), so an edit there and `hyprctl reload` do what they do
+  -- on a desktop (a plugin's "add this to bindings.lua"). Before everything omabox sets below, which
+  -- wins: PATH, the screen, debug/misc/xwayland, the hidden pointer. Not ~/.config/hypr/hyprland.lua
+  -- itself (this file stands in for it). Skipped: autostart (as default.hypr.autostart), and monitors:
+  -- a new user's is not comments only (GDK_SCALE=2 and a catch-all rule at scale auto), and its rules
+  -- are for real screens; the box's are omabox's (`--size`, `--monitor`, `mode`). Hyprland's require
+  -- keeps a module's error from ending the load: it is a config error (`hyprctl configerrors`; no red
+  -- bar in a box, below), which `up`, `reload` and `hyprctl reload` say. The pcall is for a require
+  -- that raises instead (another build): the rest of the config still loads, and the error goes to
+  -- Hyprland's log. A module with no file is skipped (a HOME without them, from an Omarchy with no
+  -- /etc/skel: not an error).
+  for _, m in ipairs({ "hypr.input", "hypr.bindings", "hypr.looknfeel" }) do
+    local ok, err = true, nil
+    if package.searchpath(m, package.path) then ok, err = pcall(require, m) end
+    if not ok then
+      local run = os.getenv("XDG_RUNTIME_DIR") or ""
+      local log = io.open(run .. "/hypr/" .. (os.getenv("HYPRLAND_INSTANCE_SIGNATURE") or "") .. "/hyprland.log", "a")
+      if log then log:write("ERR from omabox ]: require(\"" .. m .. "\"): " .. tostring(err):gsub("%s+", " ") .. "\n"); log:close() end
+    end
   end
-end
--- Omarchy's envs.lua puts its own bin first for everything Hyprland starts (the bar, binds,
--- terminals): omabox's stand-ins (omarchy-version, the browser policy) go ahead of it again, as on
--- every other box PATH (finding 149).
-do
-  local standins = "/opt/omabox/share/bin"
-  local omarchy_bin = require("default.hypr.paths").omarchy_path .. "/bin"
-  local kept = { standins, omarchy_bin }
-  for entry in (os.getenv("PATH") or "/usr/bin"):gmatch("[^:]+") do
-    if entry ~= standins and entry ~= omarchy_bin then table.insert(kept, entry) end
+  -- Omarchy's envs.lua puts its own bin first for everything Hyprland starts (the bar, binds,
+  -- terminals): omabox's stand-ins (omarchy-version, the browser policy) go ahead of it again, as on
+  -- every other box PATH (finding 149).
+  do
+    local standins = "/opt/omabox/share/bin"
+    local omarchy_bin = require("default.hypr.paths").omarchy_path .. "/bin"
+    local kept = { standins, omarchy_bin }
+    for entry in (os.getenv("PATH") or "/usr/bin"):gmatch("[^:]+") do
+      if entry ~= standins and entry ~= omarchy_bin then table.insert(kept, entry) end
+    end
+    hl.env("PATH", table.concat(kept, ":"))
   end
-  hl.env("PATH", table.concat(kept, ":"))
+  -- As Omarchy's stock ~/.config/hypr/hyprland.lua ends, after the user modules (above): the toggle
+  -- flags and workspace layouts from ~/.local/state, so Omarchy's toggles work in a box.
+  require("default.hypr.toggles")
 end
 -- What the box's own session starts (`omabox run` leaves it out of the environment it copies):
 -- share/bin/inotifywait keeps only the box shell's plugin watch idle, so a shell a test starts
 -- itself still reloads (finding 424).
 hl.env("OMABOX_OWN_SESSION", "1")
--- As Omarchy's stock ~/.config/hypr/hyprland.lua ends, after the user modules (above): the toggle
--- flags and workspace layouts from ~/.local/state, so Omarchy's toggles work in a box.
-require("default.hypr.toggles")
 
 local interactive = os.getenv("OMABOX_INTERACTIVE") == "1"
 

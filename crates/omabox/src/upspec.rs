@@ -25,6 +25,55 @@ use crate::procfs;
 use crate::repo::{jail_root, readlink_e, readlink_f, refuse_src, repo_top};
 use crate::shell::{self, re_match};
 
+/// A box's desktop (`up --desktop`, #247): what its Hyprland runs and what of Omarchy's it gets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Desktop {
+    /// Omarchy's: its Hyprland config, its shell, the user's Omarchy look.
+    #[default]
+    Omarchy,
+    /// omabox's own small config (share/plain.lua), and nothing of Omarchy's: its tree hidden in
+    /// the box, no shell, a HOME with no Omarchy look.
+    Plain,
+}
+
+/// What `up --desktop` takes, as help says it.
+pub const DESKTOPS: &str = "omarchy or plain";
+
+impl Desktop {
+    /// --desktop's value; None for one that is not a desktop.
+    pub fn parse(v: &[u8]) -> Option<Desktop> {
+        match v {
+            b"omarchy" => Some(Desktop::Omarchy),
+            b"plain" => Some(Desktop::Plain),
+            _ => None,
+        }
+    }
+
+    /// Its name, as box.json, OMABOX_DESKTOP and --desktop have it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Desktop::Omarchy => "omarchy",
+            Desktop::Plain => "plain",
+        }
+    }
+
+    /// A box.json's `desktop`: a box from before #247 has none, and is Omarchy's.
+    pub fn of_box(v: &[u8]) -> Desktop {
+        if v.is_empty() {
+            Desktop::Omarchy
+        } else {
+            Desktop::parse(v).unwrap_or(Desktop::Omarchy)
+        }
+    }
+}
+
+/// The desktop a box gets: --desktop's, else the default. The one place the default is chosen
+/// (#247): Omarchy's for now; the choice by what the machine has (plain without
+/// /usr/share/omarchy) goes here.
+pub fn resolve_desktop(given: Option<Desktop>) -> Desktop {
+    given.unwrap_or_default()
+}
+
 /// up --idle and $OMABOX_IDLE as whole seconds: `check run` shares bash's idle_duration.
 #[allow(unused_imports)]
 pub use crate::cmd::check::idle_duration;
@@ -735,6 +784,24 @@ mod tests {
     use proptest::prelude::*;
 
     // clean_keep and clean_text (t_unit_check's four cases).
+    #[test]
+    fn desktops() {
+        assert_eq!(Desktop::parse(b"omarchy"), Some(Desktop::Omarchy));
+        assert_eq!(Desktop::parse(b"plain"), Some(Desktop::Plain));
+        for bad in [&b""[..], b"Plain", b"desk", b"plain ", b"omarchy,plain"] {
+            assert_eq!(Desktop::parse(bad), None, "{bad:?}");
+        }
+        for d in [Desktop::Omarchy, Desktop::Plain] {
+            assert_eq!(Desktop::parse(d.name().as_bytes()), Some(d));
+            assert_eq!(Desktop::of_box(d.name().as_bytes()), d);
+            assert_eq!(resolve_desktop(Some(d)), d);
+        }
+        // A box from before #247 (no `desktop` in its box.json), and none asked: Omarchy's.
+        assert_eq!(Desktop::of_box(b""), Desktop::Omarchy);
+        assert_eq!(resolve_desktop(None), Desktop::Omarchy);
+        assert_eq!(DESKTOPS, "omarchy or plain");
+    }
+
     #[test]
     fn clean_as_bash() {
         assert_eq!(
