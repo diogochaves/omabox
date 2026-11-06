@@ -12816,10 +12816,10 @@ t_stale_pid() {
 # another login) and the same cache took every box of this one as gone and removed their HOMEs while
 # they ran. Every box here keeps its HOME in a cache of the test's own.
 t_home_sweep() {
-  local B=$P-hs c=$TMP/hs-cache rt=$TMP/hs-rt st=$TMP/hs-state out rc
-  mkdir -p "$c" "$rt" "$st"; chmod 700 "$rt"
-  hs() { XDG_CACHE_HOME=$c "$CLI" "$@"; }
-  hs2() { XDG_CACHE_HOME=$c XDG_RUNTIME_DIR=$rt XDG_STATE_HOME=$st "$CLI" "$@"; }
+  local B=$P-hs c=$TMP/hs-cache rt=$TMP/hs-rt st=$TMP/hs-state dh=$TMP/hs-data out rc
+  mkdir -p "$c" "$rt" "$st" "$dh"; chmod 700 "$rt"
+  hs() { XDG_CACHE_HOME=$c XDG_DATA_HOME=$dh "$CLI" "$@"; }
+  hs2() { XDG_CACHE_HOME=$c XDG_DATA_HOME=$dh XDG_RUNTIME_DIR=$rt XDG_STATE_HOME=$st "$CLI" "$@"; }
   check "up, its HOME in the test's own cache" hs up "$B" --no-shell
   local H=$c/omabox/$B/home
   hs run -b "$B" -- sh -c 'echo kept > "$HOME/mark"' >/dev/null 2>&1
@@ -12828,7 +12828,18 @@ t_home_sweep() {
   # nor the next up's), and an older omabox's (no record of it) whose box is gone and unused.
   mkdir -p "$c/omabox/$P-hsgone/home" "$c/omabox/$P-hsold/home"
   printf '%s\n' "$TMP/hs-gone-rt/omabox/$P-hsgone" > "$c/omabox/$P-hsgone/box-dir"
-  check "an up with another runtime dir (and state), the same cache" hs2 up "$B-2" --no-shell
+  # (#433, finding 684: an older omabox's videos among the HOMEs, moved out by the sweep, which says so)
+  mkdir -p "$c/omabox/records"
+  printf v > "$c/omabox/records/omabox-x-1.mp4"; printf v > "$c/omabox/records/omabox-x-2.mp4"
+  printf m > "$c/omabox/records/omabox-x-1.marks.tsv"
+  rc=0; out=$(hs2 up "$B-2" --no-shell 2>&1 >/dev/null) || rc=$?
+  check_eq "an up with another runtime dir (and state), the same cache" 0 "$rc"
+  local said="omabox: moved 2 recordings to ${dh/#$HOME/\~}/omabox/records (they were in ${c/#$HOME/\~}/omabox/records, where a sweep would delete them)"
+  check_eq "...says once that it moved an older omabox's recordings, counted, its paths with ~" 1 \
+    "$(grep -cxF "$said" <<< "$out")"
+  check "...moved to the data dir's records, side files too" test -e "$dh/omabox/records/omabox-x-1.mp4" \
+    -a -e "$dh/omabox/records/omabox-x-2.mp4" -a -e "$dh/omabox/records/omabox-x-1.marks.tsv"
+  check_fails "...the old folder gone" test -e "$c/omabox/records"
   check_eq "...leaves the first box's HOME as it was" kept "$(cat "$H/mark" 2>&1)"
   check_eq "...which that box still reads" kept "$(hs run -b "$B" -- sh -c 'cat "$HOME/mark"' 2>&1)"
   check_fails "...and takes a HOME whose box is gone where it was made" test -e "$c/omabox/$P-hsgone"
@@ -12849,7 +12860,9 @@ t_home_sweep() {
   check_eq "...the HOME as it was" kept "$(cat "$H/mark" 2>&1)"
   # A HOME an older omabox made has no record of its runtime dir: while its box uses it, it stays.
   rm -f "$c/omabox/$B/box-dir"
-  check "an older omabox's box (its HOME's record taken away): an up from another runtime dir" hs2 up "$B-3" --no-shell
+  rc=0; out=$(hs2 up "$B-3" --no-shell 2>&1 >/dev/null) || rc=$?
+  check_eq "an older omabox's box (its HOME's record taken away): an up from another runtime dir" 0 "$rc"
+  check_eq "...nothing to move, nothing said of it" "" "$(grep -F 'omabox: moved ' <<< "$out")"
   check_eq "...leaves that HOME, which its box uses" kept "$(cat "$H/mark" 2>&1)"
   check "...its own box comes down" hs2 down "$B-3"
   rc=0; out=$(hs2 up "$B" --no-shell 2>&1) || rc=$?

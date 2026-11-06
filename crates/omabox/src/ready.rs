@@ -667,7 +667,10 @@ fn old_records(homes: &[u8]) -> Option<Vec<u8>> {
 /// folder for a gone box's HOME, and a box may be named `records`. Plain files only, never over a
 /// file of the same name there (a hard link then the old name removed; on another filesystem a copy
 /// under a hidden name linked into place). What cannot be moved stays, and so does the folder
-/// (sweep_homes and rm_box leave it); emptied, it goes.
+/// (sweep_homes and rm_box leave it); emptied, it goes. A move that moved any says so, one line
+/// (whichever runs it: up's sweep, or an up or down of a box named `records`), its recordings
+/// counted by their videos; nothing moved, nothing said.
+// The move from the old records folder: drop after 1.5.0 (#433, finding 684).
 fn move_old_records(homes: &[u8]) {
     let Some(old) = old_records(homes) else {
         return;
@@ -677,6 +680,7 @@ fn move_old_records(homes: &[u8]) {
     };
     let to = crate::paths::records();
     let mut made = false;
+    let (mut videos, mut files) = (0usize, 0usize);
     for e in rd.flatten() {
         if !e.file_type().is_ok_and(|t| t.is_file()) {
             continue;
@@ -688,9 +692,31 @@ fn move_old_records(homes: &[u8]) {
             }
         }
         let f = e.file_name().as_bytes().to_vec();
-        move_no_replace(&cat!(old, "/", f), &to, &f);
+        if move_no_replace(&cat!(old, "/", f), &to, &f) {
+            files += 1;
+            videos += usize::from(f.ends_with(b".mp4"));
+        }
     }
     let _ = std::fs::remove_dir(shell::path(&old));
+    if files > 0 {
+        let (n, what) = if videos > 0 {
+            (videos, "recording")
+        } else {
+            (files, "file")
+        };
+        say(cat!(
+            "moved ",
+            n.to_string(),
+            " ",
+            what,
+            if n == 1 { "" } else { "s" },
+            " to ",
+            crate::whose::tilde(&to),
+            " (they were in ",
+            crate::whose::tilde(&old),
+            ", where a sweep would delete them)"
+        ));
+    }
 }
 
 /// move_no_replace FROM DIR NAME: FROM moved to DIR/NAME unless a file is there already. Whether it went.
@@ -2613,7 +2639,9 @@ mod tests {
     /// #433, finding 684: the videos an older omabox's `record stop` left in HOMES/records (no
     /// record, no `home`: no box's HOME) are never swept as a gone box's HOME; they move to the
     /// records folder in the data dir, never over a file there, the folder kept while it holds any.
-    /// A box named `records` is refused that folder, never removing it, until it is emptied.
+    /// A box named `records` is refused that folder, never removing it, until it is emptied. Each
+    /// move that moved any says so once, its recordings counted (videos, not their side files), its
+    /// paths with ~; one that moved nothing says nothing.
     #[test]
     fn sweep_keeps_old_records() {
         let r = std::env::temp_dir().join(format!("omabox-sor-{}", std::process::id()));
@@ -2631,6 +2659,7 @@ mod tests {
             ("omabox-b-1.mp4", "V1"),
             ("omabox-b-1.marks.tsv", "M1"),
             ("omabox-b-2.mp4", "V2"),
+            ("omabox-b-3.mp4", "V3"),
         ] {
             std::fs::write(format!("{old}/{f}"), v).unwrap();
         }
@@ -2650,7 +2679,13 @@ mod tests {
         let env = [
             ("XDG_CACHE_HOME", Some(format!("{r}/cache"))),
             ("XDG_DATA_HOME", Some(format!("{r}/data"))),
+            ("HOME", Some(r.clone())),
         ];
+        let moved = |n: &str| {
+            format!(
+                "omabox: moved {n} to ~/data/omabox/records (they were in ~/cache/omabox/records, where a sweep would delete them)\n"
+            )
+        };
         let env: Vec<(&str, Option<&str>)> = env.iter().map(|(k, v)| (*k, v.as_deref())).collect();
         let read = |p: &str| std::fs::read_to_string(format!("{r}/{p}")).ok();
         let ((), said) = crate::exit::heard(|| shell::with_env(&env, || sweep_homes(&ctx)));
@@ -2664,20 +2699,22 @@ mod tests {
                 std::path::Path::new(&format!("{r}/cache/omabox/gb")).exists(),
             ),
             (
-                "",
+                moved("2 recordings").as_str(),
                 Some("V2".into()),
                 Some("V1".into()),
                 Some("M1".into()),
                 Some("THERE".into()),
                 false
             ),
-            "the old records folder is not swept: its videos moved to the data dir's, one whose name is taken there kept where it was; a gone box's HOME still goes"
+            "the old records folder is not swept: its videos moved to the data dir's (said once, 2 recordings), one whose name is taken there kept where it was; a gone box's HOME still goes"
         );
-        let (taken, ()) = shell::with_env(&env, || (home_taken(&rec), rm_box(&rec)));
+        let ((taken, ()), said) =
+            crate::exit::heard(|| shell::with_env(&env, || (home_taken(&rec), rm_box(&rec))));
         assert!(
             taken.is_some_and(|w| crate::exit::contains(&w, b"older omabox's `record stop`"))
-                && read("cache/omabox/records/omabox-b-2.mp4").as_deref() == Some("V2"),
-            "...a box named records is refused it, and its rm_box leaves it"
+                && read("cache/omabox/records/omabox-b-2.mp4").as_deref() == Some("V2")
+                && said.is_empty(),
+            "...a box named records is refused it, and its rm_box leaves it (nothing moved: nothing said): {said:?}"
         );
         std::fs::remove_file(format!("{new}/omabox-b-2.mp4")).unwrap();
         let ((), said) = crate::exit::heard(|| shell::with_env(&env, || sweep_homes(&ctx)));
@@ -2688,9 +2725,16 @@ mod tests {
                 std::path::Path::new(&old).exists(),
                 shell::with_env(&env, || home_taken(&rec)),
             ),
-            ("", Some("V2".into()), false, None),
-            "...moved once its name is free, the emptied folder gone, the name free for a box"
+            (
+                moved("1 recording").as_str(),
+                Some("V2".into()),
+                false,
+                None
+            ),
+            "...moved once its name is free (said, 1 recording), the emptied folder gone, the name free for a box"
         );
+        let ((), said) = crate::exit::heard(|| shell::with_env(&env, || sweep_homes(&ctx)));
+        assert_eq!(said, "", "...and a sweep with nothing to move says nothing");
         let _ = std::fs::remove_dir_all(&r);
     }
 
