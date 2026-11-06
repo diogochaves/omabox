@@ -13154,6 +13154,26 @@ from them.
     conflict: one at a time on a machine. DankMaterialShell is the suite's t_plain_dms (on this
     machine). end-4's dots (illogical-impulse) not tried: its installer rewrites ~/.config and its
     Hyprland config, a VM of its own.
+676. **`click --in` a crop at a fractional scale could land a layout pixel off** (2026-11-06, #432,
+    finding 643's last gap). `--in` (click, drag, pointer, scroll, `pixel --in`) turned a shot's
+    pixel into a layout point by the image's size over the region's (img_px), while `find` and
+    `pixel` map through its monitor since finding 643. A `shot -g` crop at 1.25 is grim's size cut
+    short (63 is 78 px) from its rounded start (finding 641), so that ratio (63/78, where the
+    monitor's is 0.8) put some pixels on the layout pixel beside the one under their centre,
+    anywhere along the crop, not only at its far end: at 1.25, 1.5 and 4/3, for most starts and
+    widths. **Fix:** screen.rs's shot_px_in: a screen shot of a region one monitor holds, whose image
+    is grim's own size at that monitor's scale (px_len, both sides; a cut crop is that size too),
+    maps through px_map_in on the monitors now (load already refuses a shot taken in another screen
+    mode); the rest keep the size rule: `--fit`, `--zoom` (a grid's `--cell` is one), a region over
+    two monitors, a window's own pixels, and a `--changed` crop that starts off a whole pixel (its
+    image is a pixel wider than grim's size, so it is told apart; one that starts on one maps the
+    same either way). At a whole scale both rules agree. Tests: screen.rs's
+    a_shots_pixel_is_its_own_layout_pixel (every pixel of crops 1-39 wide at both edges of the
+    monitor, at 1.25, 1.5 and 4/3 as hyprctl writes it, back to to_layout of the screen pixel shot's
+    cut starts it on; the size rule for `--zoom`, `--fit`, two monitors, scale 2), failing before
+    (`[0, 953, 3, 7]`: 955 for 954); t_find_image clicks its 1.25 crop `--in` at the first column
+    the size rule got wrong and at its last: before, column 3 went to 76 for 77 (the last column,
+    on 4k+2 and 4k+3 wide, agrees under both).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

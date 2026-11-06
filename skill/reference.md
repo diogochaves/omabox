@@ -196,7 +196,8 @@ a turn. Five rules keep every omabox call plain:
   reaching past the window's edge is cut off in its window shot: take the screen around it (`shot
   -g` in the screen's coordinates, or a whole shot; Symptoms).
 - Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
-  --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. Screen
+  --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image: the
+  point is the layout pixel under that image pixel, also in a crop at a fractional scale. Screen
   shots show the pointer (hover evidence: a `-g` crop of the screen; `--no-pointer` leaves it out of
   one), except after `keys`: Omarchy hides it on a key press until it moves; window shots never do.
   A shot right after a `click` or `keys` without `--wait` can show the frame before the redraw: `--wait`, or

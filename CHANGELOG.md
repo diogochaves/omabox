@@ -44,6 +44,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   before that show your name or host name will differ once.
 
 ### Fixed
+- **`click --in` a crop at a fractional scale lands on the pixel you read** ([#432](https://github.com/diogochaves/omabox/issues/432)):
+  a pixel of a `shot -g` crop at 1.25, 1.5 or 4/3 was turned into a layout point by the image's size
+  over the region's, which could put it a layout pixel off the one under that pixel. It now maps
+  as `find --image` and `pixel` do, by its monitor's scale (`drag`, `pointer`, `scroll` and `pixel
+  --in` too); `--fit` and `--zoom` shots map by their size as before.
 - **A box ends with its pasta under SELinux too** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   on Fedora, SELinux refuses pasta the death signal that ends a box when pasta does, so a box whose
   pasta died stayed up without its network. Its reaper now ends it within a second or two, the box
