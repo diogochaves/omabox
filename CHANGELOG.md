@@ -51,8 +51,6 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   CMake's `lib64`).
 - **`omabox setup` without Omarchy links no bar widget** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   it says it skipped it, instead of making `~/.config/omarchy/plugins`.
-
-### Fixed
 - **Hyprland 0.57: layers that hold the keyboard, and special workspaces** ([#434](https://github.com/diogochaves/omabox/issues/434)):
   0.57 renamed a layer's `interactivity`, so `keys --window` typed into a launcher that held the
   keyboard and `tree --layer` could not tell two same-size layers apart; and a special workspace has

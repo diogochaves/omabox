@@ -12747,7 +12747,8 @@ from them.
     Tests: t_keys_to_box (a keys-to-box box downed with its window focused, the pointer over it and
     another box up, keep or no keep; the same for a one-shot box alone on its workspace), on 0.56.2
     and 0.57.1.
-    t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).652. **`setup --aquamarine` built only for Hyprland 0.56: install.sh stopped where 0.57 is** (2026-11-06,
+    t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).
+655. **`setup --aquamarine` built only for Hyprland 0.56: install.sh stopped where 0.57 is** (2026-11-06,
     #48). omabox's private aquamarine was one commit, `7bb8bdf4` (0.15.1 with #415), whose soname is
     `libaquamarine.so.14`. Arch and openSUSE ship Hyprland 0.57.1 linking aquamarine 0.16.0
     (`.so.15`, which has #415), so `setup --aquamarine` built a library their Hyprland could not load
