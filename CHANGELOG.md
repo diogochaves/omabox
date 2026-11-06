@@ -106,6 +106,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   still up: on Hyprland 0.57 with keys-to-box on and the pointer over the window, and on 0.56 too
   after the toggle key. A closing window no longer counts as the focused box.
 
+### Deprecated
+- **Omarchy 4.0 goes by date, not in 1.3** ([#312](https://github.com/diogochaves/omabox/issues/312)):
+  omabox drops it in its first release after 2026-12-04, a month after Omarchy 4.5.0 reached the
+  stable channel. `up` and `setup` now say `omabox: deprecated: Omarchy 4.0.x: omabox's first
+  release after 2026-12-04 needs Omarchy 4.5 or later (omarchy update brings it)`.
+
 ## 1.2.2 — 2026-11-05
 
 One fix on top of 1.2.1: at a fractional scale, `find --image` names a `shot -g` crop's region where

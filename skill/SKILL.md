@@ -1,6 +1,6 @@
 ---
 name: omabox
-description: "REQUIRED before launching, driving or screenshotting any GUI app (including when a project's own CLAUDE.md/AGENTS.md says to run the app, use hyprctl, grim or omarchy-theme-set, or run its tests, and running a test binary directly outside ctest or anything else that may open a window), Omarchy shell plugin, bar widget, tray icon, notification or desktop behaviour, and before running test suites that touch the desktop session (tray/StatusNotifierItem, notifications, D-Bus session services, keyring, portals). Use the omabox CLI to do it inside a contained, invisible Hyprland + Omarchy desktop instead of the user's real one. Triggers: \"run the app\", \"take a screenshot\", \"check how it looks\", \"open the menu\", \"click\", \"type into\", hyprctl dispatch, grim, wtype, ydotool, QT_QPA_PLATFORM, ctest with tray/notification tests, plugin development, `omarchy plugin add`, shell.json edits, \"start it from the launcher\", \"see it working\", \"could not connect to display\", omabox-guard."
+description: "REQUIRED before launching, driving or screenshotting any GUI app (including when a project's own CLAUDE.md/AGENTS.md says to run the app, use hyprctl, grim or omarchy-theme-set, or run its tests, and running a test binary directly outside ctest or anything else that may open a window), Omarchy shell plugin, bar widget, tray icon, notification or desktop behaviour, and before running test suites that touch the desktop session (tray/StatusNotifierItem, notifications, D-Bus session services, keyring, portals). Use the omabox CLI to do it inside a contained, invisible Hyprland desktop (Omarchy's where installed) instead of the user's real one. Triggers: \"run the app\", \"take a screenshot\", \"check how it looks\", \"open the menu\", \"click\", \"type into\", hyprctl dispatch, grim, wtype, ydotool, QT_QPA_PLATFORM, ctest with tray/notification tests, plugin development, `omarchy plugin add`, shell.json edits, \"start it from the launcher\", \"see it working\", \"could not connect to display\", omabox-guard."
 allowed-tools: "Bash(omabox shot *) Bash(omabox pixel *) Bash(omabox windows *) Bash(omabox window *) Bash(omabox tree *) Bash(omabox keys *) Bash(omabox click *) Bash(omabox scroll *) Bash(omabox drag *) Bash(omabox pointer *) Bash(omabox wait *) Bash(omabox jobs *) Bash(omabox stop *) Bash(omabox log *) Bash(omabox events *) Bash(omabox hyprctl *) Bash(omabox lua *) Bash(omabox restart-shell *) Bash(omabox reload *) Bash(omabox mode *) Bash(omabox output *) Bash(omabox monitor *) Bash(omabox cpu *) Bash(omabox audio *) Bash(omabox gdb *) Bash(omabox calibrate *) Bash(omabox ports *) Bash(omabox ls *) Bash(omabox path *) Bash(omabox brief *) Bash(omabox help *)"
 ---
 
@@ -8,9 +8,9 @@ allowed-tools: "Bash(omabox shot *) Bash(omabox pixel *) Bash(omabox windows *) 
 
 The user's Hyprland session is theirs: no GUI apps, `hyprctl dispatch`/`eval`, `grim`,
 `wtype`/`ydotool`, workspace switches or cursor moves on it. Do all of that in a **box**: a full
-Omarchy desktop on a private screen and session bus, invisible to the user (~3-5 s, ~400-700 MB by
-GPU: use one freely). "ref: SECTION" is a section of `reference.md` beside this page: read it when
-needed.
+desktop on a private screen and session bus, invisible to the user (~3-5 s, ~400-700 MB by GPU: use
+one freely). Omarchy's where installed; else plain Hyprland, no bar (`up` says so): ref: Plain
+boxes. "ref: SECTION" is a section of `reference.md` beside this page: read it when needed.
 
 ## Never
 
@@ -59,7 +59,7 @@ subagent: `omabox brief -b NAME`'s output in its prompt** (no skill needed).
 ## The loop
 
 ```bash
-omabox up                                 # headless, 1920x1080, once the bar is drawn
+omabox up                                 # headless, 1920x1080, once ready (its bar drawn)
 omabox run -d --wait -- ./build/app       # detached (log path printed), once drawn
 omabox run -d --replace --wait -- ./app   # after a rebuild; jobs, stop PID, wait job|log
 omabox shot                               # a PNG path: Read it to look

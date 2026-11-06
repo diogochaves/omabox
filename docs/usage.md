@@ -1,13 +1,13 @@
 # Using omabox
 
-Every everyday command, testing that touches the desktop, shell plugins, a Hyprland or Omarchy
-change, several monitors. Agents get the same from the skill and `omabox help`. Back to the
+Every everyday command, testing that touches the desktop, plain boxes, shell plugins, a Hyprland or
+Omarchy change, several monitors. Agents get the same from the skill and `omabox help`. Back to the
 [README](../README.md).
 
 ## Everyday commands
 
 ```bash
-omabox up                              # headless box, 1920x1080; returns when the bar is drawn
+omabox up                              # headless box, 1920x1080; returns once ready (its bar drawn)
 omabox run -d -- ./build/src/myapp     # launch an app inside (detached; prints its pid and log path)
 omabox jobs                            # the box's run -d jobs; omabox stop PID stops one, its windows gone
 omabox wait log 'listening on'         # until a line in the latest job's log; wait job: until it ends
@@ -71,8 +71,9 @@ omabox brief -b box-3                  # ~15 lines for a subagent's prompt: the 
   terminal is never one.
 - **Visual checks**: `omabox check run -- SCENARIO` runs a script of yours in a fresh `up --clean`
   box (Omarchy's bar, one theme, a `#ff00ff` wallpaper, the clock frozen, no pointer, network or
-  animations) and compares each `omabox check point ID` it takes with a baseline (`--approve`: three
-  runs, what most agree on, and what was not the same from one run to the next left out). It names
+  animations; on a plain box a `#ff00ff` background and no bar) and compares each `omabox check
+  point ID` it takes with a baseline (`--approve`: three runs, what most agree on, and what was not
+  the same from one run to the next left out). It names
   the regions that changed and, for an app with an accessibility tree, the elements that moved,
   resized or changed; shots are compared exactly, as users see them, leaving out only specks.
   Baselines are per GPU (an AMD iGPU and an NVIDIA card draw text differently).
@@ -107,6 +108,32 @@ there: for tests that write into the tree, `omabox down` first. The command gets
 environment, not your shell's; `--pass NAME` hands it one of your variables, a password too, through
 a pipe, never on a command line, and `--env-file dev.env` a whole file of them.
 
+## Plain boxes
+
+```bash
+omabox up                                  # without Omarchy installed: a plain box (up says so)
+omabox up --shell 'dms run'                # ...whose shell is yours ('qs -p DIR' too)
+omabox up bare --desktop plain             # on Omarchy: a box with nothing of Omarchy's
+omabox config desktop plain                # every up's default (auto: Omarchy's if installed)
+```
+
+A plain box runs Hyprland on omabox's own small config: Hyprland's defaults, your keyboard layout
+(from `/etc/vconsole.conf`, as Omarchy reads it), SUPER+RETURN your terminal (xdg-terminal-exec,
+foot, alacritty, kitty or ghostty), SUPER+W closes a window. It sees an empty `/usr/share/omarchy`
+and its HOME has none of your Omarchy look (git's name and email only). Everything else is a box as
+usual: `run`, `shot`, `keys`, `click`, `tree`, `wait`, `record`, monitors, `--net`, `--clean` (its
+hole sentinel the `#ff00ff` background, for `check run --desktop plain`), `--hyprland`.
+
+It has no shell unless `--shell CMD` names one, run by sh in the box. CMD may be a launcher that
+starts the shell and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once
+nothing of it is left. `up` waits until one of its processes draws a layer, `omabox log shell` is
+its output, `restart-shell` stops all of it and starts CMD again, and a Quickshell crash of its
+config is said as the shell's. An app the shell starts itself counts as the shell. A shell's config
+outside the repo needs `--ro-bind DIR`; `--quickshell PATH` makes a build of yours its `qs`. What
+needs Omarchy (`--plugin`, `--theme`, `--stock`, `--desk-shell`, `--omarchy`, `dnd`, `dock`,
+`plugin`) is refused on a plain box, saying why the box is plain; `omabox ls` says `desktop: plain`
+(and the shell) under its line.
+
 ## Shell plugins
 
 ```bash
@@ -136,14 +163,19 @@ omabox up stock                                               # the installed on
 ```
 
 The box runs your build instead of `/usr/bin/Hyprland` (its folder mounted read-only), with the
-rest of the box as usual: the Omarchy shell, your bar, `hyprctl` and `hyprpm` from your system (a
-warning when their version is not the build's). The build must link a `libaquamarine` soname the
-box has (your system's, or omabox's private build); `up` refuses one that does not, or a file that is not an executable
-ELF, before the box starts. `omabox ls` and `omabox windows` name the build, so a box on it is never
-taken for a stock one. A box runs the compositor's logic for real (layouts, focus, input routing, the
-Lua config, IPC, protocols) on a virtual output with virtual input devices; the DRM/KMS backend
-(modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices and the session and
-suspend paths never run in one (the lock screen does, but takes no real password).
+rest of the box as usual: its desktop and shell, `hyprctl` and `hyprpm` from your system (a
+warning when their version is not the build's). Another version whole (Hyprland 0.57 on a desk that
+has 0.56, say) is a folder: `--hyprland DIR`, an unpacked package (`usr/bin/Hyprland` with the
+libraries it needs, each package `bsdtar -xf` into DIR), an install prefix (`bin/Hyprland`) or a
+build folder (`Hyprland`); its libraries load first and its `hyprctl` is the box's.
+`OMABOX_HYPRLAND=DIR` makes it every `up`'s default. A build must link a `libaquamarine` soname the
+box has (your system's, or omabox's private build; a folder's own counts); `up` refuses one that
+does not, or a file that is not an executable ELF, before the box starts. `omabox ls` and `omabox
+windows` name the build, so a box on it is never taken for a stock one. A box runs the compositor's
+logic for real (layouts, focus, input routing, the Lua config, IPC, protocols) on a virtual output
+with virtual input devices; the DRM/KMS backend (modesetting, real monitors, HDR/VRR, multi-GPU),
+libinput with real devices and the session and suspend paths never run in one (the lock screen
+does, but takes no real password).
 
 ## An Omarchy change
 

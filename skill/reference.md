@@ -859,13 +859,14 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
 
 ## Mounts, HOME and the session
 
-- In short: a box is a full Omarchy desktop (its Hyprland config, shell, theme, tray, notifications,
-  keyring). Read-only in it are the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir`
-  dirs, mise's toolchains and the fonts; nothing else of the user's HOME. Mounting HOME,
-  `~/.config/omarchy`, `/tmp`, secret stores or the runtime dir is refused: do not work around it.
-  The box HOME is fake (`/home/sbx`; `omabox path --home` on the host). The box's /run/user/$UID is
-  `omabox path --run` on the host; the host's own is the real session's: never read app state there.
-  Private session bus and keyring; audio: `up --audio`; a polkit agent: `up --polkit`; `/sys`: the host's.
+- In short: on Omarchy a box is a full Omarchy desktop (its Hyprland config, shell, theme, tray,
+  notifications, keyring); without Omarchy it is plain (Plain boxes, below). Read-only in it are the
+  repo (same path), `--ro-bind`, `--plugin` and `--theme-dir` dirs, mise's toolchains and the fonts;
+  nothing else of the user's HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret stores or the
+  runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`; `omabox path
+  --home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the host's own
+  is the real session's: never read app state there. Private session bus and keyring; audio: `up
+  --audio`; a polkit agent: `up --polkit`; `/sys`: the host's.
 - The repo you ran `omabox up` from is visible **read-only** at the same path (from a linked worktree
   or a submodule, the main checkout's `.git` too: git reads work there, writes fail), plus any dirs listed in
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
@@ -993,21 +994,7 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   idle one for up to 2 h): the user is left at Hyprland's "lockscreen app died" screen until every
   box is down (`omabox ls`, `omabox down -b NAME`). It fails closed: nothing unlocks.
 - `--no-shell` starts Hyprland only (no bar, tray or notifications): faster for plain app work.
-- `--desktop plain` is a box with nothing of Omarchy's: Hyprland on omabox's own small config
-  (Hyprland's defaults, the machine's keyboard layout, SUPER+RETURN a terminal, SUPER+W closes), an
-  empty `/usr/share/omarchy`, no shell, a HOME with git's name and email only. For an app or a
-  compositor bug that must not depend on Omarchy. What needs Omarchy (`--plugin`, `--theme`,
-  `--stock`, `--dnd`...) is refused. Without `--desktop` a box is plain where Omarchy is not
-  installed (`up` says so) or when `omabox config desktop plain` is set. `--clean` works there: its
-  sentinel is the Hyprland background colour (`#ff00ff`), not a wallpaper, and `check run --desktop
-  plain` checks on such boxes.
-- `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
-  DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
-  and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
-  left. `up` waits until one of its processes draws a layer, `omabox log shell` is its output,
-  `restart-shell` stops all of it and starts CMD again, a crash is said as the shell's. An app the
-  shell launches itself counts as the shell. `--quickshell PATH` makes the build CMD's `qs`. `dnd`,
-  `dock` and `plugin` stay refused (they ask Omarchy's shell).
+- `--desktop plain` and `--shell CMD`: Plain boxes, below.
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
 - Logs: `omabox log` prints them (below); `omabox path --logs` says where each file is.
@@ -1089,6 +1076,34 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
 - Your session's box goes down when your agent (Claude Code, Codex) exits. A peek window or an
   `omabox run` still going then keeps it until they end; a `run -d` job does not. After `/clear` the
   agent's process lives on and the old box only idles out.
+
+## Plain boxes
+
+A box is Omarchy's desktop where Omarchy is installed, else **plain**: `up` says `desktop: plain, as
+Omarchy is not installed here`, and `omabox ls` says `desktop: plain` under its line. Never tell the
+user about a bar, a theme or Omarchy's menus in a plain box: it has none.
+
+- `--desktop plain` is a box with nothing of Omarchy's: Hyprland on omabox's own small config
+  (Hyprland's defaults, the machine's keyboard layout, SUPER+RETURN a terminal, SUPER+W closes), an
+  empty `/usr/share/omarchy`, no shell, a HOME with git's name and email only. For an app or a
+  compositor bug that must not depend on Omarchy. What needs Omarchy (`--plugin`, `--theme`,
+  `--stock`, `--dnd`...) is refused. Without `--desktop` a box is plain where Omarchy is not
+  installed (`up` says so) or when `omabox config desktop plain` is set. `--clean` works there: its
+  sentinel is the Hyprland background colour (`#ff00ff`), not a wallpaper, and `check run --desktop
+  plain` checks on such boxes.
+- `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
+  DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
+  and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
+  left. `up` waits until one of its processes draws a layer, `omabox log shell` is its output,
+  `restart-shell` stops all of it and starts CMD again, a crash is said as the shell's. An app the
+  shell launches itself counts as the shell. `--quickshell PATH` makes the build CMD's `qs`. `dnd`,
+  `dock` and `plugin` stay refused (they ask Omarchy's shell).
+- A plain box has no bar, launcher, tray host, notification server or wallpaper but what its
+  `--shell` runs: a tray or notification test needs a shell that has them (`omabox tray` says when
+  the box has none; `restart-shell` and `log shell` need `--shell`). Omarchy's binds and menus are
+  not there (nor its `omarchy-*` commands where Omarchy is not installed): start apps with `omabox
+  run -d`, not a launcher. Everything else (run, shot, keys, click, tree, wait, record, monitors,
+  `--net`, `--hyprland`) works as in an Omarchy box.
 
 ## A Hyprland build of your own
 

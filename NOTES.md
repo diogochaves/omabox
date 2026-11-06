@@ -42,12 +42,13 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
   │                      systemd's dbus.service with --systemd), gnome-keyring, PATH, env, then:
   ├ [systemd --user]     --systemd only
   └ labwc -S (headless)  invisible parent compositor (WLR_BACKENDS=headless, 1 output); ends with Hyprland
-    └ Hyprland (nested)  real Omarchy config minus autostart; LD_LIBRARY_PATH → patched aquamarine
-                         when one is used (finding 125);
-      │                  /usr/bin/Hyprland, or --hyprland's build (116)
+    └ Hyprland (nested)  real Omarchy config minus autostart, or a plain box's plain.lua (645, 656);
+      │                  LD_LIBRARY_PATH → patched aquamarine when one is used (finding 125);
+      │                  /usr/bin/Hyprland, or --hyprland's build or folder (116, 644)
       ├ HEADLESS-2       screen on AMD/Intel; WAYLAND-1 bootstrap disabled
       │ WAYLAND-1        screen on NVIDIA; labwc's private headless output is resized to --size
       ├ quickshell       the Omarchy shell (bar, menu, tray host, notifications): share/shell.sh;
+      │                  on a plain box only `--shell CMD`, all CMD starts (652, 659);
       │                  not with --no-shell; /usr/bin/quickshell, or --quickshell's build (358)
       ├ keyboard, pointer --hold: idle devices so focus changes work (41)
       └ apps             `omabox run [-d]` (nsenter into the namespaces, Hyprland's env)
@@ -75,7 +76,7 @@ Then: `omabox up && omabox shot`. It also links the bar widget (`plugin/`) as
 What it does, step by step (each is safe to repeat; `install.sh` is the source of truth):
 
 1. Packages (`PKGS_arch` in install.sh; another distribution's list is `PKGS_<family>`, and there
-   install.sh names the command and stops, finding 645): labwc, wlr-randr, bubblewrap, util-linux, iproute2, passt, jq,
+   install.sh names the command and stops, finding 646): labwc, wlr-randr, bubblewrap, util-linux, iproute2, passt, jq,
    grim, gnome-keyring, libsecret, python (the guard's Codex check), the tools' build deps (wayland,
    libxkbcommon, base-devel, pkgconf, libpng; at-spi2-core and glib2 for tools/tree, finding 317),
    aquamarine's build deps, and what the box runs that Omarchy
@@ -95,14 +96,16 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    cmake -S build/aquamarine -B build/aquamarine/out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PWD/build/prefix -DCMAKE_INSTALL_LIBDIR=lib
    cmake --build build/aquamarine/out && cmake --install build/aquamarine/out
    ```
-   (installed beside the old one, then swapped in). It must provide the soname the installed Hyprland
+   (installed beside the old one, then swapped in). That is the source for Hyprland 0.56's
+   `libaquamarine.so.14`; for 0.57's `.so.15` it is v0.16.0 (`b77d6764`) without the `+layout`
+   patch (`install::AQ_SOURCES`, finding 655). It must provide the soname the installed Hyprland
    links (`ldd $(command -v Hyprland)`), or `up` skips it for the system's; only the nested Hyprland
    loads it. Outside a checkout it goes to `~/.local/share/omabox/aquamarine`.
 4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
    `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
    those exist; `skill-feedback/` as `skills/omabox-feedback` beside it only with `--feedback-skill`,
    finding 326); `plugin/` as `~/.config/omarchy/plugins/chaves.omabox` (only where Omarchy is,
-   finding 645); makes `~/.config/omabox`;
+   finding 646); makes `~/.config/omabox`;
    asks about the agent guard. A real directory where a link goes stops it. `omabox setup --remove`
    undoes it.
 5. Try it: `omabox up && omabox shot`, then `omabox down`. The spike's hand-run scripts (`spike/*.sh`,
@@ -12924,6 +12927,14 @@ from them.
     with CMD a sleep: up times out naming CMD), shellnote's `plain_shell_is_its_slot` and
     `slot_pids_as_sh` (a setsid daemon whose launcher left, another slot's, a dialog's), ready's
     `plain_shell_layer_and_configs`.
+660. **Omarchy 4.0's drop goes by a date, not a version** (2026-11-06, #312). Finding 629's line said
+    `omabox 1.3 needs Omarchy 4.5 or later`, but 1.3.0 became the release of plain boxes and
+    Hyprland 0.57 (#247), and 4.0's removal its own milestone, due one month after Omarchy 4.5.0
+    reached the stable channel (2026-11-04). **Now:** `Ctx::deprecated_omarchy` says `omabox:
+    deprecated: Omarchy 4.0.6-1: omabox's first release after 2026-12-04 needs Omarchy 4.5 or later
+    (omarchy update brings it)` (an `--omarchy` tree as before, without the hint); README and
+    docs/install.md say the same. When it is said is unchanged. Tests: exit.rs
+    `deprecated_omarchy_line`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

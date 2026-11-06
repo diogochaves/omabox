@@ -30,7 +30,7 @@ fn first_jq(main: &str) -> String {
         r#"({main}) as $s | (map(select(.disabled | not)) | length - 1) as $n
       | "You drive omabox box '\($b)' (\(if $s then "\($s.width)x\($s.height), scale \($s.scale * 100 | round / 100)" else "its main screen away" end)"
         + (if $n > 0 then ", \($n) more monitor\(if $n > 1 then "s" else "" end): monitor list" else "" end)
-        + "): a private Omarchy desktop, not the user's. Its windows (--window SEL, size at x,y):""#
+        + "): a private desktop, not the user's. Its windows (--window SEL, size at x,y):""#
     )
 }
 
@@ -71,7 +71,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     if mons.is_empty() {
         out(
-            "You drive an omabox box: a private Omarchy desktop, not the user's. Start yours: omabox up --new [--plugin PATH]\n(all its options there); it prints its name (box-3): that is NAME below. It has no windows yet.\n",
+            "You drive an omabox box: a private desktop, not the user's. Start yours: omabox up --new [--plugin PATH]\n(all its options there); it prints its name (box-3): that is NAME below. It has no windows yet.\n",
         )?;
     } else {
         let main = crate::screen::main_screen(ctx);

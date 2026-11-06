@@ -1,7 +1,7 @@
 [package]
 name = "omabox"
 version = "0.0.0"
-description = "A contained, invisible Hyprland + Omarchy desktop for agents"
+description = "A contained, invisible Hyprland desktop for agents, Omarchy's or plain"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

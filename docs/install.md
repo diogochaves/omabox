@@ -5,20 +5,26 @@ What a machine needs, what `install.sh` does, updating and removing. Back to the
 
 ## What you need
 
-- **Omarchy 4.5** on Arch, with Hyprland 0.56+ (the Lua config). Omarchy 4.0 still works but is
-  deprecated (`up` and `setup` say so on a `deprecated:` line): omabox 1.3 drops it, not before
-  2026-12-02, four weeks after 4.5 reached Omarchy's stable channel
+- **Hyprland 0.56 or later**, with its Lua config. 0.56.2 and 0.57.1 are tested; a box runs the
+  installed one, or another version from a folder (`up --hyprland DIR`, `OMABOX_HYPRLAND`).
+- **Omarchy 4.5** on Arch: boxes are Omarchy's desktop. Omarchy 4.0 still works but is deprecated
+  (`up` and `setup` say so on a `deprecated:` line): omabox drops it in its first release after
+  2026-12-04, a month after 4.5 reached Omarchy's stable channel
   ([#312](https://github.com/diogochaves/omabox/issues/312)). `omarchy update` brings 4.5.
 - **Or another Linux with Hyprland 0.56+** ([#247](https://github.com/diogochaves/omabox/issues/247)):
-  Arch without Omarchy, Debian sid, openSUSE Tumbleweed (aimed at: `install.sh` and real boxes
-  checked in containers before a release, [below](#checking-other-distributions)), Fedora (its
-  packages named, untested: Hyprland only from COPR). There `install.sh`
-  checks your distribution's packages under their own names and, if some are missing, prints the
-  command that installs them (`sudo apt install …`, `sudo zypper install …`) and stops: run it, then
-  `./install.sh` again. Without Omarchy, boxes are plain Hyprland (no Omarchy bar, theme or plugins),
-  `setup` links no bar widget, and `omabox doctor` says so as information, not failures. A plain
-  box's SUPER+RETURN opens your terminal (foot, alacritty, kitty or ghostty; `install.sh` installs
-  none). NixOS is not supported yet: a box looks for its programs in `/usr/bin`.
+  Arch without Omarchy, Debian sid and openSUSE Tumbleweed are tested (`install.sh` and real boxes,
+  each in a container, [below](#checking-other-distributions)). There `install.sh` checks your
+  distribution's packages under their own names and, if some are missing, prints the command that
+  installs them (`sudo apt install …`, `sudo zypper install …`) and stops: run it, then
+  `./install.sh` again (on Arch without Omarchy it installs them itself, as on Omarchy). No package
+  for Arch without Omarchy yet: install from a clone or a release's tarball. Fedora has Hyprland only
+  from a COPR: `install.sh` names its packages, untried. NixOS is not supported yet: a box looks for
+  its programs in `/usr/bin` (`install.sh` says what it would need). Ubuntu 26.04 LTS, Alpine and
+  Void ship no Hyprland with the Lua config. Without Omarchy, boxes are plain Hyprland (no Omarchy
+  bar, theme or plugins; `--shell CMD` runs a shell of yours), `setup` links no bar widget, and
+  `omabox doctor` says so as information, not failures. A plain box's SUPER+RETURN opens your
+  terminal (foot, alacritty, kitty or ghostty; `install.sh` installs none), which needs a font (a
+  desktop has one; the test containers get DejaVu).
 - **A GPU render node** (`/dev/dri/renderD*`). Tested on AMD and Intel iGPUs, an NVIDIA RTX 4070
   SUPER (driver 615.71.09) and an RTX 5070 Ti (610.57.04, open kernel module). A headless box takes
   the first usable node, or the GPU `omabox config gpu` names (`OMABOX_RENDER_NODE` overrides); an
@@ -45,6 +51,9 @@ git clone https://github.com/diogochaves/omabox && cd omabox
 ./install.sh                            # packages (on Arch, sudo only if some are missing; elsewhere the command to run), tools, omabox, aquamarine's fix, links
 ./install.sh --check                    # the same, then start a box, screenshot it, tear it down
 ```
+
+A release's tarball (`omabox-X.Y.Z.tar.gz`, beside its `SHA256SUMS` on the releases page) unpacked
+in a folder you keep installs the same way: `./install.sh` in it.
 
 `install.sh` then runs `omabox setup`, which links `~/.local/bin/omabox`, the agent skill (wherever
 Omarchy puts its own skills: `~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and
