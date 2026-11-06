@@ -206,6 +206,12 @@ const PKGS: &[(&str, [&str; 5])] = &[
             "imagemagick",
         ],
     ),
+    ("wl-copy", ["wl-clipboard"; 5]),
+    ("wf-recorder", ["wf-recorder"; 5]),
+    (
+        "ffmpeg",
+        ["ffmpeg", "ffmpeg", "ffmpeg-free", "ffmpeg", "ffmpeg"],
+    ),
     // tools/ (C, wayland-scanner, pkg-config's modules: the Makefiles')
     (
         "tools-build",
@@ -543,6 +549,9 @@ const SOME_PROGS: &[(&str, &str)] = &[
         "magick",
         "check, calibrate, find, shot --zoom/--grid/--changed/--diff, record's sheet",
     ),
+    ("wl-copy", "clip"),
+    ("wf-recorder", "record"),
+    ("ffmpeg", "record"),
 ];
 
 fn box_progs_check(root: &[u8], fam: Option<Family>) -> Check {
@@ -1675,7 +1684,15 @@ mod tests {
             c.found
         );
         // #439: nft in /usr/sbin (Debian, openSUSE) is found there, the rest in /usr/bin
-        for p in ["wlr-randr", "ip", "python3", "magick"] {
+        for p in [
+            "wlr-randr",
+            "ip",
+            "python3",
+            "magick",
+            "wl-copy",
+            "wf-recorder",
+            "ffmpeg",
+        ] {
             prog(&d, p, "true");
         }
         put(&d, "/usr/sbin/nft", "#!/bin/sh\n");
@@ -1687,7 +1704,7 @@ mod tests {
             assert_eq!(c.st, St::Ok, "{}", c.found);
             assert_eq!(
                 c.found,
-                "wlr-randr, ip, python3, magick in /usr/bin; nft in /usr/sbin"
+                "wlr-randr, ip, python3, magick, wl-copy, wf-recorder, ffmpeg in /usr/bin; nft in /usr/sbin"
             );
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o777)).unwrap();
             let c = some_progs_check(&r, arch);
@@ -1705,7 +1722,10 @@ mod tests {
         }
         prog(&d, "nft", "true");
         let c = some_progs_check(&r, arch);
-        assert_eq!(c.found, "wlr-randr, ip, nft, python3, magick in /usr/bin");
+        assert_eq!(
+            c.found,
+            "wlr-randr, ip, nft, python3, magick, wl-copy, wf-recorder, ffmpeg in /usr/bin"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1806,6 +1826,9 @@ mod tests {
             "wlr-randr",
             "ip",
             "magick",
+            "wl-copy",
+            "wf-recorder",
+            "ffmpeg",
             "tools-build",
             "aquamarine-build",
         ];

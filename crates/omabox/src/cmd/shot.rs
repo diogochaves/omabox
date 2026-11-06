@@ -2570,6 +2570,10 @@ fn burst_run(
         // Tiles at most 320 px wide, 5 a row, each frame's number and time under it.
         let mut c = crate::sig::command("magick");
         c.arg("montage");
+        let font = crate::grid::font("sans");
+        if !font.is_empty() {
+            c.arg("-font").arg(std::ffi::OsStr::from_bytes(&font));
+        }
         for (k, f) in files.iter().enumerate() {
             c.arg("-label")
                 .arg(format!("{}: {}", k + 1, ms_s(&ts[k])))
@@ -2591,9 +2595,26 @@ fn burst_run(
                 s.out,
                 "/sheet.png"
             )))
-            .stderr(std::process::Stdio::null());
-        if !c.status().is_ok_and(|s| s.success()) {
-            return Err(ctx.die("shot --burst: the contact sheet failed (magick montage)"));
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped());
+        match c.output() {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let why = crate::grid::last_line(&o.stderr);
+                return Err(ctx.die(cat!(
+                    "shot --burst: the contact sheet failed (magick montage",
+                    if why.is_empty() {
+                        b"".as_slice()
+                    } else {
+                        b": "
+                    },
+                    why,
+                    ")"
+                )));
+            }
+            Err(_) => {
+                return Err(ctx.die("shot --burst: the contact sheet failed (magick montage)"));
+            }
         }
         out(cat!(s.out, "/sheet.png\n"))?;
     }

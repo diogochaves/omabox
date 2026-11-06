@@ -3,16 +3,8 @@
 # Launched by Hyprland, so it has the session env.
 # The file watcher stays off so a screenshot never catches a half-reloaded shell; `omabox restart-shell`
 # is the explicit reload.
-# What Omarchy's autostart does: give the session bus the compositor's env, or D-Bus-activated apps
-# (Files, the portals) start without WAYLAND_DISPLAY and die.
-dbus-update-activation-environment --all
-# And the user manager's, with `up --systemd`: units that open windows need WAYLAND_DISPLAY too. A
-# unit bus-activated before this (the portal, in an interactive box) failed without it and may have hit
-# its start limit: clear that, so the next request starts it with the session's environment.
-if [ -S "$XDG_RUNTIME_DIR/systemd/private" ]; then
-  dbus-update-activation-environment --systemd --all
-  systemctl --user reset-failed
-fi
+# What Omarchy's autostart does: give the session bus (and the user manager's) the compositor's env.
+"$(dirname "${BASH_SOURCE[0]}")/session-env.sh"
 pidfile=$XDG_RUNTIME_DIR/omabox-shell.pid
 # `up --desktop plain --shell CMD` (#247): a shell of the user's, not Omarchy's. CMD runs in this
 # process, so its pid is the one recorded, with the mark and token files `up` and `restart-shell` read

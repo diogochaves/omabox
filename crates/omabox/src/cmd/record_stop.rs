@@ -2477,6 +2477,10 @@ fn record_sheet(
     }
     // magick reads % and \ in a label as escapes.
     let mut args: Vec<Vec<u8>> = vec![b"montage".to_vec()];
+    let font = crate::grid::font("sans");
+    if !font.is_empty() {
+        args.extend([b"-font".to_vec(), font]);
+    }
     for (i, l) in lab
         .iter()
         .take(usize::try_from(cnt).unwrap_or(0))
@@ -2503,8 +2507,12 @@ fn record_sheet(
         b"8",
         &cat!("PNG:", part),
     ]));
-    let mut err = !crate::shots::mkdir_p(&crate::shots::dirname(png))
-        || !jq::tool("magick", &args, None, jq::Err::Null).ok();
+    let mut why: Vec<u8> = Vec::new();
+    let mut err = !crate::shots::mkdir_p(&crate::shots::dirname(png)) || {
+        let r = jq::tool("magick", &args, None, jq::Err::Out);
+        why = crate::grid::last_line(&r.out).to_vec();
+        !r.ok()
+    };
     if !err && !fit.is_empty() {
         err = !jq::tool(
             "magick",
@@ -2527,6 +2535,12 @@ fn record_sheet(
         say(cat!(
             "record: the contact sheet failed (magick montage, to ",
             png,
+            if why.is_empty() {
+                b"".as_slice()
+            } else {
+                b": "
+            },
+            why,
             ")"
         ));
         return Ok(None);

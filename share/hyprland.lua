@@ -403,7 +403,10 @@ hl.on("hyprland.start", function()
     hl.exec_cmd("/opt/omabox/bin/omabox-pointer --hold")
   end
   -- The Omarchy shell, unless `up --no-shell`: then a bare compositor, no bar, tray or notifications.
-  if os.getenv("OMABOX_SHELL") ~= "0" then hl.exec_cmd("/opt/omabox/share/shell.sh") end
+  -- Without one, the session's environment still goes to its bus and user manager (shell.sh does it
+  -- before a shell; finding 663).
+  if os.getenv("OMABOX_SHELL") ~= "0" then hl.exec_cmd("/opt/omabox/share/shell.sh")
+  else hl.exec_cmd("/opt/omabox/share/session-env.sh") end
   -- What `omabox run` gives commands, so they see the box like anything Hyprland launched.
   -- Written last and renamed into place: its presence means Hyprland is up.
   hl.exec_cmd("env -0 > $XDG_RUNTIME_DIR/omabox.env.tmp && mv $XDG_RUNTIME_DIR/omabox.env.tmp $XDG_RUNTIME_DIR/omabox.env")

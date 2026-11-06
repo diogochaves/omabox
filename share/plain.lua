@@ -46,6 +46,9 @@ hl.config({
     disable_splash_rendering = true,
     background_color = background(),
     focus_on_activate = true,
+    -- A window opens on the workspace in front, not the one its launcher started on: `omabox run`
+    -- starts everything through one process that began on workspace 1 (Omarchy sets it the same).
+    initial_workspace_tracking = 0,
   },
   input = { kb_layout = layout, kb_variant = variant, follow_mouse = 1 },
 })

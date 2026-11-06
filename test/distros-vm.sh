@@ -139,12 +139,16 @@ EOF
     --disk "path=$dir/disk.qcow2,format=qcow2,bus=virtio" --network network=default,model=virtio \
     "${gfx[@]}" --cloud-init "user-data=$dir/user-data" --noautoconsole >/dev/null || return 1
 
-  for i in $(seq 1 90); do
-    ip=$(virsh_ domifaddr "$name" --source lease 2>/dev/null | awk '/ipv4/ { sub(/\/.*/, "", $4); print $4; exit }') || ip=
-    [ -n "$ip" ] && ssh "${SSHO[@]}" -i "$dir/key" "user@$ip" true 2>/dev/null && break
-    ip=''; sleep 2
-  done
-  [ -n "$ip" ] || { echo "no SSH to the guest after 3 min"; return 1; }
+  # (the guest's address and SSH, waited for: at its first boot and after the reboot below)
+  ssh_up() {
+    for i in $(seq 1 90); do
+      ip=$(virsh_ domifaddr "$name" --source lease 2>/dev/null | awk '/ipv4/ { sub(/\/.*/, "", $4); print $4; exit }') || ip=
+      [ -n "$ip" ] && ssh "${SSHO[@]}" -i "$dir/key" "user@$ip" true 2>/dev/null && return 0
+      ip=''; sleep 2
+    done
+    echo "no SSH to the guest after 3 min"; return 1
+  }
+  ssh_up || return 1
   echo "   up at $ip"
   g() { ssh "${SSHO[@]}" -i "$dir/key" "user@$ip" "$@"; }
   g 'cloud-init status --wait >/dev/null 2>&1; true'
@@ -155,6 +159,13 @@ EOF
   # (lingering: a desktop user stays logged in, so the runtime dir outlives each SSH command)
   echo "==> as root: Hyprland, a terminal, a font; the user lingers"
   g "sudo sh -c '$prep' && sudo loginctl enable-linger user" >"$out/prep.log" 2>&1 || { tail -n 20 "$out/prep.log"; return 1; }
+  # A reboot, as after any update: the packages may have replaced the running kernel, whose modules
+  # are then gone (nft and a dummy link failed so on Arch's cloud image).
+  echo "==> reboot"
+  g 'sudo systemctl reboot' >/dev/null 2>&1 || true
+  sleep 10
+  ssh_up || return 1
+  g 'uname -r'
   g 'Hyprland --version 2>&1 | head -n 1; qs --version 2>&1 | head -n 1 || true'
 
   echo "==> HEAD, as a release tarball has it"

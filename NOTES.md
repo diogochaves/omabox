@@ -12963,7 +12963,26 @@ from them.
     commands) all took it for granted, Omarchy having it. **Now** install.sh installs it in every
     family (imagemagick; Fedora and openSUSE ImageMagick; each gives /usr/bin/magick, checked in
     debian:sid, fedora:45 and tumbleweed containers) and doctor's some-programs check warns
-    without it, naming what needs it, with the install line.
+    without it, naming what needs it, with the install line. The same for `clip`'s wl-copy and
+    wl-paste (wl-clipboard) and `record`'s wf-recorder and ffmpeg (Fedora: ffmpeg-free), whose
+    refusal named `sudo pacman -S` on every distribution and now says doctor names the packages.
+663. **A box with no shell never gave its session bus the compositor's environment** (2026-11-06,
+    #247). shell.sh ran `dbus-update-activation-environment --all` (and `--systemd` with `up
+    --systemd`) before starting the shell, and hyprland.lua starts shell.sh only when the box has
+    one: `up --no-shell` on Omarchy and every plain box without `--shell` (plain.lua's default)
+    gave D-Bus-activated apps and the user manager's units no WAYLAND_DISPLAY, so they started
+    blind and died. t_systemd's "manager has the session environment" failed on plain Arch. **Now**
+    share/session-env.sh does the import, run by shell.sh as before and by hyprland.lua itself when
+    there is no shell. Same release: plain.lua sets `misc.initial_workspace_tracking = 0`, as
+    Omarchy does: Hyprland's default opens a window on the workspace its launcher started on, and
+    `omabox run` launches through one process that began on workspace 1, so a window opened there
+    while workspace 2 was in front (t_monitors_wait, t_keys_layer on plain Arch).
+664. **A contact sheet failed on plain Arch, and said nothing of why** (2026-11-06, #247). `shot
+    --burst --sheet`'s and `record`'s `magick montage` label each frame with no `-font`, and
+    ImageMagick's default there is a Ghostscript font that is not installed: "unable to read font",
+    exit 1 (the sheet half written). Both threw magick's stderr away. **Now** both pass the file
+    fontconfig picks for `sans` (grid.rs `font`, which the grid's labels used for a monospace
+    already; check's report does the same), and a failure ends with magick's last line.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
