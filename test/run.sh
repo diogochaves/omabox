@@ -4070,7 +4070,8 @@ esac
 EOF
   # (grim: a PPM for -t ppm, slow once with ppm.sleep, or with ppm.late after the hold's first look;
   # a PNG otherwise, `grabbing` once it is asked, slow with grim.sleep; another after grim.alt captures;
-  # a window's (-T) ending 139 saying nothing, as grim 1.5.0's SIGSEGV, for the first grim.segv of them)
+  # a window's (-T) ending 139 saying nothing, as grim 1.5.0's SIGSEGV, for the first grim.segv of them;
+# with grim.resize, window 0xa2 changes size at each, 400 and 800 wide in turn)
   cat > "$fk/bin/grim" <<EOF
 #!/bin/sh
 echo "\$*" >> $fk/grim.args
@@ -4078,7 +4079,9 @@ case " \$* " in *" -t ppm "*) i=grim.ppm; [ ! -f $fk/ppm.sleep ] || { t=\$(cat $
     [ ! -f $fk/ppm.late ] || ! grep -q '^-l 1' $fk/grim.args || { t=\$(cat $fk/ppm.late); rm -f $fk/ppm.late; touch $fk/seen; sleep "\$t"; } ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
 case " \$* " in *" -t ppm "*) ;; *" -g "*) i=grim-small.png ;; *) i=grim.png ;; esac
 [ ! -f $fk/grim.alt ] || [ \$(wc -l < $fk/grim.args) -le \$(cat $fk/grim.alt) ] || i=\$(cat $fk/grim.altimg 2>/dev/null || echo grim2.png)
-case " \$* " in *" -T "*) [ ! -f $fk/grim.segv ] || [ \$(grep -c ' -T ' $fk/grim.args) -gt \$(cat $fk/grim.segv) ] || exit 139 ;; esac
+case " \$* " in *" -T "*) [ ! -f $fk/grim.segv ] || [ \$(grep -c ' -T ' $fk/grim.args) -gt \$(cat $fk/grim.segv) ] || {
+  [ ! -f $fk/grim.resize ] || { jq -c 'map(if .address == "0xa2" then .size[0] = 1200 - .size[0] else . end)' $fk/clients.json > $fk/clients.new && mv $fk/clients.new $fk/clients.json; }
+  exit 139; } ;; esac
 cat $fk/\$i 2>/dev/null || { echo "stand-in grim: no frame" >&2; exit 1; }
 exit \$(cat $fk/grim.rc 2>/dev/null || echo 0)
 EOF
@@ -4119,6 +4122,7 @@ EOF
   printf '[{"address":"0xa1","at":[10,10],"size":[400,300],"workspace":{"id":1,"name":"1"},"class":"fk-a","title":"fk \\"one\\"","initialClass":"fk-a","initialTitle":"one","stableId":"a1",%s},
 {"address":"0xa2","at":[420,10],"size":[400,300],"workspace":{"id":1,"name":"1"},"class":"fk-a","title":"two","initialClass":"fk-a","initialTitle":"two","stableId":"a2",%s},
 {"address":"0xb1","at":[0,0],"size":[800,600],"workspace":{"id":2,"name":"2"},"class":"fk-off","title":"off","initialClass":"fk-off","initialTitle":"off","stableId":"zz",%s}]\n' "$win" "$win" "$win" > "$fk/clients.json"
+  cp "$fk/clients.json" "$fk/clients.orig"
   printf '{"address":"0xa2","class":"fk-a","title":"two","workspace":{"id":1,"name":"1"}}\n' > "$fk/active.orig"
   printf '[{"id":0,"name":"HEADLESS-2","width":1920,"height":1080,"refreshRate":60.0,"x":0,"y":0,"scale":1.0,"transform":0,"disabled":false,"reserved":[42,0,0,0],"activeWorkspace":{"id":1,"name":"1"},"specialWorkspace":{"id":0,"name":""}},
 {"id":1,"name":"HEADLESS-3","width":800,"height":600,"refreshRate":60.0,"x":1920,"y":480,"scale":1.0,"transform":0,"disabled":false,"reserved":[0,0,0,0],"activeWorkspace":{"id":3,"name":"3"},"specialWorkspace":{"id":0,"name":""}}]\n' > "$fk/monitors.json"
@@ -4146,9 +4150,9 @@ sd_fix() {
   printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$d/run/omabox.env"
   printf 'P6\n2 2\n255\n\001\002\003\004\005\006\007\010\011\012\013\014' > "$fk/grim.ppm"
   printf 'ready 1920x1080 area=2073600\nsatisfied still t=300 frames=2\n' > "$fk/still"
-  cp "$fk/active.orig" "$fk/active.json"; echo fk-pop > "$fk/kbl"
+  cp "$fk/active.orig" "$fk/active.json"; cp "$fk/clients.orig" "$fk/clients.json"; echo fk-pop > "$fk/kbl"
   for f in still.args grim.args input.args hyprctl.args; do : > "$fk/$f"; done
-  for f in kb.sigign cursor.sleep cursoring ppm.late ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep grim.segv burst.fail ptr; do rm -f "${fk:?}/$f"; done
+  for f in kb.sigign cursor.sleep cursoring ppm.late ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep grim.segv grim.resize burst.fail ptr; do rm -f "${fk:?}/$f"; done
   [ ! -f "$fk/grim.png.off" ] || mv "$fk/grim.png.off" "$fk/grim.png"
   chmod +x "$fk/bin/omabox-burst"
   printf '{"option":"input:kb_layout","str":"us","set":true}\n' > "$fk/opt-input:kb_layout.json"
@@ -4413,6 +4417,20 @@ t_unit_capture_errors() {
   cx_want=(rc=1 out= "err=omabox: shot: grim failed: it died of SIGSEGV (status 139) on each of 4 tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy, as while the window keeps changing size" 'state!~^\./w\.png')
   cx_case "...every time: 4 tries, then said what it means" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
   check_eq "...grim asked 4 times" 4 "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")"
+  # A window that keeps changing size (#436, finding 648): taken again past 4 tries while it does,
+  # its animations off after half a second of it (Hyprland 0.57 fails copies through them), until
+  # 4 s are over; then said so.
+  ce_segv9r() { ce_segv 9; touch "$sd_fk/grim.resize"; }; sd_pre=(ce_segv9r)
+  cx_want=(rc=0 "out=$r/out/w.png")
+  cx_case "...a window changing size at each: taken again past 4 tries, the tenth taken" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
+  check_eq "...grim asked for it 11 times (9 failed, the priming one, the shot)" 11 "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")"
+  ce_segvr() { ce_segv 100000; touch "$sd_fk/grim.resize"; }; sd_pre=(ce_segvr)
+  cx_want=(rc=1 out= "err~^omabox: shot: grim failed: it died of SIGSEGV \(status 139\) on each of [0-9]+ tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy, and the window kept changing size for the 4 s it was tried: shoot it once it holds its size \(omabox wait still\)$" 'state!~^\./w\.png')
+  cx_case "...changing size for ever: tried for 4 s, then said so" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
+  check "...more than 4 tries" test "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")" -gt 4
+  check_eq "...its animations turned off once, after half a second of it, and back" \
+    "dispatch hl.dsp.window.set_prop({ prop = 'no_anim', value = '1', window = 'address:0xa2' }) dispatch hl.dsp.window.set_prop({ prop = 'no_anim', value = 'unset', window = 'address:0xa2' })" \
+    "$(grep no_anim "$fk/hyprctl.args" | tr '\n' ' ' | sed 's/ $//')"
   ce_rc139() { echo 139 > "$sd_fk/grim.rc"; }; sd_pre=(ce_rc139)
   cx_want=(rc=1 out= "err=omabox: shot: grim failed: it ended with status 139 and said nothing")
   cx_case "...a screen's grim ending 139: not a window's copy, asked once" shot -b fk -o "$r/out/x.png"

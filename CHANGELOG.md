@@ -23,6 +23,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`--version` and `config --json` describe OMABOX_HYPRLAND's Hyprland** ([#424](https://github.com/diogochaves/omabox/issues/424)):
   with it set they named the aquamarine of the installed Hyprland, not the folder's that boxes load.
   They now say the folder's (kind `folder`), and name the Hyprland (`hyprland` in both `--json`s).
+- **Hyprland 0.57: a shot of a window that keeps resizing** ([#436](https://github.com/diogochaves/omabox/issues/436)):
+  0.57 fails a window's copy all through its size animation, so `shot --window` of a window resized
+  over and over failed nearly every time. It is now tried for up to 4 s while the window changes
+  size, with the window's own animations off after half a second of it, and back after the shot.
 
 ## 1.2.2 — 2026-11-05
 

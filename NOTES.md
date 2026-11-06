@@ -12551,6 +12551,25 @@ from them.
     view). Tests: install.rs new_box_follows_omabox_hyprland (a folder's link and soname-only copy,
     OMABOX_AQUAMARINE=system, a folder with none, a path that holds nothing), version.rs
     omabox_hyprland_is_said and json_as_jq_writes_it.
+648. **On Hyprland 0.57 a shot of a window that kept resizing failed 19 times in 20** (2026-11-06,
+    #436). 0.57 fails every copy of a window (`grim -T`: SIGSEGV with grim 1.5.0, finding 605) for
+    the whole of its size animation, not a frame of it: probed in a 0.57.1 box, a floating foot
+    resized once failed its copies for 200-300 ms after (Omarchy's animation), never with animations
+    off, and 3 copies in 150 succeeded while it was resized every 34 ms, against 99 in 100 with the
+    window's `no_anim` set. `-j clients`' size is the goal size, the same all through the animation, and
+    nothing in `-j` or Lua says a window is animating. 0.56.2 copies a window through its animation;
+    there 1 copy in 5 failed. A window resized faster than its animation never ends one, so 4 tries
+    100 ms apart ran out. **Now:** while the window holds its size (as `-j clients` lists it) a
+    failed copy is tried 4 times as before; once its size is seen to change around a failed try,
+    every 20 ms until 4 s from the capture's start (WIN_RETRY_FOR), and after 500 ms of that
+    (WIN_ANIM_AFTER, longer than an animation) the window's own animations are turned off
+    (`hl.dsp.window.set_prop` no_anim 1) and set back (`unset`) when the capture is over; past 4 s,
+    the words say how many tries and that the window kept changing size. Not done: a signal to
+    omabox in those tries leaves the window's animations off. Tests: t_unit_capture_errors (the
+    stand-in grim's window changing size at each failure: taken on the tenth try; for ever: tried
+    4 s, said so, its animations off once and back), t_window_resizing (20 shots of a window resized
+    every 30 ms: 0 failed on 0.56.2 and in 3 runs on 0.57.1; 19 of 20 failed before, 1 of 20 with
+    retries alone).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
