@@ -2595,7 +2595,9 @@ skill_refs() { python3 -I -c "$SKILL_REFS" "$@"; }
 t_unit_version() {
   local v; v=$(cat "$ROOT/VERSION")
   check_eq "omabox --version" "omabox $v" "$("$CLI" --version | head -1)"
-  check_match "...then the aquamarine boxes use (finding 125)" "^aquamarine: (a private build, |the system's, )" "$("$CLI" --version | sed -n 2p)"
+  # (Without OMABOX_HYPRLAND: a folder's run puts a `hyprland:` line first and names its aquamarine,
+  # finding 649; this is the installed Hyprland's.)
+  check_match "...then the aquamarine boxes use (finding 125)" "^aquamarine: (a private build, |the system's, )" "$(env -u OMABOX_HYPRLAND "$CLI" --version | sed -n 2p)"
   check_eq "...an argument it does not take refused, exit 2, nothing printed" "omabox: --version: unknown argument foo (omabox --version [--json]) 2" \
     "$(o=$("$CLI" version foo 2>&1); echo "$o $?")"
   check_eq "...an option too" "omabox: --version: unknown option --bogus (omabox help --version) 2" "$(o=$("$CLI" --version --bogus 2>&1); echo "$o $?")"
@@ -11625,7 +11627,7 @@ aq_symbol_checks() {
     rt=$d/root-$dir; mkdir -p "$rt/usr"; ln -sfn "$d/$dir" "$rt/usr/lib"; ln -sfn "$gt/dev" "$rt/dev"; ln -sfn "$gt/sys" "$rt/sys"
     if [ "$(sys "$d/$dir" | cut -d'|' -f3)" = 1 ]; then avail=true refused=0; else avail=false refused=1; fi
     check_eq "the $dir system's: config --json confirm-close-available $avail" "$avail" \
-      "$(OMABOX_AQUAMARINE=system probe confirm_close_available "$d/noco" "$rt" 2>/dev/null)"
+      "$(env -u OMABOX_HYPRLAND OMABOX_AQUAMARINE=system "$PROBE" _rust probe confirm_close_available "$d/noco" "$rt" 2>/dev/null)"
     out=$(OMABOX_AQUAMARINE=system probe nvidia_needs_fix /dev/dri/renderD129 "$d/noco" "$rt" 2>&1; echo "rc=$?")
     if [ "$refused" = 1 ]; then
       check_match "...up's check of a headless box on NVIDIA: refused" "a headless box on NVIDIA \(/dev/dri/renderD129\) needs aquamarine's fix.*rc=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
