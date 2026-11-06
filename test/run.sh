@@ -11132,6 +11132,50 @@ t_no_shell() {
   check "down" ob down "$B"
 }
 
+# #247 (finding 645): up --desktop plain, a box with nothing of Omarchy's: omabox's own small config
+# (share/plain.lua), an empty /usr/share/omarchy, no shell, a HOME with no Omarchy look. Its Hyprland
+# drives as any box's: an app, keys, wait, windows, a shot. Omarchy-only options refused.
+t_plain() {
+  local B=$P-plain D
+  check "up --desktop plain" ob up "$B" --desktop plain
+  D=$(ob path -b "$B")
+  check_eq "box.json: desktop plain, no shell" "plain false" "$(jq -r '"\(.desktop) \(.shell)"' "$D/box.json")"
+  check_eq "ls --json: its desktop, no Omarchy version, no shell" "plain null none" \
+    "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | "\(.desktop) \(.omarchy_version) \(.shell_state)"')"
+  check_eq "ls: its desktop under its line" "  desktop: plain" "$(ob ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  check_eq "/usr/share/omarchy is empty in it" "" "$(ob run -b "$B" -- ls -A /usr/share/omarchy)"
+  check_fails "...a tmpfs, nothing of the host's" ob run -b "$B" -- sh -c 'findmnt -n -o SOURCE /usr/share/omarchy | grep -qv "^tmpfs$"'
+  check_eq "no Omarchy or Quickshell process" "" "$(ob run -b "$B" -- ps -eo comm= | grep -E '^(omarchy|quickshell|qs$)')"
+  check_eq "the HOME has no Omarchy look" "" "$(ob run -b "$B" -- sh -c 'ls -d ~/.config/omarchy ~/.local/state/omarchy ~/.local/share/applications 2>/dev/null')"
+  check_fails "no /etc/omarchy.conf of its own" test -e "$D/etc/omarchy.conf"
+  check_eq "no layer: nothing drew a bar" "0" "$(ob hyprctl -b "$B" -j layers | jq '[.. | objects | select(has("namespace"))] | length')"
+  check_eq "no config errors" "" "$(ob hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  local want; want=$(sed -n 's/^[[:space:]]*XKBLAYOUT=//p' /etc/vconsole.conf 2>/dev/null | tr -d '"' | head -n 1)
+  check_eq "its keyboard layout is the machine's (vconsole.conf)" "${want:-us}" "$(ob hyprctl -b "$B" -j getoption input:kb_layout | jq -r .str)"
+  check "the stand-ins first on the session's PATH (S7: Xwayland)" ob run -b "$B" -- sh -c '[ "$(command -v Xwayland)" = /opt/omabox/share/bin/Xwayland ]'
+  check "run -d foot" ob run -b "$B" -d --wait -- foot -a t-plain
+  check "wait window" ob wait -b "$B" --timeout 10s window t-plain
+  check_match "windows lists it" "t-plain" "$(ob windows -b "$B")"
+  check "keys type into it" ob keys -b "$B" --window t-plain --wait -t 'echo plain-typed > /tmp/t-plain'
+  ob keys -b "$B" --window t-plain --wait Return >/dev/null 2>&1
+  check "...and it runs" ob wait -b "$B" --timeout 10s until -- grep -qx plain-typed /tmp/t-plain
+  local shot; shot=$(ob shot -b "$B" 2>/dev/null)
+  check "a shot" test -s "$shot"
+  check_box_safety "$B"
+  check_match "up --desktop omarchy on it: refused, said" "without what you asked for: --desktop omarchy \(it runs plain\)" "$(ob up "$B" --desktop omarchy 2>&1)"
+  local o
+  for o in "--theme tokyo-night" --stock --clean --stock-bar --dnd --no-dock "--plugin $ROOT/plugin"; do
+    # shellcheck disable=SC2086 # an option and its value
+    check_match "up --desktop plain $o: refused" "^omabox: up: ${o%% *} needs Omarchy, and --desktop plain has none of it" "$(ob up "$P-plain2" --desktop plain $o 2>&1)"
+  done
+  check_match "--desktop takes omarchy or plain" "up: --desktop is omarchy or plain, got desk" "$(ob up "$P-plain2" --desktop desk 2>&1)"
+  check "down" ob down "$B"
+  check_fails "box dir gone" test -e "$D"
+  check_fails "box HOME gone" test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$B"
+  check_fails "no reaper left" pgrep -f "omabox _reap $B "
+  check_fails "no box process left" pgrep -f "omabox/$B/"
+}
+
 # finding 122 (nvidia-modprobe -c MINOR for a missing /dev/nvidiaN, -c 255 for /dev/nvidiactl, finding
 # 254; what to run when still missing) and nvidia_card (finding 294): render.rs
 # nvidia_node_asks_the_helper_as_bash, on a stand-in helper.
@@ -21045,7 +21089,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

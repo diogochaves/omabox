@@ -252,6 +252,8 @@ pub struct SeedPlan {
     pub clean_keep: Vec<u8>,
     /// --omarchy's tree, or empty for /usr/share/omarchy.
     pub omarchy: Vec<u8>,
+    /// --desktop plain (#247): nothing of Omarchy's (seed_plain).
+    pub plain: bool,
 }
 
 impl SeedPlan {
@@ -1550,6 +1552,47 @@ fn base64_decode(s: &str) -> Vec<u8> {
     out
 }
 
+/// Git's identity only (finding 48): never the rest of the user's git config (credential helpers,
+/// tokens in URLs). From /, so a broken repo here cannot fail it.
+fn seed_git(h: &[u8]) -> Res<()> {
+    for key in ["user.name", "user.email"] {
+        let mut c = crate::sig::command("git");
+        c.args(["-C", "/", "config", "--global", key])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null());
+        let Ok((0, v)) = crate::sig::run_output(c) else {
+            continue;
+        };
+        let mut c = crate::sig::command("git");
+        c.args(["-C", "/", "config", "--file"])
+            .arg(p(&cat!(h, "/.gitconfig")))
+            .arg(key)
+            .arg(p(&shell::strip_nl(&v)))
+            .stdin(Stdio::null());
+        let rc = crate::sig::run_status(c).unwrap_or(127);
+        if rc != 0 {
+            return Err(status_end(rc));
+        }
+    }
+    Ok(())
+}
+
+/// A plain box's HOME (#247): nothing of Omarchy's (no /etc/skel, bar, theme, terminal configs,
+/// branding or toggles): the session bus's service dir and git's name and email, as every box has
+/// them. A save's (--from) stays as it was, but for those.
+fn seed_plain(ctx: &Ctx, h: &[u8]) -> Res<Vec<u8>> {
+    for rel in [
+        ".local/share/dbus-1/services",
+        ".gitconfig",
+        ".gitconfig.lock",
+    ] {
+        home_unlink(ctx, h, &Dest::of(rel))?;
+    }
+    mkdir_p(ctx, &cat!(h, "/.local/share/dbus-1/services"))?;
+    seed_git(h)?;
+    Ok(Vec::new())
+}
+
 /// seed_home: the box's fake HOME, H (`$D/home`): the user's Omarchy look, no secrets. /etc/skel
 /// first (a new user's HOME but nvim's plugins and the XDG autostart entries; not over a save's),
 /// then the bar (the user's shell.json with only the built-in widgets and the mounted plugins, each
@@ -1558,6 +1601,9 @@ fn base64_decode(s: &str) -> Vec<u8> {
 /// off (no screensaver or lock without real input: finding 10). DESK_FILES: what --desk-shell
 /// copied and skipped, for box.json.
 pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
+    if plan.plain {
+        return seed_plain(ctx, h);
+    }
     let look = Look {
         omarchy: &plan.omarchy,
     };
@@ -1855,27 +1901,7 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
             }
         }
     }
-    // Git's identity only (finding 48): never the rest of the user's git config (credential helpers,
-    // tokens in URLs). From /, so a broken repo here cannot fail it.
-    for key in ["user.name", "user.email"] {
-        let mut c = crate::sig::command("git");
-        c.args(["-C", "/", "config", "--global", key])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null());
-        let Ok((0, v)) = crate::sig::run_output(c) else {
-            continue;
-        };
-        let mut c = crate::sig::command("git");
-        c.args(["-C", "/", "config", "--file"])
-            .arg(p(&cat!(h, "/.gitconfig")))
-            .arg(key)
-            .arg(p(&shell::strip_nl(&v)))
-            .stdin(Stdio::null());
-        let rc = crate::sig::run_status(c).unwrap_or(127);
-        if rc != 0 {
-            return Err(status_end(rc));
-        }
-    }
+    seed_git(h)?;
     // --desk-shell (#206): the desk's other config files, last, and said.
     if !plan.desk_shell {
         return Ok(Vec::new());
@@ -3002,6 +3028,65 @@ mod tests {
             !sc_there(&format!("{d}/home3/.config/omarchy/extensions")),
             "...no extensions folder made"
         );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// A plain box's HOME (#247): git's name and email and the bus's service dir, nothing of the
+    /// user's Omarchy look (no skel, bar, theme, terminal configs), whatever the desk has.
+    #[test]
+    fn plain_home_has_no_omarchy() {
+        if !crate::exec::tools_or_skip("plain_home_has_no_omarchy", &["git"]) {
+            return;
+        }
+        let d = sc_tmp("plain");
+        let fh = format!("{d}/fh");
+        for x in [
+            ".config/omarchy/branding",
+            ".config/foot",
+            ".local/state/omarchy/current/theme",
+        ] {
+            sc_mk(&format!("{fh}/{x}"));
+        }
+        sc_put(&format!("{fh}/.config/foot/foot.ini"), "[main]");
+        sc_put(&format!("{fh}/.config/omarchy/shell.json"), "{}");
+        let h = format!("{d}/home");
+        sc_mk(&h);
+        let plan = SeedPlan {
+            plain: true,
+            ..SeedPlan::default()
+        };
+        let c = sc_cx();
+        let r = sc_env(
+            &[
+                ("HOME", &fh),
+                ("XDG_CONFIG_HOME", &format!("{fh}/.config")),
+                ("OMABOX_DESK_CONFIG", &format!("{fh}/.config/omarchy")),
+            ],
+            || seed_home(&c, &plan, h.as_bytes()),
+        );
+        assert!(r.unwrap().is_empty(), "no desk files");
+        // (git runs with the real environment, not the test's: whichever identity it has, and
+        // only that: t_no_git_identity checks it in a box)
+        let files = sc_files(&h);
+        assert!(
+            files.is_empty() || files == [".gitconfig"],
+            "only git's identity: {files:?}"
+        );
+        let g = sc_read(&format!("{h}/.gitconfig"));
+        assert!(
+            g.lines().all(|l| l.trim().is_empty()
+                || l == "[user]"
+                || l.trim_start().starts_with("name = ")
+                || l.trim_start().starts_with("email = ")),
+            "...never the rest: {g}"
+        );
+        assert!(
+            std::path::Path::new(&format!("{h}/.local/share/dbus-1/services")).is_dir(),
+            "the bus's service dir"
+        );
+        for x in [".config/omarchy", ".local/state/omarchy", ".config/foot"] {
+            assert!(!sc_there(&format!("{h}/{x}")), "no {x}");
+        }
         std::fs::remove_dir_all(&d).unwrap();
     }
 

@@ -20,7 +20,7 @@ use crate::procfs;
 use crate::render::{self, RenderNode};
 use crate::repo::{jail_root, norepo_note, readlink_f, refuse_src, repo_top};
 use crate::shell;
-use crate::upspec::{self, SeedRefused, refuse_dest};
+use crate::upspec::{self, Desktop, SeedRefused, refuse_dest};
 use std::time::Duration;
 
 const W_WHOLE: &str = "a folder this jail was given whole (its project, or one of its maps)";
@@ -61,6 +61,7 @@ const GIVEN: &[&str] = &[
     "theme",
     "clean",
     "stock",
+    "desktop",
 ];
 
 /// cmd_up's state: what the options set, then what up worked out from them.
@@ -133,6 +134,9 @@ pub struct Up {
     pub xwayland: bool,
     pub autoreload: bool,
     pub shell: bool,
+    /// --desktop's (#247), and the desktop the box gets (upspec::resolve_desktop, in checks).
+    pub desktop_given: Option<Desktop>,
+    pub desktop: Desktop,
     pub nopointer: bool,
     /// --dnd, --no-dock (#309): Do Not Disturb on, the dock off, in the box's shell once it is up.
     pub dnd: bool,
@@ -454,6 +458,13 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                 };
                 u.omarchy_given = val;
             }
+            // #247: a box with nothing of Omarchy's.
+            b"--desktop" => {
+                optarg(ctx, a, v)?;
+                u.desktop_given = Some(Desktop::parse(&val).ok_or_else(|| {
+                    ctx.usage_die(cat!("up: --desktop is ", upspec::DESKTOPS, ", got ", val))
+                })?);
+            }
             // internal: `run`'s throwaway box goes when this pid does
             b"--owner" => {
                 optarg(ctx, a, v)?;
@@ -541,9 +552,44 @@ fn base_of(g: &[u8]) -> Vec<u8> {
     }
 }
 
+/// What a plain box (#247) cannot have: each option that needs Omarchy's tree, its shell or the
+/// user's Omarchy look, refused as given.
+fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
+    for (opt, given) in [
+        ("--plugin", !u.plugin_args.is_empty()),
+        ("--theme", !u.theme.is_empty()),
+        ("--theme-dir", !u.theme_dirs.is_empty()),
+        ("--stock-bar", u.stock_bar),
+        ("--stock", u.stock),
+        ("--clean", u.clean),
+        ("--keep", !u.clean_keep.is_empty()),
+        ("--desk-shell", u.desk_shell),
+        ("--omarchy", !u.omarchy.is_empty()),
+        ("--quickshell", !u.quickshell.is_empty()),
+        ("--dnd", u.dnd),
+        ("--no-dock", u.nodock),
+    ] {
+        if given {
+            return Err(ctx.usage_die(cat!(
+                "up: ",
+                opt,
+                " needs Omarchy, and --desktop plain has none of it"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Everything cmd_up checks before it makes anything: false when the box is up already (said).
 fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let jailed = in_jail();
+    // --desktop plain (#247): Omarchy's tree is hidden in the box, so what needs it is refused, and
+    // the box has no shell (Omarchy's is the only one there is yet).
+    u.desktop = upspec::resolve_desktop(u.desktop_given);
+    if u.desktop == Desktop::Plain {
+        plain_refusals(ctx, u)?;
+        u.shell = false;
+    }
     // --stock (#265, finding 613): Omarchy as a new user sees it. Omarchy's own bar on CLEAN_THEME
     // with its own wallpaper, English in UTC (finding 363), none of the desk's look (seed_home); the
     // clock, pointer, network and animations as in any box. --clean (#252, finding 357) is --stock
@@ -1027,7 +1073,8 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // A box starts from the user's Omarchy look, which Omarchy makes at their first login (finding
     // 130). Said before anything is made. With --theme the box starts on that one instead.
     let home = shell::env_or_empty("HOME");
-    if u.theme.is_empty()
+    if u.desktop == Desktop::Omarchy
+        && u.theme.is_empty()
         && !shell::path(&cat!(home, "/.local/state/omarchy/current/theme")).is_dir()
     {
         return Err(ctx.die(cat!(
@@ -1717,6 +1764,16 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
     }
     if u.has("no-shell") && jqr(".shell | tostring") != b"false" {
         diff.push(b"--no-shell (it has the shell)".to_vec());
+    }
+    let desktop = Desktop::of_box(&m("desktop"));
+    if u.has("desktop") && desktop != u.desktop {
+        diff.push(cat!(
+            "--desktop ",
+            u.desktop.name(),
+            " (it runs ",
+            desktop.name(),
+            ")"
+        ));
     }
     if u.has("omarchy") && m("omarchy") != u.omarchy {
         diff.push(cat!(

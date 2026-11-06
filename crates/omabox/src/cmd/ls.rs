@@ -260,6 +260,11 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
         if ok && !al.is_empty() {
             out(cat!("  addresses: ", al, " (on its loopback)\n"))?;
         }
+        // A box whose desktop is not Omarchy's (#247), under its line: an Omarchy box's rows as before.
+        let desktop = meta(&ctx.d, "desktop").0;
+        if crate::upspec::Desktop::of_box(&desktop) != crate::upspec::Desktop::Omarchy {
+            out(cat!("  desktop: ", desktop, "\n"))?;
+        }
         // A box on a Hyprland build of its own (finding 116), and one whose shell runs a Quickshell
         // build (finding 358), under its line: never taken for a stock one.
         for (key, label) in [("hyprland", "Hyprland"), ("quickshell", "Quickshell")] {

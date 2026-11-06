@@ -22,6 +22,7 @@ use crate::procfs;
 use crate::ready::{self, Owner, Ready};
 use crate::render::{self, CardPlaceholder, NvidiaDev, RenderNode};
 use crate::shell::{self, quote_q};
+use crate::upspec::Desktop;
 use serde_json::{Map, Value};
 use std::cell::RefCell;
 use std::os::unix::fs::PermissionsExt;
@@ -45,6 +46,8 @@ pub const LAUNCH_PATH: &[u8] = b"/usr/bin";
 /// What pasta's shell says before it ends the start when it could not set the box's network up: the
 /// --addr addresses (#229) or the protected ports' rule (#355). up says it at once (#364).
 const ADDR_FAILED: &str = "omabox: could not add the --addr addresses to the box loopback";
+/// What a plain box (#247) has an empty tmpfs over: the packaged Omarchy's tree.
+const PLAIN_HIDDEN: &str = "/usr/share/omarchy";
 const NFT_FAILED: &str = "omabox: could not set the protected ports rule in the box network";
 
 fn os(v: &[u8]) -> &std::ffi::OsStr {
@@ -595,7 +598,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     }
     // #411: an Omarchy before 4.5 is deprecated (1.3 drops it, #312), said once the box is up, after
     // up's own lines: a refusal stays the one line it is. omarchy<4.5
-    if let Some(what) = crate::install::omarchy_before_45(&u.omarchy) {
+    if u.desktop == Desktop::Omarchy
+        && let Some(what) = crate::install::omarchy_before_45(&u.omarchy)
+    {
         ctx.deprecated_omarchy(&what, u.omarchy.is_empty());
     }
     if u.json {
@@ -699,6 +704,7 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
         clean: u.clean,
         clean_keep: u.clean_keep.clone(),
         omarchy: u.omarchy.clone(),
+        plain: u.desktop == Desktop::Plain,
     }
 }
 
@@ -827,17 +833,21 @@ fn box_json(
     o.insert("xwayland".into(), Value::Bool(u.xwayland));
     o.insert("autoreload".into(), Value::Bool(u.autoreload));
     o.insert("shell".into(), Value::Bool(u.shell));
-    let ov = if u.omarchy.is_empty() {
-        install::omarchy_version()
-    } else {
-        let v = install::git_rev(&u.omarchy);
-        if v.is_empty() {
-            b"dev".to_vec()
+    o.insert("desktop".into(), s(u.desktop.name().as_bytes()));
+    // (a plain box runs no Omarchy: no version to say, #247)
+    if u.desktop == Desktop::Omarchy {
+        let ov = if u.omarchy.is_empty() {
+            install::omarchy_version()
         } else {
-            cat!("dev ", v)
-        }
-    };
-    o.insert("omarchy_version".into(), s(&ov));
+            let v = install::git_rev(&u.omarchy);
+            if v.is_empty() {
+                b"dev".to_vec()
+            } else {
+                cat!("dev ", v)
+            }
+        };
+        o.insert("omarchy_version".into(), s(&ov));
+    }
     let mut aq = Map::new();
     aq.insert("kind".into(), s(&u.aq.kind));
     aq.insert("version".into(), s(&u.aq.ver));
@@ -1010,8 +1020,11 @@ fn etc_files(ctx: &Ctx, u: &Up) -> Res<Etc> {
     let etc = cat!(d, "/etc");
     let _ = std::fs::create_dir_all(shell::path(&etc));
     // /etc/omarchy.conf, which Omarchy's env-bootstrap sources in every bash: a box's own, the
-    // packaged Omarchy or --omarchy's tree (finding 135).
-    if std::path::Path::new("/etc/omarchy.conf").exists() || !u.omarchy.is_empty() {
+    // packaged Omarchy or --omarchy's tree (finding 135). A plain box's is the host's, if any (#247):
+    // what it names is hidden in the box.
+    if u.desktop == Desktop::Omarchy
+        && (std::path::Path::new("/etc/omarchy.conf").exists() || !u.omarchy.is_empty())
+    {
         write(
             &cat!(etc, "/omarchy.conf"),
             &cat!("export OMARCHY_PATH=", quote_q(&u.tree()), "\n"),
@@ -1203,6 +1216,12 @@ fn bwrap_args(
     ]);
     b.hostname(&hostname());
     b.sys_ro("/usr").map_err(refused)?;
+    // --desktop plain (#247): the box sees no Omarchy tree, as on a machine without Omarchy, so
+    // nothing of it loads by accident (a require, a stand-in, a file seeded pointing there). An empty
+    // tmpfs, never a bind: nothing of the host's goes in.
+    if u.desktop == Desktop::Plain && std::path::Path::new(PLAIN_HIDDEN).is_dir() {
+        b.words(&[b"--tmpfs", PLAIN_HIDDEN.as_bytes()]);
+    }
     b.words(&[
         b"--symlink",
         b"usr/bin",
@@ -1409,6 +1428,7 @@ fn bwrap_args(
         (b"OMABOX_AUDIO", bit(u.audio).to_vec()),
         (b"OMABOX_POLKIT", bit(u.polkit).to_vec()),
         (b"OMABOX_SHELL", bit(u.shell).to_vec()),
+        (b"OMABOX_DESKTOP", u.desktop.name().as_bytes().to_vec()),
         (b"OMABOX_OMARCHY_VERSION", install::omarchy_version()),
         (b"OMABOX_BOX", ctx.name.clone()),
     ] {
@@ -2342,7 +2362,7 @@ mod tests {
 
     // S1 (#355, #365): whatever combination of up's options (its mounts, overlays, plugins, desk
     // fonts, a jailed caller's covers, a private aquamarine, net mode, --systemd, --interactive,
-    // NVIDIA's nodes and card placeholders, /etc as files or an overlay) the bwrap words come out with
+    // NVIDIA's nodes and card placeholders, /etc as files or an overlay, a plain desktop's tmpfs) the bwrap words come out with
     // no mount touching the seat, every word read as bwrap reads it (crate::bwrap::oracle), or up is
     // refused. Most cases get as far as the words (counted), and some are refused.
     #[test]
@@ -2354,6 +2374,7 @@ mod tests {
                 any::<bool>(),
                 any::<bool>(),
                 0u8..3,
+                any::<bool>(),
                 any::<bool>(),
             ),
             proptest::collection::vec(seg(), 0..3),
@@ -2371,7 +2392,7 @@ mod tests {
             128,
             opts,
             |(
-                (interactive, systemd, clean, net, etc_overlay),
+                (interactive, systemd, clean, net, etc_overlay, plain),
                 overlays,
                 ro,
                 plugins,
@@ -2423,6 +2444,11 @@ mod tests {
                     aq: crate::install::Aq {
                         lib: aq_lib.to_vec(),
                         ..Default::default()
+                    },
+                    desktop: if plain {
+                        Desktop::Plain
+                    } else {
+                        Desktop::Omarchy
                     },
                     ..Up::default()
                 };

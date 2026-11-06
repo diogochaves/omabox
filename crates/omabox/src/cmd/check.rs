@@ -2248,6 +2248,20 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 )));
             }
             b"--clean" | b"--stock" => {}
+            // A check's box is clean, which is Omarchy's (#247): --desktop plain has no --clean yet.
+            b"--desktop" => {
+                optarg(ctx, x, v)?;
+                if args[i + 1] != b"omarchy" {
+                    return Err(ctx.die(cat!(
+                        "check run: a check's box is clean (--clean), which needs Omarchy: --desktop ",
+                        args[i + 1],
+                        " has none of it"
+                    )));
+                }
+                upopts.push(x.clone());
+                upopts.push(args[i + 1].clone());
+                i += 1;
+            }
             b"--idle" => {
                 optarg(ctx, x, v)?;
                 match idle_duration(&args[i + 1], "--idle ") {
