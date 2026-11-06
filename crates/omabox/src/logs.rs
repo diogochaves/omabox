@@ -11,9 +11,22 @@ use crate::repo::readlink_e;
 use crate::shell;
 
 /// A box's logs (issue #41, finding 107), by name.
-pub const LOG_NAMES: [&str; 14] = [
-    "hyprland", "shell", "apps", "run", "events", "keyring", "labwc", "systemd", "audio", "polkit",
-    "gdb", "journal", "box", "reap",
+pub const LOG_NAMES: [&str; 15] = [
+    "hyprland",
+    "shell",
+    "apps",
+    "run",
+    "events",
+    "keyring",
+    "labwc",
+    "systemd",
+    "audio",
+    "polkit",
+    "gdb",
+    "journal",
+    "notifications",
+    "box",
+    "reap",
 ];
 
 /// Where log NAME of the selected box is, as the box sees it (`box PATH`) or the host does (`host

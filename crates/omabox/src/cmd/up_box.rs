@@ -36,6 +36,8 @@ const BOX_STILL: &str = "/opt/omabox/bin/omabox-still";
 const BOX_EVENTS: &str = "/opt/omabox/bin/omabox-events";
 const BOX_BURST: &str = "/opt/omabox/bin/omabox-burst";
 const BOX_TREE: &str = "/opt/omabox/bin/omabox-tree";
+/// The notification recorder share/session.sh starts on the box's bus (#430, finding 680).
+const BOX_NOTICES: &str = "/opt/omabox/bin/omabox-notices";
 /// `up --polkit`'s stand-in authority and its session shim (#258).
 pub const BOX_POLKIT: &str = "/opt/omabox/bin/omabox-polkit";
 const BOX_POLKIT_SESSION: &str = "/opt/omabox/bin/omabox-polkit-session.so";
@@ -1224,8 +1226,13 @@ pub(crate) fn helper_binds(polkit: bool) -> Vec<HelperBind> {
         dest,
     })
     .collect();
-    // shot --burst's one capture client (#196), `tree`'s reader (#178): when built.
-    for (name, dest) in [("burst", BOX_BURST), ("tree", BOX_TREE)] {
+    // shot --burst's one capture client (#196), `tree`'s reader (#178), the notification recorder
+    // (#430): when built.
+    for (name, dest) in [
+        ("burst", BOX_BURST),
+        ("tree", BOX_TREE),
+        ("notices", BOX_NOTICES),
+    ] {
         let src = paths::tool(name);
         if crate::exec::executable(&src) {
             v.push(HelperBind { name, src, dest });

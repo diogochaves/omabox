@@ -38,6 +38,7 @@ mod logs;
 mod marks;
 mod mon;
 mod net;
+mod notices;
 mod num;
 mod omshell;
 mod paths;

@@ -35,7 +35,7 @@ inside a box.**
 | The project says | Do |
 |---|---|
 | `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
-| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR`; a dispatch (old syntax: a no-op): `omabox lua 'hl.dispatch(hl.dsp…)'` |
+| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR`; a dispatch: `omabox lua 'hl.dispatch(hl.dsp…)'` |
 | `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `keys`, `click X Y`, `windows` |
 | `ctest`, a test binary (tray, D-Bus, keyring…) | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …` | `omabox run -- …` (`omarchy plugin validate` only reads: fine on the host) |
@@ -68,10 +68,10 @@ omabox shot --window app                  # one window's own pixels, even covere
 omabox click --window app 40 12           # window coordinates, as in its shot; or --find NAME
 omabox keys --window app --wait -t hi     # focus it, type, wait until settled
 omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
-omabox wait window app                    # or --gone; layer NS; tree TEXT; until -- CMD
+omabox wait window app                    # or --gone; layer NS; tree TEXT; notification RE; until -- CMD
 omabox wait change --window app           # a later redraw by itself; then wait still
 omabox run -- busctl --user list          # any command in the box (its exit code)
-omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default; run PID: that job's
+omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
 omabox down                               # when done
 ```
 
@@ -86,7 +86,7 @@ omabox down                               # when done
    sending again.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
 4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
-   `omabox lua 'hl.dispatch(hl.dsp…)'`), not by keys and clicks, unless the gesture is under test. **Stop when
+   `omabox lua 'hl.dispatch(…)'`), not by keys and clicks, unless the gesture is under test. **Stop when
    it shows the goal.**
 
 No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;

@@ -8649,6 +8649,114 @@ t_wait_log() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #430 (finding 680): the box records what reaches its notification server from its start (tools/notices,
+# a monitor on its own bus): `log notifications` (--json) has each Notify with the id its server gave,
+# each close, closed and action; `wait notification RE` waits for one whose summary or body RE matches.
+# A box with no shell and a stand-in server of the test's (python's gi), so whatever the server is.
+t_notifications() {
+  local B=$P-notif out rc err m=t430-$RANDOM D off
+  python3 -c 'import gi; gi.require_version("Gio", "2.0"); from gi.repository import Gio' 2>/dev/null ||
+    { skip "notifications" "no python3 gi here (the stand-in server)"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
+  D=$(ob path "$B")
+  check_match "log notifications: there from up, its recorder listening" "^[0-9:.]+ omabox: listening$" \
+    "$(ob log -b "$B" notifications 2>&1)"
+  # No server yet: a Notify the bus could not deliver, with the bus's error and no id.
+  ob run -b "$B" -- gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
+    --method org.freedesktop.Notifications.Notify '"t430"' "uint32 0" '""' "\"$m none\"" '""' '@as []' '@a{sv} {}' "int32 -1" >/dev/null 2>&1
+  check_match "...a Notify with no server: no id, the bus's error" \
+    "notify \(no id\) t430: \"$m none\" -- not shown: org\.freedesktop\.DBus\.Error\.ServiceUnknown" \
+    "$(ob log -b "$B" notifications --grep "$m none" 2>&1)"
+  # The stand-in: ids from 42; a summary starting "act " has its default action invoked, then is dismissed.
+  cat > "$D/home/t430-server.py" <<'EOF'
+from gi.repository import Gio, GLib
+XML = """<node><interface name="org.freedesktop.Notifications">
+<method name="Notify"><arg type="s" direction="in"/><arg type="u" direction="in"/><arg type="s" direction="in"/>
+<arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="as" direction="in"/><arg type="a{sv}" direction="in"/>
+<arg type="i" direction="in"/><arg type="u" direction="out"/></method>
+<method name="CloseNotification"><arg type="u" direction="in"/></method>
+<method name="GetCapabilities"><arg type="as" direction="out"/></method>
+<method name="GetServerInformation"><arg type="s" direction="out"/><arg type="s" direction="out"/>
+<arg type="s" direction="out"/><arg type="s" direction="out"/></method>
+<signal name="NotificationClosed"><arg type="u"/><arg type="u"/></signal>
+<signal name="ActionInvoked"><arg type="u"/><arg type="s"/></signal>
+</interface></node>"""
+n = [41]
+P, I = "/org/freedesktop/Notifications", "org.freedesktop.Notifications"
+def call(conn, sender, path, iface, method, args, inv):
+    if method == "Notify":
+        n[0] += 1
+        inv.return_value(GLib.Variant("(u)", (n[0],)))
+        if args[3].startswith("act "):
+            conn.emit_signal(None, P, I, "ActionInvoked", GLib.Variant("(us)", (n[0], "default")))
+            conn.emit_signal(None, P, I, "NotificationClosed", GLib.Variant("(uu)", (n[0], 2)))
+    elif method == "CloseNotification":
+        inv.return_value(None)
+        conn.emit_signal(None, P, I, "NotificationClosed", GLib.Variant("(uu)", (args[0], 3)))
+    elif method == "GetCapabilities":
+        inv.return_value(GLib.Variant("(as)", (["actions", "body"],)))
+    else:
+        inv.return_value(GLib.Variant("(ssss)", ("t430", "omabox", "1", "1.2")))
+conn = Gio.bus_get_sync(Gio.BusType.SESSION)
+conn.register_object(P, Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0], call, None, None)
+Gio.bus_own_name_on_connection(conn, I, 0, None, None)
+GLib.MainLoop().run()
+EOF
+  ob run -b "$B" -d -q -- python3 -I /home/sbx/t430-server.py
+  ob wait -b "$B" --timeout 10s until -- gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+    --method org.freedesktop.DBus.GetNameOwner org.freedesktop.Notifications >/dev/null ||
+    { no "the stand-in server" "$(ob log -b "$B" run 2>&1 | tail -n 5)"; ob down "$B" >/dev/null 2>&1; return; }
+  ob run -b "$B" -- notify-send -a t430app -u critical -c t430.cat -h string:desktop-entry:t430 -t 5000 "$m one" $'body\none'
+  out=$(ob log -b "$B" notifications --grep "$m one" 2>&1)
+  check_match "log notifications: notify-send's Notify with the id the server gave" \
+    "^[0-9:.]+ notify #42 t430app: \"$m one\" \"body\\\\none\" " "$out"
+  check_match "...its urgency, category, desktop entry and timeout" \
+    " urgency=critical.* desktop-entry=t430| desktop-entry=t430.* urgency=critical" "$out"
+  check_match "...its category and timeout" " category=t430\.cat.* timeout=5000ms$" "$out"
+  out=$(ob log -b "$B" notifications --json --grep "$m one" 2>&1)
+  check "log notifications --json: the record, its id and fields" jq -e --arg s "$m one" \
+    '.event == "notify" and .id == 42 and .error == null and .app_name == "t430app" and .summary == $s and .body == "body\none"
+     and .hints.urgency == 2 and .hints.category == "t430.cat" and .hints["desktop-entry"] == "t430" and .expire_timeout == 5000
+     and .actions == [] and (.time | type) == "number"' <<<"$out"
+  # An action the server says was invoked, then its close; and an app's CloseNotification.
+  check_eq "notify-send -A: the action the server invoked" default \
+    "$(ob run -b "$B" -- timeout 10 notify-send -A default=Open "act $m" two 2>/dev/null)"
+  # (notify-send closes it itself once its action comes)
+  out=$(ob log -b "$B" notifications --grep '#43 ' 2>&1)
+  check_match "...its Notify with its actions" "notify #43 notify-send: \"act $m\" \"two\" .*actions=default:\"Open\"" "$out"
+  check_match "...the action" "[0-9] action #43 default" "$out"
+  check_match "...closed: dismissed" "[0-9] closed #43 dismissed"$'\n' "$out"
+  check_match "...then notify-send's own close" "[0-9] close #43 \(asked by :1\.[0-9]+\)"$'\n'".* closed #43 closed by CloseNotification$" "$out"
+  ob run -b "$B" -- gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
+    --method org.freedesktop.Notifications.CloseNotification 42 >/dev/null
+  out=$(ob log -b "$B" notifications -n 2 2>&1)
+  check_match "an app's CloseNotification, who asked" "[0-9] close #42 \(asked by :1\.[0-9]+\)" "$out"
+  check_match "...the server's closed" "[0-9] closed #42 closed by CloseNotification$" "$out"
+  check_eq "log -n counts records" 1 "$(ob log -b "$B" notifications -n 1 | wc -l)"
+  # wait notification: one arriving later, matched on its body; none: 124.
+  ob run -b "$B" -d -q -- sh -c "sleep 1; notify-send '$m later' 'done: file.iso'"
+  out=$(ob wait -b "$B" --timeout 10s notification '^done: file'); rc=$?
+  check_eq "wait notification: one sent during the wait, its body matched, exit 0" 0 "$rc"
+  check_match "...after it came, with it" \
+    "^satisfied: a notification whose summary or body matches \^done: file after (0\.[5-9]|[1-9])[0-9.]*s: notify #44 notify-send: \"$m later\" \"done: file\.iso\"" "$out"
+  out=$(ob wait -b "$B" --timeout 1s notification "$m later" 2>"$TMP/wn.err"); rc=$?; err=$(cat "$TMP/wn.err")
+  check_eq "...one there before the wait is not new: 124" 124 "$rc"
+  check_match "...said so" "^unsatisfied: no new notification whose summary or body matches $m later after 1\.[0-9]+s$" "$out"
+  check_match "...with the one there, and --since 0" "before the wait began \(--since 0 counts it\): notify #44" "$err"
+  out=$(ob wait -b "$B" --timeout 1s --json --since 0 notification -i "${m^^} LATER"); rc=$?
+  check_eq "--since 0 -i --json: it, its record" "0 notification 44 notifications" \
+    "$rc $(jq -r '"\(.condition) \(.notification.id) \(.log)"' <<<"$out")"
+  off=$(jq -r '.offset // 0' <<<"$out")
+  check_eq "...offset: where its line ends" "" "$(tail -c +$((off + 1)) "$D/home/notifications.log" | grep -F "$m later")"
+  check_eq "a summary or body, not the app's name: 124" 124 \
+    "$(ob wait -b "$B" --timeout 1s --since 0 notification '^t430app$' >/dev/null 2>&1; echo $?)"
+  rc=0; ob wait -b "$B" --timeout 1s notification "never-$m" >/dev/null 2>&1 || rc=$?
+  check_eq "wait notification: none in time, 124" 124 "$rc"
+  check_match "log --json is the notifications log's alone" "--json is the notifications log's alone" \
+    "$(ob log -b "$B" shell --json 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # The reaper (finding 74): it decides on the box it watches, then waits for the lock in `down`; a box
 # started under the name meanwhile is not the one it decided on. And the "closed by its user" file is
 # for interactive boxes: a headless one that writes it and dies stays dead, logs kept (finding 71).
@@ -21841,6 +21949,17 @@ t_unit_inspect() {
         --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i "$ROOT/tools/events/omabox-events" /tmp/ev.log 2>&1) || rc=$?
   check_eq "omabox-events refuses outside a box" 2 "$rc"
   check_match "...and says so" "only runs inside an omabox box" "$out"
+  # The notification recorder (#430) too: on the host it would watch your session bus.
+  rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp \
+        --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent \
+        "$ROOT/tools/notices/omabox-notices" /tmp/n.log /tmp/n.ready 2>&1) || rc=$?
+  check_eq "omabox-notices refuses outside a box" "2 omabox-notices: only runs inside an omabox box" "$rc $out"
+  check_match "log --json: the notifications log's alone (#430)" "--json is the notifications log's alone" \
+    "$(ob log -b "$P-x" --json 2>&1)"
+  check_match "wait notification: RE wanted" "wait notification: for which\?" "$(ob wait -b "$P-x" notification 2>&1)"
+  check_match "...a regular expression" "RE is a regular expression \(grep -E\), got \(" "$(ob wait -b "$P-x" notification '(' 2>&1)"
+  check_match "...no --gone" "wait notification: only -i and --since OFFSET" "$(ob wait -b "$P-x" notification x --gone 2>&1)"
+  check_match "...--since an offset" "--since takes a byte offset" "$(ob wait -b "$P-x" notification x --since 1x 2>&1)"
   # The suite's fixture client (#336) too: on the host it would open windows on the real desktop.
   rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp \
         --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i "$ROOT/tools/fixture/omabox-fixture" 2>&1) || rc=$?
@@ -22142,7 +22261,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

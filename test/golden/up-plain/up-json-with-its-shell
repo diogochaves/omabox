@@ -139,6 +139,9 @@ ROOT/tools/burst/omabox-burst
 ROOT/tools/tree/omabox-tree
 /opt/omabox/bin/omabox-tree
 --ro-bind
+ROOT/tools/notices/omabox-notices
+/opt/omabox/bin/omabox-notices
+--ro-bind
 TMP.bar/plain-bar
 TMP.bar/plain-bar
 --tmpfs

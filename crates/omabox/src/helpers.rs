@@ -1,5 +1,5 @@
 //! The in-box helpers `up` binds one file each (#421, finding 640): keyboard, pointer, still,
-//! events, burst, tree, polkit and its session shim. A file bind pins the inode it found, so a helper
+//! events, burst, tree, notices, polkit and its session shim. A file bind pins the inode it found, so a helper
 //! replaced on the host since (`make`, `install`, a package upgrade: each writes a new inode) leaves
 //! the box on the old one while the new CLI drives it. `up` records each source's device and inode
 //! in box.json's `helpers`; a command that runs one in the box compares them with the host's path

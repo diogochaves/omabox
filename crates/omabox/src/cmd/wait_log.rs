@@ -28,6 +28,19 @@ pub struct LogWait {
     pub re: Vec<u8>,
     pub icase: bool,
     pub since: Option<i64>,
+    /// `wait notification RE` (#430): the notifications log's next Notify whose summary or body RE
+    /// matches, not a line.
+    pub notice: bool,
+}
+
+/// What a wait found in CHUNK (whole lines): where it ends, the line it says, and (`wait
+/// notification`) the record.
+fn found(w: &LogWait, chunk: &[u8]) -> Option<(usize, Vec<u8>, Option<Value>)> {
+    if w.notice {
+        let (end, v) = crate::notices::first_notify(&w.re, w.icase, chunk)?;
+        return Some((end, crate::notices::detail(&v), Some(v)));
+    }
+    first_match(&w.re, w.icase, chunk).map(|(end, l)| (end, l, None))
 }
 
 /// The first line of DATA (whole lines, each ending in a newline) that RE matches, as `grep -E`
@@ -205,23 +218,37 @@ pub fn log_wait(ctx: &mut Ctx, w: &LogWait, tmo: i64, json: bool) -> Res<()> {
     } else {
         Kind::Box
     };
-    let what = cat!("a line matching ", w.re, " in the ", w.log, " log");
+    let (cond, what) = if w.notice {
+        (
+            "notification",
+            cat!("a notification whose summary or body matches ", w.re),
+        )
+    } else {
+        (
+            "log",
+            cat!("a line matching ", w.re, " in the ", w.log, " log"),
+        )
+    };
     let t0 = mono_ms();
     let mut used = Instant::now();
     let mut alive_at = Instant::now();
-    let extra = |off: Option<i64>| {
-        vec![
+    let extra = |off: Option<i64>, rec: Option<Value>| {
+        let mut v = vec![
             ("log", Value::String(name.clone())),
             (
                 "offset",
                 off.map_or(Value::Null, |o| Value::Number(o.into())),
             ),
-        ]
+        ];
+        if w.notice {
+            v.push(("notification", rec.unwrap_or(Value::Null)));
+        }
+        v
     };
     let gone = |ctx: &Ctx, t0: i64| -> Res<()> {
         let t = mono_ms() - t0;
         let msg = cat!("box '", ctx.name, "' went down after ", ms_s(t.to_string()));
-        finish("unknown", "log", &msg, t, None, json, extra(None))
+        finish("unknown", cond, &msg, t, None, json, extra(None, None))
     };
     if w.log == b"hyprland" {
         // (each try's rolling log against the last's: what it has past it is new)
@@ -259,7 +286,7 @@ pub fn log_wait(ctx: &mut Ctx, w: &LogWait, tmo: i64, json: bool) -> Res<()> {
                     now,
                     Some(&line),
                     json,
-                    extra(None),
+                    extra(None, None),
                 );
             }
             if now >= tmo {
@@ -270,7 +297,15 @@ pub fn log_wait(ctx: &mut Ctx, w: &LogWait, tmo: i64, json: bool) -> Res<()> {
                     ));
                 }
                 let msg = cat!("no new ", &what[2..], " after ", ms_s(now.to_string()));
-                return finish("unsatisfied", "log", &msg, now, None, json, extra(None));
+                return finish(
+                    "unsatisfied",
+                    "log",
+                    &msg,
+                    now,
+                    None,
+                    json,
+                    extra(None, None),
+                );
             }
             if used.elapsed() >= Duration::from_secs(30) {
                 touch(&ctx.at("used"));
@@ -288,12 +323,20 @@ pub fn log_wait(ctx: &mut Ctx, w: &LogWait, tmo: i64, json: bool) -> Res<()> {
             return Err(ctx.die(cat!("wait: could not ask box '", ctx.name, "'")));
         }
     };
+    // (#430: a box records them from its start, or never: one up before omabox had the recorder)
+    if w.notice && first.is_none() {
+        return Err(ctx.die(cat!(
+            "box '",
+            ctx.name,
+            "' has no notifications log: it records them from up on (a box started by an omabox without tools/notices built has none; omabox log box says)"
+        )));
+    }
     let have = first.map(|(_, d)| d).unwrap_or_default();
     let len = i64::try_from(have.len()).unwrap_or(i64::MAX);
     let mut off = match w.since {
         Some(s) if s > len => {
             say(format!(
-                "wait log: --since {s} is past the end of the {name} log (it is {len} bytes): reading it all"
+                "wait {cond}: --since {s} is past the end of the {name} log (it is {len} bytes): reading it all"
             ));
             0
         }
@@ -336,39 +379,41 @@ pub fn log_wait(ctx: &mut Ctx, w: &LogWait, tmo: i64, json: bool) -> Res<()> {
                 base += i64::try_from(i).unwrap_or(0);
                 skip_partial = false;
             }
-            if let Some((end, line)) = first_match(&w.re, w.icase, chunk) {
+            if let Some((end, line, rec)) = found(w, chunk) {
                 let now = mono_ms() - t0;
                 let at = base + i64::try_from(end).unwrap_or(0);
                 let msg = cat!(what, " after ", ms_s(now.to_string()));
                 return finish(
                     "satisfied",
-                    "log",
+                    cond,
                     &msg,
                     now,
                     Some(&line),
                     json,
-                    extra(Some(at)),
+                    extra(Some(at), rec),
                 );
             }
             off = base + i64::try_from(chunk.len()).unwrap_or(0);
         }
         let now = mono_ms() - t0;
         if now >= tmo {
-            if let Some((_, line)) = first_match(&w.re, w.icase, whole(&before)) {
+            if let Some((_, line, _)) = found(w, whole(&before)) {
                 say(cat!(
-                    "wait log: one was there before the wait began (--since 0 counts it): ",
+                    "wait ",
+                    cond,
+                    ": one was there before the wait began (--since 0 counts it): ",
                     line
                 ));
             }
             let msg = cat!("no new ", &what[2..], " after ", ms_s(now.to_string()));
             return finish(
                 "unsatisfied",
-                "log",
+                cond,
                 &msg,
                 now,
                 None,
                 json,
-                extra(Some(off)),
+                extra(Some(off), None),
             );
         }
         if used.elapsed() >= Duration::from_secs(30) {

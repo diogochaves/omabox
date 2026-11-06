@@ -232,6 +232,7 @@ pub fn gdb_crashes(text: &[u8]) -> Vec<u8> {
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut name, mut follow, mut crash, mut n) = (Vec::new(), false, false, b"100".to_vec());
+    let mut json = false;
     let mut rd = Reading {
         live: false,
         re: Vec::new(),
@@ -250,6 +251,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
             b"-f" | b"--follow" => follow = true,
             b"--crash" => crash = true,
+            b"--json" => json = true,
             // `--grep -i RE` as grep users type it (#130).
             b"--grep" => {
                 optarg(ctx, a, args.get(i + 1))?;
@@ -313,6 +315,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if srcs.iter().any(|s| s == b"all") {
         srcs = LOG_NAMES.iter().map(|s| s.as_bytes().to_vec()).collect();
     }
+    // (#430: the one log of records; the others are lines of text as their programs wrote them)
+    if json && srcs != [b"notifications".to_vec()] {
+        return Err(ctx.die(
+            "log: --json is the notifications log's alone (omabox log notifications --json)",
+        ));
+    }
     if crash {
         if srcs != [b"gdb".to_vec()] {
             return Err(ctx.die("log: --crash is the gdb log's alone (omabox log gdb --crash)"));
@@ -338,6 +346,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             Some((cat!("run ", j.pid), p))
         }
     };
+    // (the notifications log is the recorder's, as events.log is the events helper's: #421)
+    if rd.live && srcs.iter().any(|s| s == b"notifications") {
+        crate::helpers::warn_stale(ctx);
+    }
     if follow && !rd.live {
         say(cat!("box '", ctx.name, "' is down: its logs as they were"));
         follow = false;
@@ -399,7 +411,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         )));
     }
     if follow {
-        return follow_logs(ctx, &rd, &picked, &n);
+        return follow_logs(ctx, &rd, &picked, &n, json);
     }
     let count = shell::test_int(&n).and_then(|v| usize::try_from(v).ok());
     let mut sep: &[u8] = b"";
@@ -417,6 +429,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 Some(k) => shell::subst(&tail_lines(&cat!(c, "\n"), k)),
                 None => c,
             }
+        } else if s == b"notifications" {
+            // (#430: a record a line, as text or JSON; --grep and -n count records)
+            let data = rd.cat(ctx, *kind, p);
+            shell::subst(&crate::notices::show(&data, json, &rd.re, rd.icase, count))
         } else {
             let mut data = rd.cat(ctx, *kind, p);
             // Hyprland's file lags what it logged (#328): the rest from its rolling log.
@@ -462,7 +478,13 @@ pub fn live(ctx: &Ctx) -> Res<bool> {
 /// -f: tail -F, which ends within a second of the box's PID 1 (--pid), the box's own logs followed
 /// inside it and the box dir's here, into one stream; tail's "==> PATH <==" headers get the logs'
 /// names, and with --grep only before a match. -n counts lines before --grep here.
-fn follow_logs(ctx: &Ctx, rd: &Reading, picked: &[(Kind, Vec<u8>, Vec<u8>)], n: &[u8]) -> Res<()> {
+fn follow_logs(
+    ctx: &Ctx,
+    rd: &Reading,
+    picked: &[(Kind, Vec<u8>, Vec<u8>)],
+    n: &[u8],
+    json: bool,
+) -> Res<()> {
     let pid = match crate::boxes::box_pid(&ctx.d) {
         crate::boxes::BoxPid::Pid(p) => p,
         _ => Vec::new(),
@@ -531,7 +553,21 @@ fn follow_logs(ctx: &Ctx, rd: &Reading, picked: &[(Kind, Vec<u8>, Vec<u8>)], n: 
             }
         }
         drop(w);
-        show(r, &re, rd.icase, &names)
+        // The notifications log's records as `log` prints them (#430), before --grep sees them.
+        let notices: Vec<u8> = picked
+            .iter()
+            .find(|(_, _, s)| s == b"notifications")
+            .map(|(_, p, _)| p.clone())
+            .unwrap_or_default();
+        if notices.is_empty() {
+            return show(r, &re, rd.icase, &names);
+        }
+        let Ok((r2, w2)) = crate::exec::pipe() else {
+            return 1;
+        };
+        let alone = picked.len() == 1;
+        sc.spawn(move || notices_lines(r, w2, &notices, alone, json));
+        show(r2, &re, rd.icase, &names)
     });
     for mut c in children {
         let _ = c.wait();
@@ -541,6 +577,43 @@ fn follow_logs(ctx: &Ctx, rd: &Reading, picked: &[(Kind, Vec<u8>, Vec<u8>)], n: 
         return Ok(());
     }
     crate::cmd::hyprctl::code(rc)
+}
+
+/// -f's stream from R to W, each line of the notifications log at PATH (every line when it is
+/// followed ALONE: tail then writes no headers) as `log notifications` prints it (--json: JSON).
+fn notices_lines(
+    r: std::os::fd::OwnedFd,
+    w: std::os::fd::OwnedFd,
+    path: &[u8],
+    alone: bool,
+    json: bool,
+) {
+    let mut lines = std::io::BufReader::new(std::fs::File::from(r));
+    let mut w = std::fs::File::from(w);
+    let mut on = alone;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match lines.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        let l = line.strip_suffix(b"\n").unwrap_or(&line);
+        let o = if !alone && l.starts_with(b"==> ") && l.ends_with(b" <==") && l.len() >= 8 {
+            on = &l[4..l.len() - 4] == path;
+            l.to_vec()
+        } else if on && !l.is_empty() {
+            crate::notices::follow_line(l, json)
+        } else {
+            l.to_vec()
+        };
+        if w.write_all(&cat!(o, "\n"))
+            .and_then(|()| w.flush())
+            .is_err()
+        {
+            return;
+        }
+    }
 }
 
 /// The followed stream (through grep for --grep), its tail headers named, printed as it comes.
