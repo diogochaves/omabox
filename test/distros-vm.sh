@@ -156,9 +156,18 @@ EOF
   echo "==> the guest"
   # shellcheck disable=SC2016 # expanded in the guest
   g 'grep -h PRETTY_NAME /etc/os-release; uname -r; (getenforce 2>/dev/null || echo "SELinux: none"); ls -l /dev/dri/; echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"'
-  # (lingering: a desktop user stays logged in, so the runtime dir outlives each SSH command)
-  echo "==> as root: Hyprland, a terminal, a font; the user lingers"
-  g "sudo sh -c '$prep' && sudo loginctl enable-linger user" >"$out/prep.log" 2>&1 || { tail -n 20 "$out/prep.log"; return 1; }
+  # The user as a desktop user: logged in on the VM's monitor (autologin on tty1 starting Hyprland,
+  # from the reboot below), so logind gives them the render node (Tumbleweed's is the render group's
+  # only, and an SSH login gets no seat) and the suite has the session it checks boxes leave alone;
+  # lingering, so the runtime dir outlives each SSH command.
+  echo "==> as root: Hyprland, a terminal, a font; a desktop session on tty1; the user lingers"
+  # shellcheck disable=SC2016 # expanded in the guest
+  g "sudo sh -c '$prep' && sudo loginctl enable-linger user"' &&
+    sudo mkdir -p /etc/systemd/system/getty@tty1.service.d &&
+    printf "[Service]\nExecStart=\nExecStart=-/sbin/agetty -o \"-p -f -- \\\\\\\\u\" --noclear --autologin user %%I \$TERM\n" |
+      sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf >/dev/null &&
+    echo "[ \"\$(tty)\" = /dev/tty1 ] && [ -z \"\${WAYLAND_DISPLAY:-}\" ] && exec start-hyprland > ~/hyprland-session.log 2>&1" >> ~/.bash_profile' \
+    >"$out/prep.log" 2>&1 || { tail -n 20 "$out/prep.log"; return 1; }
   # A reboot, as after any update: the packages may have replaced the running kernel, whose modules
   # are then gone (nft and a dummy link failed so on Arch's cloud image).
   # virt-install --cloud-init treats the first boot as an install: the guest powers off at its first
@@ -176,6 +185,9 @@ EOF
   done
   ssh_up || return 1
   g 'uname -r'
+  # shellcheck disable=SC2016 # expanded in the guest
+  g 'for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/hypr/*/.socket.sock >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1' ||
+    { echo "no Hyprland session on tty1 (~/hyprland-session.log in the guest)"; return 1; }
   g 'Hyprland --version 2>&1 | head -n 1; qs --version 2>&1 | head -n 1 || true'
 
   echo "==> HEAD, as a release tarball has it"
@@ -208,17 +220,6 @@ EOF
   g "$P OMABOX_DISTROS_VM=1 bash test/distros-boxes.sh ~/out" 2>&1 || rc=1
   g 'tar -cf - -C ~/out .' | tar -xf - -C "$out" 2>/dev/null || true
   if [ $suite = 1 ]; then
-    # The suite runs from a Hyprland session (it checks that boxes leave that desktop alone): the
-    # user's own, as a desktop user has one, by autologin on tty1 on the VM's virgl monitor.
-    echo "==> a Hyprland session on tty1"
-    # shellcheck disable=SC2016 # expanded in the guest
-    g 'sudo mkdir -p /etc/systemd/system/getty@tty1.service.d &&
-      printf "[Service]\nExecStart=\nExecStart=-/sbin/agetty -o \"-p -f -- \\\\\\\\u\" --noclear --autologin user %%I \$TERM\n" |
-        sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf >/dev/null &&
-      echo "[ \"\$(tty)\" = /dev/tty1 ] && [ -z \"\${WAYLAND_DISPLAY:-}\" ] && exec start-hyprland > ~/hyprland-session.log 2>&1" >> ~/.bash_profile &&
-      sudo systemctl daemon-reload && sudo systemctl restart getty@tty1 &&
-      for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/hypr/*/.socket.sock >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1' ||
-      { echo "no Hyprland session on tty1"; return 1; }
     # (from a git repo, as a developer runs it: a box mounts the git repo it is started from, and
     # the suite's stand-ins run this omabox inside boxes; a tarball has no .git)
     echo "==> the suite"
