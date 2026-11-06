@@ -12991,6 +12991,18 @@ from them.
     and stopped there. **Now** Fedora's list (and doctor's) names hyprwayland-scanner-devel. Then
     omabox's aquamarine build failed there, CMake finding no `hwdata` module: Fedora's hwdata.pc is
     in `hwdata-devel`, now on the list (the build then passed, and the boxes ran on it).
+666. **Boxes under SELinux (Fedora 45, enforcing): they work; two kinds of denial are logged** (2026-11-06,
+    #247). test/distros-vm.sh's plain boxes (21 checks) passed on Fedora 45 with SELinux enforcing,
+    on Fedora's aquamarine and on omabox's. The journal then held two kinds of AVC denial, neither
+    with an effect found: (1) `nnp_transition nosuid_transition` from unconfined_t to
+    unconfined_dbusd_t for bash and at-spi-bus-launcher: a box runs with no_new_privs, and the
+    policy moves dbus-daemon into its own domain, which NNP forbids; the box's session bus and its
+    accessibility bus (at-spi-bus-launcher's dbus-daemon) both ran and answered (`busctl --user
+    list`, org.a11y.Bus GetAddress), so only the domain change is refused. (2) `sigkill` for
+    pasta_t on an unconfined_t process: Fedora confines pasta (passt-selinux), and pasta's kill of
+    what it started is refused; a box's teardown is omabox's KILL of its namespace PID 1, and
+    `down` left nothing (the checks' `gone`). Untried there: the full suite, --systemd boxes,
+    interactive boxes. If a box misbehaves only on Fedora, start from these.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
