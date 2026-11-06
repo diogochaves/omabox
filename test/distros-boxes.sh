@@ -9,10 +9,13 @@
 # logs to OUT/kept-<box>/. Exit 1 when a step failed.
 set -uo pipefail
 
-[ -e /run/.containerenv ] || { echo "distros-boxes.sh: runs inside test/distros.sh's container only" >&2; exit 2; }
+[ -e /run/.containerenv ] || [ "${OMABOX_DISTROS_VM:-}" = 1 ] ||
+  { echo "distros-boxes.sh: runs inside test/distros.sh's container or test/distros-vm.sh's VM only" >&2; exit 2; }
 out=${1:?usage: distros-boxes.sh OUT}
 mkdir -p "$out"
 pass=0 fail=0
+# What this user runs before any box (a VM's systemd --user and SSH session): not left by a box.
+before=" $(ps -u "$(id -u)" -o pid= | tr -s ' \n' '  ') "
 
 step() {
   local what=$1; shift
@@ -36,7 +39,8 @@ gone() {
   local left
   [ ! -e "$XDG_RUNTIME_DIR/omabox/$1" ] || { echo "      its folder is left"; return 1; }
   [ ! -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$1" ] || { echo "      its HOME is left"; return 1; }
-  left=$(ps -u "$(id -u)" -o pid=,stat=,args= | awk -v me=$$ '$1 != me && $2 !~ /^Z/ && $3 !~ /^(ps|awk|bash|runuser)$/')
+  left=$(ps -u "$(id -u)" -o pid=,stat=,args= |
+    awk -v me=$$ -v before="$before" '$1 != me && $2 !~ /^Z/ && $3 !~ /^(ps|awk|bash|runuser)$/ && !index(before, " " $1 " ")')
   [ -z "$left" ] || { echo "      left running:"; echo "        ${left//$'\n'/$'\n'        }"; return 1; }
 }
 
