@@ -13027,7 +13027,8 @@ from them.
     an upgrade applies no new preset (systemd-coredumpd.service disabled). A fresh install with 262
     (Omarchy's ISO included) would have the socket, and a box's crash would then reach
     omarchy-crash-watch on the real desktop. Not fixed; to decide: a way for a box's processes to
-    stay out of the journal's crash records, or the notifier skipping them (its side). #441.
+    stay out of the journal's crash records, or the notifier skipping them (its side). #441; fixed
+    on the reading side by finding 672.
 
 669. **Plain Arch on a real NVIDIA card: a guest with the RTX passed through** (2026-11-06, #247).
     `OMABOX_VM_GPU=0000:01:00.0 test/distros-vm.sh --suite arch` hands the guest the whole card
@@ -13069,6 +13070,55 @@ from them.
     machine. Where Omarchy is not installed (install::omarchy_at, as up decides a box's desktop), it
     names a file in ~/.config/environment.d/ (`PATH=$HOME/.local/bin:$PATH`), which that manager
     reads at login; Omarchy's machines keep uwsm's file. doctor.rs's path_check test covers both.
+
+672. **Omarchy's crash watcher reads through omabox's filter (finding 668's fix)** (2026-11-06,
+    #441). No way out from inside a box: the kernel hands the crash to systemd's socket outside the
+    box's namespaces, and exec resets PR_SET_DUMPABLE. systemd's own way, `CoredumpReceive=` forwarding
+    a container's crash to the container, fails for any container the user owns: the coredumpd
+    worker checks the namespace's PID 1 with kill(0) and its bounding set has no CAP_KILL (EPERM,
+    "maybe it is crashed, ignoring"), and the unit it checks is the first non-slice one in the
+    path, user@UID.service for everything under the user manager (its `user.coredump_receive`
+    xattr the user can set; tried, still EPERM). Upstream finding diogochaves/upstream#222. What a
+    box's crash record does carry is COREDUMP_RLIMIT=1 (the 1-byte limit; nothing else sets it), and
+    the watcher (omarchy-crash-watch) filters by program name only, which would hide the desktop's
+    own crashes. So `omabox setup`, where the watcher's unit exists and core_pattern is a socket,
+    asks (as the guard: terminal, yes by default, a no remembered in
+    ~/.config/omabox/crash-watch-declined) and writes crashwatch.rs's two files: a journalctl in
+    ~/.local/share/omabox/crash-watch that runs the real one (its own folder taken out of PATH) and,
+    for `-o json`, passes every line but a record with COREDUMP_RLIMIT "1" (jq -R, a line that is no
+    JSON passed as is; no jq: journalctl untouched); and a drop-in that resets ExecStart to the unit's
+    own command under `/usr/bin/env "PATH=DIR:${PATH}"` (systemd expands ${PATH} from the manager's
+    environment, so Omarchy's commands in /usr/share/omarchy/bin stay found), recording that command
+    so a changed unit reads as stale. Then daemon-reload and try-restart of the watcher. doctor's
+    crash-watch check: ok on the pipe or filtered, warn unfiltered on the socket or stale; none
+    without the watcher. Verified in plain Arch's VM (fresh 262, socket) with a stand-in unit of the
+    watcher's name and read: before, it saw a box's crash (rlimit=1) and one outside (rlimit=0);
+    with the filter only the one outside; `setup --remove` brought the box's back, doctor warning
+    again. This machine is on the pipe: setup asks nothing, doctor ok.
+
+673. **openSUSE Tumbleweed's full suite, and Fedora's tty1** (2026-11-06, #247). Tumbleweed's VM
+    (`test/distros-vm.sh --suite tumbleweed`): 4401/197/117. The bulk was the suite assuming a
+    Quickshell for a plain box's stand-in shell (PSHELL, a Quickshell bar), which openSUSE packages
+    none of: every box given it died "the shell exited while starting" (t_main, t_monitors,
+    t_cli_up's and t_cli_box's shell cases, t_hyprland, t_tree_layer, t_which, t_pid, t_run_options,
+    t_output_nvidia). They skip now without Quickshell (no_pshell). t_gdb with no gdb installed
+    (`omabox gdb` said so rightly) skips after its refusals. And a product bug: record's raw stream
+    and every video are libx264's, and openSUSE's ffmpeg (and Fedora's ffmpeg-free) have none:
+    wf-recorder "Failed to find the given codec: libx264", seen as record start failing. record now
+    refuses up front (has_x264, `ffmpeg -encoders`) naming RPM Fusion's and Packman's ffmpeg, doctor's
+    some-programs warns, and the suite's record tests skip without it (rec_tools; REC_WHY). Another
+    encoder where libx264 is missing (openh264, VP9) is not done. Fedora's run never got a session:
+    its cloud image's console is the serial port, nothing starts getty@tty1, so the autologin drop-in
+    never ran; distros-vm.sh enables getty@tty1. Then what failed alone there: the suite's own
+    sandbox (t_unit_jail_covers) linked /lib64 to usr/lib as on Arch, where openSUSE's loader is in
+    usr/lib64 (bwrap: execvp sh: ENOENT): USRLINKS, the machine's own links; the goldens are Arch's
+    /usr layout (skipped on another); install.sh's later cases read the machine's os-release and
+    expected pacman (now an Arch one, exported, local to the test); no xdg-open, qml, Xwayland,
+    cursor theme (a box draws no pointer), bash loadables (share/bin/inotifywait's sleep builtin, now
+    also tried in /usr/lib64/bash) or Quickshell for the layer tests (no_qs): each its skip.
+    t_guard's "abort not a journaled crash" accepts one with COREDUMP_RLIMIT=1 (finding 672's
+    filter leaves it out). Left open: t_monitors_turned's turned monitors' shots against their part
+    of the whole shot (2 checks; they pass in Arch's VM), not looked into.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -320,6 +320,7 @@ impl Setup {
             self.widget()?;
         }
         self.guard()?;
+        self.crash_watch()?;
         let aq = muted(|| {
             hypr_aq_soname(ctx)
                 .ok()
@@ -578,6 +579,65 @@ impl Setup {
         Ok(())
     }
 
+    /// setup_crash_watch (#441, finding 672): where Omarchy's crash watcher would announce a box's
+    /// crash (systemd's coredump socket), a filter for what it reads, asked for as the guard is (in a
+    /// terminal, yes by default, a "no" remembered). One already there is kept current, unasked.
+    fn crash_watch(&self) -> Res<()> {
+        use crate::crashwatch::{self as cw, State};
+        let dirs = cw::Dirs::of(&self.home);
+        let st = cw::state(b"/", &dirs);
+        if matches!(st, State::NoWatcher | State::Pipe | State::Filtered) {
+            return Ok(());
+        }
+        out("\n==> Crash notifications\n")?;
+        if let State::Stale(_) = st {
+            return self.crash_watch_write(&dirs, "updated");
+        }
+        out(
+            "systemd's coredump socket (systemd 262 on a fresh install) records a crash inside a box whatever\nits core limit, and Omarchy's crash watcher would announce it on your desktop. omabox can leave\nthose out of what the watcher reads: a drop-in for its unit in ~/.config/systemd/user, Omarchy's\nscript untouched, your desktop's own crashes announced as before (omabox setup --remove undoes it).\n",
+        )?;
+        let declined = self.in_home(".config/omabox/crash-watch-declined");
+        if exists(&declined) || is_link(&declined) {
+            out(cat!(
+                "not asked (you said no before; rm ",
+                declined,
+                " and run omabox setup to be asked again)\n"
+            ))
+        } else if terminal() {
+            if ask_no("Add the filter? [Y/n] ")? {
+                remember(&declined);
+                Ok(())
+            } else {
+                self.crash_watch_write(&dirs, "added")
+            }
+        } else {
+            out("not asked (no terminal): omabox setup in a terminal offers it\n")
+        }
+    }
+
+    /// The crash watcher's filter written, the watcher restarted onto it; DONE says what was done.
+    fn crash_watch_write(&self, dirs: &crate::crashwatch::Dirs, done: &str) -> Res<()> {
+        match crate::crashwatch::install(b"/", dirs) {
+            Ok(_) => {
+                let restarted = crate::crashwatch::reload_watcher();
+                out(cat!(
+                    "the crash watcher's filter ",
+                    done,
+                    ": ",
+                    dirs.dropin(),
+                    if restarted {
+                        "\n"
+                    } else {
+                        " (the watcher was not restarted: systemctl --user restart omarchy-crash-watch)\n"
+                    }
+                ))
+            }
+            Err(e) => out(format!(
+                "could not write the crash watcher's filter: {e}; the rest of the setup is done\n"
+            )),
+        }
+    }
+
     /// `"$ROOT/bin/omabox" guard on [AGENT]`: whether it went.
     fn guard_on(&self, w: &str) -> bool {
         let mut a: Vec<&[u8]> = vec![b"guard", b"on"];
@@ -637,6 +697,19 @@ impl Setup {
             )?;
         }
         self.feedback(ctx, "off")?;
+        let dirs = crate::crashwatch::Dirs::of(&self.home);
+        if crate::crashwatch::remove(&dirs) {
+            let restarted = crate::crashwatch::reload_watcher();
+            out(cat!(
+                "removed the crash watcher's filter (",
+                dirs.dropin(),
+                if restarted {
+                    ")\n"
+                } else {
+                    "; systemctl --user daemon-reload)\n"
+                }
+            ))?;
+        }
         self.unlink(&self.in_home(".local/bin/omabox"), &self.omabox())?;
         let aq_user = crate::paths::aq_user();
         let cache = cat!(

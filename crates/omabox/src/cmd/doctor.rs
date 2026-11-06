@@ -628,17 +628,21 @@ fn some_progs_check(root: &[u8], fam: Option<Family>) -> Check {
             Err(Some(w)) => missing.push(format!("{w} ({why})")),
         }
     }
+    // (an ffmpeg without libx264, Fedora's ffmpeg-free and openSUSE's: record's videos are H.264 by
+    // it, #247, finding 673; on this machine only, as record asks its /usr/bin/ffmpeg)
+    let mut fix_x264 = None;
+    if root == b"/" && some_prog(root, "ffmpeg").is_ok() && !crate::cmd::record::has_x264() {
+        missing.push("ffmpeg without libx264 (record)".into());
+        fix_x264 = Some(crate::cmd::record::X264_WHY.to_string());
+    }
     if missing.is_empty() {
         let mut said = vec![format!("{} in {}", found.join(", "), launch_dir())];
         said.extend(elsewhere);
         return check("some-programs", St::Ok, said.join("; "), Vec::new());
     }
-    check(
-        "some-programs",
-        St::Warn,
-        missing.join("; "),
-        install_lines(fam, &install),
-    )
+    let mut fix = install_lines(fam, &install);
+    fix.extend(fix_x264);
+    check("some-programs", St::Warn, missing.join("; "), fix)
 }
 
 /// What a machine without Omarchy has: plain boxes (#247).
@@ -1157,6 +1161,46 @@ fn path_check(
     }
 }
 
+/// Omarchy's crash watcher and a box's crashes (#441, finding 672): None where there is no watcher.
+fn crash_watch_check(root: &[u8], dirs: &crate::crashwatch::Dirs) -> Option<Check> {
+    use crate::crashwatch::State;
+    let id = "crash-watch";
+    Some(match crate::crashwatch::state(root, dirs) {
+        State::NoWatcher => return None,
+        State::Pipe => check(
+            id,
+            St::Ok,
+            "Omarchy's crash watcher never hears of a box's crash: the kernel's coredump pipe keeps it out",
+            Vec::new(),
+        ),
+        State::Filtered => check(
+            id,
+            St::Ok,
+            "Omarchy's crash watcher reads the journal through omabox's filter: a box's crash is left out",
+            Vec::new(),
+        ),
+        State::Stale(was) => check(
+            id,
+            St::Warn,
+            format!(
+                "omabox's filter for Omarchy's crash watcher is not current (written for its unit's ExecStart {}), so a crash in a box may show on your desktop",
+                if was.is_empty() {
+                    "(unknown)".into()
+                } else {
+                    s(&was)
+                }
+            ),
+            vec!["omabox setup (it writes the filter again)".into()],
+        ),
+        State::Unfiltered => check(
+            id,
+            St::Warn,
+            "a crash in a box shows as a crash notification on your desktop: systemd's coredump socket journals it whatever the box's core limit (#441)",
+            vec!["omabox setup (it offers a filter for Omarchy's crash watcher)".into()],
+        ),
+    })
+}
+
 /// The desktop session's PATH, which what it starts (a launcher's agent, a terminal) inherits:
 /// the systemd user manager's environment, read.
 fn session_path() -> Option<Vec<u8>> {
@@ -1229,6 +1273,7 @@ fn gather(ctx: &Ctx, os: &OsRelease) -> Vec<Check> {
         aq_fixed,
     ));
     v.push(socket_check(&ctx.boxes));
+    v.extend(crash_watch_check(root, &crate::crashwatch::Dirs::of(&home)));
     let me = std::env::current_exe()
         .ok()
         .and_then(|p| crate::repo::readlink_f(shell::bytes(&p)))

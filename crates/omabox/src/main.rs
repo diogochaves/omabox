@@ -7,6 +7,7 @@ mod broker_side;
 mod bwrap;
 mod cmd;
 mod conf;
+mod crashwatch;
 mod desk;
 mod deskwin;
 mod drawn;

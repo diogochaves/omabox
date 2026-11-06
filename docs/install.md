@@ -62,7 +62,14 @@ in a folder you keep installs the same way: `./install.sh` in it.
 `install.sh` then runs `omabox setup`, which links `~/.local/bin/omabox`, the agent skill (wherever
 Omarchy puts its own skills: `~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and
 the bar widget (on Omarchy), and asks whether to put the widget in your bar and to turn on the
-[agent guard](guard.md) (or: `omarchy plugin enable chaves.omabox`, `omabox guard on`). omabox is built
+[agent guard](guard.md) (or: `omarchy plugin enable chaves.omabox`, `omabox guard on`). Where
+systemd's coredump socket is in use (systemd 262 on a fresh install), it also offers a filter for
+Omarchy's crash watcher: a crash inside a box otherwise shows as a crash notification on your
+desktop, since the socket records it whatever the box's core limit ([#441](https://github.com/diogochaves/omabox/issues/441)). The filter is a
+drop-in for `omarchy-crash-watch.service` in `~/.config/systemd/user` that puts omabox's
+`journalctl` first in the watcher's PATH; it passes every crash record on but those from a box
+(their 1-byte core limit, `COREDUMP_RLIMIT=1`). Omarchy's script is not touched, and `omabox doctor`
+says whether a box's crash would be announced. omabox is built
 from Rust: `install.sh` installs Arch's `rust` (elsewhere it names your distribution's `cargo`) when there is no `cargo` (a rustup needs a default
 toolchain), and the first build fetches its crates. **Update** with `git pull && ./install.sh` in one go
 (until it has run, `bin/omabox` links to a binary not built yet);
@@ -120,7 +127,7 @@ rm -rf ~/.local/share/omabox               # saves, if you made any
 
 `omabox setup --remove` turns the guard off (if on), the ai-jail broker off (its `~/.ai-jail` lines
 are yours to delete), disables the bar widget if it is on, and removes the links `setup` made (only
-those that still point at this omabox) and a per-user aquamarine build; it keeps your settings and
+those that still point at this omabox), the crash watcher's filter and a per-user aquamarine build; it keeps your settings and
 saves. Run it before you delete omabox: once it is gone there is no `guard off` left to
 run. A guard left behind applies nothing in Claude Code and says so; in Codex its values stay, and
 its hook says which lines of `~/.codex/config.toml` to delete.
