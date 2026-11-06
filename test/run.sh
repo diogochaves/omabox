@@ -11307,6 +11307,22 @@ echo "%s $*" >> "$HOME/stub.log"
   check_eq "--remove again: nothing left to do" 0 "$(in_h setup --remove >/dev/null; echo $?)"
   mkdir -p "$h/.cache/omabox/b/home"; in_h setup --remove >/dev/null
   check "...a box's home still in it stays" test -d "$h/.cache/omabox/b/home"
+  # #247 (finding 646): without Omarchy (its tree hidden under bwrap's tmpfs), no bar widget: not
+  # linked, said, and no omarchy or omarchy-shell asked; the rest as ever.
+  local hp=$TMP/$P-setup-plain
+  rm -rf "$hp"; mkdir -p "$hp"
+  out=$(HOME=$hp XDG_DATA_HOME=$hp/.local/share XDG_CACHE_HOME=$hp/.cache XDG_CONFIG_HOME=$hp/.config XDG_STATE_HOME=$hp/.local/state \
+    PATH=$hst:$PATH bwrap --dev-bind / / --tmpfs /usr/share/omarchy "$CLI" setup 2>&1 </dev/null); rc=$?
+  if [ "$rc" = 0 ] || grep -q 'bar widget' <<<"$out"; then
+    check_eq "setup without Omarchy: the widget skipped, said; no omarchy asked; exit 0 (#247)" \
+      "bar widget: skipped, no Omarchy here (it lives in Omarchy's bar)|0|" \
+      "$(grep '^bar widget' <<<"$out")|$rc|$(cat "$hp/shell.log" 2>/dev/null)"
+    check_fails "...no link into ~/.config/omarchy/plugins" test -e "$hp/.config/omarchy/plugins/chaves.omabox"
+    check "...the skill linked as ever" test -L "$hp/.claude/skills/omabox"
+  else
+    skip "setup without Omarchy" "bwrap cannot hide /usr/share/omarchy here: $out"
+  fi
+  rm -rf "$hp"
 }
 
 # finding 130: a user Omarchy has set no theme for (an account that never logged in) is told why,
@@ -13312,7 +13328,7 @@ t_unit_doctor() {
   rc=0; j=$(_doctor_env XDG_RUNTIME_DIR="$h/rt" "$CLI" doctor --json) || rc=$?
   check_eq "doctor --json: ok, os {id, id_like, family}, checks [{id, status, found, fix}], smoke null" "true" \
     "$(jq '(.ok | type == "boolean") and (.os | has("id") and has("id_like") and has("family")) and (.checks | length > 0)
-      and all(.checks[]; (.id | type == "string") and (.status | IN("ok", "warn", "fail")) and (.found | type == "string")
+      and all(.checks[]; (.id | type == "string") and (.status | IN("ok", "info", "warn", "fail")) and (.found | type == "string")
       and (.fix | type == "array" and all(.[]; type == "string"))) and .smoke == null' <<<"$j")"
   ids="omarchy theme hyprland aquamarine labwc quickshell bwrap pasta unshare grim box-programs some-programs tools userns no-new-privs tun render socket-path path session-path"
   check_eq "...every check, in order" "$ids" "$(jq -r '[.checks[].id] | join(" ")' <<<"$j")"
@@ -13320,6 +13336,17 @@ t_unit_doctor() {
     "fail log into Omarchy once, or: omarchy-theme-set \"Tokyo Night\" (or up --theme NAME) false 1" \
     "$(jq -r '(.checks[] | select(.id == "theme") | "\(.status) \(.fix[0])"), .ok' <<<"$j" | paste -sd ' ') $rc"
   check_eq "...and it wrote nothing (HOME, XDG dirs, TMPDIR, runtime dir)" "" "$(command find "$h/home" "$h/rt" -mindepth 1)"
+  # #247 (finding 646): a machine without Omarchy (its tree hidden here under a tmpfs, bwrap's): the
+  # Omarchy and theme checks are information, plain boxes only, not failures; quickshell would be
+  # information too (it is installed here).
+  j=$(_doctor_env XDG_RUNTIME_DIR="$h/rt" bwrap --dev-bind / / --tmpfs /usr/share/omarchy "$CLI" doctor --json 2>/dev/null) || true
+  if [ -n "$j" ]; then
+    check_eq "...without Omarchy: omarchy and theme are information, no fix (#247)" \
+      "omarchy info plain boxes only: no Omarchy here (/usr/share/omarchy is missing): a box runs Hyprland without Omarchy's desktop, bar, theme or plugins 0|theme info 0" \
+      "$(jq -r '.checks[] | select(.id == "omarchy" or .id == "theme") | "\(.id) \(.status)\(if .id == "omarchy" then " " + .found else "" end) \(.fix | length)"' <<<"$j" | paste -sd '|')"
+  else
+    skip "doctor without Omarchy" "bwrap cannot hide /usr/share/omarchy here"
+  fi
   rc=0; _doctor_env XDG_RUNTIME_DIR="$h/rt" "$CLI" doctor > "$h/text" 2>&1 || rc=$?
   check_match "doctor: says the distribution and that it changes nothing" "^omabox doctor \(.+\): read-only, nothing changed$" "$(head -n 1 "$h/text")"
   check_match "...a failed check in capitals, its fix under it" \
@@ -13408,6 +13435,46 @@ t_unit_install() {
     "$stub" "$ROOT" "$stub" "$stub" > "$stub/cargo"   # ($stub/omabox-bin while there: a stand-in, for --check)
   chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell" "$stub/cargo"
   local tty=(env SHELL=/bin/bash script -qec "$(printf %q "$c/install.sh")" /dev/null)
+  # #247 (finding 646): on another distribution (os-release's stand-in), install.sh asks that one's
+  # package database with its names and, for what is missing, says the command and stops: no sudo of
+  # its own, in a terminal or not. dpkg-query and rpm here are stand-ins: every package installed but
+  # one.
+  local osr=$TMP/ih-os-release rc
+  printf '#!/bin/sh\n[ "$3" = libsecret-tools ] && exit 1; printf "ii "\n' > "$stub/dpkg-query"
+  printf '#!/bin/sh\n[ "$3" = secret-tool ] && exit 1; exit 0\n' > "$stub/rpm"
+  chmod +x "$stub/dpkg-query" "$stub/rpm"
+  printf 'NAME="Debian GNU/Linux"\nID=debian\n' > "$osr"
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null); rc=$?
+  check_eq "Debian, a package missing: install.sh says apt's command and stops, without sudo (#247)" \
+    "1|missing: libsecret-tools|install.sh: run this, then $c/install.sh again: sudo apt install libsecret-tools|" \
+    "$rc|$(grep '^missing:' <<<"$out")|$(tail -n 1 <<<"$out")|$(cat "$stub/sudo-called" 2>/dev/null)"
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "${tty[@]}" 2>&1 </dev/null); rc=$?
+  check_eq "...in a terminal too: no sudo" "1 " "$rc $(cat "$stub/sudo-called" 2>/dev/null)"
+  printf 'ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n' > "$osr"
+  check_match "openSUSE (ID_LIKE): rpm asked, zypper's command" "again: sudo zypper install secret-tool$" \
+    "$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null)"
+  printf 'ID=nixos\n' > "$osr"
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null); rc=$?
+  check_match "NixOS: not supported yet, said with why (no /usr/bin) and what it would need" \
+    "^install.sh: NixOS is not supported yet: a box's start looks for its programs in /usr/bin\..*environment.systemPackages: hyprland labwc .* 1$" "$out $rc"
+  # An ID of no family, no ID_LIKE: the package manager there tells (pacman, on this machine).
+  printf 'ID=someos\n' > "$osr"
+  echo omabox-no-such-package > "$stub/missing"
+  check_match "an unknown ID: the package manager there tells the family (pacman here)" \
+    "sudo pacman -S --needed omabox-no-such-package" "$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_OS_RELEASE=$osr "$c/install.sh" 2>&1 </dev/null)"
+  rm -f "$stub/dpkg-query" "$stub/rpm" "$stub/sudo-called"
+  # Hyprland's version by sort -V, not pacman's vercmp (#247): 0.56 and later, 0.100 after 0.99.
+  local hv
+  for hv in 0.55.9:1 0.56.0:0 0.57.1:0 0.100.0:0; do
+    printf '#!/bin/sh\necho "Hyprland %s built from branch v%s at commit x"\n' "${hv%:*}" "${hv%:*}" > "$stub/Hyprland"
+    chmod +x "$stub/Hyprland"
+    out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 </dev/null)
+    check_eq "Hyprland ${hv%:*}: too old? ${hv#*:}" "${hv#*:}" "$(grep -c 'is too old: omabox needs 0.56+' <<<"$out")"
+  done
+  printf '#!/bin/sh\necho "Hyprland: Operation not permitted" >&2; exit 126\n' > "$stub/Hyprland"
+  check_match "a Hyprland that says no version: what it says instead" \
+    "^install.sh: Hyprland --version says no version: Hyprland: Operation not permitted$" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 </dev/null)"
+  rm "$stub/Hyprland"
   echo omabox-no-such-package > "$stub/missing"
   # #395: with no terminal, sudo can only fail (in words of its own, which vary): the command to run.
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 </dev/null); local rc=$?
@@ -13564,7 +13631,7 @@ EOF
     "$rc $(grep -o 'screenshot: .*' <<<"$out") $(grep -c '^down install-check-' "$stub/omabox-called" 2>&1) $(test -e "$kept" && echo kept || echo no)"
   rm -f "$stub/omabox-bin" "$stub/up-ok" "$stub/omabox-called"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
-  check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
+  check_match "an unreadable Hyprland version says so (was silent), as what it says (#247)" "Hyprland --version says no version: Hyprland dev build$" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
   check_fails "...and none of it reached a shell (omarchy, omarchy-shell)" test -e "$stub/shell-called"
 }
 

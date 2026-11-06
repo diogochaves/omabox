@@ -82,7 +82,10 @@ do not trust at all, use a VM.
 You need **Omarchy 4.5** (Hyprland 0.56+, the Lua config) and a GPU render node: AMD and Intel iGPUs
 and NVIDIA RTX cards are tested. Omarchy 4.0 still works but is deprecated: omabox 1.3 drops it, not
 before 2026-12-02, four weeks after 4.5 reached Omarchy's stable channel
-([#312](https://github.com/diogochaves/omabox/issues/312)).
+([#312](https://github.com/diogochaves/omabox/issues/312)). On another Linux with Hyprland 0.56+
+(Arch, Debian sid, openSUSE Tumbleweed), `install.sh` prints the command that installs what your
+distribution lacks, and boxes are plain Hyprland, without Omarchy's bar or theme
+([#247](https://github.com/diogochaves/omabox/issues/247), [docs/install.md](docs/install.md)).
 
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox

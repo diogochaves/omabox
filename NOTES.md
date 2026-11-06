@@ -74,7 +74,8 @@ Then: `omabox up && omabox shot`. It also links the bar widget (`plugin/`) as
 
 What it does, step by step (each is safe to repeat; `install.sh` is the source of truth):
 
-1. Packages (`PKGS` in install.sh): labwc, wlr-randr, bubblewrap, util-linux, iproute2, passt, jq,
+1. Packages (`PKGS_arch` in install.sh; another distribution's list is `PKGS_<family>`, and there
+   install.sh names the command and stops, finding 645): labwc, wlr-randr, bubblewrap, util-linux, iproute2, passt, jq,
    grim, gnome-keyring, libsecret, python (the guard's Codex check), the tools' build deps (wayland,
    libxkbcommon, base-devel, pkgconf, libpng; at-spi2-core and glib2 for tools/tree, finding 317),
    aquamarine's build deps, and what the box runs that Omarchy
@@ -91,7 +92,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    git clone https://github.com/hyprwm/aquamarine build/aquamarine
    git -C build/aquamarine checkout 7bb8bdf4      # "wayland: fix configure not applying sometimes (#415)"
    for p in patches/aquamarine/*.patch; do git -C build/aquamarine apply "$PWD/$p"; done   # omabox's own (findings 132, 238)
-   cmake -S build/aquamarine -B build/aquamarine/out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PWD/build/prefix
+   cmake -S build/aquamarine -B build/aquamarine/out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PWD/build/prefix -DCMAKE_INSTALL_LIBDIR=lib
    cmake --build build/aquamarine/out && cmake --install build/aquamarine/out
    ```
    (installed beside the old one, then swapped in). It must provide the soname the installed Hyprland
@@ -100,7 +101,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
 4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
    `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
    those exist; `skill-feedback/` as `skills/omabox-feedback` beside it only with `--feedback-skill`,
-   finding 326); `plugin/` as `~/.config/omarchy/plugins/chaves.omabox`; makes `~/.config/omabox`;
+   finding 326); `plugin/` as `~/.config/omarchy/plugins/chaves.omabox` (only where Omarchy is,
+   finding 645); makes `~/.config/omabox`;
    asks about the agent guard. A real directory where a link goes stops it. `omabox setup --remove`
    undoes it.
 5. Try it: `omabox up && omabox shot`, then `omabox down`. The spike's hand-run scripts (`spike/*.sh`,
@@ -12544,7 +12546,53 @@ from them.
     Xwayland's stand-in first, foot driven by `run -d`, `wait`, `windows`, `keys`, a shot, the box
     safety checks, the refusals, down leaves nothing); upspec.rs `desktops`; seed.rs
     `plain_home_has_no_omarchy`.
-
+646. **Setting omabox up without pacman or Omarchy: install.sh per distribution, doctor's Omarchy lines
+    as information** (2026-11-06, #247, #320). install.sh died at once without pacman ("this expects
+    Arch/Omarchy") and compared Hyprland's version with pacman's `vercmp`; doctor failed every
+    machine without Omarchy (no Omarchy, no theme, no quickshell); setup linked the bar widget into
+    `~/.config/omarchy/plugins` whatever the machine. Tried in rootless podman containers
+    (`test/distros.sh`: archlinux without Omarchy, debian:sid, opensuse/tumbleweed; the render node
+    and /dev/net/tun only, seccomp off inside, CAP_SYS_NICE granted in the container's own namespace),
+    install.sh run until it passed, each command it named run as the container's root, then setup
+    and doctor. **Now:** install.sh tells the family as doctor does (os-release's ID, then ID_LIKE's
+    words; with neither, the package manager there; `OMABOX_TEST_OS_RELEASE` is the suite's
+    stand-in) and has a package list for each (`PKGS_arch`, the old `PKGS` unchanged; `_debian`,
+    `_fedora`, `_suse`, `_nix`). Arch's path is as before (pacman -T, sudo pacman in a terminal).
+    Debian asks dpkg-query, Fedora and openSUSE `rpm -q --whatprovides` (so a capability such as
+    openSUSE's python3 counts); what is missing is said with the family's command (`sudo apt
+    install`, `sudo dnf install`, `sudo zypper install`) and install.sh stops: no sudo of its own
+    there. NixOS stops at once: a box's start looks for every program in /usr/bin, which NixOS has
+    not; it names what it would need. An unknown distribution stops, saying so. Hyprland's version is
+    compared with `sort -V` (0.100 after 0.99), and one that says no version is said as what it says
+    (Debian's Hyprland carries `cap_sys_nice=ep`, which a container that does not grant the
+    capability cannot exec: "Operation not permitted", once read as "Hyprland ? is too old").
+    doctor: a check may be `info`, neither ok nor a failure; without Omarchy (install::omarchy_at,
+    its Hyprland bootstrap) `omarchy` and `theme` are information ("plain boxes only: no Omarchy
+    here"), and a missing quickshell is information too (only a shell put in a box needs it), a
+    failure still on Omarchy. A fifth family, nix (ID=nixos), and the tables filled from the
+    containers: Debian sid has quickshell (0.3.2); openSUSE's dbus-1 brings dbus-broker, not
+    dbus-daemon (dbus-1-daemon; dbus-update-activation-environment is dbus-1-tools), its libpng.pc
+    is libpng16-compat-devel's, pixman's is libpixman-1-0-devel; aquamarine's build needs OpenGL's
+    and GLES3's headers there (Debian libgl-dev and libopengl-dev, openSUSE Mesa-libGL-devel and
+    Mesa-libGLESv3-devel: CMake's FindOpenGL, which Arch's mesa covers). setup links the widget only where
+    Omarchy is, else says `bar widget: skipped, no Omarchy here`, and asks no omarchy-shell. The
+    system's aquamarine is looked for where each distribution keeps it (install::aq_sysdir:
+    /usr/lib, /usr/lib64, /usr/lib/<arch>-linux-gnu; it was /usr/lib only, so doctor and up found no
+    aquamarine on Debian or openSUSE), and `setup --aquamarine` installs its build into `lib/`
+    (`-DCMAKE_INSTALL_LIBDIR=lib`: CMake's default is lib64 on openSUSE and Fedora, where setup then
+    found "no libaquamarine"). Seen in the containers: every package installed by the command
+    install.sh named, the tools and omabox built, setup skipping the widget, and doctor with no
+    failure on all three (Arch: Hyprland 0.57.1, aquamarine 0.16.0; Debian sid: 0.57.0, 0.15.1;
+    Tumbleweed: 0.57.1, 0.16.0, quickshell information). On Debian install.sh ran to the end,
+    omabox's aquamarine built (0.15.1@7bb8bdf4, `.so.14`, what Debian's Hyprland links) and doctor
+    took it. **Left:** on Arch and openSUSE (aquamarine 0.16.0, `.so.15`) install.sh stops at `setup
+    --aquamarine`: the pinned commit builds `.so.14` ("omabox needs a newer AQ_COMMIT"; #48, the 0.57
+    work). No box was started in a container (the plain profile is separate work). Tests: doctor.rs's os_release_and_families (nixos), install_lines_per_family (nix,
+    openSUSE's dbus), omarchy_and_theme (information without Omarchy), quickshell_only_with_omarchy,
+    install_sh_has_doctors_packages (install.sh's lists hold every package doctor names for what it
+    sets up, per family); install.rs's aq_sysdir_per_distribution; t_unit_install (Debian, openSUSE
+    by ID_LIKE, NixOS, an unknown ID, versions by sort -V, a Hyprland that says no version);
+    t_unit_doctor and t_unit_setup without Omarchy (bwrap's tmpfs over /usr/share/omarchy).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

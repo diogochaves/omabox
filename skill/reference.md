@@ -103,7 +103,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
 | `pid --json` | `box, process` (hyprland or shell), `pid` (the host's), `box_pid` (the box's own) |
 | `--version --json` | `version, aquamarine` (`kind, version, fixed, message`) |
-| `doctor --json` | `ok, os` (`id, id_like, family`: null for one omabox has no package names for), `checks` (an array: `id, status` ok, warn or fail, `found, fix` an array of lines), `smoke` (null without `--smoke`; else `ok, box, shot, error`) |
+| `doctor --json` | `ok, os` (`id, id_like, family`: null for one omabox has no package names for), `checks` (an array: `id, status` ok, info (what this machine is: no Omarchy), warn or fail, `found, fix` an array of lines), `smoke` (null without `--smoke`; else `ok, box, shot, error`) |
 
 ## Handing box work to a subagent
 

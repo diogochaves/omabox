@@ -29,8 +29,21 @@ pub const AQ_FOLDER_HOWTO: &str =
 pub const AQ_FIX_SYMBOL: &str = "_ZN10Aquamarine14CWaylandOutput14applyConfigureEv";
 /// The release after this one comes from a main that has #415.
 pub const AQ_FIXED_AFTER: &str = "0.15.1";
-/// Where the system's aquamarine is (under a ROOT in aq_resolve_in: "/", or a unit test's tree).
+/// Where the system's aquamarine is (under a ROOT in aq_resolve_in: "/", or a unit test's tree): Arch's
+/// /usr/lib, unless the soname is in another distribution's library dir (aq_sysdir, #247).
 pub const AQ_SYSDIR: &str = "/usr/lib";
+
+/// aq_sysdir ROOT SONAME (#247, finding 646): the system library dir that has SONAME: Arch's /usr/lib,
+/// openSUSE's and Fedora's /usr/lib64, Debian's multiarch /usr/lib/<arch>-linux-gnu; AQ_SYSDIR when
+/// none has it (what aq_pick then says is missing).
+pub fn aq_sysdir(root: &[u8], soname: &[u8]) -> Vec<u8> {
+    let multiarch = format!("/usr/lib/{}-linux-gnu", std::env::consts::ARCH);
+    [AQ_SYSDIR, "/usr/lib64", &multiarch]
+        .iter()
+        .map(|d| crate::gpu::at(root, d.as_bytes()))
+        .find(|d| shell::path(&cat!(d, "/", soname)).exists())
+        .unwrap_or_else(|| crate::gpu::at(root, AQ_SYSDIR.as_bytes()))
+}
 /// The box's Qt (the system's: a box has /usr).
 pub const QT_CORE: &str = "/usr/lib/libQt6Core.so.6";
 pub const TITLEBARS_SO: &str = "/usr/lib/omarchy-hyprland-titlebars/titlebars.so";
@@ -690,7 +703,7 @@ pub fn aq_resolve_in(ctx: &Ctx, soname: &[u8], env: &[u8], co: &[u8], root: &[u8
     if shell::path(&at(root, b"/opt/omabox/share/session.sh")).is_file() {
         dirs.push(at(root, b"/opt/omabox/lib"));
     }
-    let mut aq = aq_pick_env(ctx, soname, &at(root, AQ_SYSDIR.as_bytes()), &dirs, env)?;
+    let mut aq = aq_pick_env(ctx, soname, &aq_sysdir(root, soname), &dirs, env)?;
     if aq.kind == b"private" && !main.is_empty() && aq.lib == main {
         aq.main = main.strip_suffix(b"/lib").unwrap_or(&main).to_vec();
     }
@@ -1174,6 +1187,17 @@ pub fn omarchy_before_45(omarchy: &[u8]) -> Option<Vec<u8>> {
     } else {
         cat!("Omarchy ", v)
     })
+}
+
+/// omarchy_at ROOT (#247): whether Omarchy is installed under ROOT ("/", or a unit test's tree), told
+/// by the Hyprland bootstrap a box's Omarchy config loads. Without it a machine has plain boxes only:
+/// doctor says so, and setup links no bar widget.
+pub fn omarchy_at(root: &[u8]) -> bool {
+    shell::path(&crate::gpu::at(
+        root,
+        b"/usr/share/omarchy/default/hypr/bootstrap.lua",
+    ))
+    .is_file()
 }
 
 /// omarchy_version: the installed Omarchy's version, as Omarchy's omarchy-version reads it
@@ -1711,6 +1735,28 @@ mod tests {
             dyn_value(b"(NEEDED) [a [b]", b"NEEDED"),
             Some(b"b".to_vec())
         );
+    }
+
+    /// #247: the system's aquamarine where each distribution keeps it; Arch's /usr/lib first, and
+    /// when none has the soname (up then says it is missing from there).
+    #[test]
+    fn aq_sysdir_per_distribution() {
+        let t = std::env::temp_dir().join(format!("omabox-aqsys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let r = shell::bytes(&t).to_vec();
+        let so = b"libaquamarine.so.15";
+        assert_eq!(aq_sysdir(&r, so), cat!(r, "/usr/lib"), "none: /usr/lib");
+        let ma = format!("usr/lib/{}-linux-gnu", std::env::consts::ARCH);
+        for (d, want) in [
+            (ma.as_str(), ma.as_str()),
+            ("usr/lib64", "usr/lib64"),
+            ("usr/lib", "usr/lib"),
+        ] {
+            std::fs::create_dir_all(t.join(d)).unwrap();
+            std::fs::write(t.join(d).join("libaquamarine.so.15"), "").unwrap();
+            assert_eq!(aq_sysdir(&r, so), cat!(r, "/", want), "{d}");
+        }
+        let _ = std::fs::remove_dir_all(&t);
     }
 
     #[test]
