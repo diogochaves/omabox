@@ -110,6 +110,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
                                                          a box's logs: hyprland (the default), shell, apps, run,
                                                          events, keyring, labwc, systemd, audio, polkit,
                                                          gdb, journal, box, reap
+  omabox log [-b NAME] run [JOB] [-n 100|all] [--grep RE [-i]] [-f]   a run -d job's log: JOB its pid (jobs), none the latest
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
   omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
@@ -798,7 +799,7 @@ not answer in time (busy or hung?)".
 `run -d`'s) has exited, satisfied with how it ended ("exited with status 0", "was killed by SIGTERM
 (143)"), at once for one that ended already; --gone: until nothing of its session runs either (what
 it forked: an app a launcher left). `wait log [JOB] RE [-i]`: until a line of the job's log (as
-`log run` has it, every line from its first: one there already counts) matches RE (grep -E; -i:
+`log run [JOB]` has it, every line from its first: one there already counts) matches RE (grep -E; -i:
 either case), satisfied with that line; a job that ended with no such line is unknown (exit 1), as
 nothing more will come. Each tried every 100 ms. Never a host `pgrep` or a loop over the log file.
 `wait log LOG RE [-i]` (LOG a box log, as `log` names them: shell, hyprland, apps, journal, ...;
@@ -826,7 +827,8 @@ strings quoted too). A Lua error is exit 1 with its message. An error inside a c
 hl.timer) that runs later is logged nowhere: catch it with pcall.
 @ log
 `log` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
-`run -d`'s, apps what Omarchy's launcher started, journal what programs sent the box's journal
+`run -d`'s (`run JOB`: that job's, by its pid as `jobs` and `run -d` say it or any pid of its
+session, ended too; an unknown one names the jobs there are), apps what Omarchy's launcher started, journal what programs sent the box's journal
 sockets (/run/systemd/journal: dbus-broker, `logger` and `logger --journald` (`-t omarchy-shell`
 goes to shell), `/usr/bin/systemd-cat` (the bare name writes ~/ID.log), units' output; at most 4 MB,
 then journal.1.log), box bwrap's. shell's lines carry their time (YYYY-MM-DD HH:MM:SS.mmm, Quickshell's

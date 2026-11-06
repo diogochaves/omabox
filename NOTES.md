@@ -13174,6 +13174,17 @@ from them.
     (`[0, 953, 3, 7]`: 955 for 954); t_find_image clicks its 1.25 crop `--in` at the first column
     the size rule got wrong and at its last: before, column 3 went to 76 for 77 (the last column,
     on 4k+2 and 4k+3 wide, agrees under both).
+679. **`log run` read only the latest `run -d` job's log** (2026-11-06, #429). A check that starts
+    the app under test with `run -d`, then a terminal or an `xdg-open` with `-d`, lost the app's log
+    to `log run`; agents found the file by hand (`ls -t …/home/run-*.log | head -1`) and once read
+    the terminal's. `wait log JOB RE` already took a job, `log` did not. Now `log run JOB` reads that
+    job's log, JOB taken by the resolver `wait job|log` use (`jobs::job_resolve`: the job's pid as
+    `run -d` and `jobs` say it, or any pid of its session; a running job's, else its record in
+    `jobs/` or `jobs-done/`, so an ended job's too); a pid no job had is refused, by all three, with
+    the jobs the box had (newest 10, "ended" marked). A pid is a word after `run` only (`log 115`,
+    `log shell 115`: a usage error): a command match (`run:myapp`, as the issue asked) is not taken,
+    as words after `run` are logs' names (`log run shell` reads two). Beside other logs it is headed `==> run PID <==`.
+    Verified in a box (t_jobs: two jobs, the first's log by its pid, --grep -n, after `stop`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
