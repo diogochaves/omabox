@@ -377,7 +377,11 @@ pub fn px_cut(ctx: &Ctx, g: [i64; 4]) -> Res<Option<PxCut>> {
 /// img_px P IMAGE SCREEN: the screen pixel under the centre of image pixel P; None for a number that
 /// is none, or an image of no size.
 fn img_px(p: &[u8], image: &[u8], screen: &[u8]) -> Option<i64> {
-    let (p, i, s) = (dec(p)?, dec(image)?, dec(screen)?);
+    img_px_n(dec(p)?, dec(image)?, dec(screen)?)
+}
+
+/// img_px on numbers: by the image's size over the region's.
+fn img_px_n(p: i64, i: i64, s: i64) -> Option<i64> {
     let d = 2i64.saturating_mul(i);
     if d == 0 {
         return None;
@@ -388,6 +392,34 @@ fn img_px(p: &[u8], image: &[u8], screen: &[u8]) -> Option<i64> {
             .saturating_mul(s)
             .saturating_div(d),
     )
+}
+
+/// shot_px_in MONS G IW IH X Y: the layout point of image pixel X,Y of a screen shot of region G,
+/// IW x IH, for --in (#432, finding 676): the layout pixel under its centre by its monitor's mapping
+/// (px_map_in, find's and pixel's) when one monitor holds the region and the image is grim's own size
+/// at its scale (a cut crop is that size too); else by its size: a --fit or --zoom shot (a grid's
+/// cell is one), or a region over more than one monitor (grim draws it at one scale). None for an
+/// image of no size.
+pub fn shot_px_in(
+    mons: &[MonPx],
+    g: [i64; 4],
+    [iw, ih]: [i64; 2],
+    [x, y]: [i64; 2],
+) -> Option<[i64; 2]> {
+    if iw > 0
+        && ih > 0
+        && let Some(m) = holder(mons, g)
+        && px_len(g[2], m.scale) == iw
+        && px_len(g[3], m.scale) == ih
+    {
+        let map = px_map_in(mons, g, iw as usize, ih as usize);
+        let r = map.region([x, y, 1, 1]);
+        return Some([r[0], r[1]]);
+    }
+    Some([
+        g[0].saturating_add(img_px_n(x, iw, g[2])?),
+        g[1].saturating_add(img_px_n(y, ih, g[3])?),
+    ])
 }
 
 /// `stat -L -c '%s %.9Y' -- FILE`.
@@ -597,10 +629,17 @@ fn shot_point_ref(
     let (Some(ox), Some(oy)) = (half(&ref_, true), half(&ref_, false)) else {
         return Err(unread());
     };
-    Ok((
-        Point::Screen(ox.saturating_add(rx), oy.saturating_add(ry)),
-        r,
-    ))
+    // (on the monitors now: a shot taken in another screen mode was refused)
+    let n = |v: &[u8]| dec(v).ok_or_else(unread);
+    let Some([sx, sy]) = shot_px_in(
+        &mons(ctx)?,
+        [ox, oy, n(lw)?, n(lh)?],
+        [n(iw)?, n(ih)?],
+        [n(x)?, n(y)?],
+    ) else {
+        return Err(unread());
+    };
+    Ok((Point::Screen(sx, sy), r))
 }
 
 #[cfg(test)]
@@ -725,6 +764,67 @@ mod tests {
             1.25,
             "over two: by its size"
         );
+    }
+
+    // #432, finding 676: click --in a pixel of a screen shot cut at a fractional scale is the layout
+    // pixel under its centre, as find and pixel map it, not by the image's size over the region's.
+    #[test]
+    fn a_shots_pixel_is_its_own_layout_pixel() {
+        let mon = |x, scale| MonPx {
+            x,
+            y: 0,
+            scale,
+            pw: 1920,
+            ph: 1200,
+        };
+        for s in [1.25, 1.5, 1.333333] {
+            let m = vec![mon(0, s)];
+            let (lw, lh) = ((1920.0 / s + 1e-3) as i64, (1200.0 / s + 1e-3) as i64);
+            for x in (0..48).chain(lw - 40..lw) {
+                for w in (1..40).filter(|w| x + w <= lw) {
+                    let (y, h) = (lh - 7, 7);
+                    let g = [x, y, w, h];
+                    let (iw, ih) = (px_len(w, s), px_len(h, s));
+                    // The screen pixel the image starts on: shot's cut, else grim's own (on a whole one).
+                    let p0 = match px_cut_in(&m, g) {
+                        Some(c) => [
+                            to_px(c.grab[0], s) + c.crop[0],
+                            to_px(c.grab[1], s) + c.crop[1],
+                        ],
+                        None => [to_px(x, s), to_px(y, s)],
+                    };
+                    for i in 0..iw {
+                        let j = i % ih;
+                        assert_eq!(
+                            shot_px_in(&m, g, [iw, ih], [i, j]),
+                            Some([to_layout(p0[0] + i, s), to_layout(p0[1] + j, s)]),
+                            "scale {s}: pixel {i},{j} of {g:?} ({iw}x{ih} from {p0:?})"
+                        );
+                    }
+                }
+            }
+        }
+        // By its size: a --zoom or --fit shot (a grid's cell is a --zoom), a region over two
+        // monitors; a whole scale maps the same either way.
+        let m = vec![mon(0, 1.25)];
+        let g = [30, 40, 100, 50];
+        assert_eq!(
+            shot_px_in(&m, g, [500, 250], [499, 0]),
+            Some([129, 40]),
+            "--zoom 4"
+        );
+        assert_eq!(shot_px_in(&m, g, [50, 25], [1, 1]), Some([33, 43]), "--fit");
+        let two = vec![mon(0, 1.0), mon(1920, 1.25)];
+        assert_eq!(
+            shot_px_in(&two, [1900, 0, 100, 10], [125, 12], [124, 11]),
+            Some([1999, 9]),
+            "over two"
+        );
+        assert_eq!(
+            shot_px_in(&[mon(0, 2.0)], [31, 33, 10, 10], [20, 20], [19, 0]),
+            Some([40, 33])
+        );
+        assert_eq!(shot_px_in(&m, g, [0, 62], [0, 0]), None, "no size");
     }
 
     // What bash's awk wrote for each.

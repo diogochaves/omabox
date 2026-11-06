@@ -19903,6 +19903,21 @@ t_find_image() {
     check_eq "...pixel: the screen's colours, none blended" "${want[*]}" "$(ob pixel -b "$B" "${pts[@]}" 2>/dev/null | awk '{ print $NF }' | tr '\n' ' ' | sed 's/ $//')"
     out=$(ob wait -b "$B" --timeout 1s change --since "$o/m125.png" 2>&1); rc=$?
     check_match "...wait change --since it: nothing changed (its frame cut the same way)" "^124 unsatisfied: nothing changed" "$rc $out"
+    # click --in it (#432, finding 676): an image pixel is the layout pixel under its screen pixel's
+    # centre, as find and pixel map it, at its last column and at the first the image's size over the
+    # region's put a layout pixel off (that rule's 63/78 where the monitor's is 0.8)
+    local iw ih cj cols=() got=() exp=()
+    iw=${sz%x*} ih=${sz#*x} cj=$((ih / 2))
+    for ((k = 0; k < iw; k++)); do
+      (( ((px + k) * 4 + 2) / 5 - x != (2 * k + 1) * w / (2 * iw) )) && { cols+=("$k"); break; }
+    done
+    cols+=($((iw - 1)))
+    for k in "${cols[@]}"; do
+      ob click -b "$B" --in "$o/m125.png" "$k" "$cj" >/dev/null 2>&1
+      got+=("$k:$(ob hyprctl -b "$B" cursorpos)")
+      exp+=("$k:$((((px + k) * 4 + 2) / 5)), $((((py + cj) * 4 + 2) / 5))")
+    done
+    check_eq "...click --in it, columns ${cols[*]}: each pixel's own layout pixel" "${exp[*]}" "${got[*]}"
   fi
   ob down "$B" >/dev/null 2>&1
 }
