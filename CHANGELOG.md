@@ -54,6 +54,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   over the region's, which could put it a layout pixel off the one under that pixel. It now maps
   as `find --image` and `pixel` do, by its monitor's scale (`drag`, `pointer`, `scroll` and `pixel
   --in` too); `--fit` and `--zoom` shots map by their size as before.
+- **A box's HOME is no longer removed while its `up` sets it up** ([#433](https://github.com/diogochaves/omabox/issues/433)):
+  with several omabox commands at once (agents in parallel), a `down` and a new `up` of one name
+  could meet another `up`'s sweep of gone boxes' HOMEs, which removed the new box's HOME as it was
+  seeded (`up: could not write … in the box HOME`). The sweep now checks again under the name's lock
+  and moves a HOME aside in one step before removing it. Every HOME removal is logged in
+  `~/.cache/omabox/.removed.log`, with the process and the reason.
 - **A box ends with its pasta under SELinux too** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   on Fedora, SELinux refuses pasta the death signal that ends a box when pasta does, so a box whose
   pasta died stayed up without its network. Its reaper now ends it within a second or two, the box

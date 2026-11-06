@@ -404,9 +404,17 @@ pub fn rm_box(ctx: &Ctx) {
     if !(ctx.d.starts_with(&pre) && ctx.d.len() > pre.len()) {
         return;
     }
-    let home = cat!(crate::paths::homes(), "/", ctx.name);
+    let homes = crate::paths::homes();
+    let home = cat!(homes, "/", ctx.name);
     let mut paths = vec![ctx.d.clone()];
-    if home_taken(ctx).is_none() {
+    if let Ok(why) = home_whose(ctx) {
+        if crate::homeuse::there(&home) {
+            crate::homeuse::note_removed(
+                &homes,
+                &ctx.name,
+                &cat!("with its box dir ", ctx.d, " (rm_box): ", why),
+            );
+        }
         paths.push(home);
     }
     rm_tree(&cat!("box '", ctx.name, "'"), &paths);
@@ -418,30 +426,42 @@ pub fn rm_box(ctx: &Ctx) {
 /// is this box's (its record names this box dir; an older omabox's, this box dir's `home` leads to
 /// it), or no box's.
 pub fn home_taken(ctx: &Ctx) -> Option<Vec<u8>> {
+    home_whose(ctx).err()
+}
+
+/// home_whose: Ok(why this box's name may have its HOME, as the removal log says it) or
+/// Err(home_taken's why not).
+fn home_whose(ctx: &Ctx) -> Result<&'static [u8], Vec<u8>> {
     let h = cat!(crate::paths::homes(), "/", ctx.name);
     let p = shell::path(&h);
     if !p.is_dir() || p.is_symlink() {
-        return None;
+        return Ok(b"no HOME dir there");
     }
-    match crate::homeuse::record(&h) {
-        Some(r) if r == ctx.d => return None,
-        Some(r) if crate::homeuse::there(&r) => {
+    let rec = crate::homeuse::record(&h);
+    match &rec {
+        Some(r) if *r == ctx.d => return Ok(b"its record names this box dir"),
+        Some(r) if crate::homeuse::there(r) => {
             let at = r
                 .strip_suffix(cat!("/", ctx.name).as_slice())
-                .unwrap_or(&r)
+                .unwrap_or(r)
                 .to_vec();
-            return Some(cat!("is a box's in ", at));
+            return Err(cat!("is a box's in ", at));
         }
         Some(_) => {}
         None => {
             let link = std::fs::read_link(ctx.at("home")).ok();
             if link.is_some_and(|l| shell::bytes(&l) == cat!(h, "/home").as_slice()) {
-                return None;
+                return Ok(b"no record (an older omabox's), and this box dir's home leads to it");
             }
         }
     }
-    crate::homeuse::Users::scan().uses(&h).then(|| {
-        b"is in use (a box this runtime dir does not have runs on it: an older omabox's, or one of another runtime dir)".to_vec()
+    if crate::homeuse::Users::scan().uses(&h) {
+        return Err(b"is in use (a box this runtime dir does not have runs on it: an older omabox's, or one of another runtime dir)".to_vec());
+    }
+    Ok(if rec.is_some() {
+        b"its record names a box dir that is not there, and nothing uses it"
+    } else {
+        b"no record (an older omabox's), and nothing uses it"
     })
 }
 
@@ -499,11 +519,19 @@ fn rm_tree_with(chmod: &str, what: &[u8], paths: &[Vec<u8>]) -> bool {
 /// not). Gone where it was made: the box dir its record names is not there (an `up` with another
 /// runtime dir sees none of this one's boxes, finding 584), and no process uses the HOME (no box has
 /// it mounted, nothing has it open). A HOME with no record (an older omabox's) goes only when its box
-/// is not in this runtime dir and nothing uses it either. The box dir and the record are made before
-/// the HOME, so a box being set up is never swept. In byte order (bash's glob: the locale's
-/// collation, finding 446).
+/// is not in this runtime dir and nothing uses it either. The box dir is made before the HOME, which
+/// appears with its record (homeuse::make_home), so a box being set up is never judged gone; one
+/// made again between the judgement and the removal is kept (sweep_one, #433). In byte order (bash's
+/// glob: the locale's collation, finding 446).
 pub fn sweep_homes(ctx: &Ctx) {
+    sweep_homes_with(ctx, &|_| {});
+}
+
+/// sweep_homes with BETWEEN called with a HOME's name once it is judged gone, before anything is
+/// done about it (a test's stand-in for what other processes do meanwhile).
+fn sweep_homes_with(ctx: &Ctx, between: &dyn Fn(&[u8])) {
     let homes = crate::paths::homes();
+    sweep_leftovers(&homes);
     let mut users: Option<crate::homeuse::Users> = None;
     for n in shell::glob(&shell::path(&homes), true) {
         let h = cat!(homes, "/", n);
@@ -511,21 +539,125 @@ pub fn sweep_homes(ctx: &Ctx) {
         if !p.is_dir() || p.is_symlink() {
             continue;
         }
-        let made_in =
-            crate::homeuse::record(&h).unwrap_or_else(|| shell::bytes(&ctx.in_boxes(&n)).to_vec());
+        let rec = crate::homeuse::record(&h);
+        let made_in = rec
+            .clone()
+            .unwrap_or_else(|| shell::bytes(&ctx.in_boxes(&n)).to_vec());
         if crate::homeuse::there(&made_in) {
             continue;
         }
+        let judged = Instant::now();
         if users
             .get_or_insert_with(crate::homeuse::Users::scan)
             .uses(&h)
         {
             continue;
         }
-        rm_tree(
-            &cat!("the HOME of box '", n, "', which is gone"),
-            std::slice::from_ref(&h),
+        between(&n);
+        sweep_one(&homes, &n, rec.as_deref(), &made_in, judged);
+    }
+}
+
+/// sweep_one HOMES NAME REC MADE_IN JUDGED: HOMES/NAME, judged gone (its record REC, or none, and
+/// its box dir MADE_IN not there, at JUDGED), removed unless a box of its name has been made
+/// meanwhile (#433). Between the judgement and the removal (the /proc scan, chmod and rm spawned:
+/// 75 ms and more under load) a `down` of the name can finish and an `up` make its box again: rm
+/// then took the new box's HOME while that up seeded it. So the name's lock is taken where its box
+/// would be made (MADE_IN's runtime dir, whose `up` and `down` hold it while they make or remove a
+/// box: one held is left alone), the record and the box dir are looked at again under it, and the
+/// HOME moved aside in one rename (HOMES/.swept-PID-NAME) before the lock goes; rm takes it from
+/// there. A runtime dir that is not there has no up to wait for: no lock then. A rename refused
+/// (HOMES not writable): removed in place, under the lock.
+fn sweep_one(homes: &[u8], n: &[u8], rec: Option<&[u8]>, made_in: &[u8], judged: Instant) {
+    let h = cat!(homes, "/", n);
+    let (at, base) = match made_in.iter().rposition(|&c| c == b'/') {
+        Some(i) => (&made_in[..i], &made_in[i + 1..]),
+        None => (&b""[..], made_in),
+    };
+    let lk = cat!(at, "/.lock-", base);
+    let lock = if !at.is_empty() && shell::path(at).is_dir() {
+        match crate::boxes::lock_file(&shell::path(&lk), Duration::ZERO) {
+            Some(l) => Some(l),
+            None => return,
+        }
+    } else {
+        None
+    };
+    let p = shell::path(&h);
+    let still = p.is_dir()
+        && !p.is_symlink()
+        && crate::homeuse::record(&h).as_deref() == rec
+        && !crate::homeuse::there(made_in);
+    let what = cat!("the HOME of box '", n, "', which is gone");
+    let mut trash = None;
+    if still {
+        crate::homeuse::note_removed(
+            homes,
+            n,
+            &cat!(
+                "sweep_homes: ",
+                if rec.is_some() {
+                    "its record names "
+                } else {
+                    "no record; no "
+                },
+                made_in,
+                ", not there ",
+                judged.elapsed().as_millis().to_string(),
+                " ms ago (again under its name's lock), and nothing uses it"
+            ),
         );
+        let t = cat!(
+            homes,
+            "/",
+            crate::homeuse::SWEPT,
+            std::process::id().to_string(),
+            "-",
+            n
+        );
+        if std::fs::rename(&p, shell::path(&t)).is_ok() {
+            trash = Some(t);
+        } else {
+            rm_tree(&what, std::slice::from_ref(&h));
+        }
+    }
+    // (a lock file made for no box goes, as down's: removed while held)
+    if lock.is_some() && !crate::homeuse::there(made_in) {
+        let _ = std::fs::remove_file(shell::path(&lk));
+    }
+    drop(lock);
+    if let Some(t) = trash {
+        rm_tree(&what, &[t]);
+    }
+}
+
+/// What sweeps left half done (a sweep's HOME moved aside, an up's HOME being made, each named
+/// for its process: `.swept-PID-NAME`, `.new-PID-NAME`) whose process is gone: removed.
+fn sweep_leftovers(homes: &[u8]) {
+    let Ok(rd) = std::fs::read_dir(shell::path(homes)) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let f = e.file_name().as_bytes().to_vec();
+        let Some(rest) = [crate::homeuse::SWEPT, crate::homeuse::MAKING]
+            .iter()
+            .find_map(|pre| f.strip_prefix(pre.as_bytes()))
+        else {
+            continue;
+        };
+        let pid = rest.split(|&c| c == b'-').next().unwrap_or_default();
+        if pid.is_empty()
+            || !pid.iter().all(u8::is_ascii_digit)
+            || shell::path(&cat!("/proc/", pid)).exists()
+        {
+            continue;
+        }
+        let _ = muted(|| {
+            rm_tree(
+                &cat!("a box HOME left half made or removed (", f, ")"),
+                &[cat!(homes, "/", f)],
+            )
+        });
     }
 }
 
@@ -2282,6 +2414,122 @@ mod tests {
             .args(["-R", "u+rwX", &r])
             .status();
         std::fs::remove_dir_all(&r).unwrap();
+    }
+
+    /// #433: a HOME sweep_homes judged gone, made again for a new box of its name before the sweep
+    /// got to it (a `down` then an `up` of the name, while another process's up sweeps): kept, as
+    /// the new box made it. Its up holds the name's lock (sa), or has made it and let go (sb); a
+    /// HOME whose box is gone and that nothing is making goes (sc), logged with why; one whose
+    /// name's lock is held (sd: a `down` still removing it) is left to that down. What a sweep or
+    /// an up left half done, its process gone, goes; a live process's stays.
+    #[test]
+    fn sweep_keeps_a_home_made_again() {
+        let r = std::env::temp_dir().join(format!("omabox-swa-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        let r = r.to_str().unwrap().to_string();
+        let boxes = format!("{r}/run/omabox");
+        std::fs::create_dir_all(&boxes).unwrap();
+        // (each a gone box's HOME, its record naming its box dir in this runtime dir)
+        let gone_home = |b: &str| {
+            std::fs::create_dir_all(format!("{r}/cache/omabox/{b}/home")).unwrap();
+            assert!(crate::homeuse::write_record(
+                format!("{r}/cache/omabox/{b}").as_bytes(),
+                format!("{boxes}/{b}").as_bytes()
+            ));
+        };
+        for b in ["sa", "sb", "sc", "sd"] {
+            gone_home(b);
+        }
+        let dead = {
+            let mut c = std::process::Command::new("true").spawn().unwrap();
+            let pid = c.id();
+            c.wait().unwrap();
+            pid
+        };
+        for f in [
+            format!(".swept-{dead}-old"),
+            format!(".new-{dead}-old"),
+            format!(".swept-{}-mine", std::process::id()),
+        ] {
+            std::fs::create_dir_all(format!("{r}/cache/omabox/{f}/home/x")).unwrap();
+        }
+        let down_lock = crate::boxes::lock_file(
+            std::path::Path::new(&format!("{boxes}/.lock-sd")),
+            Duration::ZERO,
+        )
+        .unwrap();
+        let mut ctx = Ctx::new(b"up", boxes.clone().into_bytes());
+        ctx.name = b"other".to_vec();
+        ctx.d = format!("{boxes}/other").into_bytes();
+        let held = std::cell::RefCell::new(Vec::new());
+        // An up of the name: under its lock, the old HOME removed, the box dir, then the HOME
+        // with its record, seeded. sa's up still holds the lock; sb's has let it go.
+        let up_again = |n: &[u8]| {
+            let b = std::str::from_utf8(n).unwrap().to_string();
+            if b == "sc" || b == "sd" {
+                return;
+            }
+            let lk = crate::boxes::lock_file(
+                std::path::Path::new(&format!("{boxes}/.lock-{b}")),
+                Duration::ZERO,
+            )
+            .unwrap();
+            std::fs::remove_dir_all(format!("{r}/cache/omabox/{b}")).unwrap();
+            std::fs::create_dir_all(format!("{boxes}/{b}/run")).unwrap();
+            gone_home(&b);
+            std::fs::write(format!("{r}/cache/omabox/{b}/home/seeded"), "").unwrap();
+            if b == "sa" {
+                held.borrow_mut().push(lk);
+            }
+        };
+        let env = [("XDG_CACHE_HOME", Some(format!("{r}/cache")))];
+        let env: Vec<(&str, Option<&str>)> = env.iter().map(|(k, v)| (*k, v.as_deref())).collect();
+        let ((), said) = crate::exit::heard(|| {
+            shell::with_env(&env, || sweep_homes_with(&ctx, &up_again));
+        });
+        let there = |p: &str| std::path::Path::new(&format!("{r}/{p}")).exists();
+        assert_eq!(
+            (
+                said.as_str(),
+                there("cache/omabox/sa/home/seeded"),
+                there("cache/omabox/sb/home/seeded"),
+                there("cache/omabox/sc"),
+                there("cache/omabox/sd/home"),
+            ),
+            ("", true, true, false, true),
+            "a HOME made again for a new box of its name meanwhile is kept (its up holding the lock, or done); a gone box's goes; one whose down holds the lock is left to it"
+        );
+        let log = std::fs::read_to_string(format!("{r}/cache/omabox/.removed.log")).unwrap();
+        assert!(
+            log.lines().count() == 1
+                && log.contains(": box 'sc''s HOME removed: sweep_homes: its record names ")
+                && log.contains(&format!(" pid {} (", std::process::id())),
+            "...the one removed is logged, with its remover's pid and why: {log}"
+        );
+        let mut left: Vec<String> = std::fs::read_dir(format!("{r}/cache/omabox"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                ".removed.log".to_string(),
+                format!(".swept-{}-mine", std::process::id()),
+                "sa".to_string(),
+                "sb".to_string(),
+                "sd".to_string()
+            ],
+            "...what a gone process left half done goes, this one's own stays, and the swept HOME's aside name with it"
+        );
+        assert!(
+            !there("run/omabox/.lock-sc"),
+            "...the lock file made for no box goes"
+        );
+        drop(held);
+        drop(down_lock);
+        let _ = std::fs::remove_dir_all(&r);
     }
 
     /// t_unit_omarchy45's intro_cover cases: an Overlay omarchy-background layer's geometry; the

@@ -32,6 +32,113 @@ pub fn write_record(h: &[u8], d: &[u8]) -> bool {
         && std::fs::rename(shell::path(&new), shell::path(&f)).is_ok()
 }
 
+/// The name a sweep moves a gone box's HOME to before it removes it, then PID-NAME (#433).
+pub const SWEPT: &str = ".swept-";
+/// The name a box's HOME is made under, with its record, before it is moved to HOMES/NAME in one
+/// rename, then PID-NAME (#433).
+pub const MAKING: &str = ".new-";
+
+/// make_home HOMES NAME D: HOMES/NAME made for box dir D, its record and its `home` in it from the
+/// first moment it is there: made under a name of its own and renamed into place, so no sweep, of
+/// any runtime dir, ever sees it without its record (taken then for an older omabox's HOME and
+/// judged by the sweeper's own runtime dir: #433). False when it could not be made, or HOMES/NAME
+/// is there and not empty (another box's, made meanwhile).
+pub fn make_home(homes: &[u8], name: &[u8], d: &[u8]) -> bool {
+    let new = cat!(
+        homes,
+        "/",
+        MAKING,
+        std::process::id().to_string(),
+        "-",
+        name
+    );
+    let ok = std::fs::create_dir_all(shell::path(&cat!(new, "/home"))).is_ok()
+        && write_record(&new, d)
+        && std::fs::rename(shell::path(&new), shell::path(&cat!(homes, "/", name))).is_ok();
+    if !ok {
+        let _ = std::fs::remove_dir_all(shell::path(&new));
+    }
+    ok
+}
+
+/// The log beside the HOMEs (HOMES/.removed.log; hidden, so never taken for a box's) of every HOME
+/// omabox removes (#433): when, which process (its pid, command line, runtime dir and pid namespace)
+/// and why it judged the HOME free to go. A HOME that vanishes under a box names its remover there.
+pub const REMOVED_LOG: &str = ".removed.log";
+/// Past this size the log is moved to `.removed.log.old` (the one before dropped) and begun anew.
+const REMOVED_LOG_MAX: u64 = 256 * 1024;
+
+/// note_removed HOMES NAME WHY: a line in HOMES' removal log for box NAME's HOME, which this process
+/// is about to remove because WHY. Best effort: a log that cannot be written stops no removal.
+pub fn note_removed(homes: &[u8], name: &[u8], why: &[u8]) {
+    use std::io::Write;
+    let f = cat!(homes, "/", REMOVED_LOG);
+    if std::fs::metadata(shell::path(&f)).is_ok_and(|m| m.len() > REMOVED_LOG_MAX) {
+        let _ = std::fs::rename(shell::path(&f), shell::path(&cat!(f, ".old")));
+    }
+    let cmd: Vec<u8> = std::fs::read("/proc/self/cmdline")
+        .unwrap_or_default()
+        .strip_suffix(b"\0")
+        .unwrap_or_default()
+        .iter()
+        .map(|&c| if c == 0 { b' ' } else { c })
+        .collect();
+    let ns = crate::procfs::pidns(b"self").unwrap_or_else(|| b"-".to_vec());
+    let line = cat!(
+        shell::date_iso(),
+        " ",
+        now_ns().to_string(),
+        " pid ",
+        std::process::id().to_string(),
+        " (",
+        shell::cut_line(&cmd, 300),
+        ") runtime ",
+        shell::env_or_empty("XDG_RUNTIME_DIR"),
+        " ",
+        ns,
+        ": box '",
+        name,
+        "''s HOME removed: ",
+        why,
+        "\n"
+    );
+    // (one write with O_APPEND: lines of processes writing at once do not mix)
+    if let Ok(mut fh) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(shell::path(&f))
+    {
+        let _ = fh.write_all(&line);
+    }
+}
+
+/// Nanoseconds since the epoch, as the removal log's second field has them.
+pub fn now_ns() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+/// removed_note HOMES NAME SINCE_NS: the last line of HOMES' removal log for box NAME's HOME
+/// written at or after SINCE_NS (epoch_ns) by another process, when there is one: who removed it
+/// while an up made it.
+pub fn removed_note(homes: &[u8], name: &[u8], since_ns: u128) -> Option<Vec<u8>> {
+    let log = std::fs::read(shell::path(&cat!(homes, "/", REMOVED_LOG))).ok()?;
+    let tag = cat!(": box '", name, "''s HOME removed: ");
+    let me = cat!(" pid ", std::process::id().to_string(), " (");
+    log.split(|&c| c == b'\n')
+        .rfind(|l| {
+            crate::exit::contains(l, &tag)
+                && !crate::exit::contains(l, &me)
+                && l.split(|&c| c == b' ')
+                    .nth(1)
+                    .and_then(|t| std::str::from_utf8(t).ok()?.parse::<u128>().ok())
+                    .is_some_and(|t| t >= since_ns)
+        })
+        .map(<[u8]>::to_vec)
+}
+
 /// there P: P exists, or is a link.
 pub fn there(p: &[u8]) -> bool {
     let p = shell::path(p);
@@ -238,6 +345,78 @@ mod tests {
                 "...not once that namespace is gone"
             );
         }
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    /// #433: each removal a line (when, who, why); up's note names another process's removal of
+    /// its HOME made since it began, never its own, nor one before.
+    #[test]
+    fn removal_log() {
+        let r = std::env::temp_dir().join(format!("omabox-rl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        std::fs::create_dir_all(&r).unwrap();
+        let h = shell::bytes(&r).to_vec();
+        let before = now_ns();
+        note_removed(&h, b"x", b"because");
+        let log = std::fs::read_to_string(r.join(REMOVED_LOG)).unwrap();
+        let me = format!(" pid {} (", std::process::id());
+        assert!(
+            log.ends_with(": box 'x''s HOME removed: because\n")
+                && log.contains(&me)
+                && log.lines().count() == 1,
+            "a line, with this process's pid and why: {log}"
+        );
+        assert_eq!(removed_note(&h, b"x", before), None, "...its own: no note");
+        let other = log.replace(&me, " pid 1 (");
+        std::fs::write(r.join(REMOVED_LOG), format!("{log}{other}")).unwrap();
+        assert_eq!(
+            removed_note(&h, b"x", before),
+            Some(other.trim_end().as_bytes().to_vec()),
+            "...another process's since up began: the note"
+        );
+        assert_eq!(
+            removed_note(&h, b"x", now_ns()),
+            None,
+            "...one before up began: none"
+        );
+        assert_eq!(
+            removed_note(&h, b"y", before),
+            None,
+            "...another box's: none"
+        );
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    /// #433: a HOME made whole, its record and `home` in it, under its own name for nothing but
+    /// the rename; never over another box's HOME made meanwhile.
+    #[test]
+    fn make_home_whole() {
+        let r = std::env::temp_dir().join(format!("omabox-mh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        let homes = shell::bytes(&r.join("cache/omabox")).to_vec();
+        assert!(make_home(&homes, b"x", b"/run/user/1/omabox/x"));
+        assert_eq!(
+            (
+                record(&cat!(homes, "/x")),
+                r.join("cache/omabox/x/home").is_dir()
+            ),
+            (Some(b"/run/user/1/omabox/x".to_vec()), true),
+            "made with its record and its home"
+        );
+        assert!(
+            !make_home(&homes, b"x", b"/run/user/2/omabox/x"),
+            "...not over one there"
+        );
+        let names: Vec<_> = std::fs::read_dir(r.join("cache/omabox"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            (names, record(&cat!(homes, "/x"))),
+            (vec!["x".into()], Some(b"/run/user/1/omabox/x".to_vec())),
+            "...which keeps its record, nothing left beside it"
+        );
         let _ = std::fs::remove_dir_all(&r);
     }
 

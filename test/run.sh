@@ -12668,6 +12668,13 @@ t_home_sweep() {
   check_eq "...which that box still reads" kept "$(hs run -b "$B" -- sh -c 'cat "$HOME/mark"' 2>&1)"
   check_fails "...and takes a HOME whose box is gone where it was made" test -e "$c/omabox/$P-hsgone"
   check_fails "...and an older omabox's whose box is gone and unused" test -e "$c/omabox/$P-hsold"
+  # (#433: each removal logged beside the HOMEs, naming the process and why it judged the HOME gone)
+  check_match "...each logged, with the up that took it and why" \
+    "pid [0-9]+ \(.*omabox up $B-2 --no-shell\) runtime $rt .*: box '$P-hsgone''s HOME removed: sweep_homes: its record names $TMP/hs-gone-rt/omabox/$P-hsgone, not there" \
+    "$(cat "$c/omabox/.removed.log" 2>&1)"
+  check_match "...the older one's too" "box '$P-hsold''s HOME removed: sweep_homes: no record; no $rt/omabox/$P-hsold, not there" \
+    "$(cat "$c/omabox/.removed.log" 2>&1)"
+  check_fails "...no lock file left for it" test -e "$rt/omabox/.lock-$P-hsold"
   check "...its own box comes down" hs2 down "$B-2"
   # The same name from there: the HOME is the running box's, so that up is refused and changes nothing.
   rc=0; out=$(hs2 up "$B" --no-shell 2>&1) || rc=$?
