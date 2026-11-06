@@ -50,6 +50,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   seeded (`up: could not write … in the box HOME`). The sweep now checks again under the name's lock
   and moves a HOME aside in one step before removing it. Every HOME removal is logged in
   `~/.cache/omabox/.removed.log`, with the process and the reason.
+- **A jailed agent's recording stopped outside the jail is no longer deleted at the next `up`** ([#433](https://github.com/diogochaves/omabox/issues/433)):
+  its video went to `~/.cache/omabox/records`, the folder of box HOMEs, whose sweep of gone boxes'
+  HOMEs took `records` for one. It now goes to `~/.local/share/omabox/records`; videos already in
+  the old folder are moved there at the next `up`.
 - **A box ends with its pasta under SELinux too** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   on Fedora, SELinux refuses pasta the death signal that ends a box when pasta does, so a box whose
   pasta died stayed up without its network. Its reaper now ends it within a second or two, the box
