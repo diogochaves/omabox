@@ -145,6 +145,14 @@ impl Sched {
 }
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    // SIGPIPE ignored (#440): guard_set writes the rule to nft's stdin, and an nft that ended before
+    // reading it (one that fails at once) made that write end the reaper on the spot, its box left
+    // with no guard and no idle limit. Its own output is reap.log, a file. (Its children get the
+    // default back: sig::command goes by how this process came, read before this.)
+    // SAFETY: SIGPIPE's disposition set to ignored; no handler of ours is replaced.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
     let name = args.first().cloned().unwrap_or_default();
     select_box(ctx, &name)?;
     let d = ctx.d.clone();
