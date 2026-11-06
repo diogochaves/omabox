@@ -480,6 +480,17 @@ fn hyprland_check(root: &[u8], fam: Option<Family>) -> Check {
                 .unwrap_or_default()
                 .trim_end()
         );
+        // 0.57.0 hands GPU clients a dmabuf format table it has just replaced, after any reset (a
+        // box resets it as it starts): every EGL app and shell in a box is disconnected
+        // (finding 667; Hyprland 7a648e3ed, in 0.57.1). Debian sid shipped it.
+        if c.found.split_whitespace().nth(1) == Some("0.57.0") {
+            c.st = St::Warn;
+            c.found = format!(
+                "{}: in a box its GPU apps and shells are disconnected as they start (fixed in 0.57.1)",
+                c.found
+            );
+            c.fix = vec!["update Hyprland to 0.57.1 or later".into()];
+        }
     }
     c
 }
@@ -1636,6 +1647,22 @@ mod tests {
             (c.st, c.found.as_str()),
             (St::Ok, "Hyprland 0.56.2 (Lua config)")
         );
+        // finding 667: 0.57.0's dmabuf format table, a warning; 0.57.1 none
+        prog(
+            &d,
+            "Hyprland",
+            "echo 'Hyprland 0.57.0 built from branch v0.57.0 at commit x'",
+        );
+        let c = hyprland_check(&r, Some(Family::Debian));
+        assert_eq!(c.st, St::Warn, "{}", c.found);
+        assert!(c.found.contains("fixed in 0.57.1"), "{}", c.found);
+        assert_eq!(c.fix, ["update Hyprland to 0.57.1 or later"]);
+        prog(
+            &d,
+            "Hyprland",
+            "echo 'Hyprland 0.57.1 built from branch v0.57.1 at commit x'",
+        );
+        assert_eq!(hyprland_check(&r, arch).st, St::Ok);
         prog(&d, "bwrap", "echo 'bubblewrap 0.9.0'");
         let c = prog_check(
             &r,

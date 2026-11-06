@@ -13003,6 +13003,17 @@ from them.
     what it started is refused; a box's teardown is omabox's KILL of its namespace PID 1, and
     `down` left nothing (the checks' `gone`). Untried there: the full suite, --systemd boxes,
     interactive boxes. If a box misbehaves only on Fedora, start from these.
+667. **Hyprland 0.57.0 disconnects every GPU client in a box: doctor warns** (2026-11-06, #247). On
+    Debian sid (a VM; Hyprland 0.57.0+ds-1) a plain box with a Quickshell bar as its shell died
+    starting, and the plain box with foot passed. The box's Hyprland logged `error marshalling
+    arguments for format_table: dup failed: Bad file descriptor` for each client: 0.57.0's
+    `resetFormatTable` sends feedback naming the table it is replacing, and a box resets it as it
+    starts (FALLBACK, then HEADLESS-2), so each EGL client gets a format table whose fd is gone and
+    is dropped; foot draws with shm and never asks. Not omabox's aquamarine (the same with Debian's
+    0.15.1, `OMABOX_AQUAMARINE=system`), and the same Hyprland as the VM's desktop session ran the
+    bar fine. Fixed in 0.57.1 (Hyprland 7a648e3ed, 04d93b8f3); Arch's 0.57.1 passes the same run.
+    **Now** doctor's hyprland check warns on 0.57.0 and says to update. Tracked privately until
+    Debian ships 0.57.1.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
