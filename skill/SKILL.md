@@ -72,7 +72,7 @@ omabox wait window app                    # or --gone; layer NS; tree TEXT; unti
 omabox wait change --window app           # a later redraw by itself; then wait still
 omabox run -- busctl --user list          # any command in the box (its exit code)
 omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
-omabox wait notification 'RE'             # a notice an app sent (summary/body); log notifications
+omabox wait notification RE               # a notice an app sent; log notifications
 omabox down                               # when done
 ```
 
@@ -103,8 +103,7 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
 ## Where to look next
 
 - A failure: ref: Symptoms; `omabox help exit-codes`. Colours, transitions: ref: Shots. Toasts,
-  and what an app notified (`log notifications`, never a `dbus-monitor` of your own): ref: Toasts and
-  dock.
+  notices an app sent: ref: Toasts and dock.
 - `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors, `gpu`/`cpu`: ref: Screen size and
   rendering cost.
 - Plugins: ref: Testing a shell plugin. `--hyprland`: ref: A Hyprland build of your own. `--omarchy`:
