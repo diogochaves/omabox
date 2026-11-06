@@ -13139,6 +13139,22 @@ from them.
     Quickshell, a COPR git snapshot, logs nothing from a PolkitAgent that Arch's 0.3.2 registers)
     and t_wait_blink (a counter not seen changing; failed in Tumbleweed's VM too, not in Arch's).
 
+675. **Third-party shells as a plain box's shell, on plain Arch** (2026-11-06, #247). In Arch's VM
+    (virgl; boxes plain, Hyprland 0.57.1), each as `up --desktop plain --shell CMD`, then its
+    layers, a shot, `restart-shell`, `pid shell`, down: Waybar 0.15.0 (`--shell waybar`, extra) up,
+    its bar drawn (the VM's own address in it: a connected box sees the host's, as pasta gives
+    them); Noctalia (AUR noctalia-shell, today noctalia-legacy-v4 4.7.8 with its own Quickshell fork,
+    noctalia-qs 0.0.13; `qs -c noctalia-shell`) up, bar, wallpaper and dock layers, its first-run
+    welcome (a box's HOME is new); Caelestia 2.5.0 (AUR caelestia-shell + caelestia-cli, by its own
+    launcher `caelestia shell -d`, #438) up, its bar, drawers and wallpaper. Every one restarted
+    and named its process. What they said and a box has not, on purpose: no PipeWire, no power
+    profiles daemon, no desktop portal. Caelestia needs quickshell-git (its shell.qml's `//@
+    pragma DefaultEnv` is unknown to Noctalia's fork: "the shell exited while starting", omabox's
+    words right), and the AUR packages of the two shells each bring their own Quickshell, which
+    conflict: one at a time on a machine. DankMaterialShell is the suite's t_plain_dms (on this
+    machine). end-4's dots (illogical-impulse) not tried: its installer rewrites ~/.config and its
+    Hyprland config, a VM of its own.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
