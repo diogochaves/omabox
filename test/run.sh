@@ -11254,6 +11254,118 @@ t_plain() {
   check_fails "no box process left" pgrep -f "omabox/$B/"
 }
 
+# #247 (finding 652): up --desktop plain --shell CMD, a shell of the user's in a plain box: a tiny
+# Quickshell bar (one PanelWindow) as CMD, through share/shell.sh's slot. up waits for a layer drawn,
+# not Omarchy's bar; box.json, ls and ls --json name it; restart-shell starts it again; its crash is
+# noted as the shell's (its dialog closed) and restart-shell brings it back; the Omarchy-only commands
+# stay refused, in plain words; a shell that exits or draws nothing fails up, naming it.
+t_plain_shell() {
+  local B=$P-pshell D bar=$TMP/$P-pshell-bar old p out rc
+  mkdir -p "$bar"
+  cat > "$bar/shell.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+PanelWindow {
+  WlrLayershell.namespace: "t-plainbar"
+  anchors { top: true; left: true; right: true }
+  implicitHeight: 30
+  color: "#336699"
+  Text { anchors.centerIn: parent; text: "plain bar" }
+}
+QML
+  up_ok "$B" --desktop plain --net isolated --ro-bind "$bar" --shell "qs -p $bar" || { no "up --desktop plain --shell 'qs -p BAR'" "$UP_OUT"; return; }
+  check "up --desktop plain --shell 'qs -p BAR'" true
+  D=$(ob path -b "$B")
+  check_eq "box.json: plain, a shell, its command" "plain true qs -p $bar" "$(jq -r '"\(.desktop) \(.shell) \(.shell_cmd)"' "$D/box.json")"
+  check_eq "ls --json: its command, the shell running" "qs -p $bar running" \
+    "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | "\(.shell_cmd) \(.shell_state)"')"
+  check_eq "ls: its desktop and shell under its line" "  desktop: plain, shell: qs -p $bar" "$(ob ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  check_match "its layer is drawn (up waited for it)" "t-plainbar" "$(ob hyprctl -b "$B" -j layers | jq -r '.. | objects | select(has("namespace")) | .namespace')"
+  check "wait layer finds it at once" ob wait -b "$B" --timeout 1s layer t-plainbar
+  check_eq "no Omarchy process" "" "$(ob run -b "$B" -- ps -eo comm= | grep -E '^omarchy')"
+  check_match "log shell: the shell's own log" "Configuration Loaded" "$(ob log -b "$B" shell)"
+  check_eq "its config noted as the shell's (omabox-shell.configs)" "$bar" "$(cat "$D/run/omabox-shell.configs")"
+  old=$(cat "$D/run/omabox-shell.pid")
+  out=$(ob restart-shell -b "$B" 2>&1); rc=$?
+  check_eq "restart-shell: exit 0, restarted" "0 yes" "$rc $(grep -q "shell restarted in box '$B'" <<<"$out" && echo yes)"
+  p=$(cat "$D/run/omabox-shell.pid")
+  check "...a new shell (pid $old, now $p)" test "$p" != "$old"
+  check_fails "...the old one stopped" ob run -b "$B" -- test -d "/proc/$old"
+  check_eq "...one instance of the bar" 1 "$(ob hyprctl -b "$B" -j layers | jq '[.. | objects | select(.namespace? == "t-plainbar")] | length')"
+  # Its crash, before Quickshell would start it again itself (10 s): the shell's, its dialog closed.
+  shell_segv "$B" "$p"
+  check "a crash: its dialog closed as the shell's" until_ok 10 grep -q "closed the shell's crash dialog" "$D/home/shell.log"
+  check_match "...the next command says the shell is gone, after its crash" \
+    "warning: box '$B' has no shell \(gone after 1 crash\(es\); omabox log -b $B shell; omabox restart-shell -b $B\)" \
+    "$(ob windows -b "$B" 2>&1 >/dev/null)"
+  check_eq "...no org.quickshell window left" 0 "$(ob windows -b "$B" --json | jq '[.[] | select(.class == "org.quickshell")] | length')"
+  check "restart-shell brings it back" ob restart-shell -b "$B"
+  check "...its layer" ob wait -b "$B" --timeout 5s layer t-plainbar
+  # What stays Omarchy's, in plain words (not --no-shell's).
+  local c
+  for c in "dnd on" "dock off" "plugin add $ROOT/plugin" "plugin remove x.y"; do
+    # shellcheck disable=SC2086 # a command and its words
+    check_match "$c: refused, plain" "box '$B' runs plain \(up --desktop plain\)" "$(ob ${c%% *} -b "$B" ${c#* } 2>&1)"
+  done
+  check_box_safety "$B"
+  check "down" ob down "$B"
+  check_fails "box dir gone" test -e "$D"
+  check_fails "no box process left" pgrep -f "omabox/$B/"
+  check_fails "no shell of it left on the host" pgrep -f "qs -p $bar"
+  # The refusals, before a box starts.
+  check_match "--shell on an Omarchy box: refused" "up: --shell needs --desktop plain: an Omarchy box runs Omarchy's shell" "$(ob up "$P-pshell2" --shell "qs -p $bar" 2>&1)"
+  check_match "--shell with --no-shell: refused" "up: --shell runs a shell, and --no-shell starts none" "$(ob up "$P-pshell2" --desktop plain --no-shell --shell qs 2>&1)"
+  check_match "--quickshell on plain without --shell: refused" "up: --quickshell runs the box's shell, and --desktop plain has none without --shell CMD" \
+    "$(ob up "$P-pshell2" --desktop plain --quickshell /usr/bin/quickshell 2>&1)"
+  check_match "--shell with no command: refused" "up: --shell takes the command that starts the shell" "$(ob up "$P-pshell2" --desktop plain --shell ' ' 2>&1)"
+  check_match "check run --shell: refused" "check run: .*--shell runs on --desktop plain only" "$(ob check run --shell qs -- true 2>&1)"
+  # A plain box with no shell: restart-shell and log shell say why, in plain words.
+  B=$P-pshell3
+  up_ok "$B" --desktop plain --net isolated || { no "up --desktop plain" "$UP_OUT"; return; }
+  check_match "no --shell: restart-shell refused, saying how to get one" \
+    "restart-shell: box '$B' runs plain \(up --desktop plain\): no shell to restart \(up --desktop plain --shell CMD starts one\)" "$(ob restart-shell -b "$B" 2>&1)"
+  check_match "...log shell too" "log: box '$B' runs plain \(up --desktop plain\): no shell, so no shell log" "$(ob log -b "$B" shell 2>&1)"
+  ob down "$B" >/dev/null
+  # A shell that exits at once, or draws nothing: up fails, saying so.
+  out=$(ob up "$P-pshell4" --desktop plain --net isolated --shell 'exit 3' 2>&1); rc=$?
+  check_eq "a shell that exits: up fails" 1 "$rc"
+  check_match "...saying it exited while starting" "the shell exited while starting \(omabox log -b $P-pshell4 shell\)" "$out"
+  ob down "$P-pshell4" >/dev/null 2>&1
+  out=$(OMABOX_READY_TIMEOUT=3s ob up "$P-pshell5" --desktop plain --net isolated --shell 'exec sleep 300' 2>&1); rc=$?
+  check_eq "a shell that draws nothing: up fails" 1 "$rc"
+  check_match "...naming it and its log" "the shell \(exec sleep 300\) drew no layer in 3s; see .*/home/shell.log" "$out"
+  ob down "$P-pshell5" >/dev/null 2>&1
+  # --quickshell with --shell: the build is the session's qs and quickshell (here the installed one).
+  local qsb=/usr/bin/quickshell
+  B=$P-pshell6
+  up_ok "$B" --desktop plain --net isolated --ro-bind "$bar" --quickshell "$qsb" --shell "qs -p $bar" || { no "up --desktop plain --quickshell --shell" "$UP_OUT"; return; }
+  check_eq "--quickshell: CMD's qs is the build's link" "$qsb" "$(ob run -b "$B" -- sh -c 'readlink "$(command -v qs)"')"
+  check "...its bar drawn" ob wait -b "$B" --timeout 5s layer t-plainbar
+  ob down "$B" >/dev/null
+}
+
+# #247 (finding 652): DankMaterialShell (`dms run`, Go + Quickshell) as a plain box's shell, when it
+# is installed: its bar drawn, restart-shell stops its whole tree (dms and its qs) and starts another.
+# It needed nothing set: a box has no system bus and no /dev/i2c (DMS_NO_DDC, DMS_DISABLE_POLKIT moot).
+t_plain_dms() {
+  command -v dms >/dev/null || { skip "dms run in a plain box" "dms is not installed"; return; }
+  local B=$P-pdms D old
+  up_ok "$B" --desktop plain --net isolated --shell 'dms run' || { no "up --desktop plain --shell 'dms run'" "$UP_OUT"; return; }
+  check "up --desktop plain --shell 'dms run'" true
+  D=$(ob path -b "$B")
+  check "its bar (dms:bar)" ob wait -b "$B" --timeout 10s layer dms:bar
+  old=$(cat "$D/run/omabox-shell.pid")
+  check_match "dms runs its Quickshell under it" "^qs " "$(ob run -b "$B" -- pgrep -a -P "$old" | cut -d' ' -f2-)"
+  check "restart-shell" ob restart-shell -b "$B"
+  check_fails "...the old dms gone" ob run -b "$B" -- test -d "/proc/$old"
+  check_eq "...one dms and one qs" "1 1" "$(ob run -b "$B" -- sh -c 'echo $(pgrep -cx dms) $(pgrep -cx qs)')"
+  check "...its bar back" ob wait -b "$B" --timeout 10s layer dms:bar
+  check_box_safety "$B"
+  check "down" ob down "$B"
+  check_fails "no box process left" pgrep -f "omabox/$B/"
+}
+
 # finding 122 (nvidia-modprobe -c MINOR for a missing /dev/nvidiaN, -c 255 for /dev/nvidiactl, finding
 # 254; what to run when still missing) and nvidia_card (finding 294): render.rs
 # nvidia_node_asks_the_helper_as_bash, on a stand-in helper.
@@ -21281,7 +21393,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

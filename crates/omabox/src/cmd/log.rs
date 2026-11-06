@@ -339,6 +339,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             if srcs.len() > 1 {
                 continue;
             }
+            // A plain box with no shell (#247) will have none.
+            if st == "shell"
+                && crate::boxes::meta(&ctx.d, "shell").0 != b"true"
+                && crate::boxes::meta(&ctx.d, "shell_cmd").0.is_empty()
+            {
+                crate::omshell::plain_refuse(
+                    ctx,
+                    "log",
+                    "no shell, so no shell log (up --desktop plain --shell CMD starts one)",
+                )?;
+            }
             if !follow {
                 return Err(ctx.die(cat!(
                     "box '",

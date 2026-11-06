@@ -12675,6 +12675,39 @@ from them.
     F9, both unbound, no longer crash 0.57, so t_hyprland_crash's Lua sends its Hyprland a SIGSEGV
     through the shell `os.execute` runs (its parent), which ends any version inside the call.
     t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).
+652. **A shell of the user's in a plain box: `up --desktop plain --shell CMD`** (2026-11-06, #247,
+    phase 2; the first cut was branch desk-plain's). A plain box had no shell at all. **Now:** `--shell
+    CMD` (plain only: an Omarchy box runs Omarchy's, refused with `--no-shell` too) runs CMD through
+    share/shell.sh's slot: OMABOX_SHELL_CMD set, it stops the last start's whole process tree (TERM,
+    KILL after 5 s), writes the mark and the restart token as for Omarchy's, and execs `sh -c CMD`
+    with its output in ~/shell.log, so the recorded pid is CMD's (bash execs a lone command: `qs -p
+    DIR` is the pid; `dms run` is, with its qs under it). `up` and `restart-shell` (wait_ready) take
+    it as up once any layer is drawn (more than 1x1, as `wait layer` counts it), with the usual crash
+    check, and skip Omarchy's bar, tray, cover and notification waits; one that draws nothing fails
+    at OMABOX_READY_TIMEOUT naming the command. CMD must stay in the foreground: one that forks off
+    and exits (`caelestia shell -d`) is taken as exited. Once drawn, the Quickshell configs of this
+    start (`qs list --all -j`: its pid, or one after its mark) are kept in the box's runtime dir as
+    omabox-shell.configs (written from inside the box, as shell_adopt's pid: S7); a crash report
+    of one of them is the shell's (shellnote's crash_reports, ls's `+N`, "has no shell (gone after N
+    crash(es))"), and share/crash-dialog.sh closes its dialog as for Omarchy's. shell_adopt (finding
+    248) is Omarchy's only. `--quickshell PATH` goes with `--shell` (refused on plain without it):
+    session.sh's link makes the build CMD's `qs` and `quickshell` on PATH. box.json and `ls --json`
+    have `shell_cmd`; `ls` says `desktop: plain, shell: CMD` under the line; `up` on a box with
+    another says so. Refused on plain, in plain words ("runs plain (up --desktop plain): ..."):
+    `dnd`, `dock`, `plugin add|remove`; without `--shell`, `restart-shell` and `log shell` too.
+    `run` takes `--shell` for a throwaway; `check run --shell` is refused (a check's box is clean,
+    Omarchy's). DankMaterialShell 1.6.3 (`--shell 'dms run'`, with `--net isolated`) came up in
+    3.7 s with its bar (`dms:bar`) and a full-screen `quickshell` layer, and needed nothing set: a
+    box has no system bus and no /dev/i2c, so `DMS_NO_DDC` and `DMS_DISABLE_POLKIT` change nothing
+    (its DDC backend finds no bus, its polkit agent cannot register); it writes
+    ~/.config/hypr/dms/layout.lua, which plain.lua does not load. Tests: t_plain_shell (a one-
+    PanelWindow Quickshell bar as CMD: up, box.json, ls, ls --json, the layer, log shell, the noted
+    config, restart-shell (a new pid, the old gone, one bar), a SIGSEGV within 10 s: dialog closed,
+    "gone after 1 crash(es)", restart-shell back; dnd/dock/plugin refused; the box safety checks;
+    down leaves nothing; the up refusals; restart-shell and log shell on a shell-less plain box; a
+    CMD that exits, one that draws nothing; `--quickshell` with `--shell`), t_plain_dms (skipped
+    without dms: its bar, restart-shell stops dms and its qs and starts one of each, safety, down).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

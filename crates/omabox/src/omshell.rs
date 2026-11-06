@@ -48,14 +48,31 @@ pub fn tree_has_dnd(tree: &[u8]) -> bool {
     })
 }
 
-/// A box without Omarchy's shell (`up --no-shell`) has nothing to ask: CMD's refusal.
+/// A box without Omarchy's shell (`up --no-shell`, or a plain box's, #247) has nothing to ask: CMD's
+/// refusal.
 pub fn need_shell(ctx: &Ctx, cmd: &str) -> Res<()> {
+    plain_refuse(ctx, cmd, "it has no Omarchy shell to ask")?;
     if meta(&ctx.d, "shell").0 != b"true" {
         return Err(ctx.die(cat!(
             cmd,
             ": box '",
             ctx.name,
             "' runs no Omarchy shell (up --no-shell): it has no notifications nor dock"
+        )));
+    }
+    Ok(())
+}
+
+/// A plain box (`up --desktop plain`, #247) has nothing of Omarchy's: CMD's refusal, saying WHAT it
+/// lacks. Any other box: Ok.
+pub fn plain_refuse(ctx: &Ctx, cmd: &str, what: &str) -> Res<()> {
+    if crate::upspec::Desktop::of_box(&meta(&ctx.d, "desktop").0) == crate::upspec::Desktop::Plain {
+        return Err(ctx.die(cat!(
+            cmd,
+            ": box '",
+            ctx.name,
+            "' runs plain (up --desktop plain): ",
+            what
         )));
     }
     Ok(())

@@ -62,6 +62,7 @@ const GIVEN: &[&str] = &[
     "clean",
     "stock",
     "desktop",
+    "shell",
 ];
 
 /// cmd_up's state: what the options set, then what up worked out from them.
@@ -137,6 +138,8 @@ pub struct Up {
     /// --desktop's (#247), and the desktop the box gets (upspec::resolve_desktop, in checks).
     pub desktop_given: Option<Desktop>,
     pub desktop: Desktop,
+    /// `--shell CMD` (#247): a plain box's shell is CMD, run by share/shell.sh's slot.
+    pub shell_cmd: Vec<u8>,
     pub nopointer: bool,
     /// --dnd, --no-dock (#309): Do Not Disturb on, the dock off, in the box's shell once it is up.
     pub dnd: bool,
@@ -465,6 +468,16 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                     ctx.usage_die(cat!("up: --desktop is ", upspec::DESKTOPS, ", got ", val))
                 })?);
             }
+            // #247: a plain box's shell, any of them (`dms run`, `qs -p DIR`).
+            b"--shell" => {
+                optarg(ctx, a, v)?;
+                if val.iter().all(u8::is_ascii_whitespace) {
+                    return Err(
+                        ctx.usage_die("up: --shell takes the command that starts the shell")
+                    );
+                }
+                u.shell_cmd = val;
+            }
             // internal: `run`'s throwaway box goes when this pid does
             b"--owner" => {
                 optarg(ctx, a, v)?;
@@ -565,7 +578,6 @@ fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
         ("--keep", !u.clean_keep.is_empty()),
         ("--desk-shell", u.desk_shell),
         ("--omarchy", !u.omarchy.is_empty()),
-        ("--quickshell", !u.quickshell.is_empty()),
         ("--dnd", u.dnd),
         ("--no-dock", u.nodock),
     ] {
@@ -580,16 +592,43 @@ fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
     Ok(())
 }
 
+/// --desktop plain and --shell CMD (#247): what needs Omarchy refused on a plain box; its shell is
+/// CMD's, or none. --shell only there (an Omarchy box runs Omarchy's shell), and not with --no-shell.
+/// --quickshell is the build CMD finds as `qs` and `quickshell` on the session's PATH, so it needs
+/// a --shell on a plain box.
+fn plain_shell(ctx: &Ctx, u: &mut Up) -> Res<()> {
+    if !u.shell_cmd.is_empty() {
+        if u.desktop != Desktop::Plain {
+            return Err(ctx.usage_die(
+                "up: --shell needs --desktop plain: an Omarchy box runs Omarchy's shell",
+            ));
+        }
+        if !u.shell {
+            return Err(ctx.usage_die("up: --shell runs a shell, and --no-shell starts none"));
+        }
+    }
+    if u.desktop != Desktop::Plain {
+        return Ok(());
+    }
+    plain_refusals(ctx, u)?;
+    if u.shell_cmd.is_empty() {
+        if !u.quickshell.is_empty() {
+            return Err(ctx.usage_die(
+                "up: --quickshell runs the box's shell, and --desktop plain has none without --shell CMD",
+            ));
+        }
+        u.shell = false;
+    }
+    Ok(())
+}
+
 /// Everything cmd_up checks before it makes anything: false when the box is up already (said).
 fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let jailed = in_jail();
     // --desktop plain (#247): Omarchy's tree is hidden in the box, so what needs it is refused, and
-    // the box has no shell (Omarchy's is the only one there is yet).
+    // the box has no shell unless --shell names one. An Omarchy box runs Omarchy's own.
     u.desktop = upspec::resolve_desktop(u.desktop_given);
-    if u.desktop == Desktop::Plain {
-        plain_refusals(ctx, u)?;
-        u.shell = false;
-    }
+    plain_shell(ctx, u)?;
     // --stock (#265, finding 613): Omarchy as a new user sees it. Omarchy's own bar on CLEAN_THEME
     // with its own wallpaper, English in UTC (finding 363), none of the desk's look (seed_home); the
     // clock, pointer, network and animations as in any box. --clean (#252, finding 357) is --stock
@@ -1772,6 +1811,22 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
             u.desktop.name(),
             " (it runs ",
             desktop.name(),
+            ")"
+        ));
+    }
+    if u.has("shell") && m("shell_cmd") != u.shell_cmd {
+        diff.push(cat!(
+            "--shell ",
+            u.shell_cmd,
+            " (its shell is ",
+            or(
+                m("shell_cmd"),
+                if desktop == Desktop::Plain {
+                    "none"
+                } else {
+                    "Omarchy's"
+                }
+            ),
             ")"
         ));
     }
