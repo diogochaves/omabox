@@ -4070,7 +4070,8 @@ esac
 EOF
   # (grim: a PPM for -t ppm, slow once with ppm.sleep, or with ppm.late after the hold's first look;
   # a PNG otherwise, `grabbing` once it is asked, slow with grim.sleep; another after grim.alt captures;
-  # a window's (-T) ending 139 saying nothing, as grim 1.5.0's SIGSEGV, for the first grim.segv of them)
+  # a window's (-T) ending 139 saying nothing, as grim 1.5.0's SIGSEGV, for the first grim.segv of them;
+# with grim.resize, window 0xa2 changes size at each, 400 and 800 wide in turn)
   cat > "$fk/bin/grim" <<EOF
 #!/bin/sh
 echo "\$*" >> $fk/grim.args
@@ -4078,7 +4079,9 @@ case " \$* " in *" -t ppm "*) i=grim.ppm; [ ! -f $fk/ppm.sleep ] || { t=\$(cat $
     [ ! -f $fk/ppm.late ] || ! grep -q '^-l 1' $fk/grim.args || { t=\$(cat $fk/ppm.late); rm -f $fk/ppm.late; touch $fk/seen; sleep "\$t"; } ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
 case " \$* " in *" -t ppm "*) ;; *" -g "*) i=grim-small.png ;; *) i=grim.png ;; esac
 [ ! -f $fk/grim.alt ] || [ \$(wc -l < $fk/grim.args) -le \$(cat $fk/grim.alt) ] || i=\$(cat $fk/grim.altimg 2>/dev/null || echo grim2.png)
-case " \$* " in *" -T "*) [ ! -f $fk/grim.segv ] || [ \$(grep -c ' -T ' $fk/grim.args) -gt \$(cat $fk/grim.segv) ] || exit 139 ;; esac
+case " \$* " in *" -T "*) [ ! -f $fk/grim.segv ] || [ \$(grep -c ' -T ' $fk/grim.args) -gt \$(cat $fk/grim.segv) ] || {
+  [ ! -f $fk/grim.resize ] || { jq -c 'map(if .address == "0xa2" then .size[0] = 1200 - .size[0] else . end)' $fk/clients.json > $fk/clients.new && mv $fk/clients.new $fk/clients.json; }
+  exit 139; } ;; esac
 cat $fk/\$i 2>/dev/null || { echo "stand-in grim: no frame" >&2; exit 1; }
 exit \$(cat $fk/grim.rc 2>/dev/null || echo 0)
 EOF
@@ -4119,6 +4122,7 @@ EOF
   printf '[{"address":"0xa1","at":[10,10],"size":[400,300],"workspace":{"id":1,"name":"1"},"class":"fk-a","title":"fk \\"one\\"","initialClass":"fk-a","initialTitle":"one","stableId":"a1",%s},
 {"address":"0xa2","at":[420,10],"size":[400,300],"workspace":{"id":1,"name":"1"},"class":"fk-a","title":"two","initialClass":"fk-a","initialTitle":"two","stableId":"a2",%s},
 {"address":"0xb1","at":[0,0],"size":[800,600],"workspace":{"id":2,"name":"2"},"class":"fk-off","title":"off","initialClass":"fk-off","initialTitle":"off","stableId":"zz",%s}]\n' "$win" "$win" "$win" > "$fk/clients.json"
+  cp "$fk/clients.json" "$fk/clients.orig"
   printf '{"address":"0xa2","class":"fk-a","title":"two","workspace":{"id":1,"name":"1"}}\n' > "$fk/active.orig"
   printf '[{"id":0,"name":"HEADLESS-2","width":1920,"height":1080,"refreshRate":60.0,"x":0,"y":0,"scale":1.0,"transform":0,"disabled":false,"reserved":[42,0,0,0],"activeWorkspace":{"id":1,"name":"1"},"specialWorkspace":{"id":0,"name":""}},
 {"id":1,"name":"HEADLESS-3","width":800,"height":600,"refreshRate":60.0,"x":1920,"y":480,"scale":1.0,"transform":0,"disabled":false,"reserved":[0,0,0,0],"activeWorkspace":{"id":3,"name":"3"},"specialWorkspace":{"id":0,"name":""}}]\n' > "$fk/monitors.json"
@@ -4146,9 +4150,9 @@ sd_fix() {
   printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$d/run/omabox.env"
   printf 'P6\n2 2\n255\n\001\002\003\004\005\006\007\010\011\012\013\014' > "$fk/grim.ppm"
   printf 'ready 1920x1080 area=2073600\nsatisfied still t=300 frames=2\n' > "$fk/still"
-  cp "$fk/active.orig" "$fk/active.json"; echo fk-pop > "$fk/kbl"
+  cp "$fk/active.orig" "$fk/active.json"; cp "$fk/clients.orig" "$fk/clients.json"; echo fk-pop > "$fk/kbl"
   for f in still.args grim.args input.args hyprctl.args; do : > "$fk/$f"; done
-  for f in kb.sigign cursor.sleep cursoring ppm.late ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep grim.segv burst.fail ptr; do rm -f "${fk:?}/$f"; done
+  for f in kb.sigign cursor.sleep cursoring ppm.late ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep grim.segv grim.resize burst.fail ptr; do rm -f "${fk:?}/$f"; done
   [ ! -f "$fk/grim.png.off" ] || mv "$fk/grim.png.off" "$fk/grim.png"
   chmod +x "$fk/bin/omabox-burst"
   printf '{"option":"input:kb_layout","str":"us","set":true}\n' > "$fk/opt-input:kb_layout.json"
@@ -4413,6 +4417,20 @@ t_unit_capture_errors() {
   cx_want=(rc=1 out= "err=omabox: shot: grim failed: it died of SIGSEGV (status 139) on each of 4 tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy, as while the window keeps changing size" 'state!~^\./w\.png')
   cx_case "...every time: 4 tries, then said what it means" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
   check_eq "...grim asked 4 times" 4 "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")"
+  # A window that keeps changing size (#436, finding 650): taken again past 4 tries while it does,
+  # its animations off after half a second of it (Hyprland 0.57 fails copies through them), until
+  # 4 s are over; then said so.
+  ce_segv9r() { ce_segv 9; touch "$sd_fk/grim.resize"; }; sd_pre=(ce_segv9r)
+  cx_want=(rc=0 "out=$r/out/w.png")
+  cx_case "...a window changing size at each: taken again past 4 tries, the tenth taken" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
+  check_eq "...grim asked for it 11 times (9 failed, the priming one, the shot)" 11 "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")"
+  ce_segvr() { ce_segv 100000; touch "$sd_fk/grim.resize"; }; sd_pre=(ce_segvr)
+  cx_want=(rc=1 out= "err~^omabox: shot: grim failed: it died of SIGSEGV \(status 139\) on each of [0-9]+ tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy, and the window kept changing size for the 4 s it was tried: shoot it once it holds its size \(omabox wait still\)$" 'state!~^\./w\.png')
+  cx_case "...changing size for ever: tried for 4 s, then said so" shot -b fk -w 'title:^two$' -o "$r/out/w.png"
+  check "...more than 4 tries" test "$(grep -c '^-l 1 -T a2 -$' "$fk/grim.args")" -gt 4
+  check_eq "...its animations turned off once, after half a second of it, and back" \
+    "dispatch hl.dsp.window.set_prop({ prop = 'no_anim', value = '1', window = 'address:0xa2' }) dispatch hl.dsp.window.set_prop({ prop = 'no_anim', value = 'unset', window = 'address:0xa2' })" \
+    "$(grep no_anim "$fk/hyprctl.args" | tr '\n' ' ' | sed 's/ $//')"
   ce_rc139() { echo 139 > "$sd_fk/grim.rc"; }; sd_pre=(ce_rc139)
   cx_want=(rc=1 out= "err=omabox: shot: grim failed: it ended with status 139 and said nothing")
   cx_case "...a screen's grim ending 139: not a window's copy, asked once" shot -b fk -o "$r/out/x.png"
@@ -11750,6 +11768,8 @@ t_hyprland_folder() {
   check "box.log has no warning that the IPC may not match" bash -c "! grep -q 'IPC may not match' '$D/box.log'"
   check "omabox hyprctl answers through it" ob hyprctl -b "$B" version
   check "its folder is read-only in the box" bash -c "! '$CLI' run -b '$B' -- touch '$f/x' 2>/dev/null"
+  check_eq "the box HOME's lastVersion is the folder's Hyprland, run with its libraries (finding 648)" \
+    "$(Hyprland --version | sed -n '1s/^Hyprland \([0-9][0-9.]*\) .*/\1/p')" "$(ob run -b "$B" -- cat /home/sbx/.local/share/hyprland/lastVersion 2>&1)"
   check "down" ob down "$B"
 }
 
@@ -13701,9 +13721,15 @@ t_system_dirs() {
     "$(ob run -b "$B" -- timedatectl list-timezones 2>&1 | md5sum)"
   check_fails "...set-timezone still goes to the real one, which fails" ob run -b "$B" -- timedatectl set-timezone UTC
   check_eq "the box HOME's Hyprland lastVersion is the box's Hyprland, not 0.0.0 (finding 626)" \
-    "$(Hyprland --version | sed -n '1s/^Hyprland \([0-9][0-9.]*\) .*/\1/p')" \
-    "$(ob run -b "$B" -- cat /home/sbx/.local/share/hyprland/lastVersion 2>&1)"
+    "$(box_hypr_version "$B")" "$(ob run -b "$B" -- cat /home/sbx/.local/share/hyprland/lastVersion 2>&1)"
   ob down "$B" >/dev/null
+}
+
+# box_hypr_version B: the version of the Hyprland box B runs (a folder's under OMABOX_HYPRLAND or
+# --hyprland DIR, with the library dir it runs with), as lastVersion has it.
+box_hypr_version() {
+  ob run -b "$1" -- sh -c 'LD_LIBRARY_PATH=/opt/omabox/lib "$(readlink /proc/$(pgrep -x Hyprland)/exe)" --version' 2>/dev/null \
+    | sed -n '1s/^Hyprland \([0-9][0-9.]*\) .*/\1/p'
 }
 
 # #140: a box keeps the config it started with: an update of omabox (share/ is live) reloaded every
@@ -14872,7 +14898,7 @@ t_omarchy_restart() {
 # there is not enough: keys sent then were lost, and a keyed row of the widget's flaked under load.
 panel_takes_keys() {
   [ "$(ob lua -b "$1" 'for _, l in ipairs(hl.get_layers()) do
-    if l.namespace == "omarchy-keyboard-panel" and l.mapped and l.interactivity > 0 then return true end
+    if l.namespace == "omarchy-keyboard-panel" and l.mapped and (l.keyboard_interactivity or l.interactivity or 0) > 0 then return true end
   end return false')" = true ]
 }
 
@@ -18199,6 +18225,16 @@ t_unit_window_select() {
   check_eq "a hidden special workspace is off screen" false "$(on "$W" 0xd)"
   check_eq "a shown one is on screen" true "$(on "$Wsp" 0xd)"
   check_eq "...above the workspace under it" "0xf 0x2 0xd" "$(cov "$Wsp" 0xa)"
+  # Hyprland 0.57 (finding 647): a special workspace has no id anywhere (a window's, a monitor's
+  # specialWorkspace), only its name; none shown is {"name": ""}.
+  local c57 W57 W57sp
+  c57=$(jq -c 'map(.workspace |= (if .id < 0 then {address: "special:scratch", type: "special", name: "special:scratch"} else . + {address: .name, type: "normal"} end))' <<<"$c")
+  W57=$(probe win_annotate "$c57" '[{"activeWorkspace":{"address":"1","id":1,"type":"normal","name":"1"},"specialWorkspace":{"address":"","type":"","name":""}}]' "$act")
+  W57sp=$(probe win_annotate "$c57" '[{"activeWorkspace":{"address":"1","id":1,"type":"normal","name":"1"},"specialWorkspace":{"address":"special:scratch","type":"special","name":"special:scratch"}}]' "$act")
+  check_eq "0.57: a hidden special workspace is off screen" false "$(on "$W57" 0xd)"
+  check_eq "...a shown one on screen" true "$(on "$W57sp" 0xd)"
+  check_eq "...above the workspace under it" "0xf 0x2 0xd" "$(cov "$W57sp" 0xa)"
+  check_eq "...and not over it while hidden" "0xf 0x2" "$(cov "$W57" 0xa)"
   local Wfs; Wfs=$(probe win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act")
   check_eq "a fullscreen window: nothing covers it" "" "$(cov "$Wfs" 0xa)"
   check_eq "...it covers the rest" 0xa "$(cov "$Wfs" 0xf | tr ' ' '\n' | grep -x 0xa)"

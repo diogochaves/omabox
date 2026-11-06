@@ -132,9 +132,12 @@ pub fn desk_target_with(what: Target, s: &[u8], kbl_of: impl FnOnce() -> Vec<u8>
         .text()
 }
 
+// A layer's keyboard interactivity: `interactivity` until Hyprland 0.57, `keyboard_interactivity`
+// since (finding 647); the other name is nil on each.
 const KBL_LUA: &str = "local e = {}
 for _, l in ipairs(hl.get_layers()) do
-  if l.mapped and l.interactivity == 1 then e[#e + 1] = (l.namespace ~= '' and l.namespace) or tostring(l.address) end
+  local k = l.keyboard_interactivity or l.interactivity
+  if l.mapped and k == 1 then e[#e + 1] = (l.namespace ~= '' and l.namespace) or tostring(l.address) end
 end
 error('omabox-kbl:' .. table.concat(e, ', '), 0)";
 
@@ -154,7 +157,8 @@ pub fn kb_layers(ctx: &Ctx) -> Vec<u8> {
 
 const KBT_LUA: &str = "local e = {}
 for _, l in ipairs(hl.get_layers()) do
-  if l.mapped and l.interactivity ~= 0 then e[#e + 1] = tostring(l.address) .. '=' .. l.interactivity end
+  local k = l.keyboard_interactivity or l.interactivity
+  if l.mapped and k and k ~= 0 then e[#e + 1] = tostring(l.address) .. '=' .. k end
 end
 error('omabox-kbt:' .. table.concat(e, ', '), 0)";
 
@@ -189,5 +193,36 @@ mod tests {
             b"",
             "...an error from hyprctl: nothing"
         );
+    }
+
+    /// KBL_LUA and KBT_LUA run by a host Lua against a stand-in `hl.get_layers()`, layers shaped as
+    /// HYPR's (`interactivity` up to 0.56, `keyboard_interactivity` since 0.57; finding 647): the
+    /// error they end with. None without a Lua on the host.
+    fn lua_layers(prog: &str, key: &str) -> Option<String> {
+        let stub = format!(
+            "hl = {{ get_layers = function() return {{
+               {{ mapped = true, namespace = 'launcher', address = '0xa', {key} = 1 }},
+               {{ mapped = true, namespace = 'bar', address = '0xb', {key} = 0 }},
+               {{ mapped = true, namespace = '', address = '0xc', {key} = 2 }},
+               {{ mapped = false, namespace = 'gone', address = '0xd', {key} = 1 }} }} end }}
+             local ok, e = pcall(function() {prog} end) io.write(tostring(e))"
+        );
+        let out = std::process::Command::new("lua")
+            .args(["-e", &stub])
+            .output()
+            .ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[test]
+    fn layers_keyboard_on_each_hyprland() {
+        for key in ["interactivity", "keyboard_interactivity"] {
+            let Some(kbl) = lua_layers(KBL_LUA, key) else {
+                return;
+            };
+            assert_eq!(kbl, "omabox-kbl:launcher", "kb_layers with {key}");
+            let kbt = lua_layers(KBT_LUA, key).unwrap_or_default();
+            assert_eq!(kbt, "omabox-kbt:0xa=1, 0xc=2", "kb_takers with {key}");
+        }
     }
 }

@@ -12593,6 +12593,64 @@ from them.
     sets up, per family); install.rs's aq_sysdir_per_distribution; t_unit_install (Debian, openSUSE
     by ID_LIKE, NixOS, an unknown ID, versions by sort -V, a Hyprland that says no version);
     t_unit_doctor and t_unit_setup without Omarchy (bwrap's tmpfs over /usr/share/omarchy).
+647. **On Hyprland 0.57 a layer's keyboard interactivity and a special workspace's id were gone**
+    (2026-11-06, #434). 0.57.1 renamed `HL.LayerSurface.interactivity` to `keyboard_interactivity`
+    (the other name is nil on each, probed in a box of each), so kb_layers and kb_takers
+    (desk.rs's KBL_LUA, KBT_LUA) found no layer: `keys --window` sent keys into a launcher that held
+    the keyboard, `tree --layer` could not tell two same-size layers of one pid apart, and the settle
+    line never said "the keys went to layer X". And a special workspace has no id any more, in
+    `-j clients`, `-j monitors`' `specialWorkspace` (`{"address":"","type":"","name":""}` with none
+    shown) and Lua: WIN_JQ took the null of a hidden special workspace for a shown one, so a window
+    there was on screen and covered the windows under it. The other `-j` changes (an `address` and
+    `type` on each workspace, `hardwareDetails.backend`, a bind's `mouse`) touch nothing of omabox's.
+    **Now:** both Lua readers take `keyboard_interactivity or interactivity`; WIN_JQ and
+    DESK_FACTS_JQ key a workspace by its id or, with none, its name (`wsk`), a special one by a
+    negative id or a `special:` name. Tests: desk.rs layers_keyboard_on_each_hyprland (both Lua
+    readers under a host Lua, layers of each shape), t_unit_window_select (0.57-shaped special
+    workspaces, hidden and shown), t_keys_layer and t_tree_layer on 0.56.2 and 0.57.1.
+648. **A `--hyprland DIR` box wrote lastVersion 0.0.0** (2026-11-06, #424). start-hyprland.sh asks
+    the box's Hyprland its version for the box HOME's `lastVersion` (finding 626), but ran a folder's
+    binary without the folder's library dir: Arch's 0.57.1 needs `libaquamarine.so.15`, which only the
+    folder has, so `--version` failed, nothing was written, and Hyprland wrote 0.0.0 (finding 626's
+    update news for the next Hyprland started in the box). **Now:** the probe runs with the
+    environment the launch has (`env "${lib[@]}"`). The suite's t_system_dirs compared with the
+    host's `Hyprland --version`; it now asks the box's own Hyprland (box_hypr_version), so it holds
+    under OMABOX_HYPRLAND. Tests: t_system_dirs under OMABOX_HYPRLAND=0.57.1 (failed with 0.0.0
+    before), t_hyprland_folder (its folder's lastVersion).
+649. **`--version` and `config --json` described build/prefix while OMABOX_HYPRLAND's folder was what
+    boxes ran** (2026-11-06, #424). Both asked which aquamarine the installed Hyprland's soname
+    resolves to; with OMABOX_HYPRLAND set, `up` loads the folder's own (kind `folder`, whatever
+    OMABOX_AQUAMARINE says), so `--version` named omabox's 0.15.1 build and `confirm_close_available`
+    its answer, while boxes ran 0.16.0 (the suite's aq_unfixed said unfixed and `up` went ahead).
+    **Now:** install::new_box_in is what `up` would run: with OMABOX_HYPRLAND, that build's
+    aquamarine as check_install picks it (the folder's own, else the one omabox finds for the soname it
+    links), else the installed Hyprland's as before. `--version` adds a line `hyprland: BINARY
+    (OMABOX_HYPRLAND=PATH)` (or that up cannot run it), `--version --json` a `hyprland` object
+    (`given, binary, message`; null when unset), `config --json` a `hyprland` key (the path or
+    null), and `confirm_close_available` is the folder's aquamarine's. Not done: a jailed caller's
+    `--version` still describes the installed one (a jailed `up` takes the path through the jail's
+    view). Tests: install.rs new_box_follows_omabox_hyprland (a folder's link and soname-only copy,
+    OMABOX_AQUAMARINE=system, a folder with none, a path that holds nothing), version.rs
+    omabox_hyprland_is_said and json_as_jq_writes_it.
+650. **On Hyprland 0.57 a shot of a window that kept resizing failed 19 times in 20** (2026-11-06,
+    #436). 0.57 fails every copy of a window (`grim -T`: SIGSEGV with grim 1.5.0, finding 605) for
+    the whole of its size animation, not a frame of it: probed in a 0.57.1 box, a floating foot
+    resized once failed its copies for 200-300 ms after (Omarchy's animation), never with animations
+    off, and 3 copies in 150 succeeded while it was resized every 34 ms, against 99 in 100 with the
+    window's `no_anim` set. `-j clients`' size is the goal size, the same all through the animation, and
+    nothing in `-j` or Lua says a window is animating. 0.56.2 copies a window through its animation;
+    there 1 copy in 5 failed. A window resized faster than its animation never ends one, so 4 tries
+    100 ms apart ran out. **Now:** while the window holds its size (as `-j clients` lists it) a
+    failed copy is tried 4 times as before; once its size is seen to change around a failed try,
+    every 20 ms until 4 s from the capture's start (WIN_RETRY_FOR), and after 500 ms of that
+    (WIN_ANIM_AFTER, longer than an animation) the window's own animations are turned off
+    (`hl.dsp.window.set_prop` no_anim 1) and set back (`unset`) when the capture is over; past 4 s,
+    the words say how many tries and that the window kept changing size. Not done: a signal to
+    omabox in those tries leaves the window's animations off. Tests: t_unit_capture_errors (the
+    stand-in grim's window changing size at each failure: taken on the tenth try; for ever: tried
+    4 s, said so, its animations off once and back), t_window_resizing (20 shots of a window resized
+    every 30 ms: 0 failed on 0.56.2 and in 3 runs on 0.57.1; 19 of 20 failed before, 1 of 20 with
+    retries alone).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

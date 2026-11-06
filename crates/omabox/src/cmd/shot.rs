@@ -245,7 +245,21 @@ struct Grab {
     pid: Arc<AtomicI32>,
     mpid: Arc<AtomicI32>,
     stop: Arc<AtomicBool>,
+    /// A window shot's window, for its size between failed copies (#436); empty for the screen.
+    addr: Vec<u8>,
+    /// The last window grab's tries, and whether the window was seen changing size among them.
+    tries: AtomicI32,
+    resized: AtomicBool,
+    /// A grab turned the window's animations off (#436).
+    anim_off: AtomicBool,
 }
+
+/// How long a window's copy is taken again while the window keeps changing size (#436, finding
+/// 648): Hyprland 0.57 fails about 4 in 5 copies of a window resized every 30 ms, so 4 tries ran out.
+const WIN_RETRY_FOR: Duration = Duration::from_secs(4);
+/// How long a resizing window's copy fails before its animations are turned off for the rest of
+/// the tries (finding 650): longer than one of Omarchy's size animations (about 300 ms).
+const WIN_ANIM_AFTER: Duration = Duration::from_millis(500);
 
 impl Grab {
     fn errfile(&self) -> Option<std::fs::File> {
@@ -326,19 +340,92 @@ impl Grab {
                     .is_ok_and(|e| e.windows(29).any(|w| w == b"failed to copy capture source")))
     }
 
+    /// The window's size as Hyprland lists it now (`[W,H]`), None when it cannot tell.
+    fn win_size(&self) -> Option<String> {
+        if self.addr.is_empty() {
+            return None;
+        }
+        let a: Vec<Vec<u8>> = ["timeout", "3", "hyprctl", "-j", "clients"]
+            .iter()
+            .map(|w| w.as_bytes().to_vec())
+            .collect();
+        let r = on_box(&self.ctx, &a, false, Out::Capture(None), ErrTo::Null);
+        let v: serde_json::Value = serde_json::from_slice(&r.out).ok()?;
+        v.as_array()?
+            .iter()
+            .find(|c| c["address"].as_str().map(str::as_bytes) == Some(self.addr.as_slice()))
+            .map(|c| c["size"].to_string())
+    }
+
+    /// The window's own animations off (ON) or back as they were (Hyprland's `set_prop` no_anim,
+    /// `unset`), in the box. Only for an address as Hyprland writes one.
+    fn no_anim(&self, on: bool) {
+        if self.addr.len() < 3
+            || !self.addr.starts_with(b"0x")
+            || !self.addr[2..].iter().all(u8::is_ascii_hexdigit)
+        {
+            return;
+        }
+        let v = if on { "1" } else { "unset" };
+        let lua = format!(
+            "hl.dsp.window.set_prop({{ prop = 'no_anim', value = '{v}', window = 'address:{}' }})",
+            String::from_utf8_lossy(&self.addr)
+        );
+        let a: Vec<Vec<u8>> = vec![
+            b"timeout".to_vec(),
+            b"3".to_vec(),
+            b"hyprctl".to_vec(),
+            b"dispatch".to_vec(),
+            lua.into_bytes(),
+        ];
+        let _ = on_box(&self.ctx, &a, false, Out::Null, ErrTo::Null);
+    }
+
+    /// The window's animations back, when a grab turned them off.
+    fn anim_back(&self) {
+        if self.anim_off.swap(false, Ordering::SeqCst) {
+            self.no_anim(false);
+        }
+    }
+
     /// GRAB of a window, taken again while its copy failed (finding 605: Hyprland fails a window's
     /// copy when its buffer changes size during it, as when the window was just resized or shown),
-    /// up to 3 more times 100 ms apart; each failed try's words dropped. Its status.
-    fn win_retried(&self, grab: impl Fn() -> i32) -> i32 {
+    /// each failed try's words dropped. Up to 4 tries 100 ms apart while the window holds its size.
+    /// Once its size is seen to change around a failed try, every 20 ms until UNTIL (#436, finding
+    /// 648): Hyprland 0.57 fails every copy of a window through its size animation, which a window
+    /// resized faster than that never ends, so after WIN_ANIM_AFTER of failed tries the window's own
+    /// animations are turned off (`anim_off`; anim_back once the capture is over). Its status; its tries and whether
+    /// it resized in `tries` and `resized`.
+    fn win_retried(&self, until: std::time::Instant, grab: impl Fn() -> i32) -> i32 {
+        let t0 = std::time::Instant::now();
+        let mut before = self.win_size();
         let mut rc = grab();
-        for _ in 0..3 {
+        let mut tries = 1;
+        loop {
             if !self.copy_failed(rc) || self.stop.load(Ordering::SeqCst) {
                 break;
             }
+            let after = self.win_size();
+            if before.is_some() && after.is_some() && before != after {
+                self.resized.store(true, Ordering::SeqCst);
+            }
+            let resizing = self.resized.load(Ordering::SeqCst);
+            if (!resizing && tries >= 4) || std::time::Instant::now() >= until {
+                break;
+            }
+            if resizing
+                && t0.elapsed() >= WIN_ANIM_AFTER
+                && !self.anim_off.swap(true, Ordering::SeqCst)
+            {
+                self.no_anim(true);
+            }
             let _ = std::fs::File::create(shell::path(&self.err));
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(if resizing { 20 } else { 100 }));
+            before = if resizing { self.win_size() } else { after };
             rc = grab();
+            tries += 1;
         }
+        self.tries.store(tries, Ordering::SeqCst);
         rc
     }
 }
@@ -1156,6 +1243,26 @@ fn grim_failed_words(mut why: Vec<u8>, grc: i32, zn: &[u8]) -> Vec<u8> {
     cat!("shot: grim failed: ", why, zn)
 }
 
+/// What a window's grim 1.5.0 dying of SIGSEGV on each of TRIES means (finding 605); RESIZED: the
+/// window was seen changing size among them (#436), so they went on until WIN_RETRY_FOR was over.
+fn segv_words(tries: i32, resized: bool) -> Vec<u8> {
+    let why = if resized {
+        cat!(
+            ", and the window kept changing size for the ",
+            n(i64::try_from(WIN_RETRY_FOR.as_secs()).unwrap_or(0)),
+            " s it was tried: shoot it once it holds its size (omabox wait still)"
+        )
+    } else {
+        b", as while the window keeps changing size".to_vec()
+    };
+    cat!(
+        "it died of SIGSEGV (status 139) on each of ",
+        n(i64::from(tries)),
+        " tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy",
+        why
+    )
+}
+
 fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bool) -> Res<()> {
     let (pid, mpid) = (Arc::new(AtomicI32::new(0)), Arc::new(AtomicI32::new(0)));
     let (stop, done) = (
@@ -1206,6 +1313,10 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         pid,
         mpid,
         stop,
+        addr: jq_r(".address", &s.win),
+        tries: AtomicI32::new(0),
+        resized: AtomicBool::new(false),
+        anim_off: AtomicBool::new(false),
     });
     let to_fd = !s.tofd.is_empty() && !s.via_file();
     let tofd = s.tofd.clone();
@@ -1253,8 +1364,9 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         th = Some(std::thread::spawn(move || {
             // A window's first capture can be a frame from long ago (finding 81): captured twice.
             let mut rc = 0;
+            let until = std::time::Instant::now() + WIN_RETRY_FOR;
             if has_win {
-                rc = g.win_retried(|| match dev_null(true) {
+                rc = g.win_retried(until, || match dev_null(true) {
                     Ok(nl) => g.grab(nl),
                     Err(_) => 1,
                 });
@@ -1263,7 +1375,11 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 }
             }
             if rc == 0 {
-                rc = if has_win { g.win_retried(&put) } else { put() };
+                rc = if has_win {
+                    g.win_retried(until, &put)
+                } else {
+                    put()
+                };
             }
             // Under load grim now and then ends 0 with no image at all (#217, finding 318).
             if rc == 0
@@ -1274,6 +1390,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 std::thread::sleep(Duration::from_millis(100));
                 rc = put();
             }
+            g.anim_back();
             done.store(true, Ordering::SeqCst);
             let _ = tx.send(rc);
         }));
@@ -1348,7 +1465,10 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         }
         // A window's copy that kept failing (finding 605): what grim 1.5.0's SIGSEGV means.
         if why.is_empty() && grc == 139 && has_win {
-            why = b"it died of SIGSEGV (status 139) on each of 4 tries, saying nothing: grim 1.5.0 does when Hyprland fails a window's copy, as while the window keeps changing size".to_vec();
+            why = segv_words(
+                grab.tries.load(Ordering::SeqCst),
+                grab.resized.load(Ordering::SeqCst),
+            );
         }
         // A 0x0 output in an NVIDIA box (#213) fails a whole shot: said why.
         let mut zn = Vec::new();

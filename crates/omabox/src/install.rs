@@ -612,15 +612,17 @@ pub fn aq_pick_dirs(ctx: &Ctx, soname: &[u8], sys: &[u8], dirs: &[Vec<u8>]) -> O
 }
 
 /// config --json's confirm_close_available: false only when the aquamarine boxes would use (from
-/// checkout CO, the system's under ROOT) lacks the fix; quiet.
+/// checkout CO, the system's under ROOT; OMABOX_HYPRLAND's, when set: new_box_in) lacks the fix;
+/// quiet.
 pub fn confirm_close_available_in(ctx: &Ctx, co: &[u8], root: &[u8]) -> bool {
-    let env = shell::env_or_empty("OMABOX_AQUAMARINE");
-    !muted(|| {
-        hypr_aq_soname(ctx)
-            .ok()
-            .and_then(|w| aq_resolve_in(ctx, &w, &env, co, root))
-            .is_some_and(|a| !a.fixed)
-    })
+    let nb = new_box_in(
+        ctx,
+        co,
+        root,
+        &shell::env_or_empty("OMABOX_AQUAMARINE"),
+        &shell::env_or_empty("OMABOX_HYPRLAND"),
+    );
+    !nb.aq.is_some_and(|a| !a.fixed)
 }
 
 /// What `up` refuses without aquamarine's fix on a headless box (finding 125): one on an NVIDIA
@@ -722,6 +724,90 @@ fn ldd_missing(file: &[u8], lib: Option<&[u8]>) -> Vec<u8> {
     v.join(&b' ')
 }
 
+/// The libaquamarine soname build H links: its ELF dynamic section, read, never run. A soname,
+/// nothing else: aq_pick looks for it in library dirs by name, and one with a / in it (a jailed
+/// caller's build can say anything) would have it test any path on the host (#198).
+fn hypr_links_aq(h: &[u8]) -> Option<Vec<u8>> {
+    elf_needed(h, "NEEDED")
+        .unwrap_or_default()
+        .into_iter()
+        .find(|l| shell::re_match("^libaquamarine\\.so(\\.[0-9A-Za-z_]+)*$", l))
+}
+
+/// A `--hyprland DIR`'s own aquamarine (#424): kind folder, when its library dir LIB has WANT.
+fn folder_aq(lib: &[u8], want: &[u8]) -> Option<Aq> {
+    let own = cat!(lib, "/", want);
+    (!lib.is_empty() && shell::path(&own).exists()).then(|| {
+        // The file the soname links to names the version (libaquamarine.so.0.16.0); a copy under the
+        // soname itself (.so.15) names none, and only #415's symbol can say it has the fix.
+        let ver = after_so(&crate::repo::readlink_f(&own).unwrap_or_default());
+        let ver = if ver.contains(&b'.') {
+            ver
+        } else {
+            b"unknown".to_vec()
+        };
+        Aq {
+            kind: b"folder".to_vec(),
+            lib: lib.to_vec(),
+            fixed: aq_ver_fixed(&ver) || aq_has_fix(&own),
+            ver,
+            main: Vec::new(),
+        }
+    })
+}
+
+/// What a new box would run, for `--version` and `config --json` (#424, finding 649).
+#[derive(Debug, Default)]
+pub struct NewBox {
+    /// OMABOX_HYPRLAND's value when set (up's `--hyprland` default); empty for the installed one.
+    pub given: Vec<u8>,
+    /// What that value resolves to; None for the installed Hyprland, or one up refuses.
+    pub hypr: Option<Hypr>,
+    /// The aquamarine its Hyprland loads, as check_install picks it; None when none is found.
+    pub aq: Option<Aq>,
+}
+
+/// new_box_in CO ROOT ENV HYPRLAND: what `up` would run from checkout CO (the system's under ROOT),
+/// OMABOX_AQUAMARINE as ENV and OMABOX_HYPRLAND as HYPRLAND: that build's aquamarine as
+/// check_install takes it (a folder's own first, whatever ENV says; else the one omabox finds for
+/// the soname it links), else the installed Hyprland's (aq_resolve_in). Quiet. Not in a jail: a
+/// jailed `up` takes the path only through the jail's view of it.
+pub fn new_box_in(ctx: &Ctx, co: &[u8], root: &[u8], env: &[u8], hyprland: &[u8]) -> NewBox {
+    muted(|| {
+        if hyprland.is_empty() || in_jail() {
+            let aq = hypr_aq_soname(ctx)
+                .ok()
+                .and_then(|w| aq_resolve_in(ctx, &w, env, co, root));
+            return NewBox {
+                aq,
+                ..NewBox::default()
+            };
+        }
+        let hypr = hypr_target(ctx, hyprland).ok();
+        let aq = hypr.as_ref().and_then(|h| {
+            let want = hypr_links_aq(&h.bin)?;
+            folder_aq(&h.lib, &want).or_else(|| aq_resolve_in(ctx, &want, env, co, root))
+        });
+        NewBox {
+            given: hyprland.to_vec(),
+            hypr,
+            aq,
+        }
+    })
+}
+
+/// new_box_in from this checkout, the system at /, and the environment's OMABOX_AQUAMARINE and
+/// OMABOX_HYPRLAND.
+pub fn new_box(ctx: &Ctx) -> NewBox {
+    new_box_in(
+        ctx,
+        &crate::paths::root(),
+        b"/",
+        &shell::env_or_empty("OMABOX_AQUAMARINE"),
+        &shell::env_or_empty("OMABOX_HYPRLAND"),
+    )
+}
+
 /// check_install RENDER [HYPRLAND]: what `up` needs from install.sh: the helpers, and an aquamarine
 /// with the soname the box's Hyprland links (aq_resolve): the installed Hyprland's, or `up
 /// --hyprland`'s build (finding 116), which is refused here rather than left to crash in the box.
@@ -777,35 +863,14 @@ pub fn check_install(
     // A build's own libraries: its ELF dynamic section, read, never run. A soname, nothing else:
     // aq_pick looks for it in library dirs by name, and one with a / in it (a jailed caller's build
     // can say anything) would have it test any path on the host (#198).
-    let want = elf_needed(h, "NEEDED")
-        .unwrap_or_default()
-        .into_iter()
-        .find(|l| shell::re_match("^libaquamarine\\.so(\\.[0-9A-Za-z_]+)*$", l));
-    let Some(want) = want else {
+    let Some(want) = hypr_links_aq(h) else {
         return Err(ctx.die(cat!(
             "--hyprland ",
             h,
             " links no libaquamarine (readelf -d): not a Hyprland build?"
         )));
     };
-    let own = cat!(lib, "/", want);
-    let folder = (!lib.is_empty() && shell::path(&own).exists()).then(|| {
-        // The file the soname links to names the version (libaquamarine.so.0.16.0); a copy under the
-        // soname itself (.so.15) names none, and only #415's symbol can say it has the fix.
-        let ver = after_so(&crate::repo::readlink_f(&own).unwrap_or_default());
-        let ver = if ver.contains(&b'.') {
-            ver
-        } else {
-            b"unknown".to_vec()
-        };
-        Aq {
-            kind: b"folder".to_vec(),
-            lib: lib.to_vec(),
-            fixed: aq_ver_fixed(&ver) || aq_has_fix(&own),
-            ver,
-            main: Vec::new(),
-        }
-    });
+    let folder = folder_aq(lib, &want);
     let Some(aq) = folder.or_else(|| muted(|| aq_resolve(ctx, &want))) else {
         let sys = muted(|| hypr_aq_soname(ctx)).unwrap_or(b"no libaquamarine".to_vec());
         return Err(ctx.die(cat!(
@@ -1900,6 +1965,71 @@ mod tests {
         );
         assert_eq!(got("bld/Hyprland"), h("bld/Hyprland", "bld", "", ""));
         assert_eq!(got("none"), None);
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    // --version and config --json describe what up would run under OMABOX_HYPRLAND (#424, finding
+    // 647): a folder's own aquamarine, whatever OMABOX_AQUAMARINE says; the soname-only copy's
+    // version unknown; a folder with none: the one omabox finds (none in an empty system here).
+    #[test]
+    fn new_box_follows_omabox_hyprland() {
+        if !std::path::Path::new("/usr/bin/Hyprland").is_file() {
+            return;
+        }
+        let t = std::env::temp_dir().join(format!("omabox-newbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let want = hypr_links_aq(b"/usr/bin/Hyprland").expect("Hyprland links libaquamarine");
+        let want = String::from_utf8(want).unwrap();
+        for d in ["pkg", "copy", "nolib"] {
+            std::fs::create_dir_all(t.join(d).join("usr/bin")).unwrap();
+            std::fs::copy("/usr/bin/Hyprland", t.join(d).join("usr/bin/Hyprland")).unwrap();
+        }
+        for d in ["pkg", "copy"] {
+            std::fs::create_dir_all(t.join(d).join("usr/lib")).unwrap();
+        }
+        std::fs::write(t.join("pkg/usr/lib/libaquamarine.so.0.99.0"), "").unwrap();
+        std::os::unix::fs::symlink("libaquamarine.so.0.99.0", t.join("pkg/usr/lib").join(&want))
+            .unwrap();
+        std::fs::write(t.join("copy/usr/lib").join(&want), "").unwrap();
+        let ctx = Ctx::new(b"version", Vec::new());
+        let at = |p: &str| shell::bytes(&t.join(p)).to_vec();
+        let (co, root) = (at("co"), at("root"));
+        let nb = |h: &str, env: &[u8]| {
+            let h = if h.is_empty() { Vec::new() } else { at(h) };
+            new_box_in(&ctx, &co, &root, env, &h)
+        };
+        let n = nb("", b"");
+        assert!(
+            n.given.is_empty() && n.hypr.is_none(),
+            "unset: the installed one"
+        );
+        assert!(n.aq.is_none_or(|a| a.kind != b"folder"));
+        for env in [&b""[..], b"system"] {
+            let n = nb("pkg", env);
+            assert_eq!(n.given, at("pkg"));
+            assert_eq!(n.hypr.map(|h| h.bin), Some(at("pkg/usr/bin/Hyprland")));
+            let a = n.aq.expect("the folder's aquamarine");
+            assert_eq!(
+                (a.kind, a.ver, a.fixed, a.lib),
+                (
+                    b"folder".to_vec(),
+                    b"0.99.0".to_vec(),
+                    true,
+                    at("pkg/usr/lib")
+                ),
+                "OMABOX_AQUAMARINE={}",
+                String::from_utf8_lossy(env)
+            );
+        }
+        let a = nb("copy", b"").aq.expect("a copy under the soname");
+        assert_eq!(
+            (a.kind, a.ver, a.fixed),
+            (b"folder".to_vec(), b"unknown".to_vec(), false)
+        );
+        let n = nb("nolib", b"system");
+        assert!(n.hypr.is_some() && n.aq.is_none(), "no aquamarine anywhere");
+        let n = nb("nosuch", b"");
+        assert_eq!((n.given, n.hypr, n.aq), (at("nosuch"), None, None));
         let _ = std::fs::remove_dir_all(&t);
     }
 
