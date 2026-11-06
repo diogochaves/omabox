@@ -57,6 +57,7 @@ pub enum Family {
     Debian,
     Fedora,
     Suse,
+    Nix,
 }
 
 impl Family {
@@ -66,6 +67,7 @@ impl Family {
             Family::Debian => "debian",
             Family::Fedora => "fedora",
             Family::Suse => "suse",
+            Family::Nix => "nix",
         }
     }
 
@@ -75,6 +77,8 @@ impl Family {
             Family::Debian => "sudo apt install",
             Family::Fedora => "sudo dnf install",
             Family::Suse => "sudo zypper install",
+            // (NixOS installs by its configuration, not a command: #247)
+            Family::Nix => "nixos-rebuild switch with these in environment.systemPackages:",
         }
     }
 
@@ -91,6 +95,7 @@ fn family_of(w: &str) -> Option<Family> {
         "fedora" | "rhel" | "centos" => Some(Family::Fedora),
         "suse" | "sles" => Some(Family::Suse),
         _ if w.starts_with("opensuse") => Some(Family::Suse),
+        "nixos" => Some(Family::Nix),
         _ => None,
     }
 }
@@ -150,31 +155,47 @@ impl OsRelease {
 }
 
 /// What a fix may install, by the program (or build) it is for: its packages on Arch, Debian and
-/// Ubuntu, Fedora, openSUSE, in Family's order; "" where none is known to package it. Arch's are the
-/// ones install.sh installs and this machine runs; the others are written from those
-/// distributions' package lists and only checked by the unit tests (#320).
-const PKGS: &[(&str, [&str; 4])] = &[
-    ("Hyprland", ["hyprland"; 4]),
-    ("labwc", ["labwc"; 4]),
-    ("quickshell", ["quickshell", "", "", ""]),
-    ("bwrap", ["bubblewrap"; 4]),
-    ("pasta", ["passt"; 4]),
-    ("unshare", ["util-linux"; 4]),
-    ("jq", ["jq"; 4]),
-    ("grim", ["grim"; 4]),
+/// Ubuntu, Fedora, openSUSE, NixOS, in Family's order; "" where none is known to package it. Arch's
+/// are the ones install.sh installs and this machine runs; Debian sid's and openSUSE Tumbleweed's
+/// were installed in containers (finding 645); Fedora's are from its package lists, NixOS's from
+/// nixpkgs' attribute names. install.sh's lists hold every one of these (a unit test, below).
+const PKGS: &[(&str, [&str; 5])] = &[
+    ("Hyprland", ["hyprland"; 5]),
+    ("labwc", ["labwc"; 5]),
+    (
+        "quickshell",
+        ["quickshell", "quickshell", "", "", "quickshell"],
+    ),
+    ("bwrap", ["bubblewrap"; 5]),
+    ("pasta", ["passt"; 5]),
+    ("unshare", ["util-linux"; 5]),
+    ("jq", ["jq"; 5]),
+    ("grim", ["grim"; 5]),
     (
         "dbus-daemon",
-        ["dbus", "dbus-daemon", "dbus-daemon", "dbus-1"],
+        [
+            "dbus",
+            "dbus-daemon",
+            "dbus-daemon",
+            "dbus-1-daemon",
+            "dbus",
+        ],
     ),
     (
         "dbus-update-activation-environment",
-        ["dbus", "dbus-bin", "dbus-tools", "dbus-1"],
+        ["dbus", "dbus-bin", "dbus-tools", "dbus-1-tools", "dbus"],
     ),
-    ("gnome-keyring-daemon", ["gnome-keyring"; 4]),
-    ("python3", ["python", "python3", "python3", "python3"]),
-    ("wlr-randr", ["wlr-randr"; 4]),
-    ("ip", ["iproute2", "iproute2", "iproute", "iproute2"]),
-    ("nft", ["nftables"; 4]),
+    ("gnome-keyring-daemon", ["gnome-keyring"; 5]),
+    (
+        "python3",
+        ["python", "python3", "python3", "python3", "python3"],
+    ),
+    ("wlr-randr", ["wlr-randr"; 5]),
+    (
+        "ip",
+        ["iproute2", "iproute2", "iproute", "iproute2", "iproute2"],
+    ),
+    ("nft", ["nftables"; 5]),
     // tools/ (C, wayland-scanner, pkg-config's modules: the Makefiles')
     (
         "tools-build",
@@ -182,7 +203,8 @@ const PKGS: &[(&str, [&str; 4])] = &[
             "base-devel pkgconf wayland libxkbcommon libpng pixman at-spi2-core glib2",
             "build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev",
             "gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel",
-            "gcc make pkg-config wayland-devel libxkbcommon-devel libpng16-devel pixman-devel at-spi2-core-devel glib2-devel",
+            "gcc make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel",
+            "gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib",
         ],
     ),
     // setup --aquamarine (the programs it checks for)
@@ -193,6 +215,7 @@ const PKGS: &[(&str, [&str; 4])] = &[
             "git cmake ninja-build hyprwayland-scanner build-essential",
             "git cmake ninja-build hyprwayland-scanner gcc-c++",
             "git cmake ninja hyprwayland-scanner gcc-c++",
+            "git cmake ninja hyprwayland-scanner gcc",
         ],
     ),
 ];
@@ -254,6 +277,8 @@ pub fn install_here(needs: &[&str]) -> Vec<String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum St {
     Ok,
+    /// Neither good nor bad: what this machine is (no Omarchy: plain boxes only, #247).
+    Info,
     Warn,
     Fail,
 }
@@ -262,6 +287,7 @@ impl St {
     fn word(self) -> &'static str {
         match self {
             St::Ok => "ok",
+            St::Info => "info",
             St::Warn => "warn",
             St::Fail => "fail",
         }
@@ -442,6 +468,20 @@ fn hyprland_check(root: &[u8], fam: Option<Family>) -> Check {
     c
 }
 
+/// quickshell, which Omarchy's shell runs on: a failure without it on Omarchy (every box has its
+/// bar), information elsewhere, where only a shell put in a box needs it (#247).
+fn quickshell_check(root: &[u8], fam: Option<Family>, omarchy: bool) -> Check {
+    let mut c = prog_check(root, fam, "quickshell", "quickshell", None);
+    if !omarchy && c.st == St::Fail {
+        c.st = St::Info;
+        c.found = format!(
+            "{}: only a shell in a box needs it; a plain box starts without one",
+            c.found
+        );
+    }
+    c
+}
+
 /// grim, with -T (a window by its toplevel id: shot --window, finding 81; grim 1.5).
 fn grim_check(root: &[u8], fam: Option<Family>) -> Check {
     let Some(p) = in_launch(root, "grim") else {
@@ -545,19 +585,22 @@ fn some_progs_check(root: &[u8], fam: Option<Family>) -> Check {
     )
 }
 
-/// Omarchy, whose desktop a box runs (plain Hyprland boxes would be #247), and the look a box
-/// starts from, which Omarchy makes at the first login (finding 130; up refuses without it).
+/// What a machine without Omarchy has: plain boxes (#247).
+const PLAIN_ONLY: &str = "plain boxes only: no Omarchy here";
+
+/// Omarchy, whose desktop a box runs, and the look a box starts from, which Omarchy makes at the first
+/// login (finding 130; up refuses without it). Without Omarchy, information: boxes are plain Hyprland
+/// (#247, finding 645).
 fn omarchy_check(root: &[u8], version: &str) -> Check {
-    let boot = at(root, b"/usr/share/omarchy/default/hypr/bootstrap.lua");
-    if !shell::path(&boot).is_file() {
+    if !crate::install::omarchy_at(root) {
         return check(
             "omarchy",
-            St::Fail,
+            St::Info,
             format!(
-                "no Omarchy ({} is missing): a box runs Omarchy's desktop",
-                s(&boot)
+                "{PLAIN_ONLY} ({} is missing): a box runs Hyprland without Omarchy's desktop, bar, theme or plugins",
+                s(&at(root, b"/usr/share/omarchy"))
             ),
-            vec!["install Omarchy 4 (https://omarchy.org); boxes without Omarchy are not there yet (issue #247)".into()],
+            Vec::new(),
         );
     }
     let v = if version.is_empty() {
@@ -573,7 +616,15 @@ fn omarchy_check(root: &[u8], version: &str) -> Check {
     )
 }
 
-fn theme_check(home: &[u8]) -> Check {
+fn theme_check(home: &[u8], omarchy: bool) -> Check {
+    if !omarchy {
+        return check(
+            "theme",
+            St::Info,
+            format!("{PLAIN_ONLY}: no Omarchy theme, which a plain box does without"),
+            Vec::new(),
+        );
+    }
     let t = cat!(home, "/.local/state/omarchy/current/theme");
     if shell::path(&t).is_dir() {
         return check(
@@ -1055,10 +1106,9 @@ fn gather(ctx: &Ctx, os: &OsRelease) -> Vec<Check> {
     let fam = os.family();
     let root: &[u8] = b"/";
     let home = shell::env_or_empty("HOME");
+    let omarchy = crate::install::omarchy_at(root);
     let mut v = vec![omarchy_check(root, &s(&crate::install::omarchy_version()))];
-    if v[0].st == St::Ok {
-        v.push(theme_check(&home));
-    }
+    v.push(theme_check(&home, omarchy));
     v.push(hyprland_check(root, fam));
     v.extend(host_config_check(crate::host::host_config(ctx).as_deref()));
     // (`up` picks it so: the installed Hyprland's soname, then aq_resolve; their words held)
@@ -1078,7 +1128,7 @@ fn gather(ctx: &Ctx, os: &OsRelease) -> Vec<Check> {
     let aq_fixed = aq.as_ref().is_some_and(|a| a.fixed);
     v.push(aq_check(aq.as_ref(), &why));
     v.push(prog_check(root, fam, "labwc", "labwc", None));
-    v.push(prog_check(root, fam, "quickshell", "quickshell", None));
+    v.push(quickshell_check(root, fam, omarchy));
     v.push(prog_check(
         root,
         fam,
@@ -1374,7 +1424,8 @@ mod tests {
             ("rocky", "rhel centos fedora", Some(Family::Fedora)),
             ("opensuse-tumbleweed", "opensuse suse", Some(Family::Suse)),
             ("sles", "", Some(Family::Suse)),
-            ("nixos", "", None),
+            ("nixos", "", Some(Family::Nix)),
+            ("gentoo", "", None),
             ("", "", None),
         ] {
             assert_eq!(family(id, like), f, "{id} {like}");
@@ -1420,7 +1471,13 @@ mod tests {
         );
         assert_eq!(
             install_lines(Some(Family::Suse), &needs),
-            ["sudo zypper install labwc bubblewrap passt dbus-1 iproute2"]
+            ["sudo zypper install labwc bubblewrap passt dbus-1-daemon iproute2"]
+        );
+        assert_eq!(
+            install_lines(Some(Family::Nix), &needs),
+            [
+                "nixos-rebuild switch with these in environment.systemPackages: labwc bubblewrap passt dbus iproute2"
+            ]
         );
         assert_eq!(
             install_lines(None, &["labwc"]),
@@ -1441,11 +1498,16 @@ mod tests {
         );
         // none packaged there: said, with where to get it
         assert_eq!(
-            install_lines(Some(Family::Debian), &["quickshell", "jq"]),
+            install_lines(Some(Family::Suse), &["quickshell", "jq"]),
             [
-                "sudo apt install jq",
-                "quickshell: no debian package known to omabox: build it (https://quickshell.org)"
+                "sudo zypper install jq",
+                "quickshell: no suse package known to omabox: build it (https://quickshell.org)"
             ]
+        );
+        assert_eq!(
+            install_lines(Some(Family::Debian), &["quickshell"]),
+            ["sudo apt install quickshell"],
+            "Debian sid has it (0.3.2, 2026-11-06)"
         );
         assert!(install_lines(Some(Family::Arch), &["no-such-need"]).is_empty());
         // every need named by a check is in the table, for every family
@@ -1553,7 +1615,10 @@ mod tests {
         assert_eq!(grim_check(&r, arch).st, St::Ok);
         let c = box_progs_check(&r, Some(Family::Suse));
         assert_eq!(c.st, St::Fail);
-        assert_eq!(c.fix, ["sudo zypper install jq dbus-1 gnome-keyring"]);
+        assert_eq!(
+            c.fix,
+            ["sudo zypper install jq dbus-1-daemon dbus-1-tools gnome-keyring"]
+        );
         for p in BOX_PROGS {
             prog(&d, p, "true");
         }
@@ -1572,18 +1637,120 @@ mod tests {
     fn omarchy_and_theme() {
         let d = tree("omarchy");
         let r = rb(&d);
+        // #247: no Omarchy is no failure, information: plain boxes only, no theme to start from
+        assert!(!crate::install::omarchy_at(&r));
         let c = omarchy_check(&r, "");
-        assert_eq!(c.st, St::Fail);
-        assert!(c.fix[0].contains("#247"));
+        assert_eq!((c.st, c.fix.len()), (St::Info, 0));
+        assert_eq!(
+            c.found,
+            format!(
+                "plain boxes only: no Omarchy here ({}/usr/share/omarchy is missing): a box runs Hyprland without Omarchy's desktop, bar, theme or plugins",
+                d.display()
+            )
+        );
+        let t = theme_check(&r, false);
+        assert_eq!((t.st, t.fix.len()), (St::Info, 0));
+        assert!(t.found.starts_with("plain boxes only: no Omarchy here"));
         put(&d, "/usr/share/omarchy/default/hypr/bootstrap.lua", "");
+        assert!(crate::install::omarchy_at(&r));
         assert_eq!(
             omarchy_check(&r, "4.5.0-1").found,
             "Omarchy 4.5.0-1 (/usr/share/omarchy)"
         );
-        assert_eq!(theme_check(&r).st, St::Fail);
+        assert_eq!(theme_check(&r, true).st, St::Fail);
         std::fs::create_dir_all(d.join(".local/state/omarchy/current/theme")).unwrap();
-        assert_eq!(theme_check(&r).st, St::Ok);
+        assert_eq!(theme_check(&r, true).st, St::Ok);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #247: quickshell runs Omarchy's bar, so on Omarchy a box needs it; elsewhere only a shell put in
+    /// a box does: information, with the line that installs it (or where to get it).
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn quickshell_only_with_omarchy() {
+        let d = tree("qs");
+        let r = rb(&d);
+        let c = quickshell_check(&r, Some(Family::Arch), true);
+        assert_eq!(c.st, St::Fail);
+        let c = quickshell_check(&r, Some(Family::Suse), false);
+        assert_eq!(c.st, St::Info);
+        // (what comes before says where it is not: the caller's PATH may have one)
+        assert!(
+            c.found
+                .ends_with(": only a shell in a box needs it; a plain box starts without one"),
+            "{}",
+            c.found
+        );
+        assert_eq!(
+            c.fix,
+            ["quickshell: no suse package known to omabox: build it (https://quickshell.org)"]
+        );
+        prog(&d, "quickshell", "echo quickshell 0.3.2");
+        for o in [true, false] {
+            assert_eq!(quickshell_check(&r, Some(Family::Arch), o).st, St::Ok);
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// install.sh installs, per family, every package doctor's fixes name for what install.sh sets up
+    /// (it cannot ask doctor: it runs before omabox is built). Its lists, read from the script.
+    #[test]
+    fn install_sh_has_doctors_packages() {
+        let sh = include_str!("../../../../install.sh");
+        let list = |fam: &str| -> Vec<String> {
+            let start = format!("PKGS_{fam}=(\n");
+            let i = sh
+                .find(&start)
+                .unwrap_or_else(|| panic!("install.sh has {start}"))
+                + start.len();
+            let body = &sh[i..i + sh[i..].find("\n)\n").expect("its end")];
+            body.lines()
+                .flat_map(|l| {
+                    l.split('#')
+                        .next()
+                        .unwrap_or_default()
+                        .split_ascii_whitespace()
+                })
+                .map(str::to_string)
+                .collect()
+        };
+        // (what install.sh leaves to the user: Hyprland, said first; nft, for one setting)
+        let needs = [
+            "labwc",
+            "quickshell",
+            "bwrap",
+            "pasta",
+            "unshare",
+            "jq",
+            "grim",
+            "dbus-daemon",
+            "dbus-update-activation-environment",
+            "gnome-keyring-daemon",
+            "python3",
+            "wlr-randr",
+            "ip",
+            "tools-build",
+            "aquamarine-build",
+        ];
+        for f in [
+            Family::Arch,
+            Family::Debian,
+            Family::Fedora,
+            Family::Suse,
+            Family::Nix,
+        ] {
+            let have = list(f.name());
+            for n in needs {
+                let (_, by) = PKGS.iter().find(|(k, _)| *k == n).expect("in the table");
+                for p in by[f.index()].split_ascii_whitespace() {
+                    assert!(
+                        have.iter().any(|h| h == p),
+                        "install.sh's {} list has {p} ({n})",
+                        f.name()
+                    );
+                }
+            }
+        }
     }
 
     /// #422, finding 642: the host's config as status says it. hyprlang (a .conf): a warning that

@@ -293,13 +293,19 @@ impl Setup {
             " (skills/)\n"
         ))?;
         self.feedback(ctx, "refresh")?;
-        // The bar widget: only ~/.config/omarchy/plugins holds third-party plugins (finding 126).
-        self.link(
-            ctx,
-            &cat!(self.root, "/plugin"),
-            &self.in_home(".config/omarchy/plugins/chaves.omabox"),
-        )?;
-        out("bar widget chaves.omabox -> ~/.config/omarchy/plugins\n")?;
+        // The bar widget: only ~/.config/omarchy/plugins holds third-party plugins (finding 126). It is
+        // a widget of Omarchy's bar: without Omarchy, nothing to link it into (#247, finding 645).
+        let omarchy = crate::install::omarchy_at(b"/");
+        if omarchy {
+            self.link(
+                ctx,
+                &cat!(self.root, "/plugin"),
+                &self.in_home(".config/omarchy/plugins/chaves.omabox"),
+            )?;
+            out("bar widget chaves.omabox -> ~/.config/omarchy/plugins\n")?;
+        } else {
+            out("bar widget: skipped, no Omarchy here (it lives in Omarchy's bar)\n")?;
+        }
         // Where `omabox config` keeps the settings. The widget watches the file, and a watch only sees
         // the file appear if its directory already exists (finding 72).
         let _ = std::fs::create_dir_all(shell::path(&self.in_home(".config/omabox")));
@@ -309,7 +315,9 @@ impl Setup {
                 out("note: add ~/.local/bin to PATH\n")?;
             }
         }
-        self.widget()?;
+        if omarchy {
+            self.widget()?;
+        }
         self.guard()?;
         let aq = muted(|| hypr_aq_soname(ctx).ok().and_then(|w| aq_resolve(ctx, &w)));
         if let Some(aq) = aq {
