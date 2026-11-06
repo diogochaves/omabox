@@ -13175,42 +13175,6 @@ from them.
     (`[0, 953, 3, 7]`: 955 for 954); t_find_image clicks its 1.25 crop `--in` at the first column
     the size rule got wrong and at its last: before, column 3 went to 76 for 77 (the last column,
     on 4k+2 and 4k+3 wide, agrees under both).
-679. **`log run` read only the latest `run -d` job's log** (2026-11-06, #429). A check that starts
-    the app under test with `run -d`, then a terminal or an `xdg-open` with `-d`, lost the app's log
-    to `log run`; agents found the file by hand (`ls -t …/home/run-*.log | head -1`) and once read
-    the terminal's. `wait log JOB RE` already took a job, `log` did not. Now `log run JOB` reads that
-    job's log, JOB taken by the resolver `wait job|log` use (`jobs::job_resolve`: the job's pid as
-    `run -d` and `jobs` say it, or any pid of its session; a running job's, else its record in
-    `jobs/` or `jobs-done/`, so an ended job's too); a pid no job had is refused, by all three, with
-    the jobs the box had (newest 10, "ended" marked). A pid is a word after `run` only (`log 115`,
-    `log shell 115`: a usage error): a command match (`run:myapp`, as the issue asked) is not taken,
-    as words after `run` are logs' names (`log run shell` reads two). Beside other logs it is headed `==> run PID <==`.
-    Verified in a box (t_jobs: two jobs, the first's log by its pid, --grep -n, after `stop`).
-
-678. **`windows` named 4.5's idle notifications layer as possibly over every window** (2026-11-06,
-    #431). Every listing in a box with Omarchy 4.5's shell ended with `layer "omarchy-notifications"
-    (overlay 399x1080 at 1521,0 …) spans the screen, possibly over …`, toast or not: finding 421's
-    column, mapped while idle with its input mask empty (Service.qml: `mask: Region { item:
-    surface.showingNotifications ? deck : null }`, the deck as tall as its toasts), and called
-    "spans the screen" though it is a strip at the right edge. An agent took to `grep -v '^layer'`,
-    which would hide a layer really in the way. Finding 549's way (#407: the bar's surface cut to its
-    strip, from the edge its output reserves) cannot place the deck: Hyprland lists no input region
-    and nothing it lists tells the deck's height. Nor can `live.json` tell, which leaves out a
-    transient toast (`notify-send -e`: shown, count 1, live.json `[]`; checked in a box) and is
-    written a moment late. **Fix**: input_layers (finding 611's way for the hidden dock) asks the
-    box's shell `notifications count` when an `omarchy-notifications` layer is listed and drops it
-    from every monitor while that answers 0 (a few ms); no Omarchy shell, 4.0's (which counts none:
-    its layer goes with its last toast) or no answer keeps it. So `windows` and `click --window` (no
-    pixel narrowing then) leave it out; with a toast up it is still said, on every monitor (the count
-    is not per monitor). A layer spanning its output is now worded for what it covers: `span` in
-    WIN_JQ's layers (`windows --json`), `screen` for a whole one or the reserved-edge rule's whole
-    height and width, else the edge a full-height (`right`, `left`) or full-width (`bottom`, `top`)
-    strip is at, `height`/`width` away from both; `windows` says "is full height at the right edge,
-    possibly over …". The click's hints still say "a layer spanning the screen". Verified in a box on
-    Omarchy 4.5.0-3 (stock bar: the column 399x1080 at 1521,0) on Hyprland 0.56.2 and 0.57.1. Tests:
-    t_unit_window_select (the wording and `span`), omshell's unit test, t_click_layer (no line with no
-    toast or after it closed; the line with one, worded per generation; failed 3 checks on the old
-    code).
 
 677. **`hyprctl dispatch` in the old syntax dispatched nothing, and a script went on** (2026-11-06,
     #427). Every box's Hyprland runs a Lua config (share/hyprland.lua, plain.lua; no box runs a
@@ -13239,6 +13203,111 @@ from them.
     `warning: …` (hyprctl) or `{"ok":false,…}` (lua), as before. Tests: t_hypr_old_dispatch (each
     printed line run in the box does what the old words would; --batch; Lua dispatches untouched;
     passes on 0.57.1 under OMABOX_HYPRLAND too), hyprctl.rs's old_dispatch_* unit tests.
+
+678. **`windows` named 4.5's idle notifications layer as possibly over every window** (2026-11-06,
+    #431). Every listing in a box with Omarchy 4.5's shell ended with `layer "omarchy-notifications"
+    (overlay 399x1080 at 1521,0 …) spans the screen, possibly over …`, toast or not: finding 421's
+    column, mapped while idle with its input mask empty (Service.qml: `mask: Region { item:
+    surface.showingNotifications ? deck : null }`, the deck as tall as its toasts), and called
+    "spans the screen" though it is a strip at the right edge. An agent took to `grep -v '^layer'`,
+    which would hide a layer really in the way. Finding 549's way (#407: the bar's surface cut to its
+    strip, from the edge its output reserves) cannot place the deck: Hyprland lists no input region
+    and nothing it lists tells the deck's height. Nor can `live.json` tell, which leaves out a
+    transient toast (`notify-send -e`: shown, count 1, live.json `[]`; checked in a box) and is
+    written a moment late. **Fix**: input_layers (finding 611's way for the hidden dock) asks the
+    box's shell `notifications count` when an `omarchy-notifications` layer is listed and drops it
+    from every monitor while that answers 0 (a few ms); no Omarchy shell, 4.0's (which counts none:
+    its layer goes with its last toast) or no answer keeps it. So `windows` and `click --window` (no
+    pixel narrowing then) leave it out; with a toast up it is still said, on every monitor (the count
+    is not per monitor). A layer spanning its output is now worded for what it covers: `span` in
+    WIN_JQ's layers (`windows --json`), `screen` for a whole one or the reserved-edge rule's whole
+    height and width, else the edge a full-height (`right`, `left`) or full-width (`bottom`, `top`)
+    strip is at, `height`/`width` away from both; `windows` says "is full height at the right edge,
+    possibly over …". The click's hints still say "a layer spanning the screen". Verified in a box on
+    Omarchy 4.5.0-3 (stock bar: the column 399x1080 at 1521,0) on Hyprland 0.56.2 and 0.57.1. Tests:
+    t_unit_window_select (the wording and `span`), omshell's unit test, t_click_layer (no line with no
+    toast or after it closed; the line with one, worded per generation; failed 3 checks on the old
+    code).
+
+679. **`log run` read only the latest `run -d` job's log** (2026-11-06, #429). A check that starts
+    the app under test with `run -d`, then a terminal or an `xdg-open` with `-d`, lost the app's log
+    to `log run`; agents found the file by hand (`ls -t …/home/run-*.log | head -1`) and once read
+    the terminal's. `wait log JOB RE` already took a job, `log` did not. Now `log run JOB` reads that
+    job's log, JOB taken by the resolver `wait job|log` use (`jobs::job_resolve`: the job's pid as
+    `run -d` and `jobs` say it, or any pid of its session; a running job's, else its record in
+    `jobs/` or `jobs-done/`, so an ended job's too); a pid no job had is refused, by all three, with
+    the jobs the box had (newest 10, "ended" marked). A pid is a word after `run` only (`log 115`,
+    `log shell 115`: a usage error): a command match (`run:myapp`, as the issue asked) is not taken,
+    as words after `run` are logs' names (`log run shell` reads two). Beside other logs it is headed `==> run PID <==`.
+    Verified in a box (t_jobs: two jobs, the first's log by its pid, --grep -n, after `stop`).
+
+680. **What an app notified: the box records what reaches its notification server** (2026-11-06,
+    #430). A project's walks each ran `dbus-monitor --session` in the box by `run -d` and grepped
+    its text by hand: started after `up`, it missed what came first; a Notify's arguments are spread
+    over many lines; the id the server gave is in a method return lines away; and there was no wait,
+    so they polled the file. Now every box records from its start. tools/notices (C, sd-bus, as
+    tools/polkit) becomes a monitor on the box's own bus (org.freedesktop.DBus.Monitoring
+    .BecomeMonitor, what dbus-monitor and `busctl monitor` use: no eavesdrop flags, nothing it can
+    send) with five match rules: the Notifications interface's calls and its signals, method returns
+    and errors whose sender owns org.freedesktop.Notifications (dbus-daemon matches a well-known
+    sender by its primary owner at the time, so whichever server is up), and the bus driver's errors
+    (a Notify to no server gets ServiceUnknown from the bus, and dbus-daemon passes its own
+    errors to monitors too). So the server can be anything (Omarchy's shell, a plain box's
+    `--shell`, a test's stand-in) or none yet. It reads each message with sd-bus's typed readers,
+    not text: a Notify waits (a cookie table of 64) for the reply from its destination with its serial,
+    then one JSON line goes to ~/notifications.log with the id, or the error's name and text, or after
+    5 s with neither (id null, "no reply in 5 s"); a call that wants no reply at once. CloseNotification
+    (the app's), NotificationClosed and ActionInvoked (the server's) are lines too. Hints keep basic
+    values; a structured one (image-data) is its signature; strings are cut at 16 KiB (summary,
+    body) or 1 KiB, at a character, ending in "…". Lines go out in one O_APPEND write each, never
+    truncated (offsets stay places, as events.log's: `wait notification --since`), and it stops at 16
+    MB. Idle it sleeps in sd_bus_wait with no timeout: no timer runs unless a Notify waits for its
+    reply, and a box's bus has no per-frame traffic, so it wakes only when a notice moves. The race
+    with readiness: share/session.sh starts it right after the bus (before the keyring, systemd's
+    units aside, Hyprland and the shell) and waits up to 2 s for its READY file, made once
+    BecomeMonitor returned; ~5 ms here. Not built: the box records none, box.log says so; `wait
+    notification` then refuses (no log) rather than wait for nothing. libnotify (notify-send) with no
+    server never sends Notify (its GetServerInformation fails first), so that case is logged only for
+    clients that call Notify straight (gdbus, Qt's, Electron's): `(no id) ... -- not shown:
+    ServiceUnknown`. Not recorded: org.gtk.Notifications (GNotification on GNOME) and the portal's
+    AddNotification, which reach org.freedesktop.Notifications only through a backend that forwards.
+    Read: `log notifications` (a text line a record, made plain on the terminal, S7; `--json` the
+    record written again by omabox, `-n`/`--grep` counting records, `-f` formatting as it follows,
+    before --grep), `wait notification RE [-i] [--since OFFSET]` (wait_log.rs's reading of a box log,
+    RE matched with grep -E against the summary and the body, newlines as spaces; --json adds the
+    record). omabox-notices refuses outside a box (box.h, S8), so it can never watch the host's bus.
+    Verified in boxes here: an Omarchy box (the shell's server: id, critical urgency, actions, the
+    `closed #1 dismissed` that `dnd --clear` caused), and t_notifications (no shell, a stand-in server
+    in Python's gi: ids, actions, CloseNotification, the no-server error, both waits).
+
+681. **`drag` does a toolkit's drag-and-drop: 150 ms of path at least, and a nudge at the end**
+    (2026-11-06, #428: a folder dragged onto a Nautilus sidebar bookmark gave "You cannot move a file
+    over itself"; #323's open item, finding 596). Two things, read with WAYLAND_DEBUG in a box
+    (Hyprland 0.56.2, GTK 4.24.1, Nautilus 51.1). (1) GTK 4 starts a drag only on a motion past the
+    threshold that comes 100 ms or more after the press (gtkdragsource.c, `MIN_TIME_TO_DND`; no
+    timer): `drag --steps 1..3` (each move waits 40 ms, finding 101) was a click, and `pointer --
+    move down sleep 300ms move up` too (one motion after the wait: no drag in Nautilus nor in a GTK
+    probe). (2) Hyprland sends `wl_data_device.enter` at the centre of the surface (927,528 for a
+    1854x1056 window, every time), not where the pointer is; only a later motion says where. A
+    drag that began on the path's last motion (`--steps 4`: its 4th motion is past 100 ms), or after
+    it in an app slow to answer, had no motion after the enter and dropped at the window's centre:
+    Nautilus's grid there, the issue's dialog (the issue's own `--glide 1.3s` drop worked in a box
+    here, 29 motions after the enter; its run likely had the drag begin late). Chromium 155 starts
+    on any motion, so only `--steps 1` dropped at the centre (`offsetX 0`, y 528); Qt Quick
+    (`Drag.Automatic`) started on `--steps 1` and was released before the enter: no drop. **Fix**:
+    the path waits out 150 ms when it is shorter, then a 1 px nudge and back at the end point (a
+    motion that starts a drag not begun, then puts a begun one at the end), again before the release
+    after `--hold` or `--shot`. Checked after it: Nautilus moved a folder onto the bookmark with
+    `--steps 4 --hold 0.5s` (it had dropped at the centre); a GTK probe, Chromium and Qt dropped at
+    the end with `--steps 1`, 3, 4 held, 10 and a glide. Seen, not ours: after a good drop Hyprland
+    told GTK's and Chromium's sources `cancelled` (Chromium's `dragend` says `none`), Qt's and the
+    fixture's `dnd_finished`; Nautilus moved the folder all the same. Nautilus opens a "New bookmark"
+    space above the bookmarks while a folder hovers the sidebar, which moves the rows down one: the
+    end point read from a shot before the drag lands on that space (adds a bookmark), so `--shot`
+    first. The fixture's `--dnd` starts drags by GTK's rule and logs enter, motion and drop:
+    t_drag_dnd (the old code: `--steps 3` no drag, `--steps 4 --hold` and a held `--shot` dropped at
+    the centre), drag_seq's unit test.
+
 682. **A box's HOME removed while its up seeded it: another up's sweep, judged 75 ms before**
     (2026-11-06, #433). Four sightings in full suites under load (t_desk_fonts, t_cli_up,
     t_keys_down_up; each passing alone): `could not write .../home/.config/omarchy/shell.json`
@@ -13273,24 +13342,6 @@ from them.
     tests sweep_keeps_a_home_made_again (the race staged between the judgement and the removal: a HOME
     made again by an up that holds the lock or has let it go, kept; a down's held lock, left; a gone
     one taken and logged; leftovers), make_home_whole and removal_log; t_home_sweep's log checks.
-684. **A jailed agent's videos, stopped outside the jail, were kept among the box HOMEs** (2026-11-06,
-    #433; found while fixing finding 682). `record stop` of a jailed agent's recording, run outside
-    the jail, wrote the video to `$XDG_CACHE_HOME/omabox/records` (finding 323): that is
-    paths::homes(), the box HOMEs' folder. sweep_homes took `records` for a gone box's HOME (no
-    record, no box of that name in this runtime dir, nothing using it) and removed the videos at the
-    next `up`; a box named `records` would have had its HOME there, and its rm_box removed them too.
-    The videos now go to paths::records(), `$XDG_DATA_HOME/omabox/records` (beside the saves; a box
-    sees neither). Videos an older omabox left in the old folder are moved there, once, not kept
-    in place: the old folder is told from a box HOME by having no record and no `home` (every box
-    HOME has its `home`, an older omabox's too), and sweep_homes moves its plain files before its
-    loop, as does home_whose for a box named `records` (so `up records` and its rm_box). A move never
-    replaces a file: a hard link then the old name removed; across filesystems (a cache on tmpfs) a
-    copy under a hidden `.moving-PID-NAME` linked into place. What cannot be moved (a name taken
-    there, a subfolder) stays, and with it the folder, which the sweep then skips and a box named
-    `records` is refused ("holds videos an older omabox's `record stop` wrote there"); emptied, it
-    goes. Tests: the unit tests sweep_keeps_old_records (fails on the code before: the folder
-    swept) and move_no_replace_across (/dev/shm to the temp dir); t_jail_record's outside stops
-    with a stand-in XDG_DATA_HOME, the video in its records folder.
 
 683. **record's fallback encoder where ffmpeg has no libx264: openh264** (2026-11-06, #442). What
     the two distributions ship (rootless podman, Fedora 45 with `ffmpeg-free` 9.0.2, Tumbleweed's
@@ -13334,72 +13385,25 @@ from them.
     t_record_layout expects the 3840x2458 layout), but not run that way yet: the suite wants a
     Hyprland session, which a container has not (Fedora's and Tumbleweed's VMs, distros-vm.sh
     --suite, have one).
-681. **`drag` does a toolkit's drag-and-drop: 150 ms of path at least, and a nudge at the end**
-    (2026-11-06, #428: a folder dragged onto a Nautilus sidebar bookmark gave "You cannot move a file
-    over itself"; #323's open item, finding 596). Two things, read with WAYLAND_DEBUG in a box
-    (Hyprland 0.56.2, GTK 4.24.1, Nautilus 51.1). (1) GTK 4 starts a drag only on a motion past the
-    threshold that comes 100 ms or more after the press (gtkdragsource.c, `MIN_TIME_TO_DND`; no
-    timer): `drag --steps 1..3` (each move waits 40 ms, finding 101) was a click, and `pointer --
-    move down sleep 300ms move up` too (one motion after the wait: no drag in Nautilus nor in a GTK
-    probe). (2) Hyprland sends `wl_data_device.enter` at the centre of the surface (927,528 for a
-    1854x1056 window, every time), not where the pointer is; only a later motion says where. A
-    drag that began on the path's last motion (`--steps 4`: its 4th motion is past 100 ms), or after
-    it in an app slow to answer, had no motion after the enter and dropped at the window's centre:
-    Nautilus's grid there, the issue's dialog (the issue's own `--glide 1.3s` drop worked in a box
-    here, 29 motions after the enter; its run likely had the drag begin late). Chromium 155 starts
-    on any motion, so only `--steps 1` dropped at the centre (`offsetX 0`, y 528); Qt Quick
-    (`Drag.Automatic`) started on `--steps 1` and was released before the enter: no drop. **Fix**:
-    the path waits out 150 ms when it is shorter, then a 1 px nudge and back at the end point (a
-    motion that starts a drag not begun, then puts a begun one at the end), again before the release
-    after `--hold` or `--shot`. Checked after it: Nautilus moved a folder onto the bookmark with
-    `--steps 4 --hold 0.5s` (it had dropped at the centre); a GTK probe, Chromium and Qt dropped at
-    the end with `--steps 1`, 3, 4 held, 10 and a glide. Seen, not ours: after a good drop Hyprland
-    told GTK's and Chromium's sources `cancelled` (Chromium's `dragend` says `none`), Qt's and the
-    fixture's `dnd_finished`; Nautilus moved the folder all the same. Nautilus opens a "New bookmark"
-    space above the bookmarks while a folder hovers the sidebar, which moves the rows down one: the
-    end point read from a shot before the drag lands on that space (adds a bookmark), so `--shot`
-    first. The fixture's `--dnd` starts drags by GTK's rule and logs enter, motion and drop:
-    t_drag_dnd (the old code: `--steps 3` no drag, `--steps 4 --hold` and a held `--shot` dropped at
-    the centre), drag_seq's unit test.
 
-680. **What an app notified: the box records what reaches its notification server** (2026-11-06,
-    #430). A project's walks each ran `dbus-monitor --session` in the box by `run -d` and grepped
-    its text by hand: started after `up`, it missed what came first; a Notify's arguments are spread
-    over many lines; the id the server gave is in a method return lines away; and there was no wait,
-    so they polled the file. Now every box records from its start. tools/notices (C, sd-bus, as
-    tools/polkit) becomes a monitor on the box's own bus (org.freedesktop.DBus.Monitoring
-    .BecomeMonitor, what dbus-monitor and `busctl monitor` use: no eavesdrop flags, nothing it can
-    send) with five match rules: the Notifications interface's calls and its signals, method returns
-    and errors whose sender owns org.freedesktop.Notifications (dbus-daemon matches a well-known
-    sender by its primary owner at the time, so whichever server is up), and the bus driver's errors
-    (a Notify to no server gets ServiceUnknown from the bus, and dbus-daemon passes its own
-    errors to monitors too). So the server can be anything (Omarchy's shell, a plain box's
-    `--shell`, a test's stand-in) or none yet. It reads each message with sd-bus's typed readers,
-    not text: a Notify waits (a cookie table of 64) for the reply from its destination with its serial,
-    then one JSON line goes to ~/notifications.log with the id, or the error's name and text, or after
-    5 s with neither (id null, "no reply in 5 s"); a call that wants no reply at once. CloseNotification
-    (the app's), NotificationClosed and ActionInvoked (the server's) are lines too. Hints keep basic
-    values; a structured one (image-data) is its signature; strings are cut at 16 KiB (summary,
-    body) or 1 KiB, at a character, ending in "…". Lines go out in one O_APPEND write each, never
-    truncated (offsets stay places, as events.log's: `wait notification --since`), and it stops at 16
-    MB. Idle it sleeps in sd_bus_wait with no timeout: no timer runs unless a Notify waits for its
-    reply, and a box's bus has no per-frame traffic, so it wakes only when a notice moves. The race
-    with readiness: share/session.sh starts it right after the bus (before the keyring, systemd's
-    units aside, Hyprland and the shell) and waits up to 2 s for its READY file, made once
-    BecomeMonitor returned; ~5 ms here. Not built: the box records none, box.log says so; `wait
-    notification` then refuses (no log) rather than wait for nothing. libnotify (notify-send) with no
-    server never sends Notify (its GetServerInformation fails first), so that case is logged only for
-    clients that call Notify straight (gdbus, Qt's, Electron's): `(no id) ... -- not shown:
-    ServiceUnknown`. Not recorded: org.gtk.Notifications (GNotification on GNOME) and the portal's
-    AddNotification, which reach org.freedesktop.Notifications only through a backend that forwards.
-    Read: `log notifications` (a text line a record, made plain on the terminal, S7; `--json` the
-    record written again by omabox, `-n`/`--grep` counting records, `-f` formatting as it follows,
-    before --grep), `wait notification RE [-i] [--since OFFSET]` (wait_log.rs's reading of a box log,
-    RE matched with grep -E against the summary and the body, newlines as spaces; --json adds the
-    record). omabox-notices refuses outside a box (box.h, S8), so it can never watch the host's bus.
-    Verified in boxes here: an Omarchy box (the shell's server: id, critical urgency, actions, the
-    `closed #1 dismissed` that `dnd --clear` caused), and t_notifications (no shell, a stand-in server
-    in Python's gi: ids, actions, CloseNotification, the no-server error, both waits).
+684. **A jailed agent's videos, stopped outside the jail, were kept among the box HOMEs** (2026-11-06,
+    #433; found while fixing finding 682). `record stop` of a jailed agent's recording, run outside
+    the jail, wrote the video to `$XDG_CACHE_HOME/omabox/records` (finding 323): that is
+    paths::homes(), the box HOMEs' folder. sweep_homes took `records` for a gone box's HOME (no
+    record, no box of that name in this runtime dir, nothing using it) and removed the videos at the
+    next `up`; a box named `records` would have had its HOME there, and its rm_box removed them too.
+    The videos now go to paths::records(), `$XDG_DATA_HOME/omabox/records` (beside the saves; a box
+    sees neither). Videos an older omabox left in the old folder are moved there, once, not kept
+    in place: the old folder is told from a box HOME by having no record and no `home` (every box
+    HOME has its `home`, an older omabox's too), and sweep_homes moves its plain files before its
+    loop, as does home_whose for a box named `records` (so `up records` and its rm_box). A move never
+    replaces a file: a hard link then the old name removed; across filesystems (a cache on tmpfs) a
+    copy under a hidden `.moving-PID-NAME` linked into place. What cannot be moved (a name taken
+    there, a subfolder) stays, and with it the folder, which the sweep then skips and a box named
+    `records` is refused ("holds videos an older omabox's `record stop` wrote there"); emptied, it
+    goes. Tests: the unit tests sweep_keeps_old_records (fails on the code before: the folder
+    swept) and move_no_replace_across (/dev/shm to the temp dir); t_jail_record's outside stops
+    with a stand-in XDG_DATA_HOME, the video in its records folder.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
