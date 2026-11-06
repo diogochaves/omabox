@@ -72,10 +72,10 @@ image() {
       local d=https://download.fedoraproject.org/pub/fedora/linux/releases/45/Cloud/x86_64/images
       url=$d/Fedora-Cloud-Base-Generic-45-1.4.x86_64.qcow2
       sums=$d/Fedora-Cloud-45-1.4-x86_64-CHECKSUM algo=sha256 osinfo=fedora-rawhide
-      # (Fedora has no Hyprland but COPR's; Quickshell too)
-      prep='dnf -y -q install dnf-plugins-core && dnf -y -q copr enable solopasha/hyprland &&
-        dnf -y -q install hyprland foot dejavu-sans-fonts &&
-        { dnf -y -q copr enable errornointernet/quickshell && dnf -y -q install quickshell || echo "(no quickshell from COPR)"; }' ;;
+      # (Fedora 45 has no Hyprland but COPR's: pm4rcin/Hyprland builds 0.57 for it, solopasha/hyprland
+      # only rawhide; its own Quickshell is 0.2.1, doctor says whether that will do)
+      prep='dnf -y -q install dnf-plugins-core && dnf -y -q copr enable pm4rcin/Hyprland &&
+        dnf -y -q install hyprland foot dejavu-sans-fonts && { dnf -y -q install quickshell || echo "(no quickshell)"; }' ;;
     tumbleweed)
       url=https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2
       sums=$url.sha256 algo=sha256 osinfo=opensusetumbleweed
