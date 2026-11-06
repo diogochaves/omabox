@@ -1472,6 +1472,28 @@ pub(crate) fn jq_r(prog: &str, input: &[u8]) -> (i32, Vec<u8>) {
     (r.rc, r.text())
 }
 
+/// What record says, and doctor, of an ffmpeg without libx264 (#247, finding 673).
+pub const X264_WHY: &str = "this ffmpeg has no libx264, which record's videos are made with (Fedora's ffmpeg-free and openSUSE's ffmpeg leave it out: RPM Fusion's or Packman's ffmpeg has it)";
+
+/// Whether /usr/bin/ffmpeg has the libx264 encoder (wf-recorder's raw stream and every video of
+/// record's are H.264 by it); an ffmpeg that does not answer in 5 s is taken as having none.
+pub fn has_x264() -> bool {
+    // (bounded, as every ffmpeg of record's is: ffmpeg 9.0.1 deadlocks now and then, finding 356)
+    let mut c = crate::sig::command("/usr/bin/timeout");
+    c.args(["-k", "1", "5"]);
+    c.args(["/usr/bin/ffmpeg", "-hide_banner", "-encoders"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::sig::run_output(c).is_ok_and(|(rc, o)| {
+        rc == 0
+            && o.split(|&b| b == b'\n').any(|l| {
+                crate::shell::words(l)
+                    .get(1)
+                    .is_some_and(|w| w == b"libx264")
+            })
+    })
+}
+
 /// record_start FILE O AS: the recording started (MONITOR all: the whole layout, #225; AUDIO: the
 /// box's sound too, #226; GLIDE: click, pointer and drag glide while it records, #176). With AS
 /// (#224), FILE is only a name, a jailed caller's: nothing is made or opened at it here.
@@ -1485,6 +1507,9 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         return Err(ctx.die(
             "record: needs wf-recorder and ffmpeg in /usr/bin (omabox doctor names their packages)",
         ));
+    }
+    if !has_x264() {
+        return Err(ctx.die(cat!("record: ", X264_WHY)));
     }
     if record_running(ctx, rec)? {
         if in_jail() && !ctx.at("record.as").is_file() {

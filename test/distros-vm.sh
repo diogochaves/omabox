@@ -186,13 +186,15 @@ EOF
   # The user as a desktop user: logged in on the VM's monitor (autologin on tty1 starting Hyprland,
   # from the reboot below), so logind gives them the render node (Tumbleweed's is the render group's
   # only, and an SSH login gets no seat) and the suite has the session it checks boxes leave alone;
-  # lingering, so the runtime dir outlives each SSH command.
+  # lingering, so the runtime dir outlives each SSH command. getty@tty1 enabled: a cloud image whose
+  # console is the serial port (Fedora's) starts no getty on tty1 otherwise, and no autologin.
   echo "==> as root: Hyprland, a terminal, a font; a desktop session on tty1; the user lingers"
   # shellcheck disable=SC2016 # expanded in the guest
   g "sudo sh -c '$prep' && sudo loginctl enable-linger user"' &&
     sudo mkdir -p /etc/systemd/system/getty@tty1.service.d &&
     printf "[Service]\nExecStart=\nExecStart=-/sbin/agetty -o \"-p -f -- \\\\\\\\u\" --noclear --autologin user %%I \$TERM\n" |
       sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf >/dev/null &&
+    sudo systemctl enable -q getty@tty1.service &&
     echo "[ \"\$(tty)\" = /dev/tty1 ] && [ -z \"\${WAYLAND_DISPLAY:-}\" ] && exec start-hyprland > ~/hyprland-session.log 2>&1" >> ~/.bash_profile' \
     >"$out/prep.log" 2>&1 || { tail -n 20 "$out/prep.log"; return 1; }
   # A reboot, as after any update: the packages may have replaced the running kernel, whose modules

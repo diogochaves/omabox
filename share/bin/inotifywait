@@ -18,7 +18,7 @@ if [ "${OMABOX_OWN_SESSION:-}" = 1 ] && [ $# = 8 ] &&
   # shell lives (another parent's /dev/null) falls back to asking every 5 s, with bash's own sleep.
   shell_alive() { local _pid _comm _state ppid; read -r _pid _comm _state ppid _ < /proc/$$/stat && [ "$ppid" = "$PPID" ]; }
   while IFS= read -r -t 3600 _ || [ $? -gt 128 ]; do shell_alive || exit 0; done
-  enable -f /usr/lib/bash/sleep sleep 2>/dev/null || true
+  enable -f /usr/lib/bash/sleep sleep 2>/dev/null || enable -f /usr/lib64/bash/sleep sleep 2>/dev/null || true
   while shell_alive; do sleep 5; done
   exit 0
 fi

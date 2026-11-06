@@ -44,6 +44,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   before that show your name or host name will differ once.
 
 ### Fixed
+- **`record` says at once when ffmpeg has no libx264** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  Fedora's `ffmpeg-free` and openSUSE's `ffmpeg` leave the H.264 encoder out, and `record start`
+  failed with wf-recorder's "Failed to find the given codec". It now refuses before starting, naming
+  where an ffmpeg with it comes from (RPM Fusion, Packman), and `omabox doctor` warns.
+- **A crash inside a box no longer shows as a crash notification on your desktop where systemd's coredump socket is in use** ([#441](https://github.com/diogochaves/omabox/issues/441)):
+  systemd 262's socket (a fresh install's default) records a crash whatever the box's core limit,
+  and Omarchy's crash watcher announced it. `omabox setup` offers a filter for what the watcher
+  reads (a drop-in for its unit in `~/.config/systemd/user`, Omarchy's script untouched), `setup
+  --remove` takes it away, and `omabox doctor` says whether a box's crash would be announced.
 - **`doctor` names the right file for the desktop session's PATH off Omarchy** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   its fix for a session that cannot find omabox named Omarchy's `~/.config/uwsm/env` everywhere; on
   other machines it now names `~/.config/environment.d/`, which the systemd user manager reads.
