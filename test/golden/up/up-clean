@@ -207,6 +207,9 @@ OMABOX_SHELL
 OMABOX_DESKTOP
 omarchy
 --setenv
+OMABOX_SHELL_CMD
+
+--setenv
 OMABOX_OMARCHY_VERSION
 X
 --setenv
