@@ -201,6 +201,9 @@ OMABOX_POLKIT
 OMABOX_SHELL
 1
 --setenv
+OMABOX_DESKTOP
+omarchy
+--setenv
 OMABOX_OMARCHY_VERSION
 X
 --setenv
