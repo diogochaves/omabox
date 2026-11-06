@@ -90,7 +90,7 @@ render node: AMD and Intel iGPUs and NVIDIA RTX cards are tested. Where it runs:
   ([#312](https://github.com/diogochaves/omabox/issues/312)). `omarchy update` brings 4.5.
 - **Arch without Omarchy, Fedora 45, Debian sid, openSUSE Tumbleweed**: boxes are plain. Each is
   tested in a VM of its own, `install.sh` through to real boxes, and plain Arch runs the whole test
-  suite ([#247](https://github.com/diogochaves/omabox/issues/247)). Fedora has Hyprland only from a
+  suite, on a virtual GPU and on a real NVIDIA card handed to the VM ([#247](https://github.com/diogochaves/omabox/issues/247)). Fedora has Hyprland only from a
   COPR (pm4rcin/Hyprland); Debian sid's Hyprland 0.57.0 drops every GPU app in a box (fixed in
   0.57.1: `omabox doctor` warns). `install.sh` checks your distribution's packages under their own
   names; on Arch it installs what is missing (sudo), elsewhere it prints the command that does

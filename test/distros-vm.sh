@@ -19,6 +19,13 @@
 # segfaults on exit there. NVIDIA's EGL is forced for QEMU (glvnd would hand it Mesa), and libvirt's
 # cgroup_device_acl must list /dev/nvidia0, nvidiactl, nvidia-modeset and nvidia-uvm.
 #
+# OMABOX_VM_GPU=0000:01:00.0 instead hands the guest that whole card (each PCI function of its
+# IOMMU group, all bound to vfio-pci first) and gives it no other display: its desktop session and
+# boxes run on the guest's own NVIDIA driver, as on a machine with that card (arch only, with
+# nvidia-open; UEFI boot without Secure Boot, which the cloud image is not signed for). The VM is
+# then omabox-dvm-<distro>-gpu, its logs <distro>-gpu/. A monitor plugged into the card shows the
+# guest's session.
+#
 # Disks in OMABOX_VM_DIR (default /var/lib/libvirt/images/omabox, writable by you and readable by
 # libvirt: `sudo install -d -o $USER -g libvirt -m 2775 DIR` once); logs, shots and the suite's
 # evidence in ${XDG_STATE_HOME:-~/.local/state}/omabox/distros-vm/<distro>/. Exit 1 when one failed.
@@ -48,13 +55,23 @@ done
   exit 2
 }
 
-node=${OMABOX_VM_RENDERNODE:-}
-if [ -z "$node" ]; then
+gpu=${OMABOX_VM_GPU:-} gpufns=() node=${OMABOX_VM_RENDERNODE:-}
+if [ -n "$gpu" ]; then
+  [ -e "/sys/bus/pci/devices/$gpu/iommu_group" ] || { echo "distros-vm.sh: no PCI device $gpu in an IOMMU group" >&2; exit 2; }
+  for f in /sys/bus/pci/devices/"$gpu"/iommu_group/devices/*; do
+    [[ $(readlink "$f/driver" 2>/dev/null) == */vfio-pci ]] ||
+      { echo "distros-vm.sh: ${f##*/} is not on vfio-pci (bind its whole IOMMU group first)" >&2; exit 2; }
+    gpufns+=("${f##*/}")
+  done
+  for d in "$@"; do
+    [ "$d" = arch ] || { echo "distros-vm.sh: OMABOX_VM_GPU: arch only (its NVIDIA driver is packaged)" >&2; exit 2; }
+  done
+elif [ -z "$node" ]; then
   for n in /dev/dri/renderD*; do
     [[ $(readlink "/sys/class/drm/${n##*/}/device/driver" 2>/dev/null) == */nvidia ]] && { node=$n; break; }
   done
 fi
-[ -n "$node" ] || {
+[ -n "$gpu" ] || [ -n "$node" ] || {
   echo "distros-vm.sh: no NVIDIA render node (QEMU segfaults on exit on an AMD one); OMABOX_VM_RENDERNODE=/dev/dri/renderDN to insist" >&2
   exit 2
 }
@@ -67,7 +84,8 @@ image() {
     arch)
       url=https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2
       sums=$url.SHA256 algo=sha256 osinfo=archlinux
-      prep='pacman -Syu --noconfirm --needed hyprland foot ttf-dejavu' ;;
+      prep='pacman -Syu --noconfirm --needed hyprland foot ttf-dejavu'
+      [ -z "$gpu" ] || prep="$prep nvidia-open nvidia-utils" ;;
     fedora)
       local d=https://download.fedoraproject.org/pub/fedora/linux/releases/45/Cloud/x86_64/images
       url=$d/Fedora-Cloud-Base-Generic-45-1.4.x86_64.qcow2
@@ -112,7 +130,8 @@ gone_vm() {
 }
 
 run_one() {
-  local distro=$1 name=omabox-dvm-$1 dir=$VMDIR/$1 out=$LOGS/$1 base ip='' i
+  local distro=$1 tag=$1${gpu:+-gpu} base ip='' i
+  local name=omabox-dvm-$tag dir=$VMDIR/$tag out=$LOGS/$tag
   image "$distro" || return 1
   echo "==> image"
   base=$(fetch) || { echo "$base"; return 1; }
@@ -130,10 +149,18 @@ users:
     ssh_authorized_keys: ["$(cat "$dir/key.pub")"]
 ssh_pwauth: false
 EOF
-  local gfx=(--video "virtio,accel3d=yes" --graphics spice --graphics "egl-headless,gl.rendernode=$node")
-  [[ $(readlink "/sys/class/drm/${node##*/}/device/driver") != */nvidia ]] ||
-    gfx+=(--qemu-commandline "env=__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json")
-  echo "==> VM $name (virgl on $node)"
+  local gfx=() f
+  if [ -n "$gpu" ]; then
+    gfx=(--video none --graphics none
+      --boot "uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no,firmware.feature1.name=enrolled-keys,firmware.feature1.enabled=no")
+    for f in "${gpufns[@]}"; do gfx+=(--hostdev "$f"); done
+    echo "==> VM $name (the card ${gpufns[*]} passed through)"
+  else
+    gfx=(--video "virtio,accel3d=yes" --graphics spice --graphics "egl-headless,gl.rendernode=$node")
+    [[ $(readlink "/sys/class/drm/${node##*/}/device/driver") != */nvidia ]] ||
+      gfx+=(--qemu-commandline "env=__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json")
+    echo "==> VM $name (virgl on $node)"
+  fi
   virt-install --connect "$CONNECT" --name "$name" --osinfo "$osinfo" --import \
     --memory "${OMABOX_VM_MEM:-8192}" --vcpus "${OMABOX_VM_CPUS:-8}" --cpu host-passthrough --machine q35 \
     --disk "path=$dir/disk.qcow2,format=qcow2,bus=virtio" --network network=default,model=virtio \
@@ -239,14 +266,15 @@ EOF
 SSHO=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes)
 rc=0
 for d in "$@"; do
-  rm -rf "${LOGS:?}/$d" && mkdir -p "$LOGS/$d"
-  echo "== $d (log: $LOGS/$d.log)"
-  if run_one "$d" > "$LOGS/$d.log" 2>&1; then
-    echo "   passed: $(grep -E '^all [0-9]+ checks|^boxes: ' "$LOGS/$d.log" | tr '\n' ' ')"
+  t=$d${gpu:+-gpu}
+  rm -rf "${LOGS:?}/$t" && mkdir -p "$LOGS/$t"
+  echo "== $t (log: $LOGS/$t.log)"
+  if run_one "$d" > "$LOGS/$t.log" 2>&1; then
+    echo "   passed: $(grep -E '^all [0-9]+ checks|^boxes: ' "$LOGS/$t.log" | tr '\n' ' ')"
   else
     rc=1
-    echo "   FAILED: $(grep -E 'install.sh: |FAIL|^boxes: |^no |mismatch' "$LOGS/$d.log" | tail -n 2 | tr '\n' ' ')"
-    [ $keep = 1 ] || { gone_vm "omabox-dvm-$d"; rm -rf "${VMDIR:?}/$d"; }
+    echo "   FAILED: $(grep -E 'install.sh: |FAIL|^boxes: |^no |mismatch' "$LOGS/$t.log" | tail -n 2 | tr '\n' ' ')"
+    [ $keep = 1 ] || { gone_vm "omabox-dvm-$t"; rm -rf "${VMDIR:?}/$t"; }
   fi
 done
 exit $rc

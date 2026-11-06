@@ -13027,7 +13027,28 @@ from them.
     an upgrade applies no new preset (systemd-coredumpd.service disabled). A fresh install with 262
     (Omarchy's ISO included) would have the socket, and a box's crash would then reach
     omarchy-crash-watch on the real desktop. Not fixed; to decide: a way for a box's processes to
-    stay out of the journal's crash records, or the notifier skipping them (its side).
+    stay out of the journal's crash records, or the notifier skipping them (its side). #441.
+
+669. **Plain Arch on a real NVIDIA card: a guest with the RTX passed through** (2026-11-06, #247).
+    `OMABOX_VM_GPU=0000:01:00.0 test/distros-vm.sh --suite arch` hands the guest the whole card
+    (both functions of its IOMMU group, on vfio-pci; UEFI without Secure Boot, which Arch's cloud
+    image is not signed for) and no other display: Hyprland 0.57.1 on tty1 and every box on the
+    guest's own nvidia-open 615.78.08. install.sh, setup and doctor passed, distros-boxes.sh 21/21,
+    the suite 5099/29/98. A headless box there is the NVIDIA path, Hyprland nested in labwc (finding
+    77): the first full suite on it since finding 234's day, when it had a third of today's tests.
+    What failed, by cause: (a) the suite assuming what a plain NVIDIA box does not have, now fixed:
+    no `hostname` program in a cloud image (`uname -n`), t_failed_up's "the shell never starts" on a
+    box with no shell (`--shell 'sleep 999'` there), Omarchy's Print selection in t_cursor_hw_nvidia,
+    cli_up's golden monitor names (an NVIDIA box's are WAYLAND-1 on, a headless one's HEADLESS-2 on:
+    evened out), and cli_box's `events --grep` (labwc's output is there before the events log, so a
+    plain NVIDIA box logs no monitor event: a workspace switch makes one); (b) t_up_signals' "while
+    it waits for the shell" racing a plain box's up, which waits for no shell (passed on the rerun);
+    (c) finding 668's journaled abort; (d) the checks vgpu skipped as a virtual GPU's (the pointer in
+    a --no-pointer shot, a window's corners and size in a shot, find's score at scale 2, Qt's
+    protocol-error line, peek's ticks), which came out the same with a real card in the guest: so
+    not virgl's. vgpu now skips them in any VM systemd-detect-virt names. They pass on this
+    machine's own GPUs in Omarchy and plain boxes; whether a plain machine on bare metal passes
+    them is untried (the laptop's plain Arch is the test).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
