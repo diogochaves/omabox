@@ -8,7 +8,8 @@ use crate::args::unknown_opt;
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, muted, out, say};
 use crate::install::{
-    AQ_BUILD, AQ_COMMIT, AQ_OWN, Aq, aq_resolve, aq_resolve_env, elf_needed, hypr_aq_soname,
+    AQ_OWN, Aq, aq_build_current, aq_build_of, aq_resolve, aq_resolve_env, aq_sonames, aq_source,
+    elf_needed, hypr_aq_soname,
 };
 use crate::shell;
 use std::ffi::OsStr;
@@ -673,12 +674,33 @@ impl Setup {
         )
     }
 
-    /// setup --aquamarine (issues #47, #49): the fix built where aq_resolve looks for it, with
-    /// omabox's own patches. A no-op only while boxes use this omabox's build (AQ_BUILD), unless
-    /// --force: a system aquamarine with #415 still lacks omabox's patches (#186, finding 247).
+    /// setup --aquamarine (issues #47, #48, #49): the fix built where aq_resolve looks for it, with
+    /// omabox's own patches, from the source for the soname the installed Hyprland links
+    /// (AQ_SOURCES). A no-op while boxes use a build this omabox makes, unless --force: a system
+    /// aquamarine with #415 still lacks omabox's patches (#186, finding 247). A soname omabox has no
+    /// source for is no failure (finding 652): boxes run on the system's, said with what interactive
+    /// boxes go without, and install.sh goes on.
     fn aquamarine(&self, ctx: &Ctx, force: bool) -> Res<()> {
         let want = hypr_aq_soname(ctx)?;
         let aq = aq_resolve_env(ctx, &want, b"").ok_or(Exit(1))?;
+        let Some(source) = aq_source(&want) else {
+            say(cat!(
+                "Hyprland links ",
+                want,
+                ", and this omabox builds aquamarine only for ",
+                aq_sonames(),
+                " (a newer omabox may build it): nothing to build; boxes use ",
+                aq.desc()
+            ));
+            if aq.kind == b"system" {
+                say(cat!(
+                    "interactive boxes go without omabox's own fixes (",
+                    AQ_OWN,
+                    ")"
+                ));
+            }
+            return Ok(());
+        };
         if !crate::install::aq_build_needed(&aq, force) {
             return Ok(());
         }
@@ -720,9 +742,10 @@ impl Setup {
                     ),
                 )
             };
+        let commit = source.commit;
         say(cat!(
             "building aquamarine ",
-            AQ_BUILD,
+            source.build,
             " (hyprwm/aquamarine#415, keys held when focus leaves, the pointer and cursor in a monitor's window, a class for each monitor's window) into ",
             prefix
         ));
@@ -753,7 +776,7 @@ impl Setup {
                 &src,
                 b"cat-file",
                 b"-e",
-                format!("{AQ_COMMIT}^{{commit}}").as_bytes(),
+                format!("{commit}^{{commit}}").as_bytes(),
             ],
             true,
         ) != 0
@@ -762,24 +785,27 @@ impl Setup {
             return Err(ctx.die(cat!("could not fetch aquamarine in ", src)));
         }
         if git(
-            &[b"-C", &src, b"checkout", b"-q", b"-f", AQ_COMMIT.as_bytes()],
+            &[b"-C", &src, b"checkout", b"-q", b"-f", commit.as_bytes()],
             false,
         ) != 0
         {
-            return Err(ctx.die(cat!(
-                "could not check out aquamarine ",
-                AQ_COMMIT,
-                " in ",
-                src
-            )));
+            return Err(ctx.die(cat!("could not check out aquamarine ", commit, " in ", src)));
         }
         for patch in shell::glob_ext(&cat!(self.root, "/patches/aquamarine"), b".patch") {
+            let name = patch.rsplit(|&c| c == b'/').next().unwrap_or_default();
+            if !source
+                .patches
+                .iter()
+                .any(|n| name.starts_with(n.as_bytes()))
+            {
+                continue;
+            }
             if git(&[b"-C", &src, b"apply", &patch], false) != 0 {
                 return Err(ctx.die(cat!(
                     "could not apply ",
                     patch,
                     " to aquamarine ",
-                    AQ_COMMIT,
+                    commit,
                     " in ",
                     src
                 )));
@@ -829,19 +855,19 @@ impl Setup {
                 .unwrap_or(b"no libaquamarine".to_vec());
             return Err(ctx.die(cat!(
                 "aquamarine ",
-                AQ_COMMIT,
+                commit,
                 " builds ",
                 has,
                 ", but Hyprland links ",
                 want,
-                ": omabox needs a newer AQ_COMMIT (left in ",
+                ": AQ_SOURCES names the wrong commit for it (left in ",
                 new,
                 ")"
             )));
         }
         if let Err(e) = std::fs::write(
             shell::path(&cat!(staged, "/.omabox-commit")),
-            cat!(AQ_BUILD, "\n"),
+            cat!(source.build, "\n"),
         ) {
             return Err(ctx.die(crate::shots::cant_write(
                 &cat!(staged, "/.omabox-commit"),
@@ -878,12 +904,7 @@ pub fn aq_note(aq: &Aq) -> Res<()> {
 pub fn aq_note_text(aq: &Aq) -> Option<Vec<u8>> {
     if aq.kind == b"private" {
         // Built by an older omabox (finding 132): it lacks a patch omabox carries now.
-        let b = aq
-            .ver
-            .iter()
-            .position(|&c| c == b'@')
-            .map_or(aq.ver.as_slice(), |i| &aq.ver[i + 1..]);
-        if b == AQ_BUILD.as_bytes() {
+        if aq_build_current(aq_build_of(&aq.ver)) {
             return None;
         }
         let lib = aq.lib.strip_suffix(b"/lib").unwrap_or(&aq.lib);

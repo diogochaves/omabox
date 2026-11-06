@@ -11026,7 +11026,7 @@ t_up_signals_window() {
   up_ok "$S" --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$S" -- "${HYPR_IN[@]}" "${GUARDED[@]}" "$CLI")
   if box_aq_unfixed "${in[@]}"; then skip "up -i --monitor and a signal" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
-  if ! "${in[@]}" --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+appid'; then
+  if ! "${in[@]}" --version 2>/dev/null | grep -Eq '^aquamarine: (a private build|the --hyprland folder.s), .*\+appid'; then
     skip "up -i --monitor and a signal" "not omabox's aquamarine build with +appid (omabox setup --aquamarine)"; ob down "$S" >/dev/null; return
   fi
   local r=$TMP/upsigw sig how i=0 B bd rc out st
@@ -11722,6 +11722,34 @@ aq_setup_checks() {
   check_match "...an older build of omabox's: older" "^note: the aquamarine build in $data is older than this omabox's" "$(note_of private 0.15.1@7bb8bdf4+keys 1)"
   check_eq "...this omabox's build: nothing" "" "$(note_of private "0.15.1@$build" 1)"
   check_match "...this omabox's build gives each monitor's window a class of its own (finding 429)" "\+appid$" "$build"
+  # #48, finding 652: the source is the one for the soname Hyprland links (a stand-in Hyprland on PATH
+  # linking a stub of each), and a soname omabox has no source for is no failure: nothing built, said,
+  # rc 0 (install.sh goes on). The stub's aquamarine is a private build in the data dir (the system's
+  # dir is the machine's).
+  if command -v cc >/dev/null; then
+    local v hb=$d/setup-hypr
+    echo 'int aq(void) { return 0; }' > "$d/aqs.c"; echo 'int aq(void); int main(void) { return aq(); }' > "$d/hm.c"
+    for v in 14:7bb8bdf4 15:b77d6764 99:; do
+      rm -rf "$data/omabox/aquamarine" "$hb"; mkdir -p "$data/omabox/aquamarine/lib" "$hb"
+      cc -shared -fPIC -Wl,-soname,"libaquamarine.so.${v%:*}" -o "$data/omabox/aquamarine/lib/libaquamarine.so.0.${v%:*}.0" "$d/aqs.c"
+      ln -s "libaquamarine.so.0.${v%:*}.0" "$data/omabox/aquamarine/lib/libaquamarine.so.${v%:*}"
+      ln -s "libaquamarine.so.0.${v%:*}.0" "$data/omabox/aquamarine/lib/libaquamarine.so"
+      cc -o "$hb/Hyprland" "$d/hm.c" -L"$data/omabox/aquamarine/lib" -laquamarine
+      echo 0000000+keys > "$data/omabox/aquamarine/.omabox-commit"
+      out=$(: > "$tools/log"; HOME=$d/setup-home XDG_DATA_HOME=$data XDG_CACHE_HOME=$cache PATH=$hb:$tools:$PATH \
+        "$fr/build/omabox" setup --aquamarine 2>&1; echo "rc=$?")
+      if [ -n "${v#*:}" ]; then
+        check_match "setup --aquamarine for a Hyprland linking .so.${v%:*}: builds ${v#*:}, omabox's patches on it" \
+          "building aquamarine ${v#*:}\+keys(\+layout)?\+cursor\+appid .*rc=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+      else
+        check_match "...linking a soname omabox has no source for: nothing built, said, rc 0" \
+          "Hyprland links libaquamarine\.so\.99, and this omabox builds aquamarine only for libaquamarine\.so\.14, libaquamarine\.so\.15 .*nothing to build; boxes use a private build, 0\.99\.0@0000000\+keys .*rc=0$" \
+          "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+        check_eq "...no tool run" "" "$(cat "$tools/log")"
+      fi
+    done
+    rm -rf "$data/omabox/aquamarine"
+  fi
 }
 
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
@@ -16504,7 +16532,7 @@ t_monitors_window() {
   local in=("$CLI" run -b "$S" -- "${HYPR_IN[@]}" "${GUARDED[@]}" "$CLI")
   if box_aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
   # (finding 429: a monitor's window needs a class of its own, which only omabox's build gives)
-  if ! "${in[@]}" --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+appid'; then
+  if ! "${in[@]}" --version 2>/dev/null | grep -Eq '^aquamarine: (a private build|the --hyprland folder.s), .*\+appid'; then
     skip "monitors as windows" "not omabox's aquamarine build with +appid (omabox setup --aquamarine)"; ob down "$S" >/dev/null; return
   fi
   ob run -b "$S" -d -- foot >/dev/null 2>&1
@@ -16568,9 +16596,11 @@ t_monitors_window() {
   check "...placed again as before (the rest of this test lays out by it)" until_ok 3 file_is "$rows"
   # The stand-in's pointer in each window, at its middle (on workspace 9 now, where the windows are):
   # the box's pointer in the middle of that monitor. aquamarine reports a point of the window; Hyprland
-  # 0.56 placed it over the whole layout, so every middle was (1600, 1079); omabox's build places it.
+  # 0.56 placed it over the whole layout, so every middle was (1600, 1079); omabox's build places it
+  # (+layout). 0.57 places it on the output the point names itself, with any aquamarine, and omabox's
+  # build for it has no +layout (finding 652).
   ob hyprctl -b "$S" dispatch "hl.dsp.focus({ workspace = '9' })" >/dev/null
-  if ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+layout'; then
+  if hypr_ge 0.57 || ob --version 2>/dev/null | grep -Eq '^aquamarine: (a private build|the --hyprland folder.s), .*\+layout'; then
     local at="" shown="" x y
     # Each window, then back to the first two: a window entered again is where the cursor went (a
     # first visit gets a cursor set a frame later, which showed it again).
@@ -16592,7 +16622,7 @@ t_monitors_window() {
         print bad ? "off" : "ok" }' <<<"$at")"
     # Crossing into another monitor's window hid the cursor: aquamarine hid it for the window the
     # pointer had left with a set_cursor the stand-in took for the one it entered (#175, finding 239).
-    if ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+cursor'; then
+    if ob --version 2>/dev/null | grep -Eq '^aquamarine: (a private build|the --hyprland folder.s), .*\+cursor'; then
       check_eq "...and the cursor shown in each window, crossing from one to another and back (finding 239; colours at it: $shown)" ok \
         "$(awk '{ for (i = 1; i <= 5; i++) if ($i < 2) { print "hidden"; exit } print "ok" }' <<<"$shown")"
     else
@@ -17766,12 +17796,13 @@ t_held_keys() {
   up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" "$CLI")
   # (Asked of this omabox: the stand-in's own sees the build it binds at /opt/omabox/lib, not its name.
-  # An OMABOX_HYPRLAND folder with an aquamarine of its own runs that one, never omabox's build.)
-  if folder_aq; then
+  # An OMABOX_HYPRLAND folder with an aquamarine of its own runs that one: omabox's build only when the
+  # folder holds one, its .omabox-commit beside its lib dir, as --version says; finding 652.)
+  if folder_aq && ! ob --version 2>/dev/null | grep -Eq '^aquamarine: the --hyprland folder.s, .*\+keys'; then
     skip "a key held when focus leaves an interactive box is released there" "OMABOX_HYPRLAND's folder brings its own aquamarine, not omabox's build with +keys"
     ob down "$B" >/dev/null; return
   fi
-  if ! ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+keys'; then
+  if ! ob --version 2>/dev/null | grep -Eq '^aquamarine: (a private build|the --hyprland folder.s), .*\+keys'; then
     skip "a key held when focus leaves an interactive box is released there" "not omabox's aquamarine build (omabox setup --aquamarine)"
     ob down "$B" >/dev/null; return
   fi
