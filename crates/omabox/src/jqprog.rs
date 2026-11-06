@@ -24,6 +24,21 @@ macro_rules! layer_span_jq { () => { r#"
           | if $fh then (if .x <= $o.x then $r[0] == 0 elif .x + .w >= $o.x + $mw - 1 then $r[2] == 0 else true end)
             elif $fw then (if .y <= $o.y then $r[1] == 0 elif .y + .h >= $o.y + $mh - 1 then $r[3] == 0 else true end)
             else false end end end;
+  def span($m; $mon): (first($m[]? | select(.name == $mon)) // null) as $o
+    | if $o == null or ($o.width // null) == null or ($o.reserved // null) == null then "screen" else
+        (if ($o.transform // 0) % 2 == 1 then [$o.height, $o.width] else [$o.width, $o.height] end
+         | map(. / ($o.scale // 1))) as [$mw, $mh]
+        | $o.reserved as $r
+        | (.x <= $o.x + $r[0]) as $lf | (.x + .w >= $o.x + $mw - $r[2] - 1) as $rg
+        | (.y <= $o.y + $r[1]) as $tp | (.y + .h >= $o.y + $mh - $r[3] - 1) as $bt
+        | if $lf and $rg and $tp and $bt then "screen"
+          elif $tp and $bt then (if $rg then "right" elif $lf then "left" else "height" end)
+          elif $lf and $rg then (if $bt then "bottom" elif $tp then "top" else "width" end)
+          else "screen" end end;
+  def span_words: if . == "screen" then "spans the screen"
+    elif . == "height" or . == "width" then "is full \(.)"
+    elif . == "left" or . == "right" then "is full height at the \(.) edge"
+    else "is full width at the \(.) edge" end;
   def bar_strip($m; $mon): (first($m[]? | select(.name == $mon)) // null) as $o
     | if (.namespace // "") != "omarchy-bar" or $o == null or ($o.width // null) == null or ($o.reserved // null) == null then .
       else
@@ -140,7 +155,8 @@ pub const WIN_JQ: &str = concat!(
     else $o.z > $t.z end;
   [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {}
    | (.["2"] // [] | map(. + {layer: "top"})), (.["3"] // [] | map(. + {layer: "overlay"}))
-   | .[] | bar_strip($m; $mon) | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], monitor: $mon, certain: (spans($m; $mon) | not)}] as $L
+   | .[] | bar_strip($m; $mon) | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], monitor: $mon, certain: (spans($m; $mon) | not),
+       span: (if spans($m; $mon) then span($m; $mon) else null end)}] as $L
   | ([$m[] | .activeWorkspace, .specialWorkspace | wsk] | map(select(. != 0 and . != null))) as $shown
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
      | .onscreen = ((.workspace | wsk) as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
@@ -305,12 +321,16 @@ pub const WINDOWS_TABLE_JQ: &str = r#"def pad($n): tostring | . + (" " * ($n - l
       ((if .onscreen | not then "off-screen" elif .cover != [] then "covered" else "on-screen" end)
         + (if .active then ",active" else "" end) | pad(20)),
       ("\(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])" | pad(22)), (.class | pad(16)), (.title | tojson)] | join(" ")"#;
-/// windows_layers.
-pub const WINDOWS_LAYERS_JQ: &str = r#"[.[] | .address as $a | .layers[]? | {k: [.namespace, .layer, .at, .size, (.certain != false), .monitor], a: $a}]
-    | group_by(.k)[] | .[0].k as [$n, $l, $at, $sz, $c, $mo]
+/// windows_layers: a layer spanning its output worded for what it covers (#431).
+pub const WINDOWS_LAYERS_JQ: &str = concat!(
+    layer_span_jq!(),
+    r#"
+  [.[] | .address as $a | .layers[]? | {k: [.namespace, .layer, .at, .size, (.certain != false), .monitor, (.span // "screen")], a: $a}]
+    | group_by(.k)[] | .[0].k as [$n, $l, $at, $sz, $c, $mo, $sp]
     | "layer \($n | tojson) (\($l) \($sz[0])x\($sz[1]) at \($at[0]),\($at[1])\(if $mo then " on \($mo)" else "" end)) "
       + if $c then "is over \(map(.a) | join(", ")): where it takes input, input there goes to it"
-        else "spans the screen, possibly over \(map(.a) | join(", ")): input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window" end"#;
+        else "\($sp | span_words), possibly over \(map(.a) | join(", ")): input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window" end"#
+);
 /// layer_select: the layers SEL names.
 pub const LAYER_HITS_JQ: &str = r#"[.[] | select(
       if ($s | startswith("address:")) then .address == ($s | ltrimstr("address:"))

@@ -20,6 +20,8 @@ use std::os::fd::AsRawFd;
 /// The dock's layer namespace and plugin id on Omarchy 4.5.
 pub const DOCK_NS: &str = "omarchy-dock";
 pub const DOCK_ID: &str = "omarchy.dock";
+/// The notifications' layer namespace (Omarchy 4.0 and 4.5).
+pub const NOTIFICATIONS_NS: &str = "omarchy-notifications";
 
 /// The Omarchy tree the box runs: its --omarchy DIR, else the installed one.
 pub fn tree(ctx: &Ctx) -> Vec<u8> {
@@ -316,16 +318,24 @@ pub fn drop_docks(layers: &[u8], hidden: &[Vec<u8>]) -> Vec<u8> {
     if hidden.is_empty() {
         return layers.to_vec();
     }
-    let names: Vec<String> = hidden
+    drop_layers(layers, DOCK_NS, Some(hidden))
+}
+
+/// LAYERS without the layers of namespace NS on the monitors ON names (on every one: None). LAYERS
+/// as it is when jq cannot read it.
+fn drop_layers(layers: &[u8], ns: &str, on: Option<&[Vec<u8>]>) -> Vec<u8> {
+    let names: Vec<String> = on
+        .unwrap_or_default()
         .iter()
         .map(|h| crate::json::quote(&String::from_utf8_lossy(h)))
         .collect();
     let r = Args::new(&["-c"])
         .kv("--argjson", "h", format!("[{}]", names.join(",")).as_bytes())
-        .kv("--arg", "ns", DOCK_NS)
+        .kv("--argjson", "all", if on.is_none() { "true" } else { "false" })
+        .kv("--arg", "ns", ns)
         .arg(
             r#"if type != "object" then . else with_entries(
-                 if (.key as $k | $h | index([$k])) and (.value | type) == "object"
+                 if ($all or (.key as $k | $h | index([$k]))) and (.value | type) == "object"
                     and (.value.levels | type) == "object"
                  then .value.levels |= map_values(if type == "array" then map(select(.namespace != $ns)) else . end)
                  else . end) end"#,
@@ -338,13 +348,34 @@ pub fn drop_docks(layers: &[u8], hidden: &[Vec<u8>]) -> Vec<u8> {
     }
 }
 
+/// Whether the box's shell shows no toast: its notifications count none (#431). Omarchy 4.5 keeps
+/// their layer mapped while idle, a column the screen's height with an empty input mask; its
+/// `live.json` leaves out a transient toast, so the shell is asked. False when that cannot tell (no
+/// Omarchy shell; 4.0's, which counts none: its layer goes with its last toast; no answer).
+fn no_toasts(ctx: &Ctx) -> bool {
+    if meta(&ctx.d, "shell").0 != b"true" {
+        return false;
+    }
+    let mut c = ctx.clone();
+    c.pass.clear();
+    c.envkv.clear();
+    ipc(&mut c, &[b"notifications", b"count"]).is_ok_and(|n| n == b"0")
+}
+
 /// `hyprctl -j layers` for what a window's input meets (windows, click/scroll/drag/pointer
-/// --window): a hidden dock taken out (#309). The monitors and the box's files are read only when
-/// a dock is there.
+/// --window): a hidden dock taken out (#309), and the notifications while they show no toast
+/// (#431). The monitors and the box's files are read only when a dock is there, the shell asked
+/// only when the notifications are.
 pub fn input_layers(ctx: &Ctx) -> Res<Vec<u8>> {
-    let lys = strip_nl(&crate::hypr::hypr_json(ctx, &["layers"])?);
-    let quoted = cat!("\"", DOCK_NS, "\"");
-    if !lys.windows(quoted.len()).any(|w| w == quoted.as_slice()) {
+    let mut lys = strip_nl(&crate::hypr::hypr_json(ctx, &["layers"])?);
+    let has = |l: &[u8], ns: &str| {
+        let quoted = cat!("\"", ns, "\"");
+        l.windows(quoted.len()).any(|w| w == quoted.as_slice())
+    };
+    if has(&lys, NOTIFICATIONS_NS) && no_toasts(ctx) {
+        lys = drop_layers(&lys, NOTIFICATIONS_NS, None);
+    }
+    if !has(&lys, DOCK_NS) {
         return Ok(lys);
     }
     let m = strip_nl(&crate::hypr::hypr_json(ctx, &["monitors"])?);
@@ -380,6 +411,12 @@ mod tests {
             r#"{"A":{"levels":{"0":[],"2":[{"namespace":"other"}]}},"B":{"levels":{"2":[{"namespace":"omarchy-dock"}]}}}"#
         );
         assert_eq!(drop_docks(l, &[]), l.to_vec());
+        // The notifications showing no toast: from every monitor (#431).
+        let n = br#"{"A":{"levels":{"3":[{"namespace":"omarchy-notifications"},{"namespace":"osd"}]}},"B":{"levels":{"3":[{"namespace":"omarchy-notifications"}]}}}"#;
+        assert_eq!(
+            String::from_utf8(drop_layers(n, NOTIFICATIONS_NS, None)).unwrap(),
+            r#"{"A":{"levels":{"3":[{"namespace":"osd"}]}},"B":{"levels":{"3":[]}}}"#
+        );
         assert_eq!(
             drop_docks(b"not json", &[b"A".to_vec()]),
             b"not json".to_vec()

@@ -13155,6 +13155,31 @@ from them.
     machine). end-4's dots (illogical-impulse) not tried: its installer rewrites ~/.config and its
     Hyprland config, a VM of its own.
 
+678. **`windows` named 4.5's idle notifications layer as possibly over every window** (2026-11-06,
+    #431). Every listing in a box with Omarchy 4.5's shell ended with `layer "omarchy-notifications"
+    (overlay 399x1080 at 1521,0 …) spans the screen, possibly over …`, toast or not: finding 421's
+    column, mapped while idle with its input mask empty (Service.qml: `mask: Region { item:
+    surface.showingNotifications ? deck : null }`, the deck as tall as its toasts), and called
+    "spans the screen" though it is a strip at the right edge. An agent took to `grep -v '^layer'`,
+    which would hide a layer really in the way. Finding 549's way (#407: the bar's surface cut to its
+    strip, from the edge its output reserves) cannot place the deck: Hyprland lists no input region
+    and nothing it lists tells the deck's height. Nor can `live.json` tell, which leaves out a
+    transient toast (`notify-send -e`: shown, count 1, live.json `[]`; checked in a box) and is
+    written a moment late. **Fix**: input_layers (finding 611's way for the hidden dock) asks the
+    box's shell `notifications count` when an `omarchy-notifications` layer is listed and drops it
+    from every monitor while that answers 0 (a few ms); no Omarchy shell, 4.0's (which counts none:
+    its layer goes with its last toast) or no answer keeps it. So `windows` and `click --window` (no
+    pixel narrowing then) leave it out; with a toast up it is still said, on every monitor (the count
+    is not per monitor). A layer spanning its output is now worded for what it covers: `span` in
+    WIN_JQ's layers (`windows --json`), `screen` for a whole one or the reserved-edge rule's whole
+    height and width, else the edge a full-height (`right`, `left`) or full-width (`bottom`, `top`)
+    strip is at, `height`/`width` away from both; `windows` says "is full height at the right edge,
+    possibly over …". The click's hints still say "a layer spanning the screen". Verified in a box on
+    Omarchy 4.5.0-3 (stock bar: the column 399x1080 at 1521,0) on Hyprland 0.56.2 and 0.57.1. Tests:
+    t_unit_window_select (the wording and `span`), omshell's unit test, t_click_layer (no line with no
+    toast or after it closed; the line with one, worded per generation; failed 3 checks on the old
+    code).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

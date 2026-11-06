@@ -13082,12 +13082,14 @@ QML
 # from it, or with no toast, nothing is said. A smaller layer (a panel stub) is over the point for
 # certain, even under a spanning one: refused under --no-raise. Without one, nothing is said.
 t_click_layer() {
-  local B=$P-cl D out rc w at x y px py fx fy live
+  local B=$P-cl D out rc w at x y px py fx fy live span
   up_ok "$B" --net isolated --stock-bar "${OM[@]}" || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   live=$D/home/.local/state/omarchy/notifications/live.json
   ob run -b "$B" -d -q -- foot -T L sh -c 'cat > /dev/null'
   ob wait -b "$B" window 'title:^L$' >/dev/null 2>&1
+  # 4.5's layer stays mapped with no toast, its input mask empty: nothing over the window (#431).
+  check_eq "no toast: windows names no notifications layer (#431)" "" "$(ob windows -b "$B" | grep -F '"omarchy-notifications"')"
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise 20 20 2>&1); rc=$?
   check_eq "no toast: --no-raise clicks, nothing said" "0 " "$rc $out"
   at=$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | "\(.at[0]) \(.at[1])"')
@@ -13104,8 +13106,10 @@ t_click_layer() {
   x=$((1700 - ${at% *})) y=$((40 - ${at#* }))
   fx=$((1700 - ${at% *})) fy=$((600 - ${at#* }))
   out=$(ob windows -b "$B")
-  check_match "windows names the spanning layer as possibly over the window" \
-    "layer \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0 on [A-Z]+-[0-9]+\) spans the screen, possibly over $(jq -r .address <<<"$w"): input goes to it only where one of its items \(a toast, a dock icon\) is" "$out"
+  # 4.5's is a column at the right, worded so; 4.0's covers the screen (#431).
+  span="spans the screen"; if omarchy45; then span="is full height at the right edge"; fi
+  check_match "windows names the layer as possibly over the window, as $span (#431)" \
+    "layer \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0 on [A-Z]+-[0-9]+\) $span, possibly over $(jq -r .address <<<"$w"): input goes to it only where one of its items \(a toast, a dock icon\) is" "$out"
   check_eq "...--json: certain false" false \
     "$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | .layers[] | select(.namespace == "omarchy-notifications") | .certain')"
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
@@ -13170,6 +13174,7 @@ QML
   check_match "...said on stderr: it draws there (#283)" "a layer spanning the screen, \"omarchy-notifications\" .* draws over $x,$y of window .*: one of its items .* \(omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off\)$" "$out"
   if omarchy45; then
     check "...the click went to the toast, which closed (live.json empty; the layer stays)" until_ok 3 jq -e 'length == 0' "$live"
+    check_eq "...windows names the notifications layer no more (#431)" "" "$(ob windows -b "$B" | grep -F '"omarchy-notifications"')"
     # 4.5's layers stay mapped while idle (finding 421): with no toast, under the column and over
     # the dock, --no-raise still clicks (it was refused: "input there goes to it").
     out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
@@ -19085,6 +19090,17 @@ t_unit_window_select() {
   local Wc; Wc=$(probe win_annotate "$c" "$mr" "$act" "$(jq -c '.M.levels["3"] += [{"namespace":"col","pid":2,"x":1455,"y":0,"w":465,"h":1080}]' <<<"$l")")
   check_eq "win_layer: under an idle column (4.5's notifications): possible" 'possible "col" overlay 465x1080 at 1455,0' \
     "$(probe win_layer "$(jq -c '.[] | select(.address == "0xb")' <<<"$Wc")" "$((1600 - $(jq -r '.[] | select(.address == "0xb") | .at[0]' <<<"$Wc")))" 500)"
+  # A strip is worded for what it is, not as spanning the screen (#431, finding 678).
+  check_eq "windows: the column is full height at the right edge (#431)" \
+    'layer "col" (overlay 465x1080 at 1455,0 on M) is full height at the right edge, possibly over 0xb: input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window' \
+    "$(probe windows_layers <<<"$Wc" | grep '^layer "col"')"
+  check_eq "...--json: its span right; a certain layer's null; a whole one's screen" "right null screen" \
+    "$(span() { jq -r --arg n "$2" 'first(.[] | .layers[]? | select(.namespace == $n)) | .span' <<<"$1"; }
+       echo "$(span "$Wc" col) $(span "$Wc" toast) $(span "$Wn" notif)")"
+  local Wd; Wd=$(probe win_annotate "$c" "$mr" "$act" "$(jq -c '.M.levels["2"] += [{"namespace":"dock","pid":2,"x":0,"y":873,"w":1920,"h":207}, {"namespace":"side","pid":2,"x":0,"y":26,"w":300,"h":1054}] | .M.levels["3"] = []' <<<"$l")")
+  check_eq "...a dock along the bottom: full width at the bottom edge; a column under the top bar at the left: full height at the left edge" \
+    'is full width at the bottom edge|is full height at the left edge' \
+    "$(probe windows_layers <<<"$Wd" | grep '^layer "dock"' | sed -E 's/.*\) (is [a-z ]+),.*/\1/')|$(probe windows_layers <<<"$Wd" | grep '^layer "side"' | sed -E 's/.*\) (is [a-z ]+),.*/\1/')"
   # Omarchy 4.5.0-rc2's bar surface spans the screen, input on its strip only (#407): the strip along
   # the edge its output reserves; with no edge known, as before (possible). (0xb: 1000,0 900x1000)
   local lb Wb; lb=$(jq -c '.M.levels["2"] = [{"namespace":"omarchy-bar","pid":1,"x":0,"y":0,"w":1920,"h":1080}] | .M.levels["3"] = []' <<<"$l")
