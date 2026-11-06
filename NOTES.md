@@ -13014,6 +13014,20 @@ from them.
     bar fine. Fixed in 0.57.1 (Hyprland 7a648e3ed, 04d93b8f3); Arch's 0.57.1 passes the same run.
     **Now** doctor's hyprland check warns on 0.57.0 and says to update. Tracked privately until
     Debian ships 0.57.1.
+668. **Open: with systemd's coredump socket, a box's crash is journaled whatever its core limit**
+    (2026-11-06, #247). A box runs its programs with RLIMIT_CORE at 1 byte (finding 401's rule: a
+    crash in a box must not reach the user's crash notifier, Omarchy's omarchy-crash-watch), which
+    the kernel's pipe handler (`|/usr/lib/systemd/systemd-coredump ...`) takes as "no core, no
+    report". systemd 262's preset enables systemd-coredumpd.service, whose
+    systemd-coredump-register.service sets `kernel.core_pattern=@@/run/systemd/coredumpd/kernel`
+    (the coredump socket): there systemd-coredump journals the crash ("terminated abnormally without
+    generating a coredump", the crash MESSAGE_ID) at any limit, `--core=0` included (t_guard's
+    "its abort is not a journaled crash" fails on plain Arch's cloud image, fresh with 262).
+    PR_SET_DUMPABLE is reset by exec. This machine is still on the pipe: it upgraded from 261, and
+    an upgrade applies no new preset (systemd-coredumpd.service disabled). A fresh install with 262
+    (Omarchy's ISO included) would have the socket, and a box's crash would then reach
+    omarchy-crash-watch on the real desktop. Not fixed; to decide: a way for a box's processes to
+    stay out of the journal's crash records, or the notifier skipping them (its side).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
