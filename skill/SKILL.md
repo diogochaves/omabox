@@ -35,7 +35,7 @@ inside a box.**
 | The project says | Do |
 |---|---|
 | `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
-| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR` |
+| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR`; a dispatch (old syntax: a no-op): `omabox lua 'hl.dispatch(hl.dsp…)'` |
 | `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `keys`, `click X Y`, `windows` |
 | `ctest`, a test binary (tray, D-Bus, keyring…) | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …` | `omabox run -- …` (`omarchy plugin validate` only reads: fine on the host) |
@@ -86,7 +86,7 @@ omabox down                               # when done
    sending again.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
 4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
-   `omabox hyprctl dispatch`), not by keys and clicks, unless the gesture is under test. **Stop when
+   `omabox lua 'hl.dispatch(hl.dsp…)'`), not by keys and clicks, unless the gesture is under test. **Stop when
    it shows the goal.**
 
 No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;

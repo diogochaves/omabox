@@ -125,6 +125,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   Hyprland in omabox's submap (every key but the toggle swallowed) while another interactive box was
   still up: on Hyprland 0.57 with keys-to-box on and the pointer over the window, and on 0.56 too
   after the toggle key. A closing window no longer counts as the focused box.
+- **`hyprctl dispatch` in the old syntax says it dispatched nothing, and the Lua for it** ([#427](https://github.com/diogochaves/omabox/issues/427)):
+  a box's Hyprland runs a Lua config, where `dispatch fullscreen 0` is run as Lua and does nothing
+  but print Hyprland's note; in a `--batch` it even exited 0. `omabox hyprctl` now fails it (exit 1
+  for a batch, hyprctl's own status otherwise) and prints the `omabox lua 'hl.dispatch(…)'` line for
+  it: fullscreen, togglefloating, setfloating, settiled, workspace, focuswindow, killactive,
+  closewindow, movetoworkspace(silent) and exec are translated; the rest are pointed at `hl.dsp`.
 
 ### Deprecated
 - **Omarchy 4.0 goes by date, not in 1.3** ([#312](https://github.com/diogochaves/omabox/issues/312)):
