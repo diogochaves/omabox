@@ -821,8 +821,13 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   `omabox lua 'hl.dispatch(hl.dsp.window.fullscreen({ mode = "fullscreen" }))'` or `omabox hyprctl
   dispatch 'hl.dsp.window.fullscreen({ mode = "fullscreen" })'`; the rest are in `omabox lua 'local t
   = {} for k in pairs(hl.dsp.window) do t[#t + 1] = k end return t'`. A Lua dispatch Hyprland
-  refuses (no such window) is still exit 0: `lua` prints `{"ok":false,"error":…}`, `hyprctl`
-  `warning: …`; read the answer.
+  refuses (no such window) is exit 1 with its answer as it came: `hyprctl` prints `warning: …`
+  (`error: …` keeps hyprctl's 7; with `-q` nothing; in a `--batch`, a dispatch between two other
+  commands is not read), `lua` the `{"ok":false,"error":…}` that `hl.dispatch` returned. `lua`
+  fails only on what `hl.dispatch` itself handed back, not on a table of yours that reads `ok =
+  false`, nor on a refusal your source read (`local r = hl.dispatch(…) return r.ok`); an
+  `hl.dispatch` given no dispatcher (an `hl.dsp` call with arguments it does not take is nil) is
+  exit 1 too, said, as Hyprland's words for it only come back through `hyprctl dispatch`.
 - A config reload (`hyprctl reload`, `omabox reload`, a theme switch, `omabox mode`, an interactive
   box's window resize) starts a fresh Lua state: binds, rules, `hl.config` values and plugins added
   with `lua`, `eval` or `plugin load` are gone. Re-apply them on `configreloaded`. Nothing reloads

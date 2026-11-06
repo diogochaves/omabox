@@ -13177,11 +13177,58 @@ from them.
     `hl.dsp.window.move({ workspace[, window][, follow = false] })`, `exec CMD` →
     `hl.dsp.exec_cmd(CMD)` (not `exec [RULES] CMD`). Anything else (`pin`, `fullscreen 2`) gets
     where the Lua dispatchers are. Not done: `forcekillactive`/`killwindow` → `hl.dsp.window.kill`
-    (whether it is the old force kill was not measured), `-q` (nothing to read; its 7 stands). A
-    failed Lua dispatch (`hl.dsp.focus({ window = "class:nosuch" })`) is still exit 0, answering
-    `warning: …` (hyprctl) or `{"ok":false,…}` (lua), as before. Tests: t_hypr_old_dispatch (each
-    printed line run in the box does what the old words would; --batch; Lua dispatches untouched;
-    passes on 0.57.1 under OMABOX_HYPRLAND too), hyprctl.rs's old_dispatch_* unit tests.
+    (whether it is the old force kill was not measured). `-q` and a failed Lua dispatch: finding
+    686. Tests: t_hypr_old_dispatch (each printed line run in the box does what the old words
+    would; --batch; Lua dispatches untouched; passes on 0.57.1 under OMABOX_HYPRLAND too),
+    hyprctl.rs's old_dispatch_* unit tests.
+
+686. **A Lua dispatch Hyprland refused exited 0 too** (2026-11-06, #427, after finding 677).
+    `omabox hyprctl -b BOX dispatch 'hl.dsp.focus({ window = "class:nosuch" })'` answered `warning:
+    =[C]:-1: hl.focus: window not found`, exit 0, and `omabox lua 'hl.dispatch(…)'` printed
+    `{"code":"not_found","error":…,"level":"warning","ok":false}`, exit 0: a script reading the
+    status went on. Measured on 0.56.2 and 0.57.1, the same: under a Lua config `hyprctl dispatch
+    X` is `eval("return hl.dispatch(X)")`, which answers `ok` or every issue the call raised, a line
+    each, `error: …` (hyprctl's 7, as its client exits 7 on an answer starting `error:`) or
+    `warning: …` / `info: …` (0; info is "Nothing to focus to in direction", "No window found").
+    `hl.dispatch` returns Hyprland's table, exactly `{ ok = false, error, level, code }` (strings),
+    or `{ ok = true, pass_event }`; given no dispatcher (`hl.dsp.window.fullscreen({ mode = "x" })`
+    is nil, after its own error) it returns nothing and raises nothing, only adds "expected a
+    dispatcher" to the eval's errors, which `lua` never sees (its answer travels as an error of its
+    own, finding 106): it printed nothing, exit 0. 0.57's `hl.dispatch` also runs a Lua function
+    and returns what it returns (a table of the caller's own), or Hyprland's table with code
+    `lua_error` when it raises. Some refusals Hyprland does not report: `hl.dsp.window.close({
+    window = "class:nosuch" })` and `.move` answer ok; those stay 0. Now: `omabox hyprctl` reads
+    the answer it holds (#166) for each `dispatch` command: anything but `ok` is exit 1 where
+    hyprctl said 0. A `--batch`'s answers are joined by three newlines, which `clients`' answer
+    holds too, so only the dispatches before the first other command (from the front) and after
+    the last (from the back) are read; one between two others is not. A dispatch's `-q`/`--quiet`
+    (hyprctl takes it anywhere before `--`) is dropped from hyprctl's words and the answer held
+    unprinted, so `-q` is read too (677's old syntax with `-q` now says its Lua). `lua.lua` puts a
+    wrapper in `hl.dispatch` while the source runs (put back after, an error too, unless the source
+    set its own): it notes each table `hl.dispatch` returned, and a value the source returns that
+    is one of those, in Hyprland's exact shape, is kind `x`: exit 1, printed as it came. A table of
+    the source's own (`{ ok = false, … }`, or 0.57's function's), a refusal stored and read
+    (`return r.ok`) or one not returned stay 0. A call that returned nothing is kind `z`: exit 1,
+    saying it was given no dispatcher and that `omabox hyprctl dispatch 'EXPR'` prints Hyprland's
+    words. The wrapper calls through a one-line chunk named `=lua`, as the source is, so
+    `hl.dispatch`'s own errors still name `=lua:N` (the caller's line put back; 1 after a tail call
+    `return hl.dispatch(…)`, whose caller's line is gone). Internal callers: none goes through
+    `omabox hyprctl` or `lua` (the Rust calls hyprctl itself), and the suite's own `ob hyprctl
+    dispatch` lines read no status. Not done: `hyprctl eval 'hl.dispatch(…)'` (the eval's answer
+    holds the warning; eval is any Lua), and other errors lost on `lua`'s way (`hl.config` of a key
+    not there). Found on the way, and older than this: `omabox lua 'return hl.dispatch(W),
+    hl.dispatch(N)'` failed after 5 s ("did not answer as expected: Hyprland IPC didn't respond in
+    time"), every time, with the wrapper's chunk named `=lua` and never named `=omabox`: its request
+    was 8184 bytes, 8 × 1023. Hyprland's hyprCtlFDTick reads a request 1023 bytes at a time until a
+    read comes back short, so one of exactly k × 1023 bytes leaves it in `read()` (its main thread,
+    `omabox gdb`) until hyprctl gives up and closes; then it answers into a closed socket ("Couldn't
+    write to socket. Error: Broken pipe" in its log), and the box's Hyprland is stalled those 5 s.
+    Any `omabox lua` source of the wrong length did that (1 in 1023). `lua` now sends its eval a
+    space longer when `/eval EVAL` is a multiple of 1023. `omabox hyprctl` with a request that long
+    still does it (its words are the caller's; a plain `hyprctl` the same). Tests:
+    t_hypr_old_dispatch's refused cases (failed on the old code; on 0.56.2 and 0.57.1) and its
+    1023-byte source (timed out on the old code), hyprctl.rs's batch_split and refused_dispatch and
+    lua.rs's eval_off_1023 unit tests.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
