@@ -135,6 +135,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   Hyprland in omabox's submap (every key but the toggle swallowed) while another interactive box was
   still up: on Hyprland 0.57 with keys-to-box on and the pointer over the window, and on 0.56 too
   after the toggle key. A closing window no longer counts as the focused box.
+- **`windows` no longer names Omarchy 4.5's notifications layer while it shows no toast** ([#431](https://github.com/diogochaves/omabox/issues/431)):
+  every listing ended with that layer "spans the screen, possibly over" the windows, with nothing on
+  screen; it stays mapped while idle and takes no input then. It is left out while the box's shell
+  counts no toast (`click --window` too); with one up it is said, worded for what it is: "is full
+  height at the right edge". `windows --json` gives each such layer a `span`.
 
 ### Deprecated
 - **Omarchy 4.0 goes by date, not in 1.3** ([#312](https://github.com/diogochaves/omabox/issues/312)):

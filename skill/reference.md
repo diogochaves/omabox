@@ -75,7 +75,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 |---|---|
 | `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more |
 | `jobs --json` | an array, oldest first: `pid, age` (seconds), `processes, log, argv` |
-| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, monitor, certain` (false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all) |
+| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, monitor, certain, span` (`certain` false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all; `span` then says how: `screen`, or the edge a full-height or full-width strip is at, `right`, `left`, `top`, `bottom`, else `height` or `width`; null on a certain one) |
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `tray --json` | an array of items: `id, title, status, category, service, path, menu` (null: none), `item_is_menu, rows` (each `id, label, role, enabled, visible, toggle, checked, rows`); `tray menu --json`: one item |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
@@ -1187,6 +1187,9 @@ Disturb; the dock is 4.5's.
   `notify-send`, a verification code and its own action toasts (a layout change's), so between steps
   `omabox dnd --clear` dismisses whatever is up (as a click on each would). A notification you are
   testing: leave it off, or `dnd off` for that step.
+- **The notifications' layer** (4.5): a column the screen's height at the right, mapped while idle
+  with no input at all; `windows` and `click --window` leave it out while it shows no toast, and with
+  one up `windows` says it "is full height at the right edge, possibly over" the windows under it.
 - **The dock** (4.5): a strip along the bottom, shown only on a floating workspace with no fullscreen
   window; elsewhere its layer stays mapped with no input at all, and `windows` and `click --window`
   leave it out. `omabox dock` says per monitor whether it is shown (input on its icons), tucked away

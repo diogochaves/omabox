@@ -465,7 +465,7 @@ fn layer_words(
     };
     // (Omarchy 4.5's notifications stay mapped while idle: wait layer --gone would not return;
     // a dock said here is shown: a hidden one never gets here, #309)
-    let toasts: &[u8] = if ns == b"omarchy-notifications" {
+    let toasts: &[u8] = if ns == crate::omshell::NOTIFICATIONS_NS.as_bytes() {
         b"omabox dnd --clear clears the toasts; omabox dnd on keeps new ones off"
     } else if ns == crate::omshell::DOCK_NS.as_bytes() {
         b"omabox dock says where it takes input; omabox dock off takes it away"
