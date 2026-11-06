@@ -974,7 +974,7 @@ pub fn seed_extensions(ctx: &Ctx, look: &Look, plan: &SeedPlan, h: &[u8]) -> Res
 /// HOME) each.
 pub fn seed_fonts(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<(Vec<u8>, Vec<u8>)>> {
     let mut fonts = Vec::new();
-    if plan.no_seed("fonts") || plan.stock && !plan.clean_has("fonts") {
+    if plan.no_seed("fonts") || (plan.stock || plan.clean) && !plan.clean_has("fonts") {
         return Ok(fonts);
     }
     let look = Look {

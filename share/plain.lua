@@ -22,6 +22,17 @@ local function xkb()
 end
 local layout, variant = xkb()
 
+-- The colour where no surface is: a clean box's sentinel (`up --clean`, #247), as omabox.clean says
+-- it ("background COLOUR"; any of it inside a window is a hole), else a dark one.
+local function background()
+  local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.clean")
+  if not f then return "rgb(1a1b26)" end
+  local colour
+  for l in f:lines() do colour = l:match("^background (%S+)$") or colour end
+  f:close()
+  return colour or "rgb(1a1b26)"
+end
+
 hl.config({
   -- No update news or donation prompt over the first frames (Omarchy turns them off too).
   ecosystem = { no_update_news = true, no_donation_nag = true },
@@ -29,7 +40,7 @@ hl.config({
   misc = {
     disable_hyprland_logo = true,
     disable_splash_rendering = true,
-    background_color = "rgb(1a1b26)",
+    background_color = background(),
     focus_on_activate = true,
   },
   input = { kb_layout = layout, kb_variant = variant, follow_mouse = 1 },

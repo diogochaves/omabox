@@ -175,6 +175,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let defaults = cat!(d, "/shell-defaults.json");
     let _ = std::fs::remove_file(shell::path(&defaults));
     if u.clean
+        && u.desktop == Desktop::Omarchy
         && !u.clean_has("clock")
         && !crate::shelljson::center_split(&u.omarchy)
         && shell::path(&cat!(u.tree(), "/config/omarchy/shell.json")).is_file()
@@ -273,11 +274,10 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     if u.interactive {
         crate::upspec::write_confirm_flag(ctx, &cat!(d, "/run"), &u.confirm);
     }
-    // --clean (#252): animations off, read by the box's config on every load.
-    if u.clean
-        && !u.clean_has("animations")
-        && !boxes::box_file(ctx, &ctx.at("run/omabox.clean"), b"animations off")
-    {
+    // --clean (#252): animations off, read by the box's config on every load; a plain box's sentinel
+    // background too (#247: plain.lua's misc.background_color), what check's holes look for.
+    let clean_lines = clean_lines(&u);
+    if !clean_lines.is_empty() && !boxes::box_file(ctx, &ctx.at("run/omabox.clean"), &clean_lines) {
         return Err(ctx.die("up: could not write the box's clean settings"));
     }
     // --no-pointer (#228): as `pointer hide` keeps it, read by the box's config from its first load.
@@ -532,6 +532,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         ") in ",
         d
     ));
+    // A plain box up did not get --desktop plain for (#247): the machine has no Omarchy, or the
+    // config says plain.
+    if let Some(t) = crate::upspec::chosen_text(u.desktop, u.chosen) {
+        say(t);
+    }
     if u.clean {
         say(cat!(
             "clean: ",
@@ -540,7 +545,8 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
                 &u.theme,
                 &u.net,
                 &u.clean_lang,
-                &u.clean_zone
+                &u.clean_zone,
+                u.desktop == Desktop::Plain
             )
         ));
     } else if u.stock {
@@ -1070,6 +1076,29 @@ fn etc_files(ctx: &Ctx, u: &Up) -> Res<Etc> {
             shell::path(&cat!(etc, "/localtime")),
         );
     }
+    // --clean's identity (#247, desk-plain's eba7dea): the user's passwd and group entries as
+    // CLEAN_USER (no full name, the box HOME), /etc/hostname CLEAN_HOST; every other entry as the host
+    // has it. Over the host's files, as locale.conf.
+    for f in ["passwd", "group", "hostname"] {
+        let _ = std::fs::remove_file(shell::path(&cat!(etc, "/", f)));
+    }
+    if clean_identity(u) {
+        let me = procfs::user_name(procfs::uid()).unwrap_or_default();
+        for f in ["passwd", "group"] {
+            if let Ok(t) = std::fs::read(format!("/etc/{f}")) {
+                write(
+                    &cat!(etc, "/", f),
+                    &crate::upspec::clean_ids(&t, me.as_bytes(), f == "passwd"),
+                );
+            }
+        }
+        if std::path::Path::new("/etc/hostname").exists() {
+            write(
+                &cat!(etc, "/hostname"),
+                &cat!(crate::upspec::CLEAN_HOST, "\n"),
+            );
+        }
+    }
     let mut e = Etc {
         overlay: false,
         files: Vec::new(),
@@ -1115,6 +1144,23 @@ fn cp_a(src: &[u8], dest: &[u8]) -> bool {
         .arg(os(dest))
         .stdin(std::process::Stdio::inherit());
     crate::sig::run_status(c).is_ok_and(|rc| rc == 0)
+}
+
+/// omabox.clean's lines (#252, #247): what the box's config reads of --clean on every load.
+fn clean_lines(u: &Up) -> Vec<u8> {
+    let mut l: Vec<Vec<u8>> = Vec::new();
+    if u.clean && !u.clean_has("animations") {
+        l.push(b"animations off".to_vec());
+    }
+    if u.clean && u.desktop == Desktop::Plain && !u.clean_has("wallpaper") {
+        l.push(cat!("background ", crate::upspec::CLEAN_BACKGROUND));
+    }
+    l.join(&b'\n')
+}
+
+/// A clean box's own identity (#247): user@omabox, unless --keep identity.
+fn clean_identity(u: &Up) -> bool {
+    u.clean && !u.clean_has("identity")
 }
 
 /// `uname -n`.
@@ -1218,7 +1264,12 @@ fn bwrap_args(
         b"--unshare-ipc",
         b"--unshare-uts",
     ]);
-    b.hostname(&hostname());
+    // A clean box's own (#247): no name of the user's in a shot.
+    b.hostname(&if clean_identity(u) {
+        crate::upspec::CLEAN_HOST.as_bytes().to_vec()
+    } else {
+        hostname()
+    });
     b.sys_ro("/usr").map_err(refused)?;
     // --desktop plain (#247): the box sees no Omarchy tree, as on a machine without Omarchy, so
     // nothing of it loads by accident (a require, a stand-in, a file seeded pointing there). An empty
@@ -1400,7 +1451,8 @@ fn bwrap_args(
     if !u.theme.is_empty() {
         hypr_env.push((b"OMABOX_THEME", u.theme.clone()));
     }
-    if u.clean && !u.clean_has("wallpaper") {
+    // (a plain box's sentinel is its background colour instead: omabox.clean)
+    if u.clean && u.desktop == Desktop::Omarchy && !u.clean_has("wallpaper") {
         hypr_env.push((
             b"OMABOX_CLEAN_WALLPAPER",
             b"/home/sbx/.config/omabox/clean-wallpaper.png".to_vec(),
@@ -1574,9 +1626,13 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
             shell::env_or_empty("XDG_RUNTIME_DIR")
         ));
     }
-    let user = procfs::user_name(procfs::uid())
-        .unwrap_or_default()
-        .into_bytes();
+    let user = if clean_identity(u) {
+        crate::upspec::CLEAN_USER.as_bytes().to_vec()
+    } else {
+        procfs::user_name(procfs::uid())
+            .unwrap_or_default()
+            .into_bytes()
+    };
     let login_shell = login_shell(procfs::uid());
     let lang = if !u.clean_lang.is_empty() {
         u.clean_lang.clone()

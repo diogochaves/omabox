@@ -10,7 +10,14 @@ pub const CLEAN_WALLPAPER_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQk
 pub const CLEAN_CLOCK: &str = "'Friday 12:00'";
 pub const CLEAN_CLOCK_VERTICAL: &str = "'12'\n'\u{2014}'\n'00'";
 pub const CLEAN_TZ: &str = "UTC";
-pub const CLEAN_KEEPS: &str = "animations bar clock fonts locale pointer wallpaper";
+pub const CLEAN_KEEPS: &str = "animations bar clock fonts identity locale pointer wallpaper";
+/// A clean box's user and host names (#247, from desk-plain's eba7dea): nothing of the user's in a
+/// shot (a shell's greeting, a terminal's title, a prompt). `--keep identity` keeps the user's.
+pub const CLEAN_USER: &str = "user";
+pub const CLEAN_HOST: &str = "omabox";
+/// A clean plain box's sentinel (#247): the colour its Hyprland fills the screen with where no
+/// surface is (plain.lua's misc.background_color, from omabox.clean), CLEAN_WALLPAPER's.
+pub const CLEAN_BACKGROUND: &str = "rgb(ff00ff)";
 // up --stock (#265, finding 613): what of the desk a stock box leaves out (seed_home's `plan.stock`),
 // as up says it. A clean box is a stock one with the freezes above.
 pub const STOCK_LEFT_OUT: &str =
@@ -67,11 +74,73 @@ impl Desktop {
     }
 }
 
-/// The desktop a box gets: --desktop's, else the default. The one place the default is chosen
-/// (#247): Omarchy's for now; the choice by what the machine has (plain without
-/// /usr/share/omarchy) goes here.
-pub fn resolve_desktop(given: Option<Desktop>) -> Desktop {
-    given.unwrap_or_default()
+/// How a box's desktop was chosen (#247): what up says of a plain one it was not asked for, and the
+/// words of a refusal of what needs Omarchy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Chosen {
+    /// `--desktop`, or `--omarchy DIR` (a tree of Omarchy's: an Omarchy box).
+    #[default]
+    Given,
+    /// `omabox config desktop omarchy|plain`.
+    Config,
+    /// By what the machine has: Omarchy's when it is installed (install::omarchy_at, the test doctor
+    /// and setup use), plain when it is not.
+    Machine,
+}
+
+/// The config's `desktop` as a Desktop: None for `auto` (the default: by what the machine has).
+pub fn conf_desktop(v: &[u8]) -> Option<Desktop> {
+    Desktop::parse(v)
+}
+
+/// The desktop a box gets, and how it was chosen: --desktop's; an Omarchy box for `--omarchy DIR`;
+/// the config's (`omabox config desktop`); else by what the machine has: Omarchy's where Omarchy is
+/// installed (OMARCHY_HERE: install::omarchy_at), plain where it is not. The one place the default
+/// is chosen (#247).
+pub fn resolve_desktop(
+    given: Option<Desktop>,
+    omarchy_dir: bool,
+    conf: Option<Desktop>,
+    omarchy_here: bool,
+) -> (Desktop, Chosen) {
+    if let Some(d) = given {
+        return (d, Chosen::Given);
+    }
+    if omarchy_dir {
+        return (Desktop::Omarchy, Chosen::Given);
+    }
+    if let Some(d) = conf {
+        return (d, Chosen::Config);
+    }
+    if omarchy_here {
+        (Desktop::Omarchy, Chosen::Machine)
+    } else {
+        (Desktop::Plain, Chosen::Machine)
+    }
+}
+
+/// Why a box is plain, as a refusal of what needs Omarchy ends: "OPT needs Omarchy, and ...".
+pub fn plain_why(how: Chosen) -> &'static str {
+    match how {
+        Chosen::Given => "--desktop plain has none of it",
+        Chosen::Config => {
+            "the box is plain (omabox config desktop plain): --desktop omarchy for an Omarchy box"
+        }
+        Chosen::Machine => "this machine has none (the box is plain)",
+    }
+}
+
+/// What up says of a plain box it was not asked for with --desktop; None for any other.
+pub fn chosen_text(d: Desktop, how: Chosen) -> Option<&'static str> {
+    match (d, how) {
+        (Desktop::Plain, Chosen::Machine) => Some(
+            "desktop: plain, as Omarchy is not installed here (omabox's own small Hyprland config, no shell)",
+        ),
+        (Desktop::Plain, Chosen::Config) => Some(
+            "desktop: plain, from omabox config desktop (--desktop omarchy for an Omarchy box)",
+        ),
+        _ => None,
+    }
 }
 
 /// up --idle and $OMABOX_IDLE as whole seconds: `check run` shares bash's idle_duration.
@@ -589,15 +658,100 @@ pub fn clean_zone_rec(envs: &[(Vec<u8>, Vec<u8>)], clean_zone: &[u8]) -> Vec<u8>
         .map_or(z.clone(), <[u8]>::to_vec)
 }
 
-/// clean_text KEEP THEME NET CLEAN_LANG CLEAN_ZONE: what a clean box is, as up says it.
+/// clean_text KEEP THEME NET CLEAN_LANG CLEAN_ZONE PLAIN: what a clean box is, as up says it. A plain
+/// box (#247) has no bar, theme or clock of Omarchy's, and none of the user's look but fonts.
 pub fn clean_text(
     keep: &[u8],
     theme: &[u8],
     net: &[u8],
     clean_lang: &[u8],
     clean_zone: &[u8],
+    plain: bool,
 ) -> Vec<u8> {
-    look_text(true, keep, theme, net, clean_lang, clean_zone)
+    if plain {
+        return plain_clean_text(keep, net, clean_lang, clean_zone);
+    }
+    let mut t = look_text(true, keep, theme, net, clean_lang, clean_zone);
+    if !clean_has(keep, "identity") {
+        t.extend_from_slice(&cat!(", as ", CLEAN_USER, "@", CLEAN_HOST));
+    }
+    t
+}
+
+/// A clean plain box's words: its background the sentinel, then the freezes as on Omarchy's.
+fn plain_clean_text(keep: &[u8], net: &[u8], clean_lang: &[u8], clean_zone: &[u8]) -> Vec<u8> {
+    let has = |w| clean_has(keep, w);
+    let mut parts: Vec<Vec<u8>> = Vec::new();
+    if !has("wallpaper") {
+        parts.push(cat!(
+            "background ",
+            CLEAN_WALLPAPER,
+            " (any of it inside a window is a hole)"
+        ));
+    }
+    if !has("locale") {
+        parts.push(cat!(
+            "locale ",
+            or_else(clean_lang, clean_locale().as_bytes()),
+            " in ",
+            or_else(clean_zone, CLEAN_TZ.as_bytes())
+        ));
+    }
+    if !has("fonts") {
+        parts.push(b"none of your fonts".to_vec());
+    }
+    if !has("pointer") {
+        parts.push(b"no pointer".to_vec());
+    }
+    if net == b"isolated" {
+        parts.push(b"no network".to_vec());
+    }
+    if !has("animations") {
+        parts.push(b"animations off".to_vec());
+    }
+    if !has("identity") {
+        parts.push(cat!("as ", CLEAN_USER, "@", CLEAN_HOST));
+    }
+    parts.join(b", ".as_slice())
+}
+
+/// V, or D when V is empty.
+fn or_else(v: &[u8], d: &[u8]) -> Vec<u8> {
+    if v.is_empty() { d.to_vec() } else { v.to_vec() }
+}
+
+/// clean_ids TEXT ME PASSWD (#247): /etc/passwd (PASSWD) or /etc/group as a clean box has them: ME's
+/// entry named CLEAN_USER, in passwd with no full name and the box HOME, and ME among a group's
+/// members CLEAN_USER too. Every other line as it was; uid and gid stay (the box's files are ME's).
+pub fn clean_ids(text: &[u8], me: &[u8], passwd: bool) -> Vec<u8> {
+    if me.is_empty() {
+        return text.to_vec();
+    }
+    let mut out = Vec::with_capacity(text.len());
+    let mut lines = text.split(|&c| c == b'\n').peekable();
+    while let Some(l) = lines.next() {
+        let last = lines.peek().is_none();
+        let mut f: Vec<Vec<u8>> = l.split(|&c| c == b':').map(<[u8]>::to_vec).collect();
+        if f.len() >= 4 && f[0] == me {
+            f[0] = CLEAN_USER.as_bytes().to_vec();
+            if passwd && f.len() == 7 {
+                f[4].clear();
+                f[5] = b"/home/sbx".to_vec();
+            }
+        }
+        if !passwd && f.len() == 4 {
+            f[3] = f[3]
+                .split(|&c| c == b',')
+                .map(|m| if m == me { CLEAN_USER.as_bytes() } else { m })
+                .collect::<Vec<_>>()
+                .join(&b',');
+        }
+        out.extend_from_slice(&f.join(&b':'));
+        if !last {
+            out.push(b'\n');
+        }
+    }
+    out
 }
 
 /// What up says under its stock (or clean) line when the box starts --from SAVE (#265, finding
@@ -794,11 +948,46 @@ mod tests {
         for d in [Desktop::Omarchy, Desktop::Plain] {
             assert_eq!(Desktop::parse(d.name().as_bytes()), Some(d));
             assert_eq!(Desktop::of_box(d.name().as_bytes()), d);
-            assert_eq!(resolve_desktop(Some(d)), d);
+            // --desktop wins over --omarchy, the config and the machine.
+            for c in [None, Some(Desktop::Omarchy), Some(Desktop::Plain)] {
+                for here in [false, true] {
+                    assert_eq!(resolve_desktop(Some(d), false, c, here), (d, Chosen::Given));
+                }
+            }
+            // The config's, wherever.
+            for here in [false, true] {
+                assert_eq!(
+                    resolve_desktop(None, false, Some(d), here),
+                    (d, Chosen::Config)
+                );
+            }
         }
-        // A box from before #247 (no `desktop` in its box.json), and none asked: Omarchy's.
+        // A box from before #247 (no `desktop` in its box.json): Omarchy's.
         assert_eq!(Desktop::of_box(b""), Desktop::Omarchy);
-        assert_eq!(resolve_desktop(None), Desktop::Omarchy);
+        // None asked, no config (auto): by what the machine has.
+        assert_eq!(
+            resolve_desktop(None, false, None, true),
+            (Desktop::Omarchy, Chosen::Machine)
+        );
+        assert_eq!(
+            resolve_desktop(None, false, None, false),
+            (Desktop::Plain, Chosen::Machine)
+        );
+        // --omarchy DIR is a tree of Omarchy's: an Omarchy box, over the config and the machine.
+        for c in [None, Some(Desktop::Plain)] {
+            assert_eq!(
+                resolve_desktop(None, true, c, false),
+                (Desktop::Omarchy, Chosen::Given)
+            );
+        }
+        assert_eq!(conf_desktop(b"auto"), None);
+        assert_eq!(conf_desktop(b"plain"), Some(Desktop::Plain));
+        // Said only for a plain box not asked for.
+        assert!(chosen_text(Desktop::Plain, Chosen::Machine).is_some());
+        assert!(chosen_text(Desktop::Plain, Chosen::Config).is_some());
+        assert!(chosen_text(Desktop::Plain, Chosen::Given).is_none());
+        assert!(chosen_text(Desktop::Omarchy, Chosen::Machine).is_none());
+        assert!(chosen_text(Desktop::Omarchy, Chosen::Config).is_none());
         assert_eq!(DESKTOPS, "omarchy or plain");
     }
 
@@ -813,7 +1002,7 @@ mod tests {
         assert_eq!(r, Err(()));
         assert!(
             said.contains(
-                "takes animations, bar, clock, fonts, locale, pointer, wallpaper (comma-separated), got blur"
+                "takes animations, bar, clock, fonts, identity, locale, pointer, wallpaper (comma-separated), got blur"
             ),
             "--keep: anything else refused, naming what it takes: {said}"
         );
@@ -823,19 +1012,21 @@ mod tests {
                 b"tokyo-night",
                 b"isolated",
                 b"en_US.UTF-8",
-                b"UTC"
+                b"UTC",
+                false
             ))
             .unwrap(),
-            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your look (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles, fonts), no pointer, no network, animations off",
+            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your look (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles, fonts), no pointer, no network, animations off, as user@omabox",
             "clean_text: all of it"
         );
         assert_eq!(
             String::from_utf8(clean_text(
-                b"bar,wallpaper,clock,animations,locale,fonts",
+                b"bar,wallpaper,clock,animations,locale,fonts,identity",
                 b"nord",
                 b"connected",
                 b"",
-                b""
+                b"",
+                false
             ))
             .unwrap(),
             "your bar, theme nord with its own wallpaper, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles), no pointer",
@@ -1030,6 +1221,24 @@ mod tests {
     }
 
     #[test]
+    fn clean_ids_renames_only_me() {
+        let pw = b"root:x:0:0::/root:/bin/bash\nme:x:1000:1000:Me Myself:/home/me:/bin/bash\nmeh:x:1001:1001::/home/meh:/bin/sh\n";
+        assert_eq!(
+            clean_ids(pw, b"me", true),
+            b"root:x:0:0::/root:/bin/bash\nuser:x:1000:1000::/home/sbx:/bin/bash\nmeh:x:1001:1001::/home/meh:/bin/sh\n".to_vec()
+        );
+        let gr = b"wheel:x:998:me,meh\nme:x:1000:\nvideo:x:985:meh,me";
+        assert_eq!(
+            clean_ids(gr, b"me", false),
+            b"wheel:x:998:user,meh\nuser:x:1000:\nvideo:x:985:meh,user".to_vec()
+        );
+        // No name to take (no passwd entry for the uid): as it was.
+        assert_eq!(clean_ids(pw, b"", true), pw.to_vec());
+        // A comment or short line is left alone.
+        assert_eq!(clean_ids(b"# me:x\n", b"me", true), b"# me:x\n".to_vec());
+    }
+
+    #[test]
     fn lists() {
         assert_eq!(
             no_seed_spec(b"fonts,extensions,fonts", b"fonts").unwrap(),
@@ -1052,22 +1261,39 @@ mod tests {
             b"isolated",
             b"C.UTF-8",
             b"UTC",
+            false,
         );
         assert_eq!(
             String::from_utf8(t).unwrap(),
-            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale C.UTF-8 in UTC, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles), no network"
+            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale C.UTF-8 in UTC, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles), no network, as user@omabox"
         );
         let t = clean_text(
-            b"bar,wallpaper,clock,locale,fonts,pointer,animations",
+            b"bar,wallpaper,clock,locale,fonts,pointer,animations,identity",
             b"x",
             b"connected",
             b"",
             b"",
+            false,
         );
         assert_eq!(
             String::from_utf8(t).unwrap(),
             "your bar, theme x with its own wallpaper, none of your look but your fonts (terminal configs, branding, themes, wallpapers, the plugins' settings, Hyprland toggles)"
         );
+        // A plain box (#247): its background the sentinel, no bar, theme or clock of Omarchy's.
+        let t = clean_text(b"", b"", b"isolated", b"C.UTF-8", b"UTC", true);
+        assert_eq!(
+            String::from_utf8(t).unwrap(),
+            "background #ff00ff (any of it inside a window is a hole), locale C.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off, as user@omabox"
+        );
+        let t = clean_text(
+            b"wallpaper,locale,fonts,pointer,animations,identity",
+            b"",
+            b"connected",
+            b"",
+            b"",
+            true,
+        );
+        assert_eq!(t, b"");
         assert_eq!(
             clean_zone_rec(
                 &[

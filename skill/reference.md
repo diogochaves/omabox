@@ -98,7 +98,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `ports --json` | an array: `box, port, addresses, process, host` |
 | `path --logs --json` | `{NAME: PATH}`, each log there is |
 | `saves --json` | an array: `name, box, saved, size, size_kb, keyring` |
-| `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, confirm_close_available, version, gpus, gpu_auto, gpu_now, hyprland` (OMABOX_HYPRLAND's path, or null) |
+| `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, protect_ports, desktop, confirm_close_available, version, gpus, gpu_auto, gpu_now, hyprland` (OMABOX_HYPRLAND's path, or null) |
 | `calibrate --answer --json` | `result` (one, fit, up, none), `card, marks, scale, fit, fit_size, error_px, worst, off, shot_fit` |
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
 | `pid --json` | `box, process` (hyprland or shell), `pid` (the host's), `box_pid` (the box's own) |
@@ -312,8 +312,8 @@ today 02:13" @1512,91 368x15)`); `tree --find TEXT` before.
 `omabox check run --approve [--plugin PATH]... -- ./visual.sh` runs it three times (`--runs N`), each
 in a fresh `up --clean` box (an `up --stock` box, Omarchy's bar on tokyo-night and none of your look, with a `#ff00ff` wallpaper, the bar's clock
 frozen, English (en_US.UTF-8, else C.UTF-8) in UTC whatever your locale and zone, no pointer, no
-network, no animations; `--keep` takes
-any back, `--keep locale` your locale and timezone, `--keep fonts` your fonts (none by default); `--theme`/`--size`/`--net connected` as `up`),
+network, no animations, the user `user` on host `omabox` (no name of yours in a shot); `--keep` takes
+any back, `--keep locale` your locale and timezone, `--keep fonts` your fonts (none by default), `--keep identity` your names; `--theme`/`--size`/`--net connected` as `up`),
 says how long each box took to start, and writes the baseline to `./omabox-check` (`--base DIR`;
 commit it with the project). It also writes `baseline.png` (path printed): every checkpoint as kept,
 in one image (more than about ten: pages, `baseline-2.png`..., one look each, all named), unstable
@@ -997,7 +997,10 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   (Hyprland's defaults, the machine's keyboard layout, SUPER+RETURN a terminal, SUPER+W closes), an
   empty `/usr/share/omarchy`, no shell, a HOME with git's name and email only. For an app or a
   compositor bug that must not depend on Omarchy. What needs Omarchy (`--plugin`, `--theme`,
-  `--stock`, `--clean`, `--dnd`...) is refused; `check` boxes stay Omarchy's.
+  `--stock`, `--dnd`...) is refused. Without `--desktop` a box is plain where Omarchy is not
+  installed (`up` says so) or when `omabox config desktop plain` is set. `--clean` works there: its
+  sentinel is the Hyprland background colour (`#ff00ff`), not a wallpaper, and `check run --desktop
+  plain` checks on such boxes.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD stays in the foreground (not `-d`): `up`
   waits until it draws a layer, `omabox log shell` is its output, `restart-shell` stops its whole

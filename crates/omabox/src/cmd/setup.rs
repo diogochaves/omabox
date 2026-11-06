@@ -320,9 +320,13 @@ impl Setup {
             self.widget()?;
         }
         self.guard()?;
-        let aq = muted(|| hypr_aq_soname(ctx).ok().and_then(|w| aq_resolve(ctx, &w)));
-        if let Some(aq) = aq {
-            aq_note(&aq)?;
+        let aq = muted(|| {
+            hypr_aq_soname(ctx)
+                .ok()
+                .and_then(|w| aq_resolve(ctx, &w).map(|a| (a, w)))
+        });
+        if let Some((aq, so)) = aq {
+            aq_note(&aq, &so)?;
         }
         Ok(())
     }
@@ -890,9 +894,10 @@ impl Setup {
     }
 }
 
-/// aq_note: what the boxes' aquamarine lacks that `omabox setup --aquamarine` builds, said.
-pub fn aq_note(aq: &Aq) -> Res<()> {
-    match aq_note_text(aq) {
+/// aq_note: what the boxes' aquamarine lacks that `omabox setup --aquamarine` builds, said. SONAME:
+/// the one the installed Hyprland links.
+pub fn aq_note(aq: &Aq, soname: &[u8]) -> Res<()> {
+    match aq_note_text(aq, soname) {
         Some(t) => out(cat!("note: ", t, "\n")),
         None => Ok(()),
     }
@@ -900,8 +905,36 @@ pub fn aq_note(aq: &Aq) -> Res<()> {
 
 /// What the boxes' aquamarine lacks that `omabox setup --aquamarine` builds: #415, and omabox's own
 /// patches, which only this omabox's build has (finding 247), ending with that command (setup's
-/// note, doctor's warning). None for a current build.
-pub fn aq_note_text(aq: &Aq) -> Option<Vec<u8>> {
+/// note, doctor's warning). None for a current build. For a Hyprland that links a SONAME omabox has
+/// no source for (finding 655), what it lacks without that command: setup builds nothing there.
+pub fn aq_note_text(aq: &Aq, soname: &[u8]) -> Option<Vec<u8>> {
+    if !soname.is_empty() && crate::install::aq_source(soname).is_none() && aq.kind != b"folder" {
+        let lacks = if aq.fixed {
+            cat!("omabox's own fixes (", AQ_OWN, ")")
+        } else {
+            cat!(
+                "aquamarine's fix for nested Wayland outputs (headless boxes on NVIDIA, confirm-close) and omabox's own fixes (",
+                AQ_OWN,
+                ")"
+            )
+        };
+        let which = if aq.kind == b"private" {
+            cat!("an aquamarine build of omabox's, ", aq.ver)
+        } else {
+            cat!("the system's aquamarine ", aq.ver)
+        };
+        return Some(cat!(
+            "boxes use ",
+            which,
+            ", without ",
+            lacks,
+            ": Hyprland links ",
+            soname,
+            ", and this omabox builds aquamarine only for ",
+            crate::install::aq_sonames(),
+            " (a newer omabox may build it)"
+        ));
+    }
     if aq.kind == b"private" {
         // Built by an older omabox (finding 132): it lacks a patch omabox carries now.
         if aq_build_current(aq_build_of(&aq.ver)) {

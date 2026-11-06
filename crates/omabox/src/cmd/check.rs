@@ -550,10 +550,43 @@ fn check_holes_in(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
 
 /// check_holes_off: why a box's screen cannot show holes, or nothing when it can.
 fn check_holes_off(ctx: &Ctx) -> Vec<u8> {
-    check_holes_off_in(ctx)
+    check_holes_off_in(ctx, &|| plain_background(ctx))
 }
 
-fn check_holes_off_in(ctx: &Ctx) -> Vec<u8> {
+/// A plain box's background colour now (#247), as Hyprland's getoption has it (0xAARRGGBB); None
+/// when it did not answer.
+fn plain_background(ctx: &Ctx) -> Option<i64> {
+    let argv: Vec<Vec<u8>> = [
+        "timeout",
+        "6",
+        "hyprctl",
+        "-j",
+        "getoption",
+        "misc:background_color",
+    ]
+    .iter()
+    .map(|w| w.as_bytes().to_vec())
+    .collect();
+    let r = crate::exec::on_box_io(
+        ctx,
+        &argv,
+        crate::exec::In::Null,
+        crate::exec::Out::Capture(Some(65_536)),
+        crate::exec::ErrTo::Null,
+        None,
+    );
+    if r.refused || r.rc != 0 {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&r.out).ok()?;
+    v.get("int").and_then(serde_json::Value::as_i64)
+}
+
+/// CLEAN_WALLPAPER as Hyprland's colour int (opaque #ff00ff).
+const CLEAN_BACKGROUND_INT: i64 = 0xffff_00ff;
+
+/// BG: a plain box's background colour now (plain_background's).
+fn check_holes_off_in(ctx: &Ctx, bg: &dyn Fn() -> Option<i64>) -> Vec<u8> {
     let bj = cat!(ctx.d, "/box.json");
     let clean = jq::tool(
         "jq",
@@ -577,6 +610,20 @@ fn check_holes_off_in(ctx: &Ctx) -> Vec<u8> {
     .ok()
     {
         return b"--keep wallpaper".to_vec();
+    }
+    // A plain box's sentinel is its Hyprland's background colour (#247: plain.lua, from
+    // omabox.clean), read live: a `hl.config` in the box may have changed it.
+    if crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
+        == crate::upspec::Desktop::Plain
+    {
+        return match bg() {
+            Some(CLEAN_BACKGROUND_INT) => Vec::new(),
+            Some(_) => {
+                b"the background is not the sentinel (misc:background_color set in the box?)"
+                    .to_vec()
+            }
+            None => b"the box's Hyprland did not say its background colour".to_vec(),
+        };
     }
     let bg = std::fs::read_link(ctx.at("home/.local/state/omarchy/current/background"))
         .map(|p| shell::bytes(&p).to_vec())
@@ -2248,26 +2295,14 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 )));
             }
             b"--clean" | b"--stock" => {}
-            // A check's box is clean, which is Omarchy's (#247): --desktop plain has no --clean yet.
-            b"--desktop" => {
+            // A check's box is clean on either desktop (#247): a plain one's sentinel is its
+            // background colour. --shell (a plain box's own) as up takes it: up refuses what does
+            // not go together.
+            b"--desktop" | b"--shell" => {
                 optarg(ctx, x, v)?;
-                if args[i + 1] != b"omarchy" {
-                    return Err(ctx.die(cat!(
-                        "check run: a check's box is clean (--clean), which needs Omarchy: --desktop ",
-                        args[i + 1],
-                        " has none of it"
-                    )));
-                }
                 upopts.push(x.clone());
                 upopts.push(args[i + 1].clone());
                 i += 1;
-            }
-            // ...nor a shell of the user's, which runs on a plain box only.
-            b"--shell" => {
-                optarg(ctx, x, v)?;
-                return Err(ctx.die(
-                    "check run: a check's box is clean (--clean), which needs Omarchy: --shell runs on --desktop plain only",
-                ));
             }
             b"--idle" => {
                 optarg(ctx, x, v)?;
@@ -4268,6 +4303,26 @@ mod tests {
         assert!(
             off(r#"{"clean": {"keep": []}}"#).contains("not the sentinel"),
             "...a theme's wallpaper since"
+        );
+        // A plain box (#247): its Hyprland's background colour, read live, is the sentinel.
+        let plain = |json: &str, bg: Option<i64>| {
+            write(&d.join("box.json"), json);
+            String::from_utf8(check_holes_off_in(&ctx, &|| bg)).unwrap()
+        };
+        let pj = r#"{"desktop": "plain", "clean": {"keep": []}}"#;
+        assert_eq!(plain(pj, Some(0xffff_00ff)), "", "plain, the sentinel: on");
+        assert!(plain(pj, Some(0xff1a_1b26)).contains("not the sentinel"));
+        assert!(plain(pj, None).contains("did not say"));
+        assert_eq!(
+            plain(r#"{"desktop": "plain"}"#, Some(0xffff_00ff)),
+            "not a clean box"
+        );
+        assert_eq!(
+            plain(
+                r#"{"desktop": "plain", "clean": {"keep": ["wallpaper"]}}"#,
+                Some(0xffff_00ff)
+            ),
+            "--keep wallpaper"
         );
         let _ = std::fs::remove_dir_all(&d);
     }

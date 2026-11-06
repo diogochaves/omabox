@@ -10,22 +10,25 @@ use crate::exit::{Ctx, Exit, Res, say};
 use crate::hypr::{HYPR_LIMIT, hung_text, hypr_down_text, hypr_errors_note, hypr_lost};
 use crate::select::select_box;
 
-/// Written only when it differs: in an --autoreload box the write is a reload of its own.
-const WRITE_SH: &str = r#"cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua; cat > "$cfg.new" &&
+/// Written only when it differs: in an --autoreload box the write is a reload of its own. $1: the
+/// copy's name in the runtime dir.
+const WRITE_SH: &str = r#"cfg=$XDG_RUNTIME_DIR/$1; cat > "$cfg.new" &&
     if cmp -s "$cfg.new" "$cfg"; then rm -f "$cfg.new"; else mv -f "$cfg.new" "$cfg"; fi"#;
 
-pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
-    let name = name_arg(ctx, "reload", args)?;
-    select_box(ctx, &name)?;
-    need_box(ctx)?;
-    let src = crate::root().join("share/hyprland.lua");
-    let src_text = crate::shell::bytes(&src).to_vec();
-    let n = ctx.name.clone();
-    let wrote = match std::fs::File::open(&src) {
+/// share/FILE written to the box's copy COPY: whether it was.
+fn write_copy(ctx: &mut Ctx, file: &str, copy: &str) -> Res<bool> {
+    let src = crate::root().join("share").join(file);
+    Ok(match std::fs::File::open(&src) {
         Ok(f) => {
             on_box_io(
                 ctx,
-                &[b"sh".to_vec(), b"-c".to_vec(), WRITE_SH.as_bytes().to_vec()],
+                &[
+                    b"sh".to_vec(),
+                    b"-c".to_vec(),
+                    WRITE_SH.as_bytes().to_vec(),
+                    b"sh".to_vec(),
+                    copy.as_bytes().to_vec(),
+                ],
                 In::Fd(f.into()),
                 Out::Inherit,
                 ErrTo::Inherit,
@@ -35,7 +38,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .rc == 0
         }
         Err(_) => false,
-    };
+    })
+}
+
+pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    let name = name_arg(ctx, "reload", args)?;
+    select_box(ctx, &name)?;
+    need_box(ctx)?;
+    let src = crate::root().join("share/hyprland.lua");
+    let src_text = crate::shell::bytes(&src).to_vec();
+    let n = ctx.name.clone();
+    // A plain box's desktop (#247) first, so the two copies are of one omabox: share/plain.lua.
+    let plain = crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
+        == crate::upspec::Desktop::Plain;
+    let wrote = (!plain || write_copy(ctx, "plain.lua", "omabox-plain.lua")?)
+        && write_copy(ctx, "hyprland.lua", "omabox-hyprland.lua")?;
     if !wrote {
         return Err(ctx.die(cat!(
             "reload: could not write the config copy in box '",

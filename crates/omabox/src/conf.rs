@@ -88,6 +88,7 @@ pub const KEYS: &[&str] = &[
     "gpu",
     "shot-fit",
     "protect-ports",
+    "desktop",
 ];
 
 /// conf_default KEY: None for a key there is not. protect-ports' is empty: no port protected.
@@ -99,6 +100,7 @@ pub fn default(key: &[u8]) -> Option<&'static [u8]> {
         b"gpu" => b"auto",
         b"shot-fit" => b"off",
         b"protect-ports" => b"",
+        b"desktop" => b"auto",
         _ => return None,
     })
 }
@@ -113,6 +115,7 @@ pub fn check(key: &[u8], v: &[u8]) -> Option<Vec<u8>> {
         b"gpu" => crate::gpu::conf_gpu(v),
         b"shot-fit" => crate::shots::fit_check(v),
         b"protect-ports" => crate::net::protect_parse(v).map(|p| p.csv()),
+        b"desktop" => matches!(v, b"auto" | b"omarchy" | b"plain").then(|| v.to_vec()),
         _ => None,
     }
 }
@@ -133,6 +136,9 @@ pub fn help(key: &[u8]) -> &'static str {
         }
         b"protect-ports" => {
             "host ports no connected box reaches, PORT[,PORT...] each 1-65535, like 8080,5432; default: none"
+        }
+        b"desktop" => {
+            "auto (the default: Omarchy's where Omarchy is installed, plain where it is not), omarchy or plain; up --desktop wins"
         }
         _ => "",
     }
