@@ -448,6 +448,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | "box … has no shell", or `ls` says `gone` under SHELL (bar gone mid-test) | It crashed past what Omarchy's launcher restarts: `omabox log shell`, then `restart-shell`. "the shell crashed since the last command" (or "was killed by SIGKILL"): it came back, but what you see changed (a shot may show it starting). A Quickshell of your own (an app built on it) crashing is not the shell: the next command says "a Quickshell in the box crashed … (not its shell: CONFIG; report: PATH)", and omabox leaves its crash dialog (class: its app id, title `quickshell`) to it; a click it covers names it. |
 | "the shell of box … does not answer (hung …)", or `ls` says `hung` under SHELL | Its pid lives but it answers nothing over its IPC: a frozen bar (a crash whose handler hung, or a stopped shell). `omabox restart-shell` kills it and starts a new one; `omabox gdb --shell` first for its stack. |
 | "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`. From `up` before the bar came, the box is gone: `up` again once fixed; after it (the box up), `restart-shell` once fixed. For its stack: `omabox gdb --shell --watch`, the crash again, `omabox log gdb --crash`. As on a desktop, Omarchy's launcher starts it again (up to 5 times a minute), so the bar may be back: the crash still happened. |
+| `hyprctl dispatch …` printed "Note: dispatch in lua is a shorthand for hl.dispatch(...)" | The old dispatcher syntax, which the box's Lua config ran as Lua: nothing dispatched. Run the `omabox lua …` line it printed after it ("Lua dispatchers" under Hyprland's Lua, logs and events). |
 | `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
 | "its Hyprland did not answer (hung? …)", `ls` says `hung` | The box's Hyprland is stuck (a plugin under test?): `omabox gdb` for where, `omabox log`, then `omabox down`. |
 | "went down: its Hyprland crashed (SIGSEGV)", `ls` says `crashed` or `going` (it goes `dead` in a moment) | What you sent crashed it (a Hyprland bug, or a plugin's): `omabox down`, `up`, `omabox gdb --watch`, the same step again, `omabox log gdb --crash` for the backtrace. |
@@ -559,7 +560,8 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   WxH`. A size the app does not take (its smallest or largest) is exit 1, naming the size it took:
   check at that one or say so. `--tile` puts it back in the layout, `--float` floats it as it is;
   a fullscreen window is refused. `wait still` before a shot, while the app redraws. Not
-  `hyprctl dispatch togglefloating`: under the Lua config it prints a note and does nothing.
+  `hyprctl dispatch togglefloating`: the old dispatcher syntax does nothing under the Lua config
+  ("Lua dispatchers" under Hyprland's Lua, logs and events).
 - **More monitors** (a bar on each, windows between them, portrait, ultrawide, mixed scale, an
   unplug): `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below` (SPEC
   `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last made by default, moving with it), or
@@ -807,6 +809,21 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   tables and Hyprland's objects (a window, a monitor, a layer) as JSON, objects inside them by name
   (`HL.Workspace(1:1)`); `--json` quotes strings too. A long script: `omabox lua - < script.lua`. A Lua
   error is exit 1 with its message. Globals you set stay for the next call (until a config reload).
+- **Lua dispatchers.** A box's Hyprland runs a Lua config, where `hyprctl dispatch X` runs
+  `hl.dispatch(X)`: the old syntax (`dispatch fullscreen 0`, `dispatch togglefloating`) dispatches
+  nothing. `omabox hyprctl` fails it (hyprctl's 7; a `--batch`'s 1, where hyprctl says 0) and
+  prints the Lua for it, for the common ones: `fullscreen [0|1] [set|unset]` →
+  `hl.dsp.window.fullscreen({ mode = "fullscreen" })` (1: `"maximized"`; it toggles, as the old one
+  did), `togglefloating`/`setfloating`/`settiled [SEL]` → `hl.dsp.window.float({ action = "toggle"
+  | "enable" | "disable", window = SEL })`, `workspace WS` → `hl.dsp.focus({ workspace = "WS" })`,
+  `focuswindow SEL` → `hl.dsp.focus({ window = SEL })`, `killactive` / `closewindow SEL` →
+  `hl.dsp.window.close()`, `movetoworkspace[silent] WS[,SEL]` → `hl.dsp.window.move({ workspace =
+  "WS", window = SEL, follow = false })`, `exec CMD` → `hl.dsp.exec_cmd("CMD")`. Run one with
+  `omabox lua 'hl.dispatch(hl.dsp.window.fullscreen({ mode = "fullscreen" }))'` or `omabox hyprctl
+  dispatch 'hl.dsp.window.fullscreen({ mode = "fullscreen" })'`; the rest are in `omabox lua 'local t
+  = {} for k in pairs(hl.dsp.window) do t[#t + 1] = k end return t'`. A Lua dispatch Hyprland
+  refuses (no such window) is still exit 0: `lua` prints `{"ok":false,"error":…}`, `hyprctl`
+  `warning: …`; read the answer.
 - A config reload (`hyprctl reload`, `omabox reload`, a theme switch, `omabox mode`, an interactive
   box's window resize) starts a fresh Lua state: binds, rules, `hl.config` values and plugins added
   with `lua`, `eval` or `plugin load` are gone. Re-apply them on `configreloaded`. Nothing reloads

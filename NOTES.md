@@ -13211,6 +13211,34 @@ from them.
     toast or after it closed; the line with one, worded per generation; failed 3 checks on the old
     code).
 
+677. **`hyprctl dispatch` in the old syntax dispatched nothing, and a script went on** (2026-11-06,
+    #427). Every box's Hyprland runs a Lua config (share/hyprland.lua, plain.lua; no box runs a
+    hyprland.conf), where `hyprctl dispatch X` runs `return hl.dispatch(X)`: `dispatch fullscreen 0`
+    is a Lua syntax error, `dispatch togglefloating` an "expected a dispatcher", each followed by "→
+    Note: dispatch in lua is a shorthand for hl.dispatch(...), your syntax might need to be
+    updated.", all on stdout. Measured on 0.56.2 and 0.57.1 (the same note; 0.57's error adds "or a
+    lua function"): a single dispatch is hyprctl's exit 7 already, but `--batch` exits 0 whatever
+    its commands said, `-q` prints nothing (7), and a script reading only the status, or an agent
+    reading only the note, took it for done (the issue's take recorded with the bar in frame). A
+    dispatch that does not start with `hl.` gets the note; a Lua one that fails (a bad mode, no
+    such field) does not. Now `omabox hyprctl` finds the note in the answer it holds (#166) and,
+    after printing that answer as it came, says on stderr which dispatch was the old syntax and the
+    `omabox lua -b BOX 'hl.dispatch(…)'` for it, exit hyprctl's status or 1 (a batch). Translated,
+    each checked in a box on both versions: `fullscreen [0|1] [toggle|set|unset]` →
+    `hl.dsp.window.fullscreen({ mode = "fullscreen"|"maximized"[, action] })` (with no action it
+    toggles, as the old one did), `togglefloating|setfloating|settiled [SEL]` →
+    `hl.dsp.window.float({ action = "toggle"|"enable"|"disable"[, window] })`, `workspace WS` →
+    `hl.dsp.focus({ workspace })`, `focuswindow SEL` → `hl.dsp.focus({ window })`, `killactive` /
+    `closewindow SEL` → `hl.dsp.window.close([{ window }])`, `movetoworkspace[silent] WS[,SEL]` →
+    `hl.dsp.window.move({ workspace[, window][, follow = false] })`, `exec CMD` →
+    `hl.dsp.exec_cmd(CMD)` (not `exec [RULES] CMD`). Anything else (`pin`, `fullscreen 2`) gets
+    where the Lua dispatchers are. Not done: `forcekillactive`/`killwindow` → `hl.dsp.window.kill`
+    (whether it is the old force kill was not measured), `-q` (nothing to read; its 7 stands). A
+    failed Lua dispatch (`hl.dsp.focus({ window = "class:nosuch" })`) is still exit 0, answering
+    `warning: …` (hyprctl) or `{"ok":false,…}` (lua), as before. Tests: t_hypr_old_dispatch (each
+    printed line run in the box does what the old words would; --batch; Lua dispatches untouched;
+    passes on 0.57.1 under OMABOX_HYPRLAND too), hyprctl.rs's old_dispatch_* unit tests.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
