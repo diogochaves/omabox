@@ -432,6 +432,17 @@ pub fn home_taken(ctx: &Ctx) -> Option<Vec<u8>> {
 /// home_whose: Ok(why this box's name may have its HOME, as the removal log says it) or
 /// Err(home_taken's why not).
 fn home_whose(ctx: &Ctx) -> Result<&'static [u8], Vec<u8>> {
+    // (an older omabox's folder of videos under this name: moved out first, kept if it cannot be)
+    if ctx.name == OLD_RECORDS.as_bytes() {
+        let homes = crate::paths::homes();
+        move_old_records(&homes);
+        if old_records(&homes).is_some() {
+            return Err(cat!(
+                "holds videos an older omabox's `record stop` wrote there, not all movable to ",
+                crate::paths::records()
+            ));
+        }
+    }
     let h = cat!(crate::paths::homes(), "/", ctx.name);
     let p = shell::path(&h);
     if !p.is_dir() || p.is_symlink() {
@@ -532,8 +543,12 @@ pub fn sweep_homes(ctx: &Ctx) {
 fn sweep_homes_with(ctx: &Ctx, between: &dyn Fn(&[u8])) {
     let homes = crate::paths::homes();
     sweep_leftovers(&homes);
+    move_old_records(&homes);
     let mut users: Option<crate::homeuse::Users> = None;
     for n in shell::glob(&shell::path(&homes), true) {
+        if n == OLD_RECORDS.as_bytes() && old_records(&homes).is_some() {
+            continue;
+        }
         let h = cat!(homes, "/", n);
         let p = shell::path(&h);
         if !p.is_dir() || p.is_symlink() {
@@ -629,6 +644,69 @@ fn sweep_one(homes: &[u8], n: &[u8], rec: Option<&[u8]>, made_in: &[u8], judged:
     if let Some(t) = trash {
         rm_tree(&what, &[t]);
     }
+}
+
+/// Where `record stop` put a jailed agent's recording stopped outside the jail before #433: HOMES/
+/// records, among the box HOMEs (finding 684). Its videos now go to paths::records().
+const OLD_RECORDS: &str = "records";
+
+/// old_records HOMES: HOMES/records when it is that folder of videos, not a box's HOME: a dir (not a
+/// link) with no record and no `home` in it (every box HOME has its `home`, an older omabox's too).
+fn old_records(homes: &[u8]) -> Option<Vec<u8>> {
+    let h = cat!(homes, "/", OLD_RECORDS);
+    let p = shell::path(&h);
+    (p.is_dir()
+        && !p.is_symlink()
+        && crate::homeuse::record(&h).is_none()
+        && std::fs::symlink_metadata(shell::path(&cat!(h, "/home"))).is_err())
+    .then_some(h)
+}
+
+/// move_old_records HOMES: the videos (and their marks, captions and sheets) an omabox before #433
+/// left in HOMES/records moved to paths::records(), once, so that no sweep or rm_box ever takes the
+/// folder for a gone box's HOME, and a box may be named `records`. Plain files only, never over a
+/// file of the same name there (a hard link then the old name removed; on another filesystem a copy
+/// under a hidden name linked into place). What cannot be moved stays, and so does the folder
+/// (sweep_homes and rm_box leave it); emptied, it goes.
+fn move_old_records(homes: &[u8]) {
+    let Some(old) = old_records(homes) else {
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(shell::path(&old)) else {
+        return;
+    };
+    let to = crate::paths::records();
+    let mut made = false;
+    for e in rd.flatten() {
+        if !e.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        if !made {
+            made = crate::shots::mkdir_p(&to);
+            if !made {
+                return;
+            }
+        }
+        let f = e.file_name().as_bytes().to_vec();
+        move_no_replace(&cat!(old, "/", f), &to, &f);
+    }
+    let _ = std::fs::remove_dir(shell::path(&old));
+}
+
+/// move_no_replace FROM DIR NAME: FROM moved to DIR/NAME unless a file is there already. Whether it went.
+fn move_no_replace(from: &[u8], dir: &[u8], name: &[u8]) -> bool {
+    let dst = cat!(dir, "/", name);
+    let (src, dstp) = (shell::path(from), shell::path(&dst));
+    match std::fs::hard_link(&src, &dstp) {
+        Ok(()) => return std::fs::remove_file(&src).is_ok(),
+        Err(e) if e.raw_os_error() != Some(libc::EXDEV) => return false,
+        Err(_) => {}
+    }
+    let tmp = cat!(dir, "/.moving-", std::process::id().to_string(), "-", name);
+    let tmpp = shell::path(&tmp);
+    let ok = std::fs::copy(&src, &tmpp).is_ok() && std::fs::hard_link(&tmpp, &dstp).is_ok();
+    let _ = std::fs::remove_file(&tmpp);
+    ok && std::fs::remove_file(&src).is_ok()
 }
 
 /// What sweeps left half done (a sweep's HOME moved aside, an up's HOME being made, each named
@@ -2530,6 +2608,143 @@ mod tests {
         drop(held);
         drop(down_lock);
         let _ = std::fs::remove_dir_all(&r);
+    }
+
+    /// #433, finding 684: the videos an older omabox's `record stop` left in HOMES/records (no
+    /// record, no `home`: no box's HOME) are never swept as a gone box's HOME; they move to the
+    /// records folder in the data dir, never over a file there, the folder kept while it holds any.
+    /// A box named `records` is refused that folder, never removing it, until it is emptied.
+    #[test]
+    fn sweep_keeps_old_records() {
+        let r = std::env::temp_dir().join(format!("omabox-sor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        let r = r.to_str().unwrap().to_string();
+        let boxes = format!("{r}/run/omabox");
+        let (old, new) = (
+            format!("{r}/cache/omabox/records"),
+            format!("{r}/data/omabox/records"),
+        );
+        std::fs::create_dir_all(&boxes).unwrap();
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        for (f, v) in [
+            ("omabox-b-1.mp4", "V1"),
+            ("omabox-b-1.marks.tsv", "M1"),
+            ("omabox-b-2.mp4", "V2"),
+        ] {
+            std::fs::write(format!("{old}/{f}"), v).unwrap();
+        }
+        std::fs::write(format!("{new}/omabox-b-2.mp4"), "THERE").unwrap();
+        // (gb: a gone box's HOME, swept as before)
+        std::fs::create_dir_all(format!("{r}/cache/omabox/gb/home")).unwrap();
+        assert!(crate::homeuse::write_record(
+            format!("{r}/cache/omabox/gb").as_bytes(),
+            format!("{boxes}/gb").as_bytes()
+        ));
+        let mut ctx = Ctx::new(b"up", boxes.clone().into_bytes());
+        ctx.name = b"other".to_vec();
+        ctx.d = format!("{boxes}/other").into_bytes();
+        let mut rec = Ctx::new(b"up", boxes.clone().into_bytes());
+        rec.name = b"records".to_vec();
+        rec.d = format!("{boxes}/records").into_bytes();
+        let env = [
+            ("XDG_CACHE_HOME", Some(format!("{r}/cache"))),
+            ("XDG_DATA_HOME", Some(format!("{r}/data"))),
+        ];
+        let env: Vec<(&str, Option<&str>)> = env.iter().map(|(k, v)| (*k, v.as_deref())).collect();
+        let read = |p: &str| std::fs::read_to_string(format!("{r}/{p}")).ok();
+        let ((), said) = crate::exit::heard(|| shell::with_env(&env, || sweep_homes(&ctx)));
+        assert_eq!(
+            (
+                said.as_str(),
+                read("cache/omabox/records/omabox-b-2.mp4"),
+                read("data/omabox/records/omabox-b-1.mp4"),
+                read("data/omabox/records/omabox-b-1.marks.tsv"),
+                read("data/omabox/records/omabox-b-2.mp4"),
+                std::path::Path::new(&format!("{r}/cache/omabox/gb")).exists(),
+            ),
+            (
+                "",
+                Some("V2".into()),
+                Some("V1".into()),
+                Some("M1".into()),
+                Some("THERE".into()),
+                false
+            ),
+            "the old records folder is not swept: its videos moved to the data dir's, one whose name is taken there kept where it was; a gone box's HOME still goes"
+        );
+        let (taken, ()) = shell::with_env(&env, || (home_taken(&rec), rm_box(&rec)));
+        assert!(
+            taken.is_some_and(|w| crate::exit::contains(&w, b"older omabox's `record stop`"))
+                && read("cache/omabox/records/omabox-b-2.mp4").as_deref() == Some("V2"),
+            "...a box named records is refused it, and its rm_box leaves it"
+        );
+        std::fs::remove_file(format!("{new}/omabox-b-2.mp4")).unwrap();
+        let ((), said) = crate::exit::heard(|| shell::with_env(&env, || sweep_homes(&ctx)));
+        assert_eq!(
+            (
+                said.as_str(),
+                read("data/omabox/records/omabox-b-2.mp4"),
+                std::path::Path::new(&old).exists(),
+                shell::with_env(&env, || home_taken(&rec)),
+            ),
+            ("", Some("V2".into()), false, None),
+            "...moved once its name is free, the emptied folder gone, the name free for a box"
+        );
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    /// move_no_replace across filesystems (/dev/shm's tmpfs to the temp dir; a link where both are
+    /// one): the file moved whole, nothing left under a hidden name, never over a file there.
+    #[test]
+    fn move_no_replace_across() {
+        let shm = std::path::Path::new("/dev/shm");
+        let src_dir = if shm.is_dir() {
+            shm.join(format!("omabox-mnr-{}", std::process::id()))
+        } else {
+            std::env::temp_dir().join(format!("omabox-mnr-src-{}", std::process::id()))
+        };
+        let dst = std::env::temp_dir().join(format!("omabox-mnr-{}", std::process::id()));
+        for d in [&src_dir, &dst] {
+            let _ = std::fs::remove_dir_all(d);
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let b = |p: &std::path::Path| shell::bytes(p).to_vec();
+        std::fs::write(src_dir.join("a.mp4"), "A").unwrap();
+        std::fs::write(src_dir.join("b.mp4"), "B").unwrap();
+        std::fs::write(dst.join("b.mp4"), "THERE").unwrap();
+        let moved = (
+            move_no_replace(&b(&src_dir.join("a.mp4")), &b(&dst), b"a.mp4"),
+            move_no_replace(&b(&src_dir.join("b.mp4")), &b(&dst), b"b.mp4"),
+        );
+        let mut left: Vec<String> = std::fs::read_dir(&dst)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        let read = |p: std::path::PathBuf| std::fs::read_to_string(p).ok();
+        assert_eq!(
+            (
+                moved,
+                left,
+                read(dst.join("a.mp4")),
+                read(src_dir.join("a.mp4")),
+                read(dst.join("b.mp4")),
+                read(src_dir.join("b.mp4")),
+            ),
+            (
+                (true, false),
+                vec!["a.mp4".to_string(), "b.mp4".to_string()],
+                Some("A".into()),
+                None,
+                Some("THERE".into()),
+                Some("B".into())
+            ),
+            "moved whole, its old name gone; one whose name is taken kept where it was"
+        );
+        let _ = std::fs::remove_dir_all(&src_dir);
+        let _ = std::fs::remove_dir_all(&dst);
     }
 
     /// t_unit_omarchy45's intro_cover cases: an Overlay omarchy-background layer's geometry; the

@@ -378,20 +378,16 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             so.as_
         )));
     }
-    // A jailed agent's recording stopped from outside the jail: a file in omabox's cache folder.
+    // A jailed agent's recording stopped from outside the jail: a file in omabox's records folder
+    // (in its data dir: never among the box HOMEs, whose sweep took it, #433).
     if so.tofd.is_empty() && ctx.at("record.as").is_file() {
         let asname = rec.file.clone();
-        let cache = cat!(
-            shell::env("XDG_CACHE_HOME")
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.cache")),
-            "/omabox/records"
-        );
-        if !crate::shots::mkdir_p(&cache) {
-            return Err(ctx.die(cat!("record stop: cannot make ", cache)));
+        let dir = crate::paths::records();
+        if !crate::shots::mkdir_p(&dir) {
+            return Err(ctx.die(cat!("record stop: cannot make ", dir)));
         }
         let t = shell::date("%Y%m%d-%H%M%S");
-        rec.file = cat!(cache, "/omabox-", ctx.name, "-", t, ".mp4");
+        rec.file = cat!(dir, "/omabox-", ctx.name, "-", t, ".mp4");
         say(cat!(
             "record: a jailed agent started this recording, to its file ",
             asname,

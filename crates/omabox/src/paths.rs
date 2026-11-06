@@ -26,6 +26,16 @@ pub fn saves() -> Vec<u8> {
     )
 }
 
+/// RECORDS: the videos of a jailed agent's recordings stopped outside the jail, beside SAVES: never
+/// in HOMES, where sweep_homes took a folder for a gone box's HOME (#433, finding 684).
+pub fn records() -> Vec<u8> {
+    let h = shell::env_or_empty("HOME");
+    cat!(
+        env_or("XDG_DATA_HOME", cat!(h, "/.local/share")),
+        "/omabox/records"
+    )
+}
+
 /// AQ_USER: the user's private aquamarine build.
 pub fn aq_user() -> Vec<u8> {
     let h = shell::env_or_empty("HOME");
