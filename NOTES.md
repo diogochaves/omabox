@@ -12786,6 +12786,48 @@ from them.
     tag) and new_box_follows_omabox_hyprland (a folder's record read, a foreign one not);
     t_unit_aquamarine (a stand-in Hyprland linking `.so.14`, `.so.15`, `.so.99`: the source each gets,
     nothing built and rc 0 for the last).
+656. **Plain boxes finished as a default: chosen without Omarchy, `--clean` on them, user@omabox**
+    (2026-11-06, #247, phase 2). After 645 a plain box had to be asked for on every `up`, even where
+    Omarchy is not installed (where an Omarchy box loads nothing), and `--clean` was refused on it:
+    its hole detection read Omarchy's wallpaper link. **Now:** `upspec::resolve_desktop` takes
+    `--desktop`, then `--omarchy DIR` (a tree of Omarchy's: an Omarchy box), then `omabox config
+    desktop` (new key: `auto`, the default, `omarchy` or `plain`), then what the machine has:
+    `install::omarchy_at("/")`, the Hyprland bootstrap doctor and setup test (finding 646), so the
+    three agree. It returns how it chose (`Chosen`): `up` says `desktop: plain, as Omarchy is not
+    installed here` (or `from omabox config desktop`) for a plain box it was not asked for, and the
+    refusal of an option that needs Omarchy ends with why the box is plain (`--desktop plain has
+    none of it`, the setting, or `this machine has none`). An Omarchy box where Omarchy is not
+    installed and no `--omarchy` is refused (explicit or by the setting). **`--clean` on plain:** the
+    generic part of it: the locale and UTC, no pointer, no network, animations off, none of the
+    user's fonts (seed_fonts now skips them for `clean`, not only `stock`), and the new identity;
+    not the stock bar or the theme (no `stock` set), and `--keep bar`/`clock` are refused there. Its
+    sentinel is the Hyprland background colour: up writes `background rgb(ff00ff)` to omabox.clean
+    beside `animations off`, and plain.lua sets `misc.background_color` from that line (else
+    `rgb(1a1b26)`). check's holes read it live (`hyprctl -j getoption misc:background_color`,
+    0xffff00ff), so a colour set in the box since turns holes off, as a theme set does on Omarchy;
+    `check run --desktop plain` and `--shell` now go to up, which refuses what does not go together.
+    **Identity (desk-plain's eba7dea, re-done):** every `--clean` box, either desktop, is
+    `user@omabox` unless `--keep identity`: $D/etc/passwd and group with the user's entry named
+    `user` (no GECOS, HOME /home/sbx, the user among a group's members renamed), $D/etc/hostname
+    `omabox`, bwrap's `--hostname omabox`, USER and LOGNAME `user`; uid and gid stay. The clean line
+    ends `as user@omabox`. **plain.lua copied per box** as hyprland.lua is (#140): start-hyprland.sh
+    writes `$XDG_RUNTIME_DIR/omabox-plain.lua` on a plain box, hyprland.lua `dofile`s that copy, and
+    `omabox reload` writes it first (WRITE_SH takes the copy's name), so an update under a running
+    box no longer mixes an old hyprland.lua copy with a new plain.lua. **Wording:** `tray` on a plain
+    box says it has no shell (or that its `--shell` runs no tray), not `--no-shell`; setup's and
+    doctor's aquamarine note for a Hyprland whose soname omabox has no source for (finding 655's
+    open end) says what boxes use and lack and that this omabox builds only for the sonames it has,
+    without suggesting `setup --aquamarine` (aq_note_text takes the soname). **Correction to 645:**
+    `--quickshell` is no longer refused on every plain box: with `--shell CMD` it is CMD's `qs`
+    (finding 652); and `--clean` is no longer among the refusals. Verified in boxes on this desk
+    (0.56.2, AMD): a clean plain box's background #ff00ff on screen and in getoption, `check point`
+    finds a hole in a see-through foot and turns holes off after a `hl.config` of the colour;
+    `check run --desktop plain` approved and compared a baseline; up under a bwrap hiding
+    /usr/share/omarchy started a plain box unasked (the box had no network there: bwrap sets
+    no_new_privs, which pasta refuses). Tests: upspec `desktops`, `clean_as_bash`, `clean_words`,
+    `clean_ids_renames_only_me`; check `holes_off_as_bash` (plain cases); t_unit_config (the key,
+    its refusal wording, an Omarchy box refused without Omarchy); t_plain (the copy, reload, tray,
+    `--keep clock`), t_plain_clean, t_plain_auto, t_clean (identity), t_cli_up's clean golden.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
