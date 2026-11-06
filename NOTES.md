@@ -12675,6 +12675,27 @@ from them.
     F9, both unbound, no longer crash 0.57, so t_hyprland_crash's Lua sends its Hyprland a SIGSEGV
     through the shell `os.execute` runs (its parent), which ends any version inside the call.
     t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).
+652. **On Hyprland 0.57 a quarter-turned monitor came out turned twice in `shot --burst` and
+    `record`** (2026-11-06, #435). Probed with a small client in a box of each, a 1280x720 output with
+    transform 1 (and one at scale 2 with 3): on 0.56.2 wlr-screencopy's frame is 1280x720 (the output
+    unturned, flags 0) and ext-image-copy-capture's 1280x720 with a frame `transform` of 1 (3); on
+    0.57.1 both are 720x1280, flags 0, ext's `transform` 0, while `wl_output.geometry` still says 1
+    (3) and xdg-output 720x1280 (360x640). Hyprland's "render: always render in normal transform"
+    (#15714, in 0.57) renders every capture upright. ext-image-copy-capture says so (its `transform`
+    event), so grim, `shot`, is right; wlr-screencopy has no field for it, and its clients turn a
+    frame by the output's transform (grim's own wlr path, wf-recorder's transpose_from_transform),
+    as wlroots' frames are the output unturned: tools/burst and wf-recorder turned an upright frame
+    again (a 720x1280 frame holding the screen squeezed into a band; a 1280x720 video). **Now:**
+    tools/burst takes a frame of a quarter-turned output (not square) that already has the turned
+    size, not the mode's, as upright (frame_transform); `record start` keeps each output's transform
+    and mode (`record.turn`, only when one is turned by a quarter) and `record stop` turns a raw
+    video that has the mode's size back by the inverse of wf-recorder's turn (turn_back), before the
+    layout's scale and the input's overlay. Both decide from the frame's size, not Hyprland's
+    version. Not done: a half turn or a flip keeps the size, so on 0.57 those still come out turned
+    in a burst and a recording (ext-image-copy-capture's `transform` would tell; omabox offers
+    neither, only Hyprland's config sets them). Tests: record_stop.rs turned_twice_turned_back,
+    t_monitors_turned(_nvidia) and t_record_layout(_nvidia) (a portrait monitor recorded alone now
+    too) on 0.56.2 and 0.57.1 (12 checks failed on 0.57.1 before).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
