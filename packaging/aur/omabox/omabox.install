@@ -1,0 +1,17 @@
+post_install() {
+  echo ":: Each user runs 'omabox setup' once: the agent skill, the agent guard and, on Omarchy,"
+  echo ":: the bar widget. 'omabox doctor' says what else this machine needs for boxes."
+  echo ":: Before removing the package, each user runs 'omabox setup --remove'."
+}
+
+pre_remove() {
+  echo ":: Users who ran 'omabox setup' should have run 'omabox setup --remove' first;"
+  echo ":: their links into /usr/lib/omabox stop working once it is gone."
+}
+
+post_upgrade() {
+  echo ":: omabox upgraded: start new boxes ('omabox down --all' first), restart any agent running"
+  echo ":: in ai-jail, and run 'omabox setup' again if this version's changelog asks for it. If"
+  echo ":: 'omabox guard' calls your agent guard outdated, 'omabox guard on' (or 'omabox setup')"
+  echo ":: renews it. On Omarchy, restart the shell (omarchy restart shell) for the new bar widget."
+}
