@@ -8,11 +8,14 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Needed for:** headless boxes on an NVIDIA render node and confirm-close (a Wayland output made
   after the backend started, or whose parent is labwc: NOTES findings 4, 125). Everything else runs
   on the system's aquamarine.
-- **Waiting for:** a release containing commit `7bb8bdf4` ("wayland: fix configure not applying
-  sometimes (#415)", 2026-09-22), after v0.15.1. Arch has `aquamarine 0.15.0` (2026-09-23).
-- **Until then:** `omabox setup --aquamarine` builds `AQ_COMMIT` (a checkout's `build/prefix`,
-  `install.sh` calls it; else `~/.local/share/omabox/aquamarine`); without one, `up` refuses what
-  needs it, saying so.
+- **Waiting for:** every system omabox supports to have a release containing commit `7bb8bdf4`
+  ("wayland: fix configure not applying sometimes (#415)", 2026-09-22). **v0.16.0** (2026-11-01,
+  soname `.so.15`) has it, and Arch `extra` carries it with Hyprland 0.57.1 since 2026-11-02;
+  Omarchy's mirror (Hyprland 0.56.2) still has 0.15.1 (`.so.14`).
+- **Until then:** `omabox setup --aquamarine` builds the source `AQ_SOURCES` names for the soname
+  Hyprland links (`.so.14`: `7bb8bdf4`; `.so.15`: v0.16.0, `b77d6764`; finding 655) into a
+  checkout's `build/prefix` (`install.sh` calls it) or `~/.local/share/omabox/aquamarine`; without
+  one, `up` refuses what needs it, saying so.
 - **Check:** `git -C build/aquamarine fetch -q --tags && git -C build/aquamarine tag --contains 7bb8bdf4`,
   then `pacman -Q aquamarine` at or past that tag, or a package patched with #415 (`OMABOX_AQUAMARINE=system
   omabox --version` says "patched with the fix": `AQ_FIX_SYMBOL`, finding 246). Once it is, `omabox
@@ -20,14 +23,14 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   (`AQ_FIXED_AFTER` in `crates/omabox/src/install.rs`, 0.15.1: correct it if that release lacks the fix). The private
   build stays all the same while omabox carries patches of its own (held keys, the pointer's and the
   cursor's entries below: `setup --aquamarine` builds them whatever the system's copy has, finding
-  247), on that release's commit instead of `AQ_COMMIT`.
+  247), on that release's commit (`AQ_SOURCES`' `.so.15` entry is v0.16.0's).
 - **Then drop:** what is #415's alone: the refusals and the confirm-close downgrade in
   `cmd_up`/`cmd_config` with `aq_lacks`/`AQ_HOWTO`, the fix's detection (`AQ_FIX_SYMBOL`,
   `aq_has_fix`, `aq_ver_fixed`, `AQ_SYSDIR` and their checks in `t_unit_aquamarine`), `aq_unfixed`
   in the suite, and #415's mention in AGENTS.md's "Developed against". Keep
   `confirm-close.sh`'s fallback. Only once omabox's own patches are gone too (below), the
   private build itself: `setup_aquamarine` (or all of `setup`, if #49 has not given it other parts),
-  the private-build half of `aq_pick` (`AQ_COMMIT`, `AQ_BUILD`, `AQ_USER`, the stale-soname note,
+  the private-build half of `aq_pick` (`AQ_SOURCES`, `AQ_USER`, the stale-soname note,
   `aq_note`), the `/opt/omabox/lib` bind and `LD_LIBRARY_PATH` in `share/start-hyprland.sh`, the
   aquamarine step and its build packages in `install.sh` (cmake, ninja, hyprwayland-scanner, ...),
   `OMABOX_AQUAMARINE` in the suite, and the mentions in README.md, CONTRIBUTING.md, NOTES
@@ -40,11 +43,11 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Waiting for:** an aquamarine release that releases held keys on `leave`. omabox does not plan to
   submit the patch itself; if someone fixes it upstream, check the fix with `t_held_keys`.
 - **Until then:** `patches/aquamarine/0001-*.patch`, applied by `setup --aquamarine` on top of
-  `AQ_COMMIT` (`AQ_BUILD` names the result). Boxes on the system's aquamarine keep the bug, #415 or
+  each of `AQ_SOURCES`' commits (its `build` names the result). Boxes on the system's aquamarine keep the bug, #415 or
   not (no system copy can be seen to carry the patch: finding 247).
-- **Then drop:** the patch, `+keys` in `AQ_BUILD` (and the suite's checks for it); with no other
-  patch left (the pointer's and the cursor's, below), the `git apply` loop in `setup_aquamarine`, `AQ_BUILD` (back to
-  `AQ_COMMIT`) and the stale-build note in `setup_user`; `t_held_keys` then checks any aquamarine
+- **Then drop:** the patch, `+keys` in `AQ_SOURCES`' builds (and the suite's checks for it); with no other
+  patch left (the pointer's and the cursor's, below), the `git apply` loop in `setup_aquamarine`, the
+  builds (back to commits) and the stale-build note in `setup_user`; `t_held_keys` then checks any aquamarine
   that has the fix.
 
 ## passt: `pasta --no-pidns`
@@ -82,13 +85,13 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   without its `output`, and `CPointerManager::warpAbsolute` maps the point over the box around every
   monitor (a pointer has no `m_boundOutput` setting), so a point of any window but a lone one lands
   in the wrong place: the middle of each of three windows put the box's pointer at (1600, 1079).
-- **Until then:** `patches/aquamarine/0002-*.patch` (`AQ_BUILD` `+layout`): aquamarine reads each
+- **Until then:** `patches/aquamarine/0002-*.patch` (`AQ_SOURCES`' `+layout`): aquamarine reads each
   output's box in the layout from the file `AQ_WAYLAND_LAYOUT` names (the box's
   `share/hyprland.lua` writes it at each layout change; `share/start-hyprland.sh` sets the variable
   for interactive boxes) and gives the point in the whole layout's terms. omabox-specific: not to
   submit. Boxes on another aquamarine keep the bug; `monitor add` says so.
 - **Then drop:** the patch, `AQ_WAYLAND_LAYOUT` and `write_layout` in `share/hyprland.lua`,
-  `+layout` in `AQ_BUILD` and in `monitor_add_window`'s note; `t_monitors_window`'s pointer check
+  `+layout` in `AQ_SOURCES`' builds and in `monitor_add_window`'s note; `t_monitors_window`'s pointer check
   then checks any build.
 
 ## aquamarine: the cursor hidden over one output's window by another's (not reported yet)
@@ -104,11 +107,11 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   window it entered. Showing a cursor already checks the serial; hiding does not. Any nested
   compositor with more than one Wayland output can hit it, so this one is worth reporting, with the
   patch as a PR.
-- **Until then:** `patches/aquamarine/0003-*.patch` (`AQ_BUILD` `+cursor`): the hide only from the
+- **Until then:** `patches/aquamarine/0003-*.patch` (`AQ_SOURCES`' `+cursor`): the hide only from the
   output with a serial, and `onEnter` on an output with no cursor sends `set_cursor(serial, NULL)`
   (before, it sent nothing, and the parent's cursor or the surface's last image stayed). Boxes on
   another aquamarine keep the bug; `monitor add` says so.
-- **Then drop:** the patch, `+cursor` in `AQ_BUILD` and its note in `monitor_add_window`;
+- **Then drop:** the patch, `+cursor` in `AQ_SOURCES`' builds and its note in `monitor_add_window`;
   `t_monitors_window`'s cursor check then checks any build.
 
 ## aquamarine: no way to set a Wayland output's app_id (not reported)
@@ -119,11 +122,11 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   `src/backend/Wayland.cpp` at `7bb8bdf4`, every output's toplevel is `sendSetAppId("aquamarine")`),
   and a Hyprland that passes one through, e.g. `output create wayland NAME [APPID]`. Not reported;
   whether it is worth proposing is the maintainer's call.
-- **Until then:** `patches/aquamarine/0004-*.patch` (`AQ_BUILD` `+appid`): with
+- **Until then:** `patches/aquamarine/0004-*.patch` (`AQ_SOURCES`' `+appid`): with
   `AQ_WAYLAND_APP_ID_FILES=PREFIX`, an output NAME whose file PREFIX+NAME holds a token gets the
   app_id `aquamarine-TOKEN`. Interactive `monitor add` and `up --interactive --monitor` are refused on
   any other aquamarine.
-- **Then drop:** the patch and `+appid` in `AQ_BUILD`; `monitor_add_window` names its class through
+- **Then drop:** the patch and `+appid` in `AQ_SOURCES`' builds; `monitor_add_window` names its class through
   the new way instead of the token file.
 
 ## Omarchy: the shell's crash dialog takes focus (not reported yet)

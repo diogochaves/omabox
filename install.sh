@@ -5,7 +5,9 @@
 #   ./install.sh           packages (on Arch, sudo pacman only if some are missing, and Arch's rust
 #                          when there is no cargo; on another distribution, the command that installs
 #                          them, then it stops), the tools and omabox itself (cargo, into build/omabox),
-#                          aquamarine's fix, then omabox setup: links, settings dir, the agent guard (asked)
+#                          omabox's aquamarine build (for the soname the system's Hyprland links; when
+#                          it cannot be built, boxes run on the system's, said), then omabox setup:
+#                          links, settings dir, the agent guard (asked)
 #   ./install.sh --check   the same, then start a box, screenshot it and tear it down
 set -euo pipefail
 
@@ -177,10 +179,17 @@ install -Dm755 "$ROOT/target/release/omabox" "$ROOT/build/omabox.new" || die "in
 mv -f "$ROOT/build/omabox.new" "$ROOT/build/omabox" || die "installing build/omabox failed"
 echo "build/omabox"
 
-# A checkout builds it into build/prefix, for every box this checkout starts (the suite needs it for
-# NVIDIA and confirm-close): nothing to do while the system's aquamarine has the fix (finding 125).
-step "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"
-"$ROOT/bin/omabox" setup --aquamarine || die "omabox setup --aquamarine failed"
+# A checkout builds it into build/prefix, for every box this checkout starts: #415 where the system's
+# lacks it (headless NVIDIA boxes, confirm-close; finding 125) and omabox's own patches (interactive
+# boxes; finding 247), from the source for the soname Hyprland links (0.15.1's .so.14, 0.16's .so.15;
+# finding 655). Nothing to do while boxes use this omabox's build; a soname omabox has no source for
+# is said and skipped by setup itself. A build that fails is no reason to stop (boxes can run on the
+# system's aquamarine, finding 655): said, with what boxes use and lose.
+step "omabox's aquamarine build (hyprwm/aquamarine#415 and omabox's own fixes)"
+if ! "$ROOT/bin/omabox" setup --aquamarine; then
+  uses=$("$ROOT/bin/omabox" --version 2>&1 | sed -n 's/^aquamarine: //p') || uses=
+  echo "install.sh: omabox's aquamarine build failed (above); going on without it. Boxes use ${uses:-no aquamarine omabox could find (omabox doctor says why)}. Interactive boxes go without omabox's own fixes (keys held when focus leaves, the pointer and cursor in a monitor's window, a class for each monitor's window). Try again with: omabox setup --aquamarine" >&2
+fi
 
 # What each user needs (links: omabox, the agent skill, the bar widget; the settings dir; the agent
 # guard, asked for): `omabox setup`, which a package's users run themselves (finding 126).

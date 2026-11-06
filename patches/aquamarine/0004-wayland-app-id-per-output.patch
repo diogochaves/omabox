@@ -1,15 +1,16 @@
 diff --git a/src/backend/Wayland.cpp b/src/backend/Wayland.cpp
-index f2a812b..1bdec57 100644
+index 4014233..03f100b 100644
 --- a/src/backend/Wayland.cpp
 +++ b/src/backend/Wayland.cpp
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  #include <algorithm>
 +#include <cctype>
++#include <fstream>
  #include <aquamarine/backend/Wayland.hpp>
  #include <wayland.hpp>
  #include <xdg-shell.hpp>
-@@ -417,6 +418,24 @@ static bool layoutAbsolute(const std::string& name, Vector2D& abs) {
-     return true;
+@@ -531,6 +533,24 @@ Hyprutils::Memory::CWeakPointer<IBackendImplementation> Aquamarine::CWaylandBack
+     return {};
  }
  
 +// A consumer whose compositor must tell one output's window from another's (each gets its own window
@@ -30,10 +31,10 @@ index f2a812b..1bdec57 100644
 +    return "aquamarine-" + token;
 +}
 +
- void Aquamarine::CWaylandPointer::emitWarp(uint32_t timeMs, wl_fixed_t x, wl_fixed_t y) {
-     const auto output = backend->focusedOutput.lock();
-     if (!output || output->waylandState.surfaceSize.x <= 0 || output->waylandState.surfaceSize.y <= 0)
-@@ -654,7 +673,7 @@ Aquamarine::CWaylandOutput::CWaylandOutput(const std::string& name_, Hyprutils::
+ Aquamarine::CWaylandOutput::CWaylandOutput(const std::string& name_, Hyprutils::Memory::CWeakPointer<CWaylandBackend> backend_) : backend(backend_) {
+     name = name_;
+ 
+@@ -601,7 +621,7 @@ Aquamarine::CWaylandOutput::CWaylandOutput(const std::string& name_, Hyprutils::
      waylandState.xdgToplevel->setClose([this](CCXdgToplevel* r) { destroy(); });
  
      waylandState.xdgToplevel->sendSetTitle(std::format("aquamarine - {}", name).c_str());

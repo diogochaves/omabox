@@ -34,6 +34,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   its crash is said as the shell's; `--quickshell` makes a build its `qs`. `ls` names it.
 
 ### Fixed
+- **`install.sh` and `omabox setup --aquamarine` on Hyprland 0.57** ([#48](https://github.com/diogochaves/omabox/issues/48)):
+  omabox's aquamarine build was for Hyprland 0.56 only (aquamarine 0.15.1), so on Arch and openSUSE,
+  whose Hyprland 0.57 links aquamarine 0.16, `setup --aquamarine` failed and `install.sh` stopped
+  there. It now builds the version your Hyprland links: 0.15.1 with the fix for 0.56, 0.16.0 for
+  0.57, each with omabox's fixes for interactive boxes (on 0.57 Hyprland puts the pointer on the
+  right monitor itself). For a Hyprland it has no build for, it says so and boxes use your system's;
+  `install.sh` goes on when the build fails, saying what interactive boxes go without.
 - **`keys` on a Hyprland config that leaves `kb_variant`, `kb_model` or `kb_options` unset**: xkb was
   handed Hyprland's `[[EMPTY]]` as their value and built no keymap, so every `keys` failed.
 - **No "XDG_CURRENT_DESKTOP set from outside" warning in a box whose config does not set it**: the

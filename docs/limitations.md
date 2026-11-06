@@ -6,9 +6,9 @@ What is untested, and what a box does differently from your desktop. Back to the
 - Other NVIDIA models and drivers are untested. Of the agents the skill is installed for, Claude
   Code and OpenCode were checked end to end; Codex, pi and Hermes find the skill, but no run of
   theirs reached a model here.
-- Headless boxes on NVIDIA and confirm-close need aquamarine's fix (PR #415, built into
-  `build/prefix` by `install.sh`, `omabox setup --aquamarine`) until a release ships it (or your
-  system's package is patched with it); without it `up` refuses them, saying what to run. omabox's
+- Headless boxes on NVIDIA and confirm-close need aquamarine's fix (PR #415, in aquamarine 0.16.0;
+  for an older system aquamarine built into `build/prefix` by `install.sh`, `omabox setup
+  --aquamarine`, unless your system's package is patched with it); without it `up` refuses them, saying what to run. omabox's
   own fixes for interactive boxes (held keys, the pointer and cursor in monitor windows, a class for
   each monitor's window) are in that build only: no system aquamarine has them. What omabox carries until upstream releases land, and
   what to drop then: `UPSTREAM.md`.

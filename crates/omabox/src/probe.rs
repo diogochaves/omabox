@@ -9,8 +9,8 @@
 //! desktop (a dispatch); the suite runs hyprctl itself with the signature host_session prints.
 
 use crate::cat;
-use crate::exit::{Ctx, Exit, Res, out};
-use crate::install::{AQ_BUILD, AQ_FIX_SYMBOL, AQ_FIXED_AFTER};
+use crate::exit::{Ctx, Exit, Res, muted, out};
+use crate::install::{AQ_FIX_SYMBOL, AQ_FIXED_AFTER, AQ_SOURCES};
 
 /// The helpers the probe answers for, and the words each takes.
 pub const NAMES: &[(&str, &str)] = &[
@@ -330,7 +330,13 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         (b"aq_const", [c]) => match *c {
             b"AQ_FIX_SYMBOL" => line(AQ_FIX_SYMBOL.as_bytes()),
             b"AQ_FIXED_AFTER" => line(AQ_FIXED_AFTER.as_bytes()),
-            b"AQ_BUILD" => line(AQ_BUILD.as_bytes()),
+            // The build setup --aquamarine makes for the installed Hyprland's soname (the first
+            // source's when it has none: what the suite's stand-in builds record).
+            b"AQ_BUILD" => {
+                let so = muted(|| crate::install::hypr_aq_soname(&ctx)).unwrap_or_default();
+                let s = crate::install::aq_source(&so).unwrap_or(&AQ_SOURCES[0]);
+                line(s.build.as_bytes())
+            }
             _ => Err(usage()),
         },
         (b"desk_facts", [before, after]) => out(crate::desk::desk_facts(before, after)),

@@ -13,10 +13,74 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::process::Stdio;
 
-/// The aquamarine commit `omabox setup --aquamarine` builds (after v0.15.1), and AQ_BUILD, what a build
-/// of it with omabox's own patches records (patches/aquamarine; finding 247).
-pub const AQ_COMMIT: &str = "7bb8bdf4";
-pub const AQ_BUILD: &str = "7bb8bdf4+keys+layout+cursor+appid";
+/// An aquamarine `omabox setup --aquamarine` builds with omabox's own patches (patches/aquamarine;
+/// finding 247): for a Hyprland that links SONAME, the source at COMMIT with PATCHES (the files whose
+/// names start with these, AQ_PATCH_TAGS' numbers); BUILD is what the build records
+/// (`.omabox-commit`) and `--version` shows after the version: the commit and each patch's tag.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AqSource {
+    pub soname: &'static str,
+    pub commit: &'static str,
+    pub patches: &'static [&'static str],
+    pub build: &'static str,
+}
+
+/// Each patch in patches/aquamarine by its number, and the tag a build names it by (`+keys`; the
+/// unit test holds each source's build to it).
+#[cfg(test)]
+const AQ_PATCH_TAGS: &[(&str, &str)] = &[
+    ("0001", "keys"),
+    ("0002", "layout"),
+    ("0003", "cursor"),
+    ("0004", "appid"),
+];
+
+/// One source per soname a supported Hyprland links (#48, finding 655): Hyprland 0.56 links `.so.14`
+/// (aquamarine 0.15.x: main after v0.15.1, with #415), 0.57 links `.so.15` (v0.16.0, which has #415).
+/// The patches apply to both unchanged, but 0.57's builds leave out 0002 (+layout): Hyprland 0.57
+/// takes a warp as local to the output it names, which 0.56 ignored, so the layout mapping 0002 adds
+/// for 0.56 put the pointer off on 0.57. A soname not here gets no build: boxes use the system's.
+pub const AQ_SOURCES: &[AqSource] = &[
+    AqSource {
+        soname: "libaquamarine.so.14",
+        commit: "7bb8bdf4",
+        patches: &["0001", "0002", "0003", "0004"],
+        build: "7bb8bdf4+keys+layout+cursor+appid",
+    },
+    AqSource {
+        soname: "libaquamarine.so.15",
+        commit: "b77d6764",
+        patches: &["0001", "0003", "0004"],
+        build: "b77d6764+keys+cursor+appid",
+    },
+];
+
+/// The source omabox builds for a Hyprland that links SONAME, if any.
+pub fn aq_source(soname: &[u8]) -> Option<&'static AqSource> {
+    AQ_SOURCES.iter().find(|s| s.soname.as_bytes() == soname)
+}
+
+/// The sonames omabox builds, for words: `libaquamarine.so.14, libaquamarine.so.15`.
+pub fn aq_sonames() -> String {
+    AQ_SOURCES
+        .iter()
+        .map(|s| s.soname)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A private build's BUILD (what follows `@` in its version) is one this omabox makes: each source's
+/// build names its own commit, and setup records it only on a library with that source's soname.
+pub fn aq_build_current(build: &[u8]) -> bool {
+    AQ_SOURCES.iter().any(|s| s.build.as_bytes() == build)
+}
+
+/// The BUILD part of a private build's version (`0.15.1@7bb8bdf4+keys`: `7bb8bdf4+keys`).
+pub fn aq_build_of(ver: &[u8]) -> &[u8] {
+    ver.iter()
+        .position(|&c| c == b'@')
+        .map_or(ver, |i| &ver[i + 1..])
+}
 /// What omabox's own patches fix, which no system aquamarine has (finding 247).
 pub const AQ_OWN: &str = "keys held when an interactive box's window loses focus, the pointer and cursor in its monitors' windows, and those windows kept off your workspace";
 /// What a refusal of aquamarine's fix says to do.
@@ -659,15 +723,10 @@ pub fn nvidia_needs_fix_in(ctx: &Ctx, aq: &Aq, render: &RenderNode, root: &[u8])
 }
 
 /// Whether `setup --aquamarine` builds over AQ, what boxes use now, and what it says first: never
-/// over this omabox's build (AQ_BUILD) unless FORCE; a system aquamarine with the fix still lacks
+/// over a build this omabox makes (AQ_SOURCES) unless FORCE; a system aquamarine with the fix still lacks
 /// omabox's own patches (#186, finding 247), said.
 pub fn aq_build_needed(aq: &Aq, force: bool) -> bool {
-    let ver_build = aq
-        .ver
-        .iter()
-        .position(|&c| c == b'@')
-        .map_or(aq.ver.as_slice(), |i| &aq.ver[i + 1..]);
-    if !force && aq.kind == b"private" && ver_build == AQ_BUILD.as_bytes() {
+    if !force && aq.kind == b"private" && aq_build_current(aq_build_of(&aq.ver)) {
         say(cat!(
             "boxes use ",
             aq.desc(),
@@ -741,11 +800,18 @@ fn folder_aq(lib: &[u8], want: &[u8]) -> Option<Aq> {
         // The file the soname links to names the version (libaquamarine.so.0.16.0); a copy under the
         // soname itself (.so.15) names none, and only #415's symbol can say it has the fix.
         let ver = after_so(&crate::repo::readlink_f(&own).unwrap_or_default());
-        let ver = if ver.contains(&b'.') {
+        let mut ver = if ver.contains(&b'.') {
             ver
         } else {
             b"unknown".to_vec()
         };
+        // A folder whose lib dir is an install of omabox's own build (setup --aquamarine's prefix, or
+        // its files copied in) records it next to lib/, as a private build does: its patches are
+        // what up and monitor add look for (+appid), so it is said (finding 655).
+        let commit = read_subst(&cat!(lib, "/../.omabox-commit")).unwrap_or_default();
+        if !commit.is_empty() && aq_build_current(&commit) {
+            ver = cat!(ver, "@", commit);
+        }
         Aq {
             kind: b"folder".to_vec(),
             lib: lib.to_vec(),
@@ -1699,6 +1765,62 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
+    // #48, finding 655: one source per soname, each build naming its commit and omabox's patches.
+    #[test]
+    fn aq_sources_one_per_soname() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../patches/aquamarine");
+        let files: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        for (n, _) in AQ_PATCH_TAGS {
+            assert_eq!(files.iter().filter(|f| f.starts_with(n)).count(), 1, "{n}");
+        }
+        assert_eq!(
+            files.len(),
+            AQ_PATCH_TAGS.len(),
+            "a patch with no tag: {files:?}"
+        );
+        for (i, s) in AQ_SOURCES.iter().enumerate() {
+            let tags: String = s
+                .patches
+                .iter()
+                .map(|p| {
+                    let t = AQ_PATCH_TAGS.iter().find(|(n, _)| n == p).expect("a tag");
+                    format!("+{}", t.1)
+                })
+                .collect();
+            assert_eq!(s.build, format!("{}{tags}", s.commit), "{s:?}");
+            assert!(shell::re_match(
+                "^libaquamarine\\.so\\.[0-9]+$",
+                s.soname.as_bytes()
+            ));
+            assert_eq!(aq_source(s.soname.as_bytes()), Some(s));
+            assert!(
+                AQ_SOURCES[..i]
+                    .iter()
+                    .all(|o| o.soname != s.soname && o.commit != s.commit)
+            );
+            assert!(aq_build_current(s.build.as_bytes()));
+            assert_eq!(
+                aq_build_of(format!("0.16.0@{}", s.build).as_bytes()),
+                s.build.as_bytes()
+            );
+        }
+        assert_eq!(
+            aq_source(b"libaquamarine.so.14").map(|s| s.commit),
+            Some("7bb8bdf4")
+        );
+        assert_eq!(
+            aq_source(b"libaquamarine.so.15").map(|s| s.commit),
+            Some("b77d6764")
+        );
+        assert_eq!(aq_source(b"libaquamarine.so.16"), None);
+        assert!(!aq_build_current(b"7bb8bdf4+keys") && !aq_build_current(b""));
+        assert_eq!(aq_sonames(), "libaquamarine.so.14, libaquamarine.so.15");
+        assert_eq!(aq_build_of(b"0.15.0"), b"0.15.0");
+    }
+
     #[test]
     fn versions_as_sort_v() {
         let gt = [
@@ -2025,6 +2147,17 @@ mod tests {
         assert_eq!(
             (a.kind, a.ver, a.fixed),
             (b"folder".to_vec(), b"unknown".to_vec(), false)
+        );
+        // A folder holding omabox's own build records it next to lib/, as setup --aquamarine does
+        // (finding 655): its version names the build; a record this omabox does not make is not read.
+        std::fs::write(t.join("pkg/usr/.omabox-commit"), "x+appid\n").unwrap();
+        assert_eq!(nb("pkg", b"").aq.map(|a| a.ver), Some(b"0.99.0".to_vec()));
+        let build = AQ_SOURCES[AQ_SOURCES.len() - 1].build;
+        std::fs::write(t.join("pkg/usr/.omabox-commit"), format!("{build}\n")).unwrap();
+        let a = nb("pkg", b"").aq.expect("the folder's aquamarine");
+        assert_eq!(
+            (a.kind, a.ver),
+            (b"folder".to_vec(), format!("0.99.0@{build}").into_bytes())
         );
         let n = nb("nolib", b"system");
         assert!(n.hypr.is_some() && n.aq.is_none(), "no aquamarine anywhere");
