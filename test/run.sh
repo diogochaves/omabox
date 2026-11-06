@@ -17633,7 +17633,7 @@ t_keys_to_box() {
   # A config reload drops the hooks, the binds and the rule; the box's reaper puts them back.
   ob hyprctl -b "$B" reload >/dev/null
   # shellcheck disable=SC2329
-  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 5 ]; }
+  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 6 ]; }
   check "after a host reload the hooks come back (the reaper)" until_ok 6 reinstalled
   check "...with the submap, border and file as focus says" until_ok 3 kis "omabox|aquamarine|border|ka"
   check_eq "...one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
@@ -17642,7 +17642,7 @@ t_keys_to_box() {
   check "...and focus still drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
   # A newer passthrough over an older one with no reload between (#113): the reaper installs it again;
   # its unbind takes the toggle out of both submaps.
-  ob lua -b "$B" 'omabox_pass_version = 4' >/dev/null
+  ob lua -b "$B" 'omabox_pass_version = 5' >/dev/null
   check "a newer passthrough over an older one: installed again" until_ok 6 reinstalled
   check_eq "...still one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
     jq -r '[.[] | select(.description | startswith("omabox:"))] | group_by(.submap) | map("\(.[0].submap):\(length)") | reverse | join(" ")')"
@@ -17650,11 +17650,11 @@ t_keys_to_box() {
   check "...focus drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
   check "keys-to-box off with the box focused: the keys are the host's at once" "${in[@]}" keys-to-box -b ka off
   check "...submap, border and file off" until_ok 5 kis "|aquamarine|plain|"
+  "${in[@]}" keys-to-box -b ka on >/dev/null 2>&1
   if box_aq_unfixed "${in[@]}"; then
     skip "a confirm-close keep keeps the keys-to-box box (issue #24)" "aquamarine without the fix for nested Wayland outputs: no keep (t_guard checks that)"
   else
     # issue #24: a confirm-close keep recreates the box's output (a new window, the same client).
-    "${in[@]}" keys-to-box -b ka on >/dev/null 2>&1
     "${in[@]}" config confirm-close on >/dev/null
     ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'pid:$pa' })" >/dev/null
     # shellcheck disable=SC2329
@@ -17664,8 +17664,27 @@ t_keys_to_box() {
     focus class:foot; focus "pid:$pa"
     check "after a confirm-close keep, its new window is still the keys-to-box box" until_ok 5 kis "omabox|aquamarine|border|ka"
   fi
+  # The box focused, alone on its workspace, and its window gone: with nothing to take focus,
+  # Hyprland's window.active names the closing window, unmapped, which is no window (issue #437: on
+  # 0.57 its box still read as itself, keys-to-box on and the pointer over it, so the submap stayed).
+  # kb still up, so down's own submap reset (once no interactive box is left) does not hide it.
+  focus class:foot; focus "pid:$pa"; to_mid "pid:$pa"
+  check "keys-to-box on, the pointer over it: the submap before its down" until_ok 5 kis "omabox|aquamarine|border|ka"
   "${in[@]}" down ka >/dev/null 2>&1
-  check "down with the box focused: nobody is left in the submap" until_ok 5 kre '^\|[a-z]*\|plain\|$'
+  check "down with the box focused: nobody is left in the submap (issue #437)" until_ok 5 kre '^\|[a-z]*\|plain\|$'
+  # The same in one-shot: kc alone on a workspace of the stand-in's (6), kb still up.
+  if UP_OUT=$("${in[@]}" up kc --interactive --no-shell 2>&1); then
+    local pc
+    pc=$(ob run -b "$B" -- sh -c 'for p in $(pgrep -x bwrap); do tr "\0" " " < /proc/$p/cmdline | grep -q "/omabox/$1/run " && { echo "$p"; break; }; done' _ kc)
+    ob hyprctl -b "$B" dispatch "hl.dsp.window.move({ workspace = '6', window = 'pid:$pc' })" >/dev/null
+    focus "pid:$pc"; to_mid "pid:$pc"
+    ob keys -b "$B" super+alt+Escape >/dev/null
+    check "one-shot on a box alone on its workspace" until_ok 5 kis "omabox|aquamarine|border|kc"
+    "${in[@]}" down kc >/dev/null 2>&1
+    check "...its down ends the submap, another box still up (issue #437)" until_ok 5 kre '^\|[a-z]*\|plain\|$'
+  else
+    no "up --interactive kc in the stand-in" "$UP_OUT"
+  fi
   "${in[@]}" down --all >/dev/null 2>&1
   ob down "$B" >/dev/null
 }

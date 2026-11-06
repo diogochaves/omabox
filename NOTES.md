@@ -12675,6 +12675,25 @@ from them.
     F9, both unbound, no longer crash 0.57, so t_hyprland_crash's Lua sends its Hyprland a SIGSEGV
     through the shell `os.execute` runs (its parent), which ends any version inside the call.
     t_held_keys skips under a folder with an aquamarine of its own (not omabox's `+keys` build).
+652. **A focused interactive box that went left the host in omabox's submap** (2026-11-06, #437).
+    Found by t_keys_to_box on Hyprland 0.57.1 after a confirm-close keep, but the keep is not the
+    cause: it was the only place the test downed a box with the submap on and another interactive box
+    still up (down's own reset, finding 134, runs only once none is left). When the focused window
+    closes and nothing on its workspace takes focus, Hyprland's `window.active` names the closing
+    window itself (`mapped` false, reason FOCUS_REASON_OTHER), on 0.56.2 and on 0.57.1 alike, and
+    `hl.get_active_window()` is nil by then. passthrough.lua's check took it for a focused box window.
+    On 0.57.1 that window's `pid` is still its client's and the box's outer bwrap still readable in
+    /proc, so the box read as keys-to-box: with the pointer over it, follow() entered the submap again,
+    and `.keys` still named the box. On 0.56.2 the closing window's `pid` is -1, so the box was no
+    longer itself and a sticky submap ended, which is why the test passed there. A one-shot submap
+    (the toggle key) stayed on both versions: "box to box" kept it, the closing window counting as
+    another box. Probed in stand-in hosts (finding 26) with a `window.active` hook logging what it is
+    handed. **Now:** check() takes a window that is not mapped for no window (the submap ends, the
+    border and `.keys` go back), and the passthrough is VERSION 6. Focus moving away and the window
+    reopened by a keep (mapped again, same address on 0.57) were already right and still are.
+    Tests: t_keys_to_box (a keys-to-box box downed with its window focused, the pointer over it and
+    another box up, keep or no keep; the same for a one-shot box alone on its workspace), on 0.56.2
+    and 0.57.1.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -56,6 +56,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   0.57 fails a window's copy all through its size animation, so `shot --window` of a window resized
   over and over failed nearly every time. It is now tried for up to 4 s while the window changes
   size, with the window's own animations off after half a second of it, and back after the shot.
+- **The keys come back when a focused interactive box goes** ([#437](https://github.com/diogochaves/omabox/issues/437)):
+  when the box's window was focused and nothing else on its workspace took focus, `down` left your
+  Hyprland in omabox's submap (every key but the toggle swallowed) while another interactive box was
+  still up: on Hyprland 0.57 with keys-to-box on and the pointer over the window, and on 0.56 too
+  after the toggle key. A closing window no longer counts as the focused box.
 
 ## 1.2.2 — 2026-11-05
 
