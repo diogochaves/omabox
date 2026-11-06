@@ -13122,6 +13122,23 @@ from them.
     filter leaves it out). Left open: t_monitors_turned's turned monitors' shots against their part
     of the whole shot (2 checks; they pass in Arch's VM), not looked into.
 
+674. **Fedora's full suite, and a box outliving its pasta under SELinux** (2026-11-06, #247).
+    Fedora 45's VM, once its tty1 session came up (finding 673): 4811/24/146. Alone: the suite
+    assuming util-linux's `script` (Fedora's cloud image has none: the suite brings a stand-in, a
+    pty by Python's), gdb (cli_box's gdb cases), /etc/hostname as a file every machine has (now
+    /etc/os-release), qml6 (t_main's Qt warning), and one font listed once (Fedora's fontconfig lists
+    it ten times: sort -u); each now skips or adapts. A real one: t_pasta_dies, the box never dead
+    after its pasta was SIGKILLed. The box's bwrap dies with its parent (--die-with-parent, a
+    PR_SET_PDEATHSIG), and that signal is checked as its sender's, pasta: `avc: denied { sigkill }
+    scontext=pasta_t tcontext=unconfined_t` (finding 666's denial), so the box lived on, its network
+    gone, `ls` saying up. The reaper (cmd/reap.rs) pins the box's pasta by a pidfd once the box's
+    pid namespace shows, and its nap, now in steps of a second at most, ends the box when pasta is
+    gone and the box is not: its PID 1 SIGKILLed (pinned, and only while box_pid still names it),
+    said in reap.log; the box is then dead, kept until down, as anywhere else. 3 s in the VM; a box
+    with no reaper (--idle 0, no owner, no agent) is not covered. Open there: t_polkit (Fedora's
+    Quickshell, a COPR git snapshot, logs nothing from a PolkitAgent that Arch's 0.3.2 registers)
+    and t_wait_blink (a counter not seen changing; failed in Tumbleweed's VM too, not in Arch's).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

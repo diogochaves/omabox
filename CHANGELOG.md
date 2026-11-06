@@ -44,6 +44,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   before that show your name or host name will differ once.
 
 ### Fixed
+- **A box ends with its pasta under SELinux too** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  on Fedora, SELinux refuses pasta the death signal that ends a box when pasta does, so a box whose
+  pasta died stayed up without its network. Its reaper now ends it within a second or two, the box
+  then dead as anywhere else.
 - **`record` says at once when ffmpeg has no libx264** ([#247](https://github.com/diogochaves/omabox/issues/247)):
   Fedora's `ffmpeg-free` and openSUSE's `ffmpeg` leave the H.264 encoder out, and `record start`
   failed with wf-recorder's "Failed to find the given codec". It now refuses before starting, naming

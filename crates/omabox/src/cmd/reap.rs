@@ -63,6 +63,9 @@ struct Reap {
     /// A connected box with protected ports (box.json `protect`): the host's addresses in its rule
     /// kept the host's (#399).
     guard: Option<Guard>,
+    /// The box's pasta, pinned once its pid namespace shows: when it is gone and the box is not, the
+    /// box is ended (pasta_gone, finding 674).
+    pasta: Option<crate::pidfd::Pidfd>,
 }
 
 /// What the reaper keeps to keep a box's protected ports' rule on the host's addresses (#399): the
@@ -176,6 +179,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             said: false,
             sched: Sched::default(),
         }),
+        pasta: None,
     };
     if r.idle <= 0
         && r.owner.is_empty()
@@ -195,6 +199,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !wait_pidns(ctx, &r.created) {
         return Ok(());
     }
+    r.pasta = crate::boxes::box_pasta(&d).and_then(|p| {
+        crate::pidfd::Pidfd::pin(&p, || crate::boxes::box_pasta(&d).as_ref() == Some(&p))
+    });
     // (said once, in reap.log: how often it looks, which nothing else shows)
     say(cat!(
         shell::date_iso(),
@@ -232,16 +239,56 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
 }
 
-/// The sleep between polls, SECS long; with a guard, its addresses looked at when its Sched says:
+/// pasta_gone (finding 674): the box's pasta gone and the box not, it is ended as pasta's death
+/// would have ended it (bwrap's --die-with-parent): its PID 1 SIGKILLed, the box then dead, kept
+/// until `down` as any box that died. Under SELinux (Fedora) that death signal is pasta's to send,
+/// and pasta_t may not SIGKILL an unconfined process: the box lived on, its network gone. True when
+/// it ended it.
+fn pasta_gone(ctx: &Ctx, r: &mut Reap) -> bool {
+    if r.pasta.as_ref().is_none_or(crate::pidfd::Pidfd::alive) {
+        return false;
+    }
+    r.pasta = None;
+    let crate::boxes::BoxPid::Pid(p) = crate::boxes::box_pid(&ctx.d) else {
+        return false;
+    };
+    let Some(one) = crate::pidfd::Pidfd::pin(
+        &p,
+        || matches!(crate::boxes::box_pid(&ctx.d), crate::boxes::BoxPid::Pid(q) if q == p),
+    ) else {
+        return false;
+    };
+    say(cat!(
+        when(),
+        " box '",
+        ctx.name,
+        "': its pasta ended and the box did not (a death signal refused: SELinux?): ending it"
+    ));
+    one.signal(libc::SIGKILL)
+}
+
+/// The sleep between polls, SECS long, in steps of a second at most: the box's pasta looked at
+/// each (pasta_gone, which ends the nap); with a guard, its addresses looked at when its Sched says:
 /// woken by the host's address events (every second when there is no event socket).
 fn nap(ctx: &Ctx, r: &mut Reap, secs: u64) {
-    let Some(g) = r.guard.as_mut() else {
-        crate::sig::sleep(Duration::from_secs(secs));
-        return;
-    };
     let end = std::time::Instant::now() + Duration::from_secs(secs);
+    if r.guard.is_none() {
+        while std::time::Instant::now() < end {
+            crate::sig::sleep((end - std::time::Instant::now()).min(Duration::from_secs(1)));
+            if pasta_gone(ctx, r) {
+                return;
+            }
+        }
+        return;
+    }
     let mut ticks = 0u32;
     loop {
+        if pasta_gone(ctx, r) {
+            return;
+        }
+        let Some(g) = r.guard.as_mut() else {
+            return;
+        };
         let now = std::time::Instant::now();
         if now >= end {
             return;
