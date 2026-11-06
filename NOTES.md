@@ -13154,6 +13154,33 @@ from them.
     conflict: one at a time on a machine. DankMaterialShell is the suite's t_plain_dms (on this
     machine). end-4's dots (illogical-impulse) not tried: its installer rewrites ~/.config and its
     Hyprland config, a VM of its own.
+681. **`drag` does a toolkit's drag-and-drop: 150 ms of path at least, and a nudge at the end**
+    (2026-11-06, #428: a folder dragged onto a Nautilus sidebar bookmark gave "You cannot move a file
+    over itself"; #323's open item, finding 596). Two things, read with WAYLAND_DEBUG in a box
+    (Hyprland 0.56.2, GTK 4.24.1, Nautilus 51.1). (1) GTK 4 starts a drag only on a motion past the
+    threshold that comes 100 ms or more after the press (gtkdragsource.c, `MIN_TIME_TO_DND`; no
+    timer): `drag --steps 1..3` (each move waits 40 ms, finding 101) was a click, and `pointer --
+    move down sleep 300ms move up` too (one motion after the wait: no drag in Nautilus nor in a GTK
+    probe). (2) Hyprland sends `wl_data_device.enter` at the centre of the surface (927,528 for a
+    1854x1056 window, every time), not where the pointer is; only a later motion says where. A
+    drag that began on the path's last motion (`--steps 4`: its 4th motion is past 100 ms), or after
+    it in an app slow to answer, had no motion after the enter and dropped at the window's centre:
+    Nautilus's grid there, the issue's dialog (the issue's own `--glide 1.3s` drop worked in a box
+    here, 29 motions after the enter; its run likely had the drag begin late). Chromium 155 starts
+    on any motion, so only `--steps 1` dropped at the centre (`offsetX 0`, y 528); Qt Quick
+    (`Drag.Automatic`) started on `--steps 1` and was released before the enter: no drop. **Fix**:
+    the path waits out 150 ms when it is shorter, then a 1 px nudge and back at the end point (a
+    motion that starts a drag not begun, then puts a begun one at the end), again before the release
+    after `--hold` or `--shot`. Checked after it: Nautilus moved a folder onto the bookmark with
+    `--steps 4 --hold 0.5s` (it had dropped at the centre); a GTK probe, Chromium and Qt dropped at
+    the end with `--steps 1`, 3, 4 held, 10 and a glide. Seen, not ours: after a good drop Hyprland
+    told GTK's and Chromium's sources `cancelled` (Chromium's `dragend` says `none`), Qt's and the
+    fixture's `dnd_finished`; Nautilus moved the folder all the same. Nautilus opens a "New bookmark"
+    space above the bookmarks while a folder hovers the sidebar, which moves the rows down one: the
+    end point read from a shot before the drag lands on that space (adds a bookmark), so `--shot`
+    first. The fixture's `--dnd` starts drags by GTK's rule and logs enter, motion and drop:
+    t_drag_dnd (the old code: `--steps 3` no drag, `--steps 4 --hold` and a held `--shot` dropped at
+    the centre), drag_seq's unit test.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

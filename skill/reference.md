@@ -631,6 +631,13 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   ignores the cursor along the path, so a change wholly under it may not count. Both points are
   mapped as for `click`. It jumps to the first point: to get there on foot, `pointer --steps N --
   move X1 Y1` first.
+  It does real drag-and-drop between widgets and windows: checked in GTK 4 (Nautilus: a folder onto a
+  sidebar bookmark), Chromium (an HTML5 `draggable`) and Qt Quick (`Drag.Automatic`), with any
+  `--steps` or `--glide`, held or not. The path takes 150 ms at least (GTK starts a drag only on a
+  motion 100 ms after the press) and ends with a 1 px nudge and back (Hyprland puts a new drag at the
+  window's centre until the pointer moves). A drop target may change under the hover (Nautilus
+  opens a space for a new bookmark above the rows): `--shot` shows where it will land. A raw
+  `pointer -- down … up` gets none of this.
 - `omabox pointer [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- move X Y [--steps N], click
   [BTN], down [BTN], up [BTN], scroll DY, hscroll DX, source wheel|finger|continuous|tilt, sleep DURATION` in
   one run: raw, it raises nothing (a `--window` must be on screen and uncovered). BTN is left (the default), right, middle, back or forward (a mouse's thumb buttons, also `side` and `extra`; `click X Y back` too). A button pressed with `down` stays
