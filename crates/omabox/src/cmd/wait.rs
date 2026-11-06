@@ -14,7 +14,7 @@ use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers_in, hypr_json};
 use crate::jail::in_jail;
-use crate::jobs::{Job, job_find, job_how, job_latest, job_procs_now, job_status};
+use crate::jobs::{Job, job_how, job_procs_now, job_resolve, job_status};
 use crate::jq::{self, Args};
 use crate::jqprog::WIN_DESC_JQ;
 use crate::num::{fixed, ms_duration, ms_s, xywh_less};
@@ -998,33 +998,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             } else {
                 Vec::new()
             };
-            let job = if pid.is_empty() {
-                job_latest(ctx)
-            } else {
-                job_find(ctx, &pid)
-            };
-            let Some(job) = job else {
-                return Err(ctx.die(if pid.is_empty() {
-                    cat!(
-                        "wait ",
-                        cond,
-                        ": box '",
-                        ctx.name,
-                        "' has no run -d job yet"
-                    )
-                } else {
-                    cat!(
-                        "wait ",
-                        cond,
-                        ": box '",
-                        ctx.name,
-                        "' has no run -d job of pid ",
-                        pid,
-                        " (omabox -b ",
-                        ctx.name,
-                        " jobs)"
-                    )
-                }));
+            let job = match job_resolve(ctx, &pid) {
+                Ok(j) => j,
+                Err(m) => return Err(ctx.die(cat!("wait ", cond, ": ", m))),
             };
             let j = cat!("job ", job.pid, " (", job.words(), ")");
             if cond == b"job" {

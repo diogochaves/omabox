@@ -1137,6 +1137,69 @@ pub fn job_latest(ctx: &Ctx) -> Option<Job> {
         .max_by(|a, b| a.ns.cmp(&b.ns))
 }
 
+/// The box's `run -d` jobs, running or ended (their records, each pid once), oldest first.
+fn jobs_known(ctx: &Ctx) -> Vec<Job> {
+    let mut out: Vec<Job> = Vec::new();
+    for j in job_files(ctx)
+        .into_iter()
+        .chain(done_files(ctx))
+        .filter_map(|f| job_of(&f))
+    {
+        if !out.iter().any(|k| k.pid == j.pid) {
+            out.push(j);
+        }
+    }
+    out.sort_by(|a, b| a.ns.cmp(&b.ns).then_with(|| a.pid.cmp(&b.pid)));
+    out
+}
+
+/// JOB as `wait job|log [JOB]` and `log run [JOB]` take it (#429, finding 679): a job's pid as `jobs`
+/// prints it, or any pid of its session (job_find), running or ended; none: the latest job. Err: what
+/// to say, with the jobs there are (the newest 10), so the next try can name one.
+pub fn job_resolve(ctx: &Ctx, pid: &[u8]) -> Result<Job, Vec<u8>> {
+    let found = if pid.is_empty() {
+        job_latest(ctx)
+    } else {
+        job_find(ctx, pid)
+    };
+    if let Some(j) = found {
+        return Ok(j);
+    }
+    let known = jobs_known(ctx);
+    if known.is_empty() {
+        return Err(cat!("box '", ctx.name, "' has no run -d job yet"));
+    }
+    let running: Vec<Vec<u8>> = jobs_now(ctx).into_iter().map(|j| j.pid).collect();
+    let shown: Vec<Vec<u8>> = known
+        .iter()
+        .rev()
+        .take(10)
+        .rev()
+        .map(|j| {
+            let ended = if running.contains(&j.pid) {
+                ""
+            } else {
+                ", ended"
+            };
+            cat!(j.pid, " (", j.words(), ended, ")")
+        })
+        .collect();
+    let more = if known.len() > shown.len() {
+        format!(", and {} older", known.len() - shown.len())
+    } else {
+        String::new()
+    };
+    Err(cat!(
+        "box '",
+        ctx.name,
+        "' has no run -d job of pid ",
+        pid,
+        "; its jobs: ",
+        shown.join(&b", "[..]),
+        more
+    ))
+}
+
 /// JOB's processes running now (job_procs on the box's processes).
 pub fn job_procs_now(ctx: &Ctx, job: &Job) -> Vec<(Vec<u8>, Vec<u8>)> {
     job_procs(&box_procs(ctx), &job.pid, &job.start)

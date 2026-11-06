@@ -21630,6 +21630,23 @@ t_jobs() {
   check_eq "wait log of a job that ended without the line: exit 1" 1 "$rc"
   check_match "...said" "^unknown: job [0-9]+ exited with status 0, and its log has no line matching not this \(job ended\) after" "$out"
   check_eq "wait log of a bad expression: 2" 2 "$(ob wait -b "$B" log '(' >/dev/null 2>&1; echo $?)"
+  # log run JOB (#429, finding 679): a job's log by its pid, however many run -d jobs came after it
+  local j1
+  err=$(ob run -b "$B" -d -- sh -c 'echo omabox-429-first; echo 429 again; exec sleep 624' 2>&1 >/dev/null)
+  j1=$(sed -n 's/.*(pid \([0-9]*\),.*/\1/p' <<<"$err")
+  ob wait -b "$B" log "$j1" 'again' >/dev/null
+  ob run -b "$B" -d -q -- sh -c 'echo omabox-429-second; exec sleep 625'
+  ob wait -b "$B" log 'second' >/dev/null
+  check_eq "log run: the latest job's, as before" omabox-429-second "$(ob log -b "$B" run)"
+  check_eq "log run JOB: that job's, a later one started" "omabox-429-first"$'\n'"429 again" "$(ob log -b "$B" run "$j1")"
+  check_eq "...with --grep and -n" "429 again" "$(ob log -b "$B" run "$j1" --grep '^4' -n 1)"
+  out=$(ob log -b "$B" run "$j1" events -n 1)
+  check_match "...beside another log, under its pid" "^==> run $j1 <=="$'\n'"429 again" "$out"
+  out=$(ob log -b "$B" run 2 2>&1); rc=$?
+  check_eq "log run of a pid no job had: exit 1" 1 "$rc"
+  check_match "...naming the jobs there are" "has no run -d job of pid 2; its jobs: .*$j1 \(sh -c echo omabox-429-first; echo 429 again; exec sleep 624\), .*\(sh -c echo omabox-429-second; exec sleep 625\)$" "$out"
+  ob stop -b "$B" "$j1" >/dev/null 2>&1
+  check_eq "log run JOB of a job that ended: still read" "429 again" "$(ob log -b "$B" run "$j1" -n 1)"
   # stop --all
   err=$(ob stop -b "$B" --all 2>&1); rc=$?
   check_eq "stop --all: 0" 0 "$rc"
@@ -21652,6 +21669,10 @@ t_unit_inspect() {
   # (lua is a jailed agent's, as hyprctl is: broker_side.rs's broker_check_allows_and_refuses)
   check_match "log: an unknown log named, with the ones there are" "unknown log nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
   check_match "log -n takes a number or all" "-n takes a number" "$(ob log -b "$P-x" -n 5x 2>&1)"
+  # #429: a job's pid goes after run (log run JOB), read before any box is looked for.
+  check_match "log JOB without run: refused" "a job's pid goes after run" "$(ob log -b "$P-x" shell 115 2>&1)"
+  check_eq "...a usage error: 2" 2 "$(ob log -b "$P-x" 115 >/dev/null 2>&1; echo $?)"
+  check_match "log run JOB JOB: one job" "a job's pid goes after run" "$(ob log -b "$P-x" run 1 2 2>&1)"
   check_match "log --grep: a bad expression said" "takes a regular expression" "$(ob log -b "$P-x" --grep '(' 2>&1)"
   # #130: `--grep -i RE` took -i as the expression, and RE as a log's name.
   check_fails "log --grep -i RE: -i is the flag, RE the expression (#130)" grep -q "no log called" \

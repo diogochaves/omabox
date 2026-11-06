@@ -238,6 +238,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         icase: false,
     };
     let mut srcs: Vec<Vec<u8>> = Vec::new();
+    let mut job: Option<Vec<u8>> = None;
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -278,6 +279,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
             b"-h" | b"--help" => return crate::help::usage("log"),
             _ if a.starts_with(b"-") => return Err(unknown_opt(ctx, "log", a)),
+            // `run JOB` (#429): that run -d job's log, by its pid, as `wait log JOB RE` takes it.
+            _ if shell::is_num(a) => {
+                if srcs.last().map(Vec::as_slice) != Some(b"run") || job.is_some() {
+                    return Err(ctx.die(cat!(
+                        "log: a job's pid goes after run (omabox log run JOB: that run -d job's log), got ",
+                        a
+                    )));
+                }
+                job = Some(a.clone());
+            }
             _ => srcs.push(a.clone()),
         }
         i += 1;
@@ -316,6 +327,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         need_box(ctx)?;
     }
     rd.live = live(ctx)?;
+    // A job named: its log, ended or not; an unknown one names the jobs there are.
+    let job_log = match &job {
+        None => None,
+        Some(pid) => {
+            let j = crate::jobs::job_resolve(ctx, pid).map_err(|m| ctx.die(cat!("log: ", m)))?;
+            let Some(p) = j.box_log() else {
+                return Err(ctx.die(cat!("log: job ", j.pid, " has no log of run -d's")));
+            };
+            Some((cat!("run ", j.pid), p))
+        }
+    };
     if follow && !rd.live {
         say(cat!("box '", ctx.name, "' is down: its logs as they were"));
         follow = false;
@@ -323,7 +345,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut picked: Vec<(Kind, Vec<u8>, Vec<u8>)> = Vec::new();
     for s in &srcs {
         let st = String::from_utf8_lossy(s);
-        let Some(p) = log_where(ctx, &st) else {
+        let (p, s) = match &job_log {
+            Some((shown, p)) if s == b"run" => (Some(p.clone()), shown),
+            _ => (log_where(ctx, &st), s),
+        };
+        let Some(p) = p else {
             if srcs.len() > 1 {
                 continue;
             }
