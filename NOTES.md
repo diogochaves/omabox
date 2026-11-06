@@ -13063,6 +13063,13 @@ from them.
     other finding-669 checks still fail in a VM with the zoom gone (a window's size and corners in a
     shot, find at scale 2, Qt's line, peek's ticks, peek_monitors' titles): not this.
 
+671. **doctor's session-path fix off Omarchy: environment.d, not uwsm's env** (2026-11-06, #247).
+    session_path reads the systemd user manager's environment; a session that cannot find omabox got
+    "add ~/.local/bin to the PATH your desktop session gets (Omarchy: ~/.config/uwsm/env)" on every
+    machine. Where Omarchy is not installed (install::omarchy_at, as up decides a box's desktop), it
+    names a file in ~/.config/environment.d/ (`PATH=$HOME/.local/bin:$PATH`), which that manager
+    reads at login; Omarchy's machines keep uwsm's file. doctor.rs's path_check test covers both.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

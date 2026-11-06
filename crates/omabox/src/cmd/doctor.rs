@@ -1088,7 +1088,16 @@ fn kind_of(root: &[u8]) -> Kind {
 }
 
 /// The omabox a PATH finds: this one, another, or none. ME: this omabox, resolved.
-fn path_check(id: &'static str, whose: &str, path: Option<&[u8]>, me: &[u8], kind: Kind) -> Check {
+/// OMARCHY: Omarchy is installed (its session's PATH is uwsm's env file; elsewhere systemd's
+/// environment.d, which the user manager whose environment session_path reads takes it from).
+fn path_check(
+    id: &'static str,
+    whose: &str,
+    path: Option<&[u8]>,
+    me: &[u8],
+    kind: Kind,
+    omarchy: bool,
+) -> Check {
     let Some(path) = path else {
         return check(
             id,
@@ -1133,7 +1142,14 @@ fn path_check(id: &'static str, whose: &str, path: Option<&[u8]>, me: &[u8], kin
             if kind == Kind::System {
                 vec![format!("put {} in that PATH", launch_dir())]
             } else if id == "session-path" {
-                vec!["omabox setup links ~/.local/bin/omabox; then add ~/.local/bin to the PATH your desktop session gets (Omarchy: ~/.config/uwsm/env), and log in again".into()]
+                let place = if omarchy {
+                    "~/.config/uwsm/env (Omarchy's session reads it)"
+                } else {
+                    "a file in ~/.config/environment.d/ (PATH=$HOME/.local/bin:$PATH: the systemd user manager reads it)"
+                };
+                vec![format!(
+                    "omabox setup links ~/.local/bin/omabox; then add ~/.local/bin to the PATH your desktop session gets, in {place}, and log in again"
+                )]
             } else {
                 vec!["omabox setup links ~/.local/bin/omabox; add ~/.local/bin to PATH".into()]
             },
@@ -1224,6 +1240,7 @@ fn gather(ctx: &Ctx, os: &OsRelease) -> Vec<Check> {
         Some(&shell::env_or_empty("PATH")),
         &me,
         kind,
+        crate::install::omarchy_at(root),
     ));
     v.push(path_check(
         "session-path",
@@ -1231,6 +1248,7 @@ fn gather(ctx: &Ctx, os: &OsRelease) -> Vec<Check> {
         session_path().as_deref(),
         &me,
         kind,
+        crate::install::omarchy_at(root),
     ));
     v
 }
@@ -1976,6 +1994,7 @@ mod tests {
             Some(&p(&["none", "link", "other"])),
             &mer,
             Kind::Checkout,
+            true,
         );
         assert_eq!(c.st, St::Ok, "a link to this one: {}", c.found);
         let c = path_check(
@@ -1984,6 +2003,7 @@ mod tests {
             Some(&p(&["other", "me"])),
             &mer,
             Kind::Checkout,
+            true,
         );
         assert_eq!(c.st, St::Warn);
         assert!(c.found.contains("finds another omabox"), "{}", c.found);
@@ -1993,15 +2013,28 @@ mod tests {
             Some(&p(&["none"])),
             &mer,
             Kind::Checkout,
+            true,
         );
         assert_eq!(c.st, St::Warn);
         assert!(c.fix[0].contains("~/.config/uwsm/env"), "{:?}", c.fix);
+        // (a machine without Omarchy: systemd's environment.d, not uwsm's file, #247)
+        let c = path_check(
+            "session-path",
+            "your desktop session's",
+            Some(&p(&["none"])),
+            &mer,
+            Kind::Checkout,
+            false,
+        );
+        assert!(c.fix[0].contains("~/.config/environment.d/"), "{:?}", c.fix);
+        assert!(!c.fix[0].contains("uwsm"), "{:?}", c.fix);
         let c = path_check(
             "session-path",
             "your desktop session's",
             None,
             &mer,
             Kind::Checkout,
+            true,
         );
         assert!(c.found.starts_with("could not read"));
         let _ = std::fs::remove_dir_all(&d);
