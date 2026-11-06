@@ -12512,6 +12512,39 @@ from them.
     taken, a file as before, a folder with none refused); t_unit_hyprland's folder refusals and the
     default; t_hyprland_folder (a folder of copies of the installed Hyprland, hyprctl and the boxes'
     aquamarine, started by OMABOX_HYPRLAND: the same files in the box by inode, no IPC warning).
+
+645. **A box without Omarchy: `up --desktop plain`** (2026-11-06, #247, phase 1 of the plan to run
+    beyond Omarchy). Every box ran Omarchy's Hyprland config (an unguarded `dofile` of its bootstrap),
+    and `up` refused a user Omarchy had not given a theme. **Now:** `--desktop omarchy|plain`
+    (upspec.rs's `Desktop`; `resolve_desktop` is the one place the default is chosen: Omarchy's for
+    now). A plain box: share/hyprland.lua runs Omarchy's part (bootstrap, the HOME's hypr modules,
+    its PATH order, toggles) only on `omarchy`, and on `plain` share/plain.lua instead (read live
+    from share/ by `dofile` at each load, unlike the copied hyprland.lua: #140's concern was a change
+    reloading running boxes, which a file Hyprland does not watch cannot), then the generic rest as
+    for every box. plain.lua: Hyprland's defaults, update news and donation prompt off, the keyboard
+    layout and variant from /etc/vconsole.conf (else /etc/default/keyboard; else us), the file
+    Omarchy reads too, so a plain box types as an Omarchy box does; SUPER+RETURN runs `$TERMINAL`
+    (session.sh: the first of xdg-terminal-exec, foot, alacritty, kitty, ghostty, unless `--env`
+    names one), SUPER+W closes. An empty tmpfs over /usr/share/omarchy (S1 holds: a tmpfs, no bind;
+    `up_options_never_bind_the_seat` now varies the desktop); no $D/etc/omarchy.conf (the host's, if
+    any, shows, and names the hidden tree); no shell (box.json `shell` false, so `up` waits for no
+    bar and the shell commands refuse as for `--no-shell`); seed_home's `seed_plain`: the bus's
+    service dir and git's name and email, no /etc/skel, bar, theme, terminal configs or toggles;
+    session.sh skips Omarchy's uwsm defaults, `omarchy-theme-set-gnome` and the monitor-workspaces
+    file; no theme refusal, no Omarchy deprecation line, no `omarchy_version` in box.json. Refused on
+    plain (usage, exit 2): `--plugin --theme --theme-dir --stock-bar --stock --clean --keep
+    --desk-shell --omarchy --quickshell --dnd --no-dock`; `check run --desktop plain` too (a check's
+    box is `--clean`). `up` on a box of the other desktop says so; `ls` prints `desktop: plain` under
+    a plain box's line, `ls --json` has `desktop`. On this machine the 563 `/usr/bin/omarchy-*` files
+    and /etc's Omarchy files stay visible: an approximation of a machine without Omarchy. Two fixes
+    from the first cut (branch desk-plain) went with it: `keys` read an unset `kb_*` option
+    (`[[EMPTY]]`) as its value, and the box's Hyprland inherited labwc's XDG_CURRENT_DESKTOP (a
+    warning on screen). A plain box is up in under a second (no shell to wait for). Tests: t_plain
+    (up, the empty tree, no Omarchy process or look, no layer, no config errors, the layout,
+    Xwayland's stand-in first, foot driven by `run -d`, `wait`, `windows`, `keys`, a shot, the box
+    safety checks, the refusals, down leaves nothing); upspec.rs `desktops`; seed.rs
+    `plain_home_has_no_omarchy`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -11,6 +11,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   prefix (`bin/Hyprland`) or a build folder (`Hyprland`). Its libraries load first (its aquamarine is
   the box's) and its `hyprctl` is the box's, so a box can run Hyprland 0.57 on a desktop that still has
   0.56. `OMABOX_HYPRLAND=PATH` makes it the default for every `up`.
+- **`up --desktop plain`: a box without Omarchy** ([#247](https://github.com/diogochaves/omabox/issues/247)):
+  its Hyprland runs omabox's own small config (Hyprland's defaults, your keyboard layout, a terminal
+  on SUPER+RETURN) and sees no Omarchy tree; it has no shell and a HOME with git's name and email
+  only. Options that need Omarchy are refused. `ls` and `ls --json` say each box's desktop; Omarchy
+  stays the default.
+
+### Fixed
+- **`keys` on a Hyprland config that leaves `kb_variant`, `kb_model` or `kb_options` unset**: xkb was
+  handed Hyprland's `[[EMPTY]]` as their value and built no keymap, so every `keys` failed.
+- **No "XDG_CURRENT_DESKTOP set from outside" warning in a box whose config does not set it**: the
+  box's Hyprland no longer inherits labwc's `labwc:wlroots`.
 
 ## 1.2.2 — 2026-11-05
 
