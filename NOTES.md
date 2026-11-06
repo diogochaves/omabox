@@ -13404,6 +13404,25 @@ from them.
     goes. Tests: the unit tests sweep_keeps_old_records (fails on the code before: the folder
     swept) and move_no_replace_across (/dev/shm to the temp dir); t_jail_record's outside stops
     with a stand-in XDG_DATA_HOME, the video in its records folder.
+685. **A `click --wait` that timed out still named 4.5's idle notifications layer** (2026-11-06,
+    #431). After 678, `windows` and `click --window` left the layer out with no toast up, but a 124
+    still said "the click at X,Y was on foot "L" (…), or possibly on layer omarchy-notifications (it
+    spans the screen: …)", and `--json`'s `target` had `certain: false`: DESK_TARGET_JQ reads the
+    snapshot taken before the input (desk_snap, a hyprctl batch), not input_layers. **Fix**: before
+    a click, scroll or drag is sent (settle's `ready`, once the snapshot is in), the snapshot is
+    marked `toasts: false` when it lists the layer and the shell counts no toast
+    (`omshell::toasts_idle`, input_layers' judgement), and DESK_TARGET_JQ leaves the layer out of
+    such a snapshot. Asked there, not in the snapshot's thread: ipc mutes fd 2 for the whole process
+    while it runs. The mark is ignored by desk_facts, so what changed during the wait is read as
+    before. Where the layer is named (a toast up), the hint is worded as 678 words `windows`: "(it is
+    full height at the right edge: …)", and so are win_point's two warnings, "a layer full height at
+    the right edge, "omarchy-notifications" (…), draws over …" (and "… is up … may go to it");
+    WIN_LAYER_JQ's possible line carries the `span` after its first word (`possible right "NS" …`).
+    4.5's dock along the bottom reads "full width at the bottom edge". Tests: t_unit_wait_facts (the
+    strip's wording, `toasts: false`, another namespace kept), t_unit_window_select (the line's
+    span), t_click_layer (a 124 under the idle column names no layer; the wordings per generation;
+    failed 5 checks on 678's code), t_dnd_dock (the dock's wording). Verified in a box on Omarchy
+    4.5 on Hyprland 0.56.2.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

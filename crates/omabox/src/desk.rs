@@ -65,6 +65,17 @@ fn snap_of(printed: &[u8]) -> Vec<u8> {
         .text()
 }
 
+/// SNAPSHOT marked `toasts: false` when it lists the notifications layer while the box's shell shows
+/// no toast (#431, finding 685): DESK_TARGET_JQ then leaves that layer out of what a click, scroll or
+/// drag may have met, as input_layers does for --window. As it was otherwise.
+pub fn judge_toasts(ctx: &Ctx, snap: Vec<u8>) -> Vec<u8> {
+    if snap.is_empty() || !crate::omshell::toasts_idle(ctx, &snap) {
+        return snap;
+    }
+    let r = jq::jq(&["-c", ".toasts = false"], Some(&snap), jq::Err::Null);
+    if r.ok() { r.text() } else { snap }
+}
+
 /// desk_facts BEFORE AFTER: DESK_FACTS_JQ's {changes, line}, or nothing when either is not a
 /// snapshot.
 pub fn desk_facts(before: &[u8], after: &[u8]) -> Vec<u8> {

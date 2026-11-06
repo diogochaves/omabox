@@ -181,6 +181,8 @@ pub const DESK_FACTS_JQ: &str = desk_facts_jq!();
 
 /// What got the input, from a snapshot (findings 398, 421); `(WIN)` stands for WIN_JQ. A window in
 /// real fullscreen at the point, on a shown workspace, covers the top level there (#409, finding 561).
+/// The notifications layer is left out of a snapshot marked `toasts: false` (desk::judge_toasts), and
+/// a layer spanning its output is worded for what it covers (#431, finding 685).
 pub const DESK_TARGET_JQ: &str = concat!(
     layer_span_jq!(),
     r#"
@@ -206,8 +208,11 @@ pub const DESK_TARGET_JQ: &str = concat!(
           and at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]})) as $fs
       | [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {} | to_entries[] | (.key | tonumber) as $lv | .value | reverse[]
         | select($lv != 2 or ($fs | not))
+        | select($s.toasts != false or .namespace != "omarchy-notifications")
         | bar_strip($m; $mon) | select(.w > 1 and .h > 1 and at(.))
-        | {lv: $lv, ns: (if (.namespace // "") == "" then .address else .namespace end), span: ($lv >= 2 and spans($m; $mon))}] as $L
+        | ($lv >= 2 and spans($m; $mon)) as $sp
+        | {lv: $lv, ns: (if (.namespace // "") == "" then .address else .namespace end), span: $sp,
+           sp: (if $sp then span($m; $mon) else null end)}] as $L
       | ([(WIN) | .[] | select(.onscreen and at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]})
             and all(.cover[]; at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]}) | not))] | first // null) as $w
       | ([$L[] | select(.lv >= 2)] | sort_by(-.lv)) as $tops
@@ -222,7 +227,7 @@ pub const DESK_TARGET_JQ: &str = concat!(
              ($L | map(select(.lv < 2)) | sort_by(-.lv) | first) as $b | target("layer"; null; $b.ns; null; "\($say) on no window (layer \($b.ns))")
            else target("none"; null; null; null; "\($say) on no window or layer") end)
           | if $maybe then .certain = false
-              | .text += ", or possibly on layer \($maybe.ns) (it spans the screen: if one of its items, a toast, is there)"
+              | .text += ", or possibly on layer \($maybe.ns) (it \($maybe.sp | span_words): if one of its items, a toast, is there)"
             else . end
         end
     end"#
@@ -389,11 +394,12 @@ pub const WIN_BLOCKED_JQ: &str = r#"(.at[0] + $x) as $px | (.at[1] + $y) as $py
 pub const WIN_BLOCKER_JQ: &str = r#"(.at[0] + $x) as $px | (.at[1] + $y) as $py
     | first(.cover[] | select($px >= .at[0] and $px < .at[0] + .size[0] and $py >= .at[1] and $py < .at[1] + .size[1])
         | "\(.pid) \(.address)") // empty"#;
-/// win_layer: the layer surface over a point of a window (#263, findings 398, 421).
+/// win_layer: the layer surface over a point of a window (#263, findings 398, 421); a possible one
+/// (spanning its output) with its `span` after the word (#431, finding 685).
 pub const WIN_LAYER_JQ: &str = r#"(.at[0] + $x) as $px | (.at[1] + $y) as $py
     | [.layers[]? | select($px >= .at[0] and $px < .at[0] + .size[0] and $py >= .at[1] and $py < .at[1] + .size[1])]
     | select(length > 0) | (map(select(.certain != false)) | last) // last
-    | "\(if .certain == false then "possible" else "certain" end) \(.namespace | tojson) \(.layer) \(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])""#;
+    | "\(if .certain == false then "possible \(.span // "screen")" else "certain" end) \(.namespace | tojson) \(.layer) \(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])""#;
 /// win_point: the point inside the window.
 pub const WIN_INSIDE_JQ: &str = r#"$x < .size[0] and $y < .size[1]"#;
 /// win_point: its screen point.

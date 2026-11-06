@@ -362,17 +362,25 @@ fn no_toasts(ctx: &Ctx) -> bool {
     ipc(&mut c, &[b"notifications", b"count"]).is_ok_and(|n| n == b"0")
 }
 
+/// Whether JSON (hyprctl's layers, or a snapshot holding them) names namespace NS.
+fn has(json: &[u8], ns: &str) -> bool {
+    let quoted = cat!("\"", ns, "\"");
+    json.windows(quoted.len()).any(|w| w == quoted.as_slice())
+}
+
+/// Whether JSON lists the notifications layer while the box's shell shows no toast: that layer
+/// takes no input then (#431). The shell asked only when the layer is there.
+pub fn toasts_idle(ctx: &Ctx, json: &[u8]) -> bool {
+    has(json, NOTIFICATIONS_NS) && no_toasts(ctx)
+}
+
 /// `hyprctl -j layers` for what a window's input meets (windows, click/scroll/drag/pointer
 /// --window): a hidden dock taken out (#309), and the notifications while they show no toast
 /// (#431). The monitors and the box's files are read only when a dock is there, the shell asked
 /// only when the notifications are.
 pub fn input_layers(ctx: &Ctx) -> Res<Vec<u8>> {
     let mut lys = strip_nl(&crate::hypr::hypr_json(ctx, &["layers"])?);
-    let has = |l: &[u8], ns: &str| {
-        let quoted = cat!("\"", ns, "\"");
-        l.windows(quoted.len()).any(|w| w == quoted.as_slice())
-    };
-    if has(&lys, NOTIFICATIONS_NS) && no_toasts(ctx) {
+    if toasts_idle(ctx, &lys) {
         lys = drop_layers(&lys, NOTIFICATIONS_NS, None);
     }
     if !has(&lys, DOCK_NS) {

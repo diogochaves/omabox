@@ -164,8 +164,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`windows` no longer names Omarchy 4.5's notifications layer while it shows no toast** ([#431](https://github.com/diogochaves/omabox/issues/431)):
   every listing ended with that layer "spans the screen, possibly over" the windows, with nothing on
   screen; it stays mapped while idle and takes no input then. It is left out while the box's shell
-  counts no toast (`click --window` too); with one up it is said, worded for what it is: "is full
-  height at the right edge". `windows --json` gives each such layer a `span`.
+  counts no toast (`click --window` too, and a `click --wait` that times out no longer says the click
+  was "possibly on layer omarchy-notifications"); with one up it is said, worded for what it is: "is
+  full height at the right edge", in the click's warnings too. `windows --json` gives each such layer
+  a `span`.
 - **`hyprctl dispatch` in the old syntax says it dispatched nothing, and the Lua for it** ([#427](https://github.com/diogochaves/omabox/issues/427)):
   a box's Hyprland runs a Lua config, where `dispatch fullscreen 0` is run as Lua and does nothing
   but print Hyprland's note; in a `--batch` it even exited 0. `omabox hyprctl` now fails it (exit 1
