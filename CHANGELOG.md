@@ -42,6 +42,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `/etc/passwd` and `/etc/group`) and its host `omabox`, so a greeting, a terminal's title or a
   prompt in a shot to publish carries neither. `--keep identity` keeps yours. Baselines approved
   before that show your name or host name will differ once.
+- **`log run JOB` reads one `run -d` job's log** ([#429](https://github.com/diogochaves/omabox/issues/429)):
+  by its pid, as `wait log JOB RE` takes it, however many jobs were started after it (a terminal,
+  an `xdg-open`) and after it ended; `--grep`, `-n` and `-f` as for any log. `log run` alone still
+  reads the latest job's. A pid no job had is refused naming the jobs there are, by `wait job` and
+  `wait log` too.
 
 ### Fixed
 - **A box ends with its pasta under SELinux too** ([#247](https://github.com/diogochaves/omabox/issues/247)):

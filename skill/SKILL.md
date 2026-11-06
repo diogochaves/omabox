@@ -71,7 +71,7 @@ omabox keys --wait super+space            # real key events; a secret: --pass VA
 omabox wait window app                    # or --gone; layer NS; tree TEXT; until -- CMD
 omabox wait change --window app           # a later redraw by itself; then wait still
 omabox run -- busctl --user list          # any command in the box (its exit code)
-omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
+omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default; run PID: that job's
 omabox down                               # when done
 ```
 
