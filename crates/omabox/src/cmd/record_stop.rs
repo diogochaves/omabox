@@ -2785,26 +2785,14 @@ fn host_sandbox(dir: &[u8]) -> Vec<Vec<u8>> {
         "--ro-bind",
         "/usr",
         "/usr",
-        "--symlink",
-        "usr/bin",
-        "/bin",
-        "--symlink",
-        "usr/bin",
-        "/sbin",
-        "--symlink",
-        "usr/lib",
-        "/lib",
-        "--symlink",
-        "usr/lib",
-        "/lib64",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--bind",
     ]);
+    // /bin, /sbin, /lib, /lib64 as the host's links into /usr (#247: Debian's /lib64 is usr/lib64).
+    for (target, link) in crate::bwrap::root_links(b"") {
+        a.extend([b"--symlink".to_vec(), target, link.as_bytes().to_vec()]);
+    }
+    a.extend(w(&[
+        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind",
+    ]));
     a.push(dir.to_vec());
     a.extend(w(&["/out", "--chdir", "/out", "--"]));
     a
