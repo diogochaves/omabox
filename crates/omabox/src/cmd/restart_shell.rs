@@ -1,4 +1,5 @@
-//! `omabox restart-shell [-b NAME]`: the box's Omarchy shell again, after plugin edits. share/shell.sh
+//! `omabox restart-shell [-b NAME]`: the box's shell again (Omarchy's, after plugin edits, or a
+//! plain box's `up --shell CMD`, #247). share/shell.sh
 //! keeps the shell's pid in the box's omabox-shell.pid: a pid there once shell.sh wrote back this
 //! restart's token is the restart (a project's own quickshell in the box is not the Omarchy shell,
 //! finding 63). Not any new pid: while shell.sh stops the old shell, an old launcher's relaunch writes
@@ -23,6 +24,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let name = name_arg(ctx, "restart-shell", args)?;
     select_box(ctx, &name)?;
     need_box(ctx)?;
+    // A plain box (#247) has a shell only when `up --shell CMD` named one: nothing to start again.
+    if meta(&ctx.d, "shell").0 != b"true" && meta(&ctx.d, "shell_cmd").0.is_empty() {
+        crate::omshell::plain_refuse(
+            ctx,
+            "restart-shell",
+            "no shell to restart (up --desktop plain --shell CMD starts one)",
+        )?;
+    }
     let n = ctx.name.clone();
     let old = run_read(&ctx.d, "omabox-shell.pid")
         .map(|v| shell::strip_nl(&v))

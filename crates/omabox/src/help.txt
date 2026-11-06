@@ -14,7 +14,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--stock | --clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   a new user's look; --clean: frozen too
             [--hyprland PATH]                            a Hyprland build or folder of yours, not the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
-            [--omarchy DIR | --desktop plain]            an Omarchy tree (a checkout); plain: Hyprland with nothing of Omarchy's
+            [--omarchy DIR | --desktop plain [--shell CMD]]   an Omarchy tree (a checkout); plain: nothing of Omarchy's, CMD its shell
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      start it under a free name, box-1, box-2, ... (printed)
             [--json]                                     the box as ls --json lists it, on stdout
@@ -259,10 +259,16 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 --desktop plain (#247): the box's Hyprland runs omabox's own small config (Hyprland's defaults, your
   keyboard layout from /etc/vconsole.conf, SUPER+RETURN a terminal, SUPER+W closes) and sees an empty
-  /usr/share/omarchy, as on a machine without Omarchy: no shell, and a HOME with none of your Omarchy
-  look (git's name and email only). --plugin, --theme, --theme-dir, --stock-bar, --stock, --clean,
-  --keep, --desk-shell, --omarchy, --quickshell, --dnd and --no-dock need Omarchy and are refused.
-  omarchy, the default, is the Omarchy desktop. ls says a plain box's desktop under its line.
+  /usr/share/omarchy, as on a machine without Omarchy: no shell but --shell's, and a HOME with none of
+  your Omarchy look (git's name and email only). --plugin, --theme, --theme-dir, --stock-bar, --stock,
+  --clean, --keep, --desk-shell, --omarchy, --dnd and --no-dock need Omarchy and are refused, as are
+  the dnd, dock and plugin commands on the box. omarchy, the default, is the Omarchy desktop. ls says
+  a plain box's desktop (and shell) under its line.
+--shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`), run by sh in the
+  session, in the foreground (one that forks off and exits is taken as exited): up waits until it
+  draws a layer (OMABOX_READY_TIMEOUT), says when it exits or crashes on the way; log shell is its
+  output, restart-shell stops its whole tree and starts it again, a Quickshell crash of its config is
+  the shell's. --quickshell PATH: the build is CMD's `qs` and `quickshell` (on the session's PATH).
 @ up run
 --stock: Omarchy as a new user sees it, for a showcase or a shot for someone else: Omarchy's bar
 (--stock-bar) on tokyo-night (or --theme) with the theme's own wallpaper (never yours for it),

@@ -108,6 +108,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let p = resolve_plugin(ctx, what, &crate::jailpath::jail_read, false)?;
         select_box(ctx, &name)?;
         need_box(ctx)?;
+        crate::omshell::plain_refuse(ctx, "plugin add", "no Omarchy shell to load the plugin")?;
         add(ctx, &p)
     } else {
         if !id_ok(what) {
@@ -119,6 +120,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         select_box(ctx, &name)?;
         need_box(ctx)?;
+        crate::omshell::plain_refuse(ctx, "plugin remove", "no Omarchy shell, no plugins")?;
         remove(ctx, what)
     }
 }

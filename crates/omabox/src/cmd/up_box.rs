@@ -834,6 +834,10 @@ fn box_json(
     o.insert("autoreload".into(), Value::Bool(u.autoreload));
     o.insert("shell".into(), Value::Bool(u.shell));
     o.insert("desktop".into(), s(u.desktop.name().as_bytes()));
+    // `up --shell CMD` (#247): the plain box's shell, for restart-shell, ls and up_already.
+    if !u.shell_cmd.is_empty() {
+        o.insert("shell_cmd".into(), s(&u.shell_cmd));
+    }
     // (a plain box runs no Omarchy: no version to say, #247)
     if u.desktop == Desktop::Omarchy {
         let ov = if u.omarchy.is_empty() {
@@ -1429,6 +1433,7 @@ fn bwrap_args(
         (b"OMABOX_POLKIT", bit(u.polkit).to_vec()),
         (b"OMABOX_SHELL", bit(u.shell).to_vec()),
         (b"OMABOX_DESKTOP", u.desktop.name().as_bytes().to_vec()),
+        (b"OMABOX_SHELL_CMD", u.shell_cmd.clone()),
         (b"OMABOX_OMARCHY_VERSION", install::omarchy_version()),
         (b"OMABOX_BOX", ctx.name.clone()),
     ] {

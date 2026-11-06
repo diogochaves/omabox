@@ -2262,6 +2262,13 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 upopts.push(args[i + 1].clone());
                 i += 1;
             }
+            // ...nor a shell of the user's, which runs on a plain box only.
+            b"--shell" => {
+                optarg(ctx, x, v)?;
+                return Err(ctx.die(
+                    "check run: a check's box is clean (--clean), which needs Omarchy: --shell runs on --desktop plain only",
+                ));
+            }
             b"--idle" => {
                 optarg(ctx, x, v)?;
                 match idle_duration(&args[i + 1], "--idle ") {

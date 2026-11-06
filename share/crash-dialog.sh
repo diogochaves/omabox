@@ -6,7 +6,9 @@
 # it shows the dialog; the report says the crashed instance's config ("Config Path: DIR/shell.qml", the
 # box shell's DIR being $OMARCHY_PATH/shell) and the pid in the reporter's __QUICKSHELL_CRASH_DUMP_PID
 # ("Crashed process ID", the child the handler forked to dump). No such report (none written): the
-# dialog is the shell's when the reporter's parent, the crashed process, is the box shell.
+# dialog is the shell's when the reporter's parent, the crashed process, is the box shell. A plain box's
+# shell (`up --shell CMD`, #247) has no Omarchy tree: its configs are the ones omabox noted in
+# omabox-shell.configs once it drew (a folder a line).
 # crash-dialog.sh PID DUMP: PID the dialog's process, DUMP its __QUICKSHELL_CRASH_DUMP_PID.
 set -uo pipefail
 pid=${1:-} dump=${2:-}
@@ -19,7 +21,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   for r in "$dir"/*/report.txt; do
     grep -aqx "Crashed process ID: $dump" "$r" 2>/dev/null || continue
     cfg=$(sed -n '/^Config Path: /{s///p;q}' "$r" | tr -s /)
-    if [ "${cfg%/*}" = "$want" ]; then ours=1; else ours=0; fi
+    if [ -n "${OMABOX_SHELL_CMD:-}" ]; then
+      ours=0; grep -qxF -- "${cfg%/*}" "$XDG_RUNTIME_DIR/omabox-shell.configs" 2>/dev/null && ours=1
+    elif [ "${cfg%/*}" = "$want" ]; then ours=1; else ours=0; fi
     break 2
   done
   sleep 0.1

@@ -25,9 +25,21 @@ const TRAY_JQ: &str = r#"[.bar.layout[][]? | if type == "object" then .id else .
 const INTRO_COVER_JQ: &str = r#"first(.[].levels["3"][]? | select(.namespace == "omarchy-background") | "\(.x),\(.y) \(.w)x\(.h)")"#;
 /// shell_adopt: the pid of the shell another start brought up (finding 248).
 const ADOPT_JQ: &str = "first(.[].pid) // empty";
+/// A layer drawn (not a hidden 1x1 nor an empty one, as LAYER_AT_JQ has it) in `hyprctl -j layers`'
+/// answer, whatever its namespace: a plain box's shell (`up --shell CMD`, #247) is up. Its namespace.
+const ANY_LAYER_JQ: &str = r#"first(.. | objects | select(has("namespace") and .w > 1 and .h > 1)
+    | .namespace) // empty"#;
+/// `qs list --all -j`'s instances of this start of the shell: its own pid ($shell, shell.sh's, which
+/// CMD's exec keeps) or one started after its mark ($mark; both the box's numbering). The folders of
+/// their configs, one a line (#247: a plain box's shell's, as its crash reports name them).
+const SHELL_CONFIGS_JQ: &str = r#".[]? | select((.pid // 0) > $mark or .pid == $shell)
+    | .config_path // empty | sub("/[^/]*$"; "")"#;
 /// shell_adopt's write of that pid where shell.sh keeps it, in the box.
 const ADOPT_SH: &str =
     r#"f=$XDG_RUNTIME_DIR/omabox-shell.pid; echo "$1" > "$f.new" && mv -f "$f.new" "$f""#;
+/// shell_configs_note's write, in the box as ADOPT_SH's (S7: the box's runtime dir is the box's to
+/// change, so the host writes nothing there itself).
+const CONFIGS_SH: &str = r#"f=$XDG_RUNTIME_DIR/omabox-shell.configs; printf '%s' "$1" > "$f.new" && mv -f "$f.new" "$f""#;
 /// more_screens (#308).
 const MORE_SCREENS_JQ: &str = r#"[.[] | select((.disabled | not) and .name != $main)
     | " + \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)" + ((.scale * 100 | round / 100) as $s
@@ -50,7 +62,7 @@ const BOX_JSON_JQ: &str = r#"{name: $name, mode, size, scale: (.scale // 1), cre
       allowed: (.allow // "" | split(",") | map(select(. != "") | tonumber)), addrs: (.addrs // []), idle: (.idle // 0),
       dir: (.dir // null), session: (.session // null),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
-        | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), polkit: (.polkit // false), autoreload: (.autoreload // false), desktop: (.desktop // "omarchy"), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
+        | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), polkit: (.polkit // false), autoreload: (.autoreload // false), desktop: (.desktop // "omarchy"), shell_cmd: (.shell_cmd // null), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), quickshell: (.quickshell // null), quickshell_version: (.quickshell_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
       client_render: (.client_render // null),
       monitors: (.monitors // null),
@@ -830,6 +842,41 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     if !want_shell {
         return Ok(());
     }
+    // A plain box's shell (`up --shell CMD`, #247): up once it has drawn a layer, whatever its
+    // namespace; Omarchy's bar, tray, cover and notification waits are not its.
+    let cmd = meta(&ctx.d, "shell_cmd").0;
+    if !cmd.is_empty() {
+        loop {
+            let l = layers(ctx, ErrTo::Null);
+            if !Args::new(&["-r", ANY_LAYER_JQ])
+                .run(Some(&l.out), jq::Err::Null)
+                .text()
+                .is_empty()
+            {
+                break;
+            }
+            starting_ok(ctx, r)?;
+            if let Some(how) = shell_crash(ctx, r, shell_pid(ctx).as_deref()) {
+                let m = shell_crash_text(ctx, "while", &how);
+                return Err(ctx.die(m.strip_prefix(b"warning: ").unwrap_or(&m)));
+            }
+            if past(deadline) {
+                return Err(ctx.die(cat!(
+                    "the shell (",
+                    crate::term::plain_cap(&cmd, 120),
+                    ") drew no layer in ",
+                    t.to_string(),
+                    "s; see ",
+                    ctx.d,
+                    "/home/shell.log"
+                )));
+            }
+            poll();
+        }
+        r.bar_at = mono_ms();
+        shell_configs_note(ctx);
+        return Ok(());
+    }
     // The bar on screen; only wait for the tray watcher when the user's layout has a tray.
     let tray_expected = box_home_file(&ctx.d, ".config/omarchy/shell.json").is_some_and(|f| {
         Args::new(&["-e", TRAY_JQ])
@@ -1127,10 +1174,42 @@ pub fn shell_crash_logged(ctx: &Ctx) -> bool {
         .is_some_and(|t| crate::exit::contains(&t, b"Quickshell has crashed"))
 }
 
+/// shell_configs_note (#247): a plain box's shell, once it has drawn: the Quickshell configs it runs
+/// (SHELL_CONFIGS_JQ's instances), kept in the box's runtime dir, so a crash report of one is the
+/// shell's (shellnote's crash_reports; crash-dialog.sh closes its dialog). A shell that is no
+/// Quickshell (or no `qs list` to ask) keeps none: its crash is seen by its pid going.
+fn shell_configs_note(ctx: &Ctx) {
+    let mark = run_read(&ctx.d, "omabox-shell.mark")
+        .map(|m| strip_nl(&m))
+        .filter(|m| shell::is_num(m))
+        .unwrap_or_else(|| b"0".to_vec());
+    let pid = shell_pid(ctx).unwrap_or_else(|| b"0".to_vec());
+    let qs = crate::shellnote::box_qs(ctx);
+    let l = RealBox.on_box(ctx, &w(&[&qs, b"list", b"--all", b"-j"]));
+    let dirs = if l.rc == 0 {
+        let j = Args::new(&["-r", "--argjson", "mark"])
+            .arg(&mark)
+            .kv("--argjson", "shell", &pid)
+            .arg(SHELL_CONFIGS_JQ)
+            .run(Some(&l.out), jq::Err::Null);
+        if j.ok() { j.out } else { Vec::new() }
+    } else {
+        Vec::new()
+    };
+    let _ = RealBox.on_box(
+        ctx,
+        &w(&[b"sh", b"-c", CONFIGS_SH.as_bytes(), b"sh", &dirs]),
+    );
+}
+
 /// shell_adopt (finding 248): this start's shell exited at once as a duplicate of one that something
 /// else started after shell.sh stopped the old one, and that one is up: its pid goes where shell.sh
-/// keeps the shell's, written in the box, and is returned.
+/// keeps the shell's, written in the box, and is returned. Not a plain box's shell (#247): its
+/// command is its own, not Omarchy's config.
 fn shell_adopt_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
+    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+        return None;
+    }
     let t = std::fs::read(box_home_file(&ctx.d, "shell.log")?).ok()?;
     if !crate::exit::contains(&t, b"An instance of this configuration is already running") {
         return None;
@@ -1454,6 +1533,56 @@ mod tests {
     use super::*;
 
     use std::sync::Mutex;
+
+    // #247: a plain box's shell is up once any layer is drawn (not a hidden 1x1 one, nor an empty
+    // one), and its Quickshell configs are its own pid's and those started after its mark.
+    #[test]
+    fn plain_shell_layer_and_configs() {
+        let any = |l: &str| {
+            String::from_utf8(
+                Args::new(&["-r", ANY_LAYER_JQ])
+                    .run(Some(l.as_bytes()), jq::Err::Inherit)
+                    .text(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            any(r#"{"HEADLESS-2":{"levels":{"0":[],"3":[]}}}"#),
+            "",
+            "no layer"
+        );
+        assert_eq!(
+            any(
+                r#"{"HEADLESS-2":{"levels":{"3":[{"namespace":"menu","x":0,"y":0,"w":1,"h":1},{"namespace":"osd","w":0,"h":0}]}}}"#
+            ),
+            "",
+            "...a hidden 1x1 one and an empty one are none"
+        );
+        assert_eq!(
+            any(
+                r#"{"HEADLESS-2":{"levels":{"2":[{"namespace":"dms:bar","x":0,"y":0,"w":1920,"h":64}]}}}"#
+            ),
+            "dms:bar",
+            "...a drawn one is"
+        );
+        let cfgs = |l: &str, mark: &str, shell: &str| {
+            String::from_utf8(
+                Args::new(&["-r", "--argjson", "mark", mark, "--argjson", "shell", shell])
+                    .arg(SHELL_CONFIGS_JQ)
+                    .run(Some(l.as_bytes()), jq::Err::Inherit)
+                    .out,
+            )
+            .unwrap()
+        };
+        let list = r#"[{"config_path":"/a/bar/shell.qml","pid":79},{"config_path":"/old/x.qml","pid":50},
+            {"config_path":"/run/user/1000/dms/84f/shell.qml","pid":107},{"pid":120}]"#;
+        assert_eq!(
+            cfgs(list, "86", "79"),
+            "/a/bar\n/run/user/1000/dms/84f\n",
+            "the shell's own pid (below its mark) and what came after the mark; not an older one"
+        );
+        assert_eq!(cfgs("[]", "86", "79"), "", "...none running: none");
+    }
 
     // wait layer (finding 146; t_unit_wait's): a hidden menu mapped at 1x1 is not the menu.
     #[test]

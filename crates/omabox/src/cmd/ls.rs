@@ -263,7 +263,18 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
         // A box whose desktop is not Omarchy's (#247), under its line: an Omarchy box's rows as before.
         let desktop = meta(&ctx.d, "desktop").0;
         if crate::upspec::Desktop::of_box(&desktop) != crate::upspec::Desktop::Omarchy {
-            out(cat!("  desktop: ", desktop, "\n"))?;
+            // ...with its shell's command (`up --shell CMD`), one line, control characters shown.
+            let cmd = meta(&ctx.d, "shell_cmd").0;
+            let shell = if cmd.is_empty() {
+                Vec::new()
+            } else {
+                let one: Vec<u8> = cmd
+                    .iter()
+                    .map(|&c| if c == b'\n' { b' ' } else { c })
+                    .collect();
+                cat!(", shell: ", crate::term::plain_cap(&one, 200))
+            };
+            out(cat!("  desktop: ", desktop, shell, "\n"))?;
         }
         // A box on a Hyprland build of its own (finding 116), and one whose shell runs a Quickshell
         // build (finding 358), under its line: never taken for a stock one.

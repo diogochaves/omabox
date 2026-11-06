@@ -144,17 +144,33 @@ impl Report {
     }
 }
 
-/// The folder the box's shell's config is in (the Omarchy tree's `shell`), slashes squeezed, no
-/// trailing one.
-fn shell_config_dir(ctx: &Ctx) -> Vec<u8> {
+/// The box's runtime dir's file that names a plain box's shell's Quickshell configs (#247), a folder
+/// a line (ready's shell_configs_note; share/crash-dialog.sh reads it too).
+pub const SHELL_CONFIGS: &str = "omabox-shell.configs";
+
+/// The folders the box's shell's config is in, slashes squeezed, no trailing one: the Omarchy tree's
+/// `shell`, or a plain box's shell's Quickshell configs (`up --shell CMD`, #247; none known yet:
+/// none).
+fn shell_config_dirs(ctx: &Ctx) -> Vec<Vec<u8>> {
+    let tidy = |v: &[u8]| {
+        let w = strip_nl(&squeeze(v));
+        w.strip_suffix(b"/").unwrap_or(&w).to_vec()
+    };
+    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+        return run_read(&ctx.d, SHELL_CONFIGS)
+            .unwrap_or_default()
+            .split(|&c| c == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(tidy)
+            .collect();
+    }
     let want = meta(&ctx.d, "omarchy").0;
     let want = if want.is_empty() {
         b"/usr/share/omarchy".to_vec()
     } else {
         want
     };
-    let w = strip_nl(&squeeze(&cat!(want, "/shell")));
-    w.strip_suffix(b"/").unwrap_or(&w).to_vec()
+    vec![tidy(&cat!(want, "/shell"))]
 }
 
 /// crash_reports: the box's Quickshell crash reports with their config, oldest first (by time,
@@ -170,7 +186,7 @@ pub fn crash_reports(ctx: &Ctx) -> Vec<Report> {
     if !dir.starts_with(&cat!(home, "/")) {
         return Vec::new();
     }
-    let want = shell_config_dir(ctx);
+    let want = shell_config_dirs(ctx);
     let mut out = Vec::new();
     for rep in shell::glob(&shell::path(&dir), false) {
         let d = cat!(dir, "/", rep);
@@ -201,7 +217,7 @@ pub fn crash_reports(ctx: &Ctx) -> Vec<Report> {
         out.push(Report {
             mtime: shell::path(&f).metadata().and_then(|m| m.modified()).ok(),
             dump: first(b"Crashed process ID: ").unwrap_or_default(),
-            shell: cdir == want.as_slice(),
+            shell: want.iter().any(|w| cdir == w.as_slice()),
             config,
             name: rep,
         });

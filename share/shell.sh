@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Starts (or restarts) the Omarchy shell inside a box. Launched by Hyprland, so it has the session env.
+# Starts (or restarts) the box's shell inside a box: Omarchy's, or a plain box's `up --shell CMD`.
+# Launched by Hyprland, so it has the session env.
 # The file watcher stays off so a screenshot never catches a half-reloaded shell; `omabox restart-shell`
 # is the explicit reload.
 # What Omarchy's autostart does: give the session bus the compositor's env, or D-Bus-activated apps
@@ -12,10 +13,38 @@ if [ -S "$XDG_RUNTIME_DIR/systemd/private" ]; then
   dbus-update-activation-environment --systemd --all
   systemctl --user reset-failed
 fi
+pidfile=$XDG_RUNTIME_DIR/omabox-shell.pid
+# `up --desktop plain --shell CMD` (#247): a shell of the user's, not Omarchy's. The last start's
+# process and all it started (`dms run` starts quickshell) are stopped, TERM then KILL after 5 s; then
+# CMD runs in this process, so its pid is the one recorded, with the mark and token files `up` and
+# `restart-shell` read as for Omarchy's. `up --quickshell`'s build is `qs` and `quickshell` on PATH.
+if [ -n "${OMABOX_SHELL_CMD:-}" ]; then
+  tree() { local c; for c in $(pgrep -P "$1"); do tree "$c"; done; echo "$1"; }
+  old=$(cat "$pidfile" 2>/dev/null) || old=""
+  alive=""
+  if [ -n "$old" ] && [ -d "/proc/$old" ]; then
+    pids=$(tree "$old")
+    # shellcheck disable=SC2086 # pid lists
+    kill $pids 2>/dev/null
+    deadline=$((SECONDS + 5))
+    while [ $SECONDS -lt $deadline ]; do
+      alive=""; for p in $pids; do [ -d "/proc/$p" ] && alive="$alive $p"; done
+      [ -n "$alive" ] || break
+      sleep 0.05
+    done
+    # shellcheck disable=SC2086 # pid lists
+    [ -z "$alive" ] || kill -KILL $alive 2>/dev/null
+  fi
+  rm -f "$pidfile"
+  : > "$HOME/shell.log"
+  sh -c 'echo $$' > "$XDG_RUNTIME_DIR/omabox-shell.mark"
+  echo "${1:-}" > "$XDG_RUNTIME_DIR/omabox-shell.start"
+  echo $$ > "$pidfile"
+  exec sh -c "$OMABOX_SHELL_CMD" >> "$HOME/shell.log" 2>&1
+fi
 # The Omarchy shell only: its recorded pid and any other instance of its config, which the new one's
 # `-n` would meet ("An instance of this configuration is already running", finding 248). A quickshell
 # a project runs in the box on a config of its own is not ours to kill.
-pidfile=$XDG_RUNTIME_DIR/omabox-shell.pid
 config=$OMARCHY_PATH/shell
 # The box's quickshell: `up --quickshell`'s build when share/session.sh linked one (finding 358).
 qs=$XDG_RUNTIME_DIR/omabox-quickshell/quickshell
