@@ -17,6 +17,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   0.57 renamed a layer's `interactivity`, so `keys --window` typed into a launcher that held the
   keyboard and `tree --layer` could not tell two same-size layers apart; and a special workspace has
   no id any more, so a window on a hidden one was listed on screen. Both read on 0.56 and 0.57.
+- **A `--hyprland DIR` box knows its Hyprland's version** ([#424](https://github.com/diogochaves/omabox/issues/424)):
+  the version written to the box HOME was asked without the folder's libraries, so a folder's
+  Hyprland wrote 0.0.0, and the next Hyprland started in the box opened its update news.
 
 ## 1.2.2 — 2026-11-05
 

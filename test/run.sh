@@ -11690,6 +11690,8 @@ t_hyprland_folder() {
   check "box.log has no warning that the IPC may not match" bash -c "! grep -q 'IPC may not match' '$D/box.log'"
   check "omabox hyprctl answers through it" ob hyprctl -b "$B" version
   check "its folder is read-only in the box" bash -c "! '$CLI' run -b '$B' -- touch '$f/x' 2>/dev/null"
+  check_eq "the box HOME's lastVersion is the folder's Hyprland, run with its libraries (finding 646)" \
+    "$(Hyprland --version | sed -n '1s/^Hyprland \([0-9][0-9.]*\) .*/\1/p')" "$(ob run -b "$B" -- cat /home/sbx/.local/share/hyprland/lastVersion 2>&1)"
   check "down" ob down "$B"
 }
 
@@ -13590,9 +13592,15 @@ t_system_dirs() {
     "$(ob run -b "$B" -- timedatectl list-timezones 2>&1 | md5sum)"
   check_fails "...set-timezone still goes to the real one, which fails" ob run -b "$B" -- timedatectl set-timezone UTC
   check_eq "the box HOME's Hyprland lastVersion is the box's Hyprland, not 0.0.0 (finding 626)" \
-    "$(Hyprland --version | sed -n '1s/^Hyprland \([0-9][0-9.]*\) .*/\1/p')" \
-    "$(ob run -b "$B" -- cat /home/sbx/.local/share/hyprland/lastVersion 2>&1)"
+    "$(box_hypr_version "$B")" "$(ob run -b "$B" -- cat /home/sbx/.local/share/hyprland/lastVersion 2>&1)"
   ob down "$B" >/dev/null
+}
+
+# box_hypr_version B: the version of the Hyprland box B runs (a folder's under OMABOX_HYPRLAND or
+# --hyprland DIR, with the library dir it runs with), as lastVersion has it.
+box_hypr_version() {
+  ob run -b "$1" -- sh -c 'LD_LIBRARY_PATH=/opt/omabox/lib "$(readlink /proc/$(pgrep -x Hyprland)/exe)" --version' 2>/dev/null \
+    | sed -n '1s/^Hyprland \([0-9][0-9.]*\) .*/\1/p'
 }
 
 # #140: a box keeps the config it started with: an update of omabox (share/ is live) reloaded every

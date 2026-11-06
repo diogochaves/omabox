@@ -12527,6 +12527,15 @@ from them.
     negative id or a `special:` name. Tests: desk.rs layers_keyboard_on_each_hyprland (both Lua
     readers under a host Lua, layers of each shape), t_unit_window_select (0.57-shaped special
     workspaces, hidden and shown), t_keys_layer and t_tree_layer on 0.56.2 and 0.57.1.
+646. **A `--hyprland DIR` box wrote lastVersion 0.0.0** (2026-11-06, #424). start-hyprland.sh asks
+    the box's Hyprland its version for the box HOME's `lastVersion` (finding 626), but ran a folder's
+    binary without the folder's library dir: Arch's 0.57.1 needs `libaquamarine.so.15`, which only the
+    folder has, so `--version` failed, nothing was written, and Hyprland wrote 0.0.0 (finding 626's
+    update news for the next Hyprland started in the box). **Now:** the probe runs with the
+    environment the launch has (`env "${lib[@]}"`). The suite's t_system_dirs compared with the
+    host's `Hyprland --version`; it now asks the box's own Hyprland (box_hypr_version), so it holds
+    under OMABOX_HYPRLAND. Tests: t_system_dirs under OMABOX_HYPRLAND=0.57.1 (failed with 0.0.0
+    before), t_hyprland_folder (its folder's lastVersion).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
