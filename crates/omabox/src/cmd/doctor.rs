@@ -229,7 +229,7 @@ const PKGS: &[(&str, [&str; 5])] = &[
         [
             "git cmake ninja hyprwayland-scanner base-devel",
             "git cmake ninja-build hyprwayland-scanner build-essential",
-            "git cmake ninja-build hyprwayland-scanner gcc-c++",
+            "git cmake ninja-build hyprwayland-scanner-devel gcc-c++",
             "git cmake ninja hyprwayland-scanner gcc-c++",
             "git cmake ninja hyprwayland-scanner gcc",
         ],

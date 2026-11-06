@@ -12983,6 +12983,12 @@ from them.
     exit 1 (the sheet half written). Both threw magick's stderr away. **Now** both pass the file
     fontconfig picks for `sans` (grid.rs `font`, which the grid's labels used for a monospace
     already; check's report does the same), and a failure ends with magick's last line.
+665. **install.sh asked Fedora for a package it already had, for ever** (2026-11-06, #247). Fedora 45
+    in a VM (test/distros-vm.sh; Hyprland 0.57.1 from the pm4rcin/Hyprland COPR, Fedora having none
+    and solopasha/hyprland building only rawhide): its hyprwayland-scanner is the package
+    `hyprwayland-scanner-devel`. `dnf install hyprwayland-scanner` resolves to it, but install.sh's
+    check, `rpm -q --whatprovides hyprwayland-scanner`, does not, so every run said it was missing
+    and stopped there. **Now** Fedora's list (and doctor's) names hyprwayland-scanner-devel.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
