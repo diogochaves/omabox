@@ -6,8 +6,8 @@
 </p>
 
 > Your agents get desktops of their own. Yours stays untouched. omabox gives every coding agent a
-> whole Hyprland desktop, with the Omarchy shell, to launch, click, type and screenshot its work in:
-> invisible, one per agent, gone when the agent is.
+> whole Hyprland desktop, with the Omarchy shell on Omarchy, to launch, click, type and screenshot
+> its work in: invisible, one per agent, gone when the agent is.
 
 **Website: [omabox.app](https://omabox.app)**
 
@@ -20,11 +20,14 @@ https://github.com/user-attachments/assets/8dca4735-140e-472a-9bb8-b05412a4649a
 
 ## What omabox is (and isn't)
 
-A box is the real thing, not a mock: Omarchy's own Hyprland config, the Omarchy shell (bar, menu,
-tray, notifications) and your theme, bar layout and terminal settings, on a private screen and a
-private session bus. An agent drives it the way you drive your desktop: it starts apps, clicks,
-types, takes screenshots, reads what is on screen, records video. Nothing of it reaches your
-screen, your cursor, your focus or your notifications.
+A box is the real thing, not a mock, on a private screen and a private session bus. On Omarchy it
+is Omarchy's own Hyprland config, the Omarchy shell (bar, menu, tray, notifications) and your theme,
+bar layout and terminal settings. On another distribution with Hyprland 0.56 or later it is a
+**plain box**: Hyprland on a small config of omabox's (Hyprland's defaults, your keyboard layout, a
+terminal on SUPER+RETURN), with no bar unless you give it your own shell (`--shell 'dms run'`). An
+agent drives it the way you drive your desktop: it starts apps, clicks, types, takes screenshots,
+reads what is on screen, records video. Nothing of it reaches your screen, your cursor, your focus
+or your notifications.
 
 omabox is **not** a sandbox. It keeps an agent's windows off your desktop; it does not fence the
 agent in. A box shares your kernel, your GPU and, by default, your network, and commands the agent
@@ -79,24 +82,32 @@ do not trust at all, use a VM.
 
 ## Install
 
-You need **Omarchy 4.5** (Hyprland 0.56+, the Lua config) and a GPU render node: AMD and Intel iGPUs
-and NVIDIA RTX cards are tested. Omarchy 4.0 still works but is deprecated: omabox 1.3 drops it, not
-before 2026-12-02, four weeks after 4.5 reached Omarchy's stable channel
-([#312](https://github.com/diogochaves/omabox/issues/312)). On another Linux with Hyprland 0.56+
-(Arch, Debian sid, openSUSE Tumbleweed), `install.sh` prints the command that installs what your
-distribution lacks, and boxes are plain Hyprland, without Omarchy's bar or theme
-([#247](https://github.com/diogochaves/omabox/issues/247), [docs/install.md](docs/install.md)).
+You need **Hyprland 0.56 or later** with its Lua config (0.56.2 and 0.57.1 are tested) and a GPU
+render node: AMD and Intel iGPUs and NVIDIA RTX cards are tested. Where it runs:
+
+- **Omarchy 4.5**: boxes are Omarchy's desktop. Omarchy 4.0 still works but is deprecated: omabox
+  drops it in its first release after 2026-12-04, a month after 4.5 reached Omarchy's stable channel
+  ([#312](https://github.com/diogochaves/omabox/issues/312)). `omarchy update` brings 4.5.
+- **Arch without Omarchy, Debian sid, openSUSE Tumbleweed**: boxes are plain. Each is tested in a
+  container, `install.sh` through to real boxes ([#247](https://github.com/diogochaves/omabox/issues/247)).
+  `install.sh` checks your distribution's packages under their own names; on Arch it installs what
+  is missing (sudo), elsewhere it prints the command that does (`sudo apt install …`, `sudo zypper
+  install …`) and stops: run it, then `./install.sh` again. There is no package for Arch without
+  Omarchy yet: install from a clone or a release tarball, as below.
+- **Not yet**: Fedora (Hyprland only from a COPR; its packages are named, untried), NixOS (a box
+  looks for its programs in `/usr/bin`). Ubuntu 26.04 LTS, Alpine and Void ship no Hyprland with the
+  Lua config.
 
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox
-./install.sh                            # packages (sudo only if some are missing), omabox, links
+./install.sh                            # packages (or the command that installs them), omabox, links
 ./install.sh --check                    # the same, then start a box, screenshot it, tear it down
 ```
 
 `install.sh` builds omabox (Rust) and a private copy of aquamarine with the fixes boxes need (your
 system's is not touched), then runs `omabox setup`: it links `~/.local/bin/omabox`, the agent skill
-for Claude Code, Codex, OpenCode, pi and Hermes, and the bar widget, and asks whether to put the
-widget in your bar and to turn on the [agent guard](#the-agent-guard). **Update** with
+for Claude Code, Codex, OpenCode, pi and Hermes, and, on Omarchy, the bar widget, and asks whether
+to put the widget in your bar and to turn on the [agent guard](#the-agent-guard). **Update** with
 `git pull && ./install.sh`, after a Hyprland upgrade too. **Remove** with `omabox down --all &&
 omabox setup --remove`, then delete the clone. Every step, upgrading from 0.x and what is left
 behind: [docs/install.md](docs/install.md). A box that will not start: `omabox doctor` says what
@@ -105,7 +116,7 @@ this machine lacks and the line that installs it, changing nothing (`--smoke` st
 ## Quick start
 
 ```bash
-omabox up                                 # a hidden desktop for this repo; returns when its bar is drawn
+omabox up                                 # a hidden desktop for this repo; returns once it is ready
 omabox run -d --wait -- ./build/myapp     # launch your app in it, detached, once its window is up
 omabox shot                               # a screenshot of the box; prints the PNG's path
 omabox peek                               # watch it live, in a view-only window on workspace 9
@@ -115,8 +126,17 @@ omabox down                               # end it
 That is the loop an agent runs, through the skill, without being told. Tests that touch the desktop
 are one line: `omabox run -- ctest --test-dir build --output-on-failure`.
 
-Every command, testing a shell plugin, a Hyprland build or an Omarchy checkout, several monitors:
-[docs/usage.md](docs/usage.md). `omabox help` lists every command and flag.
+Without Omarchy the same `omabox up` starts a plain box, and says so; `--shell CMD` makes a shell of
+yours its bar. On Omarchy, `--desktop plain` (with or without `--shell`) is a box with nothing of
+Omarchy's:
+
+```bash
+omabox up --shell 'dms run'               # a plain box, its bar your shell's ('qs -p DIR' too)
+omabox up --desktop plain                 # on Omarchy: for an app that must not depend on it
+```
+
+Every command, plain boxes, testing a shell plugin, a Hyprland build or an Omarchy checkout, several
+monitors: [docs/usage.md](docs/usage.md). `omabox help` lists every command and flag.
 
 ## Seeing a box yourself
 
@@ -124,8 +144,8 @@ Every command, testing a shell plugin, a Hyprland build or an Omarchy checkout, 
   agent never notices; a ring shows where it clicks and the keys it types.
 - **`omabox up --interactive`**: a box as a window you drive with your own keyboard and mouse.
   SUPER+ALT+ESCAPE sends SUPER keys to the box instead of your desktop.
-- **The bar widget** lists every box, with Peek, Screenshot and Down, and starts a new interactive
-  box.
+- **The bar widget** (in Omarchy's bar) lists every box, with Peek, Screenshot and Down, and starts
+  a new interactive box.
 
 <p><img src="docs/media/peeks.webp" alt="Four peek windows in a grid, each a live view of an agent's box: the same app in three themes, one with its Add torrent dialog open" width="800"></p>
 
@@ -133,7 +153,8 @@ The clipboard, keys-to-box, the widget's settings and keys: [docs/seeing-a-box.m
 
 ## Agents
 
-`install.sh` installs the `omabox` skill wherever Omarchy installs its own agent skills, so Claude
+`install.sh` installs the `omabox` skill where each agent looks for skills (where Omarchy puts its
+own), so Claude
 Code, Codex, OpenCode, pi and Hermes load it when a task involves a GUI app, a screenshot, a shell
 plugin or desktop-touching tests. Projects need no changes: when a project's own instructions say
 "run the app", "screenshot with grim", "use hyprctl" or "run ctest", the skill has the agent do
@@ -204,8 +225,9 @@ Tested with ai-jail 2.10.0 and 2.12.0 and omabox 1.0 on Linux, and before that w
   pi's, Hermes' and Gemini's; the browsers' profiles, `~/.mozilla`, Chromium's, Chrome's, Brave's, Vivaldi's,
   Edge's, and `~/.pki`), omabox's own saves and box HOMEs
   (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys`.
-- **Its HOME** is fake, seeded with your theme and shell settings and nothing secret (no API keys,
-  keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app changed there.
+- **Its HOME** is fake, seeded with your theme and shell settings (on Omarchy) and nothing secret
+  (no API keys, keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app
+  changed there.
 - **Its session**: a private session bus, its own accessibility (AT-SPI) bus and a throwaway keyring
   (secrets stored and read without prompts), no system bus, no real input devices, no audio unless `--audio` (then its own PipeWire, a
   speaker nobody hears and a silent mic; never your audio server or `/dev/snd`), no Xwayland unless `--xwayland`.
@@ -277,7 +299,8 @@ logs); and internal or undocumented forms, such as a box's name given to `peek`,
 - [CHANGELOG.md](CHANGELOG.md): what changed in each version.
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to send a fix, and what a bug report needs.
   Contributions are welcome, and so are people trying it on other NVIDIA models, other GPUs,
-  multi-monitor desks, or a fresh Omarchy install.
+  multi-monitor desks, a fresh Omarchy install, or a distribution with Hyprland 0.56+ not listed
+  above.
 - [NOTES.md](NOTES.md): design notes, findings (cited in the code as "finding N") and dead ends.
 - [UPSTREAM.md](UPSTREAM.md): what omabox carries until upstream releases land, and what to drop
   then.

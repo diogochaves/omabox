@@ -1,4 +1,4 @@
-omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
+omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
 
   omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]

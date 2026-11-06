@@ -1,7 +1,7 @@
 # omabox — instructions for agents
 
-A contained, invisible Hyprland + Omarchy desktop ("box") where agents launch, drive and
-screenshot apps and Omarchy shell plugins **without touching the user's real desktop**.
+A contained, invisible Hyprland desktop ("box"), Omarchy's or plain, where agents launch, drive and
+screenshot apps and shell plugins **without touching the user's real desktop**.
 
 If `.local/AGENTS.md` exists, read it first: this checkout's private notes (git-ignored; its rules
 add to the ones here).
@@ -69,12 +69,16 @@ enforced and its test. A change that adds or weakens one updates its row there.
   "Reproduce on a fresh Omarchy install" section runnable: it becomes `install.sh`.
 - Report honestly what was verified in a real box vs. assumed.
 
-## Developed against (2026-09-23)
+## Developed against (2026-09-23; updated 2026-11-06)
 
-Hyprland 0.56.2 (Lua config, `hyprctl eval`, dispatch syntax `hl.dsp.*`), aquamarine 0.15.0
-system + patched 0.15.1@7bb8bdf4 in `build/prefix` (headless NVIDIA boxes and confirm-close need it
-until a release has PR #415; everything else runs on the system's); since 2026-11-06 `setup
---aquamarine` builds by the soname Hyprland links: that for 0.56 (`.so.14`), patched v0.16.0 for 0.57
-(`.so.15`, `install::AQ_SOURCES`, NOTES 652),
-labwc 0.20.2 as parent compositor, quickshell 0.3.1. The binary (since 2026-10-25): Rust 1.99 (edition 2024,
-`rust-version` 1.85).
+Hyprland 0.56.2 and 0.57.1 (Lua config, `hyprctl eval`, dispatch syntax `hl.dsp.*`): the dev machine
+runs Omarchy's 0.56.2; 0.57.1 is Arch's packages unpacked into a folder and run as `--hyprland DIR`
+/ `OMABOX_HYPRLAND` (finding 644; 0.57's changes, findings 647-651 and 653). aquamarine: the
+system's 0.15.1, and omabox's builds by the soname Hyprland links (`setup --aquamarine`,
+`install::AQ_SOURCES`, finding 655): 0.15.1@7bb8bdf4 (`.so.14`, for 0.56; headless NVIDIA boxes and
+confirm-close need it until a release has PR #415) and v0.16.0 (`.so.15`, for 0.57), each with
+omabox's patches for interactive boxes; everything else runs on the system's. labwc 0.20.2 as parent
+compositor, quickshell 0.3.1 (0.3.2 since). Distributions: Omarchy 4.5 on the dev machine; Arch
+without Omarchy, Debian sid and openSUSE Tumbleweed in rootless podman containers (`test/distros.sh
+--boxes`, findings 646, 657); NixOS not (a box runs its programs from `/usr/bin`). The binary (since
+2026-10-25): Rust 1.99 (edition 2024, `rust-version` 1.85).

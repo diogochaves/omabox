@@ -10,7 +10,7 @@ promise, where omabox (`crates/omabox`, the binary `bin/omabox` is; or a tool) e
 Report a way around any rule below privately, through GitHub's
 [private vulnerability reporting](https://github.com/diogochaves/omabox/security/advisories/new),
 not in a public issue. Say what you ran, what the box reached and your versions (`omabox --version`,
-`Hyprland --version`, `omarchy version`). Only the latest release gets fixes.
+`Hyprland --version`, `omarchy version` or your distribution). Only the latest release gets fixes.
 
 ## What omabox is not
 

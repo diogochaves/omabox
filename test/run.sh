@@ -1938,7 +1938,7 @@ t_unit_layout() {
   check_eq "a package: /usr/bin/omabox -> /usr/lib/omabox/bin/omabox, ROOT /usr/lib/omabox" "$t/usr/lib/omabox" "$(rootof "$t/usr/bin/omabox")"
   mkdir -p "$t/jail/.local/bin"; cp "$b" "$t/jail/.local/bin/omabox"
   check_eq "alone, as ai-jail maps it: ROOT ~/.local" "$t/jail/.local" "$(rootof "$t/jail/.local/bin/omabox")"
-  check_eq "...its help, with no file beside it" "omabox: a contained, invisible Hyprland + Omarchy desktop for agents." "$(XDG_RUNTIME_DIR=$TMP "$t/jail/.local/bin/omabox" help 2>&1 | head -n 1)"
+  check_eq "...its help, with no file beside it" "omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain." "$(XDG_RUNTIME_DIR=$TMP "$t/jail/.local/bin/omabox" help 2>&1 | head -n 1)"
   # VERSION compiled in (A5): a build in a tree whose VERSION differs says its own.
   echo 9.9.9-tree > "$t/co/VERSION"
   check_eq "...and its version, compiled in (a tree's VERSION that differs is not read)" "omabox $(cat "$ROOT/VERSION")" \
@@ -14389,7 +14389,7 @@ t_cli_up() {
   # brief names the box, reload gives its Hyprland the config again; restart-shell on a box with its
   # shell, below.
   cx_env=("HOME=$h") cx_prep="" cx_sed="" cx_check=""
-  cx_want=(rc=0 "out~^You drive omabox box '$U' \\(1920x1080, scale 1\\): a private Omarchy desktop, not the user's\\. " "out~^  none yet \\(omabox -b $U run -d --wait -- APP opens one\\)\$" err=)
+  cx_want=(rc=0 "out~^You drive omabox box '$U' \\(1920x1080, scale 1\\): a private desktop, not the user's\\. " "out~^  none yet \\(omabox -b $U run -d --wait -- APP opens one\\)\$" err=)
   cx_case "brief -b: the box up, no windows" brief -b "$U"
   local reloaded="err~^omabox: box '$U': config reloaded from .*/share/hyprland\\.lua \\(binds, rules and Lua state added since are gone\\)\$"
   cx_want=(rc=0 out= "$reloaded"); cx_case "reload: the box up" reload -b "$U"

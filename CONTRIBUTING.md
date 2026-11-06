@@ -1,14 +1,16 @@
 # Contributing
 
 omabox is young, and it has only run on a couple of machines. You can help without writing any code:
-try it on a setup it has not seen (NVIDIA, another GPU, several monitors, a fresh Omarchy install)
-and say what happened. Bug reports, fixes, tests, docs and ideas are all welcome.
+try it on a setup it has not seen (NVIDIA, another GPU, several monitors, a fresh Omarchy install,
+a distribution with Hyprland 0.56+ other than Arch, Debian sid and openSUSE Tumbleweed) and say what
+happened. Bug reports, fixes, tests, docs and ideas are all welcome.
 
 ## Reporting a problem
 
 Open an issue with:
 
-- `omabox --version`, `Hyprland --version` and your Omarchy version (`omarchy version`);
+- `omabox --version`, `Hyprland --version` and your Omarchy version (`omarchy version`), or without
+  Omarchy your distribution (`/etc/os-release`'s `PRETTY_NAME`);
 - your GPU (`ls -l /sys/class/drm/renderD*/device/driver`);
 - the command you ran and what it printed;
 - for a box that failed or died, its logs: `omabox ls` names it, and `omabox path -b NAME` is where

@@ -10,19 +10,26 @@ The process tree of a box, the repo's layout and where a box keeps its files. Ba
     ├ [systemd --user]         --systemd only (in its own delegated cgroup scope)
     ├ [pipewire, wireplumber]  --audio only (and pipewire-pulse): a null sink, a silent mic
     └ labwc, headless          invisible parent compositor
-      └ Hyprland, nested       Omarchy's default config; screen = a headless output of any size
-        ├ quickshell           the Omarchy shell (not with --no-shell)
+      └ Hyprland, nested       Omarchy's config, or a plain box's own; screen = a headless output of any size
+        ├ quickshell           the Omarchy shell (not with --no-shell), or a plain box's --shell CMD
         └ your app             via `omabox run` (nsenter into the box)
 ```
 
 In interactive mode, labwc is left out: Hyprland runs inside your Hyprland through a single
 Wayland connection.
 
+A box is Omarchy's or plain (`--desktop`; plain where Omarchy is not installed). The same
+`share/hyprland.lua` runs in both: Omarchy's bootstrap, the box HOME's Hyprland modules and toggles
+on Omarchy, `share/plain.lua` (Hyprland's defaults, your keyboard layout, a terminal and a close
+bind) on plain, then what every box needs. A plain box sees an empty `/usr/share/omarchy`, and its
+shell, if any, is the command `--shell` names. `--hyprland DIR` runs another Hyprland version from a
+folder: its libraries first, its `hyprctl` bound over the box's.
+
 | Path | What |
 |---|---|
 | `bin/omabox` | the CLI: a link to `build/omabox`, the binary `install.sh` builds from `crates/omabox` (Rust) |
 | `crates/omabox` | omabox's source (a package builds it with cargo and installs the binary at `bin/omabox`) |
-| `share/` | runs inside the box: session, Hyprland config, shell launcher |
+| `share/` | runs inside the box: session, Hyprland config (`hyprland.lua`, a plain box's `plain.lua`), shell launcher |
 | `tools/pointer`, `tools/keyboard` | virtual pointer and keyboard; `wtype` sends the wrong keys under Hyprland |
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |
 | `tools/peek` | the live view-only window (`omabox peek`) |
