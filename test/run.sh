@@ -11775,7 +11775,6 @@ t_plain() {
   check_match "up --desktop plain --clean --keep clock: refused (no clock of Omarchy's)" "^omabox: up: --keep clock needs Omarchy, and --desktop plain has none of it" \
     "$(ob up "$P-plain2" --desktop plain --clean --keep clock 2>&1)"
   check_match "--desktop takes omarchy, plain or desk" "up: --desktop is omarchy, plain or desk, got dusk" "$(ob up "$P-plain2" --desktop dusk 2>&1)"
-  check_match "--desktop desk: refused until it is finished (#321)" "^omabox: up: --desktop desk: desk boxes are not finished yet" "$(ob up "$P-plain2" --desktop desk 2>&1)"
   check "down" ob down "$B"
   check_fails "box dir gone" test -e "$D"
   check_fails "box HOME gone" test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$B"
@@ -12016,6 +12015,251 @@ t_plain_dms() {
   check_box_safety "$B"
   check "down" ob down "$B"
   check_fails "no box process left" pgrep -f "omabox/$B/"
+}
+
+# DESK_BINDS (#321, finding 700): `python3 -I -c "$DESK_BINDS" LAUNCH HOME BOXHOME`: what in launch.sh's
+# bwrap would bring the host's HOME into a desk box, a line each (none: the guard holds). Its words
+# are read as the shell reads them (RPU_NORM's way), and every mount of a host path in them: --bind,
+# --ro-bind, --dev-bind and their -try forms, an overlay's sources and work dir. Wrong: a source at or
+# above HOME (as written or resolved), a destination above HOME, a mount at HOME but BOXHOME (the box
+# HOME's own folder) bound writable, or not exactly one mount at HOME; or no mount read at all.
+DESK_BINDS='
+import os, shlex, sys
+launch, home, boxhome = sys.argv[1:4]
+text = open(launch, encoding="utf-8", errors="surrogateescape").read()
+w = [x for line in text.splitlines() for x in shlex.split(line, comments=False)]
+two = ("--bind", "--ro-bind", "--bind-try", "--ro-bind-try", "--dev-bind", "--dev-bind-try")
+mounts, srcs, i = [], [], 0
+while i < len(w):
+    o = w[i]
+    if o in two and i + 2 < len(w):
+        mounts.append((o, w[i + 1], w[i + 2])); i += 3
+    elif o == "--overlay-src" and i + 1 < len(w):
+        srcs.append(w[i + 1]); i += 2
+    elif o == "--overlay" and i + 3 < len(w):
+        mounts += [(o, s, w[i + 3]) for s in srcs + [w[i + 1], w[i + 2]]]; srcs = []; i += 4
+    elif o in ("--ro-overlay", "--tmp-overlay") and i + 1 < len(w):
+        mounts += [(o, s, w[i + 1]) for s in srcs]; srcs = []; i += 2
+    else:
+        i += 1
+def norm(p):
+    return "/" + "/".join(x for x in p.split("/") if x not in ("", "."))
+def at_or_above(p, h):
+    p = norm(p)
+    return p == "/" or (norm(h) + "/").startswith(p + "/")
+homes = {norm(home), norm(os.path.realpath(home))}
+at_home = 0
+if not mounts:
+    print("no mount read in " + launch)
+for o, s, d in mounts:
+    if any(at_or_above(s, h) or at_or_above(os.path.realpath(s), h) for h in homes):
+        print(f"{o} {s} {d}: its source is at or above HOME")
+    if norm(d) == norm(home):
+        at_home += 1
+        if o != "--bind" or os.path.realpath(s) != os.path.realpath(boxhome):
+            print(f"{o} {s} {d}: at HOME, and not the box HOME folder {boxhome} bound writable")
+    elif at_or_above(d, home):
+        print(f"{o} {s} {d}: above HOME")
+if mounts and at_home != 1:
+    print(f"{at_home} mounts at HOME {home}: want the box HOME folder alone")
+'
+# desk_guard NAME DIR HOME CACHE [RUNNER...] (#321, S2-S4; finding 700): the suite's guard on a desk
+# box, run before anything of the test's writes in its HOME, which is at HOME's own path. launch.sh
+# mounts nothing of the host's from HOME or above it, and only the box HOME's own folder
+# (CACHE/omabox/NAME/home) at HOME (DESK_BINDS); in the box, HOME is that folder (its device and
+# inode), not the host's HOME; and no entry of the host's HOME is in the box at its path (each one's
+# device and inode, read in the box). DESK_ALLOW (the caller's local): names of HOME's entries left
+# out (the repo, when it is one). RUNNER: how to reach the box's omabox (default this one; a stand-in
+# HOME's caller). Fails (1) when any of its checks failed: the test stops there and takes the box down.
+# shellcheck disable=SC2031 # fail: no()'s count, in the test's own shell (a check's subshell never changes it)
+desk_guard() {
+  local b=$1 d=$2 h=$3 c=$4; shift 4
+  local via=("$@"); [ ${#via[@]} -gt 0 ] || via=("$CLI")
+  local f0=$fail out p n hid bid ids=()
+  out=$(python3 -I -c "$DESK_BINDS" "$d/launch.sh" "$h" "$c/omabox/$b/home" 2>&1) || out="launch.sh not read: $out"
+  check_eq "$b: launch.sh mounts nothing from HOME ($h) or above it, and only the box HOME's folder at it" "" "$out"
+  hid=$(stat -L -c %d:%i "$h" 2>&1); bid=$(stat -L -c %d:%i "$c/omabox/$b/home" 2>&1)
+  check_eq "$b: HOME in the box is the box HOME's folder (device and inode)" "$bid" "$("${via[@]}" run -b "$b" -- stat -L -c %d:%i "$h" 2>&1)"
+  check "$b: ...which is not your HOME" test "$bid" != "$hid"
+  for p in "$h"/* "$h"/.[!.]* "$h"/..?*; do
+    [ -e "$p" ] || [ -L "$p" ] || continue
+    n=${p##*/}
+    [[ " ${DESK_ALLOW:-} " != *" $n "* ]] || continue
+    ids+=("$n" "$(stat -c %d:%i "$p")")
+  done
+  check_eq "$b: none of HOME's $((${#ids[@]} / 2)) entries is in the box (each by device and inode)" "" \
+    "$("${via[@]}" run -b "$b" -- sh -c 'h=$1; shift; while [ $# -ge 2 ]; do i=$(stat -c %d:%i -- "$h/$1" 2>/dev/null) && [ "$i" = "$2" ] && printf "%s\n" "$1"; shift 2; done; true' sh "$h" "${ids[@]}" 2>&1)"
+  [ "$fail" = "$f0" ]
+}
+# re_q TEXT: TEXT as a bash regex matching it literally.
+re_q() { printf '%s' "$1" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g'; }
+
+# #321 step 1 (finding 700): a desk box at your real HOME's path. On the host, your HOME is only read:
+# what the box writes goes to its own folder, which desk_guard proves before anything of the test's
+# writes there. box.json's home; HOME, `cd ~` and the XDG dirs at that path in the box; the repo
+# read-only at its own path in it; path --home, run -d's log, gdb's HOME and log, a shot, all through
+# the box's folder and none in your HOME; down removes the folder and leaves your HOME as it was.
+t_desk_home() {
+  local B=$P-dhome D out err c=${XDG_CACHE_HOME:-$HOME/.cache} top first hid hq dq sp DESK_ALLOW=""
+  hid=$(stat -L -c %d:%i "$HOME")
+  # (the repo up runs from, when ROOT is a checkout in your HOME: it lands over the fake HOME at its
+  # path, and its first folder under HOME is the box HOME's, made on its way)
+  top=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null) || top=""
+  [[ $top == "$HOME"/* ]] || top=""
+  first=${top#"$HOME"/}; first=${first%%/*}
+  [ -z "$top" ] || [ "$HOME/$first" != "$top" ] || DESK_ALLOW=$first
+  out=$(cd "$ROOT" && "$CLI" up "$B" --desktop desk --net isolated 2>&1) ||
+    { no "up --desktop desk" "$out"; ob down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk"
+  D=$(ob path -b "$B")
+  check_eq "box.json: desktop desk, its home your HOME's path" "desk $HOME" "$(jq -r '"\(.desktop) \(.home)"' "$D/box.json")"
+  # The guard first: nothing below writes in the box HOME until it is known to be the box's own.
+  desk_guard "$B" "$D" "$HOME" "$c" || { ob down "$B" >/dev/null 2>&1; return; }
+  check_eq "HOME, cd ~ and XDG_CONFIG_HOME's parent in the box: your HOME's path" "$HOME|$HOME|$HOME" \
+    "$(ob run -b "$B" -- sh -c 'echo "$HOME|$(cd ~ && pwd -P)|${XDG_CONFIG_HOME%/.config}"' 2>&1)"
+  check_fails "...no /home/sbx in it" ob run -b "$B" -- test -e /home/sbx
+  if [ -n "$top" ]; then
+    check "the repo readable at its path in the desk HOME ($top)" ob run -b "$B" -- test -r "$top/test/run.sh"
+    check_eq "...the host's (device and inode)" "$(stat -c %d:%i "$top")" "$(ob run -b "$B" -- stat -c %d:%i "$top" 2>&1)"
+    check_fails "...read-only" ob run -b "$B" -- test -w "$top"
+    if [ "$HOME/$first" != "$top" ]; then
+      check "...~/$first on its way is the box HOME's, not yours" \
+        test "$(ob run -b "$B" -- stat -c %d:%i "$HOME/$first" 2>&1)" != "$(stat -c %d:%i "$HOME/$first")"
+    fi
+  else skip "the repo at its path in a desk HOME" "ROOT ($ROOT) is not a checkout in your HOME"; fi
+  # Writes in the box HOME from here on: the guard held.
+  check_eq "path --home: <dir>/home" "$D/home" "$(ob path -b "$B" --home)"
+  ob run -b "$B" -- sh -c 'echo "omabox-desk-$$" > "$1/omabox-321"' sh "$HOME" >/dev/null 2>&1
+  check_match "...a file the box wrote at your HOME's path is there" '^omabox-desk-[0-9]+$' "$(cat "$D/home/omabox-321" 2>&1)"
+  check_fails "...not in your HOME" test -e "$HOME/omabox-321"
+  hq=$(re_q "$HOME") dq=$(re_q "$D")
+  err=$(ob run -b "$B" -d -- sh -c 'echo omabox-desk-log; exec sleep 621' 2>&1 >/dev/null)
+  # (builder B's words, as /home/sbx's were "log: HOST, /home/sbx/run-N.log in the box": the
+  # integrator tightens this to the merged wording)
+  check_match "run -d: its log in the box's folder, at your HOME's path in the box" \
+    "log: $dq/home/run-[0-9]+\.log, $hq/run-[0-9]+\.log in the box\)" "$err"
+  check "...its output in that log" until_ok 5 bash -c "grep -qx omabox-desk-log '$D'/home/run-*.log"
+  check "log run: read through the box's folder" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-desk-log"
+  check_eq "...none of its logs in your HOME" "" "$(cd "$D/home" && for f in run-*.log; do [ ! -e "$HOME/$f" ] || echo "$f"; done)"
+  if command -v gdb >/dev/null; then
+    sp=$(ob run -b "$B" -- pgrep -xn sleep 2>/dev/null) || sp=""
+    check_match "gdb --pid: gdb's HOME the box's, your HOME's path" "(^|"$'\n'")$hq($|"$'\n'")" \
+      "$(ob gdb -b "$B" --pid "${sp:-1}" -- -ex 'shell printenv HOME' 2>&1)"
+    check "gdb --watch" ob gdb -b "$B" --watch
+    check "...its log in the box's folder" until_ok 5 grep -q '^== omabox gdb --watch ' "$D/home/gdb.log"
+    check_fails "...not in your HOME" grep -qs '^== omabox gdb --watch ' "$HOME/gdb.log"
+    check_match "log gdb: read through the box's folder" "== omabox gdb --watch" "$(ob log -b "$B" gdb -n all 2>&1)"
+  else skip "gdb in a desk box" "no gdb here (a box runs the host's)"; fi
+  check "shot" test -s "$(ob shot -b "$B" -o "$TMP/$B.png" 2>/dev/null)"
+  check_box_safety "$B"
+  check "down" ob down "$B"
+  check_fails "the box's folder gone" test -e "$c/omabox/$B"
+  check_fails "box dir gone" test -e "$D"
+  check_eq "your HOME as it was (device and inode)" "$hid" "$(stat -L -c %d:%i "$HOME")"
+  [ -z "$top" ] || check "...the repo in it still there" test -f "$top/test/run.sh"
+  check_fails "no box process left" pgrep -f "omabox/$B/"
+}
+
+# #321 step 1 (finding 700): a desk box on a stand-in HOME (with runtime, cache, state and data dirs of
+# its own), where the test may plant what a HOME has: a marker, a key in .ssh, a picture. What --seed
+# names is in the box at the HOME's path, the rest is not; a mount inside a desk HOME goes in read-only;
+# the stand-in HOME is the same after the box as before. Refused, no box made: the HOME itself, a mount
+# at it, above it and at omabox's own files in it; step 1's --clean, --desk-shell, a jailed caller's
+# desk box and `config desktop desk`. And a mount under a link --seed put in the box HOME, which bwrap
+# would follow out of it: refused, nothing made where it led.
+t_desk_home_standin() {
+  local B=$P-dhs B2=$P-dhs2 base=$TMP/$P-dhs D out rc before fhq
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  mkdir -p "$fh/.ssh" "$fh/Pictures" "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data" "$base/src" "$base/lnk" "$base/target"
+  chmod 700 "$rt" "$fh/.ssh"
+  echo omabox-321-marker > "$fh/marker"; echo "not a key" > "$fh/.ssh/id_test"; printf 'PNG' > "$fh/Pictures/w.png"
+  : > "$fh/.config/omabox/config"
+  echo omabox-321-src > "$base/src/f"
+  ln -s "$base/target" "$base/lnk/l"
+  dh() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  dh_up() { (cd "$base" && dh up "$@" 2>&1); }
+  standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
+  before=$(standin)
+  out=$(dh_up "$B" --desktop desk --net isolated --seed "$fh/Pictures:Pictures" --ro-bind "$base/src:$fh/proj"); rc=$?
+  if [ "$rc" != 0 ]; then no "up --desktop desk on a stand-in HOME" "$out"; dh down "$B" >/dev/null 2>&1; return; fi
+  ok "up --desktop desk on a stand-in HOME"
+  D=$(dh path -b "$B")
+  check_eq "box.json: desktop desk, its home the stand-in's path" "desk $fh" "$(jq -r '"\(.desktop) \(.home)"' "$D/box.json")"
+  desk_guard "$B" "$D" "$fh" "$c" dh || { dh down "$B" >/dev/null 2>&1; return; }
+  check "--seed's Pictures in it, at the HOME's path" dh run -b "$B" -- test -f "$fh/Pictures/w.png"
+  check_fails "...the marker beside it not" dh run -b "$B" -- test -e "$fh/marker"
+  check_fails "...nor .ssh" dh run -b "$B" -- test -e "$fh/.ssh"
+  check_eq "a mount inside the desk HOME (--ro-bind SRC:HOME/proj): there" omabox-321-src "$(dh run -b "$B" -- cat "$fh/proj/f" 2>&1)"
+  check_fails "...read-only" dh run -b "$B" -- test -w "$fh/proj"
+  check "down" dh down "$B"
+  check_fails "the box's folder gone" test -e "$c/omabox/$B"
+  check_eq "the stand-in HOME as it was before the box" "$before" "$(standin)"
+  # Refused before a box is made. (The reasons' words are builder A's: the integrator tightens each
+  # pattern below to the merged wording; each matches only the stable part: the path, desk, the option.)
+  fhq=$(re_q "$fh")
+  check_match "--ro-bind HOME: refused" "refusing to mount $fhq into a box" "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$fh")"
+  check_match "--ro-bind SRC:HOME: refused" "refusing to mount .* at $fhq in a box" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$fh")"
+  check_match "...SRC:above HOME: refused" "refusing to mount .* at $(re_q "$base") in a box" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$base")"
+  check_match "...SRC:HOME/.config/omabox (omabox's own): refused" "refusing to mount .* at $fhq/\.config/omabox in a box" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$fh/.config/omabox")"
+  # (integrator: A's wording; these say the option and desk)
+  check_match "--desktop desk --clean: refused in step 1 (its HOME path carries your login name)" "\-\-clean.*desk|desk.*\-\-clean" \
+    "$(dh_up "$B2" --desktop desk --clean)"
+  check_match "--desktop desk --desk-shell: refused in step 1" "\-\-desk-shell.*desk|desk.*\-\-desk-shell" \
+    "$(dh_up "$B2" --desktop desk --desk-shell)"
+  check_match "a jailed caller's desk box: refused in step 1" "jail.*desk|desk.*jail" \
+    "$(OMABOX_JAIL='{"id": "t321", "roots": []}' dh_up "$B2" --desktop desk --net isolated)"
+  check_fails "...none of them made a box" test -e "$rt/omabox/$B2"
+  out=$(dh config desktop desk 2>&1); rc=$?
+  check "config desktop desk: refused in step 1" test "$rc" != 0
+  check_fails "...not written" grep -q '^desktop=desk' "$fh/.config/omabox/config"
+  # A link in the box HOME's folder on a mount's way (#321's new hazard): --seed copies a folder with a
+  # link `l` to a folder of the test's; a mount at HOME/code/l/x would be made through it, there.
+  out=$(dh_up "$B2" --desktop desk --net isolated --seed "$base/lnk:code" --ro-bind "$base/src:$fh/code/l/x"); rc=$?
+  check "a mount under a link --seed put in the box HOME: up fails" test "$rc" != 0
+  # (integrator: A's wording; "link" is the stable word)
+  check_match "...saying the link" "link" "$out"
+  check_fails "...nothing made where the link led" test -e "$base/target/x"
+  dh down "$B2" >/dev/null 2>&1
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 1 (finding 700): the spike's case. DankMaterialShell keeps its wallpaper by absolute path
+# (session.json's wallpaperPath, $HOME/Pictures/w.png): a desk box, whose HOME is at that path, draws
+# it; a plain box (HOME /home/sbx) given the same files draws DMS's own art. On a stand-in HOME (and
+# runtime, cache, state and data dirs), so nothing of DMS's could reach your HOME whatever the box did.
+t_desk_dms() {
+  command -v dms >/dev/null || { skip "DMS's wallpaper in a desk box" "dms is not installed"; return; }
+  command -v magick >/dev/null || { skip "DMS's wallpaper in a desk box" "no magick to make the wallpaper"; return; }
+  local B=$P-ddms B2=$P-pdms2 base=$TMP/$P-ddms D out teal='#1a8c8c'
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state s=$base/seed
+  mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data" "$s/state" "$s/conf"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"
+  magick -size 1920x1080 "xc:$teal" "$s/w.png"
+  printf '{"wallpaperPath": "%s/Pictures/w.png", "isLightMode": true}\n' "$fh" > "$s/state/session.json"
+  : > "$s/conf/.firstlaunch"   # (no welcome dialog)
+  dm() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  px_is() { [ "$(dm pixel -b "$1" "$2" "$3" 2>/dev/null)" = "$teal" ]; }
+  px_not() { ! px_is "$@"; }
+  local seeds=(--seed "$s/w.png:Pictures/w.png" --seed "$s/state:.local/state/DankMaterialShell" --seed "$s/conf:.config/DankMaterialShell")
+  out=$(cd "$base" && dm up "$B" --desktop desk --net isolated --shell 'dms run' "${seeds[@]}" 2>&1) ||
+    { no "up --desktop desk --shell 'dms run'" "$out"; dm down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk --shell 'dms run', its state seeded"
+  D=$(dm path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" dm || { dm down "$B" >/dev/null 2>&1; return; }
+  check "its bar (dms:bar)" dm wait -b "$B" --timeout 10s layer dms:bar
+  check "its wallpaper, from the HOME path session.json names (bottom left)" until_ok 10 px_is "$B" 100 1000
+  check "...(bottom right)" px_is "$B" 1800 1000
+  check "down" dm down "$B"
+  # The control (the spike's): HOME at /home/sbx, the same files; the wallpaper's path is not there.
+  out=$(cd "$base" && dm up "$B2" --desktop plain --net isolated --shell 'dms run' "${seeds[@]}" 2>&1) ||
+    { no "the control: up --desktop plain --shell 'dms run'" "$out"; dm down "$B2" >/dev/null 2>&1; return; }
+  check "the control, a plain box: its bar" dm wait -b "$B2" --timeout 10s layer dms:bar
+  check "...not the wallpaper (DMS's own art: its path is not in /home/sbx)" holds 3 px_not "$B2" 100 1000
+  check "down" dm down "$B2"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
 }
 
 # finding 122 (nvidia-modprobe -c MINOR for a missing /dev/nvidiaN, -c 255 for /dev/nvidiactl, finding
@@ -14915,6 +15159,8 @@ t_cli_up() {
     slug=$(tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
     # (a plain machine's boxes, #247: goldens of their own, up-plain/, written on one)
     g=$ROOT/test/golden/up$(omarchy_here || echo -plain)/$slug
+    # (a desk box's, #321: the same on either machine, a plain box's at the HOME's path: up-desk/)
+    [[ $slug != up-desktop-desk* ]] || g=$ROOT/test/golden/up-desk/$slug
     # (a connected box's: the host's ephemeral ports, pasta's to forward, and its resolver file)
     eph=$(tr -s '\t ' '-' < /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null) || eph=""
     resolv=$(readlink -f /etc/resolv.conf 2>/dev/null) || resolv=""
@@ -14985,6 +15231,11 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
   cx_case "up --env and --size with a scale" up "$U" --no-shell --net isolated --env RPV=1 --size 1280x720,scale=1.5
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "no_seed": \[$')
   cx_case "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
+  # #321 (finding 700): a desk box, its HOME at the caller's HOME path (the test's own, $h): box.json's
+  # desktop and home; its golden (test/golden/up-desk/) has the box HOME's folder bound there and HOME
+  # and the XDG dirs under it.
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "desktop": "desk",$' "state~^  \"home\": \"$(re_q "$h")\",\$")
+  cx_case "up --desktop desk" up "$U" --net isolated --desktop desk
   # A save whose HOME has a link where --clean writes its wallpaper (finding 461): the PNG is written
   # in the box HOME, never through the link onto the host file it leads to.
   mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
@@ -22501,7 +22752,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's
