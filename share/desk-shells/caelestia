@@ -8,3 +8,5 @@ config .config/caelestia
 state .local/state/caelestia
 # unverified
 idle .config/caelestia/shell.json general.idle.timeouts []
+# unverified: the path of the wallpaper it shows, the file's one line (finding 710)
+images .local/state/caelestia/wallpaper/path.txt

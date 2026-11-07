@@ -317,13 +317,25 @@ fn box_dirs(ctx: &Ctx, all: bool) -> Vec<Vec<u8>> {
 /// is a regular file and not a link, None otherwise. The box writes that dir: a FIFO there would
 /// hang the host's read, a link would read a host file (finding 258).
 pub fn run_read(d: &[u8], file: &str) -> Option<Vec<u8>> {
-    let f = at(d, &format!("run/{file}"));
-    if f.is_symlink() || !f.is_file() {
-        return None;
-    }
     let mut v = Vec::new();
-    File::open(&f).ok()?.take(65536).read_to_end(&mut v).ok()?;
+    open_box_file(&at(d, &format!("run/{file}")))?
+        .take(65536)
+        .read_to_end(&mut v)
+        .ok()?;
     Some(v)
+}
+
+/// P, a file the box can write (its runtime dir, its HOME), opened for the host to read: a link at
+/// P is refused, not followed (O_NOFOLLOW), a FIFO does not hang the open (O_NONBLOCK), and the fd's
+/// own fstat must be a regular file. The check is the open itself, so a box that swaps the file
+/// between a look and the read gains nothing (finding 710; it was a look by path, then an open).
+pub fn open_box_file(p: &Path) -> Option<File> {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC)
+        .open(p)
+        .ok()?;
+    f.metadata().ok()?.is_file().then_some(f)
 }
 
 /// One value from the environment Hyprland's children get (share/hyprland.lua writes it at start).
@@ -355,10 +367,11 @@ pub fn box_home_file(d: &[u8], file: &str) -> Option<PathBuf> {
         .then_some(p)
 }
 
-/// The last N bytes of a file.
+/// The last N bytes of a file of the box's (its HOME's logs), opened as open_box_file opens one:
+/// nothing for a link, a FIFO or anything but a regular file (finding 710).
 pub fn tail(p: &Path, n: u64) -> Vec<u8> {
     use std::io::{Seek, SeekFrom};
-    let Ok(mut f) = File::open(p) else {
+    let Some(mut f) = open_box_file(p) else {
         return Vec::new();
     };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
@@ -772,6 +785,51 @@ mod tests {
         );
         let m = std::fs::symlink_metadata(d.join("run/omabox.mode")).unwrap();
         assert!(m.is_file(), "...the flag a plain file now");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// open_box_file (finding 710): what run_read and tail read of a box's files. A FIFO is not
+    /// waited on, a link to a host file not read (at run/, in the HOME), a regular file read.
+    #[test]
+    fn box_files_open_no_fifo_no_link() {
+        let d = std::env::temp_dir().join(format!("omabox-boxopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        std::fs::create_dir_all(d.join("home")).unwrap();
+        let c = std::ffi::CString::new(d.join("run/fifo").as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a path of ours, NUL-terminated.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        std::fs::write(d.join("host-file"), "host secret\n").unwrap();
+        std::os::unix::fs::symlink(d.join("host-file"), d.join("run/link")).unwrap();
+        std::os::unix::fs::symlink(d.join("host-file"), d.join("home/hyprland.log")).unwrap();
+        std::os::unix::fs::symlink(d.join("run/fifo"), d.join("home/gdb.log")).unwrap();
+        std::fs::write(d.join("run/ok"), "fine\n").unwrap();
+        let db = shell::bytes(&d).to_vec();
+        // (each in a thread: an open that waited on the FIFO would hang; 5 s says so)
+        let (tx, rx) = std::sync::mpsc::channel();
+        let d2 = d.clone();
+        std::thread::spawn(move || {
+            let r = (
+                run_read(&db, "fifo"),
+                run_read(&db, "link"),
+                run_read(&db, "ok"),
+                tail(&d2.join("run/fifo"), 512),
+                tail(&d2.join("home/hyprland.log"), 512),
+                tail(&d2.join("home/gdb.log"), 512),
+                tail(&d2.join("run/ok"), 3),
+            );
+            let _ = tx.send(r);
+        });
+        let r = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a read waited on a FIFO");
+        assert_eq!(r.0, None, "run_read: a FIFO");
+        assert_eq!(r.1, None, "run_read: a link to a host file");
+        assert_eq!(r.2.as_deref(), Some(&b"fine\n"[..]));
+        assert_eq!(r.3, b"", "tail: a FIFO");
+        assert_eq!(r.4, b"", "tail: a link to a host file");
+        assert_eq!(r.5, b"", "tail: a link to a FIFO");
+        assert_eq!(r.6, b"ne\n");
         let _ = std::fs::remove_dir_all(&d);
     }
 

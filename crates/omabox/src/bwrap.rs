@@ -194,6 +194,9 @@ pub struct Bwrap {
     /// desk box's at the user's HOME path), once set_home has them. A bind's destination is checked
     /// against the inside one (refuse_dest), and against links in the host folder (link_in_way).
     home: Option<(Vec<u8>, Vec<u8>)>,
+    /// The destinations of the binds made so far inside the box's HOME (not omabox's own box-dir
+    /// files), each with whether it is a same-path bind (finding 710: nested_in_home).
+    home_dests: Vec<(Vec<u8>, bool)>,
 }
 
 /// The fixed system binds (S3's list of its own): read-only, at their own path.
@@ -222,6 +225,7 @@ impl Bwrap {
             own_roots: own_roots.iter().map(|p| lexical(p)).collect(),
             user_home,
             home: None,
+            home_dests: Vec::new(),
         })
     }
 
@@ -258,6 +262,36 @@ impl Bwrap {
             }
         }
         None
+    }
+
+    /// Why DEST (for SRC) would be mounted inside an earlier bind's destination in the box's HOME
+    /// (finding 710): bwrap reaches it through that mount, and so through any link in the folder it
+    /// mounted, which refuse_dest and link_in_way (the HOME's host folder only) never see. Allowed
+    /// only where both are same-path binds and DEST is its own resolved path on the host (a repo's git
+    /// dir, a toolchain under a mounted folder): the box then resolves it as the host does.
+    fn nested_in_home(&self, src: &[u8], dest: &[u8]) -> Option<Vec<u8>> {
+        let d = lexical(dest);
+        let same_ok = || {
+            lexical(src) == d
+                && std::fs::canonicalize(crate::shell::path(&d))
+                    .is_ok_and(|c| crate::shell::bytes(&c) == d.as_slice())
+        };
+        self.home_dests
+            .iter()
+            .find(|(o, same)| d.starts_with(&cat!(o, "/")) && !(*same && same_ok()))
+            .map(|(o, _)| o.clone())
+    }
+
+    /// DEST, mounted for SRC: kept when it is inside the box's HOME and SRC is not the box dir's.
+    fn note_home_dest(&mut self, src: &[u8], dest: &[u8]) {
+        let Some((_, inside)) = self.home.as_ref() else {
+            return;
+        };
+        let (s, d) = (lexical(src), lexical(dest));
+        let own = s == self.own || s.starts_with(&cat!(self.own, "/"));
+        if !own && d.starts_with(&cat!(inside, "/")) {
+            self.home_dests.push((d, s == lexical(dest)));
+        }
     }
 
     pub fn into_args(self) -> Vec<Vec<u8>> {
@@ -326,11 +360,22 @@ impl Bwrap {
                 ")"
             )));
         }
+        let own = s == self.own || s.starts_with(&cat!(self.own, "/"));
+        if let Some(outer) = (!own).then(|| self.nested_in_home(src, dest)).flatten() {
+            return Err(Refused(cat!(
+                "refusing to mount at ",
+                dest,
+                " in a box: it is inside another mount in the box HOME (",
+                outer,
+                "), reached through that folder's links; omabox does not mount one inside another there (mount it elsewhere, or mount the folder above it)"
+            )));
+        }
         Ok(())
     }
 
     fn push_bind(&mut self, how: &[u8], src: &[u8], dest: &[u8]) -> Result<(), Refused> {
         self.check_bind(src, dest)?;
+        self.note_home_dest(src, dest);
         self.args.push(how.to_vec());
         self.args.push(src.to_vec());
         self.args.push(dest.to_vec());
@@ -480,6 +525,7 @@ impl Bwrap {
             return Err(Refused(cat!("refusing to overlay ", p, " in a box: ", why)));
         }
         self.check_bind(p, p)?;
+        self.note_home_dest(p, p);
         for w in [b"--overlay-src".as_slice(), p, b"--tmp-overlay", p] {
             self.args.push(w.to_vec());
         }
@@ -826,6 +872,56 @@ mod tests {
             assert!(b.user_ro(b"/usr/share", dest).is_err(), "{dest:?}");
         }
         assert!(b.tmp_overlay(b"/home/u").is_err());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    // Finding 710: a destination inside an earlier bind's in the box HOME is refused (bwrap would
+    // reach it through the links in that mounted folder), but for same-path binds of a path that
+    // resolves to itself (a repo's git dir); the box dir's own (a jail's covers) are not checked;
+    // outside the HOME, nesting is as it was.
+    #[test]
+    fn no_bind_inside_another_in_the_home() {
+        let base = std::env::temp_dir().join(format!("omabox-bwrap-nest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let host = base.join("boxhome");
+        let user = base.join("u");
+        std::fs::create_dir_all(&host).unwrap();
+        std::fs::create_dir_all(user.join("code/repo/.git/worktrees/w")).unwrap();
+        std::fs::create_dir_all(user.join("fonts")).unwrap();
+        std::os::unix::fs::symlink(user.join("code/repo"), user.join("code/lnk")).unwrap();
+        let hb = crate::shell::bytes(&host).to_vec();
+        let ub = crate::shell::bytes(&user).to_vec();
+        let d = b"/run/user/1000/omabox/b";
+        let mut b = Bwrap::new(RT, d, vec![hb.clone()], Vec::new()).unwrap();
+        b.set_home(&hb, &ub).unwrap();
+        let at = |r: &str| cat!(ub, "/", r);
+        // A font folder at its place, then a --ro-bind inside it: refused, saying why.
+        b.checked_ro(b"/usr/share/fonts", &at(".local/share/fonts"))
+            .unwrap();
+        let e = b
+            .user_ro(b"/usr/share", &at(".local/share/fonts/x"))
+            .unwrap_err();
+        assert!(
+            crate::exit::contains(&e.0, b"it is inside another mount in the box HOME"),
+            "{}",
+            String::from_utf8_lossy(&e.0)
+        );
+        assert!(b.tmp_overlay(&at(".local/share/fonts/y")).is_err());
+        // The repo at its path, its git dir inside it at its own path: fine.
+        let repo = at("code/repo");
+        b.user_ro(&repo, &repo).unwrap();
+        let gd = at("code/repo/.git/worktrees/w");
+        assert!(b.user_ro(&gd, &gd).is_ok());
+        // ...a remapped one, or one whose path is not its own resolved one, inside it: refused.
+        assert!(b.user_ro(b"/usr/share", &at("code/repo/x")).is_err());
+        assert!(b.user_ro(&at("fonts"), &at("code/repo/.git/f")).is_err());
+        // The box dir's own (a jail's cover) inside a mount: fine. Outside the HOME: as before.
+        assert!(
+            b.checked_ro(b"/run/user/1000/omabox/b/cover-dir", &at("code/repo/.git"))
+                .is_ok()
+        );
+        assert!(b.user_ro(b"/usr/share", b"/srv/a").is_ok());
+        assert!(b.user_ro(b"/usr/share/fonts", b"/srv/a/b").is_ok());
         std::fs::remove_dir_all(&base).unwrap();
     }
 

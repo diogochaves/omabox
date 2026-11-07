@@ -6,3 +6,6 @@ unit dms.service
 config .config/DankMaterialShell
 state .local/state/DankMaterialShell
 layer dms:bar
+# Its wallpaper (finding 710): session.json's wallpaperPath (t_desk_dms); the light and dark ones and
+# the per-monitor maps are names dms 1.6.3 has (its strings), unverified.
+images .local/state/DankMaterialShell/session.json wallpaperPath wallpaperPathLight wallpaperPathDark monitorWallpapers monitorWallpapersLight monitorWallpapersDark

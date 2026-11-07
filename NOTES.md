@@ -14027,6 +14027,48 @@ from them.
     needs no intro. t_desk_wallpaper (a pixel of the desk's colour; it showed nord's own picture
     before) and deskcopy's `omarchy_wallpaper`.
 
+710. **A review of the desk box's host side: what it followed, copied and mounted** (2026-11-07,
+    #321, after findings 701, 704 and 709). An independent review of `--desktop desk` found six
+    places where the host acted on what a box can change. (1) `deskcopy::idle_edit` wrote its temp
+    file (`FILE.omabox-idle`) by path and renamed it into place. A box's save is restored before the
+    copy, so a save holding that name as a link to `~/.bashrc` had the host overwrite it at the next
+    `up --from`; and with no `~/.config/caelestia` on the host, `root()` returns before it clears
+    links, so a save's `.config/caelestia` linked to another of the user's folders had the host
+    rewrite its `shell.json`. The edit now opens each folder of the path from the one above,
+    `O_NOFOLLOW|O_DIRECTORY`, removes whatever is at the temp name (the entry, never its target),
+    makes the temp file `O_EXCL`, and renames within that folder; a link on the way is said and the
+    edit skipped (`skipped FILE<TAB>its idle edit: ...` in desk_copy). (2) The links omabox makes in a
+    desk HOME (`current/background`, to the copy of the desk's wallpaper) were absolute, so on the
+    host they led into the real HOME: an agent editing the box's wallpaper through the folder
+    `path --home` gives would have written the user's file. They are relative now
+    (`seed::link_target`; a /home/sbx box's stay absolute, its path), and `path --home` says on
+    stderr when that folder holds links into the real HOME (6 folders deep, 20000 entries at most).
+    Omarchy reads `current/background` with `readlink -f`; only `omarchy-theme-bg-next`'s plain
+    `readlink` compares it, and starts its cycle over. (3) Any folder in HOME a copied file named
+    (`nautilus ~/Downloads` in a bind, a screenshot folder in a shell's settings) had its top-level
+    pictures copied in. Only the wallpapers a desk shows come in now: a profile's
+    `images FILE [KEY...]` (DMS's `wallpaperPath`, verified, and the light, dark and per-monitor names
+    dms 1.6.3 has; Caelestia's `wallpaper/path.txt` and Noctalia's keys, unverified), read only in a
+    file the copy brought and without following a link; the config's `swww`, `swaybg` and
+    `hyprpaper` arguments and `hyprpaper.conf` (a picture each); a folder only by a profile key.
+    (4) A part's cap only skipped files: the walk went on, made every folder, and listed each file.
+    It now stops the part with one line (`DIR/...<TAB>N more not walked: ...`), caps the entries a
+    part looks at (4 per file it may copy: a tree of empty folders), reads at most 10000 names a
+    folder, and ends the whole copy at 30 s; a hyprland.lua or required module a cap left unwalked
+    fails `up` as a skipped one does. (5) `link_in_way` looked at the HOME's host folder only; a
+    destination inside an earlier bind there (a desk font folder, a plugin, the repo) is reached by
+    bwrap through that mounted folder's links, past refuse_dest. Such a bind is refused now, but for
+    same-path binds of a path that is its own resolved path (a repo's git dir) and the box dir's own
+    files (a jail's covers). (6) `boxes::run_read` looked at a file in the box's runtime dir, then
+    opened it by path; `boxes::tail` (gdb.log, labwc.log, hyprland.log) did not look. A box swapping
+    in a FIFO between look and open hung the host's read; a link had a host file's bytes read. Both
+    open `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC` now and take only what the fd's fstat says is a regular
+    file (`boxes::open_box_file`). Tests: deskcopy's `idle_edit_follows_no_link`, `caps_stop_the_walk`,
+    `named_images_found`, `omarchy_wallpaper`; `real_home_links_found`, `link_target` in
+    `home_links_as_bash`, bwrap's `no_bind_inside_another_in_the_home`, boxes'
+    `box_files_open_no_fifo_no_link`; t_desk_idle_links (both save cases, on a stand-in HOME) and
+    t_desk_wallpaper (the relative link, `path --home`'s warning).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

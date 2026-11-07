@@ -12873,8 +12873,15 @@ t_desk_wallpaper() {
   check_match "up says the folder's pictures copied" "copied into the box's HOME: [0-9]+ files \(.*2 of your wallpapers\)" "$out"
   bg=$H/.config/omarchy/backgrounds/nord
   check "...as files of the box's own" bash -c "[ -f '$bg/a.png' ] && [ -f '$bg/b.png' ] && [ ! -L '$bg' ] && [ ! -L '$bg/b.png' ]"
-  check_eq "the box's current/background: its copy of the desk's pick" "$fh/.config/omarchy/backgrounds/nord/b.png" \
+  # (finding 710: relative, so on the host it leads into the box's folder, never the stand-in HOME)
+  check_eq "the box's current/background: its copy of the desk's pick, a relative link" "../../../../.config/omarchy/backgrounds/nord/b.png" \
     "$(readlink "$H/.local/state/omarchy/current/background")"
+  check_eq "...on the host: the box's copy" "$(readlink -f "$bg/b.png")" "$(readlink -f "$H/.local/state/omarchy/current/background")"
+  check_eq "...path --home: no warning (no link of the box HOME's leads into HOME)" "" "$(dw path -b "$B" --home 2>&1 >/dev/null)"
+  ln -s "$fh/walls/a.png" "$H/planted.png"
+  check_match "...one planted that does: path --home warns, on stderr" "^omabox: path: box '$B''s HOME holds 1 link into your real HOME \(planted\.png -> " \
+    "$(dw path -b "$B" --home 2>&1 >/dev/null)"
+  rm -f "$H/planted.png"
   check "the box shows it" until_ok 15 px_pink
   check "down" dw down "$B"
   check_fails "no box process left" pgrep -f "$rt/omabox/"
@@ -19974,6 +19981,52 @@ t_desk_copy() {
   check_fails "no box process left" pgrep -f "$rt/omabox/"
 }
 
+# finding 710: a desk box's host-side edit of its shell's idle timeouts (Caelestia's profile: its
+# shell.json) never follows a link a save left in the box HOME, restored before the copy. (1) The save's
+# shell.json.omabox-idle a link to the stand-in's .bashrc: the edit makes its own temp file, .bashrc as
+# it was. (2) The host has no ~/.config/caelestia, the save's is a link to another folder of the
+# stand-in's: not followed, said, its shell.json as it was. On a stand-in HOME and XDG dirs; the
+# config names Caelestia in a string it never runs, and the box runs no shell.
+t_desk_idle_links() {
+  local B=$P-dil base=$TMP/$P-dil out S1=$P-dil1 S2=$P-dil2 host
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  host='{"general": {"idle": {"timeouts": [{"timeout": 180}]}}}'
+  rm -rf "$base"
+  mkdir -p "$fh/.config/omabox" "$fh/.config/hypr" "$fh/.config/caelestia" "$fh/.config/x" "$rt" "$c" "$st" "$base/data"
+  chmod 700 "$rt"; : > "$fh/.config/omabox/config"
+  echo 'local shell = "caelestia shell -d" -- named, never run (the test runs no shell)' > "$fh/.config/hypr/hyprland.lua"
+  echo "$host" > "$fh/.config/caelestia/shell.json"; echo "$host" > "$fh/.config/x/shell.json"
+  echo '# the real one' > "$fh/.bashrc"
+  dl() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  out=$(cd "$base" && dl up "$B" --desktop desk --net isolated --no-shell 2>&1) ||
+    { no "up --desktop desk, Caelestia's config copied" "$out"; dl down "$B" >/dev/null 2>&1; return; }
+  check_match "up --desktop desk: Caelestia's idle timeouts off in its copy" "caelestia's own idle timeouts off in the box's ~/\.config/caelestia/shell\.json" "$out"
+  check "a link at the edit's temp name, to .bashrc's path (the box's own view of it)" \
+    dl run -b "$B" -- ln -s "$fh/.bashrc" "$fh/.config/caelestia/shell.json.omabox-idle"
+  check "...saved" dl save "$S1" -b "$B"
+  check "down" dl down "$B"
+  out=$(cd "$base" && dl up "$B" --desktop desk --net isolated --no-shell --from "$S1" 2>&1) ||
+    { no "up --from that save" "$out"; dl down "$B" >/dev/null 2>&1; return; }
+  ok "up --from that save"
+  check_eq "...the stand-in's .bashrc as it was" "# the real one" "$(cat "$fh/.bashrc")"
+  check_eq "...the box's shell.json edited, a file of its own" "[] false" \
+    "$(dl run -b "$B" -- sh -c 'jq -c .general.idle.timeouts "$1"; test -L "$1" && echo true || echo false' sh "$fh/.config/caelestia/shell.json" 2>/dev/null | paste -sd ' ')"
+  check "a folder link in its place, to the stand-in's ~/.config/x" \
+    dl run -b "$B" -- sh -c 'rm -rf "$1/.config/caelestia" && ln -s "$1/.config/x" "$1/.config/caelestia"' sh "$fh"
+  check "...saved" dl save "$S2" -b "$B"
+  check "down" dl down "$B"
+  mv "$fh/.config/caelestia" "$base/caelestia.away"
+  out=$(cd "$base" && dl up "$B" --desktop desk --net isolated --no-shell --from "$S2" 2>&1) ||
+    { no "up --from it, no ~/.config/caelestia on the host" "$out"; mv "$base/caelestia.away" "$fh/.config/caelestia"; dl down "$B" >/dev/null 2>&1; return; }
+  ok "up --from it, no ~/.config/caelestia on the host"
+  mv "$base/caelestia.away" "$fh/.config/caelestia"
+  check_eq "...the stand-in's ~/.config/x/shell.json as it was" "$host" "$(cat "$fh/.config/x/shell.json")"
+  check_match "...said: not followed" "caelestia's own idle timeouts not turned off in the box's ~/\.config/caelestia/shell\.json: a link on its way \(~/\.config/caelestia\), not followed" "$out"
+  check "down" dl down "$B"
+  dl saves rm "$S1" >/dev/null 2>&1; dl saves rm "$S2" >/dev/null 2>&1
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
 # #321 step 2 (finding 701): the desk box's copy on its own (probe desk_copy H [SHELL_CMD]: the copy
 # into H, from the HOME and XDG dirs it is given; no box), on stand-in HOMEs. Refused, nothing copied:
 # a Hyprland config that is a link into a secret store, a hyprland.lua holding a token's shape, a module
@@ -23601,7 +23654,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

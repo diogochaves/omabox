@@ -14,11 +14,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   at it or above it.
   - **The copy:** `up` copies your `~/.config/hypr`, the config and state of the shell you run
     (found by `--shell`, by what your `hyprland.lua` starts, or by its systemd unit), and the
-    wallpapers those name by path, into the box's HOME before `--seed`. Links (stow, home-manager)
+    wallpapers they show (where the shell keeps its wallpaper's path, and what your config's `swww`,
+    `swaybg` or hyprpaper names; nothing else a copied file names), into the box's HOME before
+    `--seed`. Links (stow, home-manager)
     are followed and copied as files, so nothing the box writes reaches yours; a link into a secret
     store, a secret's name or a file that holds a key's shape stays out, and so does what is over
     the caps. `up` says what it left out; box.json's `desk_copy` lists every file. A config the copy
     would refuse fails `up` before any box is made.
+  - **Its files from the host:** `omabox path --home` gives the box HOME's folder as for any box;
+    omabox's own links in it are relative, and `path --home` warns on stderr when the folder holds a
+    link into your real HOME (following one from the host edits your file, not the box's). A mount
+    inside another mount in that HOME (a font folder, the repo) is refused.
   - **Your config runs:** the box's Hyprland loads your `hyprland.lua` as your desk does, your look,
     input and binds with it, omabox's settings over it (the screen and monitors, no red error bar,
     the cursor's buffer). What it starts goes through an autostart policy: idle and lock daemons,
