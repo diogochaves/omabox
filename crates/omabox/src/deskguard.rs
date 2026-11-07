@@ -96,7 +96,9 @@ pub fn checks(ctx: &Ctx, u: &mut Up, _jailed: bool) -> Res<()> {
     if let Some(why) = config_refusal(&hypr_dir(), &shell::env_or_empty("HOME")) {
         return Err(ctx.die(why));
     }
-    Ok(())
+    // What the copy of the desktop would refuse (#321 step 2, finding 709), before the box's folder
+    // is made.
+    crate::deskcopy::precheck(ctx)
 }
 
 /// The idle hold's launcher in the box: omabox-idlehold as a session of its own (the box's pid
