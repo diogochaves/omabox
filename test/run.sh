@@ -15735,7 +15735,8 @@ while i < len(words):
 print("== launch.sh")
 print("\n".join(out))
 b = json.load(open(boxj))
-for k in ("created", "pidns"):
+# (mount_ns: the inodes of the mount namespace of the box and of its owner, new each up)
+for k in ("created", "pidns", "mount_ns"):
     b.pop(k, None)
 if isinstance(b.get("starter"), dict):
     for k in ("pid", "start", "command"):
@@ -15745,7 +15746,8 @@ for k in ("aquamarine", "render", "wayland_screen", "hyprland_version", "quicksh
         b[k] = "X"
 # (written only where eglinfo is, an optional mesa-utils: #414)
 b.pop("client_render", None)
-for m in b.get("mounts") or []:
+# (the dev and inode of each mount and of each helper up checked: the machine and the build)
+for m in (b.get("mounts") or []) + (b.get("helpers") or []):
     for k in ("dev", "ino"):
         if k in m:
             m[k] = "N"
@@ -19950,7 +19952,10 @@ t_desk_copy() {
   dc() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
   standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
   before=$(standin)
-  out=$(cd "$base" && dc up "$B" --desktop desk --net isolated --seed "$base/seed/binds.lua:.config/hypr/binds.lua" 2>&1) ||
+  # (the box starts the shell it guesses, dms, only where DankMaterialShell is installed: elsewhere it
+  # would exit at once and fail up; the guess and what up says of it are the same with --no-shell)
+  local ns=(); command -v dms >/dev/null || ns=(--no-shell)
+  out=$(cd "$base" && dc up "$B" --desktop desk --net isolated "${ns[@]}" --seed "$base/seed/binds.lua:.config/hypr/binds.lua" 2>&1) ||
     { no "up --desktop desk with a desktop to copy" "$out"; dc down "$B" >/dev/null 2>&1; return; }
   ok "up --desktop desk with a desktop to copy"
   check_match "...says what it copied" "omabox: up: your desktop, copied into the box's HOME: 5 files \(2 of ~/\.config/hypr, 2 of the dms shell, 1 of the images they name\); its shell, first guessed: dms \(from unit\)" "$out"
