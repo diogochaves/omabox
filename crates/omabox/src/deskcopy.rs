@@ -893,6 +893,11 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     for rel in &folders {
         w.named(rel, true)?;
     }
+    // 4. On Omarchy's base, the wallpaper the desk shows (its seeding follows no link).
+    if !plan.plain && plan.theme.is_empty() && !plan.stock {
+        w.part(b"your wallpapers".to_vec(), IMAGES);
+        wallpaper(&mut w, plan)?;
+    }
     w.end_part();
     // What up says: the parts copied, the first guess, and what stayed out (box.json has it all).
     // (on Omarchy's base the shell is Omarchy's: no guess for a slot it does not have)
@@ -945,6 +950,133 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         out.extend(cat!("guess ", name, "\t", from, "\n"));
     }
     Ok(shell::strip_nl(&out))
+}
+
+/// The wallpaper an Omarchy desk shows, in a desk box on Omarchy's base (finding 709). Omarchy's
+/// seeding (seed::box_background) follows no link: a ~/.config/omarchy/backgrounds/THEME (or
+/// backgrounds/) that is one is left out, and a current/background that leads anywhere but the
+/// theme or that folder falls back to the theme's first picture. Here, as the rest of the copy: that
+/// folder's top-level images when it is a link, else the one image the link leads to (at its path
+/// in HOME), each through refuse_src and the name check under the images' caps; the box's
+/// current/background then leads to its copy. An intro video beside it stays out (images only).
+fn wallpaper(w: &mut Walk, plan: &SeedPlan) -> Res<()> {
+    let home = w.home.clone();
+    let cur = ".local/state/omarchy/current";
+    let link = cat!(home, "/", cur, "/background");
+    let Ok(raw) = std::fs::read_link(p(&link)) else {
+        return Ok(());
+    };
+    let raw = shell::bytes(&raw).to_vec();
+    // (the theme's own picture: seeding's link to the box's copy of the theme stands)
+    if raw.starts_with(b"/usr/") || crate::exit::contains(&raw, b"/current/theme/") {
+        return Ok(());
+    }
+    let Some(t) = readlink_e(&link) else {
+        return Ok(());
+    };
+    if t.starts_with(b"/usr/") {
+        return Ok(());
+    }
+    let theme = std::fs::read(p(&cat!(home, "/", cur, "/theme.name")))
+        .map(|t| t.split(|&c| c == b'\n').next().unwrap_or_default().to_vec())
+        .unwrap_or_default();
+    let is_link =
+        |x: &[u8]| std::fs::symlink_metadata(p(x)).is_ok_and(|m| m.file_type().is_symlink());
+    let mut to: Option<Vec<u8>> = None;
+    if shell::re_match("^[a-zA-Z0-9][a-zA-Z0-9._-]*$", &theme) {
+        let bgs = cat!(".config/omarchy/backgrounds/", theme);
+        let folder = cat!(home, "/", bgs);
+        let linked = is_link(&cat!(home, "/.config/omarchy/backgrounds")) || is_link(&folder);
+        if linked {
+            wallpaper_folder(w, &folder, &bgs)?;
+        }
+        let inside = readlink_e(&folder).and_then(|f| {
+            t.strip_prefix(cat!(f, "/").as_slice())
+                .filter(|n| !n.contains(&b'/'))
+                .map(<[u8]>::to_vec)
+        });
+        if let Some(n) = inside {
+            // (a folder of its own: seeding copied it and made the link, or its caps left it out)
+            if !linked {
+                return Ok(());
+            }
+            to = Some(cat!(bgs, "/", n));
+        }
+    }
+    let rel = match to {
+        Some(r) => r,
+        None => {
+            let below = [cat!(home, "/"), cat!(w.home_r, "/")]
+                .iter()
+                .find_map(|x| t.strip_prefix(x.as_slice()))
+                .map(<[u8]>::to_vec);
+            match below {
+                Some(rel) if clean_rel(&rel) => {
+                    w.named(&rel, false)?;
+                    rel
+                }
+                _ => {
+                    w.skip(&t, b"your wallpaper, outside your HOME");
+                    return Ok(());
+                }
+            }
+        }
+    };
+    let copied = std::fs::symlink_metadata(p(&cat!(w.h, "/", rel))).is_ok_and(|m| m.is_file());
+    let Some(d) = Dest::new(&cat!(cur, "/background")) else {
+        return Ok(());
+    };
+    if copied {
+        seed::home_link(w.ctx, w.h, &d, &cat!(plan.box_home(), "/", rel))?;
+        w.out.extend(cat!("linked ", d.rel(), "\t", rel, "\n"));
+    }
+    Ok(())
+}
+
+/// The top-level images of FOLDER (a link, or reached through one) into the box at REL, its own
+/// folder. Where it leads goes through follow_why (refuse_src and the names on its way), and each
+/// picture in it too; FOLDER's own path, in ~/.config/omarchy, is the one refuse_src keeps out but
+/// for plugins/ and themes/, and Omarchy's seeding copies it when it is no link.
+fn wallpaper_folder(w: &mut Walk, folder: &[u8], rel: &[u8]) -> Res<()> {
+    let shown = cat!(rel, "/");
+    let Some(f) = readlink_e(folder) else {
+        w.skip(&shown, b"a link that leads nowhere");
+        return Ok(());
+    };
+    if let Some(why) = w.follow_why(&f, &f) {
+        w.skip(&shown, &why);
+        return Ok(());
+    }
+    let mut names: Vec<Vec<u8>> = std::fs::read_dir(p(&f))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
+                .filter(|n| pic_name(n))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    for n in names {
+        let r = cat!(rel, "/", n);
+        if let Some(why) = seed::desk_box_name_refused(&n) {
+            w.skip(&r, why.as_bytes());
+            continue;
+        }
+        let e = cat!(f, "/", n);
+        let Some(t) = readlink_e(&e) else {
+            w.skip(&r, b"a link that leads nowhere");
+            continue;
+        };
+        if let Some(why) = w.follow_why(&e, &t) {
+            w.skip(&r, &why);
+            continue;
+        }
+        match std::fs::metadata(p(&t)) {
+            Ok(m) if m.is_file() => w.file(&t, &r, m.len())?,
+            _ => w.skip(&r, b"not a regular file"),
+        }
+    }
+    Ok(())
 }
 
 /// What copy said, read back from its lines.
@@ -1074,16 +1206,30 @@ mod tests {
 
         /// copy with this HOME (--shell SHELL), what it returned and what it said.
         fn run(&self, shell: &str) -> (Result<String, u8>, String) {
-            let ctx = {
-                let mut c = Ctx::new(b"up", b"/nonexistent".to_vec());
-                c.parsed();
-                c
-            };
-            let plan = SeedPlan {
+            self.run_plan(&SeedPlan {
                 plain: true,
                 desk_box: true,
                 shell_cmd: shell.as_bytes().to_vec(),
                 ..SeedPlan::default()
+            })
+        }
+
+        /// copy on Omarchy's base (after its seeding), the box's HOME at this HOME's path.
+        fn run_omarchy(&self) -> String {
+            self.run_plan(&SeedPlan {
+                desk_box: true,
+                home: self.fh.as_bytes().to_vec(),
+                ..SeedPlan::default()
+            })
+            .0
+            .unwrap()
+        }
+
+        fn run_plan(&self, plan: &SeedPlan) -> (Result<String, u8>, String) {
+            let ctx = {
+                let mut c = Ctx::new(b"up", b"/nonexistent".to_vec());
+                c.parsed();
+                c
             };
             let fh = self.fh.clone();
             let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../share/desk-shells");
@@ -1097,7 +1243,7 @@ mod tests {
                 ("OMABOX_DESK_SHELL_DIR", Some(dir)),
             ];
             let (r, said) = shell::with_env(&vars, || {
-                crate::exit::heard(|| copy(&ctx, &plan, self.bx.as_bytes()))
+                crate::exit::heard(|| copy(&ctx, plan, self.bx.as_bytes()))
             });
             (
                 r.map(|v| String::from_utf8_lossy(&v).into_owned())
@@ -1457,6 +1603,108 @@ mod tests {
         let out = f.run("").0.unwrap();
         assert!(f.real_file("Pictures/c.png"), "{out}");
         assert!(out.ends_with("guess caelestia\tconfig"), "{out}");
+    }
+
+    /// On Omarchy's base, the wallpaper the desk shows (finding 709): a backgrounds folder that is a
+    /// link (Omarchy's seeding leaves it out) copied, the box's current/background to its copy of
+    /// the desk's pick; one elsewhere in HOME copied at its path; a secret's way, a picture outside
+    /// HOME, the theme's own and a plain base: left alone.
+    #[test]
+    fn omarchy_wallpaper() {
+        if !crate::exec::tools_or_skip("omarchy_wallpaper", &["grep", "cp"]) {
+            return;
+        }
+        let cur = ".local/state/omarchy/current";
+        let bg = |f: &Fx| {
+            std::fs::read_link(f.in_box(&format!("{cur}/background")))
+                .map(|l| l.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let desk = |tag: &str| {
+            let f = Fx::new(tag);
+            f.put(".config/hypr/hyprland.lua", LUA);
+            f.put(&format!("{cur}/theme.name"), b"t\n");
+            f
+        };
+        // The folder a link out of ~/.config, the desk's pick its second picture.
+        let f = desk("wp1");
+        f.put("walls/a.png", PNG);
+        f.put("walls/b.jpg", b"\xff\xd8\xff\xe0");
+        f.put("walls/intros/b.mp4", b"video");
+        f.ln(&format!("{}/walls", f.fh), ".config/omarchy/backgrounds/t");
+        f.ln(
+            &format!("{}/walls/b.jpg", f.fh),
+            &format!("{cur}/background"),
+        );
+        let out = f.run_omarchy();
+        for r in ["a.png", "b.jpg"] {
+            assert!(
+                f.real_file(&format!(".config/omarchy/backgrounds/t/{r}")),
+                "{r}: {out}"
+            );
+        }
+        assert!(!f.there(".config/omarchy/backgrounds/t/intros"), "{out}");
+        assert_eq!(
+            bg(&f),
+            format!("{}/.config/omarchy/backgrounds/t/b.jpg", f.fh),
+            "{out}"
+        );
+        // (a plain base: no Omarchy, none of it)
+        let f2 = desk("wp1p");
+        f2.put("walls/b.jpg", b"\xff\xd8\xff\xe0");
+        f2.ln(&format!("{}/walls", f2.fh), ".config/omarchy/backgrounds/t");
+        f2.ln(
+            &format!("{}/walls/b.jpg", f2.fh),
+            &format!("{cur}/background"),
+        );
+        let out = f2.run("").0.unwrap();
+        assert!(!f2.there(".config/omarchy/backgrounds"), "{out}");
+        assert_eq!(bg(&f2), "", "{out}");
+        // Elsewhere in HOME: copied at its path there.
+        let f = desk("wp2");
+        f.put("Pictures/w.png", PNG);
+        f.ln(
+            &format!("{}/Pictures/w.png", f.fh),
+            &format!("{cur}/background"),
+        );
+        let out = f.run_omarchy();
+        assert!(f.real_file("Pictures/w.png"), "{out}");
+        assert_eq!(bg(&f), format!("{}/Pictures/w.png", f.fh), "{out}");
+        // A secret's way, outside HOME, the theme's own: no copy, no link of ours.
+        let f = desk("wp3");
+        f.put(".ssh/w.png", PNG);
+        f.ln(
+            &format!("{}/.ssh/w.png", f.fh),
+            &format!("{cur}/background"),
+        );
+        let out = f.run_omarchy();
+        assert!(!f.there(".ssh"), "{out}");
+        assert!(out.contains("skipped .ssh/w.png\t"), "{out}");
+        assert_eq!(bg(&f), "", "{out}");
+        let f = desk("wp4");
+        f.put("../outside/w.png", PNG);
+        f.ln(
+            &format!("{}/outside/w.png", f.base),
+            &format!("{cur}/background"),
+        );
+        let out = f.run_omarchy();
+        assert!(
+            out.contains(&format!(
+                "skipped {}/outside/w.png\tyour wallpaper, outside your HOME",
+                f.base
+            )),
+            "{out}"
+        );
+        assert_eq!(bg(&f), "", "{out}");
+        let f = desk("wp5");
+        f.put(&format!("{cur}/theme/backgrounds/1.png"), PNG);
+        f.ln(
+            &format!("{}/{cur}/theme/backgrounds/1.png", f.fh),
+            &format!("{cur}/background"),
+        );
+        let out = f.run_omarchy();
+        assert!(!out.contains("linked "), "{out}");
+        assert!(!f.there(cur), "{out}");
     }
 
     /// A desk box's name check: keybinds.lua and session.json go in, a secret's names stay out.
