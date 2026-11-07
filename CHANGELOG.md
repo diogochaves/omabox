@@ -3,7 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.4.0 — 2026-11-07
+
+Your own desktop in a box: `up --desktop desk` runs your Hyprland config, your shell and your look
+at your HOME's path, on a copy of your files, held awake between an agent's steps. Also `window
+--fullscreen` and `--maximize`, which set a window's state instead of toggling it, and `--net host`
+for tools that scan your real LAN. Update.
+
+**Omarchy:** as 1.3, Omarchy 4.5 and, deprecated, 4.0 (dropped in the first release after
+2026-12-04), on Hyprland 0.56.2; 0.57.1 also runs boxes.
 
 ### Added
 - **`up --desktop desk`: your own desktop in a box** ([#321](https://github.com/diogochaves/omabox/issues/321)):
