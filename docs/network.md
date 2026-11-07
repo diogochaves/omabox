@@ -37,6 +37,18 @@ How a box's network, ports and mounts work, in detail. Back to the [README](../R
 - Every box needs `passt` (which `install.sh` installs), and a connected one `/dev/net/tun`. Its own
   network also keeps what runs in it from reaching or taking your host's abstract sockets (a box's
   X11 display used to catch X11 apps started on the host).
+- `--net host` (only by name: never the default, and no `omabox config` key picks it) is for a tool
+  that discovers devices on your LAN, which a connected box cannot test: pasta answers for every
+  address on its subnet, so a scan finds a "device" at each. The box shares your host's network
+  namespace and has no pasta, but keeps its own seat, session bus, runtime dir and HOME. What changes:
+  its servers listen on your host's real ports, so they collide with your services (and other host
+  boxes), and nothing is forwarded (`omabox ports` says `host-net`); it sees your real interfaces
+  (Tailscale, Docker bridges), and its ARP and ICMP reach your LAN; it reaches your abstract sockets,
+  so an X server in it would catch your X11 apps (`--xwayland` is refused; don't start Xvfb there);
+  and protected ports cannot hold for it, so it does not start while `protect-ports` names one. It
+  is refused with `--allow` and `--addr` (isolated's) and inside ai-jail. Not for code you do not
+  trust: that stays `--net isolated`, ai-jail or a VM. Inside a box, `--net host` is that box's
+  network.
 - `--ro-bind DIR:DEST` mounts a dir somewhere else (`--ro-bind ~/nas:/mnt/nas`, to test path
   mapping); DEST cannot be `/`, a system dir, `/run`, `/tmp` itself, `/opt/omabox`, the box HOME, or
   a dir above those. A plugin dir inside `~/.config/omarchy/plugins` is fine (a theme in `themes/` too). A throwaway `run`
