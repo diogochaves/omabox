@@ -144,8 +144,236 @@ pub fn all(dir: &[u8]) -> Result<Vec<Profile>, String> {
         .collect()
 }
 
-/// A desk box's shell, once the box is ready (#321 step 4). Nothing yet.
-pub fn after_ready(_ctx: &Ctx, _u: &Up) -> Res<()> {
+/// parts CMD: the shell command CMD split into its parts (on `&&`, `||`, `;`, `|`, `&`, newlines and
+/// parentheses), each its words with quotes taken off as sh takes them. share/desk-shell.lua's
+/// M.parts, which takes the commands in the box: the two read a command the same way.
+pub fn parts(s: &[u8]) -> Vec<Vec<Vec<u8>>> {
+    let (mut parts, mut words, mut w, mut have) = (Vec::new(), Vec::new(), Vec::new(), false);
+    let n = s.len();
+    let mut i = 0;
+    let word = |words: &mut Vec<Vec<u8>>, w: &mut Vec<u8>, have: &mut bool| {
+        if *have {
+            words.push(std::mem::take(w));
+        }
+        w.clear();
+        *have = false;
+    };
+    while i < n {
+        let c = s[i];
+        match c {
+            b'\'' => {
+                let j = s[i + 1..]
+                    .iter()
+                    .position(|&d| d == b'\'')
+                    .map_or(n, |k| i + 1 + k);
+                w.extend_from_slice(&s[i + 1..j]);
+                have = true;
+                i = j + 1;
+            }
+            b'"' => {
+                i += 1;
+                while i < n && s[i] != b'"' {
+                    if s[i] == b'\\' && i + 1 < n && matches!(s[i + 1], b'\\' | b'"' | b'$' | b'`')
+                    {
+                        i += 1;
+                    }
+                    w.push(s[i]);
+                    i += 1;
+                }
+                have = true;
+                i += 1;
+            }
+            b'\\' => {
+                if i + 1 < n && s[i + 1] != b'\n' {
+                    w.push(s[i + 1]);
+                    have = true;
+                }
+                i += 2;
+            }
+            b';' | b'|' | b'&' | b'\n' | b'(' | b')' => {
+                word(&mut words, &mut w, &mut have);
+                if !words.is_empty() {
+                    parts.push(std::mem::take(&mut words));
+                }
+                i += 1;
+            }
+            _ if c.is_ascii_whitespace() => {
+                word(&mut words, &mut w, &mut have);
+                i += 1;
+            }
+            _ => {
+                w.push(c);
+                have = true;
+                i += 1;
+            }
+        }
+    }
+    word(&mut words, &mut w, &mut have);
+    if !words.is_empty() {
+        parts.push(words);
+    }
+    parts
+}
+
+fn base(w: &[u8]) -> &[u8] {
+    w.rsplit(|&c| c == b'/').next().unwrap_or(w)
+}
+
+/// `A=B`: a variable's assignment, as sh reads one before a command.
+fn assign(w: &[u8]) -> bool {
+    match w.iter().position(|&c| c == b'=') {
+        Some(k) if k > 0 => {
+            (w[0].is_ascii_alphabetic() || w[0] == b'_')
+                && w[..k]
+                    .iter()
+                    .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        }
+        _ => false,
+    }
+}
+
+/// strip WORDS: what a part runs once what only starts it is taken off: `A=B` words, exec, env (its
+/// -i, -u NAME, A=B), setsid and nohup, `uwsm app` / uwsm-app / app2unit (to their --), systemd-run
+/// (to its --); `sh -c` / `bash -c` 'SCRIPT' is SCRIPT's parts, each stripped. desk-shell.lua's
+/// M.strip.
+pub fn strip(words: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
+    let mut i = 0;
+    let opts = |i: &mut usize| {
+        while words
+            .get(*i)
+            .is_some_and(|w| w.first() == Some(&b'-') && w != b"--")
+        {
+            *i += 1;
+        }
+        if words.get(*i).is_some_and(|w| w == b"--") {
+            *i += 1;
+        }
+    };
+    while let Some(w) = words.get(i) {
+        let b = base(w);
+        if assign(w) || b == b"exec" || b == b"nohup" {
+            i += 1;
+        } else if b == b"setsid" {
+            i += 1;
+            while words.get(i).is_some_and(|w| w.first() == Some(&b'-')) {
+                i += 1;
+            }
+        } else if b == b"env" {
+            i += 1;
+            while let Some(e) = words.get(i) {
+                if e == b"-u" || e == b"--unset" {
+                    i += 2;
+                } else if e.first() == Some(&b'-') || assign(e) {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+        } else if b == b"uwsm" && words.get(i + 1).is_some_and(|w| w == b"app") {
+            i += 2;
+            opts(&mut i);
+        } else if b == b"uwsm-app" || b == b"app2unit" {
+            i += 1;
+            opts(&mut i);
+        } else if b == b"systemd-run" {
+            match words[i + 1..].iter().position(|w| w == b"--") {
+                Some(k) => i += k + 2,
+                None => break,
+            }
+        } else if matches!(b, b"sh" | b"bash" | b"dash" | b"zsh")
+            && words.get(i + 1).is_some_and(|f| {
+                f.len() > 1
+                    && f[0] == b'-'
+                    && f[1..].iter().all(|c| c.is_ascii_alphabetic())
+                    && f.contains(&b'c')
+            })
+            && let Some(script) = words.get(i + 2)
+        {
+            return parts(script).iter().flat_map(|p| strip(p)).collect();
+        } else {
+            break;
+        }
+    }
+    let rest = words.get(i..).unwrap_or_default();
+    if rest.is_empty() {
+        Vec::new()
+    } else {
+        vec![rest.to_vec()]
+    }
+}
+
+/// profile_for CMD PROFILES: the profile whose `start` or a `match` a part of CMD begins with, once
+/// stripped (its program by its name, then its words in order, a `{...}` word any one word); a
+/// pattern with no `{...}` before any with one, so a named Quickshell config's own profile wins
+/// over the generic one. desk-shell.lua's M.profile_for, which takes what the box runs.
+pub fn profile_for<'a>(cmd: &[u8], profiles: &'a [Profile]) -> Option<&'a Profile> {
+    let runs: Vec<Vec<Vec<u8>>> = parts(cmd).iter().flat_map(|p| strip(p)).collect();
+    let wild = |w: &[u8]| w.len() >= 2 && w[0] == b'{' && w[w.len() - 1] == b'}';
+    let fits = |argv: &[Vec<u8>], pat: &[&[u8]]| {
+        argv.len() >= pat.len()
+            && !pat.is_empty()
+            && base(&argv[0]) == pat[0]
+            && pat[1..]
+                .iter()
+                .zip(&argv[1..])
+                .all(|(p, a)| wild(p) || p == a)
+    };
+    for want_wild in [false, true] {
+        for p in profiles {
+            let pats = (!p.start.is_empty())
+                .then_some(&p.start)
+                .into_iter()
+                .chain(&p.matches);
+            for pat in pats {
+                let pw: Vec<&[u8]> = pat
+                    .split(|c| c.is_ascii_whitespace())
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                if pw.iter().any(|w| wild(w)) != want_wild {
+                    continue;
+                }
+                if runs.iter().any(|argv| fits(argv, &pw)) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A desk box's shell, once the box is ready (#321 step 4, finding 703): what its slot runs, said
+/// (the profile it is, by omabox's own reading of the command the box wrote). A config that never
+/// said what it started (no desk-shell.lua ran: ready took it for no shell) leaves the box with
+/// none: box.json's shell false, so every command takes it for one with none, as a plain box
+/// without --shell. `up --shell CMD` and --no-shell: nothing to do.
+pub fn after_ready(ctx: &Ctx, u: &Up) -> Res<()> {
+    use crate::shellnote::{DESK_SHELL_CMD, DeskSlot, desk_slot, slot_cmd};
+    if !u.shell || !u.shell_cmd.is_empty() {
+        return Ok(());
+    }
+    if crate::boxes::run_read(&ctx.d, DESK_SHELL_CMD).is_none() {
+        let _ = crate::mon::jq_box_json(ctx, crate::jq::Args::new(&[".shell = false"]));
+        return Ok(());
+    }
+    let cmd = slot_cmd(ctx);
+    let raw = crate::boxes::run_read(&ctx.d, DESK_SHELL_CMD).unwrap_or_default();
+    let name = all(&dir())
+        .ok()
+        .and_then(|ps| profile_for(&raw, &ps).map(|p| p.name.clone()));
+    let from = match desk_slot(ctx) {
+        DeskSlot::Guess => "guessed: your config starts none omabox knows",
+        _ => "from your config",
+    };
+    crate::exit::say(cat!(
+        "box '",
+        ctx.name,
+        "': its shell: ",
+        cmd,
+        " (",
+        name.map(|n| cat!(n, ", ")).unwrap_or_default(),
+        from,
+        ")"
+    ));
     Ok(())
 }
 
@@ -219,6 +447,7 @@ mod tests {
                 b"dms",
                 b"noctalia",
                 b"quickshell",
+                b"quickshell-path",
                 b"waybar"
             ]
         );
@@ -232,4 +461,67 @@ mod tests {
         assert_eq!(qs.matches, w(&["qs -c {name}", "quickshell -c {name}"]));
         assert_eq!(qs.config, w(&[".config/quickshell/{name}"]));
     }
+
+    /// #321 step 4: which profile a command a config starts is, once what only starts it is off;
+    /// as share/desk-shell.lua reads it (t_unit_desk_shell_lua runs the same cases there).
+    #[test]
+    fn profile_match() {
+        let d = concat!(env!("CARGO_MANIFEST_DIR"), "/../../share/desk-shells");
+        let ps = all(d.as_bytes()).unwrap();
+        let of = |c: &str| {
+            profile_for(c.as_bytes(), &ps).map(|p| String::from_utf8_lossy(&p.name).into_owned())
+        };
+        for (cmd, want) in PROFILE_CASES {
+            assert_eq!(of(cmd).as_deref(), *want, "{cmd:?}");
+        }
+        // The words as sh takes them.
+        let words = |c: &str| -> Vec<Vec<String>> {
+            parts(c.as_bytes())
+                .iter()
+                .map(|p| {
+                    p.iter()
+                        .map(|w| String::from_utf8_lossy(w).into_owned())
+                        .collect()
+                })
+                .collect()
+        };
+        assert_eq!(
+            words(r#"a 'b c'"d\"e" f\ g && h|i;j"#),
+            vec![
+                vec!["a", r#"b cd"e"#, "f g"],
+                vec!["h"],
+                vec!["i"],
+                vec!["j"]
+            ]
+        );
+    }
+
+    /// profile_match's cases (t_unit_desk_shell_lua runs them, and more, through desk-shell.lua).
+    const PROFILE_CASES: &[(&str, Option<&str>)] = &[
+        ("dms run", Some("dms")),
+        ("env A=1 dms run", Some("dms")),
+        ("A=1 B=2 exec dms run --session", Some("dms")),
+        ("uwsm app -- dms run", Some("dms")),
+        ("uwsm-app -- dms run", Some("dms")),
+        ("app2unit -- waybar", Some("waybar")),
+        ("systemd-run --user --scope -- waybar -c x", Some("waybar")),
+        ("/usr/bin/waybar", Some("waybar")),
+        ("setsid -f qs -c noctalia-shell", Some("noctalia")),
+        ("nohup quickshell -c noctalia-shell &", Some("noctalia")),
+        ("qs -c caelestia", Some("caelestia")),
+        ("caelestia shell -d", Some("caelestia")),
+        ("qs -c mybar", Some("quickshell")),
+        ("qs -p /home/me/bar", Some("quickshell-path")),
+        ("sh -c 'sleep 1 && dms run'", Some("dms")),
+        ("bash -lc \"env -u X waybar\"", Some("waybar")),
+        ("sleep 2; waybar", Some("waybar")),
+        ("echo dms run", None),
+        ("dms", None),
+        ("dmsx run", None),
+        ("qs", None),
+        ("qs -c", None),
+        ("hypridle", None),
+        ("systemd-run --user waybar", None),
+        ("", None),
+    ];
 }

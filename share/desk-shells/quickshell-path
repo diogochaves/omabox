@@ -1,0 +1,7 @@
+# A Quickshell config run by its path (#321): `qs -p PATH`, `quickshell -p PATH`. `key value` lines,
+# crates/omabox/src/deskshell.rs says the keys; {path} is any one word. No config line: the path is
+# the user's own folder, wherever it is.
+match qs -p {path}
+match quickshell -p {path}
+match qs --path {path}
+match quickshell --path {path}

@@ -3,7 +3,7 @@
 //! and started again by its launcher (#303, finding 408). As bin/omabox's shell_note, shell_state,
 //! shell_crashes, shell_relaunches and what they call.
 
-use crate::boxes::{BoxSys, RealBox, box_home_file, meta, run_read};
+use crate::boxes::{BoxSys, RealBox, box_home_file, meta, run_read, slot_shell};
 use crate::cat;
 use crate::exec::{ErrTo, Out};
 use crate::exit::{Ctx, Res, say};
@@ -51,10 +51,10 @@ const SLOT_PIDS_SH: &str = r#"/usr/bin/grep -lsFxz -e "OMABOX_SHELL_SLOT=$1" /pr
     /usr/bin/grep -qsz '^__QUICKSHELL_CRASH_DUMP_PID=' "$f" || { f=${f#/proc/}; echo "${f%/environ}"; }
   done"#;
 
-/// shell_slot: a plain box's shell's slot (SHELL_SLOT; letters, digits, `.`, `_`, `-`), None on an
-/// Omarchy box or one whose shell.sh wrote none.
+/// shell_slot: a plain or desk box's shell's slot (SHELL_SLOT; letters, digits, `.`, `_`, `-`), None
+/// on an Omarchy box or one whose shell.sh wrote none.
 pub fn shell_slot(ctx: &Ctx) -> Option<Vec<u8>> {
-    if meta(&ctx.d, "shell_cmd").0.is_empty() {
+    if !slot_shell(&ctx.d) {
         return None;
     }
     let s = strip_nl(&run_read(&ctx.d, SHELL_SLOT)?);
@@ -211,6 +211,61 @@ impl Report {
     }
 }
 
+/// The box's runtime dir's files a desk box's slot is filled from (#321 step 4, finding 703), which
+/// share/desk-shell.lua writes: the command the slot runs (share/shell.sh reads it), and how it got
+/// it (`config`, `guess` or `none`). The box's own files: read as such.
+pub const DESK_SHELL_CMD: &str = "omabox-shell.cmd";
+pub const DESK_SHELL_FROM: &str = "omabox-desk-shell";
+
+/// What filled a desk box's slot, as its omabox-desk-shell says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeskSlot {
+    /// The user's config started it (desk-shell.lua's take).
+    Config,
+    /// Nothing in the config did: the guess `up` made (box.json shell_guess), by its profile's start.
+    Guess,
+    /// Nothing did, and there was no guess.
+    None,
+    /// Nothing said yet (or not one of those words).
+    Unsaid,
+}
+
+/// desk_slot: what filled the box's slot (DeskSlot), from its runtime dir.
+pub fn desk_slot(ctx: &Ctx) -> DeskSlot {
+    match run_read(&ctx.d, DESK_SHELL_FROM)
+        .map(|v| strip_nl(&v))
+        .as_deref()
+    {
+        Some(b"config") => DeskSlot::Config,
+        Some(b"guess") => DeskSlot::Guess,
+        Some(b"none") => DeskSlot::None,
+        _ => DeskSlot::Unsaid,
+    }
+}
+
+/// seen_cmd RAW: a slot's command as the box wrote it, fit to show: one line (a newline in it a
+/// space, the last one dropped), at most 512 bytes, control characters shown (term::plain_cap).
+pub fn seen_cmd(raw: &[u8]) -> Vec<u8> {
+    let one: Vec<u8> = strip_nl(raw)
+        .iter()
+        .map(|&c| if c == b'\n' { b' ' } else { c })
+        .collect();
+    crate::term::plain_cap(&one, 512)
+}
+
+/// slot_cmd: what the box's slot runs, to show: `up --shell CMD`'s (box.json shell_cmd), else a desk
+/// box's from its runtime dir (seen_cmd); empty: none (an Omarchy box, a desk whose config started
+/// none, or not yet).
+pub fn slot_cmd(ctx: &Ctx) -> Vec<u8> {
+    let c = meta(&ctx.d, "shell_cmd").0;
+    if !c.is_empty() || !slot_shell(&ctx.d) {
+        return c;
+    }
+    run_read(&ctx.d, DESK_SHELL_CMD)
+        .map(|v| seen_cmd(&v))
+        .unwrap_or_default()
+}
+
 /// The box's runtime dir's file that names a plain box's shell's Quickshell configs (#247), a folder
 /// a line (ready's shell_configs_note; share/crash-dialog.sh reads it too).
 pub const SHELL_CONFIGS: &str = "omabox-shell.configs";
@@ -223,7 +278,7 @@ fn shell_config_dirs(ctx: &Ctx) -> Vec<Vec<u8>> {
         let w = strip_nl(&squeeze(v));
         w.strip_suffix(b"/").unwrap_or(&w).to_vec()
     };
-    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+    if slot_shell(&ctx.d) {
         return run_read(&ctx.d, SHELL_CONFIGS)
             .unwrap_or_default()
             .split(|&c| c == b'\n')
@@ -1068,6 +1123,18 @@ mod tests {
         w("run/omabox-shell.slot", "40-1\n");
         w("box.json", r#"{"shell": true}"#);
         assert_eq!(shell_slot(&ctx), None, "an Omarchy box: no slot");
+        // A desk box (#321 step 4): its shell, the one its config starts, in the slot, with no
+        // shell_cmd; up --no-shell (or a config that started none, after_ready): no slot.
+        w("box.json", r#"{"shell": true, "desktop": "desk"}"#);
+        assert_eq!(
+            shell_slot(&ctx),
+            Some(b"40-1".to_vec()),
+            "a desk box: its slot"
+        );
+        w("box.json", r#"{"shell": false, "desktop": "desk"}"#);
+        assert_eq!(shell_slot(&ctx), None, "a desk box with no shell: none");
+        w("box.json", r#"{"shell": false, "desktop": "plain"}"#);
+        assert_eq!(shell_slot(&ctx), None, "a plain box with no --shell: none");
         // A crash dialog with no report yet: the shell's by its slot (its parent gone, PPid 1).
         w("box.json", r#"{"shell": true, "shell_cmd": "x"}"#);
         let dl = |env: &'static [u8]| {
@@ -1096,6 +1163,55 @@ mod tests {
             }),
             "...another slot's (an old start's): not"
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // #321 step 4: what a desk box's slot runs, as the box wrote it, shown one line, bounded, plain;
+    // `up --shell CMD`'s (box.json) over it; how it got there, only by its three words.
+    #[test]
+    fn seen_cmd_plain_and_bounded() {
+        assert_eq!(seen_cmd(b"dms run\n"), b"dms run");
+        assert_eq!(seen_cmd(b"a\nb\n\n"), b"a b");
+        assert_eq!(seen_cmd(b"qs \x1b[31m-c x"), b"qs ?[31m-c x");
+        let long = seen_cmd(&[b'x'; 600]);
+        assert!(long.starts_with(&[b'x'; 512]), "the first 512 bytes kept");
+        assert!(long.ends_with(b"... (88 bytes more)"), "...the rest said");
+        let d = std::env::temp_dir().join(format!("omabox-dslot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        let w = |p: &str, t: &str| std::fs::write(d.join(p), t).unwrap();
+        let mut ctx = Ctx::new(b"ls", shell::bytes(&std::env::temp_dir()).to_vec());
+        ctx.parsed();
+        ctx.d = shell::bytes(&d).to_vec();
+        w("box.json", r#"{"shell": true, "desktop": "desk"}"#);
+        assert_eq!(slot_cmd(&ctx), b"", "nothing in the slot yet");
+        assert_eq!(desk_slot(&ctx), DeskSlot::Unsaid);
+        w("run/omabox-shell.cmd", "qs -p /x\nbar\n");
+        w("run/omabox-desk-shell", "config\n");
+        assert_eq!(slot_cmd(&ctx), b"qs -p /x bar", "the box's file, one line");
+        assert_eq!(desk_slot(&ctx), DeskSlot::Config);
+        for (t, s) in [
+            ("guess\n", DeskSlot::Guess),
+            ("none", DeskSlot::None),
+            ("config x\n", DeskSlot::Unsaid),
+            ("", DeskSlot::Unsaid),
+        ] {
+            w("run/omabox-desk-shell", t);
+            assert_eq!(desk_slot(&ctx), s, "{t:?}");
+        }
+        w(
+            "box.json",
+            r#"{"shell": true, "desktop": "desk", "shell_cmd": "dms run"}"#,
+        );
+        assert_eq!(slot_cmd(&ctx), b"dms run", "up --shell's over the file");
+        w("box.json", r#"{"shell": false, "desktop": "desk"}"#);
+        assert_eq!(
+            slot_cmd(&ctx),
+            b"",
+            "no shell: none, whatever the file says"
+        );
+        w("box.json", r#"{"shell": true}"#);
+        assert_eq!(slot_cmd(&ctx), b"", "an Omarchy box: none");
         let _ = std::fs::remove_dir_all(&d);
     }
 

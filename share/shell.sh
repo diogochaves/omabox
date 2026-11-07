@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Starts (or restarts) the box's shell inside a box: Omarchy's, or a plain box's `up --shell CMD`.
+# Starts (or restarts) the box's shell inside a box: Omarchy's, a plain box's `up --shell CMD`, or a
+# desk box's own (#321).
 # Launched by Hyprland, so it has the session env.
 # The file watcher stays off so a screenshot never catches a half-reloaded shell; `omabox restart-shell`
 # is the explicit reload.
@@ -14,7 +15,17 @@ pidfile=$XDG_RUNTIME_DIR/omabox-shell.pid
 # counts the shell gone when nothing of the slot is left (the slot is in omabox-shell.slot). The last
 # start's slot and the tree of each of its processes (`dms run` starts quickshell) are stopped, TERM
 # then KILL after 5 s. `up --quickshell`'s build is `qs` and `quickshell` on PATH.
-if [ -n "${OMABOX_SHELL_CMD:-}" ]; then
+cmd=${OMABOX_SHELL_CMD:-}
+# A desk box (#321, finding 703) runs the shell its user's config starts in the same slot: the command
+# share/desk-shell.lua took from the config (or its guess), in omabox-shell.cmd. Started from there by
+# desk-shell.lua (`take`) and by `restart-shell` (its token); never by hyprland.lua's own start, which
+# has no word: the slot is the config's to fill, and starting it twice would stop the one just taken.
+# Nothing in the file (the config started none): nothing to start. `up --shell CMD` overrides it.
+if [ "${OMABOX_DESKTOP:-}" = desk ] && [ -z "$cmd" ]; then
+  [ -z "${1:-}" ] || cmd=$(cat "$XDG_RUNTIME_DIR/omabox-shell.cmd" 2>/dev/null) || cmd=""
+  [ -n "$cmd" ] || exit 0
+fi
+if [ -n "$cmd" ]; then
   slotfile=$XDG_RUNTIME_DIR/omabox-shell.slot
   tree() { local c; for c in $(pgrep -P "$1"); do tree "$c"; done; echo "$1"; }
   # The processes of slot $1, crash dialogs and all (this script is none: Hyprland started it).
@@ -45,7 +56,7 @@ if [ -n "${OMABOX_SHELL_CMD:-}" ]; then
   slot=$$-${EPOCHREALTIME//[!0-9]/}
   echo "$slot" > "$slotfile"
   echo $$ > "$pidfile"
-  OMABOX_SHELL_SLOT=$slot exec sh -c "$OMABOX_SHELL_CMD" >> "$HOME/shell.log" 2>&1
+  OMABOX_SHELL_SLOT=$slot exec sh -c "$cmd" >> "$HOME/shell.log" 2>&1
 fi
 # The Omarchy shell only: its recorded pid and any other instance of its config, which the new one's
 # `-n` would meet ("An instance of this configuration is already running", finding 248). A quickshell

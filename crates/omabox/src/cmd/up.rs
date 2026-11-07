@@ -719,6 +719,12 @@ fn plain_shell(ctx: &Ctx, u: &mut Up) -> Res<()> {
         return Ok(());
     }
     plain_refusals(ctx, u)?;
+    // A desk box (#321 step 4, finding 703) has the shell its user's config starts, in the slot
+    // (share/desk-shell.lua), unless --no-shell; --shell CMD runs another in its place, and
+    // --quickshell is the build either finds as `qs`.
+    if u.desktop == Desktop::Desk {
+        return Ok(());
+    }
     if u.shell_cmd.is_empty() {
         if !u.quickshell.is_empty() {
             return Err(ctx.usage_die(
@@ -1988,18 +1994,26 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
         ));
     }
     if u.has("shell") && m("shell_cmd") != u.shell_cmd {
+        // (a desk box's, #321 step 4: what its slot runs from its config, when it runs one)
+        let desk_cmd = if Desktop::of_box(&m("desktop")) == Desktop::Desk {
+            crate::shellnote::slot_cmd(ctx)
+        } else {
+            Vec::new()
+        };
+        let theirs = if !m("shell_cmd").is_empty() {
+            m("shell_cmd")
+        } else if !desk_cmd.is_empty() {
+            cat!(crate::term::plain_cap(&desk_cmd, 200), ", from your config")
+        } else if crate::boxes::plain_like(&ctx.d) {
+            b"none".to_vec()
+        } else {
+            b"Omarchy's".to_vec()
+        };
         diff.push(cat!(
             "--shell ",
             u.shell_cmd,
             " (its shell is ",
-            or(
-                m("shell_cmd"),
-                if crate::boxes::plain_like(&ctx.d) {
-                    "none"
-                } else {
-                    "Omarchy's"
-                }
-            ),
+            theirs,
             ")"
         ));
     }

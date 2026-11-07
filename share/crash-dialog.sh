@@ -16,12 +16,18 @@ pid=${1:-} dump=${2:-}
 dir=${XDG_CACHE_HOME:-$HOME/.cache}/quickshell/crashes
 want=$(printf '%s' "${OMARCHY_PATH:-/usr/share/omarchy}/shell" | tr -s /); want=${want%/}
 ours=""
+# A shell in the slot: a plain box's `--shell CMD`, or a desk box's (#321, finding 703), the command
+# its config started in omabox-shell.cmd.
+slotted=0
+if [ -n "${OMABOX_SHELL_CMD:-}" ] || { [ "${OMABOX_DESKTOP:-}" = desk ] && [ -s "$XDG_RUNTIME_DIR/omabox-shell.cmd" ]; }; then
+  slotted=1
+fi
 # (A moment for the report, should the dialog come first.)
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   for r in "$dir"/*/report.txt; do
     grep -aqx "Crashed process ID: $dump" "$r" 2>/dev/null || continue
     cfg=$(sed -n '/^Config Path: /{s///p;q}' "$r" | tr -s /)
-    if [ -n "${OMABOX_SHELL_CMD:-}" ]; then
+    if [ "$slotted" = 1 ]; then
       ours=0; grep -qxF -- "${cfg%/*}" "$XDG_RUNTIME_DIR/omabox-shell.configs" 2>/dev/null && ours=1
     elif [ "${cfg%/*}" = "$want" ]; then ours=1; else ours=0; fi
     break 2
@@ -30,7 +36,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 # A plain box's shell's dialog (#438): forked from the crashed shell, it has its slot.
 slot=$(cat "$XDG_RUNTIME_DIR/omabox-shell.slot" 2>/dev/null) || slot=""
-if [ -z "$ours" ] && [ -n "${OMABOX_SHELL_CMD:-}" ] && [[ $slot =~ ^[A-Za-z0-9._-]+$ ]] &&
+if [ -z "$ours" ] && [ "$slotted" = 1 ] && [[ $slot =~ ^[A-Za-z0-9._-]+$ ]] &&
   grep -qsFxz -e "OMABOX_SHELL_SLOT=$slot" "/proc/$pid/environ"; then
   ours=1
 fi

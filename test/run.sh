@@ -12030,8 +12030,245 @@ t_plain_dms() {
 }
 
 # #321 step 4's tests (its builder replaces these stubs): a desk box's shell slot.
-t_desk_shell_slot() { skip "a desk box's shell in its slot" "#321 step 4"; }
-t_unit_desk_shell_lua() { skip "share/desk-shell.lua's take and after_start" "#321 step 4"; }
+# DESK_STANDIN_LUA: what t_desk_shell_slot's stand-in omabox runs where step 3's desk.lua will: share/
+# desk-shell.lua's take for every command the user's config (~/.config/hypr/hyprland.lua) starts, its
+# verdict in ~/autostart.log, and after_start in a start handler after the config's.
+DESK_STANDIN_LUA='
+local ds = dofile("/opt/omabox/share/desk-shell.lua")
+local raw = hl.exec_cmd
+ds.exec = raw
+hl.exec_cmd = function(cmd, ...)
+  if type(cmd) == "string" then
+    local taken, why = ds.take(cmd)
+    if taken then
+      local log = io.open(os.getenv("HOME") .. "/autostart.log", "a")
+      if log then log:write("take " .. cmd .. "  (" .. why .. ")\n"); log:close() end
+      return
+    end
+  end
+  return raw(cmd, ...)
+end
+local f = (os.getenv("XDG_CONFIG_HOME") or "") .. "/hypr/hyprland.lua"
+if io.open(f) then dofile(f) end
+hl.on("hyprland.start", function() ds.after_start() end)'
+
+# #321 step 4 (finding 703): a desk box's shell is the one its user's config starts, run in the slot a
+# plain box's --shell has (share/shell.sh): up waits for its layer and says it; ls, pid shell,
+# log shell, restart-shell (one bar, a new pid) and a crash as for a plain box's. A config that starts
+# none but up guessed one: the guess's start. None and no guess: up fails at once, saying so. --shell
+# overrides it (the config's dropped); --no-shell drops it. desk.lua (step 3) is not on this branch:
+# a stand-in omabox (a copy of this one with its share/, whose hyprland.lua calls DESK_STANDIN_LUA for
+# a desk box) plays its part, on a stand-in HOME (runtime, cache, state and data dirs of its own), the
+# config seeded; the real omabox's desk box, whose config never said what it started, has no shell.
+t_desk_shell_slot() {
+  local why; if why=$(no_qs); then skip "a desk box's shell in its slot" "$why"; return; fi
+  local base=$TMP/$P-dslot B=$P-dslot D out rc t0 lp lp2 pre n
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state s=$base/seed sr=$base/root
+  local bar=$base/bar bar2=$base/bar2
+  mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data" "$bar" "$bar2" "$s/hyp" "$s/none" "$sr/build" "$sr/tools"
+  chmod 700 "$rt"; : > "$fh/.config/omabox/config"
+  for n in bar bar2; do
+    printf 'import QtQuick\nimport Quickshell\nimport Quickshell.Wayland\nPanelWindow {\n  WlrLayershell.namespace: "t-desk%s"\n  anchors { top: true; left: true; right: true }\n  implicitHeight: 30\n  color: "#336699"\n}\n' "$n" > "$base/$n/shell.qml"
+  done
+  # The stand-in omabox: a copy of the binary (it finds its share/ beside its folder), share/ copied
+  # with the stand-in, the tools and aquamarine build linked.
+  cp "$ROOT/build/omabox" "$sr/build/omabox"; cp -r "$ROOT/share" "$sr/share"; ln -s "$ROOT"/tools/* "$sr/tools/"
+  pre=$ROOT/build/prefix
+  [ -d "$pre" ] || pre=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/../build/prefix
+  [ ! -d "$pre" ] || ln -s "$pre" "$sr/build/prefix"
+  printf '%s\n' "$DESK_STANDIN_LUA" > "$sr/share/t-desk-standin.lua"
+  sed -i '/\/omabox-plain\.lua")$/a\  if desktop == "desk" then dofile("/opt/omabox/share/t-desk-standin.lua") end' "$sr/share/hyprland.lua"
+  check "the stand-in's hyprland.lua runs it for a desk box" grep -q 't-desk-standin' "$sr/share/hyprland.lua"
+  check_match "check run --desktop desk: refused, before any box" "^omabox: check run: --desktop desk is not for a check: " \
+    "$(ob check run --approve --base "$base/check-base" --desktop desk -- true 2>&1)"
+  printf 'start qs -p %s\n' "$bar2" > "$sr/share/desk-shells/t-bar"
+  # The user's config: its shell (with a word of its own), a second shell, and a command of its own.
+  printf 'hl.on("hyprland.start", function()\n  hl.exec_cmd("env OMABOX_T=1 qs -p %s")\n  hl.exec_cmd("setsid -f waybar")\n  hl.exec_cmd("touch \\"$HOME/other-ran\\"")\nend)\n' "$bar" > "$s/hyp/hyprland.lua"
+  echo '-- no shell' > "$s/none/hyprland.lua"
+  local senv=(HOME="$fh" XDG_RUNTIME_DIR="$rt" XDG_CACHE_HOME="$c" XDG_STATE_HOME="$st" XDG_CONFIG_HOME="$fh/.config" XDG_DATA_HOME="$base/data")
+  sb() { env "${senv[@]}" "$sr/build/omabox" "$@"; }
+  sb_up() { (cd "$base" && sb up "$@" 2>&1); }
+  ns_pids() { sb hyprctl -b "$1" -j layers | jq -r --arg n "$2" '[.. | objects | select(.namespace? == $n) | .pid] | join(" ")'; }
+  no_ns() { [ -z "$(ns_pids "$1" "$2")" ]; }
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar" --seed "$s/hyp:.config/hypr"); rc=$?
+  [ "$rc" = 0 ] || { no "up --desktop desk, its config starting env OMABOX_T=1 qs -p BAR" "$out"; sb down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk, its config starting env OMABOX_T=1 qs -p BAR: up once its bar is drawn"
+  D=$(sb path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" sb || { sb down "$B" >/dev/null 2>&1; return; }
+  check_match "...up says it: the command, its profile, from your config" \
+    "box '$B': its shell: env OMABOX_T=1 qs -p $(re_q "$bar") \(quickshell-path, from your config\)" "$out"
+  check_eq "box.json: desk, a shell, no shell_cmd" "desk true null" "$(jq -r '"\(.desktop) \(.shell) \(.shell_cmd)"' "$D/box.json")"
+  check_eq "the slot's files: the command as the config wrote it, from the config" "env OMABOX_T=1 qs -p $bar|config" \
+    "$(cat "$D/run/omabox-shell.cmd")|$(cat "$D/run/omabox-desk-shell")"
+  check_eq "the stand-in's log: the shell taken, the second dropped" \
+    "take env OMABOX_T=1 qs -p $bar  (the slot runs it (quickshell-path))
+take setsid -f waybar  (a second shell: the slot runs env OMABOX_T=1 qs -p $bar)" "$(cat "$D/home/autostart.log")"
+  check "...the config's own command ran" until_ok 5 test -e "$D/home/other-ran"
+  check_eq "ls: desk, its shell and where it came from" "  desktop: desk, shell: env OMABOX_T=1 qs -p $bar (from your config)" \
+    "$(sb ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  check_eq "ls --json: the shell running" running "$(sb ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .shell_state')"
+  lp=$(ns_pids "$B" t-deskbar)
+  check_match "its bar drawn, once" '^[0-9]+$' "$lp"
+  check_eq "pid shell --in-box: its qs" "$lp" "$(sb pid -b "$B" shell --in-box 2>&1)"
+  check_eq "...run with the config's word (the command as written)" OMABOX_T=1 \
+    "$(sb run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$1/environ | grep -x OMABOX_T=1' sh "$lp" 2>&1)"
+  check_eq "...its config noted as the shell's" "$bar" "$(cat "$D/run/omabox-shell.configs")"
+  check_match "log shell: its log" "Configuration Loaded" "$(sb log -b "$B" shell)"
+  out=$(sb restart-shell -b "$B" 2>&1); rc=$?
+  check_eq "restart-shell: exit 0, restarted" "0 yes" "$rc $(grep -q "shell restarted in box '$B'" <<<"$out" && echo yes)"
+  lp2=$(ns_pids "$B" t-deskbar)
+  check "...one bar, a new qs (was $lp, now $lp2)" test -n "$lp2" -a "$lp2" != "$lp" -a "${lp2#* }" = "$lp2"
+  check_fails "...the old one stopped" sb run -b "$B" -- test -d "/proc/$lp"
+  check_eq "...still the config's command" "env OMABOX_T=1 qs -p $bar" "$(cat "$D/run/omabox-shell.cmd")"
+  env CLI="$sr/build/omabox" "${senv[@]}" bash -c "$(declare -f ob shell_segv); shell_segv \"\$@\"" sh "$B" "$lp2" >/dev/null 2>&1
+  check "its crash: the dialog closed as the shell's" until_ok 10 grep -q "closed the shell's crash dialog" "$D/home/shell.log"
+  check_match "...the next command says the shell is gone, after its crash" \
+    "warning: box '$B' has no shell \(gone after 1 crash\(es\);" "$(sb windows -b "$B" 2>&1 >/dev/null)"
+  check "restart-shell brings it back" sb restart-shell -b "$B"
+  check "...its layer" sb wait -b "$B" --timeout 5s layer t-deskbar
+  check_match "up again with --shell: refused, naming what its slot runs" \
+    "--shell qs -p $(re_q "$bar2") \(its shell is env OMABOX_T=1 qs -p $(re_q "$bar"), from your config\)" \
+    "$(sb_up "$B" --desktop desk --shell "qs -p $bar2")"
+  check_box_safety "$B" sb
+  check "down" sb down "$B"
+  check_fails "...no qs of it left on the host" pgrep -f "qs -p $bar"
+  # The config starts none, up guessed one (OMABOX_DESK_SHELL: step 2's, here the suite's profile t-bar).
+  B=$P-dslot2
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar2" --seed "$s/none:.config/hypr" --env OMABOX_DESK_SHELL=t-bar); rc=$?
+  check_eq "a config that starts none, a guess: up" 0 "$rc"
+  D=$(sb path -b "$B")
+  check_match "...the guess's start in the slot, said" "box '$B': its shell: qs -p $(re_q "$bar2") \(t-bar, guessed: your config starts none omabox knows\)" "$out"
+  check_eq "...the slot's files" "qs -p $bar2|guess" "$(cat "$D/run/omabox-shell.cmd" 2>&1)|$(cat "$D/run/omabox-desk-shell" 2>&1)"
+  check "...its bar" sb wait -b "$B" --timeout 5s layer t-deskbar2
+  check_match "...ls: guessed" "^  desktop: desk, shell: qs -p $(re_q "$bar2") \(guessed" "$(sb ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  sb down "$B" >/dev/null
+  # None, and no guess: up fails at once, saying why and what to do.
+  B=$P-dslot3 t0=$SECONDS
+  out=$(OMABOX_READY_TIMEOUT=30s sb_up "$B" --desktop desk --net isolated --seed "$s/none:.config/hypr"); rc=$?
+  check_eq "a config that starts no shell omabox knows, no guess: up fails" 1 "$rc"
+  check_match "...saying so" "your desktop's config started no shell omabox knows \(see .*/home/autostart\.log\): up --shell CMD names one, --no-shell runs none" "$out"
+  check "...at once, not after its 30 s ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 20
+  sb down "$B" >/dev/null 2>&1
+  # --shell CMD overrides the config's: its shell dropped.
+  B=$P-dslot4
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar" --ro-bind "$bar2" --seed "$s/hyp:.config/hypr" --shell "qs -p $bar2"); rc=$?
+  check_eq "up --desktop desk --shell 'qs -p BAR2' over a config starting BAR" 0 "$rc"
+  D=$(sb path -b "$B")
+  check "...BAR2 drawn" sb wait -b "$B" --timeout 5s layer t-deskbar2
+  check "...BAR not" holds 2 no_ns "$B" t-deskbar
+  check_match "...the config's dropped, the slot's named" "take env OMABOX_T=1 qs -p .*  \(a second shell: the slot runs qs -p $(re_q "$bar2") \(up --shell\)\)" "$(cat "$D/home/autostart.log")"
+  check_eq "...ls: from up --shell" "  desktop: desk, shell: qs -p $bar2 (up --shell)" "$(sb ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  sb down "$B" >/dev/null
+  # --no-shell: the config's shell dropped, none in the slot.
+  B=$P-dslot5
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar" --seed "$s/hyp:.config/hypr" --no-shell); rc=$?
+  check_eq "up --desktop desk --no-shell" 0 "$rc"
+  D=$(sb path -b "$B")
+  check "...no bar" holds 2 no_ns "$B" t-deskbar
+  check_match "...the config's shell dropped" "take env OMABOX_T=1 qs -p .*  \(up --no-shell: no shell\)" "$(cat "$D/home/autostart.log" 2>&1)"
+  check_eq "...box.json: no shell" false "$(jq -r .shell "$D/box.json")"
+  sb down "$B" >/dev/null
+  # The real omabox (no desk.lua yet): a desk box whose config never said what it started has none.
+  B=$P-dslot6
+  out=$(cd "$base" && env "${senv[@]}" "$CLI" up "$B" --desktop desk --net isolated --seed "$s/hyp:.config/hypr" 2>&1); rc=$?
+  check_eq "a desk box whose start never ran desk-shell.lua: up" 0 "$rc"
+  D=$(sb path -b "$B")
+  check_eq "...box.json: no shell" false "$(jq -r .shell "$D/box.json")"
+  check_eq "...ls: no shell" "-|  desktop: desk" "$(sb ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .shell_state // "-"' | sed 's/^none$/-/')|$(sb ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  check_match "...restart-shell: no shell to restart" "restart-shell: box '$B' runs plain .*no shell to restart" "$(sb restart-shell -b "$B" 2>&1)"
+  sb down "$B" >/dev/null
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+# DESK_SHELL_LUA: `lua FILE SHARE OP ARG...` (FILE holding it) drives share/desk-shell.lua as desk.lua
+# will (#321 step 4), with a stand-in `hl` whose exec_cmd prints `exec CMD`: OP match reads commands
+# a line each and prints the profile each is (- for none); OP take calls take on each ARG and prints
+# `TAKEN|WHY` (an ARG `@after` calls after_start, `@own` sets M.exec to one printing `own CMD`, `@num`
+# takes a number).
+# Run in one Lua state per call, as one Hyprland config load.
+DESK_SHELL_LUA='
+local share, op = arg[1], arg[2]
+hl = { exec_cmd = function(c) print("exec " .. c) end }
+local M = dofile(share .. "/desk-shell.lua")
+M.dir = share .. "/desk-shells"
+if op == "match" then
+  for l in io.lines() do local p = M.profile_for(l); print(p and p.name or "-") end
+else
+  for i = 3, #arg do
+    if arg[i] == "@after" then M.after_start(); print("after")
+    elseif arg[i] == "@own" then M.exec = function(c) print("own " .. c) end
+    else
+      local t, why = M.take(arg[i] == "@num" and 42 or arg[i])
+      print(tostring(t) .. "|" .. (why or ""))
+    end
+  end
+end'
+
+# #321 step 4 (finding 703): share/desk-shell.lua, on the host's Lua with a stand-in `hl`: which
+# profile a command a config starts is (the cases deskshell.rs's profile_match has, read the same
+# way); take: the first shell into the slot (omabox-shell.cmd and omabox-desk-shell written, then
+# shell.sh started with its word), a second dropped, one already in the slot (a reload) dropped,
+# not a shell left to run; --shell's and --no-shell's; after_start: the guess, or none.
+t_unit_desk_shell_lua() {
+  command -v lua >/dev/null || { skip "share/desk-shell.lua on the host's Lua" "no lua here"; return; }
+  local rt=$TMP/$P-dsl out cases
+  printf '%s\n' "$DESK_SHELL_LUA" > "$TMP/$P-dsl.lua"
+  rtls() { local f l=""; for f in "$rt"/*; do [ -e "$f" ] && l+="${f##*/} "; done; echo "${l:--}"; }
+  dl() { (cd / && env -u OMABOX_SHELL -u OMABOX_SHELL_CMD -u OMABOX_DESK_SHELL XDG_RUNTIME_DIR="$rt" "$@" lua "$TMP/$P-dsl.lua" "$ROOT/share" "${DL_ARGS[@]}"); }
+  # (profile_match's cases, from deskshell.rs's PROFILE_CASES: `("CMD", Some("NAME"))` or None)
+  cases=$(sed -n '/^    const PROFILE_CASES/,/^    \];/p' "$ROOT/crates/omabox/src/deskshell.rs" |
+    sed -n 's/^        ("\(.*\)", \(Some("\([a-z-]*\)")\|None\)),$/\1\t\3/p' | sed 's/\\"/"/g')
+  check_eq "profile_match's cases read (deskshell.rs)" 25 "$(grep -c . <<<"$cases")"
+  DL_ARGS=(match)
+  out=$(cut -f1 <<<"$cases" | dl)
+  check_eq "...each the profile deskshell.rs finds" "$(cut -f2 <<<"$cases" | sed 's/^$/-/')" "$out"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take "env A=1 dms run" "setsid -f waybar" hypridle "echo dms run" "sh -c 'sleep 1; waybar'" @after)
+  out=$(dl)
+  check_eq "take: the first shell into the slot, shell.sh started with its word; a second dropped; others not taken" \
+    "exec /opt/omabox/share/shell.sh take
+true|the slot runs it (dms)
+true|a second shell: the slot runs env A=1 dms run
+false|
+false|
+true|a second shell: the slot runs env A=1 dms run
+after" "$out"
+  check_eq "...omabox-shell.cmd: the command as the config wrote it" "env A=1 dms run" "$(cat "$rt/omabox-shell.cmd")"
+  check_eq "...omabox-desk-shell: config" config "$(cat "$rt/omabox-desk-shell")"
+  check_eq "...no .new left" "" "$(cd "$rt" && ls -- *.new 2>/dev/null)"
+  DL_ARGS=(take "env A=1 dms run" "qs -c bar" @after)
+  check_eq "a reload (a new Lua state, the slot's file there): the same command dropped, another a second shell, nothing started" \
+    "true|the slot runs it already
+true|a second shell: the slot runs env A=1 dms run
+after" "$(dl)"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take @own "qs -p /x/bar")
+  check_eq "M.exec: desk.lua's own exec starts the slot" "own /opt/omabox/share/shell.sh take
+true|the slot runs it (quickshell-path)" "$(dl)"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take hypridle @after)
+  check_eq "after_start, nothing taken: the guess's start (OMABOX_DESK_SHELL=dms)" "false|
+exec /opt/omabox/share/shell.sh take
+after" "$(dl OMABOX_DESK_SHELL=dms)"
+  check_eq "...its command and guess" "dms run guess" "$(cat "$rt/omabox-shell.cmd") $(cat "$rt/omabox-desk-shell")"
+  DL_ARGS=(take "waybar")
+  check_eq "...a shell after it (a later start): a second shell" "true|a second shell: the slot runs dms run" "$(dl OMABOX_DESK_SHELL=dms)"
+  local g
+  for g in "" quickshell nosuch "../dms"; do
+    rm -rf "$rt"; mkdir -p "$rt"
+    DL_ARGS=(take @after)
+    check_eq "after_start, nothing taken, guess '$g' (none, no start, no profile): none, nothing started" "after none -" \
+      "$(dl OMABOX_DESK_SHELL="$g") $(cat "$rt/omabox-desk-shell") $(cat "$rt/omabox-shell.cmd" 2>/dev/null || echo -)"
+  done
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take "dms run" hypridle @after)
+  check_eq "up --shell CMD: the config's shell dropped, nothing started, nothing written" "true|a second shell: the slot runs qs -p /b (up --shell)
+false|
+after -" "$(dl OMABOX_SHELL_CMD='qs -p /b' OMABOX_DESK_SHELL=dms) $(rtls)"
+  check_eq "up --no-shell: dropped, nothing started, nothing written" "true|up --no-shell: no shell
+false|
+after -" "$(dl OMABOX_SHELL=0 OMABOX_DESK_SHELL=dms) $(rtls)"
+  check_eq "take: a command that is no string is not taken" "false|" "$(DL_ARGS=(take @num); dl)"
+}
 
 # DESK_BINDS (#321, finding 700): `python3 -I -c "$DESK_BINDS" LAUNCH HOME BOXHOME`: what in launch.sh's
 # bwrap would bring the host's HOME into a desk box, a line each (none: the guard holds). Its words
