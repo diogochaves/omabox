@@ -1580,6 +1580,7 @@ impl Base {
                 .kv("--argjson", "evs", "null")
                 .kv("--arg", "exp", "")
                 .kv("--arg", "treed", "")
+                .kv("--arg", "job", "")
                 .arg(crate::jqprog::SETTLE_JSON_JQ)
                 .run(None, jq::Err::Inherit);
             out(&r.out)?;

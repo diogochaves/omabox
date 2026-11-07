@@ -480,8 +480,14 @@ fn detached(
         job_record(ctx, &jpid, &log, cmd);
         st.fpid = jpid.clone();
     }
+    // stdout's first line, data even under -q: the job's pid (`J=$(omabox run -d -- APP)`, then
+    // `log run "$J"`, `wait job "$J"`, `stop "$J"`: #429), or the log's path with --print-log;
+    // --wait --json keeps stdout one JSON document, the pid its "job". The pid, unasked for, never
+    // fails a job that started: a closed stdout only goes without it.
     if print_log {
         out(cat!(log, "\n"))?;
+    } else if numeric && !(st.wait && st.json) {
+        let _ = out(cat!(jpid, "\n"));
     }
     // Its first moments (#286): a job over by then is said with its status and log instead of
     // "started", and run -d exits with that status. --wait has its own answer, below.
