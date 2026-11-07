@@ -30,7 +30,6 @@ pub const SBX_HOME: &str = "/home/sbx";
 
 /// P is absolute, not `/`, and lexically clean: no empty, `.` or `..` part, no trailing slash, no
 /// control character.
-#[allow(dead_code)] // #321: its callers come with the next step-1 commits
 pub fn clean_abs(p: &[u8]) -> bool {
     p.len() > 1
         && p[0] == b'/'
@@ -43,7 +42,6 @@ pub fn clean_abs(p: &[u8]) -> bool {
 /// box_home D (#321): the box's HOME inside it, as box.json's `home` says (up writes it, outside
 /// what the box can write), when that is a clean absolute path; else SBX_HOME (a box from before
 /// it, or a value that is not one).
-#[allow(dead_code)] // #321: its callers come with the next step-1 commits
 pub fn box_home(d: &[u8]) -> Vec<u8> {
     let (h, _) = meta(d, "home");
     if clean_abs(&h) {

@@ -510,7 +510,7 @@ fn entries(ctx: &mut Ctx) -> Res<Vec<String>> {
         }
         // (a plain box, #247: Omarchy's bar is not there to have one; its --shell may)
         let why = if crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
-            == crate::upspec::Desktop::Plain
+            .plain_like()
         {
             if crate::boxes::meta(&ctx.d, "shell_cmd").0.is_empty() {
                 "a plain box has no shell to have one: up --shell CMD runs one".to_string()

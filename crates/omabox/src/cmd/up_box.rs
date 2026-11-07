@@ -563,7 +563,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
                 &u.net,
                 &u.clean_lang,
                 &u.clean_zone,
-                u.desktop == Desktop::Plain
+                u.desktop.plain_like()
             )
         ));
     } else if u.stock {
@@ -613,7 +613,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
                 p.id,
                 ": ",
                 p.dir,
-                " is /home/sbx/.config/omarchy/plugins/",
+                " is ",
+                u.box_home(),
+                "/.config/omarchy/plugins/",
                 p.id,
                 " in the box, not at its own path"
             ));
@@ -741,7 +743,8 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
         clean: u.clean,
         clean_keep: u.clean_keep.clone(),
         omarchy: u.omarchy.clone(),
-        plain: u.desktop == Desktop::Plain,
+        plain: u.desktop.plain_like(),
+        home: u.box_home().to_vec(),
     }
 }
 
@@ -871,8 +874,9 @@ fn box_json(
     o.insert("autoreload".into(), Value::Bool(u.autoreload));
     o.insert("shell".into(), Value::Bool(u.shell));
     o.insert("desktop".into(), s(u.desktop.name().as_bytes()));
-    // The box's HOME inside it (#321), read back by boxes::box_home: /home/sbx for every box yet.
-    o.insert("home".into(), s(crate::boxes::SBX_HOME.as_bytes()));
+    // The box's HOME inside it (#321), read back by boxes::box_home: /home/sbx, or a desk box's at
+    // the user's HOME path.
+    o.insert("home".into(), s(u.box_home()));
     // `up --shell CMD` (#247): the plain box's shell, for restart-shell, ls and up_already.
     if !u.shell_cmd.is_empty() {
         o.insert("shell_cmd".into(), s(&u.shell_cmd));
@@ -1121,7 +1125,7 @@ fn etc_files(ctx: &Ctx, u: &Up) -> Res<Etc> {
             if let Ok(t) = std::fs::read(format!("/etc/{f}")) {
                 write(
                     &cat!(etc, "/", f),
-                    &crate::upspec::clean_ids(&t, me.as_bytes(), f == "passwd"),
+                    &crate::upspec::clean_ids(&t, me.as_bytes(), f == "passwd", u.box_home()),
                 );
             }
         }
@@ -1185,7 +1189,7 @@ fn clean_lines(u: &Up) -> Vec<u8> {
     if u.clean && !u.clean_has("animations") {
         l.push(b"animations off".to_vec());
     }
-    if u.clean && u.desktop == Desktop::Plain && !u.clean_has("wallpaper") {
+    if u.clean && u.desktop.plain_like() && !u.clean_has("wallpaper") {
         l.push(cat!("background ", crate::upspec::CLEAN_BACKGROUND));
     }
     l.join(&b'\n')
@@ -1312,7 +1316,7 @@ fn bwrap_args(
     // --desktop plain (#247): the box sees no Omarchy tree, as on a machine without Omarchy, so
     // nothing of it loads by accident (a require, a stand-in, a file seeded pointing there). An empty
     // tmpfs, never a bind: nothing of the host's goes in.
-    if u.desktop == Desktop::Plain && std::path::Path::new(PLAIN_HIDDEN).is_dir() {
+    if u.desktop.plain_like() && std::path::Path::new(PLAIN_HIDDEN).is_dir() {
         b.words(&[b"--tmpfs", PLAIN_HIDDEN.as_bytes()]);
     }
     // /bin, /sbin, /lib, /lib64 as the host's links into /usr (#247: Debian's /lib64 is usr/lib64).
@@ -1357,7 +1361,7 @@ fn bwrap_args(
         b"/run/user",
     ]);
     b.own_rw(&cat!(d, "/run"), &run).map_err(refused)?;
-    b.own_rw(&home_dir, b"/home/sbx").map_err(refused)?;
+    b.set_home(&home_dir, u.box_home()).map_err(refused)?;
     b.own_ro(&cat!(root, "/share"), b"/opt/omabox/share")
         .map_err(refused)?;
     // The helpers, one file each (#421: box.json's `helpers` records the same list).
@@ -1416,7 +1420,7 @@ fn bwrap_args(
     }
     // The desk's fonts (#261), read-only at their place in the box HOME; before --ro-bind's.
     for (src, rel) in desk_fonts {
-        b.checked_ro(src, &cat!("/home/sbx/", rel))
+        b.checked_ro(src, &cat!(u.box_home(), "/", rel))
             .map_err(refused)?;
     }
     for (src, dest) in &u.ro_args {
@@ -1440,8 +1444,11 @@ fn bwrap_args(
     }
     for p in &u.plugins {
         if !u.linked.contains(&p.id) {
-            b.checked_ro(&p.dir, &cat!("/home/sbx/.config/omarchy/plugins/", p.id))
-                .map_err(refused)?;
+            b.checked_ro(
+                &p.dir,
+                &cat!(u.box_home(), "/.config/omarchy/plugins/", p.id),
+            )
+            .map_err(refused)?;
         }
     }
     for p in &u.overlays {
@@ -1486,7 +1493,7 @@ fn bwrap_args(
     if u.clean && u.desktop == Desktop::Omarchy && !u.clean_has("wallpaper") {
         hypr_env.push((
             b"OMABOX_CLEAN_WALLPAPER",
-            b"/home/sbx/.config/omabox/clean-wallpaper.png".to_vec(),
+            cat!(u.box_home(), "/.config/omabox/clean-wallpaper.png"),
         ));
     }
     let bit = |v: bool| if v { b"1".as_slice() } else { b"0" };
@@ -1496,11 +1503,11 @@ fn bwrap_args(
             b"/opt/omabox/share/bin:/usr/bin".to_vec(),
         ),
         (b"XDG_RUNTIME_DIR", run.clone()),
-        (b"HOME", b"/home/sbx".to_vec()),
-        (b"XDG_DATA_HOME", b"/home/sbx/.local/share".to_vec()),
-        (b"XDG_CONFIG_HOME", b"/home/sbx/.config".to_vec()),
-        (b"XDG_CACHE_HOME", b"/home/sbx/.cache".to_vec()),
-        (b"XDG_STATE_HOME", b"/home/sbx/.local/state".to_vec()),
+        (b"HOME", u.box_home().to_vec()),
+        (b"XDG_DATA_HOME", cat!(u.box_home(), "/.local/share")),
+        (b"XDG_CONFIG_HOME", cat!(u.box_home(), "/.config")),
+        (b"XDG_CACHE_HOME", cat!(u.box_home(), "/.cache")),
+        (b"XDG_STATE_HOME", cat!(u.box_home(), "/.local/state")),
         (b"QT_FORCE_STDERR_LOGGING", b"1".to_vec()),
         (b"ATSPI_DBUS_IMPLEMENTATION", b"dbus-daemon".to_vec()),
         (b"OMABOX_RENDER_NODE", render.as_bytes().to_vec()),

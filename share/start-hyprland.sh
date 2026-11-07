@@ -35,9 +35,9 @@ fi
 # read-only install's 0444, and a write to the copy in the box was refused (finding 528).
 cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua
 cat /opt/omabox/share/hyprland.lua > "$cfg.new" && mv -f "$cfg.new" "$cfg"
-# A plain box's desktop (#247), copied with it for the same reason: an omabox update under a running
-# box must not mix this copy of hyprland.lua with a newer plain.lua.
-if [ "${OMABOX_DESKTOP:-}" = plain ]; then
+# A plain or desk box's desktop (#247, #321), copied with it for the same reason: an omabox update
+# under a running box must not mix this copy of hyprland.lua with a newer plain.lua.
+if [ "${OMABOX_DESKTOP:-}" = plain ] || [ "${OMABOX_DESKTOP:-}" = desk ]; then
   cat /opt/omabox/share/plain.lua > "$XDG_RUNTIME_DIR/omabox-plain.lua.new" &&
     mv -f "$XDG_RUNTIME_DIR/omabox-plain.lua.new" "$XDG_RUNTIME_DIR/omabox-plain.lua"
 fi

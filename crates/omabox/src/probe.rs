@@ -73,7 +73,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("jail_deep", "PATH"),
     ("jail_readable", "FILE"),
     ("repo_top", ""),
-    ("seed_spec", "SRC:DEST"),
+    ("seed_spec", "SRC:DEST [HOME]"),
     ("seed_blocked", "SRC REL PLACE..."),
     ("jail_cover", "D SRC DEST"),
     ("box_held", "D PID"),
@@ -107,7 +107,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("diff_parts", "A B [MASK...]"),
     // What a box may mount, and where (the reason on stdout, 0, when refused; 1 when it may).
     ("refuse_src", "PATH [look]"),
-    ("refuse_dest", "PATH"),
+    ("refuse_dest", "PATH [HOME]"),
     ("robind_spec", "DIR[:DEST]"),
     ("monitor_spec", "SPEC"),
     // up's seeding and the desk, as read (nothing copied).
@@ -463,7 +463,11 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             line(&crate::repo::norepo_note(&String::from_utf8_lossy(how)).ok_or(Exit(1))?)
         }
         // SRC, a tab, DEST; a refusal said, 1 (3 for a jailed caller's).
-        (b"seed_spec", [spec]) => match crate::upspec::seed_spec(spec) {
+        (b"seed_spec", [spec, home @ ..]) if home.len() < 2 => match crate::upspec::seed_spec(
+            spec,
+            home.first()
+                .map_or(crate::boxes::SBX_HOME.as_bytes(), |h| &h[..]),
+        ) {
             Ok((src, dest)) => line(&cat!(src, "\t", dest)),
             Err(crate::upspec::SeedRefused::Bad) => Err(Exit(1)),
             Err(crate::upspec::SeedRefused::Jail) => Err(Exit(3)),
@@ -624,7 +628,11 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         }
         (b"refuse_src", [p]) => refused(crate::repo::refuse_src(p)),
         (b"refuse_src", [p, l]) if *l == b"look" => refused(crate::repo::refuse_src_look(p)),
-        (b"refuse_dest", [p]) => refused(crate::upspec::refuse_dest(p)),
+        (b"refuse_dest", [p]) => refused(crate::upspec::refuse_dest(
+            p,
+            crate::boxes::SBX_HOME.as_bytes(),
+        )),
+        (b"refuse_dest", [p, h]) => refused(crate::upspec::refuse_dest(p, h)),
         (b"robind_spec", [spec]) => {
             let (src, dest) = crate::upspec::robind_spec(spec).ok_or(Exit(1))?;
             line(&cat!(src, "\t", dest))
