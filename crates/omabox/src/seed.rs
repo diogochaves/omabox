@@ -254,6 +254,8 @@ pub struct SeedPlan {
     pub omarchy: Vec<u8>,
     /// --desktop plain (#247): nothing of Omarchy's (seed_plain).
     pub plain: bool,
+    /// --desktop desk (#321): the user's desktop copied in (deskcopy::copy), on a plain base.
+    pub desk_box: bool,
     /// The box's HOME inside it (#321): /home/sbx, or a desk box's at the user's HOME path; empty
     /// for /home/sbx. Where a link seeded in the HOME leads, as the box sees it.
     pub home: Vec<u8>,
@@ -1621,7 +1623,12 @@ fn seed_plain(ctx: &Ctx, h: &[u8]) -> Res<Vec<u8>> {
 /// copied and skipped, for box.json.
 pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     if plan.plain {
-        return seed_plain(ctx, h);
+        let out = seed_plain(ctx, h)?;
+        // A desk box (#321 step 2): the user's desktop, before --seed's (which win).
+        if plan.desk_box {
+            return crate::deskcopy::copy(ctx, plan, h);
+        }
+        return Ok(out);
     }
     let look = Look {
         omarchy: &plan.omarchy,

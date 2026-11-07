@@ -223,6 +223,9 @@ NAME
 --setenv
 OMABOX_DESK_BASE
 plain
+--setenv
+OMABOX_DESK_SHELL
+
 /opt/omabox/share/session.sh
 3>BOXDIR/info.json
 </dev/null

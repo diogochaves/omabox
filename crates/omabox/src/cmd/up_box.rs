@@ -174,6 +174,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let h = cat!(d, "/home");
     let plan = seed_plan(&u);
     let desk_files = crate::seed::seed_home(ctx, &plan, &h).map_err(gone)?;
+    if u.desktop == Desktop::Desk {
+        u.desk_copy = crate::deskcopy::Report::parse(&desk_files);
+    }
     for (src, rel) in &u.seeds {
         let dest = crate::seed::Dest::new(rel)
             .ok_or_else(|| ctx.die(cat!("--seed: DEST must be inside the box HOME, got ", rel)))?;
@@ -475,6 +478,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         }
     }
     crate::mon::set_up_locked(false);
+    // A desk box once it is ready (#321): its shell's step (4) and its guards' (5).
+    if u.desktop == Desktop::Desk {
+        crate::deskshell::after_ready(ctx, &u)?;
+        crate::deskguard::after_ready(ctx, &u)?;
+    }
     // The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
     let crashed = if u.shell {
         ready::shell_watch(ctx, &r)
@@ -744,6 +752,7 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
         clean_keep: u.clean_keep.clone(),
         omarchy: u.omarchy.clone(),
         plain: u.plain_like(),
+        desk_box: u.desktop == Desktop::Desk,
         home: u.box_home().to_vec(),
     }
 }
@@ -878,8 +887,14 @@ fn box_json(
     // the user's HOME path.
     o.insert("home".into(), s(u.box_home()));
     // A desk box's base (#321, finding 708), fixed at up: boxes::plain_like reads it back.
+    // ...what its copy of your desktop did (#321 step 2), and the shell its slot guessed first
+    // (step 4): what found it (null: none guessed).
     if u.desktop == Desktop::Desk {
         o.insert("desk_base".into(), s(u.desk_base.name().as_bytes()));
+        o.insert("desk_copy".into(), u.desk_copy.json());
+        let opt = |v: &Option<Vec<u8>>| v.as_deref().map_or(Value::Null, s);
+        o.insert("shell_guess".into(), opt(&u.desk_copy.guess));
+        o.insert("shell_from".into(), opt(&u.desk_copy.from));
     }
     // `up --shell CMD` (#247): the plain box's shell, for restart-shell, ls and up_already.
     if !u.shell_cmd.is_empty() {
@@ -1534,8 +1549,13 @@ fn bwrap_args(
         b.setenv(k, &v);
     }
     // (a desk box's base, #321, finding 708: what the box's own scripts take a desk box for)
+    // (and the desk shell its slot guesses first, #321 step 4: a profile's name, empty for none)
     if u.desktop == Desktop::Desk {
         b.setenv(b"OMABOX_DESK_BASE", u.desk_base.name().as_bytes());
+        b.setenv(
+            b"OMABOX_DESK_SHELL",
+            u.desk_copy.guess.as_deref().unwrap_or_default(),
+        );
     }
     for (k, v) in &hypr_env {
         b.setenv(k, v);

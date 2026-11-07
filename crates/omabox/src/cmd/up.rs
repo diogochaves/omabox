@@ -145,6 +145,9 @@ pub struct Up {
     pub home: Vec<u8>,
     /// A desk box's base (#321, finding 708): upspec::desk_base, set in checks.
     pub desk_base: upspec::DeskBase,
+    /// What a desk box's copy of the desktop did (#321 step 2): deskcopy's lines read back, set
+    /// once the HOME is seeded (box.json desk_copy, shell_guess, shell_from; OMABOX_DESK_SHELL).
+    pub desk_copy: crate::deskcopy::Report,
     /// Each --seed as given, read with seed_spec once the box's HOME is known (the end of parse).
     pub seed_args: Vec<Vec<u8>>,
     /// `--shell CMD` (#247): a plain box's shell is CMD, run by share/shell.sh's slot.
@@ -770,6 +773,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             },
             "): --desktop plain, or --omarchy DIR for a checkout of it"
         )));
+    }
+    // A desk box's own refusals (#321 step 5), once its HOME and base are known.
+    if u.desktop == Desktop::Desk {
+        crate::deskguard::checks(ctx, u, jailed)?;
     }
     plain_shell(ctx, u)?;
     // --stock (#265, finding 613): Omarchy as a new user sees it. Omarchy's own bar on CLEAN_THEME

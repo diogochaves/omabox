@@ -1,0 +1,8 @@
+# DankMaterialShell (#321): `key value` lines, crates/omabox/src/deskshell.rs says the keys.
+# Verified on this machine's dms-shell 1.6.3 (the plain box's spikes, t_plain_dms). Its idle
+# timeouts are 0 already: no idle line.
+start dms run
+unit dms.service
+config .config/DankMaterialShell
+state .local/state/DankMaterialShell
+layer dms:bar
