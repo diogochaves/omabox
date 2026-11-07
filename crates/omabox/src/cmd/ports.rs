@@ -4,7 +4,8 @@
 //! and the other's pasta says nothing. pasta is non-dumpable, so which pasta holds a port cannot be
 //! read: a port held by a socket of ours that no readable process has is put down to the boxes
 //! serving on it, all of them named when there are several. Nothing connects to a port to tell them
-//! apart: it could be one of the user's own services.
+//! apart: it could be one of the user's own services. A `--net host` box (#313) has no pasta: its
+//! servers are on the host's own ports, and said so (`host-net`).
 
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::{BoxPid, box_pid, box_state, list_names, meta, need_box};
@@ -274,6 +275,9 @@ fn run_with<S: PortsSys>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let pn = pnet.get(key).cloned().unwrap_or_default();
         let state: Vec<u8> = if pn == b"isolated" || pn == b"allowed" {
             pn.clone()
+        } else if pn == b"host" {
+            // (#313: no forward, no mirror; the box's server is on the host's own port)
+            b"host-net".to_vec()
         } else if pn != b"connected" {
             b"no-network".to_vec()
         } else if let Some((uid, ino)) = held.get(port) {
@@ -464,6 +468,7 @@ fn run_with<S: PortsSys>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             b"isolated" => b"not forwarded: the box is isolated".to_vec(),
             b"allowed" => b"the host's: --allow leads the box's port there (pasta's, in the box: a box server cannot have it)".to_vec(),
             b"no-network" => b"not forwarded: the box has no network".to_vec(),
+            b"host-net" => b"the host's own port: the box shares your network (--net host), nothing is forwarded".to_vec(),
             _ => Vec::new(),
         };
         out(line([&f[0], &f[1], &f[2], &f[3], &says]))?;
@@ -543,6 +548,71 @@ mod tests {
             String::from_utf8_lossy(&rows.text()),
             "pa 40001 nothing",
             "ports: a box going down meanwhile is listed as it was or left out: {said}"
+        );
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    /// A host box's stand-ins (#313): box ph up (PID 1 this process), its server on 127.0.0.1:40002
+    /// (socket 525252), which is also what holds that port on this side (the same network).
+    struct HostNet;
+
+    impl PortsSys for HostNet {
+        fn up_pid(&self, _: &[u8]) -> Option<Vec<u8>> {
+            Some(me())
+        }
+        fn box_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
+            vec![me()]
+        }
+        fn tcp_listeners(&self, _: &[u8]) -> Vec<[Vec<u8>; 4]> {
+            vec![[
+                b"40002".to_vec(),
+                b"127.0.0.1".to_vec(),
+                crate::procfs::euid().to_string().into_bytes(),
+                b"525252".to_vec(),
+            ]]
+        }
+        fn sock_owners(&self, _: &[Vec<u8>], own: &mut HashMap<Vec<u8>, Vec<u8>>) {
+            own.insert(b"525252".to_vec(), me());
+        }
+    }
+
+    // #313 (finding 706): a host box's server is on the host's own port, which ports says as such
+    // (state host-net, nothing forwarded), not as a process of the user's holding it.
+    #[test]
+    fn ports_says_a_host_box_is_on_the_hosts_port() {
+        let rt = std::env::temp_dir().join(format!("omabox-hports-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&rt);
+        std::fs::create_dir_all(rt.join("ph")).unwrap();
+        std::fs::write(rt.join("ph/box.json"), r#"{"net":"host"}"#).unwrap();
+        let ports = |json: bool| {
+            let mut ctx = Ctx::new(b"ports", shell::bytes(&rt).to_vec());
+            let args: Vec<Vec<u8>> = if json {
+                vec![b"--json".to_vec()]
+            } else {
+                Vec::new()
+            };
+            crate::exit::heard_all(|| {
+                shell::with_env(&[("OMABOX_JAIL", None)], || {
+                    run_with(&HostNet, &mut ctx, &args)
+                })
+            })
+            .1
+        };
+        let said = ports(true);
+        let st = jq::jq(
+            &["-c", ".[] | [.box, .port, .host]"],
+            Some(said.as_bytes()),
+            jq::Err::Inherit,
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&st.text()),
+            r#"["ph",40002,{"state":"host-net"}]"#,
+            "{said}"
+        );
+        let text = ports(false);
+        assert!(
+            text.contains("the host's own port: the box shares your network (--net host)"),
+            "{text}"
         );
         let _ = std::fs::remove_dir_all(&rt);
     }

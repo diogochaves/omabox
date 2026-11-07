@@ -19,17 +19,19 @@ use crate::cat;
 pub use crate::upspec::AllowedPorts as Ports;
 
 /// How a box is networked: pasta's tap with the host's loopback forwarded both ways (connected),
-/// a loopback of its own with only the allowed ports spliced to the host's (isolated), or a network
+/// a loopback of its own with only the allowed ports spliced to the host's (isolated), a network
 /// namespace with only a loopback and no pasta (none: a nested connected box, or one started from a
-/// no_new_privs process).
+/// no_new_privs process), or no network namespace of its own and no pasta (host, #313: the host's
+/// network, for tools that scan the real LAN; asked for by name only, finding 706).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Net {
     Connected { protect: Ports },
     Isolated { allow: Ports },
     None,
+    Host,
 }
 
-/// pasta's arguments for NET (not None), its pid written to PID_FILE; EPH the ephemeral range
+/// pasta's arguments for NET (connected or isolated), its pid written to PID_FILE; EPH the ephemeral range
 /// (`32768-60999`), which `auto` skips and so has rules of its own (finding 156).
 pub fn pasta_args(net: &Net, pid_file: &[u8], eph: &[u8]) -> Vec<Vec<u8>> {
     let mut a: Vec<Vec<u8>> = vec![b"-q".to_vec(), b"-P".to_vec(), pid_file.to_vec()];
@@ -92,7 +94,7 @@ pub fn pasta_args(net: &Net, pid_file: &[u8], eph: &[u8]) -> Vec<Vec<u8>> {
                 &eph_auto,
             ]);
         }
-        Net::None => {}
+        Net::None | Net::Host => {}
     }
     a
 }
