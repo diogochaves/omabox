@@ -754,6 +754,8 @@ const TOOLS_SOME: &[(&str, &str)] = &[
     ("burst", "shot --burst"),
     ("tree", "omabox tree"),
     ("relay", "agents inside ai-jail"),
+    ("notices", "log notifications"),
+    ("polkit", "up --polkit"),
     ("idlehold", "desk boxes"),
 ];
 

@@ -15263,6 +15263,14 @@ t_unit_install() {
   # install.sh is a checkout's (it builds the tools into ROOT): a package builds them itself.
   [ "$INSTALLED" = 0 ] || { skip "install.sh" "an installed omabox has no install.sh to run"; return; }
   local h=$TMP/ih stub=$TMP/ih-stub out
+  # Every tool with a Makefile is built by install.sh and by the AUR package (its _tools): the package
+  # once left a new tool out (idlehold, notices).
+  local want
+  want=$(cd "$ROOT/tools" && printf '%s\n' */Makefile | sed 's,/Makefile$,,' | LC_ALL=C sort | paste -sd ' ')
+  check_eq "install.sh builds every tool" "$want" \
+    "$(grep -B1 -F 'make -s -C "$ROOT/tools/$t"' "$ROOT/install.sh" | sed -n 's/^for t in \(.*\); do$/\1/p' | tr ' ' '\n' | LC_ALL=C sort | paste -sd ' ')"
+  check_eq "...the AUR package too" "$want" \
+    "$(sed -n 's/^_tools=(\(.*\))$/\1/p' "$ROOT/packaging/aur/omabox/PKGBUILD" | tr ' ' '\n' | LC_ALL=C sort | paste -sd ' ')"
   # The XDG dirs too: the session sets them, and install.sh's `setup --aquamarine` builds under the
   # data dir when ROOT is no checkout (it once did so in the user's own, from an --installed run).
   local -x XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state

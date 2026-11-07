@@ -44,7 +44,7 @@ install=omabox.install
 source=("$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
 sha256sums=('cb9121fb70a001d072573b1d984b9b778898c1ea9716c244a12c826bb933ba74')
 
-_tools=(pointer keyboard wlfd peek still relay events burst tree notices polkit fixture)
+_tools=(pointer keyboard wlfd peek still relay events burst tree notices polkit fixture idlehold)
 
 prepare() {
   cd "$pkgname-$pkgver"
