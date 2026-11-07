@@ -56,9 +56,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // literal path for an agent's own file tools (Read, Write, Edit), where `$(omabox path)/home`
     // inside a command is refused in a worktree.
     if home {
-        // (finding 710: a link in it into your real HOME is said, as following it edits your files)
+        // (finding 710: a link in it into your real HOME is said, as following it edits your files;
+        // a desk box's only, whose HOME is at your HOME's path: an Omarchy box's seeded theme links
+        // into your HOME by design, to what it mounts read-only there)
         let user = shell::env_or_empty("HOME");
-        if let Some((n, first, to)) = real_home_links(&cat!(ctx.d, "/home"), &user) {
+        let desk = crate::boxes::box_home(&ctx.d) != crate::boxes::SBX_HOME.as_bytes();
+        if let Some((n, first, to)) = desk
+            .then(|| real_home_links(&cat!(ctx.d, "/home"), &user))
+            .flatten()
+        {
             say(cat!(
                 "path: box '",
                 ctx.name,

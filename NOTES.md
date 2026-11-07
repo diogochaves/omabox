@@ -14062,7 +14062,11 @@ from them.
     host they led into the real HOME: an agent editing the box's wallpaper through the folder
     `path --home` gives would have written the user's file. They are relative now
     (`seed::link_target`; a /home/sbx box's stay absolute, its path), and `path --home` says on
-    stderr when that folder holds links into the real HOME (6 folders deep, 20000 entries at most).
+    stderr when that folder holds links into the real HOME (6 folders deep, 20000 entries at most),
+    for a desk box only: an Omarchy box's seeded theme pictures link into the real HOME by design (to
+    the theme it mounts read-only at that path), and the first full suite with the warning on every
+    box failed t_cli_box's `path --home` case on it. Those links lead the same way from the host, as
+    they have since before 1.4: open, not changed here.
     Omarchy reads `current/background` with `readlink -f`; only `omarchy-theme-bg-next`'s plain
     `readlink` compares it, and starts its cycle over. (3) Any folder in HOME a copied file named
     (`nautilus ~/Downloads` in a bind, a screenshot folder in a shell's settings) had its top-level
