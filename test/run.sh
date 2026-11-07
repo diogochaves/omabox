@@ -8668,7 +8668,8 @@ t_notifications() {
   check_match "...a Notify with no server: no id, the bus's error" \
     "notify \(no id\) t430: \"$m none\" -- not shown: org\.freedesktop\.DBus\.Error\.ServiceUnknown" \
     "$(ob log -b "$B" notifications --grep "$m none" 2>&1)"
-  # The stand-in: ids from 42; a summary starting "act " has its default action invoked, then is dismissed.
+  # The stand-in: ids from 42; a summary starting "act " has its default action invoked, then is dismissed;
+  # one starting "slow " gets its id 6 s late (finding 688).
   cat > "$D/home/t430-server.py" <<'EOF'
 from gi.repository import Gio, GLib
 XML = """<node><interface name="org.freedesktop.Notifications">
@@ -8687,6 +8688,9 @@ P, I = "/org/freedesktop/Notifications", "org.freedesktop.Notifications"
 def call(conn, sender, path, iface, method, args, inv):
     if method == "Notify":
         n[0] += 1
+        if args[3].startswith("slow "):
+            GLib.timeout_add(6000, lambda i=n[0]: inv.return_value(GLib.Variant("(u)", (i,))))
+            return
         inv.return_value(GLib.Variant("(u)", (n[0],)))
         if args[3].startswith("act "):
             conn.emit_signal(None, P, I, "ActionInvoked", GLib.Variant("(us)", (n[0], "default")))
@@ -8753,6 +8757,44 @@ EOF
     "$(ob wait -b "$B" --timeout 1s --since 0 notification '^t430app$' >/dev/null 2>&1; echo $?)"
   rc=0; ob wait -b "$B" --timeout 1s notification "never-$m" >/dev/null 2>&1 || rc=$?
   check_eq "wait notification: none in time, 124" 124 "$rc"
+  # A reply later than the recorder's 5 s (D-Bus waits 25 s): the notify goes out without an id, then
+  # its id comes as a line of its own, which log joins to it (finding 688).
+  ob run -b "$B" -d -q -- gdbus call --session --timeout 20 --dest org.freedesktop.Notifications \
+    --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.Notify \
+    '"t430"' "uint32 0" '""' "\"slow $m\"" '""' '@as []' '@a{sv} {}' "int32 -1"
+  out=$(ob wait -b "$B" --timeout 10s notification "^slow $m"); rc=$?
+  check_eq "a late reply: wait notification has its notify at 5 s" 0 "$rc"
+  check_match "...without an id yet" "notify \(no id\) t430: \"slow $m\" -- not shown: no reply in 5 s$" "$out"
+  check "...its line in the log stays so" jq -e -s --arg s "slow $m" \
+    'map(select(.summary == $s)) | length == 1 and .[0].id == null and .[0].error == "no reply in 5 s" and (.[0].serial | type) == "number"' \
+    "$D/home/notifications.log"
+  ob wait -b "$B" --timeout 10s until -- grep -qF '"event":"reply"' /home/sbx/notifications.log >/dev/null 2>&1 ||
+    no "...its reply recorded when it came" "$(grep -F "slow $m" "$D/home/notifications.log")"
+  check_match "...then log notifications shows its id" "[0-9] notify #45 \(replied after [5-9]\.[0-9] s\) t430: \"slow $m\"$" \
+    "$(ob log -b "$B" notifications --grep "slow $m" 2>&1)"
+  check "...--json too: id, no error, the reply's time; the reply no line of its own" jq -e -s --arg s "slow $m" \
+    'length == 1 and .[0].summary == $s and .[0].id == 45 and .[0].error == null and .[0].reply_time > .[0].time' \
+    <<<"$(ob log -b "$B" notifications --json --grep "slow $m|reply" 2>&1)"
+  # GTK's GNotification (GLib 2.90 here): nothing in a box owns org.gtk.Notifications and the app is not
+  # sandboxed (no portal), so GLib's freedesktop backend sends it as a Notify.
+  cat > "$D/home/t430-gnotify.py" <<'EOF'
+import sys
+from gi.repository import Gio, GLib
+app = Gio.Application(application_id="org.omabox.T430", flags=Gio.ApplicationFlags.NON_UNIQUE)
+def activate(a):
+    n = Gio.Notification.new(sys.argv[1])
+    n.set_body("from a GNotification")
+    n.add_button("Open", "app.open")
+    a.send_notification("t430", n)
+    a.hold()
+    GLib.timeout_add(1000, lambda: (a.release(), a.quit()))
+app.connect("activate", activate)
+app.run([sys.argv[0]])
+EOF
+  ob run -b "$B" -- python3 -I /home/sbx/t430-gnotify.py "gtk $m" >/dev/null 2>&1
+  check_match "a GApplication's GNotification: recorded, as GLib's freedesktop backend sends it" \
+    "[0-9] notify #46 t430-gnotify\.py: \"gtk $m\" \"from a GNotification\" .*desktop-entry=org\.omabox\.T430.* actions=app\.open:\"Open\"$" \
+    "$(ob log -b "$B" notifications --grep "gtk $m" 2>&1)"
   check_match "log --json is the notifications log's alone" "--json is the notifications log's alone" \
     "$(ob log -b "$B" shell --json 2>&1)"
   ob down "$B" >/dev/null 2>&1

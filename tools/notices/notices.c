@@ -12,16 +12,21 @@
 // nothing of the host's bus: it only ever connects to the box's own.
 //
 // A line each (SECONDS.MILLIS: when the bus passed it on):
-//   {"time":S,"event":"notify","id":N|null,"error":null|"NAME: TEXT","sender":":1.9","app_name":..,
+//   {"time":S,"event":"notify","id":N|null,"error":null|"NAME: TEXT","serial":N,"sender":":1.9","app_name":..,
 //    "replaces_id":N,"app_icon":..,"summary":..,"body":..,"actions":[{"key":..,"label":..}],
 //    "hints":{"urgency":2,"category":"..",...},"expire_timeout":-1}
 //   {"time":S,"event":"close","id":N,"sender":..}         CloseNotification, an app's
 //   {"time":S,"event":"closed","id":N,"reason":R}         NotificationClosed, the server's (1 expired,
 //                                                         2 dismissed, 3 closed by CloseNotification)
 //   {"time":S,"event":"action","id":N,"action":KEY}       ActionInvoked, the server's
+//   {"time":S,"event":"reply","serial":N,"sender":..,"call_time":S,"id":N|null,"error":null|..}
+//                                                         a late reply: see below
 //   {"time":S,"event":"omabox","note":..}                 its own: listening, stopped
 // A Notify is written when its reply (the id) or error comes, or REPLY_MS after it with neither (id
-// null, error "no reply in 5 s"); one sent wanting no reply at once (id null). Hints keep their basic
+// null, error "no reply in 5 s"); one sent wanting no reply at once (id null, no serial). One written
+// without its reply is still waited for until LATE_MS after it (D-Bus's default reply timeout): a
+// reply that comes by then is a "reply" line naming the call by its sender and serial (and its time),
+// which `omabox log notifications` joins to the notify line (#430, finding 688). Hints keep their basic
 // values; a structured one (image-data) is its D-Bus signature. A string past its cap is cut at a
 // character and ends in "…". Each line is one write() to a file opened O_APPEND, never truncated, so
 // a byte offset stays a place in it (`wait notification --since`); it stops at MAX_BYTES. Idle it
@@ -47,6 +52,7 @@
 #define MAX_BYTES (16L << 20)
 #define MAX_PENDING 64
 #define REPLY_MS 5000
+#define LATE_MS 25000         // D-Bus's default reply timeout (libdbus's, GDBus's, sd-bus's)
 #define CAP_TEXT (16 << 10)   // summary, body
 #define CAP_WORD 1024         // a name, a key, a label, a hint's string
 #define MAX_ITEMS 64          // actions (pairs), hints
@@ -156,9 +162,10 @@ static void note(const char *what) {
     free(b.p);
 }
 
-// A Notify waiting for its reply: who sent it, its serial, when, and its line from "sender" on.
+// A Notify waiting for its reply: who sent it, its serial, when, and its line from "sender" on; once
+// written (late), only who, which and when, until LATE_MS.
 struct pending {
-    int used;
+    int used, written;
     char *sender;
     uint64_t cookie, at_ms;
     struct timespec ts;
@@ -166,36 +173,75 @@ struct pending {
 };
 static struct pending pend[MAX_PENDING];
 
-static void write_notify(const struct timespec *ts, const uint32_t *id, const char *error, const struct buf *rest) {
+// ",\"id\":N|null,\"error\":null|\"..\""
+static void id_error(struct buf *b, const uint32_t *id, const char *error) {
+    if (id) sayf(b, ",\"id\":%" PRIu32, *id);
+    else say(b, ",\"id\":null");
+    say(b, ",\"error\":");
+    jstr(b, error, CAP_WORD);
+}
+
+// SERIAL is 0 for a call that wants no reply (then the line has none).
+static void write_notify(const struct timespec *ts, const uint32_t *id, const char *error, uint64_t serial,
+                         const struct buf *rest) {
     struct buf b = {0};
     stamp(&b, ts, "notify");
-    if (id) sayf(&b, ",\"id\":%" PRIu32, *id);
-    else say(&b, ",\"id\":null");
-    say(&b, ",\"error\":");
-    jstr(&b, error, CAP_WORD);
+    id_error(&b, id, error);
+    if (serial) sayf(&b, ",\"serial\":%" PRIu64, serial);
     put(&b, rest->p, rest->n);
     say(&b, "}");
     emit(&b);
     free(b.p);
 }
 
-static void settle(struct pending *p, const uint32_t *id, const char *error) {
-    write_notify(&p->ts, id, error, &p->rest);
+static void drop(struct pending *p) {
     free(p->sender);
     free(p->rest.p);
     memset(p, 0, sizeof(*p));
 }
 
-// The ones whose reply did not come in REPLY_MS, oldest first; and how long until the next one is due.
+// Its reply (ID or ERROR) came: the notify line, or, when that is out already, a reply line.
+static void settle(struct pending *p, const uint32_t *id, const char *error) {
+    if (!p->written) {
+        write_notify(&p->ts, id, error, p->cookie, &p->rest);
+        drop(p);
+        return;
+    }
+    struct buf b = {0};
+    struct timespec ts = now_real();
+    stamp(&b, &ts, "reply");
+    sayf(&b, ",\"serial\":%" PRIu64 ",\"sender\":", p->cookie);
+    jstr(&b, p->sender, CAP_WORD);
+    sayf(&b, ",\"call_time\":%lld.%03ld", (long long)p->ts.tv_sec, p->ts.tv_nsec / 1000000);
+    id_error(&b, id, error);
+    say(&b, "}");
+    emit(&b);
+    free(b.p);
+    drop(p);
+}
+
+// Its notify line goes out without an id (WHY); the reply is still waited for, until LATE_MS.
+static void give_up(struct pending *p, const char *why) {
+    write_notify(&p->ts, NULL, why, p->cookie, &p->rest);
+    free(p->rest.p);
+    p->rest = (struct buf){0};
+    p->written = 1;
+}
+
+static uint64_t due(const struct pending *p) { return p->at_ms + (p->written ? LATE_MS : REPLY_MS); }
+
+// The ones whose reply did not come in REPLY_MS (written without an id), and those written so whose
+// reply did not come in LATE_MS (forgotten), oldest first; and how long until the next one is due.
 static uint64_t expire(void) {
     uint64_t t = now_ms(), next = UINT64_MAX;
     for (;;) {
         struct pending *old = NULL;
         for (int i = 0; i < MAX_PENDING; i++)
-            if (pend[i].used && (!old || pend[i].at_ms < old->at_ms)) old = &pend[i];
+            if (pend[i].used && (!old || due(&pend[i]) < due(old))) old = &pend[i];
         if (!old) break;
-        if (old->at_ms + REPLY_MS > t) { next = old->at_ms + REPLY_MS - t; break; }
-        settle(old, NULL, "no reply in 5 s");
+        if (due(old) > t) { next = due(old) - t; break; }
+        if (old->written) drop(old);
+        else give_up(old, "no reply in 5 s");
     }
     return next;
 }
@@ -315,21 +361,30 @@ static void on_call(sd_bus_message *m, const struct timespec *ts) {
         }
         uint64_t cookie = 0;
         if (sd_bus_message_get_expect_reply(m) <= 0 || !sender || sd_bus_message_get_cookie(m, &cookie) < 0) {
-            write_notify(ts, NULL, NULL, &rest);
+            write_notify(ts, NULL, NULL, 0, &rest);
             free(rest.p);
             return;
         }
         struct pending *slot = NULL;
         for (int i = 0; i < MAX_PENDING && !slot; i++)
             if (!pend[i].used) slot = &pend[i];
-        if (!slot) {   // full: the oldest goes out as it is
+        if (!slot) {   // full: the oldest one written already is forgotten, else the oldest goes out as it is
             for (int i = 0; i < MAX_PENDING; i++)
-                if (!slot || pend[i].at_ms < slot->at_ms) slot = &pend[i];
-            settle(slot, NULL, "no reply yet (too many waiting)");
+                if (!slot || pend[i].written > slot->written ||
+                    (pend[i].written == slot->written && pend[i].at_ms < slot->at_ms))
+                    slot = &pend[i];
+            if (slot->written) drop(slot);
+            else {
+                give_up(slot, "no reply yet (too many waiting)");
+                drop(slot);
+            }
         }
         *slot = (struct pending){.used = 1, .sender = strdup(sender), .cookie = cookie, .at_ms = now_ms(),
                                  .ts = *ts, .rest = rest};
-        if (!slot->sender) { settle(slot, NULL, NULL); }
+        if (!slot->sender) {
+            write_notify(ts, NULL, NULL, 0, &rest);
+            drop(slot);
+        }
     } else if (is(member, "CloseNotification")) {
         uint32_t id;
         if (sd_bus_message_read(m, "u", &id) < 0) return;
@@ -465,7 +520,7 @@ int main(int argc, char **argv) {
         if (r < 0 && r != -EINTR) break;
     }
     for (int i = 0; i < MAX_PENDING; i++)
-        if (pend[i].used) settle(&pend[i], NULL, "no reply: the bus closed");
+        if (pend[i].used && !pend[i].written) settle(&pend[i], NULL, "no reply: the bus closed");
     note("stopped: the bus closed");
     return 0;
 }
