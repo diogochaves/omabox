@@ -20059,18 +20059,26 @@ t_desk_copy() {
 # shell.json.omabox-idle a link to the stand-in's .bashrc: the edit makes its own temp file, .bashrc as
 # it was. (2) The host has no ~/.config/caelestia, the save's is a link to another folder of the
 # stand-in's: not followed, said, its shell.json as it was. On a stand-in HOME and XDG dirs; the
-# config names Caelestia in a string it never runs, and the box runs no shell.
+# config names Caelestia in a string it never runs, and the box runs no shell. (Where Caelestia is not
+# installed, a stand-in caelestia profile whose start is a program the box has, `true caelestia shell
+# -d`, and the config names that: finding 701 leaves out a shell whose program is not installed, its
+# folders uncopied and no idle edit, as t_desk_copy's dms.)
 t_desk_idle_links() {
-  local B=$P-dil base=$TMP/$P-dil out S1=$P-dil1 S2=$P-dil2 host
-  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  local B=$P-dil base=$TMP/$P-dil out S1=$P-dil1 S2=$P-dil2 host start
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state pd=$base/profiles
   host='{"general": {"idle": {"timeouts": [{"timeout": 180}]}}}'
   rm -rf "$base"
   mkdir -p "$fh/.config/omabox" "$fh/.config/hypr" "$fh/.config/caelestia" "$fh/.config/x" "$rt" "$c" "$st" "$base/data"
   chmod 700 "$rt"; : > "$fh/.config/omabox/config"
-  echo 'local shell = "caelestia shell -d" -- named, never run (the test runs no shell)' > "$fh/.config/hypr/hyprland.lua"
+  cp -r "$ROOT/share/desk-shells" "$pd"
+  if ! command -v caelestia >/dev/null; then
+    sed -i 's/^start caelestia shell -d$/start true caelestia shell -d/' "$pd/caelestia"
+  fi
+  start=$(sed -n 's/^start //p' "$pd/caelestia")
+  echo "local shell = \"$start\" -- named, never run (the test runs no shell)" > "$fh/.config/hypr/hyprland.lua"
   echo "$host" > "$fh/.config/caelestia/shell.json"; echo "$host" > "$fh/.config/x/shell.json"
   echo '# the real one' > "$fh/.bashrc"
-  dl() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  dl() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data OMABOX_DESK_SHELL_DIR=$pd "$CLI" "$@"; }
   out=$(cd "$base" && dl up "$B" --desktop desk --net isolated --no-shell 2>&1) ||
     { no "up --desktop desk, Caelestia's config copied" "$out"; dl down "$B" >/dev/null 2>&1; return; }
   check_match "up --desktop desk: Caelestia's idle timeouts off in its copy" "caelestia's own idle timeouts off in the box's ~/\.config/caelestia/shell\.json" "$out"
