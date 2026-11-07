@@ -210,7 +210,7 @@ OMABOX_POLKIT
 0
 --setenv
 OMABOX_SHELL
-1
+0
 --setenv
 OMABOX_DESKTOP
 desk
@@ -243,7 +243,9 @@ OMABOX_DESK_SHELL
   "bar": "user",
   "desk_base": "plain",
   "desk_copy": {
-    "copied": [],
+    "copied": [
+      ".config/hypr/hyprland.lua"
+    ],
     "skipped": []
   },
   "desktop": "desk",
