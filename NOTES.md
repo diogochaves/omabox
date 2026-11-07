@@ -13697,14 +13697,21 @@ from them.
     (`zwp_idle_inhibit_manager_v1`) for every notification made with `get_idle_notification`
     (Quickshell's IdleMonitor with `respectInhibitors: true`, its default; hypridle; swayidle), not
     for `get_input_idle_notification` (`respectInhibitors: false`). It counts an inhibitor only on
-    a mapped, visible surface (IdleInhibitor.cpp: a view's `aliveAndVisible()`; a surface with no
-    view, "non-desktop", always), and checks only when one is made or destroyed or on focus and
-    fullscreen changes, never at a map: an inhibitor made before its surface maps does nothing until
-    the next focus change. So `tools/idlehold` (C, like the other in-box tools; refuses outside a box
-    by `tools/common/box.h`) puts a 1×1 transparent layer surface (background layer, empty input
+    a mapped, visible surface (IdleInhibitor.cpp: 0.56.2 a view's `aliveAndVisible()`; 0.57.1
+    `mapped() && acceptsInput() && alphaNonZero()`, the last a layer's fade alpha, which animates in
+    from 0 as it maps; a surface with no view, "non-desktop", always), and looks only when one is
+    made or destroyed or on focus and fullscreen changes, never at a map or an animation's end: an
+    inhibitor made before its surface maps, or on 0.57 before its fade-in is under way, does
+    nothing until the next focus change (seen on 0.57.1: the respecting IdleMonitor went idle with
+    the hold up). So `tools/idlehold` (C, like the other in-box tools; refuses outside a box by
+    `tools/common/box.h`) puts a 1×1 transparent layer surface (background layer, empty input
     region, no exclusive zone, namespace `omabox-idlehold`) on each output, commits its buffer, waits
-    for the compositor's answer to that commit (`wl_display_sync`), and only then makes the
-    inhibitor; an output added later gets its own. `deskguard::after_ready` starts it in the box
+    for the compositor's answer to that commit (`wl_display_sync`), then makes the inhibitor, and
+    makes it again at 0.25, 0.75, 1.5, 3 and 6 s (the new one before the old one goes, so the hold
+    never lapses), each a look Hyprland takes after the fade-in; an output added later gets its own.
+    A layer mapped while a window is fullscreen on its monitor is not animated in on 0.57 (its
+    alpha may stay 0): a hold made under a fullscreen window may hold nothing there until one of
+    the looks above comes after it ends (not staged). `deskguard::after_ready` starts it in the box
     (`setsid -f`, the box's pid namespace: it ends with the box), bound at
     `/opt/omabox/bin/omabox-idlehold` in desk boxes only (other boxes' launch.sh unchanged), and
     waits up to 3 s for its "holding idle off on N of M outputs" line in the runtime dir's
