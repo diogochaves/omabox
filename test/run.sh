@@ -12079,7 +12079,9 @@ desk_guard() {
   out=$(python3 -I -c "$DESK_BINDS" "$d/launch.sh" "$h" "$c/omabox/$b/home" 2>&1) || out="launch.sh not read: $out"
   check_eq "$b: launch.sh mounts nothing from HOME ($h) or above it, and only the box HOME's folder at it" "" "$out"
   hid=$(stat -L -c %d:%i "$h" 2>&1); bid=$(stat -L -c %d:%i "$c/omabox/$b/home" 2>&1)
-  check_eq "$b: HOME in the box is the box HOME's folder (device and inode)" "$bid" "$("${via[@]}" run -b "$b" -- stat -L -c %d:%i "$h" 2>&1)"
+  # (stdout only: run's note that a path under your HOME is the box HOME's there goes to stderr;
+  # the entries' check ends on a word of its own, so a run that fails cannot pass for none)
+  check_eq "$b: HOME in the box is the box HOME's folder (device and inode)" "$bid" "$("${via[@]}" run -b "$b" -- stat -L -c %d:%i "$h" 2>/dev/null)"
   check "$b: ...which is not your HOME" test "$bid" != "$hid"
   for p in "$h"/* "$h"/.[!.]* "$h"/..?*; do
     [ -e "$p" ] || [ -L "$p" ] || continue
@@ -12087,8 +12089,8 @@ desk_guard() {
     [[ " ${DESK_ALLOW:-} " != *" $n "* ]] || continue
     ids+=("$n" "$(stat -c %d:%i "$p")")
   done
-  check_eq "$b: none of HOME's $((${#ids[@]} / 2)) entries is in the box (each by device and inode)" "" \
-    "$("${via[@]}" run -b "$b" -- sh -c 'h=$1; shift; while [ $# -ge 2 ]; do i=$(stat -c %d:%i -- "$h/$1" 2>/dev/null) && [ "$i" = "$2" ] && printf "%s\n" "$1"; shift 2; done; true' sh "$h" "${ids[@]}" 2>&1)"
+  check_eq "$b: none of HOME's $((${#ids[@]} / 2)) entries is in the box (each by device and inode)" "checked" \
+    "$("${via[@]}" run -b "$b" -- sh -c 'h=$1; shift; while [ $# -ge 2 ]; do i=$(stat -c %d:%i -- "$h/$1" 2>/dev/null) && [ "$i" = "$2" ] && printf "%s\n" "$1"; shift 2; done; echo checked' sh "$h" "${ids[@]}" 2>/dev/null)"
   [ "$fail" = "$f0" ]
 }
 # re_q TEXT: TEXT as a bash regex matching it literally.
@@ -15177,8 +15179,6 @@ t_cli_up() {
     slug=$(tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
     # (a plain machine's boxes, #247: goldens of their own, up-plain/, written on one)
     g=$ROOT/test/golden/up$(omarchy_here || echo -plain)/$slug
-    # (a desk box's, #321: the same on either machine, a plain box's at the HOME's path: up-desk/)
-    [[ $slug != up-desktop-desk* ]] || g=$ROOT/test/golden/up-desk/$slug
     # (a connected box's: the host's ephemeral ports, pasta's to forward, and its resolver file)
     eph=$(tr -s '\t ' '-' < /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null) || eph=""
     resolv=$(readlink -f /etc/resolv.conf 2>/dev/null) || resolv=""
@@ -15250,8 +15250,9 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "no_seed": \[$')
   cx_case "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
   # #321 (finding 700): a desk box, its HOME at the caller's HOME path (the test's own, $h): box.json's
-  # desktop and home; its golden (test/golden/up-desk/) has the box HOME's folder bound there and HOME
-  # and the XDG dirs under it.
+  # desktop and home; its golden has the box HOME's folder bound there and HOME
+  # and the XDG dirs under it (up/ on an Omarchy machine, where its tree is hidden; up-plain/ on one
+  # without, written there).
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "desktop": "desk",$' "state~^  \"home\": \"$(re_q "$h")\",\$" 'state~^  "desk_base": "plain",$')
   # (its own XDG_CONFIG_HOME: no Hyprland config loading Omarchy there, a plain base, finding 708)
   cx_env=("HOME=$h" "XDG_CONFIG_HOME=$h/.config")
