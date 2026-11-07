@@ -276,8 +276,15 @@ fn held_parent(h: &[u8], rel: &[u8]) -> Result<Option<(Fd, std::ffi::CString)>, 
     let Some(hc) = cstr(h) else {
         return Ok(None);
     };
+    // (H itself is omabox's: the box dir's `home`, a link to the HOME's folder, which no box can
+    // change; followed. Only what is below it is the box's.)
     // SAFETY: open of a NUL-terminated path; the fd is owned by Fd from here.
-    let fd = unsafe { libc::open(hc.as_ptr(), flags) };
+    let fd = unsafe {
+        libc::open(
+            hc.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
     if fd < 0 {
         return Ok(None);
     }
@@ -2584,6 +2591,14 @@ mod tests {
         std::fs::create_dir_all(f.in_box("c")).unwrap();
         symlink(format!("{}/victim.json", f.fh), f.in_box("c/a.json")).unwrap();
         assert!(idle_edit(f.bx.as_bytes(), b"c/a.json k []").is_err());
+        // (H itself a link, as up's box dir `home` is: followed, it is omabox's own)
+        std::fs::write(f.in_box("c/b.json"), b"{}").unwrap();
+        let hl = format!("{}/home-link", f.base);
+        symlink(&f.bx, &hl).unwrap();
+        assert_eq!(
+            idle_edit(hl.as_bytes(), b"c/b.json k []"),
+            Ok(Some(b"c/b.json".to_vec()))
+        );
         assert_eq!(
             std::fs::read(format!("{}/victim.json", f.fh)).unwrap(),
             b"{}"

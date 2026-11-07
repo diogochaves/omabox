@@ -1159,12 +1159,20 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   as any box's), never your files: only the repo, `--ro-bind`, `--seed` and the copy of your desktop
   bring any in. A path under your HOME in a command is the box HOME's there, not yours (`run` says
   so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at it or above it, over
-  omabox's own files in it (`.config/omabox`, its logs), nor through a link in it.
+  omabox's own files in it (`.config/omabox`, its logs), nor through a link in it, nor inside
+  another mount there (a font folder, a plugin, the repo).
+- **Its files from the host**: Read, Write and Edit them at their paths under `omabox path --home`
+  (or through `omabox run`), never by following a link there: on the host, an absolute link in that
+  folder leads to your real HOME's file, not the box's (`path --home` warns when it holds one;
+  omabox's own links there are relative).
 - **The copy**, made at `up` before `--seed`'s (which win): your `~/.config/hypr` (links followed,
   stow and home-manager included, as copies), the config and state of each desk shell found
   (`--shell CMD`, what your `hyprland.lua` starts, or its unit linked under
-  `~/.config/systemd/user/{hyprland-session,graphical-session}.target.wants/`), and the images those
-  name by a path in your HOME. Never a secret store or what looks like a key; capped; `up` says what
+  `~/.config/systemd/user/{hyprland-session,graphical-session}.target.wants/`), and the wallpapers
+  they show: where a shell's profile says it keeps them (DMS's `wallpaperPath`, Caelestia's
+  `wallpaper/path.txt`), and the pictures your config's `swww`, `swaybg` or hyprpaper names; nothing
+  else a copied file names (a `~/Downloads` in a bind stays out). Never a secret store or what looks
+  like a key; capped (a part stops at its cap, said in one line; the whole copy at 30 s); `up` says what
   it left out and box.json's `desk_copy` lists it, `shell_guess`/`shell_from` (and the box's
   `OMABOX_DESK_SHELL`) the shell found first. A shell's own idle timeouts are turned off in its copy
   where its profile says how (Caelestia). A write to the copy never reaches your files. A config the
