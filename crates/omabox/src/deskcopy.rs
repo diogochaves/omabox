@@ -114,6 +114,156 @@ fn pic_name(n: &[u8]) -> bool {
             .any(|e| l.len() > e.len() && l.ends_with(e.as_bytes()))
 }
 
+/// Why the path T (resolved) stays out by a name in it: each part below HOME (as written, or
+/// HOME_R, resolved), or each part when it is not in HOME.
+fn parts_why(home: &[u8], home_r: &[u8], t: &[u8]) -> Option<&'static str> {
+    let under = |h: &[u8]| t.strip_prefix(cat!(h, "/").as_slice()).map(<[u8]>::to_vec);
+    let rel = under(home_r)
+        .or_else(|| under(home))
+        .unwrap_or_else(|| t.to_vec());
+    rel.split(|&c| c == b'/')
+        .filter(|s| !s.is_empty())
+        .find_map(seed::desk_box_name_refused)
+}
+
+/// Why E, a link (or a top folder) leading to TO, is not followed: refuse_src, or a name on its
+/// way.
+fn follow_why(home: &[u8], home_r: &[u8], e: &[u8], to: &[u8]) -> Option<Vec<u8>> {
+    if let Some(w) = refuse_src(e) {
+        return Some(cat!("it leads to ", to, ": ", w));
+    }
+    parts_why(home, home_r, to).map(|w| cat!("it leads to ", to, ": ", w))
+}
+
+/// precheck: what copy refuses (up fails), asked before the box's folder is made (deskguard::checks,
+/// finding 709): a Hyprland config folder refuse_src keeps out, or a hyprland.lua or a module it
+/// requires (and they require) that the copy would leave out (a link refused on its way, a secret's
+/// name, over 1 MiB, what looks like a key in it: read on the host, read-only). The same words as
+/// copy's own refusals, which stay for a file changed in between.
+pub fn precheck(ctx: &Ctx) -> Res<()> {
+    let home = shell::env_or_empty("HOME");
+    let home_r = readlink_e(&home).unwrap_or_else(|| home.clone());
+    let hypr = cat!(xdg("XDG_CONFIG_HOME", &home, ".config"), "/hypr");
+    if std::fs::symlink_metadata(p(&hypr)).is_err() {
+        return Ok(());
+    }
+    let refused = |why: &[u8]| {
+        ctx.die(cat!(
+            "up: --desktop desk: your Hyprland config (",
+            hypr,
+            ") cannot go into a box: ",
+            why
+        ))
+    };
+    let Some(t) = readlink_e(&hypr) else {
+        return Err(refused(b"a link that leads nowhere"));
+    };
+    if let Some(why) = follow_why(&home, &home_r, &hypr, &t) {
+        return Err(refused(&why));
+    }
+    // (REL in ~/.config/hypr; whether it is hyprland.lua's module, and so may be missing)
+    let mut todo: Vec<(Vec<u8>, bool)> = vec![(b"hyprland.lua".to_vec(), false)];
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    while let Some((rel, module)) = todo.pop() {
+        if !seen.insert(rel.clone()) {
+            continue;
+        }
+        let src = cat!(t, "/", rel);
+        if std::fs::symlink_metadata(p(&src)).is_err() {
+            continue;
+        }
+        let why: Option<Vec<u8>> =
+            if let Some(w) = rel
+                .split(|&c| c == b'/')
+                .find_map(seed::desk_box_name_refused)
+            {
+                Some(w.as_bytes().to_vec())
+            } else {
+                match readlink_e(&src) {
+                    None => Some(b"a link that leads nowhere".to_vec()),
+                    Some(to) => follow_why(&home, &home_r, &src, &to).or_else(|| {
+                        match std::fs::metadata(p(&to)) {
+                            Ok(m) if !m.is_file() => Some(b"not a regular file".to_vec()),
+                            Ok(m) if m.len() > HYPR.file => Some(b"over 1 MiB".to_vec()),
+                            Ok(_) => seed::desk_content_refused(&to).map(|w| w.as_bytes().to_vec()),
+                            Err(_) => Some(b"a link that leads nowhere".to_vec()),
+                        }
+                    }),
+                }
+            };
+        if let Some(why) = why {
+            return Err(ctx.die(if module {
+                cat!(
+                    "up: --desktop desk: ~/.config/hypr/",
+                    rel,
+                    ", which your Hyprland config requires, was not copied into the box: ",
+                    why
+                )
+            } else {
+                cat!(
+                    "up: --desktop desk: your hyprland.lua was not copied into the box: ",
+                    why
+                )
+            }));
+        }
+        for m in requires(&std::fs::read(p(&src)).unwrap_or_default()) {
+            if clean_rel(&m) {
+                todo.push((cat!(m, ".lua"), true));
+                todo.push((cat!(m, "/init.lua"), true));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// idle_edit H LINE: a profile's `idle FILE KEY VALUE` (#321 step 5, finding 709) on the box's copy
+/// of FILE (a JSON file in the box HOME H, a file of its own: the copy's, never a link): KEY, dotted,
+/// set to VALUE (JSON; a word that is none as a string), the folders on its way made objects. So the
+/// shell's own idle timeouts never lock or blank the box (the idle hold covers the shells that heed
+/// an inhibitor). Some(FILE) when it was edited; None when the copy has no such file, or it is no
+/// JSON object.
+fn idle_edit(h: &[u8], line: &[u8]) -> Option<Vec<u8>> {
+    let mut it = line
+        .splitn(3, |c| c.is_ascii_whitespace())
+        .map(<[u8]>::trim_ascii);
+    let (file, key, val) = (it.next()?, it.next()?, it.next()?);
+    if !clean_rel(file) || key.is_empty() || val.is_empty() {
+        return None;
+    }
+    let f = cat!(h, "/", file);
+    let m = std::fs::symlink_metadata(p(&f)).ok()?;
+    if !m.is_file() || m.len() > SHELL.file {
+        return None;
+    }
+    let mut doc: Value = serde_json::from_slice(&std::fs::read(p(&f)).ok()?).ok()?;
+    let new: Value = serde_json::from_slice(val)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(val).into_owned()));
+    let keys: Vec<String> = String::from_utf8_lossy(key)
+        .split('.')
+        .map(str::to_owned)
+        .collect();
+    let mut at = &mut doc;
+    for (i, k) in keys.iter().enumerate() {
+        let o = at.as_object_mut()?;
+        if i + 1 == keys.len() {
+            o.insert(k.clone(), new);
+            break;
+        }
+        let next = o
+            .entry(k.clone())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !next.is_object() {
+            *next = Value::Object(Map::new());
+        }
+        at = next;
+    }
+    let text = serde_json::to_vec_pretty(&doc).ok()?;
+    let tmp = cat!(f, ".omabox-idle");
+    std::fs::write(p(&tmp), &text).ok()?;
+    std::fs::rename(p(&tmp), p(&f)).ok()?;
+    Some(file.to_vec())
+}
+
 /// The walk: what it copied and skipped, its caps.
 struct Walk<'a> {
     ctx: &'a Ctx,
@@ -162,26 +312,8 @@ impl Walk<'_> {
         }
     }
 
-    /// Why the path T (resolved) stays out by a name in it: each part below HOME, or each part when
-    /// it is not in HOME.
-    fn parts_why(&self, t: &[u8]) -> Option<&'static str> {
-        let under = |h: &[u8]| t.strip_prefix(cat!(h, "/").as_slice()).map(<[u8]>::to_vec);
-        let rel = under(&self.home_r)
-            .or_else(|| under(&self.home))
-            .unwrap_or_else(|| t.to_vec());
-        rel.split(|&c| c == b'/')
-            .filter(|s| !s.is_empty())
-            .find_map(seed::desk_box_name_refused)
-    }
-
-    /// Why E, a link (or a top folder) leading to TO, is not followed: refuse_src, or a name on its
-    /// way.
     fn follow_why(&self, e: &[u8], to: &[u8]) -> Option<Vec<u8>> {
-        if let Some(w) = refuse_src(e) {
-            return Some(cat!("it leads to ", to, ": ", w));
-        }
-        self.parts_why(to)
-            .map(|w| cat!("it leads to ", to, ": ", w))
+        follow_why(&self.home, &self.home_r, e, to)
     }
 
     /// A top folder (or file) the copy starts from: SRC on the host, REL in the box HOME. Nothing
@@ -415,125 +547,6 @@ impl Walk<'_> {
     }
 }
 
-/// A shell's command line, CMD (a hyprland.lua string, --shell's): the words of each command in
-/// it (`;`, `&` and `|` part them), quotes dropped, with what only starts one taken off: `env`,
-/// `A=B`, `exec`, `setsid [-f]`, `nohup`, `uwsm app [...] --`, `sh -c`, `bash -c`.
-fn commands(cmd: &[u8]) -> Vec<Vec<Vec<u8>>> {
-    let assign = |x: &[u8]| {
-        x.iter().position(|&c| c == b'=').is_some_and(|k| {
-            k > 0
-                && !x[0].is_ascii_digit()
-                && x[..k]
-                    .iter()
-                    .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
-        })
-    };
-    let mut out = Vec::new();
-    for piece in cmd.split(|c| matches!(c, b';' | b'&' | b'|')) {
-        let w: Vec<Vec<u8>> = piece
-            .split(u8::is_ascii_whitespace)
-            .map(|w| {
-                w.iter()
-                    .copied()
-                    .filter(|c| *c != b'"' && *c != b'\'')
-                    .collect::<Vec<u8>>()
-            })
-            .filter(|w| !w.is_empty())
-            .collect();
-        let at = |i: usize| w.get(i).map(Vec::as_slice);
-        let mut i = 0;
-        while let Some(x) = at(i) {
-            match x {
-                b"env" | b"exec" | b"nohup" => i += 1,
-                b"setsid" => {
-                    i += 1;
-                    while at(i).is_some_and(|y| y.starts_with(b"-")) {
-                        i += 1;
-                    }
-                }
-                b"uwsm" if at(i + 1) == Some(b"app") => {
-                    // (its options up to `--`, when it has one; else those that start with `-`)
-                    i += 2;
-                    match w[i..].iter().position(|y| y == b"--") {
-                        Some(k) => i += k + 1,
-                        None => {
-                            while at(i).is_some_and(|y| y.starts_with(b"-")) {
-                                i += 1;
-                            }
-                        }
-                    }
-                }
-                b"sh" | b"bash" if at(i + 1) == Some(b"-c") => i += 2,
-                _ if assign(x) => i += 1,
-                _ => break,
-            }
-        }
-        if i < w.len() {
-            out.push(w[i..].to_vec());
-        }
-    }
-    out
-}
-
-/// A Quickshell config's name in `{name}`'s place: one word, not a path, not an option.
-fn name_word(w: &[u8]) -> bool {
-    !w.is_empty() && w[0] != b'-' && w != b"." && w != b".." && !w.contains(&b'/')
-}
-
-/// Whether CMD (a command's words) starts the profile P: Some(its `{name}`) when it begins with one
-/// of P's matches or its start (the first word also by its last part: `/usr/bin/qs`).
-fn hit(pr: &Profile, cmd: &[Vec<u8>]) -> Option<Option<Vec<u8>>> {
-    let start = Some(&pr.start).filter(|s| !s.is_empty());
-    for pat in pr.matches.iter().chain(start) {
-        let pw: Vec<&[u8]> = pat
-            .split(u8::is_ascii_whitespace)
-            .filter(|w| !w.is_empty())
-            .collect();
-        if pw.is_empty() || cmd.len() < pw.len() {
-            continue;
-        }
-        let mut name = None;
-        let ok = pw.iter().zip(cmd).enumerate().all(|(i, (a, b))| {
-            let b: &[u8] = if i == 0 {
-                b.rsplit(|&c| c == b'/').next().unwrap_or(b)
-            } else {
-                b
-            };
-            if *a == b"{name}" {
-                name = Some(b.to_vec());
-                name_word(b)
-            } else {
-                *a == b
-            }
-        });
-        if ok {
-            return Some(name);
-        }
-    }
-    None
-}
-
-/// The first profile CMD starts: a named one before a `{name}` one (Noctalia before any Quickshell
-/// config).
-fn first_hit(profiles: &[Profile], cmd: &[Vec<u8>]) -> Option<(usize, Option<Vec<u8>>)> {
-    let generic = |pr: &Profile| {
-        pr.matches
-            .iter()
-            .any(|m| crate::exit::contains(m, b"{name}"))
-    };
-    let order = profiles
-        .iter()
-        .enumerate()
-        .filter(|(_, pr)| !generic(pr))
-        .chain(profiles.iter().enumerate().filter(|(_, pr)| generic(pr)));
-    for (i, pr) in order {
-        if let Some(n) = hit(pr, cmd) {
-            return Some((i, n));
-        }
-    }
-    None
-}
-
 /// The strings in a Lua line ("..." and '...', a backslash's next character kept), up to a `--`
 /// outside them; COMMENT false: the whole line's (a JSON or text file's).
 fn strings(line: &[u8], comment: bool) -> Vec<Vec<u8>> {
@@ -678,18 +691,14 @@ fn detect(profiles: &[Profile], shell_cmd: &[u8], luas: &[Vec<u8>], config: &[u8
             found.push(Found { i, name, from });
         }
     };
-    for cmd in commands(shell_cmd) {
-        if let Some((i, n)) = first_hit(profiles, &cmd) {
-            add(i, n, "--shell");
-        }
+    for (i, n) in deskshell::hits(shell_cmd, profiles) {
+        add(i, n, "--shell");
     }
     for text in luas {
         for line in text.split(|&c| c == b'\n') {
             for s in strings(line, true) {
-                for cmd in commands(&s) {
-                    if let Some((i, n)) = first_hit(profiles, &cmd) {
-                        add(i, n, "config");
-                    }
+                for (i, n) in deskshell::hits(&s, profiles) {
+                    add(i, n, "config");
                 }
             }
         }
@@ -823,6 +832,27 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
             }
         }
     }
+    // Each found shell's own idle timeouts off in its copy (its profile's `idle` lines), said.
+    for f in &found {
+        for line in &profiles[f.i].idle {
+            if let Some(file) = idle_edit(h, line) {
+                let key = line
+                    .split(u8::is_ascii_whitespace)
+                    .nth(1)
+                    .unwrap_or_default();
+                say(cat!(
+                    "up: ",
+                    profiles[f.i].name,
+                    "'s own idle timeouts off in the box's ~/",
+                    file,
+                    " (",
+                    key,
+                    ")"
+                ));
+                w.out.extend(cat!("edited ", file, "\t", key, "\n"));
+            }
+        }
+    }
     // 3. The images what was copied names by path: a folder named brings its top-level ones.
     w.part(b"the images they name".to_vec(), IMAGES);
     let mut files: Vec<Vec<u8>> = Vec::new();
@@ -865,7 +895,11 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     }
     w.end_part();
     // What up says: the parts copied, the first guess, and what stayed out (box.json has it all).
-    let guess = found.first().map(|f| (profiles[f.i].name.clone(), f.from));
+    // (on Omarchy's base the shell is Omarchy's: no guess for a slot it does not have)
+    let guess = found
+        .first()
+        .filter(|_| plan.plain)
+        .map(|f| (profiles[f.i].name.clone(), f.from));
     let n: u64 = w.parts.iter().map(|(_, c)| c).sum();
     if n > 0 || !w.nskipped.is_empty() || guess.is_some() {
         let parts: Vec<Vec<u8>> = w
@@ -1070,6 +1104,23 @@ mod tests {
                     .map_err(|e| e.0),
                 said,
             )
+        }
+
+        /// precheck with this HOME (deskguard::checks's, before any box): what it said, if it failed.
+        fn pre(&self) -> Result<(), String> {
+            let ctx = {
+                let mut c = Ctx::new(b"up", b"/nonexistent".to_vec());
+                c.parsed();
+                c
+            };
+            let fh = self.fh.clone();
+            let vars = [
+                ("HOME", Some(fh.as_str())),
+                ("XDG_CONFIG_HOME", None),
+                ("OMABOX_JAIL", None),
+            ];
+            let (r, said) = shell::with_env(&vars, || crate::exit::heard(|| precheck(&ctx)));
+            r.map_err(|_| said)
         }
 
         fn in_box(&self, rel: &str) -> String {
@@ -1503,29 +1554,18 @@ mod tests {
         );
         let found = detect(&all, b"", &[], cfg.as_bytes());
         assert_eq!(names(&found), ["dms/unit"]);
-        // (the commands' words)
-        let w = |s: &str| -> Vec<String> {
-            commands(s.as_bytes())
-                .iter()
-                .map(|c| {
-                    c.iter()
-                        .map(|x| String::from_utf8_lossy(x).into_owned())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .collect()
-        };
-        assert_eq!(w("env A=1 B=2 exec dms run"), ["dms run"]);
+        // (each part's shell, read as desk-shell.lua reads it: deskshell::hits)
+        let h = |s: &str| names(&detect(&all, s.as_bytes(), &[], none));
+        assert_eq!(h("env A=1 B=2 exec dms run"), ["dms/--shell"]);
         assert_eq!(
-            w("uwsm app -s b -- qs -c x && waybar"),
-            ["qs -c x", "waybar"]
+            h("uwsm app -s b -- qs -c x && waybar"),
+            ["quickshell(x)/--shell", "waybar/--shell"]
         );
-        assert_eq!(w("bash -c 'nohup setsid --fork x'"), ["x"]);
         assert_eq!(
-            hit(&all[1], &[b"dms".to_vec()]),
-            None,
-            "dms alone is not `dms run`"
+            h("bash -c 'nohup setsid --fork waybar'"),
+            ["waybar/--shell"]
         );
+        assert!(h("dms").is_empty(), "dms alone is not `dms run`");
     }
 
     /// A profile's folders: DMS found by its unit, its config and state copied; a profile folder
@@ -1570,11 +1610,18 @@ mod tests {
         let f = Fx::new("ref");
         let (r, said) = f.run("");
         assert_eq!((r, said), (Ok(String::new()), String::new()));
+        assert_eq!(
+            f.pre(),
+            Ok(()),
+            "no hypr folder: no refusal here (deskguard says it)"
+        );
         f.put(".gnupg/hypr/hyprland.lua", LUA);
         f.ln(&format!("{}/.gnupg/hypr", f.fh), ".config/hypr");
         let (r, said) = f.run("");
         assert_eq!(r, Err(1));
         assert!(said.starts_with(&format!("omabox: up: --desktop desk: your Hyprland config ({}/.config/hypr) cannot go into a box: it leads to {}/.gnupg/hypr: it is inside", f.fh, f.fh)), "{said}");
+        // (finding 709: each refusal is precheck's too, before the box's folder, in the same words)
+        assert_eq!(f.pre(), Err(said));
         let f = Fx::new("ref2");
         f.put(
             ".config/hypr/hyprland.lua",
@@ -1586,6 +1633,7 @@ mod tests {
             said,
             "omabox: up: --desktop desk: your hyprland.lua was not copied into the box: it holds what looks like a key, token or password\n"
         );
+        assert_eq!(f.pre(), Err(said));
         let f = Fx::new("ref3");
         f.put(
             ".config/hypr/hyprland.lua",
@@ -1599,9 +1647,68 @@ mod tests {
             said,
             "omabox: up: --desktop desk: ~/.config/hypr/conf/binds.lua, which your Hyprland config requires, was not copied into the box: over 1 MiB\n"
         );
+        assert_eq!(f.pre(), Err(said));
+        // (a module a module requires; a fine config passes)
+        f.put(".config/hypr/conf/binds.lua", b"require('deep.x')\n");
+        f.put(
+            ".config/hypr/deep/x.lua",
+            b"local password = \"hunter2hunter2\"\n",
+        );
+        assert_eq!(
+            f.pre(),
+            Err("omabox: up: --desktop desk: ~/.config/hypr/deep/x.lua, which your Hyprland config requires, was not copied into the box: it holds what looks like a key, token or password\n".into())
+        );
+        f.put(".config/hypr/deep/x.lua", b"-- x\n");
+        assert_eq!(f.pre(), Ok(()));
         assert_eq!(
             requires(b"require(\"conf.binds\") -- require(\"gone\")\nrequire 'mine'\n"),
             [b"conf/binds".to_vec(), b"mine".to_vec()]
         );
+    }
+
+    /// A profile's `idle FILE KEY VALUE` (Caelestia's): its copy edited, the rest of it kept, said;
+    /// the host's file as it was. A file that is no JSON object is left alone.
+    #[test]
+    fn idle_timeouts_off() {
+        if !crate::exec::tools_or_skip("idle_timeouts_off", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("idle");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        let host = br#"{"general": {"idle": {"timeouts": [{"timeout": 180, "idleAction": "lock"}]}}, "x": 1}"#;
+        f.put(".config/caelestia/shell.json", host);
+        let (r, said) = f.run("caelestia shell -d");
+        let r = r.unwrap();
+        assert!(said.contains("up: caelestia's own idle timeouts off in the box's ~/.config/caelestia/shell.json (general.idle.timeouts)"), "{said}");
+        assert!(
+            lines(&r, "edited ").contains(&".config/caelestia/shell.json\tgeneral.idle.timeouts"),
+            "{r}"
+        );
+        let v: Value = serde_json::from_slice(
+            &std::fs::read(f.in_box(".config/caelestia/shell.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["general"]["idle"]["timeouts"], serde_json::json!([]));
+        assert_eq!(v["x"], serde_json::json!(1));
+        assert_eq!(
+            std::fs::read(format!("{}/.config/caelestia/shell.json", f.fh)).unwrap(),
+            host
+        );
+        assert!(f.real_file(".config/caelestia/shell.json"));
+        // (idle_edit alone: made on the way, a string value, a file that is not JSON left)
+        let h = f.bx.as_bytes();
+        std::fs::write(f.in_box("a.json"), b"{}").unwrap();
+        assert_eq!(idle_edit(h, b"a.json b.c off"), Some(b"a.json".to_vec()));
+        assert_eq!(
+            std::fs::read_to_string(f.in_box("a.json"))
+                .unwrap()
+                .split_whitespace()
+                .collect::<String>(),
+            r#"{"b":{"c":"off"}}"#
+        );
+        std::fs::write(f.in_box("t.json"), b"not json").unwrap();
+        assert_eq!(idle_edit(h, b"t.json a []"), None);
+        assert_eq!(idle_edit(h, b"../t.json a []"), None);
+        assert_eq!(idle_edit(h, b"none.json a []"), None);
     }
 }

@@ -93,9 +93,13 @@ end
 -- (to its --). A list of parts: sh -c / bash -c 'SCRIPT' is SCRIPT's parts, each stripped.
 function M.strip(words)
   local i = 1
+  -- (a launcher's options: up to its `--` when it has one, as `uwsm app -s b -- CMD`; else those
+  -- that start with `-`)
   local function opts()
-    while words[i] and words[i]:sub(1, 1) == "-" and words[i] ~= "--" do i = i + 1 end
-    if words[i] == "--" then i = i + 1 end
+    for k = i, #words do
+      if words[k] == "--" then i = k + 1; return end
+    end
+    while words[i] and words[i]:sub(1, 1) == "-" do i = i + 1 end
   end
   while words[i] do
     local w = words[i]

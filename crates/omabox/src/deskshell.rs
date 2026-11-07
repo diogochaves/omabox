@@ -238,14 +238,14 @@ fn assign(w: &[u8]) -> bool {
 /// M.strip.
 pub fn strip(words: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
     let mut i = 0;
+    // (a launcher's options: up to its `--` when it has one, as `uwsm app -s b -- CMD`; else those
+    // that start with `-`)
     let opts = |i: &mut usize| {
-        while words
-            .get(*i)
-            .is_some_and(|w| w.first() == Some(&b'-') && w != b"--")
-        {
-            *i += 1;
+        if let Some(k) = words[*i..].iter().position(|w| w == b"--") {
+            *i += k + 1;
+            return;
         }
-        if words.get(*i).is_some_and(|w| w == b"--") {
+        while words.get(*i).is_some_and(|w| w.first() == Some(&b'-')) {
             *i += 1;
         }
     };
@@ -302,43 +302,87 @@ pub fn strip(words: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
     }
 }
 
+/// A `{...}` word of a pattern: any one word.
+fn wild(w: &[u8]) -> bool {
+    w.len() >= 2 && w[0] == b'{' && w[w.len() - 1] == b'}'
+}
+
+/// The patterns of P (its start, then its matches) as words, each with whether it has a `{...}`.
+fn patterns(p: &Profile) -> Vec<(Vec<&[u8]>, bool)> {
+    (!p.start.is_empty())
+        .then_some(&p.start)
+        .into_iter()
+        .chain(&p.matches)
+        .map(|pat| {
+            let pw: Vec<&[u8]> = pat
+                .split(|c| c.is_ascii_whitespace())
+                .filter(|w| !w.is_empty())
+                .collect();
+            let w = pw.iter().any(|x| wild(x));
+            (pw, w)
+        })
+        .collect()
+}
+
+/// Whether ARGV begins with PAT (its program by its name, then its words in order): Some(the word
+/// the first `{...}` stands for, if any).
+fn fits(argv: &[Vec<u8>], pat: &[&[u8]]) -> Option<Option<Vec<u8>>> {
+    let ok = argv.len() >= pat.len()
+        && !pat.is_empty()
+        && base(&argv[0]) == pat[0]
+        && pat[1..]
+            .iter()
+            .zip(&argv[1..])
+            .all(|(p, a)| wild(p) || p == a);
+    ok.then(|| {
+        pat.iter()
+            .zip(argv)
+            .skip(1)
+            .find(|(p, _)| wild(p))
+            .map(|(_, a)| a.clone())
+    })
+}
+
 /// profile_for CMD PROFILES: the profile whose `start` or a `match` a part of CMD begins with, once
 /// stripped (its program by its name, then its words in order, a `{...}` word any one word); a
 /// pattern with no `{...}` before any with one, so a named Quickshell config's own profile wins
 /// over the generic one. desk-shell.lua's M.profile_for, which takes what the box runs.
 pub fn profile_for<'a>(cmd: &[u8], profiles: &'a [Profile]) -> Option<&'a Profile> {
     let runs: Vec<Vec<Vec<u8>>> = parts(cmd).iter().flat_map(|p| strip(p)).collect();
-    let wild = |w: &[u8]| w.len() >= 2 && w[0] == b'{' && w[w.len() - 1] == b'}';
-    let fits = |argv: &[Vec<u8>], pat: &[&[u8]]| {
-        argv.len() >= pat.len()
-            && !pat.is_empty()
-            && base(&argv[0]) == pat[0]
-            && pat[1..]
-                .iter()
-                .zip(&argv[1..])
-                .all(|(p, a)| wild(p) || p == a)
-    };
     for want_wild in [false, true] {
         for p in profiles {
-            let pats = (!p.start.is_empty())
-                .then_some(&p.start)
-                .into_iter()
-                .chain(&p.matches);
-            for pat in pats {
-                let pw: Vec<&[u8]> = pat
-                    .split(|c| c.is_ascii_whitespace())
-                    .filter(|w| !w.is_empty())
-                    .collect();
-                if pw.iter().any(|w| wild(w)) != want_wild {
-                    continue;
-                }
-                if runs.iter().any(|argv| fits(argv, &pw)) {
+            for (pw, w) in patterns(p) {
+                if w == want_wild && runs.iter().any(|argv| fits(argv, &pw).is_some()) {
                     return Some(p);
                 }
             }
         }
     }
     None
+}
+
+/// hits CMD PROFILES: each shell CMD starts, a part at a time (read and stripped as profile_for
+/// reads them), as its profile's index in PROFILES and the word its pattern's `{...}` stands for (a
+/// Quickshell config's name); for each part, a pattern with no `{...}` first. What a desk box's copy
+/// (deskcopy) finds in the config the slot then takes from it.
+pub fn hits(cmd: &[u8], profiles: &[Profile]) -> Vec<(usize, Option<Vec<u8>>)> {
+    let mut out = Vec::new();
+    for argv in parts(cmd).iter().flat_map(|p| strip(p)) {
+        'one: for want_wild in [false, true] {
+            for (i, p) in profiles.iter().enumerate() {
+                for (pw, w) in patterns(p) {
+                    if w != want_wild {
+                        continue;
+                    }
+                    if let Some(name) = fits(&argv, &pw) {
+                        out.push((i, name));
+                        break 'one;
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A desk box's shell, once the box is ready (#321 step 4, finding 703): what its slot runs, said
@@ -504,6 +548,7 @@ mod tests {
         ("A=1 B=2 exec dms run --session", Some("dms")),
         ("uwsm app -- dms run", Some("dms")),
         ("uwsm-app -- dms run", Some("dms")),
+        ("uwsm app -s b -- qs -c x", Some("quickshell")),
         ("app2unit -- waybar", Some("waybar")),
         ("systemd-run --user --scope -- waybar -c x", Some("waybar")),
         ("/usr/bin/waybar", Some("waybar")),

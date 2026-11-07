@@ -174,8 +174,16 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let h = cat!(d, "/home");
     let plan = seed_plan(&u);
     let desk_files = crate::seed::seed_home(ctx, &plan, &h).map_err(gone)?;
+    // A desk box's copy of the desktop (#321 step 2): seed_home's own on a plain base; on Omarchy's
+    // (finding 709) after Omarchy's seeding (the look, --desk-shell's plugins and shell.json), which
+    // has no ~/.config/hypr: the user's config, and what it names, as on a plain base.
     if u.desktop == Desktop::Desk {
-        u.desk_copy = crate::deskcopy::Report::parse(&desk_files);
+        let lines = if plan.plain {
+            desk_files.clone()
+        } else {
+            crate::deskcopy::copy(ctx, &plan, &h).map_err(gone)?
+        };
+        u.desk_copy = crate::deskcopy::Report::parse(&lines);
     }
     for (src, rel) in &u.seeds {
         let dest = crate::seed::Dest::new(rel)

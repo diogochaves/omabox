@@ -12217,7 +12217,7 @@ t_unit_desk_shell_lua() {
   # (profile_match's cases, from deskshell.rs's PROFILE_CASES: `("CMD", Some("NAME"))` or None)
   cases=$(sed -n '/^    const PROFILE_CASES/,/^    \];/p' "$ROOT/crates/omabox/src/deskshell.rs" |
     sed -n 's/^        ("\(.*\)", \(Some("\([a-z-]*\)")\|None\)),$/\1\t\3/p' | sed 's/\\"/"/g')
-  check_eq "profile_match's cases read (deskshell.rs)" 25 "$(grep -c . <<<"$cases")"
+  check_eq "profile_match's cases read (deskshell.rs)" 26 "$(grep -c . <<<"$cases")"
   DL_ARGS=(match)
   out=$(cut -f1 <<<"$cases" | dl)
   check_eq "...each the profile deskshell.rs finds" "$(cut -f2 <<<"$cases" | sed 's/^$/-/')" "$out"
