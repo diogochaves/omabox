@@ -13400,9 +13400,19 @@ from them.
     copy under a hidden `.moving-PID-NAME` linked into place. What cannot be moved (a name taken
     there, a subfolder) stays, and with it the folder, which the sweep then skips and a box named
     `records` is refused ("holds videos an older omabox's `record stop` wrote there"); emptied, it
-    goes. Tests: the unit tests sweep_keeps_old_records (fails on the code before: the folder
-    swept) and move_no_replace_across (/dev/shm to the temp dir); t_jail_record's outside stops
-    with a stand-in XDG_DATA_HOME, the video in its records folder.
+    goes. A move that moved any says so in one line on stderr, whichever command ran it (up's
+    sweep; an `up` or `down` of a box named `records`): "omabox: moved 2 recordings to
+    ~/.local/share/omabox/records (they were in ~/.cache/omabox/records, where a sweep would delete
+    them)", recordings counted by their videos (side files moved with them; "files" when no video
+    moved), paths with ~; nothing moved, nothing said (up has no quiet mode; a muted helper's move
+    stays unsaid). **The move goes after 1.5.0** (a release later, every older omabox's folder has
+    met an `up`): move_old_records, old_records and their callers in sweep_homes and home_whose,
+    marked at the code. Tests: the unit tests sweep_keeps_old_records (fails on the code before:
+    the folder swept; then nothing said: the line once with 2 recordings, then 1, none for a move
+    of nothing) and move_no_replace_across (/dev/shm to the temp dir); t_home_sweep's up with
+    another runtime dir moves two videos and a marks file from its cache's `records` to a stand-in
+    XDG_DATA_HOME, saying so once (fails on the code before), and its next up says nothing;
+    t_jail_record's outside stops with a stand-in XDG_DATA_HOME, the video in its records folder.
 
 685. **A `click --wait` that timed out still named 4.5's idle notifications layer** (2026-11-06,
     #431). After 678, `windows` and `click --window` left the layer out with no toast up, but a 124
