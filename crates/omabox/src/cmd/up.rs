@@ -639,6 +639,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let here = install::omarchy_at(b"/");
     (u.desktop, u.chosen) =
         upspec::resolve_desktop(u.desktop_given, !u.omarchy.is_empty(), conf, here);
+    // --desktop desk (#321): parsed, not built yet; refused until its HOME and rules are in.
+    if u.desktop == Desktop::Desk {
+        return Err(ctx.die("up: --desktop desk: desk boxes are not finished yet"));
+    }
     if u.desktop == Desktop::Omarchy && !here && u.omarchy.is_empty() {
         return Err(ctx.die(cat!(
             "up: an Omarchy box needs Omarchy, and this machine has none (no /usr/share/omarchy/default/hypr/bootstrap.lua",

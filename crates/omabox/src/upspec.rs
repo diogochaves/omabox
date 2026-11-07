@@ -41,10 +41,13 @@ pub enum Desktop {
     /// omabox's own small config (share/plain.lua), and nothing of Omarchy's: its tree hidden in
     /// the box, no shell, a HOME with no Omarchy look.
     Plain,
+    /// The user's own desk (#321): a plain box (plain_like) whose HOME sits at the user's own HOME
+    /// path (desk_home), so a desktop that keeps absolute paths in its settings finds them there.
+    Desk,
 }
 
 /// What `up --desktop` takes, as help says it.
-pub const DESKTOPS: &str = "omarchy or plain";
+pub const DESKTOPS: &str = "omarchy, plain or desk";
 
 impl Desktop {
     /// --desktop's value; None for one that is not a desktop.
@@ -52,6 +55,7 @@ impl Desktop {
         match v {
             b"omarchy" => Some(Desktop::Omarchy),
             b"plain" => Some(Desktop::Plain),
+            b"desk" => Some(Desktop::Desk),
             _ => None,
         }
     }
@@ -61,7 +65,15 @@ impl Desktop {
         match self {
             Desktop::Omarchy => "omarchy",
             Desktop::Plain => "plain",
+            Desktop::Desk => "desk",
         }
+    }
+
+    /// Plain or desk (#321): nothing of Omarchy's, its tree hidden, a plain HOME. A desk box is a
+    /// plain one whose HOME is at the user's HOME path.
+    #[allow(dead_code)] // #321: its callers come with the next step-1 commits
+    pub fn plain_like(self) -> bool {
+        matches!(self, Desktop::Plain | Desktop::Desk)
     }
 
     /// A box.json's `desktop`: a box from before #247 has none, and is Omarchy's.
@@ -89,8 +101,44 @@ pub enum Chosen {
 }
 
 /// The config's `desktop` as a Desktop: None for `auto` (the default: by what the machine has).
+/// Never desk (#321): a desk box is asked for with --desktop desk until it is complete.
 pub fn conf_desktop(v: &[u8]) -> Option<Desktop> {
-    Desktop::parse(v)
+    Desktop::parse(v).filter(|d| *d != Desktop::Desk)
+}
+
+/// desk_home HOME (#321): where a desk box's HOME sits in the box, the user's $HOME as written
+/// (trailing slashes dropped; no canonicalising, so a HOME through a link stays that path). Err
+/// says why it cannot be: not absolute, `/`, `.` or `..` or empty parts, a control character, or
+/// what refuse_dest keeps for the box itself (its system dirs, runtime dir, /tmp, /home/sbx, omabox's
+/// own, and anything above them).
+#[allow(dead_code)] // #321: its callers come with the next step-1 commits
+pub fn desk_home(home: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+    let mut h = home;
+    while h.len() > 1 && h.ends_with(b"/") {
+        h = &h[..h.len() - 1];
+    }
+    let why: Option<Vec<u8>> = if h.is_empty() {
+        Some(b"it is empty".to_vec())
+    } else if !h.starts_with(b"/") {
+        Some(b"it is not an absolute path".to_vec())
+    } else if h == b"/" {
+        Some(b"it is /".to_vec())
+    } else if h.iter().any(|c| c.is_ascii_control()) {
+        Some(b"it has a control character".to_vec())
+    } else if !boxes::clean_abs(h) {
+        Some(b"it has an empty, . or .. part".to_vec())
+    } else {
+        refuse_dest(h)
+    };
+    match why {
+        Some(w) => Err(cat!(
+            "a desk box needs your HOME at its own path, and ",
+            h,
+            " cannot be: ",
+            w
+        )),
+        None => Ok(h.to_vec()),
+    }
 }
 
 /// The desktop a box gets, and how it was chosen: --desktop's; an Omarchy box for `--omarchy DIR`;
@@ -942,10 +990,14 @@ mod tests {
     fn desktops() {
         assert_eq!(Desktop::parse(b"omarchy"), Some(Desktop::Omarchy));
         assert_eq!(Desktop::parse(b"plain"), Some(Desktop::Plain));
-        for bad in [&b""[..], b"Plain", b"desk", b"plain ", b"omarchy,plain"] {
+        assert_eq!(Desktop::parse(b"desk"), Some(Desktop::Desk));
+        for bad in [&b""[..], b"Plain", b"Desk", b"plain ", b"omarchy,plain"] {
             assert_eq!(Desktop::parse(bad), None, "{bad:?}");
         }
-        for d in [Desktop::Omarchy, Desktop::Plain] {
+        assert!(!Desktop::Omarchy.plain_like());
+        assert!(Desktop::Plain.plain_like());
+        assert!(Desktop::Desk.plain_like());
+        for d in [Desktop::Omarchy, Desktop::Plain, Desktop::Desk] {
             assert_eq!(Desktop::parse(d.name().as_bytes()), Some(d));
             assert_eq!(Desktop::of_box(d.name().as_bytes()), d);
             // --desktop wins over --omarchy, the config and the machine.
@@ -982,13 +1034,68 @@ mod tests {
         }
         assert_eq!(conf_desktop(b"auto"), None);
         assert_eq!(conf_desktop(b"plain"), Some(Desktop::Plain));
+        // Desk only by --desktop (#321), never the config's.
+        assert_eq!(conf_desktop(b"desk"), None);
         // Said only for a plain box not asked for.
         assert!(chosen_text(Desktop::Plain, Chosen::Machine).is_some());
         assert!(chosen_text(Desktop::Plain, Chosen::Config).is_some());
         assert!(chosen_text(Desktop::Plain, Chosen::Given).is_none());
         assert!(chosen_text(Desktop::Omarchy, Chosen::Machine).is_none());
         assert!(chosen_text(Desktop::Omarchy, Chosen::Config).is_none());
-        assert_eq!(DESKTOPS, "omarchy or plain");
+        assert_eq!(DESKTOPS, "omarchy, plain or desk");
+    }
+
+    // desk_home (#321): the user's HOME as written, or why it cannot be a desk box's.
+    #[test]
+    fn desk_home_validation() {
+        for (h, want) in [
+            (&b"/home/u"[..], &b"/home/u"[..]),
+            (b"/home/u/", b"/home/u"),
+            (b"/home/u//", b"/home/u"),
+            (b"/var/home/u", b"/var/home/u"),
+            (b"/root", b"/root"),
+            (b"/tmp/x/h", b"/tmp/x/h"),
+            (b"/home/a b", b"/home/a b"),
+        ] {
+            assert_eq!(desk_home(h), Ok(want.to_vec()), "{h:?}");
+        }
+        for h in [
+            &b""[..],
+            b"/",
+            b"//",
+            b"home/u",
+            b"~",
+            b"./u",
+            b"/home/./u",
+            b"/home/../u",
+            b"/home/u/..",
+            b"/home//u",
+            b"/home/u\n",
+            b"/tmp",
+            b"/tmp/",
+            b"/tmp/.X11-unix/u",
+            b"/usr/u",
+            b"/etc",
+            b"/proc/self",
+            b"/dev/shm/u",
+            b"/sys/u",
+            b"/run/user/1000",
+            b"/bin/u",
+            b"/lib/u",
+            b"/lib64/u",
+            b"/opt/omabox/u",
+            b"/opt",
+            b"/home",
+            b"/home/sbx",
+            b"/home/sbx/u",
+        ] {
+            let e = desk_home(h).expect_err(&String::from_utf8_lossy(h));
+            assert!(
+                e.starts_with(b"a desk box needs your HOME at its own path, and "),
+                "{}",
+                String::from_utf8_lossy(&e)
+            );
+        }
     }
 
     #[test]

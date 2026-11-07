@@ -11774,7 +11774,8 @@ t_plain() {
   done
   check_match "up --desktop plain --clean --keep clock: refused (no clock of Omarchy's)" "^omabox: up: --keep clock needs Omarchy, and --desktop plain has none of it" \
     "$(ob up "$P-plain2" --desktop plain --clean --keep clock 2>&1)"
-  check_match "--desktop takes omarchy or plain" "up: --desktop is omarchy or plain, got desk" "$(ob up "$P-plain2" --desktop desk 2>&1)"
+  check_match "--desktop takes omarchy, plain or desk" "up: --desktop is omarchy, plain or desk, got dusk" "$(ob up "$P-plain2" --desktop dusk 2>&1)"
+  check_match "--desktop desk: refused until it is finished (#321)" "^omabox: up: --desktop desk: desk boxes are not finished yet" "$(ob up "$P-plain2" --desktop desk 2>&1)"
   check "down" ob down "$B"
   check_fails "box dir gone" test -e "$D"
   check_fails "box HOME gone" test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$B"
