@@ -12550,8 +12550,8 @@ t_desk_home_standin() {
   # link `l` to a folder of the test's; a mount at HOME/code/l/x would be made through it, there.
   out=$(dh_up "$B2" --desktop desk --net isolated --seed "$base/lnk:code" --ro-bind "$base/src:$fh/code/l/x"); rc=$?
   check "a mount under a link --seed put in the box HOME: up fails" test "$rc" != 0
-  check_match "...saying the link" \
-    "^omabox: up: refusing to mount at $fhq/code/l/x in a box: a link in its way in the box HOME \($(re_q "$c")/omabox/$B2/home/code/l\)\$" "$out"
+  check_match "...saying the link (its last line: the desk copy's summary before it)" \
+    "^omabox: up: refusing to mount at $fhq/code/l/x in a box: a link in its way in the box HOME \($(re_q "$c")/omabox/$B2/home/code/l\)\$" "$(tail -n 1 <<<"$out")"
   check_fails "...nothing made where the link led" test -e "$base/target/x"
   dh down "$B2" >/dev/null 2>&1
   check_fails "no box process left" pgrep -f "$rt/omabox/"

@@ -13727,7 +13727,7 @@ from them.
     folder `refuse_src` keeps out (a link into `~/.gnupg`), a hyprland.lua or a module it requires
     (`require("a.b")` → `a/b.lua`) that was not copied. No hypr folder at all is no refusal here
     (step 5 says it). Not done here: the refusals run in seed_home, after the box's folder is made,
-    not in up's checks before it. Checked: `deskcopy.rs`'s tests, `t_unit_desk_copy` (the probe
+    not in up's checks before it (finding 709 adds them there). Checked: `deskcopy.rs`'s tests, `t_unit_desk_copy` (the probe
     `desk_copy`, stand-in HOMEs; and this machine's real `~/.config/hypr`, copied into the test's
     folder: 25 files and a `/usr` link, its six `.bak.*` files left out as backups), `t_desk_copy`
     (a box on a stand-in desk) on Hyprland 0.56.2 and 0.57.1.
@@ -13869,6 +13869,43 @@ from them.
     refused); a stand-in `XDG_CONFIG_HOME` without one gives a plain base at the real HOME's path
     (t_desk_home runs that way here). Step 3 (finding 702) lifts the refusal: an Omarchy base is
     an Omarchy box running the user's config.
+709. **A desk box's steps wired together** (2026-11-07, #321, steps 2-5 merged). What came out of
+    joining them, each step having stood in for the others: (1) desk.lua's policy wraps `io.popen`,
+    and desk-shell.lua reads its profiles' folder with `io.popen` lazily, at the first take: that
+    read became a `query` line of the user's autostart.log (t_unit_autostart caught it). desk.lua
+    loads desk-shell.lua before it wraps anything, so desk-shell.lua keeps the `io.popen` it found at
+    load; its `M.exec` is `omabox_exec` (the slot's shell.sh is omabox's own start, never judged).
+    (2) desk.lua asks `take` for every command its policy would run, or drops only as a shell (a
+    `--shell` duplicate, Omarchy's launcher), before logging: one the slot takes is the verdict
+    `take` with take's why (`the slot runs it (PROFILE)`, `a second shell: ...`, `up --no-shell`),
+    so the log says what became of the shell. A command dropped for another part (`hypridle & waybar`)
+    is not taken. (3) On Omarchy's base (step 3) the shell is Omarchy's, started by shell.sh as in an
+    Omarchy box, but step 4's shell.sh ran a desk box's slot only with a word and exited otherwise:
+    an Omarchy desk would have had no shell at all, and after_start would have written `none`, which
+    fails `up`. The slot is a plain base's only: desk-shell.lua's take/after_start do nothing there,
+    shell.sh's desk branch needs `OMABOX_DESK_BASE` not omarchy, `boxes::slot_shell` and
+    `deskshell::after_ready` need a plain-like box. (4) Step 2's copy ran in seed_home's plain branch
+    only, so an Omarchy desk got no `~/.config/hypr` (step 3's test brought it with `--seed`); the
+    real Omarchy desk would have run Omarchy's defaults without the user's config. up_box now copies
+    after Omarchy's seeding too (no slot guess there). (5) One reader of a shell's command: deskcopy's
+    own (`commands`/`hit`) is gone for `deskshell::hits` (desk-shell.lua's reading, a part at a time,
+    with the word a `{name}` stands for); both now skip a launcher's options up to its `--` (`uwsm
+    app -s b -- qs -c x`), which deskcopy did and the slot's did not. (6) Step 2's refusals ran after
+    the box folder existed: `deskcopy::precheck` runs them read-only on the host files (the hypr
+    folder through refuse_src; hyprland.lua and every module it requires, transitively: a refused
+    link, a secret's name, over 1 MiB, a key's shape) from `deskguard::checks`, same words; copy's
+    own stay, for a file changed in between. (7) The profiles' `idle FILE KEY VALUE` (Caelestia's
+    `general.idle.timeouts []`) is applied to the copy right after it (`deskcopy::idle_edit`: a JSON
+    file of the box's own, a dotted key, objects made on the way; said by up). (8) `ls --json` gives
+    a desk box's slot command as `shell_cmd` (box.json has none: it is no `--shell`) and
+    `shell_from` (config, guess, none, up --shell). (9) The `--desk-shell` refusal had three
+    wordings (steps 1, 3, 5): one now ("part of --desktop desk: a desk box brings your desk, its
+    shell with it"). (10) Tests: step 4's "your config started no shell" failure met every desk test
+    whose config starts no known shell (step 5's `desk_lua` placeholder, t_desk_lua's fixture bar,
+    t_cli_up's desk case): those say `--no-shell`; and step 5's no-config refusal met every test
+    that brought its config with `--seed` only: they keep a placeholder in the stand-in HOME, which
+    `--seed` replaces in the box. t_desk_shell_slot runs the real desk.lua (step 4's stand-in Lua is
+    gone; a copy of omabox stays for the suite's own profile in its share/).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
