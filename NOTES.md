@@ -13375,7 +13375,7 @@ from them.
     is; still `.mp4`, H.264, nothing beyond each distribution's stock packages. `--crf N` is its QP
     N (about the same quality, 1.6-1.7x the bytes), `--crf 0` refused (openh264 has no lossless),
     a monitor past its frame refused at start, a `--monitor all` layout scaled down to fit it (the
-    layout's 35651584 becomes 9437184: t_record_layout's 4000x2560 is 3840x2458 there). record start
+    layout's 35651584 becomes 9437184: t_record_layout's 4000x2560 is 3826x2448 there). record start
     and stop say "by openh264", doctor's some-programs says which encoder record uses (a warning only
     with neither, naming the openh264 packages and RPM Fusion's or Packman's ffmpeg).
     `OMABOX_RECORD_ENCODER=libopenh264` (for tests) takes openh264 only; this machine's ffmpeg (Arch's)
@@ -13385,9 +13385,20 @@ from them.
     Constrained Baseline, `yuv420p,tv,bt709,bt709,bt709` as libx264's, read by this machine's
     ffmpeg too). The suite's record tests run on openh264 where libx264 is missing (rec_tools:
     REC_ENC; t_record_hold checks openh264's QP by the first frame's bytes, as it writes no settings;
-    t_record_layout expects the 3840x2458 layout), but not run that way yet: the suite wants a
+    t_record_layout expects the scaled layout), but not run that way yet: the suite wants a
     Hyprland session, which a container has not (Fedora's and Tumbleweed's VMs, distros-vm.sh
     --suite, have one).
+    Then Tumbleweed's VM suite: t_record_layout's `--monitor all` (2000x1280 at scale 2) made no
+    video, its m1-m3 left in the box. Reproduced in Tumbleweed's container, stop's ffmpeg said
+    `invalid 3840 x 2464 in dependency layer settings`: openh264 counts a frame in 16x16 macroblocks
+    (3840x2457 and 3840x2458 are 3840x2464 to it, 36960 of its 36864; 4096x2306 is 4096x2320),
+    so a layout scaled to 9437184 pixels was still past it. record_layout now lowers the layout's
+    scale a thousandth at a time until the frame, padded to macroblocks, fits (libx264's level 6.2
+    is in macroblocks too: its layouts in the unit tests unchanged), and a monitor is weighed the
+    same way. That layout is 3826x2448 (scale just over 0.956, 3825x2448 made even), its video
+    made in the container, nothing left in the box. t_record_layout keeps what stop said (ffmpeg's
+    words) with its failure, and checks openh264's video is within 36864 macroblocks; unit
+    openh264_frames (3840 2457 on the code before).
 
 684. **A jailed agent's videos, stopped outside the jail, were kept among the box HOMEs** (2026-11-06,
     #433; found while fixing finding 682). `record stop` of a jailed agent's recording, run outside
@@ -13532,6 +13543,14 @@ from them.
     answers a "slow " summary 6 s late: no id at 5 s, the id after; failed on the old recorder;
     and a GApplication's GNotification, skipped without gi as the whole test is), notices.rs's
     late_reply_joined.
+
+690. **openSUSE's ImageMagick forbids the txt: coder the suite read cells with** (2026-11-07, #442).
+    In Tumbleweed's VM, t_record_layout's last-frame and turned-monitor comparisons had no colours
+    at all (`(/ ...)`), and t_monitors_turned's two part-of-the-whole checks (finding 673's open
+    item) the same: `magick ... txt:-` writes nothing there ("not authorized by the security policy
+    `TXT'"; rgb:, ppm: and info: work, ImageMagick 7.1.2-35). The suite's five such reads now take
+    rgb:- through rgb_cells (od, then "R,G,B" a cell, the same text txt:- gave, checked alike on
+    #102030). t_record_layout and t_monitors_turned pass here on it; not yet rerun in the VM.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
