@@ -81,7 +81,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `find --json` | `image, similar, matches` (an array in reading order: `x, y, w, h, middle` ([x, y]), `score`, and `window` (`address, x, y`: the window's own coordinates) with `--window`), `more` (true: past 1000, not all listed), `best` (the best place seen, a match's shape, null for none), `near_tie` (a scaled template's one match with another place within 0.05 of it: that place, a match's shape; null for none) |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames, blinking`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `notification` also `log, offset, notification` (the record, as `log notifications --json` has it; null when none came); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames, blinking`; window/layer/job/log/tree/until add `detail`; `log LOG` also `log, offset` (where the line found ends: the next wait's `--since`; null for hyprland); `notification` also `log, offset, notification` (the record, as `log notifications --json` has it; null when none came); `for` has `detail` null; `--expect` adds `expect` (`tree, met, detail`: `met` null when the screen did not settle); `--tree` adds `tree` (`window, changes, why`: each change `kind` changed, appeared or vanished, `role, name, path, line`, and `name_was, text, value` (`from, to`), `states_added, states_removed, hidden, inside` when they apply; `changes` null and `why` when there was no tree to compare); an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset); `run -d --wait --json` adds `job` (the job's pid, printed alone otherwise) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `log notifications --json` | a line each record: `time, event` (notify, close, closed, action, omabox); notify: `id` (null: none came), `error` (null, or why there is no id), `sender, app_name, replaces_id, app_icon, summary, body, actions` (each `key, label`), `hints` (a basic value each; a structured one, image-data, as its D-Bus signature), `expire_timeout`; close: `id, sender`; closed: `id, reason` (1 expired, 2 dismissed, 3 CloseNotification); action: `id, action`; omabox: `note` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, grid` (`--grid`: `n, margin, file` (`w, h`), `columns` (`name, x, w`), `rows` (`name, y, h`)), `changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
@@ -471,7 +471,8 @@ with `--keep wallpaper` or after a theme set in the box.
   command line, or a whole file with `--env-file`: `omabox run --env-file ./dev.env -- ctest …`
   (KEY=VAL lines, read as data); a plain value: `run --env KEY=VAL` (never a secret: that is in the
   process list). A `run -d` command's output, a Qt app's warnings and QML errors too, is in the log
-  file it prints (`-q`: no line; `--print-log`: only the path, on stdout). A plain `run` returns when
+  file it names on stderr (`-q`: no line); its stdout is the job's pid (`--print-log`: the log's path
+  instead). A plain `run` returns when
   its command exits, even one that leaves a process running (`run -- wl-copy TEXT` puts TEXT on the
   box's clipboard); what that process writes afterwards is dropped: `run -d` for its output.
 - Check what a keyring or D-Bus test left behind inside the box (`omabox run -- secret-tool …`), never
@@ -1039,7 +1040,8 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
 - `run -d` jobs: each is its own session, with a log (`run-*.log`) named on stderr, as the host has it
   and as the box does (`/home/sbx/run-*.log`: the one to give a command in the box, `wait until --
   grep -q X /home/sbx/run-….log`); `-q` drops that
-  line, `--print-log` prints only the host path on stdout (first, before a `--wait` line). A job that
+  line. Its stdout's first line is the job's pid alone, under `-q` too (`--print-log`: the host log
+  path instead; `--wait --json`: the JSON's `job`), before a `--wait` line; nothing when nothing started. A job that
   ends in its first 0.3 s leaving nothing running is said instead (its status, its log's last lines),
   and `run -d` exits with its status: a server whose port is taken shows here, not as "started". One
   that ends later in its first 30 s with a status other than 0 is a warning on the box's next
@@ -1055,7 +1057,9 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   one, and `--replace` names it with its pid and the `omabox stop PID` that stops it. No earlier job
   (or one that exited): it just starts, and says so.
 - **A job by its pid, never a host `pgrep`/`kill`** (the same program often runs on the user's
-  desktop): `run -d` says the job's pid ("started in box 'B' (pid 115, log: …)"). `omabox jobs
+  desktop): `run -d` prints the job's pid alone on stdout, and says it on stderr ("started in box
+  'B' (pid 115, log: …)"). Keep it: `J=$(omabox run -d -- ./app)`, then `omabox log run "$J"`,
+  `wait log "$J" 'listening on'`, `wait job "$J"`, `stop "$J"`. `omabox jobs
   [--json]` lists the box's running jobs (PID, AGE, PROCS, LOG, COMMAND). `omabox stop PID...`
   (or `--all`) stops one as `--replace` does (SIGTERM to its session, SIGKILL after 5 s, its windows
   gone), through a pidfd of each of its processes; PID may be any pid of its session, a window's PID
