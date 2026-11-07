@@ -3,7 +3,17 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.3.0 — 2026-11-07
+
+omabox beyond Omarchy: plain boxes (`up --desktop plain`, with your own shell by `--shell`), chosen
+by themselves where Omarchy is not installed; `install.sh`, `setup` and `doctor` on Arch without
+Omarchy, Debian, Fedora and openSUSE; and Hyprland 0.57 beside 0.56 (`up --hyprland DIR`, the
+aquamarine build for its soname). Also what an app notified (`log notifications`, `wait
+notification`), one `run -d` job's log (`log run JOB`), real drag-and-drop by `drag`, and `record`
+without libx264 and with every frame kept. Update.
+
+**Omarchy:** as 1.2, Omarchy 4.5 and, deprecated, 4.0 (dropped in the first release after
+2026-12-04), on Hyprland 0.56.2; 0.57.1 also runs boxes.
 
 ### Added
 - **What an app notified: `log notifications` and `wait notification RE`** ([#430](https://github.com/diogochaves/omabox/issues/430)):
