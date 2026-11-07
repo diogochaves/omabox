@@ -13486,6 +13486,26 @@ from them.
     1023-byte source (timed out on the old code), hyprctl.rs's batch_split and refused_dispatch and
     lua.rs's eval_off_1023 unit tests.
 
+687. **`run -d` prints its job's pid on stdout** (2026-11-06, #429, after finding 679). `log run JOB`,
+    `wait job|log JOB`, `stop JOB` take a job's pid, but `run -d` said it only in a sentence on
+    stderr, so a script had to cut it out with sed; matching a job by its command instead (the
+    issue's `run:myapp`) was not taken. Now `run -d` prints the pid alone on stdout as soon as the
+    job started: `J=$(omabox run -d -- APP)`, then `log run "$J"`. It is data, so `-q` keeps it
+    (only the stderr sentence goes); `--print-log` prints the log's path in its place, as before
+    (scripts read that line); `--wait`'s line comes after it; `--wait --json` keeps stdout one JSON
+    document (a number before it broke `| jq .result`), the pid its `job`. A job that ends in its first 0.3 s
+    still gets its pid printed (run -d exits with its status; its log reads by that pid); a run -d
+    that started nothing (no box, a box that went down) prints none and fails. A write that fails
+    (stdout closed) is ignored: the job runs, the status is unchanged. A jailed caller gets it on
+    its own stdout through the broker, the box's pid as `jobs` lists it (S9: nothing of the host's).
+    `--replace` prints only the new job's pid. Inside `record -- run -d` and `shot --after -- run -d`
+    the action's stdout already goes to stderr. Callers changed: the suite's captures of `run -d`'s
+    stdout and stderr together (t_isolated, t_host_paths), its `^satisfied:` checks of `--wait`'s
+    line (t_wait, t_wait_facts, t_replace, t_jail), t_cli_box's `run -d` cases (stdout `P`). Tests: t_jobs (the pid alone, a pid `jobs`
+    lists, read by `wait log`, `log run`, `stop`; under `-q` for a job that ended at once, read by
+    `log run` and `wait job`; none from a `run -d` with no box; failed on the old code), t_jail
+    (`run -d -q --replace` through the broker: the pid alone on the jail's stdout).
+
 688. **A notification server's late id is kept; GTK's GNotification is recorded** (2026-11-06, #430,
     after finding 680). (1) The recorder wrote a Notify with no reply in 5 s as `id: null` and
     forgot it, but D-Bus waits 25 s for a reply (libdbus's, GDBus's and sd-bus's default timeout),

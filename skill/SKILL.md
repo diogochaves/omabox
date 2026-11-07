@@ -60,7 +60,7 @@ subagent: `omabox brief -b NAME`'s output in its prompt** (no skill needed).
 
 ```bash
 omabox up                                 # headless, 1920x1080, once ready (its bar drawn)
-omabox run -d --wait -- ./build/app       # detached (log path printed), once drawn
+omabox run -d --wait -- ./build/app       # detached, its pid on stdout, once drawn
 omabox run -d --replace --wait -- ./app   # after a rebuild; jobs, stop PID, wait job|log
 omabox shot                               # a PNG path: Read it to look
 omabox windows                            # address, workspace, on screen or covered

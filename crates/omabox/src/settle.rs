@@ -1161,6 +1161,16 @@ impl Settle {
                 .kv("--argjson", "evs", &evs)
                 .kv("--arg", "exp", &exp)
                 .kv("--arg", "treed", &tree_js)
+                // (run -d --wait --json: its job's pid, which run -d prints alone otherwise, #429)
+                .kv(
+                    "--arg",
+                    "job",
+                    if self.facts == "run" {
+                        &self.fpid[..]
+                    } else {
+                        b""
+                    },
+                )
                 .arg(crate::jqprog::SETTLE_JSON_JQ)
                 .run(None, jq::Err::Inherit);
             // (a write that fails is not settle_end's end: its status is the answer's)

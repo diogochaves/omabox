@@ -53,7 +53,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   by its pid, as `wait log JOB RE` takes it, however many jobs were started after it (a terminal,
   an `xdg-open`) and after it ended; `--grep`, `-n` and `-f` as for any log. `log run` alone still
   reads the latest job's. A pid no job had is refused naming the jobs there are, by `wait job` and
-  `wait log` too.
+  `wait log` too. `run -d` now prints the job's pid alone on stdout (under `-q` too; `--print-log`
+  still prints the log's path instead), so `J=$(omabox run -d -- app)` keeps it for `log run "$J"`,
+  `wait job "$J"`, `wait log "$J" RE` and `stop "$J"`.
 
 ### Fixed
 - **`click --in` a crop at a fractional scale lands on the pixel you read** ([#432](https://github.com/diogochaves/omabox/issues/432)):

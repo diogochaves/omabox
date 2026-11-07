@@ -6418,7 +6418,7 @@ EOF
   check_match "click --steps --mod through the broker (#38, #25)" "^rc=0 $" "$(sect travel-mod)"
   check_match "...pointer --steps --mod, and move's own --steps" "^rc=0 $" "$(sect pointer-mod)"
   # #274: the facts --wait adds (the box read from the broker's side) reach the jail as they are.
-  check_match "--wait's desktop facts through the broker (#274)" '^satisfied: .*; window opened, focused: foot "J" rc=0 $' "$(sect facts)"
+  check_match "--wait's desktop facts through the broker (#274), after the job's pid (#429)" '^[0-9]+ satisfied: .*; window opened, focused: foot "J" rc=0 $' "$(sect facts)"
   check_match "...a 124's, with --json's changes and target" \
     '"message":"nothing changed in .*; the keys went to foot \\"J\\" \(focused\); no window, layer or focus changed".*"changes":\[\],"target":\{"kind":"window".* rc=124 $' "$(sect facts124)"
   check_match "a path of the broker's never written" "never at a path here rc=1" "$(sect relay-o)"
@@ -6430,6 +6430,7 @@ EOF
   check_match "...the user's box still not the jail's" "not this jail's.* rc=1" "$(sect pre-b-other)"
   check_match "no internet in its box" "no-internet rc=0" "$(sect net-in-box)"
   check_match "run -d -q --print-log through the broker: only the log path" "^/[^ ]*/run-[0-9]+\.log rc=0 $" "$(sect run-d)"
+  check_match "run -d -q --replace through the broker: its job's pid on the jail's stdout, alone (#429)" "^[0-9]+ rc=0 $" "$(sect replace)"
   check_eq "run -d --replace through the broker: one job left" "1 rc=0 " "$(sect sleeps)"
   check_match "down" "box '$P-jail' down rc=0" "$(sect down)"
   # #198 security: seeding a masked file is refused, and a plugin up runs no git on the jail's path.
@@ -7735,11 +7736,11 @@ t_isolated() {
   check_match "...said, with its log's last lines" \
     "the command exited with status 3 at once in box '$B', and left nothing running \(log: [^)]*\)"$'\n'"omabox: its log ends \(omabox log -b $B run\):"$'\n'"  boom" "$err"
   check_fails "...not as started" grep -q "started in box" <<<"$err"
-  err=$(ob run -b "$B" -d -- true 2>&1); rc=$?
+  err=$(ob run -b "$B" -d -- true 2>&1 >/dev/null); rc=$?
   check_match "...one that exits 0 at once: 0, said" "^0 omabox: the command exited with status 0 at once" "$rc $err"
-  err=$(ob run -b "$B" -d -q -- true 2>&1); rc=$?
+  err=$(ob run -b "$B" -d -q -- true 2>&1 >/dev/null); rc=$?
   check_eq "...with -q: nothing said" "0 " "$rc $err"
-  err=$(ob run -b "$B" -d -- sh -c 'sleep 600 & exit 0' 2>&1); rc=$?
+  err=$(ob run -b "$B" -d -- sh -c 'sleep 600 & exit 0' 2>&1 >/dev/null); rc=$?
   check_match "...a launcher that exits and leaves its child: started" "^0 omabox: started in box '$B'" "$rc $err"
   check "down" ob down "$B"
 }
@@ -7936,7 +7937,7 @@ t_host_paths() {
   check_eq "...nothing said for PATH's or XDG_DATA_DIRS's dirs" "" \
     "$(ob run -b "$B" -- env "PATH=$s/lib:/usr/bin" "XDG_DATA_DIRS=$s:/usr/share" true 2>&1)"
   check_eq "...nothing said for paths the box has" "" "$(ob run -b "$B" -- ls /usr/bin/true /etc/os-release 2>&1 >/dev/null)"
-  out=$(ob run -b "$B" -d -- sh -c 'echo said-301; exec sleep 30' 2>&1)
+  out=$(ob run -b "$B" -d -- sh -c 'echo said-301; exec sleep 30' 2>&1 >/dev/null)
   check_match "run -d: its log as the box has it too (#301)" \
     "^omabox: started in box '$B' \(pid [0-9]+, log: $h/run-[0-9]+\.log, /home/sbx/run-[0-9]+\.log in the box\)\$" "$out"
   lg=$(sed -nE 's/.*, (\/home\/sbx\/run-[0-9]+\.log) in the box\)$/\1/p' <<<"$out")
@@ -13315,7 +13316,7 @@ t_wait_facts() {
   D=$(ob path -b "$B")
   out=$(ob run -b "$B" -d -q --wait -- foot -T F sh -c 'read x; exec foot -T G sleep 600' 2>&1); rc=$?
   check_eq "run -d --wait: settled" 0 "$rc"
-  check_match "...said: its window opened, focused" '^satisfied: settled after .*; window opened, focused: foot "F"$' "$out"
+  check_match "...said: its window opened, focused (after the job's pid, #429)" $'^[0-9]+\n''satisfied: settled after .*; window opened, focused: foot "F"$' "$out"
   out=$(ob keys -b "$B" --window 'title:^F$' --wait Return 2>&1); rc=$?
   check_eq "keys --wait that opens a window: settled" 0 "$rc"
   check_match "...said: the window it opened, focused" '^satisfied: settled after .*; window opened, focused: foot "G"$' "$out"
@@ -15156,22 +15157,22 @@ t_cli_box() {
   cx_case "run --env-file, --env, --pass" run -b "$B" --env-file "$TMP/rp-env" --env A=2 --pass RPP -- sh -c 'echo "$A $B $RPP"'; cx_env=()
   cx_in=$TMP/rp-env; cx_want=(rc=0 $'out=A=1\nexport B="b b"' err=)
   cx_case "run: stdin passed through" run -b "$B" -- cat; cx_in=/dev/null
-  cx_sed='s/run-[0-9]+\.log/run-N.log/g; s/stopped the earlier job \(0 windows\) in [0-9.]+s/stopped the earlier job (0 windows) in Ts/; s/pid [0-9]+/pid P/g'
-  cx_want=(rc=4 out= "err~^omabox: the command exited with status 4 at once in box '$B', and left nothing running \\(log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N\\.log\\)\$" "err~^omabox: its log ends \\(omabox log -b $B run\\):\$" 'err~^  said$')
+  cx_sed='s/run-[0-9]+\.log/run-N.log/g; s/stopped the earlier job \(0 windows\) in [0-9.]+s/stopped the earlier job (0 windows) in Ts/; s/pid [0-9]+/pid P/g; s/^[0-9]+$/P/'
+  cx_want=(rc=4 out=P "err~^omabox: the command exited with status 4 at once in box '$B', and left nothing running \\(log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N\\.log\\)\$" "err~^omabox: its log ends \\(omabox log -b $B run\\):\$" 'err~^  said$')
   cx_case "run -d: a job that exits at once, its status" run -b "$B" -d -- sh -c 'echo said; exit 4'
-  cx_want=(rc=0 out= err=)
-  cx_case "run -d -q: a 0 at once is not said" run -b "$B" -d -q -- true
-  cx_want=(rc=2 out= "err~^omabox: note: $TMP is not in box '$B' " "err~^omabox: the command exited with status 2 at once in box '$B', and left nothing running " "err~^  ls: cannot access '.*': No such file or directory\$")
+  cx_want=(rc=0 out=P err=)
+  cx_case "run -d -q: a 0 at once is not said, its pid printed (#429)" run -b "$B" -d -q -- true
+  cx_want=(rc=2 out=P "err~^omabox: note: $TMP is not in box '$B' " "err~^omabox: the command exited with status 2 at once in box '$B', and left nothing running " "err~^  ls: cannot access '.*': No such file or directory\$")
   cx_case "run -d: a host path the box has not" run -b "$B" -d -- ls "$TMP"
   cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/home/run-N.log" "err=omabox: started in box '$B' (pid P, log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N.log, /home/sbx/run-N.log in the box)")
   cx_case "run -d --print-log: started" run -b "$B" -d --print-log -- sleep 610
   cx_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; ob run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
   cx_prep=cx_jobs
-  cx_want=(rc=0 out= 'err~^omabox: --replace: stopped the earlier job \(0 windows\) in Ts$' "err~^omabox: started in box '$B' ")
+  cx_want=(rc=0 out=P 'err~^omabox: --replace: stopped the earlier job \(0 windows\) in Ts$' "err~^omabox: started in box '$B' ")
   cx_case "run -d --replace: the earlier job stopped" run -b "$B" -d --replace -- sleep 611
-  cx_want=(rc=0 out= "err~^omabox: --replace: no earlier job with these arguments, none stopped; sleep \\(pid P, 611\\) still runs, and the new job starts beside it \\(omabox -b $B stop [0-9]+ stops it\\)\$" "err~^omabox: started in box '$B' ")
+  cx_want=(rc=0 out=P "err~^omabox: --replace: no earlier job with these arguments, none stopped; sleep \\(pid P, 611\\) still runs, and the new job starts beside it \\(omabox -b $B stop [0-9]+ stops it\\)\$" "err~^omabox: started in box '$B' ")
   cx_case "run -d --replace: another job of the program named" run -b "$B" -d --replace -- sleep 612
-  cx_want=(rc=0 out= err=)
+  cx_want=(rc=0 out=P err=)
   cx_case "run -d --replace -q: none of this command" run -b "$B" -d --replace -q -- true
   cx_prep="" cx_sed=""
   ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1
@@ -15186,7 +15187,7 @@ t_cli_box() {
   # Wave 3a: wait, windows, tree, pixel, run -d --wait. Times, frame counts and the events log's size
   # differ from call to call (sed); so do the pixels the screen settled on (animation frames: where
   # the last change was, what was ignored), which only the tool's timing decides.
-  cx_sed='s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"(elapsed|first_change|last_change)":[0-9.]+/"\1":T/g; s/"frames":[0-9]+/"frames":N/; s/"events_since":[0-9]+/"events_since":N/; s/run-[0-9]+\.log/run-N.log/g'
+  cx_sed='s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"(elapsed|first_change|last_change)":[0-9.]+/"\1":T/g; s/"frames":[0-9]+/"frames":N/; s/"events_since":[0-9]+/"events_since":N/; s/run-[0-9]+\.log/run-N.log/g; s/^[0-9]+$/P/; s/"job":[0-9]+/"job":P/'
   cx_want=(rc=0 'out~^ADDRESS +PID +WORKSPACE +STATE +GEOMETRY +CLASS +TITLE$' 'out!~^0x' err=)
   cx_case "windows: none yet" windows -b "$B"
   cx_want=(rc=0 'out=[]' err=)
@@ -15317,15 +15318,15 @@ t_cli_box() {
     find "$jd/runs" -newer "$TMP/rp-mark" -printf '%f\n' 2>/dev/null | sed -E 's/^(o|c)\.[0-9]+\.[0-9]+/\1.MARK/' | sort
   }
   cx_prep=cx_w3_prep cx_also=cx_w3_also
-  cx_want=(rc=0 'out~^satisfied: settled after Ts \(last change Ts at G.*\); window opened, focused: rp-w3 "w3"$' "err~^omabox: started in box '$B' " 'state~"exe":"foot","argv":\["foot","-a","rp-w3","-T","w3","sleep","600"\]')
+  cx_want=(rc=0 'out~^P$' 'out~^satisfied: settled after Ts \(last change Ts at G.*\); window opened, focused: rp-w3 "w3"$' "err~^omabox: started in box '$B' " 'state~"exe":"foot","argv":\["foot","-a","rp-w3","-T","w3","sleep","600"\]')
   cx_case "run -d --wait: its window opened, the screen settled" run -b "$B" -d --wait -- foot -a rp-w3 -T w3 sleep 600
-  cx_want=(rc=0 'out~^\{"result":"satisfied","condition":"settle","message":"settled after Ts \(last change Ts at G.*\); window opened, focused: rp-w3 \\"w3\\"",' "err~^omabox: started in box '$B' " 'state~"exe":"foot"')
+  cx_want=(rc=0 'out~^\{"result":"satisfied","condition":"settle","message":"settled after Ts \(last change Ts at G.*\); window opened, focused: rp-w3 \\"w3\\"",.*"job":P\}$' 'out!~^P$' "err~^omabox: started in box '$B' " 'state~"exe":"foot"')
   cx_case "run -d --wait --json: what changed, its target" run -b "$B" -d --wait --json -- foot -a rp-w3 -T w3 sleep 600
-  cx_want=(rc=3 'out=unsatisfied: nothing changed in Ts; no window from pid P yet; no window, layer or focus changed' 'err~^omabox: the command exited with status 3 before the screen settled, and left nothing running' 'state~^omabox\.run-N\.exit$')
+  cx_want=(rc=3 $'out=P\nunsatisfied: nothing changed in Ts; no window from pid P yet; no window, layer or focus changed' 'err~^omabox: the command exited with status 3 before the screen settled, and left nothing running' 'state~^omabox\.run-N\.exit$')
   cx_case "run -d --wait: a command that exits 3, its end said (124)" run -b "$B" -d --wait --timeout 1s -- sh -c 'exit 3'
-  cx_want=(rc=124 'out=unsatisfied: nothing changed in Ts; no window from pid P yet; no window, layer or focus changed' 'err~^omabox: the command exited with status 0 before the screen settled, and left nothing running' 'state~^omabox\.run-N\.exit$')
+  cx_want=(rc=124 $'out=P\nunsatisfied: nothing changed in Ts; no window from pid P yet; no window, layer or focus changed' 'err~^omabox: the command exited with status 0 before the screen settled, and left nothing running' 'state~^omabox\.run-N\.exit$')
   cx_case "run -d --wait: one that exits 0 and changes nothing (124)" run -b "$B" -d --wait --timeout 1s -- true
-  cx_want=(rc=0 'out~^satisfied: settled after Ts \(last change Ts at G\); window opened, focused: rp-w3 "w3"$' "err~^omabox: started in box '$B' " 'state~"exe":"foot"')
+  cx_want=(rc=0 'out~^P$' 'out~^satisfied: settled after Ts \(last change Ts at G\); window opened, focused: rp-w3 "w3"$' "err~^omabox: started in box '$B' " 'state~"exe":"foot"')
   cx_case "run -d --wait --strict --start 3s -g, an --ignore inside it" run -b "$B" -d --wait --strict --start 3s -g '0,0 1920x1080' --ignore '0,0 10x10' -- foot -a rp-w3 -T w3 sleep 600
   # Wave 3b: keys, click, scroll, pointer, drag, shot, calibrate on the real box, into a terminal of
   # its own that echoes what it gets. Each side's input lands on the same desktop: what both say is
@@ -21634,7 +21635,7 @@ t_wait() {
   check "wait counts as use (idle expiry)" test "$(( $(date +%s) - $(stat -c %Y "$D/used") ))" -lt 60
   out=$(ob run -b "$B" -d --wait -- foot -T A sh -c 'cat > /tmp/typed' 2>/dev/null); rc=$?
   check_eq "run -d --wait: settled" 0 "$rc"
-  check_match "...once the window was drawn" "^satisfied: settled after .*last change" "$out"
+  check_match "...once the window was drawn (after the job's pid, #429)" "^[0-9]+"$'\n'"satisfied: settled after .*last change" "$out"
   check "wait window: it is there" ob wait -b "$B" window 'title:^A$' --focused
   out=$(ob keys -b "$B" --wait -t hello); rc=$?
   check_eq "keys --wait: typing settles" 0 "$rc"
@@ -21895,7 +21896,7 @@ t_replace() {
   echo probe > "$TMP/rep-probe.qml"
   out=$(ob run -b "$B" -d -q --wait --start 1s -- sh -c 'echo boom >&2; exit 3' "$TMP/rep-probe.qml" 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
   check_eq "run -d --wait of a command that exits 3 at once: exit 3" 3 "$rc"
-  check_match "...the wait's line still on stdout" "^unsatisfied: " "$out"
+  check_match "...the wait's line still on stdout, after the job's pid (#429)" "^[0-9]+"$'\n'"unsatisfied: " "$out"
   check_match "...said: exited with status 3, nothing left running" "the command exited with status 3 before the screen settled, and left nothing running" "$err"
   check_match "...with its log's last lines" "its log ends \(omabox log -b $B run\):"$'\n'"  boom" "$err"
   check_match "...the host path the box does not have named" "host paths box '$B' does not have: $TMP/rep-probe.qml " "$err"
@@ -21917,14 +21918,14 @@ t_replace() {
   ob wait -b "$B" window 'title:^K$' >/dev/null
   out=$(ob run -b "$B" -d -q --wait -- sh -c 'pkill -f "^foot -T K "; echo gone >&2; exit 3' 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
   check_eq "run -d --wait of a job that died as another window closed: its status (3)" 3 "$rc"
-  check_match "...unsatisfied: not its screen" "^unsatisfied: .*the command had ended by then: not its screen" "$out"
+  check_match "...unsatisfied: not its screen" "^[0-9]+"$'\n'"unsatisfied: .*the command had ended by then: not its screen" "$out"
   check_match "...its end and log said" "the command exited with status 3 before the screen settled, and left nothing running.*"$'\n'"  gone" "$err"
   # (foot K's own end, killed, is said: it was a run -d job too)
   check_eq "...not said again by the next command" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job sh -c pkill')"
   ob run -b "$B" -d -q -- foot -T K sh -c 'sleep 600'
   ob wait -b "$B" window 'title:^K$' >/dev/null
   out=$(ob run -b "$B" -d -q --wait -- pkill -f "^foot -T K " 2>/dev/null); rc=$?
-  check_match "...a one-shot that closes it and exits 0: satisfied" "^0 satisfied: " "$rc $out"
+  check_match "...a one-shot that closes it and exits 0: satisfied" "^0 [0-9]+"$'\n'"satisfied: " "$rc $out"
   ob windows -b "$B" >/dev/null 2>&1
   # A missing command still says so in its log
   out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
@@ -22024,6 +22025,21 @@ t_jobs() {
   check_match "...naming the jobs there are" "has no run -d job of pid 2; its jobs: .*$j1 \(sh -c echo omabox-429-first; echo 429 again; exec sleep 624\), .*\(sh -c echo omabox-429-second; exec sleep 625\)$" "$out"
   ob stop -b "$B" "$j1" >/dev/null 2>&1
   check_eq "log run JOB of a job that ended: still read" "429 again" "$(ob log -b "$B" run "$j1" -n 1)"
+  # J=$(run -d ...) (#429, finding 687): the job's pid alone on stdout, as jobs lists it, for log
+  # run, wait log, stop and wait job; under -q too; none from a run -d that started nothing.
+  local j2 j3
+  j2=$(ob run -b "$B" -d -- sh -c 'echo omabox-687; exec sleep 626' 2>/dev/null); rc=$?
+  check_match "run -d: the job's pid alone on stdout" "^0 [0-9]+$" "$rc $j2"
+  check "...a pid jobs lists" grep -qx -- "${j2:-none}" <<<"$(ob jobs -b "$B" --json | jq -r '.[].pid')"
+  check "...wait log takes it" ob wait -b "$B" --timeout 10s log "${j2:-none}" omabox-687
+  check_eq "...log run reads it" omabox-687 "$(ob log -b "$B" run "${j2:-none}")"
+  check "...stop takes it" ob stop -b "$B" "${j2:-none}"
+  j3=$(ob run -b "$B" -d -q -- sh -c 'echo omabox-687-over; exit 3' 2>/dev/null); rc=$?
+  check_match "...-q, a job that ends at once: its status, its pid still" "^3 [0-9]+$" "$rc $j3"
+  check_eq "...its log by that pid" omabox-687-over "$(ob log -b "$B" run "${j3:-none}" 2>/dev/null)"
+  check_match "...wait job takes it" "^satisfied: job $j3 \(sh -c echo omabox-687-over; exit 3\) ended after [0-9.]+s: exited with status 3$" "$(ob wait -b "$B" job "${j3:-none}")"
+  out=$(ob run -b "$B-none" -d -- true 2>/dev/null); rc=$?
+  check_match "...a run -d that started nothing: no pid, an error" "^[1-9][0-9]* $" "$rc $out"
   # stop --all
   err=$(ob stop -b "$B" --all 2>&1); rc=$?
   check_eq "stop --all: 0" 0 "$rc"

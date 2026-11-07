@@ -162,7 +162,7 @@ too (omabox -b NAME windows).
        after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout;
        the line adds what changed on the desktop (windows, layers, focus), a 124 where the input went
 @short run
--d (or --detach): the command left running in the box, its pid and log said on stderr; --replace: the same one stopped first
+-d (or --detach): the command left running in the box, its pid on stdout (J=$(omabox run -d -- APP)), pid and log said on stderr; --replace: the same one stopped first
 @short shot
 --monitor NAME: one monitor of the box's (omabox monitor list)
 @short tree click wait
@@ -761,7 +761,8 @@ Their line then adds what changed on the desktop since just before the input: a 
 closed, a layer drawn or hidden, focus, a title, the workspace (3 at most, then "+N more (omabox
 events --since OFFSET)"); a 124 says where the input went (the focused window, a layer holding the
 keyboard, what was under the point) and "no window, layer or focus changed" when nothing did. Since
-the input, not caused by it. --json adds changes (null: not read), target and events_since.
+the input, not caused by it. --json adds changes (null: not read), target and events_since; run -d's adds job
+(its pid, then not printed on a line of its own).
 `keys`, `click`, `scroll` and `drag` --wait take --expect tree TEXT (#319): once the screen settled,
 the tree holds TEXT, read as `wait tree TEXT` reads it, in the window the input went to (--window's,
 click --find's or its layer's; none: the active one) until --timeout (from the input), once at least:
@@ -978,8 +979,10 @@ through a pidfd of each process, checked to be the box's, never a pid number on 
 job's end is not said as a warning. Another process of the box: `omabox run -- kill PID`. Not a
 `run -d` job's pid: exit 1, nothing stopped.
 @ run
-`run -d` (or --detach) says the job's pid and where its output goes (its log) on stderr: -q says
-nothing (errors still), --print-log prints the log's path on stdout (first, before --wait's line).
+`run -d` (or --detach) prints the job's pid alone on stdout, -q too (--print-log: the log's path
+instead; --wait --json: its "job"), first, before --wait's line: `J=$(omabox run -d -- APP)`, then `log run "$J"`, `wait log
+"$J" RE`, `wait job "$J"`, `stop "$J"`. None when nothing started (the error said, not 0). On
+stderr it says the job's pid and where its output goes (its log): -q says nothing (errors still).
 `run -d --replace` first stops what `run -d` started in that box with the same command and
 arguments (SIGTERM to its session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt
 app in one step. Nothing else in the box is touched: an app started some other way stays, and so
