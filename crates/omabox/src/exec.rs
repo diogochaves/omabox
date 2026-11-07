@@ -573,7 +573,14 @@ pub fn on_box_io(
     err: ErrTo,
     pid_to: Option<Arc<AtomicI32>>,
 ) -> Ran {
-    on_box_with(ctx, args, stdin, out, err, pid_to, false)
+    on_box_with(ctx, args, stdin, out, err, pid_to, false, None)
+}
+
+/// on_box while up still waits for the box's Hyprland, before share/hyprland.lua wrote its
+/// omabox.env (#406): a tool against the Hyprland of instance SIG (a tame name the caller checked),
+/// with no WAYLAND_DISPLAY; stdin /dev/null.
+pub fn on_box_starting(ctx: &Ctx, sig: &[u8], args: &[Vec<u8>], out: Out, err: ErrTo) -> Ran {
+    on_box_with(ctx, args, In::Null, out, err, None, false, Some(sig))
 }
 
 /// on_box_io for what bash starts in the background (`&`, coproc, `<(...)`): SIGINT and SIGQUIT
@@ -586,7 +593,7 @@ pub fn on_box_bg(
     err: ErrTo,
     pid_to: Option<Arc<AtomicI32>>,
 ) -> Ran {
-    on_box_with(ctx, args, stdin, out, err, pid_to, true)
+    on_box_with(ctx, args, stdin, out, err, pid_to, true, None)
 }
 
 /// What on_box says of a box that went down as it entered.
@@ -611,6 +618,7 @@ fn on_box_with(
     err: ErrTo,
     pid_to: Option<Arc<AtomicI32>>,
     bg: bool,
+    starting: Option<&[u8]>,
 ) -> Ran {
     let mut buf = Vec::new();
     let refuse = |buf: &mut Vec<u8>, m: Vec<u8>| {
@@ -642,21 +650,26 @@ fn on_box_with(
             ),
         );
     }
-    let Some(wd) = box_env(&ctx.d, "WAYLAND_DISPLAY") else {
-        return refuse(
-            &mut buf,
-            cat!("box '", ctx.name, "': no WAYLAND_DISPLAY in its omabox.env"),
-        );
-    };
-    let Some(sig) = box_env(&ctx.d, "HYPRLAND_INSTANCE_SIGNATURE") else {
-        return refuse(
-            &mut buf,
-            cat!(
-                "box '",
-                ctx.name,
-                "': no HYPRLAND_INSTANCE_SIGNATURE in its omabox.env"
-            ),
-        );
+    let (wd, sig) = if let Some(s) = starting {
+        (None, s.to_vec())
+    } else {
+        let Some(wd) = box_env(&ctx.d, "WAYLAND_DISPLAY") else {
+            return refuse(
+                &mut buf,
+                cat!("box '", ctx.name, "': no WAYLAND_DISPLAY in its omabox.env"),
+            );
+        };
+        let Some(sig) = box_env(&ctx.d, "HYPRLAND_INSTANCE_SIGNATURE") else {
+            return refuse(
+                &mut buf,
+                cat!(
+                    "box '",
+                    ctx.name,
+                    "': no HYPRLAND_INSTANCE_SIGNATURE in its omabox.env"
+                ),
+            );
+        };
+        (Some(wd), sig)
     };
     // One of the helpers up bound: whether the box still has the host's (#421).
     if crate::helpers::runs_helper(args) {
@@ -666,16 +679,16 @@ fn on_box_with(
         .filter(|l| !l.is_empty())
         .unwrap_or(b"C.UTF-8".to_vec());
     // The tool itself, with a clean environment (no env -i, no sh between: the entry does the rest).
-    let env: Vec<(Vec<u8>, Vec<u8>)> = vec![
-        (b"PATH".to_vec(), b"/usr/bin".to_vec()),
-        (
-            b"XDG_RUNTIME_DIR".to_vec(),
-            format!("/run/user/{}", procfs::uid()).into_bytes(),
-        ),
-        (b"WAYLAND_DISPLAY".to_vec(), wd),
-        (b"HYPRLAND_INSTANCE_SIGNATURE".to_vec(), sig),
-        (b"LANG".to_vec(), lang),
-    ];
+    let mut env: Vec<(Vec<u8>, Vec<u8>)> = vec![(b"PATH".to_vec(), b"/usr/bin".to_vec())];
+    env.push((
+        b"XDG_RUNTIME_DIR".to_vec(),
+        format!("/run/user/{}", procfs::uid()).into_bytes(),
+    ));
+    if let Some(wd) = wd {
+        env.push((b"WAYLAND_DISPLAY".to_vec(), wd));
+    }
+    env.push((b"HYPRLAND_INSTANCE_SIGNATURE".to_vec(), sig));
+    env.push((b"LANG".to_vec(), lang));
     // (a crash of one of omabox's tools there never notifies the desktop either: finding 492)
     let fds = Fds {
         pid: pid_to,

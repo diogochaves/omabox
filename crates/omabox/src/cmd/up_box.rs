@@ -397,6 +397,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         shell_before,
         bar_at: 0,
         before_end: &drop_trap,
+        aq_unfixed: if u.aq.fixed {
+            Vec::new()
+        } else {
+            cat!(u.aq.lacks(), ": ", u.aq.howto())
+        },
     };
     let end = crate::settle::after(10);
     let pid = loop {

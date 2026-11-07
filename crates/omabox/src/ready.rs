@@ -87,13 +87,16 @@ pub struct Owner {
 /// were made (#210: died_starting's hint), the crash folders before the shell started (SHELL_BEFORE:
 /// up sets it once the HOME is seeded, from shell_crash_dirs) and when the bar came (BAR_AT, mono_ms,
 /// set by wait_ready: finding 450, where bash read the wall clock). BEFORE_END drops up's own undo
-/// (bash's `trap - EXIT`): up_owner_check calls it before it ends the box itself.
+/// (bash's `trap - EXIT`): up_owner_check calls it before it ends the box itself. AQ_UNFIXED: what
+/// the box's aquamarine lacks and how to get it (Aq's lacks and howto), when it lacks #415's fix
+/// (#406: wait_hyprland's timeout names it); empty when it has it.
 pub struct Ready<'a> {
     pub owner: Option<Owner>,
     pub covers: bool,
     pub shell_before: Vec<u8>,
     pub bar_at: i64,
     pub before_end: &'a dyn Fn(),
+    pub aq_unfixed: Vec<u8>,
 }
 
 /// ready_timeout (#273): $OMABOX_READY_TIMEOUT, a duration (30s, 2m; a bare number is seconds), as
@@ -956,12 +959,7 @@ fn wait_hyprland_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, r: &Ready) -> Res<
     {
         starting_ok_with(sys, ctx, r)?;
         if past(deadline) {
-            let render = render_why(ctx);
-            let why = if render.is_empty() {
-                Vec::new()
-            } else {
-                cat!(" (", render, ")")
-            };
+            let why = not_up_why(render_why(ctx), &r.aq_unfixed, || starting_monitors(ctx));
             return Err(ctx.die(cat!(
                 "Hyprland not up after ",
                 t.to_string(),
@@ -975,6 +973,74 @@ fn wait_hyprland_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, r: &Ready) -> Res<
         poll();
     }
     Ok(())
+}
+
+/// What wait_hyprland's timeout adds after "Hyprland not up after Ns": why labwc could not render
+/// (RENDER), when it logged that; else, for a box whose aquamarine lacks #415's fix (AQ_UNFIXED, as
+/// Ready has it), a Wayland output of its Hyprland that never got a size (MONITORS: `hyprctl -j
+/// monitors all`, asked only then), which is that race (#406): the size of the box's window came
+/// before aquamarine made its output, and was lost; else nothing.
+fn not_up_why(
+    render: Vec<u8>,
+    aq_unfixed: &[u8],
+    monitors: impl FnOnce() -> Option<Vec<u8>>,
+) -> Vec<u8> {
+    if !render.is_empty() {
+        return cat!(" (", render, ")");
+    }
+    if aq_unfixed.is_empty() {
+        return Vec::new();
+    }
+    match monitors().as_deref().and_then(unsized_output) {
+        Some(m) => cat!(
+            ": its output ",
+            m,
+            " never got a size, as can happen without ",
+            aq_unfixed
+        ),
+        None => Vec::new(),
+    }
+}
+
+/// A Wayland output (an interactive box's window, a labwc screen's) at 0x0 in MONITORS, `hyprctl -j
+/// monitors all`'s answer: its name.
+fn unsized_output(mons: &[u8]) -> Option<Vec<u8>> {
+    let (vals, _) = crate::json::values(mons);
+    let num = |m: &serde_json::Value, k: &str| m.get(k).and_then(serde_json::Value::as_i64);
+    vals.iter()
+        .filter_map(serde_json::Value::as_array)
+        .flatten()
+        .find_map(|m| {
+            let n = m.get("name")?.as_str()?;
+            (n.starts_with("WAYLAND-") && num(m, "width") == Some(0) && num(m, "height") == Some(0))
+                .then(|| n.as_bytes().to_vec())
+        })
+}
+
+/// The box's Hyprland's monitors (`hyprctl -j monitors all`) while up still waits for it, before its
+/// omabox.env names its instance: the one folder in the box's runtime dir's hypr/, a tame name, not
+/// a link (the box writes that dir). None when there is no single one, or no answer in 3 s.
+fn starting_monitors(ctx: &Ctx) -> Option<Vec<u8>> {
+    let h = ctx.at("run/hypr");
+    if h.is_symlink() {
+        return None;
+    }
+    let mut names = std::fs::read_dir(&h)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().as_bytes().to_vec());
+    let sig = names.next()?;
+    if names.next().is_some() || !shell::re_match("^[A-Za-z0-9_.-]+$", &sig) {
+        return None;
+    }
+    let r = crate::exec::on_box_starting(
+        ctx,
+        &sig,
+        &w(&[b"timeout", b"3", b"hyprctl", b"-j", b"monitors", b"all"]),
+        Out::Capture(Some(1 << 20)),
+        ErrTo::Null,
+    );
+    (r.rc == 0 && !r.refused).then_some(r.out)
 }
 
 /// `on_box hyprctl -j layers [2>/dev/null]`: the box's layers, as hyprctl answered (or nothing).
@@ -1803,6 +1869,60 @@ mod tests {
 
     use std::sync::Mutex;
 
+    // #406: "Hyprland not up" names aquamarine's race (and setup --aquamarine) only when the box's
+    // aquamarine lacks #415's fix and its Hyprland shows it, a Wayland output at 0x0; its monitors are
+    // asked only then. Otherwise the message is as before: labwc's reason, or nothing.
+    #[test]
+    fn not_up_names_the_aquamarine_race() {
+        let stuck =
+            br#"[{"id": 0, "name": "WAYLAND-1", "width": 0, "height": 0, "availableModes": []}]"#;
+        let sized = br#"[{"id": 0, "name": "WAYLAND-1", "width": 1920, "height": 1080}]"#;
+        let headless = br#"[{"id": 0, "name": "HEADLESS-2", "width": 0, "height": 0}]"#;
+        let lacks = b"aquamarine's fix (#415), which the system's aquamarine 0.15.1 lacks: omabox setup --aquamarine";
+        let why = |render: &str, aq: &[u8], mons: Option<&[u8]>| {
+            let asked = std::cell::Cell::new(false);
+            let w = not_up_why(render.as_bytes().to_vec(), aq, || {
+                asked.set(true);
+                mons.map(<[u8]>::to_vec)
+            });
+            (String::from_utf8(w).unwrap(), asked.get())
+        };
+        assert_eq!(
+            why("", lacks, Some(stuck)),
+            (
+                ": its output WAYLAND-1 never got a size, as can happen without aquamarine's fix (#415), which the system's aquamarine 0.15.1 lacks: omabox setup --aquamarine".to_string(),
+                true
+            ),
+            "unfixed, an output at 0x0: the race, named, with what to run"
+        );
+        assert_eq!(
+            why("", lacks, Some(sized)),
+            (String::new(), true),
+            "...an output with its size: as before"
+        );
+        assert_eq!(
+            why("", lacks, Some(headless)),
+            (String::new(), true),
+            "...a headless output at 0x0 is no window: as before"
+        );
+        assert_eq!(
+            why("", lacks, None),
+            (String::new(), true),
+            "...no answer from its Hyprland: as before"
+        );
+        assert_eq!(
+            why("", b"", Some(stuck)),
+            (String::new(), false),
+            "the fix: as before, its monitors not asked"
+        );
+        assert_eq!(
+            why("labwc: no GPU", lacks, Some(stuck)),
+            (" (labwc: no GPU)".to_string(), false),
+            "labwc's reason first, as before"
+        );
+        assert_eq!(unsized_output(b"not json"), None, "garbage: none");
+    }
+
     // #247, #438: a plain box's shell is up once a layer of one of its processes is drawn (not a
     // hidden 1x1 one, nor an empty one; with no slot known, anyone's), and its Quickshell configs are
     // its processes' (with no slot: its own pid's and those started after its mark).
@@ -1961,6 +2081,7 @@ mod tests {
             shell_before: Vec::new(),
             bar_at: 0,
             before_end: &|| {},
+            aq_unfixed: Vec::new(),
         }
     }
 
@@ -2934,6 +3055,7 @@ mod tests {
             shell_before: b"old".to_vec(),
             bar_at: 0,
             before_end: &|| {},
+            aq_unfixed: Vec::new(),
         };
         let sc = |stat: &'static str| {
             let sys = ShellBox { stat, list: None };

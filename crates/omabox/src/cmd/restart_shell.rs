@@ -135,6 +135,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         shell_before: before,
         bar_at: 0,
         before_end: &|| {},
+        aq_unfixed: Vec::new(),
     };
     wait_ready(ctx, &mut r, true)?;
     // A shell that crashed just after its bar came is no restart (#126): said with its report, exit 1.
