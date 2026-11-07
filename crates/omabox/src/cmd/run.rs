@@ -6,7 +6,7 @@
 //! the desktop did meanwhile (#274).
 
 use crate::args::{optarg, unknown_opt_hint};
-use crate::boxes::{box_alive, need_box, take_over, touch};
+use crate::boxes::{box_alive, box_home, need_box, take_over, touch};
 use crate::cat;
 use crate::exec::{ExecOpts, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, out, say};
@@ -441,7 +441,7 @@ fn detached(
         b"-c".to_vec(),
         RUN_D_SH.as_bytes().to_vec(),
         b"omabox-run".to_vec(),
-        cat!("/home/sbx/", lname),
+        cat!(box_home(&ctx.d), "/", lname),
         ex.clone(),
     ];
     argv.extend(cmd.iter().cloned());
@@ -519,7 +519,9 @@ fn detached(
             pid,
             "log: ",
             log,
-            ", /home/sbx/",
+            ", ",
+            box_home(&ctx.d),
+            "/",
             lname,
             " in the box)"
         ));

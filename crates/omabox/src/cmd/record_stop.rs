@@ -4,8 +4,8 @@
 //! bytes of the box's `cat` (box_copy, finding 297).
 
 use super::record::{
-    Enc, Err2, REC_AAC, REC_CRF, REC_DIR, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec,
-    SheetMore, SheetOpts, StopOpts, audio_end, now_us, num, rec_dirs, rec_enc, rec_max, rec_yuv,
+    Enc, Err2, REC_AAC, REC_CRF, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec, SheetMore,
+    SheetOpts, StopOpts, audio_end, now_us, num, rec_dir, rec_dirs, rec_enc, rec_max, rec_yuv,
     record_first_us, record_firsts, record_running, record_size, rm, sys_cap, sys_q, sys_run, w,
 };
 use crate::cat;
@@ -49,7 +49,7 @@ fn drain(ctx: &mut Ctx, rec: &Rec, pids: &[Vec<u8>]) -> Res<bool> {
         "omabox-record",
         &dl.to_string(),
     ]);
-    for (d, p) in rec_dirs(rec).into_iter().zip(pids) {
+    for (d, p) in rec_dirs(ctx, rec).into_iter().zip(pids) {
         a.push(d);
         a.push(p.clone());
     }
@@ -512,7 +512,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     let raw1 = if rec.n > 1 {
         None
     } else {
-        raw_size(ctx, REC_DIR.as_bytes())?
+        raw_size(ctx, rec_dir(&ctx.d).as_bytes())?
     };
     let px = if rec.n > 1 {
         let s = record_size(ctx);
@@ -549,7 +549,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "stream=codec_name",
                 "-of",
                 "csv=p=0",
-                &format!("{REC_DIR}/audio.mka"),
+                &format!("{}/audio.mka", rec_dir(&ctx.d)),
             ]),
         )?;
         let o = &o[..o.len().min(4096)];
@@ -567,7 +567,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         } else {
             say(cat!(
                 "record: no sound came out (ffmpeg's log, ",
-                REC_DIR,
+                &rec_dir(&ctx.d),
                 "/audio.log in box '",
                 ctx.name,
                 "', is kept): a video without it"
@@ -660,7 +660,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         if !record_compose(ctx, rec, &afilt, &vass, so.cut, &turns, lim.as_deref())? {
             return Err(ctx.die(cat!(
                 "record: ffmpeg could not make the video (the monitors' raw.mkv in ",
-                REC_DIR,
+                &rec_dir(&ctx.d),
                 "/m1 to m",
                 rec.n.to_string(),
                 " in box '",
@@ -677,10 +677,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             "error",
             "-y",
             "-i",
-            &format!("{REC_DIR}/raw.mkv"),
+            &format!("{}/raw.mkv", rec_dir(&ctx.d)),
         ]);
         if !afilt.is_empty() {
-            a.extend(w(&["-i", &format!("{REC_DIR}/audio.mka")]));
+            a.extend(w(&["-i", &format!("{}/audio.mka", rec_dir(&ctx.d))]));
         }
         a.push(b"-vf".to_vec());
         let back = raw1.map_or("", |wh| {
@@ -702,12 +702,12 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         a.extend(w(&[
             "-movflags",
             "+faststart",
-            &format!("{REC_DIR}/out.mp4"),
+            &format!("{}/out.mp4", rec_dir(&ctx.d)),
         ]));
         if rec_ff(ctx, Ff::Plain { to_err: true }, &a)?.0 != 0 {
             return Err(ctx.die(cat!(
                 "record: ffmpeg could not make the video (",
-                REC_DIR,
+                &rec_dir(&ctx.d),
                 "/raw.mkv in box '",
                 ctx.name,
                 "' is kept)"
@@ -737,7 +737,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             "stream=width,height:format=duration",
             "-of",
             "csv=p=0",
-            &format!("{REC_DIR}/out.mp4"),
+            &format!("{}/out.mp4", rec_dir(&ctx.d)),
         ]),
     )?;
     // (`| head -c 4096 | paste -sd ' '`; its status not read)
@@ -773,7 +773,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     let durb = dur.map(|d| d.to_string().into_bytes()).unwrap_or_default();
     let base = rec.file.strip_suffix(b".mp4").unwrap_or(&rec.file).to_vec();
     let max = rec_max();
-    let outmp4 = format!("{REC_DIR}/out.mp4").into_bytes();
+    let outmp4 = format!("{}/out.mp4", rec_dir(&ctx.d)).into_bytes();
     if !so.tofd.is_empty() {
         // Streamed into the caller's file, as the bytes of the box's `cat`.
         let fd = num(&so.tofd) as i32;
@@ -790,7 +790,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "record: could not copy the video out of box '",
                 ctx.name,
                 "' (into the caller's file; ",
-                REC_DIR,
+                &rec_dir(&ctx.d),
                 "/out.mp4 there is kept)"
             )));
         }
@@ -813,7 +813,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "record: could not copy the video out of box '",
                 ctx.name,
                 "' (",
-                REC_DIR,
+                &rec_dir(&ctx.d),
                 "/out.mp4 there is kept)"
             )));
         }
@@ -884,21 +884,21 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         .unwrap_or_default();
     }
     let mut rmd = w(&[
-        format!("{REC_DIR}/raw.mkv"),
-        format!("{REC_DIR}/out.mp4"),
-        format!("{REC_DIR}/first-frame"),
-        format!("{REC_DIR}/last-frame"),
-        format!("{REC_DIR}/overlay.ass"),
-        format!("{REC_DIR}/cut.mp4"),
+        format!("{}/raw.mkv", rec_dir(&ctx.d)),
+        format!("{}/out.mp4", rec_dir(&ctx.d)),
+        format!("{}/first-frame", rec_dir(&ctx.d)),
+        format!("{}/last-frame", rec_dir(&ctx.d)),
+        format!("{}/overlay.ass", rec_dir(&ctx.d)),
+        format!("{}/cut.mp4", rec_dir(&ctx.d)),
     ]);
     if !afilt.is_empty() {
         rmd.extend(w(&[
-            format!("{REC_DIR}/audio.mka"),
-            format!("{REC_DIR}/audio.log"),
+            format!("{}/audio.mka", rec_dir(&ctx.d)),
+            format!("{}/audio.log", rec_dir(&ctx.d)),
         ]));
     }
     if rec.n != 1 {
-        rmd.extend(rec_dirs(rec));
+        rmd.extend(rec_dirs(ctx, rec));
     }
     let mut a = w(&["/usr/bin/rm", "-rf", "--"]);
     a.extend(rmd);
@@ -960,7 +960,7 @@ fn audio_filter(ctx: &mut Ctx, first: i64) -> Option<Vec<u8>> {
             "/usr/bin/sed",
             "-n",
             P::AUDIO_START_SED,
-            &format!("{REC_DIR}/audio.log"),
+            &format!("{}/audio.log", rec_dir(&ctx.d)),
         ]),
         Some(256),
         Err2::Null,
@@ -1060,7 +1060,7 @@ fn record_compose(
     let head = shell::read_fields(lines.first().copied().unwrap_or_default(), 3);
     let (ow, oh) = (num(&head[0]), num(&head[1]));
     let lay: Vec<&[u8]> = lines.into_iter().skip(1).collect();
-    let dirs = rec_dirs(rec);
+    let dirs = rec_dirs(ctx, rec);
     let firsts = record_firsts(ctx, rec);
     let mut durs = Vec::new();
     for d in &dirs {
@@ -1213,7 +1213,7 @@ fn record_compose(
     ));
     let mut amap: Vec<Vec<u8>> = Vec::new();
     if !afilt.is_empty() {
-        args.extend(w(&["-i", &format!("{REC_DIR}/audio.mka")]));
+        args.extend(w(&["-i", &format!("{}/audio.mka", rec_dir(&ctx.d))]));
         fc.extend_from_slice(&cat!(";[", (k + 1).to_string(), ":a]", afilt, "[a]"));
         amap = w(&["-map", "[a]"]);
         amap.extend(w(&REC_AAC));
@@ -1229,7 +1229,7 @@ fn record_compose(
     args.extend(w(&[
         "-movflags",
         "+faststart",
-        &format!("{REC_DIR}/out.mp4"),
+        &format!("{}/out.mp4", rec_dir(&ctx.d)),
     ]));
     let mut a = vec![b"/usr/bin/ffmpeg".to_vec()];
     a.extend(args);
@@ -1358,7 +1358,7 @@ fn record_marks(
 }
 
 /// record_ass INPUT MARKS FIRST_US GEO SHOW CAPTIONS: the overlay script in the box as
-/// REC_DIR/overlay.ass; Some(the filter that draws it), None when it cannot (said by the caller).
+/// rec_dir/overlay.ass; Some(the filter that draws it), None when it cannot (said by the caller).
 #[allow(clippy::too_many_arguments)]
 fn record_ass(
     ctx: &mut Ctx,
@@ -1370,6 +1370,14 @@ fn record_ass(
     show: bool,
     caps: bool,
 ) -> Res<Option<Vec<u8>>> {
+    // (the script's path goes into ffmpeg's filter graph as written: a desk box's HOME (#321) with a
+    // character the graph reads as its own syntax draws nothing rather than something else)
+    if !rec_dir(&ctx.d)
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || b"/._+@-".contains(&c))
+    {
+        return Ok(None);
+    }
     let g = shell::read_fields(geo, 8);
     let ok = shell::re_match("^-?[0-9]{1,6}$", &g[0])
         && shell::re_match("^-?[0-9]{1,6}$", &g[1])
@@ -1395,7 +1403,7 @@ fn record_ass(
                 "stream=width,height",
                 "-of",
                 "csv=p=0",
-                &format!("{REC_DIR}/raw.mkv"),
+                &format!("{}/raw.mkv", rec_dir(&ctx.d)),
             ]),
             256,
         )?;
@@ -1456,7 +1464,7 @@ fn record_ass(
                     ctx,
                     P::WRITE_SH,
                     "/usr/bin/sh",
-                    &format!("{REC_DIR}/overlay.ass"),
+                    &format!("{}/overlay.ass", rec_dir(&ctx.d)),
                     fd,
                 )? == 0
             }
@@ -1467,7 +1475,9 @@ fn record_ass(
     if !ok {
         return Ok(None);
     }
-    Ok(Some(format!(",ass={REC_DIR}/overlay.ass").into_bytes()))
+    Ok(Some(
+        format!(",ass={}/overlay.ass", rec_dir(&ctx.d)).into_bytes(),
+    ))
 }
 
 /// `box_sys SHELL -c SCRIPT omabox-record PATH < FD`: its status.
@@ -1585,7 +1595,7 @@ fn record_cut(
     show: bool,
     afilt: &[u8],
 ) -> Res<Option<Vec<u8>>> {
-    let outmp4 = format!("{REC_DIR}/out.mp4");
+    let outmp4 = format!("{}/out.mp4", rec_dir(&ctx.d));
     let nb = ff_line(
         ctx,
         &w(&[
@@ -1826,7 +1836,7 @@ fn record_cut(
     a.extend(w(&[
         "-movflags",
         "+faststart",
-        &format!("{REC_DIR}/cut.mp4"),
+        &format!("{}/cut.mp4", rec_dir(&ctx.d)),
     ]));
     if rec_ff(ctx, Ff::Plain { to_err: true }, &a)?.0 != 0 {
         return Ok(None);
@@ -1835,7 +1845,7 @@ fn record_cut(
         "/usr/bin/mv",
         "-f",
         "--",
-        &format!("{REC_DIR}/cut.mp4"),
+        &format!("{}/cut.mp4", rec_dir(&ctx.d)),
         &outmp4,
     ]);
     if sys_run(ctx, &mv, false, Err2::Inherit, false)? != 0 {
@@ -1873,7 +1883,7 @@ pub fn sheet_file(ctx: &mut Ctx, so: &SheetOpts) -> Res<()> {
 
 fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
     let base = so.video.strip_suffix(b".mp4").unwrap_or(&so.video).to_vec();
-    let bv = format!("{REC_DIR}/sheet-{}.mp4", std::process::id()).into_bytes();
+    let bv = format!("{}/sheet-{}.mp4", rec_dir(&ctx.d), std::process::id()).into_bytes();
     let max = rec_max();
     let (tsv, outp, tmpd);
     let mut size: i64;
@@ -2362,7 +2372,7 @@ fn record_sheet(
     // The frames, in a folder of the box's (Src::Box), or (Src::Host, #279) in the sandbox's /out,
     // which is the host folder the caller made.
     let bd = match v {
-        Src::Box(_) => format!("{REC_DIR}/sheet-{}", std::process::id()),
+        Src::Box(_) => format!("{}/sheet-{}", rec_dir(&ctx.d), std::process::id()),
         Src::Host { .. } => "/out".to_string(),
     };
     let made = match v {

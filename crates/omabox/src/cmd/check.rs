@@ -626,7 +626,12 @@ fn check_holes_off_in(ctx: &Ctx, bg: &dyn Fn() -> Option<i64>) -> Vec<u8> {
     let bg = std::fs::read_link(ctx.at("home/.local/state/omarchy/current/background"))
         .map(|p| shell::bytes(&p).to_vec())
         .unwrap_or_default();
-    if bg == b"/home/sbx/.config/omabox/clean-wallpaper.png" {
+    if bg
+        == cat!(
+            crate::boxes::box_home(&ctx.d),
+            "/.config/omabox/clean-wallpaper.png"
+        )
+    {
         Vec::new()
     } else {
         b"the wallpaper is not the sentinel (a theme set in the box?)".to_vec()

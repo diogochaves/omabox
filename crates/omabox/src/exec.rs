@@ -7,7 +7,7 @@
 //! could open again (finding 325: the relays, a terminal of its own), none but the ones it is given
 //! (finding 345: fds_only), and no controlling terminal of the caller's (finding 491).
 
-use crate::boxes::{self, BoxPid, box_env, box_pid, covers_held, run_read};
+use crate::boxes::{self, BoxPid, box_env, box_home, box_pid, covers_held, run_read};
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res};
 use crate::jail;
@@ -862,7 +862,7 @@ const BOX_EXEC_SH: &str = r#"
       fi
       cd "$1" && shift
       if [ -n "${OMABOX_SYS:-}" ]; then unset OMABOX_SYS OMABOX_CALLER_PATH; PATH=/usr/bin exec -- "$@"; fi
-      p=/opt/omabox/share/bin:/home/sbx/.local/bin
+      p=/opt/omabox/share/bin:$HOME/.local/bin
       # `up --quickshell`: the build as quickshell and qs, before the caller's /usr/bin (finding 358).
       [ ! -x "${XDG_RUNTIME_DIR:-/nonexistent}/omabox-quickshell/quickshell" ] || p=$p:$XDG_RUNTIME_DIR/omabox-quickshell
       # `up --omarchy`: its bin before the caller's dirs, as in the session (finding 135).
@@ -887,7 +887,7 @@ pub struct ExecOpts {
     /// process's.
     pub stdout: Option<RawFd>,
     /// box_sys (BOX_SYS): one of omabox's own helpers, by its full path, with only the box's
-    /// display, Hyprland and session bus of omabox.env, in /home/sbx, PATH=/usr/bin, its pipes not
+    /// display, Hyprland and session bus of omabox.env, in the box HOME, PATH=/usr/bin, its pipes not
     /// relayed and no terminal of its own.
     pub sys: bool,
     /// Started as bash starts what it backgrounds (a `<(...)`): SIGINT and SIGQUIT ignored in it.
@@ -903,7 +903,7 @@ fn sys_env(d: &[u8]) -> Vec<Vec<u8>> {
         .filter(|l| !l.is_empty())
         .unwrap_or(b"C.UTF-8".to_vec());
     let mut env = vec![
-        b"HOME=/home/sbx".to_vec(),
+        cat!("HOME=", box_home(d)),
         cat!("LANG=", lang),
         format!("XDG_RUNTIME_DIR=/run/user/{}", procfs::uid()).into_bytes(),
         b"OMABOX_SYS=1".to_vec(),
@@ -966,7 +966,7 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
         wd = jail::get_raw("cwd");
     }
     let cwd = if wd.is_empty() {
-        b"/home/sbx".to_vec()
+        box_home(&ctx.d)
     } else {
         box_cwd(&ctx.d, &pid, &wd)
     };
@@ -1162,19 +1162,30 @@ pub fn caller_path(for_box: bool) -> Vec<u8> {
 /// inode, or an overlay of it), else the box HOME (finding 63: /home/USER and /tmp exist in a box
 /// too, empty or the box's own).
 pub fn box_cwd(d: &[u8], pid: &[u8], wd: &[u8]) -> Vec<u8> {
-    let here = std::fs::metadata(shell::path(wd))
+    if same_in_box(d, pid, wd) {
+        return wd.to_vec();
+    }
+    box_home(d)
+}
+
+/// same_in_box D PID P: the box has host path P at the same path as the host's own (a mount of it:
+/// the same device and inode, or an overlay of it), looked up in the box's root as stat_in_box
+/// does. False when either has none; never true for what only shares the path, as a desk box's HOME
+/// does with yours (#321).
+pub fn same_in_box(d: &[u8], pid: &[u8], p: &[u8]) -> bool {
+    let here = std::fs::metadata(shell::path(p))
         .map(|m| format!("{}:{}", m.dev(), m.ino()).into_bytes())
         .unwrap_or_default();
-    let there = stat_in_box(d, pid, wd)
+    let there = stat_in_box(d, pid, p)
         .map(|st| format!("{}:{}", st.st_dev, st.st_ino).into_bytes())
         .unwrap_or_default();
-    if !here.is_empty() && here == there {
-        return wd.to_vec();
-    }
-    if !there.is_empty() && under_overlay(d, wd) {
-        return wd.to_vec();
-    }
-    b"/home/sbx".to_vec()
+    (!here.is_empty() && here == there) || (!there.is_empty() && under_overlay(d, p))
+}
+
+/// has_in_box D PID P: the box has something at P (its links followed inside its root, as it
+/// resolves them: never through the host's).
+pub fn has_in_box(d: &[u8], pid: &[u8], p: &[u8]) -> bool {
+    stat_in_box(d, pid, p).is_some()
 }
 
 /// `stat -L WD` as the box sees it, with no process started (bash ran nsenter and stat): looked up
@@ -2128,5 +2139,23 @@ mod tests {
             vec![b"A=1".to_vec(), Vec::new(), b"B".to_vec()]
         );
         assert!(mapfile0(b"").is_empty());
+    }
+
+    // #321: omabox's own helpers (shot's) get the box's HOME, a desk box's at your HOME's path.
+    #[test]
+    fn sys_env_home_is_the_box_homes() {
+        let d = std::env::temp_dir().join(format!("omabox-seh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let ds = d.display().to_string();
+        assert_eq!(sys_env(ds.as_bytes())[0], b"HOME=/home/sbx");
+        std::fs::write(
+            d.join("box.json"),
+            r#"{"desktop":"desk","home":"/home/someone"}"#,
+        )
+        .unwrap();
+        assert_eq!(sys_env(ds.as_bytes())[0], b"HOME=/home/someone");
+        assert!(BOX_EXEC_SH.contains("p=/opt/omabox/share/bin:$HOME/.local/bin"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

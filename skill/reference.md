@@ -902,8 +902,8 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   notifications, keyring); without Omarchy it is plain (Plain boxes, below). Read-only in it are the
   repo (same path), `--ro-bind`, `--plugin` and `--theme-dir` dirs, mise's toolchains and the fonts;
   nothing else of the user's HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret stores or the
-  runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`; `omabox path
-  --home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the host's own
+  runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`, or your HOME's path in
+  a desk box; `omabox path --home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the host's own
   is the real session's: never read app state there. Private session bus and keyring; audio: `up
   --audio`; a polkit agent: `up --polkit`; `/sys`: the host's.
 - The repo you ran `omabox up` from is visible **read-only** at the same path (from a linked worktree
@@ -974,7 +974,8 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   or in `/tmp` inside, and seed a widget's data files (a usage record, a store) there while the box runs.
   Inside the box it is `/home/sbx`, which does not exist on the host: a path under it passed to a
   service running on the host (a download dir sent to a local server) fails there. Use a path both
-  can see.
+  can see. A desk box's HOME is at your HOME's path: on the host that path is your real HOME,
+  not the box's.
 - The box's runtime dir (`/run/user/$UID` in it, its `XDG_RUNTIME_DIR`) is `omabox path --run` →
   `<dir>/run` on the host: an app's runtime state (a `status.json`, a socket) is read there. The host's
   own `/run/user/$UID` is the real session's: a file read there is the desktop's app state, not the box's.
@@ -1135,6 +1136,11 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   installed (`up` says so) or when `omabox config desktop plain` is set. `--clean` works there: its
   sentinel is the Hyprland background colour (`#ff00ff`), not a wallpaper, and `check run --desktop
   plain` checks on such boxes.
+- `--desktop desk` (#321) is a plain box whose HOME is at your HOME's path: `$HOME` in the box is
+  the same string as yours, so what writes your path into files or settings finds the box's. It is
+  still the fake HOME (`omabox path --home`, as any box's), never your files: only the repo,
+  `--ro-bind` and `--seed` bring any in. A path under your HOME in a command is the box HOME's
+  there, not yours (`run` says so). Refused with `--desk-shell` and `--clean`.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is

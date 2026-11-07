@@ -52,8 +52,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !shell::path(&ctx.d).is_dir() {
         need_box(ctx)?;
     }
-    // --home (#272): the box's /home/sbx on the host, a literal path for an agent's own file tools
-    // (Read, Write, Edit), where `$(omabox path)/home` inside a command is refused in a worktree.
+    // --home (#272): the box's HOME (/home/sbx, or your HOME's path in a desk box) on the host, a
+    // literal path for an agent's own file tools (Read, Write, Edit), where `$(omabox path)/home`
+    // inside a command is refused in a worktree.
     if home {
         return out(cat!(ctx.d, "/home\n"));
     }

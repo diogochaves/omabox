@@ -118,7 +118,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
   omabox events [-b NAME] --mark [MARK] [--json]         from here: prints the offset, keeps MARK for --since
   omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
-  omabox path [NAME | -b NAME] [--home | --run | --logs [--json]]   the box dir; --home: its /home/sbx (<dir>/home);
+  omabox path [NAME | -b NAME] [--home | --run | --logs [--json]]   the box dir; --home: its HOME (<dir>/home);
                                                          --run: its /run/user/$UID (<dir>/run); --logs: each log's file
   omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
   omabox ls [--json]
@@ -170,8 +170,8 @@ too (omabox -b NAME windows).
 @short log events
 -f (or --follow): on until the box goes down
 @ path
-From the host, the box's HOME (/home/sbx in it) is <dir>/home, `omabox path --home`, and its
-/run/user/$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, `omabox path
+From the host, the box's HOME (/home/sbx in it, or your HOME's path in a desk box) is <dir>/home,
+`omabox path --home`, and its /run/user/$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, `omabox path
 --run`. An agent reads and writes box files with its own file tools on the path --home prints. The host's own
 /run/user/$UID is the real session's: never read a box app's state there.
 @ brief
@@ -268,6 +268,10 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
   plugin commands on the box. Without --desktop: `omabox config desktop`'s, else omarchy where Omarchy
   is installed and plain where it is not (up says so; doctor and setup test the same); --omarchy DIR
   is an Omarchy box. ls says a plain box's desktop (and shell) under its line.
+--desktop desk (#321): a plain box whose HOME is at your HOME's path ($HOME in the box is yours), so
+  what names your paths finds the box's: still the fake HOME, never your files (but the repo,
+  --ro-bind and --seed's). From the host it is <dir>/home, as any box's; a path under your HOME in a
+  command is the box HOME's there, not yours (run says so). Refused with --desk-shell and --clean.
 --shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`, `caelestia shell
   -d`), run by sh in the session; the shell is all CMD starts (#438): a launcher may start it and
   exit, and the shell is gone once nothing of it is left. up waits until one of its processes draws
