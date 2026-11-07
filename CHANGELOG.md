@@ -62,7 +62,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   wf-recorder drops the frames still waiting for its encoder when it is told to stop, so on a busy
   machine a video lost up to a second before the stop, even right after a `record hold` that had
   said those frames were there. Stop now waits for them to be written first (a few milliseconds when
-  the encoder keeps up; at most 10 s, said if it runs out).
+  the encoder keeps up; at most 10 s, said if it runs out). The test suite's check of a stop whose
+  ffmpeg hangs once no longer fails on a busy machine ([#445](https://github.com/diogochaves/omabox/issues/445)):
+  the short time limit it set for the hung run also cut off the real encode after it, and a failure
+  there now keeps the stop's output and its raw recording.
 - **`click --in` a crop at a fractional scale lands on the pixel you read** ([#432](https://github.com/diogochaves/omabox/issues/432)):
   a pixel of a `shot -g` crop at 1.25, 1.5 or 4/3 was turned into a layout point by the image's size
   over the region's, which could put it a layout pixel off the one under that pixel. It now maps

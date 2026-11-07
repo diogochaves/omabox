@@ -13604,6 +13604,30 @@ from them.
     rgb:- through rgb_cells (od, then "R,G,B" a cell, the same text txt:- gave, checked alike on
     #102030). t_record_layout and t_monitors_turned pass here on it; not yet rerun in the VM.
 
+691. **The suite's 3 s ffmpeg bound killed the real second encode too; raw.mkv was whole**
+    (2026-11-07, #445, after findings 356 and 689). In full suites since #444, record_stuck_on's
+    stuck-once case (t_record_input) failed: "ffmpeg could not make the video (.../raw.mkv in box
+    ... is kept)", the only line the check showed. Its own case, run in four boxes at once
+    (2560x1440 at scale 2, on the RTX's node, a watcher SIGSTOPping the stop's first ffmpeg,
+    `OMABOX_RECORD_FF_SECS=3`) under 40 host busy loops, failed 20 times in 84: each said "ffmpeg
+    did not finish in 3 s again: killed" first. Nothing was wrong with the raw stream: the kept
+    raw.mkv files held 154 to 162 packets (2.4 to 2.6 s), ffprobe read them, and the stop's own
+    argv encoded one in 0.5 s on a quiet host. The drain's 10 s cap never ran out (never said);
+    wf-recorder had exited before ffmpeg ran. What ran out was the second encode's bound: it is a
+    real encode (70 frames, libx264 medium), 4.5 to 5.2 s of CPU (sampled from /proc), and under
+    that load 2.4 to 4.4 s by the wall clock, while the 3 s the suite set for the stuck first run
+    bound it too. Not a fault of #444's: the binary before it failed alike under more load (11 of
+    12 in one batch), but less often in the same batches (0 of 36 against 10 of 36), the drain's
+    tenths of a second before the encode tipping a near miss over. omabox is unchanged: outside the
+    suite a stop's bound is 60 s or more (finding 356), and a stop with an ffmpeg that is not stuck
+    makes its video. The suite now gives the stuck-once case 10 s (the stuck run killed at 10 s,
+    the real one given 10): 0 of 24 failed under that load, against 3 of 24 at 3 s alternating
+    with it; the stuck-twice case keeps 3 s (both its runs are stopped). A failure there now keeps
+    the stop's whole output, raw.mkv and wf-recorder's log in the evidence (stuck-K-*), and its
+    frame count reads none as 0 (it was `test: integer expected`). t_record_input, t_record_hold
+    and t_record_layout pass alone on 0.56.2 and 0.57.1; t_record_input three and four at once
+    under 24 and 40 busy loops passed 7 runs, its stuck-once stop taking 11 to 13 s.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
