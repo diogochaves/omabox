@@ -656,19 +656,9 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         }
     }
     let lim = stop_len(ctx, rec, t_stop);
-    if rec.n > 1 {
-        if !record_compose(ctx, rec, &afilt, &vass, so.cut, &turns, lim.as_deref())? {
-            return Err(ctx.die(cat!(
-                "record: ffmpeg could not make the video (the monitors' raw.mkv in ",
-                REC_DIR,
-                "/m1 to m",
-                rec.n.to_string(),
-                " in box '",
-                ctx.name,
-                "' are kept)"
-            )));
-        }
-        rm(&ctx.at("record.layout"));
+    // Made: 0, or ffmpeg's status (124: killed twice, finding 356).
+    let made = if rec.n > 1 {
+        record_compose(ctx, rec, &afilt, &vass, so.cut, &turns, lim.as_deref())?
     } else {
         // A steady REC_FPS, the video's clock still wf-recorder's (finding 306).
         let mut a = w(&[
@@ -704,19 +694,47 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             "+faststart",
             &format!("{REC_DIR}/out.mp4"),
         ]));
-        if rec_ff(ctx, Ff::Plain { to_err: true }, &a)?.0 != 0 {
-            return Err(ctx.die(cat!(
+        rec_ff(ctx, Ff::Plain { to_err: true }, &a)?.0
+    };
+    // Its encode stuck twice (finding 693, #445): the raw H.264 copied into the MP4 as it was
+    // recorded, what that leaves out said; failed only when that fails too.
+    let copied = made == 124
+        && record_copy(ctx, rec, &turns, lim.as_deref())?.is_some_and(|t| {
+            say(copy_said(
+                rec.n > 1,
+                &fps,
+                [!afilt.is_empty(), so.show, so.caps, t, so.cut.is_some()],
+            ));
+            true
+        });
+    if made != 0 && !copied {
+        return Err(ctx.die(if rec.n > 1 {
+            cat!(
+                "record: ffmpeg could not make the video (the monitors' raw.mkv in ",
+                REC_DIR,
+                "/m1 to m",
+                rec.n.to_string(),
+                " in box '",
+                ctx.name,
+                "' are kept)"
+            )
+        } else {
+            cat!(
                 "record: ffmpeg could not make the video (",
                 REC_DIR,
                 "/raw.mkv in box '",
                 ctx.name,
                 "' is kept)"
-            )));
-        }
+            )
+        }));
     }
-    // --cut-idle (#176): its still stretches cut short, CUTS the frames taken out.
+    if rec.n > 1 {
+        rm(&ctx.at("record.layout"));
+    }
+    // --cut-idle (#176): its still stretches cut short, CUTS the frames taken out (not in a copy:
+    // its frames come at no steady fps, and cutting would encode what just got stuck).
     let mut cuts = Vec::new();
-    if let Some(c) = so.cut {
+    if let Some(c) = so.cut.filter(|_| !copied) {
         match record_cut(ctx, rec, c, &first, &input, &marks, so.show, &afilt)? {
             Some(x) => cuts = x,
             None => say("record --cut-idle: could not cut it: the video as it was recorded"),
@@ -927,6 +945,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             fps,
             " fps",
             match rec.crf {
+                _ if copied => ", copied as recorded (not re-encoded)".to_string(),
                 Some(0) =>
                     ", CRF 0 (lossless: H.264's High 4:4:4 Predictive, which browsers do not play)"
                         .to_string(),
@@ -1048,10 +1067,10 @@ fn record_compose(
     cut: Option<i64>,
     turns: &[u8],
     lim: Option<&[u8]>,
-) -> Res<bool> {
+) -> Res<i32> {
     let lay = std::fs::read(ctx.at("record.layout")).unwrap_or_default();
     if !lay.contains(&b'\n') {
-        return Ok(false);
+        return Ok(1);
     }
     let mut lines: Vec<&[u8]> = lay.split(|&c| c == b'\n').collect();
     if lines.last().is_some_and(|l| l.is_empty()) {
@@ -1083,11 +1102,11 @@ fn record_compose(
     let n = dirs.len();
     if lay.len() != n || firsts.len() != n {
         say("record: the layout's recordings do not match its record");
-        return Ok(false);
+        return Ok(1);
     }
     let Some(t0) = firsts.iter().flatten().map(|(m, _)| *m).max() else {
         say("record: no monitor gave a frame");
-        return Ok(false);
+        return Ok(1);
     };
     let fps = String::from_utf8_lossy(&rec.fps).into_owned();
     let mut args = w(&[
@@ -1233,7 +1252,74 @@ fn record_compose(
     ]));
     let mut a = vec![b"/usr/bin/ffmpeg".to_vec()];
     a.extend(args);
-    Ok(rec_ff(ctx, Ff::Plain { to_err: true }, &a)?.0 == 0)
+    Ok(rec_ff(ctx, Ff::Plain { to_err: true }, &a)?.0)
+}
+
+/// record_copy (finding 693, #445): each monitor's raw H.264 (wf-recorder's, libx264's or
+/// openh264's) copied into out.mp4 as it was recorded, a video track each, to the stop's time:
+/// Some(whether one was recorded turned, left so), None when ffmpeg could not.
+fn record_copy(ctx: &mut Ctx, rec: &Rec, turns: &[u8], lim: Option<&[u8]>) -> Res<Option<bool>> {
+    let mut a = w(&["/usr/bin/ffmpeg", "-v", "error", "-y"]);
+    let (mut k, mut turned) = (0, false);
+    for (i, d) in rec_dirs(rec).iter().enumerate() {
+        // (only a stream ffprobe reads: a monitor that gave no frame has none)
+        let Some(wh) = raw_size(ctx, d)? else {
+            continue;
+        };
+        let turn = turns.split(|&c| c == b'\n').nth(i).unwrap_or_default();
+        turned |= !turn_back(turn, wh).is_empty();
+        a.push(b"-i".to_vec());
+        a.push(cat!(d, "/raw.mkv"));
+        k += 1;
+    }
+    if k == 0 {
+        return Ok(None);
+    }
+    for i in 0..k {
+        a.push(b"-map".to_vec());
+        a.push(format!("{i}:v:0").into_bytes());
+    }
+    a.extend(w(&["-c", "copy"]));
+    if let Some(l) = lim {
+        a.push(b"-t".to_vec());
+        a.push(l.to_vec());
+    }
+    a.extend(w(&[
+        "-movflags",
+        "+faststart",
+        &format!("{REC_DIR}/out.mp4"),
+    ]));
+    Ok((rec_ff(ctx, Ff::Plain { to_err: true }, &a)?.0 == 0).then_some(turned))
+}
+
+/// What a video record_copy made (of a LAYOUT's monitors or of one) lacks beside one stop encodes
+/// (finding 693), said once; LACKS: its sound, --show-input, --captions, a monitor recorded
+/// turned, --cut-idle.
+fn copy_said(layout: bool, fps: &[u8], lacks: [bool; 5]) -> Vec<u8> {
+    let mut v = cat!(
+        "record: so the video is ",
+        if layout {
+            "the monitors' raw H.264 copied into the MP4, a video track each (players show the first), not composed into the layout"
+        } else {
+            "the raw H.264 copied into the MP4"
+        },
+        ", not re-encoded (finding 693): no steady ",
+        fps,
+        " fps (its frames timed as they came)"
+    );
+    for (on, s) in lacks.into_iter().zip([
+        ", no sound",
+        ", no input drawn",
+        ", no captions",
+        ", not turned upright",
+        ", no still stretch cut",
+    ]) {
+        if on {
+            v.extend_from_slice(s.as_bytes());
+        }
+    }
+    v.extend_from_slice(b", a larger file");
+    v
 }
 
 fn replace_all(v: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
@@ -2993,6 +3079,19 @@ mod tests {
         ] {
             assert_eq!(sheet_geo(bad), None);
         }
+    }
+
+    /// Finding 693: what a copied video lacks, only what applies, a larger file always.
+    #[test]
+    fn copy_said_names_what_applies() {
+        assert_eq!(
+            String::from_utf8(copy_said(false, b"30", [false; 5])).unwrap(),
+            "record: so the video is the raw H.264 copied into the MP4, not re-encoded (finding 693): no steady 30 fps (its frames timed as they came), a larger file"
+        );
+        assert_eq!(
+            String::from_utf8(copy_said(true, b"60", [true, false, true, false, true])).unwrap(),
+            "record: so the video is the monitors' raw H.264 copied into the MP4, a video track each (players show the first), not composed into the layout, not re-encoded (finding 693): no steady 60 fps (its frames timed as they came), no sound, no captions, no still stretch cut, a larger file"
+        );
     }
 
     /// #435, finding 653: a raw video turned back only when it came turned twice (its mode's size on
