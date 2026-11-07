@@ -13659,6 +13659,37 @@ from them.
     (`hyprctl-rollinglog.log`, `hyprctl-monitors.txt`), asked from inside the outer box through a
     short link to the inner box's runtime dir: the socket's own path there is past a Unix socket's
     108 bytes. Checked on a nested box here and in t_unit_evidence.
+700. **A desk box's HOME sits at the user's own HOME path** (2026-11-07, #321 step 1). Why: shells
+    keep absolute paths in their state. DankMaterialShell 1.6.3 stores its wallpaper as
+    `"wallpaperPath": "/home/<user>/Pictures/x.png"` in `~/.local/state/DankMaterialShell/session.json`;
+    seeded into a box whose HOME is `/home/sbx`, that path does not exist and DMS draws its own art;
+    with the box HOME mounted at `/home/<user>` (the 2026-10-26 spike, a nested namespace in a plain
+    box) it comes back, and the host's files stay out. Seen again 2026-11-07 in a plain box with
+    `--shell 'dms run'`: the same session.json and PNG seeded give the PNG's colour near the screen's
+    bottom corners with `/home/sbx/Pictures/...`, and DMS's own art with `$HOME/Pictures/...`. Rewriting paths while seeding
+    would be one parser per shell; the path itself is the general answer. **What holds it:** the box
+    HOME stays the fake one, made from `/etc/skel` in the box's own folder under
+    `~/.cache/omabox/NAME/home` (seed_plain), only mounted elsewhere: `--desktop desk` (#321's
+    `Desktop::Desk`, plain-like) makes `up` write `home` into box.json (`upspec::desk_home`: `$HOME`
+    as written, absolute and lexically clean, not `/` nor anything of the box's own system), bind the
+    box HOME's folder there and set HOME and the XDG dirs under it; every command that names a box
+    path (run, shot, gdb, logs, record, jobs, wait, repo notes) takes it from box.json
+    (`boxes::box_home`, `/home/sbx` for a box without the key). Mount rules move with it:
+    `refuse_dest` refuses the HOME and anything above it, and omabox's own files in it; inside a desk
+    HOME the repo, fonts, `--ro-bind` and `--overlay` go in read-only at their paths (the repo at
+    `~/code/...` lands over the fake HOME, as it did under `/home`). **The main risk**, and how it is
+    closed: `/home/sbx` never exists on the host, so a box path read on the host by mistake read
+    nothing; a desk HOME's path IS the real HOME on the host. Every place that turns a box path into
+    a host one goes through the box's folder (`logs::log_host_path` never falls through to the host
+    for a path under a desk HOME), and a note that a path is "in the box" compares device and inode,
+    saying it is the box HOME's, not yours. A second, smaller one: a link in the box HOME's folder
+    (from `--seed` or a save) along a mount's destination would be followed by bwrap; `up` refuses
+    such a mount before launch. In step 1 a desk box boots plain.lua; `--clean` (its HOME path
+    carries your login name), `--desk-shell` (it folds into desk, decision 3), `config desktop desk`
+    and a jailed agent's desk box are refused. The suite's guard (t_desk_home, t_desk_home_standin,
+    t_desk_dms): the box's HOME is its own folder (device and inode), none of the HOME's entries is
+    the host's, and launch.sh mounts nothing from at or above the HOME and only the box's own folder
+    at it.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -13677,6 +13708,14 @@ of them, nor wayvnc (finding 34). It needs labwc.
 ## Open
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
+
+- Desk boxes, step 1 (#321, finding 700), four questions for Diogo, each with step 1's cautious
+  default: (1) a jailed agent starting a desk box: refused until step 2's copy of the desktop honours
+  what a jail hides; (2) `config desktop desk`: refused until a desk box is complete; (3) a `$HOME`
+  reached through a link (`/home` → `/var/home`): the box has the path as `$HOME` writes it, so a
+  shell that stored the resolved path would not find it; a second path in the box (a link or a
+  bind) is open; (4) a desk box's save started as a non-desk box, or the other way: said, not
+  refused (the saved files carry the other HOME's paths).
 
 - t_guard's nested `up --interactive` (#406): cause found, aquamarine 0.15.1's race (finding 692).
   The package test's guests run boxes on the system's aquamarine, so t_guard skips its nested

@@ -3,6 +3,18 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased (1.4.0)
+
+### Added
+- **`up --desktop desk`, first step: the box HOME at your HOME's path** ([#321](https://github.com/diogochaves/omabox/issues/321)):
+  a desk box's HOME is the same fake HOME every box gets, made in its own folder, but mounted at
+  your HOME's own path (`/home/you`, not `/home/sbx`), so a desktop that keeps absolute paths in its
+  settings (DankMaterialShell's wallpaper, say) finds them in the box. Your real HOME stays out: none
+  of its files are in the box, and nothing is mounted at it or above it but the box's own folder.
+  For now a desk box boots as a plain one (`--desktop plain`); bringing your own Hyprland config and
+  shell in comes next. `--clean`, `--desk-shell`, `config desktop desk` and a jailed agent's desk box
+  are refused until then.
+
 ## Unreleased
 
 ### Added
