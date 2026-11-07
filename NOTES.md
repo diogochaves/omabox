@@ -13920,7 +13920,10 @@ from them.
     the host's resolv.conf as a connected one does (its stub resolver is the host's own).
     `ports` says `host-net` for its servers (on the host's own port, nothing forwarded); `ls` shows
     `host`. Until now `host` was connected's old name (finding 89), accepted silently; it is this
-    mode now, so a script still passing `--net host` for connected gets the host's network.
+    mode now, so a script still passing `--net host` for connected gets the host's network; through
+    the 1.4 releases `up --net host` says so on stderr on every up (`up::HOST_NOTE`, "note: --net
+    host now shares the host's network namespace (before 1.4 it meant --net connected)"; always, not
+    only on a terminal: scripts are the ones that need it; checked in t_net_host).
     - *Refused*: `--allow` and `--addr` (isolated's: the box has every port, and the host's
       addresses); `--xwayland`, since an abstract socket belongs to the network namespace: the
       box's Xwayland would listen on the host's `@/tmp/.X11-unix/X<n>`, and host X11 apps would open

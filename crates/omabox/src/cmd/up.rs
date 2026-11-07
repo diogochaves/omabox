@@ -23,6 +23,9 @@ use crate::shell;
 use crate::upspec::{self, Desktop, SeedRefused, refuse_dest};
 use std::time::Duration;
 
+/// What `up --net host` says on stderr through the 1.4 release line (#313, finding 706).
+pub const HOST_NOTE: &str = "note: --net host now shares the host's network namespace (before 1.4 it meant --net connected)";
+
 const W_WHOLE: &str = "a folder this jail was given whole (its project, or one of its maps)";
 const W_PLUGIN: &str = "a plugin's folder (with a manifest.json) this jail was given whole (its project, or one of its maps), nor inside one the box has";
 const W_THEME: &str = "a folder in this jail's project nor one it was given whole";
@@ -1152,6 +1155,9 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 "up: --net host takes no --allow: the box has every port of the host's (--allow is --net isolated's)",
             ));
         }
+        // The name meant connected until 1.4.0 (finding 89): a script still passing it for that gets
+        // the host's network now, so it is told on every up (stderr; --json's stdout untouched).
+        say(HOST_NOTE);
     }
     if !u.allow.is_empty() && u.net != b"isolated" {
         return Err(ctx.die("up: --allow needs --net isolated"));

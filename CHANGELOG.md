@@ -69,8 +69,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 - `--net host` was a silent alias of `--net connected` (its name before every box had a network of
-  its own); it is the mode above now. A script passing `--net host` for a connected box should pass
-  `--net connected`, or nothing (the default).
+  its own); it is the mode above now, and `up --net host` says so in a note on stderr through the
+  1.4 releases. A script passing `--net host` for a connected box should pass `--net connected`, or
+  nothing (the default).
 
 ## 1.3.0 — 2026-11-07
 

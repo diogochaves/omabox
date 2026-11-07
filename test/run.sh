@@ -8537,6 +8537,9 @@ t_net_host() {
   before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
   if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up --net host"
   else no "up --net host" "$out"; return; fi
+  check_eq "...says once, on stderr, that the name meant connected before 1.4" \
+    "omabox: note: --net host now shares the host's network namespace (before 1.4 it meant --net connected)" \
+    "$(grep -F -- '--net host now' <<<"$out")"
   check_match "ls shows it host" "$B +headless .* up +[^ ]+ +host " "$(ob ls)"
   check_eq "the box is in the host's network namespace" "$(readlink /proc/self/ns/net)" "$(ob run -b "$B" -- readlink /proc/self/ns/net)"
   check_fails "...with no pasta in front of it" test -e "$D/pasta.pid"
