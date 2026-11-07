@@ -13554,7 +13554,11 @@ from them.
     gone needs nothing. Bound: 10 s, then "record: wf-recorder still had frames to write after 10 s:
     the video may end before the stop", and the stop goes on. Cost: the wait took 8 to 15 ms with
     the encoder keeping up, 13 to 34 ms with 24 host busy loops; 0.4 s in the pinned case above,
-    whose videos then reached the hold's end. Tests: record_input_on (t_record_input) records again
+    whose videos then reached the hold's end. The frames captured during that wait were written too,
+    and under 16 host busy loops `record --for 2s` gave 2.33 s (its check allows 2.25): the video
+    now ends at the stop's call and a frame more, in its own clock (`-t` on the fps pass; a layout's
+    compose takes the shorter of that and its own end), as it did when the stop's SIGINT came at
+    once. Tests: record_input_on (t_record_input) records again
     with its writer pinned beside a busy loop, holds 1 s and stops: the video reaches the hold's end,
     nothing said (failed on the old stop); its keys mark is now `mark keys --hold 300ms`, and a
     missing frame there is said with the video's length and keeps the video and marks.

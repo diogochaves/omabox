@@ -56,6 +56,19 @@ fn drain(ctx: &mut Ctx, rec: &Rec, pids: &[Vec<u8>]) -> Res<bool> {
     Ok(sys_q(ctx, &a)? == 0)
 }
 
+/// stop_len: the video's length up to a stop called at T_STOP_US (#444): to that time and a frame
+/// more, in the video's clock (from its first frame, the layout's latest); None when that is unknown.
+fn stop_len(ctx: &mut Ctx, rec: &Rec, t_stop: i64) -> Option<Vec<u8>> {
+    let f = record_first_us(ctx, rec)?;
+    let fps: f64 = std::str::from_utf8(&rec.fps).ok()?.trim().parse().ok()?;
+    if fps <= 0.0 {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let s = (t_stop - f) as f64 / 1e6 + 1.0 / fps;
+    (s > 0.0).then(|| format!("{s:.6}").into_bytes())
+}
+
 /// How rec_ff gives its output: as it comes (to stderr with TO_ERR), or captured (-o, -e with its
 /// stderr), printed when it ends.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -383,6 +396,8 @@ pub fn stop(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts) -> Res<()> {
 }
 
 fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<()> {
+    // Its time: the video ends there (the frames the drain lets in after it are not the take's).
+    let t_stop = now_us();
     let alive = record_running(ctx, rec)?;
     if !alive && !ctx.at("record").is_file() {
         return Err(ctx.die(cat!("record stop: box '", ctx.name, "' is not recording")));
@@ -640,8 +655,9 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             }
         }
     }
+    let lim = stop_len(ctx, rec, t_stop);
     if rec.n > 1 {
-        if !record_compose(ctx, rec, &afilt, &vass, so.cut, &turns)? {
+        if !record_compose(ctx, rec, &afilt, &vass, so.cut, &turns, lim.as_deref())? {
             return Err(ctx.die(cat!(
                 "record: ffmpeg could not make the video (the monitors' raw.mkv in ",
                 REC_DIR,
@@ -678,6 +694,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             a.push(afilt.clone());
             a.extend(w(&REC_AAC));
             a.push(b"-shortest".to_vec());
+        }
+        if let Some(l) = &lim {
+            a.push(b"-t".to_vec());
+            a.push(l.clone());
         }
         a.extend(w(&[
             "-movflags",
@@ -1027,6 +1047,7 @@ fn record_compose(
     vass: &[u8],
     cut: Option<i64>,
     turns: &[u8],
+    lim: Option<&[u8]>,
 ) -> Res<bool> {
     let lay = std::fs::read(ctx.at("record.layout")).unwrap_or_default();
     if !lay.contains(&b'\n') {
@@ -1168,6 +1189,17 @@ fn record_compose(
         tlim = vec![b"-t".to_vec(), end.clone()];
     } else {
         fc = replace_all(&fc, b"eof_action=pass", b"shortest=1");
+    }
+    // At most to the stop's time (#444).
+    if let Some(l) = lim {
+        let shorter = !positive
+            || awk_begin(
+                &[("e", &end), ("l", l)],
+                r#"BEGIN { printf "%d", (l + 0 < e + 0) }"#,
+            ) == b"1";
+        if shorter {
+            tlim = vec![b"-t".to_vec(), l.to_vec()];
+        }
     }
     let vass_tail = vass.strip_prefix(b",").unwrap_or(vass);
     fc.extend_from_slice(&cat!(
