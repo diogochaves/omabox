@@ -1155,9 +1155,6 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 "up: --net host takes no --allow: the box has every port of the host's (--allow is --net isolated's)",
             ));
         }
-        // The name meant connected until 1.4.0 (finding 89): a script still passing it for that gets
-        // the host's network now, so it is told on every up (stderr; --json's stdout untouched).
-        say(HOST_NOTE);
     }
     if !u.allow.is_empty() && u.net != b"isolated" {
         return Err(ctx.die("up: --allow needs --net isolated"));
@@ -1191,6 +1188,12 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             protect.csv(),
             ", and a box on your network reaches every port (--net connected keeps them off)"
         )));
+    }
+    // The name meant connected until 1.4.0 (finding 89): a script still passing it for that gets the
+    // host's network now, so it is told on every up that gets past --net host's own refusals (stderr;
+    // --json's stdout untouched).
+    if u.net == b"host" {
+        say(HOST_NOTE);
     }
     if let Some(p) = u
         .allow_ports
