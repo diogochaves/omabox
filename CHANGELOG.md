@@ -15,6 +15,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   shell in comes next. `--clean`, `--desk-shell`, `config desktop desk` and a jailed agent's desk box
   are refused until then, and so is a desk box where your desk is Omarchy's (your Hyprland config
   loads Omarchy): a desk box takes its base from your desk, kept as box.json's `desk_base`.
+- **A desk box runs the shell your config starts** ([#321](https://github.com/diogochaves/omabox/issues/321)):
+  DMS, Noctalia, Caelestia, Waybar or a Quickshell config, found in what your Hyprland config starts
+  (through `env`, `setsid`, `uwsm app --` and `sh -c`), runs in the box's shell slot, as `--shell
+  CMD` does on a plain box: `up` waits for it and says which, and `ls`, `pid shell`, `log shell`,
+  `restart-shell` and the crash notes work on it. A second shell is dropped; `--shell CMD` runs
+  another instead, `--no-shell` none; a config that starts none omabox knows makes `up` fail at
+  once, saying so. `check run --desktop desk` is refused.
 
 ## Unreleased
 

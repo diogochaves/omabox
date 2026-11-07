@@ -13690,6 +13690,38 @@ from them.
     t_desk_dms): the box's HOME is its own folder (device and inode), none of the HOME's entries is
     the host's, and launch.sh mounts nothing from at or above the HOME and only the box's own folder
     at it.
+703. **A desk box's shell is the one its config starts, in the plain box's slot** (2026-11-07,
+    #321 step 4). Why: one bar, and every shell command (`pid shell`, `restart-shell`, crash notes,
+    `ls`) working on it, needs the shell under omabox's slot (#438), not a child of whatever the
+    user's config ran. **How:** `share/desk-shell.lua` (loaded by step 3's desk.lua) gets each
+    command the config starts (`take`), reads it as sh does (parts on `&&`/`;`/`|`/`&`, quotes), takes
+    off what only starts it (`A=B`, exec, env, setsid, nohup, `uwsm app --`, uwsm-app, app2unit,
+    `systemd-run … --`, `sh -c '…'`), and matches the `start`/`match` lines of share/desk-shells/
+    (a pattern without `{…}` first, so `qs -c noctalia-shell` is Noctalia's, not the generic
+    Quickshell one's; `quickshell-path` takes `qs -p DIR`). The first match is written to the box's
+    `omabox-shell.cmd` and `omabox-desk-shell` (`config`) in Lua, then `shell.sh take` runs it in the
+    slot as `--shell CMD` would (no quoting on the way: shell.sh reads the file). A second shell, one
+    under `--shell CMD` (the override) or `--no-shell`, and the same command on a reload (the file is
+    there) are dropped, the reason returned for desk.lua's log. `after_start` (after the config):
+    nothing taken, the guess `up` made (`OMABOX_DESK_SHELL`, a profile, e.g. DMS by its systemd unit,
+    whose `systemctl --user` the policy drops) by its `start` (`guess`); no guess: `none`. shell.sh
+    starts a desk slot only with a word (`take`, restart-shell's token): hyprland.lua's own start of
+    shell.sh, with none, would stop the shell just taken. On the host `boxes::slot_shell` (shell_cmd,
+    or a desk box with a shell) replaces `shell_cmd` as the slot's key; `shellnote::slot_cmd` shows
+    the box's file one line, plain, at most 512 bytes; in the box, crash-dialog.sh takes a desk
+    box's slot (omabox-shell.cmd there) as a plain box's, so its shell's crash dialog is closed as
+    the shell's (it was left open: the first box run). `ready` fails at once on `none` ("your
+    desktop's config started no shell omabox knows"), and takes nothing said at all (a start that
+    never ran desk-shell.lua: no desk.lua yet) as no shell, which `deskshell::after_ready` writes
+    into box.json (`shell: false`) so every command agrees; otherwise up says `its shell: CMD
+    (PROFILE, from your config)`, PROFILE by omabox's own reading (`deskshell::profile_for`, the Lua's
+    twin, the same cases in `profile_match` and t_unit_desk_shell_lua). The contract with desk.lua:
+    `after_start` runs in a start handler before the box writes omabox.env (ready reads the files
+    once that is there). `check run --desktop desk` is refused (a check needs the same box every
+    run). Verified: t_unit_desk_shell_lua (host Lua 5.5, a stand-in `hl`), t_desk_shell_slot in
+    boxes on 0.56.2 and 0.57.1 with a stand-in desk.lua (a copy of omabox whose hyprland.lua runs
+    take/after_start around a seeded config); the real desk.lua's policy, phases and logging, and
+    DMS/Noctalia/Caelestia/Waybar from a real config, only on the integrated branch.
 708. **A desk box's base: what the user's desk is, not what the machine has** (2026-11-07, #321).
     A desk box mirrors the user's own desktop, so whether it is an Omarchy one is a question about
     that desk: Omarchy installed (`install::omarchy_at`, as `--desktop`'s default asks) AND the
