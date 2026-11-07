@@ -16609,9 +16609,10 @@ record_layout_on() {
     "$(ob hyprctl -b "$B" -j clients | jq -r --argjson m "$(ob hyprctl -b "$B" -j monitors)" --arg a "$m0" --arg b "$m1" --arg c "$m2" \
       '. as $w | [$a, $b, $c] | map(. as $n | ($m[] | select(.name == $n) | .id) as $id | [$w[] | select(.monitor == $id)] | length) | join(" ")' 2>/dev/null)"
   local v=$TMP/$B.mp4 out f=$TMP/$B.png sz
-  # (openh264's frames are smaller, 4096x2304's pixels at most: the layout scaled to fit, #442)
-  local vw=4000 vh=2560 how="the layout at scale 2"
-  [ "$REC_ENC" != libopenh264 ] || vw=3840 vh=2458 how="the layout at scale 2, scaled by 0[.]96 to fit H[.]264's largest frame, a black edge making 3840x2457 even"
+  # (openh264's frames are smaller, 4096x2304's pixels at most counted in 16x16 macroblocks: the
+  # layout scaled to fit, #442; at 0.96, 3840x2458, it refused the frame as 3840x2464)
+  local vw=4000 vh=2560 how="the layout at scale 2" so se=$TMP/$B-stop.err
+  [ "$REC_ENC" != libopenh264 ] || vw=3826 vh=2448 how="the layout at scale 2, scaled by 0[.]956 to fit H[.]264's largest frame, a black edge making 3825x2448 even"
   out=$(ob record -b "$B" start --monitor all -o "$v" 2>&1)
   check_match "record start --monitor all: one video of the three, at the layout's highest scale" \
     "recording $m0, $m1, $m2 of box '$B' as one ${vw}x$vh video \($how\)" "$out"
@@ -16620,7 +16621,15 @@ record_layout_on() {
   ob record -b "$B" mark "white" >/dev/null 2>&1
   ob run -b "$B" -- sh -c 'echo > /tmp/g1 & echo > /tmp/g2 & echo > /tmp/g3; wait'
   sleep 0.8
-  check_eq "record stop prints the video, then its sheet" "$v|${v%.mp4}.sheet.png" "$(ob record -b "$B" stop --sheet --frames 3 2>/dev/null | paste -sd '|')"
+  # (what stop said, ffmpeg's words too, kept with the failure: it is all there is of a video not made)
+  so=$(ob record -b "$B" stop --sheet --frames 3 2>"$se" | paste -sd '|')
+  if [ "$so" = "$v|${v%.mp4}.sheet.png" ]; then ok "record stop prints the video, then its sheet"
+  else no "record stop prints the video, then its sheet" "want [$v|${v%.mp4}.sheet.png] got [$so]; record stop said: $(tail -c 3000 "$se")"; fi
+  if [ "$REC_ENC" = libopenh264 ]; then
+    local vd; vd=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v" 2>/dev/null) || vd=
+    check "...openh264's video: a frame within its 36864 macroblocks (${vd:-none})" \
+      awk -F, -v d="$vd" 'BEGIN { split(d, a, ","); exit !(a[1] > 0 && int((a[1] + 15) / 16) * int((a[2] + 15) / 16) <= 36864) }'
+  fi
   ob shot -b "$B" -o "$f" >/dev/null 2>&1
   sz=$(magick identify -format '%wx%h' "$f" 2>&1)
   check_eq "...an H.264 video at 30 fps, the size of a shot of the screen ($sz)" "h264,$vw,$vh,30/1 4000x2560" \

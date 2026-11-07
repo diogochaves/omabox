@@ -1580,9 +1580,40 @@ pub fn encoder() -> Option<Enc> {
     })
 }
 
-/// LAYOUT_JQ for ENC: a layout past its largest frame scaled down to fit.
-pub(crate) fn layout_jq(enc: Enc) -> String {
-    P::LAYOUT_JQ.replace("35651584", &enc.max_px().to_string())
+/// A frame's pixels as H.264 counts them, in 16x16 macroblocks: openh264 refuses 3840x2458 as
+/// 3840x2464, past its 9437184 (finding 683).
+pub(crate) fn mb_px(w: i64, h: i64) -> i64 {
+    (w + 15) / 16 * 16 * ((h + 15) / 16 * 16)
+}
+
+/// record_layout MONS ENC: LAYOUT_JQ's layout of MONS (after JQ_MON), past ENC's largest frame scaled
+/// down until it fits in macroblocks (LAYOUT_JQ's budget is pixels: its scale, to 3 decimals, lowered
+/// a step at a time while the padded frame is too big: by half a step, never past the next).
+/// jq's status and output.
+pub(crate) fn record_layout(mons: &[u8], enc: Enc) -> (i32, Vec<u8>) {
+    let max = enc.max_px();
+    let mut budget = max;
+    loop {
+        let prog = format!(
+            "{}{}",
+            crate::jqprog::JQ_MON,
+            P::LAYOUT_JQ.replace("35651584", &budget.to_string())
+        );
+        let (rc, l) = jq_r(&prog, mons);
+        let head = l.split(|&c| c == b'\n').next().unwrap_or_default();
+        let f = shell::read_fields(head, 4);
+        let (Some(w), Some(h)) = (shell::dec(&f[0]), shell::dec(&f[1])) else {
+            return (rc, l);
+        };
+        let k: f64 = std::str::from_utf8(&f[3])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        if rc != 0 || mb_px(w, h) <= max || k <= 0.001 || budget < 1024 {
+            return (rc, l);
+        }
+        budget = (budget as f64 * ((k - 0.0005) / k).powi(2)).floor() as i64;
+    }
 }
 
 /// The encoder of a recording being made into a video (start chose it the same way).
@@ -1595,7 +1626,7 @@ fn too_big(names: &[Vec<u8>], mons: &[u8], enc: Enc) -> Option<Vec<u8>> {
     mons.split(|&c| c == b'\n').find_map(|l| {
         let f = shell::read_fields(l, 3);
         let (wd, ht) = (shell::dec(&f[1])?, shell::dec(&f[2])?);
-        (names.contains(&f[0]) && wd * ht > enc.max_px())
+        (names.contains(&f[0]) && mb_px(wd, ht) > enc.max_px())
             .then(|| cat!(f[0], " is ", wd.to_string(), "x", ht.to_string()))
     })
 }
@@ -1665,7 +1696,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     let mut names: Vec<Vec<u8>> = Vec::new();
     let jq_mon = crate::jqprog::JQ_MON;
     if mon == b"all" {
-        let (rc, l) = jq_r(&format!("{jq_mon}{}", layout_jq(enc)), &mons);
+        let (rc, l) = record_layout(&mons, enc);
         if rc != 0 || l.is_empty() {
             return Err(ctx.die(cat!(
                 "record: box '",
@@ -2086,10 +2117,7 @@ mod tests {
     }
 
     fn layout_for(mons: &str, enc: Enc) -> String {
-        let (rc, l) = jq_r(
-            &format!("{}{}", crate::jqprog::JQ_MON, layout_jq(enc)),
-            mons.as_bytes(),
-        );
+        let (rc, l) = record_layout(mons.as_bytes(), enc);
         assert_eq!(rc, 0);
         String::from_utf8(l).unwrap()
     }
@@ -2156,9 +2184,17 @@ mod tests {
         ];
         let all = format!("[{}]", m.join(","));
         assert_eq!(layout(&all).lines().next(), Some("4000 2560 2 1"));
+        // (0.96 makes 3840x2457, 3840x2464 in macroblocks: past it; just over 0.956, 3825x2448, is 3840x2448)
         assert_eq!(
             layout_for(&all, Enc::OpenH264).lines().next(),
-            Some("3840 2457 2 0.96")
+            Some("3825 2448 2 0.956")
+        );
+        assert_eq!(mb_px(3840, 2458), 3840 * 2464);
+        assert_eq!(mb_px(4096, 2304), Enc::OpenH264.max_px());
+        // (a monitor counted in macroblocks too: 4096x2306 is 4096x2320)
+        assert_eq!(
+            too_big(&n(&["D"]), b"D 4096 2306\n", Enc::OpenH264),
+            Some(b"D is 4096x2306".to_vec())
         );
     }
 
