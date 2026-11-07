@@ -754,6 +754,7 @@ const TOOLS_SOME: &[(&str, &str)] = &[
     ("burst", "shot --burst"),
     ("tree", "omabox tree"),
     ("relay", "agents inside ai-jail"),
+    ("idlehold", "desk boxes"),
 ];
 
 /// pkg-config modules and programs tools/ builds with.

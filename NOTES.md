@@ -13807,6 +13807,51 @@ from them.
     boxes on 0.56.2 and 0.57.1 with a stand-in desk.lua (a copy of omabox whose hyprland.lua runs
     take/after_start around a seeded config); the real desk.lua's policy, phases and logging, and
     DMS/Noctalia/Caelestia/Waybar from a real config, only on the integrated branch.
+704. **A desk box's guards: its idle held off, LABWC_PID renamed, what it cannot run refused**
+    (2026-11-07, #321 step 5). **Idle:** a desk box runs the user's own shell, and with it their
+    idle timeouts (a lock, DPMS off, a suspend); an agent sends no input between its steps, so the
+    box would lock under it. Hyprland's ext-idle-notify honours an idle inhibitor
+    (`zwp_idle_inhibit_manager_v1`) for every notification made with `get_idle_notification`
+    (Quickshell's IdleMonitor with `respectInhibitors: true`, its default; hypridle; swayidle), not
+    for `get_input_idle_notification` (`respectInhibitors: false`). It counts an inhibitor only on
+    a mapped, visible surface (IdleInhibitor.cpp: 0.56.2 a view's `aliveAndVisible()`; 0.57.1
+    `mapped() && acceptsInput() && alphaNonZero()`, the last a layer's fade alpha, which animates in
+    from 0 as it maps; a surface with no view, "non-desktop", always), and looks only when one is
+    made or destroyed or on focus and fullscreen changes, never at a map or an animation's end: an
+    inhibitor made before its surface maps, or on 0.57 before its fade-in is under way, does
+    nothing until the next focus change (seen on 0.57.1: the respecting IdleMonitor went idle with
+    the hold up). So `tools/idlehold` (C, like the other in-box tools; refuses outside a box by
+    `tools/common/box.h`) puts a 1×1 transparent layer surface (background layer, empty input
+    region, no exclusive zone, namespace `omabox-idlehold`) on each output, commits its buffer, waits
+    for the compositor's answer to that commit (`wl_display_sync`), then makes the inhibitor, and
+    makes it again at 0.25, 0.75, 1.5, 3 and 6 s (the new one before the old one goes, so the hold
+    never lapses), each a look Hyprland takes after the fade-in; an output added later gets its own.
+    A layer mapped while a window is fullscreen on its monitor is not animated in on 0.57 (its
+    alpha may stay 0): a hold made under a fullscreen window may hold nothing there until one of
+    the looks above comes after it ends (not staged). `deskguard::after_ready` starts it in the box
+    (`setsid -f`, the box's pid namespace: it ends with the box), bound at
+    `/opt/omabox/bin/omabox-idlehold` in desk boxes only (other boxes' launch.sh unchanged), and
+    waits up to 3 s for its "holding idle off on N of M outputs" line in the runtime dir's
+    `omabox-idlehold.log`; a hold that could not start (not built, no layer shell) is a warning,
+    never a failed up. Checked in t_desk_idle: two Quickshell IdleMonitors of 3 s in a desk box,
+    the one ignoring inhibitors goes idle, the one respecting them does not for 8 s, and does once
+    `pkill -x omabox-idlehold`. A shell whose idle client ignores inhibitors is not held; the
+    profiles' `idle FILE KEY VALUE` lines (turning a shell's own timeouts off in its copied config,
+    Caelestia's) are the other half, not applied yet: they need the copy's hook (step 2).
+    **LABWC_PID:** labwc sets it for its children, and Hyprland passed it on to every client of the
+    box; a user's shell may read it as "this session is labwc's" (Noctalia does when
+    XDG_CURRENT_DESKTOP is unset). In a desk box start-hyprland.sh drops it and sets
+    `OMABOX_LABWC_PID` instead; `labwc --reconfigure` (mon.rs, an NVIDIA box's `monitor add`), which
+    finds labwc by `LABWC_PID`, gets it back by name (`mon::labwc_reconfigure`, digits only). Other
+    boxes keep `LABWC_PID` (decided: the smallest change). **Refused** (`deskguard::checks`, after
+    the base is known): no `hyprland.lua` in the config folder (`$XDG_CONFIG_HOME/hypr`, else
+    `~/.config/hypr`): with `hyprland.conf` alone, "needs a Lua config" (Hyprland 0.56 still reads a
+    `.conf`, but `hyprctl eval` refuses it, and keys, click, pointer, mode, monitor and lua need
+    it); with neither, "no Hyprland config in" the folder. On an Omarchy base (finding 708)
+    `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and `--omarchy` are the desk's own
+    Omarchy's; `--stock`, `--stock-bar` and `--keep` give Omarchy's stock desktop, not the user's, and
+    are refused. A plain base refuses what needs Omarchy as a plain box does. `--desk-shell` (step
+    1's refusal, one message for both bases) now says `--desktop desk` brings the desk already.
 708. **A desk box's base: what the user's desk is, not what the machine has** (2026-11-07, #321).
     A desk box mirrors the user's own desktop, so whether it is an Omarchy one is a question about
     that desk: Omarchy installed (`install::omarchy_at`, as `--desktop`'s default asks) AND the

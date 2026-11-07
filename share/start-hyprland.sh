@@ -54,9 +54,16 @@ if [ ! -e "$seen" ]; then
 fi
 # The parent labwc's XDG_CURRENT_DESKTOP (labwc:wlroots) is not the box desktop's (#247): Hyprland
 # warned on screen that it was set from outside, and shells read it to pick their compositor (Omarchy's
-# config set it back; a plain box's does not). Hyprland sets its own. LABWC_PID stays: omabox's own
-# `labwc --reconfigure` (mon.rs, an NVIDIA box's monitor windows) finds labwc by it, and a shell that
-# reads it does so only when XDG_CURRENT_DESKTOP is unset (noctalia).
+# config set it back; a plain box's does not). Hyprland sets its own. LABWC_PID: omabox's own
+# `labwc --reconfigure` (mon.rs, an NVIDIA box's monitor windows) finds labwc by it. It stays in an
+# Omarchy or plain box, whose shell is omabox's or named by --shell; a desk box's (#321 step 5, finding
+# 704) runs the user's own shell, which may take it for labwc's session (noctalia reads it when
+# XDG_CURRENT_DESKTOP is unset), so it is OMABOX_LABWC_PID there, and mon.rs passes it back to labwc.
+lw=()
+if [ "${OMABOX_DESKTOP:-}" = desk ]; then
+  lw=(-u LABWC_PID)
+  [ -z "${LABWC_PID:-}" ] || lw+=("OMABOX_LABWC_PID=$LABWC_PID")
+fi
 exec env -u XDG_CURRENT_DESKTOP -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u WLR_SCENE_DISABLE_VISIBILITY -u DISPLAY -u OMABOX_HYPRLAND \
-  OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
+  "${lw[@]}" OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
   "${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --config "$cfg"

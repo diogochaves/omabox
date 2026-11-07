@@ -1174,6 +1174,12 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   None at all: `up` fails at once, saying so; `--shell CMD` names one, `--no-shell` runs none.
   `--shell CMD` on a desk box runs CMD instead of the config's. `check run --desktop desk` is
   refused.
+- A desk box needs a Lua Hyprland config (`hypr/hyprland.lua`; a `hyprland.conf` alone is refused:
+  `hyprctl eval`, which keys, click, pointer, mode, monitor and lua use, refuses it). On an Omarchy
+  base, `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and `--omarchy` work;
+  `--stock`, `--stock-bar` and `--keep` are refused (they are not your desk). Its idle is held off
+  (an idle inhibitor, `tools/idlehold`), so your shell's own idle timeouts never lock or blank it
+  between your steps; a shell's idle client that ignores inhibitors still goes idle.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is

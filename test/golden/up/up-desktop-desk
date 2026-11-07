@@ -143,6 +143,9 @@ ROOT/tools/tree/omabox-tree
 --ro-bind
 ROOT/tools/notices/omabox-notices
 /opt/omabox/bin/omabox-notices
+--ro-bind
+ROOT/tools/idlehold/omabox-idlehold
+/opt/omabox/bin/omabox-idlehold
 --tmpfs
 /run/systemd/journal
 --setenv

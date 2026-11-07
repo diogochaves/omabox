@@ -643,7 +643,7 @@ fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
     }
     if u.desk_shell {
         return Some((
-            "up: --desk-shell is part of --desktop desk: on Omarchy's base it copies your shell's plugins and shell.json itself",
+            "up: --desk-shell is part of --desktop desk: a desk box brings your desk, its shell with it (on Omarchy's base, your plugins and shell.json)",
             true,
         ));
     }

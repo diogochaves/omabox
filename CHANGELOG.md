@@ -38,6 +38,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   nothing the box writes reaches yours; a link into a secret store, a secret's name or a file that
   holds a key's shape stays out, and so does what is over the caps. `up` says what it left out;
   box.json's `desk_copy` lists every file, and `shell_guess` the shell it found.
+- **A desk box holds its idle off, and refuses what it cannot run** ([#321](https://github.com/diogochaves/omabox/issues/321)):
+  your own shell's idle timeouts (a lock, a blank screen) would fire between an agent's steps, so a
+  desk box keeps an idle inhibitor on a 1×1 transparent layer per monitor (`tools/idlehold`, new;
+  `install.sh` builds it, `doctor` lists it). A shell's idle client that ignores inhibitors still
+  goes idle. `up --desktop desk` refuses a config with no `hyprland.lua` (a `hyprland.conf` alone:
+  `hyprctl eval`, which keys, click, pointer, mode, monitor and lua use, refuses it; none at all,
+  said with its folder); on an Omarchy desk it takes `--plugin`, `--theme`, `--theme-dir`, `--dnd`,
+  `--no-dock` and `--omarchy` and refuses `--stock`, `--stock-bar` and `--keep`; `--desk-shell`
+  says `--desktop desk` brings your desk already. Inside a desk box, labwc's `LABWC_PID` (which a
+  shell may take for a labwc session) is `OMABOX_LABWC_PID`.
 
 ## Unreleased
 

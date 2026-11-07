@@ -281,7 +281,10 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
   ~/.config/hypr/hyprland.lua; what that config starts goes through an autostart policy (idle and lock
   daemons, your systemd session, system-bus applets, what the box runs itself are dropped; binds run
   as on your desk), each decision a line of `omabox log autostart`. --desk-shell alone still works
-  (a note says it is part of --desktop desk now).
+  (a note says it is part of --desktop desk now). It needs a Lua config (a hyprland.conf alone is
+  refused: hyprctl eval refuses it). An Omarchy base takes --plugin, --theme, --theme-dir, --dnd,
+  --no-dock and --omarchy, refuses --stock, --stock-bar and --keep. Its idle is held off
+  (tools/idlehold): your shell's idle timeouts never lock or blank it.
   Its shell is the one your config starts (DMS, Noctalia, Caelestia, Waybar, a Quickshell config), run
   in the box's shell slot as --shell's: up waits for it and says which, and ls, pid shell, log shell
   and restart-shell work on it; a second shell your config starts is dropped. --shell CMD runs
