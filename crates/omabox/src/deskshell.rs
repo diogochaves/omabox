@@ -345,10 +345,11 @@ pub fn profile_for<'a>(cmd: &[u8], profiles: &'a [Profile]) -> Option<&'a Profil
 /// (the profile it is, by omabox's own reading of the command the box wrote). A config that never
 /// said what it started (no desk-shell.lua ran: ready took it for no shell) leaves the box with
 /// none: box.json's shell false, so every command takes it for one with none, as a plain box
-/// without --shell. `up --shell CMD` and --no-shell: nothing to do.
+/// without --shell. `up --shell CMD` and --no-shell: nothing to do; nor on Omarchy's base, whose
+/// shell is Omarchy's (finding 702).
 pub fn after_ready(ctx: &Ctx, u: &Up) -> Res<()> {
     use crate::shellnote::{DESK_SHELL_CMD, DeskSlot, desk_slot, slot_cmd};
-    if !u.shell || !u.shell_cmd.is_empty() {
+    if !u.shell || !u.shell_cmd.is_empty() || !u.plain_like() {
         return Ok(());
     }
     if crate::boxes::run_read(&ctx.d, DESK_SHELL_CMD).is_none() {

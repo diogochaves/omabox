@@ -22,6 +22,12 @@
 -- M.dir: the profiles' folder (the suite's unit test points it at its own); M.exec: what starts the
 -- slot, desk.lua's own unwrapped exec when it sets one (hl.exec_cmd otherwise).
 local M = { dir = "/opt/omabox/share/desk-shells", exec = nil }
+-- (io.popen as it was when this loaded: desk.lua loads it before it wraps io.popen in its policy, so
+-- reading the profiles' folder is omabox's own, never a line of the user's autostart.log)
+local popen = io.popen
+-- On Omarchy's base (finding 702) the shell is Omarchy's, started by shell.sh as in an Omarchy box:
+-- no slot to fill, take() takes nothing and after_start() says nothing.
+local omarchy_base = os.getenv("OMABOX_DESK_BASE") == "omarchy"
 
 local function run_dir()
   return os.getenv("XDG_RUNTIME_DIR") or ""
@@ -143,7 +149,7 @@ function M.profiles()
   if loaded then return loaded end
   loaded = {}
   local dir = M.dir
-  local ls = io.popen("ls -1 -- '" .. dir:gsub("'", "'\\''") .. "' 2>/dev/null")
+  local ls = popen("ls -1 -- '" .. dir:gsub("'", "'\\''") .. "' 2>/dev/null")
   local names = {}
   if ls then
     for n in ls:lines() do
@@ -239,7 +245,7 @@ local function start(cmd, from)
 end
 
 function M.take(cmd)
-  if type(cmd) ~= "string" then return false end
+  if type(cmd) ~= "string" or omarchy_base then return false end
   local p = M.profile_for(cmd)
   if not p then return false end
   if os.getenv("OMABOX_SHELL") == "0" then return true, "up --no-shell: no shell" end
@@ -255,6 +261,7 @@ function M.take(cmd)
 end
 
 function M.after_start()
+  if omarchy_base then return end
   if os.getenv("OMABOX_SHELL") == "0" or (os.getenv("OMABOX_SHELL_CMD") or "") ~= "" then return end
   if taken or read("omabox-shell.cmd") then return end
   local guess = os.getenv("OMABOX_DESK_SHELL") or ""

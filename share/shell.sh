@@ -21,7 +21,8 @@ cmd=${OMABOX_SHELL_CMD:-}
 # desk-shell.lua (`take`) and by `restart-shell` (its token); never by hyprland.lua's own start, which
 # has no word: the slot is the config's to fill, and starting it twice would stop the one just taken.
 # Nothing in the file (the config started none): nothing to start. `up --shell CMD` overrides it.
-if [ "${OMABOX_DESKTOP:-}" = desk ] && [ -z "$cmd" ]; then
+# On Omarchy's base (finding 702) a desk box's shell is Omarchy's, as below.
+if [ "${OMABOX_DESKTOP:-}" = desk ] && [ "${OMABOX_DESK_BASE:-}" != omarchy ] && [ -z "$cmd" ]; then
   [ -z "${1:-}" ] || cmd=$(cat "$XDG_RUNTIME_DIR/omabox-shell.cmd" 2>/dev/null) || cmd=""
   [ -n "$cmd" ] || exit 0
 fi

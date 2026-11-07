@@ -8,7 +8,8 @@
 -- starts through hl.exec_cmd, os.execute or io.popen is judged, and what a box must not or cannot
 -- run is dropped (idle and lock daemons, the user's systemd session, system-bus applets, what the box
 -- runs itself, Omarchy's own session work, the shell the box's slot starts); each decision is a line
--- in ~/autostart.log (`omabox log autostart`): PHASE VERDICT CLASS VIA CMD  (WHY). PHASE is load (the
+-- in ~/autostart.log (`omabox log autostart`): PHASE VERDICT CLASS VIA CMD  (WHY), VERDICT run, drop
+-- or take (a shell desk-shell.lua's slot took: it runs there, or is dropped as a second). PHASE is load (the
 -- first load), start (the hyprland.start handlers), reload (a later load: `hyprctl reload`) or later
 -- (after the start, or after a reload's load: a bind's Lua, which runs as the user asked, unjudged).
 -- Binds that name a command (hl.dsp.exec_cmd) are never wrapped: a key pressed in the box does what
@@ -20,6 +21,8 @@ local policy = dofile(run .. "/omabox-autostart.lua")
 -- The desk shell's slot (#321 step 4): take(cmd) for a shell's command (true: the slot runs it, the
 -- config does not), after_start() once the config's start handlers have run.
 local deskshell = dofile(run .. "/omabox-desk-shell.lua")
+-- (the slot's shell.sh is omabox's own start: the raw exec, never the policy's)
+deskshell.exec = omabox_exec or hl.exec_cmd
 local conf = os.getenv("XDG_CONFIG_HOME") or (home .. "/.config")
 local hypr = conf .. "/hypr"
 -- As Hyprland reads a config's modules: beside it, and ~/.config's (`require("hypr.x")`).
@@ -56,8 +59,14 @@ local function allowed(cmd, via)
     note(phase, "run", class, via, cmd, verdict == "drop" and "after the start: the user's own doing" or nil)
     return true
   end
-  -- A shell's command: the slot's first (step 4), before the policy's own drop.
-  if class == "shell" and deskshell.take(cmd) then verdict, why, part = "drop", "the box's shell slot runs it", nil end
+  -- A shell's command (#321 step 4, finding 709): the slot's first, before the policy's own drop. A
+  -- command the policy would run (or drop only as a shell) that starts a shell a desk-shells profile
+  -- knows is the slot's: `take`, the slot runs it (or drops it as a second shell, --shell's, or
+  -- --no-shell's), the config does not; why says which.
+  if verdict == "run" or class == "shell" then
+    local taken, twhy = deskshell.take(cmd)
+    if taken then verdict, class, why, part = "take", "shell", twhy, nil end
+  end
   note(phase, verdict, class, via, cmd, why, part)
   return verdict == "run"
 end
