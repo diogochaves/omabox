@@ -8611,9 +8611,104 @@ t_idle() {
   ob down "$B" >/dev/null 2>&1
 }
 
-# #321 step 5's tests (its builder replaces these stubs): a desk box's guards.
-t_desk_idle() { skip "a desk box holds its shell's idle off" "#321 step 5"; }
-t_desk_refusals() { skip "what up refuses for a desk box" "#321 step 5"; }
+# #321 step 5 (finding 704): a desk box holds its idle off (tools/idlehold: an idle inhibitor on a 1x1
+# background layer per monitor), so the user's shell's idle timeouts never lock or blank it between an
+# agent's steps. A Quickshell fixture with two IdleMonitors of 3 s stands in for the shell's idle
+# client: the one ignoring inhibitors (respectInhibitors: false) goes idle (the control: idle is
+# counted in the box), the one respecting them (the default, a shell's lock) does not for 8 s; with
+# the hold killed, it does. And LABWC_PID, which a user's shell may take for labwc's session, is not
+# in a desk box's environment: OMABOX_LABWC_PID is, and on NVIDIA `monitor add` (labwc --reconfigure)
+# still finds labwc by it. On a stand-in HOME and XDG dirs, with a plain desk's hyprland.lua.
+t_desk_idle() {
+  command -v qs >/dev/null || { skip "a desk box holds its idle off" "no qs (Quickshell) for the idle fixture"; return; }
+  local B=$P-didle B2=$P-didlenv base=$TMP/$P-didle D out n
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"; desk_lua "$fh/.config"
+  cat > "$base/idle.qml" <<'EOF'
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import Quickshell.Wayland
+ShellRoot {
+  IdleMonitor { timeout: 3; respectInhibitors: true; onIsIdleChanged: if (isIdle) held.running = true }
+  IdleMonitor { timeout: 3; respectInhibitors: false; onIsIdleChanged: if (isIdle) input.running = true }
+  Process { id: held; command: ["sh", "-c", "date +%s > \"$HOME/idled\""] }
+  Process { id: input; command: ["sh", "-c", "date +%s > \"$HOME/idled-input\""] }
+}
+EOF
+  di() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  out=$(cd "$base" && di up "$B" --desktop desk --net isolated --seed "$base/idle.qml:idle.qml" 2>&1) ||
+    { no "up --desktop desk" "$out"; di down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk"
+  D=$(di path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" di || { di down "$B" >/dev/null 2>&1; return; }
+  check_eq "up says nothing of the idle hold (it started)" "" "$(grep 'idle hold' <<<"$out")"
+  check_match "the hold says it holds" "^omabox-idlehold: holding idle off on 1 of 1 outputs$" "$(cat "$D/run/omabox-idlehold.log" 2>&1)"
+  check "...it runs in the box" di run -b "$B" -- pgrep -x omabox-idlehold
+  check_eq "...on a 1x1 layer of its own" "1x1" \
+    "$(di hyprctl -b "$B" -j layers | jq -r '[.. | objects | select(.namespace? == "omabox-idlehold") | "\(.w)x\(.h)"] | join(" ")' 2>&1)"
+  check "an idle fixture (Quickshell's IdleMonitor, 3 s)" di run -b "$B" -d -q -- qs -p "$fh/idle.qml"
+  check "...the control, ignoring inhibitors, goes idle" until_ok 10 test -e "$D/home/idled-input"
+  check "...the one respecting them (a shell's lock) does not, 8 s in" holds 5 test ! -e "$D/home/idled"
+  check "kill the hold" di run -b "$B" -- pkill -x omabox-idlehold
+  check "...now it goes idle" until_ok 10 test -e "$D/home/idled"
+  # LABWC_PID (finding 704): the box's parent labwc's, as OMABOX_LABWC_PID.
+  check_fails "LABWC_PID: not in a desk box's environment" di run -b "$B" -- printenv LABWC_PID
+  check_eq "...OMABOX_LABWC_PID is labwc's pid" omabox-labwc \
+    "$(di run -b "$B" -- sh -c 'cat "/proc/$OMABOX_LABWC_PID/comm"' 2>&1)"
+  check "down" di down "$B"
+  if n=$(nvidia_ready); then
+    out=$(cd "$base" && OMABOX_RENDER_NODE=$n di up "$B2" --desktop desk --net isolated 2>&1) ||
+      { no "up --desktop desk on NVIDIA" "$out"; di down "$B2" >/dev/null 2>&1; return; }
+    check_fails "NVIDIA: no LABWC_PID in the desk box" di run -b "$B2" -- printenv LABWC_PID
+    check "...monitor add: labwc --reconfigure finds labwc by OMABOX_LABWC_PID" di monitor -b "$B2" add 1280x720
+    check "...its output there" until_ok 5 bash -c "HOME='$fh' XDG_RUNTIME_DIR='$rt' XDG_CACHE_HOME='$c' XDG_STATE_HOME='$st' XDG_CONFIG_HOME='$fh/.config' '$CLI' hyprctl -b '$B2' -j monitors | jq -e 'length == 2' >/dev/null"
+    check "down" di down "$B2"
+  else skip "a desk box's monitor add on NVIDIA (labwc --reconfigure)" "$n"; fi
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 5 (finding 704): what up refuses for a desk box beyond step 1's, no box made. A desk needs a
+# Lua Hyprland config omabox can drive: none, or a hyprland.conf alone, is refused. On a plain base,
+# what needs Omarchy as on a plain box; on an Omarchy base (an Omarchy machine whose config loads
+# Omarchy's, finding 708), --stock, --stock-bar and --keep (not your desk). On a stand-in HOME.
+t_desk_refusals() {
+  local B=$P-dref base=$TMP/$P-dref out
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  mkdir -p "$fh/.config/omabox" "$fh/.config/hypr" "$rt" "$c" "$st" "$base/data"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"
+  dr() { (cd "$base" && HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@" 2>&1); }
+  check_match "no Hyprland config: refused" "^omabox: up: --desktop desk: no Hyprland config in ~/\.config/hypr " \
+    "$(dr up "$B" --desktop desk --net isolated)"
+  echo 'general { gaps_in = 4 }' > "$fh/.config/hypr/hyprland.conf"
+  check_match "a hyprland.conf alone: refused, saying why" \
+    "^omabox: up: --desktop desk needs a Lua config: Hyprland 0\.56 still reads hyprland\.conf, but \`hyprctl eval\` refuses it, and keys, click, pointer, mode, monitor and lua need that " \
+    "$(dr up "$B" --desktop desk --net isolated)"
+  desk_lua "$fh/.config"
+  check_match "a plain desk: --stock needs Omarchy" "^omabox: up: --stock needs Omarchy, and --desktop desk has none of it " \
+    "$(dr up "$B" --desktop desk --net isolated --stock)"
+  check_match "...--plugin too" "^omabox: up: --plugin needs Omarchy, and --desktop desk has none of it " \
+    "$(dr up "$B" --desktop desk --net isolated --plugin "$ROOT/plugin")"
+  check_match "--desk-shell: refused, pointing at --desktop desk" \
+    "^omabox: up: --desk-shell is not for a desk box: --desktop desk already brings your desk, its shell with it " \
+    "$(dr up "$B" --desktop desk --net isolated --desk-shell)"
+  if omarchy_here; then
+    echo 'dofile("/usr/share/omarchy/default/hypr/bootstrap.lua")' > "$fh/.config/hypr/hyprland.lua"
+    out=$(dr up "$B" --desktop desk --net isolated --stock)
+    if [[ $out == *"not ready for an Omarchy desk yet"* ]]; then
+      skip "an Omarchy desk's flags in a real up" "an Omarchy desk is refused until step 3 (the Rust desk_flags_by_machine has them)"
+    else
+      check_match "an Omarchy desk: --stock refused (not your desk)" \
+        "^omabox: up: --stock is not for a desk box: it gives a new Omarchy user's desktop, not your desk \(--desktop omarchy for that\)" "$out"
+      check_match "...--stock-bar" "^omabox: up: --stock-bar is not for a desk box: it gives Omarchy's own bar, not your desk" \
+        "$(dr up "$B" --desktop desk --net isolated --stock-bar)"
+      check_match "...--keep" "^omabox: up: --keep is not for a desk box: it gives part of a clean Omarchy desktop, not your desk" \
+        "$(dr up "$B" --desktop desk --net isolated --keep bar)"
+    fi
+  else skip "an Omarchy desk's flags" "no Omarchy here"; fi
+  check_fails "none of them made a box" test -e "$rt/omabox/$B"
+}
 
 # #328 (finding 566): Hyprland writes hyprland.log through an 8 KiB buffer it never flushes, so a line
 # it just logged is in `hyprctl rollinglog` and not in the file; `omabox log` adds it from there
@@ -12071,6 +12166,9 @@ for o, s, d in mounts:
 if mounts and at_home != 1:
     print(f"{at_home} mounts at HOME {home}: want the box HOME folder alone")
 '
+# desk_lua XDG_CONFIG_HOME: a plain desk's Hyprland config in it, as a desk box needs one in Lua
+# (#321 step 5, finding 704: no config, or a hyprland.conf alone, is refused).
+desk_lua() { mkdir -p "$1/hypr" && echo "-- a plain desk (the suite's)" > "$1/hypr/hyprland.lua"; }
 # desk_guard NAME DIR HOME CACHE [RUNNER...] (#321, S2-S4; finding 700): the suite's guard on a desk
 # box, run before anything of the test's writes in its HOME, which is at HOME's own path. launch.sh
 # mounts nothing of the host's from HOME or above it, and only the box HOME's own folder
@@ -12123,7 +12221,7 @@ t_desk_home() {
   # config read from a stand-in XDG_CONFIG_HOME of the test's, with none.
   local cf=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua xc=$TMP/$P-dhome-conf
   [[ $cf == /* ]] || cf=$HOME/.config/hypr/hyprland.lua
-  mkdir -p "$xc"
+  mkdir -p "$xc"; desk_lua "$xc"
   if omarchy_here && sed 's/--.*//' "$cf" 2>/dev/null | grep -q 'default/hypr/bootstrap\.lua'; then
     check_match "up --desktop desk on your Omarchy desk: refused until step 3" \
       "^omabox: up: --desktop desk is not ready for an Omarchy desk yet: your Hyprland config \($(re_q "$cf")\) loads Omarchy's" \
@@ -12197,7 +12295,7 @@ t_desk_home_standin() {
   echo omabox-321-marker > "$fh/marker"; echo "not a key" > "$fh/.ssh/id_test"; printf 'PNG' > "$fh/Pictures/w.png"
   : > "$fh/.config/omabox/config"
   echo omabox-321-src > "$base/src/f"
-  ln -s "$base/target" "$base/lnk/l"
+  ln -s "$base/target" "$base/lnk/l"; desk_lua "$fh/.config"
   dh() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
   dh_up() { (cd "$base" && dh up "$@" 2>&1); }
   standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
@@ -12232,8 +12330,8 @@ t_desk_home_standin() {
   check_match "--desktop desk --clean: refused in step 1 (its HOME path carries your login name)" \
     "^omabox: up: --clean is not for a desk box: its HOME is at your HOME's path, which carries your login name " \
     "$(dh_up "$B2" --desktop desk --clean)"
-  check_match "--desktop desk --desk-shell: refused in step 1" \
-    "^omabox: up: --desk-shell is not for a desk box yet: --desktop desk runs a plain box's desktop at your HOME's path " \
+  check_match "--desktop desk --desk-shell: refused (it brings your desk already)" \
+    "^omabox: up: --desk-shell is not for a desk box: --desktop desk already brings your desk, its shell with it " \
     "$(dh_up "$B2" --desktop desk --desk-shell)"
   # (OMABOX_HYPRLAND emptied: a suite run on another Hyprland names a folder no jail was given)
   check_match "a jailed caller's desk box: refused in step 1" \
@@ -12269,6 +12367,7 @@ t_desk_dms() {
   magick -size 1920x1080 "xc:$teal" "$s/w.png"
   printf '{"wallpaperPath": "%s/Pictures/w.png", "isLightMode": true}\n' "$fh" > "$s/state/session.json"
   : > "$s/conf/.firstlaunch"   # (no welcome dialog)
+  desk_lua "$fh/.config"
   dm() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
   px_is() { [ "$(dm pixel -b "$1" "$2" "$3" 2>/dev/null)" = "$teal" ]; }
   px_not() { ! px_is "$@"; }
@@ -15268,10 +15367,11 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
   # and the XDG dirs under it (up/ on an Omarchy machine, where its tree is hidden; up-plain/ on one
   # without, written there).
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "desktop": "desk",$' "state~^  \"home\": \"$(re_q "$h")\",\$" 'state~^  "desk_base": "plain",$')
-  # (its own XDG_CONFIG_HOME: no Hyprland config loading Omarchy there, a plain base, finding 708)
+  # (its own XDG_CONFIG_HOME: a Hyprland config not loading Omarchy there, a plain base, finding 708)
+  desk_lua "$h/.config"
   cx_env=("HOME=$h" "XDG_CONFIG_HOME=$h/.config")
   cx_case "up --desktop desk" up "$U" --net isolated --desktop desk
-  cx_env=("HOME=$h")
+  cx_env=("HOME=$h"); rm -f "$h/.config/hypr/hyprland.lua"; rmdir "$h/.config/hypr"
   # A save whose HOME has a link where --clean writes its wallpaper (finding 461): the PNG is written
   # in the box HOME, never through the link onto the host file it leads to.
   mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"

@@ -643,7 +643,7 @@ fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
     }
     if u.desk_shell {
         return Some((
-            "up: --desk-shell is not for a desk box yet: --desktop desk runs a plain box's desktop at your HOME's path",
+            "up: --desk-shell is not for a desk box: --desktop desk already brings your desk, its shell with it (--desk-shell is an Omarchy box's: your bar on Omarchy's desktop)",
             true,
         ));
     }

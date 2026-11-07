@@ -379,6 +379,21 @@ pub fn labwc_rc(ctx: &Ctx) -> Vec<u8> {
     o
 }
 
+/// `labwc --reconfigure`, which finds its labwc by LABWC_PID. A desk box's session has it as
+/// OMABOX_LABWC_PID (start-hyprland.sh, #321 step 5, finding 704): PID, that value, given back to
+/// it by name; None (any other box, whose session keeps LABWC_PID), as it is.
+pub fn labwc_reconfigure(pid: Option<&[u8]>) -> Vec<Vec<u8>> {
+    match pid.filter(|p| !p.is_empty() && p.iter().all(u8::is_ascii_digit)) {
+        Some(p) => vec![
+            b"/usr/bin/env".to_vec(),
+            cat!("LABWC_PID=", p),
+            b"/usr/bin/labwc".to_vec(),
+            b"--reconfigure".to_vec(),
+        ],
+        None => w(&[b"/usr/bin/labwc", b"--reconfigure"]),
+    }
+}
+
 /// labwc_apply: the rules in place before a monitor's window maps (the config written in the box's
 /// mount namespace, a new file renamed over the old; labwc told to read it again; a round trip to
 /// labwc, which it answers only after the signal). Ok(false) for a step that failed; a box_exec
@@ -412,9 +427,10 @@ pub fn labwc_apply(ctx: &mut Ctx) -> Res<bool> {
     let rc = {
         let _o = Redir::null(1);
         let _e = Redir::null(2);
+        let pid = crate::boxes::box_env(&ctx.d, "OMABOX_LABWC_PID");
         exec::box_exec(
             ctx,
-            &w(&[b"/usr/bin/labwc", b"--reconfigure"]),
+            &labwc_reconfigure(pid.as_deref()),
             exec::ExecOpts::default(),
         )?
     };
@@ -896,5 +912,24 @@ mod tests {
         assert_eq!(fmt_g(59.94), "59.94");
         assert_eq!(fmt_g(1e20), "1e+20");
         assert_eq!(pad("é".as_bytes(), 3), b"\xc3\xa9 ");
+    }
+
+    // #321 step 5 (finding 704): a desk box's session has labwc's pid as OMABOX_LABWC_PID, given
+    // back to `labwc --reconfigure` as LABWC_PID; any other box's runs it as before.
+    #[test]
+    fn labwc_reconfigure_names_its_pid() {
+        let s = |v: Vec<Vec<u8>>| String::from_utf8(v.join(&b' ')).unwrap();
+        assert_eq!(
+            s(labwc_reconfigure(Some(b"42"))),
+            "/usr/bin/env LABWC_PID=42 /usr/bin/labwc --reconfigure"
+        );
+        assert_eq!(s(labwc_reconfigure(None)), "/usr/bin/labwc --reconfigure");
+        // (not a pid: as before, never an env word of the box's choosing)
+        for bad in [&b""[..], b"4 2", b"X=1", b"-u"] {
+            assert_eq!(
+                s(labwc_reconfigure(Some(bad))),
+                "/usr/bin/labwc --reconfigure"
+            );
+        }
     }
 }

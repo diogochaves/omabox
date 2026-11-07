@@ -1142,10 +1142,17 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   `--ro-bind` and `--seed` bring any in. A path under your HOME in a command is the box HOME's
   there, not yours (`run` says so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at
   it or above it, over omabox's own files in it (`.config/omabox`, its logs), nor through a link in
-  it. Refused with `--desk-shell` (not yet), `--clean` (the path carries your login name) and inside
-  ai-jail (not yet); `omabox config desktop` does not take `desk` yet. Its base is your desk's
+  it. Refused with `--desk-shell` (it brings your desk already), `--clean` (the path carries
+  your login name) and inside ai-jail (not yet); `omabox config desktop` does not take `desk`
+  yet. Its base is your desk's
   (box.json's `desk_base`): where Omarchy is installed and your `hypr/hyprland.lua` loads it, the
   base is Omarchy's and `up` refuses it for now; otherwise plain.
+- A desk box needs a Lua Hyprland config (`hypr/hyprland.lua`; a `hyprland.conf` alone is refused:
+  `hyprctl eval`, which keys, click, pointer, mode, monitor and lua use, refuses it). On an Omarchy
+  base, `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and `--omarchy` work;
+  `--stock`, `--stock-bar` and `--keep` are refused (they are not your desk). Its idle is held off
+  (an idle inhibitor, `tools/idlehold`), so your shell's own idle timeouts never lock or blank it
+  between your steps; a shell's idle client that ignores inhibitors still goes idle.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
