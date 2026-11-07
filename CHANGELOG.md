@@ -57,6 +57,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   still prints the log's path instead), so `J=$(omabox run -d -- app)` keeps it for `log run "$J"`,
   `wait job "$J"`, `wait log "$J" RE` and `stop "$J"`.
 
+### Changed
+- **`record stop` still makes a video when ffmpeg is stuck** ([#445](https://github.com/diogochaves/omabox/issues/445)):
+  when the video's encode ran out of its time limit twice (ffmpeg 9.0.1 can deadlock, or a busy
+  machine made it too slow), `stop` failed and left the raw recording in the box. It now copies the
+  recorded H.264 into the MP4 without re-encoding it, which takes seconds, and says in one line what
+  that video lacks next to a normal one: a steady frame rate, and whatever else was asked for (the
+  sound, the drawn input, captions, the cut of still stretches, a layout's monitors composed into one
+  picture: each is its own track instead); it is also larger. Only when that copy fails too does
+  `stop` fail, keeping the raw files as before.
+
 ### Fixed
 - **`record stop` keeps every frame recorded before it, under load too** ([#444](https://github.com/diogochaves/omabox/issues/444)):
   wf-recorder drops the frames still waiting for its encoder when it is told to stop, so on a busy

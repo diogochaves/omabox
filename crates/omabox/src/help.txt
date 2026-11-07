@@ -552,7 +552,10 @@ from omabox's own commands (`run`'s app moving its own windows is not input).
 A video is at most 16 GiB (an hour of 4K at 36 Mbit/s): omabox copies no more out of a box, and
 `stop` says so and keeps a larger one in the box. Each ffmpeg step of `stop` and `sheet` has a
 time limit (60 s, and 5 s more a second of 1080p30 recorded; ffmpeg 9.0.1 can deadlock): one that
-runs out is killed and run once more, then said, the recording's raw files kept in the box. Inside
+runs out is killed and run once more, then said. When the video's encode runs out twice, `stop`
+copies the raw H.264 into the MP4 instead, not re-encoded, and says what that video lacks (a
+steady fps; the sound, input, captions, cut or layout asked for; it is larger); only when that copy
+fails too does it fail, the recording's raw files kept in the box. Inside
 ai-jail all of it works through the broker: the jail's own omabox resolves -o and opens the video,
 its marks, captions and sheet (and `record sheet`'s video) itself, and the broker writes and
 reads them only through those, never at a path the jail names; one stopped outside the jail goes

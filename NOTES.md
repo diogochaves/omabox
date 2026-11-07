@@ -7273,7 +7273,8 @@ from them.
     lowers the bound (the suite's 3 s, as OMABOX_RECORD_MAX lowers the cap). `omabox audio`'s
     ffmpeg got a plain `timeout -k 5 SECONDS+30` (no retry: a second take would listen to another
     moment). *Decided*: the floor 60 s; 5 s per 1080p30-second; one retry; no ffmpeg flag; a
-    double timeout fails the stop rather than waiting more. Tests: t_unit_rec_ff (each such call
+    double timeout fails the stop rather than waiting more (since finding 693 the video's encode
+    falls back to a copy of the raw stream first). Tests: t_unit_rec_ff (each such call
     in bin/omabox through rec_ff or under timeout, and the 13 of 7416abd found; rec_ff on host
     sleeps: stuck twice, stuck once, a plain failure, the bound), record_stuck_on in
     t_record_input (a watcher in the box SIGSTOPs the stop's encode once: killed at 3 s, run again,
@@ -13603,6 +13604,37 @@ from them.
     `TXT'"; rgb:, ppm: and info: work, ImageMagick 7.1.2-35). The suite's five such reads now take
     rgb:- through rgb_cells (od, then "R,G,B" a cell, the same text txt:- gave, checked alike on
     #102030). t_record_layout and t_monitors_turned pass here on it; not yet rerun in the VM.
+
+693. **A stop whose encode is stuck twice copies the raw stream instead of failing** (2026-11-07,
+    #445; changes finding 356's end). Finding 356 made a second timeout of the video's ffmpeg fail
+    the stop and keep raw.mkv in the box: no video, though the recording was there. Now, when the
+    encode (one monitor's, or a layout's compose) ends 124 from rec_ff (killed twice), `record_copy`
+    puts each monitor's raw.mkv into out.mp4 with `-c copy` (`-map N:v:0` a monitor whose stream
+    ffprobe reads, so a layout gives a video track each, not composed; `-t` to the stop's time,
+    `+faststart`), through rec_ff too. wf-recorder's raw stream is already an MP4-ready H.264
+    (libx264 ultrafast at CRF 14 or openh264, yuvj420p, no B-frames), so the copy plays: in the
+    suite's box 2.37 s, 142 frames (the box's 60 Hz, as captured). One line says it, naming what
+    that video lacks next to a normal stop, only what applies: "record: so the video is the raw
+    H.264 copied into the MP4, not re-encoded (finding 693): no steady 30 fps (its frames timed as
+    they came)", then ", no sound", ", no input drawn", ", no captions", ", not turned upright" (a
+    turn_back the encode would have made), ", no still stretch cut", and always ", a larger file";
+    the WxH line ends "copied as recorded (not re-encoded)" in place of its CRF. The marks, their
+    captions file and `--sheet` still come (they read out.mp4 or the clock, not the encode).
+    --cut-idle is skipped on a copy: its frame counts assume the steady fps, and its own pass would
+    encode again what just got stuck (a cut whose own encode fails still keeps the uncut video, as
+    before). A plain encode failure (not a timeout) fails as before: the copy is for the stuck case
+    only. Only when the copy fails too (or no monitor has a stream) does stop fail, with the same
+    message, raw.mkv kept. `record stop` has no --json (only `status` has), so the line on stderr
+    and the WxH line are what tell. *Decided* (Diogo): copy rather than fail; a layout's copy is its
+    monitors as separate tracks, the sanest form of "the plain remuxed video" for several streams.
+    Tests: record_stuck_on (t_record_input): stuck twice, the line and the WxH line said, exit 0, an
+    H.264 video with a duration and frames, raw.mkv gone (all failed on the old stop); stuck four
+    times (the copy too): both double timeouts said, nothing claims a copy, exit 1, raw.mkv kept;
+    unit copy_said_names_what_applies; t_unit_rec_ff counts the copy among its bounded calls (15).
+    Passed on Hyprland 0.56.2 and 0.57.1 (t_record_input, t_record_hold, t_record_layout). A
+    layout's copy by hand (not in the suite): two 1280x720 monitors, the compose stuck twice: the
+    layout line said, exit 0, an MP4 of two H.264 tracks of 448 frames each over 7.37 s, the box's
+    record folder emptied, no ffmpeg left.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
