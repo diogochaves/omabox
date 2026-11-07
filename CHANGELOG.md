@@ -13,8 +13,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   of its files are in the box, and nothing is mounted at it or above it but the box's own folder.
   For now a desk box boots as a plain one (`--desktop plain`); bringing your own Hyprland config and
   shell in comes next. `--clean`, `--desk-shell`, `config desktop desk` and a jailed agent's desk box
-  are refused until then, and so is a desk box where your desk is Omarchy's (your Hyprland config
-  loads Omarchy): a desk box takes its base from your desk, kept as box.json's `desk_base`.
+  are refused until then. A desk box takes its base from your desk (Omarchy's where your Hyprland
+  config loads Omarchy, else plain), kept as box.json's `desk_base`.
+- **`up --desktop desk` runs your own Hyprland config** ([#321](https://github.com/diogochaves/omabox/issues/321)):
+  the box HOME's `~/.config/hypr/hyprland.lua` loads as on your desk, your look, input and binds with
+  it, and omabox's settings over it (the screen and monitors, no red error bar, the cursor's buffer).
+  What the config starts goes through an autostart policy: idle and lock daemons, your systemd
+  session, system-bus applets and what the box runs itself are dropped, everything else runs, and
+  each decision is a line of the new `omabox log autostart`. On an Omarchy desk the box is an Omarchy
+  box (no longer refused), its shell Omarchy's with your plugins and shell.json. `--desk-shell` is
+  part of `--desktop desk` now: alone it still works, with a note, for this release.
 
 ## Unreleased
 

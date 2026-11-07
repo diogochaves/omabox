@@ -2918,20 +2918,25 @@ omarchy_contract() {
   oc() { local n=$1 w=$2; shift 2; if "$@" >/dev/null 2>&1; then printf '%s\t\n' "$n"; else printf '%s\t%s\n' "$n" "$w"; fi; }
   # oc_has FILE FIXED-STRING
   oc_has() { grep -qF -- "$2" "$1"; }
-  # Hyprland: share/hyprland.lua runs Omarchy's config by these modules; `up --omarchy` wants a tree
+  # Hyprland: share/omarchy.lua runs Omarchy's config by these modules; `up --omarchy` wants a tree
   # with bootstrap.lua and shell.qml.
-  oc "default/hypr/bootstrap.lua (share/hyprland.lua runs it)" "missing" test -f "$o/default/hypr/bootstrap.lua"
-  oc "default/hypr/omarchy.lua (share/hyprland.lua requires default.hypr.omarchy)" "missing" test -f "$o/default/hypr/omarchy.lua"
-  oc "default.hypr.autostart, required by name (share/hyprland.lua marks it loaded: no session autostart in a box)" \
+  oc "default/hypr/bootstrap.lua (share/omarchy.lua runs it)" "missing" test -f "$o/default/hypr/bootstrap.lua"
+  oc "default/hypr/omarchy.lua (share/omarchy.lua requires default.hypr.omarchy)" "missing" test -f "$o/default/hypr/omarchy.lua"
+  oc "default.hypr.autostart, required by name (share/omarchy.lua and desk.lua mark it loaded: no session autostart in a box)" \
     "no default/hypr/autostart.lua, or nothing requires \"default.hypr.autostart\": a renamed one would run Omarchy's autostart in every box" \
     bash -c 'test -f "$1/autostart.lua" && grep -qF "require(\"default.hypr.autostart\")" "$1"/*.lua' _ "$o/default/hypr"
-  oc "default.hypr.paths' omarchy_path (share/hyprland.lua puts omabox's stand-ins before its bin)" "not in default/hypr/paths.lua" \
+  oc "default.hypr.paths' omarchy_path (share/omarchy.lua and desk.lua put omabox's stand-ins before its bin)" "not in default/hypr/paths.lua" \
     oc_has "$o/default/hypr/paths.lua" omarchy_path
-  oc "default/hypr/toggles.lua (share/hyprland.lua requires default.hypr.toggles)" "missing" test -f "$o/default/hypr/toggles.lua"
-  oc "config/hypr/hyprland.lua's user modules: hypr.monitors, input, bindings, looknfeel, autostart (share/hyprland.lua loads input, bindings and looknfeel, skips monitors and autostart, #246)" \
+  oc "default/hypr/toggles.lua (share/omarchy.lua requires default.hypr.toggles)" "missing" test -f "$o/default/hypr/toggles.lua"
+  oc "config/hypr/hyprland.lua's user modules: hypr.monitors, input, bindings, looknfeel, autostart (share/omarchy.lua loads input, bindings and looknfeel, skips monitors and autostart, #246)" \
     "it requires other hypr.* modules now: a box would not load one a user edits" \
     bash -c '[ "$(grep -oE "^require\(\"hypr\.[a-z_]+\"\)" "$1" | sort | paste -sd " ")" = "$2" ]' _ "$o/config/hypr/hyprland.lua" \
     'require("hypr.autostart") require("hypr.bindings") require("hypr.input") require("hypr.looknfeel") require("hypr.monitors")'
+  # A desk box (#321): its base is Omarchy's when the user's config names bootstrap.lua (upspec::desk_base),
+  # and desk.lua marks default.hypr.autostart and hypr.monitors again after a dofile of it.
+  oc "config/hypr/hyprland.lua dofiles default/hypr/bootstrap.lua (a desk box's base; share/desk.lua marks its skips after it, #321)" \
+    "it loads Omarchy's bootstrap another way: a desk on a new user's config would be taken for a plain one" \
+    grep -qE '^dofile\(.*"/default/hypr/bootstrap\.lua"\)' "$o/config/hypr/hyprland.lua"
   oc "default/hypr/envs.lua (caller_path tells an Omarchy checkout's bin by it, finding 149)" "missing" test -f "$o/default/hypr/envs.lua"
   oc "default/uwsm/default (share/session.sh: TERMINAL, EDITOR)" "missing" test -f "$o/default/uwsm/default"
   oc "shell/shell.qml (share/shell.sh runs quickshell -p \$OMARCHY_PATH/shell)" "missing" test -f "$s/shell.qml"
@@ -8973,6 +8978,8 @@ t_desk_shell() {
   out=$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --net isolated --desk-shell 2>&1) || { no "up --desk-shell" "$out"; return; }
   ok "up --desk-shell on a fake desk"
   H=$(ob path "$B")/home
+  check_match "...a note: it is part of --desktop desk now (#321, kept a release)" \
+    "(^|"$'\n'")omabox: note: --desk-shell is now part of --desktop desk \(your Omarchy, mods and all\)($|"$'\n'")" "$out"
   check_match "...says what it mounted and copied" "--desk-shell: 3 plugins of $d/desk/plugins, its shell.json \(idle held off\), and 4 files copied into the box's ~/.config/omarchy: alias.json hostfix.json profiles/deep/two.json profiles/one.json" "$out"
   check_match "...and what it did not, and why" "not copied: $d/desk/api-keys.env \(a secret's name\)" "$out"
   check_match "...a link out of the folder" "not copied: $d/desk/out.json \(a link out of the folder \(not followed\)\)" "$out"
@@ -11766,6 +11773,7 @@ t_plain() {
   check_eq "...plain.lua's copy written again" "same" \
     "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-plain.lua"' 2>&1 | cmp -s - "$ROOT/share/plain.lua" && echo same || echo differ)"
   check_eq "...still no config errors" "" "$(ob hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  check_fails "no autostart.log: no policy on omabox's own config (a desk box's, #321)" test -e "$D/home/autostart.log"
   check_match "tray: no tray, said as plain" "has no tray: .*\(a plain box has no shell to have one: up --shell CMD runs one\)" "$(ob tray -b "$B" 2>&1)"
   # (where Omarchy is not, up refuses an Omarchy box before it looks for this one, #247)
   local om_re="without what you asked for: --desktop omarchy \(it runs plain\)"
@@ -12118,18 +12126,11 @@ t_desk_home() {
   [[ $top == "$HOME"/* ]] || top=""
   first=${top#"$HOME"/}; first=${first%%/*}
   [ -z "$top" ] || [ "$HOME/$first" != "$top" ] || DESK_ALLOW=$first
-  # Your desk's base (finding 708): an Omarchy one (Omarchy here and your Hyprland config loading
-  # it) is refused until step 3. The rest runs on a plain base at your HOME's real path: Hyprland's
-  # config read from a stand-in XDG_CONFIG_HOME of the test's, with none.
-  local cf=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua xc=$TMP/$P-dhome-conf
-  [[ $cf == /* ]] || cf=$HOME/.config/hypr/hyprland.lua
+  # Your desk's base (finding 708): an Omarchy one boots in t_desk_omarchy, on a stand-in HOME (your
+  # own Hyprland config is never booted in a test). This one runs on a plain base at your HOME's real
+  # path: Hyprland's config read from a stand-in XDG_CONFIG_HOME of the test's, with none.
+  local xc=$TMP/$P-dhome-conf
   mkdir -p "$xc"
-  if omarchy_here && sed 's/--.*//' "$cf" 2>/dev/null | grep -q 'default/hypr/bootstrap\.lua'; then
-    check_match "up --desktop desk on your Omarchy desk: refused until step 3" \
-      "^omabox: up: --desktop desk is not ready for an Omarchy desk yet: your Hyprland config \($(re_q "$cf")\) loads Omarchy's" \
-      "$(cd "$ROOT" && "$CLI" up "$B" --desktop desk --net isolated 2>&1)"
-    check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
-  else skip "up --desktop desk on an Omarchy desk: refused" "your desk is not Omarchy's ($cf)"; fi
   out=$(cd "$ROOT" && XDG_CONFIG_HOME=$xc "$CLI" up "$B" --desktop desk --net isolated 2>&1) ||
     { no "up --desktop desk" "$out"; ob down "$B" >/dev/null 2>&1; return; }
   ok "up --desktop desk (on a plain base)"
@@ -12232,8 +12233,8 @@ t_desk_home_standin() {
   check_match "--desktop desk --clean: refused in step 1 (its HOME path carries your login name)" \
     "^omabox: up: --clean is not for a desk box: its HOME is at your HOME's path, which carries your login name " \
     "$(dh_up "$B2" --desktop desk --clean)"
-  check_match "--desktop desk --desk-shell: refused in step 1" \
-    "^omabox: up: --desk-shell is not for a desk box yet: --desktop desk runs a plain box's desktop at your HOME's path " \
+  check_match "--desktop desk --desk-shell: refused (part of it, #321)" \
+    "^omabox: up: --desk-shell is part of --desktop desk: on Omarchy's base it copies your shell's plugins and shell.json itself " \
     "$(dh_up "$B2" --desktop desk --desk-shell)"
   # (OMABOX_HYPRLAND emptied: a suite run on another Hyprland names a folder no jail was given)
   check_match "a jailed caller's desk box: refused in step 1" \
@@ -12291,10 +12292,162 @@ t_desk_dms() {
   check_fails "no box process left" pgrep -f "$rt/omabox/"
 }
 
-# #321 step 3's tests (its builder replaces these stubs): a desk box's Lua and the autostart policy.
-t_desk_lua() { skip "a desk box runs your Hyprland config" "#321 step 3"; }
-t_unit_autostart() { skip "share/autostart.lua's verdicts" "#321 step 3"; }
-t_desk_omarchy() { skip "a desk box on Omarchy's base" "#321 step 3"; }
+# #321 step 3 (finding 702): share/autostart.lua's verdicts (each class of the table, wrappers, parts,
+# sh -c, a name never a substring; the box's flags), its log line, and desk.lua's wrappers around a
+# stub hl (dropped: never reaches Hyprland, os.execute says it ran, a popen "w" takes writes; a bind's
+# Lua after the start passes; omabox_exec unlogged). test/desk/unit.lua on the host's lua 5.4 or 5.5.
+t_unit_autostart() {
+  local lua="" l v d=$TMP/$P-uas out rc name want got n=0
+  for l in lua5.5 lua5.4 lua; do
+    command -v "$l" >/dev/null || continue
+    v=$("$l" -v 2>&1) || continue
+    if [[ $v == "Lua 5.4"* || $v == "Lua 5.5"* ]]; then lua=$l; break; fi
+  done
+  [ -n "$lua" ] || { skip "share/autostart.lua's verdicts" "no lua 5.4 or 5.5 here (Hyprland's is 5.5)"; return; }
+  rm -rf "$d"; mkdir -p "$d"
+  out=$("$lua" "$ROOT/test/desk/unit.lua" "$ROOT/share" "$d" 2>&1); rc=$?
+  check_eq "test/desk/unit.lua ran to its end ($lua)" 0 "$rc"
+  while IFS=$'\t' read -r name want got; do
+    check_eq "$name" "$want" "$got"; n=$((n + 1))
+  done <<<"$out"
+  check "...every check of it read" test "$n" -ge 80
+}
+
+# The Hyprland options of box B that desk boxes keep or override: NAME VALUE a line.
+desk_opts() {
+  local o
+  for o in general:gaps_out input:follow_mouse debug:suppress_errors cursor:use_cpu_buffer misc:initial_workspace_tracking; do
+    printf '%s %s\n' "$o" "$("${@:2}" hyprctl -b "$1" -j getoption "$o" | jq -r '.css // .int // .bool')"
+  done
+}
+
+# #321 step 3 (finding 702): a desk box runs your own Hyprland config, here a desk without Omarchy
+# (test/desk/hypr, seeded with --seed), on a stand-in HOME and runtime, cache, state, config and data
+# dirs. Its look and input kept, the box's settings over it (the screen, no red bar, the cursor's
+# buffer); the autostart policy: the idle daemon dropped (its stub never ran), the bar run, a line
+# each in `log autostart`, omabox's own commands in none; a bind runs its command, a bind's Lua after
+# the start passes; `hyprctl reload` starts nothing again (its parse-time lines say reload); an error
+# in the config is said in both logs and the box keeps its settings; the copies are share's.
+t_desk_lua() {
+  local B=$P-dlua base=$TMP/$P-dlua D out H f
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state bin
+  rm -rf "$base"; mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"
+  bin=$fh/.config/hypr/fixture/bin
+  dl() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  out=$(cd "$base" && dl up "$B" --desktop desk --net isolated --seed "$ROOT/test/desk/hypr:.config/hypr" 2>&1) ||
+    { no "up --desktop desk with a desk's Hyprland config" "$out"; dl down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk with a desk's Hyprland config"
+  D=$(dl path -b "$B") H=$(dl path -b "$B" --home)
+  check_eq "box.json: a plain base (the stand-in's config loads no Omarchy)" plain "$(jq -r .desk_base "$D/box.json")"
+  desk_guard "$B" "$D" "$fh" "$c" dl || { dl down "$B" >/dev/null 2>&1; return; }
+  check_eq "the config's look and input kept, the box's settings over the rest" \
+    "general:gaps_out 17 17 17 17|input:follow_mouse 0|debug:suppress_errors true|cursor:use_cpu_buffer 0|misc:initial_workspace_tracking 0" \
+    "$(desk_opts "$B" dl | paste -sd '|')"
+  check_eq "...its screen the box's (the config's catch-all says 4K at 2)" "HEADLESS-2 1920x1080 1" \
+    "$(dl hyprctl -b "$B" -j monitors | jq -r '.[] | "\(.name) \(.width)x\(.height) \(.scale)"')"
+  check_eq "...no config errors" "" "$(dl hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  check "the bar the config starts ran" until_ok 10 grep -qx fixture-bar "$H/fixture-ran"
+  check_eq "...the idle daemon it starts did not, nor the one it opens to write" "parse fixture-bar" "$(paste -sd ' ' "$H/fixture-ran")"
+  check_eq "...a popen's read and a dropped popen's write, in its Lua" "desk-popen writable" \
+    "$(dl lua -b "$B" 'return omabox_t321_popen .. " " .. omabox_t321_popen_w' 2>&1)"
+  local idle="  (idle: a box has no input and would lock itself (finding 10))"
+  check_eq "the box HOME's autostart.log: each decision, by phase; omabox's own commands in none" \
+    "load run other execute echo parse >> \"\$HOME/fixture-ran\"|load run query popen echo desk-popen|load drop idle popen $bin/hypridle --from-popen$idle|start drop idle exec_cmd uwsm-app -- $bin/hypridle$idle|start run other exec_cmd $bin/fixture-bar" \
+    "$(paste -sd '|' "$H/autostart.log")"
+  check_eq "log autostart: that file" "$(cat "$H/autostart.log")" "$(dl log -b "$B" autostart -n all 2>/dev/null)"
+  # Binds: a command is never judged (the lock's stub runs); a bind's Lua after the start passes.
+  dl keys -b "$B" super+F7 super+F8 >/dev/null 2>&1
+  check "a bind's command runs (SUPER+F7: the lock's stub)" until_ok 5 grep -qx hyprlock "$H/fixture-ran"
+  check "a bind's Lua runs its command (SUPER+F8: the idle stub)" until_ok 5 grep -qx 'hypridle --from-bind' "$H/fixture-ran"
+  check_eq "...said as later, passed" "later run idle exec_cmd $bin/hypridle --from-bind  (after the start: the user's own doing)" "$(tail -n 1 "$H/autostart.log")"
+  # A reload: the config's parse-time commands again, as reload; nothing of its start.
+  : > "$H/autostart.log"
+  check "hyprctl reload" dl hyprctl -b "$B" reload
+  check_eq "...its parse-time lines say reload, no start line" "reload run|reload run|reload drop" \
+    "$(cut -d' ' -f1,2 "$H/autostart.log" | paste -sd '|')"
+  check_eq "...the bar not started again" 1 "$(grep -cx fixture-bar "$H/fixture-ran")"
+  dl keys -b "$B" super+F8 >/dev/null 2>&1
+  check "...a bind's Lua after it: later" until_ok 5 bash -c "tail -n 1 '$H/autostart.log' | grep -q '^later run idle exec_cmd '"
+  # The copies hyprland.lua runs are share's, written again by omabox reload.
+  for f in desk autostart desk-shell plain omarchy; do
+    check_eq "the box's omabox-$f.lua: share's" same \
+      "$(dl run -b "$B" -- sh -c "cat \"\$XDG_RUNTIME_DIR/omabox-$f.lua\"" 2>/dev/null | cmp -s - "$ROOT/share/$f.lua" && echo same || echo differ)"
+  done
+  dl run -b "$B" -- sh -c 'echo "-- changed" >> "$XDG_RUNTIME_DIR/omabox-desk.lua"' >/dev/null 2>&1
+  check_match "omabox reload" "config reloaded from" "$(dl reload -b "$B" 2>&1)"
+  check_eq "...desk.lua's copy written again" same \
+    "$(dl run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-desk.lua"' 2>/dev/null | cmp -s - "$ROOT/share/desk.lua" && echo same || echo differ)"
+  # An error in the config: said, and the box keeps its settings over what loaded.
+  dl run -b "$B" -- sh -c 'echo "this is (" >> "$HOME/.config/hypr/hyprland.lua"' >/dev/null 2>&1
+  check "a config with a syntax error: hyprctl reload still answers" dl hyprctl -b "$B" reload
+  check_match "...said in autostart.log" "^reload error config dofile $(re_q "$fh/.config/hypr/hyprland.lua")  \(.*syntax error" "$(tail -n 1 "$H/autostart.log")"
+  hl_err() { dl log -b "$B" hyprland -n all 2>/dev/null | grep -q 'ERR from omabox \]: .*hyprland\.lua.*syntax error'; }
+  check "...and in Hyprland's log" until_ok 10 hl_err
+  check_eq "...the box's settings still over it" "debug:suppress_errors true" "$(desk_opts "$B" dl | grep '^debug:')"
+  check_box_safety "$B" dl
+  check "down" dl down "$B"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 3 (finding 702): a desk box on Omarchy's base. A stand-in HOME (and its dirs) whose
+# ~/.config/hypr is Omarchy's stock config plus a desk's lines (gaps 23; Omarchy's o.launch_on_start
+# of hypridle and of a stand-in bar), seeded with --seed; the stand-in's Omarchy config is
+# /etc/skel's, its theme Omarchy's nord. The box: Omarchy's binds and toggles, the config's gaps, the
+# idle daemon dropped and the bar run; Omarchy's session autostart never (first-run, monitor-watch),
+# one Omarchy shell (shell.sh's: the recorded pid), omabox's stand-ins ahead of Omarchy's bin on the
+# PATH Hyprland gives; the desk's shell config copied as --desk-shell does.
+t_desk_omarchy() {
+  local B=$P-domy base=$TMP/$P-domy D out H o=/usr/share/omarchy pid
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state bin
+  rm -rf "$base"
+  mkdir -p "$fh/.config/omabox" "$fh/.config/hypr/fixture/bin" "$fh/.local/state/omarchy/current" "$rt" "$c" "$st" "$base/data"
+  chmod 700 "$rt"; : > "$fh/.config/omabox/config"
+  bin=$fh/.config/hypr/fixture/bin
+  cp "$o"/config/hypr/*.lua "$fh/.config/hypr/"
+  cp "$ROOT"/test/desk/hypr/fixture/bin/* "$bin/"
+  printf '%s\n' "-- a desk's own lines (#321)" 'hl.config({ general = { gaps_out = 23 } })' 'o.launch_on_start("hypridle")' \
+    "o.launch_on_start(\"$bin/fixture-bar\")" >> "$fh/.config/hypr/hyprland.lua"
+  if [ -d /etc/skel/.config/omarchy ]; then cp -r /etc/skel/.config/omarchy "$fh/.config/omarchy"; else mkdir -p "$fh/.config/omarchy"; fi
+  cp -r "$o/themes/nord" "$fh/.local/state/omarchy/current/theme"; echo nord > "$fh/.local/state/omarchy/current/theme.name"
+  dm() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  out=$(cd "$base" && dm up "$B" --desktop desk --net isolated --seed "$fh/.config/hypr:.config/hypr" 2>&1) ||
+    { no "up --desktop desk on an Omarchy desk" "$out"; dm down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk on an Omarchy desk"
+  D=$(dm path -b "$B") H=$(dm path -b "$B" --home)
+  check_eq "box.json: Omarchy's base, the desk's shell config (--desk-shell's copy), a shell" "omarchy desk true" \
+    "$(jq -r '"\(.desk_base) \(.bar) \(.shell)"' "$D/box.json")"
+  check_match "...said as --desk-shell says it" "--desk-shell: [0-9]+ plugins of " "$out"
+  desk_guard "$B" "$D" "$fh" "$c" dm || { dm down "$B" >/dev/null 2>&1; return; }
+  check_eq "the config's gaps, the box's settings" "general:gaps_out 23 23 23 23|debug:suppress_errors true|cursor:use_cpu_buffer 0" \
+    "$(desk_opts "$B" dm | grep -E '^(general|debug|cursor):' | paste -sd '|')"
+  check_eq "...no config errors" "" "$(dm hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  # (Omarchy's binds are Lua, dispatcher __lua: told by the description its tiling bindings give)
+  check_eq "Omarchy's binds (its tiling bindings' \"Close all windows\")" 1 \
+    "$(dm hyprctl -b "$B" -j binds | jq '[.[] | select(.description == "Close all windows")] | length')"
+  check_eq "Omarchy's toggles loaded; its session autostart and the desk's monitors marked, not run" "true true true" \
+    "$(dm lua -b "$B" 'return tostring(package.loaded["default.hypr.toggles"] ~= nil) .. " " .. tostring(package.loaded["default.hypr.autostart"]) .. " " .. tostring(package.loaded["hypr.monitors"])' 2>&1)"
+  check "the stand-in bar the config starts ran" until_ok 10 grep -qx fixture-bar "$H/fixture-ran"
+  check "...said as run at the start" grep -qxF "start run other exec_cmd uwsm-app -- $bin/fixture-bar" "$H/autostart.log"
+  check "the idle daemon it starts: dropped" grep -qF "start drop idle exec_cmd uwsm-app -- hypridle  (idle: " "$H/autostart.log"
+  check_eq "...none in the box, nor first-run, monitor-watch or udiskie" "" \
+    "$(dm run -b "$B" -- ps -eo args= | grep -E 'hypridle|omarchy-provision-first-run|omarchy-hyprland-monitor-watch|udiskie')"
+  check_eq "...none of them asked for (Omarchy's autostart skipped)" "" \
+    "$(grep -E 'first-run|monitor-watch|udiskie|omarchy-launch-shell' "$H/autostart.log")"
+  check_eq "one Omarchy shell" 1 "$(dm run -b "$B" -- ps -eo comm= | grep -cx quickshell)"
+  pid=$(dm run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-shell.pid"' 2>/dev/null) || pid=""
+  check_match "...the one shell.sh started (its recorded pid)" "quickshell .*-p $(re_q "$o")/shell" \
+    "$(dm run -b "$B" -- sh -c 'tr "\0" " " < "/proc/$1/cmdline"' sh "${pid:-0}" 2>&1)"
+  check_eq "...running, as ls says" running "$(dm ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state')"
+  check_match "omabox's stand-ins first on the PATH Hyprland gives, then Omarchy's bin" "^PATH=/opt/omabox/share/bin:$(re_q "$o")/bin:" \
+    "$(dm run -b "$B" -- sh -c 'tr "\0" "\n" < "/proc/$1/environ" | grep "^PATH="' sh "${pid:-0}" 2>&1)"
+  check "a reload loads it again" dm hyprctl -b "$B" reload
+  check_eq "...no config errors" "" "$(dm hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  check_eq "...still one Omarchy shell" 1 "$(dm run -b "$B" -- ps -eo comm= | grep -cx quickshell)"
+  check_box_safety "$B" dm
+  check "down" dm down "$B"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
 
 # finding 122 (nvidia-modprobe -c MINOR for a missing /dev/nvidiaN, -c 255 for /dev/nvidiactl, finding
 # 254; what to run when still missing) and nvidia_card (finding 294): render.rs
@@ -15015,6 +15168,11 @@ t_config_kept() {
   check_match "its Hyprland runs the box's own copy of the config (#140)" "--config /run/user/[0-9]+/omabox-hyprland\.lua$" \
     "$(ob run -b "$B" -- pgrep -ax Hyprland)"
   check_eq "...a copy of omabox's" "$want" "$("${copy[@]}")"
+  # (#247, #321: the desktops it runs, and what desk.lua loads, copied with it, every one in every box)
+  # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
+  check_eq "...and of its desktops: omarchy, plain, desk, autostart, desk-shell" same \
+    "$(ob run -b "$B" -- sh -c 'for f in omarchy plain desk autostart desk-shell; do cat "$XDG_RUNTIME_DIR/omabox-$f.lua"; done' 2>/dev/null |
+      cmp -s - <(cat "$ROOT"/share/{omarchy,plain,desk,autostart,desk-shell}.lua) && echo same || echo differ)"
   ob lua -b "$B" 'omabox_t140 = 1' >/dev/null
   # shellcheck disable=SC2016
   ob run -b "$B" -- sh -c 'echo "-- changed" >> "$XDG_RUNTIME_DIR/omabox-hyprland.lua"'

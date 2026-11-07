@@ -13,10 +13,12 @@ use crate::repo::readlink_e;
 use crate::shell;
 
 /// A box's logs (issue #41, finding 107), by name.
-pub const LOG_NAMES: [&str; 15] = [
+pub const LOG_NAMES: [&str; 16] = [
     "hyprland",
     "shell",
     "apps",
+    // (a desk box's autostart policy, #321: ~/autostart.log)
+    "autostart",
     "run",
     "events",
     "keyring",

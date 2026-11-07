@@ -13705,7 +13705,52 @@ from them.
     `--plugin` or `--theme` with nothing to run them, so `up --desktop desk` refuses it, naming the
     config, until step 3. On this machine: the real HOME's config loads bootstrap (Omarchy base,
     refused); a stand-in `XDG_CONFIG_HOME` without one gives a plain base at the real HOME's path
-    (t_desk_home runs that way here).
+    (t_desk_home runs that way here). Step 3 (finding 702) lifts the refusal: an Omarchy base is
+    an Omarchy box running the user's config.
+702. **A desk box runs the user's own Hyprland config, under an autostart policy** (2026-11-07, #321
+    step 3). `share/hyprland.lua` is generic now: it keeps Hyprland's own `hl.exec_cmd` as the global
+    `omabox_exec` (what omabox itself starts: events, held devices, the shell, crash and close
+    helpers), then runs the box's copy of its desktop, `omabox-omarchy.lua` (lines moved verbatim
+    from hyprland.lua), `omabox-plain.lua` or `omabox-desk.lua`; start-hyprland.sh and `omabox
+    reload` copy all five (`omarchy plain desk autostart desk-shell`) every time, the desktops before
+    hyprland.lua (#140: one omabox's set). `desk.lua` wraps `hl.exec_cmd`, `os.execute` and
+    `io.popen` (never `hl.dsp.exec_cmd`: a bind does what it does on the desk) with
+    `share/autostart.lua`'s `judge(cmd, via, env)`, pure Lua (the suite runs it on the host's lua):
+    a command split on `&& || ; | &` outside quotes, each part's words past `VAR=x`, exec, env,
+    nohup, setsid, `uwsm-app --`, `uwsm app --`, app2unit, `systemd-run --user … --`, into `sh -c`
+    strings, then matched by argv0's basename (the first cut matched substrings, and `^uwsm` dropped
+    every `uwsm-app -- X`, which is how Omarchy's `o.launch` starts everything; `myhypridle` is not
+    hypridle). Any part dropped drops the whole command. Dropped: idle and lock (finding 10), the
+    systemd session and uwsm (run with `--systemd`), `dbus-update-activation-environment`
+    (session-env.sh does it), system-bus applets (a polkit agent with `--polkit`), what the box runs
+    (keyring, PipeWire, portals, `hyprpm reload`), Omarchy's session work (first-run, monitor-watch,
+    `omarchy-hook post-boot`, `herdr server`), the shell `--shell` starts in the slot, and on
+    Omarchy's base `omarchy-launch-shell` (shell.sh starts it); shells, wallpaper and notification
+    daemons, `wl-paste --watch`, hyprctl, popen reads and the rest run. A dropped `os.execute` says
+    it ran (`true, "exit", 0`), a dropped `io.popen` opens `/dev/null` in the mode asked (a "w" one
+    takes writes). Each decision is a line of `~/autostart.log` (`log autostart`): `PHASE VERDICT
+    CLASS VIA CMD  (WHY)`. A reload starts a fresh Lua state, so the first cut's global once-guard
+    did nothing; instead the phase: `load` (no `omabox.env` yet), `start` (a `hyprland.start`
+    handler registered before the user's sets it; handlers fire in registration order on 0.56.2 and
+    0.57.1), `reload` (`omabox.env` there) and `later` (set at the end of omabox's own start
+    handler, the last registered, and at the end of a reload's load): a bind's Lua then passes,
+    logged. The user's config runs in a pcall: an error is an `ERR from omabox ]` line in
+    hyprland.log and an `error` line in autostart.log, and the box keeps its settings. After it,
+    desk.lua's overrides (stand-ins first on PATH, ahead of Omarchy's bin on its base; plain.lua's
+    every-box settings), then hyprland.lua's tail wins over the config (monitors: a catch-all 4K@2
+    rule left the box's screen at 1920x1080@1; `suppress_errors`, `use_cpu_buffer`, autoreload,
+    Xwayland, the pointer); gaps and `follow_mouse` stay the user's. **Omarchy's base** (finding 708):
+    the user's own hyprland.lua loads bootstrap.lua, which empties `package.loaded` of `default.hypr.*`
+    and `hypr.*`, so desk.lua marks `default.hypr.autostart` (the session skip, as an Omarchy box) and
+    `hypr.monitors` (#246) both in `package.preload` and again after a `dofile` of bootstrap.lua;
+    `session.sh` takes such a desk for an Omarchy box (TERMINAL, theme), `up` writes its
+    `/etc/omarchy.conf` and version, wants an Omarchy look, and implies `--desk-shell`'s copy (the
+    desk's plugins and shell.json) when the Omarchy config folder is there. Verified on a stand-in
+    HOME with Omarchy 4.5.0's stock config plus `o.launch_on_start("hypridle")`: Omarchy's binds and
+    toggles, one Omarchy shell (shell.sh's pid), no first-run or monitor-watch, hypridle dropped as
+    `uwsm-app -- hypridle`. No Lua config (or only a `.conf`): a `none` line and the base's own
+    desktop (step 5 refuses it at `up`). `--desk-shell` alone keeps working a release, with a note
+    that it is part of `--desktop desk` now; with `--desktop desk` it is refused (implied there).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

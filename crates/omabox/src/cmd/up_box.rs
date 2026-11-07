@@ -632,7 +632,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     // #411: an Omarchy before 4.5 is deprecated (dropped in the first release after 2026-12-04,
     // #312), said once the box is up, after up's own lines: a refusal stays the one line it is.
     // omarchy<4.5
-    if u.desktop == Desktop::Omarchy
+    if !u.plain_like()
         && let Some(what) = crate::install::omarchy_before_45(&u.omarchy)
     {
         ctx.deprecated_omarchy(&what, u.omarchy.is_empty());
@@ -901,7 +901,7 @@ fn box_json(
         o.insert("shell_cmd".into(), s(&u.shell_cmd));
     }
     // (a plain box runs no Omarchy: no version to say, #247)
-    if u.desktop == Desktop::Omarchy {
+    if !u.plain_like() {
         let ov = if u.omarchy.is_empty() {
             install::omarchy_version()
         } else {
@@ -1088,7 +1088,7 @@ fn etc_files(ctx: &Ctx, u: &Up) -> Res<Etc> {
     // /etc/omarchy.conf, which Omarchy's env-bootstrap sources in every bash: a box's own, the
     // packaged Omarchy or --omarchy's tree (finding 135). A plain box's is the host's, if any (#247):
     // what it names is hidden in the box.
-    if u.desktop == Desktop::Omarchy
+    if !u.plain_like()
         && (std::path::Path::new("/etc/omarchy.conf").exists() || !u.omarchy.is_empty())
     {
         write(
