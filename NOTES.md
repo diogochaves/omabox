@@ -12893,6 +12893,15 @@ from them.
     none, one on no system folder, /usr/sbin's, /usr/bin's first, not executable, group- and
     world-writable, a folder), doctor.rs `programs_where_a_box_looks` (nft in /usr/sbin, a
     world-writable one, /usr/bin's), t_protect_ports (a stand-in /usr/bin/nft as before).
+    **Since verified** (2026-11-07) in an openSUSE Tumbleweed VM (nft only in /usr/sbin, off the
+    user's PATH): t_protect_ports_ns's connected boxes run with protect-ports, their rule set and
+    their reaper keeping the host's addresses in it; nothing in omabox needed a change. The suite
+    did: t_protect_ports_ns read the rule with a bare `nft` (none on PATH there: its rule checks read
+    nothing and failed) and put its reaper's stand-in over /usr/bin/nft (no such file: "mount point
+    does not exist"), and t_protect_ports' #364 stand-in mounted there too, so those cases skipped as
+    "no user namespace". Now `host_nft` picks the nft as `nft_at` does, the rule is read with it and
+    the reaper's stand-in goes over it, and #364's stand-in goes over every nft in /usr/bin and
+    /usr/sbin; on Arch (/usr/sbin a link to bin) all three are /usr/bin/nft, as before.
 659. **A plain box's shell started by a launcher that exits was taken as exited** (2026-11-06, #438).
     `up --desktop plain --shell CMD` (finding 652) recorded CMD's pid and counted the shell gone when
     it went, so a launcher that starts the shell and exits (`caelestia shell -d`, Quickshell's own
