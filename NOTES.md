@@ -13604,6 +13604,24 @@ from them.
     rgb:- through rgb_cells (od, then "R,G,B" a cell, the same text txt:- gave, checked alike on
     #102030). t_record_layout and t_monitors_turned pass here on it; not yet rerun in the VM.
 
+692. **t_guard's stuck nested `up --interactive` is aquamarine 0.15.1's race, not load** (2026-11-07,
+    #406, after finding 125). In an Omarchy 4.5.0 guest (4 vCPU, virgl) t_guard alone failed 6 of 10
+    on 1.2.2 and 5 of 10 on main with the system's aquamarine 0.15.1, 0 of 10 with omabox's build
+    (7bb8bdf4, hyprwm/aquamarine#415). A stuck nested Hyprland is idle in its event loop and answers
+    hyprctl: `monitors all` has `WAYLAND-1` at 0x0 with no modes, and `rollinglog` ends at "NO
+    PREFERRED MODE ... retrying (3/3)". WAYLAND_DEBUG showed the host's `xdg_toplevel.configure(1920,
+    1080)` dispatched and acked before aquamarine announced the output (0.15.1 queues `newOutput`
+    for its idle callbacks), so Hyprland never saw the size; #415 keeps it. Its hyprland.log only
+    *seemed* to stop in XCursor loading (1.2.1's and 1.2.2's records): Hyprland writes it buffered,
+    so an idle one's last lines never reach the file. Load widens the race (failures at host load
+    3.5 too), it does not make it. **Fix** (the test): t_guard skips everything that starts a nested
+    interactive box when the stand-in's aquamarine lacks the fix (`box_aq_unfixed`, as its
+    confirm-close and keys-to-box checks did), one skip line saying why; the `--confirm-close`
+    refusal, which starts nothing, still runs there. That drops two checks that ran only on an
+    unfixed aquamarine (confirm-close from the settings turned off for such a box; a box whose flag
+    is on anyway ends when no window comes): they start the same racing box. Here (omabox's build,
+    and the 0.57.1 folder's own 0.16.0) nothing changes.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -13622,12 +13640,10 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
-- t_guard's nested `up --interactive` under load (#406): in the 1.2.1 package test's VMs it failed 1
-  run in 4 alone on 1.2.1 and 3 in 5 on 1.2.0 once the host's load was about 13: the same on both, so
-  load, not a change. In 11 of 12 failed nested boxes the inner Hyprland's log stops inside its XCursor
-  load of the Adwaita theme, after EGL init, for the whole 30 s, while the outer box answers. Cause not
-  found (only 200 lines kept). The evidence read now ends each log with a newline: one cut mid-line
-  swallowed the next file's marker.
+- t_guard's nested `up --interactive` (#406): cause found, aquamarine 0.15.1's race (finding 692).
+  The package test's guests run boxes on the system's aquamarine, so t_guard skips its nested
+  interactive checks there; `omabox setup --aquamarine` in the guest before the installed suite would
+  run them.
 - Omarchy 4.5 on the host (#292, findings 415-423): the default stays workspace 9 (the first
   monitor's); `special:omabox` is offered for a place of omabox's own (finding 423). Boxes run no OWE
   daemon: no video wallpapers or intros (an opt-in `up --owe` for footage would be #309).

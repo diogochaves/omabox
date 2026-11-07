@@ -18229,6 +18229,25 @@ t_guard() {
   check_eq "...and its abort is not a journaled crash, or one the crash watcher's filter leaves out" 0 \
     "$(journalctl --since "$since" MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 -o json --no-pager 2>/dev/null | grep omarchy-crash-omabox | grep -vc '"COREDUMP_RLIMIT":"1"')"
   fi
+  # How the checks of nested interactive boxes below close one's window (cl) and read its state
+  local cl=(ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'class:aquamarine' })")
+  state() { "${in[@]}" "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
+  # shellcheck disable=SC2329 # called through until_ok and holds
+  gone() { [ "$(state "$1")" = gone ]; }
+  # shellcheck disable=SC2329
+  is() { [ "$(state "$1")" = "$2" ]; }
+  if box_aq_unfixed "${in[@]}" "$CLI"; then
+    # finding 125: without aquamarine's fix the box cannot open its window again: refused before
+    # anything starts
+    check_match "no aquamarine fix: --confirm-close refused, saying why" "--confirm-close .*needs aquamarine's fix" \
+      "$("${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close 2>&1)"
+    check_eq "...before anything started" gone "$(state cc)"
+    # #406 (finding 692): and a nested interactive box may never come up: its window's size can reach
+    # it before its output exists, lost (aquamarine#415 keeps it), so its Hyprland waits for a mode
+    # that never comes. Everything below that starts one is left out rather than flake.
+    skip "up --interactive under the guard: its window, shots, workspaces, confirm-close, a crash" \
+      "the stand-in's aquamarine lacks the fix for nested Wayland outputs, so a nested interactive box may never get its size (#406)"
+  else
   check "up --interactive under the guard" "${in[@]}" "$CLI" up inner --interactive --no-shell
   check_box_safety inner "${in[@]}" "$CLI"
   # finding 95: it renders on the GPU its host names, so it gets every render node the host has (and
@@ -18274,74 +18293,49 @@ t_guard() {
   "${in[@]}" "$CLI" down ws3 >/dev/null 2>&1; "${in[@]}" "$CLI" down wsp >/dev/null 2>&1
   # confirm-close: the first close opens a new window and asks, a second one ends the box; off, one
   # close ends it; `omabox config` changes a running box that took it from the config
-  local cl=(ob hyprctl -b "$B" dispatch "hl.dsp.window.close({ window = 'class:aquamarine' })")
-  state() { "${in[@]}" "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | .state][0] // "gone"'; }
-  # shellcheck disable=SC2329 # called through until_ok and holds
-  gone() { [ "$(state "$1")" = gone ]; }
-  # shellcheck disable=SC2329
-  is() { [ "$(state "$1")" = "$2" ]; }
-  if box_aq_unfixed "${in[@]}" "$CLI"; then
-    # finding 125: without aquamarine's fix the box cannot open its window again
-    check_match "no aquamarine fix: --confirm-close refused, saying why" "--confirm-close .*needs aquamarine's fix" \
-      "$("${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close 2>&1)"
-    check_eq "...before anything started" gone "$(state cc)"
-    "${in[@]}" "$CLI" config confirm-close on >/dev/null 2>&1
-    check_match "...on in the settings: off for the box, saying so" "confirm-close is on in your settings, but it needs" \
-      "$("${in[@]}" "$CLI" up lv --interactive --no-shell 2>&1)"
-    "${cl[@]}" >/dev/null
-    check "...so one close ends it, cleared" until_ok 8 gone lv
-    "${in[@]}" "$CLI" config confirm-close off >/dev/null
-    # The flag on all the same (the library changed under a running box): confirm-close.sh finds no
-    # new window and ends the box rather than leave it with none.
-    "${in[@]}" "$CLI" up fb --interactive --no-shell >/dev/null 2>&1
-    "${in[@]}" sh -c "echo on > '$("${in[@]}" "$CLI" path fb)/run/omabox.confirm-close'"
-    "${cl[@]}" >/dev/null
-    check "...and a box whose flag is on anyway ends when no window comes" until_ok 12 gone fb
-  else
-    "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
-    # issue #24: a window on 1 and one on 2, 2 shown: the new window must show 2 again, not a new one
-    local cch=("${in[@]}" "$CLI" hyprctl -b cc)
-    # shellcheck disable=SC2329 # called through until_ok
-    ccwins() { "${cch[@]}" -j clients | jq -e --argjson n "$1" 'length == $n' >/dev/null; }
-    "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
-    until_ok 10 ccwins 1
-    "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
-    "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
-    until_ok 10 ccwins 2
-    "${cl[@]}" >/dev/null
-    check "confirm-close: the box stays after a close" holds 2 is cc up
-    check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
-    # (in a VM the terminal shown dies as the window opens again: it binds the old output just gone)
-    on_gpu check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
-    on_gpu check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
-      "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
-    # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
-    check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
-    "${cl[@]}" >/dev/null
-    check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
-    "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1
-    "${in[@]}" "$CLI" config confirm-close on >/dev/null
-    # (a class token `monitor add` left for that window's name: an add still in flight, or one cut
-    # short; finding 429)
-    local lvd; lvd=$("${in[@]}" "$CLI" path lv)
-    "${in[@]}" sh -c "echo omabox-0123456789abcdef > '$lvd/run/omabox.appid.WAYLAND-1'"
-    "${cl[@]}" >/dev/null
-    check "config confirm-close on reaches a running box" holds 2 is lv up
-    check_eq "...its new window of class aquamarine with a class token left for the closed one's name (finding 429)" 1 \
-      "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
-    check_eq "...under another name, one with no token" WAYLAND-2 \
-      "$("${in[@]}" "$CLI" hyprctl -b lv -j monitors | jq -r '[.[] | select(.name != "FALLBACK") | .name] | join(" ")')"
-    check "...the token kept (an add in flight may need it)" "${in[@]}" test -e "$lvd/run/omabox.appid.WAYLAND-1"
-    "${in[@]}" "$CLI" config confirm-close off >/dev/null
-    "${cl[@]}" >/dev/null
-    check "...and off again: one close ends it, cleared" until_ok 8 gone lv
-    # #111: --no-confirm-close wins over the setting
-    "${in[@]}" "$CLI" config confirm-close on >/dev/null
-    "${in[@]}" "$CLI" up nc --interactive --no-shell --no-confirm-close >/dev/null 2>&1
-    "${in[@]}" "$CLI" config confirm-close off >/dev/null
-    "${cl[@]}" >/dev/null
-    check "up --no-confirm-close with the setting on: one close ends it" until_ok 8 gone nc
-  fi
+  "${in[@]}" "$CLI" up cc --interactive --no-shell --confirm-close >/dev/null 2>&1
+  # issue #24: a window on 1 and one on 2, 2 shown: the new window must show 2 again, not a new one
+  local cch=("${in[@]}" "$CLI" hyprctl -b cc)
+  # shellcheck disable=SC2329 # called through until_ok
+  ccwins() { "${cch[@]}" -j clients | jq -e --argjson n "$1" 'length == $n' >/dev/null; }
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 1
+  "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
+  "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
+  until_ok 10 ccwins 2
+  "${cl[@]}" >/dev/null
+  check "confirm-close: the box stays after a close" holds 2 is cc up
+  check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
+  # (in a VM the terminal shown dies as the window opens again: it binds the old output just gone)
+  on_gpu check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
+  on_gpu check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
+    "$("${cch[@]}" -j workspaces | jq -r '[.[] | "\(.name):\(.windows)"] | sort | join(" ")')"
+  # finding 90: that window has no render_unfocused; the box says so for `shot`'s message
+  check "...marked as not drawn while hidden" "${in[@]}" test -f "$("${in[@]}" "$CLI" path cc)/run/omabox.reopened"
+  "${cl[@]}" >/dev/null
+  check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
+  "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1
+  "${in[@]}" "$CLI" config confirm-close on >/dev/null
+  # (a class token `monitor add` left for that window's name: an add still in flight, or one cut
+  # short; finding 429)
+  local lvd; lvd=$("${in[@]}" "$CLI" path lv)
+  "${in[@]}" sh -c "echo omabox-0123456789abcdef > '$lvd/run/omabox.appid.WAYLAND-1'"
+  "${cl[@]}" >/dev/null
+  check "config confirm-close on reaches a running box" holds 2 is lv up
+  check_eq "...its new window of class aquamarine with a class token left for the closed one's name (finding 429)" 1 \
+    "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+  check_eq "...under another name, one with no token" WAYLAND-2 \
+    "$("${in[@]}" "$CLI" hyprctl -b lv -j monitors | jq -r '[.[] | select(.name != "FALLBACK") | .name] | join(" ")')"
+  check "...the token kept (an add in flight may need it)" "${in[@]}" test -e "$lvd/run/omabox.appid.WAYLAND-1"
+  "${in[@]}" "$CLI" config confirm-close off >/dev/null
+  "${cl[@]}" >/dev/null
+  check "...and off again: one close ends it, cleared" until_ok 8 gone lv
+  # #111: --no-confirm-close wins over the setting
+  "${in[@]}" "$CLI" config confirm-close on >/dev/null
+  "${in[@]}" "$CLI" up nc --interactive --no-shell --no-confirm-close >/dev/null 2>&1
+  "${in[@]}" "$CLI" config confirm-close off >/dev/null
+  "${cl[@]}" >/dev/null
+  check "up --no-confirm-close with the setting on: one close ends it" until_ok 8 gone nc
   # A box that dies without being closed stays dead, logs kept, until `down`
   "${in[@]}" "$CLI" up cr --interactive --no-shell >/dev/null 2>&1
   "${in[@]}" "$CLI" run -b cr -- pkill -KILL -x Hyprland >/dev/null 2>&1
@@ -18350,6 +18344,7 @@ t_guard() {
   until_ok 10 bash -c "! '$CLI' run -b '$B' -- pgrep -f 'omabox _reap cr '"
   check_eq "an interactive box that crashed stays dead" dead "$(state cr)"
   "${in[@]}" "$CLI" down cr >/dev/null 2>&1
+  fi
   check "up --size host under the guard" "${in[@]}" "$CLI" up inner2 --size host --no-shell --idle 0
   check_eq "...the stand-in's monitor" "$(ob mode -b "$B")" "$("${in[@]}" "$CLI" mode -b inner2)"
   check "peek under the guard" "${in[@]}" "$CLI" peek inner2
