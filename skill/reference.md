@@ -875,7 +875,8 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
 - `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
   of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors; each line with its
   time to the millisecond, `YYYY-MM-DD HH:MM:SS.mmm`, for timing what the shell does), `apps` (what the
-  launcher and binds started), `run` (the latest `run -d`; `run JOB`: that job's, by the pid `run
+  launcher and binds started), `autostart` (a desk box's: what its Hyprland config started and what
+  the box dropped, ref: `--desktop desk`), `run` (the latest `run -d`; `run JOB`: that job's, by the pid `run
   -d` and `jobs` say, ended too, however many jobs came after it), `keyring`, `labwc`, `systemd` (with
   `--systemd`), `audio` (PipeWire's, with `--audio`), `polkit` (the stand-in authority's, with `--polkit`), `events` (Hyprland's events, which `omabox events` reads), `journal` (what programs
   sent the box's journal sockets: dbus-broker, `logger` and `logger --journald` (not `-t omarchy-shell`: `shell`), `/usr/bin/systemd-cat` (the bare name writes `~/ID.log`), Qt with `QT_FORCE_STDERR_LOGGING=0`, units' output; at most 4 MB, then
@@ -1142,10 +1143,21 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   `--ro-bind` and `--seed` bring any in. A path under your HOME in a command is the box HOME's
   there, not yours (`run` says so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at
   it or above it, over omabox's own files in it (`.config/omabox`, its logs), nor through a link in
-  it. Refused with `--desk-shell` (not yet), `--clean` (the path carries your login name) and inside
-  ai-jail (not yet); `omabox config desktop` does not take `desk` yet. Its base is your desk's
-  (box.json's `desk_base`): where Omarchy is installed and your `hypr/hyprland.lua` loads it, the
-  base is Omarchy's and `up` refuses it for now; otherwise plain.
+  it. Refused with `--desk-shell` (part of it), `--clean` (the path carries your login name) and
+  inside ai-jail (not yet); `omabox config desktop` does not take `desk` yet. Its base is your desk's
+  (box.json's `desk_base`): where Omarchy is installed and your `hypr/hyprland.lua` loads it, an
+  Omarchy box (Omarchy's shell with your plugins and `shell.json`, as `--desk-shell` copies them);
+  otherwise plain. Its Hyprland runs the box HOME's `~/.config/hypr/hyprland.lua`, after omabox's
+  autostart policy: what the config starts (at load, in its `hyprland.start` handlers, through
+  `hl.exec_cmd`, `os.execute` or `io.popen`) runs unless a box must not or cannot run it: idle and
+  lock daemons, your systemd session and uwsm (unless `--systemd`), system-bus applets (a polkit agent
+  with `--polkit`), what the box runs itself (keyring, PipeWire, portals), Omarchy's own session work,
+  and the shell the box's slot starts. Binds run as on your desk. `omabox log autostart` is one line a
+  decision: `PHASE VERDICT CLASS VIA CMD  (WHY)`, PHASE `load`, `start`, `reload` or `later` (a bind's
+  Lua). omabox's settings win over the config's: the screen and monitors, the red error bar, the
+  cursor's buffer, autoreload, Xwayland; your look and input stay. An error in the config is said in
+  `log autostart` and `log hyprland`, and the box still starts. No `hyprland.lua` (or only a
+  `.conf`): the base's own desktop instead.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
