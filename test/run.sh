@@ -8096,6 +8096,16 @@ EOF
   ob down "$B" >/dev/null 2>&1
 }
 
+# host_nft: the nft omabox runs on this machine, as exec.rs's nft picks it: /usr/bin's, else
+# /usr/sbin's (openSUSE's and Debian's only nft, off a user's PATH there: #439). Fails with none.
+host_nft() {
+  local d
+  for d in /usr/bin /usr/sbin; do
+    if [ -f "$d/nft" ] && [ -x "$d/nft" ]; then echo "$d/nft"; return 0; fi
+  done
+  return 1
+}
+
 t_protect_ports() {
   local B=$P-prot h=$TMP/prot-home p q r w a got reached="" control=""
   # (the HOME is the test's own, with no Omarchy theme or bar of the user's: Omarchy's then, which a
@@ -8178,18 +8188,20 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(s
   protect_ports_nft "$h"
 }
 
-# #364: the protected ports' rule is set by nft, which the box's start runs with PATH=/usr/bin. Under a
-# mount namespace of the test's own whose /usr/bin/nft is a stand-in (the host's untouched; in a user
-# namespace mapped back to the user, not bwrap's, whose no_new_privs would leave the box no network):
-# with none there but one on the caller's PATH, up refuses at once naming /usr/bin; with one that
-# fails, up says so as soon as it does, not "bwrap did not start" after its 10 s wait.
+# #364: the protected ports' rule is set by nft, /usr/bin's or /usr/sbin's (#439), never the caller's
+# PATH's. Under a mount namespace of the test's own whose nft in each is a stand-in (the host's
+# untouched; in a user namespace mapped back to the user, not bwrap's, whose no_new_privs would leave
+# the box no network): with none there but one on the caller's PATH, up refuses at once naming
+# /usr/bin; with one that fails, up says so as soon as it does, not "bwrap did not start" after its
+# 10 s wait.
 # protect_ports_nft HOME
 protect_ports_nft() {
   local h=$1 B=$P-protnft fake=$TMP/protnft out rc t0 t
   local look=(--theme tokyo-night); omarchy_here || look=()   # (t_protect_ports')
-  # with_nft FILE CMD...: CMD with FILE as /usr/bin/nft
+  # with_nft FILE CMD...: CMD with FILE as every nft there is in /usr/bin and /usr/sbin (one file on
+  # Arch, whose /usr/sbin is /usr/bin; openSUSE's only in /usr/sbin)
   with_nft() {
-    unshare -Urm --propagation slave sh -c 'f=$1 u=$2 g=$3; shift 3; mount --bind "$f" /usr/bin/nft && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
+    unshare -Urm --propagation slave sh -c 'f=$1 u=$2 g=$3; shift 3; for n in /usr/bin/nft /usr/sbin/nft; do [ ! -e "$n" ] || mount --bind "$f" "$n" || exit 1; done && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
       _ "$1" "$(id -u)" "$(id -g)" "${@:2}"
   }
   if ! with_nft /dev/null true 2>/dev/null; then skip "a missing or failing nft (#364)" "no user namespace of the test's own here"; return; fi
@@ -8285,12 +8297,14 @@ while True:
   check_eq "a protected port over the box's loopback: not reached, TCP or UDP" "" "$reached"
   check_eq "...where a port not protected is (the control)" "" "$control"
   # An address the host gains after up: the box's reaper puts it in the rule as it comes. (sets: the
-  # rule's addresses, read where pasta's shell set them, in pasta's namespaces through its child)
-  local pp kid
+  # rule's addresses, read where pasta's shell set them, in pasta's namespaces through its child, by
+  # the nft omabox runs: off the user's PATH on openSUSE, #439)
+  local pp kid nftp
+  nftp=$(host_nft) || nftp=nft
   pp=$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid" 2>/dev/null) || pp=""
   kid=$(pgrep -P "${pp:-0}" | head -1) || kid=""
   local rlog=$XDG_RUNTIME_DIR/omabox/$B/reap.log
-  sets() { nsenter -t "${kid:-0}" -U -n --preserve-credentials nft list table inet omabox 2>&1; }
+  sets() { nsenter -t "${kid:-0}" -U -n --preserve-credentials "$nftp" list table inet omabox 2>&1; }
   # rule_has IN|OUT REGEX: the rule's sets hold (or not) REGEX; when not, they and reap.log said
   rule_has() {
     local t; t=$(sets) || t=""
@@ -8301,13 +8315,13 @@ while True:
   check_match "the reaper says it keeps the rule's addresses" "watching it every .* and the host's addresses for its protected ports as they change" "$(cat "$rlog" 2>&1)"
   check "...the host gains two addresses after up" asns sh -c 'ip addr add 10.239.2.1/24 dev d1 && ip -6 addr add fd39:2::1/64 dev d1 nodad'
   # (deadlines that hold under a full suite's load: the reaper puts them in at once, on the event)
-  check "...both in the rule, on their events (#399)" until_ok 15 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has IN '10\.239\.2\.1' && rule_has IN 'fd39:2::1'"
+  check "...both in the rule, on their events (#399)" until_ok 15 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog' nftp='$nftp'; rule_has IN '10\.239\.2\.1' && rule_has IN 'fd39:2::1'"
   look 10.239.2.1 fd39:2::1
   check_eq "a protected port on an address the host gained after up: not reached, TCP or UDP (#399)" "" "$reached"
   check_eq "...where a port not protected is (the control)" "" "$control"
   # ...and one it loses goes from it: the rule holds the host's addresses, no more.
   check "the host loses one" asns ip addr del 10.239.1.1/24 dev d1
-  check "...out of the rule, on its event" until_ok 15 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog'; rule_has OUT '10\.239\.1\.1'"
+  check "...out of the rule, on its event" until_ok 15 bash -c "$(declare -f sets rule_has); kid='${kid:-0}' rlog='$rlog' nftp='$nftp'; rule_has OUT '10\.239\.1\.1'"
   check_match "...the others still in it" "10\.239\.2\.1" "$(sets)"
   check_eq "...and nothing failed in reap.log" "" "$(grep "could not set" "$rlog" 2>&1)"
   HOME=$h ob down "$B" >/dev/null 2>&1
@@ -8316,13 +8330,13 @@ while True:
 }
 
 # t_protect_ports_ns's second box, its reaper's nft a stand-in (a mount namespace of the test's own
-# over /usr/bin/nft, in that network namespace) that fails, hangs or counts as the test says, and
-# runs the real one otherwise (pasta's shell's rule at up goes through). Uses its caller's H, h, q,
-# asns. A failed look is tried again soon, not at the next poll (up to 60 s); a burst of address
-# changes is a few looks, not one each; a hung nft is killed and tried again.
+# over the nft omabox runs, nftp, in that network namespace) that fails, hangs or counts as the test
+# says, and runs the real one otherwise (pasta's shell's rule at up goes through). Uses its caller's
+# H, h, q, nftp, asns. A failed look is tried again soon, not at the next poll (up to 60 s); a burst
+# of address changes is a few looks, not one each; a hung nft is killed and tried again.
 protect_ports_ns_nft() {
   local B2=$P-protns2 f=$TMP/protns-nft kid2 rlog2 n hung
-  rm -rf "$f"; mkdir -p "$f"; cp /usr/bin/nft "$f/real-nft"
+  rm -rf "$f"; mkdir -p "$f"; cp "$nftp" "$f/real-nft"
   cat > "$f/nft" <<EOF
 #!/bin/sh
 if [ "\$1" = -f ]; then
@@ -8335,13 +8349,13 @@ exec '$f/real-nft' "\$@"
 EOF
   chmod 755 "$f/nft"
   : > "$f/fail"
-  if ! UP_OUT=$(nsenter -t "$H" -U -n --preserve-credentials unshare -m --propagation slave sh -c 'mount --bind "$1" /usr/bin/nft && shift && u=$1 g=$2 && shift 2 && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
-      _ "$f/nft" "$(id -u)" "$(id -g)" env HOME="$h" "$CLI" up "$B2" --no-shell "${look[@]}" 2>&1); then
+  if ! UP_OUT=$(nsenter -t "$H" -U -n --preserve-credentials unshare -m --propagation slave sh -c 'mount --bind "$1" "$2" && shift 2 && u=$1 g=$2 && shift 2 && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
+      _ "$f/nft" "$nftp" "$(id -u)" "$(id -g)" env HOME="$h" "$CLI" up "$B2" --no-shell "${look[@]}" 2>&1); then
     no "up with a stand-in nft for its reaper" "$UP_OUT"; return
   fi
   kid2=$(pgrep -P "$(cat "$XDG_RUNTIME_DIR/omabox/$B2/pasta.pid" 2>/dev/null || echo 0)" | head -1) || kid2=""
   rlog2=$XDG_RUNTIME_DIR/omabox/$B2/reap.log
-  sets2() { nsenter -t "${kid2:-0}" -U -n --preserve-credentials nft list table inet omabox 2>&1; }
+  sets2() { nsenter -t "${kid2:-0}" -U -n --preserve-credentials "$nftp" list table inet omabox 2>&1; }
   # in2 REGEX: the second box's rule holds REGEX (when not: it, and reap.log's end)
   in2() { local t; t=$(sets2) || t=""; grep -q "$1" <<<"$t" && return 0; echo "$t"; tail -n 3 "$rlog2" 2>&1; return 1; }
   # (its first look comes as the reaper starts, after up; 20 s holds under a full suite's load)
@@ -8360,7 +8374,7 @@ EOF
   # failing, puts it in, where the next poll is the reaper's interval away; "long before" is within
   # half of it, its words in reap.log, whatever the load does to the 2 s)
   every2=$(grep -oE 'watching it every [0-9]+ s' "$rlog2" | grep -oE '[0-9]+') || every2=60
-  check "...in the rule once nft works again, with no address event since: long before the next poll, in $((every2 / 2)) s of its $every2 s (#399)" until_ok "$((every2 / 2))" bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.3\.1'"
+  check "...in the rule once nft works again, with no address event since: long before the next poll, in $((every2 / 2)) s of its $every2 s (#399)" until_ok "$((every2 / 2))" bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2' nftp='$nftp'; in2 '10\.239\.3\.1'"
   # (said once nft has answered, after the rule is in: a moment later)
   check "...said in reap.log" until_ok 10 grep -q "its protected ports' addresses set again" "$rlog2"
   # A burst: 40 addresses over about 2 s, each an event; the reaper runs nft a few times, not 40.
@@ -8369,7 +8383,7 @@ EOF
   b0=$(date +%s%N)
   asns sh -c 'i=10; while [ $i -lt 50 ]; do ip addr add 10.239.4.$i/32 dev d1; sleep 0.05; i=$((i + 1)); done'
   b1=$(date +%s%N)
-  check "...a burst of address changes: all in the rule" until_ok 15 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.4\.49'"
+  check "...a burst of address changes: all in the rule" until_ok 15 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2' nftp='$nftp'; in2 '10\.239\.4\.49'"
   sleep 0.5
   n=$(wc -l < "$f/runs")
   # (one look per 250 ms at most, and one after the last: as many as the burst lasted allows, which
@@ -8392,7 +8406,7 @@ EOF
       test "$((ka - $(cat "$f/hung.at")))" -ge 4 -a "$((ka - $(cat "$f/hung.at")))" -le 8
   else no "a reaper's nft that hangs is killed" "the stand-in never hung"; fi
   rm -f "$f/hang"
-  check "...the address in the rule once nft answers" until_ok 20 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2'; in2 '10\.239\.5\.1'"
+  check "...the address in the rule once nft answers" until_ok 20 bash -c "$(declare -f sets2 in2); kid2='${kid2:-0}' rlog2='$rlog2' nftp='$nftp'; in2 '10\.239\.5\.1'"
   check "...and the reaper still there (#440)" kill -0 "${rp2:-none}"
   HOME=$h ob down "$B2" >/dev/null 2>&1
   [ ! -s "$f/hung.pid" ] || kill "$(cat "$f/hung.pid")" 2>/dev/null
