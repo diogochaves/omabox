@@ -86,8 +86,8 @@ omabox down                               # when done
    sending again.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
 4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
-   `omabox lua 'hl.dispatch(…)'`), not by keys and clicks, unless the gesture is under test. **Stop when
-   it shows the goal.**
+   `window --fullscreen`, `omabox lua 'hl.dispatch(…)'`), not by keys and clicks, unless the gesture
+   is under test. **Stop when it shows the goal.**
 
 No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;
 video `record hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124

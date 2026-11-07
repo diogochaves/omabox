@@ -161,7 +161,8 @@ pub const WIN_JQ: &str = concat!(
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
      | .onscreen = ((.workspace | wsk) as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
   | [$all[] | . as $t | {address, stableId, class, title, initialClass, initialTitle, pid,
-      workspace: .workspace.name, at, size, floating, fullscreen: (.fullscreen > 0), xwayland,
+      workspace: .workspace.name, at, size, floating, fullscreen: (.fullscreen > 0),
+      fullscreenMode: (if .fullscreen >= 2 then "fullscreen" elif .fullscreen == 1 then "maximized" else "none" end), xwayland,
       active: (.address == $a.address), onscreen,
       cover: [$all[] | select(.address != $t.address and .onscreen and above(.; $t) and overlaps($t))
               | {address, class, title, pid, at, size}]}
@@ -325,7 +326,8 @@ pub const WINDOWS_JSON_JQ: &str = r#"def r: . + {x: .at[0], y: .at[1], w: .size[
 pub const WINDOWS_TABLE_JQ: &str = r#"def pad($n): tostring | . + (" " * ($n - length) // "");
     .[] | [(.address | pad(16)), (.pid | pad(8)), (.workspace | pad(10)),
       ((if .onscreen | not then "off-screen" elif .cover != [] then "covered" else "on-screen" end)
-        + (if .active then ",active" else "" end) | pad(20)),
+        + (if .active then ",active" else "" end)
+        + (if (.fullscreenMode // "none") != "none" then ",\(.fullscreenMode)" else "" end) | pad(27)),
       ("\(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])" | pad(22)), (.class | pad(16)), (.title | tojson)] | join(" ")"#;
 /// windows_layers: a layer spanning its output worded for what it covers (#431).
 pub const WINDOWS_LAYERS_JQ: &str = concat!(

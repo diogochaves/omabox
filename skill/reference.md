@@ -75,7 +75,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 |---|---|
 | `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more |
 | `jobs --json` | an array, oldest first: `pid, age` (seconds), `processes, log, argv` |
-| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, monitor, certain, span` (`certain` false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all; `span` then says how: `screen`, or the edge a full-height or full-width strip is at, `right`, `left`, `top`, `bottom`, else `height` or `width`; null on a certain one) |
+| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, fullscreenMode, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them; `fullscreen` is true when fullscreen or maximized, `fullscreenMode` says which: `none`, `maximized`, `fullscreen`); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, monitor, certain, span` (`certain` false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all; `span` then says how: `screen`, or the edge a full-height or full-width strip is at, `right`, `left`, `top`, `bottom`, else `height` or `width`; null on a certain one) |
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `tray --json` | an array of items: `id, title, status, category, service, path, menu` (null: none), `item_is_menu, rows` (each `id, label, role, enabled, visible, toggle, checked, rows`); `tray menu --json`: one item |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
@@ -561,9 +561,18 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   monitor's free area, in the box's own Hyprland; it prints `0x... CLASS "TITLE" floating at X,Y
   WxH`. A size the app does not take (its smallest or largest) is exit 1, naming the size it took:
   check at that one or say so. `--tile` puts it back in the layout, `--float` floats it as it is;
-  a fullscreen window is refused. `wait still` before a shot, while the app redraws. Not
+  a fullscreen or maximized window is refused. `wait still` before a shot, while the app redraws. Not
   `hyprctl dispatch togglefloating`: the old dispatcher syntax does nothing under the Lua config
   ("Lua dispatchers" under Hyprland's Lua, logs and events).
+- **The app alone, fullscreen** (a take, a shot with no bar or wallpaper): `omabox window --window SEL
+  --fullscreen`; `--maximize` fills the work area and keeps the bar. Each **sets** the state, never
+  toggles it: run it again and nothing changes, so it is safe when you do not know the window's
+  state (the old `dispatch fullscreen` toggled). `--fullscreen off` / `--maximize off` take it out
+  of that state only (a maximized window stays so after `--fullscreen off`). It prints
+  `0x... CLASS "TITLE" tiled, fullscreen at 0,0 1920x1080`; `windows` shows `,fullscreen` or
+  `,maximized` in STATE, `windows --json` has `fullscreenMode` (`none`, `maximized`,
+  `fullscreen`). A Hyprland whose `hl.dsp.window.fullscreen` takes other arguments is exit 1,
+  naming that dispatcher. `wait still` before the shot: the app redraws at the new size.
 - **More monitors** (a bar on each, windows between them, portrait, ultrawide, mixed scale, an
   unplug): `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below` (SPEC
   `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last made by default, moving with it), or
@@ -829,7 +838,7 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   nothing. `omabox hyprctl` fails it (hyprctl's 7; a `--batch`'s 1, where hyprctl says 0) and
   prints the Lua for it, for the common ones: `fullscreen [0|1] [set|unset]` →
   `hl.dsp.window.fullscreen({ mode = "fullscreen" })` (1: `"maximized"`; it toggles, as the old one
-  did), `togglefloating`/`setfloating`/`settiled [SEL]` → `hl.dsp.window.float({ action = "toggle"
+  did: to set it, `omabox window --fullscreen` or `--maximize`), `togglefloating`/`setfloating`/`settiled [SEL]` → `hl.dsp.window.float({ action = "toggle"
   | "enable" | "disable", window = SEL })`, `workspace WS` → `hl.dsp.focus({ workspace = "WS" })`,
   `focuswindow SEL` → `hl.dsp.focus({ window = SEL })`, `killactive` / `closewindow SEL` →
   `hl.dsp.window.close()`, `movetoworkspace[silent] WS[,SEL]` → `hl.dsp.window.move({ workspace =

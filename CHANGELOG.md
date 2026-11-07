@@ -3,6 +3,17 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased (1.4.0)
+
+### Added
+- **`window --fullscreen` and `--maximize`: a window's state set, not toggled** ([#443](https://github.com/diogochaves/omabox/issues/443)):
+  `omabox window --window SEL --fullscreen` makes the window fullscreen (the whole screen, no bar:
+  for a take or a shot of the app alone), `--maximize` maximizes it (the bar kept), and `off` after
+  either takes it out of that state. Asking again changes nothing, so an agent that does not know the
+  window's state cannot flip it the wrong way, as the old `hyprctl dispatch fullscreen` toggle did.
+  `windows` shows the state (`on-screen,active,fullscreen`), and `windows --json` has it as
+  `fullscreenMode` (`none`, `maximized` or `fullscreen`).
+
 ## Unreleased
 
 ### Added

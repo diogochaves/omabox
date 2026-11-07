@@ -19364,13 +19364,17 @@ t_lock() {
 t_unit_window_select() {
   local c m m_sp act='{"address":"0xb"}'
   # windows' table (#105, finding 174): a title's quotes escaped once, as in --json; an empty class
-  # keeps its column (the title starts at the 99th character, after the six padded ones).
+  # keeps its column (the title starts at the 106th character, after the six padded ones); a
+  # fullscreen or maximized window says so in its STATE (#443), which keeps its column too.
   local rows; rows=$(probe windows_table <<<'[
-    {"address":"0xa","pid":7,"workspace":1,"onscreen":true,"cover":[],"active":true,"size":[10,20],"at":[1,2],"class":"foot","title":"say \"hi\" \\ x"},
-    {"address":"0xb","pid":8,"workspace":2,"onscreen":false,"cover":[],"active":false,"size":[3,4],"at":[5,6],"class":"","title":"no class"}]')
-  check_eq "windows: a quoted title escaped once" '"say \"hi\" \\ x"' "$(sed -n 1p <<<"$rows" | cut -c99-)"
-  check_eq "...an empty class keeps its column" '"no class"' "$(sed -n 2p <<<"$rows" | cut -c99-)"
+    {"address":"0xa","pid":7,"workspace":1,"onscreen":true,"cover":[],"active":true,"size":[10,20],"at":[1,2],"class":"foot","title":"say \"hi\" \\ x","fullscreenMode":"fullscreen"},
+    {"address":"0xb","pid":8,"workspace":2,"onscreen":false,"cover":[],"active":false,"size":[3,4],"at":[5,6],"class":"","title":"no class","fullscreenMode":"none"},
+    {"address":"0xc","pid":9,"workspace":1,"onscreen":true,"cover":[],"active":false,"size":[3,4],"at":[5,6],"class":"foot","title":"max","fullscreenMode":"maximized"}]')
+  check_eq "windows: a quoted title escaped once" '"say \"hi\" \\ x"' "$(sed -n 1p <<<"$rows" | cut -c106-)"
+  check_eq "...an empty class keeps its column" '"no class"' "$(sed -n 2p <<<"$rows" | cut -c106-)"
   check_match "...the rest in theirs" '^0xb +8 +2 +off-screen +3x4 at 5,6 +"no class"$' "$(sed -n 2p <<<"$rows")"
+  check_match "...a fullscreen window's state says so (#443)" '^0xa +7 +1 +on-screen,active,fullscreen +10x20 at 1,2 ' "$(sed -n 1p <<<"$rows")"
+  check_match "...a maximized one's" '^0xc +9 +1 +on-screen,maximized +3x4 ' "$(sed -n 3p <<<"$rows")"
   c=$(jq -nc '
     def w($a; $cl; $t; $ws; $x; $y; $w; $h; $fl): {address: $a, stableId: "1", class: $cl, title: $t,
       initialClass: $cl, initialTitle: $t, pid: 10, workspace: {id: $ws, name: ($ws | tostring)}, at: [$x, $y],
@@ -19478,6 +19482,10 @@ t_unit_window_select() {
   check_eq "...nor over another window on its workspace" "toast:overlay" "$(lay "$Wf2" 0xb)"
   Wf1=$(probe win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act" "$l")
   check_eq "...a maximized one (1): they count" "bar:top osd:overlay" "$(lay "$Wf1" 0xa)"
+  fsm() { jq -r --arg a "$2" '.[] | select(.address == $a) | "\(.fullscreenMode) \(.fullscreen)"' <<<"$1"; }
+  check_eq "fullscreenMode (#443): 2 is fullscreen" "fullscreen true" "$(fsm "$Wf2" 0xa)"
+  check_eq "...1 maximized" "maximized true" "$(fsm "$Wf1" 0xa)"
+  check_eq "...0 none" "none false" "$(fsm "$Wf1" 0xb)"
   A=$(jq -c '.[] | select(.address == "0xa")' <<<"$Wl")
   check_eq "win_layer: the one over the point" 'certain "osd" overlay 100x100 at 20,500' "$(probe win_layer "$A" 50 550)"
   check_eq "...the bar's" 'certain "bar" top 42x1080 at 0,0' "$(probe win_layer "$A" 10 10)"
@@ -19733,7 +19741,7 @@ t_window_size() {
   win() { ob windows -b "$B" --json | jq -c '.[] | select(.title == "A")'; }
   check_eq "two foot windows, A tiled" false "$(win | jq .floating)"
   check_eq "window with nothing to do: exit 2" 2 "$(ob window -b "$B" -w 'title:^A$' >/dev/null 2>&1; echo $?)"
-  check_match "...saying what it takes" "--size WxH, --float or --tile" "$(ob window -b "$B" -w 'title:^A$' 2>&1)"
+  check_match "...saying what it takes" "--size WxH, --float, --tile, --fullscreen \[off\] or --maximize \[off\]" "$(ob window -b "$B" -w 'title:^A$' 2>&1)"
   check_match "--size not WxH: exit 2" "rc=2 .*--size is WxH .*got 760" "$(out=$(ob window -b "$B" --size 760 2>&1); echo "rc=$? $out")"
   check_match "--size and --tile: exit 2" "rc=2 .*not both" "$(out=$(ob window -b "$B" --size 760x500 --tile 2>&1); echo "rc=$? $out")"
   check_eq "a selector matching both: exit 2" 2 "$(ob window -b "$B" -w foot --size 760x500 >/dev/null 2>&1; echo $?)"
@@ -19764,6 +19772,78 @@ t_window_size() {
   err=$(ob window -b "$B" -w 'title:^A$' --size 600x400 2>&1); rc=$?
   check_match "a fullscreen window: refused, exit 1" "^1 omabox: window: .* is fullscreen" "$rc $err"
   check_eq "...and left as it was (not floated)" false "$(win | jq .floating)"
+  ob down "$B" >/dev/null
+}
+
+# window --fullscreen and --maximize (#443, finding 705): each set, set again (nothing changes: a
+# toggle would flip it back) and left, by the box's own Hyprland; windows --json's fullscreenMode
+# says which; a shot of a fullscreen window has no bar, a maximized one keeps it.
+t_window_fullscreen() {
+  local B=$P-wfs out out2 rc bp bar bg s
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  ob run -b "$B" -d -- foot -T A sleep 600 >/dev/null
+  until_ok 10 bash -c "'$CLI' windows -b '$B' --json | jq -e 'length == 1'"
+  ob wait -b "$B" layer "$BAR_NS" >/dev/null 2>&1
+  ob wait -b "$B" still >/dev/null
+  win() { ob windows -b "$B" --json | jq -r '.[] | select(.title == "A") | "\(.fullscreenMode) \(.fullscreen) \(.floating) \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"'; }
+  fw() { ob window -b "$B" -w 'title:^A$' "$@" 2>&1; }
+  # shotpx X Y: the colour at X Y of a fresh shot of the screen (no pointer), #rrggbb.
+  shotpx() {
+    local c r g b
+    ob shot -b "$B" --no-pointer -o "$TMP/wfs.png" >/dev/null 2>&1
+    c=$(magick "$TMP/wfs.png" -crop "1x1+$1+$2" +repage -depth 8 rgb:- | rgb_cells)
+    IFS=, read -r r g b <<<"$c"
+    printf '#%02x%02x%02x' "$r" "$g" "$b"
+  }
+  local tiled; tiled=$(win)
+  check_match "a tiled window: fullscreenMode none" "^none false false " "$tiled"
+  # The bar's strip: between the screen's edge and the tiled window, on its wider side.
+  read -r bx by < <(ob windows -b "$B" --json | jq -r '.[0] | if .at[0] >= .at[1] then "\(.at[0] / 3 | floor) 540" else "960 \(.at[1] / 3 | floor)" end')
+  bar=$(shotpx "$bx" "$by"); bg=$(ob pixel -b "$B" -w 'title:^A$' 5 5)
+  check "the bar is drawn at $bx,$by, not the window's colour ($bar, $bg)" test "$bar" != "$bg"
+  # Words it refuses before any box is asked.
+  check_match "--fullscreen WORD: exit 2" "^2 .*--fullscreen off leaves it \(on or off\), got maybe" "$(out=$(fw --fullscreen maybe); echo "$? $out")"
+  check_match "--fullscreen and --maximize: exit 2" "^2 .*goes alone" "$(out=$(fw --fullscreen --maximize off); echo "$? $out")"
+  check_match "--fullscreen and --size: exit 2" "^2 .*goes alone" "$(out=$(fw --size 600x400 --fullscreen); echo "$? $out")"
+  # Fullscreen: set, set again, out.
+  out=$(fw --fullscreen); rc=$?
+  check_match "--fullscreen: exit 0, the line says so" "^0 0x[0-9a-f]+ foot \"A\" tiled, fullscreen at 0,0 [0-9]+x[0-9]+$" "$rc $out"
+  s=$(win)
+  check_match "...the box has it so (fullscreenMode, fullscreen, at 0,0)" "^fullscreen true false 0,0 " "$s"
+  ob wait -b "$B" still >/dev/null
+  check_eq "...a shot has no bar: the window's own colour where the bar was" "$(ob pixel -b "$B" -w 'title:^A$' "$bx" "$by")" "$(shotpx "$bx" "$by")"
+  out2=$(fw --fullscreen on); rc=$?
+  check_eq "--fullscreen on again: exit 0, the same line" "0 $out" "$rc $out2"
+  check_eq "...still fullscreen, nothing moved (not toggled back)" "$s" "$(win)"
+  out=$(fw --fullscreen off); rc=$?
+  check_match "--fullscreen off: exit 0, tiled again" "^0 0x[0-9a-f]+ foot \"A\" tiled at " "$rc $out"
+  check_eq "...where it was" "$tiled" "$(win)"
+  out=$(fw --fullscreen=off); rc=$?
+  check_match "--fullscreen=off again: exit 0, nothing changed (not toggled in)" "^0 0x[0-9a-f]+ foot \"A\" tiled at " "$rc $out"
+  check_eq "...still where it was" "$tiled" "$(win)"
+  # Maximize: set, set again, out; the bar stays.
+  out=$(fw --maximize); rc=$?
+  check_match "--maximize: exit 0, the line says so" "^0 0x[0-9a-f]+ foot \"A\" tiled, maximized at " "$rc $out"
+  s=$(win)
+  check_match "...the box has it so" "^maximized true false " "$s"
+  ob wait -b "$B" still >/dev/null
+  check_eq "...the bar kept" "$bar" "$(shotpx "$bx" "$by")"
+  out2=$(fw --maximize); rc=$?
+  check_eq "--maximize again: exit 0, the same line" "0 $out" "$rc $out2"
+  check_eq "...still maximized (not toggled back)" "$s" "$(win)"
+  check_match "windows: the state in its table" "on-screen,active,maximized +[0-9]+x[0-9]+ at" "$(ob windows -b "$B")"
+  out=$(fw --fullscreen off); rc=$?
+  check_match "--fullscreen off on a maximized window: exit 0, left maximized" "^0 .* tiled, maximized at " "$rc $out"
+  check_match "a size for a maximized window: refused, exit 1, saying how out" "^1 omabox: window: .* is maximized: .*--maximize off\)$" "$(out=$(fw --size 600x400); echo "$? $out")"
+  out=$(fw --fullscreen); rc=$?
+  check_match "--fullscreen on a maximized window: fullscreen" "^0 .* tiled, fullscreen at 0,0 " "$rc $out"
+  out=$(fw --maximize); rc=$?
+  check_match "...--maximize on a fullscreen one: maximized" "^0 .* tiled, maximized at " "$rc $out"
+  out=$(fw --maximize off); rc=$?
+  check_match "--maximize off: exit 0, tiled again" "^0 0x[0-9a-f]+ foot \"A\" tiled at " "$rc $out"
+  check_eq "...where it was" "$tiled" "$(win)"
+  out=$(fw --maximize off --json); rc=$?
+  check_eq "--maximize off again, --json: windows --json's object, unchanged" "0 none false" "$rc $(jq -r '"\(.fullscreenMode) \(.floating)"' <<<"$out")"
   ob down "$B" >/dev/null
 }
 
@@ -22513,7 +22593,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's
