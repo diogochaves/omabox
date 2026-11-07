@@ -771,7 +771,7 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
 /// Whether the box gets the protected ports' rule (connected, a port protected): box.json's
 /// `protect`, for its reaper (#399). Only that it has one: which ports is not the box's to tell.
 fn guarded(u: &Up) -> bool {
-    !matches!(u.net.as_slice(), b"none" | b"isolated") && !u.protect.is_empty()
+    u.net == b"connected" && !u.protect.is_empty()
 }
 
 /// `setsid -f "$ROOT/bin/omabox" _reap NAME CREATED </dev/null >>"$D/reap.log" 2>&1`.
@@ -1473,8 +1473,9 @@ fn bwrap_args(
     }
     // The box's journal (#234): a tmpfs of its own, never the host's /run/systemd/journal.
     b.words(&[b"--tmpfs", b"/run/systemd/journal"]);
-    // DNS (finding 52): a connected box gets the host's resolver file when it links into /run.
-    if u.net == b"connected"
+    // DNS (finding 52): a connected box gets the host's resolver file when it links into /run; a
+    // host one too (#313), whose stub resolver is the host's own.
+    if matches!(u.net.as_slice(), b"connected" | b"host")
         && let Some(resolv) = crate::repo::readlink_f(b"/etc/resolv.conf")
         && resolv.starts_with(b"/run/")
         && shell::path(&resolv).is_file()
@@ -1608,9 +1609,11 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
         launch = vec![wlfd, wl, b"bwrap".to_vec()];
     }
     // Every box has its own network namespace (finding 89): pasta's tap (connected), a loopback and
-    // the --allow ports (isolated), or only a loopback (none: no pasta).
+    // the --allow ports (isolated), or only a loopback (none: no pasta); but for --net host (#313,
+    // finding 706), asked for by name, which keeps the host's and has no pasta either.
     let netmode = match u.net.as_slice() {
         b"none" => Net::None,
+        b"host" => Net::Host,
         b"isolated" => Net::Isolated {
             allow: u.allow_ports.clone(),
         },
@@ -1620,6 +1623,8 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
     };
     if netmode == Net::None {
         launch.push(b"--unshare-net".to_vec());
+    } else if netmode == Net::Host {
+        // (bwrap's own child-pid is then the host's numbering, which box_pid reads: S6)
     } else {
         let pasta = net::pasta_args(&netmode, &cat!(d, "/pasta.pid"), &net::ephemeral());
         // pasta closes inherited fds: bwrap's info fd is opened inside it, as the go pipe (#210).
@@ -2530,7 +2535,7 @@ mod tests {
                 any::<bool>(),
                 any::<bool>(),
                 any::<bool>(),
-                0u8..3,
+                0u8..4,
                 any::<bool>(),
                 any::<bool>(),
             ),
@@ -2571,6 +2576,7 @@ mod tests {
                         b"connected".to_vec(),
                         b"isolated".to_vec(),
                         b"none".to_vec(),
+                        b"host".to_vec(),
                     ][usize::from(net)]
                     .clone(),
                     size: b"1920x1080@60".to_vec(),
@@ -2663,5 +2669,28 @@ mod tests {
         if names.first().is_some_and(|n| n.as_slice() == b"LANGUAGE") {
             assert_eq!(&names[1..], &sorted[..sorted.len() - 1]);
         }
+    }
+
+    // #313 (finding 706): a host box starts with neither pasta nor --unshare-net (the host's network
+    // namespace, and bwrap's child-pid in the host's numbering); none has --unshare-net and no
+    // pasta; connected and isolated start behind pasta.
+    #[test]
+    fn launch_by_net_mode() {
+        let mut ctx = Ctx::new(b"up", b"/nonexistent".to_vec());
+        ctx.name = b"box".to_vec();
+        ctx.d = b"/nonexistent/box".to_vec();
+        let launch = |net: &[u8]| {
+            let u = Up {
+                net: net.to_vec(),
+                ..Up::default()
+            };
+            let s = launch_script(&ctx, &u, &[b"--".to_vec()], &net::Ports::default()).unwrap();
+            let s = String::from_utf8_lossy(&s).into_owned();
+            (s.contains("pasta"), s.contains("--unshare-net"))
+        };
+        assert_eq!(launch(b"host"), (false, false), "host: no pasta, no netns");
+        assert_eq!(launch(b"none"), (false, true), "none: a netns, no pasta");
+        assert_eq!(launch(b"connected"), (true, false), "connected: pasta's");
+        assert_eq!(launch(b"isolated"), (true, false), "isolated: pasta's");
     }
 }

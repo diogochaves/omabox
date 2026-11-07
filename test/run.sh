@@ -1611,6 +1611,12 @@ t_unit_refusals() {
   check_fails "--ro-bind onto box HOME refused" ob up "$P-r4" --ro-bind "$ROOT:/home/sbx"
   check_fails "--allow needs --net isolated" ob up "$P-r5" --allow 8081
   check_fails "--net junk refused" ob up "$P-r6" --net internet
+  # --net host (#313, finding 706): asked for by name only, and refused where it makes no sense.
+  check_match "--net host --xwayland refused (finding 89: its X server would be the host's)" "up: --net host takes no --xwayland" "$(ob up "$P-r40" --net host --xwayland 2>&1)"
+  check_fails "...nor is the box made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r40"
+  check_fails "--net host --allow refused (no ports to allow: it has all of them)" ob up "$P-r41" --net host --allow 8081
+  check_fails "--net host --addr refused" ob up "$P-r42" --net host --addr 203.0.113.10
+  check_fails "omabox config has no net key: a host network is never a default" env HOME="$TMP/r43-home" "$CLI" config net host
   check_fails "--allow junk refused" ob up "$P-r7" --net isolated --allow 80a
   check_fails "--env without = refused" ob up "$P-r8" --env FOO
   check_fails "--size junk refused" ob up "$P-r9" --size huge
@@ -2165,6 +2171,10 @@ t_unit_config() {
   local ppo ppr; ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell --net isolated --allow 9,5432 2>&1); ppr=$?
   check_eq "...and up reads that value: --allow 5432 refused, exit 1" "1 omabox: up: --allow 5432: a protected port (protect-ports in ~/.config/omabox/config), which no box reaches" "$ppr $ppo"
   check_fails "...nothing of the box made" test -e "$prt/omabox/$P-pp"
+  # (#313, finding 706: a box on the host's network reaches every port, so none while one is protected)
+  ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt XDG_CACHE_HOME=$prt/cache XDG_STATE_HOME=$prt/state "$CLI" up "$P-pp" --no-shell --net host 2>&1); ppr=$?
+  check_match "...and --net host refused while a port is protected (S10)" "^1 omabox: up: --net host: .*protect-ports" "$ppr $ppo"
+  check_fails "...nothing of that box made either" test -e "$prt/omabox/$P-pp"
   if [ "$(id -u)" != 0 ]; then
     chmod 000 "$pph/.config/omabox/config"
     ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell 2>&1); ppr=$?
@@ -5607,6 +5617,9 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   # (broker_check's cases: broker_side.rs's broker_check_allows_and_refuses, #324 wave 6-suite)
   # A save that does not exist: were --from let through, up would stop at "no save", no box started.
   check_match "up --from refused to a jailed agent (finding 100)" "saves are the user's" "$(OMABOX_JAIL=$J "${NOHYPR[@]}" "$CLI" up "$P-jf" --from nosuch 2>&1)"
+  # --net host (#313, finding 706): never a jailed agent's, even in a jail with a network (S9).
+  check_match "up --net host refused to a jailed agent" "up: --net host .*not for an agent inside ai-jail" \
+    "$(OMABOX_JAIL=$(jq -c '.net = true' <<<"$J") "${NOHYPR[@]}" "$CLI" up "$P-jh" --net host --no-shell 2>&1)"
   # (ports for a jailed caller, the host side by state only, #93; a port a box outside the jail
   # serves on too reads as taken, finding 237: ports.rs ports_for_a_jailed_caller; #324.)
   # A path ai-jail hides inside a folder (--mask/--deny-path: a mount inside it that is not a sub-root):
@@ -8448,8 +8461,8 @@ t_connected() {
   local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out rc ns port tok hport htok gw got
   before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
   # (No box, nothing to check; and no stray dir from writing into its HOME.)
-  if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up (--net host: connected's old name)"
-  else no "up (--net host: connected's old name)" "$out"; return; fi
+  if out=$(ob up "$B" --no-shell --net connected 2>&1); then ok "up --net connected"
+  else no "up --net connected" "$out"; return; fi
   check_match "ls shows it connected" "$B +headless .* up +[^ ]+ +connected " "$(ob ls)"
   # A no_new_privs process (a sandboxed agent's) cannot start a box behind pasta, but can use this one.
   rc=0; out=$(setpriv --no-new-privs "$CLI" up "$B" 2>&1) || rc=$?
@@ -8512,6 +8525,58 @@ t_connected() {
   # suite their pids may be another process's.
   kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
   check "down" ob down "$B"
+}
+
+# #313 (finding 706): --net host shares the host's network namespace (for tools that scan the real
+# LAN), and keeps the rest of the box its own: its pid namespace, runtime dir and session bus, no seat.
+# A box server listens on the host's own port (a random high one nobody holds), the box reaches a
+# throwaway host server, `ports` says the box's server is on the host's own port, no X server of the
+# box's is on the host's abstract sockets, and down leaves no process of it, its server's included.
+t_net_host() {
+  local B=$P-nhost D=$XDG_RUNTIME_DIR/omabox/$P-nhost before out ns port tok spid hport htok pidns
+  before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
+  if out=$(ob up "$B" --no-shell --net host 2>&1); then ok "up --net host"
+  else no "up --net host" "$out"; return; fi
+  check_match "ls shows it host" "$B +headless .* up +[^ ]+ +host " "$(ob ls)"
+  check_eq "the box is in the host's network namespace" "$(readlink /proc/self/ns/net)" "$(ob run -b "$B" -- readlink /proc/self/ns/net)"
+  check_fails "...with no pasta in front of it" test -e "$D/pasta.pid"
+  ns=$(ob run -b "$B" -- readlink /proc/self/ns/pid)
+  if [[ $ns == pid:* ]] && [ "$ns" != "$(readlink /proc/self/ns/pid)" ]; then ok "...but a pid namespace of its own"
+  else no "...but a pid namespace of its own" "box [$ns], host [$(readlink /proc/self/ns/pid)]"; fi
+  check_fails "...its own runtime dir (not the host's, which has omabox's)" ob run -b "$B" -- test -e "/run/user/$(id -u)/omabox"
+  check_match "...its own session bus" "^unix:path=/run/user/$(id -u)/bus" "$(ob run -b "$B" -- printenv DBUS_SESSION_BUS_ADDRESS)"
+  # (the seat's words are S1's, the same for every mode; its card placeholders on NVIDIA are no seat)
+  check_fails "...and no seat of the host's" ob run -b "$B" -- sh -c 'for f in /dev/input /run/seatd.sock /run/dbus/system_bus_socket; do test -e "$f" && echo "$f"; done | grep .'
+  if getent ahosts archlinux.org >/dev/null 2>&1; then
+    check "DNS resolves in the box" ob run -b "$B" -- getent ahosts archlinux.org
+  else skip "DNS resolves in the box" "the host resolves no names"; fi
+  # box server -> the host's own port: no forward, the box's python3 holds it.
+  port=$(free_port) tok=nhost-$P-$RANDOM
+  mkdir -p "$D/home/www" && echo "$tok" > "$D/home/www/index.html"
+  ob run -b "$B" -d -- python3 -m http.server "$port" --bind 127.0.0.1 --directory /home/sbx/www >/dev/null
+  check "the host reaches the box's server on its own port" until_ok 10 bash -c "curl -fsS --max-time 2 http://127.0.0.1:$port/ | grep -qx '$tok'"
+  spid=$(ss -Htlnp "sport = :$port" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+  check_match "...held by the box's server itself, nothing in between" "^python3" "$(cat "/proc/${spid:-0}/comm" 2>&1)"
+  out=$(ob ports --json -b "$B")
+  check_eq "ports: the box's server is on the host's own port" "host-net" \
+    "$(jq -r --argjson p "$port" '.[] | select(.port == $p) | .host.state' <<<"$out")"
+  check_match "...and says so" "$B +$port +127\.0\.0\.1 +python3? +the host's own port: the box shares your network" "$(ob ports -b "$B")"
+  # box -> a host server on 127.0.0.1
+  hport=$(free_port) htok=nhosth-$P-$RANDOM
+  mkdir -p "$TMP/nhost" && echo "$htok" > "$TMP/nhost/index.html"
+  python3 -m http.server "$hport" --bind 127.0.0.1 --directory "$TMP/nhost" >/dev/null 2>&1 & SERVERS+=($!)
+  check_eq "the box reaches a host server on 127.0.0.1" "$htok" \
+    "$(ob run -b "$B" -- curl -fs --retry 10 --retry-connrefused --retry-delay 1 --max-time 2 "http://127.0.0.1:$hport/")"
+  pidns=$(jq -r .pidns "$D/box.json")
+  check_eq "no abstract X11 socket of the box's on the host (finding 89)" "" "$(new_x11 "$before" "$pidns")"
+  kill "${SERVERS[@]}" 2>/dev/null; SERVERS=()
+  check "down" ob down "$B"
+  check "nothing of it left running (S6)" until_ok 5 none_running "$B"
+  if [ -n "$spid" ]; then check "...its server gone with it" until_ok 5 bash -c "! kill -0 $spid 2>/dev/null"
+  else no "...its server gone with it" "no pid held the box server's port"; fi
+  # (box_procs would name the run's other reapers too)
+  check "...nor any in its pid namespace" until_ok 5 bash -c 'for p in /proc/[0-9]*; do [ "$(readlink "$p/ns/pid" 2>/dev/null)" != "$1" ] || exit 1; done' _ "$pidns"
+  check "...and its reaper gone" until_ok 5 reaper_gone "$B"
 }
 
 # finding 156 (#88): `ports` lists a box's servers and what holds each port on the host's 127.0.0.1:
@@ -12537,6 +12602,10 @@ t_desk_home_standin() {
   check_match "--desktop desk --desk-shell: refused (part of it, #321)" \
     "^omabox: up: --desk-shell is part of --desktop desk: a desk box brings your desk, its shell with it " \
     "$(dh_up "$B2" --desktop desk --desk-shell)"
+  # (#313: the host's network namespace, and its abstract sockets, are not for a desk box)
+  out=$(dh_up "$B2" --desktop desk --net host --no-shell); rc=$?
+  check_match "--desktop desk --net host: refused, a usage error" \
+    "^2 omabox: up: --net host is not for a desk box: it runs your own config and shell at your HOME's path" "$rc $out"
   # (OMABOX_HYPRLAND emptied: a suite run on another Hyprland names a folder no jail was given)
   check_match "a jailed caller's desk box: refused in step 1" \
     "^omabox: up: --desktop desk is not for an agent inside ai-jail: the box's HOME is at your HOME's path, and the jail's hidden paths are not hidden there yet " \
@@ -23504,7 +23573,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

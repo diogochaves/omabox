@@ -28,6 +28,7 @@ $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home
                                   screen shot's desktop and pointer then: 592)
 [systemd-run --user --scope]      --systemd only: a delegated cgroup the box's user manager owns (61)
 [pasta]                           top-level boxes: own netns, connected (default) or isolated (44, 45, 89);
+                                  none for --net host (the host's netns, asked for by name: 706);
                                   a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
@@ -13905,6 +13906,50 @@ from them.
     fullscreen one, naming the `window ... --maximize off` (or `--fullscreen off`) that frees it.
     In the box: a fullscreen foot's shot (no pointer) has the window's own colour where the bar's
     strip was; a maximized one keeps the bar. t_window_fullscreen, on 0.56.2 and 0.57.1.
+706. **`--net host`: a box on the host's network, for tools that scan the real LAN** (2026-11-07,
+    #313). A LAN-discovery plugin could not be tested in a box: behind pasta every address on the
+    subnet answers (pasta's), so a scan found 254 "devices", all with the router's maker, against
+    7 real ones. `up --net host` (and `run --net host`) now starts the box with neither pasta nor
+    `--unshare-net`: bwrap keeps the caller's network namespace and still unshares pid, IPC and UTS,
+    so the box's seat, session bus, runtime dir and HOME are as a connected box's. Its PID 1 is
+    bwrap's `child-pid`, in the caller's numbering, which `box_pid` already read for a nested box
+    (no `pasta.pid`); `down` kills it and its pid namespace goes with it, the box's servers on host
+    ports included (t_net_host: nothing left in that pid namespace, the reaper gone). The box gets
+    the host's resolv.conf as a connected one does (its stub resolver is the host's own).
+    `ports` says `host-net` for its servers (on the host's own port, nothing forwarded); `ls` shows
+    `host`. Until now `host` was connected's old name (finding 89), accepted silently; it is this
+    mode now, so a script still passing `--net host` for connected gets the host's network.
+    - *Refused*: `--allow` and `--addr` (isolated's: the box has every port, and the host's
+      addresses); `--xwayland`, since an abstract socket belongs to the network namespace: the
+      box's Xwayland would listen on the host's `@/tmp/.X11-unix/X<n>`, and host X11 apps would open
+      in the box, as in finding 89 (labwc makes none since #211, so without `--xwayland` the box has
+      no X server; an Xvfb started in it would do the same, which the docs say); a jailed caller,
+      even in a jail with a network (S9: the host's netns is in no jail's policy); and a
+      `protect-ports` config naming any port (S10: no rule can keep a box in the host's own
+      namespace off a port; there is no namespace of the box's to put nft's rule in). And a desk
+      box (`--desktop desk`, finding 700; decided when the two were merged for 1.4.0): it runs the
+      user's own config, shell and autostart at their HOME's path, so a program in it that names an
+      abstract socket after a path or the user (a single-instance check, an IPC endpoint) would find
+      the real session's on the shared namespace and could hand its work to it. Until that is
+      looked at, `up` refuses the pair as a usage error before anything is made (desk_refusal;
+      t_desk_home_standin, `desk_refusals_each`).
+    - *Never picked silently*: not the default, `--clean` still means isolated, and `omabox config`
+      has no `net` key, so `config net host` is refused as an unknown key. From a no_new_privs process
+      a host box starts as is (no pasta, so no uid map to write behind it). Inside a box, `--net
+      host` is the outer box's network (its namespace is what the caller has).
+    - *What changes* (README, docs/network.md, help, skill): the box's servers take the host's real
+      ports, colliding with the user's services and other host boxes; the real interfaces
+      (Tailscale, Docker bridges) are visible and its ARP and ICMP reach the LAN; the host's
+      abstract sockets are reachable. Not for untrusted code.
+    Checked in a real box (t_net_host, the installed Hyprland and 0.57.1): the box's net namespace is
+    the host's, its pid namespace, runtime dir and session bus its own; DNS resolves; a box server on
+    a random free high port is reached from the host on that port, held by the box's python3
+    itself; the box reaches a throwaway host server on 127.0.0.1; no new abstract X11 socket on the
+    host; after `down` no process in its pid namespace. The refusals in t_unit_refusals,
+    t_unit_jail_policy and t_unit_config; `ports` in `ports_says_a_host_box_is_on_the_hosts_port`;
+    the launch's words in `launch_by_net_mode`, and host among `up_options_never_bind_the_seat`'s
+    modes. A LAN scan from such a box (ARP against the real router) was not run: the suite touches
+    no host's network beyond its own throwaway servers.
 708. **A desk box's base: what the user's desk is, not what the machine has** (2026-11-07, #321).
     A desk box mirrors the user's own desktop, so whether it is an Omarchy one is a question about
     that desk: Omarchy installed (`install::omarchy_at`, as `--desktop`'s default asks) AND the

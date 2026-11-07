@@ -1112,6 +1112,13 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   inside its box (`omabox wait until -- curl -fsS http://127.0.0.1:PORT/`), never from the host.
   Inside a box the host's LAN address is the box itself. A connected box started inside a box has
   no network.
+- A tool that discovers devices on the LAN (ARP, ping sweeps, mDNS) finds every address in a
+  connected box (pasta answers for the whole subnet). Only when the user asks for it: `omabox up
+  --net host` puts the box on the host's network itself (its own seat, session bus and HOME still).
+  Its servers are on the host's real ports, colliding with the user's services and other host boxes
+  (pick a free high port; `omabox ports` says `host-net`), it sees the real interfaces, and nothing
+  keeps it off the user's servers. Never for untrusted code; refused with `--allow`, `--addr`,
+  `--xwayland`, `--desktop desk`, inside ai-jail and while the user protects ports.
 - An app that judges its network by where a peer comes from (a BitTorrent client reads
   "firewalled" while every peer is on 127.0.0.1): `omabox up --net isolated --addr 203.0.113.10
   --addr 203.0.113.11` puts those on the box's loopback; bind the server to one and the peer

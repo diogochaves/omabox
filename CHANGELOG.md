@@ -45,7 +45,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
     still goes idle. Inside a desk box labwc's `LABWC_PID`, which a shell may take for a labwc
     session, is `OMABOX_LABWC_PID`.
   - Refused for now: `--clean` (the HOME path carries your login name), `config desktop desk`, a
-    jailed agent's desk box, and `check run --desktop desk` (a check needs the same box every run).
+    jailed agent's desk box, `check run --desktop desk` (a check needs the same box every run), and
+    `--net host` (your own programs on your network namespace would reach your session's abstract
+    sockets).
 - **`window --fullscreen` and `--maximize`: a window's state set, not toggled** ([#443](https://github.com/diogochaves/omabox/issues/443)):
   `omabox window --window SEL --fullscreen` makes the window fullscreen (the whole screen, no bar:
   for a take or a shot of the app alone), `--maximize` maximizes it (the bar kept), and `off` after
@@ -53,6 +55,21 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   window's state cannot flip it the wrong way, as the old `hyprctl dispatch fullscreen` toggle did.
   `windows` shows the state (`on-screen,active,fullscreen`), and `windows --json` has it as
   `fullscreenMode` (`none`, `maximized` or `fullscreen`).
+- **`--net host`: a box on your host's network, for tools that scan the real LAN** ([#313](https://github.com/diogochaves/omabox/issues/313)):
+  a connected box sits behind pasta, which answers for every address on its subnet, so a device
+  scan there finds one at each. `up --net host` (or `run --net host`) shares your host's network
+  namespace and keeps the rest of the box its own: seat, session bus, runtime dir, HOME. Only when
+  you name it: never the default, and no `omabox config` key picks it. Its servers take your host's
+  real ports, so they collide with your services and other host boxes (nothing is forwarded;
+  `omabox ports` says `host-net`), it sees your real interfaces (VPN, Docker bridges), and its ARP
+  and ICMP reach your LAN. Not for code you do not trust. Refused with `--allow`, `--addr`,
+  `--xwayland` (its X server would catch your X11 apps), `--desktop desk`, inside ai-jail, and while
+  `protect-ports` names a port.
+
+### Changed
+- `--net host` was a silent alias of `--net connected` (its name before every box had a network of
+  its own); it is the mode above now. A script passing `--net host` for a connected box should pass
+  `--net connected`, or nothing (the default).
 
 ## Unreleased
 

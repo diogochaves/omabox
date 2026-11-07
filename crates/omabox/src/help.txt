@@ -1,7 +1,7 @@
 omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
 
   omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
-            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]
+            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...|host]
             [--env KEY=VAL]...
             [--no-seed extensions,fonts]                 your plugins' settings files, your fonts left on the desk
             [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
@@ -207,6 +207,12 @@ on one fails, address in use (`ports`: allowed); serve on another;
 --addr ADDR (repeatable) puts an address on that loopback, for an app that wants a peer from a
 non-local address: one in a documentation range (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
 2001:db8::/32). A server on 203.0.113.10 sees a client bound to 203.0.113.11 come from there.
+--net host (asked for by name only; no config picks it): your host's network itself, no pasta, for
+a tool that scans the real LAN. The box keeps its own seat, session bus, runtime dir and HOME, but
+its servers take your host's real ports (they collide with your services and other host boxes;
+nothing is forwarded, `ports`: host-net), it sees your real interfaces and its ARP and ICMP reach
+your LAN. Not for code you do not trust. Refused with --allow, --addr, --xwayland (its X server
+would be your host's), --desktop desk, inside ai-jail, and while protect-ports names a port.
 @ ports
 ON 127.0.0.1:PORT HERE, by its --json host.state: this (this box); this-resets (this box's pasta
 holds it, but the server is on ::1 or a 127.x other than 127.0.0.1 only, so connections are reset);
@@ -214,7 +220,8 @@ shared (several boxes serve on it and one of them holds it, which cannot be read
 named as resetting); host (a process of yours, named; from inside ai-jail, unnamed, and also a box
 outside the jail serving on it too); other-user; nothing (yet: a port comes about
 a second after its server listens); isolated, no-network (the box's net: nothing is forwarded);
-allowed (an isolated box's --allow port: pasta's in the box, leading to the host's).
+allowed (an isolated box's --allow port: pasta's in the box, leading to the host's); host-net (a
+--net host box's server, on the host's own port: nothing forwarded).
 @ run keys up
 `run` starts the command with the box's environment, not yours: --pass VAR hands it one of your
 variables (a password too: never on a command line); --env-file FILE hands it a file's KEY=VAL lines

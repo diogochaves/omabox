@@ -243,6 +243,12 @@ Tested with ai-jail 2.10.0 and 2.12.0 and omabox 1.0 on Linux, and before that w
   internet, your LAN and your host's servers, and you reach its servers; with `--net isolated` it has
   only a loopback and the host ports you `--allow` (`omabox up --net isolated --allow 8081,8082`),
   and any `--addr` you give it on that loopback ([docs/network.md](docs/network.md)).
+  `--net host`, only when you ask for it by name, is your host's network itself, for a tool that
+  scans the real LAN (pasta answers for every address on a connected box's subnet): the box keeps
+  its own seat, session bus and HOME, but its servers take your host's real ports (colliding with
+  your services and other host boxes; nothing is forwarded), it sees your real interfaces (VPN,
+  Docker bridges), its ARP and ICMP reach your LAN, and no port you protect is kept from it (so it
+  does not start while you protect one). Not for code you do not trust; no `--xwayland` there.
   What reaches outside (API calls, uploads, changes to a server) is real, and `down` does not undo it.
 - **Not a security boundary**: a box shares your kernel and GPU (a runaway app can load or hang it)
   and, by default, your network. Commands you run on the host, a project's `sudo ./setup` or

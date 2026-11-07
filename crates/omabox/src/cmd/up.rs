@@ -632,7 +632,8 @@ fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
     Ok(())
 }
 
-/// What a desk box (#321) cannot have: a jailed caller's (S9) yet, --desk-shell (part of it), --clean.
+/// What a desk box (#321) cannot have: a jailed caller's (S9) yet, --desk-shell (part of it), --clean,
+/// --net host (#313).
 /// The refusal, and whether it is a usage one (2), or None.
 fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
     if jailed {
@@ -650,6 +651,15 @@ fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
     if u.clean {
         return Some((
             "up: --clean is not for a desk box: its HOME is at your HOME's path, which carries your login name",
+            true,
+        ));
+    }
+    // --net host (#313) shares your network namespace, and with it your session's abstract sockets;
+    // a desk box runs your own config and shell at your HOME's path, whose programs would name the
+    // same ones (finding 706). Not both until that is looked at.
+    if u.net == b"host" {
+        return Some((
+            "up: --net host is not for a desk box: it runs your own config and shell at your HOME's path, and on your network namespace they would reach your session's abstract sockets (--net connected or isolated)",
             true,
         ));
     }
@@ -965,6 +975,13 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 "up: saves are the user's (keyring secrets, apps signed in), not for an agent inside ai-jail",
             ));
         }
+        // The host's network namespace (#313, finding 706): its abstract sockets and every port, which
+        // no jail's policy names; refused even to a jail with a network.
+        if u.net == b"host" {
+            return Err(ctx.die(
+                "up: --net host shares your network namespace, not for an agent inside ai-jail (--net connected or isolated)",
+            ));
+        }
         if crate::jail::get_raw("net") != b"true" {
             if u.net_set && u.net != b"isolated" {
                 return Err(ctx.die(
@@ -1114,11 +1131,27 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
         u.confirm = confirm_conf();
         u.confirm_from = "config";
     }
-    // host: connected's name from before every box had a network of its own (finding 89).
+    // host (#313, finding 706): the host's network namespace, asked for by name only (no config key
+    // picks it). It was connected's old name until 1.4.0 (finding 89).
     match u.net.as_slice() {
-        b"host" | b"connected" => u.net = b"connected".to_vec(),
-        b"isolated" => {}
-        _ => return Err(ctx.die("up: --net is connected (the default) or isolated")),
+        b"connected" | b"isolated" | b"host" => {}
+        _ => {
+            return Err(ctx.die("up: --net is connected (the default), isolated or host"));
+        }
+    }
+    if u.net == b"host" {
+        // An X server's abstract socket is the network namespace's: the box's Xwayland would be the
+        // host's :N, and host X11 apps would open in the box (finding 89).
+        if u.xwayland {
+            return Err(ctx.die(
+                "up: --net host takes no --xwayland: its X server would listen on your network namespace's abstract X11 socket, and your X11 apps would open in the box (finding 89)",
+            ));
+        }
+        if !u.allow.is_empty() {
+            return Err(ctx.die(
+                "up: --net host takes no --allow: the box has every port of the host's (--allow is --net isolated's)",
+            ));
+        }
     }
     if !u.allow.is_empty() && u.net != b"isolated" {
         return Err(ctx.die("up: --allow needs --net isolated"));
@@ -1145,6 +1178,14 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // Protected ports (#355, S10): never an isolated box's --allow either.
     u.protect = crate::net::conf_protect(ctx)?;
     let protect = u.protect.clone();
+    // ...nor does a host box start while one is protected (#313): no rule keeps it off a port.
+    if u.net == b"host" && !protect.is_empty() {
+        return Err(ctx.die(cat!(
+            "up: --net host: protect-ports in ~/.config/omabox/config protects ",
+            protect.csv(),
+            ", and a box on your network reaches every port (--net connected keeps them off)"
+        )));
+    }
     if let Some(p) = u
         .allow_ports
         .ports()
@@ -1203,8 +1244,8 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     }
     // Nor does a box behind pasta start from a process with no_new_privs: bwrap cannot write its uid
     // map there (finding 89). A connected box falls back to none; an isolated one is refused. A box
-    // that is up already is still found up (without the lock below).
-    if u.net != b"none" && !u.interactive && no_new_privs() {
+    // that is up already is still found up (without the lock below). A host box has no pasta (#313).
+    if !matches!(u.net.as_slice(), b"none" | b"host") && !u.interactive && no_new_privs() {
         if box_alive(ctx)? {
             up_already(ctx, u)?;
             return Ok(false);
@@ -1893,12 +1934,13 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
         ));
     }
     if u.has("net") {
-        if u.net == b"isolated" {
-            if m("net") != b"isolated" {
-                diff.push(cat!("--net isolated (it is ", m("net"), ")"));
+        let theirs = m("net");
+        if matches!(u.net.as_slice(), b"isolated" | b"host") {
+            if theirs != u.net {
+                diff.push(cat!("--net ", u.net, " (it is ", theirs, ")"));
             }
-        } else if m("net") == b"isolated" {
-            diff.push(b"--net connected (it is isolated)".to_vec());
+        } else if matches!(theirs.as_slice(), b"isolated" | b"host") {
+            diff.push(cat!("--net connected (it is ", theirs, ")"));
         }
     }
     if u.has("allow") {
@@ -2155,6 +2197,21 @@ mod tests {
         assert!(why.starts_with("up: --desk-shell ") && usage, "{why}");
         let (why, usage) = desk_refusal(&u(false, true), false).unwrap();
         assert!(why.starts_with("up: --clean ") && usage, "{why}");
+        // (#313: the host's network namespace, its abstract sockets with it, is not a desk box's)
+        let host = Up {
+            net: b"host".to_vec(),
+            ..Up::default()
+        };
+        let (why, usage) = desk_refusal(&host, false).unwrap();
+        assert!(
+            why.starts_with("up: --net host is not for a desk box") && usage,
+            "{why}"
+        );
+        let connected = Up {
+            net: b"connected".to_vec(),
+            ..Up::default()
+        };
+        assert_eq!(desk_refusal(&connected, false), None);
         // The plain refusals' wording names the desktop asked for.
         assert_eq!(
             upspec::plain_why(Desktop::Desk, upspec::Chosen::Given),
