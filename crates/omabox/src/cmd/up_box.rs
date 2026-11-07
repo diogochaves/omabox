@@ -38,6 +38,8 @@ const BOX_BURST: &str = "/opt/omabox/bin/omabox-burst";
 const BOX_TREE: &str = "/opt/omabox/bin/omabox-tree";
 /// The notification recorder share/session.sh starts on the box's bus (#430, finding 680).
 const BOX_NOTICES: &str = "/opt/omabox/bin/omabox-notices";
+/// A desk box's idle hold (#321 step 5, finding 704): deskguard::after_ready starts it.
+pub const BOX_IDLEHOLD: &str = "/opt/omabox/bin/omabox-idlehold";
 /// `up --polkit`'s stand-in authority and its session shim (#258).
 pub const BOX_POLKIT: &str = "/opt/omabox/bin/omabox-polkit";
 const BOX_POLKIT_SESSION: &str = "/opt/omabox/bin/omabox-polkit-session.so";
@@ -270,7 +272,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     // session is a person's, on purpose: never an orphan.
     let starter = crate::upspec::box_starter().unwrap_or_default();
     let at_term = crate::exec::isatty(0) && crate::select::agent_var().is_none() && !in_jail();
-    let helpers = helper_binds(u.polkit);
+    let helpers = helper_binds(u.polkit, u.desktop == Desktop::Desk);
     let bj = box_json(
         ctx,
         &u,
@@ -1241,8 +1243,8 @@ pub(crate) struct HelperBind {
 }
 
 /// The helpers a box gets, read once a box: bwrap_args binds them and box.json records them (#421),
-/// so the two never disagree on one built in between.
-pub(crate) fn helper_binds(polkit: bool) -> Vec<HelperBind> {
+/// so the two never disagree on one built in between. DESK: a desk box's own too (its idle hold).
+pub(crate) fn helper_binds(polkit: bool, desk: bool) -> Vec<HelperBind> {
     let mut v: Vec<HelperBind> = [
         ("keyboard", BOX_KEYBOARD),
         ("pointer", BOX_POINTER),
@@ -1267,6 +1269,15 @@ pub(crate) fn helper_binds(polkit: bool) -> Vec<HelperBind> {
         if crate::exec::executable(&src) {
             v.push(HelperBind { name, src, dest });
         }
+    }
+    // A desk box's idle hold (#321 step 5): when built (deskguard::after_ready says when it is not).
+    let src = paths::tool("idlehold");
+    if desk && crate::exec::executable(&src) {
+        v.push(HelperBind {
+            name: "idlehold",
+            src,
+            dest: BOX_IDLEHOLD,
+        });
     }
     // `up --polkit` (#258, finding 627): the stand-in authority share/session.sh starts on the box's
     // own system bus, and the shim that gives the box's processes a session.
@@ -2612,7 +2623,7 @@ mod tests {
                         false,
                         &etc,
                         &fonts,
-                        &helper_binds(u.polkit),
+                        &helper_binds(u.polkit, u.desktop == Desktop::Desk),
                     )
                 });
                 match r {

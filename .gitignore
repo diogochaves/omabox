@@ -27,3 +27,5 @@ dist/
 
 # The Rust half (#324)
 target/
+tools/idlehold/omabox-idlehold
+tools/idlehold/*-protocol.[ch]
