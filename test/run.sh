@@ -954,11 +954,11 @@ t_unit_rec_ff() {
   [ -d "$src" ] || { skip "every ffmpeg and ffprobe a recording runs goes through rec_ff" "no crate here (an install)"; return; }
   out=$(python3 -c "$REC_FF" "$src"); calls=${out##*$'\n'}; out=${out%"$calls"}
   check_eq "every ffmpeg and ffprobe a recording runs in the box goes through rec_ff: bounded, run once more on a timeout (finding 356)" "" "$out"
-  check "...the check read them ($calls)" test "${calls% calls}" -ge 14
+  check "...the check read them ($calls)" test "${calls% calls}" -ge 15
   # (the check's own: the crate with rec_ff's calls renamed, each of them unbounded)
   m=$TMP/recff-crate; rm -rf "$m"; cp -r "$src" "$m"; chmod -R u+w "$m"   # (an install's tree is read-only)
   sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g; s/\bff_at(/sys_at(/g' "$m/cmd/record_stop.rs"
-  check_eq "...it finds the 14 calls bounded (finding 356, and #260's --changed), rec_ff's and ff_at's taken away" 14 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
+  check_eq "...it finds the 15 calls bounded (finding 356, #260's --changed, finding 693's copy), rec_ff's and ff_at's taken away" 15 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
   # (rec_ff itself, a run out of time run once more, stuck once, a failure not a timeout:
   # record_stop.rs rec_ff_runs_once_more, an #[ignore] test; its bound: bounds; #324 wave 6-suite.)
 }
@@ -16982,11 +16982,12 @@ record_input_on() {
   ob down "$B" >/dev/null 2>&1
 }
 # A stuck ffmpeg (finding 356: ffmpeg 9.0.1 deadlocks now and then), in record_input_on's box B: the
-# stop's encode stopped (SIGSTOP, by a watcher in the box) once, then twice; its bound lowered
-# (OMABOX_RECORD_FF_SECS). Once: killed and run again, a video. Twice: said, raw.mkv kept, none left.
-# Once, the bound is 10 s: the second encode is a real one (this 2560x1440 take, 4.5 to 5.2 s of CPU),
-# which a full suite's load kept past 3 s (#445, finding 691); twice, both stopped, 3 s. A failure keeps
-# the stop's output and the raw stream it read.
+# stop's encode stopped (SIGSTOP, by a watcher in the box) once, then twice, then four times; its
+# bound lowered (OMABOX_RECORD_FF_SECS). Once: killed and run again, a video; the bound is 10 s, as the
+# second encode is a real one (this 2560x1440 take, 4.5 to 5.2 s of CPU), which a full suite's load kept
+# past 3 s (#445, finding 691). Twice (3 s): said, and the raw stream copied into the MP4 instead
+# (finding 693), what it lacks said, a video that plays. Four times (the copy stuck twice too): said,
+# raw.mkv kept. None left after each. A failure keeps the stop's output and the raw stream it read.
 # The watcher, in the box: the first N ffmpeg processes it sees stopped.
 RS_STOPPER='seen=" "; n=0
 while [ "$n" -lt "$1" ]; do
@@ -16997,8 +16998,9 @@ while [ "$n" -lt "$1" ]; do
   sleep 0.02
 done'
 record_stuck_on() {
-  local v=$TMP/$B-stuck.mp4 out rc k t0 s np f0 r=/home/sbx/.cache/omabox-record
-  for k in 1 2; do
+  local v=$TMP/$B-stuck.mp4 out rc k t0 s np f0 d n r=/home/sbx/.cache/omabox-record
+  for k in 1 2 4; do
+    rm -f "$v"
     # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
     f0=$fail
     s=$((k == 1 ? 10 : 3))
@@ -17013,13 +17015,24 @@ record_stuck_on() {
       check_eq "...and the video made" "0 $v" "$rc $(tail -n 1 <<<"$out")"
       np=$(ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$v" 2>/dev/null) || np=""
       check "...a video (${np:-no} frames)" test "${np:-0}" -gt 10
+    elif [ "$k" = 2 ]; then
+      check_match "record stop, stuck twice: said, the raw stream copied instead and what it lacks said" \
+        "ffmpeg did not finish in 3 s again: killed omabox: record: so the video is the raw H.264 copied into the MP4, not re-encoded \(finding 693\): no steady 30 fps \(its frames timed as they came\), a larger file omabox: record: [0-9]+x[0-9]+, [0-9.]+s at 30 fps, copied as recorded \(not re-encoded\)" \
+        "$(paste -sd ' ' <<<"$out")"
+      check_eq "...and the video made" "0 $v" "$rc $(tail -n 1 <<<"$out")"
+      d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$v" 2>/dev/null) || d=""
+      n=$(ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=codec_name,nb_read_frames -of csv=p=0 "$v" 2>/dev/null) || n=""
+      check "...a video that plays: H.264, a duration (${d:-none} s) and frames (${n:-none})" \
+        awk -v d="$d" -v n="$n" 'BEGIN { split(n, f, ","); exit !(d + 0 > 1 && f[1] == "h264" && f[2] + 0 > 10) }'
+      check_fails "...raw.mkv gone from the box" ob run -b "$B" -- test -e /home/sbx/.cache/omabox-record/raw.mkv
     else
-      check_match "record stop, stuck twice: said, and what is kept" \
-        "ffmpeg did not finish in 3 s again: killed.*record: ffmpeg could not make the video \(/home/sbx/.cache/omabox-record/raw.mkv in box '$B' is kept\)" "$(paste -sd ' ' <<<"$out")"
+      check_match "record stop, stuck twice and its copy too: said, and what is kept" \
+        "ffmpeg did not finish in 3 s again: killed.*ffmpeg did not finish in 3 s again: killed.*record: ffmpeg could not make the video \(/home/sbx/.cache/omabox-record/raw.mkv in box '$B' is kept\)" "$(paste -sd ' ' <<<"$out")"
+      check_fails "...no copy claimed" grep -q "copied" <<<"$out"
       check_eq "...it failed" 1 "$rc"
       check "...raw.mkv kept in the box" ob run -b "$B" -- test -s /home/sbx/.cache/omabox-record/raw.mkv
     fi
-    check "...in its two bounds ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 30
+    check "...in its bounds ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le $((k > 2 ? 45 : 30))
     check_fails "...no ffmpeg left in the box" ob run -b "$B" -- pgrep -x ffmpeg
     ob run -b "$B" -- pkill -f t356 >/dev/null 2>&1 || true
     # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
