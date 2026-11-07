@@ -12227,9 +12227,10 @@ t_desk_home_standin() {
   check_match "--desktop desk --desk-shell: refused in step 1" \
     "^omabox: up: --desk-shell is not for a desk box yet: --desktop desk runs a plain box's desktop at your HOME's path " \
     "$(dh_up "$B2" --desktop desk --desk-shell)"
+  # (OMABOX_HYPRLAND emptied: a suite run on another Hyprland names a folder no jail was given)
   check_match "a jailed caller's desk box: refused in step 1" \
     "^omabox: up: --desktop desk is not for an agent inside ai-jail: the box's HOME is at your HOME's path, and the jail's hidden paths are not hidden there yet " \
-    "$(OMABOX_JAIL='{"id": "t321", "roots": []}' dh_up "$B2" --desktop desk --net isolated)"
+    "$(OMABOX_JAIL='{"id": "t321", "roots": []}' OMABOX_HYPRLAND='' dh_up "$B2" --desktop desk --net isolated)"
   check_fails "...none of them made a box" test -e "$rt/omabox/$B2"
   out=$(dh config desktop desk 2>&1); rc=$?
   check "config desktop desk: refused in step 1" test "$rc" != 0
