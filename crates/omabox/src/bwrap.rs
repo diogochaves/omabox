@@ -188,6 +188,12 @@ pub struct Bwrap {
     rw: Vec<Vec<u8>>,
     /// Where omabox's own files may come from besides D: the checkout, a private aquamarine.
     own_roots: Vec<Vec<u8>>,
+    /// The user's HOME (S4): no writable bind's source is it or above it.
+    user_home: Vec<u8>,
+    /// The box's HOME (#321): its folder on the host and its path inside the box (/home/sbx, or a
+    /// desk box's at the user's HOME path), once set_home has them. A bind's destination is checked
+    /// against the inside one (refuse_dest), and against links in the host folder (link_in_way).
+    home: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 /// The fixed system binds (S3's list of its own): read-only, at their own path.
@@ -204,7 +210,8 @@ impl Bwrap {
         rw: Vec<Vec<u8>>,
         own_roots: Vec<Vec<u8>>,
     ) -> Result<Bwrap, Refused> {
-        if let Some(why) = box_dir_refused(d, runtime, &crate::shell::env_or_empty("HOME")) {
+        let user_home = crate::shell::env_or_empty("HOME");
+        if let Some(why) = box_dir_refused(d, runtime, &user_home) {
             return Err(Refused(cat!("refusing box dir ", d, ": ", why)));
         }
         Ok(Bwrap {
@@ -213,7 +220,44 @@ impl Bwrap {
             own: lexical(d),
             rw: rw.iter().map(|p| lexical(p)).collect(),
             own_roots: own_roots.iter().map(|p| lexical(p)).collect(),
+            user_home,
+            home: None,
         })
+    }
+
+    /// The box's HOME (#321): HOST, its folder (one of RW), bound writable at INSIDE, its path in
+    /// the box. From here every bind's destination is checked against INSIDE (refuse_dest, for what
+    /// a user or a repo names) and against a link in HOST along its way (any bind).
+    pub fn set_home(&mut self, host: &[u8], inside: &[u8]) -> Result<(), Refused> {
+        self.home = Some((lexical(host), lexical(inside)));
+        self.own_rw(host, inside)
+    }
+
+    /// The box's HOME inside it: set_home's, else /home/sbx.
+    fn box_home(&self) -> &[u8] {
+        self.home
+            .as_ref()
+            .map_or(crate::boxes::SBX_HOME.as_bytes(), |(_, i)| i.as_slice())
+    }
+
+    /// Why DEST, a destination under the box's HOME, would be reached through a link (#321): bwrap
+    /// follows a link in the HOME's host folder (one seeded, or a save's) on its way to a mount
+    /// point, which would take the mount elsewhere. None when DEST is not under the HOME, or every
+    /// part of its way that exists in the host folder is no link (bwrap makes the rest as folders).
+    fn link_in_way(&self, dest: &[u8]) -> Option<Vec<u8>> {
+        let (host, inside) = self.home.as_ref()?;
+        let d = lexical(dest);
+        let rel = d.strip_prefix(cat!(inside, "/").as_slice())?;
+        let mut at = host.clone();
+        for part in rel.split(|&c| c == b'/') {
+            at = cat!(at, "/", part);
+            match std::fs::symlink_metadata(crate::shell::path(&at)) {
+                Ok(m) if m.file_type().is_symlink() => return Some(at),
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
+        None
     }
 
     pub fn into_args(self) -> Vec<Vec<u8>> {
@@ -273,6 +317,15 @@ impl Bwrap {
                 why
             )));
         }
+        if let Some(link) = self.link_in_way(dest) {
+            return Err(Refused(cat!(
+                "refusing to mount at ",
+                dest,
+                " in a box: a link in its way in the box HOME (",
+                link,
+                ")"
+            )));
+        }
         Ok(())
     }
 
@@ -318,7 +371,7 @@ impl Bwrap {
                 why
             )));
         }
-        if let Some(why) = crate::upspec::refuse_dest(dest) {
+        if let Some(why) = crate::upspec::refuse_dest(dest, self.box_home()) {
             return Err(Refused(cat!(
                 "refusing to mount ",
                 src,
@@ -348,8 +401,29 @@ impl Bwrap {
         self.push_bind(b"--ro-bind", src, dest)
     }
 
-    /// The box's own runtime dir or HOME, writable (S4: the only writable host folders).
+    /// The box's own runtime dir or HOME, writable (S4: the only writable host folders). Never the
+    /// user's HOME or a folder above it (#321: a desk box's HOME is at that path in the box, its
+    /// folder still the box's own), as written or as it resolves.
     pub fn own_rw(&mut self, src: &[u8], dest: &[u8]) -> Result<(), Refused> {
+        let at_or_above = |s: &[u8], h: &[u8]| s == b"/" || h == s || h.starts_with(&cat!(s, "/"));
+        let mut srcs = vec![lexical(src)];
+        if let Ok(c) = std::fs::canonicalize(crate::shell::path(src)) {
+            srcs.push(lexical(crate::shell::bytes(&c)));
+        }
+        let mut homes = Vec::new();
+        if !self.user_home.is_empty() {
+            homes.push(lexical(&self.user_home));
+            if let Ok(c) = std::fs::canonicalize(crate::shell::path(&self.user_home)) {
+                homes.push(lexical(crate::shell::bytes(&c)));
+            }
+        }
+        if srcs.iter().any(|s| homes.iter().any(|h| at_or_above(s, h))) {
+            return Err(Refused(cat!(
+                "refusing to mount ",
+                src,
+                " writable into a box: it is your HOME or above it"
+            )));
+        }
         if !self.rw.contains(&lexical(src)) {
             return Err(Refused(cat!(
                 "refusing to mount ",
@@ -400,7 +474,9 @@ impl Bwrap {
 
     /// A folder at its own path whose writes are thrown away (`--overlay`, S4).
     pub fn tmp_overlay(&mut self, p: &[u8]) -> Result<(), Refused> {
-        if let Some(why) = crate::repo::refuse_src(p).or_else(|| crate::upspec::refuse_dest(p)) {
+        if let Some(why) =
+            crate::repo::refuse_src(p).or_else(|| crate::upspec::refuse_dest(p, self.box_home()))
+        {
             return Err(Refused(cat!("refusing to overlay ", p, " in a box: ", why)));
         }
         self.check_bind(p, p)?;
@@ -659,6 +735,98 @@ mod tests {
         assert!(b.resolv(b"/run/dbus/system_bus_socket").is_err());
         assert!(b.resolv(b"/etc/passwd").is_err());
         assert_eq!(b.into_args()[0], b"--ro-bind");
+    }
+
+    // #321 (S4): the user's HOME, or a folder above it, is never bound writable, even when a caller
+    // named it among the box's writable dirs; the box's own HOME folder under it is.
+    #[test]
+    fn own_rw_refuses_real_home() {
+        let home = crate::shell::env_or_empty("HOME");
+        assert!(!home.is_empty() && home != b"/");
+        let parent = home[..home.iter().rposition(|&c| c == b'/').unwrap_or(0)].to_vec();
+        let own = cat!(home, "/.cache/omabox/b/home");
+        let mut b = Bwrap::new(
+            RT,
+            b"/run/user/1000/omabox/b",
+            vec![
+                home.clone(),
+                cat!(home, "/"),
+                parent.clone(),
+                b"/".to_vec(),
+                own.clone(),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        for src in [
+            home.clone(),
+            cat!(home, "/"),
+            cat!(home, "/."),
+            parent,
+            b"/".to_vec(),
+        ] {
+            let e = b
+                .own_rw(&src, &home)
+                .expect_err(&String::from_utf8_lossy(&src));
+            assert!(
+                crate::exit::contains(&e.0, b"it is your HOME or above it"),
+                "{}",
+                String::from_utf8_lossy(&e.0)
+            );
+        }
+        assert!(
+            b.own_rw(&own, &home).is_ok(),
+            "the box's own HOME at the HOME's path"
+        );
+        assert!(b.set_home(&own, &home).is_ok());
+    }
+
+    // #321: a box with a HOME set checks binds under it: refuse_dest against that HOME (a desk box's
+    // at the user's path), and no link along a destination's way in the HOME's host folder.
+    #[test]
+    fn binds_under_the_box_home() {
+        let base = std::env::temp_dir().join(format!("omabox-bwrap-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let host = base.join("home");
+        std::fs::create_dir_all(host.join("code/real")).unwrap();
+        std::os::unix::fs::symlink("/etc", host.join("Pictures")).unwrap();
+        std::os::unix::fs::symlink("real", host.join("code/l")).unwrap();
+        let hb = crate::shell::bytes(&host).to_vec();
+        let mut b =
+            Bwrap::new(RT, b"/run/user/1000/omabox/b", vec![hb.clone()], Vec::new()).unwrap();
+        b.set_home(&hb, b"/home/u").unwrap();
+        // Through a link, by any method.
+        for dest in [
+            &b"/home/u/Pictures"[..],
+            b"/home/u/Pictures/x",
+            b"/home/u/code/l/x",
+            b"/home/u//code/./l",
+        ] {
+            let e = b
+                .checked_ro(b"/usr/share", dest)
+                .expect_err(&String::from_utf8_lossy(dest));
+            assert!(
+                crate::exit::contains(&e.0, b"a link in its way in the box HOME"),
+                "{}",
+                String::from_utf8_lossy(&e.0)
+            );
+            assert!(b.user_ro(b"/usr/share", dest).is_err());
+        }
+        // A real folder, or one not made yet, is fine; so is a path outside the HOME.
+        assert!(b.user_ro(b"/usr/share", b"/home/u/code/real/x").is_ok());
+        assert!(b.user_ro(b"/usr/share", b"/home/u/new/x").is_ok());
+        assert!(b.user_ro(b"/usr/share", b"/home/uu/Pictures").is_ok());
+        // refuse_dest against the desk HOME: never it, above it, or omabox's own in it.
+        for dest in [
+            &b"/home/u"[..],
+            b"/home",
+            b"/home/u/.config/omabox",
+            b"/home/u/.config",
+        ] {
+            assert!(b.user_ro(b"/usr/share", dest).is_err(), "{dest:?}");
+        }
+        assert!(b.tmp_overlay(b"/home/u").is_err());
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     // Finding 607: a box dir whose by-path exemption would cover the seat, HOME or the runtime dir

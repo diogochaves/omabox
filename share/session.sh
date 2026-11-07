@@ -184,8 +184,10 @@ done
 export PATH=$p
 unset OMABOX_CALLER_PATH
 
-# `up --desktop plain` (#247): nothing of Omarchy's runs below (its tree is an empty tmpfs in the box).
-plain=0; [ "${OMABOX_DESKTOP:-omarchy}" != plain ] || plain=1
+# `up --desktop plain` (#247), and desk (#321, a plain box with its HOME at the user's HOME path):
+# nothing of Omarchy's runs below (its tree is an empty tmpfs in the box).
+plain=0
+case ${OMABOX_DESKTOP:-omarchy} in plain | desk) plain=1 ;; esac
 
 # Omarchy's session defaults (TERMINAL, EDITOR), as its uwsm env.d does on the host: the packaged
 # Omarchy's, or `up --omarchy`'s tree's. The host's dev link is not followed (finding 135). A plain

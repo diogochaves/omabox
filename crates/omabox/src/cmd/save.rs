@@ -224,13 +224,14 @@ pub fn save(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         h.let_go();
     }
     // The Hyprland and Quickshell builds it ran (findings 116, 358), so an `up --from` on another
-    // one can say so.
+    // one can say so; and its HOME's path in the box (#321), for one into a box with another.
     let sj = save_json(
         &ctx.name,
         &shell::date_iso(),
         &crate::cmd::version::version_text(),
         &meta(&ctx.d, "hyprland").0,
         &meta(&ctx.d, "quickshell").0,
+        &crate::boxes::box_home(&ctx.d),
     );
     if let Err(e) = std::fs::write(shell::path(&cat!(tmp, "/save.json")), sj) {
         return Err(ctx.die(cat!(
@@ -481,12 +482,21 @@ fn home_entries(h: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// save.json, as `jq -n` writes it.
-fn save_json(name: &[u8], saved: &[u8], version: &[u8], hypr: &[u8], qs: &[u8]) -> String {
+/// HOME: the box's HOME inside it (#321), for an `up --from` into a box with another to say so.
+fn save_json(
+    name: &[u8],
+    saved: &[u8],
+    version: &[u8],
+    hypr: &[u8],
+    qs: &[u8],
+    home: &[u8],
+) -> String {
     let s = |v: &[u8]| Value::String(String::from_utf8_lossy(v).into_owned());
     let mut m = Map::new();
     m.insert("box".into(), s(name));
     m.insert("saved".into(), s(saved));
     m.insert("version".into(), s(version));
+    m.insert("home".into(), s(home));
     if !hypr.is_empty() {
         m.insert("hyprland".into(), s(hypr));
     }
@@ -720,8 +730,8 @@ mod tests {
     #[test]
     fn save_json_pretty() {
         assert_eq!(
-            save_json(b"b", b"T", b"1.0", b"", b"/q"),
-            "{\n  \"box\": \"b\",\n  \"saved\": \"T\",\n  \"version\": \"1.0\",\n  \"quickshell\": \"/q\"\n}\n"
+            save_json(b"b", b"T", b"1.0", b"", b"/q", b"/home/sbx"),
+            "{\n  \"box\": \"b\",\n  \"saved\": \"T\",\n  \"version\": \"1.0\",\n  \"home\": \"/home/sbx\",\n  \"quickshell\": \"/q\"\n}\n"
         );
     }
 

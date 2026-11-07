@@ -254,9 +254,21 @@ pub struct SeedPlan {
     pub omarchy: Vec<u8>,
     /// --desktop plain (#247): nothing of Omarchy's (seed_plain).
     pub plain: bool,
+    /// The box's HOME inside it (#321): /home/sbx, or a desk box's at the user's HOME path; empty
+    /// for /home/sbx. Where a link seeded in the HOME leads, as the box sees it.
+    pub home: Vec<u8>,
 }
 
 impl SeedPlan {
+    /// The box's HOME inside it: HOME, or /home/sbx.
+    pub fn box_home(&self) -> &[u8] {
+        if self.home.is_empty() {
+            crate::boxes::SBX_HOME.as_bytes()
+        } else {
+            &self.home
+        }
+    }
+
     fn no_seed(&self, what: &str) -> bool {
         self.no_seed
             .split(|&c| c == b',')
@@ -635,13 +647,20 @@ pub fn seed_backgrounds(
     Ok(names)
 }
 
-/// box_background HOME THEME BG: the box's current/background link (#184) for the desk's link BG on
-/// theme THEME, as omarchy-theme-set would have made it in the box: to the box's copy of the theme or
-/// of the user's folder for it, never a host path; else the first background the box has (by byte
-/// order where bash's sort had the locale's, finding 446); no link on the desk, none in the box.
-pub fn box_background(ctx: &Ctx, look: &Look, h: &[u8], t: &[u8], bg: &[u8]) -> Res<()> {
+/// box_background HOME THEME BG SBX: the box's current/background link (#184) for the desk's link
+/// BG on theme THEME, as omarchy-theme-set would have made it in the box: to the box's copy of the
+/// theme or of the user's folder for it (SBX: the box's HOME inside it, #321), never a host path;
+/// else the first background the box has (by byte order where bash's sort had the locale's, finding
+/// 446); no link on the desk, none in the box.
+pub fn box_background(
+    ctx: &Ctx,
+    look: &Look,
+    h: &[u8],
+    t: &[u8],
+    bg: &[u8],
+    sbx: &[u8],
+) -> Res<()> {
     let home = shell::env_or_empty("HOME");
-    let sbx = "/home/sbx";
     let cur = ".local/state/omarchy/current";
     let oc = cat!(home, "/.config/omarchy");
     let o = readlink_f(&oc).unwrap_or(oc);
@@ -1812,7 +1831,7 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         let bg = std::fs::read_link(p(&cat!(state, "/background")))
             .map(|b| shell::bytes(&b).to_vec())
             .unwrap_or_default();
-        box_background(ctx, &look, h, &id, &bg)?;
+        box_background(ctx, &look, h, &id, &bg, plan.box_home())?;
     }
     // The rest of the look (finding 69): terminal configs and choice, branding, extensions, themes,
     // toggles. None of it in a stock box (#265, finding 613): /etc/skel's, as a new user has them.
@@ -2752,7 +2771,14 @@ mod tests {
         let look = Look { omarchy: b"" };
         let bb = |t: &str, bg: &str| -> String {
             sc_env(&[("HOME", &fh)], || {
-                box_background(&c, &look, h.as_bytes(), t.as_bytes(), bg.as_bytes())
+                box_background(
+                    &c,
+                    &look,
+                    h.as_bytes(),
+                    t.as_bytes(),
+                    bg.as_bytes(),
+                    b"/home/sbx",
+                )
             })
             .unwrap();
             std::fs::read_link(format!("{h}/{cur}/background"))

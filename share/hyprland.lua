@@ -1,8 +1,10 @@
 -- omabox nested Hyprland: the box's desktop, then what every box gets (the screen, monitors, debug,
 -- the hidden pointer, the crash hook, the startup).
 -- Settings come from the environment `omabox up` sets: OMABOX_SIZE (WxH@HZ), OMABOX_INTERACTIVE, OMABOX_XWAYLAND,
--- OMABOX_AUTORELOAD, OMABOX_DESKTOP (`up --desktop`, #247: omarchy or plain).
-if os.getenv("OMABOX_DESKTOP") == "plain" then
+-- OMABOX_AUTORELOAD, OMABOX_DESKTOP (`up --desktop`, #247: omarchy, plain or desk; #321: a desk box runs
+-- plain's desktop, its HOME at the user's HOME path).
+local desktop = os.getenv("OMABOX_DESKTOP")
+if desktop == "plain" or desktop == "desk" then
   -- omabox's own small config and nothing of Omarchy's (its tree is an empty tmpfs in the box): the
   -- box's copy of share/plain.lua, made with this file's (#140; start-hyprland.sh, `omabox reload`).
   -- PATH stays the session's, omabox's stand-ins first (finding 149): nothing here puts a bin ahead.

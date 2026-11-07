@@ -71,7 +71,6 @@ impl Desktop {
 
     /// Plain or desk (#321): nothing of Omarchy's, its tree hidden, a plain HOME. A desk box is a
     /// plain one whose HOME is at the user's HOME path.
-    #[allow(dead_code)] // #321: its callers come with the next step-1 commits
     pub fn plain_like(self) -> bool {
         matches!(self, Desktop::Plain | Desktop::Desk)
     }
@@ -111,7 +110,6 @@ pub fn conf_desktop(v: &[u8]) -> Option<Desktop> {
 /// says why it cannot be: not absolute, `/`, `.` or `..` or empty parts, a control character, or
 /// what refuse_dest keeps for the box itself (its system dirs, runtime dir, /tmp, /home/sbx, omabox's
 /// own, and anything above them).
-#[allow(dead_code)] // #321: its callers come with the next step-1 commits
 pub fn desk_home(home: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
     let mut h = home;
     while h.len() > 1 && h.ends_with(b"/") {
@@ -128,7 +126,7 @@ pub fn desk_home(home: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
     } else if !boxes::clean_abs(h) {
         Some(b"it has an empty, . or .. part".to_vec())
     } else {
-        refuse_dest(h)
+        refuse_dest(h, boxes::SBX_HOME.as_bytes())
     };
     match why {
         Some(w) => Err(cat!(
@@ -168,8 +166,10 @@ pub fn resolve_desktop(
 }
 
 /// Why a box is plain, as a refusal of what needs Omarchy ends: "OPT needs Omarchy, and ...".
-pub fn plain_why(how: Chosen) -> &'static str {
+/// A desk box (#321) is only ever asked for with --desktop desk.
+pub fn plain_why(d: Desktop, how: Chosen) -> &'static str {
     match how {
+        Chosen::Given if d == Desktop::Desk => "--desktop desk has none of it",
         Chosen::Given => "--desktop plain has none of it",
         Chosen::Config => {
             "the box is plain (omabox config desktop plain): --desktop omarchy for an Omarchy box"
@@ -295,10 +295,11 @@ pub enum SeedRefused {
     Jail,
 }
 
-/// seed_spec SRC:DEST (--seed): SRC resolved and DEST relative to the box HOME, or why not (said).
-/// A jailed caller's SRC (#198) is followed only inside its jail's folders, then resolved and checked
-/// there (a link swapped in since is caught); refused as written, one way for all.
-pub fn seed_spec(spec: &[u8]) -> Result<(Vec<u8>, Vec<u8>), SeedRefused> {
+/// seed_spec SRC:DEST HOME (--seed): SRC resolved and DEST relative to the box HOME (HOME: the box's
+/// HOME inside it, /home/sbx or a desk box's, #321), or why not (said). A jailed caller's SRC (#198)
+/// is followed only inside its jail's folders, then resolved and checked there (a link swapped in
+/// since is caught); refused as written, one way for all.
+pub fn seed_spec(spec: &[u8], home: &[u8]) -> Result<(Vec<u8>, Vec<u8>), SeedRefused> {
     let i = spec.iter().position(|&c| c == b':');
     let (src, dest) = match i {
         Some(i) => (&spec[..i], &spec[i + 1..]),
@@ -311,9 +312,10 @@ pub fn seed_spec(spec: &[u8]) -> Result<(Vec<u8>, Vec<u8>), SeedRefused> {
         ));
         return Err(SeedRefused::Bad);
     }
+    let home_pre = cat!(home, "/");
     let dest = if let Some(d) = dest.strip_prefix(b"~/") {
         d
-    } else if let Some(d) = dest.strip_prefix(b"/home/sbx/") {
+    } else if let Some(d) = dest.strip_prefix(home_pre.as_slice()) {
         d
     } else if dest.first() == Some(&b'/') {
         say(cat!(
@@ -540,11 +542,25 @@ pub fn box_addr(addr: &[u8]) -> Option<Vec<u8>> {
     Some(s.into_bytes())
 }
 
-/// refuse_dest PATH (S3): why a path inside the box must not be mounted over, or None when it may:
-/// the system dirs, the runtime dir, and omabox's own mounts or anything above them. Inside the box's
-/// /tmp (its own tmpfs) is fine, so a repo in /tmp mounts at its own path; /tmp itself and Xwayland's
-/// socket dirs are not.
-pub fn refuse_dest(p: &[u8]) -> Option<Vec<u8>> {
+/// What omabox keeps in a box's HOME and reads back (its logs, its record and config folders, the
+/// plugins it mounts): nothing is mounted at, in or above them in a desk box's HOME (refuse_dest,
+/// #321). `run-*.log` is each of run -d's logs.
+pub const OWN_IN_HOME: [&str; 6] = [
+    "events.log",
+    "run-*.log",
+    "gdb.log",
+    ".cache/omabox-record",
+    ".config/omabox",
+    ".config/omarchy/plugins",
+];
+
+/// refuse_dest PATH HOME (S3): why a path inside the box must not be mounted over, or None when it
+/// may: the system dirs, the runtime dir, /home/sbx, and omabox's own mounts or anything above them.
+/// Inside the box's /tmp (its own tmpfs) is fine, so a repo in /tmp mounts at its own path; /tmp
+/// itself and Xwayland's socket dirs are not. HOME is the box's HOME inside it (#321): never it nor
+/// above it; inside /home/sbx nothing; inside a desk box's (the user's HOME path) anything but
+/// omabox's own files there (OWN_IN_HOME) and what holds them.
+pub fn refuse_dest(p: &[u8], home: &[u8]) -> Option<Vec<u8>> {
     let d = cat!(p.strip_suffix(b"/").unwrap_or(p), "/");
     let own = d == b"/"
         || d == b"/tmp/"
@@ -568,10 +584,39 @@ pub fn refuse_dest(p: &[u8]) -> Option<Vec<u8>> {
     if own {
         return Some(b"that is the box's own system, runtime dir, /tmp or HOME".to_vec());
     }
-    ["/home/sbx/", "/opt/omabox/", "/tmp/"]
+    if let Some(x) = ["/home/sbx/", "/opt/omabox/", "/tmp/"]
         .iter()
         .find(|x| x.as_bytes().starts_with(&d))
-        .map(|x| cat!("it would hide ", x))
+    {
+        return Some(cat!("it would hide ", x));
+    }
+    // A desk box's HOME (#321; all of /home/sbx is refused above): never it nor above it, nor
+    // omabox's own files in it.
+    let h = cat!(home.strip_suffix(b"/").unwrap_or(home), "/");
+    if h.starts_with(&d) {
+        return Some(cat!(
+            "that is the box's HOME (",
+            &h[..h.len() - 1],
+            ") or above it"
+        ));
+    }
+    let rel = d.strip_prefix(h.as_slice())?;
+    let first = rel.split(|&c| c == b'/').next().unwrap_or_default();
+    for own in OWN_IN_HOME {
+        let o = cat!(own, "/");
+        let run_log = own == "run-*.log" && first.starts_with(b"run-") && first.ends_with(b".log");
+        if run_log || rel.starts_with(&o) {
+            return Some(cat!("that is omabox's own ~/", own, " in the box HOME"));
+        }
+        if o.starts_with(rel) {
+            return Some(cat!(
+                "it would hide omabox's own ~/",
+                own,
+                " in the box HOME"
+            ));
+        }
+    }
+    None
 }
 
 /// own_path_visible PATH ROBINDS OVERLAYS (findings 240, 241): PATH is in the box at its own host
@@ -768,10 +813,11 @@ fn or_else(v: &[u8], d: &[u8]) -> Vec<u8> {
     if v.is_empty() { d.to_vec() } else { v.to_vec() }
 }
 
-/// clean_ids TEXT ME PASSWD (#247): /etc/passwd (PASSWD) or /etc/group as a clean box has them: ME's
-/// entry named CLEAN_USER, in passwd with no full name and the box HOME, and ME among a group's
-/// members CLEAN_USER too. Every other line as it was; uid and gid stay (the box's files are ME's).
-pub fn clean_ids(text: &[u8], me: &[u8], passwd: bool) -> Vec<u8> {
+/// clean_ids TEXT ME PASSWD HOME (#247): /etc/passwd (PASSWD) or /etc/group as a clean box has them:
+/// ME's entry named CLEAN_USER, in passwd with no full name and the box HOME (HOME, #321), and ME
+/// among a group's members CLEAN_USER too. Every other line as it was; uid and gid stay (the box's
+/// files are ME's).
+pub fn clean_ids(text: &[u8], me: &[u8], passwd: bool, home: &[u8]) -> Vec<u8> {
     if me.is_empty() {
         return text.to_vec();
     }
@@ -784,7 +830,7 @@ pub fn clean_ids(text: &[u8], me: &[u8], passwd: bool) -> Vec<u8> {
             f[0] = CLEAN_USER.as_bytes().to_vec();
             if passwd && f.len() == 7 {
                 f[4].clear();
-                f[5] = b"/home/sbx".to_vec();
+                f[5] = home.to_vec();
             }
         }
         if !passwd && f.len() == 4 {
@@ -1227,53 +1273,140 @@ mod tests {
         }
 
         // S3: nothing is mounted at or under the box's own system, runtime dir, omabox's mounts or
-        // HOME, nor over /tmp, its socket dirs, or any folder above /home/sbx, /opt/omabox or /tmp.
+        // HOME, nor over /tmp, its socket dirs, or any folder above /home/sbx, /opt/omabox or /tmp;
+        // for either HOME a box has (#321): /home/sbx, or a desk box's at the user's HOME path.
         #[test]
         fn dest_refused(top in prop_oneof![
                 Just("/usr"), Just("/etc"), Just("/proc"), Just("/dev"), Just("/sys"), Just("/run"),
                 Just("/bin"), Just("/lib"), Just("/lib64"), Just("/opt/omabox"), Just("/home/sbx"),
                 Just("/tmp/.X11-unix"), Just("/tmp/.ICE-unix")],
-            rest in proptest::collection::vec("[a-zA-Z0-9._-]{1,8}", 0..4), slash in any::<bool>()) {
+            rest in proptest::collection::vec("[a-zA-Z0-9._-]{1,8}", 0..4), slash in any::<bool>(),
+            home in prop_oneof![Just(SBX), Just(DESK), Just(DESK_TMP)]) {
             let mut p = top.to_string();
             for r in &rest { p.push('/'); p.push_str(r); }
             if slash { p.push('/'); }
-            prop_assert!(refuse_dest(p.as_bytes()).is_some(), "{}", p);
+            prop_assert!(refuse_dest(p.as_bytes(), home.as_bytes()).is_some(), "{}", p);
         }
 
         #[test]
-        fn dest_above_refused(i in 0usize..3, cut in 0usize..12) {
-            let x = ["/home/sbx", "/opt/omabox", "/tmp"][i];
+        fn dest_above_refused(i in 0usize..6, cut in 0usize..12,
+            home in prop_oneof![Just(SBX), Just(DESK), Just(DESK_TMP)]) {
+            let x = ["/home/sbx", "/opt/omabox", "/tmp", home, home, home][i];
             let n = x.match_indices('/').count();
-            let k = cut % n;
+            let k = cut % (n + 1);
             let above: String = x.split('/').take(k + 1).collect::<Vec<_>>().join("/");
             let above = if above.is_empty() { "/".to_string() } else { above };
-            prop_assert!(refuse_dest(above.as_bytes()).is_some(), "{}", above);
+            prop_assert!(refuse_dest(above.as_bytes(), home.as_bytes()).is_some(), "{}", above);
+            let slash = format!("{}/", above.trim_end_matches('/'));
+            prop_assert!(refuse_dest(slash.as_bytes(), home.as_bytes()).is_some(), "{}", slash);
         }
 
         #[test]
-        fn dest_elsewhere_allowed(rest in proptest::collection::vec("[a-z]{1,8}", 1..4)) {
+        fn dest_elsewhere_allowed(rest in proptest::collection::vec("[a-z]{1,8}", 1..4),
+            home in prop_oneof![Just(SBX), Just(DESK), Just(DESK_TMP)]) {
             let p = format!("/mnt/{}", rest.join("/"));
-            prop_assert!(refuse_dest(p.as_bytes()).is_none());
-            let t = format!("/tmp/{}", rest.join("/"));
-            prop_assert!(refuse_dest(t.as_bytes()).is_none());
+            prop_assert!(refuse_dest(p.as_bytes(), home.as_bytes()).is_none());
+            let t = format!("/srv/{}", rest.join("/"));
+            prop_assert!(refuse_dest(t.as_bytes(), home.as_bytes()).is_none());
+            if home != DESK_TMP {
+                let t = format!("/tmp/{}", rest.join("/"));
+                prop_assert!(refuse_dest(t.as_bytes(), home.as_bytes()).is_none());
+            }
+        }
+
+        // #321: inside a desk box's HOME, anything (the repo, --ro-bind's) but omabox's own files
+        // there and what holds them; inside /home/sbx, nothing.
+        #[test]
+        fn dest_in_home(rest in proptest::collection::vec("[a-z][a-z0-9._-]{0,7}", 1..4),
+            own in 0usize..OWN_IN_HOME.len(), below in proptest::collection::vec("[a-z]{1,8}", 0..3),
+            home in prop_oneof![Just(DESK), Just(DESK_TMP)]) {
+            let p = format!("{home}/{}", rest.join("/"));
+            let mine = OWN_IN_HOME.iter().any(|o| {
+                let o = o.replace("*", "x");
+                format!("{o}/").starts_with(&format!("{}/", rest.join("/")))
+            });
+            let run_log = rest[0].starts_with("run-") && rest[0].ends_with(".log");
+            let ev = matches!(rest[0].as_str(), "events.log" | "gdb.log");
+            if !mine && !run_log && !ev {
+                prop_assert!(refuse_dest(p.as_bytes(), home.as_bytes()).is_none(), "{}", p);
+            }
+            prop_assert!(refuse_dest(p.as_bytes(), SBX.as_bytes()).is_none(), "{}", p);
+            let s = format!("/home/sbx/{}", rest.join("/"));
+            prop_assert!(refuse_dest(s.as_bytes(), SBX.as_bytes()).is_some(), "{}", s);
+            prop_assert!(refuse_dest(s.as_bytes(), home.as_bytes()).is_some(), "{}", s);
+            // omabox's own files in a desk HOME, at, under and above them.
+            let o = OWN_IN_HOME[own].replace("*", "7");
+            let mut at = format!("{home}/{o}");
+            prop_assert!(refuse_dest(at.as_bytes(), home.as_bytes()).is_some(), "{}", at);
+            for b in &below { at.push('/'); at.push_str(b); }
+            prop_assert!(refuse_dest(at.as_bytes(), home.as_bytes()).is_some(), "{}", at);
+            if let Some((up, _)) = o.rsplit_once('/') {
+                let above = format!("{home}/{up}");
+                prop_assert!(refuse_dest(above.as_bytes(), home.as_bytes()).is_some(), "{}", above);
+            }
         }
     }
 
+    const SBX: &str = crate::boxes::SBX_HOME;
+    const DESK: &str = "/home/u";
+    const DESK_TMP: &str = "/tmp/x/h";
+
     #[test]
     fn dests() {
+        let sbx = SBX.as_bytes();
         assert_eq!(
-            refuse_dest(b"/home"),
+            refuse_dest(b"/home", sbx),
             Some(b"it would hide /home/sbx/".to_vec())
         );
         assert_eq!(
-            refuse_dest(b"/opt"),
+            refuse_dest(b"/opt", sbx),
             Some(b"it would hide /opt/omabox/".to_vec())
         );
-        assert!(refuse_dest(b"/tmp").is_some());
-        assert!(refuse_dest(b"/").is_some());
-        assert!(refuse_dest(b"/tmp/repo").is_none());
-        assert!(refuse_dest(b"/mnt/nas").is_none());
-        assert!(refuse_dest(b"/usrx").is_none());
+        assert!(refuse_dest(b"/tmp", sbx).is_some());
+        assert!(refuse_dest(b"/", sbx).is_some());
+        assert!(refuse_dest(b"/tmp/repo", sbx).is_none());
+        assert!(refuse_dest(b"/mnt/nas", sbx).is_none());
+        assert!(refuse_dest(b"/usrx", sbx).is_none());
+        // A desk box's HOME (#321).
+        let h = DESK.as_bytes();
+        assert_eq!(
+            refuse_dest(b"/home/u", h),
+            Some(b"that is the box's HOME (/home/u) or above it".to_vec())
+        );
+        assert_eq!(
+            refuse_dest(b"/var/home/u/", b"/var/home/u"),
+            Some(b"that is the box's HOME (/var/home/u) or above it".to_vec())
+        );
+        assert!(refuse_dest(b"/var/home", b"/var/home/u").is_some());
+        assert!(refuse_dest(b"/var", b"/var/home/u").is_some());
+        assert!(refuse_dest(b"/home/u/code/omabox", h).is_none());
+        assert!(refuse_dest(b"/home/u/.local/share/fonts", h).is_none());
+        assert!(refuse_dest(b"/home/u/.configx", h).is_none());
+        assert!(refuse_dest(b"/home/u/events.logs", h).is_none());
+        assert!(refuse_dest(b"/home/u/run.log", h).is_none());
+        assert!(refuse_dest(b"/home/uu", h).is_none());
+        assert_eq!(
+            refuse_dest(b"/home/u/.config/omabox/x", h),
+            Some(b"that is omabox's own ~/.config/omabox in the box HOME".to_vec())
+        );
+        assert_eq!(
+            refuse_dest(b"/home/u/.config", h),
+            Some(b"it would hide omabox's own ~/.config/omabox in the box HOME".to_vec())
+        );
+        for p in [
+            "/home/u/events.log",
+            "/home/u/gdb.log",
+            "/home/u/run-3.log",
+            "/home/u/run-3.log/",
+            "/home/u/.cache",
+            "/home/u/.cache/omabox-record/x",
+            "/home/u/.config/omarchy",
+            "/home/u/.config/omarchy/plugins/p",
+        ] {
+            assert!(refuse_dest(p.as_bytes(), h).is_some(), "{p}");
+        }
+        // The desk HOME's own path in another box is no HOME of that box's.
+        assert!(refuse_dest(b"/home/u", sbx).is_none());
     }
 
     /// t_unit_refusals's allow_ports and box_addr (--addr, #229) cases, as bash had them.
@@ -1331,18 +1464,27 @@ mod tests {
     fn clean_ids_renames_only_me() {
         let pw = b"root:x:0:0::/root:/bin/bash\nme:x:1000:1000:Me Myself:/home/me:/bin/bash\nmeh:x:1001:1001::/home/meh:/bin/sh\n";
         assert_eq!(
-            clean_ids(pw, b"me", true),
+            clean_ids(pw, b"me", true, SBX.as_bytes()),
             b"root:x:0:0::/root:/bin/bash\nuser:x:1000:1000::/home/sbx:/bin/bash\nmeh:x:1001:1001::/home/meh:/bin/sh\n".to_vec()
         );
         let gr = b"wheel:x:998:me,meh\nme:x:1000:\nvideo:x:985:meh,me";
         assert_eq!(
-            clean_ids(gr, b"me", false),
+            clean_ids(gr, b"me", false, SBX.as_bytes()),
             b"wheel:x:998:user,meh\nuser:x:1000:\nvideo:x:985:meh,user".to_vec()
         );
         // No name to take (no passwd entry for the uid): as it was.
-        assert_eq!(clean_ids(pw, b"", true), pw.to_vec());
+        assert_eq!(clean_ids(pw, b"", true, SBX.as_bytes()), pw.to_vec());
         // A comment or short line is left alone.
-        assert_eq!(clean_ids(b"# me:x\n", b"me", true), b"# me:x\n".to_vec());
+        assert_eq!(
+            clean_ids(b"# me:x\n", b"me", true, SBX.as_bytes()),
+            b"# me:x\n".to_vec()
+        );
+        // The box's HOME, whichever it is (#321).
+        assert!(
+            clean_ids(pw, b"me", true, b"/home/u")
+                .windows(23)
+                .any(|w| w == b"1000:1000::/home/u:/bin")
+        );
     }
 
     #[test]
@@ -1445,18 +1587,55 @@ mod tests {
         );
         assert_eq!(robind_spec(&cat!(db, "/none")), None);
         assert_eq!(
-            seed_spec(&cat!(db, "/l:~/.config/x")),
+            seed_spec(&cat!(db, "/l:~/.config/x"), SBX.as_bytes()),
             Ok((cat!(db, "/a/b"), b".config/x".to_vec()))
         );
         assert_eq!(
-            seed_spec(&cat!(db, "/l:/home/sbx/y/../z")),
+            seed_spec(&cat!(db, "/l:/home/sbx/y/../z"), SBX.as_bytes()),
             Ok((cat!(db, "/a/b"), b"z".to_vec()))
         );
-        assert_eq!(seed_spec(&cat!(db, "/l:../x")), Err(SeedRefused::Bad));
-        assert_eq!(seed_spec(&cat!(db, "/l:~/")), Err(SeedRefused::Bad));
-        assert_eq!(seed_spec(&cat!(db, "/l:/etc/x")), Err(SeedRefused::Bad));
-        assert_eq!(seed_spec(&cat!(db, "/l")), Err(SeedRefused::Bad));
-        assert_eq!(seed_spec(&cat!(db, "/none:x")), Err(SeedRefused::Bad));
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:../x"), SBX.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:~/"), SBX.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:/etc/x"), SBX.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/l"), SBX.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/none:x"), SBX.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
+        // A desk box's HOME (#321): DEST under it, as under /home/sbx in any other box; /home/sbx
+        // is no HOME of a desk box's, nor the desk HOME's path one of another box's.
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:/home/u/Pictures"), DESK.as_bytes()),
+            Ok((cat!(db, "/a/b"), b"Pictures".to_vec()))
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:~/Pictures"), DESK.as_bytes()),
+            Ok((cat!(db, "/a/b"), b"Pictures".to_vec()))
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:/home/sbx/x"), DESK.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:/home/u/x"), SBX.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
+        assert_eq!(
+            seed_spec(&cat!(db, "/l:/home/u/"), DESK.as_bytes()),
+            Err(SeedRefused::Bad)
+        );
         std::fs::remove_dir_all(&d).unwrap();
     }
 
