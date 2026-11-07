@@ -16804,7 +16804,7 @@ t_record_hold() {
   ob down "$B" >/dev/null 2>&1 || true
 }
 record_input_on() {
-  local n=$1 B=$2 D v1=$TMP/$2-input.mp4 v2=$TMP/$2-glide.mp4 v3=$TMP/$2-cut.mp4 out m1 m2 c
+  local n=$1 B=$2 D v1=$TMP/$2-input.mp4 v2=$TMP/$2-glide.mp4 v3=$TMP/$2-cut.mp4 out m1 m2 c hk
   if ! rec_tools; then skip "record --show-input" "$REC_WHY"; return; fi
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --size 2560x1440,scale=2 || { no "up for record --show-input" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
@@ -16821,7 +16821,10 @@ record_input_on() {
   ob keys -b "$B" -t abc --pass T319PASS >/dev/null 2>&1
   check "while it records, the box dir has the input: a --pass as its length alone" grep -q ' secret 7$' "$D/record.input"
   check_fails "...never its value" grep -q sesame7 "$D/record.input"
-  sleep 1; ob record -b "$B" mark "keys" >/dev/null 2>&1; sleep 0.3
+  # The mark, then 300 ms more of video in its own clock (record hold, finding 383), not 0.3 s by the
+  # wall clock: under a full suite's load the video ended before the mark (#444), the frame there not
+  # to read. The hold waits for frames past the mark; stop keeps them (finding 689).
+  sleep 1; hk=$(ob record -b "$B" mark "keys" --hold 300ms 2>&1) || hk="failed: $hk"
   out=$(ob record -b "$B" stop --show-input --captions 2>&1)
   check_match "record stop --show-input --captions makes the video" "$v1" "$out"
   check_fails "...the input goes with the recording" test -e "$D/record.input"
@@ -16843,7 +16846,7 @@ record_input_on() {
     ri_frame "$v1" "$(awk -v m="$m1" 'BEGIN { printf "%.3f", (m > 150 ? m - 150 : 0) / 1000 }')" "$fb"
     if [ ! -s "$fa" ]; then
       d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$v1" 2>/dev/null) || d=""
-      no "...a frame at the keys mark, for its two captions" "none read at the mark's $sa s, in a video ${d:-of no length} s long; the video and its marks are in the evidence"
+      no "...a frame at the keys mark, for its two captions" "none read at the mark's $sa s, in a video ${d:-of no length} s long (the mark's hold: $(paste -sd ' ' <<<"$hk")); the video and its marks are in the evidence"
     else
       printf '%s\n' "1000 2000 text abc" "1000 2000 secret 7" > "$TMP/$B-ri"
       probe record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
