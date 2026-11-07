@@ -58,6 +58,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `wait job "$J"`, `wait log "$J" RE` and `stop "$J"`.
 
 ### Fixed
+- **`record stop` keeps every frame recorded before it, under load too** ([#444](https://github.com/diogochaves/omabox/issues/444)):
+  wf-recorder drops the frames still waiting for its encoder when it is told to stop, so on a busy
+  machine a video lost up to a second before the stop, even right after a `record hold` that had
+  said those frames were there. Stop now waits for them to be written first (a few milliseconds when
+  the encoder keeps up; at most 10 s, said if it runs out).
 - **`click --in` a crop at a fractional scale lands on the pixel you read** ([#432](https://github.com/diogochaves/omabox/issues/432)):
   a pixel of a `shot -g` crop at 1.25, 1.5 or 4/3 was turned into a layout point by the image's size
   over the region's, which could put it a layout pixel off the one under that pixel. It now maps

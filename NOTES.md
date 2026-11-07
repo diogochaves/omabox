@@ -13532,6 +13532,32 @@ from them.
     answers a "slow " summary 6 s late: no id at 5 s, the id after; failed on the old recorder;
     and a GApplication's GNotification, skipped without gi as the whole test is), notices.rs's
     late_reply_joined.
+689. **`record stop` keeps the frames wf-recorder had captured but not written** (2026-11-06, #444,
+    after finding 383). t_record_input's two caption checks failed in two full suites (0.56.2 and
+    0.57.1) and passed alone: no frame at the "keys" mark, which the take stopped 0.3 s after. Under
+    load the video ended before the mark, and `mark keys --hold 300ms` did not help: its hold said
+    "held 3.666s to 3.966s" and the video was 3.10 s. wf-recorder 0.6.0 (src/main.cpp,
+    buffer-pool.hpp) captures in its main thread into a pool of up to 16 buffers and encodes in a
+    writer thread; SIGINT sets `exit_main_loop`, and the writer's loop breaks on it at once, so every
+    frame still queued is dropped (only the codec's own delayed frames are flushed). `record hold`
+    reads frames as they are captured (`last-frame`), so a stop right after it lost what the encoder
+    had not reached, breaking finding 383's promise. Measured in a 2560x1440 scale-2 box, its
+    threads but the main one on one CPU at nice 19 with a busy loop there, `hold 1s` then stop: the
+    video ended 0.33 and 0.37 s before the hold's end (24 host busy loops and the recorder at nice
+    19: 0.2 to 0.5 s). Now `stop` waits before its SIGINT (recprog's DRAIN_SH) until each recorder
+    has handed its encoder every frame captured before the call: its writer (its lowest thread after
+    the main one) seen in its 1 ms wait for a frame (`wchan` *nanosleep*), then in it again after a
+    voluntary switch more (so it looked at the queue after the call and found it empty), or 16
+    frames captured after the call (a new `frames` counter beside `last-frame`: the 16th took the
+    buffer of the last frame before the call, which had to be written first). `wchan` and `status`
+    are readable in the box (`syscall` is not: yama). A recorder with no writer yet (no frame) or
+    gone needs nothing. Bound: 10 s, then "record: wf-recorder still had frames to write after 10 s:
+    the video may end before the stop", and the stop goes on. Cost: the wait took 8 to 15 ms with
+    the encoder keeping up, 13 to 34 ms with 24 host busy loops; 0.4 s in the pinned case above,
+    whose videos then reached the hold's end. Tests: record_input_on (t_record_input) records again
+    with its writer pinned beside a busy loop, holds 1 s and stops: the video reaches the hold's end,
+    nothing said (failed on the old stop); its keys mark is now `mark keys --hold 300ms`, and a
+    missing frame there is said with the video's length and keeps the video and marks.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

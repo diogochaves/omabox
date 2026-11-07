@@ -30,6 +30,32 @@ fn ff_bound(frames: i64, px: i64) -> i64 {
     REC_FF_FLOOR + (frames * px + 12_441_599) / 12_441_600
 }
 
+/// How long a stop waits for wf-recorder to write the frames it captured before it (#444).
+const REC_DRAIN_S: i64 = 10;
+
+/// drain: true once each wf-recorder in PIDS (the recording's, in rec_dirs' order) has handed its
+/// encoder every frame it captured before this call, false after REC_DRAIN_S (recprog's DRAIN_SH).
+fn drain(ctx: &mut Ctx, rec: &Rec, pids: &[Vec<u8>]) -> Res<bool> {
+    let dl = now_us() + REC_DRAIN_S * 1_000_000;
+    // (Under timeout: frames is the box's file, which its processes could make a FIFO.)
+    let mut a = w(&[
+        "/usr/bin/timeout",
+        "-k",
+        "1",
+        &(REC_DRAIN_S + 3).to_string(),
+        "/usr/bin/bash",
+        "-c",
+        P::DRAIN_SH,
+        "omabox-record",
+        &dl.to_string(),
+    ]);
+    for (d, p) in rec_dirs(rec).into_iter().zip(pids) {
+        a.push(d);
+        a.push(p.clone());
+    }
+    Ok(sys_q(ctx, &a)? == 0)
+}
+
 /// How rec_ff gives its output: as it comes (to stderr with TO_ERR), or captured (-o, -e with its
 /// stderr), printed when it ends.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -424,6 +450,16 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             a.extend(rpids.iter().cloned());
             sys_q(ctx, &a)
         };
+        // Every frame captured before this stop written first (#444, finding 689): wf-recorder drops
+        // the frames still queued for its encoder on SIGINT, and under load that was up to a second
+        // of video before the stop, past a `record hold`'s end. Quick when it keeps up.
+        if !drain(ctx, rec, &rpids)? {
+            say(cat!(
+                "record: wf-recorder still had frames to write after ",
+                REC_DRAIN_S.to_string(),
+                " s: the video may end before the stop"
+            ));
+        }
         still(ctx, "INT")?;
         audio_end(ctx, &apid)?;
         while still(ctx, "")? == 0 {

@@ -16900,6 +16900,24 @@ record_input_on() {
     od -An -tu1 -w3 -v | awk '$1 > 200 && $2 < 80 && $3 < 80 { print NR - 1; exit }')
   check "...the mark after the gap moved with it: the change's first frame no more than a frame early, at most 250 ms late (mark at ${m1:-?} ms, the change at $cv ms, first red frame ${fr:-none} at 30 fps)" \
     awk -v f="${fr:--1}" -v cv="$cv" -v m="${m1:-99999}" 'BEGIN { t = f * 1000 / 30; exit !(f >= 0 && m < 4000 && t >= cv - 1000 / 30 && t <= cv + 250) }'
+  # A recorder that captures faster than it writes (#444, finding 689): its threads but the main one
+  # on one CPU at nice 19, a busy loop there. wf-recorder drops the frames still queued for its encoder
+  # on SIGINT: a stop right after a hold lost a third of a second of this 2560x1440 video. Stop writes
+  # them first.
+  local x=$TMP/$2-slow.mp4 cpu lp so e d
+  cpu=$(taskset -pc $$ 2>/dev/null | sed 's/.*[-, ]//') || cpu=0
+  if ob record -b "$B" start -o "$x" >/dev/null 2>&1; then
+    lp=$(ob run -b "$B" -d -- taskset -c "$cpu" sh -c 'while :; do :; done' 2>/dev/null) || lp=""
+    ob run -b "$B" -- sh -c 'p=$(pgrep -x wf-recorder); for t in /proc/$p/task/*; do t=${t##*/}; [ "$t" = "$p" ] || { taskset -p -c "$1" "$t" && renice -n 19 -p "$t"; } >/dev/null; done' _ "$cpu" 2>/dev/null
+    e=$(ob record -b "$B" hold 1s 2>&1)
+    so=$(ob record -b "$B" stop 2>&1)
+    [ -z "$lp" ] || ob run -b "$B" -- kill "$lp" >/dev/null 2>&1 || true
+    d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$x" 2>/dev/null) || d=0
+    [[ $e =~ to\ ([0-9.]+)s$ ]] || true
+    check "record hold, then stop at once, the recorder writing slower than it captures (one CPU, nice 19): the video ($d s) reaches the hold's end (${BASH_REMATCH[1]:-none} s)" \
+      awk -v d="$d" -v h="${BASH_REMATCH[1]:-99}" 'BEGIN { exit !(d >= h - 0.034) }'
+    check_fails "...its frames all written within the stop's bound, not said ($(paste -sd ' ' <<<"$so"))" grep -q "still had frames" <<<"$so"
+  else no "record start (a slow writer)" "failed"; fi
   record_stuck_on
   ob down "$B" >/dev/null 2>&1
 }

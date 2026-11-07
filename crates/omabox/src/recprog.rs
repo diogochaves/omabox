@@ -19,10 +19,11 @@ pub const START_SH: &str = r###"
         fi
         [[ $l == "["* ]] || printf "%s\n" "$l"
       done
-      exec awk -v f="$d/last-frame" "
+      exec awk -v f="$d/last-frame" -v g="$d/frames" "
         /^\\[/ { if (match(\$0, /zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(][0-9]+, [0-9]+, [0-9]+[)]/)) {
             s = substr(\$0, RSTART, RLENGTH); sub(/.*ready[(]/, \"\", s); split(s, a, /[,)] ?/)
-            printf \"%.0f\\n\", (a[1] * 4294967296 + a[2]) * 1000000 + int(a[3] / 1000) > f; close(f) }
+            printf \"%.0f\\n\", (a[1] * 4294967296 + a[2]) * 1000000 + int(a[3] / 1000) > f; close(f)
+            n++; print n > g; close(g) }
           next }
         { print; fflush() }"
     }
@@ -35,7 +36,7 @@ pub const START_SH: &str = r###"
     while [ $# -ge 2 ]; do
       d=$1 o=$2; shift 2
       case $d in */m[0-9]*) rm -rf "$d" ;; esac
-      mkdir -p "$d" && rm -f "$d"/raw.mkv "$d"/out.mp4 "$d"/first-frame "$d"/last-frame || exit 125
+      mkdir -p "$d" && rm -f "$d"/raw.mkv "$d"/out.mp4 "$d"/first-frame "$d"/last-frame "$d"/frames || exit 125
       (exec >"$d/wf-recorder.log" 2>&1 3>&-; trap - INT QUIT; export WAYLAND_DEBUG=client
         exec setsid -- wf-recorder -y -D -o "$o" -c "$e" -x yuvj420p "${q[@]}" -f "$d/raw.mkv" 2> >(first "$d")) &
       echo "$!" >&3
@@ -67,6 +68,43 @@ pub const HOLD_SH: &str = r###"dl=$1 a=("${@:2}")
       [ "${EPOCHREALTIME//[!0-9]/}" -lt "$dl" ] || exit 3
       sleep 0.01
     done"###;
+// DRAIN_SH DEADLINE_US DIR PID [DIR PID]...: returns once each wf-recorder has handed its encoder
+// every frame it captured before the call (#444, finding 689), exit 3 at DEADLINE_US. wf-recorder
+// (0.6.0) queues captured frames for its writer thread (its lowest thread after the main one), which
+// drops the queue on SIGINT. Written out: the writer seen sleeping for a frame (its 1 ms
+// nanosleep), then sleeping again after a switch more (so it looked at the queue after the call,
+// found it empty), or 16 frames captured after the call (its pool holds 16: the 16th took the
+// buffer of the last frame before the call, which it had written). No writer yet, or gone: nothing.
+pub const DRAIN_SH: &str = r###"dl=$1; shift; rc=0
+    while [ $# -ge 2 ]; do
+      d=$1 p=$2; shift 2
+      w=""
+      for t in /proc/"$p"/task/*; do
+        t=${t##*/}; [[ $t =~ ^[0-9]+$ && $t != "$p" ]] || continue
+        if [ -z "$w" ] || [ "$t" -lt "$w" ]; then w=$t; fi
+      done
+      [ -n "$w" ] || continue
+      n0=""; read -r n0 < "$d/frames" 2>/dev/null || n0=""
+      [[ $n0 =~ ^[0-9]{1,9}$ ]] || n0=""
+      c1=""
+      while :; do
+        # (wchan has no newline: read's 1 with the name read)
+        s=""; read -r s < "/proc/$p/task/$w/wchan" 2>/dev/null || [ -n "$s" ] || break
+        c=""
+        while read -r k v; do [ "$k" != voluntary_ctxt_switches: ] || { c=$v; break; }; done < "/proc/$p/task/$w/status" 2>/dev/null
+        if [[ $s == *nanosleep* && $c =~ ^[0-9]+$ ]]; then
+          [ -z "$c1" ] || [ "$c" -le "$c1" ] || break
+          [ -n "$c1" ] || c1=$c
+        fi
+        if [ -n "$n0" ]; then
+          n=""; read -r n < "$d/frames" 2>/dev/null || n=""
+          ! [[ $n =~ ^[0-9]{1,9}$ ]] || [ "$n" -lt $((n0 + 16)) ] || break
+        fi
+        [ "${EPOCHREALTIME//[!0-9]/}" -lt "$dl" ] || { rc=3; break; }
+        sleep 0.005
+      done
+    done
+    exit $rc"###;
 pub const STILL_SH: &str = r###"for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" != wf-recorder ] || { [ -z "$S" ] || kill "-$S" "$p"; R=0; }; done; exit ${R:-1}"###;
 pub const WRITE_SH: &str = r###"mkdir -p "${1%/*}" && cat > "$1""###;
 pub const SHEETDIR_SH: &str = r###"rm -rf "$1" && mkdir -p "$1""###;
