@@ -269,26 +269,28 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
   plugin commands on the box. Without --desktop: `omabox config desktop`'s, else omarchy where Omarchy
   is installed and plain where it is not (up says so; doctor and setup test the same); --omarchy DIR
   is an Omarchy box. ls says a plain box's desktop (and shell) under its line.
---desktop desk (#321): a plain box whose HOME is at your HOME's path ($HOME in the box is yours), so
-  what names your paths finds the box's: still the fake HOME, never your files (but the repo,
-  --ro-bind and --seed's). From the host it is <dir>/home, as any box's; a path under your HOME in a
-  command is the box HOME's there, not yours (run says so). A mount (--ro-bind, --overlay) goes inside
-  that HOME, never at it or above it, over omabox's own files in it, nor through a link in it.
-  Refused with --desk-shell (part of it), --clean (the path carries your login name) and inside
-  ai-jail (not yet); `omabox config desktop` does not take desk yet. Its base is your desk's: Omarchy's
-  (Omarchy here and your hypr/hyprland.lua loading it: an Omarchy box, its shell Omarchy's with your
-  plugins and shell.json, as --desk-shell copies them), else plain. Its Hyprland runs the box HOME's
-  ~/.config/hypr/hyprland.lua; what that config starts goes through an autostart policy (idle and lock
-  daemons, your systemd session, system-bus applets, what the box runs itself are dropped; binds run
-  as on your desk), each decision a line of `omabox log autostart`. --desk-shell alone still works
-  (a note says it is part of --desktop desk now). It needs a Lua config (a hyprland.conf alone is
-  refused: hyprctl eval refuses it). An Omarchy base takes --plugin, --theme, --theme-dir, --dnd,
-  --no-dock and --omarchy, refuses --stock, --stock-bar and --keep. Its idle is held off
-  (tools/idlehold): your shell's idle timeouts never lock or blank it.
-  Its shell is the one your config starts (DMS, Noctalia, Caelestia, Waybar, a Quickshell config), run
-  in the box's shell slot as --shell's: up waits for it and says which, and ls, pid shell, log shell
-  and restart-shell work on it; a second shell your config starts is dropped. --shell CMD runs
-  another in its place, --no-shell none; a config that starts none omabox knows fails up, saying so.
+--desktop desk (#321): your own desktop in a box, its HOME at your HOME's path ($HOME in the box is
+  yours), so what names your paths finds the box's: still the fake HOME, never your files (but the
+  repo, --ro-bind, --seed's and the copy of your desktop). From the host it is <dir>/home, as any
+  box's; a path under your HOME in a command is the box HOME's there, not yours (run says so). A
+  mount (--ro-bind, --overlay) goes inside that HOME, never at it or above it, over omabox's own
+  files in it, nor through a link in it. up copies in your ~/.config/hypr (links followed, as
+  copies), the config and state of the shell it finds, and the images they name, before --seed's;
+  never a secret store or what looks like a key, capped, what it left out said (box.json desk_copy).
+  It needs a Lua config (a hyprland.conf alone is refused: hyprctl eval refuses it). Its base is your
+  desk's: Omarchy's (Omarchy here and your hypr/hyprland.lua loading it: an Omarchy box, its shell
+  Omarchy's with your plugins and shell.json, as --desk-shell copies them; it takes --plugin,
+  --theme, --theme-dir, --dnd, --no-dock and --omarchy, refuses --stock, --stock-bar and --keep),
+  else plain. Its Hyprland runs your copied hyprland.lua; what it starts goes through an autostart
+  policy (idle and lock daemons, your systemd session, system-bus applets, what the box runs itself
+  are dropped; binds run as on your desk), each decision a line of `omabox log autostart`. Its idle is
+  held off (tools/idlehold): your shell's idle timeouts never lock or blank it. On a plain base its
+  shell is the one your config starts (DMS, Noctalia, Caelestia, Waybar, a Quickshell config), run in
+  the box's shell slot as --shell's: up waits for it and says which, and ls, pid shell, log shell and
+  restart-shell work on it; a second shell your config starts is dropped. --shell CMD runs another in
+  its place, --no-shell none; a config that starts none omabox knows fails up, saying so. Refused
+  with --desk-shell (part of it; alone it still works, with a note), --clean (the path carries your
+  login name) and inside ai-jail (not yet); `omabox config desktop` does not take desk yet, and
   `check run --desktop desk` is refused (a check needs the same box every run).
 --shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`, `caelestia shell
   -d`), run by sh in the session; the shell is all CMD starts (#438): a launcher may start it and

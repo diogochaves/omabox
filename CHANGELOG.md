@@ -6,48 +6,45 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ## Unreleased (1.4.0)
 
 ### Added
-- **`up --desktop desk`, first step: the box HOME at your HOME's path** ([#321](https://github.com/diogochaves/omabox/issues/321)):
-  a desk box's HOME is the same fake HOME every box gets, made in its own folder, but mounted at
-  your HOME's own path (`/home/you`, not `/home/sbx`), so a desktop that keeps absolute paths in its
-  settings (DankMaterialShell's wallpaper, say) finds them in the box. Your real HOME stays out: none
-  of its files are in the box, and nothing is mounted at it or above it but the box's own folder.
-  For now a desk box boots as a plain one (`--desktop plain`); bringing your own Hyprland config and
-  shell in comes next. `--clean`, `--desk-shell`, `config desktop desk` and a jailed agent's desk box
-  are refused until then. A desk box takes its base from your desk (Omarchy's where your Hyprland
-  config loads Omarchy, else plain), kept as box.json's `desk_base`.
-- **`up --desktop desk` runs your own Hyprland config** ([#321](https://github.com/diogochaves/omabox/issues/321)):
-  the box HOME's `~/.config/hypr/hyprland.lua` loads as on your desk, your look, input and binds with
-  it, and omabox's settings over it (the screen and monitors, no red error bar, the cursor's buffer).
-  What the config starts goes through an autostart policy: idle and lock daemons, your systemd
-  session, system-bus applets and what the box runs itself are dropped, everything else runs, and
-  each decision is a line of the new `omabox log autostart`. On an Omarchy desk the box is an Omarchy
-  box (no longer refused), its shell Omarchy's with your plugins and shell.json. `--desk-shell` is
-  part of `--desktop desk` now: alone it still works, with a note, for this release.
-- **A desk box runs the shell your config starts** ([#321](https://github.com/diogochaves/omabox/issues/321)):
-  DMS, Noctalia, Caelestia, Waybar or a Quickshell config, found in what your Hyprland config starts
-  (through `env`, `setsid`, `uwsm app --` and `sh -c`), runs in the box's shell slot, as `--shell
-  CMD` does on a plain box: `up` waits for it and says which, and `ls`, `pid shell`, `log shell`,
-  `restart-shell` and the crash notes work on it. A second shell is dropped; `--shell CMD` runs
-  another instead, `--no-shell` none; a config that starts none omabox knows makes `up` fail at
-  once, saying so. `check run --desktop desk` is refused.
-- **A desk box brings your desktop in, as copies** ([#321](https://github.com/diogochaves/omabox/issues/321)):
-  `up --desktop desk` copies your `~/.config/hypr`, the config and state of the shell you run (found
-  by `--shell`, by what your `hyprland.lua` starts, or by its systemd unit: DankMaterialShell,
-  Noctalia, Caelestia, Waybar, a Quickshell config), and the wallpapers those name by path, into
-  the box's HOME before `--seed`. Links (stow, home-manager) are followed and copied as files, so
-  nothing the box writes reaches yours; a link into a secret store, a secret's name or a file that
-  holds a key's shape stays out, and so does what is over the caps. `up` says what it left out;
-  box.json's `desk_copy` lists every file, and `shell_guess` the shell it found.
-- **A desk box holds its idle off, and refuses what it cannot run** ([#321](https://github.com/diogochaves/omabox/issues/321)):
-  your own shell's idle timeouts (a lock, a blank screen) would fire between an agent's steps, so a
-  desk box keeps an idle inhibitor on a 1×1 transparent layer per monitor (`tools/idlehold`, new;
-  `install.sh` builds it, `doctor` lists it). A shell's idle client that ignores inhibitors still
-  goes idle. `up --desktop desk` refuses a config with no `hyprland.lua` (a `hyprland.conf` alone:
-  `hyprctl eval`, which keys, click, pointer, mode, monitor and lua use, refuses it; none at all,
-  said with its folder); on an Omarchy desk it takes `--plugin`, `--theme`, `--theme-dir`, `--dnd`,
-  `--no-dock` and `--omarchy` and refuses `--stock`, `--stock-bar` and `--keep`; `--desk-shell`
-  says `--desktop desk` brings your desk already. Inside a desk box, labwc's `LABWC_PID` (which a
-  shell may take for a labwc session) is `OMABOX_LABWC_PID`.
+- **`up --desktop desk`: your own desktop in a box** ([#321](https://github.com/diogochaves/omabox/issues/321)):
+  your Hyprland config, your shell and your look, where an agent can drive them without touching
+  your session. The box HOME is the same fake HOME every box gets, made in its own folder, but
+  mounted at your HOME's own path (`/home/you`, not `/home/sbx`), so what keeps absolute paths
+  (DankMaterialShell's wallpaper, say) finds them in the box; nothing of your real HOME is mounted
+  at it or above it.
+  - **The copy:** `up` copies your `~/.config/hypr`, the config and state of the shell you run
+    (found by `--shell`, by what your `hyprland.lua` starts, or by its systemd unit), and the
+    wallpapers those name by path, into the box's HOME before `--seed`. Links (stow, home-manager)
+    are followed and copied as files, so nothing the box writes reaches yours; a link into a secret
+    store, a secret's name or a file that holds a key's shape stays out, and so does what is over
+    the caps. `up` says what it left out; box.json's `desk_copy` lists every file. A config the copy
+    would refuse fails `up` before any box is made.
+  - **Your config runs:** the box's Hyprland loads your `hyprland.lua` as your desk does, your look,
+    input and binds with it, omabox's settings over it (the screen and monitors, no red error bar,
+    the cursor's buffer). What it starts goes through an autostart policy: idle and lock daemons,
+    your systemd session, system-bus applets and what the box runs itself are dropped, the rest runs,
+    and each decision is a line of the new `omabox log autostart`. A `hyprland.conf` alone is
+    refused (`hyprctl eval`, which keys, click and the rest use, refuses it).
+  - **Your shell:** DMS, Noctalia, Caelestia, Waybar or a Quickshell config, found in what your
+    config starts (through `env`, `setsid`, `uwsm app --` and `sh -c`) or by its systemd unit, runs
+    in the box's shell slot, as `--shell CMD` does on a plain box: `up` waits for it and says which,
+    and `ls` (and `ls --json`'s `shell_cmd`, `shell_from`), `pid shell`, `log shell`,
+    `restart-shell` and the crash notes work on it. A second shell is dropped; `--shell CMD` runs
+    another instead, `--no-shell` none; a config that starts none omabox knows makes `up` fail at
+    once, saying so.
+  - **On an Omarchy desk** (Omarchy installed and your config loading it; box.json's `desk_base`) the
+    box is an Omarchy box running your config, its shell Omarchy's with your plugins and
+    `shell.json`. It takes `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and
+    `--omarchy`, and refuses `--stock`, `--stock-bar` and `--keep` (not your desk). `--desk-shell`
+    is part of `--desktop desk` now: alone it still works, with a note, for this release.
+  - **Held awake:** your shell's own idle timeouts (a lock, a blank screen) would fire between an
+    agent's steps, so a desk box keeps an idle inhibitor on a 1×1 transparent layer per monitor
+    (`tools/idlehold`, new; `install.sh` builds it, `doctor` lists it), and turns a shell's timeouts
+    off in its copy where it knows how (Caelestia). A shell's idle client that ignores inhibitors
+    still goes idle. Inside a desk box labwc's `LABWC_PID`, which a shell may take for a labwc
+    session, is `OMABOX_LABWC_PID`.
+  - Refused for now: `--clean` (the HOME path carries your login name), `config desktop desk`, a
+    jailed agent's desk box, and `check run --desktop desk` (a check needs the same box every run).
 
 ## Unreleased
 

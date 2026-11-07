@@ -1137,49 +1137,53 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   installed (`up` says so) or when `omabox config desktop plain` is set. `--clean` works there: its
   sentinel is the Hyprland background colour (`#ff00ff`), not a wallpaper, and `check run --desktop
   plain` checks on such boxes.
-- `--desktop desk` (#321) is a plain box whose HOME is at your HOME's path: `$HOME` in the box is
-  the same string as yours, so what writes your path into files or settings finds the box's. It is
-  still the fake HOME (`omabox path --home`, as any box's), never your files: only the repo,
-  `--ro-bind`, `--seed` and the copy of your desktop bring any in. That copy, made at `up` before
-  `--seed`'s (which win): your `~/.config/hypr` (links followed, as copies), the config and state
-  of each desk shell found (`--shell CMD`, what your hyprland.lua starts, or its unit linked under
+- `--desktop desk` (#321) is the user's own desktop in a box: their Hyprland config, their shell,
+  their look, at their HOME's path. `$HOME` in the box is the same string as yours, so what writes
+  your path into files or settings finds the box's. It is still the fake HOME (`omabox path --home`,
+  as any box's), never your files: only the repo, `--ro-bind`, `--seed` and the copy of your desktop
+  bring any in. A path under your HOME in a command is the box HOME's there, not yours (`run` says
+  so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at it or above it, over
+  omabox's own files in it (`.config/omabox`, its logs), nor through a link in it.
+- **The copy**, made at `up` before `--seed`'s (which win): your `~/.config/hypr` (links followed,
+  stow and home-manager included, as copies), the config and state of each desk shell found
+  (`--shell CMD`, what your `hyprland.lua` starts, or its unit linked under
   `~/.config/systemd/user/{hyprland-session,graphical-session}.target.wants/`), and the images those
   name by a path in your HOME. Never a secret store or what looks like a key; capped; `up` says what
   it left out and box.json's `desk_copy` lists it, `shell_guess`/`shell_from` (and the box's
-  `OMABOX_DESK_SHELL`) the shell found first. A write to the copy never reaches your files. A path under your HOME in a command is the box HOME's
-  there, not yours (`run` says so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at
-  it or above it, over omabox's own files in it (`.config/omabox`, its logs), nor through a link in
-  it. Refused with `--desk-shell` (part of it), `--clean` (the path carries your login name) and
-  inside ai-jail (not yet); `omabox config desktop` does not take `desk` yet. Its base is your desk's
-  (box.json's `desk_base`): where Omarchy is installed and your `hypr/hyprland.lua` loads it, an
-  Omarchy box (Omarchy's shell with your plugins and `shell.json`, as `--desk-shell` copies them);
-  otherwise plain. Its Hyprland runs the box HOME's `~/.config/hypr/hyprland.lua`, after omabox's
-  autostart policy: what the config starts (at load, in its `hyprland.start` handlers, through
-  `hl.exec_cmd`, `os.execute` or `io.popen`) runs unless a box must not or cannot run it: idle and
-  lock daemons, your systemd session and uwsm (unless `--systemd`), system-bus applets (a polkit agent
-  with `--polkit`), what the box runs itself (keyring, PipeWire, portals), Omarchy's own session work,
-  and the shell the box's slot starts. Binds run as on your desk. `omabox log autostart` is one line a
-  decision: `PHASE VERDICT CLASS VIA CMD  (WHY)`, PHASE `load`, `start`, `reload` or `later` (a bind's
-  Lua). omabox's settings win over the config's: the screen and monitors, the red error bar, the
-  cursor's buffer, autoreload, Xwayland; your look and input stay. An error in the config is said in
-  `log autostart` and `log hyprland`, and the box still starts. No `hyprland.lua` (or only a
-  `.conf`): the base's own desktop instead.
-  Its shell is the one your Hyprland
-  config starts (`dms run`, `qs -c noctalia-shell`, `caelestia shell -d`, `waybar`, `qs -c NAME`,
-  `qs -p DIR`; `env`, `setsid`, `uwsm app --`, `sh -c` around it are seen through), run in the same
-  slot as `--shell CMD`'s: `up` waits for its layer and says `its shell: CMD (PROFILE, from your
-  config)`, and `ls` (`shell: CMD (from your config)`), `pid shell`, `log shell`, `restart-shell`
-  and the crash notes work on it. A second shell the config starts is dropped (one bar). When the
-  config starts none but `up` found one (its systemd unit, say), the slot starts that (`guessed`).
-  None at all: `up` fails at once, saying so; `--shell CMD` names one, `--no-shell` runs none.
-  `--shell CMD` on a desk box runs CMD instead of the config's. `check run --desktop desk` is
-  refused.
-- A desk box needs a Lua Hyprland config (`hypr/hyprland.lua`; a `hyprland.conf` alone is refused:
-  `hyprctl eval`, which keys, click, pointer, mode, monitor and lua use, refuses it). On an Omarchy
-  base, `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and `--omarchy` work;
-  `--stock`, `--stock-bar` and `--keep` are refused (they are not your desk). Its idle is held off
-  (an idle inhibitor, `tools/idlehold`), so your shell's own idle timeouts never lock or blank it
+  `OMABOX_DESK_SHELL`) the shell found first. A shell's own idle timeouts are turned off in its copy
+  where its profile says how (Caelestia). A write to the copy never reaches your files. A config the
+  copy would refuse (a link into a secret store, a `hyprland.lua` or a module it requires holding a
+  key's shape or over 1 MiB) fails `up` before any box is made.
+- **Its base** is your desk's (box.json's `desk_base`): where Omarchy is installed and your
+  `hypr/hyprland.lua` loads it, an Omarchy box (Omarchy's shell, with your plugins and `shell.json`
+  as `--desk-shell` copies them; `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and
+  `--omarchy` work, `--stock`, `--stock-bar` and `--keep` are refused: they are not your desk);
+  otherwise plain. It needs a Lua config (`hypr/hyprland.lua`; a `hyprland.conf` alone is refused:
+  `hyprctl eval`, which keys, click, pointer, mode, monitor and lua use, refuses it). Refused with
+  `--desk-shell` (part of it), `--clean` (the path carries your login name) and inside ai-jail (not
+  yet); `omabox config desktop` does not take `desk` yet, and `check run --desktop desk` is refused
+  (a check needs the same box every run).
+- **Its Hyprland** runs the box HOME's `~/.config/hypr/hyprland.lua`, after omabox's autostart
+  policy: what the config starts (at load, in its `hyprland.start` handlers, through `hl.exec_cmd`,
+  `os.execute` or `io.popen`) runs unless a box must not or cannot run it: idle and lock daemons,
+  your systemd session and uwsm (unless `--systemd`), system-bus applets (a polkit agent with
+  `--polkit`), what the box runs itself (keyring, PipeWire, portals), Omarchy's own session work.
+  Binds run as on your desk. `omabox log autostart` is one line a decision: `PHASE VERDICT CLASS VIA
+  CMD  (WHY)`, PHASE `load`, `start`, `reload` or `later` (a bind's Lua), VERDICT `run`, `drop` or
+  `take` (the shell slot's). omabox's settings win over the config's: the screen and monitors, the
+  red error bar, the cursor's buffer, autoreload, Xwayland; your look and input stay. An error in the
+  config is said in `log autostart` and `log hyprland`, and the box still starts. Its idle is held
+  off (an idle inhibitor, `tools/idlehold`), so your shell's own idle timeouts never lock or blank it
   between your steps; a shell's idle client that ignores inhibitors still goes idle.
+- **Its shell**, on a plain base, is the one your config starts (`dms run`, `qs -c noctalia-shell`,
+  `caelestia shell -d`, `waybar`, `qs -c NAME`, `qs -p DIR`; `env`, `setsid`, `uwsm app --`, `sh -c`
+  around it are seen through), taken into the same slot as `--shell CMD`'s (`take` in `log
+  autostart`): `up` waits for its layer and says `its shell: CMD (PROFILE, from your config)`, and
+  `ls` (`shell: CMD (from your config)`; `ls --json`'s `shell_cmd` and `shell_from`), `pid shell`,
+  `log shell`, `restart-shell` and the crash notes work on it. A second shell the config starts is
+  dropped (one bar). When the config starts none but `up` found one (its systemd unit, say), the
+  slot starts that (`guessed`). None at all: `up` fails at once, saying so; `--shell CMD` names one
+  (it runs instead of the config's), `--no-shell` runs none.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
