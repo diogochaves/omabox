@@ -12853,8 +12853,15 @@ t_desk_wallpaper() {
   check_match "up says the folder's pictures copied" "copied into the box's HOME: [0-9]+ files \(.*2 of your wallpapers\)" "$out"
   bg=$H/.config/omarchy/backgrounds/nord
   check "...as files of the box's own" bash -c "[ -f '$bg/a.png' ] && [ -f '$bg/b.png' ] && [ ! -L '$bg' ] && [ ! -L '$bg/b.png' ]"
-  check_eq "the box's current/background: its copy of the desk's pick" "$fh/.config/omarchy/backgrounds/nord/b.png" \
+  # (finding 710: relative, so on the host it leads into the box's folder, never the stand-in HOME)
+  check_eq "the box's current/background: its copy of the desk's pick, a relative link" "../../../../.config/omarchy/backgrounds/nord/b.png" \
     "$(readlink "$H/.local/state/omarchy/current/background")"
+  check_eq "...on the host: the box's copy" "$(readlink -f "$bg/b.png")" "$(readlink -f "$H/.local/state/omarchy/current/background")"
+  check_eq "...path --home: no warning (no link of the box HOME's leads into HOME)" "" "$(dw path -b "$B" --home 2>&1 >/dev/null)"
+  ln -s "$fh/walls/a.png" "$H/planted.png"
+  check_match "...one planted that does: path --home warns, on stderr" "^omabox: path: box '$B''s HOME holds 1 link into your real HOME \(planted\.png -> " \
+    "$(dw path -b "$B" --home 2>&1 >/dev/null)"
+  rm -f "$H/planted.png"
   check "the box shows it" until_ok 15 px_pink
   check "down" dw down "$B"
   check_fails "no box process left" pgrep -f "$rt/omabox/"

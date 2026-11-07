@@ -707,9 +707,9 @@ pub fn box_background(
     };
     let mut to: Vec<u8> = Vec::new();
     if !n.is_empty() && names.contains(&n) {
-        to = cat!(sbx, "/.config/omarchy/backgrounds/", t, "/", n);
+        to = cat!(".config/omarchy/backgrounds/", t, "/", n);
     } else if let Some(rest) = theme_part(bg).filter(|r| there(&cat!(h, "/", cur, "/theme/", r))) {
-        to = cat!(sbx, "/", cur, "/theme/", rest);
+        to = cat!(cur, "/theme/", rest);
     } else {
         // (find's: regular files, no links, hidden ones too, a wallpaper's ending in any case)
         let mut found: Vec<Vec<u8>> = Vec::new();
@@ -733,7 +733,7 @@ pub fn box_background(
         }
         found.sort();
         if let Some(f) = found.first() {
-            to = cat!(sbx, "/", f);
+            to = f.clone();
         }
     }
     if to.is_empty() {
@@ -746,7 +746,28 @@ pub fn box_background(
         link.clone()
     };
     rm_f(&at).map_err(|e| failed(ctx, &cat!("remove ", at), &e))?;
+    let to = link_target(h, &at, sbx, &to);
     std::os::unix::fs::symlink(p(&to), p(&at)).map_err(|e| failed(ctx, &cat!("link ", at), &e))
+}
+
+/// What a link omabox makes at AT (on the host, in the box HOME H) to REL (a path in the box HOME)
+/// holds: SBX/REL, the path the box sees, in a box whose HOME is /home/sbx; in a desk box, whose
+/// HOME is at the user's own HOME path (#321), REL relative to AT's folder (`../` up to the HOME),
+/// so that on the host the link leads into the box's folder, never into the user's real HOME (an
+/// agent following it from `path --home` would edit real files; finding 710).
+pub fn link_target(h: &[u8], at: &[u8], sbx: &[u8], rel: &[u8]) -> Vec<u8> {
+    let under = at.strip_prefix(cat!(h, "/").as_slice());
+    match under {
+        Some(r) if sbx != crate::boxes::SBX_HOME.as_bytes() => {
+            let ups = r
+                .split(|&c| c == b'/')
+                .filter(|x| !x.is_empty())
+                .count()
+                .saturating_sub(1);
+            cat!("../".repeat(ups), rel)
+        }
+        _ => cat!(sbx, "/", rel),
+    }
 }
 
 /// `git -C DIR rev-parse ARGS...`: its answer, or None.
@@ -2073,6 +2094,22 @@ mod tests {
     /// what is at REL (seed_home's copy, a save's dir); a link on the way cleared, never followed.
     #[test]
     fn home_links_as_bash() {
+        // (finding 710: what omabox's own links in a desk box HOME hold is relative, so on the host
+        // they lead into the box's folder; a /home/sbx box's stay absolute, the box's path)
+        let h = b"/c/omabox/b/home";
+        let at = b"/c/omabox/b/home/.local/state/omarchy/current/background";
+        assert_eq!(
+            link_target(h, at, b"/home/u", b".config/omarchy/backgrounds/t/a.png"),
+            b"../../../../.config/omarchy/backgrounds/t/a.png"
+        );
+        assert_eq!(
+            link_target(h, b"/c/omabox/b/home/top", b"/home/u", b"x/y"),
+            b"x/y"
+        );
+        assert_eq!(
+            link_target(h, at, b"/home/sbx", b"Pictures/a.png"),
+            b"/home/sbx/Pictures/a.png"
+        );
         let d = sc_tmp("hl");
         let c = sc_cx();
         let h = format!("{d}/home");

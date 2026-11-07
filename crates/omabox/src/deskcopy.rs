@@ -1443,7 +1443,9 @@ fn wallpaper(w: &mut Walk, plan: &SeedPlan) -> Res<()> {
         return Ok(());
     };
     if copied {
-        seed::home_link(w.ctx, w.h, &d, &cat!(plan.box_home(), "/", rel))?;
+        // (relative: on the host, the link leads into the box's folder, not your HOME; finding 710)
+        let to = seed::link_target(w.h, &cat!(w.h, "/", d.rel()), plan.box_home(), &rel);
+        seed::home_link(w.ctx, w.h, &d, &to)?;
         w.out.extend(cat!("linked ", d.rel(), "\t", rel, "\n"));
     }
     Ok(())
@@ -2203,8 +2205,13 @@ mod tests {
         assert!(!f.there(".config/omarchy/backgrounds/t/intros"), "{out}");
         assert_eq!(
             bg(&f),
-            format!("{}/.config/omarchy/backgrounds/t/b.jpg", f.fh),
+            "../../../../.config/omarchy/backgrounds/t/b.jpg",
             "{out}"
+        );
+        assert_eq!(
+            std::fs::canonicalize(f.in_box(&format!("{cur}/background"))).unwrap(),
+            std::fs::canonicalize(f.in_box(".config/omarchy/backgrounds/t/b.jpg")).unwrap(),
+            "on the host it leads to the box's copy, not HOME's"
         );
         // (a plain base: no Omarchy, none of it)
         let f2 = desk("wp1p");
@@ -2226,7 +2233,7 @@ mod tests {
         );
         let out = f.run_omarchy();
         assert!(f.real_file("Pictures/w.png"), "{out}");
-        assert_eq!(bg(&f), format!("{}/Pictures/w.png", f.fh), "{out}");
+        assert_eq!(bg(&f), "../../../../Pictures/w.png", "{out}");
         // A secret's way, outside HOME, the theme's own: no copy, no link of ours.
         let f = desk("wp3");
         f.put(".ssh/w.png", PNG);
