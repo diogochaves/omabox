@@ -13168,6 +13168,10 @@ t_drag_dnd() {
   fx_has() { [ "$(fx_since "$1" "$2")" = true ]; }
   ob run -b "$B" -d -q -- "$fx" --dnd --log /tmp/fx.log
   check "its window opens" until_ok 10 fx_has 0 '[.[] | select(.ev == "ready")] | length == 1'
+  # (Its opening animation over first: through it Hyprland gives a held button's motions the animated
+  # window's coordinates, 219 for 233, and the first drag dropped short where the animation is
+  # Hyprland's own default, longer than Omarchy's: a Tumbleweed VM, finding 681.)
+  ob wait -b "$B" still --quiet 500ms >/dev/null 2>&1
   local drops='map(select(.ev == "dnd-drop") | "\(.win) \(.x | round) \(.y | round)")'
   for c in "--steps 3" "--steps 4 --hold 300ms" "" "--glide 400ms" "--steps 4 --hold 200ms --shot $TMP/dnd.png"; do
     n=$(fx_n)

@@ -13319,6 +13319,19 @@ from them.
     first. The fixture's `--dnd` starts drags by GTK's rule and logs enter, motion and drop:
     t_drag_dnd (the old code: `--steps 3` no drag, `--steps 4 --hold` and a held `--shot` dropped at
     the centre), drag_seq's unit test.
+    In an openSUSE Tumbleweed VM (Hyprland 0.57.1, virgl, no Omarchy) t_drag_dnd's first case,
+    `--steps 3`, dropped at 490,195, alone and twice; the other cases at 500,200. Not the drag's
+    timing: the fixture's log had the drag begin on the nudge, then a motion after the enter, as here.
+    Every motion with the button held fell short of its point, by less each frame, scaled about the
+    window's centre (233,133 came as 219.19,125.31, 500,200 as 494.24,196.80; the drop 499.41,199.67,
+    0.5 s after `ready`); the move to the start before the press was exact. The window was still
+    opening: a box with no Omarchy runs Hyprland's built-in window animation (`hyprctl animations`
+    overrides none), still changing 0.45 s after `ready` (`wait still`), where Omarchy's `windowsIn`
+    (speed 4.1, popin 87%) had ended by the press here (0.4 s; 0.56.2 and 0.57.1 alike). Through it
+    Hyprland gives a held button's motions the animated window's coordinates. After `wait still`, or
+    with animations off, the same drag dropped at 500,200, so t_drag_dnd now waits out the opening
+    animation first, as t_fixture does. A `drag --window` an agent sends to a window still opening
+    lands short the same way: a shot or `wait still` first, as for any point read off the screen.
 
 682. **A box's HOME removed while its up seeded it: another up's sweep, judged 75 ms before**
     (2026-11-06, #433). Four sightings in full suites under load (t_desk_fonts, t_cli_up,
