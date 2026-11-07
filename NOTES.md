@@ -13690,6 +13690,47 @@ from them.
     t_desk_dms): the box's HOME is its own folder (device and inode), none of the HOME's entries is
     the host's, and launch.sh mounts nothing from at or above the HOME and only the box's own folder
     at it.
+701. **A desk box copies the user's desktop in, following links, through refuse_src** (2026-11-07,
+    #321 step 2). A desk box runs the user's own config, so its HOME needs their `~/.config/hypr`
+    (`$XDG_CONFIG_HOME/hypr` when that is absolute), their shell's config and state, and the
+    wallpaper those name by path; seed_home's plain branch calls `deskcopy::copy` before `--seed`
+    (which wins). Why not `--desk-shell`'s DeskWalk as it was: dotfile managers (stow,
+    home-manager) make the config a tree of links, often `~/.config/hypr` itself; DeskWalk followed
+    a link only to a file inside its folder. And its name check drops any name with `key`,
+    `session` or `auth`: `keybinds.lua`, DankMaterialShell's `session.json` (where its wallpaper's
+    path lives). **What it does:** every link is followed (`readlink -e`) and its target put through
+    `refuse_src` (secret stores, omabox's folders, `~/.config/omarchy` but `plugins/` and `themes/`,
+    HOME itself) and the name check on each part of its path below HOME; what it leads to is
+    copied as the box's own file or folder, so no link in the box HOME leads to the host. A link
+    into `/usr` stays a link (the box has `/usr`). A folder whose dev:ino is one it is inside is a
+    loop; 8 folders deep is the end. Each file is read from its folder held open and checked to be
+    that path (`seed::copy_file_in`, finding 257's shape), and the content check runs on the copy,
+    deleted when it holds a key's shape (no window between the check and the copy); PNG, JPEG, GIF
+    and WebP by their magic skip it. The name check for a desk box only (`desk_box_name_refused`):
+    a bare key/session/auth no longer counts; exact secret names, `.pem .p12 .pfx .gpg .asc .kdbx
+    .key .env`, `id_*`, token, secret, credential, passw, cookie, private, api[-_]key, a repo's
+    metadata dir and backups still do. **Which shells:** `--shell CMD`, then each string of the copied
+    hypr Lua files (hyprland.lua first, `--` comments skipped) read as commands (`env A=B`, `exec`,
+    `setsid -f`, `nohup`, `uwsm app ... --`, `sh -c` taken off), then a profile's unit linked under
+    `~/.config/systemd/user/{hyprland-session,graphical-session}.target.wants/` (DMS's way); each
+    profile's `config`, `state` and listed `cache` folders copied (from the user's XDG dirs), a named
+    profile before the `qs -c {name}` fallback. The first found is box.json's `shell_guess` (with
+    `shell_from`: `--shell`, `config` or `unit`) and the box's `OMABOX_DESK_SHELL`, for step 4's
+    slot. **Images by path:** each copied text names paths (`$HOME/...`, `~/...`, `file://...`,
+    JSON's `\/`); one in HOME with an image's ending is copied at its path (DMS's
+    `wallpaperPath`, Caelestia's `wallpaper/path.txt`, `swww img ~/...`), a folder named brings its
+    top-level images, `/usr` is left alone and anything else outside HOME is said ("outside your
+    HOME"). **Caps** (skipped and said): 1 MiB a file, 8 MiB and 500 files for the hypr tree; 1 MiB,
+    16 MiB and 1000 for each shell; 32 MiB, 128 MiB and 32 files for images; 160 MiB in all. `up`
+    says the parts copied and up to 10 of what it left out; box.json's `desk_copy` has every
+    `copied` path and every `skipped` {path, why}. **Refused** (up fails, its box removed): a hypr
+    folder `refuse_src` keeps out (a link into `~/.gnupg`), a hyprland.lua or a module it requires
+    (`require("a.b")` → `a/b.lua`) that was not copied. No hypr folder at all is no refusal here
+    (step 5 says it). Not done here: the refusals run in seed_home, after the box's folder is made,
+    not in up's checks before it. Checked: `deskcopy.rs`'s tests, `t_unit_desk_copy` (the probe
+    `desk_copy`, stand-in HOMEs; and this machine's real `~/.config/hypr`, copied into the test's
+    folder: 25 files and a `/usr` link, its six `.bak.*` files left out as backups), `t_desk_copy`
+    (a box on a stand-in desk) on Hyprland 0.56.2 and 0.57.1.
 708. **A desk box's base: what the user's desk is, not what the machine has** (2026-11-07, #321).
     A desk box mirrors the user's own desktop, so whether it is an Omarchy one is a question about
     that desk: Omarchy installed (`install::omarchy_at`, as `--desktop`'s default asks) AND the

@@ -15,6 +15,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   shell in comes next. `--clean`, `--desk-shell`, `config desktop desk` and a jailed agent's desk box
   are refused until then, and so is a desk box where your desk is Omarchy's (your Hyprland config
   loads Omarchy): a desk box takes its base from your desk, kept as box.json's `desk_base`.
+- **A desk box brings your desktop in, as copies** ([#321](https://github.com/diogochaves/omabox/issues/321)):
+  `up --desktop desk` copies your `~/.config/hypr`, the config and state of the shell you run (found
+  by `--shell`, by what your `hyprland.lua` starts, or by its systemd unit: DankMaterialShell,
+  Noctalia, Caelestia, Waybar, a Quickshell config), and the wallpapers those name by path, into
+  the box's HOME before `--seed`. Links (stow, home-manager) are followed and copied as files, so
+  nothing the box writes reaches yours; a link into a secret store, a secret's name or a file that
+  holds a key's shape stays out, and so does what is over the caps. `up` says what it left out;
+  box.json's `desk_copy` lists every file, and `shell_guess` the shell it found.
 
 ## Unreleased
 

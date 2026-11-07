@@ -1139,7 +1139,13 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
 - `--desktop desk` (#321) is a plain box whose HOME is at your HOME's path: `$HOME` in the box is
   the same string as yours, so what writes your path into files or settings finds the box's. It is
   still the fake HOME (`omabox path --home`, as any box's), never your files: only the repo,
-  `--ro-bind` and `--seed` bring any in. A path under your HOME in a command is the box HOME's
+  `--ro-bind`, `--seed` and the copy of your desktop bring any in. That copy, made at `up` before
+  `--seed`'s (which win): your `~/.config/hypr` (links followed, as copies), the config and state
+  of each desk shell found (`--shell CMD`, what your hyprland.lua starts, or its unit linked under
+  `~/.config/systemd/user/{hyprland-session,graphical-session}.target.wants/`), and the images those
+  name by a path in your HOME. Never a secret store or what looks like a key; capped; `up` says what
+  it left out and box.json's `desk_copy` lists it, `shell_guess`/`shell_from` (and the box's
+  `OMABOX_DESK_SHELL`) the shell found first. A write to the copy never reaches your files. A path under your HOME in a command is the box HOME's
   there, not yours (`run` says so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at
   it or above it, over omabox's own files in it (`.config/omabox`, its logs), nor through a link in
   it. Refused with `--desk-shell` (not yet), `--clean` (the path carries your login name) and inside
