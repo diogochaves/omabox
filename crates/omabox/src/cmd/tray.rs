@@ -509,9 +509,17 @@ fn entries(ctx: &mut Ctx) -> Res<Vec<String>> {
             return Err(ctx.die(cat!("tray: box '", ctx.name, "''s bus did not answer: ", e)));
         }
         // (a plain box, #247: Omarchy's bar is not there to have one; its --shell may)
-        let why = if crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
-            == crate::upspec::Desktop::Plain
-        {
+        // (a desk box, #321 step 4: the shell its config starts, in the slot, or none)
+        let desk = crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
+            == crate::upspec::Desktop::Desk;
+        let why = if desk {
+            if crate::shellnote::slot_cmd(ctx).is_empty() {
+                "a desk box whose config started no shell omabox knows: up --shell CMD runs one"
+                    .to_string()
+            } else {
+                "the desk's shell runs none".to_string()
+            }
+        } else if crate::boxes::plain_like(&ctx.d) {
             if crate::boxes::meta(&ctx.d, "shell_cmd").0.is_empty() {
                 "a plain box has no shell to have one: up --shell CMD runs one".to_string()
             } else {

@@ -1,54 +1,20 @@
 -- omabox nested Hyprland: the box's desktop, then what every box gets (the screen, monitors, debug,
 -- the hidden pointer, the crash hook, the startup).
 -- Settings come from the environment `omabox up` sets: OMABOX_SIZE (WxH@HZ), OMABOX_INTERACTIVE, OMABOX_XWAYLAND,
--- OMABOX_AUTORELOAD, OMABOX_DESKTOP (`up --desktop`, #247: omarchy or plain).
-if os.getenv("OMABOX_DESKTOP") == "plain" then
-  -- omabox's own small config and nothing of Omarchy's (its tree is an empty tmpfs in the box): the
-  -- box's copy of share/plain.lua, made with this file's (#140; start-hyprland.sh, `omabox reload`).
-  -- PATH stays the session's, omabox's stand-ins first (finding 149): nothing here puts a bin ahead.
-  dofile((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox-plain.lua")
-else
-  -- Omarchy's: its real defaults, minus its session autostart.
-  dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")
-  package.loaded["default.hypr.autostart"] = true -- skip: systemd/dbus env import, first-run, monitor-watch, udiskie
-  require("default.hypr.omarchy")
-  -- The box HOME's own ~/.config/hypr modules (#246), where stock ~/.config/hypr/hyprland.lua loads them
-  -- (after Omarchy's defaults, before the toggles), so an edit there and `hyprctl reload` do what they do
-  -- on a desktop (a plugin's "add this to bindings.lua"). Before everything omabox sets below, which
-  -- wins: PATH, the screen, debug/misc/xwayland, the hidden pointer. Not ~/.config/hypr/hyprland.lua
-  -- itself (this file stands in for it). Skipped: autostart (as default.hypr.autostart), and monitors:
-  -- a new user's is not comments only (GDK_SCALE=2 and a catch-all rule at scale auto), and its rules
-  -- are for real screens; the box's are omabox's (`--size`, `--monitor`, `mode`). Hyprland's require
-  -- keeps a module's error from ending the load: it is a config error (`hyprctl configerrors`; no red
-  -- bar in a box, below), which `up`, `reload` and `hyprctl reload` say. The pcall is for a require
-  -- that raises instead (another build): the rest of the config still loads, and the error goes to
-  -- Hyprland's log. A module with no file is skipped (a HOME without them, from an Omarchy with no
-  -- /etc/skel: not an error).
-  for _, m in ipairs({ "hypr.input", "hypr.bindings", "hypr.looknfeel" }) do
-    local ok, err = true, nil
-    if package.searchpath(m, package.path) then ok, err = pcall(require, m) end
-    if not ok then
-      local run = os.getenv("XDG_RUNTIME_DIR") or ""
-      local log = io.open(run .. "/hypr/" .. (os.getenv("HYPRLAND_INSTANCE_SIGNATURE") or "") .. "/hyprland.log", "a")
-      if log then log:write("ERR from omabox ]: require(\"" .. m .. "\"): " .. tostring(err):gsub("%s+", " ") .. "\n"); log:close() end
-    end
-  end
-  -- Omarchy's envs.lua puts its own bin first for everything Hyprland starts (the bar, binds,
-  -- terminals): omabox's stand-ins (omarchy-version, the browser policy) go ahead of it again, as on
-  -- every other box PATH (finding 149).
-  do
-    local standins = "/opt/omabox/share/bin"
-    local omarchy_bin = require("default.hypr.paths").omarchy_path .. "/bin"
-    local kept = { standins, omarchy_bin }
-    for entry in (os.getenv("PATH") or "/usr/bin"):gmatch("[^:]+") do
-      if entry ~= standins and entry ~= omarchy_bin then table.insert(kept, entry) end
-    end
-    hl.env("PATH", table.concat(kept, ":"))
-  end
-  -- As Omarchy's stock ~/.config/hypr/hyprland.lua ends, after the user modules (above): the toggle
-  -- flags and workspace layouts from ~/.local/state, so Omarchy's toggles work in a box.
-  require("default.hypr.toggles")
-end
+-- OMABOX_AUTORELOAD, OMABOX_DESKTOP (`up --desktop`, #247, #321: omarchy, plain or desk).
+-- omabox's own commands go through omabox_exec, Hyprland's own hl.exec_cmd taken before anything else
+-- runs: a desk box's config (desk.lua, #321) has hl.exec_cmd judged by its autostart policy, and
+-- what omabox itself starts (the events, the held devices, the shell) is not the user's to judge.
+omabox_exec = hl.exec_cmd
+-- The box's desktop: the box's copy of share/omarchy.lua, plain.lua or desk.lua, each made with this
+-- file's (#140; start-hyprland.sh, `omabox reload`): an omabox update under a running box must not mix
+-- this copy with a newer one of them. Omarchy's: its real defaults minus its session autostart. Plain
+-- (#247): omabox's own small config, nothing of Omarchy's (its tree is an empty tmpfs in the box);
+-- PATH stays the session's, omabox's stand-ins first (finding 149). Desk (#321): the user's own
+-- config, under the autostart policy, on Omarchy's base or a plain one (OMABOX_DESK_BASE).
+local desktop = os.getenv("OMABOX_DESKTOP")
+if desktop ~= "plain" and desktop ~= "desk" then desktop = "omarchy" end
+dofile((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox-" .. desktop .. ".lua")
 -- What the box's own session starts (`omabox run` leaves it out of the environment it copies):
 -- share/bin/inotifywait keeps only the box shell's plugin watch idle, so a shell a test starts
 -- itself still reloads (finding 424).
@@ -278,7 +244,7 @@ if interactive then
       -- its workspaces 1 and 2 renumbered 22 and 23.
       local name = gone and gone.name or ""
       if name == "FALLBACK" or not name:match("^[%w_-]+$") then name = "" end
-      hl.exec_cmd("/opt/omabox/share/confirm-close.sh " .. name)
+      omabox_exec("/opt/omabox/share/confirm-close.sh " .. name)
     else
       -- Closed on purpose: the box's reaper on the host then clears it, instead of leaving it
       -- "dead" as a crash would be (with its logs) (finding 71).
@@ -306,7 +272,7 @@ if interactive then
     omabox_resize_timer = hl.timer(function()
       local now = sizes()
       if not now then return end
-      if last and now ~= last then hl.exec_cmd("/usr/bin/hyprctl reload") end
+      if last and now ~= last then omabox_exec("/usr/bin/hyprctl reload") end
       last = now
     end, { timeout = 250, type = "repeat" })
   end
@@ -385,29 +351,34 @@ if not omabox_crash_hook then
     f:close()
     local dump = ("\0" .. env):match("\0__QUICKSHELL_CRASH_DUMP_PID=(%d+)")
     if not dump then return end
-    hl.exec_cmd("/opt/omabox/share/crash-dialog.sh " .. math.floor(w.pid) .. " " .. dump)
+    omabox_exec("/opt/omabox/share/crash-dialog.sh " .. math.floor(w.pid) .. " " .. dump)
   end)
 end
 
 hl.on("hyprland.start", function()
   -- The box's events, from the start, for `omabox events` (NOTES finding 108): a line each, stamped.
-  hl.exec_cmd('/opt/omabox/bin/omabox-events "$HOME/events.log"')
+  omabox_exec('/opt/omabox/bin/omabox-events "$HOME/events.log"')
   if not interactive then
     if os.getenv("OMABOX_WAYLAND_SCREEN") ~= "1" then
-      hl.exec_cmd("/usr/bin/hyprctl output create headless HEADLESS-2")
+      omabox_exec("/usr/bin/hyprctl output create headless HEADLESS-2")
     end
     -- A headless box has no input devices, and with none on the seat Hyprland drops focus changes:
     -- a shell panel then never gets the keys of a later `omabox keys`, nor a pointer the click of a
     -- later `omabox click` on the same spot (NOTES finding 41). Keep an idle keyboard and pointer.
-    hl.exec_cmd("/opt/omabox/bin/omabox-keyboard --hold")
-    hl.exec_cmd("/opt/omabox/bin/omabox-pointer --hold")
+    omabox_exec("/opt/omabox/bin/omabox-keyboard --hold")
+    omabox_exec("/opt/omabox/bin/omabox-pointer --hold")
   end
   -- The Omarchy shell, unless `up --no-shell`: then a bare compositor, no bar, tray or notifications.
   -- Without one, the session's environment still goes to its bus and user manager (shell.sh does it
   -- before a shell; finding 663).
-  if os.getenv("OMABOX_SHELL") ~= "0" then hl.exec_cmd("/opt/omabox/share/shell.sh")
-  else hl.exec_cmd("/opt/omabox/share/session-env.sh") end
+  if os.getenv("OMABOX_SHELL") ~= "0" then omabox_exec("/opt/omabox/share/shell.sh")
+  else omabox_exec("/opt/omabox/share/session-env.sh") end
   -- What `omabox run` gives commands, so they see the box like anything Hyprland launched.
   -- Written last and renamed into place: its presence means Hyprland is up.
-  hl.exec_cmd("env -0 > $XDG_RUNTIME_DIR/omabox.env.tmp && mv $XDG_RUNTIME_DIR/omabox.env.tmp $XDG_RUNTIME_DIR/omabox.env")
+  omabox_exec("env -0 > $XDG_RUNTIME_DIR/omabox.env.tmp && mv $XDG_RUNTIME_DIR/omabox.env.tmp $XDG_RUNTIME_DIR/omabox.env")
+  -- A desk box's start is over (#321): this handler is the last one registered, after the user's,
+  -- and what the config starts from here on (a bind's Lua) is the user's doing, not its autostart.
+  if omabox_desk_phase then omabox_desk_phase("later") end
 end)
+-- ...and so is a reload's load (a reload fires no hyprland.start).
+if omabox_desk_phase then omabox_desk_phase("parsed") end

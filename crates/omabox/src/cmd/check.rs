@@ -613,9 +613,7 @@ fn check_holes_off_in(ctx: &Ctx, bg: &dyn Fn() -> Option<i64>) -> Vec<u8> {
     }
     // A plain box's sentinel is its Hyprland's background colour (#247: plain.lua, from
     // omabox.clean), read live: a `hl.config` in the box may have changed it.
-    if crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
-        == crate::upspec::Desktop::Plain
-    {
+    if crate::boxes::plain_like(&ctx.d) {
         return match bg() {
             Some(CLEAN_BACKGROUND_INT) => Vec::new(),
             Some(_) => {
@@ -628,7 +626,12 @@ fn check_holes_off_in(ctx: &Ctx, bg: &dyn Fn() -> Option<i64>) -> Vec<u8> {
     let bg = std::fs::read_link(ctx.at("home/.local/state/omarchy/current/background"))
         .map(|p| shell::bytes(&p).to_vec())
         .unwrap_or_default();
-    if bg == b"/home/sbx/.config/omabox/clean-wallpaper.png" {
+    if bg
+        == cat!(
+            crate::boxes::box_home(&ctx.d),
+            "/.config/omabox/clean-wallpaper.png"
+        )
+    {
         Vec::new()
     } else {
         b"the wallpaper is not the sentinel (a theme set in the box?)".to_vec()
@@ -2300,6 +2303,14 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             // not go together.
             b"--desktop" | b"--shell" => {
                 optarg(ctx, x, v)?;
+                // (#321: a desk box runs the user's own desktop, its shell and config as they are
+                // that day; a check compares against a base, and needs a box that is the same each
+                // run. Not until the desk has a clean form of its own.)
+                if x == b"--desktop" && args[i + 1] == b"desk" {
+                    return Err(ctx.die(
+                        "check run: --desktop desk is not for a check: a desk box runs your own desktop as it is today, and a check needs one that is the same every run (--desktop plain or omarchy)",
+                    ));
+                }
                 upopts.push(x.clone());
                 upopts.push(args[i + 1].clone());
                 i += 1;

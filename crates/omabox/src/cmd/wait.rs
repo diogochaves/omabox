@@ -144,7 +144,7 @@ impl Probe<'_> {
                 }
                 // (whether it still ran, read before its log: a line it wrote as it ended is seen)
                 let ended = job_procs_now(ctx, job).is_empty();
-                let Some(log) = job.box_log() else {
+                let Some(log) = job.box_log(&ctx.d) else {
                     return (0, b"stop no log: the job has no log of run -d's".to_vec());
                 };
                 let mut argv = vec![
@@ -266,7 +266,7 @@ fn last_lines(text: &[u8], n: usize) -> Vec<Vec<u8>> {
 }
 
 /// `wait until`'s note when CMD (a word of it, or a `sh -c` string) names a path the box cannot
-/// see (#400): one under the box's own folder here (its HOME is /home/sbx in the box), or under the
+/// see (#400): one under the box's own folder here (its HOME is box_home's in the box), or under the
 /// caller's $TMPDIR (the box has a /tmp of its own). Such a command fails in the box; behind a `!`
 /// it succeeded at once.
 fn host_path_note(ctx: &Ctx, cmd: &[Vec<u8>]) -> Option<Vec<u8>> {
@@ -289,7 +289,9 @@ fn host_path_note_with(d: &[u8], tmp: Option<Vec<u8>>, cmd: &[Vec<u8>]) -> Optio
             return Some(cat!(
                 "wait until: the command names ",
                 home,
-                "/..., this box's HOME as the host has it: in the box it is /home/sbx/..."
+                "/..., this box's HOME as the host has it: in the box it is ",
+                crate::boxes::box_home(d),
+                "/..."
             ));
         }
         if under(w, d) {
@@ -1692,5 +1694,27 @@ mod tests {
         assert_eq!(note(Some("/tmp"), &["test", "-e", "/tmp/ready"]), None);
         assert_eq!(note(None, &["test", "-e", "/run/u/omabox/bb/x"]), None);
         assert_eq!(note(Some("/h/t"), &["/h/tt/x"]), None);
+    }
+
+    // #321: a desk box's HOME as the host has it is said at the box's HOME path.
+    #[test]
+    fn host_path_note_desk() {
+        let d = std::env::temp_dir().join(format!("omabox-hpn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("box.json"),
+            r#"{"desktop":"desk","home":"/home/someone"}"#,
+        )
+        .unwrap();
+        let ds = d.display().to_string();
+        let n = host_path_note_with(ds.as_bytes(), None, &[format!("{ds}/home/x").into_bytes()])
+            .map(|n| String::from_utf8(n).unwrap());
+        assert!(
+            n.as_deref()
+                .is_some_and(|n| n.ends_with("in the box it is /home/someone/...")),
+            "{n:?}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

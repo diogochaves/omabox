@@ -1,0 +1,10 @@
+# Caelestia (#321): `key value` lines, crates/omabox/src/deskshell.rs says the keys.
+# Not installed here: to verify in the Arch VM (finding 675).
+start caelestia shell -d
+match qs -c caelestia
+# unverified
+config .config/caelestia
+# unverified
+state .local/state/caelestia
+# unverified
+idle .config/caelestia/shell.json general.idle.timeouts []

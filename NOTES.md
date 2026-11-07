@@ -13690,6 +13690,270 @@ from them.
     layout's copy by hand (not in the suite): two 1280x720 monitors, the compose stuck twice: the
     layout line said, exit 0, an MP4 of two H.264 tracks of 448 frames each over 7.37 s, the box's
     record folder emptied, no ffmpeg left.
+700. **A desk box's HOME sits at the user's own HOME path** (2026-11-07, #321 step 1). Why: shells
+    keep absolute paths in their state. DankMaterialShell 1.6.3 stores its wallpaper as
+    `"wallpaperPath": "/home/<user>/Pictures/x.png"` in `~/.local/state/DankMaterialShell/session.json`;
+    seeded into a box whose HOME is `/home/sbx`, that path does not exist and DMS draws its own art;
+    with the box HOME mounted at `/home/<user>` (the 2026-10-26 spike, a nested namespace in a plain
+    box) it comes back, and the host's files stay out. Seen again 2026-11-07 in a plain box with
+    `--shell 'dms run'`: the same session.json and PNG seeded give the PNG's colour near the screen's
+    bottom corners with `/home/sbx/Pictures/...`, and DMS's own art with `$HOME/Pictures/...`. Rewriting paths while seeding
+    would be one parser per shell; the path itself is the general answer. **What holds it:** the box
+    HOME stays the fake one, made from `/etc/skel` in the box's own folder under
+    `~/.cache/omabox/NAME/home` (seed_plain), only mounted elsewhere: `--desktop desk` (#321's
+    `Desktop::Desk`, plain-like) makes `up` write `home` into box.json (`upspec::desk_home`: `$HOME`
+    as written, absolute and lexically clean, not `/` nor anything of the box's own system), bind the
+    box HOME's folder there and set HOME and the XDG dirs under it; every command that names a box
+    path (run, shot, gdb, logs, record, jobs, wait, repo notes) takes it from box.json
+    (`boxes::box_home`, `/home/sbx` for a box without the key). Mount rules move with it:
+    `refuse_dest` refuses the HOME and anything above it, and omabox's own files in it; inside a desk
+    HOME the repo, fonts, `--ro-bind` and `--overlay` go in read-only at their paths (the repo at
+    `~/code/...` lands over the fake HOME, as it did under `/home`). **The main risk**, and how it is
+    closed: `/home/sbx` never exists on the host, so a box path read on the host by mistake read
+    nothing; a desk HOME's path IS the real HOME on the host. Every place that turns a box path into
+    a host one goes through the box's folder (`logs::log_host_path` never falls through to the host
+    for a path under a desk HOME), and a note that a path is "in the box" compares device and inode,
+    saying it is the box HOME's, not yours. A second, smaller one: a link in the box HOME's folder
+    (from `--seed` or a save) along a mount's destination would be followed by bwrap; `up` refuses
+    such a mount before launch. In step 1 a desk box boots plain.lua; `--clean` (its HOME path
+    carries your login name), `--desk-shell` (it folds into desk, decision 3), `config desktop desk`
+    and a jailed agent's desk box are refused. The suite's guard (t_desk_home, t_desk_home_standin,
+    t_desk_dms): the box's HOME is its own folder (device and inode), none of the HOME's entries is
+    the host's, and launch.sh mounts nothing from at or above the HOME and only the box's own folder
+    at it.
+701. **A desk box copies the user's desktop in, following links, through refuse_src** (2026-11-07,
+    #321 step 2). A desk box runs the user's own config, so its HOME needs their `~/.config/hypr`
+    (`$XDG_CONFIG_HOME/hypr` when that is absolute), their shell's config and state, and the
+    wallpaper those name by path; seed_home's plain branch calls `deskcopy::copy` before `--seed`
+    (which wins). Why not `--desk-shell`'s DeskWalk as it was: dotfile managers (stow,
+    home-manager) make the config a tree of links, often `~/.config/hypr` itself; DeskWalk followed
+    a link only to a file inside its folder. And its name check drops any name with `key`,
+    `session` or `auth`: `keybinds.lua`, DankMaterialShell's `session.json` (where its wallpaper's
+    path lives). **What it does:** every link is followed (`readlink -e`) and its target put through
+    `refuse_src` (secret stores, omabox's folders, `~/.config/omarchy` but `plugins/` and `themes/`,
+    HOME itself) and the name check on each part of its path below HOME; what it leads to is
+    copied as the box's own file or folder, so no link in the box HOME leads to the host. A link
+    into `/usr` stays a link (the box has `/usr`). A folder whose dev:ino is one it is inside is a
+    loop; 8 folders deep is the end. Each file is read from its folder held open and checked to be
+    that path (`seed::copy_file_in`, finding 257's shape), and the content check runs on the copy,
+    deleted when it holds a key's shape (no window between the check and the copy); PNG, JPEG, GIF
+    and WebP by their magic skip it. The name check for a desk box only (`desk_box_name_refused`):
+    a bare key/session/auth no longer counts; exact secret names, `.pem .p12 .pfx .gpg .asc .kdbx
+    .key .env`, `id_*`, token, secret, credential, passw, cookie, private, api[-_]key, a repo's
+    metadata dir and backups still do. **Which shells:** `--shell CMD`, then each string of the copied
+    hypr Lua files (hyprland.lua first, `--` comments skipped) read as commands (`env A=B`, `exec`,
+    `setsid -f`, `nohup`, `uwsm app ... --`, `sh -c` taken off), then a profile's unit linked under
+    `~/.config/systemd/user/{hyprland-session,graphical-session}.target.wants/` (DMS's way); each
+    profile's `config`, `state` and listed `cache` folders copied (from the user's XDG dirs), a named
+    profile before the `qs -c {name}` fallback. The first found is box.json's `shell_guess` (with
+    `shell_from`: `--shell`, `config` or `unit`) and the box's `OMABOX_DESK_SHELL`, for step 4's
+    slot. **Images by path:** each copied text names paths (`$HOME/...`, `~/...`, `file://...`,
+    JSON's `\/`); one in HOME with an image's ending is copied at its path (DMS's
+    `wallpaperPath`, Caelestia's `wallpaper/path.txt`, `swww img ~/...`), a folder named brings its
+    top-level images, `/usr` is left alone and anything else outside HOME is said ("outside your
+    HOME"). **Caps** (skipped and said): 1 MiB a file, 8 MiB and 500 files for the hypr tree; 1 MiB,
+    16 MiB and 1000 for each shell; 32 MiB, 128 MiB and 32 files for images; 160 MiB in all. `up`
+    says the parts copied and up to 10 of what it left out; box.json's `desk_copy` has every
+    `copied` path and every `skipped` {path, why}. **Refused** (up fails, its box removed): a hypr
+    folder `refuse_src` keeps out (a link into `~/.gnupg`), a hyprland.lua or a module it requires
+    (`require("a.b")` → `a/b.lua`) that was not copied. No hypr folder at all is no refusal here
+    (step 5 says it). Not done here: the refusals run in seed_home, after the box's folder is made,
+    not in up's checks before it (finding 709 adds them there). Checked: `deskcopy.rs`'s tests, `t_unit_desk_copy` (the probe
+    `desk_copy`, stand-in HOMEs; and this machine's real `~/.config/hypr`, copied into the test's
+    folder: 25 files and a `/usr` link, its six `.bak.*` files left out as backups), `t_desk_copy`
+    (a box on a stand-in desk) on Hyprland 0.56.2 and 0.57.1.
+702. **A desk box runs the user's own Hyprland config, under an autostart policy** (2026-11-07, #321
+    step 3). `share/hyprland.lua` is generic now: it keeps Hyprland's own `hl.exec_cmd` as the global
+    `omabox_exec` (what omabox itself starts: events, held devices, the shell, crash and close
+    helpers), then runs the box's copy of its desktop, `omabox-omarchy.lua` (lines moved verbatim
+    from hyprland.lua), `omabox-plain.lua` or `omabox-desk.lua`; start-hyprland.sh and `omabox
+    reload` copy all five (`omarchy plain desk autostart desk-shell`) every time, the desktops before
+    hyprland.lua (#140: one omabox's set). `desk.lua` wraps `hl.exec_cmd`, `os.execute` and
+    `io.popen` (never `hl.dsp.exec_cmd`: a bind does what it does on the desk) with
+    `share/autostart.lua`'s `judge(cmd, via, env)`, pure Lua (the suite runs it on the host's lua):
+    a command split on `&& || ; | &` outside quotes, each part's words past `VAR=x`, exec, env,
+    nohup, setsid, `uwsm-app --`, `uwsm app --`, app2unit, `systemd-run --user … --`, into `sh -c`
+    strings, then matched by argv0's basename (the first cut matched substrings, and `^uwsm` dropped
+    every `uwsm-app -- X`, which is how Omarchy's `o.launch` starts everything; `myhypridle` is not
+    hypridle). Any part dropped drops the whole command. Dropped: idle and lock (finding 10), the
+    systemd session and uwsm (run with `--systemd`), `dbus-update-activation-environment`
+    (session-env.sh does it), system-bus applets (a polkit agent with `--polkit`), what the box runs
+    (keyring, PipeWire, portals, `hyprpm reload`), Omarchy's session work (first-run, monitor-watch,
+    `omarchy-hook post-boot`, `herdr server`), the shell `--shell` starts in the slot, and on
+    Omarchy's base `omarchy-launch-shell` (shell.sh starts it); shells, wallpaper and notification
+    daemons, `wl-paste --watch`, hyprctl, popen reads and the rest run. A dropped `os.execute` says
+    it ran (`true, "exit", 0`), a dropped `io.popen` opens `/dev/null` in the mode asked (a "w" one
+    takes writes). Each decision is a line of `~/autostart.log` (`log autostart`): `PHASE VERDICT
+    CLASS VIA CMD  (WHY)`. A reload starts a fresh Lua state, so the first cut's global once-guard
+    did nothing; instead the phase: `load` (no `omabox.env` yet), `start` (a `hyprland.start`
+    handler registered before the user's sets it; handlers fire in registration order on 0.56.2 and
+    0.57.1), `reload` (`omabox.env` there) and `later` (set at the end of omabox's own start
+    handler, the last registered, and at the end of a reload's load): a bind's Lua then passes,
+    logged. The user's config runs in a pcall: an error is an `ERR from omabox ]` line in
+    hyprland.log and an `error` line in autostart.log, and the box keeps its settings. After it,
+    desk.lua's overrides (stand-ins first on PATH, ahead of Omarchy's bin on its base; plain.lua's
+    every-box settings), then hyprland.lua's tail wins over the config (monitors: a catch-all 4K@2
+    rule left the box's screen at 1920x1080@1; `suppress_errors`, `use_cpu_buffer`, autoreload,
+    Xwayland, the pointer); gaps and `follow_mouse` stay the user's. **Omarchy's base** (finding 708):
+    the user's own hyprland.lua loads bootstrap.lua, which empties `package.loaded` of `default.hypr.*`
+    and `hypr.*`, so desk.lua marks `default.hypr.autostart` (the session skip, as an Omarchy box) and
+    `hypr.monitors` (#246) both in `package.preload` and again after a `dofile` of bootstrap.lua;
+    `session.sh` takes such a desk for an Omarchy box (TERMINAL, theme), `up` writes its
+    `/etc/omarchy.conf` and version, wants an Omarchy look, and implies `--desk-shell`'s copy (the
+    desk's plugins and shell.json) when the Omarchy config folder is there. Verified on a stand-in
+    HOME with Omarchy 4.5.0's stock config plus `o.launch_on_start("hypridle")`: Omarchy's binds and
+    toggles, one Omarchy shell (shell.sh's pid), no first-run or monitor-watch, hypridle dropped as
+    `uwsm-app -- hypridle`. No Lua config (or only a `.conf`): a `none` line and the base's own
+    desktop (step 5 refuses it at `up`). `--desk-shell` alone keeps working a release, with a note
+    that it is part of `--desktop desk` now; with `--desktop desk` it is refused (implied there).
+703. **A desk box's shell is the one its config starts, in the plain box's slot** (2026-11-07,
+    #321 step 4). Why: one bar, and every shell command (`pid shell`, `restart-shell`, crash notes,
+    `ls`) working on it, needs the shell under omabox's slot (#438), not a child of whatever the
+    user's config ran. **How:** `share/desk-shell.lua` (loaded by step 3's desk.lua) gets each
+    command the config starts (`take`), reads it as sh does (parts on `&&`/`;`/`|`/`&`, quotes), takes
+    off what only starts it (`A=B`, exec, env, setsid, nohup, `uwsm app --`, uwsm-app, app2unit,
+    `systemd-run … --`, `sh -c '…'`), and matches the `start`/`match` lines of share/desk-shells/
+    (a pattern without `{…}` first, so `qs -c noctalia-shell` is Noctalia's, not the generic
+    Quickshell one's; `quickshell-path` takes `qs -p DIR`). The first match is written to the box's
+    `omabox-shell.cmd` and `omabox-desk-shell` (`config`) in Lua, then `shell.sh take` runs it in the
+    slot as `--shell CMD` would (no quoting on the way: shell.sh reads the file). A second shell, one
+    under `--shell CMD` (the override) or `--no-shell`, and the same command on a reload (the file is
+    there) are dropped, the reason returned for desk.lua's log. `after_start` (after the config):
+    nothing taken, the guess `up` made (`OMABOX_DESK_SHELL`, a profile, e.g. DMS by its systemd unit,
+    whose `systemctl --user` the policy drops) by its `start` (`guess`); no guess: `none`. shell.sh
+    starts a desk slot only with a word (`take`, restart-shell's token): hyprland.lua's own start of
+    shell.sh, with none, would stop the shell just taken. On the host `boxes::slot_shell` (shell_cmd,
+    or a desk box with a shell) replaces `shell_cmd` as the slot's key; `shellnote::slot_cmd` shows
+    the box's file one line, plain, at most 512 bytes; in the box, crash-dialog.sh takes a desk
+    box's slot (omabox-shell.cmd there) as a plain box's, so its shell's crash dialog is closed as
+    the shell's (it was left open: the first box run). `ready` fails at once on `none` ("your
+    desktop's config started no shell omabox knows"), and takes nothing said at all (a start that
+    never ran desk-shell.lua: no desk.lua yet) as no shell, which `deskshell::after_ready` writes
+    into box.json (`shell: false`) so every command agrees; otherwise up says `its shell: CMD
+    (PROFILE, from your config)`, PROFILE by omabox's own reading (`deskshell::profile_for`, the Lua's
+    twin, the same cases in `profile_match` and t_unit_desk_shell_lua). The contract with desk.lua:
+    `after_start` runs in a start handler before the box writes omabox.env (ready reads the files
+    once that is there). `check run --desktop desk` is refused (a check needs the same box every
+    run). Verified: t_unit_desk_shell_lua (host Lua 5.5, a stand-in `hl`), t_desk_shell_slot in
+    boxes on 0.56.2 and 0.57.1 with a stand-in desk.lua (a copy of omabox whose hyprland.lua runs
+    take/after_start around a seeded config); the real desk.lua's policy, phases and logging, and
+    DMS/Noctalia/Caelestia/Waybar from a real config, only on the integrated branch.
+704. **A desk box's guards: its idle held off, LABWC_PID renamed, what it cannot run refused**
+    (2026-11-07, #321 step 5). **Idle:** a desk box runs the user's own shell, and with it their
+    idle timeouts (a lock, DPMS off, a suspend); an agent sends no input between its steps, so the
+    box would lock under it. Hyprland's ext-idle-notify honours an idle inhibitor
+    (`zwp_idle_inhibit_manager_v1`) for every notification made with `get_idle_notification`
+    (Quickshell's IdleMonitor with `respectInhibitors: true`, its default; hypridle; swayidle), not
+    for `get_input_idle_notification` (`respectInhibitors: false`). It counts an inhibitor only on
+    a mapped, visible surface (IdleInhibitor.cpp: 0.56.2 a view's `aliveAndVisible()`; 0.57.1
+    `mapped() && acceptsInput() && alphaNonZero()`, the last a layer's fade alpha, which animates in
+    from 0 as it maps; a surface with no view, "non-desktop", always), and looks only when one is
+    made or destroyed or on focus and fullscreen changes, never at a map or an animation's end: an
+    inhibitor made before its surface maps, or on 0.57 before its fade-in is under way, does
+    nothing until the next focus change (seen on 0.57.1: the respecting IdleMonitor went idle with
+    the hold up). So `tools/idlehold` (C, like the other in-box tools; refuses outside a box by
+    `tools/common/box.h`) puts a 1×1 transparent layer surface (background layer, empty input
+    region, no exclusive zone, namespace `omabox-idlehold`) on each output, commits its buffer, waits
+    for the compositor's answer to that commit (`wl_display_sync`), then makes the inhibitor, and
+    makes it again at 0.25, 0.75, 1.5, 3 and 6 s (the new one before the old one goes, so the hold
+    never lapses), each a look Hyprland takes after the fade-in; an output added later gets its own.
+    A layer mapped while a window is fullscreen on its monitor is not animated in on 0.57 (its
+    alpha may stay 0): a hold made under a fullscreen window may hold nothing there until one of
+    the looks above comes after it ends (not staged). `deskguard::after_ready` starts it in the box
+    (`setsid -f`, the box's pid namespace: it ends with the box), bound at
+    `/opt/omabox/bin/omabox-idlehold` in desk boxes only (other boxes' launch.sh unchanged), and
+    waits up to 3 s for its "holding idle off on N of M outputs" line in the runtime dir's
+    `omabox-idlehold.log`; a hold that could not start (not built, no layer shell) is a warning,
+    never a failed up. Checked in t_desk_idle: two Quickshell IdleMonitors of 3 s in a desk box,
+    the one ignoring inhibitors goes idle, the one respecting them does not for 8 s, and does once
+    `pkill -x omabox-idlehold`. A shell whose idle client ignores inhibitors is not held; the
+    profiles' `idle FILE KEY VALUE` lines (turning a shell's own timeouts off in its copied config,
+    Caelestia's) are the other half, not applied yet: they need the copy's hook (step 2).
+    **LABWC_PID:** labwc sets it for its children, and Hyprland passed it on to every client of the
+    box; a user's shell may read it as "this session is labwc's" (Noctalia does when
+    XDG_CURRENT_DESKTOP is unset). In a desk box start-hyprland.sh drops it and sets
+    `OMABOX_LABWC_PID` instead; `labwc --reconfigure` (mon.rs, an NVIDIA box's `monitor add`), which
+    finds labwc by `LABWC_PID`, gets it back by name (`mon::labwc_reconfigure`, digits only). Other
+    boxes keep `LABWC_PID` (decided: the smallest change). **Refused** (`deskguard::checks`, after
+    the base is known): no `hyprland.lua` in the config folder (`$XDG_CONFIG_HOME/hypr`, else
+    `~/.config/hypr`): with `hyprland.conf` alone, "needs a Lua config" (Hyprland 0.56 still reads a
+    `.conf`, but `hyprctl eval` refuses it, and keys, click, pointer, mode, monitor and lua need
+    it); with neither, "no Hyprland config in" the folder. On an Omarchy base (finding 708)
+    `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and `--omarchy` are the desk's own
+    Omarchy's; `--stock`, `--stock-bar` and `--keep` give Omarchy's stock desktop, not the user's, and
+    are refused. A plain base refuses what needs Omarchy as a plain box does. `--desk-shell` (step
+    1's refusal, one message for both bases) now says `--desktop desk` brings the desk already.
+708. **A desk box's base: what the user's desk is, not what the machine has** (2026-11-07, #321).
+    A desk box mirrors the user's own desktop, so whether it is an Omarchy one is a question about
+    that desk: Omarchy installed (`install::omarchy_at`, as `--desktop`'s default asks) AND the
+    user's Hyprland config (`$XDG_CONFIG_HOME`, else `~/.config`, `hypr/hyprland.lua`) loading
+    Omarchy's `default/hypr/bootstrap.lua` on a line before any `--` (`upspec::loads_omarchy`; stock
+    Omarchy's `dofile(... .. "/default/hypr/bootstrap.lua")`). An Omarchy machine whose user wrote
+    a config of their own has a plain desk. `up` fixes it once (`upspec::desk_base`), box.json keeps
+    it as `desk_base` (a desk box without the key is plain, as step 1's were) and the box gets
+    `OMABOX_DESK_BASE`. `Desktop::plain_like` takes it: a desk box is plain-like only on a plain
+    base, and every reader of a running box goes through `boxes::plain_like` (box.json's desktop
+    and desk_base). Step 1 runs the plain base only: an Omarchy base needs Omarchy's session in the
+    box (step 3), and half of one (plain.lua with Omarchy's tree in view and no shell) would accept
+    `--plugin` or `--theme` with nothing to run them, so `up --desktop desk` refuses it, naming the
+    config, until step 3. On this machine: the real HOME's config loads bootstrap (Omarchy base,
+    refused); a stand-in `XDG_CONFIG_HOME` without one gives a plain base at the real HOME's path
+    (t_desk_home runs that way here). Step 3 (finding 702) lifts the refusal: an Omarchy base is
+    an Omarchy box running the user's config.
+709. **A desk box's steps wired together** (2026-11-07, #321, steps 2-5 merged). What came out of
+    joining them, each step having stood in for the others: (1) desk.lua's policy wraps `io.popen`,
+    and desk-shell.lua reads its profiles' folder with `io.popen` lazily, at the first take: that
+    read became a `query` line of the user's autostart.log (t_unit_autostart caught it). desk.lua
+    loads desk-shell.lua before it wraps anything, so desk-shell.lua keeps the `io.popen` it found at
+    load; its `M.exec` is `omabox_exec` (the slot's shell.sh is omabox's own start, never judged).
+    (2) desk.lua asks `take` for every command its policy would run, or drops only as a shell (a
+    `--shell` duplicate, Omarchy's launcher), before logging: one the slot takes is the verdict
+    `take` with take's why (`the slot runs it (PROFILE)`, `a second shell: ...`, `up --no-shell`),
+    so the log says what became of the shell. A command dropped for another part (`hypridle & waybar`)
+    is not taken. (3) On Omarchy's base (step 3) the shell is Omarchy's, started by shell.sh as in an
+    Omarchy box, but step 4's shell.sh ran a desk box's slot only with a word and exited otherwise:
+    an Omarchy desk would have had no shell at all, and after_start would have written `none`, which
+    fails `up`. The slot is a plain base's only: desk-shell.lua's take/after_start do nothing there,
+    shell.sh's desk branch needs `OMABOX_DESK_BASE` not omarchy, `boxes::slot_shell` and
+    `deskshell::after_ready` need a plain-like box. (4) Step 2's copy ran in seed_home's plain branch
+    only, so an Omarchy desk got no `~/.config/hypr` (step 3's test brought it with `--seed`); the
+    real Omarchy desk would have run Omarchy's defaults without the user's config. up_box now copies
+    after Omarchy's seeding too (no slot guess there). (5) One reader of a shell's command: deskcopy's
+    own (`commands`/`hit`) is gone for `deskshell::hits` (desk-shell.lua's reading, a part at a time,
+    with the word a `{name}` stands for); both now skip a launcher's options up to its `--` (`uwsm
+    app -s b -- qs -c x`), which deskcopy did and the slot's did not. (6) Step 2's refusals ran after
+    the box folder existed: `deskcopy::precheck` runs them read-only on the host files (the hypr
+    folder through refuse_src; hyprland.lua and every module it requires, transitively: a refused
+    link, a secret's name, over 1 MiB, a key's shape) from `deskguard::checks`, same words; copy's
+    own stay, for a file changed in between. (7) The profiles' `idle FILE KEY VALUE` (Caelestia's
+    `general.idle.timeouts []`) is applied to the copy right after it (`deskcopy::idle_edit`: a JSON
+    file of the box's own, a dotted key, objects made on the way; said by up). (8) `ls --json` gives
+    a desk box's slot command as `shell_cmd` (box.json has none: it is no `--shell`) and
+    `shell_from` (config, guess, none, up --shell). (9) The `--desk-shell` refusal had three
+    wordings (steps 1, 3, 5): one now ("part of --desktop desk: a desk box brings your desk, its
+    shell with it"). (10) Tests: step 4's "your config started no shell" failure met every desk test
+    whose config starts no known shell (step 5's `desk_lua` placeholder, t_desk_lua's fixture bar,
+    t_cli_up's desk case): those say `--no-shell`; and step 5's no-config refusal met every test
+    that brought its config with `--seed` only: they keep a placeholder in the stand-in HOME, which
+    `--seed` replaces in the box. t_desk_shell_slot runs the real desk.lua (step 4's stand-in Lua is
+    gone; a copy of omabox stays for the suite's own profile in its share/). (11) A real Omarchy desk
+    came up on its theme's plain dark picture, not its own wallpaper. Its
+    `~/.config/omarchy/backgrounds/THEME` is a link into a repo of the user's, and
+    `~/.local/state/omarchy/current/background` leads into it. On Omarchy's base the wallpaper is
+    Omarchy's seeding's (`seed::box_background`, #184), which follows no link. It left that folder
+    out and fell back to the theme's first picture, as an Omarchy box with `--desk-shell` always did:
+    not a desk regression. Omarchy's wallpaper engine reads `current/background` and drew what it
+    was given. The desk copy now does this step as it does the rest of the copy
+    (`deskcopy::wallpaper`). When that folder (or `backgrounds/`) is a link, it copies the folder's
+    top-level pictures into the box's own `~/.config/omarchy/backgrounds/THEME`. Where the folder
+    leads goes through refuse_src: the link's own path sits in `~/.config/omarchy`, which refuse_src
+    keeps out apart from plugins/ and themes/. Each picture goes through the name check, under the
+    caps for named images (32 MiB each, 128 MiB and 32 files). A pick elsewhere in HOME is copied at
+    its path there. The box's `current/background` then leads to its copy. Left as seeding has them:
+    the theme's own picture, one under /usr, one outside HOME (said), `--theme`, `--stock`. Omarchy
+    4.5's intro videos (an `intros/` folder beside the pictures) stay out: pictures only, and a box
+    needs no intro. t_desk_wallpaper (a pixel of the desk's colour; it showed nord's own picture
+    before) and deskcopy's `omarchy_wallpaper`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -13708,6 +13972,14 @@ of them, nor wayvnc (finding 34). It needs labwc.
 ## Open
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
+
+- Desk boxes, step 1 (#321, finding 700), four questions for Diogo, each with step 1's cautious
+  default: (1) a jailed agent starting a desk box: refused until step 2's copy of the desktop honours
+  what a jail hides; (2) `config desktop desk`: refused until a desk box is complete; (3) a `$HOME`
+  reached through a link (`/home` → `/var/home`): the box has the path as `$HOME` writes it, so a
+  shell that stored the resolved path would not find it; a second path in the box (a link or a
+  bind) is open; (4) a desk box's save started as a non-desk box, or the other way: said, not
+  refused (the saved files carry the other HOME's paths).
 
 - t_guard's nested `up --interactive` (#406): cause found, aquamarine 0.15.1's race (finding 692).
   The package test's guests run boxes on the system's aquamarine, so t_guard skips its nested

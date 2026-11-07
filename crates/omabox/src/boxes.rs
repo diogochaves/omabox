@@ -24,6 +24,51 @@ pub fn meta(d: &[u8], key: &str) -> (Vec<u8>, bool) {
     json::field(&at(d, "box.json"), key)
 }
 
+/// The box's HOME inside it, for every box but a desk one (#321), and any box from before box.json
+/// had a `home`.
+pub const SBX_HOME: &str = "/home/sbx";
+
+/// P is absolute, not `/`, and lexically clean: no empty, `.` or `..` part, no trailing slash, no
+/// control character.
+pub fn clean_abs(p: &[u8]) -> bool {
+    p.len() > 1
+        && p[0] == b'/'
+        && !p.iter().any(|c| c.is_ascii_control())
+        && p[1..]
+            .split(|c| *c == b'/')
+            .all(|c| !c.is_empty() && c != b"." && c != b"..")
+}
+
+/// box_home D (#321): the box's HOME inside it, as box.json's `home` says (up writes it, outside
+/// what the box can write), when that is a clean absolute path; else SBX_HOME (a box from before
+/// it, or a value that is not one).
+pub fn box_home(d: &[u8]) -> Vec<u8> {
+    let (h, _) = meta(d, "home");
+    if clean_abs(&h) {
+        h
+    } else {
+        SBX_HOME.as_bytes().to_vec()
+    }
+}
+
+/// The box at D is plain-like (#247, #321): a plain box, or a desk box on a plain base (box.json's
+/// desktop and desk_base; Desktop::plain_like).
+pub fn plain_like(d: &[u8]) -> bool {
+    use crate::upspec::{DeskBase, Desktop};
+    Desktop::of_box(&meta(d, "desktop").0).plain_like(DeskBase::of_box(&meta(d, "desk_base").0))
+}
+
+/// The box at D runs its shell in share/shell.sh's slot (#438): a plain box's `up --shell CMD`
+/// (box.json shell_cmd, #247), or a desk box with a shell (#321 step 4, finding 703), whose slot runs
+/// what its user's config starts (shellnote::slot_cmd). Omarchy's shell has no slot, a desk box's on
+/// Omarchy's base included (its shell is Omarchy's, finding 702).
+pub fn slot_shell(d: &[u8]) -> bool {
+    !meta(d, "shell_cmd").0.is_empty()
+        || (crate::upspec::Desktop::of_box(&meta(d, "desktop").0) == crate::upspec::Desktop::Desk
+            && plain_like(d)
+            && meta(d, "shell").0 == b"true")
+}
+
 /// box_pid's answer.
 pub enum BoxPid {
     None,
@@ -664,6 +709,42 @@ pub fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // box_home (#321): box.json's `home` when it is a clean absolute path, else /home/sbx.
+    #[test]
+    fn box_home_defaults() {
+        let d = std::env::temp_dir().join(format!("omabox-boxhome-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let db = shell::bytes(&d).to_vec();
+        // No box.json, or one from before `home`: /home/sbx.
+        assert_eq!(box_home(&db), SBX_HOME.as_bytes());
+        std::fs::write(d.join("box.json"), r#"{"desktop":"plain"}"#).unwrap();
+        assert_eq!(box_home(&db), SBX_HOME.as_bytes());
+        for (home, want) in [
+            ("/home/sbx", "/home/sbx"),
+            ("/home/u", "/home/u"),
+            ("/var/home/u", "/var/home/u"),
+            ("/root", "/root"),
+            ("", SBX_HOME),
+            ("/", SBX_HOME),
+            ("home/u", SBX_HOME),
+            ("/home/u/", SBX_HOME),
+            ("/home//u", SBX_HOME),
+            ("/home/./u", SBX_HOME),
+            ("/home/../etc", SBX_HOME),
+            ("/home/u/..", SBX_HOME),
+            ("/home/u\n/x", SBX_HOME),
+        ] {
+            let j = serde_json::json!({ "desktop": "desk", "home": home });
+            std::fs::write(d.join("box.json"), j.to_string()).unwrap();
+            assert_eq!(box_home(&db), want.as_bytes(), "{home:?}");
+        }
+        // Not a string: the default.
+        std::fs::write(d.join("box.json"), r#"{"home":["/home/u"]}"#).unwrap();
+        assert_eq!(box_home(&db), SBX_HOME.as_bytes());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     // box_file (finding 74; t_unit_config's): a flag over a link to a FIFO is written, not blocked
     // on; over a link to a host file, that file is untouched and the flag a plain file.

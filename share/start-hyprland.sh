@@ -35,12 +35,13 @@ fi
 # read-only install's 0444, and a write to the copy in the box was refused (finding 528).
 cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua
 cat /opt/omabox/share/hyprland.lua > "$cfg.new" && mv -f "$cfg.new" "$cfg"
-# A plain box's desktop (#247), copied with it for the same reason: an omabox update under a running
-# box must not mix this copy of hyprland.lua with a newer plain.lua.
-if [ "${OMABOX_DESKTOP:-}" = plain ]; then
-  cat /opt/omabox/share/plain.lua > "$XDG_RUNTIME_DIR/omabox-plain.lua.new" &&
-    mv -f "$XDG_RUNTIME_DIR/omabox-plain.lua.new" "$XDG_RUNTIME_DIR/omabox-plain.lua"
-fi
+# The desktops hyprland.lua runs (#247, #321: omarchy.lua, plain.lua, desk.lua and what desk.lua
+# loads), copied with it for the same reason, all of them every time: an omabox update under a running
+# box must not mix this copy of hyprland.lua with a newer one of them.
+for f in omarchy plain desk autostart desk-shell; do
+  cat "/opt/omabox/share/$f.lua" > "$XDG_RUNTIME_DIR/omabox-$f.lua.new" &&
+    mv -f "$XDG_RUNTIME_DIR/omabox-$f.lua.new" "$XDG_RUNTIME_DIR/omabox-$f.lua"
+done
 # The version this Hyprland is, as a desk's HOME has it after its first session (finding 626): with
 # none, the box's Hyprland wrote 0.0.0, and the next Hyprland started in the box (a test's nested
 # compositor, one run by hand) took itself for an upgrade and opened Hyprland's update news over its
@@ -53,9 +54,16 @@ if [ ! -e "$seen" ]; then
 fi
 # The parent labwc's XDG_CURRENT_DESKTOP (labwc:wlroots) is not the box desktop's (#247): Hyprland
 # warned on screen that it was set from outside, and shells read it to pick their compositor (Omarchy's
-# config set it back; a plain box's does not). Hyprland sets its own. LABWC_PID stays: omabox's own
-# `labwc --reconfigure` (mon.rs, an NVIDIA box's monitor windows) finds labwc by it, and a shell that
-# reads it does so only when XDG_CURRENT_DESKTOP is unset (noctalia).
+# config set it back; a plain box's does not). Hyprland sets its own. LABWC_PID: omabox's own
+# `labwc --reconfigure` (mon.rs, an NVIDIA box's monitor windows) finds labwc by it. It stays in an
+# Omarchy or plain box, whose shell is omabox's or named by --shell; a desk box's (#321 step 5, finding
+# 704) runs the user's own shell, which may take it for labwc's session (noctalia reads it when
+# XDG_CURRENT_DESKTOP is unset), so it is OMABOX_LABWC_PID there, and mon.rs passes it back to labwc.
+lw=()
+if [ "${OMABOX_DESKTOP:-}" = desk ]; then
+  lw=(-u LABWC_PID)
+  [ -z "${LABWC_PID:-}" ] || lw+=("OMABOX_LABWC_PID=$LABWC_PID")
+fi
 exec env -u XDG_CURRENT_DESKTOP -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u WLR_SCENE_DISABLE_VISIBILITY -u DISPLAY -u OMABOX_HYPRLAND \
-  OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
+  "${lw[@]}" OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
   "${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --config "$cfg"

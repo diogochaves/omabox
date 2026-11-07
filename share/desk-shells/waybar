@@ -1,0 +1,7 @@
+# Waybar (#321): `key value` lines, crates/omabox/src/deskshell.rs says the keys.
+# Not installed here: to verify in the Arch VM (finding 675).
+start waybar
+unit waybar.service
+config .config/waybar
+# unverified
+layer waybar

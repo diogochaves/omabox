@@ -140,6 +140,16 @@ pub struct Up {
     pub desktop: Desktop,
     /// How it was chosen: --desktop, the config, or what the machine has (up says a plain one).
     pub chosen: upspec::Chosen,
+    /// The box's HOME inside it (#321): a desk box's at the user's HOME path (upspec::desk_home),
+    /// set in checks; empty for /home/sbx (box_home).
+    pub home: Vec<u8>,
+    /// A desk box's base (#321, finding 708): upspec::desk_base, set in checks.
+    pub desk_base: upspec::DeskBase,
+    /// What a desk box's copy of the desktop did (#321 step 2): deskcopy's lines read back, set
+    /// once the HOME is seeded (box.json desk_copy, shell_guess, shell_from; OMABOX_DESK_SHELL).
+    pub desk_copy: crate::deskcopy::Report,
+    /// Each --seed as given, read with seed_spec once the box's HOME is known (the end of parse).
+    pub seed_args: Vec<Vec<u8>>,
     /// `--shell CMD` (#247): a plain box's shell is CMD, run by share/shell.sh's slot.
     pub shell_cmd: Vec<u8>,
     pub nopointer: bool,
@@ -176,6 +186,20 @@ impl Up {
 
     pub fn clean_has(&self, k: &str) -> bool {
         upspec::clean_has(&self.clean_keep, k)
+    }
+
+    /// Plain, or desk on a plain base (#247, #321): Desktop::plain_like with this box's desk_base.
+    pub fn plain_like(&self) -> bool {
+        self.desktop.plain_like(self.desk_base)
+    }
+
+    /// The box's HOME inside it (#321): /home/sbx, or a desk box's at the user's HOME path.
+    pub fn box_home(&self) -> &[u8] {
+        if self.home.is_empty() {
+            crate::boxes::SBX_HOME.as_bytes()
+        } else {
+            &self.home
+        }
     }
 
     /// `${omarchy:-/usr/share/omarchy}`.
@@ -339,15 +363,7 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
             }
             b"--seed" => {
                 optarg(ctx, a, v)?;
-                match upspec::seed_spec(&val) {
-                    Ok(spec) => u.seeds.push(spec),
-                    Err(e) => {
-                        if e == SeedRefused::Jail {
-                            ctx.parsed();
-                        }
-                        return Err(ctx.refused());
-                    }
-                }
+                u.seed_args.push(val.clone());
                 u.named.push(("seed", tilde(before(&val, b":")), "into"));
             }
             b"--no-seed" => {
@@ -556,6 +572,25 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
     {
         set_hyprland(ctx, u, &v, jailed)?;
     }
+    // --seed's DEST is in the box HOME (~/x, or the HOME's path): a desk box's (#321) is the user's
+    // HOME path, known once --desktop is read (the config never makes a box a desk one).
+    let seed_home = if u.desktop_given == Some(Desktop::Desk) {
+        let h = shell::env_or_empty("HOME");
+        upspec::desk_home(&h).unwrap_or(h)
+    } else {
+        crate::boxes::SBX_HOME.as_bytes().to_vec()
+    };
+    for val in std::mem::take(&mut u.seed_args) {
+        match upspec::seed_spec(&val, &seed_home) {
+            Ok(spec) => u.seeds.push(spec),
+            Err(e) => {
+                if e == SeedRefused::Jail {
+                    ctx.parsed();
+                }
+                return Err(ctx.refused());
+            }
+        }
+    }
     Ok(false)
 }
 
@@ -590,11 +625,79 @@ fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
                 "up: ",
                 opt,
                 " needs Omarchy, and ",
-                upspec::plain_why(u.chosen)
+                upspec::plain_why(u.desktop, u.chosen)
             )));
         }
     }
     Ok(())
+}
+
+/// What a desk box (#321) cannot have: a jailed caller's (S9) yet, --desk-shell (part of it), --clean.
+/// The refusal, and whether it is a usage one (2), or None.
+fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
+    if jailed {
+        return Some((
+            "up: --desktop desk is not for an agent inside ai-jail: the box's HOME is at your HOME's path, and the jail's hidden paths are not hidden there yet",
+            false,
+        ));
+    }
+    if u.desk_shell {
+        return Some((
+            "up: --desk-shell is part of --desktop desk: a desk box brings your desk, its shell with it (on Omarchy's base, your plugins and shell.json)",
+            true,
+        ));
+    }
+    if u.clean {
+        return Some((
+            "up: --clean is not for a desk box: its HOME is at your HOME's path, which carries your login name",
+            true,
+        ));
+    }
+    None
+}
+
+/// The user's Hyprland config, as their Hyprland reads it ($XDG_CONFIG_HOME, when absolute, else
+/// ~/.config; hypr/hyprland.lua): its path, and its text (None when it cannot be read).
+fn user_hypr_lua() -> (Vec<u8>, Option<Vec<u8>>) {
+    let x = shell::env_or_empty("XDG_CONFIG_HOME");
+    let dir = if x.starts_with(b"/") {
+        x
+    } else {
+        cat!(shell::env_or_empty("HOME"), "/.config")
+    };
+    let f = cat!(dir, "/hypr/hyprland.lua");
+    let text = std::fs::read(shell::path(&f)).ok();
+    (f, text)
+}
+
+fn desk_refusals(ctx: &Ctx, u: &Up, jailed: bool) -> Res<()> {
+    match desk_refusal(u, jailed) {
+        Some((why, true)) => Err(ctx.usage_die(why)),
+        Some((why, false)) => Err(ctx.die(why)),
+        None => Ok(()),
+    }
+}
+
+/// What `up --from SAVE` says when the save's box had its HOME at another path than this box's
+/// (#321): FD, the save's save.json (no `home`: /home/sbx, a save from before it); HOME, this box's.
+fn from_home_note(save: &[u8], fd: &[u8], home: &[u8]) -> Option<Vec<u8>> {
+    let (h, _) = json::field(&shell::path(fd), "home");
+    let theirs = if crate::boxes::clean_abs(&h) {
+        h
+    } else {
+        crate::boxes::SBX_HOME.as_bytes().to_vec()
+    };
+    (theirs != home).then(|| {
+        cat!(
+            "note: save '",
+            save,
+            "' was made in a box whose HOME was ",
+            theirs,
+            ", this one's is ",
+            home,
+            ": what in it names the old path may not be found"
+        )
+    })
 }
 
 /// --desktop plain and --shell CMD (#247): what needs Omarchy refused on a plain box; its shell is
@@ -603,7 +706,7 @@ fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
 /// a --shell on a plain box.
 fn plain_shell(ctx: &Ctx, u: &mut Up) -> Res<()> {
     if !u.shell_cmd.is_empty() {
-        if u.desktop != Desktop::Plain {
+        if !u.plain_like() {
             return Err(ctx.usage_die(
                 "up: --shell needs --desktop plain: an Omarchy box runs Omarchy's shell",
             ));
@@ -612,10 +715,16 @@ fn plain_shell(ctx: &Ctx, u: &mut Up) -> Res<()> {
             return Err(ctx.usage_die("up: --shell runs a shell, and --no-shell starts none"));
         }
     }
-    if u.desktop != Desktop::Plain {
+    if !u.plain_like() {
         return Ok(());
     }
     plain_refusals(ctx, u)?;
+    // A desk box (#321 step 4, finding 703) has the shell its user's config starts, in the slot
+    // (share/desk-shell.lua), unless --no-shell; --shell CMD runs another in its place, and
+    // --quickshell is the build either finds as `qs`.
+    if u.desktop == Desktop::Desk {
+        return Ok(());
+    }
     if u.shell_cmd.is_empty() {
         if !u.quickshell.is_empty() {
             return Err(ctx.usage_die(
@@ -639,6 +748,29 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let here = install::omarchy_at(b"/");
     (u.desktop, u.chosen) =
         upspec::resolve_desktop(u.desktop_given, !u.omarchy.is_empty(), conf, here);
+    // --desktop desk (#321): a plain box whose HOME, still a fake one of its own, sits at the user's
+    // HOME path. Not for a jailed caller yet (S9: the jail's hidden paths are not hidden in it), nor
+    // with --desk-shell (the desk's shell comes later) or --clean (a HOME path carries the login).
+    // Its base (finding 708), fixed here and kept in box.json: Omarchy's where your desk is
+    // Omarchy's (the machine has it and your Hyprland config loads it), else plain. On Omarchy's
+    // base (finding 702) the box is an Omarchy box running your config (share/desk.lua), its shell
+    // Omarchy's with your desk's plugins and shell.json: --desk-shell's copy (#206), implied when
+    // your Omarchy config folder is there.
+    if u.desktop == Desktop::Desk {
+        desk_refusals(ctx, u, jailed)?;
+        u.home = upspec::desk_home(&shell::env_or_empty("HOME"))
+            .map_err(|why| ctx.die(cat!("up: --desktop desk: ", why)))?;
+        let (_, text) = user_hypr_lua();
+        u.desk_base = upspec::desk_base(here, text.as_deref());
+        if u.desk_base == upspec::DeskBase::Omarchy {
+            let d = shell::env("OMABOX_DESK_CONFIG")
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.config/omarchy"));
+            u.desk_shell = shell::path(&d).is_dir();
+        }
+    } else if u.desk_shell {
+        say("note: --desk-shell is now part of --desktop desk (your Omarchy, mods and all)");
+    }
     if u.desktop == Desktop::Omarchy && !here && u.omarchy.is_empty() {
         return Err(ctx.die(cat!(
             "up: an Omarchy box needs Omarchy, and this machine has none (no /usr/share/omarchy/default/hypr/bootstrap.lua",
@@ -650,6 +782,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             "): --desktop plain, or --omarchy DIR for a checkout of it"
         )));
     }
+    // A desk box's own refusals (#321 step 5), once its HOME and base are known.
+    if u.desktop == Desktop::Desk {
+        crate::deskguard::checks(ctx, u, jailed)?;
+    }
     plain_shell(ctx, u)?;
     // --stock (#265, finding 613): Omarchy as a new user sees it. Omarchy's own bar on CLEAN_THEME
     // with its own wallpaper, English in UTC (finding 363), none of the desk's look (seed_home); the
@@ -660,10 +796,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // A plain box's --clean (#247) is the generic part: no stock bar or theme (Omarchy's), its own
     // sentinel (plain.lua's background colour), the locale, pointer, network, animations, fonts and
     // identity as on any clean box.
-    if u.clean && u.desktop != Desktop::Plain {
+    if u.clean && !u.plain_like() {
         u.stock = true;
     }
-    if u.clean && u.desktop == Desktop::Plain && !u.clean_has("locale") {
+    if u.clean && u.plain_like() && !u.clean_has("locale") {
         u.clean_lang = upspec::clean_locale().as_bytes().to_vec();
         u.clean_zone = upspec::CLEAN_TZ.as_bytes().to_vec();
     }
@@ -912,7 +1048,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 "; put the build in a folder of its own"
             )));
         }
-        if let Some(why) = refuse_dest(&d) {
+        if let Some(why) = refuse_dest(&d, u.box_home()) {
             return Err(ctx.die(cat!(
                 "up: ",
                 opt,
@@ -1059,6 +1195,11 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 ));
             }
         }
+        // Its HOME's path in the box (#321): a save from before it was /home/sbx's. Said, not
+        // refused: what in it names the old path (a desk's settings) may not be found.
+        if let Some(note) = from_home_note(&u.from, &fd, u.box_home()) {
+            say(note);
+        }
     }
     // Nor does a box behind pasta start from a process with no_new_privs: bwrap cannot write its uid
     // map there (finding 89). A connected box falls back to none; an isolated one is refused. A box
@@ -1143,7 +1284,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // A box starts from the user's Omarchy look, which Omarchy makes at their first login (finding
     // 130). Said before anything is made. With --theme the box starts on that one instead.
     let home = shell::env_or_empty("HOME");
-    if u.desktop == Desktop::Omarchy
+    if !u.plain_like()
         && u.theme.is_empty()
         && !shell::path(&cat!(home, "/.local/state/omarchy/current/theme")).is_dir()
     {
@@ -1503,14 +1644,21 @@ fn mounts(ctx: &Ctx, u: &mut Up) -> Res<()> {
     let home = shell::env_or_empty("HOME");
     if let Some(top) = repo_top() {
         u.auto.push(top.clone());
-        if let Some(why) = refuse_src(&top) {
+        // (a desk box's HOME is at the user's HOME path, #321: a repo that is that HOME, or holds
+        // it, or is one of omabox's own files in it, is left out, said, as it cannot be mounted)
+        let desk_why = || {
+            (!u.home.is_empty())
+                .then(|| refuse_dest(&top, &u.home))
+                .flatten()
+        };
+        if let Some(why) = refuse_src(&top).or_else(desk_why) {
             say(cat!("not mounting the repo ", top, ": ", why));
         } else {
             u.robinds.insert(0, (top.clone(), top.clone()));
             // A linked worktree's git dir (finding 250), before the repo: mounted after, one that held
             // it would hide it.
             for gd in install::repo_git_dirs(&top, jailpath::view()) {
-                if let Some(why) = refuse_src(&gd).or_else(|| refuse_dest(&gd)) {
+                if let Some(why) = refuse_src(&gd).or_else(|| refuse_dest(&gd, u.box_home())) {
                     say(cat!(
                         "not mounting ",
                         gd,
@@ -1601,7 +1749,7 @@ fn mounts(ctx: &Ctx, u: &mut Up) -> Res<()> {
                 why
             )));
         }
-        if let Some(why) = refuse_dest(&dest) {
+        if let Some(why) = refuse_dest(&dest, u.box_home()) {
             return Err(ctx.die(cat!(
                 ctx.label(),
                 "refusing to mount ",
@@ -1651,7 +1799,7 @@ fn mounts(ctx: &Ctx, u: &mut Up) -> Res<()> {
         }
     }
     for p in &u.overlays {
-        if let Some(why) = refuse_src(p).or_else(|| refuse_dest(p)) {
+        if let Some(why) = refuse_src(p).or_else(|| refuse_dest(p, u.box_home())) {
             return Err(ctx.die(cat!("refusing to overlay ", p, " in a box: ", why)));
         }
     }
@@ -1846,18 +1994,26 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
         ));
     }
     if u.has("shell") && m("shell_cmd") != u.shell_cmd {
+        // (a desk box's, #321 step 4: what its slot runs from its config, when it runs one)
+        let desk_cmd = if Desktop::of_box(&m("desktop")) == Desktop::Desk {
+            crate::shellnote::slot_cmd(ctx)
+        } else {
+            Vec::new()
+        };
+        let theirs = if !m("shell_cmd").is_empty() {
+            m("shell_cmd")
+        } else if !desk_cmd.is_empty() {
+            cat!(crate::term::plain_cap(&desk_cmd, 200), ", from your config")
+        } else if crate::boxes::plain_like(&ctx.d) {
+            b"none".to_vec()
+        } else {
+            b"Omarchy's".to_vec()
+        };
         diff.push(cat!(
             "--shell ",
             u.shell_cmd,
             " (its shell is ",
-            or(
-                m("shell_cmd"),
-                if desktop == Desktop::Plain {
-                    "none"
-                } else {
-                    "Omarchy's"
-                }
-            ),
+            theirs,
             ")"
         ));
     }
@@ -1977,6 +2133,70 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #321: a desk box is refused to a jailed caller (S9), with --desk-shell and with --clean;
+    // anything else of a plain box's it may have.
+    #[test]
+    fn desk_refusals_each() {
+        let u = |desk_shell, clean| Up {
+            desk_shell,
+            clean,
+            ..Up::default()
+        };
+        assert_eq!(desk_refusal(&u(false, false), false), None);
+        let (why, usage) = desk_refusal(&u(false, false), true).unwrap();
+        assert!(why.contains("inside ai-jail") && !usage, "{why}");
+        // (the jail first: whatever else was asked)
+        assert_eq!(
+            desk_refusal(&u(true, true), true),
+            desk_refusal(&u(false, false), true)
+        );
+        let (why, usage) = desk_refusal(&u(true, false), false).unwrap();
+        assert!(why.starts_with("up: --desk-shell ") && usage, "{why}");
+        let (why, usage) = desk_refusal(&u(false, true), false).unwrap();
+        assert!(why.starts_with("up: --clean ") && usage, "{why}");
+        // The plain refusals' wording names the desktop asked for.
+        assert_eq!(
+            upspec::plain_why(Desktop::Desk, upspec::Chosen::Given),
+            "--desktop desk has none of it"
+        );
+        assert_eq!(
+            upspec::plain_why(Desktop::Plain, upspec::Chosen::Given),
+            "--desktop plain has none of it"
+        );
+        // Up's HOME in the box: /home/sbx unless a desk one was set.
+        assert_eq!(u(false, false).box_home(), b"/home/sbx");
+        let mut d = u(false, false);
+        d.home = b"/home/u".to_vec();
+        assert_eq!(d.box_home(), b"/home/u");
+    }
+
+    // #321: up --from says when the save's HOME was at another path in its box; a save from before
+    // save.json had `home` was /home/sbx's.
+    #[test]
+    fn from_home_notes() {
+        let d = std::env::temp_dir().join(format!("omabox-fromhome-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let fd = crate::shell::bytes(&d.join("save.json")).to_vec();
+        std::fs::write(d.join("save.json"), r#"{"box":"b"}"#).unwrap();
+        assert_eq!(from_home_note(b"s", &fd, b"/home/sbx"), None);
+        let n = from_home_note(b"s", &fd, b"/home/u").unwrap();
+        assert_eq!(
+            n,
+            b"note: save 's' was made in a box whose HOME was /home/sbx, this one's is /home/u: what in it names the old path may not be found"
+        );
+        std::fs::write(d.join("save.json"), r#"{"box":"b","home":"/home/u"}"#).unwrap();
+        assert_eq!(from_home_note(b"s", &fd, b"/home/u"), None);
+        assert!(from_home_note(b"s", &fd, b"/home/sbx").is_some());
+        // A value that is no clean path reads as /home/sbx.
+        std::fs::write(d.join("save.json"), r#"{"home":"/home/../etc"}"#).unwrap();
+        assert_eq!(from_home_note(b"s", &fd, b"/home/sbx"), None);
+        // No save.json at all: /home/sbx's.
+        std::fs::remove_file(d.join("save.json")).unwrap();
+        assert_eq!(from_home_note(b"s", &fd, b"/home/sbx"), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn a_down_over_before_the_up_is_not_one_that_came() {

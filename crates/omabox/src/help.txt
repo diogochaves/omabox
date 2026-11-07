@@ -14,7 +14,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
             [--stock | --clean [--keep animations,bar,clock,fonts,identity,locale,pointer,wallpaper]]   a new user's look; --clean: frozen too
             [--hyprland PATH]                            a Hyprland build or folder of yours, not the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
-            [--omarchy DIR | --desktop plain [--shell CMD]]   an Omarchy tree (a checkout); plain: nothing of Omarchy's, CMD its shell
+            [--omarchy DIR | --desktop plain|desk [--shell CMD]]   an Omarchy tree (a checkout); plain: nothing of Omarchy's, CMD its shell; desk: plain at your HOME's path
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      start it under a free name, box-1, box-2, ... (printed)
             [--json]                                     the box as ls --json lists it, on stdout
@@ -108,9 +108,10 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
-                                                         a box's logs: hyprland (the default), shell, apps, run,
-                                                         events, keyring, labwc, systemd, audio, polkit,
-                                                         gdb, journal, notifications, box, reap
+                                                         a box's logs: hyprland (the default), shell, apps,
+                                                         autostart (a desk box's), run, events, keyring, labwc,
+                                                         systemd, audio, polkit, gdb, journal, notifications,
+                                                         box, reap
   omabox log [-b NAME] run [JOB] [-n 100|all] [--grep RE [-i]] [-f]   a run -d job's log: JOB its pid (jobs), none the latest
   omabox log [-b NAME] notifications [--json] [-n N] [--grep RE [-i]] [-f]   what apps sent the notification server
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
@@ -118,7 +119,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
   omabox events [-b NAME] --mark [MARK] [--json]         from here: prints the offset, keeps MARK for --since
   omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
-  omabox path [NAME | -b NAME] [--home | --run | --logs [--json]]   the box dir; --home: its /home/sbx (<dir>/home);
+  omabox path [NAME | -b NAME] [--home | --run | --logs [--json]]   the box dir; --home: its HOME (<dir>/home);
                                                          --run: its /run/user/$UID (<dir>/run); --logs: each log's file
   omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
   omabox ls [--json]
@@ -170,8 +171,8 @@ too (omabox -b NAME windows).
 @short log events
 -f (or --follow): on until the box goes down
 @ path
-From the host, the box's HOME (/home/sbx in it) is <dir>/home, `omabox path --home`, and its
-/run/user/$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, `omabox path
+From the host, the box's HOME (/home/sbx in it, or your HOME's path in a desk box) is <dir>/home,
+`omabox path --home`, and its /run/user/$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, `omabox path
 --run`. An agent reads and writes box files with its own file tools on the path --home prints. The host's own
 /run/user/$UID is the real session's: never read a box app's state there.
 @ brief
@@ -268,6 +269,29 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
   plugin commands on the box. Without --desktop: `omabox config desktop`'s, else omarchy where Omarchy
   is installed and plain where it is not (up says so; doctor and setup test the same); --omarchy DIR
   is an Omarchy box. ls says a plain box's desktop (and shell) under its line.
+--desktop desk (#321): your own desktop in a box, its HOME at your HOME's path ($HOME in the box is
+  yours), so what names your paths finds the box's: still the fake HOME, never your files (but the
+  repo, --ro-bind, --seed's and the copy of your desktop). From the host it is <dir>/home, as any
+  box's; a path under your HOME in a command is the box HOME's there, not yours (run says so). A
+  mount (--ro-bind, --overlay) goes inside that HOME, never at it or above it, over omabox's own
+  files in it, nor through a link in it. up copies in your ~/.config/hypr (links followed, as
+  copies), the config and state of the shell it finds, and the images they name, before --seed's;
+  never a secret store or what looks like a key, capped, what it left out said (box.json desk_copy).
+  It needs a Lua config (a hyprland.conf alone is refused: hyprctl eval refuses it). Its base is your
+  desk's: Omarchy's (Omarchy here and your hypr/hyprland.lua loading it: an Omarchy box, its shell
+  Omarchy's with your plugins and shell.json, as --desk-shell copies them; it takes --plugin,
+  --theme, --theme-dir, --dnd, --no-dock and --omarchy, refuses --stock, --stock-bar and --keep),
+  else plain. Its Hyprland runs your copied hyprland.lua; what it starts goes through an autostart
+  policy (idle and lock daemons, your systemd session, system-bus applets, what the box runs itself
+  are dropped; binds run as on your desk), each decision a line of `omabox log autostart`. Its idle is
+  held off (tools/idlehold): your shell's idle timeouts never lock or blank it. On a plain base its
+  shell is the one your config starts (DMS, Noctalia, Caelestia, Waybar, a Quickshell config), run in
+  the box's shell slot as --shell's: up waits for it and says which, and ls, pid shell, log shell and
+  restart-shell work on it; a second shell your config starts is dropped. --shell CMD runs another in
+  its place, --no-shell none; a config that starts none omabox knows fails up, saying so. Refused
+  with --desk-shell (part of it; alone it still works, with a note), --clean (the path carries your
+  login name) and inside ai-jail (not yet); `omabox config desktop` does not take desk yet, and
+  `check run --desktop desk` is refused (a check needs the same box every run).
 --shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`, `caelestia shell
   -d`), run by sh in the session; the shell is all CMD starts (#438): a launcher may start it and
   exit, and the shell is gone once nothing of it is left. up waits until one of its processes draws

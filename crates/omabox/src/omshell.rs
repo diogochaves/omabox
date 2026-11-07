@@ -68,7 +68,7 @@ pub fn need_shell(ctx: &Ctx, cmd: &str) -> Res<()> {
 /// A plain box (`up --desktop plain`, #247) has nothing of Omarchy's: CMD's refusal, saying WHAT it
 /// lacks. Any other box: Ok.
 pub fn plain_refuse(ctx: &Ctx, cmd: &str, what: &str) -> Res<()> {
-    if crate::upspec::Desktop::of_box(&meta(&ctx.d, "desktop").0) == crate::upspec::Desktop::Plain {
+    if crate::boxes::plain_like(&ctx.d) {
         return Err(ctx.die(cat!(
             cmd,
             ": box '",

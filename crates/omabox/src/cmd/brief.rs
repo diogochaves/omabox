@@ -56,10 +56,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         b"the path omabox -b NAME path --home prints".to_vec(),
     );
     let (mut mons, mut wins) = (Vec::new(), Vec::new());
+    // (the box's HOME inside it: /home/sbx, or your HOME's path in a desk box, #321)
+    let mut inside = crate::boxes::SBX_HOME.as_bytes().to_vec();
     if box_alive(ctx)? {
         need_box(ctx)?;
         b = ctx.name.clone();
         home = cat!(ctx.d, "/home");
+        inside = crate::boxes::box_home(&ctx.d);
         mons = crate::hypr::hypr_json(ctx, &["monitors"])?;
         wins = crate::win::box_windows(ctx, None)?;
     } else {
@@ -99,12 +102,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         " hyprctl ..., omabox -b ",
         b,
         " run -- CMD instead.\n",
-        "Box files: the box's /home/sbx is ",
+        "Box files: the box's ",
+        inside,
+        " is ",
         home,
         " on the host: Read, Write and Edit there, never $(omabox path) in a command.\n",
         "Several shell steps in the box: write them to a script there with your file tool, then omabox -b ",
         b,
-        " run -- sh /home/sbx/F.sh.\n",
+        " run -- sh ",
+        inside,
+        "/F.sh.\n",
         "Stay in your worktree: no cd out of it, no git on another checkout (absolute paths instead). Scroll with scroll X Y DY --source wheel.\n",
         own,
         " Report what you saw, and what a box cannot show (real hardware, the installed package).\n",

@@ -10,8 +10,10 @@ use crate::jq::{self, Args};
 use crate::jqprog::{DESK_FACTS_JQ, DESK_TARGET_JQ, WIN_JQ};
 use crate::shell;
 
-/// EVENTS_LOG: the box's events log, as the box sees it.
-pub const EVENTS_LOG: &str = "/home/sbx/events.log";
+/// events_log D: box D's events log, as the box sees it (in its HOME, box_home: #321).
+pub fn events_log(d: &[u8]) -> Vec<u8> {
+    crate::cat!(crate::boxes::box_home(d), "/events.log")
+}
 const DESK_BATCH: &str = "j/clients; j/layers; j/activewindow; j/activeworkspace; j/monitors";
 const SNAP_SH: &str =
     r#"stat -L -c %s -- "$1" 2>/dev/null || echo -; exec timeout 2 hyprctl --batch "$2""#;
@@ -21,10 +23,14 @@ const SNAP_SH: &str =
 /// Never dies: a desktop that could not be read leaves the answer as it was. STDIN_NULL: run in the
 /// background, where bash gives it /dev/null and ignores SIGINT and SIGQUIT in it.
 pub fn desk_snap(ctx: &Ctx, stdin_null: bool) -> Vec<u8> {
-    let args: Vec<Vec<u8>> = ["/usr/bin/sh", "-c", SNAP_SH, "sh", EVENTS_LOG, DESK_BATCH]
-        .iter()
-        .map(|w| w.as_bytes().to_vec())
-        .collect();
+    let args: Vec<Vec<u8>> = vec![
+        b"/usr/bin/sh".to_vec(),
+        b"-c".to_vec(),
+        SNAP_SH.as_bytes().to_vec(),
+        b"sh".to_vec(),
+        events_log(&ctx.d),
+        DESK_BATCH.as_bytes().to_vec(),
+    ];
     // (In the background: /dev/null its stdin, SIGINT and SIGQUIT ignored, as bash's `&` has it.)
     let r = if stdin_null {
         crate::exec::on_box_bg(

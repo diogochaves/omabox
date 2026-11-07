@@ -7,6 +7,7 @@ use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::{BoxPid, box_alive, box_pid, need_box, touch};
 use crate::cat;
 use crate::cmd::log::{Kind, Reading, live, tail_lines};
+use crate::desk::events_log;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::json;
@@ -17,7 +18,6 @@ use std::io::Write;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
-const EVENTS_LOG: &[u8] = b"/home/sbx/events.log";
 /// WAIT_MAX_MS: --timeout's most, 10 min.
 const WAIT_MAX_MS: i64 = 600_000;
 
@@ -197,7 +197,7 @@ fn events_size(ctx: &Ctx) -> Option<Vec<u8>> {
         b"-c".to_vec(),
         b"%s".to_vec(),
         b"--".to_vec(),
-        EVENTS_LOG.to_vec(),
+        events_log(&ctx.d),
     ];
     let r = on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Null);
     (r.rc == 0).then(|| shell::subst(&r.out))
@@ -325,7 +325,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if rd.live {
         crate::helpers::warn_stale(ctx);
     }
-    if !rd.there(ctx, Kind::Box, EVENTS_LOG)? {
+    if !rd.there(ctx, Kind::Box, &events_log(&ctx.d))? {
         return Err(ctx.die(cat!(
             "box '", ctx.name,
             "' records no events (it was started by an omabox that did not record them yet: omabox down ",
@@ -470,7 +470,7 @@ fn events_from(ctx: &Ctx, rd: &Reading, from: i64) -> Vec<u8> {
             .and_then(|s| shell::test_int(&s))
             .unwrap_or(0)
     } else {
-        log_dead_path(ctx, EVENTS_LOG)
+        log_dead_path(ctx, &events_log(&ctx.d))
             .and_then(|p| std::fs::metadata(shell::path(&p)).ok())
             .map_or(0, |m| i64::try_from(m.len()).unwrap_or(0))
     };
@@ -482,7 +482,7 @@ fn events_from(ctx: &Ctx, rd: &Reading, from: i64) -> Vec<u8> {
         from = 0;
     }
     if from == 0 {
-        return rd.cat(ctx, Kind::Box, EVENTS_LOG);
+        return rd.cat(ctx, Kind::Box, &events_log(&ctx.d));
     }
     let part = if rd.live {
         let argv = vec![
@@ -490,11 +490,11 @@ fn events_from(ctx: &Ctx, rd: &Reading, from: i64) -> Vec<u8> {
             b"-c".to_vec(),
             format!("+{from}").into_bytes(),
             b"--".to_vec(),
-            EVENTS_LOG.to_vec(),
+            events_log(&ctx.d),
         ];
         on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit).out
     } else {
-        let p = log_dead_path(ctx, EVENTS_LOG).unwrap_or_default();
+        let p = log_dead_path(ctx, &events_log(&ctx.d)).unwrap_or_default();
         crate::sig::command("tail")
             .arg("-c")
             .arg(format!("+{from}"))
@@ -545,7 +545,7 @@ fn follow_events(
         b"-F".to_vec(),
         cat!("--pid=", pid),
         b"--".to_vec(),
-        EVENTS_LOG.to_vec(),
+        events_log(&ctx.d),
     ];
     std::thread::scope(|sc| {
         // (follow_start's `<(...)`: SIGINT and SIGQUIT ignored in it)

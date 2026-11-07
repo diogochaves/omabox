@@ -1,0 +1,5 @@
+# Any other Quickshell config (#321), the fallback: `qs -c NAME` runs ~/.config/quickshell/NAME.
+# `key value` lines, crates/omabox/src/deskshell.rs says the keys; {name} is the config's name.
+match qs -c {name}
+match quickshell -c {name}
+config .config/quickshell/{name}

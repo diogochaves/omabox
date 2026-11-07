@@ -15,6 +15,10 @@ use crate::select::select_box;
 const WRITE_SH: &str = r#"cfg=$XDG_RUNTIME_DIR/$1; cat > "$cfg.new" &&
     if cmp -s "$cfg.new" "$cfg"; then rm -f "$cfg.new"; else mv -f "$cfg.new" "$cfg"; fi"#;
 
+/// What share/hyprland.lua runs before itself (its desktop, and what desk.lua loads): share/F.lua each,
+/// copied to the runtime dir as omabox-F.lua (start-hyprland.sh's list).
+const DESKTOP_FILES: [&str; 5] = ["omarchy", "plain", "desk", "autostart", "desk-shell"];
+
 /// share/FILE written to the box's copy COPY: whether it was.
 fn write_copy(ctx: &mut Ctx, file: &str, copy: &str) -> Res<bool> {
     let src = crate::root().join("share").join(file);
@@ -48,11 +52,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let src = crate::root().join("share/hyprland.lua");
     let src_text = crate::shell::bytes(&src).to_vec();
     let n = ctx.name.clone();
-    // A plain box's desktop (#247) first, so the two copies are of one omabox: share/plain.lua.
-    let plain = crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
-        == crate::upspec::Desktop::Plain;
-    let wrote = (!plain || write_copy(ctx, "plain.lua", "omabox-plain.lua")?)
-        && write_copy(ctx, "hyprland.lua", "omabox-hyprland.lua")?;
+    // The desktops hyprland.lua runs first (#247, #321), all of them, as start-hyprland.sh copies
+    // them, so every copy is of one omabox by the time hyprland.lua's is: an `--autoreload` box
+    // reloads at that write.
+    let mut wrote = true;
+    for f in DESKTOP_FILES {
+        wrote = wrote && write_copy(ctx, &format!("{f}.lua"), &format!("omabox-{f}.lua"))?;
+    }
+    let wrote = wrote && write_copy(ctx, "hyprland.lua", "omabox-hyprland.lua")?;
     if !wrote {
         return Err(ctx.die(cat!(
             "reload: could not write the config copy in box '",
@@ -98,4 +105,27 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Err(Exit(1));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DESKTOP_FILES;
+
+    // reload writes the copies start-hyprland.sh makes (#321): one list, each file in share/.
+    #[test]
+    fn desktop_files_as_start_hyprland_copies_them() {
+        let share = concat!(env!("CARGO_MANIFEST_DIR"), "/../../share");
+        let sh = std::fs::read_to_string(format!("{share}/start-hyprland.sh")).unwrap();
+        let line = sh
+            .lines()
+            .find_map(|l| l.strip_prefix("for f in ")?.strip_suffix("; do"))
+            .expect("start-hyprland.sh's copy loop");
+        assert_eq!(line.split(' ').collect::<Vec<_>>(), DESKTOP_FILES);
+        for f in DESKTOP_FILES {
+            assert!(
+                std::path::Path::new(&format!("{share}/{f}.lua")).is_file(),
+                "{f}"
+            );
+        }
+    }
 }

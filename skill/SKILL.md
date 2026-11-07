@@ -9,8 +9,8 @@ allowed-tools: "Bash(omabox shot *) Bash(omabox pixel *) Bash(omabox windows *) 
 The user's Hyprland session is theirs: no GUI apps, `hyprctl dispatch`/`eval`, `grim`,
 `wtype`/`ydotool`, workspace switches or cursor moves on it. Do all of that in a **box**: a full
 desktop on a private screen and session bus, invisible to the user (~3-5 s, ~400-700 MB by GPU: use
-one freely). Omarchy's where installed; else plain Hyprland, no bar (`up` says so): ref: Plain
-boxes. "ref: SECTION" is a section of `reference.md` beside this page: read it when needed.
+one freely). Omarchy's where installed; else plain Hyprland, no bar (`up` says so), or theirs
+(`--desktop desk`): ref: Plain boxes. "ref: SECTION" is a section of `reference.md` beside this page: read it when needed.
 
 ## Never
 

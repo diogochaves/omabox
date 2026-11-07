@@ -340,7 +340,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         None => None,
         Some(pid) => {
             let j = crate::jobs::job_resolve(ctx, pid).map_err(|m| ctx.die(cat!("log: ", m)))?;
-            let Some(p) = j.box_log() else {
+            let Some(p) = j.box_log(&ctx.d) else {
                 return Err(ctx.die(cat!("log: job ", j.pid, " has no log of run -d's")));
             };
             Some((cat!("run ", j.pid), p))
@@ -377,10 +377,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             if srcs.len() > 1 {
                 continue;
             }
+            // A desk box whose config started no shell omabox knows (#321 step 4) will have none.
+            if st == "shell"
+                && crate::boxes::slot_shell(&ctx.d)
+                && crate::shellnote::slot_cmd(ctx).is_empty()
+            {
+                return Err(ctx.die(cat!(
+                    "log: box '",
+                    ctx.name,
+                    "' runs no shell, so no shell log: its desktop's config started none omabox knows"
+                )));
+            }
             // A plain box with no shell (#247) will have none.
             if st == "shell"
                 && crate::boxes::meta(&ctx.d, "shell").0 != b"true"
-                && crate::boxes::meta(&ctx.d, "shell_cmd").0.is_empty()
+                && !crate::boxes::slot_shell(&ctx.d)
             {
                 crate::omshell::plain_refuse(
                     ctx,

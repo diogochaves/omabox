@@ -67,12 +67,12 @@ const BOX_JSON_JQ: &str = r#"{name: $name, mode, size, scale: (.scale // 1), cre
       allowed: (.allow // "" | split(",") | map(select(. != "") | tonumber)), addrs: (.addrs // []), idle: (.idle // 0),
       dir: (.dir // null), session: (.session // null),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
-        | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), polkit: (.polkit // false), autoreload: (.autoreload // false), desktop: (.desktop // "omarchy"), shell_cmd: (.shell_cmd // null), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
+        | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), polkit: (.polkit // false), autoreload: (.autoreload // false), desktop: (.desktop // "omarchy"), shell_cmd: (.shell_cmd // (if $slot != "" then $slot else null end)), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), quickshell: (.quickshell // null), quickshell_version: (.quickshell_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
       client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
-      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {desk_fonts: (.desk_fonts // [])} + {clean: (.clean // null), stock: (.stock // (.clean != null))} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}"#;
+      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + (if .desktop == "desk" then {shell_from: (if .shell_cmd then "up --shell" elif $from != "" then $from else null end)} else {} end) + {desk_fonts: (.desk_fonts // [])} + {clean: (.clean // null), stock: (.stock // (.clean != null))} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}"#;
 /// box_json's answer for a box.json jq cannot read.
 const BOX_JSON_BARE_JQ: &str = "{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}";
 
@@ -1152,8 +1152,24 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     // A plain box's shell (`up --shell CMD`, #247): up once one of its processes (#438: CMD's slot,
     // what a launcher left) has drawn a layer, whatever its namespace; Omarchy's bar, tray, cover and
     // notification waits are not its.
-    let cmd = meta(&ctx.d, "shell_cmd").0;
-    if !cmd.is_empty() {
+    // A desk box's (#321 step 4, finding 703) is the same slot, filled by what its user's config
+    // started (share/desk-shell.lua), which is known once Hyprland is up: the config started none
+    // omabox knows (and up had no guess) fails here at once; nothing said at all (a config that never
+    // ran desk-shell.lua) is a desk with no shell, as a plain box without --shell.
+    if crate::boxes::slot_shell(&ctx.d) {
+        let desk = meta(&ctx.d, "shell_cmd").0.is_empty();
+        if desk && run_read(&ctx.d, crate::shellnote::DESK_SHELL_CMD).is_none() {
+            use crate::shellnote::{DeskSlot, desk_slot};
+            if desk_slot(ctx) == DeskSlot::None {
+                return Err(ctx.die(cat!(
+                    "your desktop's config started no shell omabox knows (see ",
+                    ctx.d,
+                    "/home/autostart.log): up --shell CMD names one, --no-shell runs none"
+                )));
+            }
+            return Ok(());
+        }
+        let cmd = crate::shellnote::slot_cmd(ctx);
         loop {
             let l = layers(ctx, ErrTo::Null);
             let pids = pids_json(crate::shellnote::shell_pids_with(&RealBox, ctx));
@@ -1540,9 +1556,9 @@ fn pids_json(pids: Option<Vec<Vec<u8>>>) -> Vec<u8> {
 /// shell_adopt (finding 248): this start's shell exited at once as a duplicate of one that something
 /// else started after shell.sh stopped the old one, and that one is up: its pid goes where shell.sh
 /// keeps the shell's, written in the box, and is returned. Not a plain box's shell (#247): its
-/// command is its own, not Omarchy's config.
+/// command is its own, not Omarchy's config; nor a desk box's (#321), its config's.
 fn shell_adopt_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
-    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+    if crate::boxes::slot_shell(&ctx.d) {
         return None;
     }
     let t = std::fs::read(box_home_file(&ctx.d, "shell.log")?).ok()?;
@@ -1838,9 +1854,26 @@ pub fn box_json(ctx: &Ctx, hung: bool, shell_given: &str, gone: &str) -> Vec<u8>
         ("none", 0)
     };
     let orphan = state == "up" && box_orphan(ctx);
+    // A desk box's slot (#321, finding 709): its shell_cmd is what the slot runs (the box's own file,
+    // shown as `ls` shows it), and shell_from where it came from: config, guess or none.
+    let (slot, from) = if meta(&ctx.d, "shell_cmd").0.is_empty() && crate::boxes::slot_shell(&ctx.d)
+    {
+        use crate::shellnote::{DeskSlot, desk_slot};
+        let from = match desk_slot(ctx) {
+            DeskSlot::Config => "config",
+            DeskSlot::Guess => "guess",
+            DeskSlot::None => "none",
+            DeskSlot::Unsaid => "",
+        };
+        (crate::shellnote::slot_cmd(ctx), from)
+    } else {
+        (Vec::new(), "")
+    };
     let tf = |b: bool| if b { "true" } else { "false" };
     let j = Args::new(&["-c"])
         .kv("--arg", "name", &ctx.name)
+        .kv("--arg", "slot", &slot)
+        .kv("--arg", "from", from)
         .kv("--arg", "state", &state)
         .kv("--argjson", "peeking", tf(peeking))
         .kv("--argjson", "keys", tf(keys))

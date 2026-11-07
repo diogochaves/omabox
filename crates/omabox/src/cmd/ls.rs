@@ -147,6 +147,35 @@ fn json(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
     out(cat!("[", lines.join(&b','), "]\n"))
 }
 
+/// Where a desk box's shell came from (#321 step 4), after its command in `ls`: ` (up --shell)`,
+/// ` (from your config)`, ` (guessed: NAME, from WHAT)` (box.json shell_guess and shell_from, what
+/// up found); nothing for another box, or one that has not said.
+fn desk_shell_from(ctx: &Ctx) -> Vec<u8> {
+    use crate::shellnote::{DeskSlot, desk_slot};
+    use crate::upspec::Desktop;
+    if Desktop::of_box(&meta(&ctx.d, "desktop").0) != Desktop::Desk {
+        return Vec::new();
+    }
+    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+        return b" (up --shell)".to_vec();
+    }
+    match desk_slot(ctx) {
+        DeskSlot::Config => b" (from your config)".to_vec(),
+        DeskSlot::Guess => {
+            let (guess, from) = (meta(&ctx.d, "shell_guess").0, meta(&ctx.d, "shell_from").0);
+            cat!(
+                " (guessed",
+                if guess.is_empty() { "" } else { ": " },
+                crate::term::plain_cap(&guess, 64),
+                if from.is_empty() { "" } else { ", from " },
+                crate::term::plain_cap(&from, 120),
+                ")"
+            )
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn row(cols: [&[u8]; 8]) -> Vec<u8> {
     let w = [24, 11, 16, 7, 14, 9, 9];
     let mut o = Vec::new();
@@ -263,8 +292,9 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
         // A box whose desktop is not Omarchy's (#247), under its line: an Omarchy box's rows as before.
         let desktop = meta(&ctx.d, "desktop").0;
         if crate::upspec::Desktop::of_box(&desktop) != crate::upspec::Desktop::Omarchy {
-            // ...with its shell's command (`up --shell CMD`), one line, control characters shown.
-            let cmd = meta(&ctx.d, "shell_cmd").0;
+            // ...with its shell's command (`up --shell CMD`), one line, control characters shown; a
+            // desk box's (#321 step 4) what its slot runs, and where it came from.
+            let cmd = crate::shellnote::slot_cmd(ctx);
             let shell = if cmd.is_empty() {
                 Vec::new()
             } else {
@@ -272,7 +302,11 @@ fn table(ctx: &mut Ctx, hung: &Hung) -> Res<()> {
                     .iter()
                     .map(|&c| if c == b'\n' { b' ' } else { c })
                     .collect();
-                cat!(", shell: ", crate::term::plain_cap(&one, 200))
+                cat!(
+                    ", shell: ",
+                    crate::term::plain_cap(&one, 200),
+                    desk_shell_from(ctx)
+                )
             };
             out(cat!("  desktop: ", desktop, shell, "\n"))?;
         }

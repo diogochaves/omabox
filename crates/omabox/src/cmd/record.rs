@@ -22,7 +22,14 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::process::Stdio;
 
-pub(crate) const REC_DIR: &str = "/home/sbx/.cache/omabox-record";
+/// rec_dir D: where a recording keeps its files in box D, as the box sees it: under its HOME
+/// (box_home, #321: a desk box's is at your HOME's path).
+pub(crate) fn rec_dir(d: &[u8]) -> String {
+    format!(
+        "{}/.cache/omabox-record",
+        String::from_utf8_lossy(&crate::boxes::box_home(d))
+    )
+}
 pub(crate) const REC_FF_FLOOR: i64 = 60;
 const AUDIO_SINK: &str = "omabox-speaker";
 pub(crate) const REC_YUV_ARGS: &str = "in_range=full:in_color_matrix=bt601:out_range=limited:out_color_matrix=bt709:flags=accurate_rnd+full_chroma_int";
@@ -236,13 +243,13 @@ pub(crate) fn record_running(ctx: &mut Ctx, rec: &mut Rec) -> Res<bool> {
 }
 
 /// rec_dirs: the folders in the box its wf-recorders write to.
-pub(crate) fn rec_dirs(rec: &Rec) -> Vec<Vec<u8>> {
+pub(crate) fn rec_dirs(ctx: &Ctx, rec: &Rec) -> Vec<Vec<u8>> {
     if rec.n > 1 {
         (1..=rec.n)
-            .map(|i| cat!(REC_DIR, "/m", i.to_string()))
+            .map(|i| cat!(rec_dir(&ctx.d), "/m", i.to_string()))
             .collect()
     } else {
-        vec![REC_DIR.as_bytes().to_vec()]
+        vec![rec_dir(&ctx.d).as_bytes().to_vec()]
     }
 }
 
@@ -293,7 +300,7 @@ fn record_how(ctx: &Ctx) -> Vec<u8> {
 /// record_firsts: each wf-recorder's first frame, "MONO_US WALL_US", or None for one not come.
 pub(crate) fn record_firsts(ctx: &mut Ctx, rec: &Rec) -> Vec<Option<(i64, i64)>> {
     let mut a = w(&["/usr/bin/sh", "-c", P::FIRSTS_SH, "omabox-record"]);
-    a.extend(rec_dirs(rec));
+    a.extend(rec_dirs(ctx, rec));
     // (`< <(box_sys ...)`: SIGINT and SIGQUIT ignored in it)
     let (_, o) = sys_cap_bg(ctx, &a, Some(4096), Err2::Null, false, true);
     let re = shell::Re::new(r"^([0-9]{1,17}) ([0-9]{1,17}) ([0-9]{1,17}) ([0-9]{1,17})$");
@@ -1366,7 +1373,7 @@ fn record_hold(ctx: &mut Ctx, rec: &mut Rec, dur: i64, from: i64, quiet: bool) -
     let from = from.max(first);
     let end = from + dur * 1000;
     let firsts = record_firsts(ctx, rec);
-    let dirs = rec_dirs(rec);
+    let dirs = rec_dirs(ctx, rec);
     let mut args: Vec<Vec<u8>> = Vec::new();
     for (i, d) in dirs.iter().enumerate() {
         let Some(Some((m, wl))) = firsts.get(i) else {
@@ -1851,11 +1858,11 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     let mut pairs: Vec<Vec<u8>> = Vec::new();
     if !layout.is_empty() {
         for (i, n) in names.iter().enumerate() {
-            pairs.push(cat!(REC_DIR, "/m", (i + 1).to_string()));
+            pairs.push(cat!(rec_dir(&ctx.d), "/m", (i + 1).to_string()));
             pairs.push(n.clone());
         }
     } else {
-        pairs = vec![REC_DIR.as_bytes().to_vec(), mon.clone()];
+        pairs = vec![rec_dir(&ctx.d).as_bytes().to_vec(), mon.clone()];
     }
     // One wf-recorder an output, each in a session of its own, its pid said on fd 3 (a
     // `<(...)`: SIGINT and SIGQUIT ignored in it, the script puts them back for wf-recorder).
@@ -2040,7 +2047,7 @@ fn audio_start(ctx: &mut Ctx) -> Res<Vec<u8>> {
             "-c",
             P::AUDIO_SH,
             "omabox-record",
-            REC_DIR,
+            &rec_dir(&ctx.d),
             AUDIO_SINK,
         ]);
         let _ = box_exec(
@@ -2067,7 +2074,7 @@ fn audio_start(ctx: &mut Ctx) -> Res<Vec<u8>> {
         ctx,
         "/usr/bin/sh",
         P::AUDIO_WAIT_SH,
-        &[cat!(REC_DIR, "/audio.log"), apid.clone()],
+        &[cat!(rec_dir(&ctx.d), "/audio.log"), apid.clone()],
     )
     .unwrap_or_else(|Exit(c)| i32::from(c));
     if t != 0 {
@@ -2078,7 +2085,7 @@ fn audio_start(ctx: &mut Ctx) -> Res<Vec<u8>> {
                 "/usr/bin/tail".as_bytes(),
                 b"-n",
                 b"3",
-                &cat!(REC_DIR, "/audio.log"),
+                &cat!(rec_dir(&ctx.d), "/audio.log"),
             ]),
             Some(2000),
             Err2::Null,

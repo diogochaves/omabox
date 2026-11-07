@@ -2918,20 +2918,25 @@ omarchy_contract() {
   oc() { local n=$1 w=$2; shift 2; if "$@" >/dev/null 2>&1; then printf '%s\t\n' "$n"; else printf '%s\t%s\n' "$n" "$w"; fi; }
   # oc_has FILE FIXED-STRING
   oc_has() { grep -qF -- "$2" "$1"; }
-  # Hyprland: share/hyprland.lua runs Omarchy's config by these modules; `up --omarchy` wants a tree
+  # Hyprland: share/omarchy.lua runs Omarchy's config by these modules; `up --omarchy` wants a tree
   # with bootstrap.lua and shell.qml.
-  oc "default/hypr/bootstrap.lua (share/hyprland.lua runs it)" "missing" test -f "$o/default/hypr/bootstrap.lua"
-  oc "default/hypr/omarchy.lua (share/hyprland.lua requires default.hypr.omarchy)" "missing" test -f "$o/default/hypr/omarchy.lua"
-  oc "default.hypr.autostart, required by name (share/hyprland.lua marks it loaded: no session autostart in a box)" \
+  oc "default/hypr/bootstrap.lua (share/omarchy.lua runs it)" "missing" test -f "$o/default/hypr/bootstrap.lua"
+  oc "default/hypr/omarchy.lua (share/omarchy.lua requires default.hypr.omarchy)" "missing" test -f "$o/default/hypr/omarchy.lua"
+  oc "default.hypr.autostart, required by name (share/omarchy.lua and desk.lua mark it loaded: no session autostart in a box)" \
     "no default/hypr/autostart.lua, or nothing requires \"default.hypr.autostart\": a renamed one would run Omarchy's autostart in every box" \
     bash -c 'test -f "$1/autostart.lua" && grep -qF "require(\"default.hypr.autostart\")" "$1"/*.lua' _ "$o/default/hypr"
-  oc "default.hypr.paths' omarchy_path (share/hyprland.lua puts omabox's stand-ins before its bin)" "not in default/hypr/paths.lua" \
+  oc "default.hypr.paths' omarchy_path (share/omarchy.lua and desk.lua put omabox's stand-ins before its bin)" "not in default/hypr/paths.lua" \
     oc_has "$o/default/hypr/paths.lua" omarchy_path
-  oc "default/hypr/toggles.lua (share/hyprland.lua requires default.hypr.toggles)" "missing" test -f "$o/default/hypr/toggles.lua"
-  oc "config/hypr/hyprland.lua's user modules: hypr.monitors, input, bindings, looknfeel, autostart (share/hyprland.lua loads input, bindings and looknfeel, skips monitors and autostart, #246)" \
+  oc "default/hypr/toggles.lua (share/omarchy.lua requires default.hypr.toggles)" "missing" test -f "$o/default/hypr/toggles.lua"
+  oc "config/hypr/hyprland.lua's user modules: hypr.monitors, input, bindings, looknfeel, autostart (share/omarchy.lua loads input, bindings and looknfeel, skips monitors and autostart, #246)" \
     "it requires other hypr.* modules now: a box would not load one a user edits" \
     bash -c '[ "$(grep -oE "^require\(\"hypr\.[a-z_]+\"\)" "$1" | sort | paste -sd " ")" = "$2" ]' _ "$o/config/hypr/hyprland.lua" \
     'require("hypr.autostart") require("hypr.bindings") require("hypr.input") require("hypr.looknfeel") require("hypr.monitors")'
+  # A desk box (#321): its base is Omarchy's when the user's config names bootstrap.lua (upspec::desk_base),
+  # and desk.lua marks default.hypr.autostart and hypr.monitors again after a dofile of it.
+  oc "config/hypr/hyprland.lua dofiles default/hypr/bootstrap.lua (a desk box's base; share/desk.lua marks its skips after it, #321)" \
+    "it loads Omarchy's bootstrap another way: a desk on a new user's config would be taken for a plain one" \
+    grep -qE '^dofile\(.*"/default/hypr/bootstrap\.lua"\)' "$o/config/hypr/hyprland.lua"
   oc "default/hypr/envs.lua (caller_path tells an Omarchy checkout's bin by it, finding 149)" "missing" test -f "$o/default/hypr/envs.lua"
   oc "default/uwsm/default (share/session.sh: TERMINAL, EDITOR)" "missing" test -f "$o/default/uwsm/default"
   oc "shell/shell.qml (share/shell.sh runs quickshell -p \$OMARCHY_PATH/shell)" "missing" test -f "$s/shell.qml"
@@ -8611,6 +8616,101 @@ t_idle() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #321 step 5 (finding 704): a desk box holds its idle off (tools/idlehold: an idle inhibitor on a 1x1
+# background layer per monitor), so the user's shell's idle timeouts never lock or blank it between an
+# agent's steps. A Quickshell fixture with two IdleMonitors of 3 s stands in for the shell's idle
+# client: the one ignoring inhibitors (respectInhibitors: false) goes idle (the control: idle is
+# counted in the box), the one respecting them (the default, a shell's lock) does not for 8 s; with
+# the hold killed, it does. And LABWC_PID, which a user's shell may take for labwc's session, is not
+# in a desk box's environment: OMABOX_LABWC_PID is, and on NVIDIA `monitor add` (labwc --reconfigure)
+# still finds labwc by it. On a stand-in HOME and XDG dirs, with a plain desk's hyprland.lua.
+t_desk_idle() {
+  command -v qs >/dev/null || { skip "a desk box holds its idle off" "no qs (Quickshell) for the idle fixture"; return; }
+  local B=$P-didle B2=$P-didlenv base=$TMP/$P-didle D out n
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"; desk_lua "$fh/.config"
+  cat > "$base/idle.qml" <<'EOF'
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import Quickshell.Wayland
+ShellRoot {
+  IdleMonitor { timeout: 3; respectInhibitors: true; onIsIdleChanged: if (isIdle) held.running = true }
+  IdleMonitor { timeout: 3; respectInhibitors: false; onIsIdleChanged: if (isIdle) input.running = true }
+  Process { id: held; command: ["sh", "-c", "date +%s > \"$HOME/idled\""] }
+  Process { id: input; command: ["sh", "-c", "date +%s > \"$HOME/idled-input\""] }
+}
+EOF
+  di() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  out=$(cd "$base" && di up "$B" --desktop desk --net isolated --no-shell --seed "$base/idle.qml:idle.qml" 2>&1) ||
+    { no "up --desktop desk" "$out"; di down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk"
+  D=$(di path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" di || { di down "$B" >/dev/null 2>&1; return; }
+  check_eq "up says nothing of the idle hold (it started)" "" "$(grep 'idle hold' <<<"$out")"
+  check_match "the hold says it holds" "^omabox-idlehold: holding idle off on 1 of 1 outputs$" "$(cat "$D/run/omabox-idlehold.log" 2>&1)"
+  check "...it runs in the box" di run -b "$B" -- pgrep -x omabox-idlehold
+  check_eq "...on a 1x1 layer of its own" "1x1" \
+    "$(di hyprctl -b "$B" -j layers | jq -r '[.. | objects | select(.namespace? == "omabox-idlehold") | "\(.w)x\(.h)"] | join(" ")' 2>&1)"
+  check "an idle fixture (Quickshell's IdleMonitor, 3 s)" di run -b "$B" -d -q -- qs -p "$fh/idle.qml"
+  check "...the control, ignoring inhibitors, goes idle" until_ok 10 test -e "$D/home/idled-input"
+  check "...the one respecting them (a shell's lock) does not, 8 s in" holds 5 test ! -e "$D/home/idled"
+  check "kill the hold" di run -b "$B" -- pkill -x omabox-idlehold
+  check "...now it goes idle" until_ok 10 test -e "$D/home/idled"
+  # LABWC_PID (finding 704): the box's parent labwc's, as OMABOX_LABWC_PID.
+  check_fails "LABWC_PID: not in a desk box's environment" di run -b "$B" -- printenv LABWC_PID
+  check_eq "...OMABOX_LABWC_PID is labwc's pid" omabox-labwc \
+    "$(di run -b "$B" -- sh -c 'cat "/proc/$OMABOX_LABWC_PID/comm"' 2>&1)"
+  check "down" di down "$B"
+  if n=$(nvidia_ready); then
+    out=$(cd "$base" && OMABOX_RENDER_NODE=$n di up "$B2" --desktop desk --net isolated --no-shell 2>&1) ||
+      { no "up --desktop desk on NVIDIA" "$out"; di down "$B2" >/dev/null 2>&1; return; }
+    check_fails "NVIDIA: no LABWC_PID in the desk box" di run -b "$B2" -- printenv LABWC_PID
+    check "...monitor add: labwc --reconfigure finds labwc by OMABOX_LABWC_PID" di monitor -b "$B2" add 1280x720
+    check "...its output there" until_ok 5 bash -c "HOME='$fh' XDG_RUNTIME_DIR='$rt' XDG_CACHE_HOME='$c' XDG_STATE_HOME='$st' XDG_CONFIG_HOME='$fh/.config' '$CLI' hyprctl -b '$B2' -j monitors | jq -e 'length == 2' >/dev/null"
+    check "down" di down "$B2"
+  else skip "a desk box's monitor add on NVIDIA (labwc --reconfigure)" "$n"; fi
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 5 (finding 704): what up refuses for a desk box beyond step 1's, no box made. A desk needs a
+# Lua Hyprland config omabox can drive: none, or a hyprland.conf alone, is refused. On a plain base,
+# what needs Omarchy as on a plain box; on an Omarchy base (an Omarchy machine whose config loads
+# Omarchy's, finding 708), --stock, --stock-bar and --keep (not your desk). On a stand-in HOME.
+t_desk_refusals() {
+  local B=$P-dref base=$TMP/$P-dref out
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  mkdir -p "$fh/.config/omabox" "$fh/.config/hypr" "$rt" "$c" "$st" "$base/data"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"
+  dr() { (cd "$base" && HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@" 2>&1); }
+  check_match "no Hyprland config: refused" "^omabox: up: --desktop desk: no Hyprland config in ~/\.config/hypr " \
+    "$(dr up "$B" --desktop desk --net isolated)"
+  echo 'general { gaps_in = 4 }' > "$fh/.config/hypr/hyprland.conf"
+  check_match "a hyprland.conf alone: refused, saying why" \
+    "^omabox: up: --desktop desk needs a Lua config: Hyprland 0\.56 still reads hyprland\.conf, but \`hyprctl eval\` refuses it, and keys, click, pointer, mode, monitor and lua need that " \
+    "$(dr up "$B" --desktop desk --net isolated)"
+  desk_lua "$fh/.config"
+  check_match "a plain desk: --stock needs Omarchy" "^omabox: up: --stock needs Omarchy, and --desktop desk has none of it " \
+    "$(dr up "$B" --desktop desk --net isolated --stock)"
+  check_match "...--plugin too" "^omabox: up: --plugin needs Omarchy, and --desktop desk has none of it " \
+    "$(dr up "$B" --desktop desk --net isolated --plugin "$ROOT/plugin")"
+  check_match "--desk-shell: refused, pointing at --desktop desk" \
+    "^omabox: up: --desk-shell is part of --desktop desk: a desk box brings your desk, its shell with it " \
+    "$(dr up "$B" --desktop desk --net isolated --desk-shell)"
+  if omarchy_here; then
+    echo 'dofile("/usr/share/omarchy/default/hypr/bootstrap.lua")' > "$fh/.config/hypr/hyprland.lua"
+    check_match "an Omarchy desk: --stock refused (not your desk)" \
+      "^omabox: up: --stock is not for a desk box: it gives a new Omarchy user's desktop, not your desk \(--desktop omarchy for that\)" \
+      "$(dr up "$B" --desktop desk --net isolated --stock)"
+    check_match "...--stock-bar" "^omabox: up: --stock-bar is not for a desk box: it gives Omarchy's own bar, not your desk" \
+      "$(dr up "$B" --desktop desk --net isolated --stock-bar)"
+    check_match "...--keep" "^omabox: up: --keep is not for a desk box: it gives part of a clean Omarchy desktop, not your desk" \
+      "$(dr up "$B" --desktop desk --net isolated --keep bar)"
+  else skip "an Omarchy desk's flags" "no Omarchy here"; fi
+  check_fails "none of them made a box" test -e "$rt/omabox/$B"
+}
+
 # #328 (finding 566): Hyprland writes hyprland.log through an 8 KiB buffer it never flushes, so a line
 # it just logged is in `hyprctl rollinglog` and not in the file; `omabox log` adds it from there
 # (with a note on stderr when the file is further behind than rollinglog's 4 KiB reach).
@@ -8969,6 +9069,8 @@ t_desk_shell() {
   out=$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --net isolated --desk-shell 2>&1) || { no "up --desk-shell" "$out"; return; }
   ok "up --desk-shell on a fake desk"
   H=$(ob path "$B")/home
+  check_match "...a note: it is part of --desktop desk now (#321, kept a release)" \
+    "(^|"$'\n'")omabox: note: --desk-shell is now part of --desktop desk \(your Omarchy, mods and all\)($|"$'\n'")" "$out"
   check_match "...says what it mounted and copied" "--desk-shell: 3 plugins of $d/desk/plugins, its shell.json \(idle held off\), and 4 files copied into the box's ~/.config/omarchy: alias.json hostfix.json profiles/deep/two.json profiles/one.json" "$out"
   check_match "...and what it did not, and why" "not copied: $d/desk/api-keys.env \(a secret's name\)" "$out"
   check_match "...a link out of the folder" "not copied: $d/desk/out.json \(a link out of the folder \(not followed\)\)" "$out"
@@ -11762,6 +11864,7 @@ t_plain() {
   check_eq "...plain.lua's copy written again" "same" \
     "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-plain.lua"' 2>&1 | cmp -s - "$ROOT/share/plain.lua" && echo same || echo differ)"
   check_eq "...still no config errors" "" "$(ob hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  check_fails "no autostart.log: no policy on omabox's own config (a desk box's, #321)" test -e "$D/home/autostart.log"
   check_match "tray: no tray, said as plain" "has no tray: .*\(a plain box has no shell to have one: up --shell CMD runs one\)" "$(ob tray -b "$B" 2>&1)"
   # (where Omarchy is not, up refuses an Omarchy box before it looks for this one, #247)
   local om_re="without what you asked for: --desktop omarchy \(it runs plain\)"
@@ -11774,7 +11877,7 @@ t_plain() {
   done
   check_match "up --desktop plain --clean --keep clock: refused (no clock of Omarchy's)" "^omabox: up: --keep clock needs Omarchy, and --desktop plain has none of it" \
     "$(ob up "$P-plain2" --desktop plain --clean --keep clock 2>&1)"
-  check_match "--desktop takes omarchy or plain" "up: --desktop is omarchy or plain, got desk" "$(ob up "$P-plain2" --desktop desk 2>&1)"
+  check_match "--desktop takes omarchy, plain or desk" "up: --desktop is omarchy, plain or desk, got dusk" "$(ob up "$P-plain2" --desktop dusk 2>&1)"
   check "down" ob down "$B"
   check_fails "box dir gone" test -e "$D"
   check_fails "box HOME gone" test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$B"
@@ -12015,6 +12118,677 @@ t_plain_dms() {
   check_box_safety "$B"
   check "down" ob down "$B"
   check_fails "no box process left" pgrep -f "omabox/$B/"
+}
+
+# #321 step 4 (finding 703; wired to desk.lua, finding 709): a desk box's shell is the one its user's
+# config starts, run in the slot a plain box's --shell has (share/shell.sh): desk.lua hands each
+# command to desk-shell.lua's take and logs its verdict (`take`) in ~/autostart.log; up waits for its
+# layer and says it; ls (and ls --json), pid shell, log shell, restart-shell (one bar, a new pid) and
+# a crash as for a plain box's. A config that starts none but up guessed
+# one: the guess's start. None and no guess: up fails at once, saying so. --shell overrides it (the
+# config's dropped); --no-shell drops it. On a stand-in omabox (a copy of this one and its share/,
+# for a profile of the suite's in share/desk-shells) and a stand-in HOME (runtime, cache, state and
+# data dirs of its own), the config seeded.
+t_desk_shell_slot() {
+  local why; if why=$(no_qs); then skip "a desk box's shell in its slot" "$why"; return; fi
+  local base=$TMP/$P-dslot B=$P-dslot D out rc t0 lp lp2 pre n
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state s=$base/seed sr=$base/root
+  local bar=$base/bar bar2=$base/bar2
+  mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data" "$bar" "$bar2" "$s/hyp" "$s/none" "$sr/build" "$sr/tools"
+  chmod 700 "$rt"; : > "$fh/.config/omabox/config"
+  for n in bar bar2; do
+    printf 'import QtQuick\nimport Quickshell\nimport Quickshell.Wayland\nPanelWindow {\n  WlrLayershell.namespace: "t-desk%s"\n  anchors { top: true; left: true; right: true }\n  implicitHeight: 30\n  color: "#336699"\n}\n' "$n" > "$base/$n/shell.qml"
+  done
+  # The stand-in omabox: a copy of the binary (it finds its share/ beside its folder), share/ copied
+  # (with the suite's profile t-bar below), the tools and aquamarine build linked. The stand-in HOME
+  # has a Hyprland config (up needs one); each case's own is --seed's, over its copy.
+  desk_lua "$fh/.config"
+  cp "$ROOT/build/omabox" "$sr/build/omabox"; cp -r "$ROOT/share" "$sr/share"; ln -s "$ROOT"/tools/* "$sr/tools/"
+  pre=$ROOT/build/prefix
+  [ -d "$pre" ] || pre=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/../build/prefix
+  [ ! -d "$pre" ] || ln -s "$pre" "$sr/build/prefix"
+  check_match "check run --desktop desk: refused, before any box" "^omabox: check run: --desktop desk is not for a check: " \
+    "$(ob check run --approve --base "$base/check-base" --desktop desk -- true 2>&1)"
+  printf 'start qs -p %s\n' "$bar2" > "$sr/share/desk-shells/t-bar"
+  # The user's config: its shell (with a word of its own), a second shell, and a command of its own.
+  printf 'hl.on("hyprland.start", function()\n  hl.exec_cmd("env OMABOX_T=1 qs -p %s")\n  hl.exec_cmd("setsid -f waybar")\n  hl.exec_cmd("touch \\"$HOME/other-ran\\"")\nend)\n' "$bar" > "$s/hyp/hyprland.lua"
+  echo '-- no shell' > "$s/none/hyprland.lua"
+  local senv=(HOME="$fh" XDG_RUNTIME_DIR="$rt" XDG_CACHE_HOME="$c" XDG_STATE_HOME="$st" XDG_CONFIG_HOME="$fh/.config" XDG_DATA_HOME="$base/data")
+  sb() { env "${senv[@]}" "$sr/build/omabox" "$@"; }
+  sb_up() { (cd "$base" && sb up "$@" 2>&1); }
+  ns_pids() { sb hyprctl -b "$1" -j layers | jq -r --arg n "$2" '[.. | objects | select(.namespace? == $n) | .pid] | join(" ")'; }
+  no_ns() { [ -z "$(ns_pids "$1" "$2")" ]; }
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar" --seed "$s/hyp:.config/hypr"); rc=$?
+  [ "$rc" = 0 ] || { no "up --desktop desk, its config starting env OMABOX_T=1 qs -p BAR" "$out"; sb down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk, its config starting env OMABOX_T=1 qs -p BAR: up once its bar is drawn"
+  D=$(sb path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" sb || { sb down "$B" >/dev/null 2>&1; return; }
+  check_match "...up says it: the command, its profile, from your config" \
+    "box '$B': its shell: env OMABOX_T=1 qs -p $(re_q "$bar") \(quickshell-path, from your config\)" "$out"
+  check_eq "box.json: desk, a shell, no shell_cmd" "desk true null" "$(jq -r '"\(.desktop) \(.shell) \(.shell_cmd)"' "$D/box.json")"
+  check_eq "the slot's files: the command as the config wrote it, from the config" "env OMABOX_T=1 qs -p $bar|config" \
+    "$(cat "$D/run/omabox-shell.cmd")|$(cat "$D/run/omabox-desk-shell")"
+  check_eq "autostart.log: the shell taken, the second dropped, the config's own command run" \
+    "start take shell exec_cmd env OMABOX_T=1 qs -p $bar  (the slot runs it (quickshell-path))
+start take shell exec_cmd setsid -f waybar  (a second shell: the slot runs env OMABOX_T=1 qs -p $bar)
+start run other exec_cmd touch \"\$HOME/other-ran\"" "$(cat "$D/home/autostart.log")"
+  check "...the config's own command ran" until_ok 5 test -e "$D/home/other-ran"
+  check_eq "ls: desk, its shell and where it came from" "  desktop: desk, shell: env OMABOX_T=1 qs -p $bar (from your config)" \
+    "$(sb ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  check_eq "ls --json: the shell running, its command and where it came from" "running|env OMABOX_T=1 qs -p $bar|config" \
+    "$(sb ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | "\(.shell_state)|\(.shell_cmd)|\(.shell_from)"')"
+  lp=$(ns_pids "$B" t-deskbar)
+  check_match "its bar drawn, once" '^[0-9]+$' "$lp"
+  check_eq "pid shell --in-box: its qs" "$lp" "$(sb pid -b "$B" shell --in-box 2>&1)"
+  check_eq "...run with the config's word (the command as written)" OMABOX_T=1 \
+    "$(sb run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$1/environ | grep -x OMABOX_T=1' sh "$lp" 2>&1)"
+  check_eq "...its config noted as the shell's" "$bar" "$(cat "$D/run/omabox-shell.configs")"
+  check_match "log shell: its log" "Configuration Loaded" "$(sb log -b "$B" shell)"
+  out=$(sb restart-shell -b "$B" 2>&1); rc=$?
+  check_eq "restart-shell: exit 0, restarted" "0 yes" "$rc $(grep -q "shell restarted in box '$B'" <<<"$out" && echo yes)"
+  lp2=$(ns_pids "$B" t-deskbar)
+  check "...one bar, a new qs (was $lp, now $lp2)" test -n "$lp2" -a "$lp2" != "$lp" -a "${lp2#* }" = "$lp2"
+  check_fails "...the old one stopped" sb run -b "$B" -- test -d "/proc/$lp"
+  check_eq "...still the config's command" "env OMABOX_T=1 qs -p $bar" "$(cat "$D/run/omabox-shell.cmd")"
+  env CLI="$sr/build/omabox" "${senv[@]}" bash -c "$(declare -f ob shell_segv); shell_segv \"\$@\"" sh "$B" "$lp2" >/dev/null 2>&1
+  check "its crash: the dialog closed as the shell's" until_ok 10 grep -q "closed the shell's crash dialog" "$D/home/shell.log"
+  check_match "...the next command says the shell is gone, after its crash" \
+    "warning: box '$B' has no shell \(gone after 1 crash\(es\);" "$(sb windows -b "$B" 2>&1 >/dev/null)"
+  check "restart-shell brings it back" sb restart-shell -b "$B"
+  check "...its layer" sb wait -b "$B" --timeout 5s layer t-deskbar
+  check_match "up again with --shell: refused, naming what its slot runs" \
+    "--shell qs -p $(re_q "$bar2") \(its shell is env OMABOX_T=1 qs -p $(re_q "$bar"), from your config\)" \
+    "$(sb_up "$B" --desktop desk --shell "qs -p $bar2")"
+  check_box_safety "$B" sb
+  check "down" sb down "$B"
+  check_fails "...no qs of it left on the host" pgrep -f "qs -p $bar"
+  # The config starts none, up guessed one (OMABOX_DESK_SHELL: step 2's, here the suite's profile t-bar).
+  B=$P-dslot2
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar2" --seed "$s/none:.config/hypr" --env OMABOX_DESK_SHELL=t-bar); rc=$?
+  check_eq "a config that starts none, a guess: up" 0 "$rc"
+  D=$(sb path -b "$B")
+  check_match "...the guess's start in the slot, said" "box '$B': its shell: qs -p $(re_q "$bar2") \(t-bar, guessed: your config starts none omabox knows\)" "$out"
+  check_eq "...the slot's files" "qs -p $bar2|guess" "$(cat "$D/run/omabox-shell.cmd" 2>&1)|$(cat "$D/run/omabox-desk-shell" 2>&1)"
+  check "...its bar" sb wait -b "$B" --timeout 5s layer t-deskbar2
+  check_match "...ls: guessed" "^  desktop: desk, shell: qs -p $(re_q "$bar2") \(guessed" "$(sb ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  sb down "$B" >/dev/null
+  # None, and no guess: up fails at once, saying why and what to do.
+  B=$P-dslot3 t0=$SECONDS
+  out=$(OMABOX_READY_TIMEOUT=30s sb_up "$B" --desktop desk --net isolated --seed "$s/none:.config/hypr"); rc=$?
+  check_eq "a config that starts no shell omabox knows, no guess: up fails" 1 "$rc"
+  check_match "...saying so" "your desktop's config started no shell omabox knows \(see .*/home/autostart\.log\): up --shell CMD names one, --no-shell runs none" "$out"
+  check "...at once, not after its 30 s ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 20
+  sb down "$B" >/dev/null 2>&1
+  # --shell CMD overrides the config's: its shell dropped.
+  B=$P-dslot4
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar" --ro-bind "$bar2" --seed "$s/hyp:.config/hypr" --shell "qs -p $bar2"); rc=$?
+  check_eq "up --desktop desk --shell 'qs -p BAR2' over a config starting BAR" 0 "$rc"
+  D=$(sb path -b "$B")
+  check "...BAR2 drawn" sb wait -b "$B" --timeout 5s layer t-deskbar2
+  check "...BAR not" holds 2 no_ns "$B" t-deskbar
+  check_match "...the config's dropped, the slot's named" "start take shell exec_cmd env OMABOX_T=1 qs -p .*  \(a second shell: the slot runs qs -p $(re_q "$bar2") \(up --shell\)\)" "$(cat "$D/home/autostart.log")"
+  check_eq "...ls: from up --shell" "  desktop: desk, shell: qs -p $bar2 (up --shell)" "$(sb ls 2>/dev/null | grep -A1 "^$B " | tail -n 1)"
+  sb down "$B" >/dev/null
+  # --no-shell: the config's shell dropped, none in the slot.
+  B=$P-dslot5
+  out=$(sb_up "$B" --desktop desk --net isolated --ro-bind "$bar" --seed "$s/hyp:.config/hypr" --no-shell); rc=$?
+  check_eq "up --desktop desk --no-shell" 0 "$rc"
+  D=$(sb path -b "$B")
+  check "...no bar" holds 2 no_ns "$B" t-deskbar
+  check_match "...the config's shell dropped" "start take shell exec_cmd env OMABOX_T=1 qs -p .*  \(up --no-shell: no shell\)" "$(cat "$D/home/autostart.log" 2>&1)"
+  check_eq "...box.json: no shell" false "$(jq -r .shell "$D/box.json")"
+  sb down "$B" >/dev/null
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+# DESK_SHELL_LUA: `lua FILE SHARE OP ARG...` (FILE holding it) drives share/desk-shell.lua as desk.lua
+# will (#321 step 4), with a stand-in `hl` whose exec_cmd prints `exec CMD`: OP match reads commands
+# a line each and prints the profile each is (- for none); OP take calls take on each ARG and prints
+# `TAKEN|WHY` (an ARG `@after` calls after_start, `@own` sets M.exec to one printing `own CMD`, `@num`
+# takes a number).
+# Run in one Lua state per call, as one Hyprland config load.
+DESK_SHELL_LUA='
+local share, op = arg[1], arg[2]
+hl = { exec_cmd = function(c) print("exec " .. c) end }
+local M = dofile(share .. "/desk-shell.lua")
+M.dir = share .. "/desk-shells"
+if op == "match" then
+  for l in io.lines() do local p = M.profile_for(l); print(p and p.name or "-") end
+else
+  for i = 3, #arg do
+    if arg[i] == "@after" then M.after_start(); print("after")
+    elseif arg[i] == "@own" then M.exec = function(c) print("own " .. c) end
+    else
+      local t, why = M.take(arg[i] == "@num" and 42 or arg[i])
+      print(tostring(t) .. "|" .. (why or ""))
+    end
+  end
+end'
+
+# #321 step 4 (finding 703): share/desk-shell.lua, on the host's Lua with a stand-in `hl`: which
+# profile a command a config starts is (the cases deskshell.rs's profile_match has, read the same
+# way); take: the first shell into the slot (omabox-shell.cmd and omabox-desk-shell written, then
+# shell.sh started with its word), a second dropped, one already in the slot (a reload) dropped,
+# not a shell left to run; --shell's and --no-shell's; after_start: the guess, or none.
+t_unit_desk_shell_lua() {
+  command -v lua >/dev/null || { skip "share/desk-shell.lua on the host's Lua" "no lua here"; return; }
+  local rt=$TMP/$P-dsl out cases
+  printf '%s\n' "$DESK_SHELL_LUA" > "$TMP/$P-dsl.lua"
+  rtls() { local f l=""; for f in "$rt"/*; do [ -e "$f" ] && l+="${f##*/} "; done; echo "${l:--}"; }
+  dl() { (cd / && env -u OMABOX_SHELL -u OMABOX_SHELL_CMD -u OMABOX_DESK_SHELL XDG_RUNTIME_DIR="$rt" "$@" lua "$TMP/$P-dsl.lua" "$ROOT/share" "${DL_ARGS[@]}"); }
+  # (profile_match's cases, from deskshell.rs's PROFILE_CASES: `("CMD", Some("NAME"))` or None)
+  cases=$(sed -n '/^    const PROFILE_CASES/,/^    \];/p' "$ROOT/crates/omabox/src/deskshell.rs" |
+    sed -n 's/^        ("\(.*\)", \(Some("\([a-z-]*\)")\|None\)),$/\1\t\3/p' | sed 's/\\"/"/g')
+  check_eq "profile_match's cases read (deskshell.rs)" 26 "$(grep -c . <<<"$cases")"
+  DL_ARGS=(match)
+  out=$(cut -f1 <<<"$cases" | dl)
+  check_eq "...each the profile deskshell.rs finds" "$(cut -f2 <<<"$cases" | sed 's/^$/-/')" "$out"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take "env A=1 dms run" "setsid -f waybar" hypridle "echo dms run" "sh -c 'sleep 1; waybar'" @after)
+  out=$(dl)
+  check_eq "take: the first shell into the slot, shell.sh started with its word; a second dropped; others not taken" \
+    "exec /opt/omabox/share/shell.sh take
+true|the slot runs it (dms)
+true|a second shell: the slot runs env A=1 dms run
+false|
+false|
+true|a second shell: the slot runs env A=1 dms run
+after" "$out"
+  check_eq "...omabox-shell.cmd: the command as the config wrote it" "env A=1 dms run" "$(cat "$rt/omabox-shell.cmd")"
+  check_eq "...omabox-desk-shell: config" config "$(cat "$rt/omabox-desk-shell")"
+  check_eq "...no .new left" "" "$(cd "$rt" && ls -- *.new 2>/dev/null)"
+  DL_ARGS=(take "env A=1 dms run" "qs -c bar" @after)
+  check_eq "a reload (a new Lua state, the slot's file there): the same command dropped, another a second shell, nothing started" \
+    "true|the slot runs it already
+true|a second shell: the slot runs env A=1 dms run
+after" "$(dl)"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take @own "qs -p /x/bar")
+  check_eq "M.exec: desk.lua's own exec starts the slot" "own /opt/omabox/share/shell.sh take
+true|the slot runs it (quickshell-path)" "$(dl)"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take hypridle @after)
+  check_eq "after_start, nothing taken: the guess's start (OMABOX_DESK_SHELL=dms)" "false|
+exec /opt/omabox/share/shell.sh take
+after" "$(dl OMABOX_DESK_SHELL=dms)"
+  check_eq "...its command and guess" "dms run guess" "$(cat "$rt/omabox-shell.cmd") $(cat "$rt/omabox-desk-shell")"
+  DL_ARGS=(take "waybar")
+  check_eq "...a shell after it (a later start): a second shell" "true|a second shell: the slot runs dms run" "$(dl OMABOX_DESK_SHELL=dms)"
+  local g
+  for g in "" quickshell nosuch "../dms"; do
+    rm -rf "$rt"; mkdir -p "$rt"
+    DL_ARGS=(take @after)
+    check_eq "after_start, nothing taken, guess '$g' (none, no start, no profile): none, nothing started" "after none -" \
+      "$(dl OMABOX_DESK_SHELL="$g") $(cat "$rt/omabox-desk-shell") $(cat "$rt/omabox-shell.cmd" 2>/dev/null || echo -)"
+  done
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take "dms run" hypridle @after)
+  check_eq "up --shell CMD: the config's shell dropped, nothing started, nothing written" "true|a second shell: the slot runs qs -p /b (up --shell)
+false|
+after -" "$(dl OMABOX_SHELL_CMD='qs -p /b' OMABOX_DESK_SHELL=dms) $(rtls)"
+  check_eq "up --no-shell: dropped, nothing started, nothing written" "true|up --no-shell: no shell
+false|
+after -" "$(dl OMABOX_SHELL=0 OMABOX_DESK_SHELL=dms) $(rtls)"
+  check_eq "take: a command that is no string is not taken" "false|" "$(DL_ARGS=(take @num); dl)"
+}
+
+# DESK_BINDS (#321, finding 700): `python3 -I -c "$DESK_BINDS" LAUNCH HOME BOXHOME`: what in launch.sh's
+# bwrap would bring the host's HOME into a desk box, a line each (none: the guard holds). Its words
+# are read as the shell reads them (RPU_NORM's way), and every mount of a host path in them: --bind,
+# --ro-bind, --dev-bind and their -try forms, an overlay's sources and work dir. Wrong: a source at or
+# above HOME (as written or resolved), a destination above HOME, a mount at HOME but BOXHOME (the box
+# HOME's own folder) bound writable, or not exactly one mount at HOME; or no mount read at all.
+DESK_BINDS='
+import os, shlex, sys
+launch, home, boxhome = sys.argv[1:4]
+text = open(launch, encoding="utf-8", errors="surrogateescape").read()
+w = [x for line in text.splitlines() for x in shlex.split(line, comments=False)]
+two = ("--bind", "--ro-bind", "--bind-try", "--ro-bind-try", "--dev-bind", "--dev-bind-try")
+mounts, srcs, i = [], [], 0
+while i < len(w):
+    o = w[i]
+    if o in two and i + 2 < len(w):
+        mounts.append((o, w[i + 1], w[i + 2])); i += 3
+    elif o == "--overlay-src" and i + 1 < len(w):
+        srcs.append(w[i + 1]); i += 2
+    elif o == "--overlay" and i + 3 < len(w):
+        mounts += [(o, s, w[i + 3]) for s in srcs + [w[i + 1], w[i + 2]]]; srcs = []; i += 4
+    elif o in ("--ro-overlay", "--tmp-overlay") and i + 1 < len(w):
+        mounts += [(o, s, w[i + 1]) for s in srcs]; srcs = []; i += 2
+    else:
+        i += 1
+def norm(p):
+    return "/" + "/".join(x for x in p.split("/") if x not in ("", "."))
+def at_or_above(p, h):
+    p = norm(p)
+    return p == "/" or (norm(h) + "/").startswith(p + "/")
+homes = {norm(home), norm(os.path.realpath(home))}
+at_home = 0
+if not mounts:
+    print("no mount read in " + launch)
+for o, s, d in mounts:
+    if any(at_or_above(s, h) or at_or_above(os.path.realpath(s), h) for h in homes):
+        print(f"{o} {s} {d}: its source is at or above HOME")
+    if norm(d) == norm(home):
+        at_home += 1
+        if o != "--bind" or os.path.realpath(s) != os.path.realpath(boxhome):
+            print(f"{o} {s} {d}: at HOME, and not the box HOME folder {boxhome} bound writable")
+    elif at_or_above(d, home):
+        print(f"{o} {s} {d}: above HOME")
+if mounts and at_home != 1:
+    print(f"{at_home} mounts at HOME {home}: want the box HOME folder alone")
+'
+# desk_lua XDG_CONFIG_HOME: a plain desk's Hyprland config in it, as a desk box needs one in Lua
+# (#321 step 5, finding 704: no config, or a hyprland.conf alone, is refused).
+desk_lua() { mkdir -p "$1/hypr" && echo "-- a plain desk (the suite's)" > "$1/hypr/hyprland.lua"; }
+# desk_guard NAME DIR HOME CACHE [RUNNER...] (#321, S2-S4; finding 700): the suite's guard on a desk
+# box, run before anything of the test's writes in its HOME, which is at HOME's own path. launch.sh
+# mounts nothing of the host's from HOME or above it, and only the box HOME's own folder
+# (CACHE/omabox/NAME/home) at HOME (DESK_BINDS); in the box, HOME is that folder (its device and
+# inode), not the host's HOME; and no entry of the host's HOME is in the box at its path (each one's
+# device and inode, read in the box). DESK_ALLOW (the caller's local): names of HOME's entries left
+# out (the repo, when it is one). RUNNER: how to reach the box's omabox (default this one; a stand-in
+# HOME's caller). Fails (1) when any of its checks failed: the test stops there and takes the box down.
+# shellcheck disable=SC2031 # fail: no()'s count, in the test's own shell (a check's subshell never changes it)
+desk_guard() {
+  local b=$1 d=$2 h=$3 c=$4; shift 4
+  local via=("$@"); [ ${#via[@]} -gt 0 ] || via=("$CLI")
+  local f0=$fail out p n hid bid ids=()
+  out=$(python3 -I -c "$DESK_BINDS" "$d/launch.sh" "$h" "$c/omabox/$b/home" 2>&1) || out="launch.sh not read: $out"
+  check_eq "$b: launch.sh mounts nothing from HOME ($h) or above it, and only the box HOME's folder at it" "" "$out"
+  hid=$(stat -L -c %d:%i "$h" 2>&1); bid=$(stat -L -c %d:%i "$c/omabox/$b/home" 2>&1)
+  # (stdout only: run's note that a path under your HOME is the box HOME's there goes to stderr;
+  # the entries' check ends on a word of its own, so a run that fails cannot pass for none)
+  check_eq "$b: HOME in the box is the box HOME's folder (device and inode)" "$bid" "$("${via[@]}" run -b "$b" -- stat -L -c %d:%i "$h" 2>/dev/null)"
+  check "$b: ...which is not your HOME" test "$bid" != "$hid"
+  for p in "$h"/* "$h"/.[!.]* "$h"/..?*; do
+    [ -e "$p" ] || [ -L "$p" ] || continue
+    n=${p##*/}
+    [[ " ${DESK_ALLOW:-} " != *" $n "* ]] || continue
+    ids+=("$n" "$(stat -c %d:%i "$p")")
+  done
+  check_eq "$b: none of HOME's $((${#ids[@]} / 2)) entries is in the box (each by device and inode)" "checked" \
+    "$("${via[@]}" run -b "$b" -- sh -c 'h=$1; shift; while [ $# -ge 2 ]; do i=$(stat -c %d:%i -- "$h/$1" 2>/dev/null) && [ "$i" = "$2" ] && printf "%s\n" "$1"; shift 2; done; echo checked' sh "$h" "${ids[@]}" 2>/dev/null)"
+  [ "$fail" = "$f0" ]
+}
+# re_q TEXT: TEXT as a bash regex matching it literally.
+re_q() { printf '%s' "$1" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g'; }
+
+# #321 step 1 (finding 700): a desk box at your real HOME's path. On the host, your HOME is only read:
+# what the box writes goes to its own folder, which desk_guard proves before anything of the test's
+# writes there. box.json's home; HOME, `cd ~` and the XDG dirs at that path in the box; the repo
+# read-only at its own path in it; path --home, run -d's log, gdb's HOME and log, a shot, all through
+# the box's folder and none in your HOME; down removes the folder and leaves your HOME as it was.
+t_desk_home() {
+  local B=$P-dhome D out err c=${XDG_CACHE_HOME:-$HOME/.cache} top first hid hq dq sp DESK_ALLOW=""
+  hid=$(stat -L -c %d:%i "$HOME")
+  # (the repo up runs from, when ROOT is a checkout in your HOME: it lands over the fake HOME at its
+  # path, and its first folder under HOME is the box HOME's, made on its way)
+  top=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null) || top=""
+  [[ $top == "$HOME"/* ]] || top=""
+  first=${top#"$HOME"/}; first=${first%%/*}
+  [ -z "$top" ] || [ "$HOME/$first" != "$top" ] || DESK_ALLOW=$first
+  # Your desk's base (finding 708): an Omarchy one boots in t_desk_omarchy, on a stand-in HOME (your
+  # own Hyprland config is never booted in a test). This one runs on a plain base at your HOME's real
+  # path: Hyprland's config read from a stand-in XDG_CONFIG_HOME of the test's, a plain one.
+  local xc=$TMP/$P-dhome-conf
+  mkdir -p "$xc"; desk_lua "$xc"
+  out=$(cd "$ROOT" && XDG_CONFIG_HOME=$xc "$CLI" up "$B" --desktop desk --net isolated --no-shell 2>&1) ||
+    { no "up --desktop desk" "$out"; ob down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk (on a plain base)"
+  D=$(ob path -b "$B")
+  check_eq "box.json: desktop desk, its home your HOME's path, a plain base" "desk $HOME plain" \
+    "$(jq -r '"\(.desktop) \(.home) \(.desk_base)"' "$D/box.json")"
+  check_eq "...OMABOX_DESK_BASE in the box: plain" plain "$(ob run -b "$B" -- printenv OMABOX_DESK_BASE 2>&1)"
+  # The guard first: nothing below writes in the box HOME until it is known to be the box's own.
+  desk_guard "$B" "$D" "$HOME" "$c" || { ob down "$B" >/dev/null 2>&1; return; }
+  check_eq "HOME, cd ~ and XDG_CONFIG_HOME's parent in the box: your HOME's path" "$HOME|$HOME|$HOME" \
+    "$(ob run -b "$B" -- sh -c 'echo "$HOME|$(cd ~ && pwd -P)|${XDG_CONFIG_HOME%/.config}"' 2>&1)"
+  check_fails "...no /home/sbx in it" ob run -b "$B" -- test -e /home/sbx
+  if [ -n "$top" ]; then
+    check "the repo readable at its path in the desk HOME ($top)" ob run -b "$B" -- test -r "$top/test/run.sh"
+    check_eq "...the host's (device and inode)" "$(stat -c %d:%i "$top")" "$(ob run -b "$B" -- stat -c %d:%i "$top" 2>&1)"
+    check_fails "...read-only" ob run -b "$B" -- test -w "$top"
+    if [ "$HOME/$first" != "$top" ]; then
+      check "...~/$first on its way is the box HOME's, not yours" \
+        test "$(ob run -b "$B" -- stat -c %d:%i "$HOME/$first" 2>&1)" != "$(stat -c %d:%i "$HOME/$first")"
+    fi
+  else skip "the repo at its path in a desk HOME" "ROOT ($ROOT) is not a checkout in your HOME"; fi
+  # Writes in the box HOME from here on: the guard held.
+  check_eq "path --home: <dir>/home" "$D/home" "$(ob path -b "$B" --home)"
+  ob run -b "$B" -- sh -c 'echo "omabox-desk-$$" > "$1/omabox-321"' sh "$HOME" >/dev/null 2>&1
+  check_match "...a file the box wrote at your HOME's path is there" '^omabox-desk-[0-9]+$' "$(cat "$D/home/omabox-321" 2>&1)"
+  check_fails "...not in your HOME" test -e "$HOME/omabox-321"
+  hq=$(re_q "$HOME") dq=$(re_q "$D")
+  err=$(ob run -b "$B" -d -- sh -c 'echo omabox-desk-log; exec sleep 621' 2>&1 >/dev/null)
+  check_match "run -d: its log in the box's folder, at your HOME's path in the box" \
+    "^omabox: started in box '$B' \(pid [0-9]+, log: $dq/home/run-[0-9]+\.log, $hq/run-[0-9]+\.log in the box\)\$" "$err"
+  check "...its output in that log" until_ok 5 bash -c "grep -qx omabox-desk-log '$D'/home/run-*.log"
+  check "log run: read through the box's folder" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-desk-log"
+  check_eq "...none of its logs in your HOME" "" "$(cd "$D/home" && for f in run-*.log; do [ ! -e "$HOME/$f" ] || echo "$f"; done)"
+  if command -v gdb >/dev/null; then
+    sp=$(ob run -b "$B" -- pgrep -xn sleep 2>/dev/null) || sp=""
+    check_match "gdb --pid: gdb's HOME the box's, your HOME's path" "(^|"$'\n'")$hq($|"$'\n'")" \
+      "$(ob gdb -b "$B" --pid "${sp:-1}" -- -ex 'shell printenv HOME' 2>&1)"
+    check "gdb --watch" ob gdb -b "$B" --watch
+    check "...its log in the box's folder" until_ok 5 grep -q '^== omabox gdb --watch ' "$D/home/gdb.log"
+    check_fails "...not in your HOME" grep -qs '^== omabox gdb --watch ' "$HOME/gdb.log"
+    check_match "log gdb: read through the box's folder" "== omabox gdb --watch" "$(ob log -b "$B" gdb -n all 2>&1)"
+  else skip "gdb in a desk box" "no gdb here (a box runs the host's)"; fi
+  check "shot" test -s "$(ob shot -b "$B" -o "$TMP/$B.png" 2>/dev/null)"
+  check_box_safety "$B"
+  check "down" ob down "$B"
+  check_fails "the box's folder gone" test -e "$c/omabox/$B"
+  check_fails "box dir gone" test -e "$D"
+  check_eq "your HOME as it was (device and inode)" "$hid" "$(stat -L -c %d:%i "$HOME")"
+  [ -z "$top" ] || check "...the repo in it still there" test -f "$top/test/run.sh"
+  check_fails "no box process left" pgrep -f "omabox/$B/"
+}
+
+# #321 step 1 (finding 700): a desk box on a stand-in HOME (with runtime, cache, state and data dirs of
+# its own), where the test may plant what a HOME has: a marker, a key in .ssh, a picture. What --seed
+# names is in the box at the HOME's path, the rest is not; a mount inside a desk HOME goes in read-only;
+# the stand-in HOME is the same after the box as before. Refused, no box made: the HOME itself, a mount
+# at it, above it and at omabox's own files in it; step 1's --clean, --desk-shell, a jailed caller's
+# desk box and `config desktop desk`. And a mount under a link --seed put in the box HOME, which bwrap
+# would follow out of it: refused, nothing made where it led.
+t_desk_home_standin() {
+  local B=$P-dhs B2=$P-dhs2 base=$TMP/$P-dhs D out rc before fhq
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state
+  mkdir -p "$fh/.ssh" "$fh/Pictures" "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data" "$base/src" "$base/lnk" "$base/target"
+  chmod 700 "$rt" "$fh/.ssh"
+  echo omabox-321-marker > "$fh/marker"; echo "not a key" > "$fh/.ssh/id_test"; printf 'PNG' > "$fh/Pictures/w.png"
+  : > "$fh/.config/omabox/config"
+  echo omabox-321-src > "$base/src/f"
+  ln -s "$base/target" "$base/lnk/l"; desk_lua "$fh/.config"
+  dh() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  dh_up() { (cd "$base" && dh up "$@" 2>&1); }
+  standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
+  before=$(standin)
+  out=$(dh_up "$B" --desktop desk --net isolated --no-shell --seed "$fh/Pictures:Pictures" --ro-bind "$base/src:$fh/proj"); rc=$?
+  if [ "$rc" != 0 ]; then no "up --desktop desk on a stand-in HOME" "$out"; dh down "$B" >/dev/null 2>&1; return; fi
+  ok "up --desktop desk on a stand-in HOME"
+  D=$(dh path -b "$B")
+  check_eq "box.json: desktop desk, its home the stand-in's path" "desk $fh" "$(jq -r '"\(.desktop) \(.home)"' "$D/box.json")"
+  desk_guard "$B" "$D" "$fh" "$c" dh || { dh down "$B" >/dev/null 2>&1; return; }
+  check "--seed's Pictures in it, at the HOME's path" dh run -b "$B" -- test -f "$fh/Pictures/w.png"
+  check_fails "...the marker beside it not" dh run -b "$B" -- test -e "$fh/marker"
+  check_fails "...nor .ssh" dh run -b "$B" -- test -e "$fh/.ssh"
+  check_eq "a mount inside the desk HOME (--ro-bind SRC:HOME/proj): there" omabox-321-src "$(dh run -b "$B" -- cat "$fh/proj/f" 2>&1)"
+  check_fails "...read-only" dh run -b "$B" -- test -w "$fh/proj"
+  check "down" dh down "$B"
+  check_fails "the box's folder gone" test -e "$c/omabox/$B"
+  check_eq "the stand-in HOME as it was before the box" "$before" "$(standin)"
+  # Refused before a box is made, each with its reason.
+  fhq=$(re_q "$fh")
+  check_match "--ro-bind HOME: refused" "^omabox: refusing to mount $fhq into a box: it contains $fhq/\$" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$fh")"
+  check_match "--ro-bind SRC:HOME: refused" \
+    "^omabox: up: refusing to mount .* at $fhq in a box: that is the box's HOME \($fhq\) or above it\$" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$fh")"
+  check_match "...SRC:above HOME: refused" \
+    "^omabox: up: refusing to mount .* at $(re_q "$base") in a box: that is the box's HOME \($fhq\) or above it\$" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$base")"
+  check_match "...SRC:HOME/.config/omabox (omabox's own): refused" \
+    "^omabox: up: refusing to mount .* at $fhq/\.config/omabox in a box: that is omabox's own ~/\.config/omabox in the box HOME\$" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$fh/.config/omabox")"
+  check_match "--desktop desk --clean: refused in step 1 (its HOME path carries your login name)" \
+    "^omabox: up: --clean is not for a desk box: its HOME is at your HOME's path, which carries your login name " \
+    "$(dh_up "$B2" --desktop desk --clean)"
+  check_match "--desktop desk --desk-shell: refused (part of it, #321)" \
+    "^omabox: up: --desk-shell is part of --desktop desk: a desk box brings your desk, its shell with it " \
+    "$(dh_up "$B2" --desktop desk --desk-shell)"
+  # (OMABOX_HYPRLAND emptied: a suite run on another Hyprland names a folder no jail was given)
+  check_match "a jailed caller's desk box: refused in step 1" \
+    "^omabox: up: --desktop desk is not for an agent inside ai-jail: the box's HOME is at your HOME's path, and the jail's hidden paths are not hidden there yet " \
+    "$(OMABOX_JAIL='{"id": "t321", "roots": []}' OMABOX_HYPRLAND='' dh_up "$B2" --desktop desk --net isolated)"
+  check_fails "...none of them made a box" test -e "$rt/omabox/$B2"
+  out=$(dh config desktop desk 2>&1); rc=$?
+  check "config desktop desk: refused in step 1" test "$rc" != 0
+  check_match "...as a bad value" "^omabox: config: bad desktop: desk " "$out"
+  check_fails "...not written" grep -q '^desktop=desk' "$fh/.config/omabox/config"
+  # A link in the box HOME's folder on a mount's way (#321's new hazard): --seed copies a folder with a
+  # link `l` to a folder of the test's; a mount at HOME/code/l/x would be made through it, there.
+  out=$(dh_up "$B2" --desktop desk --net isolated --seed "$base/lnk:code" --ro-bind "$base/src:$fh/code/l/x"); rc=$?
+  check "a mount under a link --seed put in the box HOME: up fails" test "$rc" != 0
+  check_match "...saying the link (its last line: the desk copy's summary before it)" \
+    "^omabox: up: refusing to mount at $fhq/code/l/x in a box: a link in its way in the box HOME \($(re_q "$c")/omabox/$B2/home/code/l\)\$" "$(tail -n 1 <<<"$out")"
+  check_fails "...nothing made where the link led" test -e "$base/target/x"
+  dh down "$B2" >/dev/null 2>&1
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 1 (finding 700): the spike's case. DankMaterialShell keeps its wallpaper by absolute path
+# (session.json's wallpaperPath, $HOME/Pictures/w.png): a desk box, whose HOME is at that path, draws
+# it; a plain box (HOME /home/sbx) given the same files draws DMS's own art. On a stand-in HOME (and
+# runtime, cache, state and data dirs), so nothing of DMS's could reach your HOME whatever the box did.
+t_desk_dms() {
+  command -v dms >/dev/null || { skip "DMS's wallpaper in a desk box" "dms is not installed"; return; }
+  command -v magick >/dev/null || { skip "DMS's wallpaper in a desk box" "no magick to make the wallpaper"; return; }
+  local B=$P-ddms B2=$P-pdms2 base=$TMP/$P-ddms D out teal='#1a8c8c'
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state s=$base/seed
+  mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data" "$s/state" "$s/conf"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"
+  magick -size 1920x1080 "xc:$teal" "$s/w.png"
+  printf '{"wallpaperPath": "%s/Pictures/w.png", "isLightMode": true}\n' "$fh" > "$s/state/session.json"
+  : > "$s/conf/.firstlaunch"   # (no welcome dialog)
+  desk_lua "$fh/.config"
+  dm() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  px_is() { [ "$(dm pixel -b "$1" "$2" "$3" 2>/dev/null)" = "$teal" ]; }
+  px_not() { ! px_is "$@"; }
+  local seeds=(--seed "$s/w.png:Pictures/w.png" --seed "$s/state:.local/state/DankMaterialShell" --seed "$s/conf:.config/DankMaterialShell")
+  out=$(cd "$base" && dm up "$B" --desktop desk --net isolated --shell 'dms run' "${seeds[@]}" 2>&1) ||
+    { no "up --desktop desk --shell 'dms run'" "$out"; dm down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk --shell 'dms run', its state seeded"
+  D=$(dm path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" dm || { dm down "$B" >/dev/null 2>&1; return; }
+  check "its bar (dms:bar)" dm wait -b "$B" --timeout 10s layer dms:bar
+  check "its wallpaper, from the HOME path session.json names (bottom left)" until_ok 10 px_is "$B" 100 1000
+  check "...(bottom right)" px_is "$B" 1800 1000
+  check "down" dm down "$B"
+  # The control (the spike's): HOME at /home/sbx, the same files; the wallpaper's path is not there.
+  out=$(cd "$base" && dm up "$B2" --desktop plain --net isolated --shell 'dms run' "${seeds[@]}" 2>&1) ||
+    { no "the control: up --desktop plain --shell 'dms run'" "$out"; dm down "$B2" >/dev/null 2>&1; return; }
+  check "the control, a plain box: its bar" dm wait -b "$B2" --timeout 10s layer dms:bar
+  check "...not the wallpaper (DMS's own art: its path is not in /home/sbx)" holds 3 px_not "$B2" 100 1000
+  check "down" dm down "$B2"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 3 (finding 702): share/autostart.lua's verdicts (each class of the table, wrappers, parts,
+# sh -c, a name never a substring; the box's flags), its log line, and desk.lua's wrappers around a
+# stub hl (dropped: never reaches Hyprland, os.execute says it ran, a popen "w" takes writes; a bind's
+# Lua after the start passes; omabox_exec unlogged). test/desk/unit.lua on the host's lua 5.4 or 5.5.
+t_unit_autostart() {
+  local lua="" l v d=$TMP/$P-uas out rc name want got n=0
+  for l in lua5.5 lua5.4 lua; do
+    command -v "$l" >/dev/null || continue
+    v=$("$l" -v 2>&1) || continue
+    if [[ $v == "Lua 5.4"* || $v == "Lua 5.5"* ]]; then lua=$l; break; fi
+  done
+  [ -n "$lua" ] || { skip "share/autostart.lua's verdicts" "no lua 5.4 or 5.5 here (Hyprland's is 5.5)"; return; }
+  rm -rf "$d"; mkdir -p "$d"
+  out=$("$lua" "$ROOT/test/desk/unit.lua" "$ROOT/share" "$d" 2>&1); rc=$?
+  check_eq "test/desk/unit.lua ran to its end ($lua)" 0 "$rc"
+  while IFS=$'\t' read -r name want got; do
+    check_eq "$name" "$want" "$got"; n=$((n + 1))
+  done <<<"$out"
+  check "...every check of it read" test "$n" -ge 80
+}
+
+# The Hyprland options of box B that desk boxes keep or override: NAME VALUE a line.
+desk_opts() {
+  local o
+  for o in general:gaps_out input:follow_mouse debug:suppress_errors cursor:use_cpu_buffer misc:initial_workspace_tracking; do
+    printf '%s %s\n' "$o" "$("${@:2}" hyprctl -b "$1" -j getoption "$o" | jq -r '.css // .int // .bool')"
+  done
+}
+
+# #321 step 3 (finding 702): a desk box runs your own Hyprland config, here a desk without Omarchy
+# (test/desk/hypr, seeded with --seed), on a stand-in HOME and runtime, cache, state, config and data
+# dirs. Its look and input kept, the box's settings over it (the screen, no red bar, the cursor's
+# buffer); the autostart policy: the idle daemon dropped (its stub never ran), the bar run, a line
+# each in `log autostart`, omabox's own commands in none; a bind runs its command, a bind's Lua after
+# the start passes; `hyprctl reload` starts nothing again (its parse-time lines say reload); an error
+# in the config is said in both logs and the box keeps its settings; the copies are share's.
+t_desk_lua() {
+  local B=$P-dlua base=$TMP/$P-dlua D out H f
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state bin
+  rm -rf "$base"; mkdir -p "$fh/.config/omabox" "$rt" "$c" "$st" "$base/data"; chmod 700 "$rt"
+  : > "$fh/.config/omabox/config"
+  bin=$fh/.config/hypr/fixture/bin
+  desk_lua "$fh/.config"   # (up needs a config; --seed's is the test's, over its copy)
+  dl() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  out=$(cd "$base" && dl up "$B" --desktop desk --net isolated --no-shell --seed "$ROOT/test/desk/hypr:.config/hypr" 2>&1) ||
+    { no "up --desktop desk with a desk's Hyprland config" "$out"; dl down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk with a desk's Hyprland config"
+  D=$(dl path -b "$B") H=$(dl path -b "$B" --home)
+  check_eq "box.json: a plain base (the stand-in's config loads no Omarchy)" plain "$(jq -r .desk_base "$D/box.json")"
+  desk_guard "$B" "$D" "$fh" "$c" dl || { dl down "$B" >/dev/null 2>&1; return; }
+  check_eq "the config's look and input kept, the box's settings over the rest" \
+    "general:gaps_out 17 17 17 17|input:follow_mouse 0|debug:suppress_errors true|cursor:use_cpu_buffer 0|misc:initial_workspace_tracking 0" \
+    "$(desk_opts "$B" dl | paste -sd '|')"
+  check_eq "...its screen the box's (the config's catch-all says 4K at 2)" "HEADLESS-2 1920x1080 1" \
+    "$(dl hyprctl -b "$B" -j monitors | jq -r '.[] | "\(.name) \(.width)x\(.height) \(.scale)"')"
+  check_eq "...no config errors" "" "$(dl hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  check "the bar the config starts ran" until_ok 10 grep -qx fixture-bar "$H/fixture-ran"
+  check_eq "...the idle daemon it starts did not, nor the one it opens to write" "parse fixture-bar" "$(paste -sd ' ' "$H/fixture-ran")"
+  check_eq "...a popen's read and a dropped popen's write, in its Lua" "desk-popen writable" \
+    "$(dl lua -b "$B" 'return omabox_t321_popen .. " " .. omabox_t321_popen_w' 2>&1)"
+  local idle="  (idle: a box has no input and would lock itself (finding 10))"
+  check_eq "the box HOME's autostart.log: each decision, by phase; omabox's own commands in none" \
+    "load run other execute echo parse >> \"\$HOME/fixture-ran\"|load run query popen echo desk-popen|load drop idle popen $bin/hypridle --from-popen$idle|start drop idle exec_cmd uwsm-app -- $bin/hypridle$idle|start run other exec_cmd $bin/fixture-bar" \
+    "$(paste -sd '|' "$H/autostart.log")"
+  check_eq "log autostart: that file" "$(cat "$H/autostart.log")" "$(dl log -b "$B" autostart -n all 2>/dev/null)"
+  # Binds: a command is never judged (the lock's stub runs); a bind's Lua after the start passes.
+  dl keys -b "$B" super+F7 super+F8 >/dev/null 2>&1
+  check "a bind's command runs (SUPER+F7: the lock's stub)" until_ok 5 grep -qx hyprlock "$H/fixture-ran"
+  check "a bind's Lua runs its command (SUPER+F8: the idle stub)" until_ok 5 grep -qx 'hypridle --from-bind' "$H/fixture-ran"
+  check_eq "...said as later, passed" "later run idle exec_cmd $bin/hypridle --from-bind  (after the start: the user's own doing)" "$(tail -n 1 "$H/autostart.log")"
+  # A reload: the config's parse-time commands again, as reload; nothing of its start.
+  : > "$H/autostart.log"
+  check "hyprctl reload" dl hyprctl -b "$B" reload
+  check_eq "...its parse-time lines say reload, no start line" "reload run|reload run|reload drop" \
+    "$(cut -d' ' -f1,2 "$H/autostart.log" | paste -sd '|')"
+  check_eq "...the bar not started again" 1 "$(grep -cx fixture-bar "$H/fixture-ran")"
+  dl keys -b "$B" super+F8 >/dev/null 2>&1
+  check "...a bind's Lua after it: later" until_ok 5 bash -c "tail -n 1 '$H/autostart.log' | grep -q '^later run idle exec_cmd '"
+  # The copies hyprland.lua runs are share's, written again by omabox reload.
+  for f in desk autostart desk-shell plain omarchy; do
+    check_eq "the box's omabox-$f.lua: share's" same \
+      "$(dl run -b "$B" -- sh -c "cat \"\$XDG_RUNTIME_DIR/omabox-$f.lua\"" 2>/dev/null | cmp -s - "$ROOT/share/$f.lua" && echo same || echo differ)"
+  done
+  dl run -b "$B" -- sh -c 'echo "-- changed" >> "$XDG_RUNTIME_DIR/omabox-desk.lua"' >/dev/null 2>&1
+  check_match "omabox reload" "config reloaded from" "$(dl reload -b "$B" 2>&1)"
+  check_eq "...desk.lua's copy written again" same \
+    "$(dl run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-desk.lua"' 2>/dev/null | cmp -s - "$ROOT/share/desk.lua" && echo same || echo differ)"
+  # An error in the config: said, and the box keeps its settings over what loaded.
+  dl run -b "$B" -- sh -c 'echo "this is (" >> "$HOME/.config/hypr/hyprland.lua"' >/dev/null 2>&1
+  check "a config with a syntax error: hyprctl reload still answers" dl hyprctl -b "$B" reload
+  check_match "...said in autostart.log" "^reload error config dofile $(re_q "$fh/.config/hypr/hyprland.lua")  \(.*syntax error" "$(tail -n 1 "$H/autostart.log")"
+  hl_err() { dl log -b "$B" hyprland -n all 2>/dev/null | grep -q 'ERR from omabox \]: .*hyprland\.lua.*syntax error'; }
+  check "...and in Hyprland's log" until_ok 10 hl_err
+  check_eq "...the box's settings still over it" "debug:suppress_errors true" "$(desk_opts "$B" dl | grep '^debug:')"
+  check_box_safety "$B" dl
+  check "down" dl down "$B"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 3 (finding 702): a desk box on Omarchy's base. A stand-in HOME (and its dirs) whose
+# ~/.config/hypr is Omarchy's stock config plus a desk's lines (gaps 23; Omarchy's o.launch_on_start
+# of hypridle and of a stand-in bar), seeded with --seed; the stand-in's Omarchy config is
+# /etc/skel's, its theme Omarchy's nord. The box: Omarchy's binds and toggles, the config's gaps, the
+# idle daemon dropped and the bar run; Omarchy's session autostart never (first-run, monitor-watch),
+# one Omarchy shell (shell.sh's: the recorded pid), omabox's stand-ins ahead of Omarchy's bin on the
+# PATH Hyprland gives; the desk's shell config copied as --desk-shell does.
+t_desk_omarchy() {
+  local B=$P-domy base=$TMP/$P-domy D out H o=/usr/share/omarchy pid
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state bin
+  rm -rf "$base"
+  mkdir -p "$fh/.config/omabox" "$fh/.config/hypr/fixture/bin" "$fh/.local/state/omarchy/current" "$rt" "$c" "$st" "$base/data"
+  chmod 700 "$rt"; : > "$fh/.config/omabox/config"
+  bin=$fh/.config/hypr/fixture/bin
+  cp "$o"/config/hypr/*.lua "$fh/.config/hypr/"
+  cp "$ROOT"/test/desk/hypr/fixture/bin/* "$bin/"
+  printf '%s\n' "-- a desk's own lines (#321)" 'hl.config({ general = { gaps_out = 23 } })' 'o.launch_on_start("hypridle")' \
+    "o.launch_on_start(\"$bin/fixture-bar\")" >> "$fh/.config/hypr/hyprland.lua"
+  if [ -d /etc/skel/.config/omarchy ]; then cp -r /etc/skel/.config/omarchy "$fh/.config/omarchy"; else mkdir -p "$fh/.config/omarchy"; fi
+  cp -r "$o/themes/nord" "$fh/.local/state/omarchy/current/theme"; echo nord > "$fh/.local/state/omarchy/current/theme.name"
+  dm() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  out=$(cd "$base" && dm up "$B" --desktop desk --net isolated --seed "$fh/.config/hypr:.config/hypr" 2>&1) ||
+    { no "up --desktop desk on an Omarchy desk" "$out"; dm down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk on an Omarchy desk"
+  D=$(dm path -b "$B") H=$(dm path -b "$B" --home)
+  check_eq "box.json: Omarchy's base, the desk's shell config (--desk-shell's copy), a shell" "omarchy desk true" \
+    "$(jq -r '"\(.desk_base) \(.bar) \(.shell)"' "$D/box.json")"
+  check_match "...said as --desk-shell says it" "--desk-shell: [0-9]+ plugins of " "$out"
+  desk_guard "$B" "$D" "$fh" "$c" dm || { dm down "$B" >/dev/null 2>&1; return; }
+  check_eq "the config's gaps, the box's settings" "general:gaps_out 23 23 23 23|debug:suppress_errors true|cursor:use_cpu_buffer 0" \
+    "$(desk_opts "$B" dm | grep -E '^(general|debug|cursor):' | paste -sd '|')"
+  check_eq "...no config errors" "" "$(dm hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  # (Omarchy's binds are Lua, dispatcher __lua: told by the description its tiling bindings give)
+  check_eq "Omarchy's binds (its tiling bindings' \"Close all windows\")" 1 \
+    "$(dm hyprctl -b "$B" -j binds | jq '[.[] | select(.description == "Close all windows")] | length')"
+  check_eq "Omarchy's toggles loaded; its session autostart and the desk's monitors marked, not run" "true true true" \
+    "$(dm lua -b "$B" 'return tostring(package.loaded["default.hypr.toggles"] ~= nil) .. " " .. tostring(package.loaded["default.hypr.autostart"]) .. " " .. tostring(package.loaded["hypr.monitors"])' 2>&1)"
+  check "the stand-in bar the config starts ran" until_ok 10 grep -qx fixture-bar "$H/fixture-ran"
+  check "...said as run at the start" grep -qxF "start run other exec_cmd uwsm-app -- $bin/fixture-bar" "$H/autostart.log"
+  check "the idle daemon it starts: dropped" grep -qF "start drop idle exec_cmd uwsm-app -- hypridle  (idle: " "$H/autostart.log"
+  check_eq "...none in the box, nor first-run, monitor-watch or udiskie" "" \
+    "$(dm run -b "$B" -- ps -eo args= | grep -E 'hypridle|omarchy-provision-first-run|omarchy-hyprland-monitor-watch|udiskie')"
+  check_eq "...none of them asked for (Omarchy's autostart skipped)" "" \
+    "$(grep -E 'first-run|monitor-watch|udiskie|omarchy-launch-shell' "$H/autostart.log")"
+  check_eq "one Omarchy shell" 1 "$(dm run -b "$B" -- ps -eo comm= | grep -cx quickshell)"
+  pid=$(dm run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-shell.pid"' 2>/dev/null) || pid=""
+  check_match "...the one shell.sh started (its recorded pid)" "quickshell .*-p $(re_q "$o")/shell" \
+    "$(dm run -b "$B" -- sh -c 'tr "\0" " " < "/proc/$1/cmdline"' sh "${pid:-0}" 2>&1)"
+  check_eq "...running, as ls says" running "$(dm ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state')"
+  check_match "omabox's stand-ins first on the PATH Hyprland gives, then Omarchy's bin" "^PATH=/opt/omabox/share/bin:$(re_q "$o")/bin:" \
+    "$(dm run -b "$B" -- sh -c 'tr "\0" "\n" < "/proc/$1/environ" | grep "^PATH="' sh "${pid:-0}" 2>&1)"
+  check "a reload loads it again" dm hyprctl -b "$B" reload
+  check_eq "...no config errors" "" "$(dm hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  check_eq "...still one Omarchy shell" 1 "$(dm run -b "$B" -- ps -eo comm= | grep -cx quickshell)"
+  check_box_safety "$B" dm
+  check "down" dm down "$B"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 (finding 709): an Omarchy desk's wallpaper in a desk box. A stand-in HOME on Omarchy's base
+# (its theme nord) whose ~/.config/omarchy/backgrounds/nord is a link to a folder outside ~/.config
+# (as a dotfiles repo keeps one), its current/background a link to the folder's second picture.
+# Omarchy's seeding follows no link (the box showed nord's own first picture); the desk copy brings
+# the folder's pictures as the box's own and links the box's current/background to its copy of the
+# desk's pick: the box shows its colour.
+t_desk_wallpaper() {
+  command -v magick >/dev/null || { skip "an Omarchy desk's wallpaper in a desk box" "no magick to make the wallpaper"; return; }
+  local B=$P-dwp base=$TMP/$P-dwp D H o=/usr/share/omarchy out pink='#c8287a' bg
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state cur
+  cur=$fh/.local/state/omarchy/current
+  rm -rf "$base"
+  mkdir -p "$fh/.config/omabox" "$fh/.config/hypr" "$fh/walls" "$cur" "$rt" "$c" "$st" "$base/data"
+  chmod 700 "$rt"; : > "$fh/.config/omabox/config"
+  cp "$o"/config/hypr/*.lua "$fh/.config/hypr/"
+  if [ -d /etc/skel/.config/omarchy ]; then cp -r /etc/skel/.config/omarchy "$fh/.config/omarchy"; else mkdir -p "$fh/.config/omarchy"; fi
+  mkdir -p "$fh/.config/omarchy/backgrounds"
+  cp -r "$o/themes/nord" "$cur/theme"; echo nord > "$cur/theme.name"
+  magick -size 64x64 'xc:#1a8c8c' "$fh/walls/a.png"; magick -size 64x64 "xc:$pink" "$fh/walls/b.png"
+  ln -s "$fh/walls" "$fh/.config/omarchy/backgrounds/nord"
+  ln -s "$fh/walls/b.png" "$cur/background"
+  dw() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  # shellcheck disable=SC2329 # called by until_ok
+  px_pink() { [ "$(dw pixel -b "$B" 900 500 2>/dev/null)" = "$pink" ]; }
+  out=$(cd "$base" && dw up "$B" --desktop desk --net isolated 2>&1) ||
+    { no "up --desktop desk on an Omarchy desk, its wallpapers a link" "$out"; dw down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk on an Omarchy desk, its wallpapers a link"
+  D=$(dw path -b "$B") H=$(dw path -b "$B" --home)
+  desk_guard "$B" "$D" "$fh" "$c" dw || { dw down "$B" >/dev/null 2>&1; return; }
+  check_match "up says the folder's pictures copied" "copied into the box's HOME: [0-9]+ files \(.*2 of your wallpapers\)" "$out"
+  bg=$H/.config/omarchy/backgrounds/nord
+  check "...as files of the box's own" bash -c "[ -f '$bg/a.png' ] && [ -f '$bg/b.png' ] && [ ! -L '$bg' ] && [ ! -L '$bg/b.png' ]"
+  check_eq "the box's current/background: its copy of the desk's pick" "$fh/.config/omarchy/backgrounds/nord/b.png" \
+    "$(readlink "$H/.local/state/omarchy/current/background")"
+  check "the box shows it" until_ok 15 px_pink
+  check "down" dw down "$B"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
 }
 
 # finding 122 (nvidia-modprobe -c MINOR for a missing /dev/nvidiaN, -c 255 for /dev/nvidiactl, finding
@@ -14736,6 +15510,11 @@ t_config_kept() {
   check_match "its Hyprland runs the box's own copy of the config (#140)" "--config /run/user/[0-9]+/omabox-hyprland\.lua$" \
     "$(ob run -b "$B" -- pgrep -ax Hyprland)"
   check_eq "...a copy of omabox's" "$want" "$("${copy[@]}")"
+  # (#247, #321: the desktops it runs, and what desk.lua loads, copied with it, every one in every box)
+  # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
+  check_eq "...and of its desktops: omarchy, plain, desk, autostart, desk-shell" same \
+    "$(ob run -b "$B" -- sh -c 'for f in omarchy plain desk autostart desk-shell; do cat "$XDG_RUNTIME_DIR/omabox-$f.lua"; done' 2>/dev/null |
+      cmp -s - <(cat "$ROOT"/share/{omarchy,plain,desk,autostart,desk-shell}.lua) && echo same || echo differ)"
   ob lua -b "$B" 'omabox_t140 = 1' >/dev/null
   # shellcheck disable=SC2016
   ob run -b "$B" -- sh -c 'echo "-- changed" >> "$XDG_RUNTIME_DIR/omabox-hyprland.lua"'
@@ -14984,6 +15763,16 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
   cx_case "up --env and --size with a scale" up "$U" --no-shell --net isolated --env RPV=1 --size 1280x720,scale=1.5
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "no_seed": \[$')
   cx_case "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
+  # #321 (finding 700): a desk box, its HOME at the caller's HOME path (the test's own, $h): box.json's
+  # desktop and home; its golden has the box HOME's folder bound there and HOME
+  # and the XDG dirs under it (up/ on an Omarchy machine, where its tree is hidden; up-plain/ on one
+  # without, written there).
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "desktop": "desk",$' "state~^  \"home\": \"$(re_q "$h")\",\$" 'state~^  "desk_base": "plain",$')
+  # (its own XDG_CONFIG_HOME: a Hyprland config not loading Omarchy there, a plain base, finding 708)
+  desk_lua "$h/.config"
+  cx_env=("HOME=$h" "XDG_CONFIG_HOME=$h/.config")
+  cx_case "up --desktop desk" up "$U" --no-shell --net isolated --desktop desk
+  cx_env=("HOME=$h"); rm -f "$h/.config/hypr/hyprland.lua"; rmdir "$h/.config/hypr"
   # A save whose HOME has a link where --clean writes its wallpaper (finding 461): the PNG is written
   # in the box HOME, never through the link onto the host file it leads to.
   mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
@@ -19030,6 +19819,124 @@ t_desk_backgrounds() {
   fake down "$B" >/dev/null 2>&1
 }
 
+# #321 step 2 (finding 701): a desk box's copy of your desktop, on a stand-in HOME (and runtime, cache,
+# state and data dirs; the shell's state in the stand-in XDG_STATE_HOME): ~/.config/hypr a stow link
+# into ~/dotfiles, a link to ~/.ssh and a 2 MiB file in it; DankMaterialShell's unit linked under
+# graphical-session.target.wants, its config and state, the wallpaper its session.json names. In the
+# box: copies, none a link; the link to .ssh and the big file left out and said (up and box.json); the
+# shell guessed (dms, from its unit) in box.json and OMABOX_DESK_SHELL; --seed's file over a copied
+# one; a write in the box's copy leaves the host's as it was; the stand-in HOME as it was after down.
+t_desk_copy() {
+  local B=$P-dcp base=$TMP/$P-dcp D out before lua='hl.config({ general = { gaps_out = 7 } })'
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state hy
+  hy=$fh/dotfiles/hypr/.config/hypr
+  mkdir -p "$hy" "$fh/.config/omabox" "$fh/.ssh" "$fh/Pictures" "$st/DankMaterialShell" "$fh/.config/DankMaterialShell" \
+    "$fh/.config/systemd/user/graphical-session.target.wants" "$rt" "$c" "$base/data" "$base/seed"
+  chmod 700 "$rt" "$fh/.ssh"
+  : > "$fh/.config/omabox/config"
+  echo "$lua" > "$hy/hyprland.lua"; echo '-- binds' > "$hy/binds.lua"
+  head -c 2097152 /dev/zero | tr '\0' - > "$hy/big.lua"
+  ln -s "$hy" "$fh/.config/hypr"
+  echo "not a key" > "$fh/.ssh/id_test"; ln -s "$fh/.ssh" "$hy/ssh"
+  printf '\x89PNG\r\n\x1a\nomabox-321' > "$fh/Pictures/w.png"
+  printf '{"wallpaperPath": "%s/Pictures/w.png"}\n' "$fh" > "$st/DankMaterialShell/session.json"
+  echo '{}' > "$fh/.config/DankMaterialShell/settings.json"
+  ln -s /usr/lib/systemd/user/dms.service "$fh/.config/systemd/user/graphical-session.target.wants/dms.service"
+  echo '-- seeded' > "$base/seed/binds.lua"
+  dc() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
+  before=$(standin)
+  out=$(cd "$base" && dc up "$B" --desktop desk --net isolated --seed "$base/seed/binds.lua:.config/hypr/binds.lua" 2>&1) ||
+    { no "up --desktop desk with a desktop to copy" "$out"; dc down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk with a desktop to copy"
+  check_match "...says what it copied" "omabox: up: your desktop, copied into the box's HOME: 5 files \(2 of ~/\.config/hypr, 2 of the dms shell, 1 of the images they name\); its shell, first guessed: dms \(from unit\)" "$out"
+  check_match "...and what it left out, and why" "omabox: up: not copied: ~/\.config/hypr/big\.lua \(over 1 MiB\)" "$out"
+  D=$(dc path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" dc || { dc down "$B" >/dev/null 2>&1; return; }
+  check_eq "box.json: desk_copy's skipped, shell_guess, shell_from" \
+    ".config/hypr/big.lua .config/hypr/ssh|dms|unit" \
+    "$(jq -r '"\([.desk_copy.skipped[].path] | join(" "))|\(.shell_guess)|\(.shell_from)"' "$D/box.json")"
+  check_match "...the link to .ssh: where it leads, refused" "^it leads to $(re_q "$fh/.ssh"): it is inside " \
+    "$(jq -r '.desk_copy.skipped[] | select(.path == ".config/hypr/ssh") | .why' "$D/box.json")"
+  check_eq "OMABOX_DESK_SHELL in the box: the guess" dms "$(dc run -b "$B" -- printenv OMABOX_DESK_SHELL 2>&1)"
+  check_eq "the box's .config/hypr: a folder of its own, its files copies (no link)" "$lua|0" \
+    "$(dc run -b "$B" -- sh -c 'echo "$(cat ~/.config/hypr/hyprland.lua)|$(find ~/.config/hypr ~/.local/state/DankMaterialShell ~/.config/DankMaterialShell ~/Pictures -type l | wc -l)"' 2>&1)"
+  check "...DMS's state at the box's XDG_STATE_HOME, its config" dc run -b "$B" -- sh -c 'test -f "$XDG_STATE_HOME/DankMaterialShell/session.json" && test -f ~/.config/DankMaterialShell/settings.json'
+  check_eq "...the wallpaper session.json names, at its path" "omabox-321" "$(dc run -b "$B" -- sh -c 'tail -c 10 "$1/Pictures/w.png"' sh "$fh" 2>/dev/null)"
+  check_fails "...not the link to .ssh" dc run -b "$B" -- test -e "$fh/.config/hypr/ssh"
+  check_fails "...nor .ssh" dc run -b "$B" -- test -e "$fh/.ssh"
+  check_fails "...nor the big file" dc run -b "$B" -- test -e "$fh/.config/hypr/big.lua"
+  check_fails "...nor the systemd links" dc run -b "$B" -- test -e "$fh/.config/systemd"
+  check_eq "--seed over a copied file: --seed's" "-- seeded" "$(dc run -b "$B" -- cat "$fh/.config/hypr/binds.lua" 2>/dev/null)"
+  dc run -b "$B" -- sh -c 'echo "-- the box wrote" >> ~/.config/hypr/hyprland.lua' >/dev/null 2>&1
+  check_eq "a write in the box's copy: there" "-- the box wrote" "$(dc run -b "$B" -- tail -n 1 "$fh/.config/hypr/hyprland.lua" 2>/dev/null)"
+  check_eq "...the host's file as it was" "$lua" "$(cat "$hy/hyprland.lua")"
+  check_box_safety "$B"
+  check "down" dc down "$B"
+  check_eq "the stand-in HOME as it was before the box" "$before" "$(standin)"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 2 (finding 701): the desk box's copy on its own (probe desk_copy H [SHELL_CMD]: the copy
+# into H, from the HOME and XDG dirs it is given; no box), on stand-in HOMEs. Refused, nothing copied:
+# a Hyprland config that is a link into a secret store, a hyprland.lua holding a token's shape, a module
+# it requires over 1 MiB. What a copy follows and what it leaves out: links followed (none in the copy
+# but one into /usr), a secret's name on a link's way, a repo's metadata, a loop, a FIFO; the looser
+# names a desktop's files have (keybinds.lua, session.json); --shell CMD's shell and its config. And
+# your real ~/.config/hypr copies (into the test's folder, read-only on yours, only names said).
+t_unit_desk_copy() {
+  local d=$TMP/$P-udc fh out rc
+  # dcp HOME H [SHELL_CMD]: the copy from HOME (its XDG dirs under it) into H
+  dcp() { local h=$1; shift; HOME=$h XDG_CONFIG_HOME='' XDG_STATE_HOME='' XDG_CACHE_HOME='' XDG_DATA_HOME='' OMABOX_JAIL='' probe desk_copy "$@"; }
+  fh=$d/a; mkdir -p "$fh/.gnupg/hypr" "$fh/.config" "$d/a-box"
+  echo 'hl.config({})' > "$fh/.gnupg/hypr/hyprland.lua"; ln -s "$fh/.gnupg/hypr" "$fh/.config/hypr"
+  out=$(dcp "$fh" "$d/a-box" 2>&1); rc=$?
+  check_match "a Hyprland config that leads into ~/.gnupg: refused" \
+    "^omabox: up: --desktop desk: your Hyprland config \($(re_q "$fh/.config/hypr")\) cannot go into a box: it leads to $(re_q "$fh/.gnupg/hypr"): it is inside " "$out"
+  check "...failing" test "$rc" != 0
+  check_eq "...nothing copied" "" "$(ls -A "$d/a-box")"
+  fh=$d/b; mkdir -p "$fh/.config/hypr" "$d/b-box"
+  echo 'local password = "hunter2hunter2"' > "$fh/.config/hypr/hyprland.lua"
+  check_eq "a hyprland.lua holding what looks like a password: refused" \
+    "omabox: up: --desktop desk: your hyprland.lua was not copied into the box: it holds what looks like a key, token or password" \
+    "$(dcp "$fh" "$d/b-box" 2>&1)"
+  check_fails "...not in the box HOME" test -e "$d/b-box/.config/hypr/hyprland.lua"
+  fh=$d/c; mkdir -p "$fh/.config/hypr/conf" "$d/c-box"
+  printf 'require("conf.big")\n' > "$fh/.config/hypr/hyprland.lua"
+  head -c 1048577 /dev/zero | tr '\0' - > "$fh/.config/hypr/conf/big.lua"
+  check_eq "a module it requires over 1 MiB: refused" \
+    "omabox: up: --desktop desk: ~/.config/hypr/conf/big.lua, which your Hyprland config requires, was not copied into the box: over 1 MiB" \
+    "$(dcp "$fh" "$d/c-box" 2>&1)"
+  # What a copy follows and leaves out.
+  fh=$d/e; local hy=$fh/dots/.config/hypr
+  mkdir -p "$hy/.git" "$hy/sub" "$fh/.ssh" "$fh/private" "$fh/.config/noctalia" "$d/e-box"
+  echo 'hl.config({})' > "$hy/hyprland.lua"; echo '-- keys' > "$hy/keybinds.lua"; echo '{}' > "$hy/session.json"
+  echo '[core]' > "$hy/.git/config"; echo 'k' > "$fh/.ssh/id_k"; echo '-- p' > "$fh/private/p.lua"; echo '{}' > "$fh/.config/noctalia/settings.json"
+  ln -s "$hy" "$fh/.config/hypr"
+  ln -s "$fh/.ssh/id_k" "$hy/k.lua"; ln -s "$fh/private/p.lua" "$hy/p.lua"; ln -s "$hy" "$hy/sub/loop"; ln -s /usr/share "$hy/share"
+  mkfifo "$hy/fifo"
+  out=$(dcp "$fh" "$d/e-box" "uwsm app -- qs -c noctalia-shell" 2>/dev/null)
+  check_eq "what it copies: the config's files through the links, --shell's shell's" \
+    ".config/hypr/hyprland.lua .config/hypr/keybinds.lua .config/hypr/session.json .config/hypr/share .config/noctalia/settings.json" \
+    "$(sed -n 's/^copied //p' <<<"$out" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "...what it leaves out, and why" \
+    ".config/hypr/.git/|a git dir (its config can hold credentials) .config/hypr/fifo|not a regular file .config/hypr/k.lua|it leads to $fh/.ssh/id_k .config/hypr/p.lua|it leads to $fh/private/p.lua .config/hypr/sub/loop/|a loop: a link to a folder it is in" \
+    "$(sed -n 's/^skipped //p' <<<"$out" | sed -E 's/: (it is inside|a secret).*//' | tr '\t' '|' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "...the shell it guessed, and from what" "noctalia	--shell" "$(sed -n 's/^guess //p' <<<"$out")"
+  check_eq "...no link in the copy but the one into /usr" "$d/e-box/.config/hypr/share" "$(command find "$d/e-box" -type l)"
+  check_fails "...nothing of .ssh" test -e "$d/e-box/.config/hypr/k.lua"
+  # Your real Hyprland config: copied (read-only on yours; names only, into the test's folder).
+  local cf=${XDG_CONFIG_HOME:-$HOME/.config}
+  [[ $cf == /* ]] || cf=$HOME/.config
+  if [ -f "$cf/hypr/hyprland.lua" ]; then
+    mkdir -p "$d/real"
+    out=$(OMABOX_JAIL='' probe desk_copy "$d/real" 2>/dev/null)
+    check_match "your real ~/.config/hypr: its hyprland.lua copied" "(^|"$'\n'")copied \.config/hypr/hyprland\.lua($|"$'\n'")" "$out"
+    check_eq "...as a copy (not a link)" "" "$(command find "$d/real/.config/hypr" -maxdepth 1 -name hyprland.lua -type l)"
+    rm -rf "$d/real"
+  else skip "your real ~/.config/hypr copies" "no $cf/hypr/hyprland.lua"; fi
+}
+
 # up --stock (#265, finding 613): Omarchy as a new user sees it, on a fake desk (HOME and the XDG dirs
 # a folder of the test's) that has one of each thing of a desk's look, each holding a marker: none of
 # it in the box, the theme's own wallpaper (not the user's for it), English in UTC; the clock,
@@ -22206,6 +23113,10 @@ t_unit_inspect() {
         --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent \
         "$ROOT/tools/notices/omabox-notices" /tmp/n.log /tmp/n.ready 2>&1) || rc=$?
   check_eq "omabox-notices refuses outside a box" "2 omabox-notices: only runs inside an omabox box" "$rc $out"
+  # A desk box's idle hold (#321 step 5) too: on the host it would hold your desktop's idle off.
+  rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp \
+        --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i "$ROOT/tools/idlehold/omabox-idlehold" 2>&1) || rc=$?
+  check_eq "omabox-idlehold refuses outside a box" "2 omabox-idlehold: only runs inside an omabox box" "$rc $out"
   check_match "log --json: the notifications log's alone (#430)" "--json is the notifications log's alone" \
     "$(ob log -b "$P-x" --json 2>&1)"
   check_match "wait notification: RE wanted" "wait notification: for which\?" "$(ob wait -b "$P-x" notification 2>&1)"
@@ -22512,8 +23423,8 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
-  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's
@@ -22523,7 +23434,7 @@ BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_cl
 OMARCHY_ONLY=(t_widget t_widget_list t_widget_mark t_plugin_check t_plugin_hosted t_plugin_link t_plugin_add t_no_seed
   t_shell_restart_race t_shell_restart_dup t_shell_crash t_shell_hung t_shell_other_crash t_omarchy_restart t_quickshell
   t_click_layer t_dnd_dock t_desk_backgrounds t_stock t_stock_bar t_desk_shell t_theme t_theme_dir t_omarchy_tree t_lock
-  t_setup_prompts t_extensions_secret t_user_hypr t_clean)
+  t_setup_prompts t_extensions_secret t_user_hypr t_clean t_desk_omarchy t_desk_wallpaper)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
