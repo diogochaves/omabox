@@ -288,6 +288,9 @@ rec_tools() {
     ffmpeg -nostdin -v error -f lavfi -i color=s=64x64:d=0.1 -c:v libopenh264 -f null - 2>/dev/null || return 1
   REC_ENC=libopenh264 REC_VARGS=(-c:v libopenh264 -rc_mode quality -qmin 18 -qmax 18)
 }
+# ... | rgb_cells: 8-bit RGB pixels on stdin (magick's rgb:-) as "R,G,B R,G,B ...", row by row, as the
+# suite once read them from magick's txt:-, which openSUSE's ImageMagick policy forbids (finding 690).
+rgb_cells() { od -An -v -tu1 -w3 | awk 'NF == 3 { printf "%s%s,%s,%s", n++ ? " " : "", $1, $2, $3 }'; }
 # BAR_NS: the layer namespace of a box's bar, Omarchy's or PSHELL's.
 BAR_NS=omarchy-bar; omarchy_here || BAR_NS="t-plainbar"
 # "${NOOM[@]}" CMD...: CMD as on a machine without Omarchy: under a bwrap that hides /usr/share/omarchy
@@ -16609,9 +16612,10 @@ record_layout_on() {
     "$(ob hyprctl -b "$B" -j clients | jq -r --argjson m "$(ob hyprctl -b "$B" -j monitors)" --arg a "$m0" --arg b "$m1" --arg c "$m2" \
       '. as $w | [$a, $b, $c] | map(. as $n | ($m[] | select(.name == $n) | .id) as $id | [$w[] | select(.monitor == $id)] | length) | join(" ")' 2>/dev/null)"
   local v=$TMP/$B.mp4 out f=$TMP/$B.png sz
-  # (openh264's frames are smaller, 4096x2304's pixels at most: the layout scaled to fit, #442)
-  local vw=4000 vh=2560 how="the layout at scale 2"
-  [ "$REC_ENC" != libopenh264 ] || vw=3840 vh=2458 how="the layout at scale 2, scaled by 0[.]96 to fit H[.]264's largest frame, a black edge making 3840x2457 even"
+  # (openh264's frames are smaller, 4096x2304's pixels at most counted in 16x16 macroblocks: the
+  # layout scaled to fit, #442; at 0.96, 3840x2458, it refused the frame as 3840x2464)
+  local vw=4000 vh=2560 how="the layout at scale 2" so se=$TMP/$B-stop.err
+  [ "$REC_ENC" != libopenh264 ] || vw=3826 vh=2448 how="the layout at scale 2, scaled by 0[.]956 to fit H[.]264's largest frame, a black edge making 3825x2448 even"
   out=$(ob record -b "$B" start --monitor all -o "$v" 2>&1)
   check_match "record start --monitor all: one video of the three, at the layout's highest scale" \
     "recording $m0, $m1, $m2 of box '$B' as one ${vw}x$vh video \($how\)" "$out"
@@ -16620,15 +16624,23 @@ record_layout_on() {
   ob record -b "$B" mark "white" >/dev/null 2>&1
   ob run -b "$B" -- sh -c 'echo > /tmp/g1 & echo > /tmp/g2 & echo > /tmp/g3; wait'
   sleep 0.8
-  check_eq "record stop prints the video, then its sheet" "$v|${v%.mp4}.sheet.png" "$(ob record -b "$B" stop --sheet --frames 3 2>/dev/null | paste -sd '|')"
+  # (what stop said, ffmpeg's words too, kept with the failure: it is all there is of a video not made)
+  so=$(ob record -b "$B" stop --sheet --frames 3 2>"$se" | paste -sd '|')
+  if [ "$so" = "$v|${v%.mp4}.sheet.png" ]; then ok "record stop prints the video, then its sheet"
+  else no "record stop prints the video, then its sheet" "want [$v|${v%.mp4}.sheet.png] got [$so]; record stop said: $(tail -c 3000 "$se")"; fi
+  if [ "$REC_ENC" = libopenh264 ]; then
+    local vd; vd=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v" 2>/dev/null) || vd=
+    check "...openh264's video: a frame within its 36864 macroblocks (${vd:-none})" \
+      awk -F, -v d="$vd" 'BEGIN { split(d, a, ","); exit !(a[1] > 0 && int((a[1] + 15) / 16) * int((a[2] + 15) / 16) <= 36864) }'
+  fi
   ob shot -b "$B" -o "$f" >/dev/null 2>&1
   sz=$(magick identify -format '%wx%h' "$f" 2>&1)
   check_eq "...an H.264 video at 30 fps, the size of a shot of the screen ($sz)" "h264,$vw,$vh,30/1 4000x2560" \
     "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$v" 2>&1) $sz"
   # Its last frame and the shot, 10x8 cells' mean colours (the gaps transparent in the shot: black).
   local a b
-  a=$(magick "$f" -background black -alpha remove -alpha off -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
-  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  a=$(magick "$f" -background black -alpha remove -alpha off -scale '10x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
+  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '10x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
   check "...its last frame is the shot's layout: 80 cells' colours within 8 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 12) <(tr ' ' '\n' <<<"$b" | head -n 12) | paste -sd ' ') ...)" \
     awk -v a="$a" -v b="$b" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 240 || nb != 240) exit 1
       for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 8 || d < -8) exit 1 } }'
@@ -16655,8 +16667,8 @@ record_layout_on() {
   ob shot -b "$B" --no-pointer --monitor "$m1" -o "$fm" >/dev/null 2>&1
   check_eq "record --monitor $m1 (transform 1): a 720x1280 video" "720,1280" \
     "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
-  a=$(magick "$fm" -background black -alpha remove -alpha off -scale '4x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
-  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '4x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  a=$(magick "$fm" -background black -alpha remove -alpha off -scale '4x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
+  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '4x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
   check "...its last frame is $m1's shot: 32 cells' colours within 12 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 8) <(tr ' ' '\n' <<<"$b" | head -n 8) | paste -sd ' ') ...)" \
     awk -v a="$a" -v b="$b" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 96 || nb != 96) exit 1
       for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 12 || d < -12) exit 1 } }'
@@ -17258,7 +17270,7 @@ monitors_turned_on() {
   check_match "shot --monitor $m2 (transform 3, scale 2): 360x640 at 2000,0, a 720x1280 image" "720x1280 image of the screen's 360x640 at 2000,0" "$out"
   # Each monitor's shot against its part of the whole one, in 6x10 cells' mean colours.
   local a b sh
-  turned_cells() { magick "$@" -background black -alpha remove -alpha off -scale '6x10!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' '; }
+  turned_cells() { magick "$@" -background black -alpha remove -alpha off -scale '6x10!' -depth 8 rgb:- 2>/dev/null | rgb_cells; }
   for sh in "$m1 $fa 1440x2560+2560+0" "$m2 $fb 720x1280+4000+0"; do
     read -r x a b <<<"$sh"
     local w h; w=$(turned_cells "$a"); h=$(turned_cells "$f" -crop "$b" +repage)
