@@ -1,6 +1,6 @@
 //! `omabox broker [on|off]` (issue #16, finding 99): the broker as a systemd user socket (started on
-//! the first connection), and what to add to ~/.ai-jail so a jail reaches it. omabox never edits
-//! ~/.ai-jail. The broker itself (a jailed caller's policy read from its jail's bwrap command line,
+//! the first connection), and what to add to ai-jail's config (`ai_jail_config`) so a jail reaches
+//! it. omabox never edits that file. The broker itself (a jailed caller's policy read from its jail's bwrap command line,
 //! broker_init, and what it refuses, broker_check) runs in bash's front until wave 6: this is only
 //! the switch.
 
@@ -82,7 +82,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             // socket stops; an older omabox's unit had none (#393).
             clear_sock(&cat!(ctx.boxes, "/.broker"));
             systemctl(&["daemon-reload"], false)?;
-            out("broker off (the lines in ~/.ai-jail, if you added them, can go)\n")
+            out(cat!(
+                "broker off (the ro_maps for omabox in ",
+                ai_jail_config(),
+                ", if you added them, can go)\n"
+            ))
         }
         _ => {
             let mut c = crate::sig::command("systemctl");
@@ -140,7 +144,16 @@ fn systemctl_quiet_err(args: &[&str]) -> i32 {
     crate::sig::run_status(c).unwrap_or(127)
 }
 
-/// broker_recipe: what to add to ~/.ai-jail for a jail to reach the broker.
+/// ai-jail's trusted global config: `$XDG_CONFIG_HOME/ai-jail/config.toml`, `~/.config` without one
+/// (ai-jail 3.0 moved it there; 2.x read `~/.ai-jail`, which 3.x migrates on its first launch).
+fn ai_jail_config() -> Vec<u8> {
+    let base = shell::env("XDG_CONFIG_HOME")
+        .filter(|x| x.starts_with(b"/"))
+        .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.config"));
+    cat!(base, "/ai-jail/config.toml")
+}
+
+/// broker_recipe: what to add to ai-jail's config for a jail to reach the broker.
 fn recipe(root: &[u8], relay: &[u8], bsock: &[u8]) -> Vec<u8> {
     let bin = cat!(shell::env_or_empty("HOME"), "/.local/bin");
     let dir = bsock
@@ -148,7 +161,9 @@ fn recipe(root: &[u8], relay: &[u8], bsock: &[u8]) -> Vec<u8> {
         .rposition(|&c| c == b'/')
         .map_or(bsock, |i| &bsock[..i]);
     cat!(
-        "\nFor ai-jail, add to ~/.ai-jail (merge into the ro_maps there, if it has some; or under\n[commands.claude] for one agent only):\n\nro_maps = [\"",
+        "\nFor ai-jail, add to ",
+        ai_jail_config(),
+        " (merge into the ro_maps there, if it has\nsome; or under [commands.claude] for one agent only; ai-jail before 3.0 reads ~/.ai-jail):\n\nro_maps = [\"",
         root,
         "/bin/omabox:",
         bin,

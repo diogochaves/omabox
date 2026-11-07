@@ -3,6 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+- **ai-jail 3: `omabox broker on` says to add its `ro_maps` to `~/.config/ai-jail/config.toml`**
+  (`$XDG_CONFIG_HOME/ai-jail/` when that is set), where ai-jail 3.0 moved its global config;
+  ai-jail before 3.0 read `~/.ai-jail`, and 3.0 moves that file there on its first launch, so lines
+  already added keep working. `broker off` and `up`'s "this sandbox refuses new namespaces" say so
+  too. Tested with ai-jail 3.3.0: the broker reads a 3.x jail as it read a 2.x one.
+
 ## 1.4.0 — 2026-11-07
 
 Your own desktop in a box: `up --desktop desk` runs your Hyprland config, your shell and your look

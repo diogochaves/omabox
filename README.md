@@ -197,7 +197,7 @@ omabox where it draws, and they stack: an agent inside ai-jail drives boxes of i
 omabox's broker, with no change to ai-jail.
 
 ```bash
-omabox broker on   # a systemd user socket; prints the lines to add to ~/.ai-jail
+omabox broker on   # a systemd user socket; prints the ro_maps to add to ai-jail's config.toml
 ai-jail claude     # then, as usual: omabox up, shot, keys, click work inside the jail
 ```
 
@@ -206,8 +206,8 @@ jail's own project mounted, and only the boxes that jail started, which go down 
 jailed agent cannot use `omabox host`, `peek`, interactive boxes or `guard`. Running a build you do
 not trust with a box's screen as its only display, and the details: [docs/ai-jail.md](docs/ai-jail.md).
 
-Tested with ai-jail 2.10.0 and 2.12.0 and omabox 1.0 on Linux, and before that with ai-jail 2.2.1,
-2.6.2 and 2.8.1.
+Tested with ai-jail 3.3.0 and omabox 1.4 on Linux, and before that with ai-jail 2.2.1, 2.6.2,
+2.8.1, 2.10.0 and 2.12.0.
 
 ## What a box can and cannot touch
 

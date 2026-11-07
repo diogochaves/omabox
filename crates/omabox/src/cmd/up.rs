@@ -1295,7 +1295,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // A sandbox that refuses new namespaces (ai-jail's seccomp filter) cannot start a box.
     if !jailed && !unshare_ok() {
         return Err(ctx.die(
-            "cannot start a box here: this sandbox refuses new namespaces. Inside ai-jail, omabox goes through the broker: run 'omabox broker on' outside the jail and add the lines it prints to ~/.ai-jail",
+            "cannot start a box here: this sandbox refuses new namespaces. Inside ai-jail, omabox goes through the broker: run 'omabox broker on' outside the jail and add the ro_maps it prints to ai-jail's config",
         ));
     }
     if u.net == b"connected" && !is_char("/dev/net/tun") {

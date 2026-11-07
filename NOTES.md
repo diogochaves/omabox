@@ -14093,6 +14093,30 @@ from them.
     `box_files_open_no_fifo_no_link`; t_desk_idle_links (both save cases, on a stand-in HOME) and
     t_desk_wallpaper (the relative link, `path --home`'s warning).
 
+711. **ai-jail 3: the broker reads it as it read 2.x; only where its config lives moved** (2026-11-07,
+    ai-jail 3.3.0, after finding 99). ai-jail 3.0 moved its trusted policy out of `~/.ai-jail` to
+    `$XDG_CONFIG_HOME/ai-jail/` (`config.toml` global, `projects/` per canonical project path,
+    owner-only, a tmpfs over it in the jail); a writable launch moves `~/.ai-jail` there and keeps
+    its settings, and a repository's `.ai-jail` keeps only its restrictions. `omabox broker on` now
+    names `config.toml` (`broker::ai_jail_config`), and so do `broker off` and `up`'s refusal in a
+    sandbox. What the broker reads did not change: the options memfd is still `ai-jail-bwrap-args`,
+    every bwrap option 3.3 emits is one `policy_of` knows, bwrap is still ai-jail's child, and a
+    project's `.ai-jail` is still masked; t_jail, t_jail_record, t_jail_down_race, t_jail_held and
+    t_jail_recipe pass on a real 3.3.0. A dry run with the recipe in a stand-in `config.toml` binds
+    all four maps, at the base and under `[commands.claude]`; global config needs no approval in
+    3.x's per-project onboarding. ai-jail prints notices after the jailed command (3.0's
+    `AJ-MIG-001`, once, as it moves `~/.ai-jail`), which broke t_jail_recipe's last section; its
+    script ends with `== end` now. **Kept the integration as it is (Diogo's option A of #16).** 3.0.1's
+    wrapper contract (`--request-file`, `--harness`, `status --json`, exit 3 for an unapproved
+    request) was weighed and does not fit: it is for a program that starts ai-jail (option B, turned
+    down then), a request file must be passed at every launch, a `map` request is a folder at its own
+    path (no `SRC:DEST`, so it cannot put omabox on the jail's PATH: the jail inherits the host PATH
+    but `~/.local/bin` is not mounted), each project approves it again, and `status --json` lists
+    grant kinds, not maps, so it cannot tell whether a jail will have the broker. 3.3's
+    `project_strategy = "repo-root"` (linked worktrees share one project policy) changes nothing for
+    omabox: the maps are global. `capabilities --json` says `inside_marker: false` (no unspoofable
+    in-jail marker yet); the broker never needed one, since it reads the jail from outside.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

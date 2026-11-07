@@ -21,11 +21,14 @@ cannot enter a box itself (its seccomp filter refuses new namespaces), so its `o
 command to the broker outside:
 
 ```bash
-omabox broker on   # a systemd user socket; prints the lines to add to ~/.ai-jail
+omabox broker on   # a systemd user socket; prints the ro_maps to add to ai-jail's config.toml
 ```
 
-Add those lines (they map omabox, its relay, the skill and the broker's socket into the jail,
-read-only), then run `ai-jail claude` as usual: `omabox up`, `shot`, `keys`, `click` and the rest
+Add those `ro_maps` (they map omabox, its relay, the skill and the broker's socket into the jail,
+read-only) to ai-jail's global config, `~/.config/ai-jail/config.toml` (`$XDG_CONFIG_HOME/ai-jail/`
+when that is set; ai-jail before 3.0 read `~/.ai-jail`, and 3.0 moves that file there on its first
+launch). That file is ai-jail's trusted policy, so the maps need no approval per project: ai-jail
+3's first-run screen in a project asks about the rest. Then run `ai-jail claude` as usual: `omabox up`, `shot`, `keys`, `click` and the rest
 work inside the jail as outside. The broker keeps a jail's boxes to what the jail has: no network
 when the jail has none (`--net isolated`), only the jail's own project mounted (when it is a git
 repo: `up` says so of one without a `.git`, with the `--ro-bind` that brings it; what the jail hides
@@ -36,8 +39,8 @@ jailed agent: `omabox host`, `peek`, interactive boxes, `guard`, `config` change
 lists the jail's boxes and says a host process, another user or a box outside the jail holds a port
 without naming it. A shot or a recording (`record`, its marks, captions and contact sheet) is written into
 the jail by its own `omabox`; the broker never opens a path the jail names.
-Since ai-jail 2.8, a bare `ai-jail claude` reaches its model's API and nothing else; its boxes
-still get no network. `omabox broker off` turns it off.
+Since ai-jail 2.8, a bare `ai-jail claude` reaches only the hosts its proxy lets through (its
+model's API; since 3.x package registries and GitHub too); its boxes still get no network. `omabox broker off` turns it off.
 
-Tested with ai-jail 2.10.0 and 2.12.0 and omabox 1.0 on Linux, and before that with ai-jail 2.2.1,
-2.6.2 and 2.8.1.
+Tested with ai-jail 3.3.0 and omabox 1.4 on Linux, and before that with ai-jail 2.2.1, 2.6.2,
+2.8.1, 2.10.0 and 2.12.0.

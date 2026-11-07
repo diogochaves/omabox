@@ -6158,12 +6158,13 @@ t_jail_held() {
 
 # omabox broker on/off writes a socket and a service for the user manager (systemctl stubbed: the real
 # one is never touched; the runtime dir a stand-in, so off never removes the real broker's socket) and
-# prints the lines for ~/.ai-jail; it never edits that file.
+# prints the lines for ai-jail's config (ai-jail 3's $XDG_CONFIG_HOME/ai-jail/config.toml); it never
+# edits that file.
 t_unit_broker_units() {
-  local h=$TMP/bh stub=$TMP/bstub rt=$TMP/brt out; mkdir -p "$h" "$stub" "$rt"
+  local h=$TMP/bh stub=$TMP/bstub rt=$TMP/brt out; mkdir -p "$h/.config/ai-jail" "$stub" "$rt"
   printf '#!/bin/sh\necho "$*" >> %q\n' "$TMP/systemctl.log" > "$stub/systemctl"; chmod +x "$stub/systemctl"
-  echo 'ro_maps = ["/x"]' > "$h/.ai-jail"
-  bk() { env -u OMABOX_BROKER_SOCK HOME="$h" XDG_RUNTIME_DIR="$rt" PATH="$stub:$PATH" "$CLI" broker "$@"; }
+  echo 'ro_maps = ["/x"]' > "$h/.config/ai-jail/config.toml"
+  bk() { env -u OMABOX_BROKER_SOCK -u XDG_CONFIG_HOME HOME="$h" XDG_RUNTIME_DIR="$rt" PATH="$stub:$PATH" "$CLI" broker "$@"; }
   out=$(bk on 2>&1)
   local u=$h/.config/systemd/user
   check_match "on: the socket" "ListenStream=%t/omabox/.broker/sock" "$(cat "$u/omabox-broker.socket" 2>&1)"
@@ -6172,8 +6173,11 @@ t_unit_broker_units() {
   check_match "on: the service runs the relay on this checkout's omabox" "ExecStart=$ROOT/tools/relay/omabox-relay listen -- $ROOT/bin/omabox" "$(cat "$u/omabox-broker.service" 2>&1)"
   check_match "...and boxes outlive it" "KillMode=process" "$(cat "$u/omabox-broker.service" 2>&1)"
   check_match "on: the socket enabled" "enable --now omabox-broker.socket" "$(cat "$TMP/systemctl.log")"
-  check_match "on: prints the ~/.ai-jail lines" "ro_maps = \[\"$ROOT/bin/omabox:.*/omabox-relay\", \"$ROOT/skill\", \"$rt/omabox/.broker\"\]" "$out"
-  check_eq "...and leaves ~/.ai-jail alone" 'ro_maps = ["/x"]' "$(cat "$h/.ai-jail")"
+  check_match "on: prints the ro_maps for ai-jail" "ro_maps = \[\"$ROOT/bin/omabox:.*/omabox-relay\", \"$ROOT/skill\", \"$rt/omabox/.broker\"\]" "$out"
+  check_match "...to add to ai-jail 3's config.toml" "add to $h/\.config/ai-jail/config\.toml " "$out"
+  check_eq "...and leaves it alone" 'ro_maps = ["/x"]' "$(cat "$h/.config/ai-jail/config.toml")"
+  check_match "...in \$XDG_CONFIG_HOME when one is set" "add to $TMP/bxdg/ai-jail/config\.toml " \
+    "$(XDG_CONFIG_HOME=$TMP/bxdg env -u OMABOX_BROKER_SOCK HOME="$h" XDG_RUNTIME_DIR="$rt" PATH="$stub:$PATH" "$CLI" broker on 2>&1)"
   if command -v systemd-analyze >/dev/null; then
     check "the units are valid" systemd-analyze --user verify "$u/omabox-broker.socket" "$u/omabox-broker.service"
   else skip "the units are valid" "no systemd-analyze"; fi
@@ -6194,7 +6198,7 @@ t_unit_broker_units() {
   rm -f "$bd/notes"; echo mine > "$bd/sock"
   bk off >/dev/null 2>&1
   check_eq "off: a sock that is no socket is not ours: it stays" mine "$(cat "$bd/sock" 2>&1)"
-  check_match "off: says so" "^broker off" "$(bk off 2>&1)"
+  check_match "off: says so, naming ai-jail's config" "^broker off .*$h/\.config/ai-jail/config\.toml" "$(bk off 2>&1)"
 }
 
 # The relay itself, host to host: what reaches the command, and what does not.
@@ -6643,7 +6647,10 @@ r shot omabox shot -b $B -o ./s.png
 r usage omabox windows -b $B --jsno
 r host omabox host -- true
 r down omabox down $B
+echo "== end"
 EOF
+  # (== end: what ai-jail itself prints after the jailed command, such as 3.0's one-time notice that
+  # it moved ~/.ai-jail, goes in a section of its own.)
   out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$CLI:$HOME/.local/bin/omabox" \
     --map "$R:$HOME/.local/bin/omabox-relay" --map "$ROOT/skill" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
   printf '%s\n' "$out" > "$TMP/jail-recipe.out"
