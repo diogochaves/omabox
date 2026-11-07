@@ -7,3 +7,6 @@ match quickshell -c noctalia-shell
 config .config/noctalia
 # unverified
 state .cache/noctalia
+# unverified: its wallpaper folder and the wallpapers it shows, as its docs name them (finding 710)
+images .config/noctalia/settings.json wallpaper.directory
+images .cache/noctalia/wallpapers.json defaultWallpaper wallpapers

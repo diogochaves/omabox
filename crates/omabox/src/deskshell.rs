@@ -10,6 +10,10 @@
 //! - `config PATH`, `state PATH`, `cache PATH`: HOME-relative folders a desk box copies (step 2).
 //! - `layer NS`: the layer namespace that shows it is up.
 //! - `idle FILE KEY VALUE`: how its own idle timeouts are turned off in the copied FILE (step 5).
+//! - `images FILE [KEY...]`: where it keeps the wallpaper it shows, so a desk box copies that
+//!   picture in (finding 710): FILE (HOME-relative, one the copy brought) is JSON and each dotted
+//!   KEY's value (a string, or the strings in it) names a picture or a folder of them; no KEY, FILE's
+//!   first line is the path. Nothing else a copied file names comes in.
 //!
 //! Step 0 has the profiles and their parser; steps 2 (what to copy), 4 (the slot) and 5 (idle) use
 //! them. OMABOX_DESK_SHELL_DIR, test-only and never a jailed caller's, reads another folder.
@@ -33,6 +37,7 @@ pub struct Profile {
     pub cache: Vec<Vec<u8>>,
     pub layer: Vec<Vec<u8>>,
     pub idle: Vec<Vec<u8>>,
+    pub images: Vec<Vec<u8>>,
 }
 
 /// A profile's name: a file name of lowercase letters, digits and `-`, not starting with `-`.
@@ -89,6 +94,19 @@ pub fn parse(name: &[u8], text: &[u8]) -> Result<Profile, String> {
             b"match" => p.matches.push(v),
             b"layer" => p.layer.push(v),
             b"idle" => p.idle.push(v),
+            b"images" => {
+                let file = val
+                    .split(|c| c.is_ascii_whitespace())
+                    .next()
+                    .unwrap_or_default();
+                if !rel_ok(file) {
+                    return Err(format!(
+                        "line {n}: images must name a file in HOME, got {}",
+                        lossy(file)
+                    ));
+                }
+                p.images.push(v);
+            }
             b"config" | b"state" | b"cache" => {
                 if !rel_ok(val) {
                     return Err(format!(
@@ -436,7 +454,8 @@ mod tests {
             b"x",
             b"# a comment\n\nstart  x run -d \nmatch qs -c x\nmatch quickshell -c x\nunit x.service\n\
               config .config/x\nstate .local/state/x\ncache .cache/x\nlayer x:bar\n\
-              idle .config/x/a.json general.idle.timeouts []\n",
+              idle .config/x/a.json general.idle.timeouts []\n\
+              images .local/state/x/s.json wallpaper a.b\nimages .local/state/x/path.txt\n",
         )
         .unwrap();
         assert_eq!(p.name, b"x");
@@ -448,6 +467,13 @@ mod tests {
         assert_eq!(p.cache, w(&[".cache/x"]));
         assert_eq!(p.layer, w(&["x:bar"]));
         assert_eq!(p.idle, w(&[".config/x/a.json general.idle.timeouts []"]));
+        assert_eq!(
+            p.images,
+            w(&[
+                ".local/state/x/s.json wallpaper a.b",
+                ".local/state/x/path.txt"
+            ])
+        );
     }
 
     #[test]
@@ -472,6 +498,10 @@ mod tests {
             assert_eq!(
                 e(b"x", &format!("start a\nconfig {bad}\n")),
                 format!("line 2: config must be a folder in HOME, got {bad}")
+            );
+            assert_eq!(
+                e(b"x", &format!("start a\nimages {bad} k\n")),
+                format!("line 2: images must name a file in HOME, got {bad}")
             );
         }
         for bad in [&b""[..], b"-x", b"X", b"a/b", b"a b", b"a.b"] {

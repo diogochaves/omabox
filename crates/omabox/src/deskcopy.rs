@@ -1,6 +1,8 @@
 //! A desk box's copy of the user's desktop (#321 step 2, finding 701): their Hyprland config, the
-//! config and state of each desk shell found (deskshell's profiles), and the images those name by
-//! path, copied into the box's HOME before --seed's (which win). copy says what it did as
+//! config and state of each desk shell found (deskshell's profiles), and the wallpapers they show
+//! (a profile's `images` keys, the config's swww/swaybg/hyprpaper commands and hyprpaper.conf:
+//! nothing else a copied file names, finding 710), copied into the box's HOME before --seed's
+//! (which win). copy says what it did as
 //! seed_home's DESK_FILES lines, which Report reads back for box.json's desk_copy, shell_guess and
 //! shell_from.
 //!
@@ -12,7 +14,10 @@
 //! again below itself (dev:ino) is a loop, and 8 folders deep is the end. Each file is read from its
 //! folder held open (seed::copy_file_in), a desk box's looser name check
 //! (seed::desk_box_name_refused) and the content check on the copy (seed::desk_content_refused;
-//! images by their magic skip it). Caps per part and in all (the CAPS below), each skip said.
+//! images by their magic skip it). Caps per part and in all (the CAPS below), each skip said; a part
+//! stops at its cap, the rest not walked, said in one line, and the whole copy at 30 s (finding 710).
+//! What the host reads or edits in the box HOME after the copy (a profile's `images` file, its
+//! `idle` edit) is opened from its folders held open, no link followed (a save's may be there).
 
 use crate::cat;
 use crate::deskshell::{self, Profile};
@@ -870,45 +875,162 @@ fn requires(text: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// The absolute paths TEXT names: in its strings whole and in its words, `file://` taken off, `~/`,
-/// `$HOME/` and `${HOME}/` as HOME, JSON's `\/` as `/`; each once, in order.
-fn named_paths(text: &[u8], home: &[u8], lua: bool) -> Vec<Vec<u8>> {
-    let delim = |c: &u8| c.is_ascii_whitespace() || b"\"'`,;()[]{}<>=|".contains(c);
+/// One path as a desktop's file names it, made absolute: `file://` taken off, `~/`, `$HOME/` and
+/// `${HOME}/` as HOME, JSON's `\/` as `/`, a trailing `/` off. None when it is no absolute path.
+fn norm_path(c: &[u8], home: &[u8]) -> Option<Vec<u8>> {
+    let mut v = Vec::with_capacity(c.len());
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == b'\\' && c.get(i + 1) == Some(&b'/') {
+            i += 1;
+        }
+        v.push(c[i]);
+        i += 1;
+    }
+    let c = v.trim_ascii();
+    let c = c.strip_prefix(b"file://").unwrap_or(c);
+    let mut c = if let Some(r) = c.strip_prefix(b"~/") {
+        cat!(home, "/", r)
+    } else if let Some(r) = c.strip_prefix(b"$HOME/") {
+        cat!(home, "/", r)
+    } else if let Some(r) = c.strip_prefix(b"${HOME}/") {
+        cat!(home, "/", r)
+    } else {
+        c.to_vec()
+    };
+    while c.len() > 1 && c.ends_with(b"/") {
+        c.pop();
+    }
+    (c.starts_with(b"/") && !c.contains(&0)).then_some(c)
+}
+
+/// The pictures the wallpaper commands of a Hyprland Lua config name (finding 710): in each string
+/// of a line (its `--` comment skipped), the path-shaped words after a `swww`, `swaybg` or
+/// `hyprpaper` word (`swww img PATH`, `swaybg -i PATH`, `hyprctl hyprpaper wallpaper MON,PATH`).
+fn wallpaper_cmd_paths(text: &[u8], home: &[u8]) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = Vec::new();
     for line in text.split(|&c| c == b'\n') {
-        let line = if lua { lua_code(line) } else { line };
-        let line: Vec<u8> = {
-            let mut v = Vec::with_capacity(line.len());
-            let mut i = 0;
-            while i < line.len() {
-                if line[i] == b'\\' && line.get(i + 1) == Some(&b'/') {
-                    i += 1;
+        for s in strings(line, true) {
+            let mut after = false;
+            for word in s
+                .split(|c| c.is_ascii_whitespace())
+                .filter(|w| !w.is_empty())
+            {
+                let base = word.rsplit(|&c| c == b'/').next().unwrap_or_default();
+                if matches!(base, b"swww" | b"swaybg" | b"hyprpaper") {
+                    after = true;
+                    continue;
                 }
-                v.push(line[i]);
-                i += 1;
+                if !after {
+                    continue;
+                }
+                for part in word.split(|&c| c == b',' || c == b'=') {
+                    let q = |c: &u8| *c == b'"' || *c == b'\'';
+                    let a = part.iter().position(|c| !q(c)).unwrap_or(part.len());
+                    let b = part.iter().rposition(|c| !q(c)).map_or(a, |i| i + 1);
+                    let part = &part[a..b.max(a)];
+                    if let Some(x) = norm_path(part, home).filter(|x| !out.contains(x)) {
+                        out.push(x);
+                    }
+                }
             }
-            v
+        }
+    }
+    out
+}
+
+/// hyprpaper.conf's pictures: `preload = PATH`, `wallpaper = MON,PATH`, and its 0.8 blocks'
+/// `path = PATH`; `#` comments skipped.
+fn hyprpaper_paths(text: &[u8], home: &[u8]) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    for line in text.split(|&c| c == b'\n') {
+        let line = line.split(|&c| c == b'#').next().unwrap_or_default();
+        let Some(k) = line.iter().position(|&c| c == b'=') else {
+            continue;
         };
-        let mut cands = strings(&line, false);
-        cands.extend(line.split(delim).map(<[u8]>::to_vec));
-        for c in cands {
-            let c = c.trim_ascii();
-            let c = c.strip_prefix(b"file://").unwrap_or(c);
-            let mut c = if let Some(r) = c.strip_prefix(b"~/") {
-                cat!(home, "/", r)
-            } else if let Some(r) = c.strip_prefix(b"$HOME/") {
-                cat!(home, "/", r)
-            } else if let Some(r) = c.strip_prefix(b"${HOME}/") {
-                cat!(home, "/", r)
-            } else {
-                c.to_vec()
-            };
-            while c.len() > 1 && c.ends_with(b"/") {
-                c.pop();
+        let (key, val) = (line[..k].trim_ascii(), line[k + 1..].trim_ascii());
+        let val = match key {
+            b"preload" | b"path" => val,
+            b"wallpaper" => val.splitn(2, |&c| c == b',').nth(1).unwrap_or(val),
+            _ => continue,
+        };
+        if let Some(x) = norm_path(val, home).filter(|x| !out.contains(x)) {
+            out.push(x);
+        }
+    }
+    out
+}
+
+/// REL's file in the box HOME H read for the host (at most CAP bytes): opened from its folder held
+/// open, no link followed on the way or at it, a regular file only (finding 710).
+fn read_in_box(h: &[u8], rel: &[u8], cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    let (dir, name) = held_parent(h, rel).ok()??;
+    let rd =
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY;
+    // SAFETY: openat from a folder fd of ours.
+    let fd = unsafe { libc::openat(dir.0, name.as_ptr(), rd) };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: FD was just opened and nothing else owns it.
+    let f = unsafe { std::fs::File::from_raw_fd(fd) };
+    if !f.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut v = Vec::new();
+    f.take(cap).read_to_end(&mut v).ok()?;
+    Some(v)
+}
+
+/// The strings in V (a string, or those in an array or object, nested), at most 64.
+fn json_strings(v: &Value, out: &mut Vec<Vec<u8>>) {
+    if out.len() >= 64 {
+        return;
+    }
+    match v {
+        Value::String(s) => out.push(s.as_bytes().to_vec()),
+        Value::Array(a) => a.iter().for_each(|x| json_strings(x, out)),
+        Value::Object(o) => o.values().for_each(|x| json_strings(x, out)),
+        _ => {}
+    }
+}
+
+/// A profile's `images FILE [KEY...]` (finding 710) read in the box's copy of FILE in H: the paths
+/// each dotted KEY's value names (JSON), or FILE's first line with no KEY.
+fn key_paths(h: &[u8], line: &[u8], home: &[u8]) -> Vec<Vec<u8>> {
+    let mut words = line
+        .split(|c| c.is_ascii_whitespace())
+        .filter(|w| !w.is_empty());
+    let Some(file) = words.next().filter(|f| clean_rel(f)) else {
+        return Vec::new();
+    };
+    let keys: Vec<&[u8]> = words.collect();
+    let Some(text) = read_in_box(h, file, SHELL.file) else {
+        return Vec::new();
+    };
+    let mut vals: Vec<Vec<u8>> = Vec::new();
+    if keys.is_empty() {
+        let first = text
+            .split(|&c| c == b'\n')
+            .find(|l| !l.trim_ascii().is_empty());
+        vals.extend(first.map(<[u8]>::to_vec));
+    } else if let Ok(doc) = serde_json::from_slice::<Value>(&text) {
+        for k in keys {
+            let mut at = Some(&doc);
+            for part in String::from_utf8_lossy(k).split('.') {
+                at = at.and_then(|v| v.get(part));
             }
-            if c.starts_with(b"/") && !c.contains(&0) && !out.contains(&c) {
-                out.push(c);
+            if let Some(v) = at {
+                json_strings(v, &mut vals);
             }
+        }
+    }
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    for v in vals {
+        if let Some(x) = norm_path(&v, home).filter(|x| !out.contains(x)) {
+            out.push(x);
         }
     }
     out
@@ -1117,38 +1239,68 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
             }
         }
     }
-    // 3. The images what was copied names by path: a folder named brings its top-level ones.
+    // 3. The pictures the desk shows (finding 710): what each found shell's profile names in its
+    // `images` keys (a folder too), the wallpaper commands of the Hyprland config and hyprpaper.conf
+    // (a picture each). Nothing else a copied file names comes in (a bind's ~/Downloads stays out).
     w.part(b"the images they name".to_vec(), IMAGES);
+    let mut named: Vec<(Vec<u8>, bool)> = Vec::new();
+    for f in &found {
+        for line in &profiles[f.i].images {
+            let file = line
+                .split(|c| c.is_ascii_whitespace())
+                .next()
+                .unwrap_or_default();
+            // (only a file the copy brought: a save's own is the box's word, not the desk's)
+            if !w.texts.iter().any(|t| t == file) {
+                continue;
+            }
+            named.extend(key_paths(h, line, &home).into_iter().map(|x| (x, true)));
+        }
+    }
+    for text in &lua_texts {
+        named.extend(
+            wallpaper_cmd_paths(text, &home)
+                .into_iter()
+                .map(|x| (x, false)),
+        );
+    }
+    let hp = b".config/hypr/hyprpaper.conf";
+    if w.texts.iter().any(|t| t == hp) {
+        let text = read_in_box(h, hp, HYPR.file).unwrap_or_default();
+        named.extend(
+            hyprpaper_paths(&text, &home)
+                .into_iter()
+                .map(|x| (x, false)),
+        );
+    }
     let mut files: Vec<Vec<u8>> = Vec::new();
     let mut folders: Vec<Vec<u8>> = Vec::new();
     let homes = [cat!(home, "/"), cat!(w.home_r, "/")];
-    for r in w.texts.clone() {
-        let text = std::fs::read(p(&cat!(h, "/", r))).unwrap_or_default();
-        for path in named_paths(&text, &home, r.ends_with(b".lua")) {
-            let below = homes
-                .iter()
-                .find_map(|x| path.strip_prefix(x.as_slice()))
-                .map(<[u8]>::to_vec);
-            let base = path.rsplit(|&c| c == b'/').next().unwrap_or_default();
-            match below {
-                Some(rel) if !clean_rel(&rel) => {}
-                Some(rel) if pic_name(base) => {
-                    if !files.contains(&rel) {
-                        files.push(rel);
-                    }
+    for (path, folder_ok) in named {
+        let below = homes
+            .iter()
+            .find_map(|x| path.strip_prefix(x.as_slice()))
+            .map(<[u8]>::to_vec);
+        let base = path.rsplit(|&c| c == b'/').next().unwrap_or_default();
+        match below {
+            Some(rel) if !clean_rel(&rel) => {}
+            Some(rel) if pic_name(base) => {
+                if !files.contains(&rel) {
+                    files.push(rel);
                 }
-                Some(rel) => {
-                    if std::fs::metadata(p(&path)).is_ok_and(|m| m.is_dir())
-                        && !folders.contains(&rel)
-                    {
-                        folders.push(rel);
-                    }
-                }
-                None if pic_name(base) && !path.starts_with(b"/usr/") => {
-                    w.skip(&path, b"outside your HOME");
-                }
-                None => {}
             }
+            Some(rel) => {
+                if folder_ok
+                    && std::fs::metadata(p(&path)).is_ok_and(|m| m.is_dir())
+                    && !folders.contains(&rel)
+                {
+                    folders.push(rel);
+                }
+            }
+            None if pic_name(base) && !path.starts_with(b"/usr/") => {
+                w.skip(&path, b"outside your HOME");
+            }
+            None => {}
         }
     }
     for rel in &files {
@@ -1757,12 +1909,15 @@ mod tests {
             return;
         }
         let f = Fx::new("caps");
-        let mut lua = LUA.to_vec();
-        lua.extend(b"-- ~/w\n-- \"~/big.png\"\n");
-        lua.extend(
-            format!("local w = \"{}/w\"\nlocal b = \"{}/big.png\"\n", f.fh, f.fh).as_bytes(),
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.put(
+            ".local/state/DankMaterialShell/session.json",
+            format!(
+                "{{\"wallpaperPath\": \"{}/big.png\", \"monitorWallpapers\": {{\"DP-1\": \"~/w\"}}}}\n",
+                f.fh
+            )
+            .as_bytes(),
         );
-        f.put(".config/hypr/hyprland.lua", &lua);
         for i in 0..12 {
             let big =
                 std::fs::File::create(format!("{}/.config/hypr/big{i:02}.lua", f.fh)).unwrap();
@@ -1773,7 +1928,7 @@ mod tests {
         }
         let big = std::fs::File::create(format!("{}/big.png", f.fh)).unwrap();
         big.set_len(33 * MIB).unwrap();
-        let (r, said) = f.run("");
+        let (r, said) = f.run("dms run");
         let out = r.unwrap();
         assert!(
             out.contains("skipped .config/hypr/big00.lua\tover 1 MiB"),
@@ -1909,9 +2064,11 @@ mod tests {
         assert!(!f.there("Pictures"), "{out}");
     }
 
-    /// Images named by path: DMS's session.json, Caelestia's path.txt, a Lua `swww img ~/...`, a
-    /// file:// URL; under /usr left alone, elsewhere outside HOME said; a named folder brings its
-    /// top-level images only.
+    /// The pictures a desk shows (finding 710): DMS's session.json keys (a picture, a file:// one, a
+    /// folder by a per-monitor key: its top-level pictures), Caelestia's path.txt, a Lua `swww img`,
+    /// hyprpaper.conf's; under /usr left alone, elsewhere outside HOME said. What else a copied file
+    /// names stays out: a bind's `nautilus ~/Downloads`, a folder in a Lua string, a path in a
+    /// shell's settings under no wallpaper key, a commented command.
     #[test]
     fn named_images_found() {
         if !crate::exec::tools_or_skip("named_images_found", &["grep", "cp"]) {
@@ -1921,37 +2078,66 @@ mod tests {
         let fh = &f.fh;
         f.put(
             ".config/hypr/hyprland.lua",
+            b"hl.exec_once(\"swww img --transition-fps 60 ~/Pictures/a.png\")\nhl.exec_once(\"dms run\")\n\
+              -- hl.exec_once(\"swww img ~/Pictures/commented.png\")\n\
+              hl.exec_once(\"swaybg -o DP-1 -i /mnt/data/w.jpg\")\n\
+              hl.exec_once(\"swaybg -i /usr/share/backgrounds/x.png\")\n\
+              hl.bind(\"SUPER + E\", hl.dsp.exec_cmd(\"nautilus ~/Downloads\"))\n\
+              hl.bind(\"SUPER + P\", hl.dsp.exec_cmd(\"imv ~/Downloads/shot.png\"))\n\
+              local d = \"~/Shots\"\n",
+        );
+        f.put(
+            ".config/hypr/hyprpaper.conf",
+            b"preload = ~/Pictures/h.png\nwallpaper = DP-1,~/Pictures/h.png\n# preload = ~/Pictures/no.png\n",
+        );
+        f.put(
+            ".local/state/DankMaterialShell/session.json",
             format!(
-                "hl.exec_once(\"swww img ~/Pictures/a.png\")\nhl.exec_once(\"dms run\")\n\
-                 -- hl.exec_once(\"swww img ~/Pictures/commented.png\")\nlocal x = \"/mnt/data/w.jpg\"\n\
-                 local u = \"/usr/share/backgrounds/x.png\"\nlocal g = \"file://{fh}/Pictures/g.webp\"\n\
-                 local d = \"~/Walls\"\n"
+                "{{\"wallpaperPath\": \"{fh}\\/Pictures\\/w.png\", \"wallpaperPathDark\": \"file://{fh}/Pictures/g.webp\", \
+                 \"monitorWallpapers\": {{\"DP-1\": \"~/Walls\"}}, \"screenshotDir\": \"~/Shots\", \"isLightMode\": true}}\n"
             )
             .as_bytes(),
         );
         f.put(
-            ".local/state/DankMaterialShell/session.json",
-            format!("{{\"wallpaperPath\": \"{fh}\\/Pictures\\/w.png\", \"isLightMode\": true}}\n")
-                .as_bytes(),
+            ".config/DankMaterialShell/settings.json",
+            b"{\"launcherLogo\": \"~/Pictures/logo.png\"}\n",
         );
-        f.put(".config/DankMaterialShell/settings.json", b"{}\n");
-        f.put("Pictures/a.png", PNG);
-        f.put("Pictures/w.png", PNG);
+        for n in [
+            "a.png",
+            "w.png",
+            "h.png",
+            "commented.png",
+            "no.png",
+            "logo.png",
+        ] {
+            f.put(&format!("Pictures/{n}"), PNG);
+        }
         f.put("Pictures/g.webp", b"RIFF0000WEBPVP8 ");
-        f.put("Pictures/commented.png", PNG);
         f.put("Walls/1.jpg", b"\xff\xd8\xff\xe0");
         f.put("Walls/notes.txt", b"n\n");
         f.put("Walls/sub/2.jpg", b"\xff\xd8\xff\xe0");
+        f.put("Downloads/shot.png", PNG);
+        f.put("Downloads/scan.jpg", b"\xff\xd8\xff\xe0");
+        f.put("Shots/s.png", PNG);
         let out = f.run("").0.unwrap();
         for r in [
             "Pictures/a.png",
             "Pictures/w.png",
             "Pictures/g.webp",
+            "Pictures/h.png",
             "Walls/1.jpg",
         ] {
             assert!(f.real_file(r), "{r}: {out}");
         }
-        for r in ["Pictures/commented.png", "Walls/notes.txt", "Walls/sub"] {
+        for r in [
+            "Pictures/commented.png",
+            "Pictures/no.png",
+            "Pictures/logo.png",
+            "Walls/notes.txt",
+            "Walls/sub",
+            "Downloads",
+            "Shots",
+        ] {
             assert!(!f.there(r), "{r}: {out}");
         }
         assert!(
@@ -1959,6 +2145,7 @@ mod tests {
             "{out}"
         );
         assert!(!out.contains("/usr/share/backgrounds"), "{out}");
+        assert!(!out.contains("Downloads"), "{out}");
         // (Caelestia keeps its wallpaper's path in a text file of its state)
         let f = Fx::new("img2");
         f.put(
