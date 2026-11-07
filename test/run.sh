@@ -16827,6 +16827,8 @@ record_input_on() {
   check_fails "...the input goes with the recording" test -e "$D/record.input"
   m1=$(ri_ms "${v1%.mp4}.marks.tsv" click) m2=$(ri_ms "${v1%.mp4}.marks.tsv" keys)
   if [[ $m1 =~ ^[0-9]+$ && $m2 =~ ^[0-9]+$ ]]; then
+    # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
+    local f0=$fail
     # The ring around the click point (900,500: video 1801,1001), 12 layout px out: 24 at scale 2.
     c=$(ri_rgb "$v1" "$(awk -v m="$m1" 'BEGIN { printf "%.3f", m / 1000 + 0.4 }')" 1825 1000)
     check "...a frame just after the click: the ring at the click point, peek's accent ($c)" ri_accent "$c"
@@ -16835,21 +16837,31 @@ record_input_on() {
     # The caption: the frame at the second mark against the frame before the click with the caption
     # drawn on it as record_overlay draws "abc *******", and as it would draw the secret in clear.
     local fa=$TMP/$B-a.png fb=$TMP/$B-b.png ass=$TMP/$B-ref.ass ref=$TMP/$B-ref.png bad=$TMP/$B-bad.png crop="1200x110+680+1320" good wrong
-    ri_frame "$v1" "$(awk -v m="$m2" 'BEGIN { printf "%.3f", m / 1000 }')" "$fa"
+    local sa d
+    sa=$(awk -v m="$m2" 'BEGIN { printf "%.3f", m / 1000 }')
+    rm -f "$fa"; ri_frame "$v1" "$sa" "$fa"
     ri_frame "$v1" "$(awk -v m="$m1" 'BEGIN { printf "%.3f", (m > 150 ? m - 150 : 0) / 1000 }')" "$fb"
-    printf '%s\n' "1000 2000 text abc" "1000 2000 secret 7" > "$TMP/$B-ri"
-    probe record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
-    ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$ref" 2>/dev/null
-    printf '%s\n' "1000 2000 text abc sesame7" > "$TMP/$B-ri"
-    probe record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
-    ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$bad" 2>/dev/null
-    good=$(magick "$fa" "$ref" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
-    wrong=$(magick "$fa" "$bad" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
-    check "...the keys' caption at the bottom, the --pass as * (pixels off: $good; drawn in clear it would be $wrong)" \
-      awk -v g="$good" -v w="$wrong" 'BEGIN { exit !(g ~ /^[0-9.e+-]+$/ && w ~ /^[0-9.e+-]+$/ && g < 0.001 && w > 10 * g + 0.001) }'
-    # --captions: the mark's text at the top, from its time.
-    c=$(magick "$fa" -crop 900x110+830+0 +repage -fx 'r > 0.75 && g < 0.45 && b > 0.55' -format '%[fx:mean*w*h]' info: 2>/dev/null)
-    check "...the mark as a caption at the top, its plate's accent edge ($c px)" awk -v c="$c" 'BEGIN { exit !(c > 200) }'
+    if [ ! -s "$fa" ]; then
+      d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$v1" 2>/dev/null) || d=""
+      no "...a frame at the keys mark, for its two captions" "none read at the mark's $sa s, in a video ${d:-of no length} s long; the video and its marks are in the evidence"
+    else
+      printf '%s\n' "1000 2000 text abc" "1000 2000 secret 7" > "$TMP/$B-ri"
+      probe record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
+      ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$ref" 2>/dev/null
+      printf '%s\n' "1000 2000 text abc sesame7" > "$TMP/$B-ri"
+      probe record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
+      ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$bad" 2>/dev/null
+      good=$(magick "$fa" "$ref" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
+      wrong=$(magick "$fa" "$bad" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
+      check "...the keys' caption at the bottom, the --pass as * (pixels off: $good; drawn in clear it would be $wrong)" \
+        awk -v g="$good" -v w="$wrong" 'BEGIN { exit !(g ~ /^[0-9.e+-]+$/ && w ~ /^[0-9.e+-]+$/ && g < 0.001 && w > 10 * g + 0.001) }'
+      # --captions: the mark's text at the top, from its time.
+      c=$(magick "$fa" -crop 900x110+830+0 +repage -fx 'r > 0.75 && g < 0.45 && b > 0.55' -format '%[fx:mean*w*h]' info: 2>/dev/null)
+      check "...the mark as a caption at the top, its plate's accent edge ($c px)" awk -v c="$c" 'BEGIN { exit !(c > 200) }'
+    fi
+    # A failure here keeps the video and its marks, to read the frames that were (or were not) there.
+    # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
+    [ "$fail" = "$f0" ] || { mkdir -p "$EVID/$CUR"; cp "$v1" "${v1%.mp4}.marks.tsv" "$EVID/$CUR/" 2>/dev/null || true; }
   else no "record --show-input: the marks" "none in ${v1%.mp4}.marks.tsv"; fi
   # --glide: record start --glide 1s, then a plain pointer move glides: the pointer travels, its x in
   # the frames between start and end rising, over about a second. The pointer's x a frame: the mean
