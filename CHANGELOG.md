@@ -39,8 +39,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
     `--omarchy`, and refuses `--stock`, `--stock-bar` and `--keep` (not your desk). `--desk-shell`
     is part of `--desktop desk` now: alone it still works, with a note, for this release.
   - **Held awake:** your shell's own idle timeouts (a lock, a blank screen) would fire between an
-    agent's steps, so a desk box keeps an idle inhibitor on a 1×1 transparent layer per monitor
-    (`tools/idlehold`, new; `install.sh` builds it, `doctor` lists it), and turns a shell's timeouts
+    agent's steps, so a desk box keeps an idle inhibitor on a bare surface with no role, which
+    Hyprland counts on every monitor, under a fullscreen window too (`tools/idlehold`, new;
+    `install.sh` builds it, `doctor` lists it), and turns a shell's timeouts
     off in its copy where it knows how (Caelestia). A shell's idle client that ignores inhibitors
     still goes idle. Inside a desk box labwc's `LABWC_PID`, which a shell may take for a labwc
     session, is `OMABOX_LABWC_PID`.

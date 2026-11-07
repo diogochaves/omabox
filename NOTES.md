@@ -13845,31 +13845,33 @@ from them.
     box would lock under it. Hyprland's ext-idle-notify honours an idle inhibitor
     (`zwp_idle_inhibit_manager_v1`) for every notification made with `get_idle_notification`
     (Quickshell's IdleMonitor with `respectInhibitors: true`, its default; hypridle; swayidle), not
-    for `get_input_idle_notification` (`respectInhibitors: false`). It counts an inhibitor only on
-    a mapped, visible surface (IdleInhibitor.cpp: 0.56.2 a view's `aliveAndVisible()`; 0.57.1
-    `mapped() && acceptsInput() && alphaNonZero()`, the last a layer's fade alpha, which animates in
-    from 0 as it maps; a surface with no view, "non-desktop", always), and looks only when one is
-    made or destroyed or on focus and fullscreen changes, never at a map or an animation's end: an
-    inhibitor made before its surface maps, or on 0.57 before its fade-in is under way, does
-    nothing until the next focus change (seen on 0.57.1: the respecting IdleMonitor went idle with
-    the hold up). So `tools/idlehold` (C, like the other in-box tools; refuses outside a box by
-    `tools/common/box.h`) puts a 1×1 transparent layer surface (background layer, empty input
-    region, no exclusive zone, namespace `omabox-idlehold`) on each output, commits its buffer, waits
-    for the compositor's answer to that commit (`wl_display_sync`), then makes the inhibitor, and
-    makes it again at 0.25, 0.75, 1.5, 3 and 6 s (the new one before the old one goes, so the hold
-    never lapses), each a look Hyprland takes after the fade-in; an output added later gets its own.
-    A layer mapped while a window is fullscreen on its monitor is not animated in on 0.57 (its
-    alpha may stay 0): a hold made under a fullscreen window may hold nothing there until one of
-    the looks above comes after it ends (not staged). `deskguard::after_ready` starts it in the box
-    (`setsid -f`, the box's pid namespace: it ends with the box), bound at
-    `/opt/omabox/bin/omabox-idlehold` in desk boxes only (other boxes' launch.sh unchanged), and
-    waits up to 3 s for its "holding idle off on N of M outputs" line in the runtime dir's
-    `omabox-idlehold.log`; a hold that could not start (not built, no layer shell) is a warning,
-    never a failed up. Checked in t_desk_idle: two Quickshell IdleMonitors of 3 s in a desk box,
-    the one ignoring inhibitors goes idle, the one respecting them does not for 8 s, and does once
-    `pkill -x omabox-idlehold`. A shell whose idle client ignores inhibitors is not held; the
-    profiles' `idle FILE KEY VALUE` lines (turning a shell's own timeouts off in its copied config,
-    Caelestia's) are the other half, not applied yet: they need the copy's hook (step 2).
+    for `get_input_idle_notification` (`respectInhibitors: false`). Its verdict is latched:
+    `recheckIdleInhibitorStatus` (managers/input/IdleInhibitor.cpp) looks only when an inhibitor is
+    made or destroyed or on focus and fullscreen changes, never at a map or an animation's end, and
+    counts an inhibitor only on a surface it judges visible (0.56.2 a view's `aliveAndVisible()`;
+    0.57.1 `mapped() && acceptsInput() && alphaNonZero()`, the last a layer's fade alpha, which
+    animates in from 0 as it maps). The first hold (a 1x1 transparent background layer per output,
+    its inhibitor made again at 0.25-6 s to outlast the fade-in) held nothing on 0.57.1 when started
+    under a fullscreen window: a Hyprland 0.57 bug judges a new layer before its fade-in and never
+    again. A surface with no view behind it, though, is "non-desktop" ("Assuming it's visible",
+    IdleInhibitor.cpp 0.56.2:22-26, 0.57.1:23-27) and counts always. So `tools/idlehold` (C, like
+    the other in-box tools; refuses outside a box by `tools/common/box.h`) makes one inhibitor on
+    one bare `wl_surface` that never gets a role (no layer, no buffer, never committed, on no
+    output), says "holding idle off on every output" once the compositor answered, and runs until
+    the compositor goes: no layer shell needed, no timers, nothing per output, under a fullscreen
+    window too. omabox relies on that non-desktop rule: t_desk_idle, run on 0.56.2 and 0.57.1,
+    fails on a Hyprland that drops it. `deskguard::after_ready` starts it in the box (`setsid -f`,
+    the box's pid namespace: it ends with the box), bound at `/opt/omabox/bin/omabox-idlehold` in
+    desk boxes only (other boxes' launch.sh unchanged), and waits up to 3 s for that line in the
+    runtime dir's `omabox-idlehold.log`; a hold that could not start (not built, no idle inhibit)
+    is a warning, never a failed up. Checked in t_desk_idle: two Quickshell IdleMonitors of 3 s in
+    a desk box, the one ignoring inhibitors goes idle, the one respecting them does not for 8 s
+    (nor after `hyprctl reload`, nor after a `monitor add`, nor with a hold started while a window
+    is fullscreen, which the layer hold failed on 0.57.1), and does once `pkill -x
+    omabox-idlehold`; no `omabox-idlehold` layer in `hyprctl layers`. A shell whose idle client
+    ignores inhibitors is not held; the profiles' `idle FILE KEY VALUE` lines (turning a shell's own
+    timeouts off in its copied config, Caelestia's) are the other half, not applied yet: they need
+    the copy's hook (step 2).
     **LABWC_PID:** labwc sets it for its children, and Hyprland passed it on to every client of the
     box; a user's shell may read it as "this session is labwc's" (Noctalia does when
     XDG_CURRENT_DESKTOP is unset). In a desk box start-hyprland.sh drops it and sets

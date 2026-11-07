@@ -8681,14 +8681,16 @@ t_idle() {
   ob down "$B" >/dev/null 2>&1
 }
 
-# #321 step 5 (finding 704): a desk box holds its idle off (tools/idlehold: an idle inhibitor on a 1x1
-# background layer per monitor), so the user's shell's idle timeouts never lock or blank it between an
-# agent's steps. A Quickshell fixture with two IdleMonitors of 3 s stands in for the shell's idle
-# client: the one ignoring inhibitors (respectInhibitors: false) goes idle (the control: idle is
-# counted in the box), the one respecting them (the default, a shell's lock) does not for 8 s; with
-# the hold killed, it does. And LABWC_PID, which a user's shell may take for labwc's session, is not
-# in a desk box's environment: OMABOX_LABWC_PID is, and on NVIDIA `monitor add` (labwc --reconfigure)
-# still finds labwc by it. On a stand-in HOME and XDG dirs, with a plain desk's hyprland.lua.
+# #321 step 5 (finding 704): a desk box holds its idle off (tools/idlehold: one idle inhibitor on a
+# bare surface with no role, which Hyprland counts as always seen), so the user's shell's idle timeouts
+# never lock or blank it between an agent's steps. A Quickshell fixture with two IdleMonitors of 3 s
+# stands in for the shell's idle client: the one ignoring inhibitors (respectInhibitors: false) goes
+# idle (the control: idle is counted in the box), the one respecting them (the default, a shell's
+# lock) does not for 8 s, nor after `hyprctl reload`; with the hold killed, it does. A hold started
+# while a window is fullscreen holds too (a layer's did not on 0.57.1: Hyprland judged it before its
+# fade-in and never again), and after a `monitor add`. And LABWC_PID, which a user's shell may take
+# for labwc's session, is not in a desk box's environment: OMABOX_LABWC_PID is, and on NVIDIA
+# `monitor add` (labwc --reconfigure) still finds labwc by it. On a stand-in HOME and XDG dirs, with a plain desk's hyprland.lua.
 t_desk_idle() {
   command -v qs >/dev/null || { skip "a desk box holds its idle off" "no qs (Quickshell) for the idle fixture"; return; }
   local B=$P-didle B2=$P-didlenv base=$TMP/$P-didle D out n
@@ -8707,22 +8709,37 @@ ShellRoot {
   Process { id: input; command: ["sh", "-c", "date +%s > \"$HOME/idled-input\""] }
 }
 EOF
+  # (a second fixture, idled2*, for the hold started under a fullscreen window)
+  sed 's/idled/idled2/' "$base/idle.qml" > "$base/idle2.qml"
   di() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
-  out=$(cd "$base" && di up "$B" --desktop desk --net isolated --no-shell --seed "$base/idle.qml:idle.qml" 2>&1) ||
+  out=$(cd "$base" && di up "$B" --desktop desk --net isolated --no-shell --seed "$base/idle.qml:idle.qml" --seed "$base/idle2.qml:idle2.qml" 2>&1) ||
     { no "up --desktop desk" "$out"; di down "$B" >/dev/null 2>&1; return; }
   ok "up --desktop desk"
   D=$(di path -b "$B")
   desk_guard "$B" "$D" "$fh" "$c" di || { di down "$B" >/dev/null 2>&1; return; }
   check_eq "up says nothing of the idle hold (it started)" "" "$(grep 'idle hold' <<<"$out")"
-  check_match "the hold says it holds" "^omabox-idlehold: holding idle off on 1 of 1 outputs$" "$(cat "$D/run/omabox-idlehold.log" 2>&1)"
+  check_match "the hold says it holds" "^omabox-idlehold: holding idle off on every output$" "$(cat "$D/run/omabox-idlehold.log" 2>&1)"
   check "...it runs in the box" di run -b "$B" -- pgrep -x omabox-idlehold
-  check_eq "...on a 1x1 layer of its own" "1x1" \
-    "$(di hyprctl -b "$B" -j layers | jq -r '[.. | objects | select(.namespace? == "omabox-idlehold") | "\(.w)x\(.h)"] | join(" ")' 2>&1)"
+  check_eq "...no omabox-idlehold layer (a bare surface)" "0" \
+    "$(di hyprctl -b "$B" -j layers | jq -r '[.. | objects | select(.namespace? == "omabox-idlehold")] | length' 2>&1)"
   check "an idle fixture (Quickshell's IdleMonitor, 3 s)" di run -b "$B" -d -q -- qs -p "$fh/idle.qml"
   check "...the control, ignoring inhibitors, goes idle" until_ok 10 test -e "$D/home/idled-input"
   check "...the one respecting them (a shell's lock) does not, 8 s in" holds 5 test ! -e "$D/home/idled"
+  check "hyprctl reload" di hyprctl -b "$B" reload
+  check "...it still does not, 5 s on" holds 5 test ! -e "$D/home/idled"
   check "kill the hold" di run -b "$B" -- pkill -x omabox-idlehold
   check "...now it goes idle" until_ok 10 test -e "$D/home/idled"
+  # A hold started while a window is fullscreen on the box's one monitor, with a second fixture (the
+  # first one's idle now); then a monitor added.
+  check "a window" di run -b "$B" -d -q -- foot -T A sleep 600
+  check "...made fullscreen" until_ok 10 di window -b "$B" -w 'title:^A$' --fullscreen on
+  check "a hold started under it" di run -b "$B" -d -q -- sh -c 'exec /opt/omabox/bin/omabox-idlehold > "$XDG_RUNTIME_DIR/omabox-idlehold2.log" 2>&1'
+  check "...it says it holds" until_ok 5 grep -qx 'omabox-idlehold: holding idle off on every output' "$D/run/omabox-idlehold2.log"
+  check "...a second idle fixture" di run -b "$B" -d -q -- qs -p "$fh/idle2.qml"
+  check "...its control goes idle" until_ok 10 test -e "$D/home/idled2-input"
+  check "...the one respecting inhibitors does not, 8 s in" holds 5 test ! -e "$D/home/idled2"
+  check "monitor add" di monitor -b "$B" add 1280x720
+  check "...it still does not, 5 s on" holds 5 test ! -e "$D/home/idled2"
   # LABWC_PID (finding 704): the box's parent labwc's, as OMABOX_LABWC_PID.
   check_fails "LABWC_PID: not in a desk box's environment" di run -b "$B" -- printenv LABWC_PID
   check_eq "...OMABOX_LABWC_PID is labwc's pid" omabox-labwc \

@@ -41,7 +41,7 @@ Hyprland version from a folder: its libraries first, its `hyprctl` bound over th
 | `tools/tree` | reads a window's accessibility (AT-SPI) tree in a box, as text (`omabox tree`) |
 | `tools/events` | records a box's Hyprland events, stamped, from its start (`omabox events`) |
 | `tools/notices` | records what reaches a box's notification server, from its start (`omabox log notifications`, `wait notification`) |
-| `tools/idlehold` | holds a desk box's idle off (an idle inhibitor on a 1×1 layer per monitor), so your shell's idle timeouts never lock or blank it under an agent |
+| `tools/idlehold` | holds a desk box's idle off (one idle inhibitor on a bare surface with no role, which Hyprland counts as always seen), so your shell's idle timeouts never lock or blank it under an agent |
 | `tools/relay` | carries an omabox command from inside ai-jail to the broker outside (`omabox broker`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
 | `skill-feedback/` | opt-in: the `omabox-feedback` skill, to report what omabox got wrong in your sessions ([CONTRIBUTING](../CONTRIBUTING.md#reporting-a-problem)) |

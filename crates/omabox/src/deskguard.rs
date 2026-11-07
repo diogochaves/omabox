@@ -150,7 +150,7 @@ pub fn after_ready(ctx: &mut Ctx, _u: &Up) -> Res<()> {
         warn(b"it could not be started");
         return Ok(());
     }
-    // Its first holds in place before up says the box is ready: a hold takes one round trip or three.
+    // Its hold in place before up says the box is ready: two round trips.
     for _ in 0..60 {
         let log = run_read(&ctx.d, "omabox-idlehold.log").unwrap_or_default();
         match hold_said(&log) {
@@ -256,12 +256,12 @@ mod tests {
         assert_eq!(hold_said(b""), None);
         assert_eq!(hold_said(b"omabox-idlehold: hold"), None);
         assert_eq!(
-            hold_said(b"omabox-idlehold: holding idle off on 1 of 1 outputs\n"),
+            hold_said(b"omabox-idlehold: holding idle off on every output\n"),
             Some(true)
         );
         assert_eq!(
             hold_said(
-                b"omabox-idlehold: the compositor has no layer shell (zwlr_layer_shell_v1)\n"
+                b"omabox-idlehold: the compositor has no idle inhibit (zwp_idle_inhibit_manager_v1)\n"
             ),
             Some(false)
         );
