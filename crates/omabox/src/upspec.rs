@@ -107,9 +107,9 @@ pub fn conf_desktop(v: &[u8]) -> Option<Desktop> {
 
 /// desk_home HOME (#321): where a desk box's HOME sits in the box, the user's $HOME as written
 /// (trailing slashes dropped; no canonicalising, so a HOME through a link stays that path). Err
-/// says why it cannot be: not absolute, `/`, `.` or `..` or empty parts, a control character, or
-/// what refuse_dest keeps for the box itself (its system dirs, runtime dir, /tmp, /home/sbx, omabox's
-/// own, and anything above them).
+/// says why it cannot be: not absolute, `/`, `.` or `..` or empty parts, not UTF-8, a control
+/// character, or what refuse_dest keeps for the box itself (its system dirs, runtime dir, /tmp,
+/// /home/sbx, omabox's own, and anything above them).
 pub fn desk_home(home: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
     let mut h = home;
     while h.len() > 1 && h.ends_with(b"/") {
@@ -121,6 +121,9 @@ pub fn desk_home(home: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
         Some(b"it is not an absolute path".to_vec())
     } else if h == b"/" {
         Some(b"it is /".to_vec())
+    } else if std::str::from_utf8(h).is_err() {
+        // (paths built from it are read lossily in places, e.g. record's folder: refused whole)
+        Some(b"it is not valid UTF-8".to_vec())
     } else if h.iter().any(|c| c.is_ascii_control()) {
         Some(b"it has a control character".to_vec())
     } else if !boxes::clean_abs(h) {
@@ -1134,6 +1137,8 @@ mod tests {
             b"/home",
             b"/home/sbx",
             b"/home/sbx/u",
+            b"/home/u\xff",
+            b"/home/\xc3(",
         ] {
             let e = desk_home(h).expect_err(&String::from_utf8_lossy(h));
             assert!(
@@ -1142,6 +1147,15 @@ mod tests {
                 String::from_utf8_lossy(&e)
             );
         }
+        // (a HOME that is not UTF-8 is said so: paths built from it are lossy in places, #321)
+        assert!(crate::exit::contains(
+            &desk_home(b"/home/u\xff").unwrap_err(),
+            b"cannot be: it is not valid UTF-8"
+        ));
+        assert_eq!(
+            desk_home("/home/jo\u{e3}o".as_bytes()),
+            Ok("/home/jo\u{e3}o".as_bytes().to_vec())
+        );
     }
 
     #[test]

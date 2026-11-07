@@ -12134,10 +12134,8 @@ t_desk_home() {
   check_fails "...not in your HOME" test -e "$HOME/omabox-321"
   hq=$(re_q "$HOME") dq=$(re_q "$D")
   err=$(ob run -b "$B" -d -- sh -c 'echo omabox-desk-log; exec sleep 621' 2>&1 >/dev/null)
-  # (builder B's words, as /home/sbx's were "log: HOST, /home/sbx/run-N.log in the box": the
-  # integrator tightens this to the merged wording)
   check_match "run -d: its log in the box's folder, at your HOME's path in the box" \
-    "log: $dq/home/run-[0-9]+\.log, $hq/run-[0-9]+\.log in the box\)" "$err"
+    "^omabox: started in box '$B' \(pid [0-9]+, log: $dq/home/run-[0-9]+\.log, $hq/run-[0-9]+\.log in the box\)\$" "$err"
   check "...its output in that log" until_ok 5 bash -c "grep -qx omabox-desk-log '$D'/home/run-*.log"
   check "log run: read through the box's folder" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-desk-log"
   check_eq "...none of its logs in your HOME" "" "$(cd "$D/home" && for f in run-*.log; do [ ! -e "$HOME/$f" ] || echo "$f"; done)"
@@ -12194,33 +12192,39 @@ t_desk_home_standin() {
   check "down" dh down "$B"
   check_fails "the box's folder gone" test -e "$c/omabox/$B"
   check_eq "the stand-in HOME as it was before the box" "$before" "$(standin)"
-  # Refused before a box is made. (The reasons' words are builder A's: the integrator tightens each
-  # pattern below to the merged wording; each matches only the stable part: the path, desk, the option.)
+  # Refused before a box is made, each with its reason.
   fhq=$(re_q "$fh")
-  check_match "--ro-bind HOME: refused" "refusing to mount $fhq into a box" "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$fh")"
-  check_match "--ro-bind SRC:HOME: refused" "refusing to mount .* at $fhq in a box" \
+  check_match "--ro-bind HOME: refused" "^omabox: refusing to mount $fhq into a box: it contains $fhq/\$" \
+    "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$fh")"
+  check_match "--ro-bind SRC:HOME: refused" \
+    "^omabox: up: refusing to mount .* at $fhq in a box: that is the box's HOME \($fhq\) or above it\$" \
     "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$fh")"
-  check_match "...SRC:above HOME: refused" "refusing to mount .* at $(re_q "$base") in a box" \
+  check_match "...SRC:above HOME: refused" \
+    "^omabox: up: refusing to mount .* at $(re_q "$base") in a box: that is the box's HOME \($fhq\) or above it\$" \
     "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$base")"
-  check_match "...SRC:HOME/.config/omabox (omabox's own): refused" "refusing to mount .* at $fhq/\.config/omabox in a box" \
+  check_match "...SRC:HOME/.config/omabox (omabox's own): refused" \
+    "^omabox: up: refusing to mount .* at $fhq/\.config/omabox in a box: that is omabox's own ~/\.config/omabox in the box HOME\$" \
     "$(dh_up "$B2" --desktop desk --net isolated --ro-bind "$base/src:$fh/.config/omabox")"
-  # (integrator: A's wording; these say the option and desk)
-  check_match "--desktop desk --clean: refused in step 1 (its HOME path carries your login name)" "\-\-clean.*desk|desk.*\-\-clean" \
+  check_match "--desktop desk --clean: refused in step 1 (its HOME path carries your login name)" \
+    "^omabox: up: --clean is not for a desk box: its HOME is at your HOME's path, which carries your login name " \
     "$(dh_up "$B2" --desktop desk --clean)"
-  check_match "--desktop desk --desk-shell: refused in step 1" "\-\-desk-shell.*desk|desk.*\-\-desk-shell" \
+  check_match "--desktop desk --desk-shell: refused in step 1" \
+    "^omabox: up: --desk-shell is not for a desk box yet: --desktop desk runs a plain box's desktop at your HOME's path " \
     "$(dh_up "$B2" --desktop desk --desk-shell)"
-  check_match "a jailed caller's desk box: refused in step 1" "jail.*desk|desk.*jail" \
+  check_match "a jailed caller's desk box: refused in step 1" \
+    "^omabox: up: --desktop desk is not for an agent inside ai-jail: the box's HOME is at your HOME's path, and the jail's hidden paths are not hidden there yet " \
     "$(OMABOX_JAIL='{"id": "t321", "roots": []}' dh_up "$B2" --desktop desk --net isolated)"
   check_fails "...none of them made a box" test -e "$rt/omabox/$B2"
   out=$(dh config desktop desk 2>&1); rc=$?
   check "config desktop desk: refused in step 1" test "$rc" != 0
+  check_match "...as a bad value" "^omabox: config: bad desktop: desk " "$out"
   check_fails "...not written" grep -q '^desktop=desk' "$fh/.config/omabox/config"
   # A link in the box HOME's folder on a mount's way (#321's new hazard): --seed copies a folder with a
   # link `l` to a folder of the test's; a mount at HOME/code/l/x would be made through it, there.
   out=$(dh_up "$B2" --desktop desk --net isolated --seed "$base/lnk:code" --ro-bind "$base/src:$fh/code/l/x"); rc=$?
   check "a mount under a link --seed put in the box HOME: up fails" test "$rc" != 0
-  # (integrator: A's wording; "link" is the stable word)
-  check_match "...saying the link" "link" "$out"
+  check_match "...saying the link" \
+    "^omabox: up: refusing to mount at $fhq/code/l/x in a box: a link in its way in the box HOME \($(re_q "$c")/omabox/$B2/home/code/l\)\$" "$out"
   check_fails "...nothing made where the link led" test -e "$base/target/x"
   dh down "$B2" >/dev/null 2>&1
   check_fails "no box process left" pgrep -f "$rt/omabox/"

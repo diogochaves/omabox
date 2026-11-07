@@ -1140,7 +1140,10 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   the same string as yours, so what writes your path into files or settings finds the box's. It is
   still the fake HOME (`omabox path --home`, as any box's), never your files: only the repo,
   `--ro-bind` and `--seed` bring any in. A path under your HOME in a command is the box HOME's
-  there, not yours (`run` says so). Refused with `--desk-shell` and `--clean`.
+  there, not yours (`run` says so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at
+  it or above it, over omabox's own files in it (`.config/omabox`, its logs), nor through a link in
+  it. Refused with `--desk-shell` (not yet), `--clean` (the path carries your login name) and inside
+  ai-jail (not yet); `omabox config desktop` does not take `desk` yet.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
