@@ -7,9 +7,12 @@
 // On each output of the compositor in $WAYLAND_DISPLAY, a 1x1 transparent layer surface on the
 // background layer (no input region, no exclusive zone), with an idle inhibitor
 // (zwp_idle_inhibit_manager_v1) on it: Waybar's idle-inhibitor shape. Hyprland honours an inhibitor
-// only on a mapped surface (IdleInhibitor.cpp: a view's, alive and visible) and checks it when the
-// inhibitor is made, so each one is made after its surface's first buffer was committed and the
-// compositor answered. Clients asking ext-idle-notify for idle that respects inhibitors (Quickshell's
+// only on a mapped surface (IdleInhibitor.cpp: 0.56's a view alive and visible; 0.57's also one whose
+// fade alpha is above 0, and a layer fades in from 0 as it maps) and looks again only when one is
+// made or destroyed (or on focus and fullscreen changes), never at a map or an animation's end. So
+// each is made once its surface's first buffer was committed and the compositor answered, and made
+// again (the new one first, then the old one destroyed) at REMAKE_MS after that, by when a fade-in
+// has ended. Clients asking ext-idle-notify for idle that respects inhibitors (Quickshell's
 // IdleMonitor by default, hypridle, swayidle) are never told idle while it runs; one asking for
 // input idle (respectInhibitors: false) still is. An output added later gets its own; one removed
 // takes its own away. Prints `omabox-idlehold: holding idle off on N of M outputs` once the first
@@ -20,6 +23,7 @@
 // It only ever talks to the socket in WAYLAND_DISPLAY (never an inherited WAYLAND_SOCKET).
 #define _GNU_SOURCE
 #include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +37,10 @@
 #include "../common/roundtrip.h"
 
 #define NAMESPACE "omabox-idlehold"
+// When an output's inhibitor is made again after its first (ms after that), each look Hyprland takes:
+// a layer's fade-in (fadeLayersIn) is over by the last, unless the user's config makes it longer.
+static const int REMAKE_MS[] = {250, 750, 1500, 3000, 6000};
+#define REMAKES ((int)(sizeof REMAKE_MS / sizeof *REMAKE_MS))
 
 struct hold {
     uint32_t name;   // the wl_output's global
@@ -41,6 +49,8 @@ struct hold {
     struct zwlr_layer_surface_v1 *layer;
     struct wl_buffer *buf;
     struct zwp_idle_inhibitor_v1 *inh;
+    int64_t made;    // when its first inhibitor was made (omabox_now_ms)
+    int remade;      // how many of REMAKE_MS are done
     struct hold *next;
 };
 
@@ -72,6 +82,7 @@ static void mapped(void *data, struct wl_callback *cb, uint32_t t) {
     wl_callback_destroy(cb);
     if (!h->surf || h->inh) return;
     h->inh = zwp_idle_inhibit_manager_v1_create_inhibitor(inhibit_manager, h->surf);
+    h->made = omabox_now_ms(), h->remade = 0;
     if (said) printf("omabox-idlehold: holding idle off on output %u\n", h->name), fflush(stdout);
 }
 static const struct wl_callback_listener mapped_listener = {mapped};
@@ -155,6 +166,47 @@ static int make_pool(void) {
     return 0;
 }
 
+// remake: each inhibitor whose next REMAKE_MS is due made again, the new one before the old one goes
+// (each a look Hyprland takes, the hold never off between them); the ms until the next one is due, or
+// -1 for none.
+static int remake(void) {
+    int64_t now = omabox_now_ms(), next = -1;
+    for (struct hold *h = holds; h; h = h->next) {
+        if (!h->inh) continue;
+        while (h->remade < REMAKES && now >= h->made + REMAKE_MS[h->remade]) {
+            struct zwp_idle_inhibitor_v1 *old = h->inh;
+            h->inh = zwp_idle_inhibit_manager_v1_create_inhibitor(inhibit_manager, h->surf);
+            zwp_idle_inhibitor_v1_destroy(old);
+            h->remade++;
+        }
+        if (h->remade < REMAKES) {
+            int64_t due = h->made + REMAKE_MS[h->remade] - now;
+            if (next < 0 || due < next) next = due;
+        }
+    }
+    return (int)next;
+}
+
+// Events until the compositor goes away (0), the inhibitors made again as they fall due.
+static int run(void) {
+    int fd = wl_display_get_fd(display);
+    for (;;) {
+        while (wl_display_prepare_read(display) != 0)
+            if (wl_display_dispatch_pending(display) < 0) return 0;
+        int wait = remake();
+        if (wl_display_flush(display) < 0 && errno != EAGAIN) { wl_display_cancel_read(display); return 0; }
+        struct pollfd p = {.fd = fd, .events = POLLIN};
+        int n = poll(&p, 1, wait);
+        if (n > 0) {
+            if (wl_display_read_events(display) < 0) return 0;
+        } else {
+            wl_display_cancel_read(display);
+            if (n < 0 && errno != EINTR) { fprintf(stderr, "omabox-idlehold: poll: %s\n", strerror(errno)); return 1; }
+        }
+        if (wl_display_dispatch_pending(display) < 0) return 0;
+    }
+}
+
 static int roundtrip_or_die(void) {
     int r = omabox_roundtrip(display, 5000);
     if (r == -2) { fprintf(stderr, "omabox-idlehold: the compositor did not answer in 5 s\n"); exit(1); }
@@ -192,6 +244,5 @@ int main(int argc, char **argv) {
     fflush(stdout);
     said = 1;
     if (n == 0) { fprintf(stderr, "omabox-idlehold: no output held\n"); return 1; }
-    while (wl_display_dispatch(display) != -1) {}
-    return 0;
+    return run();
 }

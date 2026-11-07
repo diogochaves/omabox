@@ -22585,6 +22585,10 @@ t_unit_inspect() {
         --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent \
         "$ROOT/tools/notices/omabox-notices" /tmp/n.log /tmp/n.ready 2>&1) || rc=$?
   check_eq "omabox-notices refuses outside a box" "2 omabox-notices: only runs inside an omabox box" "$rc $out"
+  # A desk box's idle hold (#321 step 5) too: on the host it would hold your desktop's idle off.
+  rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp \
+        --ro-bind "$ROOT" "$ROOT" --die-with-parent env -i "$ROOT/tools/idlehold/omabox-idlehold" 2>&1) || rc=$?
+  check_eq "omabox-idlehold refuses outside a box" "2 omabox-idlehold: only runs inside an omabox box" "$rc $out"
   check_match "log --json: the notifications log's alone (#430)" "--json is the notifications log's alone" \
     "$(ob log -b "$P-x" --json 2>&1)"
   check_match "wait notification: RE wanted" "wait notification: for which\?" "$(ob wait -b "$P-x" notification 2>&1)"
