@@ -753,6 +753,7 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
         omarchy: u.omarchy.clone(),
         plain: u.plain_like(),
         desk_box: u.desktop == Desktop::Desk,
+        shell_cmd: u.shell_cmd.clone(),
         home: u.box_home().to_vec(),
     }
 }
