@@ -400,12 +400,24 @@ evidence() {
 # ev_nested EVDIR: at every failure, the log tails of each box started inside one of the run's boxes
 # (a stand-in host's: t_guard's nested `up --interactive`, #406), in boxes/OUTER/nested/INNER: the
 # test's `down` of a failed one, or the outer box's end, takes them. Read from inside the outer box,
-# where an inner box's home link (a path in the outer box's HOME) leads to its own HOME.
+# where an inner box's home link (a path in the outer box's HOME) leads to its own HOME. Its Hyprland,
+# while it answers, is asked too (finding 692): its hyprland.log lags (Hyprland buffers it), so a stuck
+# one's last lines are in `hyprctl rollinglog`, and `monitors all` shows an output that never got a
+# size. Through a short link to its runtime dir: the socket's own path there is past a socket's limit.
 EV_NESTED='for d in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/omabox/*/; do
   [ -f "$d/box.json" ] || continue
   n=${d%/}; n=${n##*/}
   for f in "$d/box.log" "$d"/home/*.log "$d"/run/hypr/*/hyprland.log "$d/run/events.log"; do
     [ -f "$f" ] && { printf "\036%s/%s\n" "$n" "${f##*/}"; tail -n 200 "$f"; [ -z "$(tail -c 1 "$f")" ] || echo; }
+  done
+  for h in "$d"run/hypr/*/; do
+    [ -S "$h.socket.sock" ] || continue
+    s=${h%/}; s=${s##*/}; l=/tmp/.ev$$; ln -sfn "${d}run" "$l" || continue
+    o=$(XDG_RUNTIME_DIR=$l HYPRLAND_INSTANCE_SIGNATURE=$s timeout 3 hyprctl rollinglog 2>&1) &&
+      printf "\036%s/hyprctl-rollinglog.log\n%s\n" "$n" "$o"
+    o=$(XDG_RUNTIME_DIR=$l HYPRLAND_INSTANCE_SIGNATURE=$s timeout 3 hyprctl monitors all 2>&1) &&
+      printf "\036%s/hyprctl-monitors.txt\n%s\n" "$n" "$o"
+    rm -f "$l"
   done
 done; true'
 ev_nested() {
@@ -5150,6 +5162,21 @@ EOF
   check_eq "evidence keeps a nested box's box.log (#406)" "inner box.log" "$(cat "$ne/box.log" 2>&1)"
   check_eq "...its Hyprland log" "inner hyprland.log" "$(cat "$ne/hyprland.log" 2>&1)"
   check_eq "...and its HOME's logs, through its home link (labwc's)" "inner labwc.log" "$(cat "$ne/labwc.log" 2>&1)"
+  check_eq "...no answers of a Hyprland with no socket" "" "$(compgen -G "$ne/hyprctl-*")"
+  # finding 692: and its Hyprland's own answers while it has a socket, rollinglog and monitors all (its
+  # log file lags), through a short link to its runtime dir; a stand-in hyprctl says what it was asked
+  # and of which instance where.
+  mkdir -p "$r/hc"
+  cat > "$r/hc/hyprctl" <<'EOF'
+#!/bin/sh
+echo "hyprctl $* at $(readlink -f "$XDG_RUNTIME_DIR") $HYPRLAND_INSTANCE_SIGNATURE"
+EOF
+  chmod +x "$r/hc/hyprctl"
+  (cd "$nd/run/hypr/sig" && python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(".socket.sock")')
+  PATH=$r/hc:$PATH ev 3
+  local ndr; ndr=$(readlink -f "$nd/run")
+  check_eq "...its Hyprland's rollinglog, asked of it" "hyprctl rollinglog at $ndr sig" "$(cat "$ne/hyprctl-rollinglog.log" 2>&1)"
+  check_eq "...and its monitors" "hyprctl monitors all at $ndr sig" "$(cat "$ne/hyprctl-monitors.txt" 2>&1)"
   touch -d '-30 seconds' "$r/rt/omabox/$P-ev/used"; before=$(stat -c %.9Y "$r/rt/omabox/$P-ev/used")
   echo "inner box.log, later" > "$nd/box.log"
   ev 3

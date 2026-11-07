@@ -13631,6 +13631,11 @@ from them.
     system's aquamarine 0.15.1 lacks: omabox setup --aquamarine builds it for you"; otherwise, or
     with the fix, it is as before (labwc's reason first). Unit-tested (`not_up_why`); the in-box
     call checked on a nested interactive box here, its answer read (the race itself not staged).
+    **Fix** (evidence): a nested box's evidence (ev_nested, d40457f and 68b293c) also keeps its
+    Hyprland's `hyprctl rollinglog` and `monitors all` while it has a socket
+    (`hyprctl-rollinglog.log`, `hyprctl-monitors.txt`), asked from inside the outer box through a
+    short link to the inner box's runtime dir: the socket's own path there is past a Unix socket's
+    108 bytes. Checked on a nested box here and in t_unit_evidence.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
