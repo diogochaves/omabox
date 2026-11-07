@@ -54,8 +54,30 @@ const IMAGES: Caps = Caps {
 };
 /// The whole copy.
 const ALL: u64 = 160 * MIB;
+/// How long the whole copy may take (finding 710: a huge or slow tree ends the walk, said).
+const COPY_TIME: std::time::Duration = std::time::Duration::from_secs(30);
+/// How many entries (files, folders, links, each one looked at) a part looks at, per file it may
+/// copy: a tree of empty folders ends there too.
+const ENTRIES_PER_FILE: u64 = 4;
+/// How many names of one folder are read.
+const NAMES: usize = 10_000;
 /// How many folders deep a walk goes.
 const DEPTH: u32 = 8;
+
+#[cfg(test)]
+thread_local! {
+    /// A test's own COPY_TIME.
+    static COPY_TIME_TEST: std::cell::Cell<Option<std::time::Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn copy_time() -> std::time::Duration {
+    #[cfg(test)]
+    if let Some(t) = COPY_TIME_TEST.with(std::cell::Cell::get) {
+        return t;
+    }
+    COPY_TIME
+}
 
 fn p(v: &[u8]) -> std::path::PathBuf {
     shell::path(v)
@@ -216,26 +238,118 @@ pub fn precheck(ctx: &Ctx) -> Res<()> {
     Ok(())
 }
 
+/// A raw fd of ours, closed when dropped.
+struct Fd(libc::c_int);
+
+impl Drop for Fd {
+    fn drop(&mut self) {
+        // SAFETY: an fd this module opened and owns.
+        unsafe { libc::close(self.0) };
+    }
+}
+
+fn cstr(v: &[u8]) -> Option<std::ffi::CString> {
+    std::ffi::CString::new(v).ok()
+}
+
+/// Whether NAME in the folder DIR holds is a link (lstat's, never followed).
+fn is_link_at(dir: &Fd, name: &std::ffi::CStr) -> bool {
+    // SAFETY: an fstatat into a zeroed stat of ours; DIR open, NAME NUL-terminated.
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        libc::fstatat(dir.0, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) == 0
+            && st.st_mode & libc::S_IFMT == libc::S_IFLNK
+    }
+}
+
+/// The folder REL's file is in (REL a clean path in the box HOME H), held open, and its last name:
+/// H opened, then each folder on the way from the one above it, O_NOFOLLOW|O_DIRECTORY, so a link
+/// anywhere on the way (a save's, which up restored before the copy) is never followed (finding
+/// 710). Ok(None) when a folder on the way is not there; Err(~/PATH) of the first link met.
+fn held_parent(h: &[u8], rel: &[u8]) -> Result<Option<(Fd, std::ffi::CString)>, Vec<u8>> {
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let Some(hc) = cstr(h) else {
+        return Ok(None);
+    };
+    // SAFETY: open of a NUL-terminated path; the fd is owned by Fd from here.
+    let fd = unsafe { libc::open(hc.as_ptr(), flags) };
+    if fd < 0 {
+        return Ok(None);
+    }
+    let mut dir = Fd(fd);
+    let parts: Vec<&[u8]> = rel.split(|&c| c == b'/').collect();
+    let Some((last, way)) = parts.split_last() else {
+        return Ok(None);
+    };
+    for (i, part) in way.iter().enumerate() {
+        let Some(pc) = cstr(part) else {
+            return Ok(None);
+        };
+        // SAFETY: openat from a folder fd of ours; the new fd is owned by Fd.
+        let fd = unsafe { libc::openat(dir.0, pc.as_ptr(), flags) };
+        if fd < 0 {
+            if is_link_at(&dir, &pc) {
+                return Err(cat!("~/", parts[..=i].join(&b'/')));
+            }
+            return Ok(None);
+        }
+        dir = Fd(fd);
+    }
+    Ok(cstr(last).map(|n| (dir, n)))
+}
+
 /// idle_edit H LINE: a profile's `idle FILE KEY VALUE` (#321 step 5, finding 709) on the box's copy
 /// of FILE (a JSON file in the box HOME H, a file of its own: the copy's, never a link): KEY, dotted,
 /// set to VALUE (JSON; a word that is none as a string), the folders on its way made objects. So the
 /// shell's own idle timeouts never lock or blank the box (the idle hold covers the shells that heed
-/// an inhibitor). Some(FILE) when it was edited; None when the copy has no such file, or it is no
-/// JSON object.
-fn idle_edit(h: &[u8], line: &[u8]) -> Option<Vec<u8>> {
+/// an inhibitor). Ok(Some(FILE)) when it was edited; Ok(None) when the box HOME has no such file, or
+/// it is no JSON object; Err(link) when a link is on its way or is the file (finding 710: the box
+/// HOME may hold a save's links and the edit is the host's, so none is followed: each folder is
+/// opened from the one above, the temp file made anew beside the file, O_EXCL, and renamed there).
+fn idle_edit(h: &[u8], line: &[u8]) -> Result<Option<Vec<u8>>, Vec<u8>> {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
     let mut it = line
         .splitn(3, |c| c.is_ascii_whitespace())
         .map(<[u8]>::trim_ascii);
-    let (file, key, val) = (it.next()?, it.next()?, it.next()?);
+    let (Some(file), Some(key), Some(val)) = (it.next(), it.next(), it.next()) else {
+        return Ok(None);
+    };
     if !clean_rel(file) || key.is_empty() || val.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let f = cat!(h, "/", file);
-    let m = std::fs::symlink_metadata(p(&f)).ok()?;
+    let Some((dir, name)) = held_parent(h, file)? else {
+        return Ok(None);
+    };
+    if is_link_at(&dir, &name) {
+        return Err(cat!("~/", file));
+    }
+    let rd =
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY;
+    // SAFETY: openat from a folder fd of ours.
+    let fd = unsafe { libc::openat(dir.0, name.as_ptr(), rd) };
+    if fd < 0 {
+        return Ok(None);
+    }
+    // SAFETY: FD was just opened and nothing else owns it.
+    let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+    let Ok(m) = f.metadata() else {
+        return Ok(None);
+    };
     if !m.is_file() || m.len() > SHELL.file {
-        return None;
+        return Ok(None);
     }
-    let mut doc: Value = serde_json::from_slice(&std::fs::read(p(&f)).ok()?).ok()?;
+    let mut bytes = Vec::new();
+    if (&mut f)
+        .take(SHELL.file + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return Ok(None);
+    }
+    let Ok(mut doc) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(None);
+    };
     let new: Value = serde_json::from_slice(val)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(val).into_owned()));
     let keys: Vec<String> = String::from_utf8_lossy(key)
@@ -244,7 +358,9 @@ fn idle_edit(h: &[u8], line: &[u8]) -> Option<Vec<u8>> {
         .collect();
     let mut at = &mut doc;
     for (i, k) in keys.iter().enumerate() {
-        let o = at.as_object_mut()?;
+        let Some(o) = at.as_object_mut() else {
+            return Ok(None);
+        };
         if i + 1 == keys.len() {
             o.insert(k.clone(), new);
             break;
@@ -257,11 +373,34 @@ fn idle_edit(h: &[u8], line: &[u8]) -> Option<Vec<u8>> {
         }
         at = next;
     }
-    let text = serde_json::to_vec_pretty(&doc).ok()?;
-    let tmp = cat!(f, ".omabox-idle");
-    std::fs::write(p(&tmp), &text).ok()?;
-    std::fs::rename(p(&tmp), p(&f)).ok()?;
-    Some(file.to_vec())
+    let Ok(text) = serde_json::to_vec_pretty(&doc) else {
+        return Ok(None);
+    };
+    let Some(tmp) = cstr(&cat!(name.as_bytes(), ".omabox-idle")) else {
+        return Ok(None);
+    };
+    // (whatever a save left at the temp name goes, the entry itself: a link removed, not followed)
+    // SAFETY: unlinkat from a folder fd of ours, a NUL-terminated name.
+    unsafe { libc::unlinkat(dir.0, tmp.as_ptr(), 0) };
+    let wr = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: openat from a folder fd of ours; O_EXCL makes it a new file, never a link's target.
+    let fd = unsafe { libc::openat(dir.0, tmp.as_ptr(), wr, 0o644 as libc::c_uint) };
+    if fd < 0 {
+        return Ok(None);
+    }
+    // SAFETY: FD was just opened and nothing else owns it.
+    let mut out = unsafe { std::fs::File::from_raw_fd(fd) };
+    let written = out.write_all(&text).is_ok();
+    drop(out);
+    // SAFETY: renameat within the one folder fd of ours, NUL-terminated names.
+    let renamed =
+        written && unsafe { libc::renameat(dir.0, tmp.as_ptr(), dir.0, name.as_ptr()) } == 0;
+    if !renamed {
+        // SAFETY: as above.
+        unsafe { libc::unlinkat(dir.0, tmp.as_ptr(), 0) };
+        return Ok(None);
+    }
+    Ok(Some(file.to_vec()))
 }
 
 /// The walk: what it copied and skipped, its caps.
@@ -286,22 +425,130 @@ struct Walk<'a> {
     seen: HashSet<Vec<u8>>,
     skipped: HashMap<Vec<u8>, Vec<u8>>,
     nskipped: Vec<Vec<u8>>,
+    /// Where (the folder, in the box HOME) and why the part stopped at a cap (finding 710): the rest
+    /// of it is counted in UNWALKED, not walked, and said in one line at its end.
+    stop: Option<(Vec<u8>, Vec<u8>)>,
+    unwalked: u64,
+    /// The entries the part looked at.
+    entries: u64,
+    /// Why every part from here on stops (the whole copy's cap, its time).
+    stop_all: Option<Vec<u8>>,
+    deadline: std::time::Instant,
+}
+
+/// One folder's names (at most NAMES), in byte order; PIC: a picture's names only.
+fn names_of(dir: &[u8], pic: bool) -> Vec<Vec<u8>> {
+    let mut v: Vec<Vec<u8>> = std::fs::read_dir(p(dir))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
+                .filter(|n| !pic || pic_name(n))
+                .take(NAMES)
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
 }
 
 impl Walk<'_> {
+    fn new<'a>(ctx: &'a Ctx, h: &'a [u8], home: Vec<u8>, home_r: Vec<u8>) -> Walk<'a> {
+        Walk {
+            ctx,
+            h,
+            home,
+            home_r,
+            out: Vec::new(),
+            caps: HYPR,
+            what: Vec::new(),
+            g_bytes: 0,
+            g_count: 0,
+            all: 0,
+            parts: Vec::new(),
+            texts: Vec::new(),
+            seen: HashSet::new(),
+            skipped: HashMap::new(),
+            nskipped: Vec::new(),
+            stop: None,
+            unwalked: 0,
+            entries: 0,
+            stop_all: None,
+            deadline: std::time::Instant::now() + copy_time(),
+        }
+    }
+
     fn part(&mut self, what: Vec<u8>, caps: Caps) {
         self.end_part();
         self.what = what;
         self.caps = caps;
         self.g_bytes = 0;
         self.g_count = 0;
+        self.entries = 0;
+        if let Some(why) = self.stop_all.clone() {
+            self.stop = Some((Vec::new(), why));
+        }
     }
 
     fn end_part(&mut self) {
+        if let Some((dir, why)) = self.stop.take() {
+            if self.unwalked > 0 {
+                let at = if dir.is_empty() {
+                    cat!("(", self.what, ")")
+                } else {
+                    cat!(dir, "/...")
+                };
+                let why = cat!(self.unwalked.to_string(), " more not walked: ", why);
+                self.out.extend(cat!("skipped ", at, "\t", why, "\n"));
+                self.skipped.insert(at.clone(), why.clone());
+                self.nskipped.push(cat!(at, "\t", why));
+            }
+        }
+        self.unwalked = 0;
         if !self.what.is_empty() {
             self.parts
                 .push((std::mem::take(&mut self.what), self.g_count));
         }
+    }
+
+    /// The part stops at R (an entry in the box HOME) for WHY; R and the rest are counted.
+    fn stop_at(&mut self, r: &[u8], why: Vec<u8>) {
+        if self.stop.is_none() {
+            let dir = r
+                .iter()
+                .rposition(|&c| c == b'/')
+                .map_or_else(|| r.to_vec(), |i| r[..i].to_vec());
+            self.stop = Some((dir, why));
+        }
+        self.unwalked += 1;
+    }
+
+    /// Whether the walk stops before R: the part stopped already (R counted), its entries' cap met,
+    /// or the copy's time up (every later part stops too).
+    fn halted(&mut self, r: &[u8]) -> bool {
+        if self.stop.is_some() {
+            self.unwalked += 1;
+            return true;
+        }
+        let cap = self.caps.count * ENTRIES_PER_FILE;
+        if self.entries >= cap {
+            self.stop_at(
+                r,
+                format!(
+                    "over the cap for {}: {cap} entries",
+                    String::from_utf8_lossy(&self.what)
+                )
+                .into_bytes(),
+            );
+            return true;
+        }
+        if std::time::Instant::now() > self.deadline {
+            let why = format!("the copy took over {} s", copy_time().as_secs()).into_bytes();
+            self.stop_all = Some(why.clone());
+            self.stop_at(r, why);
+            return true;
+        }
+        self.entries += 1;
+        false
     }
 
     fn skip(&mut self, r: &[u8], why: &[u8]) {
@@ -320,6 +567,10 @@ impl Walk<'_> {
     /// when SRC is not there; Err(why) when it may not be copied.
     fn root(&mut self, src: &[u8], rel: &[u8]) -> Res<Result<(), Vec<u8>>> {
         if std::fs::symlink_metadata(p(src)).is_err() {
+            return Ok(Ok(()));
+        }
+        // (REL/: a part that stops here says REL/...)
+        if self.halted(&cat!(rel, "/")) {
             return Ok(Ok(()));
         }
         let Some(t) = readlink_e(src) else {
@@ -347,15 +598,14 @@ impl Walk<'_> {
 
     /// The entries of DIR (resolved), at REL in the box HOME, in byte order.
     fn walk(&mut self, dir: &[u8], rel: &[u8], depth: u32, up: &mut Vec<(u64, u64)>) -> Res<()> {
-        let mut all: Vec<Vec<u8>> = std::fs::read_dir(p(dir))
-            .map(|rd| {
-                rd.flatten()
-                    .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
-                    .collect()
-            })
-            .unwrap_or_default();
-        all.sort();
-        for name in all {
+        let all = names_of(dir, false);
+        let n = all.len();
+        for (i, name) in all.into_iter().enumerate() {
+            if self.stop.is_some() {
+                // (the rest of this folder counted, not walked: each folder above counts its own)
+                self.unwalked += (n - i) as u64;
+                break;
+            }
             self.entry(dir, &name, rel, depth, up)?;
         }
         Ok(())
@@ -371,6 +621,9 @@ impl Walk<'_> {
     ) -> Res<()> {
         let e = cat!(dir, "/", name);
         let r = cat!(rel, "/", name);
+        if self.halted(&r) {
+            return Ok(());
+        }
         let Ok(lm) = std::fs::symlink_metadata(p(&e)) else {
             return Ok(());
         };
@@ -431,6 +684,10 @@ impl Walk<'_> {
         if self.seen.contains(r) {
             return Ok(());
         }
+        if self.stop.is_some() {
+            self.unwalked += 1;
+            return Ok(());
+        }
         let c = self.caps;
         let over = |n: u64| -> Vec<u8> { format!("over {} MiB", n / MIB).into_bytes() };
         if size > c.file {
@@ -447,11 +704,13 @@ impl Walk<'_> {
                 c.count.to_string(),
                 " files"
             );
-            self.skip(r, &why);
+            self.stop_at(r, why);
             return Ok(());
         }
         if self.all + size > ALL {
-            self.skip(r, b"over the cap of 160 MiB for the whole copy");
+            let why = b"over the cap of 160 MiB for the whole copy".to_vec();
+            self.stop_all = Some(why.clone());
+            self.stop_at(r, why);
             return Ok(());
         }
         let Some(d) = Dest::new(r) else {
@@ -496,7 +755,7 @@ impl Walk<'_> {
     fn named(&mut self, rel: &[u8], folder: bool) -> Res<()> {
         let src = cat!(self.home, "/", rel);
         let shown = if folder { cat!(rel, "/") } else { rel.to_vec() };
-        if self.seen.contains(&shown) {
+        if self.seen.contains(&shown) || self.halted(&shown) {
             return Ok(());
         }
         if let Some(w) = rel
@@ -526,16 +785,7 @@ impl Walk<'_> {
                 return Ok(());
             }
             self.seen.insert(shown);
-            let mut names: Vec<Vec<u8>> = std::fs::read_dir(p(&t))
-                .map(|rd| {
-                    rd.flatten()
-                        .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
-                        .filter(|n| pic_name(n))
-                        .collect()
-                })
-                .unwrap_or_default();
-            names.sort();
-            for n in names {
+            for n in names_of(&t, true) {
                 self.named(&cat!(rel, "/", n), false)?;
             }
         } else if m.is_file() {
@@ -724,7 +974,7 @@ fn detect(profiles: &[Profile], shell_cmd: &[u8], luas: &[Vec<u8>], config: &[u8
 
 /// What a skip's REL is shown as: ~/REL, an absolute path as it is.
 fn shown(rel: &[u8]) -> Vec<u8> {
-    if rel.starts_with(b"/") {
+    if rel.starts_with(b"/") || rel.starts_with(b"(") {
         rel.to_vec()
     } else {
         cat!("~/", rel)
@@ -739,23 +989,7 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     let home = shell::env_or_empty("HOME");
     let home_r = readlink_e(&home).unwrap_or_else(|| home.clone());
     let config = xdg("XDG_CONFIG_HOME", &home, ".config");
-    let mut w = Walk {
-        ctx,
-        h,
-        home: home.clone(),
-        home_r,
-        out: Vec::new(),
-        caps: HYPR,
-        what: Vec::new(),
-        g_bytes: 0,
-        g_count: 0,
-        all: 0,
-        parts: Vec::new(),
-        texts: Vec::new(),
-        seen: HashSet::new(),
-        skipped: HashMap::new(),
-        nskipped: Vec::new(),
-    };
+    let mut w = Walk::new(ctx, h, home.clone(), home_r);
     // 1. The Hyprland config's folder, whole.
     let hypr = cat!(config, "/hypr");
     w.part(b"~/.config/hypr".to_vec(), HYPR);
@@ -768,7 +1002,18 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         )));
     }
     let lua_rel = b".config/hypr/hyprland.lua";
-    if let Some(why) = w.skipped.get(lua_rel.as_slice()) {
+    // (what stayed out: skipped, or not walked when the part stopped at a cap before it, finding 710)
+    let left = |w: &Walk, rel: &[u8]| -> Option<Vec<u8>> {
+        if let Some(why) = w.skipped.get(rel) {
+            return Some(why.clone());
+        }
+        let (_, why) = w.stop.as_ref()?;
+        let on_host = rel
+            .strip_prefix(b".config/hypr/".as_slice())
+            .is_some_and(|r| std::fs::symlink_metadata(p(&cat!(hypr, "/", r))).is_ok());
+        (!w.seen.contains(rel) && on_host).then(|| cat!("not walked: ", why))
+    };
+    if let Some(why) = left(&w, lua_rel) {
         return Err(ctx.die(cat!(
             "up: --desktop desk: your hyprland.lua was not copied into the box: ",
             why
@@ -794,7 +1039,7 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
                 cat!(".config/hypr/", m, ".lua"),
                 cat!(".config/hypr/", m, "/init.lua"),
             ] {
-                if let Some(why) = w.skipped.get(&f) {
+                if let Some(why) = left(&w, &f) {
                     return Err(ctx.die(cat!(
                         "up: --desktop desk: ~/",
                         f,
@@ -835,21 +1080,40 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     // Each found shell's own idle timeouts off in its copy (its profile's `idle` lines), said.
     for f in &found {
         for line in &profiles[f.i].idle {
-            if let Some(file) = idle_edit(h, line) {
-                let key = line
-                    .split(u8::is_ascii_whitespace)
-                    .nth(1)
-                    .unwrap_or_default();
-                say(cat!(
-                    "up: ",
-                    profiles[f.i].name,
-                    "'s own idle timeouts off in the box's ~/",
-                    file,
-                    " (",
-                    key,
-                    ")"
-                ));
-                w.out.extend(cat!("edited ", file, "\t", key, "\n"));
+            let mut words = line
+                .split(u8::is_ascii_whitespace)
+                .filter(|x| !x.is_empty());
+            let (file, key) = (
+                words.next().unwrap_or_default(),
+                words.next().unwrap_or_default(),
+            );
+            match idle_edit(h, line) {
+                Ok(Some(file)) => {
+                    say(cat!(
+                        "up: ",
+                        profiles[f.i].name,
+                        "'s own idle timeouts off in the box's ~/",
+                        file,
+                        " (",
+                        key,
+                        ")"
+                    ));
+                    w.out.extend(cat!("edited ", file, "\t", key, "\n"));
+                }
+                Ok(None) => {}
+                Err(link) => {
+                    let why = cat!("a link on its way (", link, "), not followed");
+                    say(cat!(
+                        "up: ",
+                        profiles[f.i].name,
+                        "'s own idle timeouts not turned off in the box's ~/",
+                        file,
+                        ": ",
+                        why
+                    ));
+                    w.out
+                        .extend(cat!("skipped ", file, "\tits idle edit: ", why, "\n"));
+                }
             }
         }
     }
@@ -1047,17 +1311,11 @@ fn wallpaper_folder(w: &mut Walk, folder: &[u8], rel: &[u8]) -> Res<()> {
         w.skip(&shown, &why);
         return Ok(());
     }
-    let mut names: Vec<Vec<u8>> = std::fs::read_dir(p(&f))
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
-                .filter(|n| pic_name(n))
-                .collect()
-        })
-        .unwrap_or_default();
-    names.sort();
-    for n in names {
+    for n in names_of(&f, true) {
         let r = cat!(rel, "/", n);
+        if w.halted(&r) {
+            continue;
+        }
         if let Some(why) = seed::desk_box_name_refused(&n) {
             w.skip(&r, why.as_bytes());
             continue;
@@ -1505,7 +1763,11 @@ mod tests {
             format!("local w = \"{}/w\"\nlocal b = \"{}/big.png\"\n", f.fh, f.fh).as_bytes(),
         );
         f.put(".config/hypr/hyprland.lua", &lua);
-        f.put(".config/hypr/big.lua", &vec![b'-'; 2 * MIB as usize]);
+        for i in 0..12 {
+            let big =
+                std::fs::File::create(format!("{}/.config/hypr/big{i:02}.lua", f.fh)).unwrap();
+            big.set_len(2 * MIB).unwrap();
+        }
         for i in 0..44 {
             f.put(&format!("w/{i:02}.png"), PNG);
         }
@@ -1514,18 +1776,19 @@ mod tests {
         let (r, said) = f.run("");
         let out = r.unwrap();
         assert!(
-            out.contains("skipped .config/hypr/big.lua\tover 1 MiB"),
+            out.contains("skipped .config/hypr/big00.lua\tover 1 MiB"),
             "{out}"
         );
         assert!(out.contains("skipped big.png\tover 32 MiB"), "{out}");
         assert_eq!(lines(&out, "copied w/").len(), 32, "{out}");
+        // (the cap stops the part: one line for the 12 pictures left, finding 710)
         assert!(
             out.contains(
-                "skipped w/32.png\tover the cap for the images they name: 128 MiB and 32 files"
+                "skipped w/...\t12 more not walked: over the cap for the images they name: 128 MiB and 32 files"
             ),
             "{out}"
         );
-        assert!(out.contains("skipped w/43.png\t"), "{out}");
+        assert!(!out.contains("skipped w/32.png"), "{out}");
         assert!(
             said.contains(
                 "omabox: up: ...and 4 more not copied (box.json's desk_copy has them all)"
@@ -1537,6 +1800,113 @@ mod tests {
             10,
             "{said}"
         );
+    }
+
+    /// A part stops at its cap (finding 710): a big tree's first 500 files copied, the rest not
+    /// walked (no folder of it made, no line each), one line saying how many; a tree of empty
+    /// folders stops at its entries' cap; the copy's time up stops every part after it.
+    #[test]
+    fn caps_stop_the_walk() {
+        if !crate::exec::tools_or_skip("caps_stop_the_walk", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("bigtree");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        for i in 0..600 {
+            f.put(&format!(".config/hypr/m/{i:03}.lua"), b"-- x\n");
+        }
+        for i in 0..20 {
+            f.put(&format!(".config/hypr/z{i:02}/a/b/f.lua"), b"-- z\n");
+        }
+        let (r, said) = f.run("");
+        let out = r.unwrap();
+        assert_eq!(lines(&out, "copied ").len(), 500, "{out}");
+        let skipped = lines(&out, "skipped ");
+        assert_eq!(
+            skipped,
+            [
+                ".config/hypr/m/...\t121 more not walked: over the cap for ~/.config/hypr: 8 MiB and 500 files"
+            ],
+            "{out}"
+        );
+        assert!(
+            !f.there(".config/hypr/z00"),
+            "a folder after the cap: not made"
+        );
+        assert!(!f.there(".config/hypr/m/499.lua"), "{out}");
+        assert!(
+            said.contains("omabox: up: not copied: ~/.config/hypr/m/... (121 more not walked: "),
+            "{said}"
+        );
+        // Empty folders: 2000 entries looked at, then the end.
+        let f = Fx::new("emptytree");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        for i in 0..2100 {
+            std::fs::create_dir_all(format!("{}/.config/hypr/z/{i:04}", f.fh)).unwrap();
+        }
+        let out = f.run("").0.unwrap();
+        assert_eq!(
+            lines(&out, "skipped "),
+            [
+                ".config/hypr/z/...\t103 more not walked: over the cap for ~/.config/hypr: 2000 entries"
+            ],
+            "{out}"
+        );
+        assert!(f.there(".config/hypr/z/1996"), "{out}");
+        assert!(!f.there(".config/hypr/z/1997"), "{out}");
+        // A cap met before hyprland.lua (a folder sorted before it): refused, as a skipped one is.
+        let f = Fx::new("bigfirst");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        for i in 0..600 {
+            f.put(&format!(".config/hypr/a/{i:03}.lua"), b"-- x\n");
+        }
+        let (r, said) = f.run("");
+        assert_eq!(r, Err(1));
+        assert_eq!(
+            said,
+            "omabox: up: --desktop desk: your hyprland.lua was not copied into the box: not walked: over the cap for ~/.config/hypr: 8 MiB and 500 files\n"
+        );
+        // The copy's time up before it began: hyprland.lua not walked, refused.
+        let f = Fx::new("slowtree");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        COPY_TIME_TEST.with(|t| t.set(Some(std::time::Duration::ZERO)));
+        let (r, said) = f.run("");
+        COPY_TIME_TEST.with(|t| t.set(None));
+        assert_eq!(r, Err(1));
+        assert_eq!(
+            said,
+            "omabox: up: --desktop desk: your hyprland.lua was not copied into the box: not walked: the copy took over 0 s\n"
+        );
+        // ...up after a part: the parts after it not walked, one line each.
+        let f = Fx::new("slowtree2");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.put(".config/DankMaterialShell/settings.json", b"{}\n");
+        f.put("Pictures/a.png", PNG);
+        let ctx = Ctx::new(b"up", b"/nonexistent".to_vec());
+        let fh = f.fh.as_bytes().to_vec();
+        let mut w = Walk::new(&ctx, f.bx.as_bytes(), fh.clone(), fh.clone());
+        w.part(b"~/.config/hypr".to_vec(), HYPR);
+        let _ = w.root(&cat!(fh, "/.config/hypr"), b".config/hypr").unwrap();
+        w.deadline = std::time::Instant::now();
+        w.part(b"the dms shell".to_vec(), SHELL);
+        let _ = w
+            .root(
+                &cat!(fh, "/.config/DankMaterialShell"),
+                b".config/DankMaterialShell",
+            )
+            .unwrap();
+        w.part(b"the images they name".to_vec(), IMAGES);
+        w.named(b"Pictures/a.png", false).unwrap();
+        w.end_part();
+        let out = String::from_utf8_lossy(&w.out).into_owned();
+        assert_eq!(
+            out,
+            "copied .config/hypr/hyprland.lua\n\
+             skipped .config/DankMaterialShell/...\t1 more not walked: the copy took over 30 s\n\
+             skipped (the images they name)\t1 more not walked: the copy took over 30 s\n"
+        );
+        assert!(!f.there(".config/DankMaterialShell"), "{out}");
+        assert!(!f.there("Pictures"), "{out}");
     }
 
     /// Images named by path: DMS's session.json, Caelestia's path.txt, a Lua `swww img ~/...`, a
@@ -1946,7 +2316,10 @@ mod tests {
         // (idle_edit alone: made on the way, a string value, a file that is not JSON left)
         let h = f.bx.as_bytes();
         std::fs::write(f.in_box("a.json"), b"{}").unwrap();
-        assert_eq!(idle_edit(h, b"a.json b.c off"), Some(b"a.json".to_vec()));
+        assert_eq!(
+            idle_edit(h, b"a.json b.c off"),
+            Ok(Some(b"a.json".to_vec()))
+        );
         assert_eq!(
             std::fs::read_to_string(f.in_box("a.json"))
                 .unwrap()
@@ -1955,8 +2328,71 @@ mod tests {
             r#"{"b":{"c":"off"}}"#
         );
         std::fs::write(f.in_box("t.json"), b"not json").unwrap();
-        assert_eq!(idle_edit(h, b"t.json a []"), None);
-        assert_eq!(idle_edit(h, b"../t.json a []"), None);
-        assert_eq!(idle_edit(h, b"none.json a []"), None);
+        assert_eq!(idle_edit(h, b"t.json a []"), Ok(None));
+        assert_eq!(idle_edit(h, b"../t.json a []"), Ok(None));
+        assert_eq!(idle_edit(h, b"none.json a []"), Ok(None));
+    }
+
+    /// idle_edit never follows a link a box (a save restored first) left in its HOME (finding 710):
+    /// its temp file's name a link to a host file, a folder on the way a link to a host folder. The
+    /// host's files as they were; the second said, not edited.
+    #[test]
+    fn idle_edit_follows_no_link() {
+        if !crate::exec::tools_or_skip("idle_edit_follows_no_link", &["grep", "cp"]) {
+            return;
+        }
+        let host = br#"{"general": {"idle": {"timeouts": [1]}}}"#;
+        // (1) The host has the shell's config; the box's HOME a planted shell.json.omabox-idle.
+        let f = Fx::new("idlelink1");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.put(".config/caelestia/shell.json", host);
+        f.put(".bashrc", b"# the real one\n");
+        std::fs::create_dir_all(f.in_box(".config/caelestia")).unwrap();
+        symlink(
+            format!("{}/.bashrc", f.fh),
+            f.in_box(".config/caelestia/shell.json.omabox-idle"),
+        )
+        .unwrap();
+        let (r, _) = f.run("caelestia shell -d");
+        let r = r.unwrap();
+        assert_eq!(
+            std::fs::read(format!("{}/.bashrc", f.fh)).unwrap(),
+            b"# the real one\n",
+            "{r}"
+        );
+        assert!(f.real_file(".config/caelestia/shell.json"), "{r}");
+        let v: Value = serde_json::from_slice(
+            &std::fs::read(f.in_box(".config/caelestia/shell.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["general"]["idle"]["timeouts"], serde_json::json!([]));
+        // (2) No config of the shell's on the host: a planted folder link stays, is not followed.
+        let f = Fx::new("idlelink2");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.put(".config/x/shell.json", host);
+        std::fs::create_dir_all(f.in_box(".config")).unwrap();
+        symlink(format!("{}/.config/x", f.fh), f.in_box(".config/caelestia")).unwrap();
+        let (r, said) = f.run("caelestia shell -d");
+        let r = r.unwrap();
+        assert_eq!(
+            std::fs::read(format!("{}/.config/x/shell.json", f.fh)).unwrap(),
+            host,
+            "{r}"
+        );
+        assert!(
+            !lines(&r, "edited ").iter().any(|l| l.contains("caelestia")),
+            "{r}"
+        );
+        assert!(said.contains("up: caelestia's own idle timeouts not turned off in the box's ~/.config/caelestia/shell.json: a link on its way (~/.config/caelestia), not followed"), "{said}");
+        // (3) The file itself a link: not followed either.
+        let f = Fx::new("idlelink3");
+        f.put("victim.json", b"{}");
+        std::fs::create_dir_all(f.in_box("c")).unwrap();
+        symlink(format!("{}/victim.json", f.fh), f.in_box("c/a.json")).unwrap();
+        assert!(idle_edit(f.bx.as_bytes(), b"c/a.json k []").is_err());
+        assert_eq!(
+            std::fs::read(format!("{}/victim.json", f.fh)).unwrap(),
+            b"{}"
+        );
     }
 }
