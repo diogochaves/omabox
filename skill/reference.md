@@ -1156,7 +1156,8 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   key's shape or over 1 MiB) fails `up` before any box is made.
 - **Its base** is your desk's (box.json's `desk_base`): where Omarchy is installed and your
   `hypr/hyprland.lua` loads it, an Omarchy box (Omarchy's shell, with your plugins and `shell.json`
-  as `--desk-shell` copies them; `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and
+  as `--desk-shell` copies them, and your wallpaper: a `backgrounds/THEME` that is a link is
+  followed and its pictures copied, no intro video; `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and
   `--omarchy` work, `--stock`, `--stock-bar` and `--keep` are refused: they are not your desk);
   otherwise plain. It needs a Lua config (`hypr/hyprland.lua`; a `hyprland.conf` alone is refused:
   `hyprctl eval`, which keys, click, pointer, mode, monitor and lua use, refuses it). Refused with

@@ -34,7 +34,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
     once, saying so.
   - **On an Omarchy desk** (Omarchy installed and your config loading it; box.json's `desk_base`) the
     box is an Omarchy box running your config, its shell Omarchy's with your plugins and
-    `shell.json`. It takes `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and
+    `shell.json`, on your wallpaper even when your backgrounds folder is a link into another repo
+    (its pictures are copied; an intro video beside them is not). It takes `--plugin`, `--theme`, `--theme-dir`, `--dnd`, `--no-dock` and
     `--omarchy`, and refuses `--stock`, `--stock-bar` and `--keep` (not your desk). `--desk-shell`
     is part of `--desktop desk` now: alone it still works, with a note, for this release.
   - **Held awake:** your shell's own idle timeouts (a lock, a blank screen) would fire between an

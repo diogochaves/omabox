@@ -13905,7 +13905,24 @@ from them.
     t_cli_up's desk case): those say `--no-shell`; and step 5's no-config refusal met every test
     that brought its config with `--seed` only: they keep a placeholder in the stand-in HOME, which
     `--seed` replaces in the box. t_desk_shell_slot runs the real desk.lua (step 4's stand-in Lua is
-    gone; a copy of omabox stays for the suite's own profile in its share/).
+    gone; a copy of omabox stays for the suite's own profile in its share/). (11) A real Omarchy desk
+    came up on its theme's plain dark picture, not its own wallpaper. Its
+    `~/.config/omarchy/backgrounds/THEME` is a link into a repo of the user's, and
+    `~/.local/state/omarchy/current/background` leads into it. On Omarchy's base the wallpaper is
+    Omarchy's seeding's (`seed::box_background`, #184), which follows no link. It left that folder
+    out and fell back to the theme's first picture, as an Omarchy box with `--desk-shell` always did:
+    not a desk regression. Omarchy's wallpaper engine reads `current/background` and drew what it
+    was given. The desk copy now does this step as it does the rest of the copy
+    (`deskcopy::wallpaper`). When that folder (or `backgrounds/`) is a link, it copies the folder's
+    top-level pictures into the box's own `~/.config/omarchy/backgrounds/THEME`. Where the folder
+    leads goes through refuse_src: the link's own path sits in `~/.config/omarchy`, which refuse_src
+    keeps out apart from plugins/ and themes/. Each picture goes through the name check, under the
+    caps for named images (32 MiB each, 128 MiB and 32 files). A pick elsewhere in HOME is copied at
+    its path there. The box's `current/background` then leads to its copy. Left as seeding has them:
+    the theme's own picture, one under /usr, one outside HOME (said), `--theme`, `--stock`. Omarchy
+    4.5's intro videos (an `intros/` folder beside the pictures) stay out: pictures only, and a box
+    needs no intro. t_desk_wallpaper (a pixel of the desk's colour; it showed nord's own picture
+    before) and deskcopy's `omarchy_wallpaper`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
