@@ -377,10 +377,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             if srcs.len() > 1 {
                 continue;
             }
+            // A desk box whose config started no shell omabox knows (#321 step 4) will have none.
+            if st == "shell"
+                && crate::boxes::slot_shell(&ctx.d)
+                && crate::shellnote::slot_cmd(ctx).is_empty()
+            {
+                return Err(ctx.die(cat!(
+                    "log: box '",
+                    ctx.name,
+                    "' runs no shell, so no shell log: its desktop's config started none omabox knows"
+                )));
+            }
             // A plain box with no shell (#247) will have none.
             if st == "shell"
                 && crate::boxes::meta(&ctx.d, "shell").0 != b"true"
-                && crate::boxes::meta(&ctx.d, "shell_cmd").0.is_empty()
+                && !crate::boxes::slot_shell(&ctx.d)
             {
                 crate::omshell::plain_refuse(
                     ctx,

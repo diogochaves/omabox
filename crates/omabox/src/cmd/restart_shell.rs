@@ -24,6 +24,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let name = name_arg(ctx, "restart-shell", args)?;
     select_box(ctx, &name)?;
     need_box(ctx)?;
+    // A desk box (#321 step 4) has one when its config started one omabox knows (or up guessed it):
+    // its slot runs that again (share/shell.sh reads it from the box). One that started none says so.
+    if crate::boxes::slot_shell(&ctx.d) && crate::shellnote::slot_cmd(ctx).is_empty() {
+        return Err(ctx.die(cat!(
+            "restart-shell: box '",
+            ctx.name,
+            "' runs no shell: its desktop's config started none omabox knows (see ",
+            ctx.d,
+            "/home/autostart.log; up --shell CMD names one)"
+        )));
+    }
     // A plain box (#247) has a shell only when `up --shell CMD` named one: nothing to start again.
     if meta(&ctx.d, "shell").0 != b"true" && meta(&ctx.d, "shell_cmd").0.is_empty() {
         crate::omshell::plain_refuse(

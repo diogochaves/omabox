@@ -1152,8 +1152,24 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     // A plain box's shell (`up --shell CMD`, #247): up once one of its processes (#438: CMD's slot,
     // what a launcher left) has drawn a layer, whatever its namespace; Omarchy's bar, tray, cover and
     // notification waits are not its.
-    let cmd = meta(&ctx.d, "shell_cmd").0;
-    if !cmd.is_empty() {
+    // A desk box's (#321 step 4, finding 703) is the same slot, filled by what its user's config
+    // started (share/desk-shell.lua), which is known once Hyprland is up: the config started none
+    // omabox knows (and up had no guess) fails here at once; nothing said at all (a config that never
+    // ran desk-shell.lua) is a desk with no shell, as a plain box without --shell.
+    if crate::boxes::slot_shell(&ctx.d) {
+        let desk = meta(&ctx.d, "shell_cmd").0.is_empty();
+        if desk && run_read(&ctx.d, crate::shellnote::DESK_SHELL_CMD).is_none() {
+            use crate::shellnote::{DeskSlot, desk_slot};
+            if desk_slot(ctx) == DeskSlot::None {
+                return Err(ctx.die(cat!(
+                    "your desktop's config started no shell omabox knows (see ",
+                    ctx.d,
+                    "/home/autostart.log): up --shell CMD names one, --no-shell runs none"
+                )));
+            }
+            return Ok(());
+        }
+        let cmd = crate::shellnote::slot_cmd(ctx);
         loop {
             let l = layers(ctx, ErrTo::Null);
             let pids = pids_json(crate::shellnote::shell_pids_with(&RealBox, ctx));
@@ -1540,9 +1556,9 @@ fn pids_json(pids: Option<Vec<Vec<u8>>>) -> Vec<u8> {
 /// shell_adopt (finding 248): this start's shell exited at once as a duplicate of one that something
 /// else started after shell.sh stopped the old one, and that one is up: its pid goes where shell.sh
 /// keeps the shell's, written in the box, and is returned. Not a plain box's shell (#247): its
-/// command is its own, not Omarchy's config.
+/// command is its own, not Omarchy's config; nor a desk box's (#321), its config's.
 fn shell_adopt_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
-    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+    if crate::boxes::slot_shell(&ctx.d) {
         return None;
     }
     let t = std::fs::read(box_home_file(&ctx.d, "shell.log")?).ok()?;

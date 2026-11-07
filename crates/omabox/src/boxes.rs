@@ -58,6 +58,15 @@ pub fn plain_like(d: &[u8]) -> bool {
     Desktop::of_box(&meta(d, "desktop").0).plain_like(DeskBase::of_box(&meta(d, "desk_base").0))
 }
 
+/// The box at D runs its shell in share/shell.sh's slot (#438): a plain box's `up --shell CMD`
+/// (box.json shell_cmd, #247), or a desk box with a shell (#321 step 4, finding 703), whose slot runs
+/// what its user's config starts (shellnote::slot_cmd). Omarchy's shell has no slot.
+pub fn slot_shell(d: &[u8]) -> bool {
+    !meta(d, "shell_cmd").0.is_empty()
+        || (crate::upspec::Desktop::of_box(&meta(d, "desktop").0) == crate::upspec::Desktop::Desk
+            && meta(d, "shell").0 == b"true")
+}
+
 /// box_pid's answer.
 pub enum BoxPid {
     None,

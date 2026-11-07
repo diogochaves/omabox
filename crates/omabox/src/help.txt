@@ -275,7 +275,12 @@ shell.toml [bar]"). Plugins are placed as without it. --stock: the rest of a new
   that HOME, never at it or above it, over omabox's own files in it, nor through a link in it.
   Refused with --desk-shell (not yet), --clean (the path carries your login name) and inside ai-jail
   (not yet); `omabox config desktop` does not take desk yet. Its base is your desk's: an Omarchy one
-  (Omarchy here and your hypr/hyprland.lua loading it) is refused for now; plain otherwise.
+  (Omarchy here and your hypr/hyprland.lua loading it) is refused for now; plain otherwise. Its
+  shell is the one your config starts (DMS, Noctalia, Caelestia, Waybar, a Quickshell config), run
+  in the box's shell slot as --shell's: up waits for it and says which, and ls, pid shell, log shell
+  and restart-shell work on it; a second shell your config starts is dropped. --shell CMD runs
+  another in its place, --no-shell none; a config that starts none omabox knows fails up, saying so.
+  `check run --desktop desk` is refused (a check needs the same box every run).
 --shell CMD (#247, plain only): the box's shell is CMD (`dms run`, `qs -p DIR`, `caelestia shell
   -d`), run by sh in the session; the shell is all CMD starts (#438): a launcher may start it and
   exit, and the shell is gone once nothing of it is left. up waits until one of its processes draws

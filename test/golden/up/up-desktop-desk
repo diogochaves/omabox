@@ -207,7 +207,7 @@ OMABOX_POLKIT
 0
 --setenv
 OMABOX_SHELL
-0
+1
 --setenv
 OMABOX_DESKTOP
 desk

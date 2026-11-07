@@ -2303,6 +2303,14 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             // not go together.
             b"--desktop" | b"--shell" => {
                 optarg(ctx, x, v)?;
+                // (#321: a desk box runs the user's own desktop, its shell and config as they are
+                // that day; a check compares against a base, and needs a box that is the same each
+                // run. Not until the desk has a clean form of its own.)
+                if x == b"--desktop" && args[i + 1] == b"desk" {
+                    return Err(ctx.die(
+                        "check run: --desktop desk is not for a check: a desk box runs your own desktop as it is today, and a check needs one that is the same every run (--desktop plain or omarchy)",
+                    ));
+                }
                 upopts.push(x.clone());
                 upopts.push(args[i + 1].clone());
                 i += 1;

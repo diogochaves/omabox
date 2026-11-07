@@ -1145,7 +1145,16 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   it. Refused with `--desk-shell` (not yet), `--clean` (the path carries your login name) and inside
   ai-jail (not yet); `omabox config desktop` does not take `desk` yet. Its base is your desk's
   (box.json's `desk_base`): where Omarchy is installed and your `hypr/hyprland.lua` loads it, the
-  base is Omarchy's and `up` refuses it for now; otherwise plain.
+  base is Omarchy's and `up` refuses it for now; otherwise plain. Its shell is the one your Hyprland
+  config starts (`dms run`, `qs -c noctalia-shell`, `caelestia shell -d`, `waybar`, `qs -c NAME`,
+  `qs -p DIR`; `env`, `setsid`, `uwsm app --`, `sh -c` around it are seen through), run in the same
+  slot as `--shell CMD`'s: `up` waits for its layer and says `its shell: CMD (PROFILE, from your
+  config)`, and `ls` (`shell: CMD (from your config)`), `pid shell`, `log shell`, `restart-shell`
+  and the crash notes work on it. A second shell the config starts is dropped (one bar). When the
+  config starts none but `up` found one (its systemd unit, say), the slot starts that (`guessed`).
+  None at all: `up` fails at once, saying so; `--shell CMD` names one, `--no-shell` runs none.
+  `--shell CMD` on a desk box runs CMD instead of the config's. `check run --desktop desk` is
+  refused.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is
