@@ -1143,7 +1143,9 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   there, not yours (`run` says so). A mount (`--ro-bind`, `--overlay`) goes inside that HOME, never at
   it or above it, over omabox's own files in it (`.config/omabox`, its logs), nor through a link in
   it. Refused with `--desk-shell` (not yet), `--clean` (the path carries your login name) and inside
-  ai-jail (not yet); `omabox config desktop` does not take `desk` yet.
+  ai-jail (not yet); `omabox config desktop` does not take `desk` yet. Its base is your desk's
+  (box.json's `desk_base`): where Omarchy is installed and your `hypr/hyprland.lua` loads it, the
+  base is Omarchy's and `up` refuses it for now; otherwise plain.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is

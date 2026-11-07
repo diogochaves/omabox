@@ -49,8 +49,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let src_text = crate::shell::bytes(&src).to_vec();
     let n = ctx.name.clone();
     // A plain box's desktop (#247) first, so the two copies are of one omabox: share/plain.lua.
-    let plain =
-        crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0).plain_like();
+    let plain = crate::boxes::plain_like(&ctx.d);
     let wrote = (!plain || write_copy(ctx, "plain.lua", "omabox-plain.lua")?)
         && write_copy(ctx, "hyprland.lua", "omabox-hyprland.lua")?;
     if !wrote {

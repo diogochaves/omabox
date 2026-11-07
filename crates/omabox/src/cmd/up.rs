@@ -143,6 +143,8 @@ pub struct Up {
     /// The box's HOME inside it (#321): a desk box's at the user's HOME path (upspec::desk_home),
     /// set in checks; empty for /home/sbx (box_home).
     pub home: Vec<u8>,
+    /// A desk box's base (#321, finding 708): upspec::desk_base, set in checks.
+    pub desk_base: upspec::DeskBase,
     /// Each --seed as given, read with seed_spec once the box's HOME is known (the end of parse).
     pub seed_args: Vec<Vec<u8>>,
     /// `--shell CMD` (#247): a plain box's shell is CMD, run by share/shell.sh's slot.
@@ -181,6 +183,11 @@ impl Up {
 
     pub fn clean_has(&self, k: &str) -> bool {
         upspec::clean_has(&self.clean_keep, k)
+    }
+
+    /// Plain, or desk on a plain base (#247, #321): Desktop::plain_like with this box's desk_base.
+    pub fn plain_like(&self) -> bool {
+        self.desktop.plain_like(self.desk_base)
     }
 
     /// The box's HOME inside it (#321): /home/sbx, or a desk box's at the user's HOME path.
@@ -646,6 +653,20 @@ fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
     None
 }
 
+/// The user's Hyprland config, as their Hyprland reads it ($XDG_CONFIG_HOME, when absolute, else
+/// ~/.config; hypr/hyprland.lua): its path, and its text (None when it cannot be read).
+fn user_hypr_lua() -> (Vec<u8>, Option<Vec<u8>>) {
+    let x = shell::env_or_empty("XDG_CONFIG_HOME");
+    let dir = if x.starts_with(b"/") {
+        x
+    } else {
+        cat!(shell::env_or_empty("HOME"), "/.config")
+    };
+    let f = cat!(dir, "/hypr/hyprland.lua");
+    let text = std::fs::read(shell::path(&f)).ok();
+    (f, text)
+}
+
 fn desk_refusals(ctx: &Ctx, u: &Up, jailed: bool) -> Res<()> {
     match desk_refusal(u, jailed) {
         Some((why, true)) => Err(ctx.usage_die(why)),
@@ -682,7 +703,7 @@ fn from_home_note(save: &[u8], fd: &[u8], home: &[u8]) -> Option<Vec<u8>> {
 /// a --shell on a plain box.
 fn plain_shell(ctx: &Ctx, u: &mut Up) -> Res<()> {
     if !u.shell_cmd.is_empty() {
-        if !u.desktop.plain_like() {
+        if !u.plain_like() {
             return Err(ctx.usage_die(
                 "up: --shell needs --desktop plain: an Omarchy box runs Omarchy's shell",
             ));
@@ -691,7 +712,7 @@ fn plain_shell(ctx: &Ctx, u: &mut Up) -> Res<()> {
             return Err(ctx.usage_die("up: --shell runs a shell, and --no-shell starts none"));
         }
     }
-    if !u.desktop.plain_like() {
+    if !u.plain_like() {
         return Ok(());
     }
     plain_refusals(ctx, u)?;
@@ -721,10 +742,23 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // --desktop desk (#321): a plain box whose HOME, still a fake one of its own, sits at the user's
     // HOME path. Not for a jailed caller yet (S9: the jail's hidden paths are not hidden in it), nor
     // with --desk-shell (the desk's shell comes later) or --clean (a HOME path carries the login).
+    // Its base (finding 708), fixed here and kept in box.json: Omarchy's where your desk is
+    // Omarchy's (the machine has it and your Hyprland config loads it), else plain. Step 1 has the
+    // plain base only: an Omarchy base needs Omarchy's session in the box (step 3), and half of one
+    // (plain's desktop with Omarchy's tree in view) is neither, so it is refused until then.
     if u.desktop == Desktop::Desk {
         desk_refusals(ctx, u, jailed)?;
         u.home = upspec::desk_home(&shell::env_or_empty("HOME"))
             .map_err(|why| ctx.die(cat!("up: --desktop desk: ", why)))?;
+        let (conf, text) = user_hypr_lua();
+        u.desk_base = upspec::desk_base(here, text.as_deref());
+        if u.desk_base == upspec::DeskBase::Omarchy {
+            return Err(ctx.die(cat!(
+                "up: --desktop desk is not ready for an Omarchy desk yet: your Hyprland config (",
+                conf,
+                ") loads Omarchy's, and a desk box runs a plain box's desktop for now (#321). It works where that config does not load Omarchy; --desktop plain meanwhile"
+            )));
+        }
     }
     if u.desktop == Desktop::Omarchy && !here && u.omarchy.is_empty() {
         return Err(ctx.die(cat!(
@@ -747,10 +781,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // A plain box's --clean (#247) is the generic part: no stock bar or theme (Omarchy's), its own
     // sentinel (plain.lua's background colour), the locale, pointer, network, animations, fonts and
     // identity as on any clean box.
-    if u.clean && !u.desktop.plain_like() {
+    if u.clean && !u.plain_like() {
         u.stock = true;
     }
-    if u.clean && u.desktop.plain_like() && !u.clean_has("locale") {
+    if u.clean && u.plain_like() && !u.clean_has("locale") {
         u.clean_lang = upspec::clean_locale().as_bytes().to_vec();
         u.clean_zone = upspec::CLEAN_TZ.as_bytes().to_vec();
     }
@@ -1951,7 +1985,7 @@ pub fn up_already(ctx: &mut Ctx, u: &Up) -> Res<()> {
             " (its shell is ",
             or(
                 m("shell_cmd"),
-                if desktop.plain_like() {
+                if crate::boxes::plain_like(&ctx.d) {
                     "none"
                 } else {
                     "Omarchy's"

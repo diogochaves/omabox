@@ -51,6 +51,13 @@ pub fn box_home(d: &[u8]) -> Vec<u8> {
     }
 }
 
+/// The box at D is plain-like (#247, #321): a plain box, or a desk box on a plain base (box.json's
+/// desktop and desk_base; Desktop::plain_like).
+pub fn plain_like(d: &[u8]) -> bool {
+    use crate::upspec::{DeskBase, Desktop};
+    Desktop::of_box(&meta(d, "desktop").0).plain_like(DeskBase::of_box(&meta(d, "desk_base").0))
+}
+
 /// box_pid's answer.
 pub enum BoxPid {
     None,

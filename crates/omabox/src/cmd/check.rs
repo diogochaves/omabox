@@ -613,7 +613,7 @@ fn check_holes_off_in(ctx: &Ctx, bg: &dyn Fn() -> Option<i64>) -> Vec<u8> {
     }
     // A plain box's sentinel is its Hyprland's background colour (#247: plain.lua, from
     // omabox.clean), read live: a `hl.config` in the box may have changed it.
-    if crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0).plain_like() {
+    if crate::boxes::plain_like(&ctx.d) {
         return match bg() {
             Some(CLEAN_BACKGROUND_INT) => Vec::new(),
             Some(_) => {

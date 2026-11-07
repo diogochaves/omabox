@@ -509,9 +509,7 @@ fn entries(ctx: &mut Ctx) -> Res<Vec<String>> {
             return Err(ctx.die(cat!("tray: box '", ctx.name, "''s bus did not answer: ", e)));
         }
         // (a plain box, #247: Omarchy's bar is not there to have one; its --shell may)
-        let why = if crate::upspec::Desktop::of_box(&crate::boxes::meta(&ctx.d, "desktop").0)
-            .plain_like()
-        {
+        let why = if crate::boxes::plain_like(&ctx.d) {
             if crate::boxes::meta(&ctx.d, "shell_cmd").0.is_empty() {
                 "a plain box has no shell to have one: up --shell CMD runs one".to_string()
             } else {

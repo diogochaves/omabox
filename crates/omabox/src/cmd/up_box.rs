@@ -563,7 +563,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
                 &u.net,
                 &u.clean_lang,
                 &u.clean_zone,
-                u.desktop.plain_like()
+                u.plain_like()
             )
         ));
     } else if u.stock {
@@ -743,7 +743,7 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
         clean: u.clean,
         clean_keep: u.clean_keep.clone(),
         omarchy: u.omarchy.clone(),
-        plain: u.desktop.plain_like(),
+        plain: u.plain_like(),
         home: u.box_home().to_vec(),
     }
 }
@@ -877,6 +877,10 @@ fn box_json(
     // The box's HOME inside it (#321), read back by boxes::box_home: /home/sbx, or a desk box's at
     // the user's HOME path.
     o.insert("home".into(), s(u.box_home()));
+    // A desk box's base (#321, finding 708), fixed at up: boxes::plain_like reads it back.
+    if u.desktop == Desktop::Desk {
+        o.insert("desk_base".into(), s(u.desk_base.name().as_bytes()));
+    }
     // `up --shell CMD` (#247): the plain box's shell, for restart-shell, ls and up_already.
     if !u.shell_cmd.is_empty() {
         o.insert("shell_cmd".into(), s(&u.shell_cmd));
@@ -1189,7 +1193,7 @@ fn clean_lines(u: &Up) -> Vec<u8> {
     if u.clean && !u.clean_has("animations") {
         l.push(b"animations off".to_vec());
     }
-    if u.clean && u.desktop.plain_like() && !u.clean_has("wallpaper") {
+    if u.clean && u.plain_like() && !u.clean_has("wallpaper") {
         l.push(cat!("background ", crate::upspec::CLEAN_BACKGROUND));
     }
     l.join(&b'\n')
@@ -1316,7 +1320,7 @@ fn bwrap_args(
     // --desktop plain (#247): the box sees no Omarchy tree, as on a machine without Omarchy, so
     // nothing of it loads by accident (a require, a stand-in, a file seeded pointing there). An empty
     // tmpfs, never a bind: nothing of the host's goes in.
-    if u.desktop.plain_like() && std::path::Path::new(PLAIN_HIDDEN).is_dir() {
+    if u.plain_like() && std::path::Path::new(PLAIN_HIDDEN).is_dir() {
         b.words(&[b"--tmpfs", PLAIN_HIDDEN.as_bytes()]);
     }
     // /bin, /sbin, /lib, /lib64 as the host's links into /usr (#247: Debian's /lib64 is usr/lib64).
@@ -1528,6 +1532,10 @@ fn bwrap_args(
         (b"OMABOX_BOX", ctx.name.clone()),
     ] {
         b.setenv(k, &v);
+    }
+    // (a desk box's base, #321, finding 708: what the box's own scripts take a desk box for)
+    if u.desktop == Desktop::Desk {
+        b.setenv(b"OMABOX_DESK_BASE", u.desk_base.name().as_bytes());
     }
     for (k, v) in &hypr_env {
         b.setenv(k, v);

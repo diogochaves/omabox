@@ -13,7 +13,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   of its files are in the box, and nothing is mounted at it or above it but the box's own folder.
   For now a desk box boots as a plain one (`--desktop plain`); bringing your own Hyprland config and
   shell in comes next. `--clean`, `--desk-shell`, `config desktop desk` and a jailed agent's desk box
-  are refused until then.
+  are refused until then, and so is a desk box where your desk is Omarchy's (your Hyprland config
+  loads Omarchy): a desk box takes its base from your desk, kept as box.json's `desk_base`.
 
 ## Unreleased
 

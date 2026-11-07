@@ -13690,6 +13690,22 @@ from them.
     t_desk_dms): the box's HOME is its own folder (device and inode), none of the HOME's entries is
     the host's, and launch.sh mounts nothing from at or above the HOME and only the box's own folder
     at it.
+708. **A desk box's base: what the user's desk is, not what the machine has** (2026-11-07, #321).
+    A desk box mirrors the user's own desktop, so whether it is an Omarchy one is a question about
+    that desk: Omarchy installed (`install::omarchy_at`, as `--desktop`'s default asks) AND the
+    user's Hyprland config (`$XDG_CONFIG_HOME`, else `~/.config`, `hypr/hyprland.lua`) loading
+    Omarchy's `default/hypr/bootstrap.lua` on a line before any `--` (`upspec::loads_omarchy`; stock
+    Omarchy's `dofile(... .. "/default/hypr/bootstrap.lua")`). An Omarchy machine whose user wrote
+    a config of their own has a plain desk. `up` fixes it once (`upspec::desk_base`), box.json keeps
+    it as `desk_base` (a desk box without the key is plain, as step 1's were) and the box gets
+    `OMABOX_DESK_BASE`. `Desktop::plain_like` takes it: a desk box is plain-like only on a plain
+    base, and every reader of a running box goes through `boxes::plain_like` (box.json's desktop
+    and desk_base). Step 1 runs the plain base only: an Omarchy base needs Omarchy's session in the
+    box (step 3), and half of one (plain.lua with Omarchy's tree in view and no shell) would accept
+    `--plugin` or `--theme` with nothing to run them, so `up --desktop desk` refuses it, naming the
+    config, until step 3. On this machine: the real HOME's config loads bootstrap (Omarchy base,
+    refused); a stand-in `XDG_CONFIG_HOME` without one gives a plain base at the real HOME's path
+    (t_desk_home runs that way here).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

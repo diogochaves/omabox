@@ -46,6 +46,59 @@ pub enum Desktop {
     Desk,
 }
 
+/// A desk box's base (#321, finding 708), fixed at up: Omarchy's where the machine has Omarchy and
+/// the user's Hyprland config loads it (desk_base), else plain. A desk box mirrors the user's desk,
+/// so its base is what that desk is, not what the machine has installed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeskBase {
+    Omarchy,
+    #[default]
+    Plain,
+}
+
+impl DeskBase {
+    /// Its name, as box.json's desk_base and OMABOX_DESK_BASE have it.
+    pub fn name(self) -> &'static str {
+        match self {
+            DeskBase::Omarchy => "omarchy",
+            DeskBase::Plain => "plain",
+        }
+    }
+
+    /// A box.json's `desk_base`: a desk box from before it has none, and was plain.
+    pub fn of_box(v: &[u8]) -> DeskBase {
+        if v == b"omarchy" {
+            DeskBase::Omarchy
+        } else {
+            DeskBase::Plain
+        }
+    }
+}
+
+/// desk_base OMARCHY_HERE HYPR_LUA (#321, finding 708): Omarchy's when the machine has Omarchy
+/// (install::omarchy_at) and HYPR_LUA, the text of the user's Hyprland config (None: there is none),
+/// loads Omarchy's bootstrap (loads_omarchy); else plain.
+pub fn desk_base(omarchy_here: bool, hypr_lua: Option<&[u8]>) -> DeskBase {
+    if omarchy_here && hypr_lua.is_some_and(loads_omarchy) {
+        DeskBase::Omarchy
+    } else {
+        DeskBase::Plain
+    }
+}
+
+/// A Hyprland Lua config loads Omarchy's: a line names default/hypr/bootstrap.lua before any `--`
+/// (Omarchy's own `dofile(... .. "/default/hypr/bootstrap.lua")`; a commented-out one does not).
+pub fn loads_omarchy(text: &[u8]) -> bool {
+    const BOOT: &[u8] = b"default/hypr/bootstrap.lua";
+    text.split(|&c| c == b'\n').any(|line| {
+        let code = line
+            .windows(2)
+            .position(|w| w == b"--")
+            .map_or(line, |i| &line[..i]);
+        code.windows(BOOT.len()).any(|w| w == BOOT)
+    })
+}
+
 /// What `up --desktop` takes, as help says it.
 pub const DESKTOPS: &str = "omarchy, plain or desk";
 
@@ -69,10 +122,14 @@ impl Desktop {
         }
     }
 
-    /// Plain or desk (#321): nothing of Omarchy's, its tree hidden, a plain HOME. A desk box is a
-    /// plain one whose HOME is at the user's HOME path.
-    pub fn plain_like(self) -> bool {
-        matches!(self, Desktop::Plain | Desktop::Desk)
+    /// Plain, or a desk box on a plain base (#321, finding 708): nothing of Omarchy's, its tree
+    /// hidden, a plain HOME. BASE is the desk box's (desk_base); the others ignore it.
+    pub fn plain_like(self, base: DeskBase) -> bool {
+        match self {
+            Desktop::Omarchy => false,
+            Desktop::Plain => true,
+            Desktop::Desk => base == DeskBase::Plain,
+        }
     }
 
     /// A box.json's `desktop`: a box from before #247 has none, and is Omarchy's.
@@ -1043,9 +1100,12 @@ mod tests {
         for bad in [&b""[..], b"Plain", b"Desk", b"plain ", b"omarchy,plain"] {
             assert_eq!(Desktop::parse(bad), None, "{bad:?}");
         }
-        assert!(!Desktop::Omarchy.plain_like());
-        assert!(Desktop::Plain.plain_like());
-        assert!(Desktop::Desk.plain_like());
+        for base in [DeskBase::Omarchy, DeskBase::Plain] {
+            assert!(!Desktop::Omarchy.plain_like(base));
+            assert!(Desktop::Plain.plain_like(base));
+        }
+        assert!(Desktop::Desk.plain_like(DeskBase::Plain));
+        assert!(!Desktop::Desk.plain_like(DeskBase::Omarchy));
         for d in [Desktop::Omarchy, Desktop::Plain, Desktop::Desk] {
             assert_eq!(Desktop::parse(d.name().as_bytes()), Some(d));
             assert_eq!(Desktop::of_box(d.name().as_bytes()), d);
@@ -1156,6 +1216,34 @@ mod tests {
             desk_home("/home/jo\u{e3}o".as_bytes()),
             Ok("/home/jo\u{e3}o".as_bytes().to_vec())
         );
+    }
+
+    // desk_base (#321, finding 708): Omarchy's only where the machine has it and the user's
+    // Hyprland config loads it.
+    #[test]
+    fn desk_base_by_machine_and_config() {
+        let stock = b"-- Learn how to configure Hyprland\n\
+            dofile((os.getenv(\"OMARCHY_PATH\") or \"/usr/share/omarchy\") .. \"/default/hypr/bootstrap.lua\")\n\
+            require(\"default.hypr.omarchy\")\n";
+        let commented = b"-- dofile(\"/usr/share/omarchy/default/hypr/bootstrap.lua\")\n\
+            hl.config({ general = { gaps_out = 4 } })\n";
+        let trailing = b"hl.config({}) -- not default/hypr/bootstrap.lua\n";
+        let own = b"dofile(\"/opt/my-omarchy/default/hypr/bootstrap.lua\")";
+        assert!(loads_omarchy(stock));
+        assert!(loads_omarchy(own));
+        assert!(!loads_omarchy(commented));
+        assert!(!loads_omarchy(trailing));
+        assert!(!loads_omarchy(b""));
+        assert_eq!(desk_base(true, Some(stock)), DeskBase::Omarchy);
+        assert_eq!(desk_base(false, Some(stock)), DeskBase::Plain);
+        assert_eq!(desk_base(true, Some(commented)), DeskBase::Plain);
+        assert_eq!(desk_base(true, None), DeskBase::Plain);
+        assert_eq!(desk_base(false, None), DeskBase::Plain);
+        for b in [DeskBase::Omarchy, DeskBase::Plain] {
+            assert_eq!(DeskBase::of_box(b.name().as_bytes()), b);
+        }
+        // (a desk box from before desk_base: plain, as step 1's were)
+        assert_eq!(DeskBase::of_box(b""), DeskBase::Plain);
     }
 
     #[test]

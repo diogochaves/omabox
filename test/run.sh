@@ -12108,11 +12108,25 @@ t_desk_home() {
   [[ $top == "$HOME"/* ]] || top=""
   first=${top#"$HOME"/}; first=${first%%/*}
   [ -z "$top" ] || [ "$HOME/$first" != "$top" ] || DESK_ALLOW=$first
-  out=$(cd "$ROOT" && "$CLI" up "$B" --desktop desk --net isolated 2>&1) ||
+  # Your desk's base (finding 708): an Omarchy one (Omarchy here and your Hyprland config loading
+  # it) is refused until step 3. The rest runs on a plain base at your HOME's real path: Hyprland's
+  # config read from a stand-in XDG_CONFIG_HOME of the test's, with none.
+  local cf=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua xc=$TMP/$P-dhome-conf
+  [[ $cf == /* ]] || cf=$HOME/.config/hypr/hyprland.lua
+  mkdir -p "$xc"
+  if omarchy_here && sed 's/--.*//' "$cf" 2>/dev/null | grep -q 'default/hypr/bootstrap\.lua'; then
+    check_match "up --desktop desk on your Omarchy desk: refused until step 3" \
+      "^omabox: up: --desktop desk is not ready for an Omarchy desk yet: your Hyprland config \($(re_q "$cf")\) loads Omarchy's" \
+      "$(cd "$ROOT" && "$CLI" up "$B" --desktop desk --net isolated 2>&1)"
+    check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+  else skip "up --desktop desk on an Omarchy desk: refused" "your desk is not Omarchy's ($cf)"; fi
+  out=$(cd "$ROOT" && XDG_CONFIG_HOME=$xc "$CLI" up "$B" --desktop desk --net isolated 2>&1) ||
     { no "up --desktop desk" "$out"; ob down "$B" >/dev/null 2>&1; return; }
-  ok "up --desktop desk"
+  ok "up --desktop desk (on a plain base)"
   D=$(ob path -b "$B")
-  check_eq "box.json: desktop desk, its home your HOME's path" "desk $HOME" "$(jq -r '"\(.desktop) \(.home)"' "$D/box.json")"
+  check_eq "box.json: desktop desk, its home your HOME's path, a plain base" "desk $HOME plain" \
+    "$(jq -r '"\(.desktop) \(.home) \(.desk_base)"' "$D/box.json")"
+  check_eq "...OMABOX_DESK_BASE in the box: plain" plain "$(ob run -b "$B" -- printenv OMABOX_DESK_BASE 2>&1)"
   # The guard first: nothing below writes in the box HOME until it is known to be the box's own.
   desk_guard "$B" "$D" "$HOME" "$c" || { ob down "$B" >/dev/null 2>&1; return; }
   check_eq "HOME, cd ~ and XDG_CONFIG_HOME's parent in the box: your HOME's path" "$HOME|$HOME|$HOME" \
@@ -15238,8 +15252,11 @@ open(p, "w").write(re.sub(r"\"name\": \"WAYLAND-(\d+)\"", lambda m: "\"name\": \
   # #321 (finding 700): a desk box, its HOME at the caller's HOME path (the test's own, $h): box.json's
   # desktop and home; its golden (test/golden/up-desk/) has the box HOME's folder bound there and HOME
   # and the XDG dirs under it.
-  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "desktop": "desk",$' "state~^  \"home\": \"$(re_q "$h")\",\$")
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "desktop": "desk",$' "state~^  \"home\": \"$(re_q "$h")\",\$" 'state~^  "desk_base": "plain",$')
+  # (its own XDG_CONFIG_HOME: no Hyprland config loading Omarchy there, a plain base, finding 708)
+  cx_env=("HOME=$h" "XDG_CONFIG_HOME=$h/.config")
   cx_case "up --desktop desk" up "$U" --net isolated --desktop desk
+  cx_env=("HOME=$h")
   # A save whose HOME has a link where --clean writes its wallpaper (finding 461): the PNG is written
   # in the box HOME, never through the link onto the host file it leads to.
   mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
