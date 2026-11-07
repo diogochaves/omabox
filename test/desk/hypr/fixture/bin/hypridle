@@ -1,0 +1,3 @@
+#!/bin/sh
+# A stub of the desk fixture's (#321): says it ran, with its arguments, and does nothing else.
+echo "${0##*/}${1:+ $*}" >> "$HOME/fixture-ran"

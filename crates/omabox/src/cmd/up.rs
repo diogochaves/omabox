@@ -632,7 +632,7 @@ fn plain_refusals(ctx: &Ctx, u: &Up) -> Res<()> {
     Ok(())
 }
 
-/// What a desk box (#321, step 1) cannot have yet: a jailed caller's (S9), --desk-shell, --clean.
+/// What a desk box (#321) cannot have: a jailed caller's (S9) yet, --desk-shell (part of it), --clean.
 /// The refusal, and whether it is a usage one (2), or None.
 fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
     if jailed {
@@ -643,7 +643,7 @@ fn desk_refusal(u: &Up, jailed: bool) -> Option<(&'static str, bool)> {
     }
     if u.desk_shell {
         return Some((
-            "up: --desk-shell is not for a desk box yet: --desktop desk runs a plain box's desktop at your HOME's path",
+            "up: --desk-shell is part of --desktop desk: on Omarchy's base it copies your shell's plugins and shell.json itself",
             true,
         ));
     }
@@ -746,22 +746,24 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // HOME path. Not for a jailed caller yet (S9: the jail's hidden paths are not hidden in it), nor
     // with --desk-shell (the desk's shell comes later) or --clean (a HOME path carries the login).
     // Its base (finding 708), fixed here and kept in box.json: Omarchy's where your desk is
-    // Omarchy's (the machine has it and your Hyprland config loads it), else plain. Step 1 has the
-    // plain base only: an Omarchy base needs Omarchy's session in the box (step 3), and half of one
-    // (plain's desktop with Omarchy's tree in view) is neither, so it is refused until then.
+    // Omarchy's (the machine has it and your Hyprland config loads it), else plain. On Omarchy's
+    // base (finding 702) the box is an Omarchy box running your config (share/desk.lua), its shell
+    // Omarchy's with your desk's plugins and shell.json: --desk-shell's copy (#206), implied when
+    // your Omarchy config folder is there.
     if u.desktop == Desktop::Desk {
         desk_refusals(ctx, u, jailed)?;
         u.home = upspec::desk_home(&shell::env_or_empty("HOME"))
             .map_err(|why| ctx.die(cat!("up: --desktop desk: ", why)))?;
-        let (conf, text) = user_hypr_lua();
+        let (_, text) = user_hypr_lua();
         u.desk_base = upspec::desk_base(here, text.as_deref());
         if u.desk_base == upspec::DeskBase::Omarchy {
-            return Err(ctx.die(cat!(
-                "up: --desktop desk is not ready for an Omarchy desk yet: your Hyprland config (",
-                conf,
-                ") loads Omarchy's, and a desk box runs a plain box's desktop for now (#321). It works where that config does not load Omarchy; --desktop plain meanwhile"
-            )));
+            let d = shell::env("OMABOX_DESK_CONFIG")
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.config/omarchy"));
+            u.desk_shell = shell::path(&d).is_dir();
         }
+    } else if u.desk_shell {
+        say("note: --desk-shell is now part of --desktop desk (your Omarchy, mods and all)");
     }
     if u.desktop == Desktop::Omarchy && !here && u.omarchy.is_empty() {
         return Err(ctx.die(cat!(
@@ -1276,7 +1278,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // A box starts from the user's Omarchy look, which Omarchy makes at their first login (finding
     // 130). Said before anything is made. With --theme the box starts on that one instead.
     let home = shell::env_or_empty("HOME");
-    if u.desktop == Desktop::Omarchy
+    if !u.plain_like()
         && u.theme.is_empty()
         && !shell::path(&cat!(home, "/.local/state/omarchy/current/theme")).is_dir()
     {
