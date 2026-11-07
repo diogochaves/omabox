@@ -16955,8 +16955,11 @@ record_input_on() {
   ob down "$B" >/dev/null 2>&1
 }
 # A stuck ffmpeg (finding 356: ffmpeg 9.0.1 deadlocks now and then), in record_input_on's box B: the
-# stop's encode stopped (SIGSTOP, by a watcher in the box) once, then twice; its bound lowered to 3 s
+# stop's encode stopped (SIGSTOP, by a watcher in the box) once, then twice; its bound lowered
 # (OMABOX_RECORD_FF_SECS). Once: killed and run again, a video. Twice: said, raw.mkv kept, none left.
+# Once, the bound is 10 s: the second encode is a real one (this 2560x1440 take, 4.5 to 5.2 s of CPU),
+# which a full suite's load kept past 3 s (#445, finding 691); twice, both stopped, 3 s. A failure keeps
+# the stop's output and the raw stream it read.
 # The watcher, in the box: the first N ffmpeg processes it sees stopped.
 RS_STOPPER='seen=" "; n=0
 while [ "$n" -lt "$1" ]; do
@@ -16967,18 +16970,22 @@ while [ "$n" -lt "$1" ]; do
   sleep 0.02
 done'
 record_stuck_on() {
-  local v=$TMP/$B-stuck.mp4 out rc k t0
+  local v=$TMP/$B-stuck.mp4 out rc k t0 s np f0 r=/home/sbx/.cache/omabox-record
   for k in 1 2; do
+    # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
+    f0=$fail
+    s=$((k == 1 ? 10 : 3))
     ob record -b "$B" start -o "$v" >/dev/null 2>&1 || { no "record start (a stuck ffmpeg)" "failed"; return; }
     ob run -b "$B" -d -- timeout 60 sh -c "$RS_STOPPER" t356 "$k" >/dev/null 2>&1
     sleep 1.5
     t0=$SECONDS; rc=0
-    out=$(env OMABOX_RECORD_FF_SECS=3 "$CLI" record -b "$B" stop 2>&1) || rc=$?
+    out=$(env OMABOX_RECORD_FF_SECS="$s" "$CLI" record -b "$B" stop 2>&1) || rc=$?
     if [ "$k" = 1 ]; then
       check_match "record stop, its ffmpeg stuck once: killed in its bound, run once more, said" \
-        "ffmpeg did not finish in 3 s \(stuck: finding 356\): killed, run once more" "$out"
+        "ffmpeg did not finish in $s s \(stuck: finding 356\): killed, run once more" "$out"
       check_eq "...and the video made" "0 $v" "$rc $(tail -n 1 <<<"$out")"
-      check "...a video" test "$(ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$v" 2>/dev/null)" -gt 10
+      np=$(ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$v" 2>/dev/null) || np=""
+      check "...a video (${np:-no} frames)" test "${np:-0}" -gt 10
     else
       check_match "record stop, stuck twice: said, and what is kept" \
         "ffmpeg did not finish in 3 s again: killed.*record: ffmpeg could not make the video \(/home/sbx/.cache/omabox-record/raw.mkv in box '$B' is kept\)" "$(paste -sd ' ' <<<"$out")"
@@ -16988,6 +16995,13 @@ record_stuck_on() {
     check "...in its two bounds ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 30
     check_fails "...no ffmpeg left in the box" ob run -b "$B" -- pgrep -x ffmpeg
     ob run -b "$B" -- pkill -f t356 >/dev/null 2>&1 || true
+    # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
+    if [ "$fail" != "$f0" ]; then
+      mkdir -p "$EVID/$CUR"
+      printf 'rc %s\n%s\n' "$rc" "$out" > "$EVID/$CUR/stuck-$k-stop.txt"
+      ob run -b "$B" -- cat "$r/raw.mkv" > "$EVID/$CUR/stuck-$k-raw.mkv" 2>/dev/null || true
+      ob run -b "$B" -- cat "$r/wf-recorder.log" > "$EVID/$CUR/stuck-$k-wf-recorder.log" 2>/dev/null || true
+    fi
   done
 }
 # Polkit in a box (#258, finding 627): up --polkit's own system bus and stand-in authority. A polkit
