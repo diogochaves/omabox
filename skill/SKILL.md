@@ -10,7 +10,7 @@ The user's Hyprland session is theirs: no GUI apps, `hyprctl dispatch`/`eval`, `
 `wtype`/`ydotool`, workspace switches or cursor moves on it. Do all of that in a **box**: a full
 desktop on a private screen and session bus, invisible to the user (~3-5 s, ~400-700 MB by GPU: use
 one freely). Omarchy's where installed; else plain Hyprland, no bar (`up` says so), or theirs
-(`--desktop desk`): ref: Plain boxes. "ref: SECTION" is a section of `reference.md` beside this page: read it when needed.
+(`--desktop desk`): ref: Plain boxes. "ref: SECTION": a section of `reference.md` beside this page, read when needed.
 
 ## Never
 
@@ -86,8 +86,8 @@ omabox down                               # when done
    sending again.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
 4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
-   `omabox lua 'hl.dispatch(…)'`), not by keys and clicks, unless the gesture is under test. **Stop when
-   it shows the goal.**
+   `window --fullscreen`, `lua 'hl.dispatch(…)'`), not by keys and clicks, unless the gesture
+   is under test. **Stop when it shows the goal.**
 
 No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;
 video `record hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124
@@ -109,5 +109,5 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
   ref: Reviewing an Omarchy change. Launcher: ref: Testing an app as a desktop app.
 - Mounts, HOME, `save`: ref: Mounts, HOME and the session. Ports: ref: Network. Idling: ref: Box
   lifetime. Logs: ref: Hyprland's Lua, logs and events. `host`: ref: The guard, in detail.
-- What runs without a prompt: ref: Commands that run without a prompt. ref: Inside ai-jail. ref:
-  Showing the user. ref: Reporting what a box showed. ref: For subagents in an isolated worktree.
+- ref: Commands that run without a prompt. ref: Inside ai-jail. ref: Showing the user. ref:
+  Reporting what a box showed. ref: For subagents in an isolated worktree.

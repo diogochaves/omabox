@@ -1,8 +1,10 @@
-//! `omabox window [-b NAME] [--window SEL | --active] (--size WxH | --float | --tile) [--json]`
-//! (#362, finding 591): one window of the box floated and sized, or tiled again, by the box's own
-//! Hyprland (on_box: never the host's, S8), as `mode` sizes the whole screen. The size is the
-//! layout's, as `windows` gives it; the window is centred on its monitor's free area, and what it
-//! took is said: an app's smallest or largest size keeps it from another (exit 1).
+//! `omabox window [-b NAME] [--window SEL | --active] (--size WxH | --float | --tile |
+//! --fullscreen [off] | --maximize [off]) [--json]` (#362, finding 591): one window of the box
+//! floated and sized, or tiled again, by the box's own Hyprland (on_box: never the host's, S8), as
+//! `mode` sizes the whole screen. The size is the layout's, as `windows` gives it; the window is
+//! centred on its monitor's free area, and what it took is said: an app's smallest or largest size
+//! keeps it from another (exit 1). --fullscreen and --maximize (#443, finding 705) set a state and
+//! never toggle it: a window already in it is left alone, and `off` leaves only that state.
 
 use crate::args::{optarg, unexpected, unknown_opt};
 use crate::boxes::need_box;
@@ -26,6 +28,41 @@ pub enum Act {
     Float,
     /// Tiled again.
     Tile,
+    /// Fullscreen (Hyprland's mode 2: nothing over it but overlays, no bar), or out of it.
+    Fullscreen(bool),
+    /// Maximized (mode 1: the work area, the bar kept), or out of it.
+    Maximize(bool),
+}
+
+impl Act {
+    /// The fullscreen mode it sets (true) or leaves (false), as `windows --json`'s fullscreenMode
+    /// names it: None for the others.
+    pub fn mode(self) -> Option<(&'static str, bool)> {
+        match self {
+            Act::Fullscreen(on) => Some(("fullscreen", on)),
+            Act::Maximize(on) => Some(("maximized", on)),
+            _ => None,
+        }
+    }
+
+    /// Whether a window in fullscreenMode NOW is as ACT wants it: in the mode it sets, out of the
+    /// mode it leaves. Always for the others (they are checked by their floating).
+    pub fn mode_ok(self, now: &[u8]) -> bool {
+        match self.mode() {
+            Some((m, true)) => now == m.as_bytes(),
+            Some((m, false)) => now != m.as_bytes(),
+            None => true,
+        }
+    }
+}
+
+/// `--fullscreen`'s and `--maximize`'s word: none or `on` sets, `off` leaves; None for another.
+pub fn parse_on(v: Option<&[u8]>) -> Option<bool> {
+    match v {
+        None | Some(b"on") => Some(true),
+        Some(b"off") => Some(false),
+        _ => None,
+    }
 }
 
 /// `--size`'s WxH: whole layout pixels, 1 to 16384 each.
@@ -40,29 +77,46 @@ pub fn parse_size(v: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The Lua the box's Hyprland runs for ACT on the window at ADDR (checked as 0x...): each dispatch
-/// one Hyprland refuses (a fullscreen window's resize) is the chunk's error, in Hyprland's words.
+/// one Hyprland refuses (a fullscreen window's resize) is the chunk's error, in Hyprland's words; a
+/// dispatcher this Hyprland's hl.dsp does not make from those arguments (nil: another version's
+/// hl.dsp) is one too, named.
 pub fn lua(addr: &[u8], act: Act) -> Vec<u8> {
     let head = cat!(
         "local w = 'address:",
         addr,
-        "'\nlocal function d(x)\n  local r = hl.dispatch(x)\n  if type(r) == 'table' and r.ok == false then error(tostring(r.error), 0) end\nend\n"
+        "'\nlocal function d(x, what)\n  if x == nil then error('this Hyprland makes no dispatcher of ' .. what .. ' as omabox calls it (its hl.dsp differs)', 0) end\n  local r = hl.dispatch(x)\n  if type(r) == 'table' and r.ok == false then error(tostring(r.error), 0) end\nend\n"
     );
+    let float = |a: &str| {
+        cat!(
+            "d(hl.dsp.window.float({ action = '",
+            a,
+            "', window = w }), 'hl.dsp.window.float')"
+        )
+    };
     match act {
-        Act::Tile => cat!(
-            head,
-            "d(hl.dsp.window.float({ action = 'disable', window = w }))"
-        ),
-        Act::Float => cat!(
-            head,
-            "d(hl.dsp.window.float({ action = 'enable', window = w }))"
-        ),
+        Act::Tile => cat!(head, float("disable")),
+        Act::Float => cat!(head, float("enable")),
         Act::Size(wd, ht) => cat!(
             head,
-            "d(hl.dsp.window.float({ action = 'enable', window = w }))\nd(hl.dsp.window.resize({ window = w, x = ",
+            float("enable"),
+            "\nd(hl.dsp.window.resize({ window = w, x = ",
             wd.to_string(),
             ", y = ",
             ht.to_string(),
-            " }))\nd(hl.dsp.window.center({ window = w }))"
+            " }), 'hl.dsp.window.resize')\nd(hl.dsp.window.center({ window = w }), 'hl.dsp.window.center')"
+        ),
+        // set or unset, never toggle: 0.56.2 and 0.57.1 take both, and set again changes nothing.
+        Act::Fullscreen(on) | Act::Maximize(on) => cat!(
+            head,
+            "d(hl.dsp.window.fullscreen({ mode = '",
+            if matches!(act, Act::Fullscreen(_)) {
+                "fullscreen"
+            } else {
+                "maximized"
+            },
+            "', action = '",
+            if on { "set" } else { "unset" },
+            "', window = w }), 'hl.dsp.window.fullscreen')"
         ),
     }
 }
@@ -70,6 +124,7 @@ pub fn lua(addr: &[u8], act: Act) -> Vec<u8> {
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut name, mut sels, mut size) = (Vec::new(), Vec::new(), Vec::new());
     let (mut float, mut tile, mut json) = (false, false, false);
+    let (mut full, mut max): (Option<bool>, Option<bool>) = (None, None);
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -93,6 +148,27 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
             b"--float" => float = true,
             b"--tile" => tile = true,
+            b"--fullscreen" | b"--maximize" => {
+                let word = v.filter(|v| !v.starts_with(b"-"));
+                let Some(on) = parse_on(word.map(|w| w.as_slice())) else {
+                    return Err(ctx.usage_die(cat!(
+                        "window: ",
+                        a,
+                        " sets it, ",
+                        a,
+                        " off leaves it (on or off), got ",
+                        word.cloned().unwrap_or_default()
+                    )));
+                };
+                if word.is_some() {
+                    i += 1;
+                }
+                if a == b"--fullscreen" {
+                    full = Some(on);
+                } else {
+                    max = Some(on);
+                }
+            }
             b"--json" => json = true,
             b"-h" | b"--help" => return crate::args::usage("window"),
             _ if a.starts_with(b"-") => return Err(unknown_opt(ctx, "window", a)),
@@ -107,7 +183,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         i += 1;
     }
+    let others = !size.is_empty() || float || tile;
+    if (full.is_some() && max.is_some()) || ((full.is_some() || max.is_some()) && others) {
+        return Err(ctx.usage_die(
+            "window: --fullscreen or --maximize goes alone (not with each other, --size, --float or --tile)",
+        ));
+    }
     let act = match (size.is_empty(), float, tile) {
+        _ if full.is_some() => Act::Fullscreen(full == Some(true)),
+        _ if max.is_some() => Act::Maximize(max == Some(true)),
         (_, true, true) => return Err(ctx.usage_die("window: --float or --tile, not both")),
         (false, _, true) => {
             return Err(
@@ -127,7 +211,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         (true, false, true) => Act::Tile,
         (true, false, false) => {
             return Err(ctx.usage_die(
-                "window: what to do with it: --size WxH, --float or --tile (the box's windows: omabox windows)",
+                "window: what to do with it: --size WxH, --float, --tile, --fullscreen [off] or --maximize [off] (the box's windows: omabox windows)",
             ));
         }
     };
@@ -147,47 +231,72 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !shell::re_match("^0x[0-9a-f]+$", &addr) {
         return Err(ctx.die(cat!("window: bad window address: ", addr)));
     }
-    // A fullscreen window takes no size (Hyprland floats it, then refuses the resize): nothing done.
-    if act != Act::Tile && jq_r(".fullscreen", &w) == b"true" {
+    let mode_was = jq_r(r#".fullscreenMode // "none""#, &w);
+    // A fullscreen (or maximized) window takes no size (Hyprland floats it, then refuses the
+    // resize): nothing done.
+    if matches!(act, Act::Size(..) | Act::Float) && mode_was != b"none" {
+        let off: &str = if mode_was == b"maximized" {
+            "--maximize off"
+        } else {
+            "--fullscreen off"
+        };
         return Err(ctx.die(cat!(
             "window: ",
             win_desc(&w),
-            " is fullscreen: it takes no size until it leaves fullscreen (omabox lua \"hl.dispatch(hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'address:",
+            " is ",
+            mode_was,
+            ": it takes no size until it leaves that (omabox window -b ",
+            shell::quote_q(&ctx.name),
+            " --window ",
             addr,
-            "' }))\")"
+            " ",
+            off,
+            ")"
         )));
     }
-    let r = on_box(
-        ctx,
-        &[
-            b"timeout".to_vec(),
-            HYPR_LIMIT.as_bytes().to_vec(),
-            b"hyprctl".to_vec(),
-            b"eval".to_vec(),
-            lua(&addr, act),
-        ],
-        true,
-        Out::Capture(None),
-        ErrTo::Out,
-    );
-    let res = shell::subst(&r.out);
-    if res != b"ok" {
-        if !hypr_answers_in(ctx, "1")? {
-            let t = hung_text(ctx, "")?;
-            return Err(ctx.die(t));
+    // Set, not toggled: a window already as asked is left alone (Hyprland's own unset would also
+    // take a maximized window out of maximized when asked to leave fullscreen).
+    if !act.mode_ok(&mode_was) || act.mode().is_none() {
+        let r = on_box(
+            ctx,
+            &[
+                b"timeout".to_vec(),
+                HYPR_LIMIT.as_bytes().to_vec(),
+                b"hyprctl".to_vec(),
+                b"eval".to_vec(),
+                lua(&addr, act),
+            ],
+            true,
+            Out::Capture(None),
+            ErrTo::Out,
+        );
+        let res = shell::subst(&r.out);
+        if res != b"ok" {
+            if !hypr_answers_in(ctx, "1")? {
+                let t = hung_text(ctx, "")?;
+                return Err(ctx.die(t));
+            }
+            return Err(ctx.die(cat!(
+                "window: box '",
+                ctx.name,
+                "''s Hyprland refused it for ",
+                win_desc(&w),
+                ": ",
+                res
+            )));
         }
-        return Err(ctx.die(cat!(
-            "window: box '",
-            ctx.name,
-            "''s Hyprland refused it for ",
-            win_desc(&w),
-            ": ",
-            res
-        )));
     }
-    // As the box has it now: floating as asked, the same size twice 100 ms apart (an app's own
-    // limits may change what it took), 2 s at most.
-    let want_float: &[u8] = if act == Act::Tile { b"false" } else { b"true" };
+    // As the box has it now: floating (or in the mode) as asked, the same place and size twice
+    // 100 ms apart (an app's own limits may change what it took), 2 s at most.
+    let want_float: Option<&[u8]> = match act {
+        Act::Tile => Some(b"false"),
+        Act::Size(..) | Act::Float => Some(b"true"),
+        _ => None,
+    };
+    let done = |now: &[u8]| {
+        want_float.is_none_or(|f| jq_r(".floating", now) == f)
+            && act.mode_ok(&jq_r(r#".fullscreenMode // "none""#, now))
+    };
     let sel = [addr.clone()];
     let deadline = after(2);
     let mut last: Vec<u8> = Vec::new();
@@ -199,8 +308,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             return Err(ctx.die(cat!("window: ", win_desc(&w), " closed meanwhile")));
         }
         let now = jq::jq(&["-c", ".[0]"], Some(&hits), jq::Err::Inherit).text();
-        let geom = jq_r(r#""\(.floating) \(.at) \(.size)""#, &now);
-        if (geom == last && jq_r(".floating", &now) == want_float) || past(deadline) {
+        let geom = jq_r(r#""\(.floating) \(.fullscreenMode) \(.at) \(.size)""#, &now);
+        if (geom == last && done(&now)) || past(deadline) {
             break now;
         }
         last = geom;
@@ -214,24 +323,40 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         out(jq::jq(&["-c", ".[0]"], Some(&r.out), jq::Err::Inherit).out)?;
     } else {
         let line = jq_r(
-            r#""\(.address) \(.class) \(.title | tojson) " + (if .floating then "floating" else "tiled" end) + " at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])""#,
+            r#""\(.address) \(.class) \(.title | tojson) " + (if .floating then "floating" else "tiled" end) + (if (.fullscreenMode // "none") != "none" then ", \(.fullscreenMode)" else "" end) + " at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])""#,
             &now,
         );
         out(cat!(line, "\n"))?;
     }
-    if jq_r(".floating", &now) != want_float {
+    if let Some(f) = want_float
+        && jq_r(".floating", &now) != f
+    {
         say(cat!(
             "window: ",
             win_desc(&now),
             " is still ",
-            if want_float == b"true" {
-                "tiled"
-            } else {
-                "floating"
-            },
+            if f == b"true" { "tiled" } else { "floating" },
             " (a window rule? omabox log --grep windowrule)"
         ));
         return Err(Exit(1));
+    }
+    if let Some((m, on)) = act.mode() {
+        let is = jq_r(r#".fullscreenMode // "none""#, &now);
+        if !act.mode_ok(&is) {
+            say(cat!(
+                "window: ",
+                win_desc(&now),
+                if on { " did not become " } else { " is still " },
+                m,
+                if on {
+                    cat!(" (it is ", is, ")")
+                } else {
+                    Vec::new()
+                },
+                ": a window rule? (omabox log --grep windowrule)"
+            ));
+            return Err(Exit(1));
+        }
     }
     if let Act::Size(wd, ht) = act {
         let took = jq_r(r#""\(.size[0])x\(.size[1])""#, &now);
@@ -285,9 +410,43 @@ mod tests {
         let center = s.find("center({ window = w })").unwrap();
         assert!(float < resize && resize < center, "{s}");
         assert!(s.contains("r.ok == false then error(tostring(r.error), 0)"));
+        assert!(s.contains("if x == nil then error("), "{s}");
         let t = String::from_utf8(lua(b"0xabc", Act::Tile)).unwrap();
         assert!(t.contains("action = 'disable'") && !t.contains("resize"));
         let f = String::from_utf8(lua(b"0xabc", Act::Float)).unwrap();
         assert!(f.contains("action = 'enable'") && !f.contains("resize") && !f.contains("center"));
+    }
+
+    #[test]
+    fn fullscreen_set_not_toggled() {
+        let l = |a| String::from_utf8(lua(b"0xabc", a)).unwrap();
+        assert!(l(Act::Fullscreen(true)).contains(
+            "hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = w })"
+        ));
+        assert!(l(Act::Fullscreen(false)).contains(
+            "hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = w })"
+        ));
+        assert!(l(Act::Maximize(true)).contains("mode = 'maximized', action = 'set'"));
+        assert!(l(Act::Maximize(false)).contains("mode = 'maximized', action = 'unset'"));
+        for a in [true, false] {
+            assert!(!l(Act::Fullscreen(a)).contains("toggle"));
+            assert!(!l(Act::Maximize(a)).contains("toggle"));
+        }
+        // Already so: no dispatch (mode_ok); off leaves only its own mode.
+        assert!(Act::Fullscreen(true).mode_ok(b"fullscreen"));
+        assert!(!Act::Fullscreen(true).mode_ok(b"maximized"));
+        assert!(!Act::Fullscreen(true).mode_ok(b"none"));
+        assert!(Act::Fullscreen(false).mode_ok(b"none"));
+        assert!(Act::Fullscreen(false).mode_ok(b"maximized"));
+        assert!(!Act::Fullscreen(false).mode_ok(b"fullscreen"));
+        assert!(Act::Maximize(true).mode_ok(b"maximized"));
+        assert!(!Act::Maximize(true).mode_ok(b"fullscreen"));
+        assert!(Act::Maximize(false).mode_ok(b"fullscreen"));
+        assert!(!Act::Maximize(false).mode_ok(b"maximized"));
+        assert!(Act::Tile.mode_ok(b"fullscreen") && Act::Tile.mode().is_none());
+        assert_eq!(parse_on(None), Some(true));
+        assert_eq!(parse_on(Some(b"on")), Some(true));
+        assert_eq!(parse_on(Some(b"off")), Some(false));
+        assert_eq!(parse_on(Some(b"unset")), None);
     }
 }

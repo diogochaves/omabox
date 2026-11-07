@@ -65,7 +65,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     )?;
     // Bottom to top, as they stack.
     out(format!(
-        "{:<16} {:<8} {:<10} {:<20} {:<22} {:<16} {}\n",
+        "{:<16} {:<8} {:<10} {:<27} {:<22} {:<16} {}\n",
         "ADDRESS", "PID", "WORKSPACE", "STATE", "GEOMETRY", "CLASS", "TITLE"
     ))?;
     let t = jq::jq(

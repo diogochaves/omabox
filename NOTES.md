@@ -13883,6 +13883,28 @@ from them.
     Omarchy's; `--stock`, `--stock-bar` and `--keep` give Omarchy's stock desktop, not the user's, and
     are refused. A plain base refuses what needs Omarchy as a plain box does. `--desk-shell` (step
     1's refusal, one message for both bases) now says `--desktop desk` brings the desk already.
+705. **A take wanted the app fullscreen and `window` had no way to it** (2026-11-07, #443, after
+    #427 and finding 591). The old `dispatch fullscreen 0` dispatches nothing under the Lua config
+    (since #427 it fails and prints its Lua), and that Lua toggles: an agent that does not know the
+    window's state flips it the wrong way. `omabox window [--window SEL] --fullscreen [off]` and
+    `--maximize [off]` (`on` too; `--fullscreen=off`) run `hl.dsp.window.fullscreen({ mode =
+    'fullscreen' | 'maximized', action = 'set' | 'unset', window = 'address:0x...' })` in the box's
+    Hyprland. Measured in a box on 0.56.2 and 0.57.1 (the same answers): `set` again changes nothing,
+    `maximized set` on a fullscreen window makes it maximized (and back), `unset` leaves either mode
+    whatever mode it names; Hyprland's `fullscreen` field is 0 none, 1 maximized, 2 fullscreen.
+    So `window` reads the mode first and dispatches only when the window is not as asked: `off`
+    leaves its own mode only (a maximized window stays so after `--fullscreen off`), and again is no
+    dispatch at all. It reads the window back as for --size (the same place twice 100 ms apart, 2 s
+    at most) and fails (exit 1) a window still not as asked, naming a window rule. An hl.dsp call
+    given arguments it does not take is nil: the Lua chunk names the dispatcher this Hyprland does
+    not make (`this Hyprland makes no dispatcher of hl.dsp.window.fullscreen as omabox calls it`)
+    instead of dispatching nil, for every act. `windows --json` (and `window --json`) carry
+    `fullscreenMode` (`none`, `maximized`, `fullscreen`; `fullscreen` stays the boolean it was, true
+    for both), and the table's STATE adds `,fullscreen` or `,maximized` (its column 27 wide, the
+    title now at the 106th character). --size and --float refuse a maximized window as they did a
+    fullscreen one, naming the `window ... --maximize off` (or `--fullscreen off`) that frees it.
+    In the box: a fullscreen foot's shot (no pointer) has the window's own colour where the bar's
+    strip was; a maximized one keeps the bar. t_window_fullscreen, on 0.56.2 and 0.57.1.
 708. **A desk box's base: what the user's desk is, not what the machine has** (2026-11-07, #321).
     A desk box mirrors the user's own desktop, so whether it is an Omarchy one is a question about
     that desk: Omarchy installed (`install::omarchy_at`, as `--desktop`'s default asks) AND the
