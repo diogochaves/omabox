@@ -58,6 +58,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `wait job "$J"`, `wait log "$J" RE` and `stop "$J"`.
 
 ### Fixed
+- **`up --interactive` says why its box never came up on aquamarine 0.15.1** ([#406](https://github.com/diogochaves/omabox/issues/406)):
+  on an aquamarine without the fix for nested Wayland outputs (hyprwm/aquamarine#415), such as the
+  system's 0.15.1, an interactive box's window could lose its size as it opened, and `up` gave up
+  with only "Hyprland not up after 30s". When the box's Hyprland shows that (its output at 0x0),
+  `up` now says so and points to `omabox setup --aquamarine`, which builds the fix.
 - **`record stop` keeps every frame recorded before it, under load too** ([#444](https://github.com/diogochaves/omabox/issues/444)):
   wf-recorder drops the frames still waiting for its encoder when it is told to stop, so on a busy
   machine a video lost up to a second before the stop, even right after a `record hold` that had

@@ -13621,6 +13621,16 @@ from them.
     unfixed aquamarine (confirm-close from the settings turned off for such a box; a box whose flag
     is on anyway ends when no window comes): they start the same racing box. Here (omabox's build,
     and the 0.57.1 folder's own 0.16.0) nothing changes.
+    A user on a system aquamarine 0.15.x can hit the same with `up --interactive`. **Fix** (up):
+    when the box's Hyprland is not up in time and its aquamarine lacks the fix (Ready's
+    `aq_unfixed`, from the Aq up checked), up asks that Hyprland `hyprctl -j monitors all` before
+    it ends the box (inside the box, its instance the one folder in its runtime dir's `hypr/`: no
+    omabox.env names it yet; `exec::on_box_starting`, 3 s at most). A Wayland output at 0x0 there
+    makes the message "Hyprland not up after 30s: its output WAYLAND-1 never got a size, as can
+    happen without aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415), which the
+    system's aquamarine 0.15.1 lacks: omabox setup --aquamarine builds it for you"; otherwise, or
+    with the fix, it is as before (labwc's reason first). Unit-tested (`not_up_why`); the in-box
+    call checked on a nested interactive box here, its answer read (the race itself not staged).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
