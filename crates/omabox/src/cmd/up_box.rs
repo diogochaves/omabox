@@ -764,6 +764,7 @@ fn seed_plan(u: &Up) -> crate::seed::SeedPlan {
         plain: u.plain_like(),
         desk_box: u.desktop == Desktop::Desk,
         shell_cmd: u.shell_cmd.clone(),
+        quickshell: !u.quickshell.is_empty(),
         home: u.box_home().to_vec(),
     }
 }
@@ -1577,6 +1578,12 @@ fn bwrap_args(
             b"OMABOX_DESK_SHELL",
             u.desk_copy.guess.as_deref().unwrap_or_default(),
         );
+        // (and the shells it found whose program is not installed, finding 701: no slot is then
+        // `missing`, a box with no shell, not a failed up)
+        let missing = u.desk_copy.missing();
+        if !missing.is_empty() {
+            b.setenv(b"OMABOX_DESK_SHELL_MISSING", &missing.join(&b' '));
+        }
     }
     for (k, v) in &hypr_env {
         b.setenv(k, v);

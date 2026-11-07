@@ -226,6 +226,9 @@ pub enum DeskSlot {
     Guess,
     /// Nothing did, and there was no guess.
     None,
+    /// Nothing did, the shell found (in the config, or the guess) not installed (finding 701): a
+    /// box with no shell, as with --no-shell.
+    Missing,
     /// Nothing said yet (or not one of those words).
     Unsaid,
 }
@@ -239,6 +242,7 @@ pub fn desk_slot(ctx: &Ctx) -> DeskSlot {
         Some(b"config") => DeskSlot::Config,
         Some(b"guess") => DeskSlot::Guess,
         Some(b"none") => DeskSlot::None,
+        Some(b"missing") => DeskSlot::Missing,
         _ => DeskSlot::Unsaid,
     }
 }
@@ -1193,6 +1197,7 @@ mod tests {
         for (t, s) in [
             ("guess\n", DeskSlot::Guess),
             ("none", DeskSlot::None),
+            ("missing\n", DeskSlot::Missing),
             ("config x\n", DeskSlot::Unsaid),
             ("", DeskSlot::Unsaid),
         ] {

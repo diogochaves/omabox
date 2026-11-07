@@ -1155,7 +1155,8 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
     // A desk box's (#321 step 4, finding 703) is the same slot, filled by what its user's config
     // started (share/desk-shell.lua), which is known once Hyprland is up: the config started none
     // omabox knows (and up had no guess) fails here at once; nothing said at all (a config that never
-    // ran desk-shell.lua) is a desk with no shell, as a plain box without --shell.
+    // ran desk-shell.lua), or a shell whose program is not installed (`missing`, finding 701), is a
+    // desk with no shell, as a plain box without --shell.
     if crate::boxes::slot_shell(&ctx.d) {
         let desk = meta(&ctx.d, "shell_cmd").0.is_empty();
         if desk && run_read(&ctx.d, crate::shellnote::DESK_SHELL_CMD).is_none() {
@@ -1862,7 +1863,7 @@ pub fn box_json(ctx: &Ctx, hung: bool, shell_given: &str, gone: &str) -> Vec<u8>
         let from = match desk_slot(ctx) {
             DeskSlot::Config => "config",
             DeskSlot::Guess => "guess",
-            DeskSlot::None => "none",
+            DeskSlot::None | DeskSlot::Missing => "none",
             DeskSlot::Unsaid => "",
         };
         (crate::shellnote::slot_cmd(ctx), from)

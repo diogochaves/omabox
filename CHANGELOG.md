@@ -37,7 +37,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
     and `ls` (and `ls --json`'s `shell_cmd`, `shell_from`), `pid shell`, `log shell`,
     `restart-shell` and the crash notes work on it. A second shell is dropped; `--shell CMD` runs
     another instead, `--no-shell` none; a config that starts none omabox knows makes `up` fail at
-    once, saying so.
+    once, saying so. A shell found whose program is not installed (a unit link left after its
+    package went) is never started: `up` says so and the box comes up with no shell.
   - **On an Omarchy desk** (Omarchy installed and your config loading it; box.json's `desk_base`) the
     box is an Omarchy box running your config, its shell Omarchy's with your plugins and
     `shell.json`, on your wallpaper even when your backgrounds folder is a link into another repo

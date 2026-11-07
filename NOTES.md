@@ -13748,7 +13748,23 @@ from them.
     profile's `config`, `state` and listed `cache` folders copied (from the user's XDG dirs), a named
     profile before the `qs -c {name}` fallback. The first found is box.json's `shell_guess` (with
     `shell_from`: `--shell`, `config` or `unit`) and the box's `OMABOX_DESK_SHELL`, for step 4's
-    slot. **Images by path:** each copied text names paths (`$HOME/...`, `~/...`, `file://...`,
+    slot. **Only what is installed** (amended 2026-11-07): a shell found by the config or a unit
+    counted even when its program was not there (a `dms.service` link left after dms went), so the
+    slot started it, it exited at once and `up` failed ("the shell exited while starting"). Now one
+    counts only when the box finds its program, argv0 of the matched command or of the profile's
+    `start` (`box_path`/`program_found`): the box's PATH as share/session.sh builds it (finding 57),
+    as host paths: the box HOME's `~/.local/bin`, the caller's PATH as the box sees it (a folder
+    under HOME is the box HOME's, which a desk box has at that path; under `/usr`, `/bin`, `/sbin`
+    the host's; any other the box has not), `/usr/bin`; `--quickshell`'s build is `qs`. One left
+    out is said once (`up: not the NAME shell (its systemd unit is linked | your Hyprland config
+    starts it): its program X is not installed`), is `skipped` `(shell NAME)` in `desk_copy`, its
+    folders not copied; the box gets `OMABOX_DESK_SHELL_MISSING=NAME...`. In the box desk-shell.lua
+    checks the same with sh's `command -v` on the session's PATH: `take` drops a config's shell whose
+    program is missing (`not started: its program X is not installed` in autostart.log; a later
+    one is taken), the guess is never started without its program, and a slot left empty that way
+    is `missing` (DeskSlot::Missing), not `none`: ready lets `up` through and after_ready marks the
+    box shell-less, as `--no-shell` (it says why only when the copy did not). `none` with nothing
+    missing still fails `up`, as step 4 wants. `--shell CMD` runs as asked, unchecked. **Images by path:** each copied text names paths (`$HOME/...`, `~/...`, `file://...`,
     JSON's `\/`); one in HOME with an image's ending is copied at its path (DMS's
     `wallpaperPath`, Caelestia's `wallpaper/path.txt`, `swww img ~/...`), a folder named brings its
     top-level images, `/usr` is left alone and anything else outside HOME is said ("outside your
@@ -13759,10 +13775,14 @@ from them.
     folder `refuse_src` keeps out (a link into `~/.gnupg`), a hyprland.lua or a module it requires
     (`require("a.b")` → `a/b.lua`) that was not copied. No hypr folder at all is no refusal here
     (step 5 says it). Not done here: the refusals run in seed_home, after the box's folder is made,
-    not in up's checks before it (finding 709 adds them there). Checked: `deskcopy.rs`'s tests, `t_unit_desk_copy` (the probe
+    not in up's checks before it (finding 709 adds them there). Checked: `deskcopy.rs`'s tests
+    (`box_path_finds_programs`, `shell_not_installed` for the amendment), `t_unit_desk_shell_lua`'s
+    missing-program cases, `t_unit_desk_copy` (the probe
     `desk_copy`, stand-in HOMEs; and this machine's real `~/.config/hypr`, copied into the test's
     folder: 25 files and a `/usr` link, its six `.bak.*` files left out as backups), `t_desk_copy`
-    (a box on a stand-in desk) on Hyprland 0.56.2 and 0.57.1.
+    (a box on a stand-in desk; and one whose unit link names a stand-in profile with no program, its
+    config starting waybar where waybar is not installed: up, no shell, both said) on Hyprland
+    0.56.2 and 0.57.1.
 702. **A desk box runs the user's own Hyprland config, under an autostart policy** (2026-11-07, #321
     step 3). `share/hyprland.lua` is generic now: it keeps Hyprland's own `hl.exec_cmd` as the global
     `omabox_exec` (what omabox itself starts: events, held devices, the shell, crash and close

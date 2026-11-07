@@ -11,10 +11,13 @@
 -- `up --no-shell` it is dropped too.
 -- after_start(): nothing taken, the slot starts the guess `up` made (OMABOX_DESK_SHELL: a profile,
 -- found by its systemd unit, say, which the config's `systemctl --user` would have started) by its
--- `start`; no guess: the slot is marked none, and `up` says so.
+-- `start`; no guess: the slot is marked none, and `up` says so. A shell whose program the box does not
+-- have (finding 701: one take dropped, the guess's, or one `up` left out, OMABOX_DESK_SHELL_MISSING)
+-- is never started: the slot is marked missing, a box with no shell (up does not fail).
 --
 -- What the slot runs goes in $XDG_RUNTIME_DIR/omabox-shell.cmd, written here before shell.sh starts
--- (no quoting on the way), and how it got there in omabox-desk-shell: `config`, `guess`, or `none`.
+-- (no quoting on the way), and how it got there in omabox-desk-shell: `config`, `guess`, `none` or
+-- `missing`.
 -- Both are the box's files: `up` and `ls` read them as such (plain, one line, bounded). A Hyprland
 -- reload parses the config again: a command whose slot already runs (the file is there) is dropped,
 -- not started twice.
@@ -185,8 +188,9 @@ function M.profiles()
 end
 
 -- profile_for(cmd): the profile whose start or match a part of cmd begins with (its program by its
--- name, then its words in order, `{name}` any one word); a pattern with no `{...}` first, so a named
--- Quickshell config's own profile wins over the generic one. nil: none.
+-- name, then its words in order, `{name}` any one word), and that part's words (its program first);
+-- a pattern with no `{...}` first, so a named Quickshell config's own profile wins over the generic
+-- one. nil: none.
 function M.profile_for(cmd)
   local runs = {}
   for _, p in ipairs(M.parts(cmd)) do
@@ -204,13 +208,26 @@ function M.profile_for(cmd)
       for _, pat in ipairs(p.pats) do
         if pat.wild == wild then
           for _, argv in ipairs(runs) do
-            if fits(argv, pat.words) then return p end
+            if fits(argv, pat.words) then return p, argv end
           end
         end
       end
     end
   end
   return nil
+end
+
+-- installed(prog): whether the box finds prog, a command's first word (a name on the session's PATH,
+-- or a path): sh's `command -v`, through the io.popen this loaded with, so never a line of the user's
+-- autostart.log. A shell whose program is not there is never the slot's (finding 701: a unit link
+-- left when its package went): it would only exit as it starts, and `up` with it.
+function M.installed(prog)
+  if type(prog) ~= "string" or prog == "" then return false end
+  local h = popen("command -v -- '" .. prog:gsub("'", "'\\''") .. "' 2>/dev/null")
+  if not h then return true end
+  local out = h:read("*a") or ""
+  h:close()
+  return out ~= ""
 end
 
 local function read(name)
@@ -238,6 +255,8 @@ local function one_line(s)
 end
 
 local taken
+-- (a shell dropped as not installed: no slot is then `missing`, not `none`)
+local dropped = false
 local function start(cmd, from)
   taken = cmd
   write("omabox-shell.cmd", cmd)
@@ -250,7 +269,7 @@ end
 
 function M.take(cmd)
   if type(cmd) ~= "string" or omarchy_base then return false end
-  local p = M.profile_for(cmd)
+  local p, argv = M.profile_for(cmd)
   if not p then return false end
   if os.getenv("OMABOX_SHELL") == "0" then return true, "up --no-shell: no shell" end
   local over = os.getenv("OMABOX_SHELL_CMD") or ""
@@ -259,6 +278,10 @@ function M.take(cmd)
   if now ~= "" then
     if now == cmd then return true, "the slot runs it already" end
     return true, "a second shell: the slot runs " .. one_line(now)
+  end
+  if not M.installed(argv[1]) then
+    dropped = true
+    return true, "not started: its program " .. one_line(argv[1]) .. " is not installed"
   end
   start(cmd, "config")
   return true, "the slot runs it (" .. p.name .. ")"
@@ -271,11 +294,15 @@ function M.after_start()
   local guess = os.getenv("OMABOX_DESK_SHELL") or ""
   for _, p in ipairs(M.profiles()) do
     if p.name == guess and p.start then
-      start(p.start, "guess")
-      return
+      if M.installed(p.start:match("^%S+")) then
+        start(p.start, "guess")
+        return
+      end
+      dropped = true
     end
   end
-  write("omabox-desk-shell", "none")
+  local missing = dropped or (os.getenv("OMABOX_DESK_SHELL_MISSING") or "") ~= ""
+  write("omabox-desk-shell", missing and "missing" or "none")
 end
 
 return M

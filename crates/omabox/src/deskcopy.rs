@@ -1051,12 +1051,84 @@ fn clean_rel(rel: &[u8]) -> bool {
             .all(|w| !w.is_empty() && w != b"." && w != b"..")
 }
 
-/// A desk shell found: its profile's index, the Quickshell config's name for a `{name}` one, and
-/// what found it (`--shell`, `config`, `unit`).
+/// A desk shell found: its profile's index, the Quickshell config's name for a `{name}` one, what
+/// found it (`--shell`, `config`, `unit`) and the program it runs (the command's first word; for a
+/// unit, its profile's `start`'s).
 struct Found {
     i: usize,
     name: Option<Vec<u8>>,
     from: &'static str,
+    prog: Vec<u8>,
+}
+
+/// box_path H HOMES CALLER: where a desk box's session looks for a program, as folders on
+/// the host (share/session.sh's PATH, finding 57): the box HOME's ~/.local/bin, the caller's PATH
+/// (CALLER, exec::caller_path's) as the box sees it, then /usr/bin (the box's own start). A folder
+/// of CALLER under HOME (HOMES: HOME/ and where it leads) is the box HOME's (a desk box's HOME is
+/// at the user's HOME path); one under /usr, /bin or /sbin the host's (the box has /usr, the rest
+/// links into it); any other the box has not. /opt/omabox/share/bin is left out: omabox's
+/// stand-ins, never a shell.
+fn box_path(h: &[u8], homes: &[Vec<u8>], caller: &[u8]) -> Vec<Vec<u8>> {
+    let mut dirs = vec![cat!(h, "/.local/bin")];
+    for d in caller.split(|&c| c == b':') {
+        if let Some(t) = box_sees(h, homes, d)
+            && !dirs.contains(&t)
+        {
+            dirs.push(t);
+        }
+    }
+    if !dirs.iter().any(|d| d == b"/usr/bin") {
+        dirs.push(b"/usr/bin".to_vec());
+    }
+    dirs
+}
+
+/// box_sees H HOMES P: the host path the absolute path P is in a desk box (box_path says which).
+fn box_sees(h: &[u8], homes: &[Vec<u8>], p: &[u8]) -> Option<Vec<u8>> {
+    if !p.starts_with(b"/") {
+        return None;
+    }
+    let t = p.strip_suffix(b"/").filter(|t| !t.is_empty()).unwrap_or(p);
+    for hm in homes {
+        let hm = hm.strip_suffix(b"/").unwrap_or(hm);
+        if t == hm {
+            return Some(h.to_vec());
+        }
+        if let Some(rest) = t.strip_prefix(hm).filter(|r| r.starts_with(b"/")) {
+            return Some(cat!(h, rest));
+        }
+    }
+    ["/usr", "/bin", "/sbin"]
+        .iter()
+        .any(|r| t == r.as_bytes() || t.starts_with(&cat!(r, "/")))
+        .then(|| t.to_vec())
+}
+
+/// program_found PROG DIRS H HOMES QUICKSHELL: whether a desk box finds PROG, a command's first
+/// word: a path (with a `/`) as the box sees it (box_sees; a relative one is taken as found: it
+/// depends on where it runs), else an executable file of that name in one of DIRS (box_path's).
+/// QUICKSHELL (`up --quickshell`): its build is the box's `qs` and `quickshell`.
+fn program_found(
+    prog: &[u8],
+    dirs: &[Vec<u8>],
+    h: &[u8],
+    homes: &[Vec<u8>],
+    quickshell: bool,
+) -> bool {
+    if prog.contains(&b'/') {
+        if !prog.starts_with(b"/") {
+            return true;
+        }
+        return box_sees(h, homes, prog)
+            .is_some_and(|p| crate::exec::executable(&p) && shell::path(&p).is_file());
+    }
+    if quickshell && (prog == b"qs" || prog == b"quickshell") {
+        return true;
+    }
+    dirs.iter().any(|d| {
+        let p = cat!(d, "/", prog);
+        crate::exec::executable(&p) && shell::path(&p).is_file()
+    })
 }
 
 /// The desk shells to copy and guess (#321 step 2): what --shell CMD starts, then what the copied
@@ -1065,19 +1137,24 @@ struct Found {
 /// graphical-session.target.wants. Each profile (and Quickshell config) once, in that order.
 fn detect(profiles: &[Profile], shell_cmd: &[u8], luas: &[Vec<u8>], config: &[u8]) -> Vec<Found> {
     let mut found: Vec<Found> = Vec::new();
-    let mut add = |i: usize, name: Option<Vec<u8>>, from: &'static str| {
+    let mut add = |i: usize, name: Option<Vec<u8>>, from: &'static str, prog: Vec<u8>| {
         if !found.iter().any(|f| f.i == i && f.name == name) {
-            found.push(Found { i, name, from });
+            found.push(Found {
+                i,
+                name,
+                from,
+                prog,
+            });
         }
     };
-    for (i, n) in deskshell::hits(shell_cmd, profiles) {
-        add(i, n, "--shell");
+    for (i, n, prog) in deskshell::hits(shell_cmd, profiles) {
+        add(i, n, "--shell", prog);
     }
     for text in luas {
         for line in text.split(|&c| c == b'\n') {
             for s in strings(line, true) {
-                for (i, n) in deskshell::hits(&s, profiles) {
-                    add(i, n, "config");
+                for (i, n, prog) in deskshell::hits(&s, profiles) {
+                    add(i, n, "config", prog);
                 }
             }
         }
@@ -1095,7 +1172,7 @@ fn detect(profiles: &[Profile], shell_cmd: &[u8], luas: &[Vec<u8>], config: &[u8
             std::fs::symlink_metadata(p(&cat!(config, "/systemd/user/", t, "/", pr.unit))).is_ok()
         });
         if linked {
-            add(i, None, "unit");
+            add(i, None, "unit", deskshell::program(&pr.start));
         }
     }
     found
@@ -1181,7 +1258,45 @@ pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
     }
     // 2. The desk shells found, each one's config, state and listed caches.
     let profiles = deskshell::all(&deskshell::dir()).map_err(|e| ctx.die(cat!("up: ", e)))?;
-    let found = detect(&profiles, &plan.shell_cmd, &lua_texts, &config);
+    let mut found = detect(&profiles, &plan.shell_cmd, &lua_texts, &config);
+    // A shell found by the config or a unit whose program the box does not find (a unit link left
+    // when its package went): not the box's, its folders not copied, said once, so the slot never
+    // starts a program that is not there (finding 701). --shell's runs as asked.
+    {
+        let homes = [cat!(home, "/"), cat!(w.home_r, "/")];
+        let dirs = box_path(h, &homes, &crate::exec::caller_path(true));
+        found.retain(|f| {
+            if f.from == "--shell"
+                || f.prog.is_empty()
+                || program_found(&f.prog, &dirs, h, &homes, plan.quickshell)
+            {
+                return true;
+            }
+            let name = &profiles[f.i].name;
+            let how = if f.from == "unit" {
+                "its systemd unit is linked"
+            } else {
+                "your Hyprland config starts it"
+            };
+            say(cat!(
+                "up: not the ",
+                name,
+                " shell (",
+                how,
+                "): its program ",
+                f.prog,
+                " is not installed"
+            ));
+            w.out.extend(cat!(
+                "skipped (shell ",
+                name,
+                ")\tits program ",
+                f.prog,
+                " is not installed\n"
+            ));
+            false
+        });
+    }
     for f in &found {
         let pr = &profiles[f.i];
         let label = match &f.name {
@@ -1511,6 +1626,16 @@ pub struct Report {
 }
 
 impl Report {
+    /// The desk shells the copy found but left out, their program not installed (finding 701):
+    /// each `(shell NAME)` skipped, by NAME (the box's OMABOX_DESK_SHELL_MISSING).
+    pub fn missing(&self) -> Vec<Vec<u8>> {
+        self.skipped
+            .iter()
+            .filter_map(|(p, _)| p.strip_prefix(b"(shell ".as_slice())?.strip_suffix(b")"))
+            .map(<[u8]>::to_vec)
+            .collect()
+    }
+
     pub fn parse(lines: &[u8]) -> Report {
         let mut r = Report::default();
         let tab = |v: &[u8]| -> (Vec<u8>, Vec<u8>) {
@@ -1607,6 +1732,11 @@ mod tests {
                 std::fs::create_dir_all(x).unwrap();
             }
             std::fs::create_dir_all(format!("{}/out", fx.base)).unwrap();
+            // (the shipped profiles' programs, where the box finds them: its HOME's ~/.local/bin, so
+            // a shell found is one installed wherever this runs; finding 701's test has its own)
+            for n in ["dms", "caelestia", "qs", "quickshell", "waybar"] {
+                prog(&format!("{}/.local/bin/{n}", fx.bx));
+            }
             fx
         }
 
@@ -1645,13 +1775,24 @@ mod tests {
         }
 
         fn run_plan(&self, plan: &SeedPlan) -> (Result<String, u8>, String) {
+            let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../share/desk-shells");
+            self.run_in(plan, dir, None)
+        }
+
+        /// copy with this HOME, the profiles in DIR, PATH (None: the caller's).
+        fn run_in(
+            &self,
+            plan: &SeedPlan,
+            dir: &str,
+            path: Option<&str>,
+        ) -> (Result<String, u8>, String) {
             let ctx = {
                 let mut c = Ctx::new(b"up", b"/nonexistent".to_vec());
                 c.parsed();
                 c
             };
             let fh = self.fh.clone();
-            let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../share/desk-shells");
+            let caller = std::env::var("PATH").unwrap_or_default();
             let vars = [
                 ("HOME", Some(fh.as_str())),
                 ("XDG_CONFIG_HOME", None),
@@ -1660,6 +1801,7 @@ mod tests {
                 ("XDG_CACHE_HOME", None),
                 ("OMABOX_JAIL", None),
                 ("OMABOX_DESK_SHELL_DIR", Some(dir)),
+                ("PATH", Some(path.unwrap_or(&caller))),
             ];
             let (r, said) = shell::with_env(&vars, || {
                 crate::exit::heard(|| copy(&ctx, plan, self.bx.as_bytes()))
@@ -2417,6 +2559,151 @@ mod tests {
         assert!(!f.there(".config/systemd"), "{out}");
         assert!(out.ends_with("guess dms\tunit"), "{out}");
         assert!(said.contains("(1 of ~/.config/hypr, 2 of the dms shell); its shell, first guessed: dms (from unit)"), "{said}");
+    }
+
+    /// An executable file at PATH (its folders made).
+    fn prog(path: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+        std::fs::write(path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Finding 701: where a desk box looks for a program, as host paths: its HOME's ~/.local/bin,
+    /// the caller's PATH as the box sees it (under HOME: the box HOME's; under /usr, /bin, /sbin: the
+    /// host's; elsewhere: not the box's), /usr/bin; a path as the box sees it.
+    #[test]
+    fn box_path_finds_programs() {
+        let f = Fx::new("boxpath");
+        let homes = [format!("{}/", f.fh).into_bytes()];
+        let (fh, bx, out) = (&f.fh, &f.bx, format!("{}/out", f.base));
+        let caller = format!("{fh}/bin:/usr/local/bin:{out}:rel:{fh}:/usr/bin/:/opt/x");
+        let dirs = box_path(bx.as_bytes(), &homes, caller.as_bytes());
+        let shown: Vec<String> = dirs
+            .iter()
+            .map(|d| String::from_utf8_lossy(d).into_owned())
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                format!("{bx}/.local/bin"),
+                format!("{bx}/bin"),
+                "/usr/local/bin".into(),
+                bx.clone(),
+                "/usr/bin".into()
+            ]
+        );
+        let found =
+            |p: &str, qs: bool| program_found(p.as_bytes(), &dirs, bx.as_bytes(), &homes, qs);
+        // (the host's own copy in HOME/bin, or a folder the box has not, is not the box's)
+        prog(&format!("{fh}/bin/t-701"));
+        prog(&format!("{out}/t-701"));
+        assert!(!found("t-701", false));
+        assert!(
+            !found(&format!("{fh}/bin/t-701"), false),
+            "a path: the box HOME's"
+        );
+        assert!(
+            !found(&format!("{out}/t-701"), false),
+            "a path outside what the box has"
+        );
+        prog(&format!("{bx}/bin/t-701"));
+        assert!(
+            found("t-701", false),
+            "in the box HOME's copy of a folder of PATH"
+        );
+        assert!(found(&format!("{fh}/bin/t-701"), false));
+        prog(&format!("{bx}/.local/bin/t-701b"));
+        assert!(found("t-701b", false), "the box HOME's ~/.local/bin");
+        std::fs::write(format!("{bx}/.local/bin/t-701c"), "").unwrap();
+        assert!(!found("t-701c", false), "not executable");
+        std::fs::create_dir_all(format!("{bx}/.local/bin/t-701d")).unwrap();
+        assert!(!found("t-701d", false), "a folder");
+        assert!(found("sh", false), "/usr/bin's");
+        assert!(
+            found("./rel/x", false),
+            "a relative path: cannot tell, taken as there"
+        );
+        assert!(!found("omabox-no-such-program-701", false));
+        assert!(
+            found("qs", true) && found("quickshell", true),
+            "up --quickshell's build"
+        );
+    }
+
+    /// Finding 701: a shell found by its unit link, or the config, whose program the box does not
+    /// have (a unit left when its package went): not guessed, its folders not copied, said once and
+    /// skipped as `(shell NAME)`; with the program in the box HOME's ~/.local/bin, guessed.
+    #[test]
+    fn shell_not_installed() {
+        if !crate::exec::tools_or_skip("shell_not_installed", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("noprog");
+        let dir = format!("{}/profiles", f.base);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            format!("{dir}/t701"),
+            "start omabox-t701-prog run\nunit omabox-t701.service\nconfig .config/t701\n",
+        )
+        .unwrap();
+        std::fs::write(
+            format!("{dir}/t701b"),
+            "start omabox-t701b-prog\nconfig .config/t701b\n",
+        )
+        .unwrap();
+        f.put(
+            ".config/hypr/hyprland.lua",
+            b"hl.exec_cmd(\"setsid -f omabox-t701b-prog --bar\")\n",
+        );
+        f.ln(
+            "/usr/lib/systemd/user/omabox-t701.service",
+            ".config/systemd/user/graphical-session.target.wants/omabox-t701.service",
+        );
+        f.put(".config/t701/a.json", b"{}\n");
+        f.put(".config/t701b/a.json", b"{}\n");
+        let path = format!("{}/bin", f.fh);
+        prog(&format!("{path}/omabox-t701-prog"));
+        let plan = SeedPlan {
+            plain: true,
+            desk_box: true,
+            ..SeedPlan::default()
+        };
+        let (r, said) = f.run_in(&plan, &dir, Some(&path));
+        let out = r.unwrap();
+        assert!(!out.contains("\nguess "), "{out}");
+        assert_eq!(
+            lines(&out, "skipped "),
+            [
+                "(shell t701b)\tits program omabox-t701b-prog is not installed",
+                "(shell t701)\tits program omabox-t701-prog is not installed"
+            ],
+            "{out}"
+        );
+        assert!(
+            !f.there(".config/t701") && !f.there(".config/t701b"),
+            "{out}"
+        );
+        assert_eq!(said.matches("not the t701 shell").count(), 1, "{said}");
+        assert!(said.contains("up: not the t701 shell (its systemd unit is linked): its program omabox-t701-prog is not installed"), "{said}");
+        assert!(said.contains("up: not the t701b shell (your Hyprland config starts it): its program omabox-t701b-prog is not installed"), "{said}");
+        let rep = Report::parse(out.as_bytes());
+        assert_eq!(rep.guess, None);
+        assert_eq!(rep.missing(), [b"t701b".to_vec(), b"t701".to_vec()]);
+        // (where the box finds it: the unit's shell guessed, its folder copied)
+        prog(&format!("{}/bin/omabox-t701-prog", f.bx));
+        let (r, _) = f.run_in(&plan, &dir, Some(&path));
+        let out = r.unwrap();
+        assert!(out.ends_with("guess t701\tunit"), "{out}");
+        assert!(f.real_file(".config/t701/a.json"), "{out}");
+        assert_eq!(Report::parse(out.as_bytes()).missing(), [b"t701b".to_vec()]);
+        // (--shell's runs as asked: never left out)
+        let shell = SeedPlan {
+            shell_cmd: b"omabox-t701b-prog".to_vec(),
+            ..plan
+        };
+        let (r, _) = f.run_in(&shell, &dir, Some(&path));
+        assert!(r.unwrap().ends_with("guess t701b\t--shell"));
     }
 
     /// Refused, no copy: a Hyprland config folder that is a link to a secret store; a hyprland.lua,

@@ -1208,7 +1208,10 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   `log shell`, `restart-shell` and the crash notes work on it. A second shell the config starts is
   dropped (one bar). When the config starts none but `up` found one (its systemd unit, say), the
   slot starts that (`guessed`). None at all: `up` fails at once, saying so; `--shell CMD` names one
-  (it runs instead of the config's), `--no-shell` runs none.
+  (it runs instead of the config's), `--no-shell` runs none. A shell found whose program the box
+  does not have (a `dms.service` link left after dms went) is never started: `up` says `not the
+  NAME shell (...): its program X is not installed`, box.json's `desk_copy.skipped` has `(shell
+  NAME)`, and the box comes up with no shell, as with `--no-shell`.
 - `--desktop plain --shell CMD` runs a shell of yours there (`--shell 'dms run'`, `--shell 'qs -p
   DIR'`; DIR outside the repo needs `--ro-bind DIR`). CMD may be a launcher that starts the shell
   and exits (`caelestia shell -d`, `qs -d`): the shell is all CMD starts, gone once nothing of it is

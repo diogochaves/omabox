@@ -380,10 +380,11 @@ pub fn profile_for<'a>(cmd: &[u8], profiles: &'a [Profile]) -> Option<&'a Profil
 }
 
 /// hits CMD PROFILES: each shell CMD starts, a part at a time (read and stripped as profile_for
-/// reads them), as its profile's index in PROFILES and the word its pattern's `{...}` stands for (a
-/// Quickshell config's name); for each part, a pattern with no `{...}` first. What a desk box's copy
+/// reads them), as its profile's index in PROFILES, the word its pattern's `{...}` stands for (a
+/// Quickshell config's name) and the part's program (its first word, as written: what the box must
+/// find, finding 701); for each part, a pattern with no `{...}` first. What a desk box's copy
 /// (deskcopy) finds in the config the slot then takes from it.
-pub fn hits(cmd: &[u8], profiles: &[Profile]) -> Vec<(usize, Option<Vec<u8>>)> {
+pub fn hits(cmd: &[u8], profiles: &[Profile]) -> Vec<(usize, Option<Vec<u8>>, Vec<u8>)> {
     let mut out = Vec::new();
     for argv in parts(cmd).iter().flat_map(|p| strip(p)) {
         'one: for want_wild in [false, true] {
@@ -393,7 +394,7 @@ pub fn hits(cmd: &[u8], profiles: &[Profile]) -> Vec<(usize, Option<Vec<u8>>)> {
                         continue;
                     }
                     if let Some(name) = fits(&argv, &pw) {
-                        out.push((i, name));
+                        out.push((i, name, argv[0].clone()));
                         break 'one;
                     }
                 }
@@ -403,11 +404,23 @@ pub fn hits(cmd: &[u8], profiles: &[Profile]) -> Vec<(usize, Option<Vec<u8>>)> {
     out
 }
 
+/// program START: the program a profile's `start` runs (its first word once stripped, as the slot
+/// runs it), empty for none.
+pub fn program(start: &[u8]) -> Vec<u8> {
+    parts(start)
+        .iter()
+        .flat_map(|p| strip(p))
+        .next()
+        .and_then(|argv| argv.into_iter().next())
+        .unwrap_or_default()
+}
+
 /// A desk box's shell, once the box is ready (#321 step 4, finding 703): what its slot runs, said
 /// (the profile it is, by omabox's own reading of the command the box wrote). A config that never
-/// said what it started (no desk-shell.lua ran: ready took it for no shell) leaves the box with
-/// none: box.json's shell false, so every command takes it for one with none, as a plain box
-/// without --shell. `up --shell CMD` and --no-shell: nothing to do; nor on Omarchy's base, whose
+/// said what it started (no desk-shell.lua ran: ready took it for no shell), or whose shell is not
+/// installed (finding 701: said here when the copy did not say it), leaves the box with none:
+/// box.json's shell false, so every command takes it for one with none, as a plain box without
+/// --shell. `up --shell CMD` and --no-shell: nothing to do; nor on Omarchy's base, whose
 /// shell is Omarchy's (finding 702).
 pub fn after_ready(ctx: &Ctx, u: &Up) -> Res<()> {
     use crate::shellnote::{DESK_SHELL_CMD, DeskSlot, desk_slot, slot_cmd};
@@ -416,6 +429,15 @@ pub fn after_ready(ctx: &Ctx, u: &Up) -> Res<()> {
     }
     if crate::boxes::run_read(&ctx.d, DESK_SHELL_CMD).is_none() {
         let _ = crate::mon::jq_box_json(ctx, crate::jq::Args::new(&[".shell = false"]));
+        if desk_slot(ctx) == DeskSlot::Missing && u.desk_copy.missing().is_empty() {
+            crate::exit::say(cat!(
+                "box '",
+                ctx.name,
+                "': no shell: the one your config starts is not installed (see ",
+                ctx.d,
+                "/home/autostart.log)"
+            ));
+        }
         return Ok(());
     }
     let cmd = slot_cmd(ctx);

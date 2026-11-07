@@ -12353,13 +12353,20 @@ end'
 # profile a command a config starts is (the cases deskshell.rs's profile_match has, read the same
 # way); take: the first shell into the slot (omabox-shell.cmd and omabox-desk-shell written, then
 # shell.sh started with its word), a second dropped, one already in the slot (a reload) dropped,
-# not a shell left to run; --shell's and --no-shell's; after_start: the guess, or none.
+# not a shell left to run; --shell's and --no-shell's; after_start: the guess, or none. Finding 701: a
+# shell whose program is not on PATH (the box's) never started, by take or as the guess: missing.
 t_unit_desk_shell_lua() {
   command -v lua >/dev/null || { skip "share/desk-shell.lua on the host's Lua" "no lua here"; return; }
-  local rt=$TMP/$P-dsl out cases
+  local rt=$TMP/$P-dsl out cases lua bin=$TMP/$P-dsl-bin n
+  lua=$(command -v lua)
   printf '%s\n' "$DESK_SHELL_LUA" > "$TMP/$P-dsl.lua"
+  # (PATH: the shells' programs as stubs, so what is installed here does not matter)
+  rm -rf "$bin"; mkdir -p "$bin/none"
+  for n in dms qs quickshell waybar caelestia; do printf '#!/bin/sh\n' > "$bin/$n"; chmod +x "$bin/$n"; done
+  # (and ls, which reads the profiles' folder; $bin/none: ls and qs only)
+  ln -s "$(command -v ls)" "$bin/ls"; ln -s "$(command -v ls)" "$bin/none/ls"; cp "$bin/qs" "$bin/none/qs"
   rtls() { local f l=""; for f in "$rt"/*; do [ -e "$f" ] && l+="${f##*/} "; done; echo "${l:--}"; }
-  dl() { (cd / && env -u OMABOX_SHELL -u OMABOX_SHELL_CMD -u OMABOX_DESK_SHELL XDG_RUNTIME_DIR="$rt" "$@" lua "$TMP/$P-dsl.lua" "$ROOT/share" "${DL_ARGS[@]}"); }
+  dl() { (cd / && env -u OMABOX_SHELL -u OMABOX_SHELL_CMD -u OMABOX_DESK_SHELL -u OMABOX_DESK_SHELL_MISSING XDG_RUNTIME_DIR="$rt" PATH="$bin" "$@" "$lua" "$TMP/$P-dsl.lua" "$ROOT/share" "${DL_ARGS[@]}"); }
   # (profile_match's cases, from deskshell.rs's PROFILE_CASES: `("CMD", Some("NAME"))` or None)
   cases=$(sed -n '/^    const PROFILE_CASES/,/^    \];/p' "$ROOT/crates/omabox/src/deskshell.rs" |
     sed -n 's/^        ("\(.*\)", \(Some("\([a-z-]*\)")\|None\)),$/\1\t\3/p' | sed 's/\\"/"/g')
@@ -12414,6 +12421,26 @@ after -" "$(dl OMABOX_SHELL_CMD='qs -p /b' OMABOX_DESK_SHELL=dms) $(rtls)"
 false|
 after -" "$(dl OMABOX_SHELL=0 OMABOX_DESK_SHELL=dms) $(rtls)"
   check_eq "take: a command that is no string is not taken" "false|" "$(DL_ARGS=(take @num); dl)"
+  # Finding 701: a program not on PATH.
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take "setsid -f waybar" "/nonexistent/dms run" "qs -c bar" @after)
+  check_eq "take: a shell whose program is not there not started, the next one taken" \
+    "true|not started: its program waybar is not installed
+true|not started: its program /nonexistent/dms is not installed
+exec /opt/omabox/share/shell.sh take
+true|the slot runs it (quickshell)
+after" "$(dl PATH="$bin/none")"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take "setsid -f waybar" @after)
+  check_eq "...none other: the slot missing, nothing started" "true|not started: its program waybar is not installed
+after missing -" "$(dl PATH="$bin/none") $(cat "$rt/omabox-desk-shell") $(cat "$rt/omabox-shell.cmd" 2>/dev/null || echo -)"
+  rm -rf "$rt"; mkdir -p "$rt"
+  DL_ARGS=(take @after)
+  check_eq "after_start: a guess whose program is not there: missing, nothing started" "after missing -" \
+    "$(dl PATH="$bin/none" OMABOX_DESK_SHELL=dms) $(cat "$rt/omabox-desk-shell") $(cat "$rt/omabox-shell.cmd" 2>/dev/null || echo -)"
+  rm -rf "$rt"; mkdir -p "$rt"
+  check_eq "...no guess, one up left out (OMABOX_DESK_SHELL_MISSING): missing" "after missing" \
+    "$(dl OMABOX_DESK_SHELL_MISSING=dms) $(cat "$rt/omabox-desk-shell")"
 }
 
 # DESK_BINDS (#321, finding 700): `python3 -I -c "$DESK_BINDS" LAUNCH HOME BOXHOME`: what in launch.sh's
@@ -19932,6 +19959,9 @@ t_desk_backgrounds() {
 # box: copies, none a link; the link to .ssh and the big file left out and said (up and box.json); the
 # shell guessed (dms, from its unit) in box.json and OMABOX_DESK_SHELL; --seed's file over a copied
 # one; a write in the box's copy leaves the host's as it was; the stand-in HOME as it was after down.
+# Then (finding 701) a second stand-in whose unit link names a shell whose program is not installed
+# (a stand-in profile's, as a dms.service left when dms went) and, where waybar is not installed, whose
+# config starts waybar: up, a box with no shell, each said once and in desk_copy's skipped.
 t_desk_copy() {
   local B=$P-dcp base=$TMP/$P-dcp D out before lua='hl.config({ general = { gaps_out = 7 } })'
   local fh=$base/home rt=$base/rt c=$base/cache st=$base/state hy
@@ -19949,12 +19979,17 @@ t_desk_copy() {
   echo '{}' > "$fh/.config/DankMaterialShell/settings.json"
   ln -s /usr/lib/systemd/user/dms.service "$fh/.config/systemd/user/graphical-session.target.wants/dms.service"
   echo '-- seeded' > "$base/seed/binds.lua"
-  dc() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
   standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
   before=$(standin)
-  # (the box starts the shell it guesses, dms, only where DankMaterialShell is installed: elsewhere it
-  # would exit at once and fail up; the guess and what up says of it are the same with --no-shell)
-  local ns=(); command -v dms >/dev/null || ns=(--no-shell)
+  # (the box starts the shell it guesses, dms, only where DankMaterialShell is installed; elsewhere
+  # --no-shell, and a stand-in dms profile whose start is a program the box has, so the copy guesses
+  # dms as it does where it is: finding 701 leaves out a shell whose program is not installed)
+  local ns=() pd=$base/profiles
+  rm -rf "$pd"; cp -r "$ROOT/share/desk-shells" "$pd"
+  if ! command -v dms >/dev/null; then
+    ns=(--no-shell); sed -i 's/^start dms run$/start true dms run/' "$pd/dms"
+  fi
+  dc() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data OMABOX_DESK_SHELL_DIR=$pd "$CLI" "$@"; }
   out=$(cd "$base" && dc up "$B" --desktop desk --net isolated "${ns[@]}" --seed "$base/seed/binds.lua:.config/hypr/binds.lua" 2>&1) ||
     { no "up --desktop desk with a desktop to copy" "$out"; dc down "$B" >/dev/null 2>&1; return; }
   ok "up --desktop desk with a desktop to copy"
@@ -19983,6 +20018,39 @@ t_desk_copy() {
   check_box_safety "$B"
   check "down" dc down "$B"
   check_eq "the stand-in HOME as it was before the box" "$before" "$(standin)"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+  # Finding 701: a shell found whose program the box has not: no guess, no shell, up all the same.
+  local B2=$P-dcp2 fh2=$base/home2 wb=0 want skipped
+  rm -rf "$fh2"; mkdir -p "$fh2/.config/omabox" "$fh2/.config/hypr" "$fh2/.config/t701" "$fh2/.config/systemd/user/graphical-session.target.wants"
+  : > "$fh2/.config/omabox/config"
+  printf 'start omabox-t701-none run\nunit omabox-t701.service\nconfig .config/t701\n' > "$pd/t701"
+  echo '{}' > "$fh2/.config/t701/settings.json"
+  ln -s /usr/lib/systemd/user/omabox-t701.service "$fh2/.config/systemd/user/graphical-session.target.wants/omabox-t701.service"
+  echo 'hl.config({ general = { gaps_out = 7 } })' > "$fh2/.config/hypr/hyprland.lua"
+  # (and where waybar is not installed, the config starts it: the slot never takes it)
+  if [ ! -e /usr/bin/waybar ] && [ ! -e /usr/local/bin/waybar ]; then
+    wb=1; printf 'hl.on("hyprland.start", function()\n  hl.exec_cmd("setsid -f waybar")\nend)\n' >> "$fh2/.config/hypr/hyprland.lua"
+  fi
+  dc2() { HOME=$fh2 XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh2/.config XDG_DATA_HOME=$base/data OMABOX_DESK_SHELL_DIR=$pd "$CLI" "$@"; }
+  out=$(cd "$base" && dc2 up "$B2" --desktop desk --net isolated 2>&1) ||
+    { no "up --desktop desk, a unit's shell not installed: up, no shell" "$out"; dc2 down "$B2" >/dev/null 2>&1; return; }
+  ok "up --desktop desk, a unit's shell not installed: up, no shell"
+  check_eq "...said once" 1 "$(grep -c "^omabox: up: not the t701 shell (its systemd unit is linked): its program omabox-t701-none is not installed$" <<<"$out")"
+  check_fails "...no guess said" grep -q "first guessed" <<<"$out"
+  D=$(dc2 path -b "$B2")
+  want="(shell t701)|its program omabox-t701-none is not installed"; skipped=$(jq -r '.desk_copy.skipped[] | "\(.path)|\(.why)"' "$D/box.json" | LC_ALL=C sort)
+  if [ "$wb" = 1 ]; then
+    check_eq "...the config's waybar said once too" 1 "$(grep -c "^omabox: up: not the waybar shell (your Hyprland config starts it): its program waybar is not installed$" <<<"$out")"
+    want="$want"$'\n'"(shell waybar)|its program waybar is not installed"
+  fi
+  check_eq "box.json: desk_copy's skipped, no shell_guess, no shell" "$want|null|false" "$skipped|$(jq -r '"\(.shell_guess)|\(.shell)"' "$D/box.json")"
+  check_fails "...its folders not copied" dc2 run -b "$B2" -- test -e "$fh2/.config/t701"
+  check_eq "the slot: missing, nothing in it" "missing|-" "$(cat "$D/run/omabox-desk-shell" 2>&1)|$(cat "$D/run/omabox-shell.cmd" 2>/dev/null || echo -)"
+  if [ "$wb" = 1 ]; then
+    check_match "autostart.log: the config's waybar not started" "^start take shell exec_cmd setsid -f waybar  \(not started: its program waybar is not installed\)$" "$(cat "$D/home/autostart.log" 2>&1)"
+  fi
+  check_box_safety "$B2" dc2
+  check "down" dc2 down "$B2"
   check_fails "no box process left" pgrep -f "$rt/omabox/"
 }
 

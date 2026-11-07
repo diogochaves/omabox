@@ -265,6 +265,8 @@ pub struct SeedPlan {
     pub desk_box: bool,
     /// SHELL_CMD (`up --shell CMD`): a desk box's copy brings the shell it names (#321 step 2).
     pub shell_cmd: Vec<u8>,
+    /// QUICKSHELL (`up --quickshell`): its build is the box's `qs` and `quickshell` (finding 701).
+    pub quickshell: bool,
     /// The box's HOME inside it (#321): /home/sbx, or a desk box's at the user's HOME path; empty
     /// for /home/sbx. Where a link seeded in the HOME leads, as the box sees it.
     pub home: Vec<u8>,
