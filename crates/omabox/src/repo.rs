@@ -3,7 +3,7 @@
 //! word of its command the box will not have: one reached through a link out of the repo (#235), one
 //! relative to a dir the box runs it outside of (#251).
 
-use crate::boxes::{BoxPid, box_pid};
+use crate::boxes::{BoxPid, SBX_HOME, box_home, box_pid};
 use crate::cat;
 use crate::exit::{Ctx, say};
 use crate::jail::in_jail;
@@ -677,11 +677,12 @@ pub fn run_cwd_note(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
     let BoxPid::Pid(pid) = box_pid(&ctx.d) else {
         return;
     };
-    if crate::exec::box_cwd(&ctx.d, &pid, &pwd) != b"/home/sbx" {
+    let home = box_home(&ctx.d);
+    if crate::exec::box_cwd(&ctx.d, &pid, &pwd) != home {
         return;
     }
     let norepo = how == "run" && repo_top().is_none();
-    say(cwd_note(&ctx.name, how, &w, &pwd, norepo));
+    say(cwd_note_in(&ctx.name, how, &w, &pwd, norepo, &home));
 }
 
 /// mount_gone_notes (#391): a folder bound into the box at up (box.json's mounts) that is no longer
@@ -808,7 +809,10 @@ fn search_list(k: &[u8]) -> bool {
 /// What a host path is in box NAME, said by run before its command (#301; HOW: the mount's command,
 /// `down, then up` or `run` for a throwaway). P: the path; D: the box's folder; MAPS: (host folder,
 /// the box's path for it, what it is) for what the box has elsewhere; IN_BOX: the box has P at its
-/// own path; ON_HOST: the host has it. None: the box sees P as the host does, or neither has it.
+/// own path (the same file, for a path under a desk box's HOME); ON_HOST: the host has it. None:
+/// the box sees P as the host does, or neither has it. The box's HOME is box_home D's: a desk box's
+/// is at your HOME's path (#321), its own, so a path there the box does not have as yours is said
+/// to be the box HOME's, not yours.
 #[allow(clippy::too_many_arguments)]
 pub fn host_path_text(
     name: &[u8],
@@ -830,8 +834,9 @@ pub fn host_path_text(
             .map(<[u8]>::to_vec)
     };
     let (pp, n) = (no_cntrl(p), no_cntrl(name));
+    let home = box_home(d);
     let own: [(&[u8], Vec<u8>, &str, &str); 2] = [
-        (b"/home", b"/home/sbx".to_vec(), "HOME", "--home"),
+        (b"/home", home.clone(), "HOME", "--home"),
         (
             b"/run",
             format!("/run/user/{uid}").into_bytes(),
@@ -904,11 +909,29 @@ pub fn host_path_text(
         Some(why) => cat!("a box may not mount ", no_cntrl(&dir), " (", why, ")"),
         None => cat!(how, " --ro-bind ", no_cntrl(&dir), " mounts it"),
     };
+    // (a desk box's HOME is at your HOME's path: there the path is the box's, #321)
+    if home != SBX_HOME.as_bytes() && rest(&home).is_some() {
+        let fix = if how == "run" {
+            mount
+        } else {
+            cat!("copy it there, or ", mount)
+        };
+        return Some(cat!(
+            "note: ",
+            pp,
+            " is in your HOME, which box '",
+            n,
+            "' does not have: in the box that path is the box HOME's, not yours (on the host: omabox path --home): ",
+            fix
+        ));
+    }
     let fix = if how == "run" {
         mount
     } else {
         cat!(
-            "copy it into the box HOME (omabox path --home; /home/sbx in the box), or ",
+            "copy it into the box HOME (omabox path --home; ",
+            no_cntrl(&home),
+            " in the box), or ",
             mount
         )
     };
@@ -936,8 +959,21 @@ pub fn host_path_notes(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
     }
     let Some(pid) = box_root_pid(ctx) else { return };
     let maps = box_maps(ctx);
-    let in_box =
-        |p: &[u8]| std::fs::symlink_metadata(shell::path(&cat!("/proc/", pid, "/root", p))).is_ok();
+    let home = box_home(&ctx.d);
+    let desk = home != SBX_HOME.as_bytes();
+    let in_box = |p: &[u8]| {
+        // A desk box's HOME is at your HOME's path (#321): a path there counts only when the box
+        // has the same file (the repo, a --ro-bind), or something where you have nothing; looked
+        // up in the box's root, never through the host's.
+        if desk && (p == home.as_slice() || p.starts_with(&cat!(home, "/"))) {
+            return if std::fs::symlink_metadata(shell::path(p)).is_ok() {
+                crate::exec::same_in_box(&ctx.d, &pid, p)
+            } else {
+                crate::exec::has_in_box(&ctx.d, &pid, p)
+            };
+        }
+        std::fs::symlink_metadata(shell::path(&cat!("/proc/", pid, "/root", p))).is_ok()
+    };
     let on_host = |p: &[u8]| std::fs::symlink_metadata(shell::path(p)).is_ok();
     let uid = crate::procfs::uid();
     let (mut n, mut more) = (0, 0);
@@ -983,7 +1019,7 @@ fn box_maps(ctx: &Ctx) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
             if let (Some(dir), Some("mounted")) = (dir.as_str(), via) {
                 maps.push((
                     dir.as_bytes().to_vec(),
-                    cat!("/home/sbx/.config/omarchy/plugins/", id),
+                    cat!(box_home(&ctx.d), "/.config/omarchy/plugins/", id),
                     cat!("plugin ", id, "'s folder"),
                 ));
             }
@@ -1013,8 +1049,21 @@ fn box_maps(ctx: &Ctx) -> Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> {
 }
 
 /// The note run_cwd_note says (NAME's box; HOW the command; WORD the path word, DIR the caller's
-/// dir; NOREPO a throwaway outside any repo), its control characters as ?.
+/// dir; NOREPO a throwaway outside any repo), its control characters as ?: a box whose HOME is
+/// /home/sbx.
 pub fn cwd_note(name: &[u8], how: &str, word: &[u8], dir: &[u8], norepo: bool) -> Vec<u8> {
+    cwd_note_in(name, how, word, dir, norepo, SBX_HOME.as_bytes())
+}
+
+/// cwd_note for a box whose HOME is HOME (box_home's, #321).
+pub fn cwd_note_in(
+    name: &[u8],
+    how: &str,
+    word: &[u8],
+    dir: &[u8],
+    norepo: bool,
+    home: &[u8],
+) -> Vec<u8> {
     let (w, d) = (no_cntrl(word), no_cntrl(dir));
     let wher = if norepo {
         b"is in no repo, so not in this throwaway box".to_vec()
@@ -1037,7 +1086,9 @@ pub fn cwd_note(name: &[u8], how: &str, word: &[u8], dir: &[u8], norepo: bool) -
         d,
         ", which ",
         wher,
-        ": the command runs in the box HOME (/home/sbx); ",
+        ": the command runs in the box HOME (",
+        no_cntrl(home),
+        "); ",
         fix
     )
 }
@@ -1289,5 +1340,95 @@ mod tests {
             ),
             "{dev}"
         );
+    }
+
+    // #321: a desk box's HOME is at your HOME's path: its host folder maps to that path, a path of
+    // yours there that the box does not have as yours is said to be the box HOME's, never taken as
+    // the same; a plugin's place is in that HOME.
+    #[test]
+    fn host_path_said_desk() {
+        let h = std::env::temp_dir().join(format!("omabox-hpd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&h);
+        let d = h.join(".cache/omabox/B");
+        std::fs::create_dir_all(&d).unwrap();
+        let (hs, ds) = (h.display().to_string(), d.display().to_string());
+        let j = serde_json::json!({"desktop": "desk", "home": hs, "plugin_dirs": {"p.x": "/src/plug"},
+            "plugin_via": {"p.x": "mounted"}});
+        std::fs::write(d.join("box.json"), j.to_string()).unwrap();
+        let t = |how: &str, p: &str, in_box: bool, on_host: bool| {
+            host_path_text(
+                b"B",
+                how,
+                p.as_bytes(),
+                ds.as_bytes(),
+                1000,
+                &[],
+                &|_| in_box,
+                &|_| on_host,
+            )
+            .map(|v| String::from_utf8_lossy(&v).into_owned())
+        };
+        assert_eq!(
+            t(
+                "down, then up",
+                &format!("{ds}/home/run-1.log"),
+                false,
+                true
+            ),
+            Some(format!(
+                "note: {ds}/home/run-1.log is box 'B''s HOME as the host has it (omabox path --home): in the box it is {hs}/run-1.log"
+            ))
+        );
+        // (the box's folder is under that HOME on the host: still its folder, not the box HOME)
+        assert_eq!(
+            t("down, then up", &format!("{ds}/box.json"), true, true),
+            Some(format!(
+                "note: {ds}/box.json is in box 'B''s folder on the host, which the box does not see"
+            ))
+        );
+        let p = format!("{hs}/notes/a.txt");
+        assert_eq!(
+            t("down, then up", &p, false, true),
+            Some(format!(
+                "note: {p} is in your HOME, which box 'B' does not have: in the box that path is the box HOME's, not yours (on the host: omabox path --home): copy it there, or down, then up --ro-bind {hs}/notes mounts it"
+            ))
+        );
+        assert_eq!(
+            t("run", &p, false, true),
+            Some(format!(
+                "note: {p} is in your HOME, which box 'B' does not have: in the box that path is the box HOME's, not yours (on the host: omabox path --home): run --ro-bind {hs}/notes mounts it"
+            ))
+        );
+        // the same file in the box (the repo, a --ro-bind), or the box's own where you have none
+        assert_eq!(t("run", &p, true, true), None);
+        assert_eq!(t("run", &p, false, false), None);
+        // outside that HOME: as any box's, with its HOME's path in the fix
+        assert_eq!(
+            t("down, then up", "/nonexistent-321/f", false, true),
+            Some(format!(
+                "note: /nonexistent-321/f is not in box 'B' (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME): copy it into the box HOME (omabox path --home; {hs} in the box), or down, then up --ro-bind /nonexistent-321 mounts it"
+            ))
+        );
+        let mut ctx = Ctx::new(b"run", Vec::new());
+        ctx.d = ds.as_bytes().to_vec();
+        assert_eq!(
+            box_maps(&ctx),
+            vec![(
+                b"/src/plug".to_vec(),
+                format!("{hs}/.config/omarchy/plugins/p.x").into_bytes(),
+                b"plugin p.x's folder".to_vec()
+            )]
+        );
+        let n = cwd_note_in(b"B", "run", b"f", b"/x", false, hs.as_bytes());
+        assert!(
+            String::from_utf8_lossy(&n).contains(&format!("runs in the box HOME ({hs}); ")),
+            "{}",
+            String::from_utf8_lossy(&n)
+        );
+        assert_eq!(
+            cwd_note(b"B", "run", b"f", b"/x", false),
+            cwd_note_in(b"B", "run", b"f", b"/x", false, b"/home/sbx")
+        );
+        let _ = std::fs::remove_dir_all(&h);
     }
 }

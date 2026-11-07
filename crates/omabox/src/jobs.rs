@@ -1040,10 +1040,11 @@ impl Job {
         Some(format!("omabox.run-{}.exit", String::from_utf8_lossy(&ns)))
     }
 
-    /// Its log, as the box has it (/home/sbx/run-NS.log), for a read inside the box.
-    pub fn box_log(&self) -> Option<Vec<u8>> {
+    /// Its log, as box D has it (HOME/run-NS.log, its HOME box_home's), for a read inside the box.
+    pub fn box_log(&self, d: &[u8]) -> Option<Vec<u8>> {
         let base = self.log.rsplit(|&c| c == b'/').next().unwrap_or(&self.log);
-        shell::re_match(r"^run-[0-9]{1,19}\.log$", base).then(|| cat!("/home/sbx/", base))
+        shell::re_match(r"^run-[0-9]{1,19}\.log$", base)
+            .then(|| cat!(crate::boxes::box_home(d), "/", base))
     }
 }
 
@@ -1313,7 +1314,7 @@ pub fn job_ended(
         b"-n".to_vec(),
         b"5".to_vec(),
         b"--".to_vec(),
-        cat!("/home/sbx/", log),
+        cat!(crate::boxes::box_home(&ctx.d), "/", log),
     ];
     let r = on_box(ctx, &t, false, Out::Capture(Some(65536)), ErrTo::Null);
     let mut tail = Vec::new();
@@ -1981,7 +1982,7 @@ mod tests {
                 j.pid.as_slice(),
                 j.ns,
                 j.words().as_str(),
-                j.box_log(),
+                j.box_log(d.as_os_str().as_encoded_bytes()),
                 j.exit_name()
             ),
             (
@@ -2216,6 +2217,28 @@ mod tests {
         assert!(
             out.contains("(pid 3)") && !out.contains("protocol"),
             "no such line: only the end: {out}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // #321: a run -d job's log in the box is under the box's own HOME.
+    #[test]
+    fn job_box_log_desk() {
+        let d = std::env::temp_dir().join(format!("omabox-jbd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("jobs")).unwrap();
+        std::fs::write(
+            d.join("box.json"),
+            r#"{"desktop":"desk","home":"/home/someone"}"#,
+        )
+        .unwrap();
+        let v = serde_json::json!({"pid": "40", "start": "9", "log": "/x/home/run-1000.log",
+            "exe": "make", "argv": ["make"]});
+        std::fs::write(d.join("jobs/40"), format!("{v}\n")).unwrap();
+        let j = job_of(&d.join("jobs/40")).unwrap();
+        assert_eq!(
+            j.box_log(d.as_os_str().as_encoded_bytes()),
+            Some(b"/home/someone/run-1000.log".to_vec())
         );
         let _ = std::fs::remove_dir_all(&d);
     }

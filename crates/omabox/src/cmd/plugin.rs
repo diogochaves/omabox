@@ -23,8 +23,10 @@ use crate::shell;
 use crate::term;
 use std::time::Duration;
 
-/// The box HOME's plugins dir, as the box has it.
-const PLUGINS: &[u8] = b"/home/sbx/.config/omarchy/plugins";
+/// Box D's plugins dir, as the box has it: in its HOME (box_home, #321).
+fn plugins_dir(d: &[u8]) -> Vec<u8> {
+    cat!(crate::boxes::box_home(d), "/.config/omarchy/plugins")
+}
 
 /// box.json with a plugin added ($i its id, $d its dir, $v linked or mounted).
 const ADD_JQ: &str =
@@ -33,19 +35,19 @@ const ADD_JQ: &str =
 const REMOVE_JQ: &str = r#".plugins = ((.plugins // []) - [$i]) | del(.plugin_dirs[$i], .plugin_via[$i], .plugin_status[$i])
     | if (.desk_shell.plugins | type) == "array" then .desk_shell.plugins -= [$i] else . end"#;
 
-/// In the box (S7): the place for plugin $2 made, a link to $3 ($1 link) or an empty folder for a
-/// mount ($1 dir). A link already there (one made by hand) is replaced, said on stdout as `link
-/// TARGET`; anything else there is left as it is, exit 3.
-const PLACE_SH: &str = r#"p=/home/sbx/.config/omarchy/plugins t=/home/sbx/.config/omarchy/plugins/$2
+/// In the box (S7), its plugins dir first (in_box's): the place for plugin $2 made, a link to $3
+/// ($1 link) or an empty folder for a mount ($1 dir). A link already there (one made by hand) is
+/// replaced, said on stdout as `link TARGET`; anything else there is left as it is, exit 3.
+const PLACE_SH: &str = r#"p=$1 && shift && t=$p/$2
 if [ -L "$t" ]; then printf 'link %s\n' "$(readlink "$t")"; rm -f "$t" || exit 1
 elif [ -e "$t" ]; then exit 3
 fi
 mkdir -p "$p" || exit 1
 if [ "$1" = link ]; then ln -s "$3" "$t"; else mkdir "$t"; fi"#;
 
-/// In the box: plugin $2's place gone, the link ($1 link) or the empty folder left by its mount
-/// ($1 dir), never anything else.
-const UNPLACE_SH: &str = r#"t=/home/sbx/.config/omarchy/plugins/$2
+/// In the box, its plugins dir first (in_box's): plugin $2's place gone, the link ($1 link) or the
+/// empty folder left by its mount ($1 dir), never anything else.
+const UNPLACE_SH: &str = r#"t=$1/$3 && shift
 if [ "$1" = link ]; then if [ -L "$t" ]; then rm -f "$t"; fi
 elif [ -d "$t" ] && [ ! -L "$t" ]; then rmdir "$t"; fi"#;
 
@@ -222,13 +224,14 @@ fn locked(ctx: &Ctx, what: &[u8]) -> Res<std::fs::File> {
 }
 
 /// A sh script run in the box (on_box: its user and mount namespaces, a clean environment), its
-/// arguments after it; its status and stdout.
+/// the box's plugins dir then ARGS after it; its status and stdout.
 fn in_box(ctx: &Ctx, script: &str, args: &[&[u8]]) -> Res<(i32, Vec<u8>)> {
     let mut argv: Vec<Vec<u8>> = vec![
         b"/usr/bin/sh".to_vec(),
         b"-c".to_vec(),
         script.as_bytes().to_vec(),
         b"sh".to_vec(),
+        plugins_dir(&ctx.d),
     ];
     argv.extend(args.iter().map(|a| a.to_vec()));
     // (its stderr dropped: what the box's names make sh say is the box's; failures go by status)
@@ -272,7 +275,7 @@ fn rescan_until(ctx: &mut Ctx, id: &[u8], want: bool) -> bool {
 
 fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
     let n = ctx.name.clone();
-    let dest = cat!(PLUGINS, "/", p.id);
+    let dest = cat!(plugins_dir(&ctx.d), "/", p.id);
     // S1 and S3 as up's checked_ro has them for a --plugin: refuse_src, the seat's paths.
     let runtime = shell::env_or_empty("XDG_RUNTIME_DIR");
     crate::bwrap::Bwrap::new(&runtime, &ctx.d, Vec::new(), Vec::new())
@@ -358,7 +361,7 @@ fn add(ctx: &mut Ctx, p: &Plugin) -> Res<()> {
         ));
     }
     if !linked {
-        let r = BoxNs::open(&ctx.d).and_then(|b| b.mount_ro(&p.dir, PLUGINS, &p.id));
+        let r = BoxNs::open(&ctx.d).and_then(|b| b.mount_ro(&p.dir, &plugins_dir(&ctx.d), &p.id));
         if let Err(why) = r {
             let _ = in_box(ctx, UNPLACE_SH, &[b"dir", &p.id]);
             return Err(ctx.die(cat!(
@@ -484,7 +487,7 @@ fn remove(ctx: &mut Ctx, id: &[u8]) -> Res<()> {
     let lock = locked(ctx, b"remove")?;
     let linked = via == b"linked";
     if !linked {
-        let r = BoxNs::open(&ctx.d).and_then(|b| b.umount(PLUGINS, id));
+        let r = BoxNs::open(&ctx.d).and_then(|b| b.umount(&plugins_dir(&ctx.d), id));
         if let Err(why) = r {
             return Err(ctx.die(cat!(
                 "plugin remove: cannot unmount ",
@@ -597,5 +600,28 @@ mod tests {
             ]
         );
         assert!(box_plugins(&serde_json::Value::Null).is_empty());
+    }
+
+    // #321: a plugin's place is in the box's own HOME (a desk box's at your HOME's path).
+    #[test]
+    fn plugins_dir_is_the_box_homes() {
+        let d = std::env::temp_dir().join(format!("omabox-pd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let ds = d.display().to_string();
+        assert_eq!(
+            plugins_dir(ds.as_bytes()),
+            b"/home/sbx/.config/omarchy/plugins"
+        );
+        std::fs::write(
+            d.join("box.json"),
+            r#"{"desktop":"desk","home":"/home/someone"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            plugins_dir(ds.as_bytes()),
+            b"/home/someone/.config/omarchy/plugins"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -340,7 +340,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         None => None,
         Some(pid) => {
             let j = crate::jobs::job_resolve(ctx, pid).map_err(|m| ctx.die(cat!("log: ", m)))?;
-            let Some(p) = j.box_log() else {
+            let Some(p) = j.box_log(&ctx.d) else {
                 return Err(ctx.die(cat!("log: job ", j.pid, " has no log of run -d's")));
             };
             Some((cat!("run ", j.pid), p))

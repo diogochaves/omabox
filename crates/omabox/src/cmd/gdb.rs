@@ -6,7 +6,7 @@
 //! fatal signal's backtraces into the box's gdb log.
 
 use crate::args::{optarg, unexpected, unknown_opt_hint};
-use crate::boxes::{BoxPid, box_pid, covers_held, need_box};
+use crate::boxes::{BoxPid, box_home, box_pid, covers_held, need_box};
 use crate::cat;
 use crate::enter::Plan;
 use crate::exec::{Relayed, stdio_relay};
@@ -239,7 +239,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let lang = shell::env("LANG")
         .filter(|l| !l.is_empty())
         .unwrap_or(b"C.UTF-8".to_vec());
-    let mut gdb = w(&["env", "-i", "PATH=/usr/bin", "HOME=/home/sbx"]);
+    let mut gdb = w(&["env", "-i", "PATH=/usr/bin"]);
+    gdb.push(cat!("HOME=", box_home(&ctx.d)));
     gdb.push(cat!("LANG=", lang));
     gdb.extend(w(&[
         "gdb",
@@ -287,7 +288,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // written from inside the box, its header too (finding 229): a link there resolves to the box's
     // own files; a link or FIFO is replaced (log reads only a regular file, finding 107; a FIFO would
     // hang this write, 10 s at most).
-    let log = b"/home/sbx/gdb.log".to_vec();
+    let log = cat!(box_home(&ctx.d), "/gdb.log");
     let date = shell::date_iso();
     let head = cat!(
         "\n== omabox gdb --watch ",
