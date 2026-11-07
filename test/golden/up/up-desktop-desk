@@ -239,6 +239,10 @@ OMABOX_DESK_SHELL
   "autoreload": false,
   "bar": "user",
   "desk_base": "plain",
+  "desk_copy": {
+    "copied": [],
+    "skipped": []
+  },
   "desktop": "desk",
   "dir": "R/norepo",
   "home": "R/home",
@@ -259,6 +263,8 @@ OMABOX_DESK_SHELL
   "scale": 1,
   "session": null,
   "shell": false,
+  "shell_from": null,
+  "shell_guess": null,
   "size": "1920x1080@60",
   "starter": {
     "terminal": false

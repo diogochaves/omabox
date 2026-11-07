@@ -19700,9 +19700,123 @@ t_desk_backgrounds() {
   fake down "$B" >/dev/null 2>&1
 }
 
-# #321 step 2's tests (its builder replaces these stubs): a desk box's copy of your desktop.
-t_desk_copy() { skip "a desk box's copy of your desktop" "#321 step 2"; }
-t_unit_desk_copy() { skip "what a desk box's copy refuses" "#321 step 2"; }
+# #321 step 2 (finding 701): a desk box's copy of your desktop, on a stand-in HOME (and runtime, cache,
+# state and data dirs; the shell's state in the stand-in XDG_STATE_HOME): ~/.config/hypr a stow link
+# into ~/dotfiles, a link to ~/.ssh and a 2 MiB file in it; DankMaterialShell's unit linked under
+# graphical-session.target.wants, its config and state, the wallpaper its session.json names. In the
+# box: copies, none a link; the link to .ssh and the big file left out and said (up and box.json); the
+# shell guessed (dms, from its unit) in box.json and OMABOX_DESK_SHELL; --seed's file over a copied
+# one; a write in the box's copy leaves the host's as it was; the stand-in HOME as it was after down.
+t_desk_copy() {
+  local B=$P-dcp base=$TMP/$P-dcp D out before lua='hl.config({ general = { gaps_out = 7 } })'
+  local fh=$base/home rt=$base/rt c=$base/cache st=$base/state hy
+  hy=$fh/dotfiles/hypr/.config/hypr
+  mkdir -p "$hy" "$fh/.config/omabox" "$fh/.ssh" "$fh/Pictures" "$st/DankMaterialShell" "$fh/.config/DankMaterialShell" \
+    "$fh/.config/systemd/user/graphical-session.target.wants" "$rt" "$c" "$base/data" "$base/seed"
+  chmod 700 "$rt" "$fh/.ssh"
+  : > "$fh/.config/omabox/config"
+  echo "$lua" > "$hy/hyprland.lua"; echo '-- binds' > "$hy/binds.lua"
+  head -c 2097152 /dev/zero | tr '\0' - > "$hy/big.lua"
+  ln -s "$hy" "$fh/.config/hypr"
+  echo "not a key" > "$fh/.ssh/id_test"; ln -s "$fh/.ssh" "$hy/ssh"
+  printf '\x89PNG\r\n\x1a\nomabox-321' > "$fh/Pictures/w.png"
+  printf '{"wallpaperPath": "%s/Pictures/w.png"}\n' "$fh" > "$st/DankMaterialShell/session.json"
+  echo '{}' > "$fh/.config/DankMaterialShell/settings.json"
+  ln -s /usr/lib/systemd/user/dms.service "$fh/.config/systemd/user/graphical-session.target.wants/dms.service"
+  echo '-- seeded' > "$base/seed/binds.lua"
+  dc() { HOME=$fh XDG_RUNTIME_DIR=$rt XDG_CACHE_HOME=$c XDG_STATE_HOME=$st XDG_CONFIG_HOME=$fh/.config XDG_DATA_HOME=$base/data "$CLI" "$@"; }
+  standin() { (cd "$fh" && command find . -printf '%p %y %s %T@\n' | LC_ALL=C sort); }
+  before=$(standin)
+  out=$(cd "$base" && dc up "$B" --desktop desk --net isolated --seed "$base/seed/binds.lua:.config/hypr/binds.lua" 2>&1) ||
+    { no "up --desktop desk with a desktop to copy" "$out"; dc down "$B" >/dev/null 2>&1; return; }
+  ok "up --desktop desk with a desktop to copy"
+  check_match "...says what it copied" "omabox: up: your desktop, copied into the box's HOME: 5 files \(2 of ~/\.config/hypr, 2 of the dms shell, 1 of the images they name\); its shell, first guessed: dms \(from unit\)" "$out"
+  check_match "...and what it left out, and why" "omabox: up: not copied: ~/\.config/hypr/big\.lua \(over 1 MiB\)" "$out"
+  D=$(dc path -b "$B")
+  desk_guard "$B" "$D" "$fh" "$c" dc || { dc down "$B" >/dev/null 2>&1; return; }
+  check_eq "box.json: desk_copy's skipped, shell_guess, shell_from" \
+    ".config/hypr/big.lua .config/hypr/ssh|dms|unit" \
+    "$(jq -r '"\([.desk_copy.skipped[].path] | join(" "))|\(.shell_guess)|\(.shell_from)"' "$D/box.json")"
+  check_match "...the link to .ssh: where it leads, refused" "^it leads to $(re_q "$fh/.ssh"): it is inside " \
+    "$(jq -r '.desk_copy.skipped[] | select(.path == ".config/hypr/ssh") | .why' "$D/box.json")"
+  check_eq "OMABOX_DESK_SHELL in the box: the guess" dms "$(dc run -b "$B" -- printenv OMABOX_DESK_SHELL 2>&1)"
+  check_eq "the box's .config/hypr: a folder of its own, its files copies (no link)" "$lua|0" \
+    "$(dc run -b "$B" -- sh -c 'echo "$(cat ~/.config/hypr/hyprland.lua)|$(find ~/.config/hypr ~/.local/state/DankMaterialShell ~/.config/DankMaterialShell ~/Pictures -type l | wc -l)"' 2>&1)"
+  check "...DMS's state at the box's XDG_STATE_HOME, its config" dc run -b "$B" -- sh -c 'test -f "$XDG_STATE_HOME/DankMaterialShell/session.json" && test -f ~/.config/DankMaterialShell/settings.json'
+  check_eq "...the wallpaper session.json names, at its path" "omabox-321" "$(dc run -b "$B" -- sh -c 'tail -c 10 "$1/Pictures/w.png"' sh "$fh" 2>/dev/null)"
+  check_fails "...not the link to .ssh" dc run -b "$B" -- test -e "$fh/.config/hypr/ssh"
+  check_fails "...nor .ssh" dc run -b "$B" -- test -e "$fh/.ssh"
+  check_fails "...nor the big file" dc run -b "$B" -- test -e "$fh/.config/hypr/big.lua"
+  check_fails "...nor the systemd links" dc run -b "$B" -- test -e "$fh/.config/systemd"
+  check_eq "--seed over a copied file: --seed's" "-- seeded" "$(dc run -b "$B" -- cat "$fh/.config/hypr/binds.lua" 2>/dev/null)"
+  dc run -b "$B" -- sh -c 'echo "-- the box wrote" >> ~/.config/hypr/hyprland.lua' >/dev/null 2>&1
+  check_eq "a write in the box's copy: there" "-- the box wrote" "$(dc run -b "$B" -- tail -n 1 "$fh/.config/hypr/hyprland.lua" 2>/dev/null)"
+  check_eq "...the host's file as it was" "$lua" "$(cat "$hy/hyprland.lua")"
+  check_box_safety "$B"
+  check "down" dc down "$B"
+  check_eq "the stand-in HOME as it was before the box" "$before" "$(standin)"
+  check_fails "no box process left" pgrep -f "$rt/omabox/"
+}
+
+# #321 step 2 (finding 701): the desk box's copy on its own (probe desk_copy H [SHELL_CMD]: the copy
+# into H, from the HOME and XDG dirs it is given; no box), on stand-in HOMEs. Refused, nothing copied:
+# a Hyprland config that is a link into a secret store, a hyprland.lua holding a token's shape, a module
+# it requires over 1 MiB. What a copy follows and what it leaves out: links followed (none in the copy
+# but one into /usr), a secret's name on a link's way, a repo's metadata, a loop, a FIFO; the looser
+# names a desktop's files have (keybinds.lua, session.json); --shell CMD's shell and its config. And
+# your real ~/.config/hypr copies (into the test's folder, read-only on yours, only names said).
+t_unit_desk_copy() {
+  local d=$TMP/$P-udc fh out rc
+  # dcp HOME H [SHELL_CMD]: the copy from HOME (its XDG dirs under it) into H
+  dcp() { local h=$1; shift; HOME=$h XDG_CONFIG_HOME='' XDG_STATE_HOME='' XDG_CACHE_HOME='' XDG_DATA_HOME='' OMABOX_JAIL='' probe desk_copy "$@"; }
+  fh=$d/a; mkdir -p "$fh/.gnupg/hypr" "$fh/.config" "$d/a-box"
+  echo 'hl.config({})' > "$fh/.gnupg/hypr/hyprland.lua"; ln -s "$fh/.gnupg/hypr" "$fh/.config/hypr"
+  out=$(dcp "$fh" "$d/a-box" 2>&1); rc=$?
+  check_match "a Hyprland config that leads into ~/.gnupg: refused" \
+    "^omabox: up: --desktop desk: your Hyprland config \($(re_q "$fh/.config/hypr")\) cannot go into a box: it leads to $(re_q "$fh/.gnupg/hypr"): it is inside " "$out"
+  check "...failing" test "$rc" != 0
+  check_eq "...nothing copied" "" "$(ls -A "$d/a-box")"
+  fh=$d/b; mkdir -p "$fh/.config/hypr" "$d/b-box"
+  echo 'local password = "hunter2hunter2"' > "$fh/.config/hypr/hyprland.lua"
+  check_eq "a hyprland.lua holding what looks like a password: refused" \
+    "omabox: up: --desktop desk: your hyprland.lua was not copied into the box: it holds what looks like a key, token or password" \
+    "$(dcp "$fh" "$d/b-box" 2>&1)"
+  check_fails "...not in the box HOME" test -e "$d/b-box/.config/hypr/hyprland.lua"
+  fh=$d/c; mkdir -p "$fh/.config/hypr/conf" "$d/c-box"
+  printf 'require("conf.big")\n' > "$fh/.config/hypr/hyprland.lua"
+  head -c 1048577 /dev/zero | tr '\0' - > "$fh/.config/hypr/conf/big.lua"
+  check_eq "a module it requires over 1 MiB: refused" \
+    "omabox: up: --desktop desk: ~/.config/hypr/conf/big.lua, which your Hyprland config requires, was not copied into the box: over 1 MiB" \
+    "$(dcp "$fh" "$d/c-box" 2>&1)"
+  # What a copy follows and leaves out.
+  fh=$d/e; local hy=$fh/dots/.config/hypr
+  mkdir -p "$hy/.git" "$hy/sub" "$fh/.ssh" "$fh/private" "$fh/.config/noctalia" "$d/e-box"
+  echo 'hl.config({})' > "$hy/hyprland.lua"; echo '-- keys' > "$hy/keybinds.lua"; echo '{}' > "$hy/session.json"
+  echo '[core]' > "$hy/.git/config"; echo 'k' > "$fh/.ssh/id_k"; echo '-- p' > "$fh/private/p.lua"; echo '{}' > "$fh/.config/noctalia/settings.json"
+  ln -s "$hy" "$fh/.config/hypr"
+  ln -s "$fh/.ssh/id_k" "$hy/k.lua"; ln -s "$fh/private/p.lua" "$hy/p.lua"; ln -s "$hy" "$hy/sub/loop"; ln -s /usr/share "$hy/share"
+  mkfifo "$hy/fifo"
+  out=$(dcp "$fh" "$d/e-box" "uwsm app -- qs -c noctalia-shell" 2>/dev/null)
+  check_eq "what it copies: the config's files through the links, --shell's shell's" \
+    ".config/hypr/hyprland.lua .config/hypr/keybinds.lua .config/hypr/session.json .config/hypr/share .config/noctalia/settings.json" \
+    "$(sed -n 's/^copied //p' <<<"$out" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "...what it leaves out, and why" \
+    ".config/hypr/.git/|a git dir (its config can hold credentials) .config/hypr/fifo|not a regular file .config/hypr/k.lua|it leads to $fh/.ssh/id_k .config/hypr/p.lua|it leads to $fh/private/p.lua .config/hypr/sub/loop/|a loop: a link to a folder it is in" \
+    "$(sed -n 's/^skipped //p' <<<"$out" | sed -E 's/: (it is inside|a secret).*//' | tr '\t' '|' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "...the shell it guessed, and from what" "noctalia	--shell" "$(sed -n 's/^guess //p' <<<"$out")"
+  check_eq "...no link in the copy but the one into /usr" "$d/e-box/.config/hypr/share" "$(command find "$d/e-box" -type l)"
+  check_fails "...nothing of .ssh" test -e "$d/e-box/.config/hypr/k.lua"
+  # Your real Hyprland config: copied (read-only on yours; names only, into the test's folder).
+  local cf=${XDG_CONFIG_HOME:-$HOME/.config}
+  [[ $cf == /* ]] || cf=$HOME/.config
+  if [ -f "$cf/hypr/hyprland.lua" ]; then
+    mkdir -p "$d/real"
+    out=$(OMABOX_JAIL='' probe desk_copy "$d/real" 2>/dev/null)
+    check_match "your real ~/.config/hypr: its hyprland.lua copied" "(^|"$'\n'")copied \.config/hypr/hyprland\.lua($|"$'\n'")" "$out"
+    check_eq "...as a copy (not a link)" "" "$(command find "$d/real/.config/hypr" -maxdepth 1 -name hyprland.lua -type l)"
+    rm -rf "$d/real"
+  else skip "your real ~/.config/hypr copies" "no $cf/hypr/hyprland.lua"; fi
+}
 
 # up --stock (#265, finding 613): Omarchy as a new user sees it, on a fake desk (HOME and the XDG dirs
 # a folder of the test's) that has one of each thing of a desk's look, each holding a marker: none of

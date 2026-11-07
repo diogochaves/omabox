@@ -1,17 +1,916 @@
-//! A desk box's copy of the user's desktop (#321 step 2): their Hyprland config, the shell's config
-//! and state its profile names (deskshell), and the images they name, copied into the box's HOME
-//! before --seed's (which win). copy says what it did as seed_home's DESK_FILES lines, which
-//! Report reads back for box.json's desk_copy, shell_guess and shell_from.
-//! Step 0's placeholder: copies nothing, guesses nothing.
+//! A desk box's copy of the user's desktop (#321 step 2, finding 701): their Hyprland config, the
+//! config and state of each desk shell found (deskshell's profiles), and the images those name by
+//! path, copied into the box's HOME before --seed's (which win). copy says what it did as
+//! seed_home's DESK_FILES lines, which Report reads back for box.json's desk_copy, shell_guess and
+//! shell_from.
+//!
+//! What it follows and what stays out: every link is followed (stow, home-manager: even
+//! ~/.config/hypr itself a link), its target through refuse_src (the secret stores, omabox's own
+//! folders, ~/.config/omarchy but plugins/ and themes/, HOME itself) and the name check on each part
+//! of its path; what it leads to is copied as a file or folder of the box's own, so nothing in the
+//! box HOME leads back to the host. A link into /usr stays a link (the box has /usr). A folder met
+//! again below itself (dev:ino) is a loop, and 8 folders deep is the end. Each file is read from its
+//! folder held open (seed::copy_file_in), a desk box's looser name check
+//! (seed::desk_box_name_refused) and the content check on the copy (seed::desk_content_refused;
+//! images by their magic skip it). Caps per part and in all (the CAPS below), each skip said.
 
-use crate::exit::{Ctx, Res};
-use crate::seed::SeedPlan;
+use crate::cat;
+use crate::deskshell::{self, Profile};
+use crate::exit::{Ctx, Res, say};
+use crate::repo::{readlink_e, refuse_src};
+use crate::seed::{self, Dest, SeedPlan, Src};
+use crate::shell;
 use serde_json::{Map, Value};
+use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::MetadataExt;
+
+const MIB: u64 = 1 << 20;
+
+/// A part's caps: each file, and all its files' bytes and count.
+#[derive(Clone, Copy, Debug)]
+struct Caps {
+    file: u64,
+    bytes: u64,
+    count: u64,
+}
+
+/// The Hyprland config's tree.
+const HYPR: Caps = Caps {
+    file: MIB,
+    bytes: 8 * MIB,
+    count: 500,
+};
+/// Each desk shell's config, state and the caches its profile lists.
+const SHELL: Caps = Caps {
+    file: MIB,
+    bytes: 16 * MIB,
+    count: 1000,
+};
+/// The images the copied files name by path.
+const IMAGES: Caps = Caps {
+    file: 32 * MIB,
+    bytes: 128 * MIB,
+    count: 32,
+};
+/// The whole copy.
+const ALL: u64 = 160 * MIB;
+/// How many folders deep a walk goes.
+const DEPTH: u32 = 8;
+
+fn p(v: &[u8]) -> std::path::PathBuf {
+    shell::path(v)
+}
+
+/// `${VAR:-HOME/DEFAULT}`, VAR taken only when absolute (as the XDG spec says).
+fn xdg(var: &str, home: &[u8], dflt: &str) -> Vec<u8> {
+    let x = shell::env_or_empty(var);
+    if x.starts_with(b"/") {
+        x
+    } else {
+        cat!(home, "/", dflt)
+    }
+}
+
+/// Where REL (a path in the box HOME) is on the host: under the user's XDG dir for .config,
+/// .local/state, .local/share and .cache (the box's are those under its HOME), else under HOME.
+fn host_of(home: &[u8], rel: &[u8]) -> Vec<u8> {
+    for (pre, var) in [
+        (".config", "XDG_CONFIG_HOME"),
+        (".local/state", "XDG_STATE_HOME"),
+        (".local/share", "XDG_DATA_HOME"),
+        (".cache", "XDG_CACHE_HOME"),
+    ] {
+        if let Some(rest) = rel.strip_prefix(pre.as_bytes()) {
+            if rest.is_empty() || rest[0] == b'/' {
+                return cat!(xdg(var, home, pre), rest);
+            }
+        }
+    }
+    cat!(home, "/", rel)
+}
+
+/// An image by its first bytes: PNG, JPEG, GIF, WebP.
+fn is_image(f: &[u8]) -> bool {
+    use std::io::Read;
+    let mut b = [0u8; 12];
+    let n = std::fs::File::open(p(f))
+        .and_then(|mut x| x.read(&mut b))
+        .unwrap_or(0);
+    let b = &b[..n];
+    b.starts_with(b"\x89PNG\r\n\x1a\n")
+        || b.starts_with(b"\xff\xd8\xff")
+        || b.starts_with(b"GIF87a")
+        || b.starts_with(b"GIF89a")
+        || (b.len() == 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP")
+}
+
+/// An image's name, as the wallpaper pickers take one: not hidden, .jpg .jpeg .png .gif .bmp .webp
+/// in any case.
+fn pic_name(n: &[u8]) -> bool {
+    let l = n.to_ascii_lowercase();
+    n.first().is_some_and(|&c| c != b'.')
+        && [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
+            .iter()
+            .any(|e| l.len() > e.len() && l.ends_with(e.as_bytes()))
+}
+
+/// The walk: what it copied and skipped, its caps.
+struct Walk<'a> {
+    ctx: &'a Ctx,
+    h: &'a [u8],
+    /// The user's HOME as written, and resolved.
+    home: Vec<u8>,
+    home_r: Vec<u8>,
+    out: Vec<u8>,
+    caps: Caps,
+    /// The part in words, for a cap's skip and the summary.
+    what: Vec<u8>,
+    g_bytes: u64,
+    g_count: u64,
+    all: u64,
+    /// Each part's (what, files copied), for the summary.
+    parts: Vec<(Vec<u8>, u64)>,
+    /// The paths in the box HOME copied that are no image (read for the paths they name).
+    texts: Vec<Vec<u8>>,
+    /// Each path said once (copied or skipped); a skipped one's why.
+    seen: HashSet<Vec<u8>>,
+    skipped: HashMap<Vec<u8>, Vec<u8>>,
+    nskipped: Vec<Vec<u8>>,
+}
+
+impl Walk<'_> {
+    fn part(&mut self, what: Vec<u8>, caps: Caps) {
+        self.end_part();
+        self.what = what;
+        self.caps = caps;
+        self.g_bytes = 0;
+        self.g_count = 0;
+    }
+
+    fn end_part(&mut self) {
+        if !self.what.is_empty() {
+            self.parts
+                .push((std::mem::take(&mut self.what), self.g_count));
+        }
+    }
+
+    fn skip(&mut self, r: &[u8], why: &[u8]) {
+        if self.seen.insert(r.to_vec()) {
+            self.out.extend(cat!("skipped ", r, "\t", why, "\n"));
+            self.skipped.insert(r.to_vec(), why.to_vec());
+            self.nskipped.push(cat!(r, "\t", why));
+        }
+    }
+
+    /// Why the path T (resolved) stays out by a name in it: each part below HOME, or each part when
+    /// it is not in HOME.
+    fn parts_why(&self, t: &[u8]) -> Option<&'static str> {
+        let under = |h: &[u8]| t.strip_prefix(cat!(h, "/").as_slice()).map(<[u8]>::to_vec);
+        let rel = under(&self.home_r)
+            .or_else(|| under(&self.home))
+            .unwrap_or_else(|| t.to_vec());
+        rel.split(|&c| c == b'/')
+            .filter(|s| !s.is_empty())
+            .find_map(seed::desk_box_name_refused)
+    }
+
+    /// Why E, a link (or a top folder) leading to TO, is not followed: refuse_src, or a name on its
+    /// way.
+    fn follow_why(&self, e: &[u8], to: &[u8]) -> Option<Vec<u8>> {
+        if let Some(w) = refuse_src(e) {
+            return Some(cat!("it leads to ", to, ": ", w));
+        }
+        self.parts_why(to)
+            .map(|w| cat!("it leads to ", to, ": ", w))
+    }
+
+    /// A top folder (or file) the copy starts from: SRC on the host, REL in the box HOME. Nothing
+    /// when SRC is not there; Err(why) when it may not be copied.
+    fn root(&mut self, src: &[u8], rel: &[u8]) -> Res<Result<(), Vec<u8>>> {
+        if std::fs::symlink_metadata(p(src)).is_err() {
+            return Ok(Ok(()));
+        }
+        let Some(t) = readlink_e(src) else {
+            return Ok(Err(b"a link that leads nowhere".to_vec()));
+        };
+        if let Some(w) = self.follow_why(src, &t) {
+            return Ok(Err(w));
+        }
+        let Ok(m) = std::fs::metadata(p(&t)) else {
+            return Ok(Ok(()));
+        };
+        if m.is_dir() {
+            let Some(d) = Dest::new(rel) else {
+                return Ok(Ok(()));
+            };
+            seed::home_unlink(self.ctx, self.h, &d)?;
+            let _ = std::fs::create_dir_all(p(&cat!(self.h, "/", rel)));
+            let mut up = vec![(m.dev(), m.ino())];
+            self.walk(&t, rel, 0, &mut up)?;
+        } else if m.is_file() {
+            self.file(&t, rel, m.len())?;
+        }
+        Ok(Ok(()))
+    }
+
+    /// The entries of DIR (resolved), at REL in the box HOME, in byte order.
+    fn walk(&mut self, dir: &[u8], rel: &[u8], depth: u32, up: &mut Vec<(u64, u64)>) -> Res<()> {
+        let mut all: Vec<Vec<u8>> = std::fs::read_dir(p(dir))
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
+                    .collect()
+            })
+            .unwrap_or_default();
+        all.sort();
+        for name in all {
+            self.entry(dir, &name, rel, depth, up)?;
+        }
+        Ok(())
+    }
+
+    fn entry(
+        &mut self,
+        dir: &[u8],
+        name: &[u8],
+        rel: &[u8],
+        depth: u32,
+        up: &mut Vec<(u64, u64)>,
+    ) -> Res<()> {
+        let e = cat!(dir, "/", name);
+        let r = cat!(rel, "/", name);
+        let Ok(lm) = std::fs::symlink_metadata(p(&e)) else {
+            return Ok(());
+        };
+        if let Some(why) = seed::desk_box_name_refused(name) {
+            let r = if lm.is_dir() { cat!(r, "/") } else { r };
+            self.skip(&r, why.as_bytes());
+            return Ok(());
+        }
+        let t = if lm.file_type().is_symlink() {
+            let Some(to) = readlink_e(&e) else {
+                self.skip(&r, b"a link that leads nowhere");
+                return Ok(());
+            };
+            if to == b"/usr" || to.starts_with(b"/usr/") {
+                // (the box has /usr: the link stays one)
+                if let Some(d) = Dest::new(&r) {
+                    seed::home_link(self.ctx, self.h, &d, &to)?;
+                    self.seen.insert(r.clone());
+                    self.out.extend(cat!("copied ", r, "\n"));
+                }
+                return Ok(());
+            }
+            if let Some(why) = self.follow_why(&e, &to) {
+                self.skip(&r, &why);
+                return Ok(());
+            }
+            to
+        } else {
+            e
+        };
+        let Ok(m) = std::fs::metadata(p(&t)) else {
+            self.skip(&r, b"a link that leads nowhere");
+            return Ok(());
+        };
+        if m.is_dir() {
+            let id = (m.dev(), m.ino());
+            if up.contains(&id) {
+                self.skip(&cat!(r, "/"), b"a loop: a link to a folder it is in");
+            } else if depth >= DEPTH {
+                self.skip(&cat!(r, "/"), b"more than 8 folders deep");
+            } else if let Some(d) = Dest::new(&r) {
+                seed::home_unlink(self.ctx, self.h, &d)?;
+                let _ = std::fs::create_dir_all(p(&cat!(self.h, "/", r)));
+                up.push(id);
+                self.walk(&t, &r, depth + 1, up)?;
+                up.pop();
+            }
+        } else if m.is_file() {
+            self.file(&t, &r, m.len())?;
+        } else {
+            self.skip(&r, b"not a regular file");
+        }
+        Ok(())
+    }
+
+    /// One file, T (resolved), at R in the box HOME, SIZE bytes: copied, or skipped saying why.
+    fn file(&mut self, t: &[u8], r: &[u8], size: u64) -> Res<()> {
+        if self.seen.contains(r) {
+            return Ok(());
+        }
+        let c = self.caps;
+        let over = |n: u64| -> Vec<u8> { format!("over {} MiB", n / MIB).into_bytes() };
+        if size > c.file {
+            self.skip(r, &over(c.file));
+            return Ok(());
+        }
+        if self.g_bytes + size > c.bytes || self.g_count >= c.count {
+            let why = cat!(
+                "over the cap for ",
+                self.what,
+                ": ",
+                (c.bytes / MIB).to_string(),
+                " MiB and ",
+                c.count.to_string(),
+                " files"
+            );
+            self.skip(r, &why);
+            return Ok(());
+        }
+        if self.all + size > ALL {
+            self.skip(r, b"over the cap of 160 MiB for the whole copy");
+            return Ok(());
+        }
+        let Some(d) = Dest::new(r) else {
+            self.skip(r, b"not a path in the box HOME");
+            return Ok(());
+        };
+        if !seed::copy_file_in(self.ctx, self.h, &Src::desk_box(t.to_vec()), &d)? {
+            self.skip(r, b"it could not be copied");
+            return Ok(());
+        }
+        let to = cat!(self.h, "/", r);
+        let image = is_image(&to);
+        let refused = if image {
+            None
+        } else {
+            seed::desk_content_refused(&to)
+        };
+        let real = std::fs::metadata(p(&to)).map_or(u64::MAX, |m| m.len());
+        let why: Option<Vec<u8>> = match refused {
+            Some(w) => Some(w.as_bytes().to_vec()),
+            // (it grew since it was looked at)
+            None if real > c.file => Some(over(c.file)),
+            None => None,
+        };
+        if let Some(why) = why {
+            let _ = std::fs::remove_file(p(&to));
+            self.skip(r, &why);
+            return Ok(());
+        }
+        self.g_bytes += real;
+        self.g_count += 1;
+        self.all += real;
+        self.seen.insert(r.to_vec());
+        if !image {
+            self.texts.push(r.to_vec());
+        }
+        self.out.extend(cat!("copied ", r, "\n"));
+        Ok(())
+    }
+
+    /// An image (or a folder's top-level images) a copied file names by its path, REL in HOME.
+    fn named(&mut self, rel: &[u8], folder: bool) -> Res<()> {
+        let src = cat!(self.home, "/", rel);
+        let shown = if folder { cat!(rel, "/") } else { rel.to_vec() };
+        if self.seen.contains(&shown) {
+            return Ok(());
+        }
+        if let Some(w) = rel
+            .split(|&c| c == b'/')
+            .find_map(seed::desk_box_name_refused)
+        {
+            self.skip(&shown, w.as_bytes());
+            return Ok(());
+        }
+        if std::fs::symlink_metadata(p(&src)).is_err() {
+            self.skip(&shown, b"named in your config, not there");
+            return Ok(());
+        }
+        let Some(t) = readlink_e(&src) else {
+            self.skip(&shown, b"a link that leads nowhere");
+            return Ok(());
+        };
+        if let Some(why) = self.follow_why(&src, &t) {
+            self.skip(&shown, &why);
+            return Ok(());
+        }
+        let Ok(m) = std::fs::metadata(p(&t)) else {
+            return Ok(());
+        };
+        if folder {
+            if !m.is_dir() {
+                return Ok(());
+            }
+            self.seen.insert(shown);
+            let mut names: Vec<Vec<u8>> = std::fs::read_dir(p(&t))
+                .map(|rd| {
+                    rd.flatten()
+                        .map(|e| shell::bytes(std::path::Path::new(&e.file_name())).to_vec())
+                        .filter(|n| pic_name(n))
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.sort();
+            for n in names {
+                self.named(&cat!(rel, "/", n), false)?;
+            }
+        } else if m.is_file() {
+            self.file(&t, rel, m.len())?;
+        } else {
+            self.skip(&shown, b"not a regular file");
+        }
+        Ok(())
+    }
+}
+
+/// A shell's command line, CMD (a hyprland.lua string, --shell's): the words of each command in
+/// it (`;`, `&` and `|` part them), quotes dropped, with what only starts one taken off: `env`,
+/// `A=B`, `exec`, `setsid [-f]`, `nohup`, `uwsm app [...] --`, `sh -c`, `bash -c`.
+fn commands(cmd: &[u8]) -> Vec<Vec<Vec<u8>>> {
+    let assign = |x: &[u8]| {
+        x.iter().position(|&c| c == b'=').is_some_and(|k| {
+            k > 0
+                && !x[0].is_ascii_digit()
+                && x[..k]
+                    .iter()
+                    .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        })
+    };
+    let mut out = Vec::new();
+    for piece in cmd.split(|c| matches!(c, b';' | b'&' | b'|')) {
+        let w: Vec<Vec<u8>> = piece
+            .split(u8::is_ascii_whitespace)
+            .map(|w| {
+                w.iter()
+                    .copied()
+                    .filter(|c| *c != b'"' && *c != b'\'')
+                    .collect::<Vec<u8>>()
+            })
+            .filter(|w| !w.is_empty())
+            .collect();
+        let at = |i: usize| w.get(i).map(Vec::as_slice);
+        let mut i = 0;
+        while let Some(x) = at(i) {
+            match x {
+                b"env" | b"exec" | b"nohup" => i += 1,
+                b"setsid" => {
+                    i += 1;
+                    while at(i).is_some_and(|y| y.starts_with(b"-")) {
+                        i += 1;
+                    }
+                }
+                b"uwsm" if at(i + 1) == Some(b"app") => {
+                    // (its options up to `--`, when it has one; else those that start with `-`)
+                    i += 2;
+                    match w[i..].iter().position(|y| y == b"--") {
+                        Some(k) => i += k + 1,
+                        None => {
+                            while at(i).is_some_and(|y| y.starts_with(b"-")) {
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+                b"sh" | b"bash" if at(i + 1) == Some(b"-c") => i += 2,
+                _ if assign(x) => i += 1,
+                _ => break,
+            }
+        }
+        if i < w.len() {
+            out.push(w[i..].to_vec());
+        }
+    }
+    out
+}
+
+/// A Quickshell config's name in `{name}`'s place: one word, not a path, not an option.
+fn name_word(w: &[u8]) -> bool {
+    !w.is_empty() && w[0] != b'-' && w != b"." && w != b".." && !w.contains(&b'/')
+}
+
+/// Whether CMD (a command's words) starts the profile P: Some(its `{name}`) when it begins with one
+/// of P's matches or its start (the first word also by its last part: `/usr/bin/qs`).
+fn hit(pr: &Profile, cmd: &[Vec<u8>]) -> Option<Option<Vec<u8>>> {
+    let start = Some(&pr.start).filter(|s| !s.is_empty());
+    for pat in pr.matches.iter().chain(start) {
+        let pw: Vec<&[u8]> = pat
+            .split(u8::is_ascii_whitespace)
+            .filter(|w| !w.is_empty())
+            .collect();
+        if pw.is_empty() || cmd.len() < pw.len() {
+            continue;
+        }
+        let mut name = None;
+        let ok = pw.iter().zip(cmd).enumerate().all(|(i, (a, b))| {
+            let b: &[u8] = if i == 0 {
+                b.rsplit(|&c| c == b'/').next().unwrap_or(b)
+            } else {
+                b
+            };
+            if *a == b"{name}" {
+                name = Some(b.to_vec());
+                name_word(b)
+            } else {
+                *a == b
+            }
+        });
+        if ok {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// The first profile CMD starts: a named one before a `{name}` one (Noctalia before any Quickshell
+/// config).
+fn first_hit(profiles: &[Profile], cmd: &[Vec<u8>]) -> Option<(usize, Option<Vec<u8>>)> {
+    let generic = |pr: &Profile| {
+        pr.matches
+            .iter()
+            .any(|m| crate::exit::contains(m, b"{name}"))
+    };
+    let order = profiles
+        .iter()
+        .enumerate()
+        .filter(|(_, pr)| !generic(pr))
+        .chain(profiles.iter().enumerate().filter(|(_, pr)| generic(pr)));
+    for (i, pr) in order {
+        if let Some(n) = hit(pr, cmd) {
+            return Some((i, n));
+        }
+    }
+    None
+}
+
+/// The strings in a Lua line ("..." and '...', a backslash's next character kept), up to a `--`
+/// outside them; COMMENT false: the whole line's (a JSON or text file's).
+fn strings(line: &[u8], comment: bool) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < line.len() {
+        let c = line[i];
+        if comment && c == b'-' && line.get(i + 1) == Some(&b'-') {
+            break;
+        }
+        if c == b'"' || c == b'\'' {
+            let mut s = Vec::new();
+            let mut j = i + 1;
+            while j < line.len() && line[j] != c {
+                if line[j] == b'\\' && j + 1 < line.len() {
+                    s.push(line[j + 1]);
+                    j += 2;
+                    continue;
+                }
+                s.push(line[j]);
+                j += 1;
+            }
+            out.push(s);
+            i = j + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// A Lua line up to a `--` comment outside its strings.
+fn lua_code(line: &[u8]) -> &[u8] {
+    let mut q: Option<u8> = None;
+    let mut i = 0;
+    while i < line.len() {
+        let c = line[i];
+        match q {
+            Some(_) if c == b'\\' => i += 1,
+            Some(o) if c == o => q = None,
+            Some(_) => {}
+            None if c == b'"' || c == b'\'' => q = Some(c),
+            None if c == b'-' && line.get(i + 1) == Some(&b'-') => return &line[..i],
+            None => {}
+        }
+        i += 1;
+    }
+    line
+}
+
+/// The modules a Lua text requires (`require("a.b")`, `require 'a'`), as paths: `a/b`.
+fn requires(text: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for line in text.split(|&c| c == b'\n') {
+        let mut rest = lua_code(line);
+        while let Some(k) = rest.windows(7).position(|w| w == b"require") {
+            rest = &rest[k + 7..];
+            let after: &[u8] = rest.trim_ascii_start();
+            let after = after.strip_prefix(b"(").unwrap_or(after).trim_ascii_start();
+            if let Some(s) = strings(after, false).first() {
+                if after.first().is_some_and(|c| *c == b'"' || *c == b'\'') && !s.is_empty() {
+                    out.push(
+                        s.iter()
+                            .map(|&c| if c == b'.' { b'/' } else { c })
+                            .collect(),
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The absolute paths TEXT names: in its strings whole and in its words, `file://` taken off, `~/`,
+/// `$HOME/` and `${HOME}/` as HOME, JSON's `\/` as `/`; each once, in order.
+fn named_paths(text: &[u8], home: &[u8], lua: bool) -> Vec<Vec<u8>> {
+    let delim = |c: &u8| c.is_ascii_whitespace() || b"\"'`,;()[]{}<>=|".contains(c);
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    for line in text.split(|&c| c == b'\n') {
+        let line = if lua { lua_code(line) } else { line };
+        let line: Vec<u8> = {
+            let mut v = Vec::with_capacity(line.len());
+            let mut i = 0;
+            while i < line.len() {
+                if line[i] == b'\\' && line.get(i + 1) == Some(&b'/') {
+                    i += 1;
+                }
+                v.push(line[i]);
+                i += 1;
+            }
+            v
+        };
+        let mut cands = strings(&line, false);
+        cands.extend(line.split(delim).map(<[u8]>::to_vec));
+        for c in cands {
+            let c = c.trim_ascii();
+            let c = c.strip_prefix(b"file://").unwrap_or(c);
+            let mut c = if let Some(r) = c.strip_prefix(b"~/") {
+                cat!(home, "/", r)
+            } else if let Some(r) = c.strip_prefix(b"$HOME/") {
+                cat!(home, "/", r)
+            } else if let Some(r) = c.strip_prefix(b"${HOME}/") {
+                cat!(home, "/", r)
+            } else {
+                c.to_vec()
+            };
+            while c.len() > 1 && c.ends_with(b"/") {
+                c.pop();
+            }
+            if c.starts_with(b"/") && !c.contains(&0) && !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// A clean path below HOME: REL with no empty, `.` or `..` part.
+fn clean_rel(rel: &[u8]) -> bool {
+    !rel.is_empty()
+        && rel
+            .split(|&c| c == b'/')
+            .all(|w| !w.is_empty() && w != b"." && w != b"..")
+}
+
+/// A desk shell found: its profile's index, the Quickshell config's name for a `{name}` one, and
+/// what found it (`--shell`, `config`, `unit`).
+struct Found {
+    i: usize,
+    name: Option<Vec<u8>>,
+    from: &'static str,
+}
+
+/// The desk shells to copy and guess (#321 step 2): what --shell CMD starts, then what the copied
+/// Lua files of the box's ~/.config/hypr start (hyprland.lua first; `--` comments skipped), then the
+/// profiles whose unit is linked under ~/.config/systemd/user's hyprland-session.target.wants or
+/// graphical-session.target.wants. Each profile (and Quickshell config) once, in that order.
+fn detect(profiles: &[Profile], shell_cmd: &[u8], luas: &[Vec<u8>], config: &[u8]) -> Vec<Found> {
+    let mut found: Vec<Found> = Vec::new();
+    let mut add = |i: usize, name: Option<Vec<u8>>, from: &'static str| {
+        if !found.iter().any(|f| f.i == i && f.name == name) {
+            found.push(Found { i, name, from });
+        }
+    };
+    for cmd in commands(shell_cmd) {
+        if let Some((i, n)) = first_hit(profiles, &cmd) {
+            add(i, n, "--shell");
+        }
+    }
+    for text in luas {
+        for line in text.split(|&c| c == b'\n') {
+            for s in strings(line, true) {
+                for cmd in commands(&s) {
+                    if let Some((i, n)) = first_hit(profiles, &cmd) {
+                        add(i, n, "config");
+                    }
+                }
+            }
+        }
+    }
+    for (i, pr) in profiles.iter().enumerate() {
+        if pr.unit.is_empty() {
+            continue;
+        }
+        let linked = [
+            "hyprland-session.target.wants",
+            "graphical-session.target.wants",
+        ]
+        .iter()
+        .any(|t| {
+            std::fs::symlink_metadata(p(&cat!(config, "/systemd/user/", t, "/", pr.unit))).is_ok()
+        });
+        if linked {
+            add(i, None, "unit");
+        }
+    }
+    found
+}
+
+/// What a skip's REL is shown as: ~/REL, an absolute path as it is.
+fn shown(rel: &[u8]) -> Vec<u8> {
+    if rel.starts_with(b"/") {
+        rel.to_vec()
+    } else {
+        cat!("~/", rel)
+    }
+}
 
 /// copy PLAN H: the user's desktop into the box HOME H, for a desk box; its lines: `copied PATH`,
 /// `skipped PATH<TAB>WHY`, and `guess NAME<TAB>FROM` (the slot's first guess, and what found it).
-pub fn copy(_ctx: &Ctx, _plan: &SeedPlan, _h: &[u8]) -> Res<Vec<u8>> {
-    Ok(Vec::new())
+/// Refused (up fails, no box): a Hyprland config folder refuse_src keeps out, a hyprland.lua or a
+/// module it requires that could not be copied.
+pub fn copy(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
+    let home = shell::env_or_empty("HOME");
+    let home_r = readlink_e(&home).unwrap_or_else(|| home.clone());
+    let config = xdg("XDG_CONFIG_HOME", &home, ".config");
+    let mut w = Walk {
+        ctx,
+        h,
+        home: home.clone(),
+        home_r,
+        out: Vec::new(),
+        caps: HYPR,
+        what: Vec::new(),
+        g_bytes: 0,
+        g_count: 0,
+        all: 0,
+        parts: Vec::new(),
+        texts: Vec::new(),
+        seen: HashSet::new(),
+        skipped: HashMap::new(),
+        nskipped: Vec::new(),
+    };
+    // 1. The Hyprland config's folder, whole.
+    let hypr = cat!(config, "/hypr");
+    w.part(b"~/.config/hypr".to_vec(), HYPR);
+    if let Err(why) = w.root(&hypr, b".config/hypr")? {
+        return Err(ctx.die(cat!(
+            "up: --desktop desk: your Hyprland config (",
+            hypr,
+            ") cannot go into a box: ",
+            why
+        )));
+    }
+    let lua_rel = b".config/hypr/hyprland.lua";
+    if let Some(why) = w.skipped.get(lua_rel.as_slice()) {
+        return Err(ctx.die(cat!(
+            "up: --desktop desk: your hyprland.lua was not copied into the box: ",
+            why
+        )));
+    }
+    let luas: Vec<Vec<u8>> = {
+        let mut v: Vec<Vec<u8>> = w
+            .texts
+            .iter()
+            .filter(|r| r.ends_with(b".lua"))
+            .cloned()
+            .collect();
+        v.sort_by_key(|r| r.as_slice() != lua_rel);
+        v
+    };
+    let lua_texts: Vec<Vec<u8>> = luas
+        .iter()
+        .map(|r| std::fs::read(p(&cat!(h, "/", r))).unwrap_or_default())
+        .collect();
+    for text in &lua_texts {
+        for m in requires(text) {
+            for f in [
+                cat!(".config/hypr/", m, ".lua"),
+                cat!(".config/hypr/", m, "/init.lua"),
+            ] {
+                if let Some(why) = w.skipped.get(&f) {
+                    return Err(ctx.die(cat!(
+                        "up: --desktop desk: ~/",
+                        f,
+                        ", which your Hyprland config requires, was not copied into the box: ",
+                        why
+                    )));
+                }
+            }
+        }
+    }
+    // 2. The desk shells found, each one's config, state and listed caches.
+    let profiles = deskshell::all(&deskshell::dir()).map_err(|e| ctx.die(cat!("up: ", e)))?;
+    let found = detect(&profiles, &plan.shell_cmd, &lua_texts, &config);
+    for f in &found {
+        let pr = &profiles[f.i];
+        let label = match &f.name {
+            Some(n) => cat!("the ", pr.name, " shell (", n, ")"),
+            None => cat!("the ", pr.name, " shell"),
+        };
+        w.part(label, SHELL);
+        for rel in pr.config.iter().chain(&pr.state).chain(&pr.cache) {
+            let rel = if crate::exit::contains(rel, b"{name}") {
+                let Some(n) = &f.name else { continue };
+                let s = String::from_utf8_lossy(rel).replace("{name}", &String::from_utf8_lossy(n));
+                s.into_bytes()
+            } else {
+                rel.clone()
+            };
+            if !clean_rel(&rel) {
+                continue;
+            }
+            let src = host_of(&home, &rel);
+            if let Err(why) = w.root(&src, &rel)? {
+                w.skip(&cat!(rel, "/"), &why);
+            }
+        }
+    }
+    // 3. The images what was copied names by path: a folder named brings its top-level ones.
+    w.part(b"the images they name".to_vec(), IMAGES);
+    let mut files: Vec<Vec<u8>> = Vec::new();
+    let mut folders: Vec<Vec<u8>> = Vec::new();
+    let homes = [cat!(home, "/"), cat!(w.home_r, "/")];
+    for r in w.texts.clone() {
+        let text = std::fs::read(p(&cat!(h, "/", r))).unwrap_or_default();
+        for path in named_paths(&text, &home, r.ends_with(b".lua")) {
+            let below = homes
+                .iter()
+                .find_map(|x| path.strip_prefix(x.as_slice()))
+                .map(<[u8]>::to_vec);
+            let base = path.rsplit(|&c| c == b'/').next().unwrap_or_default();
+            match below {
+                Some(rel) if !clean_rel(&rel) => {}
+                Some(rel) if pic_name(base) => {
+                    if !files.contains(&rel) {
+                        files.push(rel);
+                    }
+                }
+                Some(rel) => {
+                    if std::fs::metadata(p(&path)).is_ok_and(|m| m.is_dir())
+                        && !folders.contains(&rel)
+                    {
+                        folders.push(rel);
+                    }
+                }
+                None if pic_name(base) && !path.starts_with(b"/usr/") => {
+                    w.skip(&path, b"outside your HOME");
+                }
+                None => {}
+            }
+        }
+    }
+    for rel in &files {
+        w.named(rel, false)?;
+    }
+    for rel in &folders {
+        w.named(rel, true)?;
+    }
+    w.end_part();
+    // What up says: the parts copied, the first guess, and what stayed out (box.json has it all).
+    let guess = found.first().map(|f| (profiles[f.i].name.clone(), f.from));
+    let n: u64 = w.parts.iter().map(|(_, c)| c).sum();
+    if n > 0 || !w.nskipped.is_empty() || guess.is_some() {
+        let parts: Vec<Vec<u8>> = w
+            .parts
+            .iter()
+            .filter(|(_, c)| *c > 0)
+            .map(|(what, c)| cat!(c.to_string(), " of ", what))
+            .collect();
+        let mut line = cat!(
+            "up: your desktop, copied into the box's HOME: ",
+            n.to_string(),
+            " files"
+        );
+        if !parts.is_empty() {
+            line = cat!(line, " (", parts.join(&b", "[..]), ")");
+        }
+        if let Some((name, from)) = &guess {
+            line = cat!(
+                line,
+                "; its shell, first guessed: ",
+                name,
+                " (from ",
+                from,
+                ")"
+            );
+        }
+        say(line);
+        for s in w.nskipped.iter().take(10) {
+            let i = s.iter().position(|&c| c == b'\t').unwrap_or(s.len());
+            let why = s.get(i + 1..).unwrap_or_default();
+            say(cat!("up: not copied: ", shown(&s[..i]), " (", why, ")"));
+        }
+        if w.nskipped.len() > 10 {
+            say(cat!(
+                "up: ...and ",
+                (w.nskipped.len() - 10).to_string(),
+                " more not copied (box.json's desk_copy has them all)"
+            ));
+        }
+    }
+    let mut out = w.out;
+    if let Some((name, from)) = guess {
+        out.extend(cat!("guess ", name, "\t", from, "\n"));
+    }
+    Ok(shell::strip_nl(&out))
 }
 
 /// What copy said, read back from its lines.
@@ -96,5 +995,613 @@ mod tests {
         let none = Report::parse(b"");
         assert_eq!(none, Report::default());
         assert_eq!(none.json().to_string(), r#"{"copied":[],"skipped":[]}"#);
+    }
+
+    use std::os::unix::fs::symlink;
+
+    /// A stand-in desk: BASE/home (HOME, its XDG dirs under it), BASE/box (the box HOME), BASE/out
+    /// (outside HOME). Never the user's.
+    struct Fx {
+        base: String,
+        fh: String,
+        bx: String,
+    }
+
+    impl Fx {
+        fn new(tag: &str) -> Fx {
+            let d =
+                std::env::temp_dir().join(format!("omabox-deskcopy-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            let base = d.to_string_lossy().into_owned();
+            let fx = Fx {
+                fh: format!("{base}/home"),
+                bx: format!("{base}/box"),
+                base,
+            };
+            for x in [&fx.fh, &fx.bx] {
+                std::fs::create_dir_all(x).unwrap();
+            }
+            std::fs::create_dir_all(format!("{}/out", fx.base)).unwrap();
+            fx
+        }
+
+        /// Write TEXT at HOME/REL (its folders made).
+        fn put(&self, rel: &str, text: &[u8]) {
+            let f = format!("{}/{rel}", self.fh);
+            std::fs::create_dir_all(std::path::Path::new(&f).parent().unwrap()).unwrap();
+            std::fs::write(f, text).unwrap();
+        }
+
+        fn ln(&self, target: &str, rel: &str) {
+            let f = format!("{}/{rel}", self.fh);
+            std::fs::create_dir_all(std::path::Path::new(&f).parent().unwrap()).unwrap();
+            symlink(target, f).unwrap();
+        }
+
+        /// copy with this HOME (--shell SHELL), what it returned and what it said.
+        fn run(&self, shell: &str) -> (Result<String, u8>, String) {
+            let ctx = {
+                let mut c = Ctx::new(b"up", b"/nonexistent".to_vec());
+                c.parsed();
+                c
+            };
+            let plan = SeedPlan {
+                plain: true,
+                desk_box: true,
+                shell_cmd: shell.as_bytes().to_vec(),
+                ..SeedPlan::default()
+            };
+            let fh = self.fh.clone();
+            let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../share/desk-shells");
+            let vars = [
+                ("HOME", Some(fh.as_str())),
+                ("XDG_CONFIG_HOME", None),
+                ("XDG_STATE_HOME", None),
+                ("XDG_DATA_HOME", None),
+                ("XDG_CACHE_HOME", None),
+                ("OMABOX_JAIL", None),
+                ("OMABOX_DESK_SHELL_DIR", Some(dir)),
+            ];
+            let (r, said) = shell::with_env(&vars, || {
+                crate::exit::heard(|| copy(&ctx, &plan, self.bx.as_bytes()))
+            });
+            (
+                r.map(|v| String::from_utf8_lossy(&v).into_owned())
+                    .map_err(|e| e.0),
+                said,
+            )
+        }
+
+        fn in_box(&self, rel: &str) -> String {
+            format!("{}/{rel}", self.bx)
+        }
+
+        fn real_file(&self, rel: &str) -> bool {
+            std::fs::symlink_metadata(self.in_box(rel)).is_ok_and(|m| m.is_file())
+        }
+
+        fn there(&self, rel: &str) -> bool {
+            std::fs::symlink_metadata(self.in_box(rel)).is_ok()
+        }
+    }
+
+    impl Drop for Fx {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    fn lines<'a>(out: &'a str, kind: &str) -> Vec<&'a str> {
+        out.lines().filter_map(|l| l.strip_prefix(kind)).collect()
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n0000";
+    const LUA: &[u8] = b"hl.config({ general = { gaps_out = 7 } })\n";
+
+    /// Stow's shape: ~/.config/hypr a link into ~/dotfiles, a file in it a link too, a folder link
+    /// inside; all copied as the box's own files and folders, none a link.
+    #[test]
+    fn follows_dotfile_links() {
+        if !crate::exec::tools_or_skip("follows_dotfile_links", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("stow");
+        f.put("dotfiles/hypr/.config/hypr/hyprland.lua", LUA);
+        f.put("dotfiles/hypr/extra/binds.lua", b"-- binds\n");
+        f.put("dotfiles/hypr/extra/sub/x.conf", b"x\n");
+        f.ln(
+            &format!("{}/dotfiles/hypr/.config/hypr", f.fh),
+            ".config/hypr",
+        );
+        f.ln(
+            "../../extra/binds.lua",
+            "dotfiles/hypr/.config/hypr/keybinds.lua",
+        );
+        f.ln(
+            &format!("{}/dotfiles/hypr/extra/sub", f.fh),
+            "dotfiles/hypr/.config/hypr/sub",
+        );
+        let (r, said) = f.run("");
+        let out = r.unwrap();
+        assert_eq!(
+            lines(&out, "copied "),
+            [
+                ".config/hypr/hyprland.lua",
+                ".config/hypr/keybinds.lua",
+                ".config/hypr/sub/x.conf"
+            ],
+            "{out}"
+        );
+        for r in [
+            ".config/hypr/hyprland.lua",
+            ".config/hypr/keybinds.lua",
+            ".config/hypr/sub/x.conf",
+        ] {
+            assert!(f.real_file(r), "{r}");
+        }
+        assert!(
+            !std::fs::symlink_metadata(f.in_box(".config/hypr"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert!(
+            !std::fs::symlink_metadata(f.in_box(".config/hypr/sub"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(f.in_box(".config/hypr/keybinds.lua")).unwrap(),
+            b"-- binds\n"
+        );
+        assert!(said.contains("omabox: up: your desktop, copied into the box's HOME: 3 files (3 of ~/.config/hypr)"), "{said}");
+        // (a write in the box's copy leaves the host's file as it was)
+        std::fs::write(f.in_box(".config/hypr/hyprland.lua"), b"x").unwrap();
+        assert_eq!(
+            std::fs::read(format!("{}/.config/hypr/hyprland.lua", f.fh)).unwrap(),
+            LUA
+        );
+    }
+
+    /// A link into /usr stays a link (the box has /usr); one leading nowhere is said.
+    #[test]
+    fn keeps_usr_links() {
+        if !crate::exec::tools_or_skip("keeps_usr_links", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("usr");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.ln("/usr/share", ".config/hypr/share");
+        f.ln("/usr/bin/sh", ".config/hypr/sh");
+        f.ln(&format!("{}/gone", f.fh), ".config/hypr/gone.lua");
+        let out = f.run("").0.unwrap();
+        for (r, to) in [("share", "/usr/share"), ("sh", "/usr/bin/sh")] {
+            let l = std::fs::read_link(f.in_box(&format!(".config/hypr/{r}"))).unwrap();
+            assert_eq!(
+                l.to_string_lossy(),
+                std::fs::canonicalize(to).unwrap().to_string_lossy()
+            );
+        }
+        assert_eq!(
+            lines(&out, "copied "),
+            [
+                ".config/hypr/hyprland.lua",
+                ".config/hypr/sh",
+                ".config/hypr/share"
+            ],
+            "{out}"
+        );
+        assert!(
+            out.contains("skipped .config/hypr/gone.lua\ta link that leads nowhere"),
+            "{out}"
+        );
+    }
+
+    /// Links to secret stores, omabox's folders, ~/.config/omarchy and HOME are not followed; a
+    /// secret's name on a link's way is not either; nothing of them is in the box.
+    #[test]
+    fn refuses_secrets_through_links() {
+        if !crate::exec::tools_or_skip("refuses_secrets_through_links", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("sec");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.put(".ssh/id_x", b"not a key\n");
+        f.put(".config/omarchy/api-keys.env", b"X=1\n");
+        f.put(".config/omarchy/themes/t/colors.toml", b"a = 1\n");
+        f.put("private/notes.lua", b"-- n\n");
+        f.put(".cache/omabox/b/home/f", b"f\n");
+        f.ln(&format!("{}/.ssh", f.fh), ".config/hypr/ssh");
+        f.ln(&format!("{}/.ssh/id_x", f.fh), ".config/hypr/k.lua");
+        f.ln(&format!("{}/.config/omarchy", f.fh), ".config/hypr/om");
+        f.ln(
+            &format!("{}/.config/omarchy/themes/t", f.fh),
+            ".config/hypr/theme",
+        );
+        f.ln(&f.fh, ".config/hypr/home");
+        f.ln(
+            &format!("{}/private/notes.lua", f.fh),
+            ".config/hypr/notes.lua",
+        );
+        f.ln(&format!("{}/.cache/omabox", f.fh), ".config/hypr/ob");
+        f.put(".config/hypr/tokens.lua", b"x\n");
+        f.put(".config/hypr/env.lua", b"api_key = \"abcdefgh123\"\n");
+        let out = f.run("").0.unwrap();
+        let skipped: Vec<&str> = lines(&out, "skipped ")
+            .iter()
+            .map(|l| l.split('\t').next().unwrap())
+            .collect();
+        assert_eq!(
+            skipped,
+            [
+                ".config/hypr/env.lua",
+                ".config/hypr/home",
+                ".config/hypr/k.lua",
+                ".config/hypr/notes.lua",
+                ".config/hypr/ob",
+                ".config/hypr/om",
+                ".config/hypr/ssh",
+                ".config/hypr/tokens.lua"
+            ],
+            "{out}"
+        );
+        assert!(
+            out.contains(".config/hypr/env.lua\tit holds what looks like a key"),
+            "{out}"
+        );
+        assert!(out.contains(".config/hypr/ssh\tit leads to "), "{out}");
+        assert!(
+            out.contains(".config/hypr/notes.lua\tit leads to ") && out.contains("a secret's name"),
+            "{out}"
+        );
+        // (a theme of ~/.config/omarchy may go in, as --theme-dir's)
+        assert!(f.real_file(".config/hypr/theme/colors.toml"), "{out}");
+        for r in [
+            "ssh",
+            "k.lua",
+            "om",
+            "home",
+            "notes.lua",
+            "ob",
+            "tokens.lua",
+            "env.lua",
+        ] {
+            assert!(!f.there(&format!(".config/hypr/{r}")), "{r}");
+        }
+    }
+
+    /// A folder linked below itself is a loop; 8 folders deep is the end.
+    #[test]
+    fn loop_and_depth() {
+        if !crate::exec::tools_or_skip("loop_and_depth", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("loop");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.ln(&format!("{}/.config/hypr", f.fh), ".config/hypr/a/up");
+        f.put(".config/hypr/d/1/2/3/4/5/6/7/f8", b"8\n");
+        f.put(".config/hypr/d/1/2/3/4/5/6/7/8/f9", b"9\n");
+        let out = f.run("").0.unwrap();
+        assert!(
+            out.contains("skipped .config/hypr/a/up/\ta loop: a link to a folder it is in"),
+            "{out}"
+        );
+        assert!(
+            out.contains("copied .config/hypr/d/1/2/3/4/5/6/7/f8\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("skipped .config/hypr/d/1/2/3/4/5/6/7/8/\tmore than 8 folders deep"),
+            "{out}"
+        );
+    }
+
+    /// The caps: a file over 1 MiB in the config, an image over 32 MiB, more than 32 images.
+    #[test]
+    fn caps() {
+        if !crate::exec::tools_or_skip("caps", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("caps");
+        let mut lua = LUA.to_vec();
+        lua.extend(b"-- ~/w\n-- \"~/big.png\"\n");
+        lua.extend(
+            format!("local w = \"{}/w\"\nlocal b = \"{}/big.png\"\n", f.fh, f.fh).as_bytes(),
+        );
+        f.put(".config/hypr/hyprland.lua", &lua);
+        f.put(".config/hypr/big.lua", &vec![b'-'; 2 * MIB as usize]);
+        for i in 0..44 {
+            f.put(&format!("w/{i:02}.png"), PNG);
+        }
+        let big = std::fs::File::create(format!("{}/big.png", f.fh)).unwrap();
+        big.set_len(33 * MIB).unwrap();
+        let (r, said) = f.run("");
+        let out = r.unwrap();
+        assert!(
+            out.contains("skipped .config/hypr/big.lua\tover 1 MiB"),
+            "{out}"
+        );
+        assert!(out.contains("skipped big.png\tover 32 MiB"), "{out}");
+        assert_eq!(lines(&out, "copied w/").len(), 32, "{out}");
+        assert!(
+            out.contains(
+                "skipped w/32.png\tover the cap for the images they name: 128 MiB and 32 files"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("skipped w/43.png\t"), "{out}");
+        assert!(
+            said.contains(
+                "omabox: up: ...and 4 more not copied (box.json's desk_copy has them all)"
+            ),
+            "{said}"
+        );
+        assert_eq!(
+            said.matches("omabox: up: not copied: ").count(),
+            10,
+            "{said}"
+        );
+    }
+
+    /// Images named by path: DMS's session.json, Caelestia's path.txt, a Lua `swww img ~/...`, a
+    /// file:// URL; under /usr left alone, elsewhere outside HOME said; a named folder brings its
+    /// top-level images only.
+    #[test]
+    fn named_images_found() {
+        if !crate::exec::tools_or_skip("named_images_found", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("img");
+        let fh = &f.fh;
+        f.put(
+            ".config/hypr/hyprland.lua",
+            format!(
+                "hl.exec_once(\"swww img ~/Pictures/a.png\")\nhl.exec_once(\"dms run\")\n\
+                 -- hl.exec_once(\"swww img ~/Pictures/commented.png\")\nlocal x = \"/mnt/data/w.jpg\"\n\
+                 local u = \"/usr/share/backgrounds/x.png\"\nlocal g = \"file://{fh}/Pictures/g.webp\"\n\
+                 local d = \"~/Walls\"\n"
+            )
+            .as_bytes(),
+        );
+        f.put(
+            ".local/state/DankMaterialShell/session.json",
+            format!("{{\"wallpaperPath\": \"{fh}\\/Pictures\\/w.png\", \"isLightMode\": true}}\n")
+                .as_bytes(),
+        );
+        f.put(".config/DankMaterialShell/settings.json", b"{}\n");
+        f.put("Pictures/a.png", PNG);
+        f.put("Pictures/w.png", PNG);
+        f.put("Pictures/g.webp", b"RIFF0000WEBPVP8 ");
+        f.put("Pictures/commented.png", PNG);
+        f.put("Walls/1.jpg", b"\xff\xd8\xff\xe0");
+        f.put("Walls/notes.txt", b"n\n");
+        f.put("Walls/sub/2.jpg", b"\xff\xd8\xff\xe0");
+        let out = f.run("").0.unwrap();
+        for r in [
+            "Pictures/a.png",
+            "Pictures/w.png",
+            "Pictures/g.webp",
+            "Walls/1.jpg",
+        ] {
+            assert!(f.real_file(r), "{r}: {out}");
+        }
+        for r in ["Pictures/commented.png", "Walls/notes.txt", "Walls/sub"] {
+            assert!(!f.there(r), "{r}: {out}");
+        }
+        assert!(
+            out.contains("skipped /mnt/data/w.jpg\toutside your HOME"),
+            "{out}"
+        );
+        assert!(!out.contains("/usr/share/backgrounds"), "{out}");
+        // (Caelestia keeps its wallpaper's path in a text file of its state)
+        let f = Fx::new("img2");
+        f.put(
+            ".config/hypr/hyprland.lua",
+            b"hl.exec_once(\"caelestia shell -d\")\n",
+        );
+        f.put(
+            ".local/state/caelestia/wallpaper/path.txt",
+            format!("{}/Pictures/c.png\n", f.fh).as_bytes(),
+        );
+        f.put("Pictures/c.png", PNG);
+        let out = f.run("").0.unwrap();
+        assert!(f.real_file("Pictures/c.png"), "{out}");
+        assert!(out.ends_with("guess caelestia\tconfig"), "{out}");
+    }
+
+    /// A desk box's name check: keybinds.lua and session.json go in, a secret's names stay out.
+    #[test]
+    fn desk_names() {
+        for n in [
+            "keybinds.lua",
+            "session.json",
+            "auth.lua",
+            "monkey.png",
+            "hyprland.lua",
+        ] {
+            assert_eq!(seed::desk_box_name_refused(n.as_bytes()), None, "{n}");
+        }
+        for n in [
+            "api-keys.env",
+            ".env",
+            ".env.local",
+            "x.pem",
+            "y.key",
+            "a.gpg",
+            "b.kdbx",
+            "id_ed25519",
+            "id_x",
+            "tokens.json",
+            "my-secret",
+            "credentials",
+            "passwords.txt",
+            "cookies.sqlite",
+            "private",
+            "openai_api_key",
+            "API-KEY",
+            "apikey.txt",
+            ".netrc",
+            "authorized_keys",
+        ] {
+            assert_eq!(
+                seed::desk_box_name_refused(n.as_bytes()),
+                Some("a secret's name"),
+                "{n}"
+            );
+        }
+        assert!(seed::desk_box_name_refused(b".git").is_some());
+        assert_eq!(
+            seed::desk_box_name_refused(b"hyprland.lua.bak"),
+            Some("a backup")
+        );
+    }
+
+    /// Which shells: --shell first, then the Lua's strings (comments skipped, starters taken off),
+    /// then units linked under the session targets; a named profile before a `{name}` one.
+    #[test]
+    fn detect_profiles() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../share/desk-shells");
+        let all = deskshell::all(dir.as_bytes()).unwrap();
+        let names = |found: &[Found]| -> Vec<String> {
+            found
+                .iter()
+                .map(|f| {
+                    let n = String::from_utf8_lossy(&all[f.i].name).into_owned();
+                    match &f.name {
+                        Some(q) => format!("{n}({})/{}", String::from_utf8_lossy(q), f.from),
+                        None => format!("{n}/{}", f.from),
+                    }
+                })
+                .collect()
+        };
+        let none = b"/nonexistent".as_slice();
+        let lua = b"-- hl.exec_once(\"waybar\")\n\
+            hl.exec_once(\"env A=1 setsid -f qs -c noctalia-shell\") -- \"dms run\"\n\
+            hl.exec_once(\"uwsm app -- qs -c mybar\")\n\
+            hl.exec_once(\"sh -c 'sleep 1; /usr/bin/caelestia shell -d'\")\n\
+            hl.exec_once(\"echo dms run\")\n"
+            .to_vec();
+        let found = detect(&all, b"nohup dms run", &[lua], none);
+        assert_eq!(
+            names(&found),
+            [
+                "dms/--shell",
+                "noctalia/config",
+                "quickshell(mybar)/config",
+                "caelestia/config"
+            ]
+        );
+        // (units: a link under either session target's .wants)
+        let f = Fx::new("units");
+        let cfg = format!("{}/.config", f.fh);
+        f.ln(
+            "/usr/lib/systemd/user/dms.service",
+            ".config/systemd/user/graphical-session.target.wants/dms.service",
+        );
+        f.ln(
+            "/usr/lib/systemd/user/waybar.service",
+            ".config/systemd/user/default.target.wants/waybar.service",
+        );
+        let found = detect(&all, b"", &[], cfg.as_bytes());
+        assert_eq!(names(&found), ["dms/unit"]);
+        // (the commands' words)
+        let w = |s: &str| -> Vec<String> {
+            commands(s.as_bytes())
+                .iter()
+                .map(|c| {
+                    c.iter()
+                        .map(|x| String::from_utf8_lossy(x).into_owned())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect()
+        };
+        assert_eq!(w("env A=1 B=2 exec dms run"), ["dms run"]);
+        assert_eq!(
+            w("uwsm app -s b -- qs -c x && waybar"),
+            ["qs -c x", "waybar"]
+        );
+        assert_eq!(w("bash -c 'nohup setsid --fork x'"), ["x"]);
+        assert_eq!(
+            hit(&all[1], &[b"dms".to_vec()]),
+            None,
+            "dms alone is not `dms run`"
+        );
+    }
+
+    /// A profile's folders: DMS found by its unit, its config and state copied; a profile folder
+    /// refused is said, the rest goes on.
+    #[test]
+    fn copies_found_shells() {
+        if !crate::exec::tools_or_skip("copies_found_shells", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("dms");
+        f.put(".config/hypr/hyprland.lua", LUA);
+        f.ln(
+            "/usr/lib/systemd/user/dms.service",
+            ".config/systemd/user/hyprland-session.target.wants/dms.service",
+        );
+        f.put(".config/DankMaterialShell/settings.json", b"{\"a\": 1}\n");
+        f.put(".local/state/DankMaterialShell/session.json", b"{}\n");
+        f.put(".cache/DankMaterialShell/x", b"x\n");
+        let (r, said) = f.run("");
+        let out = r.unwrap();
+        assert!(
+            f.real_file(".config/DankMaterialShell/settings.json"),
+            "{out}"
+        );
+        assert!(
+            f.real_file(".local/state/DankMaterialShell/session.json"),
+            "{out}"
+        );
+        assert!(!f.there(".cache/DankMaterialShell"), "{out}");
+        assert!(!f.there(".config/systemd"), "{out}");
+        assert!(out.ends_with("guess dms\tunit"), "{out}");
+        assert!(said.contains("(1 of ~/.config/hypr, 2 of the dms shell); its shell, first guessed: dms (from unit)"), "{said}");
+    }
+
+    /// Refused, no copy: a Hyprland config folder that is a link to a secret store; a hyprland.lua,
+    /// or a module it requires, that could not be copied. No config at all: nothing, said nothing.
+    #[test]
+    fn refusals() {
+        if !crate::exec::tools_or_skip("refusals", &["grep", "cp"]) {
+            return;
+        }
+        let f = Fx::new("ref");
+        let (r, said) = f.run("");
+        assert_eq!((r, said), (Ok(String::new()), String::new()));
+        f.put(".gnupg/hypr/hyprland.lua", LUA);
+        f.ln(&format!("{}/.gnupg/hypr", f.fh), ".config/hypr");
+        let (r, said) = f.run("");
+        assert_eq!(r, Err(1));
+        assert!(said.starts_with(&format!("omabox: up: --desktop desk: your Hyprland config ({}/.config/hypr) cannot go into a box: it leads to {}/.gnupg/hypr: it is inside", f.fh, f.fh)), "{said}");
+        let f = Fx::new("ref2");
+        f.put(
+            ".config/hypr/hyprland.lua",
+            b"local token = \"abcdefghijkl\"\n",
+        );
+        let (r, said) = f.run("");
+        assert_eq!(r, Err(1));
+        assert_eq!(
+            said,
+            "omabox: up: --desktop desk: your hyprland.lua was not copied into the box: it holds what looks like a key, token or password\n"
+        );
+        let f = Fx::new("ref3");
+        f.put(
+            ".config/hypr/hyprland.lua",
+            b"require(\"conf.binds\") -- require(\"gone\")\nrequire 'mine'\n",
+        );
+        f.put(".config/hypr/mine.lua", b"-- mine\n");
+        f.put(".config/hypr/conf/binds.lua", &vec![b'-'; 2 * MIB as usize]);
+        let (r, said) = f.run("");
+        assert_eq!(r, Err(1));
+        assert_eq!(
+            said,
+            "omabox: up: --desktop desk: ~/.config/hypr/conf/binds.lua, which your Hyprland config requires, was not copied into the box: over 1 MiB\n"
+        );
+        assert_eq!(
+            requires(b"require(\"conf.binds\") -- require(\"gone\")\nrequire 'mine'\n"),
+            [b"conf/binds".to_vec(), b"mine".to_vec()]
+        );
     }
 }

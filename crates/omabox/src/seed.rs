@@ -3,8 +3,9 @@
 //!
 //! What seed_home may read of the user's HOME is one table, SEED_ALLOW: a host path to copy is a
 //! `Src`, and a Src is made only from that table (`Look::src`), from --seed's SRC (`Src::asked`, the
-//! user's own ask, checked by seed_spec), or inside desk_files' walk (--desk-shell: its deny-list and
-//! content check). A --from save is copied by up itself, before this. Every write into the box HOME
+//! user's own ask, checked by seed_spec), inside desk_files' walk (--desk-shell: its deny-list and
+//! content check), or inside deskcopy's walk (a desk box, #321: refuse_src on every link it follows,
+//! desk_box_name_refused, and the content check on each copy). A --from save is copied by up itself, before this. Every write into the box HOME
 //! is at a `Dest`: a path relative to it with no `..`, its links cleared first (home_unlink, finding
 //! 168). The git identity is the one thing read that is no file: two values of `git config --global`.
 
@@ -132,6 +133,12 @@ impl Src {
         Src(path)
     }
 
+    /// A file deskcopy's walk took (a desk box, #321): resolved, past refuse_src and its name check;
+    /// its content checked once copied (copy_file_in's caller).
+    pub(crate) fn desk_box(path: Vec<u8>) -> Src {
+        Src(path)
+    }
+
     pub fn path(&self) -> &[u8] {
         &self.0
     }
@@ -256,6 +263,8 @@ pub struct SeedPlan {
     pub plain: bool,
     /// --desktop desk (#321): the user's desktop copied in (deskcopy::copy), on a plain base.
     pub desk_box: bool,
+    /// SHELL_CMD (`up --shell CMD`): a desk box's copy brings the shell it names (#321 step 2).
+    pub shell_cmd: Vec<u8>,
     /// The box's HOME inside it (#321): /home/sbx, or a desk box's at the user's HOME path; empty
     /// for /home/sbx. Where a link seeded in the HOME leads, as the box sees it.
     pub home: Vec<u8>,
@@ -1239,6 +1248,57 @@ pub fn desk_name_refused(name: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// desk_box_name_refused NAME (#321 step 2): desk_name_refused for a desk box's copy, looser where a
+/// desktop's own files need it: a bare `key`, `session` or `auth` in a name is no secret's
+/// (keybinds.lua, DankMaterialShell's session.json), and every file it lets in still has its content
+/// checked. A secret's exact names, its endings (.pem .p12 .pfx .gpg .asc .kdbx .key .env), `id_*`,
+/// token, secret, credential, passw, cookie, private and api[-_]key stay out, as do a repo's
+/// metadata dir and backups.
+pub fn desk_box_name_refused(name: &[u8]) -> Option<&'static str> {
+    let n: Vec<u8> = match std::str::from_utf8(name) {
+        Ok(s) => s.to_lowercase().into_bytes(),
+        Err(_) => name.to_ascii_lowercase(),
+    };
+    let has = |x: &&str| crate::exit::contains(&n, x.as_bytes());
+    let ends = |x: &&str| n.ends_with(x.as_bytes());
+    let secret = [
+        "api-keys.env",
+        ".netrc",
+        ".pgpass",
+        "authorized_keys",
+        "known_hosts",
+    ]
+    .iter()
+    .any(|x| n == x.as_bytes())
+        || n.starts_with(b".env.")
+        || n.starts_with(b"id_")
+        || [
+            "token",
+            "secret",
+            "credential",
+            "passw",
+            "cookie",
+            "private",
+            "api_key",
+            "api-key",
+            "apikey",
+        ]
+        .iter()
+        .any(has)
+        || [
+            ".env", ".pem", ".p12", ".pfx", ".gpg", ".asc", ".kdbx", ".key",
+        ]
+        .iter()
+        .any(ends);
+    if secret {
+        return Some("a secret's name");
+    }
+    match desk_name_refused(name) {
+        Some(w) if w != "a secret's name" => Some(w),
+        _ => None,
+    }
+}
+
 /// What desk_content_refused greps for: a key, token, secret, password or credential given a value
 /// (the key ends in the word, the value 6+ characters: finding 320), a bearer token, a private key,
 /// or a token-shaped string (GitHub, GitLab, Slack, OpenAI and Anthropic, AWS).
@@ -1529,6 +1589,42 @@ fn cp_in(fd: &OwnedFd, name: &[u8], to: &[u8]) -> i32 {
         .stdin(Stdio::null());
     from_held(&mut c, fd);
     crate::sig::run_status(c).unwrap_or(127)
+}
+
+/// copy_file_in HOME SRC DEST (#321 step 2): one regular file, SRC (a resolved path: no link in it),
+/// into the box HOME at DEST as a file of its own; links on the way cleared first (finding 168).
+/// Read from its folder held open and checked to be that path (finding 257), the file itself no link
+/// there: a part swapped for one since it was resolved is not followed. False (nothing left at DEST)
+/// when it could not be copied, or what landed is no regular file.
+pub(crate) fn copy_file_in(ctx: &Ctx, h: &[u8], src: &Src, d: &Dest) -> Res<bool> {
+    home_unlink(ctx, h, d)?;
+    let to = d.on(h);
+    if let Some(parent) = p(&to).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| failed(ctx, &cat!("make the folder of ", to), &e))?;
+    }
+    rm_rf(&to).map_err(|e| failed(ctx, &cat!("remove ", to), &e))?;
+    let s = src.path();
+    let Some(i) = s.iter().rposition(|&c| c == b'/') else {
+        return Ok(false);
+    };
+    let dir = if i == 0 {
+        b"/".to_vec()
+    } else {
+        s[..i].to_vec()
+    };
+    let base = &s[i + 1..];
+    let regular = |f: &[u8]| std::fs::symlink_metadata(p(f)).is_ok_and(|m| m.is_file());
+    let ok = !base.is_empty()
+        && held_dir(&dir).is_some_and(|fd| {
+            let inside = cat!("/proc/self/fd/", fd.as_raw_fd().to_string(), "/", base);
+            regular(&inside) && cp_in(&fd, base, &to) == 0
+        })
+        && regular(&to);
+    if !ok {
+        let _ = rm_rf(&to);
+    }
+    Ok(ok)
 }
 
 /// The plugins' ids as `printf '%s\n' ... | cut -f1 | jq -R . | jq -s .` has them: none is one empty

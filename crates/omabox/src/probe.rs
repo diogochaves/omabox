@@ -121,6 +121,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("desk_name_refused", "NAME"),
     ("desk_content_refused", "FILE"),
     ("desk_files", "DESK"),
+    ("desk_copy", "H [SHELL_CMD]"),
     ("desk_plugins", "DESK [ID<TAB>DIR...]"),
     ("desk_dir", ""),
     ("desk_home", ""),
@@ -674,6 +675,15 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             refused(crate::seed::desk_content_refused(f).map(|m| m.as_bytes().to_vec()))
         }
         (b"desk_files", [desk]) => line(&crate::seed::desk_files(&ctx, desk, None)?),
+        (b"desk_copy", [h, shell @ ..]) if shell.len() <= 1 => {
+            let plan = crate::seed::SeedPlan {
+                plain: true,
+                desk_box: true,
+                shell_cmd: shell.first().map(|c| c.to_vec()).unwrap_or_default(),
+                ..crate::seed::SeedPlan::default()
+            };
+            line(&crate::deskcopy::copy(&ctx, &plan, h)?)
+        }
         (b"desk_plugins", [desk, have @ ..]) => {
             let mut hv = Vec::new();
             for x in have {
