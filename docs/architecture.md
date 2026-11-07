@@ -22,8 +22,11 @@ A box is Omarchy's or plain (`--desktop`; plain where Omarchy is not installed).
 `share/hyprland.lua` runs in both: Omarchy's bootstrap, the box HOME's Hyprland modules and toggles
 on Omarchy, `share/plain.lua` (Hyprland's defaults, your keyboard layout, a terminal and a close
 bind) on plain, then what every box needs. A plain box sees an empty `/usr/share/omarchy`, and its
-shell, if any, is the command `--shell` names. `--hyprland DIR` runs another Hyprland version from a
-folder: its libraries first, its `hyprctl` bound over the box's.
+shell, if any, is the command `--shell` names. A desk box (`--desktop desk`) is a plain one
+whose fake HOME is mounted at your HOME's own path instead of `/home/sbx`, so settings that name
+files by absolute path find them; its folder on the host is the same as any box's
+(`~/.cache/omabox/NAME/home`), and none of your HOME's files are in it. `--hyprland DIR` runs another
+Hyprland version from a folder: its libraries first, its `hyprctl` bound over the box's.
 
 | Path | What |
 |---|---|
