@@ -288,6 +288,9 @@ rec_tools() {
     ffmpeg -nostdin -v error -f lavfi -i color=s=64x64:d=0.1 -c:v libopenh264 -f null - 2>/dev/null || return 1
   REC_ENC=libopenh264 REC_VARGS=(-c:v libopenh264 -rc_mode quality -qmin 18 -qmax 18)
 }
+# ... | rgb_cells: 8-bit RGB pixels on stdin (magick's rgb:-) as "R,G,B R,G,B ...", row by row, as the
+# suite once read them from magick's txt:-, which openSUSE's ImageMagick policy forbids (finding 690).
+rgb_cells() { od -An -v -tu1 -w3 | awk 'NF == 3 { printf "%s%s,%s,%s", n++ ? " " : "", $1, $2, $3 }'; }
 # BAR_NS: the layer namespace of a box's bar, Omarchy's or PSHELL's.
 BAR_NS=omarchy-bar; omarchy_here || BAR_NS="t-plainbar"
 # "${NOOM[@]}" CMD...: CMD as on a machine without Omarchy: under a bwrap that hides /usr/share/omarchy
@@ -16636,8 +16639,8 @@ record_layout_on() {
     "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$v" 2>&1) $sz"
   # Its last frame and the shot, 10x8 cells' mean colours (the gaps transparent in the shot: black).
   local a b
-  a=$(magick "$f" -background black -alpha remove -alpha off -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
-  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  a=$(magick "$f" -background black -alpha remove -alpha off -scale '10x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
+  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '10x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
   check "...its last frame is the shot's layout: 80 cells' colours within 8 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 12) <(tr ' ' '\n' <<<"$b" | head -n 12) | paste -sd ' ') ...)" \
     awk -v a="$a" -v b="$b" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 240 || nb != 240) exit 1
       for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 8 || d < -8) exit 1 } }'
@@ -16664,8 +16667,8 @@ record_layout_on() {
   ob shot -b "$B" --no-pointer --monitor "$m1" -o "$fm" >/dev/null 2>&1
   check_eq "record --monitor $m1 (transform 1): a 720x1280 video" "720,1280" \
     "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
-  a=$(magick "$fm" -background black -alpha remove -alpha off -scale '4x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
-  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '4x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  a=$(magick "$fm" -background black -alpha remove -alpha off -scale '4x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
+  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '4x8!' -depth 8 rgb:- 2>/dev/null | rgb_cells)
   check "...its last frame is $m1's shot: 32 cells' colours within 12 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 8) <(tr ' ' '\n' <<<"$b" | head -n 8) | paste -sd ' ') ...)" \
     awk -v a="$a" -v b="$b" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 96 || nb != 96) exit 1
       for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 12 || d < -12) exit 1 } }'
@@ -17234,7 +17237,7 @@ monitors_turned_on() {
   check_match "shot --monitor $m2 (transform 3, scale 2): 360x640 at 2000,0, a 720x1280 image" "720x1280 image of the screen's 360x640 at 2000,0" "$out"
   # Each monitor's shot against its part of the whole one, in 6x10 cells' mean colours.
   local a b sh
-  turned_cells() { magick "$@" -background black -alpha remove -alpha off -scale '6x10!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' '; }
+  turned_cells() { magick "$@" -background black -alpha remove -alpha off -scale '6x10!' -depth 8 rgb:- 2>/dev/null | rgb_cells; }
   for sh in "$m1 $fa 1440x2560+2560+0" "$m2 $fb 720x1280+4000+0"; do
     read -r x a b <<<"$sh"
     local w h; w=$(turned_cells "$a"); h=$(turned_cells "$f" -crop "$b" +repage)
