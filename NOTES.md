@@ -14172,13 +14172,16 @@ from them.
     the first left out and how many more, once. A link into the box HOME (relative, or omabox's own
     `/home/sbx` ones) or to what you cannot write (`/usr/share/omarchy`) stays. Desk boxes never went
     through `seed_copy` (deskcopy, finding 710). `path --home` now warns for every box, not a desk box's
-    only (finding 710's exception gone): an Omarchy box's seeding leaves no such link, so one there is a
-    save's from before this or planted; `.config/omarchy/themes/NAME` as a link is `--theme-dir`'s,
+    only (finding 710's exception gone): an Omarchy box's seeding leaves no such link, and `up --from`
+    a save runs the same pass over the whole restored HOME first (a save made before this, or with a
+    link planted in it), but a desk box's, whose absolute links to your HOME's path lead to its own
+    files inside the box; so one there is a desk save's or planted after up; `.config/omarchy/themes/NAME` as a link is `--theme-dir`'s,
     live by ask, and not named. On this machine: frieren's and baseline-frieren's wallpapers are copies
     in a box (the JPEG reads in it), no link into HOME left, `up` silent. Tests: `seed_copy_links_out`
     (a picture and a text copied, a password file and a folder gone, one inside kept, one to
     `/etc/os-release` kept), `seed_copies_as_bash`'s links to a secret now gone, `real_home_links_found`
-    (the --theme-dir case), `t_theme_links` (a stand-in HOME through a real up).
+    (the --theme-dir case), `t_theme_links` (a stand-in HOME through a real up, and `up --from` a save
+    holding a planted link: a copy).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

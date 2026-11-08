@@ -600,6 +600,11 @@ fn link_pass() -> std::sync::MutexGuard<'static, LinkPass> {
 /// that looks like a key; 64 files and 128 MiB in one up), else it is removed and seed_home says so.
 /// A link into the box HOME, or to what you cannot write (/usr/share/omarchy's), stays.
 fn home_links_out(ctx: &Ctx, h: &[u8], d: &Dest) -> Res<()> {
+    home_links_under(ctx, h, d.rel())
+}
+
+/// home_links_out over REL in the box HOME H (empty: all of it, for a save restored there).
+fn home_links_under(ctx: &Ctx, h: &[u8], rel: &[u8]) -> Res<()> {
     use crate::bwrap::lexical;
     let Ok(own) = std::fs::canonicalize(p(h)) else {
         return Ok(());
@@ -613,10 +618,14 @@ fn home_links_out(ctx: &Ctx, h: &[u8], d: &Dest) -> Res<()> {
         std::ffi::CString::new(t.to_vec())
             .is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
     };
-    let mut todo: Vec<(Vec<u8>, usize)> = vec![(d.rel().to_vec(), 0)];
+    let mut todo: Vec<(Vec<u8>, usize)> = vec![(rel.to_vec(), 0)];
     let mut seen = 0usize;
     while let Some((rel, depth)) = todo.pop() {
-        let at = cat!(own, "/", rel);
+        let at = if rel.is_empty() {
+            own.clone()
+        } else {
+            cat!(own, "/", rel)
+        };
         let Ok(rd) = std::fs::read_dir(p(&at)) else {
             continue;
         };
@@ -630,7 +639,11 @@ fn home_links_out(ctx: &Ctx, h: &[u8], d: &Dest) -> Res<()> {
             if seen > LINK_ENTRIES {
                 return Ok(());
             }
-            let r = cat!(rel, "/", name);
+            let r = if rel.is_empty() {
+                name
+            } else {
+                cat!(rel, "/", name)
+            };
             let e = cat!(own, "/", r);
             let Ok(m) = std::fs::symlink_metadata(p(&e)) else {
                 continue;
@@ -748,7 +761,7 @@ fn home_links_note() {
     say(cat!(
         "up: note: ~/",
         first,
-        " in your look is a link out of the box and stays out: ",
+        " is a link out of the box HOME and is left out: ",
         why,
         more,
         ". The box HOME holds no link into your HOME (an agent editing through one would edit your file)"
@@ -1942,7 +1955,13 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
         bytes: 0,
         left_out: Vec::new(),
     };
-    let r = seed_home_look(ctx, plan, h);
+    // A save made before #448 may hold links into your HOME: the same pass over all of it, but a
+    // desk box's, whose links to your HOME's path lead to its own files in the box.
+    let r = if plan.from && !plan.desk_box {
+        home_links_under(ctx, h, b"").and_then(|()| seed_home_look(ctx, plan, h))
+    } else {
+        seed_home_look(ctx, plan, h)
+    };
     home_links_note();
     r
 }
@@ -2845,7 +2864,7 @@ mod tests {
         let (_, said) = crate::exit::heard(home_links_note);
         // (the unit tests share up's one list: another test's links may be in it too)
         assert!(
-            said.contains("in your look is a link out of the box and stays out")
+            said.contains("is a link out of the box HOME and is left out")
                 && said.contains("more like it)"),
             "{said}"
         );

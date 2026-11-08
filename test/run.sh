@@ -20255,7 +20255,8 @@ t_stock() {
 # #448, finding 714: a theme of yours whose files are links into your HOME (a wallpaper kept in a
 # dotfiles or pictures folder) gives the box a copy of each file it may copy, and the link to what
 # looks like a secret is gone, said once: the box HOME on the host holds no link into your HOME, so
-# path --home is silent; one planted there is named. On a stand-in HOME (--theme: it has no look).
+# path --home is silent; one planted there is named, and up --from a save holding it gets a copy. On a
+# stand-in HOME (--theme: it has no look).
 t_theme_links() {
   local B=$P-tl fh=$TMP/$P-tl-home H th
   th=$fh/.config/omarchy/themes/mine
@@ -20271,13 +20272,22 @@ t_theme_links() {
   check "...the picture's bytes" cmp "$fh/pics/w.png" "$H/.config/omarchy/themes/mine/backgrounds/1.png"
   check "...and the box sees it" env HOME="$fh" "$CLI" run -b "$B" -- test -s /home/sbx/.config/omarchy/themes/mine/backgrounds/1.png
   check_fails "a link to what looks like a password: gone" test -e "$H/.config/omarchy/themes/mine/creds.txt" -o -L "$H/.config/omarchy/themes/mine/creds.txt"
-  check_eq "...said once, by up" 1 "$(grep -c 'themes/mine/creds.txt in your look is a link out of the box and stays out' <<<"$UP_OUT")"
+  check_eq "...said once, by up" 1 "$(grep -c 'themes/mine/creds.txt is a link out of the box HOME and is left out' <<<"$UP_OUT")"
   check_eq "path --home: silent (no link into HOME)" "" "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
   ln -s "$fh/pics/w.png" "$H/planted.png"
   check_match "...one planted: named" "^omabox: path: box '$B''s HOME holds 1 link into your real HOME \(planted\.png -> " \
     "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
+  # A save holding such a link (made before the fix, or planted): up --from it gets the copy.
+  local S=$P-tls
+  check "a save of it, the planted link in it" env HOME="$fh" "$CLI" save "$S" -b "$B"
+  HOME=$fh ob down "$B" >/dev/null 2>&1
+  UP_OUT=$(HOME=$fh ob up "$B" --from "$S" --no-shell --net isolated --theme tokyo-night 2>&1) || { no "up --from that save" "$UP_OUT"; HOME=$fh ob saves rm "$S" >/dev/null 2>&1; return; }
+  H=$(HOME=$fh ob path -b "$B" --home 2>/dev/null)
+  check "up --from it: the save's link to your picture a copy" bash -c "[ -f '$H/planted.png' ] && [ ! -L '$H/planted.png' ] && cmp -s '$fh/pics/w.png' '$H/planted.png'"
+  check_eq "...path --home silent" "" "$(HOME=$fh ob path -b "$B" --home 2>&1 >/dev/null)"
   check_eq "your files untouched" "password = hunter22" "$(cat "$fh/pics/creds.txt")"
   HOME=$fh ob down "$B" >/dev/null 2>&1
+  HOME=$fh ob saves rm "$S" >/dev/null 2>&1
 }
 
 # up --theme NAME (finding 245): the box on that theme, not the desk's current one (a theme the desk is
