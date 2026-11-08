@@ -20,7 +20,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   already added keep working. `broker off` and `up`'s "this sandbox refuses new namespaces" say so
   too. Tested with ai-jail 3.3.0: the broker reads a 3.x jail as it read a 2.x one, and a real
   Claude Code in the jail drives its own box. `docs/ai-jail.md` says how to start Claude in the
-  jail on Omarchy 4.5, where `ai-jail claude` stops at mise's update of the agent.
+  jail on Omarchy 4.5, where mise's command wrappers cannot take their lock in the mise folder
+  ai-jail maps read-only.
 
 ## 1.4.0 — 2026-11-07
 

@@ -43,14 +43,15 @@ Since ai-jail 2.8, a bare `ai-jail claude` reaches only the hosts its proxy lets
 model's API, and in 3.x what the project's onboarding allowed, such as package registries); its
 boxes still get no network. `omabox broker off` turns it off.
 
-On Omarchy 4.5, `claude` (like the other agent CLIs Omarchy installs) is mise's wrapper, which
-updates the agent before it runs. The jail gives mise an empty cache and no way to its version list,
-so `ai-jail claude` stops at `Failed to install aqua:anthropics/claude-code@latest` before Claude
-starts. Run the installed binary instead, naming the harness so ai-jail still sets it up as Claude
-(`--agent-state` keeps your login when the project's onboarding did not choose it):
+On Omarchy 4.5, `claude`, `codex` and `grok` are mise command wrappers (Omarchy runs each as the
+subscription account you picked), and mise takes a lock in its data folder every time a wrapper or
+one of its shims runs. ai-jail 3.3 maps that folder read-only, so `ai-jail claude` stops at `mise
+ERROR Read-only file system`, and `python3` or `node` from mise fail inside the jail too. Until
+ai-jail lets mise take that lock, give the jail a copy-on-write mise data folder (ai-jail keeps its
+writes in the project's `.ai-jail-overlays`, which it git-ignores):
 
 ```bash
-ai-jail --harness claude -- "$(mise which claude)"
+ai-jail --mise --overlay-map ~/.local/share/mise claude
 ```
 
 Tested with ai-jail 3.3.0 and omabox 1.4 on Linux, and before that with ai-jail 2.2.1, 2.6.2,

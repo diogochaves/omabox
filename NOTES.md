@@ -14121,12 +14121,19 @@ from them.
     jail's project), `shot` (into it), a refused `host` and `down`, its box `isolated`; and the
     display recipe (`omabox env`, `ai-jail --gpu --rw-map "$WAYLAND_DISPLAY" --env WAYLAND_DISPLAY`)
     put a jailed foot in the box, with only the box's socket under the jail's `/run/user/1000`. A
-    bare `ai-jail claude` on Omarchy 4.5 never starts Claude: `claude` is mise's wrapper with
-    Omarchy's `auto_update = "4h"`, and in the jail mise has an empty cache (ai-jail's own
-    `~/.cache`) and no way to `mise-versions.jdx.dev` or `api.github.com` (`Failed to install
-    aqua:anthropics/claude-code@latest`; with the host's mise cache mapped read-only it fails on
-    the write). `ai-jail --harness claude -- "$(mise which claude)"` runs it (`--agent-state` for
-    the login when the project has no saved choice); docs/ai-jail.md says so.
+    bare `ai-jail claude` on Omarchy 4.5 never starts Claude, and `python3` or `node` from mise fail
+    inside the jail: Omarchy declares mise command wrappers (`[wrappers.claude]`, `codex`, `grok`,
+    in `/etc/mise/conf.d/omarchy-agent-accounts.toml`, to run each as the chosen subscription
+    account), and with wrappers configured mise 2026.11 creates and locks
+    `~/.local/share/mise/command-wrappers/bin.lock` on every shim or wrapper run, in the folder
+    ai-jail maps read-only (`mise ERROR Read-only file system`, mise's `lock_file.rs`). Found by
+    bisecting Omarchy's three mise config files (only the wrappers file breaks it; its lazy tools
+    with `auto_update` don't) and by reading what a copy-on-write data folder's upper layer held
+    afterwards (that lock and nothing else). A plain mise setup without wrappers works in the jail,
+    shims included. Two first guesses were wrong: mise's update check (allowing its hosts or
+    `MISE_OFFLINE` changes nothing), and running the binary `mise which claude` names, which starts
+    Claude but skips the wrapper's own command, Omarchy's account choice with it. docs/ai-jail.md
+    gives `ai-jail --mise --overlay-map ~/.local/share/mise claude`, which keeps the wrapper.
 
 712. **Bare `help` was the help agents read most, and the costliest** (2026-11-07, #450). Over three
     weeks of agent sessions after `help CMD` went short (#269), bare `omabox help` rose from 12 calls
