@@ -57,14 +57,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // inside a command is refused in a worktree.
     if home {
         // (finding 710: a link in it into your real HOME is said, as following it edits your files;
-        // a desk box's only, whose HOME is at your HOME's path: an Omarchy box's seeded theme links
-        // into your HOME by design, to what it mounts read-only there)
+        // every box's since #448, whose seeding leaves none: one there is a save's from before, or
+        // planted)
         let user = shell::env_or_empty("HOME");
-        let desk = crate::boxes::box_home(&ctx.d) != crate::boxes::SBX_HOME.as_bytes();
-        if let Some((n, first, to)) = desk
-            .then(|| real_home_links(&cat!(ctx.d, "/home"), &user))
-            .flatten()
-        {
+        if let Some((n, first, to)) = real_home_links(&cat!(ctx.d, "/home"), &user) {
             say(cat!(
                 "path: box '",
                 ctx.name,
@@ -121,7 +117,8 @@ const SCAN_ENTRIES: usize = 20_000;
 /// The links in a box HOME's folder (DIR, as the host sees it) that lead into the user's real HOME
 /// (USER, at its path or below; one into the box's own folder is not), each target taken lexically
 /// from the link's folder (finding 710): how many, the first one's path in the folder and its
-/// target. None when there are none. At most SCAN_DEPTH folders deep and SCAN_ENTRIES entries.
+/// target. None when there are none. At most SCAN_DEPTH folders deep and SCAN_ENTRIES entries. A
+/// theme's own folder as a link (.config/omarchy/themes/NAME) is up --theme-dir's: live, as asked.
 fn real_home_links(dir: &[u8], user: &[u8]) -> Option<(u64, Vec<u8>, Vec<u8>)> {
     use crate::bwrap::lexical;
     let user = lexical(user);
@@ -164,7 +161,9 @@ fn real_home_links(dir: &[u8], user: &[u8]) -> Option<(u64, Vec<u8>, Vec<u8>)> {
                 } else {
                     lexical(&cat!(at, "/", raw))
                 };
-                if under(&to, &user) && !under(&to, &own) {
+                let theme_dir = r.starts_with(b".config/omarchy/themes/")
+                    && !r[b".config/omarchy/themes/".len()..].contains(&b'/');
+                if under(&to, &user) && !under(&to, &own) && !theme_dir {
                     n += 1;
                     first.get_or_insert((r, raw));
                 }
@@ -207,8 +206,17 @@ mod tests {
         let deep = bx.join("a/b/c/d/e/f/g");
         std::fs::create_dir_all(&deep).unwrap();
         ln(&real, &deep.join("too-deep"));
+        // (a --theme-dir's link is the theme's whole folder; one inside a theme is not)
+        let themes = bx.join(".config/omarchy/themes");
+        std::fs::create_dir_all(themes.join("t/backgrounds")).unwrap();
+        ln(
+            &format!("{}/dev/live", user.display()),
+            &themes.join("live"),
+        );
         let (n, first, _) = real_home_links(&db, &ub).unwrap();
         assert_eq!(n, 2, "{}", String::from_utf8_lossy(&first));
+        ln(&real, &themes.join("t/backgrounds/1.png"));
+        assert_eq!(real_home_links(&db, &ub).unwrap().0, 3);
         assert!(first.starts_with(b".local/state/omarchy/current/"));
         let _ = std::fs::remove_dir_all(&d);
     }

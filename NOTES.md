@@ -14157,6 +14157,29 @@ from them.
     shorter wording in steps 1, 2 and 4. Measure: the share of `keys`/`click` followed by a `tree`
     call should fall, and `--wait --tree` show up.
 
+714. **An Omarchy box's HOME held links into your real HOME; now copies, or nothing** (2026-11-07,
+    #448). `seed_copy` (finding 171) kept the links inside what it copies of your look, so a theme
+    whose wallpapers are links into a dotfiles or pictures folder was seeded with those links. On
+    the host, the folder `path --home` hands to an agent's file tools then led into your files: an
+    Edit through one wrote your picture. In the box it mostly dangled (only the repo up runs from is
+    mounted, so this machine's frieren theme had no wallpaper in a box), not "mounted read-only" as
+    the issue first said. `seed_copy` now ends with `home_links_out`: each link it brought that leads
+    out of the box HOME into your HOME (by its target as written, or resolved), or to a file you can
+    write, becomes a copy of that file by `copy_file_in` when the desk copy's rules allow it
+    (finding 710's: a regular file, refuse_src and no secret's name on its way via
+    `deskcopy::follow_why`, a picture by its magic up to 32 MiB or another file up to 1 MiB that
+    `desk_content_refused` passes; 64 files and 128 MiB per up), else it is removed; `seed_home` says
+    the first left out and how many more, once. A link into the box HOME (relative, or omabox's own
+    `/home/sbx` ones) or to what you cannot write (`/usr/share/omarchy`) stays. Desk boxes never went
+    through `seed_copy` (deskcopy, finding 710). `path --home` now warns for every box, not a desk box's
+    only (finding 710's exception gone): an Omarchy box's seeding leaves no such link, so one there is a
+    save's from before this or planted; `.config/omarchy/themes/NAME` as a link is `--theme-dir`'s,
+    live by ask, and not named. On this machine: frieren's and baseline-frieren's wallpapers are copies
+    in a box (the JPEG reads in it), no link into HOME left, `up` silent. Tests: `seed_copy_links_out`
+    (a picture and a text copied, a password file and a folder gone, one inside kept, one to
+    `/etc/os-release` kept), `seed_copies_as_bash`'s links to a secret now gone, `real_home_links_found`
+    (the --theme-dir case), `t_theme_links` (a stand-in HOME through a real up).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

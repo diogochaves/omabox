@@ -117,7 +117,7 @@ fn host_of(home: &[u8], rel: &[u8]) -> Vec<u8> {
 }
 
 /// An image by its first bytes: PNG, JPEG, GIF, WebP.
-fn is_image(f: &[u8]) -> bool {
+pub(crate) fn is_image(f: &[u8]) -> bool {
     use std::io::Read;
     let mut b = [0u8; 12];
     let n = std::fs::File::open(p(f))
@@ -155,7 +155,7 @@ fn parts_why(home: &[u8], home_r: &[u8], t: &[u8]) -> Option<&'static str> {
 
 /// Why E, a link (or a top folder) leading to TO, is not followed: refuse_src, or a name on its
 /// way.
-fn follow_why(home: &[u8], home_r: &[u8], e: &[u8], to: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn follow_why(home: &[u8], home_r: &[u8], e: &[u8], to: &[u8]) -> Option<Vec<u8>> {
     if let Some(w) = refuse_src(e) {
         return Some(cat!("it leads to ", to, ": ", w));
     }

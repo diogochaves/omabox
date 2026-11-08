@@ -5,6 +5,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Fixed
+- **An Omarchy box's HOME held links into your real HOME** ([#448](https://github.com/diogochaves/omabox/issues/448)):
+  a theme of yours whose wallpapers are links into another folder of your HOME (a dotfiles or
+  pictures repo) was seeded with those links, so on the host the folder `omabox path --home` gives an
+  agent's file tools led into your files, and in the box the pictures were missing. Each such link
+  is now a copy of its file, as a desk box copies (no secret's name or content, 32 MiB a picture,
+  1 MiB other files, 128 MiB in all), or is left out and `up` says so. `path --home` warns about a
+  link into your HOME for every box now, not only a desk box (a save made before keeps its links).
+
 ### Changed
 - **Bare `omabox help` is an index: each command once, with a few words on what it is for**
   ([#450](https://github.com/diogochaves/omabox/issues/450)). It printed every command's options,
