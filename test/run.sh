@@ -2832,6 +2832,8 @@ t_unit_version() {
   check "...and sends text questions to tree, not a shot (#270)" grep -qF '`tree --find TEXT` (~60 tokens), not a' "$ROOT/skill/SKILL.md"
   # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
   check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/SKILL.md"
+  check "...and its loop types with --wait --tree, its step 1 names --expect tree (#449)" \
+    bash -c "grep -qE '^omabox keys --window app --wait --tree ' '$ROOT/skill/SKILL.md' && grep -qF -- '--expect tree' '$ROOT/skill/SKILL.md'"
   if command -v omarchy-plugin-validate >/dev/null; then
     check "the widget passes omarchy-plugin-validate" omarchy-plugin-validate "$ROOT/plugin"
   else

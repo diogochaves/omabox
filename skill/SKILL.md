@@ -66,10 +66,10 @@ omabox shot                               # a PNG path: Read it to look
 omabox windows                            # address, workspace, on screen or covered
 omabox shot --window app                  # one window's own pixels, even covered
 omabox click --window app 40 12           # window coordinates, as in its shot; or --find NAME
-omabox keys --window app --wait -t hi     # focus it, type, wait until settled
+omabox keys --window app --wait --tree -t hi  # type, settle, what its tree changed
 omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
 omabox wait window app                    # or --gone; layer NS; tree TEXT; notification RE; until -- CMD
-omabox wait change --window app           # a later redraw by itself; then wait still
+omabox wait change --window app           # a redraw by itself; then wait still
 omabox run -- busctl --user list          # any command in the box (its exit code)
 omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
 omabox down                               # when done
@@ -77,17 +77,17 @@ omabox down                               # when done
 
 ## Driving an app
 
-1. **Look, act once, look again; with text when text can tell.** Exit 0 from `keys`/`click` means
-   sent, not landed. A label, a checked box, a field's text: `tree --find TEXT` (~60 tokens), not a
-   shot (~1.2k); the bar, panels, menus: `tree --layer NS --find TEXT`; no tree: `find --image`
-   (a shot's crop). Else `--wait`'s line, `windows`, `wait`, `events`, `log --grep`.
+1. **Look, act once, look again; with text when text can tell.** `keys`/`click`'s exit 0 means
+   sent, not landed: `--wait --tree` says in that call what its tree changed; `--expect tree
+   TEXT`: 124 unless it shows. A label, a checked box, a field's text:
+   `tree --find TEXT` (~60 tokens), not a shot (~1.2k); the bar, panels, menus: `tree --layer NS
+   --find TEXT`; no tree: `find --image`. Else `windows`, `events`, `log --grep`.
 2. **Never resend input you have not seen land**: it types twice or toggles back. A 124 after
-   `--wait`: it WAS sent, and the line says where it went: read it, look (`tree`, a shot) before
-   sending again.
+   `--wait`: it WAS sent; read the line, look (`tree`, a shot) before sending again.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
 4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
-   `window --fullscreen`, `lua 'hl.dispatch(…)'`), not by keys and clicks, unless the gesture
-   is under test. **Stop when it shows the goal.**
+   `window --fullscreen`, a `lua` dispatch), not by keys and clicks, unless the gesture is under
+   test. **Stop when it shows the goal.**
 
 No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;
 video `record hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124

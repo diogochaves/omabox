@@ -14140,6 +14140,16 @@ from them.
     holds the index to `--all`'s commands, one line each under 80 columns, under 3 000 bytes;
     t_unit_cli_contract reads the commands from `help --all` now.
 
+713. **Agents never used `--wait --tree` or `--expect tree`; the skill's loop now shows them**
+    (2026-11-07, #449). The same sessions had no `keys`/`click --wait --tree` and no `--expect tree`
+    (#288, #319, both 2026-10-31), while `keys -> tree` (208) and `wait -> tree` (141) were common
+    pairs: the check in a second turn that re-reads the context. `tree --find` went from 75 calls to
+    674 after SKILL.md gave it a line, so the same is tried here: the loop's `keys` line is
+    `--wait --tree`, step 1 says what `--wait --tree` and `--expect tree TEXT` answer in the action's
+    call, and `brief`'s Act line types with `--tree`. SKILL.md stays under its 9 000 bytes by
+    shorter wording in steps 1, 2 and 4. Measure: the share of `keys`/`click` followed by a `tree`
+    call should fall, and `--wait --tree` show up.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -10,6 +10,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#450](https://github.com/diogochaves/omabox/issues/450)). It printed every command's options,
   147 lines, which agents cut with `head` to find one name. `omabox help --all` prints those lines
   as before; `help CMD` and `help --long` are unchanged.
+- **The skill's loop types with `--wait --tree`**
+  ([#449](https://github.com/diogochaves/omabox/issues/449)): the action's own line says what changed
+  in the app's tree, instead of a `tree` call in a second turn; step 1 names `--expect tree TEXT`,
+  and `omabox brief` says the same to a subagent.
 - **ai-jail 3: `omabox broker on` says to add its `ro_maps` to `~/.config/ai-jail/config.toml`**
   (`$XDG_CONFIG_HOME/ai-jail/` when that is set), where ai-jail 3.0 moved its global config;
   ai-jail before 3.0 read `~/.ai-jail`, and 3.0 moves that file there on its first launch, so lines
