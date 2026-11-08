@@ -10,7 +10,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (`$XDG_CONFIG_HOME/ai-jail/` when that is set), where ai-jail 3.0 moved its global config;
   ai-jail before 3.0 read `~/.ai-jail`, and 3.0 moves that file there on its first launch, so lines
   already added keep working. `broker off` and `up`'s "this sandbox refuses new namespaces" say so
-  too. Tested with ai-jail 3.3.0: the broker reads a 3.x jail as it read a 2.x one.
+  too. Tested with ai-jail 3.3.0: the broker reads a 3.x jail as it read a 2.x one, and a real
+  Claude Code in the jail drives its own box. `docs/ai-jail.md` says how to start Claude in the
+  jail on Omarchy 4.5, where `ai-jail claude` stops at mise's update of the agent.
 
 ## 1.4.0 — 2026-11-07
 

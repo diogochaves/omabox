@@ -7,7 +7,7 @@ Running agents in ai-jail that drive boxes of their own, through omabox's broker
 Akita, fences the agent in: bubblewrap, Landlock and seccomp on Linux, `sandbox-exec` on macOS, so
 your home, keys and cloud credentials are out of reach. ai-jail answers what the agent can touch,
 omabox where it draws, and they stack. To run a build you do not trust yet with the box's screen as
-its only display (tested with ai-jail 2.10.0 and omabox 1.0):
+its only display (tested with ai-jail 3.3.0 and omabox 1.4):
 
 ```bash
 omabox up
@@ -40,7 +40,18 @@ lists the jail's boxes and says a host process, another user or a box outside th
 without naming it. A shot or a recording (`record`, its marks, captions and contact sheet) is written into
 the jail by its own `omabox`; the broker never opens a path the jail names.
 Since ai-jail 2.8, a bare `ai-jail claude` reaches only the hosts its proxy lets through (its
-model's API; since 3.x package registries and GitHub too); its boxes still get no network. `omabox broker off` turns it off.
+model's API, and in 3.x what the project's onboarding allowed, such as package registries); its
+boxes still get no network. `omabox broker off` turns it off.
+
+On Omarchy 4.5, `claude` (like the other agent CLIs Omarchy installs) is mise's wrapper, which
+updates the agent before it runs. The jail gives mise an empty cache and no way to its version list,
+so `ai-jail claude` stops at `Failed to install aqua:anthropics/claude-code@latest` before Claude
+starts. Run the installed binary instead, naming the harness so ai-jail still sets it up as Claude
+(`--agent-state` keeps your login when the project's onboarding did not choose it):
+
+```bash
+ai-jail --harness claude -- "$(mise which claude)"
+```
 
 Tested with ai-jail 3.3.0 and omabox 1.4 on Linux, and before that with ai-jail 2.2.1, 2.6.2,
 2.8.1, 2.10.0 and 2.12.0.

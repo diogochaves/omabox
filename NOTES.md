@@ -14116,6 +14116,17 @@ from them.
     `project_strategy = "repo-root"` (linked worktrees share one project policy) changes nothing for
     omabox: the maps are global. `capabilities --json` says `inside_marker: false` (no unspoofable
     in-jail marker yet); the broker never needed one, since it reads the jail from outside.
+    Verified by hand on the real session the same day: a real Claude Code 2.1.319 in ai-jail 3.3.0
+    (`-p`, Haiku, the recipe's one-run `--map`s, `omabox broker on`) ran `up`, `ls`, `run` (in the
+    jail's project), `shot` (into it), a refused `host` and `down`, its box `isolated`; and the
+    display recipe (`omabox env`, `ai-jail --gpu --rw-map "$WAYLAND_DISPLAY" --env WAYLAND_DISPLAY`)
+    put a jailed foot in the box, with only the box's socket under the jail's `/run/user/1000`. A
+    bare `ai-jail claude` on Omarchy 4.5 never starts Claude: `claude` is mise's wrapper with
+    Omarchy's `auto_update = "4h"`, and in the jail mise has an empty cache (ai-jail's own
+    `~/.cache`) and no way to `mise-versions.jdx.dev` or `api.github.com` (`Failed to install
+    aqua:anthropics/claude-code@latest`; with the host's mise cache mapped read-only it fails on
+    the write). `ai-jail --harness claude -- "$(mise which claude)"` runs it (`--agent-state` for
+    the login when the project has no saved choice); docs/ai-jail.md says so.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
