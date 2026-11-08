@@ -1,5 +1,6 @@
 //! omabox's help (#324 wave 6-front, A1): bash's usage_text compiled in, cut as bash's usage and
-//! usage_form cut it: bare `help` is every command's lines, `help --long` all of it, `help CMD` (and
+//! usage_form cut it: bare `help` is the index (help_index.txt, #450: a line a command), `help --all`
+//! every command's lines, `help --long` all of it, `help CMD` (and
 //! `CMD --help`) one command's lines and the paragraphs whose `@` line names it. `@` lines never show;
 //! `@short` paragraphs only in the short form, which is the default. help.txt was bash's text with
 //! `$PASS_KEY` expanded, the same bytes until the port ended (#324 wave 6b-end); it is the help now.
@@ -8,6 +9,9 @@ use crate::exit::{Exit, Res, out, say};
 
 /// usage_text's output.
 pub const TEXT: &str = include_str!("help.txt");
+
+/// Bare `help`'s index: each command named once, with what it is for in a few words (#450).
+pub const INDEX: &str = include_str!("help_index.txt");
 
 /// The commands, for an unknown one's nearest (aliases: screenshot, logs, list, version).
 pub const COMMANDS: &[&str] = &[
@@ -135,9 +139,10 @@ pub fn form(c: &[u8], long: bool) -> Vec<u8> {
     o
 }
 
-/// Bare `help`: the lines of every command (to the first blank line past the title), then where
-/// the rest is. `help --long`: the whole text but the `@` lines and the `@short` paragraphs.
-fn bare(long: bool) -> Vec<u8> {
+/// Bare `help`: the index, then where the rest is. `help --all`: the lines of every command (to the
+/// first blank line past the title) in its place. `help --long`: the whole text but the `@` lines
+/// and the `@short` paragraphs.
+fn bare(long: bool, all: bool) -> Vec<u8> {
     let mut o = Vec::new();
     if long {
         let mut skip = false;
@@ -153,28 +158,33 @@ fn bare(long: bool) -> Vec<u8> {
         }
         return o;
     }
-    for (i, l) in lines().enumerate() {
-        if i >= 2 && l.is_empty() {
-            break;
+    if all {
+        for (i, l) in lines().enumerate() {
+            if i >= 2 && l.is_empty() {
+                break;
+            }
+            o.extend_from_slice(l);
+            o.push(b'\n');
         }
-        o.extend_from_slice(l);
-        o.push(b'\n');
+    } else {
+        o.extend_from_slice(INDEX.as_bytes());
     }
     // (#327: how the box is picked without -b was in --long only)
     o.extend_from_slice(b"\nWithout -b, the box is $OMABOX, else the git repo's name (plus the agent session's id), else\n\"default\": omabox help up --long says more.\n");
-    o.extend_from_slice(b"\nmore: omabox help CMD (one command's options), omabox help --long (every command's notes too)\n");
+    o.extend_from_slice(b"\nmore: omabox help CMD (one command's options), omabox help --all (every command's lines),\nomabox help --long (every command's notes too)\n");
     o
 }
 
 /// What `help ARGS` prints: Ok(text), or Err(()) for a word with no help (an unknown command).
 pub fn text(args: &[Vec<u8>]) -> Result<Vec<u8>, ()> {
     let long = args.iter().any(|a| a == b"--long");
-    let Some(first) = args.iter().find(|a| *a != b"--long") else {
-        return Ok(bare(long));
+    let all = args.iter().any(|a| a == b"--all");
+    let Some(first) = args.iter().find(|a| *a != b"--long" && *a != b"--all") else {
+        return Ok(bare(long, all));
     };
     let c: &[u8] = match first.as_slice() {
         // (bash's usage calls itself with nothing: --long is not passed on)
-        b"-h" | b"--help" => return Ok(bare(false)),
+        b"-h" | b"--help" => return Ok(bare(false, false)),
         b"screenshot" => b"shot",
         b"logs" => b"log",
         b"list" => b"ls",
@@ -200,7 +210,7 @@ pub fn run(args: &[Vec<u8>]) -> Res<()> {
     match text(args) {
         Ok(t) => out(t),
         Err(()) => {
-            let first = args.iter().find(|a| *a != b"--long");
+            let first = args.iter().find(|a| *a != b"--long" && *a != b"--all");
             Err(unknown_command(first.map_or(&b""[..], Vec::as_slice)))
         }
     }
@@ -275,8 +285,53 @@ mod tests {
             assert!(!t.split(|&b| b == b'\n').any(|l| l.starts_with(b"@")));
         }
         assert_eq!(
-            bare(false),
+            bare(false, false),
             text(&[b"-h".to_vec(), b"--long".to_vec()]).unwrap_or_default()
+        );
+    }
+
+    /// #450: the index names every command help --all has lines for, once each, and only those.
+    #[test]
+    fn index_names_every_command() {
+        let mut lines_of: Vec<String> = lines()
+            .skip(2)
+            .take_while(|l| !l.is_empty())
+            .filter_map(|l| {
+                let f = fields(l);
+                (f.first() == Some(&&b"omabox"[..])).then(|| String::from_utf8_lossy(f[1]).into())
+            })
+            .filter(|c: &String| c != "help")
+            .collect();
+        lines_of.sort();
+        lines_of.dedup();
+        let mut named: Vec<String> = INDEX
+            .lines()
+            .filter(|l| l.starts_with("  "))
+            .flat_map(|l| {
+                let name = l.trim_start().split("  ").next().unwrap_or("");
+                name.split(", ").map(String::from).collect::<Vec<_>>()
+            })
+            .collect();
+        let n = named.len();
+        named.sort();
+        named.dedup();
+        assert_eq!(n, named.len(), "a command named twice in the index");
+        assert_eq!(named, lines_of);
+        // every description line fits 80 columns, and the index stays small
+        assert!(INDEX.lines().all(|l| l.len() <= 80));
+        assert!(INDEX.len() < 3000, "{}", INDEX.len());
+        // help --all is today's synopses; bare help is not
+        let all =
+            String::from_utf8(text(&[b"--all".to_vec()]).unwrap_or_default()).unwrap_or_default();
+        assert!(all.contains("\n  omabox up [NAME] "), "{all}");
+        let b = String::from_utf8(text(&[]).unwrap_or_default()).unwrap_or_default();
+        assert!(
+            !b.contains("  omabox up ") && b.contains("\n  up              "),
+            "{b}"
+        );
+        assert!(
+            b.ends_with("omabox help --long (every command's notes too)\n"),
+            "{b}"
         );
     }
 

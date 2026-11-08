@@ -89,8 +89,9 @@ omabox brief -b box-3                  # ~15 lines for a subagent's prompt: the 
   the whole box session), `--xwayland`, `--autoreload` (Hyprland reloads its config when a file it
   loaded changes, as on your desktop), `omabox gpu 10` (GPU time of one box's
   processes; on NVIDIA, its driver's own sampling) and `omabox cpu 10` (their CPU, as % of one
-  core, and memory; `--app NAME` or `--pid PID` for one). `omabox help` lists every flag,
-  `omabox help CMD` (or `omabox CMD --help`) one command's; `--long` adds what each one does.
+  core, and memory; `--app NAME` or `--pid PID` for one). `omabox help` lists every command,
+  `--all` every flag, `omabox help CMD` (or `omabox CMD --help`) one command's; `--long` adds what
+  each one does.
 
 ## Tests that touch the desktop
 

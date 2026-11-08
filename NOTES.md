@@ -14128,6 +14128,18 @@ from them.
     the write). `ai-jail --harness claude -- "$(mise which claude)"` runs it (`--agent-state` for
     the login when the project has no saved choice); docs/ai-jail.md says so.
 
+712. **Bare `help` was the help agents read most, and the costliest** (2026-11-07, #450). Over three
+    weeks of agent sessions after `help CMD` went short (#269), bare `omabox help` rose from 12 calls
+    to 63, nearly all through `head`, to find a command's name: it printed every command's
+    synopsis, 147 lines and ~15.5k characters, so `head` either cut off the command sought or the
+    agent read ~800 tokens of options for one name. `help CMD` had dropped (`help up` 805 -> 546
+    tokens a call) while help as a whole stayed flat (717 -> 719). Bare `help` (and `-h`, `--help`)
+    is now an index, `help_index.txt`: each command once, a few words each, grouped as boxes, look,
+    act, wait, in the box, measure, this machine; 58 lines, ~2.8k characters. `help --all` prints the
+    synopses as bare `help` did; `help --long` is unchanged. `help::tests::index_names_every_command`
+    holds the index to `--all`'s commands, one line each under 80 columns, under 3 000 bytes;
+    t_unit_cli_contract reads the commands from `help --all` now.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

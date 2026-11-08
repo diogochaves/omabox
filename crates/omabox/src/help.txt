@@ -139,7 +139,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
   omabox doctor [--json] [--smoke]                       can this machine run boxes? what to install if not (read-only)
   omabox --version [--json]                              and which aquamarine new boxes use
-  omabox help [COMMAND [--long] | exit-codes]            one command's options (--long: its notes); what each exit code means
+  omabox help [COMMAND [--long] | --all | exit-codes]   one command's options (--long: its notes); --all: these lines; exit codes
 
 @ up run ls down path
 NAME defaults to $OMABOX, else the current git repo's name, else "default". In an agent session

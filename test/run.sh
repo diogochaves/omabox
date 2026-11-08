@@ -1366,7 +1366,7 @@ t_unit_cli_contract() {
   # #269: help CMD is short, its options one line each and a pointer to --long, which is every note.
   local s l n lines="" more="" sub="" sec="" bare shorts
   shorts=$(probe usage_text | awk '/^@/ { on = $1 == "@short"; next } on')
-  for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u) exit-codes; do
+  for c in $(ob help --all | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u) exit-codes; do
     s=$(ob help "$c"); l=$(ob help "$c" --long)
     n=$(wc -l <<<"$s"); [ "$n" -le 30 ] || lines+=" $c:$n"
     # (the pointer only where --long has more: help env, exit-codes are all there is)
@@ -1390,12 +1390,14 @@ t_unit_cli_contract() {
   check_eq "...--long before CMD too, CMD --help is the short form" "yes yes" \
     "$([ "$(ob help --long up)" = "$(ob help up --long)" ] && echo yes) $([ "$(ob up --help)" = "$(ob help up)" ] && echo yes)"
   bare=$(ob help)
-  check_eq "help: every command's lines, then the pointer" "more: omabox help CMD (one command's options), omabox help --long (every command's notes too)" \
-    "$(tail -n 1 <<<"$bare")"
+  # #450: bare help is the index, a line a command; --all is every command's lines, as it was
+  check_eq "help: the index, then the pointer" "omabox help CMD (one command's options), omabox help --all (every command's lines),|omabox help --long (every command's notes too)|no|yes" \
+    "$(tail -n 2 <<<"$bare" | sed 's/^more: //' | paste -sd '|')|$(grep -q '^  omabox up ' <<<"$bare" && echo yes || echo no)|$(grep -q '^  shot  ' <<<"$bare" && echo yes || echo no)"
+  check_eq "...help --all: every command's lines" "  omabox up [NAME]" "$(ob help --all | sed -n 3p | cut -c1-18)"
   check_eq "...a fifth of help --long at most, which has no @short line" "yes no" \
     "$( (( ${#bare} * 5 < $(ob help --long | wc -c) )) && echo yes) $(ob help --long | grep -qxF -- "$shorts" && echo yes || echo no)"
   check_eq "...every command with options has a CMD_OPTS line" "" \
-    "$(for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u); do
+    "$(for c in $(ob help --all | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u); do
          case $c in help|--version|which|guard|host|broker|check) continue ;; esac
          probe cmd_opts "$c" >/dev/null || echo -n " $c"
        done)"
@@ -6718,7 +6720,7 @@ t_unit_cli() {
   check_match "run --help is the usage" "omabox up" "$(ob run --help 2>&1)"
   # One command's help (`help CMD`, `CMD --help`): its lines and paragraphs, not the whole text.
   local full cmds c bad=""
-  full=$(ob help)
+  full=$(ob help --all)
   cmds=$(awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' <<<"$full" | sort -u)
   for c in $cmds; do [[ $(ob help "$c" | head -1) == "  omabox $c "* ]] || bad+=" $c"; done
   check_eq "help CMD starts with CMD's line, for each command" "" "$bad"
@@ -6800,7 +6802,7 @@ EOF
   check_eq "ls: an unknown argument refused, exit 2 (#236)" "omabox: ls: unknown option --bogus (omabox ls [--json]) (omabox help ls) 2" "$(o=$(ob ls --json --bogus 2>&1); echo "$o $?")"
   check_eq "...an unknown one: one line" 1 "$(ob -b "$P-x" shoot 2>&1 | wc -l)"
   check_match "...no command: said" "goes with a command" "$(ob -b "$P-x" 2>&1)"
-  check_match "...help still helps" "omabox up" "$(ob -b "$P-x" help 2>&1)"
+  check_match "...help still helps" "omabox help CMD" "$(ob -b "$P-x" help 2>&1)"
   check_match "...no value: said" "-b needs a value" "$(ob -b 2>&1)"
   # In an empty runtime dir: if the refusal broke, --all would take down every box on the machine.
   mkdir -p "$TMP/rt"
@@ -6922,7 +6924,7 @@ t_unit_clip() {
   check_match "clip refused: guard exec" "not for agents" "$(cl "$CLI" guard exec -- "$CLI" clip -b "$P-x")"
   check_match "clip refused: inside ai-jail (the broker's command)" "clip is not for agents \(inside ai-jail\)" "$(cl OMABOX_JAIL='{}' "$CLI" clip -b "$P-x")"
   # (...and the broker never takes it: broker_side.rs's broker_check_allows_and_refuses)
-  check_match "clip is in the usage" "omabox clip \[-b NAME\] \[--from-box\]" "$(ob help)"
+  check_match "clip is in the usage" "omabox clip \[-b NAME\] \[--from-box\]" "$(ob help --all)"
   # (The type handed over, text first, then an image, PNG first, nothing else; the type list and sizes
   # said: clip.rs's picks_as_bash, #324 wave 6-suite.)
 }
@@ -20999,7 +21001,7 @@ t_unit_monitors() {
   # Every command whose usage takes -b NAME takes it before the command too: monitor was left out.
   local bcmds missing="" c n=0 out d=$TMP/maw
   bcmds=$(probe box_cmds)
-  for c in $(ob help 2>&1 | sed -nE 's/^  omabox ([a-z-]+) .*-b NAME.*/\1/p' | sort -u); do
+  for c in $(ob help --all 2>&1 | sed -nE 's/^  omabox ([a-z-]+) .*-b NAME.*/\1/p' | sort -u); do
     n=$((n + 1)); [[ $bcmds == *" $c "* ]] || missing+=" $c"
   done
   check_eq "every command whose usage takes -b NAME is one -b NAME before it reaches ($n of them)" "" "$missing"

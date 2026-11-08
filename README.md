@@ -138,7 +138,7 @@ omabox up --desktop plain                 # on Omarchy: for an app that must not
 ```
 
 Every command, plain boxes, testing a shell plugin, a Hyprland build or an Omarchy checkout, several
-monitors: [docs/usage.md](docs/usage.md). `omabox help` lists every command and flag.
+monitors: [docs/usage.md](docs/usage.md). `omabox help` lists every command, `omabox help --all` every flag.
 
 ## Seeing a box yourself
 

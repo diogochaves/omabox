@@ -1,0 +1,52 @@
+omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
+
+Boxes
+  up              start a box (your plugin, theme or desk in it)
+  run             a command in the box; -d: an app left running
+  jobs, stop      the box's run -d jobs; stop them
+  down, ls        take a box down; the boxes up
+  path            the box's folder; --home: its HOME
+  save, saves     keep a box's HOME to start from; list them
+  brief           a subagent's prompt for box work
+Look
+  shot            a PNG: the screen, --window, -g region; --fit N
+  tree            a window's accessibility tree as text; --find
+  windows         the box's windows, what covers them
+  pixel, find     the colour at X Y; where an image is
+  tray            the tray's items and menus
+  record          a video, a recorded action, a contact sheet
+  check           visual checks against a baseline
+  calibrate       do your clicks need --fit?
+  peek            a live view of a box on your desktop
+Act
+  keys            key combos, -t TEXT, --pass VAR; --wait
+  click           at X Y, --find TEXT or --image; --wait
+  scroll, drag    a wheel; a press, move and release
+  pointer         raw pointer steps; hide, show
+  window          size, float, tile, fullscreen, maximize
+  clip            your clipboard in or out (interactive)
+  keys-to-box     SUPER keys to the box (interactive)
+Wait
+  wait            still, change, window, layer, tree, log, job...
+In the box
+  log, events     the box's logs; Hyprland's events
+  hyprctl, lua    Hyprland's commands; Lua in it
+  restart-shell   reload the Omarchy shell (after plugin edits)
+  reload          the box's Hyprland config again
+  plugin          a shell plugin added or removed
+  dnd, dock       Do Not Disturb; Omarchy 4.5's dock
+  mode, monitor   the screen's mode; more monitors
+  output          a screen dropped and back
+Measure and debug
+  cpu, gpu        CPU and memory; GPU time
+  audio, polkit   an --audio box's sound; its polkit agent
+  gdb             a backtrace of Hyprland or the shell
+  ports           the boxes' servers your 127.0.0.1 reaches
+  which, pid      a host process's box; a box's host PID
+  env             exports for host-side Wayland tools
+This machine
+  setup, doctor   links, guard, builds; can boxes run here?
+  config          settings: workspace, gpu, shot-fit...
+  guard, host     the agent guard; one real-desktop command
+  broker          boxes for agents inside ai-jail
+  --version       the version, and the aquamarine boxes use

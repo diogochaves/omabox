@@ -41,7 +41,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   subagents in an isolated worktree" below.
 - `omabox help CMD` (or `omabox CMD --help`): one command's flags, one line each; `omabox help CMD
   --long` adds its notes (what each flag does, defaults, limits): read it before guessing.
-  `omabox help`: every command's flags.
+  `omabox help`: every command, a line each; `help --all`: every command's flags.
 
 ## Exit codes
 
