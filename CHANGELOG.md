@@ -3,7 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.4.1 — 2026-11-08
+
+A fix for Omarchy boxes on a theme whose pictures are links into your HOME (a dotfiles or
+wallpapers folder): the box gets copies, so the folder `path --home` gives an agent no longer leads
+into your files, and the box shows those pictures. Also a short `omabox help`, one line a command,
+the skill's loop typing with `--wait --tree`, and ai-jail 3's config path. Update.
+
+**Omarchy:** as 1.4.0, Omarchy 4.5 and, deprecated, 4.0 (dropped in the first release after
+2026-12-04), on Hyprland 0.56.2; 0.57.1 also runs boxes.
 
 ### Fixed
 - **An Omarchy box's HOME held links into your real HOME** ([#448](https://github.com/diogochaves/omabox/issues/448)):
