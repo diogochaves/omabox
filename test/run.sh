@@ -12239,7 +12239,8 @@ t_desk_shell_slot() {
   # (with the suite's profile t-bar below), the tools and aquamarine build linked. The stand-in HOME
   # has a Hyprland config (up needs one); each case's own is --seed's, over its copy.
   desk_lua "$fh/.config"
-  cp "$ROOT/build/omabox" "$sr/build/omabox"; cp -r "$ROOT/share" "$sr/share"; ln -s "$ROOT"/tools/* "$sr/tools/"
+  cp "$(readlink -f "$CLI")" "$sr/build/omabox"; cp -r "$ROOT/share" "$sr/share"; ln -s "$ROOT"/tools/* "$sr/tools/"
+  chmod -R u+w "$sr/share"   # (an install's tree is read-only: the profile below is written into it)
   pre=$ROOT/build/prefix
   [ -d "$pre" ] || pre=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/../build/prefix
   [ ! -d "$pre" ] || ln -s "$pre" "$sr/build/prefix"
@@ -20968,7 +20969,8 @@ t_window_size() {
 t_window_fullscreen() {
   local B=$P-wfs out out2 rc bp bar bg s
   up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
-  ob run -b "$B" -d -- foot -T A sleep 600 >/dev/null
+  # A colour of its own: on a theme whose bar is the terminal's colour the shots below say nothing.
+  ob run -b "$B" -d -- foot -T A -o colors-dark.background=123456 -o colors-dark.alpha=1.0 sleep 600 >/dev/null
   until_ok 10 bash -c "'$CLI' windows -b '$B' --json | jq -e 'length == 1'"
   ob wait -b "$B" layer "$BAR_NS" >/dev/null 2>&1
   ob wait -b "$B" still >/dev/null

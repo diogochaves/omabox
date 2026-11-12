@@ -2873,6 +2873,7 @@ mod tests {
             "plain words",
             "...its targets untouched"
         );
+        std::fs::remove_dir_all(&s).unwrap();
     }
 
     #[test]

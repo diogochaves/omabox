@@ -14183,6 +14183,19 @@ from them.
     (the --theme-dir case), `t_theme_links` (a stand-in HOME through a real up, and `up --from` a save
     holding a planted link: a copy).
 
+715. **Two of 1.4's tests assumed a checkout and this machine's theme** (2026-11-11, #454; test-only).
+    1.4.1's package test ran the installed suite in Omarchy VMs, where both failed every time alone.
+    `t_desk_shell_slot` copied `$ROOT/build/omabox` for its stand-in omabox (#426's mistake
+    again: an install has `bin/omabox` and no `build/`; now `readlink -f "$CLI"`), and behind that
+    copied `share/` from the install's read-only tree, then could neither write its shell profile
+    into the copy nor remove it (now `chmod -R u+w`). `t_window_fullscreen` tells a fullscreen
+    window from a maximized one by the colour where the bar is, and on Omarchy's default theme the
+    bar and foot's background are the same `#1a1b26`; its foot now has a background of its own. The
+    cargo test `seed_copy_links_out` left `/tmp/omabox-links-out-PID/` behind, in a package's
+    `check()` too; it removes it. Both box tests pass from the checkout and with `test/run.sh
+    --installed`, which would have shown all of this before the VMs: run a new box test once that
+    way when it builds a stand-in omabox or reads colours off the screen.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
