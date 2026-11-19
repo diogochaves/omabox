@@ -57,6 +57,9 @@ omabox down
 Look, act once, look again: exit 0 from `keys`/`click` means sent, not landed; never resend input
 you have not seen land. ref: loop.md.
 
+No image input (a text-only model, or a Read that shows nothing): use `tree --find`, `look`'s
+report and `pixel`, and never say a shot looked right when you could not see it.
+
 ## Where next
 
 | Task | Read |

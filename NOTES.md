@@ -14391,6 +14391,10 @@ from them.
     `setkey`, `hl.config("gaps")`; `look` was the first move in 0-2 of 5 runs with the long skill
     and 3-4 of 5 with the short. The classified list is in the run's `results.md`
     (`~/.local/state/omabox/bench/`).
+    **Decided (Diogo, 2026-11-19): no OCR in omabox.** Text routes first (`tree`, `look`'s report,
+    `pixel`), completed where the benchmark found them short (a bar widget's text); a model that sees
+    images for questions that are visual (a local one fits a 16 GB GPU). The core says so for a model
+    without image input.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

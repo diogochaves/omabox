@@ -2841,6 +2841,8 @@ t_unit_version() {
   check "...and reads text with tree --find" grep -qE '^omabox tree --find ' <<<"$sk_body"
   check "...and ends in down" grep -qE '^omabox down$' <<<"$sk_body"
   check "...and names ref/loop.md for the rest" grep -qF 'ref: loop.md' <<<"$sk_body"
+  # #464: a text-only model in the benchmark Read shots it could not see; the core names the text routes.
+  check "...and the text routes for a model without image input (#464)" grep -qF "No image input" <<<"$sk_body"
   check "ref/loop.md sends text questions to tree, not a shot (#270)" grep -qF '`tree --find TEXT` (~60 tokens), not a' "$ROOT/skill/ref/loop.md"
   # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
   check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/ref/loop.md"
