@@ -23,6 +23,8 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox look app [--keys "K..."] [--type TEXT] [--after DURATION] [--timeout 10s] [-o FILE] [--keep-box]
              [UP OPTIONS] -- CMD [ARG...]                a program in a throwaway box: its window shot, its
                                                          problems and output reported (exit 1: problems)
+  omabox look plugin DIR [--open] [-o FILE] [--keep-box] [UP OPTIONS]   a plugin in one: the bar shot, its
+                                                         panel too with --open, its state and its warnings
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--grid N [--cell C3]]                  lettered cells to aim with, no tree; --cell: that cell, closer

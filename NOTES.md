@@ -14256,6 +14256,13 @@ from them.
     from cargo's `target/release` has the checkout as root, whose `bin/omabox` is another build, so
     it now starts itself there (`self_bin`). t_look_app: a working program, one logging a QML
     error, one ending before its window, one with no window in time, refusals, no box left.
+    `look plugin DIR [--open]`: `up --plugin DIR`, its `plugin_status`, the bar's strip (the edge
+    Hyprland reserves: `monitors`' reserved is left, top, right, bottom; a vertical bar takes a side)
+    and with `--open` the screen after `shell summon ID`. Its problems are only the shell's warnings
+    that name its id: every box's shell warns about the box itself (no portal app id, no system bus
+    for UPower and PowerProfiles, no PipeWire, two module paths), seven lines that would make every
+    plugin look broken. The two checks run as one test, `t_look`: each counts the `look-*` boxes
+    left, which a look beside it would make fail.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

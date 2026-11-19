@@ -37,7 +37,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"hyprctl" => Some("-b= --box="),
         b"lua" => Some("-b= --box= --json"),
         b"look" => Some(concat!(
-            "--keys= --type= --after= --timeout= -o= --keep-box --env= ",
+            "--keys= --type= --after= --timeout= -o= --keep-box --open --env= ",
             "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
             "--theme= --net= --allow= --addr= --idle= --from= --hyprland= --quickshell= ",
             "--omarchy= --keep= --stock-bar --stock --clean --desk-shell --systemd --audio --polkit --xwayland ",

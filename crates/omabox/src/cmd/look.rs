@@ -1,8 +1,10 @@
 //! `omabox look app [--keys "K..."] [--type TEXT] [--after DURATION] [--timeout 10s] [-o FILE]
-//! [--keep-box] [UP OPTIONS] -- CMD [ARG...]` (#461): "I built this, does it look right and did it
-//! log errors?" in one call. A throwaway box of its own (as a throwaway `run`'s), then the commands
-//! an agent would chain: `run -d`, its window waited for, keys sent, `wait still`, `shot --window`,
-//! the program's output read; the box taken down however this ends, unless --keep-box. Nothing new
+//! [--keep-box] [UP OPTIONS] -- CMD [ARG...]` and `omabox look plugin DIR [--open] [-o FILE]
+//! [--keep-box] [UP OPTIONS]` (#461): "I built this, does it look right and did it log errors?" in one
+//! call. A throwaway box of its own (as a throwaway `run`'s), then the commands an agent would chain:
+//! for an app `run -d`, its window waited for, keys sent, `wait still`, `shot --window`, the program's
+//! output read; for a plugin `up --plugin`, its state, the bar shot, with --open its panel summoned and
+//! shot, the shell's warnings. The box is taken down however this ends, unless --keep-box. Nothing new
 //! is isolated here: every step is one of omabox's own commands, run as a subprocess, so S1-S10 hold
 //! as they are. One short report on stdout; exit 0 when it found no problem, 1 when it did, and an
 //! error of omabox's own as its other commands do.
@@ -31,10 +33,11 @@ const PROBLEM_RE: &str = r"(^|[^a-z])(error|errors|critical|fatal|traceback|pani
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     match args.first().map(Vec::as_slice) {
         Some(b"app") => app(ctx, &args[1..]),
+        Some(b"plugin") => plugin(ctx, &args[1..]),
         Some(b"-h" | b"--help") | None => crate::help::usage("look"),
         Some(o) if o.starts_with(b"-") => Err(crate::args::unknown_opt(ctx, "look", o)),
         Some(k) => Err(ctx.die(cat!(
-            "look: app (more kinds to come: plugin, theme, page), got ",
+            "look: app or plugin (more kinds to come: theme, page), got ",
             k
         ))),
     }
@@ -51,9 +54,13 @@ struct App {
     keep: bool,
     up: Vec<Vec<u8>>,
     cmd: Vec<Vec<u8>>,
+    /// plugin's DIR, and --open.
+    dir: Option<Vec<u8>>,
+    open: bool,
 }
 
-fn parse(ctx: &Ctx, args: &[Vec<u8>]) -> Res<App> {
+/// KIND's options (app, plugin): an app's program after --, a plugin's DIR as its one word.
+fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
     let mut a = App {
         timeout: Duration::from_secs(10),
         ..App::default()
@@ -79,11 +86,12 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>]) -> Res<App> {
             Ok(&args[i + 1])
         };
         match o.as_slice() {
-            b"--" => {
+            b"--" if kind == "app" => {
                 a.cmd = args[i + 1..].to_vec();
                 break;
             }
-            b"--keys" => {
+            b"--open" if kind == "plugin" => a.open = true,
+            b"--keys" if kind == "app" => {
                 a.keys.extend(
                     val(i)?
                         .split(|c| c.is_ascii_whitespace())
@@ -92,11 +100,11 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>]) -> Res<App> {
                 );
                 i += 1;
             }
-            b"--type" => {
+            b"--type" if kind == "app" => {
                 a.keys.extend([b"-t".to_vec(), val(i)?.clone()]);
                 i += 1;
             }
-            b"--after" => {
+            b"--after" if kind == "app" => {
                 let v = val(i)?;
                 dur(ctx, o, v)?;
                 a.after = Some(v.clone());
@@ -135,6 +143,10 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>]) -> Res<App> {
                 }
             }
             _ if o.starts_with(b"-") => return Err(crate::args::unknown_opt(ctx, "look", o)),
+            _ if kind == "plugin" && a.dir.is_none() => a.dir = Some(o.clone()),
+            _ if kind == "plugin" => {
+                return Err(ctx.die(cat!("look plugin: one DIR (a plugin's folder), got ", o)));
+            }
             _ => {
                 return Err(ctx.die(cat!(
                     "look app: the program goes after --: omabox look app [OPTIONS] -- CMD [ARG...], got ",
@@ -144,7 +156,10 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>]) -> Res<App> {
         }
         i += 1;
     }
-    if a.cmd.is_empty() {
+    if kind == "plugin" && a.dir.is_none() {
+        return Err(ctx.die("look plugin: its folder: omabox look plugin DIR [--open]"));
+    }
+    if kind == "app" && a.cmd.is_empty() {
         return Err(ctx.die(
             "look app: the program goes after --: omabox look app [OPTIONS] -- CMD [ARG...]",
         ));
@@ -253,7 +268,7 @@ fn job_end(name: &[u8], pid: i64) -> Option<Vec<u8>> {
 }
 
 fn app(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
-    let a = parse(ctx, args)?;
+    let a = parse(ctx, args, "app")?;
     let me = std::process::id();
     let name = format!("look-{me}").into_bytes();
     select_box(ctx, &name)?;
@@ -269,19 +284,7 @@ fn app(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     let mut problems: Vec<Vec<u8>> = Vec::new();
     let mut notes: Vec<Vec<u8>> = Vec::new();
-    // up: its own process, its errors the caller's; --owner and no idle limit unless the box is kept.
-    let owner = me.to_string();
-    let mut up: Vec<&[u8]> = vec![b"up", name];
-    if !a.keep {
-        up.extend([b"--idle".as_slice(), b"0", b"--owner", owner.as_bytes()]);
-    }
-    up.extend(a.up.iter().map(Vec::as_slice));
-    let r = ob(&up);
-    if !r.ok {
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
-        return Err(ctx.die("look: the box did not start"));
-    }
-    warnings(&r.err, &mut problems);
+    start(ctx, a, name, me, &[], &mut problems)?;
     // The program, a job of the box's: its log is its output.
     let mut run: Vec<&[u8]> = vec![b"run", b"-b", name, b"-d", b"-q", b"--print-log", b"--"];
     run.extend(a.cmd.iter().map(Vec::as_slice));
@@ -293,11 +296,10 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             let output = std::fs::read(shell::path(&log)).unwrap_or_default();
             problems.extend(problem_lines(&output));
             out(report(
-                None,
-                b"",
+                &[("screenshot", b"none")],
                 &problems,
                 &notes,
-                &output,
+                Some(&output),
                 a.keep.then_some(name),
             ))?;
             return Err(Exit(1));
@@ -414,12 +416,15 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     }
     let output = std::fs::read(shell::path(&log)).unwrap_or_default();
     problems.extend(problem_lines(&output));
+    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    if !window_line.is_empty() {
+        head.push(("window", &window_line));
+    }
     out(report(
-        shot.as_deref(),
-        &window_line,
+        &head,
         &problems,
         &notes,
-        &output,
+        Some(&output),
         a.keep.then_some(name),
     ))?;
     if problems.is_empty() {
@@ -429,20 +434,249 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     }
 }
 
-/// The report, as the issue drew it.
+/// up NAME for a look: its own process, its errors the caller's; --owner and no idle limit unless
+/// the box is kept; EXTRA (a plugin's --plugin DIR) before the caller's UP OPTIONS. Its warnings are
+/// problems.
+fn start(
+    ctx: &Ctx,
+    a: &App,
+    name: &[u8],
+    me: u32,
+    extra: &[&[u8]],
+    problems: &mut Vec<Vec<u8>>,
+) -> Res<()> {
+    let owner = me.to_string();
+    let mut up: Vec<&[u8]> = vec![b"up", name];
+    if !a.keep {
+        up.extend([b"--idle".as_slice(), b"0", b"--owner", owner.as_bytes()]);
+    }
+    up.extend_from_slice(extra);
+    up.extend(a.up.iter().map(Vec::as_slice));
+    let r = ob(&up);
+    if !r.ok {
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), &r.err);
+        return Err(ctx.die("look: the box did not start"));
+    }
+    warnings(&r.err, problems);
+    Ok(())
+}
+
+/// The last non-empty line of a command's stdout (shot's path).
+fn last_line(o: &[u8]) -> Option<Vec<u8>> {
+    o.split(|&c| c == b'\n')
+        .rfind(|l| !l.is_empty())
+        .map(<[u8]>::to_vec)
+}
+
+/// The bar's strip of the first monitor, from what Hyprland reserves for it (`monitors`' reserved:
+/// left, top, right, bottom): the largest edge, as `X,Y WxH`; None when nothing is reserved.
+pub fn bar_strip(monitors: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(monitors).ok()?;
+    let m = v.as_array()?.first()?;
+    let n = |k: &str| m.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let (w, h) = (n("width"), n("height"));
+    let r: Vec<i64> = m
+        .get("reserved")?
+        .as_array()?
+        .iter()
+        .map(|x| x.as_i64().unwrap_or(0))
+        .collect();
+    let (l, t, rt, b) = (*r.first()?, *r.get(1)?, *r.get(2)?, *r.get(3)?);
+    let max = l.max(t).max(rt).max(b);
+    if max <= 0 {
+        return None;
+    }
+    Some(if max == t {
+        format!("0,0 {w}x{t}")
+    } else if max == b {
+        format!("0,{} {w}x{b}", h - b)
+    } else if max == l {
+        format!("0,0 {l}x{h}")
+    } else {
+        format!("{},0 {rt}x{h}", w - rt)
+    })
+}
+
+/// The lines of the shell's WARNINGS (shell_warnings_of's) that name plugin ID.
+pub fn plugin_warnings(warnings: &[u8], id: &[u8]) -> Vec<Vec<u8>> {
+    warnings
+        .split(|&c| c == b'\n')
+        .filter(|l| !id.is_empty() && l.windows(id.len()).any(|w| w == id))
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+/// A plugin's id, from DIR/manifest.json.
+fn plugin_id(dir: &[u8]) -> Option<Vec<u8>> {
+    let m: Value =
+        serde_json::from_slice(&std::fs::read(shell::path(&cat!(dir, "/manifest.json"))).ok()?)
+            .ok()?;
+    m.get("id")
+        .and_then(Value::as_str)
+        .map(|s| s.as_bytes().to_vec())
+}
+
+/// PATH with -SUFFIX before its extension (`/x/a.png`, `panel`: `/x/a-panel.png`).
+fn suffixed(path: &[u8], suffix: &str) -> Vec<u8> {
+    let slash = path.iter().rposition(|&c| c == b'/').map_or(0, |i| i + 1);
+    match path[slash..].iter().rposition(|&c| c == b'.') {
+        Some(d) => cat!(&path[..slash + d], "-", suffix, &path[slash + d..]),
+        None => cat!(path, "-", suffix),
+    }
+}
+
+fn plugin(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    let a = parse(ctx, args, "plugin")?;
+    let dir = a.dir.clone().unwrap_or_default();
+    let Some(id) = plugin_id(&dir) else {
+        return Err(ctx.die(cat!(
+            "look plugin: ",
+            dir,
+            " has no manifest.json with an id: not a plugin's folder"
+        )));
+    };
+    let me = std::process::id();
+    let name = format!("look-{me}").into_bytes();
+    select_box(ctx, &name)?;
+    let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
+    let r = plugin_in(ctx, &a, &dir, &id, &name, me);
+    if let Some(g) = guard {
+        g.finish();
+    }
+    r
+}
+
+fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) -> Res<()> {
+    let mut problems: Vec<Vec<u8>> = Vec::new();
+    let mut notes: Vec<Vec<u8>> = Vec::new();
+    start(ctx, a, name, me, &[b"--plugin", dir], &mut problems)?;
+    // Its state, as ls --json has it.
+    let ls: Value = serde_json::from_slice(&ob(&[b"ls", b"--json"]).out).unwrap_or(Value::Null);
+    let st = ls
+        .as_array()
+        .and_then(|v| {
+            v.iter()
+                .find(|b| b.get("name").and_then(Value::as_str).map(str::as_bytes) == Some(name))
+        })
+        .and_then(|b| {
+            b.get("plugin_status")?
+                .get(std::str::from_utf8(id).ok()?)
+                .cloned()
+        })
+        .unwrap_or(Value::Null);
+    let f = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let state = if f("state").is_empty() {
+        "unknown".to_string()
+    } else {
+        f("state")
+    };
+    let mut line = cat!(id, " ", state.as_str());
+    if !f("via").is_empty() {
+        line = cat!(line, " (", f("via"), ")");
+    }
+    if !f("host").is_empty() {
+        line = cat!(line, ", in ", f("host"), "'s layout");
+    }
+    if state != "loaded" && state != "hosted" {
+        problems.push(cat!("plugin ", id, ": ", state.as_str()));
+    }
+    let still: [&[u8]; 6] = [b"wait", b"-b", name, b"--timeout", b"5s", b"still"];
+    if ob(&still).code == 124 {
+        notes.push(b"still changing after 5s: the shot is of a moving screen".to_vec());
+    }
+    // The bar's strip, from what Hyprland reserves for it; the whole screen when nothing is.
+    let g = bar_strip(&ob(&[b"hyprctl", b"-b", name, b"-j", b"monitors"]).out);
+    let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
+    if let Some(g) = &g {
+        sh.extend([b"-g".as_slice(), g.as_bytes()]);
+    } else {
+        notes.push(b"no bar reserves an edge: the shot is the whole screen".to_vec());
+    }
+    if let Some(o) = &a.out {
+        sh.extend([b"-o".as_slice(), o]);
+    }
+    let r = ob(&sh);
+    let shot = if r.ok {
+        last_line(&r.out)
+    } else {
+        problems.push(cat!("shot: ", shell::subst(&r.err)));
+        None
+    };
+    // --open: its panel summoned, then the whole screen.
+    let mut panel = None;
+    if a.open {
+        let r = ob(&[
+            b"run",
+            b"-b",
+            name,
+            b"--",
+            b"omarchy-shell",
+            b"shell",
+            b"summon",
+            id,
+        ]);
+        if !r.ok {
+            problems.push(cat!(
+                "summon ",
+                id,
+                ": ",
+                shell::subst(&r.err),
+                shell::subst(&r.out)
+            ));
+        }
+        ob(&still);
+        let out_p = a.out.as_ref().map(|o| suffixed(o, "panel"));
+        let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
+        if let Some(o) = &out_p {
+            sh.extend([b"-o".as_slice(), o]);
+        }
+        let r = ob(&sh);
+        panel = if r.ok {
+            last_line(&r.out)
+        } else {
+            problems.push(cat!("shot: ", shell::subst(&r.err)));
+            None
+        };
+    }
+    // The shell's warnings that name the plugin (its QML's path holds its id): the box's own (no
+    // portal, no system bus) are no problem of the plugin's.
+    let log = ob(&[b"log", b"-b", name, b"shell", b"-n", b"all", b"--full"]);
+    problems.extend(plugin_warnings(
+        &crate::plugins::shell_warnings_of(&log.out),
+        id,
+    ));
+    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    if let Some(p) = &panel {
+        head.push(("panel", p));
+    }
+    head.push(("plugin", &line));
+    out(report(
+        &head,
+        &problems,
+        &notes,
+        None,
+        a.keep.then_some(name),
+    ))?;
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Exit(1))
+    }
+}
+
+/// The report, as the issue drew it: HEAD's lines (`screenshot: PATH`, `window: ...`), the problems,
+/// notes, OUTPUT's first lines (none: no such part), the box kept.
 pub fn report(
-    shot: Option<&[u8]>,
-    window: &[u8],
+    head: &[(&str, &[u8])],
     problems: &[Vec<u8>],
     notes: &[Vec<u8>],
-    output: &[u8],
+    output: Option<&[u8]>,
     kept: Option<&[u8]>,
 ) -> Vec<u8> {
     let cut = |l: &[u8]| crate::cmd::log::cut_line(l, LINE_WIDTH);
     let mut r = Vec::new();
-    r.extend(cat!("screenshot: ", shot.unwrap_or(b"none"), "\n"));
-    if !window.is_empty() {
-        r.extend(cat!("window: ", window, "\n"));
+    for (k, v) in head {
+        r.extend(cat!(*k, ": ", *v, "\n"));
     }
     if problems.is_empty() {
         r.extend(b"problems: none\n");
@@ -458,23 +692,25 @@ pub fn report(
     for n in notes {
         r.extend(cat!("note: ", n, "\n"));
     }
-    let lines: Vec<&[u8]> = output
-        .strip_suffix(b"\n")
-        .unwrap_or(output)
-        .split(|&c| c == b'\n')
-        .filter(|_| !output.is_empty())
-        .collect();
-    if lines.is_empty() {
-        r.extend(b"output: none\n");
-    } else {
-        let head = if lines.len() > OUTPUT_LINES {
-            format!("output (first {OUTPUT_LINES} of {} lines):\n", lines.len())
+    if let Some(output) = output {
+        let lines: Vec<&[u8]> = output
+            .strip_suffix(b"\n")
+            .unwrap_or(output)
+            .split(|&c| c == b'\n')
+            .filter(|_| !output.is_empty())
+            .collect();
+        if lines.is_empty() {
+            r.extend(b"output: none\n");
         } else {
-            "output:\n".to_string()
-        };
-        r.extend(head.into_bytes());
-        for l in lines.iter().take(OUTPUT_LINES) {
-            r.extend(cat!("  ", cut(l), "\n"));
+            let head = if lines.len() > OUTPUT_LINES {
+                format!("output (first {OUTPUT_LINES} of {} lines):\n", lines.len())
+            } else {
+                "output:\n".to_string()
+            };
+            r.extend(head.into_bytes());
+            for l in lines.iter().take(OUTPUT_LINES) {
+                r.extend(cat!("  ", cut(l), "\n"));
+            }
         }
     }
     if let Some(n) = kept {
@@ -523,13 +759,39 @@ mod tests {
     }
 
     #[test]
+    fn the_bar_strip() {
+        let m =
+            |r: &str| format!(r#"[{{"width":1920,"height":1080,"reserved":{r}}}]"#).into_bytes();
+        assert_eq!(bar_strip(&m("[0,26,0,0]")).as_deref(), Some("0,0 1920x26"));
+        assert_eq!(
+            bar_strip(&m("[0,0,0,40]")).as_deref(),
+            Some("0,1040 1920x40")
+        );
+        assert_eq!(bar_strip(&m("[48,0,0,0]")).as_deref(), Some("0,0 48x1080"));
+        assert_eq!(
+            bar_strip(&m("[0,0,30,0]")).as_deref(),
+            Some("1890,0 30x1080")
+        );
+        assert_eq!(bar_strip(&m("[0,0,0,0]")), None);
+        assert_eq!(suffixed(b"/x/a.png", "panel"), b"/x/a-panel.png");
+        assert_eq!(suffixed(b"/x.d/a", "panel"), b"/x.d/a-panel");
+        let w = b"Could not connect to DBus. UPower service will not work.\nqs:///p/plugins/me.x/Panel.qml[15:-1]: ReferenceError: y";
+        assert_eq!(
+            plugin_warnings(w, b"me.x"),
+            [b"qs:///p/plugins/me.x/Panel.qml[15:-1]: ReferenceError: y".to_vec()]
+        );
+    }
+
+    #[test]
     fn the_report() {
         let r = report(
-            Some(b"/tmp/x.png"),
-            b"foot \"t\" 800x600 (tiled)",
+            &[
+                ("screenshot", b"/tmp/x.png"),
+                ("window", b"foot \"t\" 800x600 (tiled)"),
+            ],
             &[],
             &[],
-            b"",
+            Some(b""),
             None,
         );
         assert_eq!(
@@ -540,11 +802,10 @@ mod tests {
             .flat_map(|i| format!("l{i}\n").into_bytes())
             .collect();
         let r = String::from_utf8(report(
-            None,
-            b"",
+            &[("screenshot", b"none")],
             &[b"no window".to_vec()],
             &[],
-            &out,
+            Some(&out),
             Some(b"b"),
         ))
         .unwrap();

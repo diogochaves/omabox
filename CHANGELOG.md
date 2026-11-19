@@ -8,8 +8,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ### Added
 - **`omabox look app -- CMD`: does it look right, did it log errors, in one call** ([#461](https://github.com/diogochaves/omabox/issues/461)):
   a throwaway box, the program's window shot (keys first with `--keys` and `--type`), its problems
-  and output in a short report, exit 1 when it found problems, nothing left up. Plugins, themes and
-  pages come next.
+  and output in a short report, exit 1 when it found problems, nothing left up. `omabox look plugin
+  DIR [--open]` does the same for a shell plugin: the bar shot, its panel with `--open`, its state
+  and the shell's warnings about it. Themes and pages come next.
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):

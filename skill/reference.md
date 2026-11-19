@@ -172,6 +172,27 @@ output:
 - UP OPTIONS as a throwaway `run` takes them (`--size`, `--plugin`, `--net`...). Your repo is not
   overlaid as `run`'s is: the program is the command you give, by its path.
 
+`omabox look plugin DIR [--open] [-o FILE] [--keep-box] [UP OPTIONS]`: `up --plugin DIR` in a
+throwaway box, then
+
+```
+screenshot: /tmp/omabox-look-123-456.png
+panel: /tmp/omabox-look-123-789.png
+plugin: me.tally loaded (linked)
+problems:
+  qs:///home/sbx/.config/omarchy/plugins/me.tally/Panel.qml[15:-1]: ReferenceError: x is not defined
+```
+
+- **The shot** is the bar's strip, the edge Hyprland reserves for it (the top, or a side for a
+  vertical bar), in your bar's layout as `up` copies it (`--stock-bar` for Omarchy's default one);
+  the whole screen when no edge is reserved.
+- **`--open`**: `omarchy-shell shell summon ID`, then the whole screen (`panel:`; `-o a.png` names it
+  `a-panel.png`). A widget with no panel shows nothing more.
+- **Problems**: its state when it is not `loaded` or `hosted` (`plugin_status`, as `ls --json` has
+  it), `up`'s warnings for it, and the shell's warnings and errors that name the plugin (its QML
+  files by path). The shell's own about the box (no portal, no system bus) are left out.
+- DIR is the plugin's folder, with its `manifest.json`; the plugin id is read from it.
+
 ## Shots
 
 - Text before a shot, when the question is a label, an entry's text or a state: `omabox tree --find
