@@ -14301,6 +14301,19 @@ from them.
     (broken.html:9)`; 9.4 s in all. With `--net isolated` for a local file. look_page_checks, in
     `t_look`.
 
+722. **The skill's reference, split into topic pages** (2026-11-19, #464). `skill/reference.md` had
+    grown to 159 KB in 33 sections; SKILL.md named a section (`ref: SECTION`), and an agent was to
+    read that one. 78 sessions outside this repo grepped reference.md 148 times and never read it
+    whole; the split is for small models: one with a 32k context that opens the file whole is lost.
+    Now eleven pages in `skill/ref/` (look, shots, checks, input, session, builds, hyprland, shell,
+    apps, agents, cli; 6-22 KB each), each section moved verbatim and in its old order, each page
+    opening with its topic, the safety line (nothing here relaxes SKILL.md's rules), when to read it
+    and its sections. SKILL.md names the page (`ref: input.md`) and says to `grep -rn TERM` the
+    folder; a cross-reference between sections that now sit on different pages names the page
+    ("Symptoms in checks.md"). t_unit_version checks each `ref:` names a page there and that
+    reference.md is gone; the checks that read its Exit codes, JSON and prompt-free sections read
+    `ref/cli.md` and `ref/agents.md`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

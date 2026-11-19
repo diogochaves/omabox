@@ -41,6 +41,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A binary run from cargo's `target/release` could not start a box** ([#459](https://github.com/diogochaves/omabox/issues/459)):
   it looked for its tools under `target/`. It now finds the checkout it was built in.
 
+### Changed
+- **The skill's reference is eleven pages in `skill/ref/`** ([#464](https://github.com/diogochaves/omabox/issues/464)):
+  `reference.md` (159 KB) is split by topic (`look.md`, `shots.md`, `checks.md`, `input.md`,
+  `session.md`, `builds.md`, `hyprland.md`, `shell.md`, `apps.md`, `agents.md`, `cli.md`), its text
+  unchanged, and `SKILL.md` names the page (`ref: input.md`), so a small model reads one page of
+  6-22 KB instead of the whole. `grep -rn TERM` the folder finds a term in all of them.
+
 ## 1.4.1 — 2026-11-08
 
 A fix for Omarchy boxes on a theme whose pictures are links into your HOME (a dotfiles or
