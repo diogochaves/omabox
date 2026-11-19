@@ -288,8 +288,18 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         (b"aq_main_lib", [co]) => line(&crate::install::aq_main_lib(co).unwrap_or_default()),
         (b"aq_resolve", [so, co, r]) => {
             let env = crate::shell::env_or_empty("OMABOX_AQUAMARINE");
-            let aq = crate::install::aq_resolve_in(&ctx, so, &env, co, r).ok_or(Exit(1))?;
-            line(&cat!(aq.kind, "|", aq.lib, "|", aq.main, "|", aq.desc()))
+            let aq = crate::install::aq_resolve_in(&ctx, so, &env, co, r, b"").ok_or(Exit(1))?;
+            line(&cat!(
+                aq.kind,
+                "|",
+                aq.lib,
+                "|",
+                aq.main,
+                "|",
+                aq.desc(),
+                "|",
+                aq.dir
+            ))
         }
         (b"confirm_close_available", [co, r]) => {
             line(if crate::install::confirm_close_available_in(&ctx, co, r) {
@@ -302,12 +312,12 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             let n = crate::render::RenderNode::new(n).ok_or(Exit(2))?;
             let w = crate::install::hypr_aq_soname(&ctx)?;
             let env = crate::shell::env_or_empty("OMABOX_AQUAMARINE");
-            let aq = crate::install::aq_resolve_in(&ctx, &w, &env, co, r).ok_or(Exit(1))?;
+            let aq = crate::install::aq_resolve_in(&ctx, &w, &env, co, r, b"").ok_or(Exit(1))?;
             crate::install::nvidia_needs_fix_in(&ctx, &aq, &n, r)
         }
         (b"aq_build_needed", [force, co, r]) => {
             let w = crate::install::hypr_aq_soname(&ctx)?;
-            let aq = crate::install::aq_resolve_in(&ctx, &w, b"", co, r).ok_or(Exit(1))?;
+            let aq = crate::install::aq_resolve_in(&ctx, &w, b"", co, r, b"").ok_or(Exit(1))?;
             yes(crate::install::aq_build_needed(&aq, *force == b"1"))
         }
         (b"aq_note", [kind, lib, ver, fixed]) => crate::cmd::setup::aq_note(
@@ -317,6 +327,7 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
                 ver: ver.to_vec(),
                 fixed: *fixed == b"1",
                 main: Vec::new(),
+                dir: Vec::new(),
             },
             b"",
         ),
@@ -328,6 +339,7 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
                 ver: ver.to_vec(),
                 fixed: *fixed == b"1",
                 main: Vec::new(),
+                dir: Vec::new(),
             },
             so,
         ),

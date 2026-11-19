@@ -14196,6 +14196,26 @@ from them.
     --installed`, which would have shown all of this before the VMs: run a new box test once that
     way when it builds a stand-in omabox or reads colours off the screen.
 
+716. **A Hyprland that finds its aquamarine through its RUNPATH was refused** (2026-11-19, #460).
+    A local Hyprland 0.57.2 package with its own aquamarine 0.16.0 in `/usr/lib/<pkg>/lib`, linked
+    there by RUNPATH, beside the distribution's 0.15.1 in `/usr/lib`: the desktop ran it, `up`
+    refused it ("Hyprland links libaquamarine.so.15, which is not in /usr/lib"), since aq_pick
+    looked in omabox's builds and one system dir only. Now, when the system dir lacks the soname,
+    it looks in the box's Hyprland's RUNPATH (or RPATH) folders, as the loader does: only absolute
+    ones under `/usr` without `$ORIGIN` or `..`, because `/usr` is what a box sees of the host; one
+    elsewhere is still refused, now naming the RUNPATH. Such a library counts as the system's (no
+    LD_LIBRARY_PATH, no bind: the box's loader follows the same RUNPATH), with the same test for
+    #415's fix, and `--version` and `config` say where it is. The system dir still comes first, so
+    a Hyprland without a RUNPATH (Arch's, Omarchy's) is picked as before. `t_unit_aq_runpath`
+    builds stand-in Hyprlands with cc; checked for real with a headless box on proart's package.
+    Following `up`'s own advice for the stale build there (`setup --aquamarine`) then broke every
+    box: omabox's v0.16.0 has the same soname as the package's patched aquamarine but not its added
+    `CBackend::acquireGpu` and two more, so Hyprland died at once ("symbol lookup error", exit 127).
+    A private build is now skipped, naming the symbol, when `LD_LIBRARY_PATH=<its lib> ldd -r` on
+    the box's Hyprland leaves an `Aquamarine::` symbol undefined (29 ms; not for a jailed caller's
+    file, which the broker does not load); the same test now covers any Hyprland built against a
+    patched aquamarine, RUNPATH or not.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

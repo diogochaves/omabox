@@ -3,6 +3,18 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+- **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):
+  a Hyprland built with its own aquamarine in a private folder under `/usr` (a local package beside
+  the distribution's older aquamarine) ran as your desktop, but `up` said its soname "is not in
+  /usr/lib". omabox now looks in that Hyprland's RUNPATH folders under `/usr` too, as the loader
+  does, and `omabox --version` says where the library is. A Hyprland without a RUNPATH is picked
+  as before. omabox's own aquamarine build (`setup --aquamarine`) is skipped, saying which symbol
+  it lacks, when that Hyprland was built against a patched aquamarine it does not match: boxes
+  died at start with "symbol lookup error".
+
 ## 1.4.1 — 2026-11-08
 
 A fix for Omarchy boxes on a theme whose pictures are links into your HOME (a dotfiles or

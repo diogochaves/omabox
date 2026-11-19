@@ -150,6 +150,9 @@ pub struct Aq {
     pub fixed: bool,
     /// The main checkout's build/prefix, when the box's is that (a worktree's: aq_main_lib).
     pub main: Vec<u8>,
+    /// Where the system's is when not in the system library dir: a folder of Hyprland's RUNPATH or
+    /// RPATH under /usr, which the box's loader follows as the host's does (#460). Empty otherwise.
+    pub dir: Vec<u8>,
 }
 
 impl Aq {
@@ -169,19 +172,30 @@ impl Aq {
         } else if self.kind == b"folder" {
             cat!("the --hyprland folder's, ", self.ver, " (", self.lib, ")")
         } else if self.fixed && aq_ver_fixed(&self.ver) {
-            cat!("the system's, ", self.ver)
+            cat!("the system's, ", self.ver, self.dir_words())
         } else if self.fixed {
             cat!(
                 "the system's, ",
                 self.ver,
+                self.dir_words(),
                 ", patched with the fix for nested Wayland outputs (hyprwm/aquamarine#415)"
             )
         } else {
             cat!(
                 "the system's, ",
                 self.ver,
+                self.dir_words(),
                 ", without the fix for nested Wayland outputs (hyprwm/aquamarine#415): headless NVIDIA boxes and confirm-close need omabox setup --aquamarine"
             )
+        }
+    }
+
+    /// ` (in DIR, Hyprland's RUNPATH)` for one found there (#460), else nothing.
+    fn dir_words(&self) -> Vec<u8> {
+        if self.dir.is_empty() {
+            Vec::new()
+        } else {
+            cat!(" (in ", self.dir, ", Hyprland's RUNPATH)")
         }
     }
 
@@ -543,7 +557,19 @@ fn exit_contains(hay: &[u8], needle: &[u8]) -> bool {
 /// #415's symbol or is after AQ_FIXED_AFTER. OMABOX_AQUAMARINE=system skips the private builds (the
 /// suite on stock, finding 125). None after its words, when it cannot.
 /// ENV is OMABOX_AQUAMARINE's value (`OMABOX_AQUAMARINE="" aq_resolve`: setup --aquamarine's).
-fn aq_pick_env(ctx: &Ctx, want: &[u8], sys: &[u8], dirs: &[Vec<u8>], env: &[u8]) -> Option<Aq> {
+/// RUNPATH: the folders of Hyprland's RUNPATH under /usr (hypr_runpath_dirs), looked in when SYSDIR
+/// has not SONAME, as the loader would (#460). BIN: that Hyprland, when known: a private build that
+/// leaves it aquamarine symbols undefined (a Hyprland built against a patched aquamarine of the same
+/// soname) is skipped, said so (aq_lacks_symbols).
+fn aq_pick_env(
+    ctx: &Ctx,
+    want: &[u8],
+    sys: &[u8],
+    dirs: &[Vec<u8>],
+    env: &[u8],
+    runpath: &[Vec<u8>],
+    bin: &[u8],
+) -> Option<Aq> {
     if want.is_empty() {
         return None;
     }
@@ -566,6 +592,18 @@ fn aq_pick_env(ctx: &Ctx, want: &[u8], sys: &[u8], dirs: &[Vec<u8>], env: &[u8])
             ));
             continue;
         }
+        if there && let Some(sym) = aq_lacks_symbols(bin, d) {
+            say(cat!(
+                "skipping the aquamarine in ",
+                d,
+                ": Hyprland (",
+                bin,
+                ") needs ",
+                sym,
+                ", which it lacks (Hyprland was built against another aquamarine with the same soname)"
+            ));
+            continue;
+        }
         if there {
             let f = crate::repo::readlink_f(&p).unwrap_or_default();
             let mut v = after_so(&f);
@@ -579,6 +617,7 @@ fn aq_pick_env(ctx: &Ctx, want: &[u8], sys: &[u8], dirs: &[Vec<u8>], env: &[u8])
                 ver: v,
                 fixed: true,
                 main: Vec::new(),
+                dir: Vec::new(),
             });
         }
         // (`compgen -G "$d/libaquamarine.so.*" | head -1`, in byte order: finding 446)
@@ -602,10 +641,29 @@ fn aq_pick_env(ctx: &Ctx, want: &[u8], sys: &[u8], dirs: &[Vec<u8>], env: &[u8])
             " (built before an aquamarine upgrade; omabox setup --aquamarine makes a new one)"
         ));
     }
-    let p = cat!(sys, "/", want);
+    let mut p = cat!(sys, "/", want);
+    let mut dir = Vec::new();
     if !shell::path(&p).exists() {
-        let _ = ctx.die(cat!("Hyprland links ", want, ", which is not in ", sys));
-        return None;
+        let Some(d) = runpath
+            .iter()
+            .find(|d| shell::path(&cat!(d, "/", want)).exists())
+        else {
+            let also = if runpath.is_empty() {
+                Vec::new()
+            } else {
+                cat!(" nor in Hyprland's RUNPATH (", runpath.join(&b':'), ")")
+            };
+            let _ = ctx.die(cat!(
+                "Hyprland links ",
+                want,
+                ", which is not in ",
+                sys,
+                also
+            ));
+            return None;
+        };
+        p = cat!(d, "/", want);
+        dir = d.clone();
     }
     let f = crate::repo::readlink_f(&p).unwrap_or_default();
     let mut v = after_so(&f);
@@ -619,6 +677,7 @@ fn aq_pick_env(ctx: &Ctx, want: &[u8], sys: &[u8], dirs: &[Vec<u8>], env: &[u8])
         ver: v,
         fixed,
         main: Vec::new(),
+        dir,
     })
 }
 
@@ -660,7 +719,7 @@ pub fn aq_resolve(ctx: &Ctx, soname: &[u8]) -> Option<Aq> {
 /// aq_pick as OMABOX_AQUAMARINE=system gives it, with SYS the system's lib dir: the suite's probe of a
 /// stand-in system aquamarine (`_rust probe aq_pick`).
 pub fn aq_pick_system(ctx: &Ctx, soname: &[u8], sys: &[u8]) -> Option<Aq> {
-    aq_pick_env(ctx, soname, sys, &[], b"system")
+    aq_pick_env(ctx, soname, sys, &[], b"system", &[], b"")
 }
 
 /// aq_pick SONAME SYS DIRS..., with OMABOX_AQUAMARINE as the environment has it (`_rust probe
@@ -672,6 +731,8 @@ pub fn aq_pick_dirs(ctx: &Ctx, soname: &[u8], sys: &[u8], dirs: &[Vec<u8>]) -> O
         sys,
         dirs,
         &shell::env_or_empty("OMABOX_AQUAMARINE"),
+        &[],
+        b"",
     )
 }
 
@@ -748,12 +809,80 @@ pub fn aq_build_needed(aq: &Aq, force: bool) -> bool {
 
 /// aq_resolve with ENV as OMABOX_AQUAMARINE.
 pub fn aq_resolve_env(ctx: &Ctx, soname: &[u8], env: &[u8]) -> Option<Aq> {
-    aq_resolve_in(ctx, soname, env, &crate::paths::root(), b"/")
+    aq_resolve_in(ctx, soname, env, &crate::paths::root(), b"/", b"")
+}
+
+/// The first aquamarine symbol (`Aquamarine::...`, mangled) Hyprland BIN leaves undefined with LIB's
+/// libraries first (`LD_LIBRARY_PATH=LIB ldd -r`, as the box's loader would bind them, #460), when the
+/// aquamarine its loader finds without LIB leaves none (it was built against that one): only then is a
+/// private build in the way. None otherwise, or when BIN is unknown, missing or a jailed caller's (the
+/// broker loads nothing a jail hands it).
+fn aq_lacks_symbols(bin: &[u8], lib: &[u8]) -> Option<Vec<u8>> {
+    if bin.is_empty() || in_jail() || !shell::path(bin).is_file() {
+        return None;
+    }
+    let o = output("ldd", &[b"-r", b"--", bin], &[("LD_LIBRARY_PATH", lib)])?;
+    let sym = undefined_aq(&o)?;
+    let own = output("ldd", &[b"-r", b"--", bin], &[("LD_LIBRARY_PATH", b"")])?;
+    let found = own
+        .split(|&c| c == b'\n')
+        .any(|l| exit_contains(l, b"libaquamarine") && exit_contains(l, b"=> /"));
+    (found && undefined_aq(&own).is_none()).then_some(sym)
+}
+
+/// The first `undefined symbol: _ZN10Aquamarine...` in ldd -r's output.
+fn undefined_aq(o: &[u8]) -> Option<Vec<u8>> {
+    let key = b"undefined symbol: ";
+    o.split(|&c| c == b'\n').find_map(|l| {
+        let at = l.windows(key.len()).position(|w| w == key)? + key.len();
+        let sym = l[at..].split(|c| c.is_ascii_whitespace()).next()?;
+        exit_contains(sym, b"10Aquamarine").then(|| sym.to_vec())
+    })
+}
+
+/// The folders of build H's RUNPATH (or RPATH, when it has none) that a box sees as the host does:
+/// absolute, under /usr (bound read-only into every box), no `..`, no `$ORIGIN`. Read, never run.
+/// Each under ROOT ("/", or a unit test's tree).
+pub fn hypr_runpath_dirs(h: &[u8], root: &[u8]) -> Vec<Vec<u8>> {
+    let v = elf_needed(h, "RUNPATH")
+        .or_else(|| elf_needed(h, "RPATH"))
+        .unwrap_or_default();
+    runpath_usable(&v.join(&b':'))
+        .into_iter()
+        .map(|d| crate::gpu::at(root, &d))
+        .collect()
+}
+
+/// The entries of a RUNPATH value (`a:b`) a box can follow: hypr_runpath_dirs' rules.
+fn runpath_usable(v: &[u8]) -> Vec<Vec<u8>> {
+    v.split(|&c| c == b':')
+        .map(|d| d.strip_suffix(b"/").unwrap_or(d))
+        .filter(|d| d.starts_with(b"/usr/") && !d.contains(&b'$'))
+        .filter(|d| !d.split(|&c| c == b'/').any(|c| c == b".." || c == b"."))
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+/// The installed Hyprland under ROOT: PATH's, at "/"; ROOT's /usr/bin/Hyprland in a stand-in tree.
+fn installed_hypr(root: &[u8]) -> Vec<u8> {
+    if root == b"/" {
+        command_v(b"Hyprland").unwrap_or(b"/usr/bin/Hyprland".to_vec())
+    } else {
+        crate::gpu::at(root, b"/usr/bin/Hyprland")
+    }
 }
 
 /// aq_resolve_env for a box from checkout CO (bash's ROOT), the system's dirs (AQ_SYSDIR, a box's
-/// /opt/omabox) under ROOT: "/", or a unit test's stand-in tree.
-pub fn aq_resolve_in(ctx: &Ctx, soname: &[u8], env: &[u8], co: &[u8], root: &[u8]) -> Option<Aq> {
+/// /opt/omabox) under ROOT: "/", or a unit test's stand-in tree. BIN: the Hyprland the box runs,
+/// whose RUNPATH is looked in after the system dir (#460); empty for the installed one.
+pub fn aq_resolve_in(
+    ctx: &Ctx,
+    soname: &[u8],
+    env: &[u8],
+    co: &[u8],
+    root: &[u8],
+    bin: &[u8],
+) -> Option<Aq> {
     use crate::gpu::at;
     let main = aq_main_lib(co).unwrap_or_default();
     let mut dirs = vec![cat!(co, "/build/prefix/lib")];
@@ -764,7 +893,21 @@ pub fn aq_resolve_in(ctx: &Ctx, soname: &[u8], env: &[u8], co: &[u8], root: &[u8
     if shell::path(&at(root, b"/opt/omabox/share/session.sh")).is_file() {
         dirs.push(at(root, b"/opt/omabox/lib"));
     }
-    let mut aq = aq_pick_env(ctx, soname, &aq_sysdir(root, soname), &dirs, env)?;
+    let bin = if bin.is_empty() {
+        installed_hypr(root)
+    } else {
+        bin.to_vec()
+    };
+    let runpath = hypr_runpath_dirs(&bin, root);
+    let mut aq = aq_pick_env(
+        ctx,
+        soname,
+        &aq_sysdir(root, soname),
+        &dirs,
+        env,
+        &runpath,
+        &bin,
+    )?;
     if aq.kind == b"private" && !main.is_empty() && aq.lib == main {
         aq.main = main.strip_suffix(b"/lib").unwrap_or(&main).to_vec();
     }
@@ -818,6 +961,7 @@ fn folder_aq(lib: &[u8], want: &[u8]) -> Option<Aq> {
             fixed: aq_ver_fixed(&ver) || aq_has_fix(&own),
             ver,
             main: Vec::new(),
+            dir: Vec::new(),
         }
     })
 }
@@ -843,7 +987,7 @@ pub fn new_box_in(ctx: &Ctx, co: &[u8], root: &[u8], env: &[u8], hyprland: &[u8]
         if hyprland.is_empty() || in_jail() {
             let aq = hypr_aq_soname(ctx)
                 .ok()
-                .and_then(|w| aq_resolve_in(ctx, &w, env, co, root));
+                .and_then(|w| aq_resolve_in(ctx, &w, env, co, root, b""));
             return NewBox {
                 aq,
                 ..NewBox::default()
@@ -852,7 +996,7 @@ pub fn new_box_in(ctx: &Ctx, co: &[u8], root: &[u8], env: &[u8], hyprland: &[u8]
         let hypr = hypr_target(ctx, hyprland).ok();
         let aq = hypr.as_ref().and_then(|h| {
             let want = hypr_links_aq(&h.bin)?;
-            folder_aq(&h.lib, &want).or_else(|| aq_resolve_in(ctx, &want, env, co, root))
+            folder_aq(&h.lib, &want).or_else(|| aq_resolve_in(ctx, &want, env, co, root, &h.bin))
         });
         NewBox {
             given: hyprland.to_vec(),
@@ -937,7 +1081,18 @@ pub fn check_install(
         )));
     };
     let folder = folder_aq(lib, &want);
-    let Some(aq) = folder.or_else(|| muted(|| aq_resolve(ctx, &want))) else {
+    let Some(aq) = folder.or_else(|| {
+        muted(|| {
+            aq_resolve_in(
+                ctx,
+                &want,
+                &shell::env_or_empty("OMABOX_AQUAMARINE"),
+                &crate::paths::root(),
+                b"/",
+                h,
+            )
+        })
+    }) else {
         let sys = muted(|| hypr_aq_soname(ctx)).unwrap_or(b"no libaquamarine".to_vec());
         return Err(ctx.die(cat!(
             "--hyprland ",
@@ -1945,6 +2100,54 @@ mod tests {
             assert_eq!(aq_sysdir(&r, so), cat!(r, "/", want), "{d}");
         }
         let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn undefined_aquamarine_symbols() {
+        let o = b"\tlibc.so.6 => /usr/lib/libc.so.6 (0x7f)\nundefined symbol: _ZN10Aquamarine8CBackend10acquireGpuERKS_\t(/usr/bin/Hyprland)\n";
+        assert_eq!(
+            undefined_aq(o),
+            Some(b"_ZN10Aquamarine8CBackend10acquireGpuERKS_".to_vec())
+        );
+        assert_eq!(
+            undefined_aq(b"undefined symbol: _ZN3Foo3barEv\t(/x)\n"),
+            None
+        );
+        assert_eq!(undefined_aq(b"\tlibc.so.6 => /usr/lib/libc.so.6\n"), None);
+    }
+
+    #[test]
+    fn runpath_entries_a_box_follows() {
+        // #460: absolute folders under /usr only (bound into every box), as written.
+        let v = |s: &[u8]| runpath_usable(s);
+        assert_eq!(v(b"/usr/lib/myhypr/lib"), [b"/usr/lib/myhypr/lib".to_vec()]);
+        assert_eq!(
+            v(b"/usr/lib/a/:/usr/lib/b"),
+            [b"/usr/lib/a".to_vec(), b"/usr/lib/b".to_vec()]
+        );
+        for bad in [
+            b"$ORIGIN/../lib".as_slice(),
+            b"/opt/hypr/lib",
+            b"/home/u/lib",
+            b"lib",
+            b"/usr/../home/u",
+            b"/usr/lib/./x",
+            b"/usr",
+            b"",
+        ] {
+            assert!(v(bad).is_empty(), "{}", String::from_utf8_lossy(bad));
+        }
+        let aq = Aq {
+            kind: b"system".to_vec(),
+            ver: b"0.16.0".to_vec(),
+            fixed: true,
+            dir: b"/usr/lib/myhypr/lib".to_vec(),
+            ..Aq::default()
+        };
+        assert_eq!(
+            aq.desc(),
+            b"the system's, 0.16.0 (in /usr/lib/myhypr/lib, Hyprland's RUNPATH)"
+        );
     }
 
     #[test]

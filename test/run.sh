@@ -13190,6 +13190,55 @@ t_unit_aquamarine() {
   check_match "setup: an unknown option, refused before anything is done" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
 }
 
+# finding 716 (issue #460): a Hyprland whose aquamarine is in a folder of its RUNPATH under /usr, not in
+# the system library dir, runs on that one, as the loader would; a RUNPATH outside /usr (a box does not
+# see it) or with $ORIGIN is not followed. A stand-in tree with a stand-in Hyprland built with cc.
+t_unit_aq_runpath() {
+  local d=$TMP/$P-aqrp so=libaquamarine.so.15 out
+  command -v cc >/dev/null || { skip "aquamarine from Hyprland's RUNPATH" "no cc"; return; }
+  mkdir -p "$d/root/usr/bin" "$d/root/usr/lib/own/lib" "$d/root/opt/own/lib" "$d/co" "$d/user"
+  : > "$d/root/usr/lib/own/lib/libaquamarine.so.0.16.0"
+  ln -s libaquamarine.so.0.16.0 "$d/root/usr/lib/own/lib/$so"
+  cp -P "$d/root/usr/lib/own/lib/"* "$d/root/opt/own/lib/"
+  hyp() { echo 'int main(void){return 0;}' | cc -x c -o "$d/root/usr/bin/Hyprland" - -Wl,--enable-new-dtags,-rpath,"$1"; }
+  resolve() { XDG_DATA_HOME=$d/user OMABOX_AQUAMARINE='' probe aq_resolve "$so" "$d/co" "$d/root" 2>&1; }
+  hyp /usr/lib/own/lib || { no "the stand-in Hyprland builds" "cc failed"; return; }
+  check_eq "not in /usr/lib, in Hyprland's RUNPATH: the system's, from there, said so" \
+    "system|||the system's, 0.16.0 (in $d/root/usr/lib/own/lib, Hyprland's RUNPATH)|$d/root/usr/lib/own/lib" "$(resolve)"
+  hyp /opt/own/lib
+  out=$(resolve)
+  check_match "...a RUNPATH outside /usr (not in a box): refused as before" "Hyprland links $so, which is not in $d/root/usr/lib$" "$out"
+  hyp '$ORIGIN/../lib/own/lib'
+  check_match "...one with \$ORIGIN: not followed" "which is not in $d/root/usr/lib$" "$(resolve)"
+  hyp /usr/lib/other/lib
+  check_match "...one under /usr without it: named in the refusal" "which is not in $d/root/usr/lib nor in Hyprland's RUNPATH \($d/root/usr/lib/other/lib\)" "$(resolve)"
+  hyp /usr/lib/own/lib
+  : > "$d/root/usr/lib/libaquamarine.so.0.15.9"; ln -s libaquamarine.so.0.15.9 "$d/root/usr/lib/$so"
+  check_match "...the system dir has it too: that one first (stock Omarchy unchanged)" "^system\|\|\|the system's, 0\.15\.9\|$" "$(resolve)"
+  rm -f "$d/root/usr/lib/libaquamarine.so"*
+  # A private build with the soname but without a symbol this Hyprland needs (one built against a
+  # patched aquamarine) while the one its loader finds has it: skipped, naming it; one with it: used.
+  # Linked for real, so ldd -r binds them (the RUNPATH's second folder is where the host's loader finds
+  # it; the first, under the stand-in root, is the one omabox names).
+  local P2=$d/co/build/prefix/lib sym=_ZN10Aquamarine8CBackend3newEv
+  mkdir -p "$P2" "$d/full"
+  echo "int f(void) __asm__(\"$sym\"); int f(void) { return 0; }" > "$d/full.c"
+  echo 'int g(void) { return 0; }' > "$d/bare.c"
+  echo "int f(void) __asm__(\"$sym\"); int main(void) { return f(); }" > "$d/h.c"
+  if ! { cc -shared -fPIC -Wl,-soname,"$so" -o "$d/full/$so" "$d/full.c" && cc -shared -fPIC -Wl,-soname,"$so" -o "$P2/$so" "$d/bare.c" &&
+    cc -o "$d/root/usr/bin/Hyprland" "$d/h.c" "$d/full/$so" -Wl,--enable-new-dtags,-rpath,"/usr/lib/own/lib:$d/full"; }; then
+    no "the stand-in libraries build" "cc failed"; return
+  fi
+  out=$(resolve)
+  check_match "a private build lacking a symbol Hyprland needs: skipped, naming it" "skipping the aquamarine in $P2: Hyprland \(.*\) needs $sym, which it lacks" "$out"
+  check_match "...the RUNPATH one used" $'\n''system\|\|\|' "$out"
+  cp "$d/full/$so" "$P2/$so"
+  check_match "...a private build that has it: used" "^private\|$P2\|" "$(resolve)"
+  cp "$d/bare.so" "$P2/$so" 2>/dev/null || cc -shared -fPIC -Wl,-soname,"$so" -o "$P2/$so" "$d/bare.c"
+  rm "$d/full/$so"
+  check_match "...one lacking it while the loader finds none either: used (nothing better to fall back on)" "^private\|$P2\|" "$(resolve)"
+}
+
 # finding 271 (issue #182): a linked worktree with no build/prefix of its own runs its boxes on the main
 # checkout's (aq_main_lib), found from the files git reads, never by running git. A scratch main
 # checkout and worktrees of it (one with a relative gitdir, one with a space in its path).
@@ -13225,9 +13274,9 @@ t_unit_aq_worktree() {
   resolve() { PATH=$d/bin:$PATH XDG_DATA_HOME=$d/user OMABOX_AQUAMARINE='' probe aq_resolve "$so" "$1" "$d/root" 2>&1; }
   out=$(resolve "$W")
   check_match "a box from the worktree runs the main checkout's build" "^private\|$M/build/prefix/lib\|$M/build/prefix\|" "$out"
-  check_match "...said so" "a private build, 0\.15\.1@[^ ]* \($M/build/prefix, the main checkout's: this worktree has no usable one\)$" "$out"
+  check_match "...said so" "a private build, 0\.15\.1@[^ ]* \($M/build/prefix, the main checkout's: this worktree has no usable one\)\|$" "$out"
   mkdir -p "$W/build/prefix/lib"; : > "$W/build/prefix/lib/libaquamarine.so.0.15.1"; ln -s libaquamarine.so.0.15.1 "$W/build/prefix/lib/$so"
-  check_eq "...its own build, once it has one: first, not said to be the main's" "private|$W/build/prefix/lib||a private build, 0.15.1 ($W/build/prefix)" "$(resolve "$W")"
+  check_eq "...its own build, once it has one: first, not said to be the main's" "private|$W/build/prefix/lib||a private build, 0.15.1 ($W/build/prefix)|" "$(resolve "$W")"
   rm -rf "$W/build"
   check_eq "the main checkout's own boxes: its build, nothing borrowed" "private|$M/build/prefix/lib|" "$(resolve "$M" | cut -d'|' -f1-3)"
   if [ "$(id -u)" != 0 ]; then
@@ -13383,6 +13432,14 @@ aq_setup_checks() {
   # files but for build/ and .git, so it builds into the data dir), on stub build tools, the system's
   # aquamarine the machine's; nothing of the user's: HOME and the XDG dirs are scratch ones.
   local fr=$d/setup-co e
+  # (a stand-in Hyprland first on PATH: it links the stub's soname and needs none of its symbols, so the
+  # stub is a build it can run on; the machine's own would skip a stub that lacks what it uses, #460)
+  if command -v cc >/dev/null; then
+    echo 'int main(void) { return 0; }' > "$d/setup-hyprland.c"
+    local rp; rp=$(probe aq_resolve "$so" "$ROOT" / 2>/dev/null); rp=${rp##*|}
+    cc -o "$tools/Hyprland" "$d/setup-hyprland.c" -Wl,--no-as-needed "$d/stub/libaquamarine.so.0.15.0" ${rp:+-Wl,--enable-new-dtags,-rpath,"$rp"} ||
+      no "setup's stand-in Hyprland builds" "cc failed"
+  fi
   mkdir -p "$fr/build"; for e in "$ROOT"/*; do [ "${e##*/}" = build ] || ln -s "$e" "$fr/${e##*/}"; done
   cp "$PROBE" "$fr/build/omabox"
   setup_aq() {
@@ -13488,10 +13545,12 @@ t_unit_hyprland() {
     check_match "a build against another libaquamarine soname is refused, saying which" \
       "links libaquamarine.so.99, which neither the system nor a private build of omabox's has \(the system has $so\)" \
       "$(ob up "$P-h1" --hyprland "$d/b99/Hyprland" 2>&1)"
-    # The right soname, but a library the box does not have.
+    # The right soname, but a library the box does not have. Where the installed Hyprland's soname is
+    # only in a folder of its RUNPATH (#460), the build has that RUNPATH too, as a build against it would.
+    local rp; rp=$(probe aq_resolve "$so" "$ROOT" / 2>/dev/null); rp=${rp##*|}
     cc -shared -fPIC -Wl,-soname,"$so" -o "$d/aq14/libaquamarine.so" "$d/aq.c" &&
       cc -shared -fPIC -Wl,-soname,libomaboxmissing.so.1 -o "$d/aq14/libomaboxmissing.so" "$d/aq.c" &&
-      cc -o "$d/b14/Hyprland" "$d/m.c" -L"$d/aq14" -laquamarine -lomaboxmissing -Wl,--no-as-needed
+      cc -o "$d/b14/Hyprland" "$d/m.c" -L"$d/aq14" -laquamarine -lomaboxmissing -Wl,--no-as-needed ${rp:+-Wl,--enable-new-dtags,-rpath,"$rp"}
     check_match "...and one needing a library the box lacks" "needs libomaboxmissing.so.1, which the box lacks" \
       "$(ob up "$P-h1" --hyprland "$d/b14/Hyprland" 2>&1)"
   else
@@ -13547,7 +13606,9 @@ t_hyprland_folder() {
   so=$(probe hypr_aq_soname)
   # The aquamarine boxes use here (omabox's build, or the system's), as a package has it: the soname a
   # link to the versioned file, which names the version.
-  lib=$(probe aq_resolve "$so" "$ROOT" / | cut -d'|' -f2); lib=${lib:-/usr/lib}
+  # (a system one in a folder of Hyprland's RUNPATH, #460: that folder, the probe's last field)
+  local r; r=$(probe aq_resolve "$so" "$ROOT" /)
+  lib=$(cut -d'|' -f2 <<<"$r"); [ -n "$lib" ] || lib=${r##*|}; lib=${lib:-/usr/lib}
   mkdir -p "$f/usr/bin" "$f/usr/lib"
   cp /usr/bin/Hyprland /usr/bin/hyprctl "$f/usr/bin/"
   cp -a "$lib"/libaquamarine.so* "$f/usr/lib/"
@@ -23785,7 +23846,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
-  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
+  t_unit_aquamarine t_unit_aq_runpath t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
 BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
