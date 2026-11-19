@@ -142,6 +142,36 @@ a turn. Five rules keep every omabox call plain:
 - **Stay in your worktree**: no `cd` out of it, no git on another checkout (absolute paths instead);
   scroll with `omabox scroll … --source wheel`, not `pointer -- source`.
 
+## Looking in one call
+
+`omabox look app [--keys "K..."] [--type TEXT] [--after DURATION] [--timeout 10s] [-o FILE]
+[--keep-box] [UP OPTIONS] -- CMD [ARG...]` (#461) is `up`, `run -d`, waiting for its window, `keys`,
+`wait still`, `shot --window` and reading its output, in a throwaway box of its own (`look-PID`),
+taken down however it ends. The report:
+
+```
+screenshot: /tmp/omabox-look-123-456.png
+window: tally "Tally" 960x680 (floating)
+problems:
+  qrc:/Main.qml:42: TypeError: Cannot read property 'name' of undefined
+output:
+  ...
+```
+
+- **Its window**: the program's own (by pid), else the first; none within `--timeout` (10 s) is a
+  problem, and so is a program that ends before one, said with how it ended ("exited with status 3").
+- **Keys**: `--keys` (combos, space separated) and `--type` go in the order given, sent once the
+  window has drawn (`wait still`), with `--wait`. `--after 2s`: a fixed wait before the shot.
+- **Problems**: omabox's own warnings, and each line of the program's output (stdout and stderr, its
+  `run -d` log) naming an error, a crash or a QML file and line (`error`, `critical`, `fatal`,
+  `traceback`, `panicked`, `exception`, `segmentation fault`, `core dumped`, `aborted`, `Foo.qml:42`).
+  A warning is not one. What a terminal runs inside it goes to the terminal, not here.
+- **Output**: the first 40 lines, each cut at 200 characters.
+- **Exit**: 0 nothing found, 1 problems, an error of omabox's as its other commands give.
+- `--keep-box`: the box stays up (its name printed) for a follow-up; take it down after.
+- UP OPTIONS as a throwaway `run` takes them (`--size`, `--plugin`, `--net`...). Your repo is not
+  overlaid as `run`'s is: the program is the command you give, by its path.
+
 ## Shots
 
 - Text before a shot, when the question is a label, an entry's text or a state: `omabox tree --find

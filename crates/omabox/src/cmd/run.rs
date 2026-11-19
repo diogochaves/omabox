@@ -21,7 +21,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
 
 /// up's options, for a throwaway box: those that take a value, and the flags.
-const UP_VALUED: [&str; 20] = [
+pub(crate) const UP_VALUED: [&str; 20] = [
     "--size",
     "--plugin",
     "--ro-bind",
@@ -43,7 +43,7 @@ const UP_VALUED: [&str; 20] = [
     "--desktop",
     "--shell",
 ];
-const UP_FLAGS: [&str; 13] = [
+pub(crate) const UP_FLAGS: [&str; 13] = [
     "--xwayland",
     "--autoreload",
     "--no-shell",

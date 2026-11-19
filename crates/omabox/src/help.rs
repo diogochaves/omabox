@@ -39,6 +39,7 @@ pub const COMMANDS: &[&str] = &[
     "hyprctl",
     "lua",
     "log",
+    "look",
     "events",
     "peek",
     "restart-shell",

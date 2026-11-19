@@ -151,6 +151,7 @@ fn main() -> ExitCode {
         Some("lua") => Some(cmd::lua::run),
         Some("run") => Some(cmd::run::run),
         Some("log" | "logs") => Some(cmd::log::run),
+        Some("look") => Some(cmd::look::run),
         Some("events") => Some(cmd::events::run),
         Some("wait") => Some(cmd::wait::run),
         Some("windows") => Some(cmd::windows::run),
@@ -281,19 +282,39 @@ fn find_root() -> PathBuf {
 /// (`<checkout>/target/release/omabox`, or debug: #459), whose checkout is two levels further up,
 /// where its share/ and tools/ are.
 fn root_of(exe: &std::path::Path) -> PathBuf {
-    let dir = exe.parent();
-    let up = dir
+    let up = exe
+        .parent()
         .and_then(|p| p.parent())
         .map(PathBuf::from)
         .unwrap_or_default();
-    let cargo_out = dir
-        .and_then(|d| d.file_name())
-        .is_some_and(|n| n == "release" || n == "debug")
-        && up.file_name().is_some_and(|n| n == "target");
-    match up.parent() {
-        Some(co) if cargo_out && co.join("crates/omabox/Cargo.toml").is_file() => co.to_path_buf(),
-        _ => up,
-    }
+    cargo_checkout(exe).unwrap_or(up)
+}
+
+/// The checkout EXE was built in, when it is cargo's own output there (`<checkout>/target/release`
+/// or `debug`, beside `crates/omabox/Cargo.toml`: #459).
+fn cargo_checkout(exe: &std::path::Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    let target = dir.parent()?;
+    let co = target.parent()?;
+    let named =
+        |p: &std::path::Path, n: &[&str]| p.file_name().is_some_and(|f| n.iter().any(|x| f == *x));
+    (named(dir, &["release", "debug"])
+        && named(target, &["target"])
+        && co.join("crates/omabox/Cargo.toml").is_file())
+    .then(|| co.to_path_buf())
+}
+
+/// The binary this one starts for its own commands (a throwaway's up, look's steps): itself when it is
+/// cargo's output in a checkout (#459), whose bin/omabox is another build; ROOT's bin/omabox otherwise,
+/// as before.
+pub fn self_bin() -> PathBuf {
+    static EXE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    EXE.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        cargo_checkout(&exe).map(|_| exe)
+    })
+    .clone()
+    .unwrap_or_else(|| root().join("bin/omabox"))
 }
 
 pub fn root() -> PathBuf {

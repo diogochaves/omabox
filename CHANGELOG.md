@@ -5,6 +5,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+- **`omabox look app -- CMD`: does it look right, did it log errors, in one call** ([#461](https://github.com/diogochaves/omabox/issues/461)):
+  a throwaway box, the program's window shot (keys first with `--keys` and `--type`), its problems
+  and output in a short report, exit 1 when it found problems, nothing left up. Plugins, themes and
+  pages come next.
+
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):
   a Hyprland built with its own aquamarine in a private folder under `/usr` (a local package beside

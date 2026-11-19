@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 /// bin/omabox, for a command this half leaves to it, with this process's environment.
 pub fn omabox_cmd() -> Command {
-    command(crate::root().join("bin/omabox"))
+    command(crate::self_bin())
 }
 
 /// SIGPIPE as this process came, before Rust's runtime set it ignored (in main's preamble): read by

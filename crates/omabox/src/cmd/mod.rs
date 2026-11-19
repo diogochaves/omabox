@@ -26,6 +26,7 @@ pub mod jobs;
 pub mod keys;
 pub mod keys_to_box;
 pub mod log;
+pub mod look;
 pub mod ls;
 pub mod lua;
 pub mod mode;

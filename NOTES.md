@@ -14243,6 +14243,20 @@ from them.
     to print `Lost connection` rather than its protocol error under load (it writes before it reads
     the error): up to three tries now (#465).
 
+719. **`look app`: an app checked in one call** (2026-11-19, #461, first of its four kinds). `up`,
+    `run -d`, its window waited for, keys, `wait still`, `shot --window`, its output read, in a
+    throwaway box `look-PID` torn down as a throwaway `run`'s is (Teardown guard, `--owner`), and a
+    short report with exit 1 when it found problems. Every step is an omabox command run as a
+    subprocess: no new isolation, S1-S10 as they are. Seen building it: keys sent the moment the
+    window appeared lost their first letter to a shell still starting (a `wait still` on the
+    window first now); a program that ends at once fails `run -d` itself, which is read as its end
+    (exit status and log) rather than an error of look's; foot's inner program writes to its
+    terminal, so its errors are not in the output (a terminal app's are only in its shot). And
+    `sig::omabox_cmd` started `<root>/bin/omabox` for a throwaway's steps: since #459 a binary run
+    from cargo's `target/release` has the checkout as root, whose `bin/omabox` is another build, so
+    it now starts itself there (`self_bin`). t_look_app: a working program, one logging a QML
+    error, one ending before its window, one with no window in time, refusals, no box left.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

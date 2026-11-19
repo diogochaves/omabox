@@ -20,6 +20,9 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
             [--json]                                     the box as ls --json lists it, on stdout
   omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
+  omabox look app [--keys "K..."] [--type TEXT] [--after DURATION] [--timeout 10s] [-o FILE] [--keep-box]
+             [UP OPTIONS] -- CMD [ARG...]                a program in a throwaway box: its window shot, its
+                                                         problems and output reported (exit 1: problems)
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--grid N [--cell C3]]                  lettered cells to aim with, no tree; --cell: that cell, closer

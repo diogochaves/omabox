@@ -35,12 +35,12 @@ inside a box.**
 | The project says | Do |
 |---|---|
 | `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
-| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR`; a dispatch: `omabox lua 'hl.dispatch(hl.dsp…)'` |
+| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR` (a dispatch: `hl.dispatch(hl.dsp…)`) |
 | `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `keys`, `click X Y`, `windows` |
-| `ctest`, a test binary (tray, D-Bus, keyring…) | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
+| `ctest`, a test binary (tray, D-Bus, keyring…) | `omabox run -- ctest …` (or the binary) |
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …` | `omabox run -- …` (`omarchy plugin validate` only reads: fine on the host) |
 | `omarchy restart shell` | `omabox restart-shell` |
-| A plugin in `~/.config/omarchy/plugins`, `shell.json` edits | `omabox up --plugin PATH`; `.config/omarchy/shell.json` in `omabox path --home` |
+| A plugin in `~/.config/omarchy/plugins`, `shell.json` edits | `omabox up --plugin PATH`; `shell.json`: `omabox path --home` |
 | A theme in the works; a theme or bar result | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
 | What a new Omarchy user sees (a showcase, shots for others) | `omabox up --stock` |
 | Shots compared across runs | `omabox up --clean` (ref: Visual checks) |
@@ -51,7 +51,7 @@ run in the box; ref: Tests that touch the desktop.
 
 A step that needs real hardware: the user's. ref: Project instructions, in detail.
 
-Your box is named after the repo (or worktree) and your session, and goes down when your agent exits.
+Your box is named after the repo and your session, and goes down when your agent exits.
 Another: `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`): its
 options on that call, `-b box-3` typed out after, `omabox down -b box-3` when done. **Box work for a
 subagent: `omabox brief -b NAME`'s output in its prompt** (no skill needed).
@@ -59,7 +59,8 @@ subagent: `omabox brief -b NAME`'s output in its prompt** (no skill needed).
 ## The loop
 
 ```bash
-omabox up                                 # headless, 1920x1080, once ready (its bar drawn)
+omabox look app -- ./build/app            # shot, problems (ref: Looking in one call)
+omabox up                                 # headless, 1920x1080, once its bar is drawn
 omabox run -d --wait -- ./build/app       # detached, its pid on stdout, once drawn
 omabox run -d --replace --wait -- ./app   # after a rebuild; jobs, stop PID, wait job|log
 omabox shot                               # a PNG path: Read it to look
@@ -70,7 +71,7 @@ omabox keys --window app --wait --tree -t hi  # type, settle, what its tree chan
 omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
 omabox wait window app                    # or --gone; layer NS; tree TEXT; notification RE; until -- CMD
 omabox wait change --window app           # a redraw by itself; then wait still
-omabox run -- busctl --user list          # any command in the box (its exit code)
+omabox run -- busctl --user list          # any command in the box
 omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
 omabox down                               # when done
 ```
