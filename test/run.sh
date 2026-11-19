@@ -5239,7 +5239,7 @@ EOF
   for i in $(seq -w 21 32); do n=$pr/202611${i}-000000-t$((9000000 + 10#$i)); mkdir -p "$n/t_a"; echo x > "$n/t_a/failures.txt"; done
   prune_runs "$pr"
   check_eq "...and only the newest 10 failed ones" "10 5" \
-    "$(cd "$pr" && find . -mindepth 2 -name failures.txt | wc -l) $(for n in "$pr"/2026*-t9*; do [ -e "$n/t_a" ] || echo "$n"; done | wc -l)"
+    "$(cd "$pr" && find . -mindepth 2 -name failures.txt | wc -l) $(for n in "$pr"/2026*-t9000*; do [ -e "$n/t_a" ] || echo "$n"; done | wc -l)"
 }
 
 # The leak detector's reading of events (finding 80), on lines as the watcher logs them (the
