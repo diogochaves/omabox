@@ -93,6 +93,8 @@ pub struct Up {
     pub theme_dirs: Vec<Vec<u8>>,
     pub theme_given: Vec<Vec<u8>>,
     pub theme: Vec<u8>,
+    /// --theme was given (not --clean's default): only then does up check the named theme (#462).
+    pub theme_asked: bool,
     pub net: Vec<u8>,
     pub net_set: bool,
     pub allow: Vec<u8>,
@@ -410,6 +412,7 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
             b"--theme" => {
                 optarg(ctx, a, v)?;
                 u.theme = val;
+                u.theme_asked = true;
             }
             b"--net" => {
                 optarg(ctx, a, v)?;

@@ -581,14 +581,20 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             say(cat!("note: theme ", base, ": ", l));
         }
     }
-    // --theme NAME, an installed theme (Omarchy's, the user's over it): the same checks.
-    let named = crate::plugins::theme_folders(
-        &u.theme,
-        &u.tree(),
-        &u.theme_dirs,
-        &shell::env_or_empty("HOME"),
-        &crate::jailpath::jail_path,
-    );
+    // --theme NAME, an installed theme (Omarchy's, the user's over it): the same checks. Only for a
+    // theme the caller named: --clean's default is a stock theme, calibrated clean, and checking it
+    // cost every clean box (look, check run) ~0.8 s.
+    let named = if !u.theme_asked {
+        Vec::new()
+    } else {
+        crate::plugins::theme_folders(
+            &u.theme,
+            &u.tree(),
+            &u.theme_dirs,
+            &shell::env_or_empty("HOME"),
+            &crate::jailpath::jail_path,
+        )
+    };
     if !named.is_empty() {
         for l in crate::theme_check::check_layered(&named, wh) {
             say(cat!("note: theme ", u.theme, ": ", l));

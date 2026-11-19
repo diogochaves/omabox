@@ -14345,6 +14345,8 @@ from them.
     ever. Measured: catppuccin-latte, nothing; this machine's own `baseline`, its dot-grid
     background as nearly one colour (0.008), as from its folder. look_theme_checks in `t_look`;
     unit tests for the layering and the folders.
+    Only for a theme the caller named (`--theme`): a `--clean` box's default (tokyo-night) was checked
+    too at first, which cost every clean box ~0.8 s (`up --clean` 4.0 s -> 4.8 s; look, check run).
 
 725. **t_check's flake was the bar's network icon, not its clock** (2026-11-19, #466). Both
     failures of the day (the hole case alone, and the EXTRA case's `...counted` in a full suite)
