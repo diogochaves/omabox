@@ -623,7 +623,7 @@ fn start(
     me: u32,
     extra: &[&[u8]],
     problems: &mut Vec<Vec<u8>>,
-) -> Res<()> {
+) -> Res<Vec<u8>> {
     let owner = me.to_string();
     let mut up: Vec<&[u8]> = vec![b"up", name];
     if !a.keep {
@@ -637,7 +637,18 @@ fn start(
         return Err(ctx.die("look: the box did not start"));
     }
     warnings(&r.err, problems);
-    Ok(())
+    Ok(r.err)
+}
+
+/// up's notes on a theme (`omabox: note: theme NAME: LINE`, #462): each LINE.
+pub fn theme_notes(err: &[u8]) -> Vec<Vec<u8>> {
+    err.split(|&c| c == b'\n')
+        .filter_map(|l| l.strip_prefix(b"omabox: note: theme "))
+        .filter_map(|l| {
+            let i = l.windows(2).position(|w| w == b": ")?;
+            Some(l[i + 2..].to_vec())
+        })
+        .collect()
 }
 
 /// The last non-empty line of a command's stdout (shot's path).
@@ -848,35 +859,41 @@ const PALETTE_SH: &str = r#"printf '\033[?25l\n  omabox look theme: the terminal
 
 fn theme(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let a = parse(ctx, args, "theme")?;
-    let dir = a.dir.clone().unwrap_or_default();
-    let dir = crate::repo::readlink_f(&dir).unwrap_or(dir);
-    if !shell::path(&dir).is_dir() {
-        return Err(ctx.die(cat!("look theme: ", dir, " is no folder")));
-    }
+    let given = a.dir.clone().unwrap_or_default();
+    let dir = crate::repo::readlink_f(&given).unwrap_or_else(|| given.clone());
+    // A folder is the theme in the works; a bare word an installed theme's NAME (up resolves it).
+    let dir = if shell::path(&dir).is_dir() {
+        Some(dir)
+    } else if !given.contains(&b'/') && !given.is_empty() {
+        None
+    } else {
+        return Err(ctx.die(cat!("look theme: ", given, " is no folder")));
+    };
     let me = std::process::id();
     let name = format!("look-{me}").into_bytes();
     select_box(ctx, &name)?;
     let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
-    let r = theme_in(ctx, &a, &dir, &name, me);
+    let r = theme_in(ctx, &a, dir.as_deref(), &given, &name, me);
     if let Some(g) = guard {
         g.finish();
     }
     r
 }
 
-fn theme_in(ctx: &Ctx, a: &App, dir: &[u8], name: &[u8], me: u32) -> Res<()> {
+fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], me: u32) -> Res<()> {
     let mut problems: Vec<Vec<u8>> = Vec::new();
     let mut notes: Vec<Vec<u8>> = Vec::new();
-    // Live from DIR (--theme-dir), applied before the session starts (--theme, by its folder's name).
-    let tname = dir.rsplit(|&c| c == b'/').next().unwrap_or(dir).to_vec();
-    start(
-        ctx,
-        a,
-        name,
-        me,
-        &[b"--theme-dir", dir, b"--theme", &tname],
-        &mut problems,
-    )?;
+    // Live from DIR (--theme-dir), applied before the session starts (--theme, by its folder's name);
+    // an installed one by its NAME, checked by up itself (its notes).
+    let tname = match dir {
+        Some(d) => d.rsplit(|&c| c == b'/').next().unwrap_or(d).to_vec(),
+        None => given.to_vec(),
+    };
+    let extra: Vec<&[u8]> = match dir {
+        Some(d) => vec![b"--theme-dir", d, b"--theme", &tname],
+        None => vec![b"--theme", &tname],
+    };
+    let up_err = start(ctx, a, name, me, &extra, &mut problems)?;
     let still: [&[u8]; 6] = [b"wait", b"-b", name, b"--timeout", b"8s", b"still"];
     if ob(&still).code == 124 {
         notes.push(
@@ -957,11 +974,14 @@ fn theme_in(ctx: &Ctx, a: &App, dir: &[u8], name: &[u8], me: u32) -> Res<()> {
     } else {
         (1920, 1080)
     };
-    problems.extend(
-        crate::theme_check::check(dir, screen)
-            .into_iter()
-            .map(String::into_bytes),
-    );
+    match dir {
+        Some(d) => problems.extend(
+            crate::theme_check::check(d, screen)
+                .into_iter()
+                .map(String::into_bytes),
+        ),
+        None => problems.extend(theme_notes(&up_err)),
+    }
     let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
     if let Some(t) = &term {
         head.push(("terminal", t));
@@ -1047,6 +1067,19 @@ pub fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_on_a_theme() {
+        let e = b"omabox: box 'x' up (1920x1080) in 2s\nomabox: note: theme tally: colors.toml: no accent (x: y)\nomabox: note: theme tally: background 1.png: 640x480\nomabox: note: something else\n";
+        assert_eq!(
+            theme_notes(e),
+            [
+                b"colors.toml: no accent (x: y)".to_vec(),
+                b"background 1.png: 640x480".to_vec()
+            ]
+        );
+        assert!(theme_notes(b"").is_empty());
+    }
 
     #[test]
     fn problems_in_output() {

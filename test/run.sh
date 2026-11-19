@@ -23415,7 +23415,8 @@ HTML
 }
 
 # #461, #462: look theme DIR, the theme applied for real (--theme-dir, --theme), the desktop and a palette
-# terminal shot, its checks as problems; a stock theme's copy has none.
+# terminal shot, its checks as problems; a stock theme's copy has none. NAME: an installed one, checked
+# by up (its notes).
 look_theme_checks() {
   local out rc d=$TMP/$P-lookt shot=$TMP/$P-lookt.png left
   if ! omarchy_here; then skip "look theme" "no Omarchy here"; return; fi
@@ -23431,6 +23432,14 @@ look_theme_checks() {
   out=$(ob look theme "$d/bad" 2>&1); rc=$?
   check_eq "a theme missing a key: 1" 1 "$rc"
   check_match "...named" $'\n''  colors.toml: no accent' "$out"
+  # An installed theme by its NAME (#462): up checks it, look reports what up noted
+  out=$(cd "$TMP" && ob look theme catppuccin-latte 2>&1); rc=$?
+  check_eq "look theme NAME, a stock light theme: 0 ($out)" 0 "$rc"
+  check_match "...named" $'\n''theme: catppuccin-latte'$'\n' "$out"
+  check_match "...no problems" $'\n''problems: none' "$out"
+  out=$(cd "$TMP" && ob look theme no-such-theme-462 2>&1); rc=$?
+  check_eq "look theme NAME, none such: refused (up's error)" 1 "$((rc != 0))"
+  check_match "...said by up" "no theme no-such-theme-462" "$out"
   left=$(ob ls --json | jq -r '.[].name' | grep -c '^look-' || true)
   check_eq "no look box left" 0 "$left"
 }

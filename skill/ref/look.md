@@ -59,8 +59,8 @@ problems:
   files by path). The shell's own about the box (no portal, no system bus) are left out.
 - DIR is the plugin's folder, with its `manifest.json`; the plugin id is read from it.
 
-`omabox look theme DIR [-o FILE] [--keep-box] [UP OPTIONS]`: `up --theme-dir DIR --theme NAME` (the
-folder's name) in a throwaway box, then
+`omabox look theme DIR|NAME [-o FILE] [--keep-box] [UP OPTIONS]`: `up --theme-dir DIR --theme NAME`
+(the folder's name), or `up --theme NAME` for an installed theme, in a throwaway box, then
 
 ```
 screenshot: /tmp/omabox-look-123-456.png        # the desktop on it: wallpaper, bar
@@ -80,7 +80,9 @@ value that is no `#rrggbb` (Hyprland's `hyprland_*_border` take their own syntax
 background under three quarters of the screen on a side, nearly one colour, too bright for a dark
 theme or too dark for a light one. No stock theme of Omarchy 4.5 trips any of them, and each line
 says what stock themes score. `up --theme-dir DIR` prints the same lines as notes; they never fail
-`up`.
+`up`. An installed theme is checked by its name too: `look theme NAME` (a word that is no folder
+here) and `up --theme NAME` read it as `omarchy-theme-set` builds it, Omarchy's folder of that name
+with yours of the same name copied over it.
 
 `omabox look page FILE|URL [--keys "K..."] [--hold KEY DURATION] [--shots N] [--after 2s] [-o FILE]
 [--keep-box] [UP OPTIONS]` (#463): Chromium in the box on it, an app window with its own profile

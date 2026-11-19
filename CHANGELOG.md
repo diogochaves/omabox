@@ -20,7 +20,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `up --theme-dir` say what a person would notice: a key Omarchy reads that no fallback resolves, a
   value that is no `#rrggbb`, text too faint to read, a background that is too small, nearly one
   colour, or too bright or dark for the theme's mode. No stock theme trips them; each line says what
-  stock themes score. They are notes in `up`, problems in `look`.
+  stock themes score. They are notes in `up`, problems in `look`. An installed theme is checked
+  by its name too: `up --theme NAME` and `look theme NAME` read it as Omarchy builds it, its own
+  folder with yours of the same name over it.
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):

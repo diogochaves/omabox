@@ -581,6 +581,19 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
             say(cat!("note: theme ", base, ": ", l));
         }
     }
+    // --theme NAME, an installed theme (Omarchy's, the user's over it): the same checks.
+    let named = crate::plugins::theme_folders(
+        &u.theme,
+        &u.tree(),
+        &u.theme_dirs,
+        &shell::env_or_empty("HOME"),
+        &crate::jailpath::jail_path,
+    );
+    if !named.is_empty() {
+        for l in crate::theme_check::check_layered(&named, wh) {
+            say(cat!("note: theme ", u.theme, ": ", l));
+        }
+    }
     // A plain box up did not get --desktop plain for (#247): the machine has no Omarchy, or the
     // config says plain.
     if let Some(t) = crate::upspec::chosen_text(u.desktop, u.chosen) {

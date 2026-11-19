@@ -770,9 +770,74 @@ pub fn tree_dir(d: &[u8], tree: &[u8], jail_path: &dyn Fn(&[u8]) -> Option<Vec<u
     shell::path(d).is_dir()
 }
 
+/// The folders the installed theme NAME (theme_named's word) is made from, in the order
+/// omarchy-theme-set copies them: TREE's themes/NAME, then HOME's ~/.config/omarchy/themes/NAME over
+/// it (a box's user themes are copies of those), each where this process can read it (a jailed
+/// caller's --omarchy tree through JAIL_PATH, as tree_dir sees it). Empty when NAME is a
+/// --theme-dir's: that folder is checked as itself.
+pub fn theme_folders(
+    name: &[u8],
+    tree: &[u8],
+    theme_dirs: &[Vec<u8>],
+    home: &[u8],
+    jail_path: &dyn Fn(&[u8]) -> Option<Vec<u8>>,
+) -> Vec<Vec<u8>> {
+    if name.is_empty() || theme_dirs.iter().any(|d| shell::basename(d) == name) {
+        return Vec::new();
+    }
+    let mut v = Vec::new();
+    let stock = cat!(tree, "/themes/", name);
+    if tree_dir(&stock, tree, jail_path) {
+        let jailed =
+            in_jail() && tree != b"/usr/share/omarchy" && stock.starts_with(&cat!(tree, "/"));
+        v.push(if jailed {
+            jail_path(&stock).unwrap_or(stock)
+        } else {
+            stock
+        });
+    }
+    let user = cat!(home, "/.config/omarchy/themes/", name);
+    if shell::path(&user).is_dir() {
+        v.push(user);
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folders_of_a_theme() {
+        let d = std::env::temp_dir().join(format!("omabox-tfold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let v = |p: &std::path::Path| p.as_os_str().as_encoded_bytes().to_vec();
+        let (tree, home) = (d.join("tree"), d.join("home"));
+        for p in [
+            tree.join("themes/a"),
+            tree.join("themes/b"),
+            home.join(".config/omarchy/themes/b"),
+            home.join(".config/omarchy/themes/c"),
+        ] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        let no = |_: &[u8]| None;
+        let f = |n: &[u8], dirs: &[Vec<u8>]| theme_folders(n, &v(&tree), dirs, &v(&home), &no);
+        assert_eq!(f(b"a", &[]), [cat!(v(&tree), "/themes/a")], "Omarchy's");
+        assert_eq!(
+            f(b"b", &[]),
+            [
+                cat!(v(&tree), "/themes/b"),
+                cat!(v(&home), "/.config/omarchy/themes/b")
+            ],
+            "the user's over Omarchy's"
+        );
+        assert_eq!(f(b"c", &[]), [cat!(v(&home), "/.config/omarchy/themes/c")]);
+        assert!(f(b"b", &[b"/x/b".to_vec()]).is_empty(), "a --theme-dir's");
+        assert!(f(b"z", &[]).is_empty());
+        assert!(f(b"", &[]).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn ids() {

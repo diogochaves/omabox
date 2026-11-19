@@ -232,10 +232,40 @@ pub fn bg_warnings(name: &str, b: &Bg, screen: (i64, i64), mode: &str) -> Vec<St
 /// Every warning for theme DIR on a screen W x H: what is not checkable here said as such (no
 /// omarchy-theme-color, no ImageMagick).
 pub fn check(dir: &[u8], screen: (i64, i64)) -> Vec<String> {
-    let colors = cat!(dir, "/colors.toml");
-    if !shell::path(&colors).is_file() {
-        return vec!["no colors.toml: Omarchy reads its palette from it".to_string()];
+    check_layered(&[dir.to_vec()], screen)
+}
+
+/// A theme's colors.toml (none: it has none) and its backgrounds, (name, file) each.
+pub type Layered = (Option<Vec<u8>>, Vec<(Vec<u8>, Vec<u8>)>);
+
+/// The theme omarchy-theme-set makes of DIRS, each copied over the one before (Omarchy's folder of
+/// a name, then the user's of the same name): the colors.toml it ends with, and its backgrounds by
+/// name, each from the last folder that has it, sorted by name.
+pub fn layered(dirs: &[Vec<u8>]) -> Layered {
+    let colors = dirs
+        .iter()
+        .rev()
+        .map(|d| cat!(d, "/colors.toml"))
+        .find(|c| shell::path(c).is_file());
+    let mut bgs: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    for d in dirs {
+        let b = cat!(d, "/backgrounds");
+        for n in shell::glob(&shell::path(&b), false) {
+            let f = cat!(b, "/", n);
+            if shell::path(&f).is_file() {
+                bgs.insert(n, f);
+            }
+        }
     }
+    (colors, bgs.into_iter().collect())
+}
+
+/// check for the theme DIRS make together (layered): an installed theme picked by name.
+pub fn check_layered(dirs: &[Vec<u8>], screen: (i64, i64)) -> Vec<String> {
+    let (colors, bgs) = layered(dirs);
+    let Some(colors) = colors else {
+        return vec!["no colors.toml: Omarchy reads its palette from it".to_string()];
+    };
     let run = |what: &str| {
         std::process::Command::new("omarchy-theme-color")
             .arg("--file")
@@ -265,15 +295,9 @@ pub fn check(dir: &[u8], screen: (i64, i64)) -> Vec<String> {
         .get("mode")
         .cloned()
         .unwrap_or_else(|| "dark".to_string());
-    let bgs = cat!(dir, "/backgrounds");
-    let mut names: Vec<Vec<u8>> = shell::glob(&shell::path(&bgs), false)
-        .into_iter()
-        .filter(|n| shell::path(&cat!(bgs, "/", n)).is_file())
-        .collect();
-    names.sort();
-    for n in &names {
+    for (n, f) in &bgs {
         let name = String::from_utf8_lossy(n).into_owned();
-        match measure(&cat!(bgs, "/", n)) {
+        match measure(f) {
             Some(b) => w.extend(bg_warnings(&name, &b, screen, &mode)),
             None => w.push(format!(
                 "background {name}: not read (ImageMagick's magick, or not an image)"
@@ -341,6 +365,40 @@ mod tests {
             w[2]
         );
         assert_eq!(w.len(), 3);
+    }
+
+    #[test]
+    fn layers() {
+        let d = std::env::temp_dir().join(format!("omabox-layers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (a, b) = (d.join("a"), d.join("b"));
+        for p in [a.join("backgrounds"), b.join("backgrounds")] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        for f in ["colors.toml", "backgrounds/1.png", "backgrounds/2.png"] {
+            std::fs::write(a.join(f), "").unwrap();
+        }
+        std::fs::write(b.join("backgrounds/2.png"), "").unwrap();
+        std::fs::write(b.join("backgrounds/3.png"), "").unwrap();
+        let v = |p: &std::path::Path| p.as_os_str().as_bytes().to_vec();
+        let (c, bgs) = layered(&[v(&a), v(&b)]);
+        assert_eq!(c, Some(cat!(v(&a), "/colors.toml")), "a's: b has none");
+        let got: Vec<Vec<u8>> = bgs.iter().map(|(_, f)| f.clone()).collect();
+        assert_eq!(
+            got,
+            [
+                cat!(v(&a), "/backgrounds/1.png"),
+                cat!(v(&b), "/backgrounds/2.png"),
+                cat!(v(&b), "/backgrounds/3.png")
+            ]
+        );
+        std::fs::write(b.join("colors.toml"), "").unwrap();
+        assert_eq!(
+            layered(&[v(&a), v(&b)]).0,
+            Some(cat!(v(&b), "/colors.toml"))
+        );
+        assert_eq!(layered(&[]), (None, Vec::new()));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -14283,7 +14283,7 @@ from them.
     (`rgba(26a269ee) rgba(2ec27eee) 45deg`) in hackerman, last-horizon and solitude. On this
     machine's own themes, the three baseline ones' dot-grid backgrounds read as nearly one colour
     (0.008), a fair warning. `up --theme-dir` prints them as notes; `look theme` counts them as
-    problems. `--theme NAME` (an installed theme) is not checked yet. t_unit_theme_check: every
+    problems. `--theme NAME` (an installed theme): finding 724. t_unit_theme_check: every
     stock theme says nothing, each fault named.
 
 721. **`look page`: a page or game in a real browser with real frames** (2026-11-19, #463, #461's
@@ -14334,6 +14334,18 @@ from them.
     `tree` and `down`, and reads the moved checks (tree before a shot, `wait change`, `--expect
     tree`, `up --new`) in `ref/loop.md`. Its `ref:` check reads a table cell's end (` |`) as a
     reference's end too, with a case of each in its own test.
+
+724. **An installed theme checked by its name** (2026-11-19, #462). `up --theme NAME` without a
+    `--theme-dir` of that name now runs finding 720's checks on the theme as `omarchy-theme-set`
+    builds it: it copies `$OMARCHY_PATH/themes/NAME/*` and then `~/.config/omarchy/themes/NAME/*`
+    over it, so colors.toml is the user's when there is one, and the backgrounds are the union by
+    name, the user's winning (`theme_check::layered`; the folders from `plugins::theme_folders`, the
+    --omarchy tree's read through the jail's view as `theme_named`'s are). Notes as for
+    `--theme-dir` (`note: theme NAME: ...`). `look theme NAME` (a word that is no folder) starts
+    `up --theme NAME` and counts those notes as its problems; up resolves and refuses the name as
+    ever. Measured: catppuccin-latte, nothing; this machine's own `baseline`, its dot-grid
+    background as nearly one colour (0.008), as from its folder. look_theme_checks in `t_look`;
+    unit tests for the layering and the folders.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
