@@ -10,7 +10,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   a throwaway box, the program's window shot (keys first with `--keys` and `--type`), its problems
   and output in a short report, exit 1 when it found problems, nothing left up. `omabox look plugin
   DIR [--open]` does the same for a shell plugin: the bar shot, its panel with `--open`, its state
-  and the shell's warnings about it. Themes and pages come next.
+  and the shell's warnings about it. `omabox look theme DIR` applies a theme for real and shoots the
+  desktop and a terminal printing its palette. Pages come next.
+- **Theme checks** ([#462](https://github.com/diogochaves/omabox/issues/462)): `look theme` and
+  `up --theme-dir` say what a person would notice: a key Omarchy reads that no fallback resolves, a
+  value that is no `#rrggbb`, text too faint to read, a background that is too small, nearly one
+  colour, or too bright or dark for the theme's mode. No stock theme trips them; each line says what
+  stock themes score. They are notes in `up`, problems in `look`.
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):

@@ -66,6 +66,7 @@ mod shotcmp;
 mod shots;
 mod sig;
 mod term;
+mod theme_check;
 mod trap;
 mod treediff;
 mod treewait;

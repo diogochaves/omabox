@@ -193,6 +193,29 @@ problems:
   files by path). The shell's own about the box (no portal, no system bus) are left out.
 - DIR is the plugin's folder, with its `manifest.json`; the plugin id is read from it.
 
+`omabox look theme DIR [-o FILE] [--keep-box] [UP OPTIONS]`: `up --theme-dir DIR --theme NAME` (the
+folder's name) in a throwaway box, then
+
+```
+screenshot: /tmp/omabox-look-123-456.png        # the desktop on it: wallpaper, bar
+terminal: /tmp/omabox-look-123-789.png          # foot printing its 16 colours, bold, dim, reverse
+theme: tally
+problems:
+  colors.toml: no accent (Omarchy's templates use it, and no fallback resolves it)
+  foreground #2a2a3a on background #1e1e2e: 1.2:1, under 4.5:1 (stock themes: 6.7 to 21)
+  background 1-x.png: 640x480, small for a 1920x1080 screen (stock themes: 1536x1024 at least)
+```
+
+The checks (#462), each a line, are read as Omarchy reads the theme: its `omarchy-theme-color`
+(aliases, fallbacks) and the keys its templates use, at run time. A key no fallback resolves; a
+value that is no `#rrggbb` (Hyprland's `hyprland_*_border` take their own syntax); contrast under
+4.5:1 for `foreground` and `bright_foreground` on `background` and selection text, under 3:1 for
+`light_foreground` and `accent` (`dark_foreground` and `muted` are dim on purpose: not checked); a
+background under three quarters of the screen on a side, nearly one colour, too bright for a dark
+theme or too dark for a light one. No stock theme of Omarchy 4.5 trips any of them, and each line
+says what stock themes score. `up --theme-dir DIR` prints the same lines as notes; they never fail
+`up`.
+
 ## Shots
 
 - Text before a shot, when the question is a label, an entry's text or a state: `omabox tree --find

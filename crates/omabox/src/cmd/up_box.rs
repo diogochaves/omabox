@@ -567,6 +567,20 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         ") in ",
         d
     ));
+    // A theme in the works (#462): what a person would notice in it, as notes (they never fail up).
+    let wh = {
+        let t = String::from_utf8_lossy(&size).into_owned();
+        let t = t.split('@').next().unwrap_or("").to_string();
+        t.split_once('x')
+            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+            .unwrap_or((1920, 1080))
+    };
+    for g in &u.theme_dirs {
+        let base = g.rsplit(|&c| c == b'/').next().unwrap_or(g).to_vec();
+        for l in crate::theme_check::check(g, wh) {
+            say(cat!("note: theme ", base, ": ", l));
+        }
+    }
     // A plain box up did not get --desktop plain for (#247): the machine has no Omarchy, or the
     // config says plain.
     if let Some(t) = crate::upspec::chosen_text(u.desktop, u.chosen) {

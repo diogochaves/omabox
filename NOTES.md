@@ -14264,6 +14264,28 @@ from them.
     plugin look broken. The two checks run as one test, `t_look`: each counts the `look-*` boxes
     left, which a look beside it would make fail.
 
+720. **Theme checks, calibrated on every stock theme** (2026-11-19, #462; `look theme`, #461). The
+    palette is read through Omarchy's own `omarchy-theme-color --file F --raw|--all` (aliases and
+    fallbacks as its templates get them), the keys from `{{ ... }}` in
+    `/usr/share/omarchy/default/themed/*.tpl` at run time: a key, `mix A B N%`'s two; `_strip` and
+    `_rgb` are forms of a key and a gradient's key has a fallback (`omarchy-theme-set-templates`'
+    rules), so `background_rgb`, `hypr_gradient` and `hyprland_active_border` are not needed. Omarchy
+    4.5.0's 22 stock themes (the 23rd folder, osaka-jade, has no `colors.toml`: upstream#246),
+    WCAG contrast, min / median / max: foreground on background 6.66 (rose-pine) / 11.6 / 21;
+    bright_foreground the same; light_foreground 4.56 (miasma) / 9.6 / 21; accent 3.14 (rose-pine)
+    / 6.3 / 15.1; selection_foreground on selection_background 4.88 (gruvbox) / 7.7 / 17.4;
+    dark_foreground 1.72 (everforest) / 2.8 / 6.5 and muted 1.48 (matte-black) / 2.3 / 5.2, dim on
+    purpose, not checked. Thresholds 4.5, 4.5, 3, 3, 4.5. Their 98 backgrounds (grey of a 256 px
+    sample): dark themes' mean 0.02 to 0.63, light themes' 0.69 to 0.98; standard deviation 0.028
+    (vantablack) at least; the smallest 1536x1024 (catppuccin-latte). Warnings at a side under 3/4
+    of the screen, deviation under 0.015, a dark theme's mean over 0.75, a light one's under 0.5.
+    Not values: `hyprland_active_border` and `_inactive_border` hold Hyprland gradients
+    (`rgba(26a269ee) rgba(2ec27eee) 45deg`) in hackerman, last-horizon and solitude. On this
+    machine's own themes, the three baseline ones' dot-grid backgrounds read as nearly one colour
+    (0.008), a fair warning. `up --theme-dir` prints them as notes; `look theme` counts them as
+    problems. `--theme NAME` (an installed theme) is not checked yet. t_unit_theme_check: every
+    stock theme says nothing, each fault named.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -34,12 +34,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     match args.first().map(Vec::as_slice) {
         Some(b"app") => app(ctx, &args[1..]),
         Some(b"plugin") => plugin(ctx, &args[1..]),
+        Some(b"theme") => theme(ctx, &args[1..]),
         Some(b"-h" | b"--help") | None => crate::help::usage("look"),
         Some(o) if o.starts_with(b"-") => Err(crate::args::unknown_opt(ctx, "look", o)),
-        Some(k) => Err(ctx.die(cat!(
-            "look: app or plugin (more kinds to come: theme, page), got ",
-            k
-        ))),
+        Some(k) => Err(ctx.die(cat!("look: app, plugin or theme (page to come), got ", k))),
     }
 }
 
@@ -143,9 +141,9 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
                 }
             }
             _ if o.starts_with(b"-") => return Err(crate::args::unknown_opt(ctx, "look", o)),
-            _ if kind == "plugin" && a.dir.is_none() => a.dir = Some(o.clone()),
-            _ if kind == "plugin" => {
-                return Err(ctx.die(cat!("look plugin: one DIR (a plugin's folder), got ", o)));
+            _ if kind != "app" && a.dir.is_none() => a.dir = Some(o.clone()),
+            _ if kind != "app" => {
+                return Err(ctx.die(cat!("look ", kind, ": one DIR (its folder), got ", o)));
             }
             _ => {
                 return Err(ctx.die(cat!(
@@ -156,8 +154,14 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
         }
         i += 1;
     }
-    if kind == "plugin" && a.dir.is_none() {
-        return Err(ctx.die("look plugin: its folder: omabox look plugin DIR [--open]"));
+    if kind != "app" && a.dir.is_none() {
+        return Err(ctx.die(cat!(
+            "look ",
+            kind,
+            ": its folder: omabox look ",
+            kind,
+            " DIR"
+        )));
     }
     if kind == "app" && a.cmd.is_empty() {
         return Err(ctx.die(
@@ -650,6 +654,144 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
         head.push(("panel", p));
     }
     head.push(("plugin", &line));
+    out(report(
+        &head,
+        &problems,
+        &notes,
+        None,
+        a.keep.then_some(name),
+    ))?;
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Exit(1))
+    }
+}
+
+/// The terminal look theme opens: the theme's 16 colours, as text and as blocks, on its background.
+const PALETTE_SH: &str = r#"printf '\033[?25l\n  omabox look theme: the terminal palette\n\n'; for row in 0 8; do printf '  '; for i in 0 1 2 3 4 5 6 7; do n=$((row + i)); printf '\033[38;5;%dm %-6s\033[0m' "$n" "c$n"; done; printf '\n  '; for i in 0 1 2 3 4 5 6 7; do printf '\033[48;5;%dm       \033[0m' "$((row + i))"; done; printf '\n\n'; done; printf '  normal \033[1mbold\033[0m \033[2mdim\033[0m \033[3mitalic\033[0m \033[7mreverse\033[0m\n'; exec sleep 600"#;
+
+fn theme(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    let a = parse(ctx, args, "theme")?;
+    let dir = a.dir.clone().unwrap_or_default();
+    let dir = crate::repo::readlink_f(&dir).unwrap_or(dir);
+    if !shell::path(&dir).is_dir() {
+        return Err(ctx.die(cat!("look theme: ", dir, " is no folder")));
+    }
+    let me = std::process::id();
+    let name = format!("look-{me}").into_bytes();
+    select_box(ctx, &name)?;
+    let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
+    let r = theme_in(ctx, &a, &dir, &name, me);
+    if let Some(g) = guard {
+        g.finish();
+    }
+    r
+}
+
+fn theme_in(ctx: &Ctx, a: &App, dir: &[u8], name: &[u8], me: u32) -> Res<()> {
+    let mut problems: Vec<Vec<u8>> = Vec::new();
+    let mut notes: Vec<Vec<u8>> = Vec::new();
+    // Live from DIR (--theme-dir), applied before the session starts (--theme, by its folder's name).
+    let tname = dir.rsplit(|&c| c == b'/').next().unwrap_or(dir).to_vec();
+    start(
+        ctx,
+        a,
+        name,
+        me,
+        &[b"--theme-dir", dir, b"--theme", &tname],
+        &mut problems,
+    )?;
+    let still: [&[u8]; 6] = [b"wait", b"-b", name, b"--timeout", b"8s", b"still"];
+    if ob(&still).code == 124 {
+        notes.push(
+            b"still changing after 8s (an intro video?): the shot is of a moving screen".to_vec(),
+        );
+    }
+    let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
+    if let Some(o) = &a.out {
+        sh.extend([b"-o".as_slice(), o]);
+    }
+    let r = ob(&sh);
+    let shot = if r.ok {
+        last_line(&r.out)
+    } else {
+        problems.push(cat!("shot: ", shell::subst(&r.err)));
+        None
+    };
+    // A terminal with its palette: the colours a theme is mostly looked at for.
+    let mut term = None;
+    let r = ob(&[
+        b"run",
+        b"-b",
+        name,
+        b"-d",
+        b"-q",
+        b"--",
+        b"foot",
+        b"-T",
+        b"omabox-palette",
+        b"sh",
+        b"-c",
+        PALETTE_SH.as_bytes(),
+    ]);
+    if r.ok
+        && ob(&[
+            b"wait",
+            b"-b",
+            name,
+            b"--timeout",
+            b"8s",
+            b"window",
+            b"title:^omabox-palette$",
+        ])
+        .ok
+    {
+        ob(&[
+            b"wait",
+            b"-b",
+            name,
+            b"--timeout",
+            b"5s",
+            b"still",
+            b"--window",
+            b"title:^omabox-palette$",
+        ]);
+        let out_t = a.out.as_ref().map(|o| suffixed(o, "terminal"));
+        let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", b"title:^omabox-palette$"];
+        if let Some(o) = &out_t {
+            sh.extend([b"-o".as_slice(), o]);
+        }
+        let r = ob(&sh);
+        term = if r.ok { last_line(&r.out) } else { None };
+    } else {
+        notes.push(b"no terminal shot: foot did not open in the box".to_vec());
+    }
+    // The theme's checks (#462), on this box's screen.
+    let mon: Value =
+        serde_json::from_slice(&ob(&[b"hyprctl", b"-b", name, b"-j", b"monitors"]).out)
+            .unwrap_or(Value::Null);
+    let m = mon
+        .as_array()
+        .and_then(|v| v.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let n = |k: &str| m.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let screen = if n("width") > 0 {
+        (n("width"), n("height"))
+    } else {
+        (1920, 1080)
+    };
+    problems.extend(
+        crate::theme_check::check(dir, screen)
+            .into_iter()
+            .map(String::into_bytes),
+    );
+    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    if let Some(t) = &term {
+        head.push(("terminal", t));
+    }
+    head.push(("theme", &tname));
     out(report(
         &head,
         &problems,

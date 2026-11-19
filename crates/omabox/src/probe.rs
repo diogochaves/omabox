@@ -118,6 +118,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("theme_snapshot_note", "THEME_DIR TOP"),
     ("theme_named", "NAME TREE [THEME_DIR...]"),
     ("shell_warnings", "FILE"),
+    ("theme_check", "DIR [WxH]"),
     ("desk_name_refused", "NAME"),
     ("desk_content_refused", "FILE"),
     ("desk_files", "DESK"),
@@ -680,6 +681,22 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             &crate::jailpath::jail_path,
         )?),
         (b"shell_warnings", [f]) => out(crate::plugins::shell_warnings(&crate::shell::path(f))),
+        (b"theme_check", [d, rest @ ..]) => {
+            let (w, h) = rest
+                .first()
+                .and_then(|g| {
+                    let g = std::str::from_utf8(g).ok()?;
+                    let (w, h) = g.split_once('x')?;
+                    Some((w.parse().ok()?, h.parse().ok()?))
+                })
+                .unwrap_or((1920, 1080));
+            let v = crate::theme_check::check(d, (w, h));
+            out(v
+                .iter()
+                .map(|l| format!("{l}\n"))
+                .collect::<String>()
+                .into_bytes())
+        }
         (b"desk_name_refused", [n]) => {
             refused(crate::seed::desk_name_refused(n).map(|m| m.as_bytes().to_vec()))
         }
