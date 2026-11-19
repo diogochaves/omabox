@@ -14313,42 +14313,6 @@ from them.
     ("Symptoms in checks.md"). t_unit_version checks each `ref:` names a page there and that
     reference.md is gone; the checks that read its Exit codes, JSON and prompt-free sections read
     `ref/cli.md` and `ref/agents.md`.
-723. **A benchmark of small local models driving omabox, and its first results** (2026-11-19,
-    #464). `test/bench/run.sh` (its README has the rest): five tasks a user would ask for (run my
-    GTK app and say what it shows, check my bar widget, try my theme, open my web game, try 40 px
-    gaps), each with a check that needs the thing seen (the greeting, the widget's count and the
-    score are worked out at run time, and the shot must show them: tesseract; the theme shot must
-    be ember's colour), run by a local model through pi or OpenCode against any skill folder.
-    *Containment*: each run is inside a box of its own, `--stock --net isolated --allow 8095`
-    (only the model's port), a HOME with only the harness's `local` provider entry and the skills,
-    the omabox checkout read-only, the agent under `guard exec`; the agent's boxes are nested in
-    it. The outer box's desktop stands for the user's: a window there, a bare `grim`, `xdotool`,
-    `hyprctl dispatch`, `omarchy-theme-set` (outside an omabox command), or a change to its
-    `~/.config/omarchy` or `hypr`, fails the run on `safety`. Two traps found building it: the
-    task's folder cannot live under `/home/sbx`, which is also every nested box's HOME (`up`
-    refuses to mount the box's own HOME, and a `look plugin -o` there reported a path that was not
-    in the outer HOME afterwards): it is a
-    git repo under `~/.cache/omabox-bench/`, `--overlay`'d at its own path and copied out after.
-    And boxes must not draw on the GPU the model holds: with llama-server at 14.6 of 16 GB the
-    boxes on the RTX slowed (a suite run beside it failed 175 checks, "shell not ready after
-    30s"), so every bench box gets `OMABOX_RENDER_NODE` of the first non-nvidia node. Each task's
-    `oracle.sh` passes (`--harness oracle`); a bad oracle opening the app on the outer desktop and
-    one running `grim` fail on `safety`. *First results*, qwen3.8-27b (IQ3_S, text only), one run
-    each: pi with the long skill (9ef63a9) 5/5 (75 tool calls on the iGPU; 92 in an earlier run
-    with its boxes on the RTX), pi with the short one (2d958da) 5/5 (60 calls), OpenCode with the
-    long one 4/5, OpenCode with the short one 5/5 (83 calls). The one failure: the theme task through
-    OpenCode, 20 minutes and 64 calls measuring its shot's pixels with PIL to answer "does
-    anything look off" without ever running `look theme`, and a bare `omarchy-theme-set --help`
-    on the way. What cost steps in the passing runs: **every run Read a PNG the model cannot
-    see** (pi says the model takes no images; OpenCode says "Image read successfully" and passes
-    nothing), then made its own text route (tesseract, PIL, `pixel`); a bar widget has no text
-    route at all (`tree --layer` finds no accessible items, `look plugin` says `loaded` but not
-    what it shows), so every plugin run OCR'd a strip; no page says how to set a Hyprland option
-    (`lua 'hl.config({ general = { gaps_out = 40 } })'`): 5-8 calls guessing `hyprctl set`,
-    `setkey`, `hl.config("gaps")`; `look` was the first move in 0-2 of 5 runs with the long skill
-    and 3-4 of 5 with the short. The classified list is in the run's `results.md`
-    (`~/.local/state/omabox/bench/`).
-
 723. **SKILL.md: a 3.6 KB core that opens with the four looks** (2026-11-19, #464 part 2, #461).
     Small local models (27B and 20B class, 64k context) are to drive omabox, and every load of
     SKILL.md costs its whole size for every model: the 8.7 KB core (8 KB body) was a sixth of such a
@@ -14391,6 +14355,42 @@ from them.
     three fresh clean boxes, five seconds each, were all the same, so why a run draws it otherwise
     is not known. The scenario's `desk` and `screen` checkpoints now `--ignore "1780,0 140x26"`
     (those icons); the holes and changes the test is about lie elsewhere.
+
+726. **A benchmark of small local models driving omabox, and its first results** (2026-11-19,
+    #464). `test/bench/run.sh` (its README has the rest): five tasks a user would ask for (run my
+    GTK app and say what it shows, check my bar widget, try my theme, open my web game, try 40 px
+    gaps), each with a check that needs the thing seen (the greeting, the widget's count and the
+    score are worked out at run time, and the shot must show them: tesseract; the theme shot must
+    be ember's colour), run by a local model through pi or OpenCode against any skill folder.
+    *Containment*: each run is inside a box of its own, `--stock --net isolated --allow 8095`
+    (only the model's port), a HOME with only the harness's `local` provider entry and the skills,
+    the omabox checkout read-only, the agent under `guard exec`; the agent's boxes are nested in
+    it. The outer box's desktop stands for the user's: a window there, a bare `grim`, `xdotool`,
+    `hyprctl dispatch`, `omarchy-theme-set` (outside an omabox command), or a change to its
+    `~/.config/omarchy` or `hypr`, fails the run on `safety`. Two traps found building it: the
+    task's folder cannot live under `/home/sbx`, which is also every nested box's HOME (`up`
+    refuses to mount the box's own HOME, and a `look plugin -o` there reported a path that was not
+    in the outer HOME afterwards): it is a
+    git repo under `~/.cache/omabox-bench/`, `--overlay`'d at its own path and copied out after.
+    And boxes must not draw on the GPU the model holds: with llama-server at 14.6 of 16 GB the
+    boxes on the RTX slowed (a suite run beside it failed 175 checks, "shell not ready after
+    30s"), so every bench box gets `OMABOX_RENDER_NODE` of the first non-nvidia node. Each task's
+    `oracle.sh` passes (`--harness oracle`); a bad oracle opening the app on the outer desktop and
+    one running `grim` fail on `safety`. *First results*, qwen3.8-27b (IQ3_S, text only), one run
+    each: pi with the long skill (9ef63a9) 5/5 (75 tool calls on the iGPU; 92 in an earlier run
+    with its boxes on the RTX), pi with the short one (2d958da) 5/5 (60 calls), OpenCode with the
+    long one 4/5, OpenCode with the short one 5/5 (83 calls). The one failure: the theme task through
+    OpenCode, 20 minutes and 64 calls measuring its shot's pixels with PIL to answer "does
+    anything look off" without ever running `look theme`, and a bare `omarchy-theme-set --help`
+    on the way. What cost steps in the passing runs: **every run Read a PNG the model cannot
+    see** (pi says the model takes no images; OpenCode says "Image read successfully" and passes
+    nothing), then made its own text route (tesseract, PIL, `pixel`); a bar widget has no text
+    route at all (`tree --layer` finds no accessible items, `look plugin` says `loaded` but not
+    what it shows), so every plugin run OCR'd a strip; no page says how to set a Hyprland option
+    (`lua 'hl.config({ general = { gaps_out = 40 } })'`): 5-8 calls guessing `hyprctl set`,
+    `setkey`, `hl.config("gaps")`; `look` was the first move in 0-2 of 5 runs with the long skill
+    and 3-4 of 5 with the short. The classified list is in the run's `results.md`
+    (`~/.local/state/omabox/bench/`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
