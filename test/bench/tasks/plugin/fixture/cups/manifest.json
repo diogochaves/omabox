@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "example.cups",
+  "name": "Cups",
+  "version": "0.1.0",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Widget.qml" },
+  "barWidget": { "displayName": "Cups", "defaultSection": "right" }
+}

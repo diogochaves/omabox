@@ -1,0 +1,1 @@
+I'm making a widget for my Omarchy bar, it's in the cups folder here. Can you check that it loads and shows up on the bar, and tell me what it displays? Save a screenshot of the bar here as bar.png. Please don't install it into my own bar yet.

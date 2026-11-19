@@ -1,0 +1,1 @@
+I'm making an Omarchy theme called ember, it's in the ember folder here. Can you try it and show me what the desktop looks like with it? Save a screenshot here as theme.png, and tell me if anything about it looks off. Don't switch my own desktop to it.

@@ -1,0 +1,1 @@
+Before I change my own Hyprland config: can you try out what 40 px gaps around windows would look like? Open a terminal window with the outer gaps set to 40, make sure the setting really took effect, and save a screenshot here as gaps.png. Don't change my own config.

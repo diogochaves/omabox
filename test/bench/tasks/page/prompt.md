@@ -1,0 +1,1 @@
+I'm making a little browser game, it's in the game folder here (game/index.html). Can you open it in a browser and tell me what score it shows when it starts? Save a screenshot of it here as game.png.
