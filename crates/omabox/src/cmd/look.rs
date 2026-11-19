@@ -35,9 +35,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         Some(b"app") => app(ctx, &args[1..]),
         Some(b"plugin") => plugin(ctx, &args[1..]),
         Some(b"theme") => theme(ctx, &args[1..]),
+        Some(b"page") => page(ctx, &args[1..]),
         Some(b"-h" | b"--help") | None => crate::help::usage("look"),
         Some(o) if o.starts_with(b"-") => Err(crate::args::unknown_opt(ctx, "look", o)),
-        Some(k) => Err(ctx.die(cat!("look: app, plugin or theme (page to come), got ", k))),
+        Some(k) => Err(ctx.die(cat!("look: app, plugin, theme or page, got ", k))),
     }
 }
 
@@ -55,6 +56,9 @@ struct App {
     /// plugin's DIR, and --open.
     dir: Option<Vec<u8>>,
     open: bool,
+    /// page: its shots over --after (a contact sheet), and whether this is a page.
+    shots: u32,
+    page: bool,
 }
 
 /// KIND's options (app, plugin): an app's program after --, a plugin's DIR as its one word.
@@ -89,7 +93,26 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
                 break;
             }
             b"--open" if kind == "plugin" => a.open = true,
-            b"--keys" if kind == "app" => {
+            b"--hold" if kind == "page" => {
+                // KEY DURATION: down, held that long (real frames go by), up.
+                let k = val(i)?.clone();
+                optarg(ctx, &args[i + 1], args.get(i + 2))?;
+                let d = args[i + 2].clone();
+                dur(ctx, o, &d)?;
+                a.keys
+                    .extend([cat!("down:", k), b"-s".to_vec(), d, cat!("up:", k)]);
+                i += 2;
+            }
+            b"--shots" if kind == "page" => {
+                let v = val(i)?;
+                a.shots = std::str::from_utf8(v)
+                    .ok()
+                    .and_then(|n| n.parse().ok())
+                    .filter(|n| (1..=24).contains(n))
+                    .ok_or_else(|| ctx.die(cat!("look page: --shots takes 1 to 24, got ", v)))?;
+                i += 1;
+            }
+            b"--keys" if matches!(kind, "app" | "page") => {
                 a.keys.extend(
                     val(i)?
                         .split(|c| c.is_ascii_whitespace())
@@ -98,11 +121,11 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
                 );
                 i += 1;
             }
-            b"--type" if kind == "app" => {
+            b"--type" if matches!(kind, "app" | "page") => {
                 a.keys.extend([b"-t".to_vec(), val(i)?.clone()]);
                 i += 1;
             }
-            b"--after" if kind == "app" => {
+            b"--after" if matches!(kind, "app" | "page") => {
                 let v = val(i)?;
                 dur(ctx, o, v)?;
                 a.after = Some(v.clone());
@@ -153,6 +176,9 @@ fn parse(ctx: &Ctx, args: &[Vec<u8>], kind: &str) -> Res<App> {
             }
         }
         i += 1;
+    }
+    if kind == "page" && a.dir.is_none() {
+        return Err(ctx.die("look page: its file or URL: omabox look page FILE|URL"));
     }
     if kind != "app" && a.dir.is_none() {
         return Err(ctx.die(cat!(
@@ -285,9 +311,86 @@ fn app(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     r
 }
 
+/// look page FILE|URL: Chromium in the box on it, as an app window (its own profile in the box HOME,
+/// its sandbox kept), the page's console read from Chromium's log (--enable-logging=stderr): its
+/// uncaught exceptions and messages naming an error are the problems, the rest of Chromium's log
+/// (the box's missing system bus and the like) is not shown. A file's folder is bound read-only.
+fn page(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    let mut a = parse(ctx, args, "page")?;
+    a.page = true;
+    let what = a.dir.take().unwrap_or_default();
+    let url = if Re::new("^(https?|file)://").is_some_and(|r| r.is_match(&what)) {
+        what
+    } else {
+        let f = crate::repo::readlink_f(&what).unwrap_or_default();
+        if f.is_empty() || !shell::path(&f).is_file() {
+            return Err(ctx.die(cat!(
+                "look page: no such file: ",
+                what,
+                " (a FILE, or an http:// or file:// URL)"
+            )));
+        }
+        let dirn = f[..f.iter().rposition(|&c| c == b'/').unwrap_or(0)].to_vec();
+        a.up.extend([b"--ro-bind".to_vec(), dirn]);
+        cat!("file://", f)
+    };
+    a.cmd = vec![
+        b"sh".to_vec(),
+        b"-c".to_vec(),
+        CHROMIUM_SH.as_bytes().to_vec(),
+        b"sh".to_vec(),
+        url,
+    ];
+    let me = std::process::id();
+    let name = format!("look-{me}").into_bytes();
+    select_box(ctx, &name)?;
+    let guard = (!a.keep).then(|| crate::sig::Teardown::new(name.clone()));
+    let r = app_in(ctx, &a, &name, me);
+    if let Some(g) = guard {
+        g.finish();
+    }
+    r
+}
+
+/// Chromium on $1 as an app window: the first of chromium, google-chrome-stable, chrome on the box's
+/// PATH, its profile in the box HOME, its log (the page's console) on stderr.
+const CHROMIUM_SH: &str = r#"b=$(command -v chromium || command -v google-chrome-stable || command -v chrome) || { echo "fatal: no Chromium in the box (chromium, google-chrome-stable)" >&2; exit 127; }; exec "$b" --app="$1" --user-data-dir="$HOME/.cache/omabox-look-chromium" --enable-logging=stderr --no-first-run --no-default-browser-check --password-store=basic"#;
+
+/// A page's console in Chromium's log: each `CONSOLE` line as `message (source:line)`.
+pub fn console_lines(log: &[u8]) -> Vec<Vec<u8>> {
+    let Some(re) = Re::new(r":CONSOLE[:(]([0-9]+)\)?\] (.*), source: ([^ ]*)") else {
+        return Vec::new();
+    };
+    log.split(|&c| c == b'\n')
+        .filter_map(|l| {
+            let line = re.group(l, 1)?;
+            let mut msg = re.group(l, 2)?;
+            if msg.len() >= 2 && msg.starts_with(b"\"") && msg.ends_with(b"\"") {
+                msg = msg[1..msg.len() - 1].to_vec();
+            }
+            let src = re.group(l, 3)?;
+            let file = src.rsplit(|&c| c == b'/').next().unwrap_or(&src).to_vec();
+            Some(cat!(msg, " (", file, ":", line, ")"))
+        })
+        .collect()
+}
+
+/// The console lines that are problems: an uncaught exception, or a message naming an error.
+pub fn console_problems(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let Some(re) = Re::new(r"^uncaught |error|failed to load|net::err_") else {
+        return Vec::new();
+    };
+    lines
+        .iter()
+        .filter(|l| re.is_match(&l.to_ascii_lowercase()))
+        .cloned()
+        .collect()
+}
+
 fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     let mut problems: Vec<Vec<u8>> = Vec::new();
     let mut notes: Vec<Vec<u8>> = Vec::new();
+    let mut sheet = None;
     start(ctx, a, name, me, &[], &mut problems)?;
     // The program, a job of the box's: its log is its output.
     let mut run: Vec<&[u8]> = vec![b"run", b"-b", name, b"-d", b"-q", b"--print-log", b"--"];
@@ -346,12 +449,13 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             let addr = w.get("address").and_then(Value::as_str).unwrap_or("active");
             let sel = addr.as_bytes();
             // (its first frames drawn before a key: a shell still starting drops what it is sent)
+            let wait_for: &[u8] = if a.page { b"2s" } else { b"5s" };
             let still = [
                 b"wait".as_slice(),
                 b"-b",
                 name,
                 b"--timeout",
-                b"5s",
+                wait_for,
                 b"still",
                 b"--window",
                 sel,
@@ -361,33 +465,91 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             }
             let mut keys: Vec<&[u8]> = vec![b"keys", b"-b", name, b"--window", sel, b"--wait"];
             keys.extend(a.keys.iter().map(Vec::as_slice));
-            if !a.keys.is_empty() {
-                let r = ob(&keys);
+            let keys_done = |r: Ran, problems: &mut Vec<Vec<u8>>| {
                 if !r.ok && r.code != 124 {
                     problems.push(cat!("keys: ", shell::subst(&r.err)));
                 }
-                warnings(&r.err, &mut problems);
-            }
-            if let Some(d) = &a.after {
-                ob(&[b"wait", b"--json", b"for", d]);
-            }
-            let r = ob(&still);
-            if r.code == 124 {
-                notes.push(b"still changing after 5s: the shot is of a moving window".to_vec());
-            }
-            let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
-            if let Some(o) = &a.out {
-                sh.extend([b"-o".as_slice(), o]);
-            }
-            let r = ob(&sh);
-            if r.ok {
-                shot = r
-                    .out
-                    .split(|&c| c == b'\n')
-                    .rfind(|l| !l.is_empty())
-                    .map(<[u8]>::to_vec);
+                warnings(&r.err, problems);
+            };
+            if a.shots > 1 {
+                // A contact sheet: the keys (a held one too) sent while N shots are taken over
+                // --after (2 s by default), on real time and real frames.
+                let span = a
+                    .after
+                    .as_deref()
+                    .and_then(ms_duration)
+                    .and_then(|v| u64::try_from(v).ok())
+                    .unwrap_or(2000);
+                let step = Duration::from_millis(span / u64::from(a.shots));
+                let mut paths: Vec<Vec<u8>> = Vec::new();
+                std::thread::scope(|sc| {
+                    let k = (!a.keys.is_empty()).then(|| sc.spawn(|| ob(&keys)));
+                    for n in 0..a.shots {
+                        std::thread::sleep(step);
+                        let o = a.out.as_ref().map(|o| suffixed(o, &format!("{}", n + 1)));
+                        let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
+                        if let Some(o) = &o {
+                            sh.extend([b"-o".as_slice(), o]);
+                        }
+                        if let Some(p) = last_line(&ob(&sh).out) {
+                            paths.push(p);
+                        }
+                    }
+                    if let Some(k) = k {
+                        if let Ok(r) = k.join() {
+                            keys_done(r, &mut problems);
+                        }
+                    }
+                });
+                shot = paths.last().cloned();
+                let out_s = a.out.as_ref().map_or_else(
+                    || cat!(shot.clone().unwrap_or_default(), "-sheet.png"),
+                    |o| suffixed(o, "sheet"),
+                );
+                let mut m = std::process::Command::new("magick");
+                m.arg("montage")
+                    .args(paths.iter().map(|p| OsStr::from_bytes(p)))
+                    .args([
+                        "-tile",
+                        &format!("{}x", a.shots.min(4)),
+                        "-geometry",
+                        "480x+4+4",
+                        "-label",
+                        "%t",
+                    ])
+                    .arg(OsStr::from_bytes(&out_s))
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                if m.status().is_ok_and(|st| st.success()) {
+                    sheet = Some(out_s);
+                } else {
+                    notes.push(b"no contact sheet (ImageMagick's magick montage): the shots are each named in order".to_vec());
+                    for (n, p) in paths.iter().enumerate() {
+                        notes.push(cat!(format!("shot {}: ", n + 1), p));
+                    }
+                }
             } else {
-                problems.push(cat!("shot: ", shell::subst(&r.err)));
+                if !a.keys.is_empty() {
+                    let r = ob(&keys);
+                    keys_done(r, &mut problems);
+                }
+                if let Some(d) = &a.after {
+                    ob(&[b"wait", b"--json", b"for", d]);
+                }
+                let r = ob(&still);
+                if r.code == 124 && !a.page {
+                    notes.push(b"still changing after 5s: the shot is of a moving window".to_vec());
+                }
+                let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name, b"--window", sel];
+                if let Some(o) = &a.out {
+                    sh.extend([b"-o".as_slice(), o]);
+                }
+                let r = ob(&sh);
+                if r.ok {
+                    shot = last_line(&r.out);
+                } else {
+                    problems.push(cat!("shot: ", shell::subst(&r.err)));
+                }
             }
             let s = |k: &str| w.get(k).and_then(Value::as_str).unwrap_or("").to_string();
             let size = w
@@ -401,7 +563,11 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
                 "tiled"
             };
             window_line = cat!(
-                s("class"),
+                if a.page {
+                    "chromium".to_string()
+                } else {
+                    s("class")
+                },
                 " \"",
                 s("title"),
                 "\" ",
@@ -418,9 +584,18 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
             }
         }
     }
-    let output = std::fs::read(shell::path(&log)).unwrap_or_default();
-    problems.extend(problem_lines(&output));
+    let mut output = std::fs::read(shell::path(&log)).unwrap_or_default();
+    if a.page {
+        let c = console_lines(&output);
+        problems.extend(console_problems(&c));
+        output = c.iter().flat_map(|l| cat!(l, "\n")).collect();
+    } else {
+        problems.extend(problem_lines(&output));
+    }
     let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    if let Some(sh) = &sheet {
+        head.push(("sheet", sh));
+    }
     if !window_line.is_empty() {
         head.push(("window", &window_line));
     }
@@ -898,6 +1073,21 @@ mod tests {
             ))
         );
         assert_eq!(ended_at_once(b"omabox: no such box\n"), None);
+    }
+
+    #[test]
+    fn a_pages_console() {
+        let log = b"[1:2:1119/140516.305313:ERROR:dbus/bus.cc:405] Failed to connect to the bus\n[1:1:1119/140516.4:INFO:CONSOLE:2] \"log line\", source: file:///x/page/index.html (2)\n[1:1:1119/140516.6:INFO:CONSOLE:9] \"Uncaught ReferenceError: player is not defined\", source: file:///x/page/broken.html (9)\n[1:1:1:INFO:CONSOLE(4)] \"an error happened\", source: http://127.0.0.1:8081/app.js (4)\n";
+        let c = console_lines(log);
+        assert_eq!(
+            c,
+            [
+                b"log line (index.html:2)".to_vec(),
+                b"Uncaught ReferenceError: player is not defined (broken.html:9)".to_vec(),
+                b"an error happened (app.js:4)".to_vec()
+            ]
+        );
+        assert_eq!(console_problems(&c), c[1..].to_vec());
     }
 
     #[test]

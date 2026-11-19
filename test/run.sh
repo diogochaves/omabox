@@ -23328,7 +23328,7 @@ look_app_checks() {
   check_eq "one that opens no window in time: 1" 1 "$rc"
   check_match "...said, with the way out" "no window within 2s \(--timeout for a slower one\)" "$out"
   check_match "look app without a program: refused" "the program goes after --" "$(ob look app 2>&1)"
-  check_match "look: an unknown kind refused" "look: app, plugin or theme .*got nope" "$(ob look nope 2>&1)"
+  check_match "look: an unknown kind refused" "look: app, plugin, theme or page, got nope" "$(ob look nope 2>&1)"
   left=$(ob ls --json | jq -r '.[].name' | grep -c '^look-' || true)
   check_eq "no look box left" 0 "$left"
 }
@@ -23358,7 +23358,48 @@ look_plugin_checks() {
 }
 
 # (one test: each checks that no look-* box is left, which another look running beside it would fail)
-t_look() { look_app_checks; look_plugin_checks; look_theme_checks; }
+t_look() { look_app_checks; look_plugin_checks; look_theme_checks; look_page_checks; }
+
+# #463: look page, Chromium with real frames: a canvas loop moving a square while ArrowRight is held,
+# shot four times over 2 s (the square's place changes from shot to shot), and a broken copy whose
+# loop throws, reported with its file and line; a local file, with --net isolated.
+look_page_checks() {
+  local out rc d=$TMP/$P-lookg shot=$TMP/$P-lookg.png left x1 x4
+  if ! command -v chromium >/dev/null; then skip "look page" "no chromium here"; return; fi
+  mkdir -p "$d"
+  cat > "$d/game.html" <<'HTML'
+<!doctype html><title>game</title>
+<body style="margin:0;background:#101018"><canvas id="c" width="800" height="400"></canvas>
+<script>
+const c = document.getElementById('c'), g = c.getContext('2d');
+let x = 20, held = {};
+addEventListener('keydown', e => held[e.key] = true);
+addEventListener('keyup', e => held[e.key] = false);
+function frame() {
+  if (held.ArrowRight) x += 4;
+  g.fillStyle = '#101018'; g.fillRect(0, 0, 800, 400);
+  g.fillStyle = '#4fc3f7'; g.fillRect(x, 180, 40, 40);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+HTML
+  sed 's/if (held.ArrowRight) x += 4;/if (held.ArrowRight) x += 4; if (x > 60) player.move();/' "$d/game.html" > "$d/broken.html"
+  out=$(ob look page "$d/game.html" --net isolated --hold Right 1500ms --shots 4 --after 2s -o "$shot" 2>&1); rc=$?
+  check_eq "look page on a game: 0 ($out)" 0 "$rc"
+  check_match "...a contact sheet" $'\n'"sheet: ${shot%.png}-sheet.png"$'\n' "$out"
+  check "...written" test -s "${shot%.png}-sheet.png"
+  # (the square's left edge in the first and the last shot: it moved while the key was held)
+  x1=$(magick "${shot%.png}-1.png" -fill black +opaque '#4fc3f7' -trim -format %X info: 2>/dev/null)
+  x4=$(magick "${shot%.png}-4.png" -fill black +opaque '#4fc3f7' -trim -format %X info: 2>/dev/null)
+  check "...the square moved on the held key (x ${x1:-?} to ${x4:-?})" test "${x4:-0}" -gt "$((${x1:-0} + 40))"
+  out=$(ob look page "$d/broken.html" --net isolated --hold Right 1s 2>&1); rc=$?
+  check_eq "a page whose loop throws: 1" 1 "$rc"
+  check_match "...the error named, with its file and line" $'\n''problems:'$'\n''  Uncaught ReferenceError: player is not defined \(broken\.html:9\)' "$out"
+  check_match "...no such file: refused" "look page: no such file" "$(ob look page "$d/nope.html" 2>&1)"
+  left=$(ob ls --json | jq -r '.[].name' | grep -c '^look-' || true)
+  check_eq "no look box left" 0 "$left"
+}
 
 # #461, #462: look theme DIR, the theme applied for real (--theme-dir, --theme), the desktop and a palette
 # terminal shot, its checks as problems; a stock theme's copy has none.

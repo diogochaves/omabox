@@ -11,7 +11,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and output in a short report, exit 1 when it found problems, nothing left up. `omabox look plugin
   DIR [--open]` does the same for a shell plugin: the bar shot, its panel with `--open`, its state
   and the shell's warnings about it. `omabox look theme DIR` applies a theme for real and shoots the
-  desktop and a terminal printing its palette. Pages come next.
+  desktop and a terminal printing its palette. `omabox look page FILE|URL` opens a page or a web
+  game in Chromium in the box, with real frames (headless Chrome runs a `requestAnimationFrame`
+  loop only a few times): `--hold KEY DURATION` holds a key over many frames, `--shots N` puts N
+  shots over `--after` in a contact sheet, and the page's uncaught exceptions are its problems
+  ([#463](https://github.com/diogochaves/omabox/issues/463)).
 - **Theme checks** ([#462](https://github.com/diogochaves/omabox/issues/462)): `look theme` and
   `up --theme-dir` say what a person would notice: a key Omarchy reads that no fallback resolves, a
   value that is no `#rrggbb`, text too faint to read, a background that is too small, nearly one

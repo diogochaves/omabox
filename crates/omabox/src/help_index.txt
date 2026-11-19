@@ -3,7 +3,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
 Boxes
   up              start a box (your plugin, theme or desk in it)
   run             a command in the box; -d: an app left running
-  look            an app, plugin or theme in a throwaway box: shot and problems
+  look            an app, plugin, theme or page, shot and checked at once
   jobs, stop      the box's run -d jobs; stop them
   down, ls        take a box down; the boxes up
   path            the box's folder; --home: its HOME

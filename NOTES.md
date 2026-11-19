@@ -14286,6 +14286,21 @@ from them.
     problems. `--theme NAME` (an installed theme) is not checked yet. t_unit_theme_check: every
     stock theme says nothing, each fault named.
 
+721. **`look page`: a page or game in a real browser with real frames** (2026-11-19, #463, #461's
+    fourth kind). Chromium in the box as an app window (`--app=URL`, its own profile in the box
+    HOME, its sandbox kept), a FILE's folder bound read-only. Its console is read from its own log,
+    `--enable-logging=stderr`: each line `[pid:tid:date:INFO:CONSOLE:LINE] "message", source: URL
+    (LINE)`. `console.log` and `console.error` share the INFO level there, so a problem is an
+    uncaught exception (`Uncaught ...`) or a message naming an error, a failed load or `net::ERR_`;
+    the rest of Chromium's log (no system bus, older protocol versions, no portal: some 25 lines in
+    any box) is left out. `--hold KEY DURATION` is `keys down:KEY -s DURATION up:KEY`; with
+    `--shots N` the keys run in a thread beside N shots of the window spread over `--after`, then
+    ImageMagick's montage puts them in a contact sheet. Measured: a canvas loop moving a square on a
+    held ArrowRight, four shots over 2 s with a 1.5 s hold, the square at x 20, 148, 384 and 384
+    (stopped once released); its broken copy reports `Uncaught ReferenceError: player is not defined
+    (broken.html:9)`; 9.4 s in all. With `--net isolated` for a local file. look_page_checks, in
+    `t_look`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

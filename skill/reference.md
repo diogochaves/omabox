@@ -216,6 +216,25 @@ theme or too dark for a light one. No stock theme of Omarchy 4.5 trips any of th
 says what stock themes score. `up --theme-dir DIR` prints the same lines as notes; they never fail
 `up`.
 
+`omabox look page FILE|URL [--keys "K..."] [--hold KEY DURATION] [--shots N] [--after 2s] [-o FILE]
+[--keep-box] [UP OPTIONS]` (#463): Chromium in the box on it, an app window with its own profile
+in the box HOME, its sandbox kept (a FILE's folder is bound read-only; an `http://` URL is reached
+as the box's network allows: `--net isolated --allow PORT` for a local server only).
+
+- **Real frames.** Headless Chrome under `--virtual-time-budget` runs `requestAnimationFrame` two or
+  three times a run; a box's Chromium draws every frame on a real (headless) output, so a loop that
+  moves something does.
+- **Held keys**: `--hold Right 1500ms` is `down:Right -s 1500ms up:Right`: the page sees the key held
+  over that many frames. `--keys` takes `keys`' words as they are (combos, `down:K`, `-s 1s`, `up:K`).
+- **`--shots N`** (1 to 24): the keys sent while N shots of the window are taken over `--after` (2 s
+  by default), then put side by side as `sheet:` (ImageMagick's montage; `-o a.png` names them
+  `a-1.png`... and `a-sheet.png`). Motion shows as the object's place changing from shot to shot.
+- **Its console**, from Chromium's log (`--enable-logging=stderr`): `output:` is each console line as
+  `message (file:line)`, Chromium's own lines about the box (no system bus, protocol versions)
+  left out. `console.log` and `console.error` come out alike, so the problems are uncaught exceptions
+  (`Uncaught TypeError: ...`) and messages that name an error, a load that failed or a `net::ERR_`.
+- No Chromium in the box (`chromium`, `google-chrome-stable`): said as the program ending at once.
+
 ## Shots
 
 - Text before a shot, when the question is a label, an entry's text or a state: `omabox tree --find
