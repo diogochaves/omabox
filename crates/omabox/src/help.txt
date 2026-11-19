@@ -775,7 +775,7 @@ the baseline's (exit 1); --approve keeps no run where a checkpoint's proof faile
 in every run approves nothing (exit 1, the baseline as it was). Give both kinds: a command says
 "locked" over a black lock screen, and a wrong screen approved stays "same". `check diff A B`
 compares two shots of yours the same way. More (times and dates, specks, holes): the omabox skill's
-reference.md, "Visual checks". Not inside ai-jail yet.
+ref/checks.md, "Visual checks". Not inside ai-jail yet.
 @ drag
 `drag` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare

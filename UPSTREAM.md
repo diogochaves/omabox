@@ -34,7 +34,7 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   `aq_note`), the `/opt/omabox/lib` bind and `LD_LIBRARY_PATH` in `share/start-hyprland.sh`, the
   aquamarine step and its build packages in `install.sh` (cmake, ninja, hyprwayland-scanner, ...),
   `OMABOX_AQUAMARINE` in the suite, and the mentions in README.md, CONTRIBUTING.md, NOTES
-  "Reproduce" and the skill's `reference.md`.
+  "Reproduce" and the skill's `ref/` pages.
 
 ## aquamarine: keys held when keyboard focus leaves (not submitted)
 

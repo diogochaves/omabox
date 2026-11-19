@@ -10,13 +10,14 @@ The user's Hyprland session is theirs: no GUI apps, `hyprctl dispatch`/`eval`, `
 `wtype`/`ydotool`, workspace switches or cursor moves on it. Do all of that in a **box**: a full
 desktop on a private screen and session bus, invisible to the user (~3-5 s, ~400-700 MB by GPU: use
 one freely). Omarchy's where installed; else plain Hyprland, no bar (`up` says so), or theirs
-(`--desktop desk`): ref: Plain boxes. "ref: SECTION": a section of `reference.md` beside this page, read when needed.
+(`--desktop desk`): ref: builds.md. "ref: FILE": a page in `ref/` beside this one, read when needed;
+to find a term in all of them, `grep -rn TERM` that folder.
 
 ## Never
 
 - **Around the guard** ("could not connect to display", `omabox-guard`): do it in a box; never set the
   display back or take it from elsewhere. `xdg-open`, `gh --web`: give the link. `omabox host -- CMD`
-  only for what the user asked on their desktop: ref: The guard, in detail.
+  only for what the user asked on their desktop: ref: agents.md.
 - **Into their files**: the guard stops windows, not writes. Their `~/.config/omarchy/shell.json`,
   `plugins/`, a host `omarchy plugin add` change their real bar: write to the box HOME (`omabox path
   --home`). Their instruction files: only when asked.
@@ -25,7 +26,7 @@ one freely). Omarchy's where installed; else plain Hyprland, no bar (`up` says s
   8081]`. Secrets by `--pass NAME`, never on a command line; the box's keyring, never the host's.
 - **Past a refusal** (a mount, ai-jail, `clip`), or **into what is theirs unasked** (`peek`, `up
   --interactive`, `omabox config`, `down --all`). **"Tested"** for what a box lacks (real monitors,
-  system bus, devices, suspend): ref: When a box cannot test it, in detail.
+  system bus, devices, suspend): ref: agents.md.
 
 ## Project instructions written for the real desktop
 
@@ -43,13 +44,13 @@ inside a box.**
 | A plugin in `~/.config/omarchy/plugins`, `shell.json` edits | `omabox up --plugin PATH`; `shell.json`: `omabox path --home` |
 | A theme in the works; a theme or bar result | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
 | What a new Omarchy user sees (a showcase, shots for others) | `omabox up --stock` |
-| Shots compared across runs | `omabox up --clean` (ref: Visual checks) |
+| Shots compared across runs | `omabox up --clean` (ref: checks.md) |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
 
 In a box your checkout is read-only (a throwaway `run`'s writes are discarded): build on the host,
-run in the box; ref: Tests that touch the desktop.
+run in the box; ref: apps.md.
 
-A step that needs real hardware: the user's. ref: Project instructions, in detail.
+A step that needs real hardware: the user's. ref: agents.md.
 
 Your box is named after the repo and your session, and goes down when your agent exits.
 Another: `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`): its
@@ -59,7 +60,7 @@ subagent: `omabox brief -b NAME`'s output in its prompt** (no skill needed).
 ## The loop
 
 ```bash
-omabox look app -- ./build/app            # shot, problems (ref: Looking in one call)
+omabox look app -- ./build/app            # shot, problems (ref: look.md)
 omabox up                                 # headless, 1920x1080, once its bar is drawn
 omabox run -d --wait -- ./build/app       # detached, its pid on stdout, once drawn
 omabox run -d --replace --wait -- ./app   # after a rebuild; jobs, stop PID, wait job|log
@@ -92,23 +93,20 @@ omabox down                               # when done
 
 No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;
 video `record hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124
-names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
+names it, `--ignore "X,Y WxH"`. ref: input.md.
 
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your arithmetic; off a whole screen or a big
 window, `shot --fit 1456` first (some models read points in the smaller image they see). **Shots are
-most of a session's context**: the smallest that shows it (`--window`, `-g`, `--changed`): ref: Shots.
-**The pointer is test state** (focus follows it): ref: Pointer, in detail.
+most of a session's context**: the smallest that shows it (`--window`, `-g`, `--changed`): ref: shots.md.
+**The pointer is test state** (focus follows it): ref: input.md.
 
 ## Where to look next
 
-- A failure: ref: Symptoms; `omabox help exit-codes`. Colours, transitions: ref: Shots. Toasts:
-  ref: Toasts and dock.
-- `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors, `gpu`/`cpu`: ref: Screen size and
-  rendering cost.
-- Plugins: ref: Testing a shell plugin. `--hyprland`: ref: A Hyprland build of your own. `--omarchy`:
-  ref: Reviewing an Omarchy change. Launcher: ref: Testing an app as a desktop app.
-- Mounts, HOME, `save`: ref: Mounts, HOME and the session. Ports: ref: Network. Idling: ref: Box
-  lifetime. Logs: ref: Hyprland's Lua, logs and events. `host`: ref: The guard, in detail.
-- ref: Commands that run without a prompt. ref: Inside ai-jail. ref: Showing the user. ref:
-  Reporting what a box showed. ref: For subagents in an isolated worktree.
+- A failure: ref: checks.md; `omabox help exit-codes`, ref: cli.md. Colours, transitions, sizes,
+  monitors, `gpu`/`cpu`: ref: shots.md. `drag`, `scroll`: ref: input.md.
+- Plugins, toasts, `--omarchy`, the lock screen, polkit: ref: shell.md. `--hyprland`, plain boxes:
+  ref: builds.md. Launcher: ref: apps.md. Logs, `lua`: ref: hyprland.md.
+- Mounts, HOME, `save`, ports, idling: ref: session.md.
+- `host`, grants without a prompt, ai-jail, showing the user, reporting what a box showed,
+  subagents in an isolated worktree: ref: agents.md.

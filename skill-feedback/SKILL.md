@@ -27,7 +27,7 @@ subagent's, where omabox:
   hand-written polling loops, `pgrep` dances, reading logs by hand);
 - **was missing something:** steps done by hand (several commands, a script, a loop) that one
   omabox command could have done;
-- **misled:** the `omabox` skill (`SKILL.md`, `reference.md`), `omabox help`, the README or an error
+- **misled:** the `omabox` skill (`SKILL.md`, its `ref/` pages), `omabox help`, the README or an error
   message said something wrong or unclear, or left out what was needed;
 - **was slow or expensive** in a way that mattered (a cold start, a render, a whole suite run to
   check one thing).

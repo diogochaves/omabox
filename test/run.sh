@@ -1217,7 +1217,7 @@ for root, _, files in sorted(os.walk(sys.argv[1])):
       "$(python3 -c "${scan/pub fn deprecated/pub fn no_such_fn}" "$src")"
   else skip "...no other warning names a form 1.0 refuses" "no crate here (an install)"; fi
   check_eq "OMABOX_STRICT is documented: help exit-codes, the reference, README's Stability" "3" \
-    "$( { ob help exit-codes | grep -c OMABOX_STRICT=1; grep -c OMABOX_STRICT "$ROOT/skill/reference.md"
+    "$( { ob help exit-codes | grep -c OMABOX_STRICT=1; grep -c OMABOX_STRICT "$ROOT/skill/ref/cli.md"
          awk '/^## Stability$/ {on = 1; next} on && /^## / {exit} on' "$ROOT/README.md" | grep -c OMABOX_STRICT; } | grep -c '^[1-9]')"
   check_eq "...and no claim of semantic versioning anywhere" "" \
     "$(grep -rliE 'semantic versioning|semver' "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$ROOT/skill" "$ROOT/crates" 2>/dev/null)"
@@ -1328,7 +1328,7 @@ t_unit_exit_codes() {
   for c in "  0  " "  1  " "  2  " "  3, 4  " "  124  " "  125  " "  126, 127  " "128+N"; do [[ $out == *"$c"* ]] || bad+=" [$c]"; done
   check_eq "help exit-codes: one table, every code" "" "$bad"
   check_match "...and help help shows it" "Exit codes, the same in every command" "$(ob help help)"
-  check_match "...the skill's reference has it" "## Exit codes" "$(cat "$ROOT/skill/reference.md")"
+  check_match "...the skill's ref/cli.md has it" "## Exit codes" "$(cat "$ROOT/skill/ref/cli.md")"
 }
 
 # #273 part B: every option help shows a command taking is in CMD_OPTS, the table --opt=value and
@@ -1480,14 +1480,14 @@ t_unit_json() {
   # marking a --window: settle.rs in_window_and_opts_check_as_bash)
   local out; out=$("$CLI" keys --delay 5 a -b "$P-nobox" 2>&1); rc=$?
   check_match "keys --delay: refused (2), naming -s DURATION (#287)" "^2\|omabox: keys --delay is refused since 1\.0: for a pause between keys, -s DURATION" "$rc|$out"
-  # The promise written down: each command that takes --json has its row in the reference's JSON table.
+  # The promise written down: each command that takes --json has its row in the JSON table (skill/ref/cli.md).
   local tab c bad=""
-  tab=$(awk '/^## JSON$/ {on = 1; next} on && /^## / {exit} on && /^\| `/' "$ROOT/skill/reference.md")
+  tab=$(awk '/^## JSON$/ {on = 1; next} on && /^## / {exit} on && /^\| `/' "$ROOT/skill/ref/cli.md")
   for c in $(probe cmd_opts_keys | while read -r k; do probe cmd_opts "$k" | grep -qx -- --json && echo "$k"; done | sort); do
     case $c in run|keys|click|scroll|drag) c=--wait ;; esac
     grep -qF -- "\`$c " <<<"$tab" || grep -qF -- "\`$c\`" <<<"$tab" || bad+=" $c"
   done
-  check_eq "reference.md's JSON table has every command that takes --json" "" "$bad"
+  check_eq "ref/cli.md's JSON table has every command that takes --json" "" "$bad"
 }
 
 # finding 325: which of a caller's fds a box could reach again through /proc, and so are relayed.
@@ -2753,19 +2753,20 @@ for path in sys.argv[1:]:
 '
 rich_text() { python3 -c "$RICH_TEXT" "$@"; }
 
-# The skill's references (#143, finding 215): each `ref: NAME` of SKILL.md (its lines joined, so one may
-# wrap) is a `## NAME` of reference.md, ended by . : ) , ; or the end. A quoted "ref: ..." is the
-# intro's placeholder, not one. Prints each that names no section (as `ref: TEXT`, to its end), and `refs N` last.
+# The skill's references (#143, finding 215; #464): each `ref: FILE.md` of SKILL.md (its lines joined, so
+# one may wrap) names a page of the skill's ref/ folder, ended by . : ) , ; or the end. A quoted "ref: ..."
+# is the intro's placeholder, not one. Prints each that names no page (as `ref: TEXT`, to its end), and `refs N` last.
 SKILL_REFS='
-import re, sys
+import os, re, sys
 skill = " ".join(open(sys.argv[1]).read().split())
-heads = sorted((l[3:].strip() for l in open(sys.argv[2]) if l.startswith("## ")), key=len, reverse=True)
+pages = set(f for f in os.listdir(sys.argv[2]) if f.endswith(".md"))
 n = 0
 for m in re.finditer(r"(?<![\"\w])ref: ", skill):
     n += 1
     rest = skill[m.end():]
-    if not any(rest.startswith(h) and (len(rest) == len(h) or rest[len(h)] in ".:),;") for h in heads):
-        print("ref: " + re.match(r"[^.:),;]{0,60}", rest).group())
+    f = re.match(r"[a-z0-9-]+\.md(?=[.:),;]|$)", rest)
+    if not f or f.group() not in pages:
+        print("ref: " + re.match(r"[^:),; ]{0,60}", rest).group().rstrip("."))
 print("refs", n)
 '
 skill_refs() { python3 -I -c "$SKILL_REFS" "$@"; }
@@ -2811,20 +2812,21 @@ t_unit_version() {
   # finding 326: the feedback skill's digest.py runs as its SKILL.md says, standard library only.
   check_match "skill-feedback/digest.py --help runs under python3 -I" "^usage: digest.py" \
     "$(python3 -I "$ROOT/skill-feedback/digest.py" --help 2>&1 | head -n 1)"
-  # #143, finding 215: SKILL.md is short and names the rest as "ref: SECTION", a heading of reference.md.
-  local refs; refs=$(skill_refs "$ROOT/skill/SKILL.md" "$ROOT/skill/reference.md" 2>&1)
-  check_match "SKILL.md points to reference.md by section" "^refs [1-9][0-9]*$" "$(tail -n 1 <<<"$refs")"
-  check_eq "...every section it names is there" "" "$(sed '$d' <<<"$refs")"
-  # The check itself, on a page of its own: a wrapped ref and the quoted placeholder pass, an unknown
-  # section, a heading's prefix or an unquoted SECTION do not.
-  printf '## Shots\n## Pointer, in detail\n' > "$TMP/refs-ref.md"
-  printf '%s\n' 'The rest ("ref:' 'SECTION" below). A shot: ref: Shots. Clicks (ref: Pointer,' 'in detail).' \
-    'ref: Pointer. ref: Nope: x' 'ref: SECTION, then ref: Shots' > "$TMP/refs-skill.md"
+  # #143, finding 215, #464: SKILL.md is short and names the rest as "ref: FILE", a page of skill/ref/.
+  local refs; refs=$(skill_refs "$ROOT/skill/SKILL.md" "$ROOT/skill/ref" 2>&1)
+  check_match "SKILL.md points to its ref/ pages by file" "^refs [1-9][0-9]*$" "$(tail -n 1 <<<"$refs")"
+  check_eq "...every page it names is there" "" "$(sed '$d' <<<"$refs")"
+  check "...and reference.md, split into them (#464), is gone" test ! -e "$ROOT/skill/reference.md"
+  # The check itself, on a folder of its own: a wrapped ref and the quoted placeholder pass, an unknown
+  # page, a page's prefix, a section name or an unquoted FILE do not.
+  mkdir -p "$TMP/refs-ref"; : > "$TMP/refs-ref/shots.md"; : > "$TMP/refs-ref/input.md"
+  printf '%s\n' 'The rest ("ref:' 'FILE" below). A shot: ref: shots.md. Clicks (ref:' 'input.md).' \
+    'ref: shot.md. ref: nope.md: x' 'ref: FILE, then ref: shots.md; ref: Shots.' > "$TMP/refs-skill.md"
   check_eq "...the check: what it reads as a reference, and what it misses" \
-    "ref: Pointer|ref: Nope|ref: SECTION|refs 6" \
-    "$(skill_refs "$TMP/refs-skill.md" "$TMP/refs-ref.md" 2>&1 | paste -sd '|')"
+    "ref: shot.md|ref: nope.md|ref: FILE|ref: Shots|refs 7" \
+    "$(skill_refs "$TMP/refs-skill.md" "$TMP/refs-ref" 2>&1 | paste -sd '|')"
   # #270: SKILL.md is the core every task loads (the rules, the loop, waiting, coordinates, where to look
-  # next); the rest is in reference.md. Each load costs its whole size, so the cap is the core's + a margin.
+  # next); the rest is in ref/. Each load costs its whole size, so the cap is the core's + a margin.
   # Claude Code's load is the body (the front matter left out); an agent that reads the file reads both,
   # the front matter's allowed-tools (#338) too.
   check "...and stays short (its body under 8 000 bytes: #143, #270)" test "$(awk 'f >= 2; /^---$/ && f < 2 { f++ }' "$ROOT/skill/SKILL.md" | wc -c)" -lt 8000
@@ -2882,9 +2884,9 @@ t_unit_skill_tools() {
   for v in $verbs; do "$CLI" help "$v" >/dev/null 2>&1 || bad+="$v "; done
   check_eq "...each a command omabox has" "" "$bad"
   bad=''
-  for v in $verbs; do awk '/^## Commands that run without a prompt$/ { f = 1; next } /^## / { f = 0 } f' "$ROOT/skill/reference.md" |
+  for v in $verbs; do awk '/^## Commands that run without a prompt$/ { f = 1; next } /^## / { f = 0 } f' "$ROOT/skill/ref/agents.md" |
     grep -qF "\`$v\`" || bad+="$v "; done
-  check_eq "...each named in reference.md's section on them" "" "$bad"
+  check_eq "...each named in ref/agents.md's section on them" "" "$bad"
   # The check itself: another tool, a whole-omabox rule, a verb not on the list, one never on it.
   printf '%s\n' '---' 'name: x' 'allowed-tools: "Bash(omabox shot *) Read Bash(omabox *) Bash(omabox host *) Bash(omabox shot:*)"' '---' 'body' > "$TMP/tools.md"
   check_eq "...the check: what it reads, and what it refuses" "shot|bad Read|bad Bash(omabox *)|host|bad Bash(omabox shot:*)" \
@@ -3141,7 +3143,7 @@ t_unit_omarchy_contract() {
   while read -r m; do
     named=$((named + 1))
     [[ " ${OMARCHY_IPC//$'\n'/ } " == *" $m:"* ]] || missing+="$m "
-  done < <(grep -ohE '`(omarchy-shell )?shell [a-z][A-Za-z]+' "$ROOT"/skill/*.md | sed 's/.* //' | sort -u)
+  done < <(grep -ohE '`(omarchy-shell )?shell [a-z][A-Za-z]+' "$ROOT"/skill/*.md "$ROOT"/skill/ref/*.md | sed 's/.* //' | sort -u)
   check "the skill names shell methods (#110: else the check below has nothing to compare)" test "$named" -gt 0
   check_eq "every shell method the skill names is in the contract (OMARCHY_IPC)" "" "$missing"
   # The check itself, on a copy of that tree (links, two files real) with one method's arguments
@@ -11285,7 +11287,7 @@ t_unit_tree_layer() {
     "accesskit_unix 0.22\+ \(eframe 0.37\+\) with at-spi2-core 2.61\+" "$out"
   check_fails "...and no longer says tree gives older AccessKit its property" grep -q "ScreenReaderEnabled, which older" <<<"$out"
   check_match "the skill reference names it too" "accesskit_unix 0.22\+ \(eframe 0.37\+\) on at-spi2-core 2.61\+" \
-    "$(tr '\n' ' ' < "$ROOT/skill/reference.md" | tr -s ' ')"
+    "$(cat "$ROOT"/skill/ref/*.md | tr '\n' ' ' | tr -s ' ')"
 }
 
 # tree --layer (#254, finding 384) in a box: a Quickshell config with a named button in a layer and
@@ -15591,8 +15593,8 @@ t_unit_install() {
   check_fails "...leaving the user's target dir alone" test -e "$TMP/ic-target"
   check_eq "the skill is a link" "$c/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "...not the feedback skill: opt-in (finding 326)" test -L "$h/.claude/skills/omabox-feedback"
-  check "...of the directory: the reference SKILL.md points to comes with it, for every agent" \
-    bash -c "grep -q 'reference.md' '$h/.agents/skills/omabox/SKILL.md' && test -f '$h/.agents/skills/omabox/reference.md' && test -f '$h/.claude/skills/omabox/reference.md'"
+  check "...of the directory: the ref/ pages SKILL.md points to come with it, for every agent" \
+    bash -c "grep -q 'ref: agents.md' '$h/.agents/skills/omabox/SKILL.md' && test -f '$h/.agents/skills/omabox/ref/agents.md' && test -f '$h/.claude/skills/omabox/ref/agents.md'"
   check_fails "no dir for an agent that is not installed" test -e "$h/.codex"
   check_fails "the agent guard is never turned on without asking" test -e "$h/.claude/settings.json"
   printf '#!/bin/sh\necho "  -g <geometry>   Set the region to capture."\n' > "$stub/grim"; chmod +x "$stub/grim"

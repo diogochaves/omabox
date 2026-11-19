@@ -334,7 +334,7 @@ fn legacy_hint(name: &[u8], args: &[Vec<u8>]) -> Vec<Vec<u8>> {
                     head,
                     ". Instead, a Lua dispatcher: omabox lua -b ",
                     shell::quote_q(name),
-                    " 'hl.dispatch(hl.dsp.…)' (hl.dsp.window.fullscreen, .float, .close, .move; hl.dsp.focus, hl.dsp.exec_cmd; the omabox skill's reference.md)"
+                    " 'hl.dispatch(hl.dsp.…)' (hl.dsp.window.fullscreen, .float, .close, .move; hl.dsp.focus, hl.dsp.exec_cmd; the omabox skill's ref/hyprland.md)"
                 ),
             }
         })
@@ -587,7 +587,7 @@ mod tests {
         let g = h(&["--batch", "dispatch pin ; dispatch killactive"]);
         assert_eq!(g.len(), 2);
         assert!(g[0].starts_with("hyprctl: dispatch pin is the old dispatcher syntax"));
-        assert!(g[0].ends_with("Instead, a Lua dispatcher: omabox lua -b b1 'hl.dispatch(hl.dsp.…)' (hl.dsp.window.fullscreen, .float, .close, .move; hl.dsp.focus, hl.dsp.exec_cmd; the omabox skill's reference.md)"));
+        assert!(g[0].ends_with("Instead, a Lua dispatcher: omabox lua -b b1 'hl.dispatch(hl.dsp.…)' (hl.dsp.window.fullscreen, .float, .close, .move; hl.dsp.focus, hl.dsp.exec_cmd; the omabox skill's ref/hyprland.md)"));
         assert!(g[1].ends_with("Instead: omabox lua -b b1 'hl.dispatch(hl.dsp.window.close())'"));
         // No dispatch found in the words (hyprctl's own forms): the general line.
         assert!(h(&["-q"])[0].starts_with("hyprctl: that dispatch is the old dispatcher syntax"));

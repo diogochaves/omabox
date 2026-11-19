@@ -273,7 +273,7 @@ codes, and watches stderr for `deprecated:`. From 1.0, within 1.x:
 - **Kept, or changed only by addition:** exit codes (0 done or yes, 1 failed or no, 2 called wrongly,
   124 not in time; `check run`'s 3 and 4; `run`'s 125 for its own failures, its command's status
   otherwise: `omabox help exit-codes`), and `--json`'s field names, types and meaning (fields may be
-  added: read the ones you need by name; `skill/reference.md`, "JSON", lists them).
+  added: read the ones you need by name; `skill/ref/cli.md`, "JSON", lists them).
 - **Changed only after a warning:** commands (`brief` and the aliases help documents among them),
   options, arguments, `config` keys and `OMABOX_*` variables. The new form comes first; the old one
   keeps working for one minor release, with `omabox: deprecated: OLD: write NEW` on stderr and a
