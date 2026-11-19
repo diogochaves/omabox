@@ -14347,6 +14347,16 @@ from them.
     background as nearly one colour (0.008), as from its folder. look_theme_checks in `t_look`;
     unit tests for the layering and the folders.
 
+725. **t_check's flake was the bar's network icon, not its clock** (2026-11-19, #466). Both
+    failures of the day (the hole case alone, and the EXTRA case's `...counted` in a full suite)
+    had one change besides the expected: `at 1838,7 13x11 (64 px)` in the bar's checkpoint and the
+    screen's. A `--clean` box's clock is frozen (`Friday 12:00`); 1838,7 is the network indicator
+    (stock bar, right section: agents, network, audio, monitor), the same 64 px both times, as if
+    another glyph or state were drawn there for the whole of one run. Fifteen shots of it over
+    three fresh clean boxes, five seconds each, were all the same, so why a run draws it otherwise
+    is not known. The scenario's `desk` and `screen` checkpoints now `--ignore "1780,0 140x26"`
+    (those icons); the holes and changes the test is about lie elsewhere.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

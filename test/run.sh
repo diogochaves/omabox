@@ -10340,12 +10340,14 @@ ApplicationWindow {
     Label { x: 20; y: 120; color: "white"; text: "run " + Math.floor(Math.random() * 1000000) }
 }
 QML
-omabox check point desk -g "0,0 1920x26" --ignore "0,0 10x10"
+# (#466: the bar's status icons on the right, its network one at 1838,7 13x11 above all, sometimes
+# drawn otherwise in one run than in the baseline: left out of the bar's and the screen's checkpoints)
+omabox check point desk -g "0,0 1920x26" --ignore "0,0 10x10" --ignore "1780,0 140x26"
 omabox run -d -- qml6 /home/sbx/c.qml
 omabox wait --timeout 20s window 'title:^Check demo$'
 omabox check point demo --window 'title:^Check demo$'
 omabox check point democrop --window 'title:^Check demo$' -g "0,0 200x80"
-omabox check point screen
+omabox check point screen --ignore "1780,0 140x26"
 [ -z "${EXTRA:-}" ] || omabox check point extra -g "0,0 200x26"
 [ -z "${EXTRA:-}" ] || omabox check point extraign --window 'title:^Check demo$' -g "100,100 200x100" --ignore "110,110 30x30"
 SH
