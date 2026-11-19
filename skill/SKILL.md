@@ -17,12 +17,12 @@ beside this file: read it when the task needs it.
 - **Around the guard** ("could not connect to display", `omabox-guard`): it means "use a box"; never
   set the display back or take it from elsewhere. `xdg-open`, `gh --web`: give the link. `omabox
   host -- CMD` only for what the user asked on their desktop.
-- **Into their files**: their `~/.config/omarchy/shell.json`, `plugins/`, a host `omarchy plugin
-  add` change their real bar: write to the box HOME (`omabox path --home`). Their instruction
-  files: only when asked.
+- **Into their files**: the guard stops windows, not writes. Their `~/.config/omarchy/shell.json`,
+  `plugins/`, a host `omarchy plugin add` change their real bar: write to the box HOME (`omabox path
+  --home`). Their instruction files: only when asked.
 - **Onto their servers and secrets**: a box reaches the host's 127.0.0.1: never a real service or
-  account; apps that probe local servers: `up --net isolated [--allow 8081]`. Secrets by `--pass
-  NAME`, never on a command line; the box's keyring, never the host's.
+  account a first-run screen offers; apps that probe local servers: `up --net isolated [--allow
+  8081]`. Secrets by `--pass NAME`, never on a command line; the box's keyring, never the host's.
 - **Past a refusal** (a mount, ai-jail, `clip`), or **into what is theirs unasked** (`peek`, `up
   --interactive`, `omabox config`, `down --all`). **"Tested"** for what a box lacks (real monitors,
   system bus, devices, suspend): ref: agents.md.
