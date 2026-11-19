@@ -47,6 +47,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `session.md`, `builds.md`, `hyprland.md`, `shell.md`, `apps.md`, `agents.md`, `cli.md`), its text
   unchanged, and `SKILL.md` names the page (`ref: input.md`), so a small model reads one page of
   6-22 KB instead of the whole. `grep -rn TERM` the folder finds a term in all of them.
+- **The skill's core is 3.6 KB and opens with the four looks** ([#464](https://github.com/diogochaves/omabox/issues/464), [#461](https://github.com/diogochaves/omabox/issues/461)):
+  `SKILL.md` (8 KB) now holds the rules, `look app`, `look plugin`, `look theme` and `look page`
+  first, a short loop and a table of which `ref/` page to read for a task; the step-by-step loop
+  and driving an app are in `ref/loop.md`, the table for project instructions written for the
+  real desktop in `ref/agents.md`. A small local model loads less than half of what it did.
 
 ## 1.4.1 — 2026-11-08
 

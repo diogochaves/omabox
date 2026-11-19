@@ -14314,6 +14314,27 @@ from them.
     reference.md is gone; the checks that read its Exit codes, JSON and prompt-free sections read
     `ref/cli.md` and `ref/agents.md`.
 
+723. **SKILL.md: a 3.6 KB core that opens with the four looks** (2026-11-19, #464 part 2, #461).
+    Small local models (27B and 20B class, 64k context) are to drive omabox, and every load of
+    SKILL.md costs its whole size for every model: the 8.7 KB core (8 KB body) was a sixth of such a
+    context before the task began. The body is now 3 605 bytes (5 333 with the front matter, whose
+    `description` and `allowed-tools` are unchanged): the opening rule; "Never", every item kept
+    (the real desktop, the guard and what its error means, their files, servers and secrets, past a
+    refusal or into what is theirs, "tested" for what a box lacks) and a new one, a box left up (one
+    a task, `down`, never another's); the four `omabox look` lines first among commands, with what
+    the report holds and exit 1 for problems; an eight-line manual loop (up, run -d, wait, shot,
+    tree, keys, click, down); a "where next" table, task to `ref:` page, with `help CMD` and `grep
+    -rn TERM` over `ref/`. What left the core moved verbatim: the full loop, "Driving an app",
+    waiting, coordinates, a second box and the old pointer list to a new `ref/loop.md`; the
+    project-instructions table to the top of `ref/agents.md`'s "Project instructions, in detail".
+    `omabox brief` stays its own text (it is written for one named box, `-b NAME` on every call, no
+    pipes or `$VAR`), kept consistent by hand: the same loop words (look, act once, look again;
+    sent, not landed; no sleep). t_unit_version caps the body under 4 000 bytes (the file under
+    6 000), checks the first four commands are the looks, the exit line, the short loop's `keys`,
+    `tree` and `down`, and reads the moved checks (tree before a shot, `wait change`, `--expect
+    tree`, `up --new`) in `ref/loop.md`. Its `ref:` check reads a table cell's end (` |`) as a
+    reference's end too, with a case of each in its own test.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -18,6 +18,23 @@ Sections:
 
 ## Project instructions, in detail
 
+A project's CLAUDE.md, AGENTS.md or README written for the real desktop **still holds: carry it out
+inside a box.**
+
+| The project says | Do |
+|---|---|
+| `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
+| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR` (a dispatch: `hl.dispatch(hl.dsp…)`) |
+| `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `keys`, `click X Y`, `windows` |
+| `ctest`, a test binary (tray, D-Bus, keyring…) | `omabox run -- ctest …` (or the binary) |
+| `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …` | `omabox run -- …` (`omarchy plugin validate` only reads: fine on the host) |
+| `omarchy restart shell` | `omabox restart-shell` |
+| A plugin in `~/.config/omarchy/plugins`, `shell.json` edits | `omabox up --plugin PATH`; `shell.json`: `omabox path --home` |
+| A theme in the works; a theme or bar result | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
+| What a new Omarchy user sees (a showcase, shots for others) | `omabox up --stock` |
+| Shots compared across runs | `omabox up --clean` (ref: checks.md) |
+| Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
+
 - More of the project's steps, in a box: `grim -T ID` → `omabox shot --window SEL`; a test binary run
   directly (`./build/tests/tst_x`) has none of ctest's environment (a Qt test opens real windows):
   `omabox run -- ./build/tests/tst_x`; starting the app from the launcher, its `.desktop` and icon:

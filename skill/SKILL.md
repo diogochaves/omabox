@@ -6,107 +6,71 @@ allowed-tools: "Bash(omabox shot *) Bash(omabox pixel *) Bash(omabox windows *) 
 
 # omabox: a desktop of your own
 
-The user's Hyprland session is theirs: no GUI apps, `hyprctl dispatch`/`eval`, `grim`,
-`wtype`/`ydotool`, workspace switches or cursor moves on it. Do all of that in a **box**: a full
-desktop on a private screen and session bus, invisible to the user (~3-5 s, ~400-700 MB by GPU: use
-one freely). Omarchy's where installed; else plain Hyprland, no bar (`up` says so), or theirs
-(`--desktop desk`): ref: builds.md. "ref: FILE": a page in `ref/` beside this one, read when needed;
-to find a term in all of them, `grep -rn TERM` that folder.
+The user's Hyprland session is theirs. Anything with a window goes in a **box**: a private,
+invisible desktop (Omarchy's where installed; ~3-5 s to start). "ref: FILE" is a page in `ref/`
+beside this file: read it when the task needs it.
 
 ## Never
 
-- **Around the guard** ("could not connect to display", `omabox-guard`): do it in a box; never set the
-  display back or take it from elsewhere. `xdg-open`, `gh --web`: give the link. `omabox host -- CMD`
-  only for what the user asked on their desktop: ref: agents.md.
-- **Into their files**: the guard stops windows, not writes. Their `~/.config/omarchy/shell.json`,
-  `plugins/`, a host `omarchy plugin add` change their real bar: write to the box HOME (`omabox path
-  --home`). Their instruction files: only when asked.
+- **On their desktop**: no GUI apps, `hyprctl dispatch`/`eval`, `grim`, `wtype`/`ydotool`, workspace
+  switches or cursor moves. A project's instructions written for it still hold: do them in a box.
+- **Around the guard** ("could not connect to display", `omabox-guard`): it means "use a box"; never
+  set the display back or take it from elsewhere. `xdg-open`, `gh --web`: give the link. `omabox
+  host -- CMD` only for what the user asked on their desktop.
+- **Into their files**: their `~/.config/omarchy/shell.json`, `plugins/`, a host `omarchy plugin
+  add` change their real bar: write to the box HOME (`omabox path --home`). Their instruction
+  files: only when asked.
 - **Onto their servers and secrets**: a box reaches the host's 127.0.0.1: never a real service or
-  account a first-run screen offers; apps that probe local servers: `up --net isolated [--allow
-  8081]`. Secrets by `--pass NAME`, never on a command line; the box's keyring, never the host's.
+  account; apps that probe local servers: `up --net isolated [--allow 8081]`. Secrets by `--pass
+  NAME`, never on a command line; the box's keyring, never the host's.
 - **Past a refusal** (a mount, ai-jail, `clip`), or **into what is theirs unasked** (`peek`, `up
   --interactive`, `omabox config`, `down --all`). **"Tested"** for what a box lacks (real monitors,
   system bus, devices, suspend): ref: agents.md.
+- **A box left up**: one box per task (yours is named after the repo and session); `omabox down`
+  when done; never down a box you did not start.
 
-## Project instructions written for the real desktop
+## Look in one call
 
-A project's CLAUDE.md, AGENTS.md or README written for the real desktop **still holds: carry it out
-inside a box.**
-
-| The project says | Do |
-|---|---|
-| `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
-| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR` (a dispatch: `hl.dispatch(hl.dsp…)`) |
-| `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `keys`, `click X Y`, `windows` |
-| `ctest`, a test binary (tray, D-Bus, keyring…) | `omabox run -- ctest …` (or the binary) |
-| `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …` | `omabox run -- …` (`omarchy plugin validate` only reads: fine on the host) |
-| `omarchy restart shell` | `omabox restart-shell` |
-| A plugin in `~/.config/omarchy/plugins`, `shell.json` edits | `omabox up --plugin PATH`; `shell.json`: `omabox path --home` |
-| A theme in the works; a theme or bar result | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
-| What a new Omarchy user sees (a showcase, shots for others) | `omabox up --stock` |
-| Shots compared across runs | `omabox up --clean` (ref: checks.md) |
-| Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
-
-In a box your checkout is read-only (a throwaway `run`'s writes are discarded): build on the host,
-run in the box; ref: apps.md.
-
-A step that needs real hardware: the user's. ref: agents.md.
-
-Your box is named after the repo and your session, and goes down when your agent exits.
-Another: `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`): its
-options on that call, `-b box-3` typed out after, `omabox down -b box-3` when done. **Box work for a
-subagent: `omabox brief -b NAME`'s output in its prompt** (no skill needed).
-
-## The loop
+Each runs in a throwaway box and prints `screenshot:` (a PNG path: Read it), what it looked at,
+`problems:` and the output; nothing is left up. Exit 0: nothing found, 1: problems. ref: look.md.
 
 ```bash
-omabox look app -- ./build/app            # shot, problems (ref: look.md)
-omabox up                                 # headless, 1920x1080, once its bar is drawn
-omabox run -d --wait -- ./build/app       # detached, its pid on stdout, once drawn
-omabox run -d --replace --wait -- ./app   # after a rebuild; jobs, stop PID, wait job|log
-omabox shot                               # a PNG path: Read it to look
-omabox windows                            # address, workspace, on screen or covered
-omabox shot --window app                  # one window's own pixels, even covered
-omabox click --window app 40 12           # window coordinates, as in its shot; or --find NAME
-omabox keys --window app --wait --tree -t hi  # type, settle, what its tree changed
-omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
-omabox wait window app                    # or --gone; layer NS; tree TEXT; notification RE; until -- CMD
-omabox wait change --window app           # a redraw by itself; then wait still
-omabox run -- busctl --user list          # any command in the box
-omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
-omabox down                               # when done
+omabox look app [--keys "Down Return"] [--type TEXT] -- ./build/app  # its window
+omabox look plugin DIR [--open]      # a bar plugin: the bar, --open its panel
+omabox look theme DIR                # a theme applied: desktop, terminal, contrast
+omabox look page FILE|URL [--keys K] # a page or web game in Chromium, its console
 ```
 
-## Driving an app
+## Anything else, step by step
 
-1. **Look, act once, look again; with text when text can tell.** `keys`/`click`'s exit 0 means
-   sent, not landed: `--wait --tree` says in that call what its tree changed; `--expect tree
-   TEXT`: 124 unless it shows. A label, a checked box, a field's text:
-   `tree --find TEXT` (~60 tokens), not a shot (~1.2k); the bar, panels, menus: `tree --layer NS
-   --find TEXT`; no tree: `find --image`. Else `windows`, `events`, `log --grep`.
-2. **Never resend input you have not seen land**: it types twice or toggles back. A 124 after
-   `--wait`: it WAS sent; read the line, look (`tree`, a shot) before sending again.
-3. **Type only into a field you have seen focused**, or `keys --window SEL`.
-4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
-   `window --fullscreen`, a `lua` dispatch), not by keys and clicks, unless the gesture is under
-   test. **Stop when it shows the goal.**
+```bash
+omabox up                                  # your box, once its bar is drawn
+omabox run -d --wait -- ./build/app        # detached, once drawn
+omabox wait window app                     # or wait still|change, until -- CMD; never sleep
+omabox shot --window app                   # a PNG path: Read it
+omabox tree --find TEXT --window app       # text: ~60 tokens, a shot ~1.2k
+omabox keys --window app --wait --tree -t hi Return
+omabox click --window app 40 12            # window coordinates, as in its shot
+omabox down
+```
 
-No `sleep` (nor `wait until -- false`): `--wait`, `wait`, `wait change`; fixed `wait for 2s`;
-video `record hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124
-names it, `--ignore "X,Y WxH"`. ref: input.md.
+Look, act once, look again: exit 0 from `keys`/`click` means sent, not landed; never resend input
+you have not seen land. ref: loop.md.
 
-Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
-discard it) click with `--in THAT.png X Y`, never your arithmetic; off a whole screen or a big
-window, `shot --fit 1456` first (some models read points in the smaller image they see). **Shots are
-most of a session's context**: the smallest that shows it (`--window`, `-g`, `--changed`): ref: shots.md.
-**The pointer is test state** (focus follows it): ref: input.md.
+## Where next
 
-## Where to look next
+| Task | Read |
+|---|---|
+| The loop in full, waiting, coordinates, a second box | ref: loop.md |
+| Project steps for the real desktop; subagents, `host`, reporting | ref: agents.md |
+| Shots, colours, sizes, monitors, GPU | ref: shots.md |
+| A failure, visual checks | ref: checks.md |
+| Clicks, drags, scrolls, waiting | ref: input.md |
+| Plugins, toasts, lock screen, polkit | ref: shell.md |
+| Mounts, HOME, network, save, ports | ref: session.md |
+| Plain boxes, `--hyprland` | ref: builds.md |
+| Launcher, test suites | ref: apps.md |
+| `lua`, logs, events | ref: hyprland.md |
+| Exit codes, `--json` | ref: cli.md |
 
-- A failure: ref: checks.md; `omabox help exit-codes`, ref: cli.md. Colours, transitions, sizes,
-  monitors, `gpu`/`cpu`: ref: shots.md. `drag`, `scroll`: ref: input.md.
-- Plugins, toasts, `--omarchy`, the lock screen, polkit: ref: shell.md. `--hyprland`, plain boxes:
-  ref: builds.md. Launcher: ref: apps.md. Logs, `lua`: ref: hyprland.md.
-- Mounts, HOME, `save`, ports, idling: ref: session.md.
-- `host`, grants without a prompt, ai-jail, showing the user, reporting what a box showed,
-  subagents in an isolated worktree: ref: agents.md.
+One command's options: `omabox help CMD`. A term anywhere: `grep -rn TERM` over `ref/`.

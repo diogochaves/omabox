@@ -2754,8 +2754,8 @@ for path in sys.argv[1:]:
 rich_text() { python3 -c "$RICH_TEXT" "$@"; }
 
 # The skill's references (#143, finding 215; #464): each `ref: FILE.md` of SKILL.md (its lines joined, so
-# one may wrap) names a page of the skill's ref/ folder, ended by . : ) , ; or the end. A quoted "ref: ..."
-# is the intro's placeholder, not one. Prints each that names no page (as `ref: TEXT`, to its end), and `refs N` last.
+# one may wrap) names a page of the skill's ref/ folder, ended by . : ) , ; a table cell's " |" or the
+# end. A quoted "ref: ..." is the intro's placeholder, not one. Prints each that names no page (as `ref: TEXT`, to its end), and `refs N` last.
 SKILL_REFS='
 import os, re, sys
 skill = " ".join(open(sys.argv[1]).read().split())
@@ -2764,7 +2764,7 @@ n = 0
 for m in re.finditer(r"(?<![\"\w])ref: ", skill):
     n += 1
     rest = skill[m.end():]
-    f = re.match(r"[a-z0-9-]+\.md(?=[.:),;]|$)", rest)
+    f = re.match(r"[a-z0-9-]+\.md(?=[.:),;]| \||$)", rest)
     if not f or f.group() not in pages:
         print("ref: " + re.match(r"[^:),; ]{0,60}", rest).group().rstrip("."))
 print("refs", n)
@@ -2817,25 +2817,36 @@ t_unit_version() {
   check_match "SKILL.md points to its ref/ pages by file" "^refs [1-9][0-9]*$" "$(tail -n 1 <<<"$refs")"
   check_eq "...every page it names is there" "" "$(sed '$d' <<<"$refs")"
   check "...and reference.md, split into them (#464), is gone" test ! -e "$ROOT/skill/reference.md"
-  # The check itself, on a folder of its own: a wrapped ref and the quoted placeholder pass, an unknown
-  # page, a page's prefix, a section name or an unquoted FILE do not.
+  # The check itself, on a folder of its own: a wrapped ref, a table cell's and the quoted placeholder
+  # pass, an unknown page, a page's prefix, a section name or an unquoted FILE do not.
   mkdir -p "$TMP/refs-ref"; : > "$TMP/refs-ref/shots.md"; : > "$TMP/refs-ref/input.md"
   printf '%s\n' 'The rest ("ref:' 'FILE" below). A shot: ref: shots.md. Clicks (ref:' 'input.md).' \
-    'ref: shot.md. ref: nope.md: x' 'ref: FILE, then ref: shots.md; ref: Shots.' > "$TMP/refs-skill.md"
+    'ref: shot.md. ref: nope.md: x' 'ref: FILE, then ref: shots.md; ref: Shots.' '| Clicks | ref: input.md |' '| Shots | ref: shots.md x |' > "$TMP/refs-skill.md"
   check_eq "...the check: what it reads as a reference, and what it misses" \
-    "ref: shot.md|ref: nope.md|ref: FILE|ref: Shots|refs 7" \
+    "ref: shot.md|ref: nope.md|ref: FILE|ref: Shots|ref: shots.md|refs 9" \
     "$(skill_refs "$TMP/refs-skill.md" "$TMP/refs-ref" 2>&1 | paste -sd '|')"
-  # #270: SKILL.md is the core every task loads (the rules, the loop, waiting, coordinates, where to look
-  # next); the rest is in ref/. Each load costs its whole size, so the cap is the core's + a margin.
-  # Claude Code's load is the body (the front matter left out); an agent that reads the file reads both,
+  # #270, #464, finding 723: SKILL.md is the core every task loads (the rules, the four looks, a short
+  # loop, where next); the rest is in ref/, the step-by-step loop in ref/loop.md. Each load costs its
+  # whole size for every model, small local ones too, so the cap is the core's + a margin. Claude
+  # Code's load is the body (the front matter left out); an agent that reads the file reads both,
   # the front matter's allowed-tools (#338) too.
-  check "...and stays short (its body under 8 000 bytes: #143, #270)" test "$(awk 'f >= 2; /^---$/ && f < 2 { f++ }' "$ROOT/skill/SKILL.md" | wc -c)" -lt 8000
-  check "...the whole file under 9 000 (#338)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 9000
-  check "...and sends text questions to tree, not a shot (#270)" grep -qF '`tree --find TEXT` (~60 tokens), not a' "$ROOT/skill/SKILL.md"
+  local sk_body; sk_body=$(awk 'f >= 2; /^---$/ && f < 2 { f++ }' "$ROOT/skill/SKILL.md")
+  check "...and stays short (its body under 4 000 bytes: #143, #270, #464)" test "$(wc -c <<<"$sk_body")" -lt 4000
+  check "...the whole file under 6 000 (#338, #464)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 6000
+  # #461: the four looks are the first commands it names, each on a line of its own.
+  check_eq "...its first commands are the four looks (#461)" "app plugin theme page" \
+    "$(grep -oE '^omabox [a-z-]+ [a-z]+' <<<"$sk_body" | head -n 4 | awk '$2 == "look" { print $3 }' | paste -sd ' ')"
+  check "...says what a look's exit 1 means" grep -qF 'Exit 0: nothing found, 1: problems' <<<"$sk_body"
+  check "...its short loop types with --wait --tree" grep -qE '^omabox keys --window app --wait --tree ' <<<"$sk_body"
+  check "...and reads text with tree --find" grep -qE '^omabox tree --find ' <<<"$sk_body"
+  check "...and ends in down" grep -qE '^omabox down$' <<<"$sk_body"
+  check "...and names ref/loop.md for the rest" grep -qF 'ref: loop.md' <<<"$sk_body"
+  check "ref/loop.md sends text questions to tree, not a shot (#270)" grep -qF '`tree --find TEXT` (~60 tokens), not a' "$ROOT/skill/ref/loop.md"
   # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
-  check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/SKILL.md"
+  check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/ref/loop.md"
   check "...and its loop types with --wait --tree, its step 1 names --expect tree (#449)" \
-    bash -c "grep -qE '^omabox keys --window app --wait --tree ' '$ROOT/skill/SKILL.md' && grep -qF -- '--expect tree' '$ROOT/skill/SKILL.md'"
+    bash -c "grep -qE '^omabox keys --window app --wait --tree ' '$ROOT/skill/ref/loop.md' && grep -qF -- '--expect tree' '$ROOT/skill/ref/loop.md'"
+  check "...and the project-instructions table moved to ref/agents.md (#464)" grep -qF '| `./build/app`, `app &` | `omabox up`' "$ROOT/skill/ref/agents.md"
   if command -v omarchy-plugin-validate >/dev/null; then
     check "the widget passes omarchy-plugin-validate" omarchy-plugin-validate "$ROOT/plugin"
   else
@@ -6782,7 +6793,7 @@ EOF
   check_eq "...a box whose Hyprland does not answer: asked once, then ended" "1 1" \
     "$(grep -c '^output create' "$ccx/log") $(cat "$ccx/rt/omabox.closed" 2>/dev/null)"
   check_match "...up's: --new starts the box, so its options go on that call (#148)" "--new\] +start it under a free name" "$(ob help up)"
-  check_match "...as the skill says" "up --new \[--plugin …\]\` starts a box" "$(cat "$ROOT/skill/SKILL.md")"
+  check_match "...as the skill says (ref/loop.md, #464)" "up --new \[--plugin …\]\` starts a box" "$(cat "$ROOT/skill/ref/loop.md")"
   check_eq "...an unknown one: one line, exit 2" "1 2" "$(ob help shoot 2>&1 | wc -l) $(ob help shoot >/dev/null 2>&1; echo $?)"
   check_match "...hyprctl's --help is hyprctl's" "no box '$P-x' is up" "$(ob -b "$P-x" hyprctl --help 2>&1)"
   check_eq "path NAME names the box" "$XDG_RUNTIME_DIR/omabox/$P-x" "$(ob path "$P-x")"
