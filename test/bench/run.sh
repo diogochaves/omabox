@@ -20,6 +20,17 @@ EOF
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 PORT=${LOCAL_MODEL_PORT:-8095}
+# Every box of the bench (the agent's and each it starts) draws on this render node: BENCH_RENDER_NODE,
+# else the first whose driver is not nvidia (the iGPU), never the card the model fills. A box there
+# competes with the model for VRAM: shells "not ready after 30s" in a suite run beside the bench.
+RENDER=${BENCH_RENDER_NODE:-}
+if [ -z "$RENDER" ]; then
+  for r in /dev/dri/renderD*; do
+    [ -e "$r" ] || continue
+    drv=$(readlink -f "/sys/class/drm/${r##*/}/device/driver" 2>/dev/null) || drv=""
+    [ "${drv##*/}" = nvidia ] || { RENDER=$r; break; }
+  done
+fi
 models=() harnesses=() skills=() tasks=() runs=1 limit=20 guard=1 omarchy_skills=1 keep_model=0
 out="" list=0
 
@@ -92,7 +103,7 @@ printf 'task\tmodel\tharness\tskill\trun\tresult\ttools\tturns\tseconds\tstep\tw
   echo "omabox: $("$CLI" --version 2>&1 | head -1) ($CLI)"
   echo "checkout: $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo '?')"
   for i in "${!skill_names[@]}"; do echo "skill ${skill_names[$i]}: ${skill_dirs[$i]} ($(du -sb "${skill_dirs[$i]}" | cut -f1) bytes)"; done
-  echo "guard: $guard; omarchy skills: $omarchy_skills; limit: ${limit} min"
+  echo "guard: $guard; omarchy skills: $omarchy_skills; limit: ${limit} min; render node: ${RENDER:-the default}"
 } > "$out/meta.txt"
 echo "bench: $out (${#combos[@]} runs)" >&2
 work_root=${XDG_CACHE_HOME:-$HOME/.cache}/omabox-bench/$stamp-$$
@@ -172,7 +183,7 @@ digest() {
     opencode)
       jq -R -r 'fromjson? | select(.type == "tool_use") | .part |
         if (.tool == "shell" or .tool == "bash") then .state.input.command
-        else "\(.tool) \(.state.input.filePath // .state.input.path // .state.input.name // "")" end |
+        else "\(.tool) \(.state.input.filePath // .state.input.path // .state.input.name // .state.input.id // "")" end |
         gsub("\n"; " ; ")' "$j" > "$d/commands.txt" || true
       jq -R -s -r '[split("\n")[] | fromjson?] as $e | ($e | map(.type) | indices("step_start") | last // 0) as $i |
         $e[$i:] | map(select(.type == "text") | .part.text) | join("\n")' "$j" > "$d/answer.txt" || true
@@ -207,7 +218,7 @@ for c in "${combos[@]}"; do
   # check_safety. Started from the run's folder, which is no repo: nothing else of HOME is mounted.
   # --stock: a new Omarchy user's HOME, not this machine's desk, so the boxes the agent starts in it
   # (which seed from it) look the same on every machine.
-  if ! (cd "$rd" && "$CLI" up "$box" --stock --no-shell --net isolated --allow "$PORT" --ro-bind "$CLI_REPO" \
+  if ! (cd "$rd" && OMABOX_RENDER_NODE=$RENDER "$CLI" up "$box" --stock --no-shell --net isolated --allow "$PORT" --ro-bind "$CLI_REPO" \
     --overlay "$proj") > "$rd/up.log" 2>&1; then
     printf '%s\t%s\t%s\t%s\t%s\tfail\t0\t0\t0\tbench\tthe outer box did not come up (up.log)\n' "$t" "$m" "$h" "$sn" "$n" >> "$results"
     box=""; continue
@@ -228,7 +239,7 @@ for c in "${combos[@]}"; do
   esac
   t0=$(date +%s) rc=0
   # shellcheck disable=SC2016 # (expanded by the box's bash)
-  timeout -k 15 "${limit}m" "$CLI" run -b "$box" -- env PATH="/home/sbx/.local/bin:$PATH" \
+  timeout -k 15 "${limit}m" "$CLI" run -b "$box" -- env PATH="/home/sbx/.local/bin:$PATH" OMABOX_RENDER_NODE="$RENDER" \
     bash -c 'cd "$1" && shift && exec "$@"' _ "$proj" "${agent[@]}" > "$rd/transcript.jsonl" 2> "$rd/stderr.log" < /dev/null || rc=$?
   secs=$(($(date +%s) - t0))
   read -r tools turns < <(digest "$rd" "$h")
