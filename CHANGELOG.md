@@ -18,6 +18,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   one of Hyprland's, its list of GL extensions, is about 8 kB. Each line is now cut at 400
   characters, ending `… (+N chars)`; `--width N` cuts elsewhere, `--full` keeps lines whole.
   `--json` records are never cut.
+- **`wait still` (and an action's `--wait`) sometimes never settled beside a pulsing dot** ([#455](https://github.com/diogochaves/omabox/issues/455)):
+  a pulse is taken for a blinker partway through its cycle, and each shade it then showed for the
+  first time made omabox forget it and learn it again. Those shades are now learnt, once each.
 - **A binary run from cargo's `target/release` could not start a box** ([#459](https://github.com/diogochaves/omabox/issues/459)):
   it looked for its tools under `target/`. It now finds the checkout it was built in.
 

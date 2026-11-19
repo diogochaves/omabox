@@ -25,8 +25,9 @@
 // bringing it back to one of its last BLINK_LOOKS looks (a dot blinking or pulsing, a looping spinner),
 // once it has done so BLINK_RETURNS times; until then each change of it counts. A look is the spot's
 // pixels, each channel's top four bits (a pulse's way up meets its way down). A learnt spot that takes
-// a look it never had (a menu over it, another icon) is a change again, and forgotten; one that moved
-// (a re-layout) is learnt afresh where it went. A counter or a progress bar never comes back: a change.
+// a look it never had (another icon, a shade of a pulse not seen yet) is a change, and that look is
+// learnt (#455); a menu over it changes the screen beyond it too; one that moved (a re-layout) is learnt
+// afresh where it went. A counter or a progress bar never comes back: a change.
 // Before it answers "nothing changed" or "still", one plain copy (which never waits) of each output is
 // compared too, so a change drawn between two requests is not missed.
 //
@@ -571,17 +572,30 @@ static int compare(struct output *o) {
     }
     for (int i = 0; i < nignore; i++)
         if (ni[i]) { ign_box = to_layout(o, ig[i]); ign_why = masked[i] ? "mask" : "cursor"; }
-    // A blinker that changed: back to a look it had is not significant; a look it never had is (a menu
-    // drawn over it, another icon there), and it is forgotten.
+    // A blinker that changed: back to a look it had is not significant; a look it never had is (another
+    // icon there), and is learnt: a pulse taken for a blinker before it showed every shade shows the rest
+    // once each, and forgetting it at each would learn it all again, never quiet for long (#455). A menu
+    // drawn over it changes the screen beyond it, a change of its own.
+    const int outside = ns;
+    int learnt = 0;
     for (int j = 0; j < SPOTS; j++) {
         if (!nb[j]) continue;
         struct spot *sp = &o->spots[j];
-        if (known(sp, look(o, &o->bufs[cur], sp->pr))) { ign_box = to_layout(o, bl[j]); ign_why = "blinker"; continue; }
+        uint64_t h = look(o, &o->bufs[cur], sp->pr);
+        if (known(sp, h)) { ign_box = to_layout(o, bl[j]); ign_why = "blinker"; continue; }
+        remember(sp, h);
+        learnt = 1;
         grow(&s, &ns, bl[j].x, bl[j].y);
         grow(&s, &ns, bl[j].x + bl[j].w - 1, bl[j].y + bl[j].h - 1);
-        sp->used = 0;
     }
     if (!ns) return 0;
+    // (only a blinker's new look: a change, not one more place to learn as a blinker)
+    if (learnt && !outside) {
+        const struct rect px = s;
+        sig_box = to_layout(o, s);
+        if (dump_dir) dump_change(o, px, sig_box);
+        return 1;
+    }
     // Thin in the layout's pixels: a caret is as thin at scale 2 as at 1.
     const struct rect px = s;
     s = to_layout(o, s);

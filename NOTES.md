@@ -14228,6 +14228,21 @@ from them.
     `release` or `debug` under `target/` beside `crates/omabox/Cargo.toml` now takes that checkout;
     anything else as before. Checks in t_log_rolling and t_unit_aq_worktree.
 
+718. **A pulse taken for a blinker partway through was forgotten at each shade it had not shown**
+    (2026-11-19, #455; and #465, test-only). `t_wait_blink`'s pulsing cell (one cell's red going
+    down and up in 15 steps every 30 ms) sometimes kept `wait still` from settling. still learns a
+    small spot as a blinker after its changes come back to a look it had three times, which on a
+    pulse happens partway through its cycle; the shades past that point were looks it had never had,
+    and a blinker that took one was forgotten and learnt again from there. Whether a wait settled
+    then hung on the known stretch after each relearning lasting the 300 ms of quiet: luck, which
+    load (a 4-vCPU VM, the full suite) shifted. With `--quiet 1s` it failed every time, idle (6 of 6;
+    the fix 6 of 6 the other way, each in a fresh box: a box runs the still it was started with, so a
+    rebuilt `tools/still` needs a new box). Such a look is now learnt and counted as one change; the
+    blinker is kept. Something drawn over a blinker changes the screen beyond it, which still counts
+    as before. Test: the pulse with `--quiet 1s`. The same day `t_proto_error`'s GTK fixture was seen
+    to print `Lost connection` rather than its protocol error under load (it writes before it reads
+    the error): up to three tries now (#465).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

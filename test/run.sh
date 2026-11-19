@@ -8100,9 +8100,17 @@ int main(int argc, char **argv) {
 EOF
     # shellcheck disable=SC2046 # (pkg-config's words)
     if cc -o "$s/gtk" "$s/gtk.c" $(pkg-config --cflags --libs gtk4 gtk4-wayland wayland-client); then
-      err=$(pe_tk "$s/gtk")
-      check_match "GTK 4: its own protocol-error line, said as one" \
-        "omabox: its Wayland connection was closed for a protocol error: Error 71 \(Protocol error\) dispatching to Wayland display\." "$err"
+      # (#465: GTK prints its protocol error only when it reads the error before one of its own writes
+      # fails on the closed socket; under load the write can come first and it says lost. Up to three
+      # tries for the line it promises nothing about; what omabox says must match each try's.)
+      local try said_pe=""
+      for try in 1 2 3; do
+        err=$(pe_tk "$s/gtk")
+        if grep -q "protocol error: Error 71" <<<"$err"; then said_pe=$err; break; fi
+        grep -q "its Wayland connection was lost: Lost connection" <<<"$err" || { said_pe=$err; break; }
+      done
+      check_match "GTK 4: its own protocol-error line, said as one (try $try)" \
+        "omabox: its Wayland connection was closed for a protocol error: Error 71 \(Protocol error\) dispatching to Wayland display\." "$said_pe"
       err=$(pe_tk "$s/gtk" lost)
       check_match "...its connection shut down: lost" \
         "omabox: its Wayland connection was lost: Lost connection to Wayland compositor\." "$err"
@@ -23242,6 +23250,10 @@ t_wait_blink() {
   out=$(ob wait -b "$B" still --timeout 6s 2>"$TMP/blink.err"); rc=$?; err=$(cat "$TMP/blink.err")
   check_eq "a pulsing cell: wait still satisfied ($out)" 0 "$rc"
   check_match "...said" "left out as a blinker" "$err"
+  # #455: taken for a blinker partway through its cycle, it shows shades it had not shown yet: each is
+  # learnt once, the blinker kept. Forgotten at each, it was quiet for less than a second at a time.
+  out=$(ob wait -b "$B" still --quiet 1s --timeout 8s 2>/dev/null); rc=$?
+  check_eq "...--quiet 1s: still satisfied, its shades learnt ($out)" 0 "$rc"
   ob run -b "$B" -- pkill -f 'foot -T P' >/dev/null
   ob wait -b "$B" window 'title:^P$' --gone >/dev/null
   # The issue's: a blinking cell that moves every 2 s (a re-layout): an --ignore of where it was would
