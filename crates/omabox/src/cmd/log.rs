@@ -1,6 +1,8 @@
-//! `omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]` (issue #41, finding 107):
+//! `omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [--width N | --full] [-f]` (issue #41,
+//! finding 107):
 //! a box's logs, a live box's read inside it, a dead box's from the host (logs.rs); -f follows them
-//! with tail -F, ending with the box. `log gdb --crash` (#233): only the thread a crash hit.
+//! with tail -F, ending with the box. `log gdb --crash` (#233): only the thread a crash hit. Each line
+//! is cut at WIDTH characters (#458), `--full` for whole ones.
 
 use crate::args::{optarg, unknown_opt, unknown_word};
 use crate::boxes::{box_alive, need_box, take_over};
@@ -13,6 +15,38 @@ use crate::shell;
 use std::io::{BufRead, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::process::{Command, Stdio};
+
+/// Where log cuts a line by default (#458): an extension list or a format table, kilobytes long, costs
+/// an agent more context than the rest of its log reads, and nobody asked for one.
+pub const LOG_WIDTH: usize = 400;
+
+/// LINE cut to WIDTH characters (0: whole), ending `… (+N chars)`; never in a UTF-8 sequence.
+pub fn cut_line(l: &[u8], width: usize) -> Vec<u8> {
+    let starts = |b: &u8| (b & 0xc0) != 0x80;
+    if width == 0 || l.iter().filter(|b| starts(b)).count() <= width {
+        return l.to_vec();
+    }
+    let at = l
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| starts(b))
+        .nth(width)
+        .map_or(l.len(), |(i, _)| i);
+    let rest = l[at..].iter().filter(|b| starts(b)).count();
+    cat!(&l[..at], "… (+", rest.to_string(), " chars)")
+}
+
+/// cut_line on each line of TEXT.
+pub fn cut_lines(text: &[u8], width: usize) -> Vec<u8> {
+    if width == 0 {
+        return text.to_vec();
+    }
+    let v: Vec<Vec<u8>> = text
+        .split(|&c| c == b'\n')
+        .map(|l| cut_line(l, width))
+        .collect();
+    v.join(&b'\n')
+}
 
 /// Where a log is read: in the box (as it sees the path) or on the host (the box dir's own).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -233,6 +267,7 @@ pub fn gdb_crashes(text: &[u8]) -> Vec<u8> {
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut name, mut follow, mut crash, mut n) = (Vec::new(), false, false, b"100".to_vec());
     let mut json = false;
+    let mut width = LOG_WIDTH;
     let mut rd = Reading {
         live: false,
         re: Vec::new(),
@@ -252,6 +287,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             b"-f" | b"--follow" => follow = true,
             b"--crash" => crash = true,
             b"--json" => json = true,
+            b"--full" => width = 0,
+            b"--width" => {
+                optarg(ctx, a, args.get(i + 1))?;
+                width = shell::is_num(&args[i + 1])
+                    .then(|| std::str::from_utf8(&args[i + 1]).ok()?.parse().ok())
+                    .flatten()
+                    .ok_or_else(|| {
+                        ctx.die("log: --width takes a number of characters (0: whole lines)")
+                    })?;
+                i += 1;
+            }
             // `--grep -i RE` as grep users type it (#130).
             b"--grep" => {
                 optarg(ctx, a, args.get(i + 1))?;
@@ -421,8 +467,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             srcs.join(&b' ')
         )));
     }
+    // (JSON records whole: a cut one would not parse)
+    if json {
+        width = 0;
+    }
     if follow {
-        return follow_logs(ctx, &rd, &picked, &n, json);
+        return follow_logs(ctx, &rd, &picked, &n, json, width);
     }
     let count = shell::test_int(&n).and_then(|v| usize::try_from(v).ok());
     let mut sep: &[u8] = b"";
@@ -468,7 +518,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             sep = b"\n";
         }
         if !text.is_empty() {
-            out(cat!(text, "\n"))?;
+            out(cat!(cut_lines(&text, width), "\n"))?;
         }
     }
     Ok(())
@@ -495,6 +545,7 @@ fn follow_logs(
     picked: &[(Kind, Vec<u8>, Vec<u8>)],
     n: &[u8],
     json: bool,
+    width: usize,
 ) -> Res<()> {
     let pid = match crate::boxes::box_pid(&ctx.d) {
         crate::boxes::BoxPid::Pid(p) => p,
@@ -571,14 +622,14 @@ fn follow_logs(
             .map(|(_, p, _)| p.clone())
             .unwrap_or_default();
         if notices.is_empty() {
-            return show(r, &re, rd.icase, &names);
+            return show(r, &re, rd.icase, &names, width);
         }
         let Ok((r2, w2)) = crate::exec::pipe() else {
             return 1;
         };
         let alone = picked.len() == 1;
         sc.spawn(move || notices_lines(r, w2, &notices, alone, json));
-        show(r2, &re, rd.icase, &names)
+        show(r2, &re, rd.icase, &names, width)
     });
     for mut c in children {
         let _ = c.wait();
@@ -628,7 +679,13 @@ fn notices_lines(
 }
 
 /// The followed stream (through grep for --grep), its tail headers named, printed as it comes.
-fn show(r: std::os::fd::OwnedFd, re: &[u8], icase: bool, names: &[(Vec<u8>, Vec<u8>)]) -> i32 {
+fn show(
+    r: std::os::fd::OwnedFd,
+    re: &[u8],
+    icase: bool,
+    names: &[(Vec<u8>, Vec<u8>)],
+    width: usize,
+) -> i32 {
     let mut grep = None;
     let src: Box<dyn std::io::Read> = if re.is_empty() {
         Box::new(std::fs::File::from(r))
@@ -677,7 +734,7 @@ fn show(r: std::os::fd::OwnedFd, re: &[u8], icase: bool, names: &[(Vec<u8>, Vec<
         }
         o.extend(std::iter::repeat_n(b'\n', blank));
         blank = 0;
-        o.extend_from_slice(&cat!(l, "\n"));
+        o.extend_from_slice(&cat!(cut_line(l, width), "\n"));
         if stdout.write_all(&o).and_then(|()| stdout.flush()).is_err() {
             return 1;
         }
@@ -691,6 +748,19 @@ fn show(r: std::os::fd::OwnedFd, re: &[u8], icase: bool, names: &[(Vec<u8>, Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_lines_cut() {
+        assert_eq!(cut_line(b"abcdef", 0), b"abcdef");
+        assert_eq!(cut_line(b"abcdef", 6), b"abcdef");
+        assert_eq!(cut_line(b"abcdef", 4), "abcd… (+2 chars)".as_bytes());
+        // characters, not bytes: never inside a UTF-8 sequence
+        assert_eq!(cut_line("ááá".as_bytes(), 2), "áá… (+1 chars)".as_bytes());
+        assert_eq!(
+            cut_lines(b"short\nlonger line\n", 6),
+            "short\nlonger… (+5 chars)\n".as_bytes()
+        );
+    }
 
     #[test]
     fn tails() {

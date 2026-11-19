@@ -14216,6 +14216,18 @@ from them.
     file, which the broker does not load); the same test now covers any Hyprland built against a
     patched aquamarine, RUNPATH or not.
 
+717. **`log` cuts long lines; cargo's own binary finds its checkout** (2026-11-19, #458, #459).
+    `log --grep "…|external"` in an NVIDIA box returned Hyprland's `Supported extensions: (220)` line,
+    about 8 kB, more than the rest of a session's log reads together. Every line `log` prints (with
+    or without `--grep`, `-f` too) is now cut at 400 characters, ending `… (+N chars)`, counted in
+    characters so a cut never splits a UTF-8 sequence; `--width N` cuts elsewhere, `--full` or
+    `--width 0` keeps lines whole, and `--json` records are never cut (a cut one would not parse).
+    It applies to a pipe too: agents read through one, and the issue's line came through one. And
+    `cargo build && target/release/omabox up` said the tools were missing (`run install.sh`): the
+    binary took the parent of its folder, `target/`, as its checkout. A binary in a folder
+    `release` or `debug` under `target/` beside `crates/omabox/Cargo.toml` now takes that checkout;
+    anything else as before. Checks in t_log_rolling and t_unit_aq_worktree.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

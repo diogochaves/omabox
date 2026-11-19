@@ -107,11 +107,12 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
   omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
-  omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
+  omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [--width N | --full] [-f]
                                                          a box's logs: hyprland (the default), shell, apps,
                                                          autostart (a desk box's), run, events, keyring, labwc,
                                                          systemd, audio, polkit, gdb, journal, notifications,
-                                                         box, reap
+                                                         box, reap; each line cut at 400 characters (--full:
+                                                         whole)
   omabox log [-b NAME] run [JOB] [-n 100|all] [--grep RE [-i]] [-f]   a run -d job's log: JOB its pid (jobs), none the latest
   omabox log [-b NAME] notifications [--json] [-n N] [--grep RE [-i]] [-f]   what apps sent the notification server
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit

@@ -8829,6 +8829,16 @@ t_log_rolling() {
       "$(ob log -b "$B" --grep "$m" 2>/dev/null)"
     check_eq "...once, in -n all too" 1 "$(ob log -b "$B" -n all 2>/dev/null | grep -cF "$m")"
   fi
+  # #458: a line longer than 400 characters is cut, saying how much is left; --full or --width 0 whole.
+  local long=omabox-t458-$RANDOM out
+  ob lua -b "$B" "print('$long' .. string.rep('x', 1000))" >/dev/null
+  out=$(ob log -b "$B" --grep "$long" 2>/dev/null)
+  check_match "log: a long line cut at 400 characters, saying what is left" "^.{400}… \(\+[0-9]+ chars\)$" "$out"
+  check_eq "...its 400 characters are the line's first" "$(ob log -b "$B" --grep "$long" --full 2>/dev/null | cut -c1-400)" "${out%%…*}"
+  check_match "...--full: whole" "${long}x{1000}$" "$(ob log -b "$B" --grep "$long" --full 2>/dev/null)"
+  check_match "...--width 0: whole" "${long}x{1000}$" "$(ob log -b "$B" --grep "$long" --width 0 2>/dev/null)"
+  check_match "...--width 50: cut there" "^.{50}… \(\+[0-9]+ chars\)$" "$(ob log -b "$B" --grep "$long" --width 50 2>/dev/null)"
+  check_match "...--width takes a number" "log: --width takes a number of characters" "$(ob log -b "$B" --width x 2>&1)"
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -13302,6 +13312,13 @@ t_unit_aq_worktree() {
   check_match "up from a worktree without its tools: build them with make, not install.sh" \
     "missing .*: in a git worktree, build them: for m in .*/tools/\*/Makefile; do make -C" "$("$d/co-wt/build/omabox" _rust probe check_install 2>&1)"
   check_match "...a main checkout's: install.sh" "missing .*: run install.sh$" "$("$d/co-main/build/omabox" _rust probe check_install 2>&1)"
+  # #459: cargo's own output in a checkout (target/release, target/debug) belongs to the checkout, so
+  # `cargo build && target/release/omabox up` finds its share/ and tools/; outside one, the parent as before.
+  for co in "$d/co-cargo/target/release" "$d/co-cargo/target/debug" "$d/no-co/target/release"; do mkdir -p "$co"; cp "$PROBE" "$co/omabox"; done
+  mkdir -p "$d/co-cargo/crates/omabox"; : > "$d/co-cargo/crates/omabox/Cargo.toml"
+  check_eq "a checkout's target/release/omabox: the checkout" "$d/co-cargo" "$("$d/co-cargo/target/release/omabox" _rust probe root)"
+  check_eq "...target/debug/omabox: the same" "$d/co-cargo" "$("$d/co-cargo/target/debug/omabox" _rust probe root)"
+  check_eq "...a target/release outside a checkout: its parent, as any other folder" "$d/no-co/target" "$("$d/no-co/target/release/omabox" _rust probe root)"
 }
 
 # finding 246 (issue #48): the system's aquamarine has the fix when it exports what #415 added, whatever

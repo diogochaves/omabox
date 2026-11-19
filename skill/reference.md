@@ -881,8 +881,9 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
   nothing, check with `pcall` inside the callback and keep the error in a global to read with
   `omabox lua`. (An `hl.on` callback that a `hyprctl dispatch` sets off errors in that dispatch's
   answer.)
-- `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
-  of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors; each line with its
+- `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [--width N | --full] [-f]`: the box's logs, the last 100 lines
+  of each, every line cut at 400 characters (`… (+N chars)`; `--width N` another cut, `--full` or
+  `--width 0` whole lines; `--json` records are never cut). `hyprland` (the default), `shell` (the bar, plugins, QML errors; each line with its
   time to the millisecond, `YYYY-MM-DD HH:MM:SS.mmm`, for timing what the shell does), `apps` (what the
   launcher and binds started), `autostart` (a desk box's: what its Hyprland config started and what
   the box dropped, ref: `--desktop desk`), `run` (the latest `run -d`; `run JOB`: that job's, by the pid `run

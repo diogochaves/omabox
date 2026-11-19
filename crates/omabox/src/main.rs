@@ -274,10 +274,26 @@ static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 fn find_root() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
-    exe.parent()
+    root_of(&exe)
+}
+
+/// find_root for EXE: the parent of its directory, except cargo's own output in a checkout
+/// (`<checkout>/target/release/omabox`, or debug: #459), whose checkout is two levels further up,
+/// where its share/ and tools/ are.
+fn root_of(exe: &std::path::Path) -> PathBuf {
+    let dir = exe.parent();
+    let up = dir
         .and_then(|p| p.parent())
         .map(PathBuf::from)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let cargo_out = dir
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n == "release" || n == "debug")
+        && up.file_name().is_some_and(|n| n == "target");
+    match up.parent() {
+        Some(co) if cargo_out && co.join("crates/omabox/Cargo.toml").is_file() => co.to_path_buf(),
+        _ => up,
+    }
 }
 
 pub fn root() -> PathBuf {
@@ -292,4 +308,32 @@ pub fn made_us() -> Option<i64> {
 /// CALL_US: when this omabox was called, in µs.
 pub fn call_us() -> Vec<u8> {
     CALL_US.get().cloned().unwrap_or_else(marks::epoch_us)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::root_of;
+    use std::path::Path;
+
+    #[test]
+    fn root_from_where_the_binary_is() {
+        // This checkout, from the crate's own folder.
+        let co = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        for out in ["target/release", "target/debug"] {
+            assert_eq!(root_of(&co.join(out).join("omabox")), co, "{out} (#459)");
+        }
+        assert_eq!(root_of(&co.join("build/omabox")), co, "build/omabox");
+        // An install's bin/omabox, and a target/release outside a checkout: the parent, as before.
+        assert_eq!(
+            root_of(Path::new("/usr/lib/omabox/bin/omabox")),
+            Path::new("/usr/lib/omabox")
+        );
+        assert_eq!(
+            root_of(Path::new("/x/target/release/omabox")),
+            Path::new("/x/target")
+        );
+    }
 }

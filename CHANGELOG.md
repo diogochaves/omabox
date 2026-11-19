@@ -14,6 +14,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   as before. omabox's own aquamarine build (`setup --aquamarine`) is skipped, saying which symbol
   it lacks, when that Hyprland was built against a patched aquamarine it does not match: boxes
   died at start with "symbol lookup error".
+- **`omabox log` printed lines of any length** ([#458](https://github.com/diogochaves/omabox/issues/458)):
+  one of Hyprland's, its list of GL extensions, is about 8 kB. Each line is now cut at 400
+  characters, ending `… (+N chars)`; `--width N` cuts elsewhere, `--full` keeps lines whole.
+  `--json` records are never cut.
+- **A binary run from cargo's `target/release` could not start a box** ([#459](https://github.com/diogochaves/omabox/issues/459)):
+  it looked for its tools under `target/`. It now finds the checkout it was built in.
 
 ## 1.4.1 — 2026-11-08
 

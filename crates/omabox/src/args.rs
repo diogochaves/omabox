@@ -36,7 +36,9 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         )),
         b"hyprctl" => Some("-b= --box="),
         b"lua" => Some("-b= --box= --json"),
-        b"log" | b"logs" => Some("-b= --box= -f --follow --crash --json --grep= -i -n="),
+        b"log" | b"logs" => {
+            Some("-b= --box= -f --follow --crash --json --grep= -i -n= --width= --full")
+        }
         b"events" => Some(
             "-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n=",
         ),
