@@ -219,6 +219,8 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     }
     // (after the seeds: one into its folder keeps the box's own)
     let desk_fonts = crate::seed::seed_fonts(ctx, &plan, &h).map_err(gone)?;
+    // What up seeded, recorded before anything in the box runs: `diff --seed` starts from it (#446).
+    super::snapshot::record_seed(&d, &name);
     let shell_before = crate::shellnote::shell_crash_dirs(ctx);
     // Read again as late as possible: a change made while this box was being set up would otherwise
     // be lost for it; once box.json exists, confirm_live sees the box.

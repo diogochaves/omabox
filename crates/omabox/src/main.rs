@@ -23,6 +23,7 @@ mod grid;
 mod guard;
 mod help;
 mod helpers;
+mod homesnap;
 mod homeuse;
 mod host;
 mod hypr;
@@ -193,6 +194,8 @@ fn main() -> ExitCode {
         Some("ls" | "list") => Some(cmd::ls::run),
         Some("save") => Some(cmd::save::save),
         Some("saves") => Some(cmd::save::saves),
+        Some("snapshot") => Some(cmd::snapshot::snapshot),
+        Some("diff") => Some(cmd::snapshot::diff),
         Some("version" | "-V" | "--version") => Some(cmd::version::run),
         Some("config") => Some(cmd::config::run),
         Some("brief") => Some(cmd::brief::run),

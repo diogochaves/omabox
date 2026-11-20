@@ -453,6 +453,8 @@ pub fn refusal(cmd: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
         | b"restart-shell" | b"reload" | b"mode" | b"output" | b"monitor" | b"gpu" | b"cpu"
         | b"audio" | b"polkit" | b"env" | b"path" | b"down" | b"ls" | b"list" | b"brief"
         | b"jobs" | b"stop" | b"dnd" | b"dock" => None,
+        // snapshot, diff (#446): the jail's own box HOME, recorded in its own folder.
+        b"snapshot" | b"diff" => None,
         // record (#224): its files only through fds the caller's omabox opened (record checks
         // them). ports (#93): the jail's own boxes, the host side named by state only.
         b"record" | b"ports" => None,
