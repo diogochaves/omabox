@@ -14397,6 +14397,9 @@ from them.
     `pixel`), completed where the benchmark found them short (a bar widget's text); a model that sees
     images for questions that are visual (a local one fits a 16 GB GPU). The core says so for a model
     without image input.
+    The same Qwen3.8 27B with its vision projector (32k context, the short skill), theme and plugin,
+    one run each: all four passed, pi in 8 calls each (47 s, 49 s; text-only: 10 and 18 calls), OpenCode
+    in 18 and 11 (281 s, 130 s; text-only: 18 and 17), and the plugin runs read the widget without OCR.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
