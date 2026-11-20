@@ -134,8 +134,8 @@ pub fn select_box(ctx: &mut Ctx, given: &[u8]) -> Res<()> {
     if ctx.name_derived && env_or_empty("SELECT_PLAIN").is_empty() {
         session_fallback(ctx);
     }
-    // (its command log gets this command's line: #447; a jail's refusal too, which its jail's
-    // reading of the log leaves out)
+    // (its command log gets this command's line: #447; a jailed caller's only when the box is its
+    // jail's, so the refusal below writes none in the user's or another jail's log)
     crate::cmdlog::selected(&ctx.name, &ctx.d);
     // A jailed agent drives only the boxes its jail started (finding 99): not the user's, nor another
     // jail's, which may see more than this one.

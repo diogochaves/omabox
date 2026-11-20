@@ -433,18 +433,10 @@ fn set_jail(pol: &Value) {
     }
 }
 
-/// broker_check: what a jailed agent may ask of the broker. Not the user's desktop (host, peek,
-/// interactive boxes), nor omabox's own settings, the guard, the broker, the user's saves, or
-/// omabox's own `_` commands; the boxes' own commands, and `up`'s mounts and network, are checked
-/// where they are used.
-pub fn check(ctx: &Ctx, cmd: &[u8], args: &[Vec<u8>]) -> Res<()> {
-    match refusal(cmd, args) {
-        Some(m) => Err(ctx.die(m)),
-        None => Ok(()),
-    }
-}
-
-/// broker_check's answer: why the command is refused, or None when a jailed agent may ask it.
+/// broker_check's answer: why the command is refused, or None when a jailed agent may ask it. What a
+/// jailed agent may ask of the broker: not the user's desktop (host, peek, interactive boxes), nor
+/// omabox's own settings, the guard, the broker, the user's saves, or omabox's own `_` commands; the
+/// boxes' own commands, and `up`'s mounts and network, are checked where they are used.
 pub fn refusal(cmd: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
     match cmd {
         b"up" | b"run" | b"shot" | b"screenshot" | b"pixel" | b"find" | b"windows" | b"window"
@@ -482,14 +474,27 @@ pub fn refusal(cmd: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
     }
 }
 
-/// broker_init then broker_check, as bash's main ran them: as failures (1, run's 125), not usage
-/// errors.
+/// broker_init then broker_check (`refusal`), as bash's main ran them: as failures (1, run's 125),
+/// not usage errors. A refusal gets its line in the jail's own box's command log (cmdlog::refused).
 pub fn serve(ctx: &mut Ctx, cmd: &[u8], args: &[Vec<u8>]) -> Res<()> {
     let was = ctx.parsing;
     ctx.parsing = false;
     let r = init(ctx).and_then(|()| check(ctx, cmd, args));
     ctx.parsing = was;
     r
+}
+
+/// broker_check: `refusal`'s answer as a failure, its line in the jail's own box's command log
+/// (#447: main never begins a refused command).
+pub fn check(ctx: &Ctx, cmd: &[u8], args: &[Vec<u8>]) -> Res<()> {
+    match refusal(cmd, args) {
+        Some(m) => {
+            let e = ctx.die(&m);
+            crate::cmdlog::refused(&ctx.boxes, cmd, args, e.0, &m);
+            Err(e)
+        }
+        None => Ok(()),
+    }
 }
 
 /// `_rust-jail jail_policy [FDS]` (the command line on stdin) and `_rust-jail jail_mounts POLICY

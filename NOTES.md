@@ -14604,11 +14604,23 @@ from them.
     follow and never reaches its own end and line. A second signal, or the 3 s, ends it at once.
     Chosen over a line made ready at `begin` (bytes and an fd, the handler only writing): which boxes,
     how long and which code are known only at the end, and the log's rotation and lock would have to
-    be done in the handler. Not logged, by design: a command killed by SIGKILL (nothing of it runs
-    after), a relayed call's refusal by the broker before it runs, and the jailed side of a relay
-    (its broker's call is the line). Tests: t_cmdlog
+    be done in the handler. A jailed caller's lines (the broker's calls) go only to its own jail's
+    boxes (`callers`: box.json names the jail, when the box was selected or at the end, a `down`'s
+    and an `up`'s), never the user's or another jail's: until then the refusal of another's box
+    (`box 'X' is not this jail's`) was written into that box's log. A call the broker refuses before
+    it runs (`broker_side::refusal`: `peek`, `check`, `save`, `clip`... from a jail) is logged on the
+    broker's side (`cmdlog::refused`), the refusal as its error line, its exit code, the jail as on
+    its other lines, in the log of the box it names (`-b NAME`, else the jail's default) only when
+    that box is there and the jail's: a name a jail merely typed makes no log. A refused command that
+    is about no box (`host`, `config`) has none to go to; nor does a call the broker cannot place in a
+    jail (`broker_init`'s refusals: no jail, no line). Not logged, by design: a command killed by
+    SIGKILL (nothing of it runs after), a jailed `up` that fails before its box.json names the jail
+    (no box is the jail's yet), and the jailed side of a relay (its broker's call is the line).
+    Tests: t_cmdlog
     (a sequence read back in order, reads and exit codes, after `down` too; `log -f` and `events -f`
-    ended by INT and TERM, their exit and line), t_cmdlog_secrets (five
+    ended by INT and TERM, their exit and line), t_unit_broker_side (a jail's refused `peek` in its
+    own box's log, marked with its jail; none for the user's box, another jail's or a name nothing
+    has, nor for `tree` refused on the first two), t_cmdlog_secrets (five
     planted values, none anywhere in the box dir, its HOME or the log), `cmdlog.rs`'s unit tests.
 734. **Every refusal the benchmark's agents hit names the command that does what they meant**
     (2026-11-19, #471 part 2). Audit of the `omabox:` lines in every transcript on disk (bench

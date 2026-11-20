@@ -4801,6 +4801,41 @@ t_unit_broker_side() {
   cx_want=(rc=1 out= 'err=omabox: omabox _rust is not for an agent inside ai-jail'); cx_case "broker: _rust probe refused" _rust probe host_session
   cx_want=(rc=2 out= 'err~^omabox: ls takes no -b: it is not about one box'); cx_case "broker: -b N ls: the front's refusal first" -b rpf ls
   cx_want=(rc=0 'out~^  omabox shot \[-b NAME\]' err=); cx_case "broker: shot --help: the front's help first" shot --help
+  # #447 (finding 733): a refusal before the command runs gets a line in the command log of the box
+  # it names, only when that box is there and the jail's own: never the user's box (no jail in its
+  # box.json), another jail's, nor a name nothing has (no log made for it). jcall-own is jcall's jail
+  # whose box jbox is planted, box.json naming that jail's id, before its caller runs.
+  local cl=$r/rt/omabox/.commands
+  mkdir -p "$r/rt/omabox/ubox" "$r/rt/omabox/fbox"
+  echo '{"name":"ubox"}' > "$r/rt/omabox/ubox/box.json"
+  echo '{"name":"fbox","jail":"1 1"}' > "$r/rt/omabox/fbox/box.json"
+  cat > "$r/jcall-own" <<'EOF'
+#!/bin/bash
+shift; r=$JC_DIR; cd "$r/proj" || exit 99; rm -f go
+exec "$r/aj/ai-jail" -c '
+p=$1 rl=$2 s=$3 bd=$4; shift 4
+bwrap --unshare-pid --die-with-parent --ro-bind / / --dev /dev --proc /proc --bind "$p" "$p" --chdir "$p" -- sh -c '"'"'until [ -e go ]; do sleep 0.05; done; exec "$@"'"'"' sh "$rl" call "$s" -- "$@" & b=$!
+read -r -a st < "/proc/$b/stat"
+mkdir -p "$bd"; printf "{\"name\":\"jbox\",\"jail\":\"%s %s\"}\n" "$b" "${st[21]}" > "$bd/box.json"
+touch "$p/go"; wait "$b"' ai-jail "$r/proj" "$JC_RELAY" "$r/b.sock" "$r/rt/omabox/jbox" "$@"
+EOF
+  chmod +x "$r/jcall-own"
+  for c in ubox fbox nosuch; do
+    cx_want=(rc=1 out= 'err=omabox: omabox peek is not for an agent inside ai-jail'); cx_case "broker: peek -b $c refused" peek -b "$c"
+    check "...no line, no log for $c (#447)" test ! -e "$cl/$c.log"
+  done
+  for c in ubox fbox; do
+    cx_want=(rc=1 out= "err=omabox: box '$c' is not this jail's: an agent inside ai-jail drives only the boxes it started")
+    cx_case "broker: tree -b $c, not this jail's box" tree -b "$c"
+    check "...no line in its log (#447)" test ! -e "$cl/$c.log"
+  done
+  cx_wrap=(env JC_DIR="$r" JC_RELAY="$R" "$r/jcall-own")
+  cx_want=(rc=1 out= 'err=omabox: omabox peek is not for an agent inside ai-jail'); cx_case "broker: peek -b jbox, the jail's own box, refused" peek -b jbox
+  check_eq "...its line in that box's log: the command, the exit, jailed, its jail, the refusal (#447)" \
+    "peek 1 true $(jq -r .jail "$r/rt/omabox/jbox/box.json") omabox peek is not for an agent inside ai-jail" \
+    "$(jq -r '"\(.command) \(.exit) \(.jailed) \(.jail) \(.error)"' "$cl/jbox.log" 2>&1)"
+  cx_wrap=(env JC_DIR="$r" JC_RELAY="$R" "$r/jcall")
+  rm -rf "$r/rt/omabox/ubox" "$r/rt/omabox/fbox" "$r/rt/omabox/jbox" "$cl"
   # (let through: each finds no box here, or refuses its words, as a caller outside a jail is)
   for c in tree cpu gpu gdb pid reload log events; do
     cx_want=(rc=1 out= "err=omabox: no box 'default' is up (start one with: omabox up default)"); cx_case "broker: $c let through" "$c"

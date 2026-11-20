@@ -372,16 +372,26 @@ struct Pending {
 }
 
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
-/// The boxes this command selected (select_box), in order, each once: whether its box dir was there.
-static SELECTED: Mutex<Vec<(Vec<u8>, bool)>> = Mutex::new(Vec::new());
+/// The boxes this command selected (select_box), in order, each once: whether its box dir was there,
+/// and whether it was the caller's then (`callers`).
+static SELECTED: Mutex<Vec<(Vec<u8>, bool, bool)>> = Mutex::new(Vec::new());
 
 /// select_box picked box NAME, its box dir D.
 pub fn selected(name: &[u8], d: &[u8]) {
     if let Ok(mut s) = SELECTED.lock()
-        && !s.iter().any(|(n, _)| n == name)
+        && !s.iter().any(|(n, _, _)| n == name)
     {
-        s.push((name.to_vec(), shell::path(d).is_dir()));
+        s.push((name.to_vec(), shell::path(d).is_dir(), callers(d)));
     }
+}
+
+/// Whether the box at D may get the caller's line in its log: for a jailed caller (a broker's call),
+/// only a box its jail started (its box.json names the jail), never the user's or another jail's
+/// (S9); for anyone else, any.
+fn callers(d: &[u8]) -> bool {
+    !crate::jail::in_jail()
+        || (shell::path(&cat!(d, "/box.json")).is_file()
+            && crate::boxes::meta(d, "jail").0 == crate::jail::jail_id())
 }
 
 /// The front hands CMD ARGS to its command, called at START: kept for `end` when it is a command
@@ -417,12 +427,17 @@ pub fn end(rc: u8, why: Option<String>) {
         .map(|s| s.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|(n, was)| *was || p.cmd == b"up" || shell::path(&cat!(p.boxes, "/", n)).is_dir())
-        .map(|(n, _)| n)
+        .filter(|(n, was, _)| {
+            *was || p.cmd == b"up" || shell::path(&cat!(p.boxes, "/", n)).is_dir()
+        })
+        // (a jailed caller's: a box its jail had when it was selected (a down's), or has now (an up's))
+        .filter(|(n, _, ours)| *ours || callers(&cat!(p.boxes, "/", n)))
+        .map(|(n, _, _)| n)
         .collect();
     if names.is_empty()
         && let Some(n) = named_box(&p.args)
         && shell::path(&cat!(p.boxes, "/", n)).is_dir()
+        && callers(&cat!(p.boxes, "/", n))
     {
         names.push(n);
     }
@@ -452,6 +467,28 @@ pub fn end(rc: u8, why: Option<String>) {
             cat!(crate::json::compact(&rec), "\n").as_slice(),
         );
     }
+}
+
+/// A jailed caller's command the broker refused before it ran (broker_side::check), with RC and WHY
+/// (the refusal): its line, as `end` writes one, in the log of the box it is about (`-b NAME`, else
+/// the jail's default), only when that box is there and the jail's own (`callers`): a name the jail
+/// only typed makes no log, and the user's or another jail's box gets no line.
+pub fn refused(boxes: &[u8], cmd: &[u8], args: &[Vec<u8>], rc: u8, why: &[u8]) {
+    if !crate::jail::in_jail() || !crate::front::BOX_CMDS.contains(&cmd) {
+        return;
+    }
+    let name = if args.iter().any(|a| a == b"-b" || a == b"--box") {
+        named_box(args)
+    } else {
+        let n = crate::select::tame(&crate::select::default_name());
+        n.first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+            .then_some(n)
+    };
+    let Some(n) = name else { return };
+    begin(boxes, cmd, args, std::time::Instant::now());
+    selected(&n, &cat!(boxes, "/", n));
+    end(rc, Some(String::from_utf8_lossy(why).into_owned()));
 }
 
 /// The box `-b NAME` names in ARGS, when it is written as a box name is.
