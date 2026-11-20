@@ -6,6 +6,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ## Unreleased
 
 ### Added
+- **`omabox snapshot` and `omabox diff`: what a program wrote into the box HOME** ([#446](https://github.com/diogochaves/omabox/issues/446)):
+  `snapshot before`, then install, use and remove a plugin or an app, and `diff before` lists what
+  was added, changed or removed, grouped by area (autostart, systemd user units, mimeapps.list,
+  desktop entries, the shell's settings, `~/.config`, elsewhere in HOME...), a new folder as one
+  line. What a box writes on its own is left out (`--ignore PATH` adds, `--all` shows everything),
+  so an idle box diffs to no changes; `diff --seed` starts from what `up` seeded; `--json` too.
+  Links are never followed and FIFOs never opened.
 - **`omabox look app -- CMD`: does it look right, did it log errors, in one call** ([#461](https://github.com/diogochaves/omabox/issues/461)):
   a throwaway box, the program's window shot (keys first with `--keys` and `--type`), its problems
   and output in a short report, exit 1 when it found problems, nothing left up. `omabox look plugin

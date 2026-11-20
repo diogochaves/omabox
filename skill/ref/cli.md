@@ -65,6 +65,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `ports --json` | an array: `box, port, addresses, process, host` |
 | `path --logs --json` | `{NAME: PATH}`, each log there is |
 | `saves --json` | an array: `name, box, saved, size, size_kb, keyring` |
+| `diff --json` | `box, from` (a snapshot, or `seed`), `to` (`now` or a snapshot), `changes` (each `path, change` added/changed/removed, `type, area, what, target, inside`), `left_out, cut` |
 | `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, protect_ports, desktop, confirm_close_available, version, gpus, gpu_auto, gpu_now, hyprland` (OMABOX_HYPRLAND's path, or null) |
 | `calibrate --answer --json` | `result` (one, fit, up, none), `card, marks, scale, fit, fit_size, error_px, worst, off, shot_fit` |
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
