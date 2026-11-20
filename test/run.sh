@@ -2901,7 +2901,7 @@ skill_tools() { python3 -I -c "$SKILL_TOOLS" "$@"; }
 t_unit_skill_tools() {
   # The verbs that act only inside a box and read none of the user's files (SECURITY.md S1-S8): what
   # the skill may pre-approve. A verb added to the skill's list is added here, after that review.
-  local safe=' shot pixel windows window tree keys click scroll drag pointer wait jobs stop log events hyprctl lua restart-shell reload mode output monitor cpu audio gdb calibrate ports ls path brief help '
+  local safe=' shot pixel windows window tree keys click scroll drag pointer wait jobs stop log events snapshot diff hyprctl lua restart-shell reload mode output monitor cpu audio gdb calibrate ports ls path brief help '
   # Never pre-approved: the real desktop, the user's settings and files, other boxes, host commands.
   local never=' host peek keys-to-box clip config guard setup broker up run down save saves gpu record check '
   local verbs v bad='' out='' dup

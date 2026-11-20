@@ -143,7 +143,7 @@ git repo; `up` says so of one without a `.git`: `up --ro-bind DIR` (or `--overla
 
 The skill's `allowed-tools` pre-approves the verbs that act only inside a box and read none of the
 user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `scroll`, `drag`,
-`pointer`, `wait`, `jobs`, `stop`, `log`, `events`, `hyprctl`, `lua`, `restart-shell`, `reload`,
+`pointer`, `wait`, `jobs`, `stop`, `log`, `events`, `snapshot`, `diff`, `hyprctl`, `lua`, `restart-shell`, `reload`,
 `mode`, `output`, `monitor`, `cpu`, `audio`, `gdb`, `calibrate`, `ports`, `ls`, `path`, `brief`,
 `help`. Each is a rule `Bash(omabox VERB *)`, so:
 
@@ -160,7 +160,8 @@ user's files: `shot`, `pixel`, `windows`, `window`, `tree`, `keys`, `click`, `sc
 - **What the listed ones write on the host:** only the images named with `-o` (`shot`, `drag
   --shot`, `calibrate CARD`; a burst's `-o DIR` frames), at a new path or over an earlier image or
   an empty file: a link, a folder or any other file there is refused (`is there and is not a PNG`),
-  untouched. `keys --pass VAR` types a variable of
+  untouched. `snapshot` keeps its record in the box's own folder in the runtime dir, beside the
+  box, never in HOME; `diff` writes nothing. `keys --pass VAR` types a variable of
   the agent's own environment, as the user exported it. `shot --after`'s action takes no
   `--env-file`. Keys, clicks and `hyprctl dispatch exec` run anything inside the box, which reaches
   the network as the box does (ref: Network in session.md): a box the user started is still theirs.
