@@ -22,7 +22,7 @@ PKGS_arch=(
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
   passt                                                                  # every box's network (pasta)
   python                                                                 # the agent guard's Codex check, a jailed box's covers
-  wayland libxkbcommon base-devel pkgconf libpng at-spi2-core glib2 qt6-declarative    # tools/ (pixman below)
+  wayland libxkbcommon base-devel pkgconf libpng at-spi2-core glib2                    # tools/ (pixman below)
   git cmake ninja hyprwayland-scanner hyprutils seatd libdisplay-info hwdata libinput   # aquamarine
   libdrm mesa pixman
 )
@@ -31,7 +31,7 @@ PKGS_debian=(
   quickshell libgtk-3-0t64 xdg-terminal-exec dbus dbus-daemon dbus-bin dbus-user-session
   passt
   python3
-  build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev qt6-declarative-dev
+  build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev
   git cmake ninja-build hyprwayland-scanner libhyprutils-dev libseat-dev libdisplay-info-dev hwdata libinput-dev
   libdrm-dev libgbm-dev libegl-dev libgles-dev libgl-dev libopengl-dev libudev-dev wayland-protocols
 )
@@ -40,7 +40,7 @@ PKGS_fedora=(
   gtk3 xdg-terminal-exec dbus-daemon dbus-tools                          # (no quickshell but COPR's)
   passt
   python3
-  gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel qt6-qtdeclarative-devel
+  gcc make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel
   git cmake ninja-build hyprwayland-scanner-devel gcc-c++ hyprutils-devel libseat-devel libdisplay-info-devel hwdata-devel libinput-devel
   libdrm-devel mesa-libgbm-devel mesa-libEGL-devel mesa-libGL-devel libglvnd-devel systemd-devel wayland-protocols-devel
 )
@@ -49,7 +49,7 @@ PKGS_suse=(
   libgtk-3-0 xdg-terminal-exec dbus-1 dbus-1-daemon dbus-1-tools         # (no quickshell)
   passt
   python3
-  gcc make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel qt6-declarative-devel
+  gcc make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel
   git cmake ninja hyprwayland-scanner gcc-c++ hyprutils-devel seatd-devel libdisplay-info-devel hwdata libinput-devel
   libdrm-devel libgbm-devel Mesa-libEGL-devel Mesa-libGL-devel Mesa-libGLESv2-devel Mesa-libGLESv3-devel systemd-devel wayland-protocols-devel
 )
@@ -58,7 +58,7 @@ PKGS_nix=(
   quickshell gtk3 xdg-terminal-exec dbus
   passt
   python3
-  gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib qt6.qtdeclarative
+  gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib
   git cmake ninja hyprwayland-scanner
 )
 
@@ -167,10 +167,20 @@ cargo --version >/dev/null 2>&1 ||
 # Built before anything runs omabox (#324 wave 6-flip, proposal D2).
 step "Tools"
 # (Not `make && echo`: set -e ignores a failure on the left of &&, and install.sh would carry on.)
-for t in pointer keyboard wlfd peek still burst tree relay events notices polkit fixture idlehold qtext; do
+for t in pointer keyboard wlfd peek still burst tree relay events notices polkit fixture idlehold; do
   make -s -C "$ROOT/tools/$t" || die "building tools/$t failed"
   echo "tools/$t"
 done
+# The shell's text reader (#467) is optional: it needs Qt 6 Quick's headers, which every machine running
+# Quickshell has on Arch (the same package) but other distributions ship apart. Without it, `tree` and
+# `look plugin` read the bar by accessibility only; `up` binds it only when it is built.
+if pkg-config --exists Qt6Quick 2>/dev/null && command -v c++ >/dev/null; then
+  make -s -C "$ROOT/tools/qtext" || die "building tools/qtext failed"
+  echo "tools/qtext"
+else
+  echo "tools/qtext: skipped (no Qt 6 Quick headers: the bar's text in tree and look plugin needs them;" \
+    "Arch qt6-declarative, Debian qt6-declarative-dev, Fedora qt6-qtdeclarative-devel, openSUSE qt6-declarative-devel)"
+fi
 # omabox itself (crates/omabox): into build/omabox by a rename, so no caller ever runs a half-written
 # file, and a command running meanwhile keeps the binary it started with (finding 66). Into ROOT's own
 # target/, whatever target dir the user's CARGO_TARGET_DIR or cargo config names (finding 525).

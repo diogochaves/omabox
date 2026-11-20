@@ -15516,8 +15516,11 @@ t_unit_install() {
   # once left a new tool out (idlehold, notices).
   local want
   want=$(cd "$ROOT/tools" && printf '%s\n' */Makefile | sed 's,/Makefile$,,' | LC_ALL=C sort | paste -sd ' ')
+  check_match "...qtext only when Qt 6 Quick's headers are there: an optional tool never fails the install (#467)" 'pkg-config --exists Qt6Quick' "$(cat "$ROOT/install.sh")"
   check_eq "install.sh builds every tool" "$want" \
-    "$(grep -B1 -F 'make -s -C "$ROOT/tools/$t"' "$ROOT/install.sh" | sed -n 's/^for t in \(.*\); do$/\1/p' | tr ' ' '\n' | LC_ALL=C sort | paste -sd ' ')"
+    "$( { grep -B1 -F 'make -s -C "$ROOT/tools/$t"' "$ROOT/install.sh" | sed -n 's/^for t in \(.*\); do$/\1/p' | tr ' ' '\n'
+      # (and the optional ones built on a line of their own when their headers are there: qtext, #467)
+      grep -oE 'make -s -C "\$ROOT/tools/[a-z]+"' "$ROOT/install.sh" | sed -E 's,.*/tools/([a-z]+)",\1,'; } | LC_ALL=C sort -u | paste -sd ' ')"
   check_eq "...the AUR package too" "$want" \
     "$(sed -n 's/^_tools=(\(.*\))$/\1/p' "$ROOT/packaging/aur/omabox/PKGBUILD" | tr ' ' '\n' | LC_ALL=C sort | paste -sd ' ')"
   # The XDG dirs too: the session sets them, and install.sh's `setup --aquamarine` builds under the

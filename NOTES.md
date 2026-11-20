@@ -14462,6 +14462,11 @@ from them.
     Not covered: a plain box's `--shell` and the desk shells (their command is the user's own, run
     by `sh -c`; preloading it would load Qt Quick into every process it starts), and Qt Quick apps
     (their AT-SPI tree is what `tree` reads).
+    The library is optional (Diogo, 2026-11-19): `install.sh` builds it only when `pkg-config` finds
+    Qt6Quick and a C++ compiler, else says which package gives the headers; no distribution's list of
+    required packages has them. On Arch they come with `qt6-declarative`, which Quickshell depends on,
+    so a machine whose boxes run a shell has them already; without them `tree` and `look plugin` read
+    the bar by accessibility only.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
