@@ -212,15 +212,27 @@ const PKGS: &[(&str, [&str; 5])] = &[
         "ffmpeg",
         ["ffmpeg", "ffmpeg", "ffmpeg-free", "ffmpeg", "ffmpeg"],
     ),
-    // tools/ (C, and C++ with Qt Quick for qtext; wayland-scanner, pkg-config's modules: the Makefiles')
+    // tools/ (C; wayland-scanner, pkg-config's modules: the Makefiles')
     (
         "tools-build",
         [
-            "base-devel pkgconf wayland libxkbcommon libpng pixman at-spi2-core glib2 qt6-declarative",
-            "build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev qt6-declarative-dev",
-            "gcc gcc-c++ make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel qt6-qtdeclarative-devel",
-            "gcc gcc-c++ make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel qt6-declarative-devel",
-            "gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib qt6.qtdeclarative",
+            "base-devel pkgconf wayland libxkbcommon libpng pixman at-spi2-core glib2",
+            "build-essential pkg-config libwayland-dev libxkbcommon-dev libpng-dev libpixman-1-dev libatspi2.0-dev libglib2.0-dev",
+            "gcc gcc-c++ make pkgconf-pkg-config wayland-devel libxkbcommon-devel libpng-devel pixman-devel at-spi2-core-devel glib2-devel",
+            "gcc gcc-c++ make pkgconf wayland-devel libxkbcommon-devel libpng16-compat-devel libpixman-1-0-devel at-spi2-core-devel glib2-devel",
+            "gcc gnumake pkg-config wayland wayland-scanner libxkbcommon libpng pixman at-spi2-core glib",
+        ],
+    ),
+    // tools/qtext, optional (#467): C++ with Qt 6 Quick's headers; install.sh builds it only when they
+    // are there, so no family's required list has them.
+    (
+        "qtext-build",
+        [
+            "qt6-declarative",
+            "qt6-declarative-dev",
+            "qt6-qtdeclarative-devel",
+            "qt6-declarative-devel",
+            "qt6.qtdeclarative",
         ],
     ),
     // setup --aquamarine (the programs it checks for)
@@ -768,7 +780,6 @@ const TOOLS_MODULES: &[&str] = &[
     "libpng",
     "atspi-2",
     "gio-2.0",
-    "Qt6Quick",
 ];
 
 fn tools_check(co: &[u8], fam: Option<Family>, tool: impl Fn(&str) -> Vec<u8>) -> Check {
