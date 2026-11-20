@@ -127,6 +127,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox log [-b NAME] run [JOB] [-n 100|all] [--grep RE [-i]] [-f]   a run -d job's log: JOB its pid (jobs), none the latest
   omabox log [-b NAME] notifications [--json] [-n N] [--grep RE [-i]] [-f]   what apps sent the notification server
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
+  omabox log [-b NAME] commands [-n 100|all] [--grep RE [-i]] [-f] [--json]   the omabox commands run against it, by whom, how they ended
   omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
   omabox events [-b NAME] --mark [MARK] [--json]         from here: prints the offset, keeps MARK for --since
@@ -934,6 +935,14 @@ CloseNotification), `closed #ID expired|dismissed|closed by CloseNotification` a
 one JSON object a record (time, event, id, error, serial, sender, app_name, replaces_id, app_icon,
 summary, body, actions, hints, expire_timeout; reply_time when the id came late). -n and --grep
 count records, --grep matching the text line. Texts are cut at 16 KiB; the log stops at 16 MB.
+`log commands` (#447): every omabox command that named the box, a line each once it ended, read after
+`down` too: `HH:MM:SS.mmm COMMAND WORDS (read; exit RC, S s; pid PID, session ID): ERROR` (read: one
+that only looked at it, waited on it or read its logs; session: the agent's, when known; jailed: one
+that came from an ai-jail, which reads only its jail's lines). --json: an object a line (time, box,
+command, args, read, exit, secs, pid, ppid, jailed, session, jail, error). Never in it: the text of
+`keys -t`, --accept's password, a value in an option omabox has no word for (their lengths), --env's
+and --detail's values (their names); a run's environment. Kept on the host beside the box dirs
+($XDG_RUNTIME_DIR/omabox/.commands, which no box sees), 256 KiB and the 256 KiB before them a box.
 @ gdb
 `gdb` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a
 process of the box), stopped or deadlocked too, and leaves it as it was; -- ARGS replace the backtrace

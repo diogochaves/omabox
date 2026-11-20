@@ -6,6 +6,7 @@ mod boxes;
 mod broker_side;
 mod bwrap;
 mod cmd;
+mod cmdlog;
 mod conf;
 mod crashwatch;
 mod desk;
@@ -124,6 +125,7 @@ fn main() -> ExitCode {
     // that came ignored stays ignored, for it and its children (sig::catch leaves it).
     sig::catch(libc::SIGQUIT, quit_ignored);
     sig::set_main();
+    let called = std::time::Instant::now();
     let _ = CALL_US.set(marks::epoch_us());
     let _ = ROOT.set(find_root());
     let args = std::env::args_os().skip(1);
@@ -209,13 +211,17 @@ fn main() -> ExitCode {
     if let Some(run) = ported {
         let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
         let mut ctx = exit::Ctx::new(cmd.as_encoded_bytes(), cat!(runtime, "/omabox"));
+        // (a command about a box gets a line in its command log once it ends: #447)
+        cmdlog::begin(&ctx.boxes, cmd.as_encoded_bytes(), &words, called);
         let r = run(&mut ctx, &words);
         // (shot --no-pointer's hold, given back however the command ended: bash's EXIT trap)
         ptr::release_at_exit();
-        return match r {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(exit::Exit(rc)) => ExitCode::from(rc),
+        let rc = match r {
+            Ok(()) => 0,
+            Err(exit::Exit(rc)) => rc,
         };
+        cmdlog::end(rc, None);
+        return ExitCode::from(rc);
     }
     match cmd.to_str() {
         // The suite's read-only probe of the helpers it once sourced from bin/omabox (probe.rs).

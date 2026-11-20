@@ -14556,6 +14556,40 @@ from them.
     `Usage:` lines are not omabox's.
 
 
+733. **A box's command log: every omabox command run against it** (2026-11-19, #447). None of a
+    box's logs said what omabox was asked to do to it; with several agents on one box, only their
+    transcripts did. The front now writes one JSON line per command about a box (`front::BOX_CMDS`)
+    once it ends (`cmdlog.rs`; a signal's end from the trap thread, after its undo): time, box,
+    command, its words, `read` (it only looked, waited or read logs), exit code, seconds, the
+    omabox's pid and its parent's, the agent session when known, `jailed` (a broker call: the jailed
+    caller's pid as the broker made sure of it, and the jail's id) and, on a failure, the last line
+    it said. Which box: each that `select_box` picked and that was there then or after, or that an
+    `up` was to make (`down --all` writes to each box it took; a name nothing has, a typo, makes no
+    log); a usage error before any box was picked goes to the box `-b NAME` names, when it is there.
+    Where: `$XDG_RUNTIME_DIR/omabox/.commands/NAME.log`, beside the box dirs, since `down` removes the
+    box dir and its own line comes after (the box HOME and runtime dir, which the box writes, were
+    never a place for it; no box sees this folder). 0700 and 0600, opened with O_NOFOLLOW and read as
+    regular files only; appended under flock. Bounded by rotation: a log a line would take past 256
+    KiB is renamed `NAME.log.1` (the one before it dropped), so a name keeps 512 KiB at most; a log
+    begun prunes gone boxes' logs untouched for 7 days and those past the newest 64. Redaction is an
+    allowlist (S2): an option's value is logged only when the option is in `KEEP` (boxes, windows,
+    geometry, times, paths, names); `--env`'s and `--detail`'s `KEY=VALUE` as `KEY=<hidden>`; every
+    other value (`keys -t`'s text, `polkit ask --accept`'s password, `look --type`, a value written
+    into an option the command does not know: `--nosuch=VALUE`) as `<hidden: N bytes>`. A unit test
+    fails when an option that takes a value is in none of the three lists. A command's own words are
+    kept (a run's command line, as `ps` shows it; key combos, coordinates), for the commands listed;
+    an action after `shot --after --` or `record --` is split and redacted as the command it is. The
+    environment is never read. A hidden value of 4 bytes or more is replaced in the error line, a
+    shorter one found there leaves the line out (`--nosuch=VALUE`'s refusal names it). `omabox log
+    commands [-n N] [--grep RE [-i]] [-f] [--json]` reads `.1` then the log, a box up, dead or gone;
+    text `HH:MM:SS.mmm COMMAND WORDS (read; exit RC, S s; pid PID, session ID): ERROR`; a jailed
+    caller sees only its jail's lines (a gone box has no box.json to say whose it was); `-f` follows
+    while the box is up, then 2 s for the `down`'s line. Not logged: a command killed by SIGKILL or
+    ended by a signal in a follow (`sig.rs`'s async `_exit`), a relayed call's refusal by the broker
+    before it runs, and the jailed side of a relay (its broker's call is the line). Tests: t_cmdlog
+    (a sequence read back in order, reads and exit codes, after `down` too), t_cmdlog_secrets (five
+    planted values, none anywhere in the box dir, its HOME or the log), `cmdlog.rs`'s unit tests.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

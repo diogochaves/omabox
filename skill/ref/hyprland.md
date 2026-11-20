@@ -90,6 +90,11 @@ Sections:
   not in the file yet from `omabox hyprctl rollinglog` (its last 4 KiB), and says on stderr when the
   file is further behind than that (the lines between come later). `-f` follows the file, so a line
   about what just happened can come many lines later; `omabox hyprctl rollinglog` has it at once.
+- `omabox log commands [-n 100|all] [--grep RE [-i]] [-f] [--json]`: every omabox command run against
+  the box, in order, by whom (pid, agent session), how it ended (exit code, seconds, its error line),
+  reads marked `read`; after `down` too. When several agents share a box, or it is in a state nobody
+  expected, this says who clicked, typed or reloaded what. Typed text (`keys -t`), `--accept`'s
+  password and `--env` values are never in it (lengths, names).
 - `omabox events`: Hyprland's event stream (`activewindow>>`, `urgent>>`, `openlayer>>`,
   `workspace>>`, ...) as the box recorded it from its start, one stamped line each (`--json`:
   `{time, event, data}`). Never hand-roll a socat on `.socket2.sock`, and never truncate a log

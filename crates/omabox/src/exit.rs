@@ -41,6 +41,13 @@ pub fn is_muted() -> bool {
     MUTE.with(std::cell::Cell::get)
 }
 
+/// The last line `say` said (a command's error line, for its command log: #447).
+static LAST_SAID: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+pub fn last_said() -> Vec<u8> {
+    LAST_SAID.lock().map(|l| l.clone()).unwrap_or_default()
+}
+
 /// `say`: one line on stderr.
 pub fn say(m: impl AsRef<[u8]>) {
     if MUTE.with(std::cell::Cell::get) {
@@ -49,6 +56,9 @@ pub fn say(m: impl AsRef<[u8]>) {
     let mut line = b"omabox: ".to_vec();
     line.extend_from_slice(m.as_ref());
     line.push(b'\n');
+    if let Ok(mut l) = LAST_SAID.lock() {
+        l.clone_from(&line);
+    }
     #[cfg(test)]
     if HEARD.with(|h| h.borrow_mut().as_mut().map(|h| h.extend_from_slice(&line))) == Some(()) {
         return;
