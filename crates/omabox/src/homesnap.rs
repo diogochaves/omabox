@@ -338,6 +338,8 @@ pub const NOISE: &[&str] = &[
     ".local/state/omarchy/agents",
     ".local/state/mise",
     ".local/share/hyprland/lastVersion",
+    // (Omarchy 4.0's Hyprland writes its update notice's time beside it)
+    ".local/share/hyprland/lastNag",
     ".local/share/keyrings/login.keyring",
     ".local/share/keyrings/default",
     ".config/pipewire/*/90-omabox.conf",

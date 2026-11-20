@@ -3,6 +3,12 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+- **`diff` on Omarchy 4.0 listed Hyprland's `lastNag`** in an idle box (`+ ~/.local/share/hyprland/`):
+  it is noise, as `lastVersion` beside it already was.
+
 ## 1.5.0 — 2026-11-20
 
 `omabox look`: an app, a plugin, a theme or a web page checked in one call, with a shot, what it
