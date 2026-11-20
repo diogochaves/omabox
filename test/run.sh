@@ -378,6 +378,10 @@ evidence() {
   local e=$EVID/${CUR:-none} b d q f bd
   mkdir -p "$e" 2>/dev/null || return 0
   printf '%s\n%s\n\n' "$1" "$2" >> "$e/failures.txt"
+  # A test whose check runs write shots (#466) names their folder in EV_PNGS: its images are kept
+  # (the run's shots, a diff, a report), the suite's TMP being gone once it ends.
+  [ -z "${EV_PNGS:-}" ] || [ ! -d "$EV_PNGS" ] ||
+    (cd "$EV_PNGS" && command find . -name '*.png' -exec cp --parents -t "$(mkdir -p "$e/pngs" && echo "$e/pngs")" {} + 2>/dev/null)
   [ ! -e "$e/boxes" ] || { ev_nested "$e"; return 0; }
   mkdir -p "$e/boxes"
   [ ! -s "$UNTIL" ] || cp "$UNTIL" "$e/last-wait.txt"
@@ -5187,6 +5191,11 @@ EOF
   local later; later=$(date -d '+1 hour' +%s)
   ev 2 "@$later"
   check_eq "...but not over a test's use of the box meanwhile (finding 237)" "$later" "$(stat -c %Y "$r/rt/omabox/$P-ev/used")"
+  # #466: a test's check-run shots (EV_PNGS) kept with its failure, their folders too; nothing else.
+  mkdir -p "$r/shots/e/run1"; : > "$r/shots/e/report.png"; : > "$r/shots/e/run1/whole.png"; : > "$r/shots/e/run1.log"
+  EV_PNGS=$r/shots ev 3
+  check_eq "evidence keeps the PNGs of the folder a test names in EV_PNGS (#466)" "./e/report.png ./e/run1/whole.png" \
+    "$(cd "$r/evid-3/t_x/pngs" && command find . -type f | LC_ALL=C sort | paste -sd ' ')"
   # #406: a box started inside one (a stand-in host's, t_guard's nested up): its logs too, read from
   # inside the outer box (the stand-in's `run` runs the command with the outer box's runtime dir), at
   # every failure, as the test's `down` of it or the outer box's end takes them.
@@ -10334,7 +10343,7 @@ t_clean() {
 # backdrop of a random colour: its digits alone left one the two approve runs shared (the first, one
 # time in ten) out of the unstable region, and the next check read it as changed.
 t_check() {
-  local d=$TMP/chk out rc
+  local d=$TMP/chk out rc EV_PNGS=$TMP/chk
   if ! command -v qml6 >/dev/null 2>&1 || ! command -v magick >/dev/null; then
     skip "check run end to end" "no qml6 (qt6-declarative) or magick"; return
   fi
@@ -16804,7 +16813,7 @@ EOF
   cx_case "gdb: traced already by the watcher" gdb -b "$B" --watch
   cx_gdbw; cx_prep=""
   fi
-  local ck=$TMP/rp-check; rm -rf "$ck"; mkdir -p "$ck"
+  local ck=$TMP/rp-check EV_PNGS=$TMP/rp-check; rm -rf "$ck"; mkdir -p "$ck"
   local r_sig=$TMP/rp-sig-live; rp_sig_write "$r_sig"
   cx_ckp() { rm -rf "$ck/p"; mkdir -p "$ck/p"; }
   cx_ckls() { (cd "$ck" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in $(command find . -name '*.point' | LC_ALL=C sort); do echo "== $f"; cat "$f"; done); }
@@ -16832,8 +16841,10 @@ EOF
   cx_case "check diff: two shots of the box" check diff "$ck/p/s1.png" "$ck/p/s1.png"
   cx_want=(rc=1 'out={"result":"changed","size":{"from":"1920x1080","to":"300x200"},"regions":[],"specks":null,"marked":null,"report":null,"report_scaled":null}' err=)
   cx_case "check diff: sizes" check diff --json "$ck/p/s1.png" "$ck/p/s2.png"
-  # check run: a scenario that takes two checkpoints; its boxes named as the suite's.
-  printf '#!/bin/sh\nomabox check point whole && omabox check point part -g "0,0 400x300"\n' > "$ck/scen"; chmod +x "$ck/scen"
+  # check run: a scenario that takes two checkpoints; its boxes named as the suite's. (#466: the
+  # bar's right icons left out of whole, as in t_check: a clean box now and then draws its network
+  # icon at 1838,7 otherwise for a whole run, which no state of the widget explains, finding 731)
+  printf '#!/bin/sh\nomabox check point whole --ignore "1780,0 140x26" && omabox check point part -g "0,0 400x300"\n' > "$ck/scen"; chmod +x "$ck/scen"
   # (a checkpoint with -g and --ignore with zeros in front, 010 and 08, on a clean box: read as
   # decimal, its --ignore 010,010 is 0,0 of its region at 10,10 and 08,0 is outside it, finding 448)
   printf '#!/bin/sh\nomabox check point lz -g "010,010 400x300" --ignore "08,0 10x10" --ignore "010,010 20x20"; omabox check point lz8 -g "08,0 400x300"; omabox check point whole\n' > "$ck/lz"; chmod +x "$ck/lz"

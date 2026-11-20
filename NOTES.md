@@ -14468,7 +14468,7 @@ from them.
     so a machine whose boxes run a shell has them already; without them `tree` and `look plugin` read
     the bar by accessibility only.
 
-727. **A Hyprland option is set with hl.config; keyword says so** (2026-11-19, #468). Under the Lua
+728. **A Hyprland option is set with hl.config; keyword says so** (2026-11-19, #468). Under the Lua
     config, `hyprctl keyword general:gaps_out 40` (and the guessed `set`) answers `unknown request`
     with exit 0 and sets nothing; `hl.config({ general = { gaps_out = 40 } })` through `omabox lua`
     sets it (`getoption general:gaps_out`: `css gap data: 40 40 40 40`). Measured in a clean box on
@@ -14481,14 +14481,14 @@ from them.
     is, anything else a Lua string), each command of a `--batch` too. `help lua` (short and long)
     and `ref/hyprland.md` show the line; SKILL.md's table names options for that page.
 
-728. **An --image that is no PNG names the text route** (2026-11-19, #469). In the benchmark (726)
+729. **An --image that is no PNG names the text route** (2026-11-19, #469). In the benchmark (726)
     a model took `find --image "cups"` for a text search and got `find: no such file: cups`. The
     refusals of a template that is missing or no PNG now end with the same question asked of text,
     for each command that reads one: `find` `; --image takes a PNG; to find text: omabox tree
     --find TEXT`, `click --image` `omabox click --find TEXT`, `wait image` `omabox wait tree TEXT`
     (`find::text_route`). Exit 1 as before.
 
-729. **up says when its GPU is nearly out of video memory** (2026-11-19, #470). With a local model
+730. **up says when its GPU is nearly out of video memory** (2026-11-19, #470). With a local model
     holding 14.6 of the RTX's 16 GB, a suite on that GPU lost 175 checks to "shell not ready after
     30s" (726). Decided (Diogo, 2026-11-19): warn, never switch. A headless box's `up` reads its
     render node's VRAM when it picks the node and, once the box is up, says `note: GPU nvidia
@@ -14503,6 +14503,31 @@ from them.
     GPU). The other GPU is the first usable render node on another slot that renders on the GPU.
     Checked in a box with the threshold raised (the note, from nvidia-smi, after the up line) and
     as built (nothing at 15.5 GB free); unit-tested on a stand-in sysfs and nvidia-smi's answers.
+
+731. **The clean box's network icon has no state to pin, and nothing settles after up** (2026-11-19,
+    #466, after 725). The icon at 1838,7 is Omarchy's `omarchy.network` bar widget
+    (`plugins/panels/network/Panel.qml`): `Model.connectionIcon(kind, signal, connectivity)`, where
+    `kind` comes from Quickshell's Networking service. A box has no system bus, so its shell logs
+    `quickshell.network: Network will not work. Could not find an available backend`, `kind` is
+    `disconnected` and the icon `󰤮` (wifi off) in the bar's foreground, with no timer or poll that
+    could change it (`active` needs a captive portal or limited connectivity, which a disconnected
+    kind never has). Measured: 73 clean boxes, none drew it otherwise: 4 one after another beside 32
+    CPU spinners, 24 eight at a time, 24 twelve at a time beside 16 spinners, 12 one after another
+    beside `test/run.sh unit`, 9 runs of `check run --approve` beside t_check; each shot right after
+    `up` (and 5-6 s later, the same), one md5 per geometry. The
+    four failures of the day (725's two, t_cli_box's two) came with no local model loaded on the RTX
+    (the journal's start and stop times), and t_check's first was alone, so neither load nor VRAM
+    explains them. What the failures do show: the changed checkpoint also had 7 specks elsewhere in
+    the bar (the largest 5 px), where passing runs agree to the pixel; a slightly different
+    rendering of the whole bar, the network glyph's thin diagonal strokes over the speck size,
+    rather than another state. Unverified guess: the shell's distance-field glyph cache (bar icons
+    are drawn scaled, `Text.QtRendering`) filled in another order or size in that run. So nothing
+    to pin in shell.json (the clock is pinned there because it has a format), and waiting in `up`
+    would wait for a change that never comes in a box's life. t_check keeps 912a41a's `--ignore
+    "1780,0 140x26"`, and t_cli_box's check-run scenario takes the same on its `whole` checkpoint;
+    their outputs as expected are unchanged. And a test can now name the folder its check runs
+    write in `EV_PNGS`: `evidence` keeps its PNGs (the run's shots, diff and report) with the
+    failure, so the next one shows what was drawn instead (t_check and t_cli_box do).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
