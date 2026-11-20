@@ -19866,7 +19866,13 @@ t_conf_host() {
   ob run -b "$B" -d -q -- sh -c 'unset HYPRLAND_INSTANCE_SIGNATURE; HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 exec Hyprland --config /home/sbx/conf-host.conf > /home/sbx/conf-host.log 2>&1' >/dev/null 2>&1
   # shellcheck disable=SC2329 # called through until_ok
   nested() { "${in[@]}" sh -c 'hyprctl -j instances | jq -er --arg o "$HYPRLAND_INSTANCE_SIGNATURE" "first(.[] | select(.instance != \$o) | .instance)"'; }
-  until_ok 20 nested || { no "a Hyprland on a .conf config in the stand-in" "$(tail -n 5 "$h/conf-host.log")"; ob down "$B" >/dev/null; return; }
+  until_ok 20 nested || {
+    # (the system's Hyprland on the box's libraries: one built against an aquamarine of its own, found by
+    # its RUNPATH, does not load the OMABOX_HYPRLAND folder's, which the box puts first)
+    if grep -q 'symbol lookup error' "$h/conf-host.log" 2>/dev/null; then
+      skip "a .conf Hyprland host (#422)" "the system's Hyprland does not start on this box's libraries: $(grep -m 1 'symbol lookup error' "$h/conf-host.log" | cut -c1-120)"
+    else no "a Hyprland on a .conf config in the stand-in" "$(tail -n 5 "$h/conf-host.log")"; fi
+    ob down "$B" >/dev/null; return; }
   sig=$(nested)
   local at=("$CLI" run -b "$B" -- "${HYPR_IN[@]}" env HYPRLAND_INSTANCE_SIGNATURE="$sig")
   # (that Hyprland is the box's /usr/bin/Hyprland, the system's whatever OMABOX_HYPRLAND says: from 0.57
