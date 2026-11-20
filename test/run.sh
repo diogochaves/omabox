@@ -16669,8 +16669,10 @@ t_cli_box() {
   cx_case "pixel: off the screen" pixel -b "$B" 5000 1
   cx_want=(rc=2 out= "err=omabox: tree: the box has no window; the shell's bar, panels and menus are layers: tree --layer NAMESPACE (omabox hyprctl layers)")
   cx_case "tree: no window" tree -b "$B"
-  # (#467: the shell's text reader gives the bar's text, so the bar is no longer empty to tree)
-  cx_want=(rc=0 "out~^frame \"$BAR_NS\" @[0-9]+,[0-9]+ [0-9]+x[0-9]+\$" 'out~^  text "' err=)
+  # (#467: the shell's text reader gives the bar's text, so the bar is no longer empty to tree; a
+  # plain box's --shell CMD is not started with it: its bar is as before)
+  if omarchy_here; then cx_want=(rc=0 "out~^frame \"$BAR_NS\" @[0-9]+,[0-9]+ [0-9]+x[0-9]+\$" 'out~^  text "' err=)
+  else cx_want=(rc=1 out= "err~^omabox: tree: layer \"$BAR_NS\" \\(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\\): the layer publishes no accessible items"); fi
   cx_case "tree --layer: the bar" tree -b "$B" --layer "$BAR_NS"
   cx_want=(rc=2 out= "err~^omabox: no layer matches rp-none \\(a namespace, address:0x\\.\\.\\. or pid:PID\\); the box's layers:\$" "err~\"$BAR_NS\"")
   cx_case "tree --layer: none such, 2" tree -b "$B" --layer rp-none
@@ -23704,6 +23706,7 @@ look_app_checks() {
 # widget is the good one; a copy with a QML error put in, the broken one.
 look_plugin_checks() {
   local out rc shot=$TMP/$P-lookp.png bad=$TMP/$P-lookp-bad left
+  if ! omarchy_here; then skip "look plugin" "no Omarchy here (a plugin is Omarchy's shell's)"; return; fi
   out=$(ob look plugin "$ROOT/plugin" --stock-bar --open -o "$shot" 2>&1); rc=$?
   check_eq "look plugin on a working plugin: 0 ($out)" 0 "$rc"
   check_match "...its bar shot named" "^screenshot: $shot"$'\n' "$out"

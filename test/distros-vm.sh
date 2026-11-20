@@ -11,7 +11,8 @@
 # then over SSH as that user: this checkout's HEAD as a release tarball has it (git archive, its
 # export-ignore honoured), install.sh until it passes (each `sudo CMD` it stops with run with the
 # guest's sudo, made non-interactive), omabox setup and doctor, test/distros-boxes.sh's plain boxes,
-# and with --suite the whole of test/run.sh, from a Hyprland session autologged in on tty1. The VM
+# and with --suite the whole of test/run.sh (OMABOX_VM_SUITE_ARGS: its arguments, e.g. "-j 1 t_race"
+# for some tests one at a time), from a Hyprland session autologged in on tty1. The VM
 # is destroyed afterwards unless --keep (then `ssh -i DIR/<distro>/key user@IP`, printed).
 #
 # Boxes in a guest need GPU acceleration: virgl, rendered by QEMU's egl-headless on a host render
@@ -259,7 +260,7 @@ EOF
       { echo "no git repo for the suite"; return 1; }
     # shellcheck disable=SC2016 # expanded in the guest
     g "$P"' export HYPRLAND_INSTANCE_SIGNATURE=$(ls -t "$XDG_RUNTIME_DIR"/hypr/ | head -n 1) WAYLAND_DISPLAY=wayland-1;
-      test/run.sh' > "$out/suite.log" 2>&1 || rc=1
+      test/run.sh '"${OMABOX_VM_SUITE_ARGS:-}" > "$out/suite.log" 2>&1 || rc=1
     tail -n 30 "$out/suite.log"
     g 'tar -cf - -C ~/.local/state/omabox test 2>/dev/null' | tar -xf - -C "$out" 2>/dev/null || true
   fi
