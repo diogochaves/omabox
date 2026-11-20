@@ -10684,7 +10684,8 @@ t_check_only() {
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "${OMABOX_CHECK_ONLY-unset}" > "$OMABOX_CHECK_OUT/only.txt"
-omabox check point bar -g "0,0 1920x26"
+# (#466, finding 731: the bar's right icons left out, as in t_check)
+omabox check point bar -g "0,0 1920x26" --ignore "1780,0 140x26"
 if omabox check wants win win-crop; then
   : > "$OMABOX_CHECK_OUT/drove-win"
   cat > "$(omabox path)/home/o.qml" <<QML
@@ -17079,7 +17080,7 @@ EOF
   printf '#!/bin/sh\nomabox check point whole --ignore "1780,0 140x26" && omabox check point part -g "0,0 400x300"\n' > "$ck/scen"; chmod +x "$ck/scen"
   # (a checkpoint with -g and --ignore with zeros in front, 010 and 08, on a clean box: read as
   # decimal, its --ignore 010,010 is 0,0 of its region at 10,10 and 08,0 is outside it, finding 448)
-  printf '#!/bin/sh\nomabox check point lz -g "010,010 400x300" --ignore "08,0 10x10" --ignore "010,010 20x20"; omabox check point lz8 -g "08,0 400x300"; omabox check point whole\n' > "$ck/lz"; chmod +x "$ck/lz"
+  printf '#!/bin/sh\nomabox check point lz -g "010,010 400x300" --ignore "08,0 10x10" --ignore "010,010 20x20"; omabox check point lz8 -g "08,0 400x300"; omabox check point whole --ignore "1780,0 140x26"\n' > "$ck/lz"; chmod +x "$ck/lz"
   printf '#!/bin/sh\necho trying; exit 5\n' > "$ck/bad"; printf '#!/bin/sh\necho nothing\n' > "$ck/none"; chmod +x "$ck/bad" "$ck/none"
   cx_ckr() { rm -rf "$ck/base" "$ck/o"; }
   cx_prep=cx_ckr cx_env=(OMABOX_CHECK_NAME="$P-rpc") cx_also=cx_ckls
