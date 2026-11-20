@@ -347,9 +347,22 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             rd.re
         )));
     }
+    // (#447: the omabox commands run against the box, a log of the host's, read alone)
+    if srcs.iter().any(|s| s == b"commands") {
+        if srcs.len() > 1 {
+            return Err(ctx.die(
+                "log: commands is read alone (omabox log commands [-n N] [--grep RE] [-f] [--json])",
+            ));
+        }
+        if crash {
+            return Err(ctx.die("log: --crash is the gdb log's alone (omabox log gdb --crash)"));
+        }
+        return commands(ctx, &name, &rd, &n, json, follow, width);
+    }
     let mut all: Vec<&str> = LOG_NAMES.to_vec();
     all.push("all");
-    let choices = format!("({}, all)", LOG_NAMES.join(" "));
+    all.push("commands");
+    let choices = format!("({}, all; commands alone)", LOG_NAMES.join(" "));
     for s in &srcs {
         if !all.iter().any(|c| c.as_bytes() == s.as_slice()) {
             return Err(unknown_word(ctx, "log", "log", s, &choices, &all));
@@ -743,6 +756,98 @@ fn show(
         let _ = g.wait();
     }
     0
+}
+
+/// `log commands` (#447): the omabox commands run against box NAME, from the host's log of them
+/// (cmdlog.rs), a box up, dead or gone; -f follows it while the box is up. A jailed caller reads
+/// only its jail's lines.
+fn commands(
+    ctx: &mut Ctx,
+    name: &[u8],
+    rd: &Reading,
+    n: &[u8],
+    json: bool,
+    follow: bool,
+    width: usize,
+) -> Res<()> {
+    use crate::cmdlog;
+    select_box(ctx, name)?;
+    let jail = crate::jail::in_jail().then(crate::jail::jail_id);
+    let count = shell::test_int(n).and_then(|v| usize::try_from(v).ok());
+    let width = if json { 0 } else { width };
+    let up = || crate::boxes::box_state(&ctx.d) == "up";
+    let Some(data) = cmdlog::read(&ctx.boxes, &ctx.name) else {
+        return Err(ctx.die(cat!(
+            "box '",
+            ctx.name,
+            "' has no command log: no omabox command has named it since this session's runtime dir was made"
+        )));
+    };
+    let recs = cmdlog::records(&data, jail.as_deref());
+    out(cut_lines(
+        &cmdlog::show(&recs, json, &rd.re, rd.icase, count),
+        width,
+    ))?;
+    if !follow {
+        return Ok(());
+    }
+    if !up() {
+        say(cat!(
+            "box '",
+            ctx.name,
+            "' is down: the commands run against it as they were"
+        ));
+        return Ok(());
+    }
+    // Followed by its size: a log begun anew (its .1 made) is read from its start. The box's end ends
+    // it, 2 s later (a `down`'s line is written once the box is gone).
+    let p = cmdlog::log_path(&ctx.boxes, &ctx.name);
+    let size = |p: &std::path::Path| {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata(p)
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .map(|m| (m.ino(), m.len()))
+    };
+    let (mut ino, mut at) = size(&p).unwrap_or((0, 0));
+    // (what was read was the whole file: its lines past `at` are new)
+    at = at.min(u64::try_from(data.len()).unwrap_or(u64::MAX));
+    let mut part: Vec<u8> = Vec::new();
+    let mut gone: Option<std::time::Instant> = None;
+    loop {
+        if let Some((i, len)) = size(&p) {
+            if i != ino {
+                (ino, at) = (i, 0);
+                part.clear();
+            }
+            if len > at
+                && let Some(mut f) = cmdlog::open(&p, false)
+            {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut buf = Vec::new();
+                if f.seek(SeekFrom::Start(at)).is_ok() && f.read_to_end(&mut buf).is_ok() {
+                    at += u64::try_from(buf.len()).unwrap_or(0);
+                    part.extend_from_slice(&buf);
+                }
+            }
+        }
+        if let Some(k) = part.iter().rposition(|&c| c == b'\n') {
+            let whole: Vec<u8> = part.drain(..=k).collect();
+            let recs = cmdlog::records(&whole, jail.as_deref());
+            out(cut_lines(
+                &cmdlog::show(&recs, json, &rd.re, rd.icase, None),
+                width,
+            ))?;
+        }
+        match gone {
+            None if !up() => gone = Some(std::time::Instant::now()),
+            Some(t) if t.elapsed() >= std::time::Duration::from_secs(2) => break,
+            _ => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    say(cat!("box '", ctx.name, "' went down"));
+    Ok(())
 }
 
 #[cfg(test)]
