@@ -2,7 +2,7 @@
 
 The safety rules are in `SKILL.md` ("Never"), some spelled out here; nothing here relaxes them.
 
-Read it for `omabox lua`, `hyprctl` in a box, dispatchers, the box's logs and events.
+Read it for `omabox lua`, `hyprctl` in a box, setting an option (gaps), dispatchers, the box's logs and events.
 
 Sections:
 
@@ -17,6 +17,15 @@ Sections:
   tables and Hyprland's objects (a window, a monitor, a layer) as JSON, objects inside them by name
   (`HL.Workspace(1:1)`); `--json` quotes strings too. A long script: `omabox lua - < script.lua`. A Lua
   error is exit 1 with its message. Globals you set stay for the next call (until a config reload).
+- **Setting a Hyprland option** (gaps, borders, blur): `omabox lua 'hl.config({ general = {
+  gaps_out = 40 } })'`, read back with `omabox hyprctl getoption general:gaps_out` (`css gap data:
+  40 40 40 40`). The option `a:b:c` is `{ a = { b = { c = V } } }`; a name with a dot in brackets:
+  `hl.config({ general = { ["col.active_border"] = "rgba(ff0000ff)" } })`. `hyprctl keyword` and
+  `hyprctl set` set nothing under the Lua config (Hyprland answers `unknown request`): `omabox
+  hyprctl` fails them, exit 1, with the `hl.config` for them. An option Hyprland does not know is not
+  `lua`'s error: it lands in `omabox hyprctl configerrors` (`unknown config key 'general.nosuch'`).
+  A config reload drops what `hl.config` set; to keep it across one, put the line in the box HOME's
+  `looknfeel.lua` (below).
 - **Lua dispatchers.** A box's Hyprland runs a Lua config, where `hyprctl dispatch X` runs
   `hl.dispatch(X)`: the old syntax (`dispatch fullscreen 0`, `dispatch togglefloating`) dispatches
   nothing. `omabox hyprctl` fails it (hyprctl's 7; a `--batch`'s 1, where hyprctl says 0) and

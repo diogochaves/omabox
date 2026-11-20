@@ -14468,6 +14468,19 @@ from them.
     so a machine whose boxes run a shell has them already; without them `tree` and `look plugin` read
     the bar by accessibility only.
 
+727. **A Hyprland option is set with hl.config; keyword says so** (2026-11-19, #468). Under the Lua
+    config, `hyprctl keyword general:gaps_out 40` (and the guessed `set`) answers `unknown request`
+    with exit 0 and sets nothing; `hl.config({ general = { gaps_out = 40 } })` through `omabox lua`
+    sets it (`getoption general:gaps_out`: `css gap data: 40 40 40 40`). Measured in a clean box on
+    0.57.2: a bool takes `false` or `0`, a number given as a string (`"40"`) is taken, a name with a
+    dot goes in brackets (`["col.active_border"] = "rgba(ff0000ff)"`, read back as a gradient); an
+    unknown key (`general.nosuch`) is no error in `lua`'s answer, only in `hyprctl configerrors`
+    (`unknown config key 'general.nosuch'`). `omabox hyprctl` now fails a `keyword`/`set` that got
+    `unknown request` (1, or hyprctl's own code) and prints the `omabox lua 'hl.config(…)'` for it
+    and the getoption that reads it back (`config_for`: a:b:c nested, a number or true/false as it
+    is, anything else a Lua string), each command of a `--batch` too. `help lua` (short and long)
+    and `ref/hyprland.md` show the line; SKILL.md's table names options for that page.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

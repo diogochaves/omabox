@@ -2843,6 +2843,9 @@ t_unit_version() {
   check "...and names ref/loop.md for the rest" grep -qF 'ref: loop.md' <<<"$sk_body"
   # #464: a text-only model in the benchmark Read shots it could not see; the core names the text routes.
   check "...and the text routes for a model without image input (#464)" grep -qF "No image input" <<<"$sk_body"
+  # #468: models guessed hyprctl set/keyword for 5-8 calls; the option's form is in both places.
+  check "help lua and ref/hyprland.md: a Hyprland option set with hl.config, read back with getoption (#468)" \
+    bash -c "'$CLI' help lua | grep -qF \"omabox lua 'hl.config({ general = { gaps_out = 40 } })', read\" && '$CLI' help lua --long | tr '\n' ' ' | grep -qF \"omabox lua 'hl.config({ general = { gaps_out = 40 } })' (a:b:c\" && '$CLI' help lua --long | grep -qF 'omabox hyprctl getoption general:gaps_out' && tr '\n' ' ' < '$ROOT/skill/ref/hyprland.md' | tr -s ' ' | grep -qF \"omabox lua 'hl.config({ general = { gaps_out = 40 } })'\" && grep -qF 'omabox hyprctl getoption general:gaps_out' '$ROOT/skill/ref/hyprland.md'"
   check "ref/loop.md sends text questions to tree, not a shot (#270)" grep -qF '`tree --find TEXT` (~60 tokens), not a' "$ROOT/skill/ref/loop.md"
   # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
   check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/ref/loop.md"
@@ -9337,6 +9340,20 @@ t_hypr_old_dispatch() {
   err=$(ob hyprctl -b "$B" dispatch pin 2>&1 >/dev/null); rc=$?
   check_match "one with no Lua given: non-zero, where the Lua dispatchers are" \
     "^[1-9]+ omabox: hyprctl: dispatch pin is the old .*Instead, a Lua dispatcher: omabox lua -b $B 'hl\.dispatch\(hl\.dsp\.…\)'" "$rc $err"
+  # #468: keyword (or a guessed set) is Hyprland's `unknown request` there, hyprctl's 0, the option
+  # untouched; it fails with the hl.config for it, which sets it, read back with getoption.
+  out=$(ob hyprctl -b "$B" keyword general:gaps_out 40 2>"$TMP/hod-err"); rc=$?; err=$(cat "$TMP/hod-err")
+  check_eq "keyword general:gaps_out 40: exit 1, Hyprland's answer as it came" "1 unknown request" "$rc $out"
+  check_eq "...the hl.config for it on stderr" \
+    "omabox: hyprctl: keyword general:gaps_out 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b $B 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b $B getoption general:gaps_out (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)" "$err"
+  check_fails "...the option untouched" grep -q "^css gap data: 40 " <<<"$(ob hyprctl -b "$B" getoption general:gaps_out)"
+  check "...that Lua run" ob lua -b "$B" "$(sed -n "s/.*Instead: omabox lua -b $B '\(.*\)', read back.*/\1/p" <<<"$err")"
+  check_match "...sets it" "^css gap data: 40 40 40 40" "$(ob hyprctl -b "$B" getoption general:gaps_out)"
+  err=$(ob hyprctl -b "$B" set 'general:col.active_border' 'rgba(ff0000ff)' 2>&1 >/dev/null); rc=$?
+  check_match "set, a name with a dot: exit 1, in brackets" \
+    "^1 .*Instead: omabox lua -b $B 'hl\.config\(\{ general = \{ \[\"col\.active_border\"\] = \"rgba\(ff0000ff\)\" \} \}\)'" "$rc $err"
+  out=$(ob hyprctl -b "$B" getoption general:gaps_out 2>&1); rc=$?
+  check_match "...getoption untouched: 0" "^0 css gap data" "$rc $out"
   out=$(ob hyprctl -b "$B" dispatch 'hl.dsp.window.float({ action = "disable", window = "title:^A$" })' 2>&1); rc=$?
   check_eq "a Lua dispatch: ok, exit 0, nothing more said" "0 ok" "$rc $out"
   out=$(ob hyprctl -b "$B" --batch 'dispatch hl.dsp.focus({ workspace = "1" }) ; dispatch hl.dsp.focus({ workspace = "3" })' 2>&1); rc=$?

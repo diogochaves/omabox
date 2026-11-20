@@ -182,6 +182,9 @@ too (omabox -b NAME windows).
 --layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N
 @short log events
 -f (or --follow): on until the box goes down
+@short lua hyprctl
+A Hyprland option (gaps, borders): omabox lua 'hl.config({ general = { gaps_out = 40 } })', read
+back with omabox hyprctl getoption general:gaps_out; hyprctl keyword sets nothing in a box.
 @ path
 From the host, the box's HOME (/home/sbx in it, or your HOME's path in a desk box) is <dir>/home,
 `omabox path --home`, and its /run/user/$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, `omabox path
@@ -896,12 +899,18 @@ rules and Lua state added since are gone.
 numbers as they are, nil as nil, tables and Hyprland's objects (a window, a monitor) as JSON (--json:
 strings quoted too). A Lua error is exit 1 with its message. An error inside a callback (hl.on,
 hl.timer) that runs later is logged nowhere: catch it with pcall.
+A Hyprland option is set with hl.config: omabox lua 'hl.config({ general = { gaps_out = 40 } })'
+(a:b:c is { a = { b = { c = V } } }, ["col.active_border"] for a name with a dot), read back with
+omabox hyprctl getoption general:gaps_out. An option Hyprland does not know is not lua's error: it
+is in omabox hyprctl configerrors. A config reload drops it.
 @ hyprctl lua
 A box's Hyprland runs a Lua config: `hyprctl dispatch` takes a Lua dispatcher (dispatch
 'hl.dsp.window.close()'). The old syntax (dispatch fullscreen 0) dispatches nothing: hyprctl fails
 it (1 for a --batch, where hyprctl says 0) and prints the `omabox lua 'hl.dispatch(…)'` for it. A
 Lua dispatch Hyprland refuses (no such window) is exit 1 too, its answer as it came: hyprctl's
 `warning: …`, lua's {"ok":false,…} (only what hl.dispatch returned, not a table of yours).
+`hyprctl keyword OPTION VALUE` sets nothing there (Hyprland's `unknown request`, hyprctl's 0): it
+fails, exit 1, and prints the `omabox lua 'hl.config(…)'` for it.
 @ log
 `log` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
 `run -d`'s (`run JOB`: that job's, by its pid as `jobs` and `run -d` say it or any pid of its

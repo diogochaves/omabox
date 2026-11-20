@@ -30,6 +30,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   read the bar with OCR. `look plugin` prints the widget's text (`text:`) and, with `--open`, its
   panel's (`panel text:`). The box's shell runs with a small reader of its own Qt Quick items
   (`tools/qtext`, which needs Qt 6's Quick headers to build: `./install.sh` installs them).
+- **Setting a Hyprland option, written down** ([#468](https://github.com/diogochaves/omabox/issues/468)):
+  `omabox lua 'hl.config({ general = { gaps_out = 40 } })'`, read back with `omabox hyprctl
+  getoption general:gaps_out`, in `help lua` and the skill's `ref/hyprland.md`. `omabox hyprctl
+  keyword` (and `set`), which a box's Lua config answers `unknown request` with exit 0, now fails
+  with the `hl.config` line for the option it was given.
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):

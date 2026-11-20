@@ -90,6 +90,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let said_ok = shell::strip_nl(&held) == b"ok";
     let legacy = crate::exit::contains(&held, LEGACY_NOTE);
     let refused = !legacy && dispatch_refused(rest, &held);
+    let unknown_set =
+        crate::exit::contains(&held, b"unknown request") && !set_words(rest).is_empty();
     if !quiet {
         out(held)?;
     }
@@ -97,6 +99,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // single dispatch is hyprctl's 7 already, a --batch's 0: non-zero either way, with the Lua for it.
     if legacy {
         for line in legacy_hint(&ctx.name, rest) {
+            say(line);
+        }
+        return code(if rc == 0 { 1 } else { rc });
+    }
+    // keyword (or a guessed set) under a Lua config: Hyprland says `unknown request`, hyprctl 0, the
+    // option untouched (#468). Non-zero, with the hl.config for it and how to read it back.
+    if unknown_set {
+        for line in config_hint(&ctx.name, rest) {
             say(line);
         }
         return code(if rc == 0 { 1 } else { rc });
@@ -307,6 +317,101 @@ fn lua_for(cmd: &str) -> Option<String> {
     Some(format!("hl.dispatch({d})"))
 }
 
+/// Each `keyword` or `set` command in hyprctl's ARGS (#468): what agents reach for to set an
+/// option, which a box's Lua config answers `unknown request`.
+fn set_words(args: &[Vec<u8>]) -> Vec<String> {
+    commands(args)
+        .into_iter()
+        .filter(|c| matches!(verb(c).0, "keyword" | "set"))
+        .collect()
+}
+
+/// The hl.config for `keyword OPTION VALUE` (its words after the verb, CMD): `general:gaps_out 40` is `hl.config({
+/// general = { gaps_out = 40 } })`, a part that is no Lua name in brackets (`["col.active_border"]`);
+/// a number or true/false as it is, anything else a Lua string. None without both, or with a
+/// control character.
+fn config_for(cmd: &str) -> Option<String> {
+    let (key, val) = cmd.split_once(char::is_whitespace)?;
+    let (key, val) = (
+        key.trim_end_matches(','),
+        val.trim().trim_start_matches(',').trim(),
+    );
+    if key.is_empty() || val.is_empty() || key.split(':').any(str::is_empty) {
+        return None;
+    }
+    let name = |p: &str| {
+        let mut c = p.chars();
+        c.next()
+            .is_some_and(|f| f.is_ascii_alphabetic() || f == '_')
+            && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
+    };
+    let value = if val == "true" || val == "false" || val.parse::<f64>().is_ok_and(f64::is_finite) {
+        val.to_string()
+    } else {
+        lua_str(val)?
+    };
+    let parts: Vec<&str> = key.split(':').collect();
+    let mut t = value;
+    for p in parts.iter().rev() {
+        let k = if name(p) {
+            (*p).to_string()
+        } else {
+            format!("[{}]", lua_str(p)?)
+        };
+        t = format!("{{ {k} = {t} }}");
+    }
+    Some(format!("hl.config({t})"))
+}
+
+/// What `hyprctl` says after a `keyword`/`set` Hyprland did not take, for box NAME: one line per
+/// such command in ARGS, with its hl.config and the getoption that reads it back when config_for has
+/// it, else the general form.
+fn config_hint(name: &[u8], args: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let what = "set nothing: a box's Hyprland runs a Lua config, which has no keyword request";
+    let q = shell::quote_q(name);
+    let mut cmds = set_words(args);
+    if cmds.is_empty() {
+        cmds.push(String::new());
+    }
+    cmds.iter()
+        .map(|c| {
+            let args = verb(c).1;
+            let (lua, key) = match config_for(args) {
+                Some(l) => (l, verb(args).0.trim_end_matches(',').to_string()),
+                None => (
+                    "hl.config({ general = { gaps_out = 40 } })".into(),
+                    "general:gaps_out".into(),
+                ),
+            };
+            let head = if c.is_empty() {
+                format!("hyprctl: that {what}")
+            } else {
+                format!("hyprctl: {c} {what}")
+            };
+            let plain = key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_:.-".contains(&b));
+            let key = if plain {
+                key.into_bytes()
+            } else {
+                shell::quote_at(key.as_bytes())
+            };
+            crate::cat!(
+                head,
+                ". Instead: omabox lua -b ",
+                q,
+                " ",
+                shell::quote_at(lua.as_bytes()),
+                ", read back with omabox hyprctl -b ",
+                q,
+                " getoption ",
+                key,
+                " (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)"
+            )
+        })
+        .collect()
+}
+
 /// What `hyprctl` says after Hyprland's LEGACY_NOTE, for box NAME: one line per old-syntax dispatch
 /// in ARGS, with its Lua when lua_for has it, else where the Lua dispatchers are.
 fn legacy_hint(name: &[u8], args: &[Vec<u8>]) -> Vec<Vec<u8>> {
@@ -408,7 +513,10 @@ fn temp_file() -> Option<std::fs::File> {
 
 #[cfg(test)]
 mod tests {
-    use super::{commands, dispatch_refused, legacy_hint, lua_for, notify_text, old_dispatches};
+    use super::{
+        commands, config_for, config_hint, dispatch_refused, legacy_hint, lua_for, notify_text,
+        old_dispatches, set_words,
+    };
 
     fn w(v: &[&str]) -> Vec<Vec<u8>> {
         v.iter().map(|s| s.as_bytes().to_vec()).collect()
@@ -591,6 +699,65 @@ mod tests {
         assert!(g[1].ends_with("Instead: omabox lua -b b1 'hl.dispatch(hl.dsp.window.close())'"));
         // No dispatch found in the words (hyprctl's own forms): the general line.
         assert!(h(&["-q"])[0].starts_with("hyprctl: that dispatch is the old dispatcher syntax"));
+    }
+
+    #[test]
+    fn keyword_config() {
+        // #468: the issue's line, and the shapes Hyprland's options take.
+        assert_eq!(
+            config_for("general:gaps_out 40").as_deref(),
+            Some("hl.config({ general = { gaps_out = 40 } })")
+        );
+        assert_eq!(
+            config_for("decoration:blur:enabled false").as_deref(),
+            Some("hl.config({ decoration = { blur = { enabled = false } } })")
+        );
+        assert_eq!(
+            config_for("general:col.active_border rgba(ff0000ff)").as_deref(),
+            Some(r#"hl.config({ general = { ["col.active_border"] = "rgba(ff0000ff)" } })"#)
+        );
+        assert_eq!(
+            config_for("decoration:rounding 2.5").as_deref(),
+            Some("hl.config({ decoration = { rounding = 2.5 } })")
+        );
+        // hyprctl keyword's comma form, a quote in the value; nothing for a part missing.
+        assert_eq!(
+            config_for("general:gaps_in, 3").as_deref(),
+            Some("hl.config({ general = { gaps_in = 3 } })")
+        );
+        assert_eq!(
+            config_for(r#"misc:x a "b""#).as_deref(),
+            Some(r#"hl.config({ misc = { x = "a \"b\"" } })"#)
+        );
+        assert_eq!(config_for("general:gaps_out"), None);
+        assert_eq!(config_for("general::gaps_out 1"), None);
+        // Not finite: a string.
+        assert_eq!(
+            config_for("a inf").as_deref(),
+            Some(r#"hl.config({ a = "inf" })"#)
+        );
+        // keyword and set, alone or in a --batch; not getoption.
+        assert_eq!(
+            set_words(&w(&["--batch", "keyword a:b 1 ; clients ; set c 2"])),
+            ["keyword a:b 1", "set c 2"]
+        );
+        assert!(set_words(&w(&["getoption", "general:gaps_out"])).is_empty());
+        let h = |a: &[&str]| -> Vec<String> {
+            config_hint(b"b1", &w(a))
+                .iter()
+                .map(|l| String::from_utf8_lossy(l).into_owned())
+                .collect()
+        };
+        assert_eq!(
+            h(&["keyword", "general:gaps_out", "40"]),
+            [
+                "hyprctl: keyword general:gaps_out 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b b1 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b b1 getoption general:gaps_out (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)"
+            ]
+        );
+        // No value: the general form, the issue's example.
+        assert!(h(&["set", "gaps"])[0].contains(
+            "Instead: omabox lua -b b1 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b b1 getoption general:gaps_out"
+        ));
     }
 
     #[test]

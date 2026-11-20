@@ -73,7 +73,7 @@ report and `pixel`, and never say a shot looked right when you could not see it.
 | Mounts, HOME, network, save, ports | ref: session.md |
 | Plain boxes, `--hyprland` | ref: builds.md |
 | Launcher, test suites | ref: apps.md |
-| `lua`, logs, events | ref: hyprland.md |
+| `lua`, Hyprland options (gaps), logs, events | ref: hyprland.md |
 | Exit codes, `--json` | ref: cli.md |
 
 One command's options: `omabox help CMD`. A term anywhere: `grep -rn TERM` over `ref/`.
