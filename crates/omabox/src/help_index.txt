@@ -31,7 +31,7 @@ Act
 Wait
   wait            still, change, window, layer, tree, log, job...
 In the box
-  log, events     the box's logs; Hyprland's events
+  log, events     the box's logs, the omabox commands run on it; Hyprland's events
   hyprctl, lua    Hyprland's commands; Lua in it
   restart-shell   reload the Omarchy shell (after plugin edits)
   reload          the box's Hyprland config again
