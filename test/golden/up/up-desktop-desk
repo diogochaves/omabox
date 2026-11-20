@@ -144,6 +144,9 @@ ROOT/tools/tree/omabox-tree
 ROOT/tools/notices/omabox-notices
 /opt/omabox/bin/omabox-notices
 --ro-bind
+ROOT/tools/qtext/omabox-qtext
+/opt/omabox/bin/omabox-qtext
+--ro-bind
 ROOT/tools/idlehold/omabox-idlehold
 /opt/omabox/bin/omabox-idlehold
 --tmpfs
