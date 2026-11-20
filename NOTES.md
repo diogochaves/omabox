@@ -14528,6 +14528,33 @@ from them.
     their outputs as expected are unchanged. And a test can now name the folder its check runs
     write in `EV_PNGS`: `evidence` keeps its PNGs (the run's shots, diff and report) with the
     failure, so the next one shows what was drawn instead (t_check and t_cli_box do).
+734. **Every refusal the benchmark's agents hit names the command that does what they meant**
+    (2026-11-19, #471 part 2). Audit of the `omabox:` lines in every transcript on disk (bench
+    `2026-11-19-smoke`'s five folders, `-vision`, the oracle and negative runs, the stopped `-runs3`):
+    each refusal or error read in its run. Already ending with their command: `log --grep -iE`
+    (where `-i` goes), the box with no window (`tree --layer NAMESPACE`, `omabox hyprctl layers`), a
+    shot's path outside the box (`omabox path --home`), `find --image WORD` (729). The bar's "publishes no accessible items" is now its text (727). Changed here, each
+    with its check in the suite: an **unknown command** that is a word agents try (`layers`, `notify`;
+    also `screenshot`, `type`, `press`, `exec`, `start`, `kill`, `list`, `logs`, `eval`,
+    `notifications`, `layer`) says the command for it, `(layers is: omabox hyprctl layers; one
+    layer's items: omabox tree --layer NAMESPACE)`, before the nearest-name guess, which knew neither;
+    **`look` with no kind** says the look it was meant as, `omabox look app -- python3 hello.py` from
+    `look hello -- python3 hello.py`, a page for a `.html` or URL, a plugin or theme for a folder with
+    a `manifest.json` or `colors.toml`, else the four forms; **`shot --layer`** says a layer is shot
+    by its place (`omabox hyprctl layers`, `shot -g "X,Y WxH"`) and read by `tree --layer`;
+    **`pixel 20,540`** gives the command back with the points split, `omabox pixel 20 540 50 540`;
+    **`hyprctl eval` of words that are no Lua** (`eval "gaps out 40"`: Lua's `syntax error near
+    'out'`; non-zero now, whatever hyprctl's own status) adds the hl.config and
+    `omabox lua -b NAME`, as keyword's does; the input-sent-but-screen-unsettled line (124) says
+    `take a shot (omabox shot)`; and **`tree` of a Chromium off the accessibility bus** says `omabox
+    stop PID, then omabox run -d -- chromium --force-renderer-accessibility ARG...`, the program from
+    `/proc/PID/exe` (its cmdline will not do: Chromium rewrites it as one line of all its words, so
+    a `--app=file:///.../tree-combo.html` window read as `tree-combo.html`). Left as they are, and
+    why: `no window matches` / `no layer matches` list what there is (the fix is one of them); a
+    command that exited 127 before the screen settled prints its log's tail, where the shell's `not
+    found` is; the links-into-your-real-HOME note on `path` is a warning, not a refusal; omarchy's own
+    `Usage:` lines are not omabox's.
+
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

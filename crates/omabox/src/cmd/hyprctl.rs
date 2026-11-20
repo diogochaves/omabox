@@ -92,6 +92,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let refused = !legacy && dispatch_refused(rest, &held);
     let unknown_set =
         crate::exit::contains(&held, b"unknown request") && !set_words(rest).is_empty();
+    let eval_line = eval_hint(&ctx.name, rest, &held);
     if !quiet {
         out(held)?;
     }
@@ -109,6 +110,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         for line in config_hint(&ctx.name, rest) {
             say(line);
         }
+        return code(if rc == 0 { 1 } else { rc });
+    }
+    // eval of words that are no Lua (#471: `eval "gaps out 40"`, the old keyword's words): Lua's
+    // syntax error, then the Lua for an option and the command that runs Lua with its answer.
+    if let Some(line) = eval_line {
+        say(line);
         return code(if rc == 0 { 1 } else { rc });
     }
     // A Lua dispatch Hyprland refused (no such window): its answer, as it came, and non-zero where
@@ -170,6 +177,25 @@ fn commands(args: &[Vec<u8>]) -> Vec<String> {
         }
     }
     cmds
+}
+
+/// What `hyprctl eval` says after a Lua error HELD (Lua's `[string "..."]` in it, from ARGS whose
+/// only command is an eval), for box NAME: the Lua that sets an option, run by `omabox lua`, which
+/// prints the answer, and how to read it back.
+fn eval_hint(name: &[u8], args: &[Vec<u8>], held: &[u8]) -> Option<Vec<u8>> {
+    let cmds = commands(args);
+    let [c] = cmds.as_slice() else { return None };
+    if verb(c).0 != "eval" || !crate::exit::contains(held, b"[string \"") {
+        return None;
+    }
+    let q = shell::quote_q(name);
+    Some(crate::cat!(
+        "hyprctl: eval runs Lua; an option is set with omabox lua -b ",
+        q,
+        " 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b ",
+        q,
+        " getoption general:gaps_out (omabox help lua)"
+    ))
 }
 
 /// A command's verb and the words after it.
@@ -514,9 +540,23 @@ fn temp_file() -> Option<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::{
-        commands, config_for, config_hint, dispatch_refused, legacy_hint, lua_for, notify_text,
-        old_dispatches, set_words,
+        commands, config_for, config_hint, dispatch_refused, eval_hint, legacy_hint, lua_for,
+        notify_text, old_dispatches, set_words,
     };
+
+    // #471: eval given words that are no Lua names the Lua and the command.
+    #[test]
+    fn eval_error_names_the_lua() {
+        let a = |s: &[&str]| s.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+        let err = b"error: 3 [string \"gaps out 40\"]:1: syntax error near 'out'";
+        let h = eval_hint(b"b1", &a(&["eval", "gaps out 40"]), err).unwrap();
+        assert_eq!(
+            String::from_utf8(h).unwrap(),
+            "hyprctl: eval runs Lua; an option is set with omabox lua -b b1 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b b1 getoption general:gaps_out (omabox help lua)"
+        );
+        assert!(eval_hint(b"b1", &a(&["eval", "hl.version()"]), b"0.57.2").is_none());
+        assert!(eval_hint(b"b1", &a(&["clients"]), err).is_none());
+    }
 
     fn w(v: &[&str]) -> Vec<Vec<u8>> {
         v.iter().map(|s| s.as_bytes().to_vec()).collect()

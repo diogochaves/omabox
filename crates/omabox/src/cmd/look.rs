@@ -38,8 +38,49 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         Some(b"page") => page(ctx, &args[1..]),
         Some(b"-h" | b"--help") | None => crate::help::usage("look"),
         Some(o) if o.starts_with(b"-") => Err(crate::args::unknown_opt(ctx, "look", o)),
-        Some(k) => Err(ctx.die(cat!("look: app, plugin, theme or page, got ", k))),
+        Some(k) => Err(ctx.die(cat!(
+            "look: app, plugin, theme or page, got ",
+            k,
+            ": ",
+            kind_hint(args)
+        ))),
     }
+}
+
+/// The look ARGS were meant as, when their first word names no kind (#471: `look hello -- python3
+/// hello.py`): `look app -- CMD` for a command after `--`, `look page` for a page or URL, `look
+/// plugin`/`look theme` for a folder with a plugin's manifest or a theme's colours, else the four.
+fn kind_hint(args: &[Vec<u8>]) -> Vec<u8> {
+    let w = &args[0];
+    let ws = String::from_utf8_lossy(w);
+    if let Some(i) = args.iter().position(|a| a == b"--") {
+        let mut c = b"omabox look app --".to_vec();
+        for a in &args[i + 1..] {
+            c.push(b' ');
+            c.extend(shell::quote_q(a));
+        }
+        if i + 1 < args.len() {
+            return c;
+        }
+    }
+    let q = shell::quote_q(w);
+    let lw = ws.to_ascii_lowercase();
+    if lw.starts_with("http://")
+        || lw.starts_with("https://")
+        || lw.ends_with(".html")
+        || lw.ends_with(".htm")
+    {
+        return cat!("omabox look page ", q);
+    }
+    let p = std::path::Path::new(OsStr::from_bytes(w));
+    if p.join("manifest.json").is_file() {
+        return cat!("omabox look plugin ", q);
+    }
+    if p.join("colors.toml").is_file() {
+        return cat!("omabox look theme ", q);
+    }
+    b"omabox look app -- CMD, omabox look plugin DIR, omabox look theme DIR or omabox look page FILE|URL"
+        .to_vec()
 }
 
 /// What `look app` was asked for.
@@ -1286,6 +1327,22 @@ pub fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #471: the command a kind-less look was meant as.
+    #[test]
+    fn kind_hint_names_the_command() {
+        let v = |s: &[&str]| s.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+        let h = |s: &[&str]| String::from_utf8(kind_hint(&v(s))).unwrap();
+        assert_eq!(
+            h(&["hello", "--", "python3", "hello.py"]),
+            "omabox look app -- python3 hello.py"
+        );
+        assert_eq!(h(&["x", "--", "a b"]), "omabox look app -- a\\ b");
+        assert_eq!(h(&["game/index.html"]), "omabox look page game/index.html");
+        assert_eq!(h(&["https://x.test"]), "omabox look page https://x.test");
+        assert!(h(&["hello"]).starts_with("omabox look app -- CMD, "));
+        assert!(h(&["hello", "--"]).starts_with("omabox look app -- CMD, "));
+    }
 
     #[test]
     fn notes_on_a_theme() {

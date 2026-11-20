@@ -223,12 +223,57 @@ pub fn usage(cmd: &str) -> Res<()> {
     run(&[cmd.as_bytes().to_vec()])
 }
 
-/// A command omabox does not have: exit 2, with the nearest one it has.
+/// Words agents tried as commands that omabox has under another name (#471: `layers` and `notify`
+/// in the benchmark), each with the command that does it.
+const ALIASES: &[(&str, &str)] = &[
+    (
+        "layers",
+        "omabox hyprctl layers; one layer's items: omabox tree --layer NAMESPACE",
+    ),
+    (
+        "layer",
+        "omabox hyprctl layers; one layer's items: omabox tree --layer NAMESPACE",
+    ),
+    (
+        "notify",
+        "omabox run -- notify-send TITLE BODY; what was sent: omabox log notifications",
+    ),
+    ("notifications", "omabox log notifications"),
+    ("screenshot", "omabox shot"),
+    ("type", "omabox keys -t TEXT"),
+    ("press", "omabox keys COMBO"),
+    ("exec", "omabox run -- CMD"),
+    (
+        "start",
+        "omabox up, or a program in a box: omabox run -- CMD",
+    ),
+    ("kill", "omabox stop JOB, or the box: omabox down"),
+    ("list", "omabox ls"),
+    ("logs", "omabox log"),
+    ("eval", "omabox lua EXPR"),
+];
+
+/// The command for word C when it is one of ALIASES: " (C is: omabox ...)", else empty.
+pub fn alias_hint(c: &str) -> String {
+    let lc = c.to_ascii_lowercase();
+    ALIASES
+        .iter()
+        .find(|(w, _)| *w == lc)
+        .map_or_else(String::new, |(_, cmd)| format!(" ({c} is: {cmd})"))
+}
+
+/// A command omabox does not have: exit 2, with the command for a word agents try (ALIASES), else
+/// the nearest one it has.
 pub fn unknown_command(c: &[u8]) -> Exit {
+    let w = String::from_utf8_lossy(c);
+    let mut near = alias_hint(&w);
+    if near.is_empty() {
+        near = crate::args::did_you_mean(&w, COMMANDS);
+    }
     say(crate::cat!(
         "unknown command: ",
         c,
-        crate::args::did_you_mean(&String::from_utf8_lossy(c), COMMANDS),
+        near,
         " (omabox help lists the commands and their options)"
     ));
     Exit(2)

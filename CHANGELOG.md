@@ -60,6 +60,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   it looked for its tools under `target/`. It now finds the checkout it was built in.
 
 ### Changed
+- **Refusals name the command that does what was meant** ([#471](https://github.com/diogochaves/omabox/issues/471)):
+  from the benchmark's transcripts. `omabox layers` and `omabox notify` (and other words agents try)
+  name the command for them; `look hello -- python3 hello.py` says `omabox look app -- python3
+  hello.py`; `shot --layer` says how a layer is shot; `pixel 20,540` gives the command with the
+  points split; `hyprctl eval` of words that are no Lua gives the hl.config and `omabox lua`; `tree`
+  of a Chromium off the accessibility bus gives the commands that start it again with the flag.
 - **`find --image WORD` names the text search** ([#469](https://github.com/diogochaves/omabox/issues/469)):
   an `--image` that is no file or no PNG is refused with `--image takes a PNG; to find text: omabox
   tree --find TEXT` (`click --image`: `click --find TEXT`; `wait image`: `wait tree TEXT`).

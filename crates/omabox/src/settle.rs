@@ -1239,7 +1239,7 @@ pub fn settle_sent(rc: i32, sent: &[u8], looked: bool) {
             } else {
                 say(cat!(
                     sent,
-                    " all the same (124 is about the screen): take a shot before sending anything again"
+                    " all the same (124 is about the screen): take a shot (omabox shot) before sending anything again"
                 ));
             }
         }
@@ -1788,7 +1788,7 @@ mod tests {
         );
         assert_eq!(
             se(nothing, "click", &s, b"", false),
-            "unsatisfied: nothing changed in 2.00s; the click at 900,450 was on zenity \"Save as\" (its 100,50)\nomabox: the keys were sent all the same (124 is about the screen): take a shot before sending anything again\nrc 124",
+            "unsatisfied: nothing changed in 2.00s; the click at 900,450 was on zenity \"Save as\" (its 100,50)\nomabox: the keys were sent all the same (124 is about the screen): take a shot (omabox shot) before sending anything again\nrc 124",
             "...the desktop not read after: where the click went, nothing claimed; a shot as before"
         );
         assert_eq!(

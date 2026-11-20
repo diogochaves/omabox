@@ -1265,6 +1265,20 @@ t_unit_exit_codes() {
   check_eq "...none when none is near, or several are" "omabox: shot: unknown option -x (omabox help shot)" "$(ob shot -x 2>&1)"
   check_match "...a command's: shoot is shot, exit 2" "^omabox: unknown command: shoot \(did you mean shot\?\).*"$'\n'"2$" "$(ob shoot 2>&1; echo $?)"
   check_match "...and after -b NAME" "unknown command: windwos \(did you mean windows\?\)" "$(ob -b "$P-x" windwos 2>&1)"
+  # #471: each refusal the benchmark's agents hit ends with the command that does what they meant.
+  check_eq "...a word agents try, the command for it: layers" \
+    "omabox: unknown command: layers (layers is: omabox hyprctl layers; one layer's items: omabox tree --layer NAMESPACE) (omabox help lists the commands and their options)" "$(ob layers 2>&1)"
+  check_match "...notify" "unknown command: notify \(notify is: omabox run -- notify-send TITLE BODY; what was sent: omabox log notifications\)" "$(ob notify x 2>&1)"
+  check_eq "look with no kind: the look it was meant as" \
+    "omabox: look: app, plugin, theme or page, got hello: omabox look app -- python3 hello.py (omabox help look)|2" \
+    "$(ob look hello -- python3 hello.py 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
+  check_match "...a page" "got rocks\.html: omabox look page rocks\.html \(" "$(ob look rocks.html 2>&1)"
+  check_match "...none to guess: the four" "got x: omabox look app -- CMD, omabox look plugin DIR, omabox look theme DIR or omabox look page FILE\|URL \(" "$(ob look x 2>&1)"
+  check_eq "shot --layer: how a layer is shot" \
+    "omabox: shot: unknown option --layer (a layer is shot by its place: omabox hyprctl layers gives it, then omabox shot -g \"X,Y WxH\"; its text: omabox tree --layer NAMESPACE) (omabox help shot)" \
+    "$(ob shot --layer omarchy-bar 2>&1)"
+  check_eq "pixel X,Y: the command with the points split" \
+    "omabox: pixel: bad argument 20,540 (X Y, in pixels): omabox pixel 20 540 50 540 (omabox help pixel)" "$(ob pixel 20,540 50,540 2>&1)"
   check_match "...a subcommand's: record strat" "record: unknown subcommand strat \(did you mean start\?\)" "$(ob record strat 2>&1)"
   check_match "...wait's condition" "wait: unknown condition stil \(did you mean still\?\)" "$(ob wait stil 2>&1)"
   check_match "...check's" "check: unknown subcommand rnu \(did you mean run\?\)" "$(ob check rnu 2>&1)"
@@ -9358,6 +9372,11 @@ t_hypr_old_dispatch() {
   check_fails "...the option untouched" grep -q "^css gap data: 40 " <<<"$(ob hyprctl -b "$B" getoption general:gaps_out)"
   check "...that Lua run" ob lua -b "$B" "$(sed -n "s/.*Instead: omabox lua -b $B '\(.*\)', read back.*/\1/p" <<<"$err")"
   check_match "...sets it" "^css gap data: 40 40 40 40" "$(ob hyprctl -b "$B" getoption general:gaps_out)"
+  # #471: eval given the old keyword's words is Lua's syntax error; it names the Lua and the command.
+  out=$(ob hyprctl -b "$B" eval "gaps out 40" 2>"$TMP/hod-err"); rc=$?; err=$(cat "$TMP/hod-err")
+  check_eq "eval of words that are no Lua: non-zero, Lua's error, then the hl.config and omabox lua" \
+    "yes|omabox: hyprctl: eval runs Lua; an option is set with omabox lua -b $B 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b $B getoption general:gaps_out (omabox help lua)" \
+    "$( ((rc != 0)) && [[ $out == *'[string "gaps out 40"]'* ]] && echo yes)|$err"
   err=$(ob hyprctl -b "$B" set 'general:col.active_border' 'rgba(ff0000ff)' 2>&1 >/dev/null); rc=$?
   check_match "set, a name with a dot: exit 1, in brackets" \
     "^1 .*Instead: omabox lua -b $B 'hl\.config\(\{ general = \{ \[\"col\.active_border\"\] = \"rgba\(ff0000ff\)\" \} \}\)'" "$rc $err"
@@ -10791,8 +10810,8 @@ HTML
       --app=file:///home/sbx/tree-combo.html >/dev/null 2>&1
     ob wait -b "$B" --timeout 30s window 'title:Tree combo web' >/dev/null
     rc=0; out=$(ob tree -b "$B" --window 'Tree combo web' 2>&1) || rc=$?
-    check_eq "Chromium without --force-renderer-accessibility, off the bus: said so, exit 1" "1 yes" \
-      "$rc $(head -1 <<<"$out" | grep -q 'a Chromium or Electron app, is not on the box.s accessibility bus: start it with --force-renderer-accessibility$' && echo yes)"
+    check_eq "Chromium without --force-renderer-accessibility, off the bus: said so, with the commands that start it again with it (#471), exit 1" "1 yes" \
+      "$rc $(head -1 <<<"$out" | grep -qE 'a Chromium or Electron app, is not on the box.s accessibility bus: start it again with the flag: omabox stop [0-9]+, then omabox run -d -- chromium --force-renderer-accessibility ARG\.\.\.$' && echo yes)"
     ob run -b "$B" -- pkill -f tree-chromium-noflag >/dev/null 2>&1 || true
   else
     skip "tree of an editable combo box (Chromium)" "no chromium"

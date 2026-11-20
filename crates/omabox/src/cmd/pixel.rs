@@ -26,6 +26,29 @@ fn lt(a: &[u8], b: &[u8]) -> bool {
         .is_some_and(|(a, b)| a < b)
 }
 
+/// When a point was written X,Y (#471: `pixel 20,540 50,540` in the benchmark): ": omabox pixel
+/// ARGS", each such word split in two; else nothing.
+fn comma_hint(args: &[Vec<u8>]) -> Vec<u8> {
+    let xy = |a: &[u8]| {
+        let s = String::from_utf8_lossy(a);
+        let (x, y) = s.split_once(',')?;
+        let n = |v: &str| !v.is_empty() && v.len() <= 5 && v.bytes().all(|c| c.is_ascii_digit());
+        (n(x) && n(y)).then(|| format!("{x} {y}"))
+    };
+    if !args.iter().any(|a| xy(a).is_some()) {
+        return Vec::new();
+    }
+    let mut c = b": omabox pixel".to_vec();
+    for a in args {
+        c.push(b' ');
+        match xy(a) {
+            Some(p) => c.extend(p.bytes()),
+            None => c.extend(shell::quote_q(a)),
+        }
+    }
+    c
+}
+
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut name, mut sels, mut inp, mut json) = (Vec::new(), Vec::new(), Vec::new(), false);
     let mut xy: Vec<i64> = Vec::new();
@@ -59,7 +82,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     .then(|| shell::dec(a))
                     .flatten();
                 let Some(n) = n else {
-                    return Err(ctx.die(cat!("pixel: bad argument ", a, " (X Y, in pixels)")));
+                    return Err(ctx.die(cat!(
+                        "pixel: bad argument ",
+                        a,
+                        " (X Y, in pixels)",
+                        comma_hint(args)
+                    )));
                 };
                 xy.push(n);
             }
@@ -369,4 +397,23 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
     }
     out(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comma_hint;
+
+    // #471: X,Y points get the command with them split.
+    #[test]
+    fn comma_points_are_split() {
+        let v = |s: &[&str]| s.iter().map(|w| w.as_bytes().to_vec()).collect::<Vec<_>>();
+        let h = |s: &[&str]| String::from_utf8(comma_hint(&v(s))).unwrap();
+        assert_eq!(
+            h(&["20,540", "50,540", "--json"]),
+            ": omabox pixel 20 540 50 540 --json"
+        );
+        assert_eq!(h(&["-b", "a b", "1,2"]), ": omabox pixel -b a\\ b 1 2");
+        assert_eq!(h(&["x", "5"]), "");
+        assert_eq!(h(&["1,"]), "");
+    }
 }

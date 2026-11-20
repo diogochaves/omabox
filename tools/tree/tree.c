@@ -1152,8 +1152,22 @@ static int tree_main(int argc, char **argv) {
     if (apps->len == 0 && qt == QT_OK) return text_only();
     if (apps->len == 0) {
         if (any) fprintf(stderr, "no accessibility tree: its application (pid %ld) is on the bus with no window under it\n", pid);
-        else if (chromium_like(pid)) fprintf(stderr, "no accessibility tree: pid %ld, a Chromium or Electron app, is not on the box's "
-                                             "accessibility bus: start it with --force-renderer-accessibility\n", pid);
+        else if (chromium_like(pid)) {
+            // (#471) the command that starts it again with the flag, its program by name
+            // (its exe: Chromium rewrites its own cmdline, as one line of all its words)
+            char f[64];
+            snprintf(f, sizeof f, "/proc/%ld/exe", pid);
+            char *cl = g_file_read_link(f, NULL);
+            const char *prog = "CMD";
+            if (cl && cl[0]) {
+                const char *slash = strrchr(cl, '/');
+                prog = slash ? slash + 1 : cl;
+            }
+            fprintf(stderr, "no accessibility tree: pid %ld, a Chromium or Electron app, is not on the box's "
+                    "accessibility bus: start it again with the flag: omabox stop %ld, then omabox run -d -- %s "
+                    "--force-renderer-accessibility ARG...\n", pid, pid, prog);
+            g_free(cl);
+        }
         else if (no_sre) fprintf(stderr, "no accessibility tree: pid %ld is not on the box's accessibility bus (an egui/winit app on "
                                  "AccessKit before accesskit_unix 0.22 never joins it here: it waits for ScreenReaderEnabled, which "
                                  "at-spi2-core 2.61 and later do not have)\n", pid);

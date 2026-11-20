@@ -594,6 +594,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 after = args[i + 2..].to_vec();
                 break;
             }
+            // (#471: `shot --layer omarchy-bar` in the benchmark) a layer has a place, not a window
+            w if w == b"--layer" || w.starts_with(b"--layer=") => {
+                return Err(crate::args::unknown_opt_hint(
+                    ctx,
+                    "shot",
+                    a,
+                    "(a layer is shot by its place: omabox hyprctl layers gives it, then omabox shot -g \"X,Y WxH\"; its text: omabox tree --layer NAMESPACE)",
+                ));
+            }
             w if w.starts_with(b"-") => return Err(unknown_opt(ctx, "shot", a)),
             w => {
                 two_files(ctx, "shot", &s.out, w)?;
