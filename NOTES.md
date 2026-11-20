@@ -14695,7 +14695,10 @@ from them.
     before the walk), and an orphan `down --orphans` does take down gets its line (selected again
     after the search). t_cmdlog runs `ports` and finds no line of it in its box's log; t_orphan finds `down
     --orphans`' line in an orphan's log and none in a box it left up (never `down --orphans` in a
-    test of its own: it takes other tests' orphans down, as it did t_orphan's when tried).
+    test of its own: it takes other tests' orphans down, as it did t_orphan's when tried). What is
+    left in a box's log from outside its test is rightly there: another test's first failure has
+    the suite read every box of the run for its evidence (a shot to `screen.png`, hyprctl's
+    answers); t_cmdlog's whole-log checks leave those lines out.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

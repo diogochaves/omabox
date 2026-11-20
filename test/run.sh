@@ -8959,10 +8959,11 @@ t_cmdlog() {
     "$(grep ' run ' <<<"$out")"
   check_match "...a read marked, a failure with its error line" "tree -b $B --window title:nosuch-$B \(read; exit 2, .*\): no window matches" \
     "$(grep ' tree ' <<<"$out")"
-  check_eq "...-n 1: the last only (the log read before it)" "log" \
-    "$(ob log commands -b "$B" -n 1 --json | jq -r .command)"
+  # (one line, whatever it is: another test's failure reads every box of the run for its evidence,
+  # a shot and hyprctl's answers, and those are commands run against this box too: finding 736)
+  check_eq "...-n 1: the last only" 1 "$(ob log commands -b "$B" -n 1 --json | jq -s length)"
   check_eq "...--grep: the lines whose text matches" "shot" \
-    "$(ob log commands -b "$B" --grep '^[0-9:.]+ shot ' --json | jq -r .command)"
+    "$(ob log commands -b "$B" --grep '^[0-9:.]+ shot ' --json | jq -r .command | sort -u)"
   # A follow ended by a signal (sig.rs's followers' exit) gets its line too: the signal's code and
   # words. (INT as default for it: a background job of a script starts with INT ignored.)
   local p s c
@@ -8984,7 +8985,7 @@ t_cmdlog() {
   out=$(ob log commands -b "$B" --json 2>&1); rc=$?
   check_eq "log commands after down: exit 0" 0 "$rc"
   check_eq "...the whole sequence, the down last" "up windows run keys shot tree keys log log log log log log events log log down" \
-    "$(jq -rs 'map(.command) | join(" ")' <<<"$out")"
+    "$(jq -rs 'map(select(.command != "hyprctl" and (.args | any(tostring | endswith("/screen.png")) | not)) | .command) | join(" ")' <<<"$out")"
   check_eq "...-f of a box that is gone: what there is (a read of it is no line of its), said so" "down" \
     "$(ob log commands -b "$B" -f -n 1 --json 2>"$TMP/cl.err" | jq -r .command)"
   check_match "...said" "is down: the commands run against it as they were" "$(cat "$TMP/cl.err")"
