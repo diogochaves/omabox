@@ -8928,11 +8928,22 @@ t_cmdlog() {
     "$(ob log commands -b "$B" -n 1 --json | jq -r .command)"
   check_eq "...--grep: the lines whose text matches" "shot" \
     "$(ob log commands -b "$B" --grep '^[0-9:.]+ shot ' --json | jq -r .command)"
+  # A follow ended by a signal (sig.rs's followers' exit) gets its line too: the signal's code and
+  # words. (INT as default for it: a background job of a script starts with INT ignored.)
+  local p s c
+  for s in INT:log:2 TERM:events:15; do
+    c=${s#*:}; c=${c%:*}
+    env --default-signal=INT "$CLI" "$c" -b "$B" -f >/dev/null 2>&1 & p=$!
+    sleep 1.5; kill -"${s%%:*}" "$p"; rc=0; wait "$p" || rc=$?
+    out=$(ob log commands -b "$B" -n 1 --json)
+    check_eq "$c -f ended by SIG${s%%:*}: its exit, its line with the signal's code and words" \
+      "$((128 + ${s##*:})) $c $((128 + ${s##*:})) ended by signal ${s##*:}" "$rc $(jq -r '"\(.command) \(.exit) \(.error)"' <<<"$out")"
+  done
   ob down "$B" >/dev/null 2>&1
   check "the box is gone" test ! -e "$(ob path "$B" 2>/dev/null || echo "${L%/.commands/*}/$B")"
   out=$(ob log commands -b "$B" --json 2>&1); rc=$?
   check_eq "log commands after down: exit 0" 0 "$rc"
-  check_eq "...the whole sequence, the down last" "up windows run keys shot tree keys log log log log down" \
+  check_eq "...the whole sequence, the down last" "up windows run keys shot tree keys log log log log log log events log down" \
     "$(jq -rs 'map(.command) | join(" ")' <<<"$out")"
   check_eq "...-f of a box that is gone: what there is (a read of it is no line of its), said so" "down" \
     "$(ob log commands -b "$B" -f -n 1 --json 2>"$TMP/cl.err" | jq -r .command)"

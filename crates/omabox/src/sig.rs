@@ -487,7 +487,49 @@ fn down(name: &[u8], done: &Mutex<bool>) {
 static FOLLOWERS: [AtomicI32; 8] = [const { AtomicI32::new(0) }; 8];
 static FOLLOWING: AtomicBool = AtomicBool::new(false);
 
+/// The follow's line in its command log (#447), written by a thread of follow_logger's, never in the
+/// handler: the handler hands it the signal through FOLLOW_SIG (a pipe's write end) and waits,
+/// bounded, for its byte on FOLLOW_DONE (a read end), with write, poll and read alone (each
+/// async-signal-safe). -1 when there is no such thread.
+static FOLLOW_SIG: AtomicI32 = AtomicI32::new(-1);
+static FOLLOW_DONE: AtomicI32 = AtomicI32::new(-1);
+/// The first signal's line is under way: another signal ends the process at once.
+static FOLLOW_ENDING: AtomicBool = AtomicBool::new(false);
+/// How long the handler waits for the line (another omabox's append holding the log's lock, at worst).
+const FOLLOW_LOG_MS: libc::c_int = 3000;
+
+fn follow_code(sig: libc::c_int) -> i32 {
+    match sig {
+        libc::SIGINT => 130,
+        libc::SIGTERM => 143,
+        _ => 129,
+    }
+}
+
 extern "C" fn end_followers(sig: libc::c_int) {
+    // (the line first, the followers still running: main stays in its follow meanwhile instead of
+    // reaching its own end, which would write its own line and exit with its own code)
+    let (w, r) = (
+        FOLLOW_SIG.load(Ordering::SeqCst),
+        FOLLOW_DONE.load(Ordering::SeqCst),
+    );
+    if w >= 0 && r >= 0 && !FOLLOW_ENDING.swap(true, Ordering::SeqCst) {
+        let b = [u8::try_from(sig).unwrap_or(0)];
+        // SAFETY: write, poll and read are async-signal-safe; b, pfd and d outlive the calls.
+        unsafe {
+            if libc::write(w, b.as_ptr().cast(), 1) == 1 {
+                let mut pfd = libc::pollfd {
+                    fd: r,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if libc::poll(&mut pfd, 1, FOLLOW_LOG_MS) == 1 {
+                    let mut d = [0u8; 1];
+                    libc::read(r, d.as_mut_ptr().cast(), 1);
+                }
+            }
+        }
+    }
     for p in &FOLLOWERS {
         let fd = p.load(Ordering::Relaxed) - 1;
         if fd >= 0 {
@@ -503,18 +545,54 @@ extern "C" fn end_followers(sig: libc::c_int) {
             }
         }
     }
-    let code = match sig {
-        libc::SIGINT => 130,
-        libc::SIGTERM => 143,
-        _ => 129,
-    };
     // SAFETY: _exit is async-signal-safe; nothing is left to flush (each line was).
-    unsafe { libc::_exit(code) }
+    unsafe { libc::_exit(follow_code(sig)) }
 }
 
-/// From now, a terminating signal ends the follower's processes, then this one (follow_start's traps).
+/// The thread that writes a signalled follow's line (end_followers waits for it), its two pipes
+/// published once it runs. It never runs the handler itself: INT, TERM and HUP are blocked in it
+/// from its start (a handler there would wait for itself).
+fn follow_logger() {
+    use std::os::fd::IntoRawFd;
+    let (Ok((sr, sw)), Ok((dr, dw))) = (crate::exec::pipe(), crate::exec::pipe()) else {
+        return;
+    };
+    // SAFETY: two zeroed sigset_t of ours, filled by sigemptyset and sigaddset; the caller's mask
+    // set back once the thread is spawned (it inherits the blocked one).
+    let old = unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        for s in TERMINATING {
+            libc::sigaddset(&mut set, s);
+        }
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old);
+        old
+    };
+    let spawned = std::thread::Builder::new().spawn(move || {
+        let mut b = [0u8; 1];
+        if std::fs::File::from(sr).read_exact(&mut b).is_ok() {
+            let sig = libc::c_int::from(b[0]);
+            let rc = u8::try_from(follow_code(sig)).unwrap_or(255);
+            crate::cmdlog::end(rc, Some(format!("ended by signal {sig}")));
+            let _ = std::io::Write::write_all(&mut std::fs::File::from(dw), b"\n");
+        }
+    });
+    // SAFETY: the caller's own mask, back.
+    unsafe {
+        libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut());
+    }
+    if spawned.is_ok() {
+        FOLLOW_DONE.store(dr.into_raw_fd(), Ordering::SeqCst);
+        FOLLOW_SIG.store(sw.into_raw_fd(), Ordering::SeqCst);
+    }
+}
+
+/// From now, a terminating signal ends the follower's processes, then this one (follow_start's
+/// traps), its line in the command log written first (#447).
 pub fn follow_on() {
     if !FOLLOWING.swap(true, Ordering::Relaxed) {
+        follow_logger();
         for s in TERMINATING {
             catch(s, end_followers);
         }

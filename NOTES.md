@@ -14594,10 +14594,21 @@ from them.
     commands [-n N] [--grep RE [-i]] [-f] [--json]` reads `.1` then the log, a box up, dead or gone;
     text `HH:MM:SS.mmm COMMAND WORDS (read; exit RC, S s; pid PID, session ID): ERROR`; a jailed
     caller sees only its jail's lines (a gone box has no box.json to say whose it was); `-f` follows
-    while the box is up, then 2 s for the `down`'s line. Not logged: a command killed by SIGKILL or
-    ended by a signal in a follow (`sig.rs`'s async `_exit`), a relayed call's refusal by the broker
-    before it runs, and the jailed side of a relay (its broker's call is the line). Tests: t_cmdlog
-    (a sequence read back in order, reads and exit codes, after `down` too), t_cmdlog_secrets (five
+    while the box is up, then 2 s for the `down`'s line. A follow ended by INT, TERM or HUP (`log -f`,
+    `events -f`: `sig.rs`'s `end_followers`, a signal handler that `_exit`s) gets its line too, exit
+    128+N, `ended by signal N`: the handler hands the signal through a pipe to a thread `follow_on`
+    started (INT, TERM and HUP blocked in it, so the handler never runs there), which writes the line
+    as `end` always does, and waits for its byte on a second pipe, 3 s at most, before it ends the
+    followers and `_exit`s. The handler itself only writes, polls and reads (async-signal-safe: no
+    allocation, no file opened, no lock); the followers live on meanwhile, so main stays in its
+    follow and never reaches its own end and line. A second signal, or the 3 s, ends it at once.
+    Chosen over a line made ready at `begin` (bytes and an fd, the handler only writing): which boxes,
+    how long and which code are known only at the end, and the log's rotation and lock would have to
+    be done in the handler. Not logged, by design: a command killed by SIGKILL (nothing of it runs
+    after), a relayed call's refusal by the broker before it runs, and the jailed side of a relay
+    (its broker's call is the line). Tests: t_cmdlog
+    (a sequence read back in order, reads and exit codes, after `down` too; `log -f` and `events -f`
+    ended by INT and TERM, their exit and line), t_cmdlog_secrets (five
     planted values, none anywhere in the box dir, its HOME or the log), `cmdlog.rs`'s unit tests.
 734. **Every refusal the benchmark's agents hit names the command that does what they meant**
     (2026-11-19, #471 part 2). Audit of the `omabox:` lines in every transcript on disk (bench
