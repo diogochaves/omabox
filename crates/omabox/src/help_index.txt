@@ -11,7 +11,7 @@ Boxes
   snapshot, diff  the box HOME recorded; what an app wrote in it since
   brief           a subagent's prompt for box work
 Look
-  shot            a PNG: the screen, --window, -g region; --fit N
+  shot            a PNG: the screen, --window, --layer, -g region; --fit N
   tree            a window's accessibility tree as text; --find
   windows         the box's windows, what covers them
   pixel, find     the colour at X Y; where an image is

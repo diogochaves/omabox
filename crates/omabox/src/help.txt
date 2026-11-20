@@ -35,7 +35,7 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox look page FILE|URL [--keys "K..."] [--hold KEY DURATION] [--shots N] [--after 2s] [-o FILE]
              [--keep-box] [UP OPTIONS]                   Chromium on it: real frames, held keys, a contact
                                                          sheet of N shots, its console's errors
-  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
+  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active | --layer SEL [--monitor NAME]] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--grid N [--cell C3]]                  lettered cells to aim with, no tree; --cell: that cell, closer
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
@@ -187,7 +187,7 @@ too (omabox -b NAME windows).
 -d (or --detach): the command left running in the box, its pid on stdout (J=$(omabox run -d -- APP)), pid and log said on stderr; --replace: the same one stopped first
 @short shot
 --monitor NAME: one monitor of the box's (omabox monitor list)
-@short tree click wait
+@short shot tree click wait
 --layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N
 @short log events
 -f (or --follow): on until the box goes down
@@ -478,6 +478,15 @@ A cropped or scaled shot says so on stderr: `click --in SHOT X Y` (and `drag`, `
 take that image's pixels (a window shot follows the window if it moved). Screen shots show the
 pointer (--no-pointer: not this one; `pointer hide`: none until `pointer show`); window shots never
 do. -o makes the file's folder if it is missing.
+`shot --layer SEL` (or -l SEL) is a layer surface's rectangle of the screen (the bar, a panel, a
+menu: its namespace, address:0x... or pid:N, as tree, click and wait take it), as -g would crop it:
+the screen's pixels there, whatever is over it, the screen's own at a fractional scale; --fit,
+--zoom, --grid, --burst, --changed and --json go with it (--json: kind "layer", the layer's box),
+and `click --in` maps it to the screen. With one of the namespace on each monitor, --monitor NAME
+picks (as in `wait layer`); none or several is exit 2, listed. One not drawn yet (0x0, or a closed
+menu's 1x1) is refused, exit 1: `wait layer NAMESPACE` first. One that spans its monitor (Omarchy
+4.5's bar, a scrim) is shot whole, said on stderr with -g for a part (the bar's strip, from what its
+monitor reserves for it): no guess at what of it is drawn.
 An action `--in` a screen shot (click, scroll, drag, pointer) is refused, exit 1, when what is at
 its point is not what was there at the shot: another window or layer over it, or the window moved
 under it ("the screen changed at X,Y since SHOT: then on ..., now on ...; take a new shot"). A
@@ -650,15 +659,15 @@ and theme switches (omarchy-theme-set reloads). Hidden, it still moves and click
 focus still follows it, and peek's marks still show it; `wait` and `--changed` leave out where it
 is, as they do when it shows.
 @ shot
-`shot --changed` (or `--window SEL --changed`) is a crop of what changed since the last whole
-shot of the same screen or window (`shot` without -g, --fit, --zoom or --monitor, or --changed;
-with --fit 0 while shot-fit is set), 16 px around it; stderr says where it is (`click --in` maps
-it) and, when it changed in places far apart, each. Nothing changed: no image, nothing on stdout,
-exit 0, said on stderr. No earlier shot of it (or another size or mode since): a whole shot, said
-why. A caret blinking alone (4 px thin, 40 long at most) and where the pointer was before it moved
-are not changes; --ignore "X,Y WxH" (up to 16, in the shot's coordinates: the window's with
---window) leaves out an animation or a caret elsewhere. --since SHOT compares with that whole shot
-instead (not from a jail).
+`shot --changed` (or `--window SEL --changed`, `--layer SEL --changed`) is a crop of what changed
+since the last whole shot of the same screen, window or layer (`shot` without -g, --fit, --zoom
+or --monitor, or --changed; with --fit 0 while shot-fit is set), 16 px around it; stderr says where
+it is (`click --in` maps it) and, when it changed in places far apart, each. Nothing changed: no
+image, nothing on stdout, exit 0, said on stderr. No earlier shot of it (or another size or mode
+since): a whole shot, said why. A caret blinking alone (4 px thin, 40 long at most) and where the
+pointer was before it moved are not changes; --ignore "X,Y WxH" (up to 16, in the shot's
+coordinates: the window's with --window, the screen's with --layer) leaves out an animation or a
+caret elsewhere. --since SHOT compares with that whole shot instead (not from a jail).
 @ calibrate
 A harness may show its model a big image scaled down, and some models then give points in the
 smaller image: `click X Y` off a full-size shot lands short, up and to the left, and nothing says

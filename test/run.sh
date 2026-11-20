@@ -1275,9 +1275,9 @@ t_unit_exit_codes() {
     "$(ob look hello -- python3 hello.py 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
   check_match "...a page" "got rocks\.html: omabox look page rocks\.html \(" "$(ob look rocks.html 2>&1)"
   check_match "...none to guess: the four" "got x: omabox look app -- CMD, omabox look plugin DIR, omabox look theme DIR or omabox look page FILE\|URL \(" "$(ob look x 2>&1)"
-  check_eq "shot --layer: how a layer is shot" \
-    "omabox: shot: unknown option --layer (a layer is shot by its place: omabox hyprctl layers gives it, then omabox shot -g \"X,Y WxH\"; its text: omabox tree --layer NAMESPACE) (omabox help shot)" \
-    "$(ob shot --layer omarchy-bar 2>&1)"
+  # (#473: shot --layer is a layer's shot now; t_shot_layer)
+  check_eq "shot --layer with --window: one of them" \
+    "omabox: shot: --window or --layer, not both (omabox help shot)|2" "$(ob shot --layer omarchy-bar --window x 2>&1 | tr -d '\n'; echo "|${PIPESTATUS[0]}")"
   check_eq "pixel X,Y: the command with the points split" \
     "omabox: pixel: bad argument 20,540 (X Y, in pixels): omabox pixel 20 540 50 540 (omabox help pixel)" "$(ob pixel 20,540 50,540 2>&1)"
   check_match "...a subcommand's: record strat" "record: unknown subcommand strat \(did you mean start\?\)" "$(ob record strat 2>&1)"
@@ -21862,6 +21862,111 @@ t_shot_grid() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# shot --layer SEL (#473, finding 738): a layer's rectangle of the screen, as -g crops it. A plain box
+# whose Quickshell draws a 30 px bar on each monitor and a scrim spanning the screen under it: the PNG
+# against the layer's rectangle at scale 1 and at 1.25 (the screen's own pixels, as shot -g's), click
+# --in, --json, --fit, --grid, --changed, --burst, --monitor between two bars, the scrim shot whole.
+t_shot_layer() {
+  local B=$P-shl bar=$TMP/$P-shl-bar o=$TMP/shl out err rc lx ly lw lh W H m2 g sz
+  local why; if why=$(no_qs); then skip "shot --layer" "$why"; return; fi
+  mkdir -p "$bar" "$o"
+  cat > "$bar/shell.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+ShellRoot {
+  Variants {
+    model: Quickshell.screens
+    PanelWindow {
+      required property var modelData
+      screen: modelData
+      WlrLayershell.namespace: "t-shotbar"
+      anchors { top: true; left: true; right: true }
+      implicitHeight: 30
+      color: "#336699"
+      Text { anchors.centerIn: parent; text: "shot bar"; color: "white" }
+    }
+  }
+  PanelWindow {
+    WlrLayershell.namespace: "t-shotscrim"
+    WlrLayershell.layer: WlrLayer.Bottom
+    exclusionMode: ExclusionMode.Ignore
+    anchors { top: true; bottom: true; left: true; right: true }
+    color: "#40000000"
+  }
+}
+QML
+  up_ok "$B" --desktop plain --net isolated --ro-bind "$bar" --shell "qs -p $bar" || { no "up with a Quickshell bar" "$UP_OUT"; return; }
+  rect() { ob hyprctl -b "$B" -j layers | jq -r --arg n "$1" --arg m "${2:-}" \
+    '[to_entries[] | .key as $k | .value.levels[][] | select(.namespace == $n and ($m == "" or $k == $m))][0] | "\(.x) \(.y) \(.w) \(.h)"'; }
+  away() { ob pointer -b "$B" -- move 900 600 >/dev/null 2>&1; ob wait -b "$B" still >/dev/null 2>&1; }
+  check "its bar and scrim drawn" ob wait -b "$B" --timeout 10s layer t-shotscrim
+  ob wait -b "$B" --timeout 10s layer t-shotbar >/dev/null 2>&1
+  read -r W H < <(ob mode -b "$B" --json | jq -r '.mode | sub("@.*"; "") | split("x") | "\(.[0]) \(.[1])"')
+  away
+  read -r lx ly lw lh < <(rect t-shotbar)
+  err=$(ob shot -b "$B" --fit 0 --layer t-shotbar -o "$o/bar.png" 2>&1 >/dev/null); rc=$?
+  check_eq "shot --layer t-shotbar: exit 0, the PNG its rectangle, ${lw}x$lh" "0 ${lw}x$lh" "$rc $(magick identify -format %wx%h "$o/bar.png" 2>&1)"
+  check_match "...said: the layer, where, the image, for --in" \
+    "^omabox: layer \"t-shotbar\" \(pid [0-9]+, ${lw}x$lh at $lx,$ly\) on [A-Z0-9-]+; image ${lw}x$lh; click with --in $o/bar.png$" "$err"
+  ob shot -b "$B" --fit 0 -g "$lx,$ly ${lw}x$lh" -o "$o/g.png" >/dev/null 2>&1
+  check_eq "...the pixels shot -g of that rectangle takes" 0 "$(magick compare -metric AE "$o/bar.png" "$o/g.png" null: 2>&1 | cut -d' ' -f1)"
+  out=$(ob shot -b "$B" --fit 0 --layer t-shotbar --json -o "$o/j.png" 2>/dev/null)
+  check_eq "--json: kind layer, the region its rectangle, the layer's box" "layer $lx $ly $lw $lh t-shotbar $lx $ly $lw $lh" \
+    "$(jq -r '"\(.kind) \(.region.x) \(.region.y) \(.region.w) \(.region.h) \(.layer.namespace) \(.layer.x) \(.layer.y) \(.layer.w) \(.layer.h)"' <<<"$out")"
+  ob click -b "$B" --in "$o/bar.png" 100 10 >/dev/null 2>&1
+  check_eq "click --in it: the screen's point" "$((lx + 100)), $((ly + 10))" "$(ob hyprctl -b "$B" cursorpos)"
+  away
+  ob shot -b "$B" --layer t-shotbar --fit $((lw / 2)) -o "$o/fit.png" >/dev/null 2>&1
+  check_eq "--fit $((lw / 2)): scaled" "$((lw / 2))" "$(magick identify -format %w "$o/fit.png" 2>&1)"
+  err=$(ob shot -b "$B" --fit 0 --layer t-shotbar --grid 2 -o "$o/grid.png" 2>&1 >/dev/null)
+  check_eq "--grid 2: the layer and the labels' margin" "$((lw + 28))x$((lh + 28))" "$(magick identify -format %wx%h "$o/grid.png" 2>&1)"
+  check_match "...in the screen's coordinates, a closer look by its address" "in the screen's coordinates, .*closer: shot --layer address:0x[0-9a-f]+ --grid 2 --cell C3" "$err"
+  # --changed: the whole shot of it before (bar.png's moment) is what it compares with
+  ob shot -b "$B" --fit 0 --layer t-shotbar -o "$o/base.png" >/dev/null 2>&1
+  err=$(ob shot -b "$B" --layer t-shotbar --changed -o "$o/c1.png" 2>&1 >/dev/null); rc=$?
+  check_match "--changed after a whole shot of it: nothing changed, exit 0" "^0 omabox: --changed: nothing changed in layer \"t-shotbar\" " "$rc $err"
+  err=$(ob shot -b "$B" --layer t-shotscrim --changed -o "$o/c2.png" 2>&1 >/dev/null); rc=$?
+  check_match "...of a layer never shot: a whole shot, said why" "^0 .*--changed: no earlier shot of it to compare with: a whole shot of layer \"t-shotscrim\"" "$rc $err"
+  ob shot -b "$B" --fit 0 --layer t-shotbar --burst 2 --every 0 -o "$o/burst" >/dev/null 2>&1
+  check_eq "--burst 2: each frame the layer's" "${lw}x$lh ${lw}x$lh" \
+    "$(magick identify -format '%wx%h ' "$o/burst/frame-001.png" "$o/burst/frame-002.png" 2>&1 | sed 's/ $//')"
+  # #473's cases: a layer spanning its monitor is all of it, said; none matching listed, exit 2
+  err=$(ob shot -b "$B" --fit 0 --layer t-shotscrim -o "$o/scrim.png" 2>&1 >/dev/null); rc=$?
+  check_eq "a layer spanning the screen: all of it, ${W}x$H" "0 ${W}x$H" "$rc $(magick identify -format %wx%h "$o/scrim.png" 2>&1)"
+  check_match "...said, -g for a part" "shot: layer \"t-shotscrim\" .* spans its monitor [A-Z0-9-]+: the shot is all of it, drawn on or not; for a part of it: shot -g" "$err"
+  out=$(ob shot -b "$B" --layer nope 2>&1); rc=$?
+  check_match "--layer naming none: exit 2, the box's layers listed" "^2 omabox: shot: no layer matches nope .*\"t-shotbar\"  pid [0-9]+  top ${lw}x$lh" "$rc $(tr '\n' ' ' <<<"$out")"
+  check_match "--layer with -g: refused" "shot: --layer or -g, not both" "$(ob shot -b "$B" --layer t-shotbar -g "0,0 10x10" 2>&1)"
+  # two monitors, a bar on each: --monitor picks, as in wait layer
+  m2=$(ob monitor -b "$B" add "800x600,$W,0" 2>/dev/null)
+  if ! ob wait -b "$B" --timeout 10s layer t-shotbar --monitor "$m2" >/dev/null 2>&1; then
+    no "a bar on the second monitor ($m2)" "$(ob hyprctl -b "$B" layers 2>&1)"
+  else
+    out=$(ob shot -b "$B" --layer t-shotbar 2>&1); rc=$?
+    check_match "a bar on each monitor: exit 2, --monitor named" "^2 omabox: shot: t-shotbar matches 2 layers: name one by --monitor NAME or its address" "$rc $out"
+    err=$(ob shot -b "$B" --fit 0 --layer t-shotbar --monitor "$m2" -o "$o/m2.png" 2>&1 >/dev/null); rc=$?
+    check_eq "--monitor $m2: the bar there, 800x$lh" "0 800x$lh" "$rc $(magick identify -format %wx%h "$o/m2.png" 2>&1)"
+    check_match "...said on $m2, at $W,0" "layer \"t-shotbar\" \(pid [0-9]+, 800x$lh at $W,0\) on $m2;" "$err"
+    out=$(ob shot -b "$B" --layer t-shotbar --monitor HEADLESS-9 2>&1); rc=$?
+    check_match "...a monitor the box does not have: exit 2, its monitors said" "^2 omabox: shot: no monitor HEADLESS-9 in box " "$rc $out"
+  fi
+  [ -z "$m2" ] || ob monitor -b "$B" remove "$m2" >/dev/null 2>&1
+  # scale 1.25: the crop is the screen's own pixels, the bar's logical rectangle times the scale
+  ob mode -b "$B" "${W}x$H,scale=1.25" >/dev/null 2>&1
+  check "scale 1.25: the bar laid out again" until_ok 10 bash -c "[ \"\$('$CLI' hyprctl -b '$B' -j layers | jq '[.. | objects | select(.namespace? == \"t-shotbar\") | .w][0]')\" = $((W * 4 / 5)) ]"
+  away
+  read -r lx ly lw lh < <(rect t-shotbar)
+  out=$(ob shot -b "$B" --fit 0 --layer t-shotbar --json -o "$o/s125.png" 2>/dev/null)
+  ob shot -b "$B" --fit 0 -g "$lx,$ly ${lw}x$lh" -o "$o/g125.png" >/dev/null 2>&1
+  sz=$(magick identify -format %wx%h "$o/s125.png" 2>&1)
+  check_match "scale 1.25: the layer's ${lw}x$lh as the screen's $W px wide, $((lh * 5 / 4))-$(((lh * 5 + 3) / 4)) high" "^${W}x($((lh * 5 / 4))|$(((lh * 5 + 3) / 4)))$" "$sz"
+  check_eq "...the size and pixels shot -g of it takes" "$sz 0" \
+    "$(magick identify -format %wx%h "$o/g125.png" 2>&1) $(magick compare -metric AE "$o/s125.png" "$o/g125.png" null: 2>&1 | cut -d' ' -f1)"
+  check_eq "...--json: its region, scale 1.25" "$lx $ly $lw $lh 1.25" "$(jq -r '"\(.region.x) \(.region.y) \(.region.w) \(.region.h) \(.scale)"' <<<"$out")"
+  ob down "$B" >/dev/null 2>&1
+}
+
 t_changed() {
   local B=$P-chg o=$TMP/chg out err rc W='title:^C$'
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
@@ -24479,7 +24584,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_shot_layer t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

@@ -14742,6 +14742,33 @@ from them.
     want gtk4 and python-gobject, so `test/bench/` is export-ignore; omabox-qtext links Qt 6
     Quick at run time, an optional dependency in the recipe.
 
+738. **`shot --layer SEL`: a shot of one layer surface** (2026-11-20, #473). A shot of the bar, a
+    panel or a menu was `shot -g` with a rectangle read from `hyprctl layers` by hand, and since
+    734 `shot --layer` only said so. Now it takes the selector `tree`, `click` and `wait` take (its
+    namespace, `address:0x...`, `pid:N`) and is that layer's rectangle as `-g` would crop the
+    screen: the record is a screen crop (`screen X,Y`), so `click --in`, `wait --since`, `--burst`
+    and the pixel-exact cut at a fractional scale (641) are the region's, unchanged, and it is the
+    screen's pixels there, whatever is over the layer. `--json` says kind `layer` with the layer's
+    box (`address, namespace, pid, level, monitor, x, y, w, h`), its `region` the screen's
+    coordinates (a window's is its own; a layer has no coordinates of its own to click in).
+    `--changed` keeps a whole shot of it as `changed/layer-NAMESPACE@MONITOR.png` (by namespace,
+    not address: a menu opened again is a new surface of the same name), its pointer and
+    `--ignore` regions the screen's, moved by the layer's place; `--since` takes a layer's earlier
+    shot (a screen crop elsewhere is still refused). The four cases the issue left open, as it
+    proposed: (1) a layer covering its whole monitor (Omarchy 4.5's bar since rc2, #407; a scrim)
+    is shot whole and said on stderr with `-g` for a part, for `omarchy-bar` the strip its monitor
+    reserves (bar_strip, the rule `windows` already used), never a guess at what is drawn; (2) one
+    not drawn yet, 0x0 or a closed menu's 1x1, is refused, exit 1, naming `wait layer NAMESPACE`
+    (layer_pick, beside layer_select, whose 1x1 words say `tree:` and stay); (3) at a fractional
+    scale the crop is `-g`'s, the screen's own pixels (t_shot_layer: at 1.25 the 1536x30 bar is a
+    1920x37/38 image, the same pixels as `shot -g` of its rectangle); (4) with the namespace on
+    several monitors, `--monitor NAME` picks as in `wait layer` (590), a monitor the box lacks or
+    one the layer is not on is exit 2 with what there is; without it, several is exit 2 naming
+    `--monitor NAME`. `--layer` refuses `--window` and `-g` beside it (a crop inside the layer was
+    not asked for). The relay forwards `-l/--layer`. t_shot_layer (a plain box with a Quickshell
+    bar on each monitor and a scrim: sizes at scale 1 and 1.25, `-g`'s pixels, --json, click --in,
+    --fit, --grid, --changed, --burst, --monitor, the scrim); layer_pick's unit test.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

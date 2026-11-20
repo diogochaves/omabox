@@ -129,9 +129,44 @@ struct Shot {
     grid: Option<i64>,
     /// What --json says of the grid drawn: N, the margin, the file's size, the cells.
     grid_json: Vec<u8>,
+    /// --layer SEL (#473): the layer shot (LAYER_LIST_JQ's object), its selector and its place,
+    /// "X Y W H" as -g's words: a crop of the screen there.
+    layer: Vec<u8>,
+    lsel: Vec<u8>,
+    lrect: Option<[Vec<u8>; 4]>,
 }
 
 impl Shot {
+    /// A --layer shot of all of the layer (#473): not a --cell of it.
+    fn whole_layer(&self) -> bool {
+        !self.layer.is_empty() && self.g.is_some() && self.g == self.lrect
+    }
+
+    /// What a whole shot of it is kept as for --changed (finding 243): "screen", a layer's namespace
+    /// and monitor (#473: a menu opened again is a new surface of the same name), as a file name.
+    fn ref_key(&self) -> Vec<u8> {
+        if self.layer.is_empty() {
+            return b"screen".to_vec();
+        }
+        let safe = |v: Vec<u8>| -> Vec<u8> {
+            v.into_iter()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == b'-' || c == b'.' {
+                        c
+                    } else {
+                        b'_'
+                    }
+                })
+                .collect()
+        };
+        cat!(
+            "layer-",
+            safe(jq_r(".namespace", &self.layer)),
+            "@",
+            safe(jq_r(".monitor", &self.layer))
+        )
+    }
+
     /// layout_save for this shot, recorded in shots.tsv as PATH (FILE: its other name): the
     /// desktop read beside the capture and the pointer now. Window shots have none.
     fn layout_save(&mut self, ctx: &Ctx, path: &[u8], file: &[u8]) {
@@ -160,6 +195,8 @@ impl Shot {
         }
         let kind = if !self.win.is_empty() {
             "window"
+        } else if !self.layer.is_empty() {
+            "layer"
         } else if !self.monitor.is_empty() {
             "monitor"
         } else if self.g.is_some() {
@@ -188,6 +225,15 @@ impl Shot {
                 self.scale.map(|v| v.to_string()).unwrap_or_default(),
             )
             .kv("--argjson", "win", win)
+            .kv(
+                "--argjson",
+                "ly",
+                if self.layer.is_empty() {
+                    b"null".as_slice()
+                } else {
+                    &self.layer
+                },
+            )
             .kv("--arg", "mon", &self.monitor)
             .kv("--arg", "fit", &self.fit)
             .kv("--arg", "zoom", &self.zoom)
@@ -594,14 +640,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 after = args[i + 2..].to_vec();
                 break;
             }
-            // (#471: `shot --layer omarchy-bar` in the benchmark) a layer has a place, not a window
-            w if w == b"--layer" || w.starts_with(b"--layer=") => {
-                return Err(crate::args::unknown_opt_hint(
-                    ctx,
-                    "shot",
-                    a,
-                    "(a layer is shot by its place: omabox hyprctl layers gives it, then omabox shot -g \"X,Y WxH\"; its text: omabox tree --layer NAMESPACE)",
-                ));
+            // (#473) a layer surface's rectangle, as -g would take it
+            b"-l" | b"--layer" => {
+                optarg(ctx, a, v)?;
+                s.lsel = val();
+                i += 1;
             }
             w if w.starts_with(b"-") => return Err(unknown_opt(ctx, "shot", a)),
             w => {
@@ -610,6 +653,20 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
         }
         i += 1;
+    }
+    // --layer (#473): its rectangle of the screen; --monitor picks among one namespace's layers, as
+    // in `wait layer`, instead of cropping to that monitor.
+    let mut lmon = Vec::new();
+    if !s.lsel.is_empty() {
+        if !sels.is_empty() {
+            return Err(ctx.die("shot: --window or --layer, not both"));
+        }
+        if !geom.is_empty() {
+            return Err(ctx.die(
+                "shot: --layer or -g, not both (the layer's place is on its shot's stderr line; -g takes the screen's coordinates)",
+            ));
+        }
+        lmon = std::mem::take(&mut s.monitor);
     }
     if !geom.is_empty() {
         match geom_parse(&geom) {
@@ -707,10 +764,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if !s.fit.is_empty() {
             return Err(ctx.die("shot: --zoom or --fit, not both"));
         }
-        if s.g.is_none() && cell.is_none() {
-            return Err(
-                ctx.die("shot: --zoom goes with -g, a small crop (shot -g \"X,Y 40x30\" --zoom 8)")
-            );
+        if s.g.is_none() && cell.is_none() && s.lsel.is_empty() {
+            return Err(ctx.die(
+                "shot: --zoom goes with -g or --layer, a small crop (shot -g \"X,Y 40x30\" --zoom 8)",
+            ));
         }
         if !on_path("magick") {
             ctx.parsed();
@@ -811,6 +868,56 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let f = shell::read_fields(&g, 4);
         s.g = Some([f[0].clone(), f[1].clone(), f[2].clone(), f[3].clone()]);
     }
+    // --layer SEL (#473): the layer's rectangle as -g takes the screen's (a fractional scale's crop
+    // is the screen's own pixels, #423). One spanning its monitor is all of it, said, with -g for a
+    // part: no guess at what of it is drawn.
+    if !s.lsel.is_empty() {
+        let lys = strip_nl(&hypr_json(ctx, &["layers"])?);
+        let l = crate::layer::layer_pick(ctx, "shot", &lys, &s.lsel, &lmon)?;
+        let f = shell::read_fields(&jq_r(r#""\(.x) \(.y) \(.w) \(.h)""#, &l), 4);
+        let r = [f[0].clone(), f[1].clone(), f[2].clone(), f[3].clone()];
+        if r.iter().any(|v| dec(v).is_none()) {
+            return Err(ctx.die(cat!(
+                "shot: layer ",
+                crate::layer::layer_desc(&l),
+                " has no place to crop to"
+            )));
+        }
+        let mons = strip_nl(&hypr_json(ctx, &["monitors"])?);
+        let sp = Args::new(&["-r"])
+            .kv("--argjson", "l", &l)
+            .arg(format!("{JQ_MON}{}", crate::jqprog::SHOT_LAYER_SPAN_JQ))
+            .run(Some(&mons), jq::Err::Null)
+            .text();
+        if let Some(rest) = sp.strip_prefix(b"spans ".as_slice()) {
+            let (mon, strip) = match rest.iter().position(|&c| c == b' ') {
+                Some(i) => (rest[..i].to_vec(), rest[i + 1..].to_vec()),
+                None => (rest.to_vec(), Vec::new()),
+            };
+            let part = if strip.is_empty() {
+                b"a part of it: shot -g \"X,Y WxH\" (the screen's coordinates)".to_vec()
+            } else {
+                cat!(
+                    "its bar, the strip ",
+                    mon,
+                    " reserves for it: shot -g \"",
+                    strip,
+                    "\""
+                )
+            };
+            say(cat!(
+                "shot: layer ",
+                crate::layer::layer_desc(&l),
+                " spans its monitor ",
+                mon,
+                ": the shot is all of it, drawn on or not; for ",
+                part
+            ));
+        }
+        s.g = Some(r.clone());
+        s.lrect = Some(r);
+        s.layer = l;
+    }
     // --since FILE: a whole shot of this box, unchanged, to compare with.
     if !since.is_empty() {
         if in_jail() {
@@ -850,6 +957,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     " is a shot of the screen, not of a window"
                 )));
             }
+        } else if !s.lsel.is_empty() && skind.starts_with(b"screen ") {
+            // (a layer's shot is a crop of the screen at its place: changed() holds it to that)
         } else if shell::re_match("^window .* ", &skind) || skind.starts_with(b"screen ") {
             return Err(ctx.die(cat!(
                 "shot --since: ",
@@ -1576,7 +1685,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     s.layout_save(ctx, &o, &f);
     // A whole shot is what a later --changed compares with (finding 243); not one taken with
     // OMABOX_SHOT_NO_BASELINE=1 (the suite's evidence shots, #195, finding 266), nor a grid's.
-    if s.g.is_none()
+    if (s.g.is_none() || s.whole_layer())
         && s.grid.is_none()
         && s.zoom.is_empty()
         && !scaled
@@ -1592,7 +1701,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
             )
         } else {
             let p = crate::exit::muted(|| cursor_now(ctx).ok().filter(|p| !p.is_empty()));
-            (b"screen".to_vec(), p.unwrap_or(b"-".to_vec()))
+            (s.ref_key(), p.unwrap_or(b"-".to_vec()))
         };
         shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr])?;
     }
@@ -1641,6 +1750,27 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
             "; click with --in ",
             s.out
         ));
+    } else if !s.layer.is_empty() && s.grid.is_none() {
+        // (#473) the layer named, the region it is of the screen's, for --in
+        let crop = if s.whole_layer() {
+            Vec::new()
+        } else {
+            cat!("; ", s.lw, "x", s.lh, " of it at ", s.gx, ",", s.gy)
+        };
+        say(cat!(
+            "layer ",
+            crate::layer::layer_desc(&s.layer),
+            " on ",
+            jq_r(".monitor", &s.layer),
+            crop,
+            "; image ",
+            n(iw),
+            "x",
+            n(ih),
+            k,
+            "; click with --in ",
+            s.out
+        ));
     } else if s.grid.is_none()
         && (cat!(s.where_, " ", s.lw, " ", n(iw)) != cat!("screen 0,0 ", s.lw, " ", s.lw)
             || s.lh != n(ih))
@@ -1685,7 +1815,9 @@ fn grid_words(s: &Shot, gn: i64, r: [i64; 4], [iw, ih]: [i64; 2], k: &[u8]) -> V
     if !s.win.is_empty() {
         again = cat!(again, " --window ", jq_r(".address", &s.win));
     }
-    if s.g.is_some() {
+    if s.whole_layer() {
+        again = cat!(again, " --layer address:", jq_r(".address", &s.layer));
+    } else if s.g.is_some() {
         again = cat!(
             again,
             " -g \"",
@@ -1850,10 +1982,25 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     } else {
         let p = crate::exit::muted(|| cursor_now(ctx).ok().filter(|p| !p.is_empty()));
         (
-            b"screen".to_vec(),
-            b"the screen".to_vec(),
+            s.ref_key(),
+            if s.layer.is_empty() {
+                b"the screen".to_vec()
+            } else {
+                cat!("layer ", crate::layer::layer_desc(&s.layer))
+            },
             p.unwrap_or(b"-".to_vec()),
         )
+    };
+    // A layer's shot is a crop of the screen (#473): the pointer and --ignore's regions are the
+    // screen's, moved by its place into the shot's.
+    let (ox, oy) = if s.layer.is_empty() {
+        (0, 0)
+    } else {
+        (bi(&s.gx)?, bi(&s.gy)?)
+    };
+    let moved = |r: &[u8]| -> Res<[i64; 4]> {
+        let f = shell::read_ifs(r, 4, b",");
+        Ok([bi(&f[0])? - ox, bi(&f[1])? - oy, bi(&f[2])?, bi(&f[3])?])
     };
     let geo = cat!(s.lw, "x", s.lh, " ", n(iw), "x", n(ih));
     let (mut rfile, mut rshot, mut rptr, mut rt) =
@@ -2000,7 +2147,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
             s.out
         ));
         return s.said(
-            [&s.out, b"0", b"0", &s.lw, &s.lh, &n(iw), &n(ih)],
+            [&s.out, &n(ox), &n(oy), &s.lw, &s.lh, &n(iw), &n(ih)],
             [b"whole", b"", &why],
         );
     }
@@ -2011,9 +2158,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     }
     let mut m = Vec::new();
     for r in &rs {
-        let f = shell::read_ifs(r, 4, b",");
-        let (x, y, w, h) = (bi(&f[0])?, bi(&f[1])?, bi(&f[2])?, bi(&f[3])?);
-        m.push(to_image_px([x, y, w, h], lw, lh, iw, ih).ok_or(Exit(1))?);
+        m.push(to_image_px(moved(r)?, lw, lh, iw, ih).ok_or(Exit(1))?);
     }
     let Some(dbox) = diff_box(&rfile, &s.file, &m) else {
         rmf(&s.file);
@@ -2047,9 +2192,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     // All of it where the pointer is now, which moved there: perhaps the pointer alone.
     let mut alone: &[u8] = b"";
     if boxed.is_some() && ptr != b"-" && ptr != rptr {
-        let r = cursor_rect(&ptr).ok_or(Exit(1))?;
-        let f = shell::read_ifs(&r, 4, b",");
-        let (x, y, w, h) = (bi(&f[0])?, bi(&f[1])?, bi(&f[2])?, bi(&f[3])?);
+        let [x, y, w, h] = moved(&cursor_rect(&ptr).ok_or(Exit(1))?)?;
         if !(x0 < x || y0 < y || x1 > x + w || y1 > y + h) {
             alone = b"; all of it around the pointer, which moved there: perhaps the pointer alone";
         }
@@ -2111,7 +2254,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     let rwhere = if !s.win.is_empty() {
         cat!(s.where_, " ", n(x0), ",", n(y0), " ", s.lw, "x", s.lh)
     } else {
-        cat!("screen ", n(x0), ",", n(y0))
+        cat!("screen ", n(ox + x0), ",", n(oy + y0))
     };
     shot_record(
         ctx,
@@ -2138,8 +2281,8 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
                 places.extend(
                     format!(
                         "{},{} {}x{}",
-                        px * lw / iw,
-                        py * lh / ih,
+                        ox + px * lw / iw,
+                        oy + py * lh / ih,
                         pw * lw / iw,
                         ph * lh / ih
                     )
@@ -2179,9 +2322,9 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         "x",
         n(ch),
         " at ",
-        n(x0),
+        n(ox + x0),
         ",",
-        n(y0),
+        n(oy + y0),
         " of ",
         what,
         coords,
@@ -2192,7 +2335,15 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         s.out
     ));
     s.said(
-        [&s.out, &n(x0), &n(y0), &n(cw), &n(ch), &n(ciw), &n(cih)],
+        [
+            &s.out,
+            &n(ox + x0),
+            &n(oy + y0),
+            &n(cw),
+            &n(ch),
+            &n(ciw),
+            &n(cih),
+        ],
         [b"changed", &rshot, b""],
     )
 }

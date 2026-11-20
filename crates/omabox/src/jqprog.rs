@@ -385,6 +385,19 @@ pub const WIN_SIZE_JQ: &str = r#""\(.size[0])x\(.size[1])""#;
 /// pixel: a window's size, W H.
 pub const WIN_SIZE2_JQ: &str = r#""\(.size[0]) \(.size[1])""#;
 
+/// shot --layer (#473): whether layer $l covers all of its monitor (monitors on stdin, after
+/// JQ_MON): "spans" and its monitor's name, with Omarchy's bar the strip its monitor reserves for it
+/// (LAYER_SPAN_JQ's bar_strip) as "X,Y WxH"; nothing when it does not.
+pub const SHOT_LAYER_SPAN_JQ: &str = concat!(
+    layer_span_jq!(),
+    r#" . as $m | (first($m[] | select(.name == $l.monitor and (.disabled | not))) // null) as $o
+  | if $o == null then empty
+    elif $l.x <= $o.x and $l.y <= $o.y and $l.x + $l.w >= $o.x + ($o | lw) - 1 and $l.y + $l.h >= $o.y + ($o | lh) - 1 then
+      ($l | bar_strip($m; $l.monitor)) as $b
+      | "spans \($o.name)" + (if $b != $l then " \($b.x),\($b.y) \($b.w)x\($b.h)" else "" end)
+    else empty end"#
+);
+
 /// layer_select: the ones drawn (over 1x1, finding 146).
 pub const LAYER_BIG_JQ: &str = r#"map(select(.w > 1 and .h > 1))"#;
 
@@ -422,6 +435,7 @@ pub const SHOT_SAID_JQ: &str = r#"
        image: (if $img then {w: ($iw | n), h: ($ih | n)} else null end),
        scale: (if $img then ((if $sc != "" then $sc | n else ($iw | n) / ($w | n) end) * 10000 | round / 10000) else null end),
        window: ($win | if . == null then null else {address, class, title, workspace, x: .at[0], y: .at[1], w: .size[0], h: .size[1]} end),
+       layer: ($ly | if . == null then null else {address, namespace, pid, level, monitor, x, y, w, h} end),
        monitor: (if $mon == "" then null else $mon end), fit: ($fit | n), zoom: ($zoom | n), grid: $grid,
        changed: (if $ch == 1 then {result: $res, since: (if $since == "" then null else $since end),
          why: (if $why == "" then null else $why end)} else null end)}"#;

@@ -5,6 +5,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+- **`omabox shot --layer SEL`: a shot of the bar, a panel or a menu** ([#473](https://github.com/diogochaves/omabox/issues/473)):
+  the layer's rectangle of the screen, by the selector `tree`, `click` and `wait` take (its
+  namespace, `address:0x...`, `pid:N`), with `--monitor NAME` when it is on several monitors. It
+  goes with `--fit`, `--zoom`, `--grid`, `--changed`, `--burst` and `--json` (the layer's box), and
+  `click --in` maps it to the screen. A layer not drawn yet is refused naming `wait layer`; one
+  spanning its monitor is shot whole, said with the `-g` for a part.
+
 ### Fixed
 - **`diff` on Omarchy 4.0 listed Hyprland's `lastNag`** in an idle box (`+ ~/.local/share/hyprland/`):
   it is noise, as `lastVersion` beside it already was.

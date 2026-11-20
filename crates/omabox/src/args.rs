@@ -81,7 +81,7 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g= --shot-monitor= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g= --expect= --tree",
         ),
         b"shot" | b"screenshot" => Some(
-            "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --grid= --cell= --after --json",
+            "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active -l= --layer= --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --grid= --cell= --after --json",
         ),
         b"calibrate" => Some("-b= --box= -o= --output= --size= --answer= --json"),
         b"mode" => Some("-b= --box= --json"),
