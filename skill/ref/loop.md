@@ -36,6 +36,8 @@ omabox look app -- ./build/app            # shot, problems (ref: look.md)
 omabox up                                 # headless, 1920x1080, once its bar is drawn
 omabox run -d --wait -- ./build/app       # detached, its pid on stdout, once drawn
 omabox run -d --replace --wait -- ./app   # after a rebuild; jobs, stop PID, wait job|log
+omabox look app -- ./app                  # ...or that, its shot and its problems, in one (ref: look.md)
+omabox look                               # the box now: windows, text, problems new since the last look
 omabox shot                               # a PNG path: Read it to look
 omabox windows                            # address, workspace, on screen or covered
 omabox shot --window app                  # one window's own pixels, even covered

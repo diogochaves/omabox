@@ -20,10 +20,14 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
             [--json]                                     the box as ls --json lists it, on stdout
   omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
+  omabox look [-b NAME] [-o FILE]                        the box now: its screen shot, windows, the active one's
+                                                         text, plugins, the problems logged since the last look
+  omabox look app|plugin|theme|page ... [-b NAME | --fresh]   in the box that is up (yours, or NAME), left as it is;
+                                                         none up, or --fresh: a throwaway box, nothing left up
   omabox look app [--keys "K..."] [--type TEXT] [--after DURATION] [--timeout 10s] [-o FILE] [--keep-box]
-             [UP OPTIONS] -- CMD [ARG...]                a program in a throwaway box: its window shot, its
-                                                         problems and output reported (exit 1: problems)
-  omabox look plugin DIR [--open] [-o FILE] [--keep-box] [UP OPTIONS]   a plugin in one: the bar shot, its
+             [UP OPTIONS] -- CMD [ARG...]                a program: its window shot, its problems and output
+                                                         reported (exit 1: problems); again after a rebuild
+  omabox look plugin DIR [--open] [-o FILE] [--keep-box] [UP OPTIONS]   a plugin: the bar shot, its
                                                          panel too with --open, its state, the text it shows
                                                          (text:, panel text:) and its warnings
   omabox look theme DIR|NAME [-o FILE] [--keep-box] [UP OPTIONS]   a theme applied: the desktop and a palette terminal
@@ -167,7 +171,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save snapshot diff clip brief
+@+ up run look shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save snapshot diff clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check

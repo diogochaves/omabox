@@ -10,6 +10,7 @@ use crate::exit::{Ctx, Exit, Res, say};
 pub const BOX_CMDS: &[&[u8]] = &[
     b"up",
     b"run",
+    b"look",
     b"shot",
     b"screenshot",
     b"record",

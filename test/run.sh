@@ -23716,6 +23716,71 @@ look_plugin_checks() {
   check_eq "no look box left" 0 "$left"
 }
 
+# #461 (finding 735): a look in a box that is up, as run picks one: the box left as it is, the program
+# replaced, the shell restarted for a plugin (or the plugin put in), the theme set there; --fresh and
+# what the box lacks refused by name; and the plain look: the box now, with only what was logged since
+# the last look. Its own test: the other looks count the look-* boxes left, and this one makes none.
+t_look_box() {
+  local B=$P-lkb out rc d=$TMP/$P-lkb-plugin
+  if ! omarchy_here; then skip "look in a box that is up" "no Omarchy here"; return; fi
+  check_match "look -b NAME with no such box up: said, no throwaway in its place" "no box '$B' is up" "$(ob look -b "$B" 2>&1)"
+  check_match "...look app too" "no box '$B' is up" "$(ob look app -b "$B" -- foot 2>&1)"
+  up_ok "$B" --stock-bar --net isolated "${OM[@]}" || { no "up" "$UP_OUT"; return; }
+  out=$(ob look -b "$B" 2>&1); rc=$?
+  check_eq "look, no kind, in a box just up: 0 ($out)" 0 "$rc"
+  check_match "...its screen shot, no window, the box named" "^screenshot: /.*\.png"$'\n''windows: 0'$'\n'"box: $B"$'\n''problems: none' "$out"
+  out=$(ob look app -b "$B" -- foot -T lk1 sh -c 'sleep 600' 2>&1); rc=$?
+  check_eq "look app in a box that is up: 0 ($out)" 0 "$rc"
+  check_match "...its window, the box named" $'\n''window: foot "lk1" .*'$'\n'"box: $B"$'\n' "$out"
+  check_match "...the program left running, with what stops it" $'\n'"note: left running in the box: omabox stop -b $B [0-9]+" "$out"
+  out=$(ob look app --size 800x600 -b "$B" -- foot -T lk1 sh -c 'sleep 600' 2>&1); rc=$?
+  check_eq "...again: 0" 0 "$rc"
+  check_match "...up's options said as ignored" "is already up: --size 800x600 ignored \(look --fresh" "$out"
+  check_eq "...the first one replaced: one window" 1 "$(ob windows -b "$B" --json | jq length)"
+  check_match "--fresh with -b: refused" "look: --fresh starts a box of its own: not with -b NAME" "$(ob look app --fresh -b "$B" -- foot 2>&1)"
+  # The plain look: only what is new.
+  out=$(ob look -b "$B" 2>&1); rc=$?
+  check_match "look, no kind: the window, active" $'\n''windows: 1'$'\n''  foot "lk1" [0-9]+x[0-9]+ \((tiled|floating), active\)' "$out"
+  check_match "...after a look app: its problems are counted from there" $'\n''new problems: none' "$out"
+  ob run -b "$B" -d -q -- sh -c 'echo fine; echo "Traceback: error: boom"; sleep 600' >/dev/null 2>&1
+  until_ok 5 bash -c "grep -qs boom '$(ob path "$B")'/home/run-*.log"
+  out=$(ob look -b "$B" 2>&1); rc=$?
+  check_eq "a program logged an error since: 1" 1 "$rc"
+  check_match "...named, under its program" $'\n''new problems:'$'\n''  sh: Traceback: error: boom' "$out"
+  out=$(ob look -b "$B" 2>&1); rc=$?
+  check_eq "...the look after: not repeated, 0" "0 new problems: none" "$rc $(grep '^new problems' <<<"$out")"
+  check_match "look with an unknown option: refused" "look" "$(ob look -b "$B" --nope 2>&1 >/dev/null)"
+  # A plugin: put in, then the shell again at each look.
+  if omarchy45; then
+    rm -rf "$d"; t467_plugin "$d"
+    out=$(ob look plugin "$d" -b "$B" 2>&1); rc=$?
+    check_eq "look plugin in a box without it: put in, 0 ($out)" 0 "$rc"
+    check_match "...loaded, its text" $'\n''plugin: t467.tally loaded .*'$'\n''text: tally 42'$'\n'"box: $B" "$out"
+    sed -i 's/\[6, 7\]/[6, 8]/' "$d/Widget.qml"
+    out=$(ob look plugin "$d" -b "$B" 2>&1)
+    check_match "...edited: the look after shows it (the shell again)" $'\n''text: tally 48'$'\n' "$out"
+    sed -i 's/^  id: root/  property var boom: undefinedThing.name\n  id: root/' "$d/Widget.qml"
+    out=$(ob look plugin "$d" -b "$B" 2>&1); rc=$?
+    check_eq "...broken: 1" 1 "$rc"
+    check_match "...its error named" $'\n''problems:'$'\n''  .*t467\.tally/Widget\.qml\[[0-9]+:.*undefinedThing is not defined' "$out"
+    sed -i '/undefinedThing/d' "$d/Widget.qml"
+    out=$(ob look plugin "$d" -b "$B" 2>&1); rc=$?
+    check_eq "...mended: 0, the old warning not carried over ($out)" 0 "$rc"
+    out=$(ob look -b "$B" 2>&1)
+    check_match "look, no kind: the box's plugins" $'\n''plugins: t467.tally loaded'$'\n' "$out"
+  else skip "look plugin in a box that is up" "the fixture's widget is Omarchy 4.5's"; fi
+  # A theme: set there, said; a folder the box was not started with, and a file it lacks, refused.
+  out=$(ob look theme nord -b "$B" 2>&1); rc=$?
+  check_eq "look theme NAME in a box that is up: 0 ($out)" 0 "$rc"
+  check_match "...said: the box stays on it" $'\n''note: the box is on theme nord from now on' "$out"
+  check_eq "...the theme set in the box" nord "$(ob run -b "$B" -- cat /home/sbx/.local/state/omarchy/current/theme.name 2>/dev/null)"
+  check_eq "...its palette terminal gone" 0 "$(ob windows -b "$B" --json | jq '[.[] | select(.title == "omabox-palette")] | length')"
+  check_match "look theme DIR in a box not started with it: refused, --fresh named" "does not have .* as a live theme .*look theme .* --fresh" "$(ob look theme /usr/share/omarchy/themes/nord -b "$B" 2>&1)"
+  echo '<p>x</p>' > "$TMP/$P-lkb.html"
+  check_match "look page FILE the box does not have: refused, --fresh named" "look page: box '$B' does not have .* --fresh" "$(ob look page "$TMP/$P-lkb.html" -b "$B" 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # (one test: each checks that no look-* box is left, which another look running beside it would fail)
 t_look() { look_app_checks; look_plugin_checks; look_theme_checks; look_page_checks; }
 
@@ -24391,7 +24456,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_look_box t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_cmdlog t_cmdlog_secrets t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's

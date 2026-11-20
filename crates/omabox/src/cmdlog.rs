@@ -316,6 +316,8 @@ pub fn is_read(cmd: &[u8], r: &Redacted) -> bool {
         | b"audio" | b"ports" | b"peek" | b"wait" | b"gdb" => true,
         // (#446: they read the box HOME; a snapshot's record is on the host side, not in the box)
         b"snapshot" | b"diff" => true,
+        // (no kind: the box as it is; a kind starts, restarts or sets something in it)
+        b"look" => first.is_none(),
         b"tray" => matches!(first, None | Some(b"menu")),
         b"monitor" => first == Some(b"list"),
         b"polkit" => first == Some(b"agents"),

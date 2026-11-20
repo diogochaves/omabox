@@ -14649,6 +14649,40 @@ from them.
     found` is; the links-into-your-real-HOME note on `path` is a warning, not a refusal; omarchy's own
     `Usage:` lines are not omabox's.
 
+735. **A look works in the box that is up; `look` alone is the box now** (2026-11-20, #461). Looks
+    were built on a throwaway box each (finding 719), which fits a question asked once. How agents
+    have used omabox says most work is not that: in 253 agent threads outside this repo since
+    2026-10-20 (some 9 300 omabox calls), 76% of the calls in an `up`..`down` episode are in
+    episodes of more than 15 calls, 11% of the episodes have a look's shape (start, a key at most,
+    a shot, down), and 180 threads never ran `up` at all: they drove a box a parent or a project
+    script started, by `-b NAME`. Plugin work is a loop of `restart-shell`, `wait`, `log shell`,
+    `shot` (115 of 192 `log` calls are `log shell`, each with the box's own seven warnings in it).
+    So a look's report was out of reach where the work is. Now each kind picks its box as `run`
+    does: one that is up (`-b NAME`'s, else the session's) is looked into and left as it is; none
+    up, or `--fresh`, the throwaway; a box asked for by name that is not up is said, never replaced
+    (#295's rule). In a box that stays: `look app` is `run -d --replace` (the same program from the
+    last look stopped), its window the job's or one that was not there before, never another
+    program's, and it says what stops the one it leaves; `look plugin` restarts the shell, whose
+    log starts again with it, so a warning of an edit ago is not carried over (measured: 15 lines
+    before, 14 after, the new shell's own), or `plugin add`s one the box lacks; `look theme NAME`
+    runs `omarchy-theme-set` there and says the box stays on it (the installed theme's checks as
+    `up --theme NAME` makes them, from box.json's tree and theme_dirs), its palette terminal
+    stopped after the shot; a theme folder or a page's file the box was not started with is
+    refused, naming `--fresh` (a box's mounts are fixed at `up`; only a plugin has a late one);
+    `look page` stops the last look's Chromium first (a second one on the profile would hand its
+    page to the first and end, its console never read). `omabox look` with no kind starts nothing:
+    the screen shot, the windows (active first), the active one's text from its tree, the plugins'
+    states, and the problems logged since the last look in that box: a mark in the box dir
+    (`look.mark`, host side: each `run-*.log`'s size, the shell log's first line and length), left
+    by every look there, so what `look app` reported is not new to the next. The first look in a
+    box says `problems:`, later ones `new problems:`: one not repeated is not thereby fixed. Ended
+    jobs are not its business: `need_box` already says them (job_note). Timed in a box here: `look
+    app` again 1.3 s, `look plugin` 4 s (the shell's restart), `look` 0.2 s. Seen on the way: a
+    Chromium window gives `tree` only a frame without `--force-renderer-accessibility`, so a page
+    has no `text:` (not added: untried what it costs a page's frames). t_look_box (its own test:
+    t_look counts the `look-*` boxes left); two unit tests (the window picked, a log since its
+    mark).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

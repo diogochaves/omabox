@@ -31,14 +31,16 @@ beside this file: read it when the task needs it.
 
 ## Look in one call
 
-Each runs in a throwaway box and prints `screenshot:` (a PNG path: Read it), what it looked at,
-`problems:` and the output; nothing is left up. Exit 0: nothing found, 1: problems. ref: look.md.
+Each prints `screenshot:` (a PNG path: Read it), what it looked at, `problems:` and the output.
+Exit 0: nothing found, 1: problems. In your box when it is up (again after each edit); none up, or
+`--fresh`: a throwaway box. ref: look.md.
 
 ```bash
 omabox look app [--keys "Down Return"] [--type TEXT] -- ./build/app  # its window
 omabox look plugin DIR [--open]      # a bar plugin: the bar, --open its panel
 omabox look theme DIR                # a theme applied: desktop, terminal, contrast
 omabox look page FILE|URL [--keys K] # a page or web game in Chromium, its console
+omabox look   # your box now: windows, text, new problems
 ```
 
 ## Anything else, step by step

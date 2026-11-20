@@ -10,6 +10,46 @@ Sections:
 
 ## Looking in one call
 
+**Which box** (all four kinds, as `run` picks one): a box that is up, yours or `-b NAME`'s, is looked
+into as it is and left as it is: nothing started, nothing taken down, UP OPTIONS ignored (said). So
+after each rebuild or edit the same line again is the check, in a second or two. With no box up, or
+with `--fresh` (a clean box whatever is up), a throwaway `look-PID`, taken down however it ends. The
+report has `box: NAME` when it was a box that stays. In such a box:
+
+- `look app` stops the same program left by the last look (`run -d --replace`) and leaves the new one
+  running (`note: left running in the box: omabox stop -b NAME PID`); its window is its own, never
+  another program's.
+- `look plugin DIR` restarts the shell (so it shows the files as they are, and its warnings are this
+  run's only), or puts the plugin in first when the box does not have it (`plugin add`). `--open`
+  leaves the panel open.
+- `look theme NAME` sets the theme there (`omarchy-theme-set`) and says so: the box stays on it. A
+  folder (`look theme DIR`) only in a box started with `--theme-dir DIR`; else refused, naming
+  `--fresh`.
+- `look page FILE` only for a file the box has (in a folder it was started with); else refused,
+  naming `--fresh`. The last look's Chromium is stopped first.
+
+`omabox look [-b NAME] [-o FILE]`, no kind: the box as it is now, nothing started or changed.
+
+```
+screenshot: /tmp/omabox-mybox-101500-123.png
+windows: 2
+  tally "Tally" 960x680 (floating, active)
+  foot "build" 946x1056 (tiled)
+text: Today | 42 cups | Reset
+plugins: me.tally loaded
+box: mybox
+new problems:
+  tally: qrc:/Main.qml:42: TypeError: Cannot read property 'name' of undefined
+```
+
+- **`text:`** the active window's text (its tree, 60 items at most), when its toolkit gives any.
+- **Problems** are what was logged since the last look in that box, of any kind (`new problems:`;
+  the first look in a box reads everything, `problems:`): each `run -d` program's lines that name an
+  error (as `look app` reads them; a `look page`'s console as it does), under the program's name, and
+  the shell's warnings that name one of the box's plugins. One seen at the last look is not repeated:
+  it is not thereby fixed. Always there while true: a plugin not loaded, a shell not running.
+- Needs a box that is up. Use it after acting (`keys`, `click`) in place of a shot and a log read.
+
 `omabox look app [--keys "K..."] [--type TEXT] [--after DURATION] [--timeout 10s] [-o FILE]
 [--keep-box] [UP OPTIONS] -- CMD [ARG...]` (#461) is `up`, `run -d`, waiting for its window, `keys`,
 `wait still`, `shot --window` and reading its output, in a throwaway box of its own (`look-PID`),

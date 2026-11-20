@@ -23,6 +23,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   loop only a few times): `--hold KEY DURATION` holds a key over many frames, `--shots N` puts N
   shots over `--after` in a contact sheet, and the page's uncaught exceptions are its problems
   ([#463](https://github.com/diogochaves/omabox/issues/463)).
+  A look works in the box you already have: with your box up (or `-b NAME`), each kind looks into
+  it and leaves it as it is, so the same line after every rebuild or edit is the check (`look app`
+  replaces the program it left running, `look plugin` restarts the shell, or adds the plugin).
+  With no box up, or with `--fresh`, it is a throwaway box as above. `omabox look` with no kind
+  reports the box as it is now: a screen shot, its windows, the active one's text, its plugins,
+  and only the problems its programs and shell logged since the last look.
 - **Theme checks** ([#462](https://github.com/diogochaves/omabox/issues/462)): `look theme` and
   `up --theme-dir` say what a person would notice: a key Omarchy reads that no fallback resolves, a
   value that is no `#rrggbb`, text too faint to read, a background that is too small, nearly one

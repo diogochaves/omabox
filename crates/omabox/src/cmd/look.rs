@@ -4,20 +4,23 @@
 //! call. A throwaway box of its own (as a throwaway `run`'s), then the commands an agent would chain:
 //! for an app `run -d`, its window waited for, keys sent, `wait still`, `shot --window`, the program's
 //! output read; for a plugin `up --plugin`, its state, the bar shot, with --open its panel summoned and
-//! shot, the shell's warnings. The box is taken down however this ends, unless --keep-box. Nothing new
+//! shot, the shell's warnings. The box is taken down however this ends, unless --keep-box. With a box
+//! up already (-b NAME's, else the session's, as `run` picks one) the look is into that box, left as
+//! it is (`pick`); `omabox look` with no kind is such a box now, with what it logged since the last
+//! look (`plain`; finding 735). Nothing new
 //! is isolated here: every step is one of omabox's own commands, run as a subprocess, so S1-S10 hold
 //! as they are. One short report on stdout; exit 0 when it found no problem, 1 when it did, and an
 //! error of omabox's own as its other commands do.
 
 use crate::args::optarg;
+use crate::boxes::{box_alive, need_box};
 use crate::cat;
+use crate::exit::say;
 use crate::exit::{Ctx, Exit, Res, out};
 use crate::num::ms_duration;
-use crate::boxes::{box_alive, need_box};
-use crate::exit::say;
 use crate::select::{env_names_box, select_box, session_boxes};
-use crate::sig::Teardown;
 use crate::shell::{self, Re};
+use crate::sig::Teardown;
 use serde_json::Value;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -39,8 +42,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         Some(b"plugin") => plugin(ctx, &args[1..]),
         Some(b"theme") => theme(ctx, &args[1..]),
         Some(b"page") => page(ctx, &args[1..]),
-        Some(b"-h" | b"--help") | None => crate::help::usage("look"),
-        Some(o) if o.starts_with(b"-") => Err(crate::args::unknown_opt(ctx, "look", o)),
+        Some(b"-h" | b"--help") => crate::help::usage("look"),
+        None => plain(ctx, args),
+        Some(o) if o.starts_with(b"-") => plain(ctx, args),
         Some(k) => Err(ctx.die(cat!(
             "look: app, plugin, theme or page, got ",
             k,
@@ -351,6 +355,281 @@ pub fn problem_lines(output: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// `omabox look [-b NAME] [-o FILE]`: the box as it is now, nothing started or changed: the screen
+/// shot, its windows, the active one's text, its plugins' states, and the problems its programs and
+/// its shell logged since the last look in it (any kind's: each leaves a mark, MARK_FILE).
+fn plain(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    let (mut given, mut o_file) = (Vec::new(), None);
+    let mut i = 0;
+    while i < args.len() {
+        let o = &args[i];
+        match o.as_slice() {
+            b"-b" | b"--box" => {
+                optarg(ctx, o, args.get(i + 1))?;
+                given = args[i + 1].clone();
+                i += 1;
+            }
+            b"-o" => {
+                optarg(ctx, o, args.get(i + 1))?;
+                o_file = Some(args[i + 1].clone());
+                i += 1;
+            }
+            _ => return Err(crate::args::unknown_opt(ctx, "look", o)),
+        }
+        i += 1;
+    }
+    select_box(ctx, &given)?;
+    if !box_alive(ctx)? && given.is_empty() && !shell::path(&ctx.d).is_dir() {
+        return Err(ctx.die(
+            "look: no box is up to look into: omabox look app|plugin|theme|page looks at one thing in a box of its own; omabox up starts yours",
+        ));
+    }
+    need_box(ctx)?;
+    let name = ctx.name.clone();
+    let name = name.as_slice();
+    let mut problems: Vec<Vec<u8>> = Vec::new();
+    let mut notes: Vec<Vec<u8>> = Vec::new();
+    let mut sh: Vec<&[u8]> = vec![b"shot", b"-b", name];
+    if let Some(o) = &o_file {
+        sh.extend([b"-o".as_slice(), o]);
+    }
+    let r = ob(&sh);
+    let shot = if r.ok {
+        last_line(&r.out)
+    } else {
+        problems.push(cat!("shot: ", shell::subst(&r.err)));
+        None
+    };
+    // Its windows, the active one first; that one's text, where its toolkit gives any.
+    let wins: Value = serde_json::from_slice(&ob(&[b"windows", b"-b", name, b"--json"]).out)
+        .unwrap_or(Value::Null);
+    let mut wins: Vec<Value> = wins.as_array().cloned().unwrap_or_default();
+    let active = |w: &Value| w.get("active").and_then(Value::as_bool) == Some(true);
+    wins.sort_by_key(|w| !active(w));
+    let mut lines: Vec<Vec<u8>> = wins.iter().take(WINDOWS_MAX).map(window_line).collect();
+    if wins.len() > WINDOWS_MAX {
+        lines.push(
+            format!("... and {} more (omabox windows)", wins.len() - WINDOWS_MAX).into_bytes(),
+        );
+    }
+    let mut text = None;
+    if let Some(a) = wins
+        .first()
+        .and_then(|w| w.get("address"))
+        .and_then(Value::as_str)
+    {
+        let r = ob(&[b"tree", b"-b", name, b"--window", a.as_bytes(), b"--json"]);
+        if r.ok {
+            let items: Vec<String> = tree_texts(&r.out).0.into_iter().map(|t| t.0).collect();
+            if !items.is_empty() {
+                text = Some(text_line(&items, PANEL_TEXT_MAX));
+            }
+        }
+    }
+    // Its plugins: each one's state, and one the shell did not load is a problem.
+    let me: Value = serde_json::from_slice(&ob(&[b"ls", b"--json"]).out).unwrap_or(Value::Null);
+    let me = me
+        .as_array()
+        .and_then(|v| {
+            v.iter()
+                .find(|b| b.get("name").and_then(Value::as_str).map(str::as_bytes) == Some(name))
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    let mut ids: Vec<String> = Vec::new();
+    let mut plugins: Vec<String> = Vec::new();
+    if let Some(m) = me.get("plugin_status").and_then(Value::as_object) {
+        for (id, st) in m {
+            let state = st.get("state").and_then(Value::as_str).unwrap_or("unknown");
+            if state != "loaded" && state != "hosted" {
+                problems.push(format!("plugin {id}: {state}").into_bytes());
+            }
+            plugins.push(format!("{id} {state}"));
+            ids.push(id.clone());
+        }
+    }
+    if let Some(st) = me.get("shell_state").and_then(Value::as_str) {
+        if !matches!(st, "running" | "none" | "") {
+            problems.push(format!("the box's shell is {st} (omabox restart-shell)").into_bytes());
+        }
+    }
+    // What was logged since the last look.
+    let old = mark_read(ctx);
+    let now = mark_now(ctx, name);
+    problems.extend(new_problems(ctx, name, &old, &now, &ids));
+    mark_write(ctx, &now);
+    let n = wins.len().to_string();
+    let mut head: Vec<(&str, &[u8])> = vec![("screenshot", shot.as_deref().unwrap_or(b"none"))];
+    let wl = lines
+        .iter()
+        .fold(n.into_bytes(), |acc, l| cat!(acc, "\n  ", l));
+    head.push(("windows", &wl));
+    if let Some(t) = &text {
+        head.push(("text", t));
+    }
+    let pl = plugins.join(", ").into_bytes();
+    if !plugins.is_empty() {
+        head.push(("plugins", &pl));
+    }
+    head.push(("box", name));
+    if wins.is_empty() && plugins.is_empty() {
+        notes.push(b"no window is open in the box".to_vec());
+    }
+    let mut rep = report(&head, &problems, &notes, None, None);
+    // (said as new once there was a look before: one seen then is not gone, only not repeated)
+    if old.is_some() {
+        if let Some(at) = rep.windows(10).position(|w| w == b"\nproblems:") {
+            rep.splice(at + 1..at + 1, b"new ".iter().copied());
+        }
+    }
+    out(rep)?;
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Exit(1))
+    }
+}
+
+/// How many windows a plain look lists.
+const WINDOWS_MAX: usize = 12;
+/// A box's mark of its last look, in its dir (host side: nothing in the box reads or writes it).
+const MARK_FILE: &str = "look.mark";
+
+/// `class "title" WxH (tiled|floating[, active])`.
+fn window_line(w: &Value) -> Vec<u8> {
+    let s = |k: &str| w.get(k).and_then(Value::as_str).unwrap_or("");
+    let n = |k: &str| w.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let mut how = if w.get("floating").and_then(Value::as_bool) == Some(true) {
+        "floating".to_string()
+    } else {
+        "tiled".to_string()
+    };
+    if w.get("active").and_then(Value::as_bool) == Some(true) {
+        how.push_str(", active");
+    }
+    format!(
+        "{} \"{}\" {}x{} ({how})",
+        s("class"),
+        s("title"),
+        n("w"),
+        n("h")
+    )
+    .into_bytes()
+}
+
+/// Where each log of the box ends now: its run -d logs by size, the shell's by its first line (a
+/// restarted shell starts its log again) and its length.
+fn mark_now(ctx: &Ctx, name: &[u8]) -> Value {
+    let mut logs = serde_json::Map::new();
+    if let Ok(rd) = std::fs::read_dir(ctx.at("home")) {
+        for e in rd.flatten() {
+            let f = e.file_name();
+            let f = f.to_string_lossy();
+            if f.starts_with("run-") && f.ends_with(".log") {
+                let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+                logs.insert(f.into_owned(), Value::from(len));
+            }
+        }
+    }
+    let shell_log = ob(&[b"log", b"-b", name, b"shell", b"-n", b"all", b"--full"]).out;
+    let first = shell_log.split(|&c| c == b'\n').next().unwrap_or(b"");
+    serde_json::json!({
+        "logs": logs,
+        "shell_first": String::from_utf8_lossy(first),
+        "shell_len": shell_log.len(),
+    })
+}
+
+fn mark_read(ctx: &Ctx) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(ctx.at(MARK_FILE)).ok()?).ok()
+}
+
+fn mark_write(ctx: &Ctx, m: &Value) {
+    let _ = std::fs::write(ctx.at(MARK_FILE), m.to_string());
+}
+
+/// The part of a log written since OLD's mark of it: all of it with no mark, or when it is shorter
+/// than it was (another file under the name).
+pub fn since(all: &[u8], was: Option<u64>) -> &[u8] {
+    match was.and_then(|w| usize::try_from(w).ok()) {
+        Some(w) if w <= all.len() => &all[w..],
+        _ => all,
+    }
+}
+
+/// The problems logged between two marks: each run -d log's new lines that name one (a page's
+/// console as look page reads it), under the job's program, and the shell's new warnings that name
+/// one of the box's plugins (IDS).
+fn new_problems(
+    ctx: &Ctx,
+    name: &[u8],
+    old: &Option<Value>,
+    now: &Value,
+    ids: &[String],
+) -> Vec<Vec<u8>> {
+    let mut found = Vec::new();
+    let was = |k: &str| old.as_ref()?.get("logs")?.get(k)?.as_u64();
+    // Whose log: the job's program, while `jobs` lists it.
+    let jobs: Value =
+        serde_json::from_slice(&ob(&[b"jobs", b"-b", name, b"--json"]).out).unwrap_or(Value::Null);
+    let whose = |file: &str| -> String {
+        jobs.as_array()
+            .and_then(|v| {
+                v.iter().find(|j| {
+                    j.get("log")
+                        .and_then(Value::as_str)
+                        .is_some_and(|l| l.ends_with(&format!("/{file}")))
+                })
+            })
+            .and_then(|j| {
+                j.get("argv")?
+                    .as_array()?
+                    .first()?
+                    .as_str()
+                    .map(String::from)
+            })
+            .map_or_else(
+                || file.to_string(),
+                |p| {
+                    shell::basename(p.as_bytes())
+                        .iter()
+                        .map(|&c| c as char)
+                        .collect()
+                },
+            )
+    };
+    if let Some(logs) = now.get("logs").and_then(Value::as_object) {
+        for file in logs.keys() {
+            let all = std::fs::read(ctx.at("home").join(file)).unwrap_or_default();
+            let new = since(&all, was(file));
+            let page = crate::exit::contains(&all, b"omabox-look-chromium")
+                || !console_lines(&all).is_empty();
+            let lines = if page {
+                console_problems(&console_lines(new))
+            } else {
+                problem_lines(new)
+            };
+            let who = whose(file);
+            found.extend(lines.into_iter().map(|l| cat!(who.as_str(), ": ", l)));
+        }
+    }
+    let shell_log = ob(&[b"log", b"-b", name, b"shell", b"-n", b"all", b"--full"]).out;
+    let first = shell_log.split(|&c| c == b'\n').next().unwrap_or(b"");
+    let same = old
+        .as_ref()
+        .and_then(|o| o.get("shell_first")?.as_str())
+        .is_some_and(|f| f.as_bytes() == String::from_utf8_lossy(first).as_bytes());
+    let was_len = old
+        .as_ref()
+        .and_then(|o| o.get("shell_len")?.as_u64())
+        .filter(|_| same);
+    let warn = crate::plugins::shell_warnings_of(since(&shell_log, was_len));
+    for id in ids {
+        found.extend(plugin_warnings(&warn, id.as_bytes()));
+    }
+    found
+}
+
 /// The program's window: the job's (its pid), else the first that is not one of BEFORE (the
 /// addresses there when it was started: none in a throwaway box, so any); None before one is up.
 pub fn window_of(windows: &[u8], pid: Option<i64>, before: &[String]) -> Option<Value> {
@@ -391,8 +670,10 @@ fn stop_pages(name: &[u8]) {
     };
     for j in jobs {
         let ours = j.get("argv").and_then(Value::as_array).is_some_and(|v| {
-            v.iter()
-                .any(|w| w.as_str().is_some_and(|w| w.contains("omabox-look-chromium")))
+            v.iter().any(|w| {
+                w.as_str()
+                    .is_some_and(|w| w.contains("omabox-look-chromium"))
+            })
         });
         if let (true, Some(pid)) = (ours, j.get("pid").and_then(Value::as_i64)) {
             ob(&[b"stop", b"-b", name, pid.to_string().as_bytes()]);
@@ -779,6 +1060,8 @@ fn app_in(ctx: &Ctx, a: &App, name: &[u8], me: u32) -> Res<()> {
     }
     if a.own {
         head.push(("box", name));
+        // (what this look reported is not new to the next one)
+        mark_write(ctx, &mark_now(ctx, name));
     }
     out(report(
         &head,
@@ -1268,6 +1551,8 @@ fn plugin_in(ctx: &Ctx, a: &App, dir: &[u8], id: &[u8], name: &[u8], me: u32) ->
     }
     if a.own {
         head.push(("box", name));
+        // (what this look reported is not new to the next one)
+        mark_write(ctx, &mark_now(ctx, name));
     }
     out(report(
         &head,
@@ -1504,6 +1789,8 @@ fn theme_in(ctx: &Ctx, a: &App, dir: Option<&[u8]>, given: &[u8], name: &[u8], m
     head.push(("theme", &tname));
     if a.own {
         head.push(("box", name));
+        // (what this look reported is not new to the next one)
+        mark_write(ctx, &mark_now(ctx, name));
     }
     out(report(
         &head,
@@ -1585,6 +1872,34 @@ pub fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In a box that stays up a program's window is its own (its pid), else one that was not there
+    /// when it was started; a throwaway box has none before, so any.
+    #[test]
+    fn the_window_of_a_look_in_a_box_that_was_up() {
+        let w = br#"[{"address":"0xa","pid":7},{"address":"0xb","pid":9}]"#;
+        let addr = |v: Option<Value>| v.and_then(|v| v["address"].as_str().map(String::from));
+        assert_eq!(addresses(w), ["0xa", "0xb"]);
+        assert_eq!(addr(window_of(w, Some(9), &[])).as_deref(), Some("0xb"));
+        assert_eq!(addr(window_of(w, Some(1), &[])).as_deref(), Some("0xa"));
+        assert_eq!(
+            addr(window_of(w, Some(1), &["0xa".into()])).as_deref(),
+            Some("0xb")
+        );
+        assert_eq!(
+            addr(window_of(w, None, &["0xa".into(), "0xb".into()])),
+            None
+        );
+    }
+
+    /// What is new in a log since its mark: from there on; all of it unmarked, or shorter than it was.
+    #[test]
+    fn a_log_since_its_mark() {
+        assert_eq!(since(b"one\ntwo\n", Some(4)), b"two\n");
+        assert_eq!(since(b"one\ntwo\n", None), b"one\ntwo\n");
+        assert_eq!(since(b"new\n", Some(40)), b"new\n");
+        assert_eq!(since(b"one\n", Some(4)), b"");
+    }
 
     // #471: the command a kind-less look was meant as.
     #[test]
