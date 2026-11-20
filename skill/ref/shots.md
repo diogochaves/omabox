@@ -55,6 +55,12 @@ Sections:
   names, so the layer's is the one of its pid that is its size: two layers of one pid and size are
   told apart only when one holds the keyboard (the launcher, or an Omarchy 4.5 bar popup, over the
   wallpaper); else `tree` says so (the shell's text is read by namespace).
+- A shot of one layer: `omabox shot --layer SEL` (the same SEL; `--monitor NAME` when the namespace
+  is on several monitors) crops the screen to its rectangle, as `-g` would: `click --in` maps it to
+  the screen, and `--fit`, `--zoom`, `--grid`, `--changed`, `--burst`, `--json` go with it. Not
+  drawn yet (0x0, or a closed menu's 1x1): exit 1, `omabox wait layer NAMESPACE` first. A layer
+  spanning its monitor (Omarchy 4.5's bar, a scrim) is shot whole and said so, with the `-g` for a
+  part (the bar's strip): nothing guesses what of it is drawn.
 - `click --window SEL X Y` takes the window's own coordinates (0,0 its corner, as in its `shot
   --window`).
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
