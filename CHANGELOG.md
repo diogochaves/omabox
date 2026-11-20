@@ -39,6 +39,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   under 1 GB free on the GPU a headless box renders on (a local model holding the rest), a note
   names the other GPU's `OMABOX_RENDER_NODE`. A warning only: `up` never picks another GPU itself.
   NVIDIA through nvidia-smi, amdgpu cards through sysfs.
+- **A box's command log** ([#447](https://github.com/diogochaves/omabox/issues/447)): `omabox log
+  commands [-n N] [--grep RE] [-f] [--json]` lists every omabox command run against the box, in
+  order: when, the command and its words, whether it only looked, who ran it (pid, agent session,
+  jailed or not), how long it took and how it ended (exit code, its error line); after `down` too.
+  When several agents share a box, it says who clicked, typed or reloaded what. A typed text
+  (`keys -t`), `--accept`'s password and the values of `--env` are never in it, only their lengths
+  or names; a run's environment neither. Kept on the host, out of every box's reach, at most 512
+  KiB a box.
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):
