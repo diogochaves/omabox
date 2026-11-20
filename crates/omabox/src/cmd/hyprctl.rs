@@ -90,8 +90,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let said_ok = shell::strip_nl(&held) == b"ok";
     let legacy = crate::exit::contains(&held, LEGACY_NOTE);
     let refused = !legacy && dispatch_refused(rest, &held);
-    let unknown_set =
-        crate::exit::contains(&held, b"unknown request") && !set_words(rest).is_empty();
+    // (Hyprland 0.57's answer to keyword under a Lua config, and 0.56's: finding 737)
+    let unknown_set = (crate::exit::contains(&held, b"unknown request")
+        || crate::exit::contains(&held, b"keyword can't work with non-legacy parsers"))
+        && !set_words(rest).is_empty();
     let eval_line = eval_hint(&ctx.name, rest, &held);
     if !quiet {
         out(held)?;

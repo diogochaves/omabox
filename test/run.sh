@@ -1684,7 +1684,9 @@ t_unit_refusals() {
   check_fails "...no box dir for any of them" test -e "$XDG_RUNTIME_DIR/omabox/$P-r30"
   # (#123) Only where it is refused: with the fix it would open a window on the real desktop. Never
   # under OMABOX_HYPRLAND (NOHYPR): a folder's aquamarine can have the fix (finding 651).
-  if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
+  # (the guard asks the same Hyprland the up runs, NOHYPR's: the installed one's aquamarine may have the
+  # fix where OMABOX_HYPRLAND's lacks it, and the up then opened a window on the real desktop, finding 737)
+  if aq_unfixed env OMABOX_AQUAMARINE=system "${NOHYPR[@]}" "$CLI"; then
     check_match "--monitor on an interactive box without aquamarine's fix: refused" "opens a window per monitor, which needs aquamarine's fix" \
       "$(OMABOX_AQUAMARINE=system "${NOHYPR[@]}" "$CLI" up "$P-r28" --interactive --monitor 800x600 2>&1)"
   fi
@@ -9504,7 +9506,8 @@ t_hypr_old_dispatch() {
   # #468: keyword (or a guessed set) is Hyprland's `unknown request` there, hyprctl's 0, the option
   # untouched; it fails with the hl.config for it, which sets it, read back with getoption.
   out=$(ob hyprctl -b "$B" keyword general:gaps_out 40 2>"$TMP/hod-err"); rc=$?; err=$(cat "$TMP/hod-err")
-  check_eq "keyword general:gaps_out 40: exit 1, Hyprland's answer as it came" "1 unknown request" "$rc $out"
+  # (0.57 answers `unknown request`, 0.56 `keyword can't work with non-legacy parsers. Use eval.`)
+  check_match "keyword general:gaps_out 40: exit 1, Hyprland's answer as it came" "^1 (unknown request|keyword can't work with non-legacy parsers\. Use eval\.)$" "$rc $out"
   check_eq "...the hl.config for it on stderr" \
     "omabox: hyprctl: keyword general:gaps_out 40 set nothing: a box's Hyprland runs a Lua config, which has no keyword request. Instead: omabox lua -b $B 'hl.config({ general = { gaps_out = 40 } })', read back with omabox hyprctl -b $B getoption general:gaps_out (an option Hyprland does not know is in omabox hyprctl configerrors, not lua's answer)" "$err"
   check_fails "...the option untouched" grep -q "^css gap data: 40 " <<<"$(ob hyprctl -b "$B" getoption general:gaps_out)"
@@ -13513,7 +13516,7 @@ t_unit_aquamarine() {
   # What needs the fix, on this machine's system aquamarine (OMABOX_AQUAMARINE=system), never a folder's
   # (NOHYPR): under OMABOX_HYPRLAND an up --interactive --confirm-close expected to be refused here went
   # up, a window on your workspace 9 (finding 651).
-  if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
+  if aq_unfixed env OMABOX_AQUAMARINE=system "${NOHYPR[@]}" "$CLI"; then
     check_match "without the fix: up --confirm-close refused, saying why and what to run" \
       "--confirm-close .*needs aquamarine's fix .*hyprwm/aquamarine#415.*omabox setup --aquamarine" \
       "$(OMABOX_AQUAMARINE=system "${NOHYPR[@]}" "$CLI" up "$P-aq" --interactive --confirm-close 2>&1)"

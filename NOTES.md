@@ -14700,6 +14700,25 @@ from them.
     the suite read every box of the run for its evidence (a shot to `screen.png`, hyprctl's
     answers); t_cmdlog's whole-log checks leave those lines out.
 
+737. **What the 1.5.0 release suites on three Hyprlands turned up** (2026-11-20). The dev machine's
+    system Hyprland is now a build of its own (0.57.2, its aquamarine found by RUNPATH), so stock
+    Omarchy's 0.56.2 was run as `OMABOX_HYPRLAND` (Arch's package unpacked, its signature checked;
+    on the iGPU: a headless box on NVIDIA needs aquamarine's fix, which 0.15.1 lacks), beside
+    Arch's 0.57.1 and the installed one. (a) **`hyprctl keyword` under a Lua config is answered
+    two ways**: 0.57 says `unknown request`, 0.56 `keyword can't work with non-legacy parsers. Use
+    eval.`; #468's hint (the `hl.config` for it, exit 1) knew only the first, so on stock Omarchy
+    a keyword still set nothing and said nothing more. Both now. (b) Two guards in the suite asked
+    one Hyprland whether its aquamarine lacks the fix and then ran `up --interactive` on another
+    (`NOHYPR`: the installed one): with the installed one's fixed and the folder's not, the up
+    expected to be refused went up, a window on the real desktop (finding 651's kind, the other
+    way round). The guard asks the Hyprland the up runs. (c) t_conf_host starts the system's
+    Hyprland in the box, which a build with an aquamarine of its own cannot do on a folder's
+    libraries: skipped, saying so. (d) Stand-in tests that start `up --interactive` in a box
+    (t_keys_to_box, t_hyprland_crash, t_special_ws) fail in that mix for the same reason: they
+    need omabox's aquamarine build for the soname, which this checkout does not have for 0.56
+    (`omabox setup --aquamarine`); not run to green here, the Omarchy VM runs them on a stock
+    system.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
