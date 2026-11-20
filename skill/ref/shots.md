@@ -130,6 +130,10 @@ Sections:
 
 ## Screen size and rendering cost
 
+- **A GPU nearly out of video memory** (a local model on it) starves boxes there ("shell not ready
+  after 30s"). `up` then says `note: GPU … has N MB of … MB of video memory free; boxes there may
+  be slow or not start (OMABOX_RENDER_NODE=/dev/dri/renderDN for the other, …)`: start the next
+  boxes with that variable. `up` never moves a box to another GPU itself.
 - `omabox up --size 3440x1440` for another screen size (@60), `--size 3440x1440@144` for a refresh
   rate, `--size host` for the user's own monitor; `omabox mode` shows or changes it on a running box.
 - **Crisp, high-resolution screenshots** (docs, a README, a zoomed-in detail): `omabox up --size

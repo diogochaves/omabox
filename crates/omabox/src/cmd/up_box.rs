@@ -570,6 +570,10 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         ") in ",
         d
     ));
+    // The GPU it renders on nearly out of VRAM (#470): said, never acted on.
+    if let Some(l) = u.vram.take().and_then(crate::render::VramWatch::note) {
+        say(l);
+    }
     // A theme in the works (#462): what a person would notice in it, as notes (they never fail up).
     let wh = {
         let t = String::from_utf8_lossy(&size).into_owned();

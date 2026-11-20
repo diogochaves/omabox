@@ -179,6 +179,8 @@ pub struct Up {
     pub cover_srcs: Vec<Vec<u8>>,
     pub render: Option<RenderNode>,
     pub aq: Aq,
+    /// The render node's VRAM, read at its choice and said after the box is up (#470).
+    pub vram: Option<render::VramWatch>,
     /// The lock on the name (one up or down at a time) and up --new's on the choice of a name.
     pub lock: Option<std::fs::File>,
     pub newlock: Option<std::fs::File>,
@@ -1324,6 +1326,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             node,
             " to try it anyway)"
         )));
+    }
+    // Its VRAM (#470): read now, said once the box is up; a warning only, never another GPU.
+    if !u.interactive {
+        u.vram = Some(render::VramWatch::start(&render));
     }
     u.aq = install::check_install(
         ctx,

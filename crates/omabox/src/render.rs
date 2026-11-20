@@ -315,6 +315,179 @@ pub fn gpu_usable_in(want: &[u8], root: &[u8]) -> bool {
         .any(|n| gpu_is_in(n.as_bytes(), want, root))
 }
 
+/// Under this much VRAM free (MB) on the GPU a headless box renders on, `up` says so (#470): with a
+/// local model holding 14.6 of 16 GB, boxes there starved ("shell not ready after 30s").
+pub const VRAM_LOW_MB: u64 = 1024;
+
+/// An amdgpu with less VRAM than this (MB) is an APU's carve-out (2 GB here, 1.3 of it used on a
+/// quiet desktop), which spills into system memory (GTT) as a matter of course: not judged.
+pub const AMD_OWN_VRAM_MB: u64 = 4096;
+
+/// How long after `up` asked nvidia-smi its answer is still waited for when `up` reads it (it is
+/// started before the box and has had the box's start to answer; 26 ms here).
+const SMI_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// amdgpu's VRAM (free, total) in MB from node N's device under ROOT (mem_info_vram_used/total):
+/// None for another driver, an APU's carve-out (AMD_OWN_VRAM_MB), or a read that fails.
+pub fn amd_vram_in(n: &[u8], root: &[u8]) -> Option<(u64, u64)> {
+    if render_driver_in(n, root) != b"amdgpu" {
+        return None;
+    }
+    let node = n.rsplit(|&c| c == b'/').next().unwrap_or_default();
+    let dev = at(root, &cat!(SYSDRM, "/", node, "/device/"));
+    let read = |f: &str| -> Option<u64> {
+        let b = std::fs::read(shell::path(&cat!(dev, f))).ok()?;
+        String::from_utf8_lossy(&b).trim().parse().ok()
+    };
+    let (total, used) = (read("mem_info_vram_total")?, read("mem_info_vram_used")?);
+    let mb = |b: u64| b / (1024 * 1024);
+    (mb(total) >= AMD_OWN_VRAM_MB).then(|| (mb(total.saturating_sub(used)), mb(total)))
+}
+
+/// nvidia-smi's `--query-gpu=memory.free,memory.total --format=csv,noheader,nounits` (MiB) as
+/// (free, total): None for anything else (an error, `[N/A]`, more than one GPU's line).
+pub fn smi_vram(out: &[u8]) -> Option<(u64, u64)> {
+    let t = String::from_utf8_lossy(out);
+    let mut lines = t.lines().filter(|l| !l.trim().is_empty());
+    let (one, more) = (lines.next()?, lines.next());
+    if more.is_some() {
+        return None;
+    }
+    let (f, tot) = one.split_once(',')?;
+    Some((f.trim().parse().ok()?, tot.trim().parse().ok()?))
+}
+
+/// Another usable render node under ROOT than N, on another GPU (its slot), that renders on the GPU:
+/// the one a box could be pointed at instead.
+pub fn other_gpu_in(n: &[u8], root: &[u8]) -> Option<Vec<u8>> {
+    let slot = render_slot_in(n, root);
+    render_nodes_in(root)
+        .into_iter()
+        .map(|r| r.0)
+        .find(|o| o != n && render_slot_in(o, root) != slot && !software_only_in(o, root))
+}
+
+/// The note for node N (its driver DRIVER, slot SLOT) with FREE of TOTAL MB, OTHER the node of
+/// another GPU: None while it has VRAM_LOW_MB or more.
+pub fn vram_note(
+    n: &[u8],
+    driver: &[u8],
+    slot: &[u8],
+    (free, total): (u64, u64),
+    other: Option<(&[u8], &[u8])>,
+) -> Option<Vec<u8>> {
+    if free >= VRAM_LOW_MB {
+        return None;
+    }
+    let node = n.rsplit(|&c| c == b'/').next().unwrap_or_default();
+    let tail = match other {
+        Some((o, od)) => cat!("OMABOX_RENDER_NODE=", o, " for the other, ", od, ")"),
+        None => b"no other GPU here)".to_vec(),
+    };
+    Some(cat!(
+        "note: GPU ",
+        driver,
+        " ",
+        slot,
+        " (",
+        node,
+        ") has ",
+        free.to_string(),
+        " MB of ",
+        total.to_string(),
+        " MB of video memory free; boxes there may be slow or not start (",
+        tail
+    ))
+}
+
+/// What `up` reads of its render node's VRAM (#470), started before the box and said after it is
+/// up: amdgpu's from sysfs at once, NVIDIA's from nvidia-smi run meanwhile. Never fails up: a probe
+/// that errors, or has not answered SMI_GRACE after it is read, says nothing.
+pub struct VramWatch {
+    node: Vec<u8>,
+    figures: Option<(u64, u64)>,
+    smi: Option<std::process::Child>,
+}
+
+impl VramWatch {
+    /// Started for render node N (nothing for a driver it cannot read).
+    pub fn start(n: &RenderNode) -> VramWatch {
+        let node = n.as_bytes().to_vec();
+        let mut w = VramWatch {
+            figures: amd_vram_in(&node, b"/"),
+            node,
+            smi: None,
+        };
+        if w.figures.is_none() && n.is_nvidia() && crate::cmd::shot::on_path("nvidia-smi") {
+            w.smi = crate::sig::command("nvidia-smi")
+                .arg("-i")
+                .arg(shell::path(&n.slot()))
+                .args([
+                    "--query-gpu=memory.free,memory.total",
+                    "--format=csv,noheader,nounits",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok();
+        }
+        w
+    }
+
+    /// The note, when the GPU is short of VRAM.
+    pub fn note(mut self) -> Option<Vec<u8>> {
+        let figures = match self.smi.take() {
+            Some(c) => smi_answer(c),
+            None => self.figures,
+        }?;
+        let other = other_gpu_in(&self.node, b"/");
+        let od = other
+            .as_ref()
+            .map(|o| cat!(render_driver_in(o, b"/"), " ", render_slot_in(o, b"/")));
+        vram_note(
+            &self.node,
+            &render_driver_in(&self.node, b"/"),
+            &render_slot_in(&self.node, b"/"),
+            figures,
+            other.as_deref().zip(od.as_deref()),
+        )
+    }
+}
+
+impl Drop for VramWatch {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.smi.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+/// nvidia-smi's figures once it has ended 0, waiting at most SMI_GRACE; killed after that.
+fn smi_answer(mut c: std::process::Child) -> Option<(u64, u64)> {
+    let until = std::time::Instant::now() + SMI_GRACE;
+    loop {
+        match c.try_wait() {
+            Ok(Some(st)) => {
+                let mut out = Vec::new();
+                if let Some(mut o) = c.stdout.take() {
+                    let _ = std::io::Read::read_to_end(&mut o, &mut out);
+                }
+                return st.success().then(|| smi_vram(&out)).flatten();
+            }
+            Ok(None) if std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => {
+                let _ = c.kill();
+                let _ = c.wait();
+                return None;
+            }
+        }
+    }
+}
+
 /// config --json's gpu_auto and gpu_now: the slots of the first usable GPU and of the one a headless
 /// box renders on now (render_node's choice without OMABOX_RENDER_NODE), empty for none.
 pub fn gpu_auto_now_in(ctx: &Ctx, root: &[u8]) -> (Vec<u8>, Vec<u8>) {
@@ -785,6 +958,83 @@ mod tests {
         assert!(CardPlaceholder::make(&db, b"card1/../x").is_err());
         assert!(CardPlaceholder::make(b"/dev/dri", b"card1").is_err());
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// #470: a stand-in tree with an amdgpu (VRAM figures of its own) and an NVIDIA card.
+    #[test]
+    fn vram_low_is_said_with_the_other_gpu() {
+        use std::os::unix::fs::symlink;
+        let d = std::env::temp_dir().join(format!("omabox-vram-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let r = shell::bytes(&d).to_vec();
+        std::fs::create_dir_all(d.join("dev/dri")).unwrap();
+        let gpu = |node: &str, slot: &str, drv: &str| {
+            std::fs::write(d.join(format!("dev/dri/{node}")), "").unwrap();
+            let dev = d.join(format!("sys/devices/pci0000:00/{slot}"));
+            std::fs::create_dir_all(&dev).unwrap();
+            std::fs::create_dir_all(d.join(format!("sys/bus/pci/drivers/{drv}"))).unwrap();
+            let _ = symlink(
+                d.join(format!("sys/bus/pci/drivers/{drv}")),
+                dev.join("driver"),
+            );
+            std::fs::create_dir_all(d.join(format!("sys/class/drm/{node}"))).unwrap();
+            let _ = symlink(&dev, d.join(format!("sys/class/drm/{node}/device")));
+            dev
+        };
+        let amd = gpu("renderD128", "0000:03:00.0", "amdgpu");
+        gpu("renderD129", "0000:01:00.0", "nvidia");
+        let (a, n) = (&b"/dev/dri/renderD128"[..], &b"/dev/dri/renderD129"[..]);
+        let mib = |m: u64| (m * 1024 * 1024).to_string();
+        // amdgpu with 8 GB of its own: 7.5 GB used is 512 MB free
+        std::fs::write(amd.join("mem_info_vram_total"), mib(8192) + "\n").unwrap();
+        std::fs::write(amd.join("mem_info_vram_used"), mib(7680)).unwrap();
+        assert_eq!(amd_vram_in(a, &r), Some((512, 8192)));
+        // not amdgpu, or no figures: None
+        assert_eq!(amd_vram_in(n, &r), None);
+        // an APU's 2 GB carve-out: not judged
+        std::fs::write(amd.join("mem_info_vram_total"), mib(2048)).unwrap();
+        std::fs::write(amd.join("mem_info_vram_used"), mib(1316)).unwrap();
+        assert_eq!(amd_vram_in(a, &r), None);
+        std::fs::write(amd.join("mem_info_vram_used"), "x").unwrap();
+        assert_eq!(amd_vram_in(a, &r), None);
+        // the other GPU of each
+        assert_eq!(other_gpu_in(n, &r), Some(a.to_vec()));
+        assert_eq!(other_gpu_in(a, &r), Some(n.to_vec()));
+        // nvidia-smi's answers
+        assert_eq!(smi_vram(b"926, 16303\n"), Some((926, 16303)));
+        assert_eq!(smi_vram(b"[N/A], [N/A]\n"), None);
+        assert_eq!(smi_vram(b"1, 2\n3, 4\n"), None);
+        assert_eq!(smi_vram(b""), None);
+        assert_eq!(smi_vram(b"No devices were found\n"), None);
+        // the note: said under 1 GB free, naming the other GPU's node
+        let o = Some((a, &b"amdgpu 0000:03:00.0"[..]));
+        assert_eq!(
+            String::from_utf8(vram_note(n, b"nvidia", b"0000:01:00.0", (926, 16303), o).unwrap())
+                .unwrap(),
+            "note: GPU nvidia 0000:01:00.0 (renderD129) has 926 MB of 16303 MB of video memory free; boxes there may be slow or not start (OMABOX_RENDER_NODE=/dev/dri/renderD128 for the other, amdgpu 0000:03:00.0)"
+        );
+        assert!(
+            vram_note(n, b"nvidia", b"s", (10, 16303), None)
+                .unwrap()
+                .ends_with(b"(no other GPU here)")
+        );
+        // a probe that answers, errors, or takes long (killed after the grace, within it)
+        let sh = |c: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", c])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        assert_eq!(smi_answer(sh("echo '512, 16303'")), Some((512, 16303)));
+        assert_eq!(smi_answer(sh("echo '512, 16303'; exit 9")), None);
+        let t = std::time::Instant::now();
+        assert_eq!(smi_answer(sh("sleep 5; echo '512, 16303'")), None);
+        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+        // with room: nothing
+        assert_eq!(vram_note(n, b"nvidia", b"s", (1024, 16303), o), None);
+        assert_eq!(vram_note(n, b"nvidia", b"s", (12000, 16303), o), None);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

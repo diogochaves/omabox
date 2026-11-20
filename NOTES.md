@@ -14488,6 +14488,22 @@ from them.
     --find TEXT`, `click --image` `omabox click --find TEXT`, `wait image` `omabox wait tree TEXT`
     (`find::text_route`). Exit 1 as before.
 
+729. **up says when its GPU is nearly out of video memory** (2026-11-19, #470). With a local model
+    holding 14.6 of the RTX's 16 GB, a suite on that GPU lost 175 checks to "shell not ready after
+    30s" (726). Decided (Diogo, 2026-11-19): warn, never switch. A headless box's `up` reads its
+    render node's VRAM when it picks the node and, once the box is up, says `note: GPU nvidia
+    0000:01:00.0 (renderD129) has 926 MB of 16303 MB of video memory free; boxes there may be slow
+    or not start (OMABOX_RENDER_NODE=/dev/dri/renderD128 for the other, amdgpu 0000:7a:00.0)` under
+    1 GB free (`render::VramWatch`). NVIDIA: `nvidia-smi -i SLOT --query-gpu=memory.free,memory.total`,
+    started beside the box's start and read after it with 300 ms of grace, killed after (26 ms
+    here); nothing without nvidia-smi or on an error. amdgpu: `mem_info_vram_used/total` in sysfs,
+    judged only with 4 GB or more of its own: an APU's carve-out (this machine's iGPU: 2 GB, 1.3 GB
+    used on a quiet desktop) spills into system memory (GTT) as a matter of course, and would warn
+    on every box. Other drivers: nothing. Not for an interactive box (it renders on the desktop's
+    GPU). The other GPU is the first usable render node on another slot that renders on the GPU.
+    Checked in a box with the threshold raised (the note, from nvidia-smi, after the up line) and
+    as built (nothing at 15.5 GB free); unit-tested on a stand-in sysfs and nvidia-smi's answers.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

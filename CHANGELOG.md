@@ -35,6 +35,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   getoption general:gaps_out`, in `help lua` and the skill's `ref/hyprland.md`. `omabox hyprctl
   keyword` (and `set`), which a box's Lua config answers `unknown request` with exit 0, now fails
   with the `hl.config` line for the option it was given.
+- **`up` says when its GPU is nearly out of video memory** ([#470](https://github.com/diogochaves/omabox/issues/470)):
+  under 1 GB free on the GPU a headless box renders on (a local model holding the rest), a note
+  names the other GPU's `OMABOX_RENDER_NODE`. A warning only: `up` never picks another GPU itself.
+  NVIDIA through nvidia-smi, amdgpu cards through sysfs.
 
 ### Fixed
 - **`up` refused a Hyprland that finds its aquamarine through its RUNPATH** ([#460](https://github.com/diogochaves/omabox/issues/460)):

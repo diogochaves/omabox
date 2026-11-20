@@ -963,7 +963,9 @@ falls back to the first, saying so and why, when that one is not there (a card h
 The first is one that renders: a VM's virtio-gpu without virgl (software only) comes after any
 other, and when it is the only one `up` refuses it before starting a box that would die there.
 $OMABOX_RENDER_NODE overrides it. An interactive box renders on the GPU your desktop's compositor
-uses, whatever the setting.
+uses, whatever the setting. When the GPU a headless box renders on has under 1 GB of video memory
+free (a local model on it), `up` says so with the other GPU's OMABOX_RENDER_NODE; it never picks
+another itself (NVIDIA's figures through nvidia-smi; amdgpu's with 4 GB or more of its own).
 `omabox config protect-ports 8080,5432` keeps those host ports from every connected box, through
 any of the host's addresses (an isolated box's --allow refuses them; `default` removes them; it
 needs nft).
