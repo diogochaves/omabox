@@ -14527,7 +14527,10 @@ from them.
     "1780,0 140x26"`, and t_cli_box's check-run scenario takes the same on its `whole` checkpoint;
     their outputs as expected are unchanged. And a test can now name the folder its check runs
     write in `EV_PNGS`: `evidence` keeps its PNGs (the run's shots, diff and report) with the
-    failure, so the next one shows what was drawn instead (t_check and t_cli_box do).
+    failure, so the next one shows what was drawn instead (t_check and t_cli_box do). The same
+    icon then failed t_check_only's `bar` checkpoint (2026-11-20, `changed  bar: 1 region at 1838,7
+    13x11 (64 px)`, 1 of 4 runs): it and t_cli_box's `lz` scenario, whose `whole` is checked against
+    that baseline, take the same `--ignore` now; their expected outputs are unchanged.
 732. **`snapshot` and `diff`: what a program wrote into the box HOME** (2026-11-19, #446). `omabox
     snapshot SNAP [-b BOX]` records the HOME; `omabox diff SNAP [SNAP2] [--ignore PATH]... [--all]
     [--json]` lists what was added, changed or removed from SNAP to now (or SNAP2); `diff --seed`
