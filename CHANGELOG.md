@@ -3,7 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.5.0 — 2026-11-20
+
+`omabox look`: an app, a plugin, a theme or a web page checked in one call, with a shot, what it
+shows as text and the problems it logged; in the box you already have up, or in one of its own.
+`omabox look` alone reports your box as it is now and only what went wrong since the last look.
+Also `snapshot` and `diff` (what a program wrote into the box HOME), a command log for each box,
+theme checks, a widget's text without OCR, and a skill short enough for small local models.
+Update.
 
 ### Added
 - **`omabox snapshot` and `omabox diff`: what a program wrote into the box HOME** ([#446](https://github.com/diogochaves/omabox/issues/446)):
