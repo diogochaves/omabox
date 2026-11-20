@@ -33,7 +33,8 @@ omabox is **not** a sandbox. It keeps an agent's windows off your desktop; it do
 agent in. A box shares your kernel, your GPU and, by default, your network, and commands the agent
 runs on your host are not boxed. To limit what the agent itself can read, write and reach, pair
 omabox with [ai-jail](#with-ai-jail): a jailed agent then tests in boxes of its own. For code you
-do not trust at all, use a VM.
+do not trust at all, use a VM. Trying someone else's shell or rice in a box: what a box does and
+does not block for that is in [docs/trying-a-shell.md](docs/trying-a-shell.md).
 
 ## Why omabox
 

@@ -60,6 +60,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   it looked for its tools under `target/`. It now finds the checkout it was built in.
 
 ### Changed
+- **Trying someone else's shell in a box** ([#452](https://github.com/diogochaves/omabox/issues/452)):
+  `docs/trying-a-shell.md` says how (a plain box, `--net isolated`, `--shell 'qs -p DIR'`), what a
+  box blocks for it and what it does not; the skill's reference has the trial's two notes (a box is
+  always a first run; edge gestures), and how to give a guided demo: `peek` while the agent drives,
+  `--interactive` when the user does, never both at once ([#451](https://github.com/diogochaves/omabox/issues/451)).
 - **Refusals name the command that does what was meant** ([#471](https://github.com/diogochaves/omabox/issues/471)):
   from the benchmark's transcripts. `omabox layers` and `omabox notify` (and other words agents try)
   name the command for them; `look hello -- python3 hello.py` says `omabox look app -- python3

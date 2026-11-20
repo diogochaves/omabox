@@ -2,13 +2,15 @@
 
 The safety rules are in `SKILL.md` ("Never"), some spelled out here; nothing here relaxes them.
 
-Read it for a box without Omarchy, the user's own desktop in a box, or your own Hyprland or Quickshell build.
+Read it for a box without Omarchy, the user's own desktop in a box, your own Hyprland or Quickshell
+build, or someone else's shell.
 
 Sections:
 
 - Plain boxes
 - A Hyprland build of your own
 - A Quickshell build of your own
+- Someone else's shell
 
 ## Plain boxes
 
@@ -163,3 +165,19 @@ user about a bar, a theme or Omarchy's menus in a plain box: it has none.
   --is-ancestor FIX REVISION` in the Quickshell checkout).
 - Testing a shell plugin's accessibility tree: `omabox tree --layer NAMESPACE` (Shots, in shots.md), on
   the installed Quickshell from 0.3.2 or on a build.
+
+## Someone else's shell
+
+`omabox up --desktop plain --net isolated --shell 'qs -p DIR'` runs a published Quickshell shell from
+its folder, its builds brought in by `--ro-bind`, its fonts or starting files by `--seed`. Never run
+its install script (it writes to the real `~/.config` and uses sudo). What a box blocks for this and
+what it does not (the network without `--net isolated`, code nobody read): `docs/trying-a-shell.md`
+in omabox's repo; tell the user before starting a shell whose code you have not read.
+
+- **A box is always a first run**: a fresh HOME meets the bugs a real user meets once. When
+  something "never updates", look for a folder or file the shell expects at start and `--seed` it
+  (Caelestia's colour schemes applied only once its empty state folder was seeded).
+- **Edge gestures**: a panel that opens on a drag from the screen's last pixels wants a slow drag
+  with a hold, `drag --steps 40 --hold 300ms` from the edge (`--glide 700ms` missed it at times).
+  Its keybinds are in its own Hyprland config, which a plain box does not load: find where its panels
+  open in its code.

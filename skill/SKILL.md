@@ -71,7 +71,7 @@ report and `pixel`, and never say a shot looked right when you could not see it.
 | Clicks, drags, scrolls, waiting | ref: input.md |
 | Plugins, toasts, lock screen, polkit | ref: shell.md |
 | Mounts, HOME, network, save, ports | ref: session.md |
-| Plain boxes, `--hyprland` | ref: builds.md |
+| Plain boxes, `--hyprland`, someone else's shell | ref: builds.md |
 | Launcher, test suites | ref: apps.md |
 | `lua`, Hyprland options (gaps), logs, events | ref: hyprland.md |
 | Exit codes, `--json` | ref: cli.md |

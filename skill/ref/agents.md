@@ -235,6 +235,14 @@ and data cannot be verified in a box: do not report it as tested. (`systemctl --
   the new one is drawn only while shown: `click` and `keys` still reach it, but `shot` gets no frame,
   and the new window can open on an empty workspace, where they reach no app. When the user has to
   act in it (a login), tell them which workspace it is on and let them go there.
+- **A guided demo** (a tour of a shell, a walkthrough of an app): to *show* it, a headless box and
+  `peek`; it is view-only, so nothing the user does lands between your steps, and they see your
+  pointer's ring and key captions. To let them *try* it: `up --interactive`, and keep your hands off
+  until they say they are done. When both are needed, take turns ("your turn" / "my turn"), never at
+  once: a click of theirs in the middle of your `drag` closes what it opened, and the drag looks
+  broken when it is not.
+- After the user has touched an interactive box, take a new shot before trusting an earlier one.
+  Resizing its window changes the box's screen size too (`drag` refuses a point now off screen).
 
 ## Reporting what a box showed
 
