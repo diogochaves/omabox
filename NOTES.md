@@ -14728,7 +14728,11 @@ from them.
     to the group): the up ends with the signal's code and the box is up, whole, its reaper with
     it. Finding 668's day saw the same race (a plain box's up waits for no shell, so the signal
     lands as it finishes); the test's own skip for it ("up was done before the signal") catches
-    three of the six cases. Left as it is for 1.5.0.
+    three of the six cases. Left as it is for 1.5.0. Then (#472): the signal had landed after up
+    dropped its undo and before it said "up (": that box is whole, rightly left up, not left dead.
+    Made here with a plain box and the signal 0.25 s after `omabox.env` (two of six cases, as in
+    the VM). Where boxes are plain the cases now give the box PSHELL's shell, which up waits for
+    (about 2.4 s here, the signal 0.2 s in), so they test a wait again; without Quickshell they skip.
     (f) The package, built from the tree as a tarball, in an Omarchy 4.5.0 guest (Hyprland
     0.56.2-4; record in the release's notes): check() failed on `index_names_every_command`, two
     lines of help_index.txt over 80 columns (look's, log's): `cargo test` whole is not in the

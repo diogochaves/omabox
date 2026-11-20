@@ -12023,16 +12023,20 @@ t_up_aborted() {
 # each signal to up's group and to up alone (an INT to up alone used to let it go on), INT, TERM and
 # HUP at their defaults (a test run in the background ignores INT): bash's code, and the box gone:
 # not up, not listed dead, no dir, `starting` or reaper left (#388: a signal is a stop, not a failure
-# with logs to keep).
+# with logs to keep). A plain box's up waits for no shell: done about 0.1 s after omabox.env, the
+# signal 0.2 s on could land after it had dropped its undo and before it said "up (", its box whole
+# and up, which read as left behind (#472). So where boxes are plain, PSHELL's shell, which up waits
+# for as for Omarchy's (seconds).
 t_up_signals() {
-  local r=$TMP/upsig B i=0 sig how rc bd st
+  local r=$TMP/upsig B i=0 sig how rc bd st why
   mkdir -p "$r"; rp_sig_write "$r/rp-sig"
   for sig in TERM HUP INT; do
+    if why=$(no_pshell); then skip "up and $sig while it waits for the shell" "$why"; i=$((i + 2)); continue; fi
     for how in group alone; do
       i=$((i + 1)) B=$P-usig$i
       bd=$(ob path "$B")
       local s=$sig; [ "$how" = alone ] || s=group-$sig
-      rc=0; RP_DEADLINE=90 "$r/rp-sig" "$s" "$bd/run/omabox.env" env --default-signal=INT,TERM,HUP "$CLI" up "$B" --net isolated >/dev/null 2>"$r/err.$i" || rc=$?
+      rc=0; RP_DEADLINE=90 "$r/rp-sig" "$s" "$bd/run/omabox.env" env --default-signal=INT,TERM,HUP "$CLI" up "$B" --net isolated "${PSHELL[@]}" >/dev/null 2>"$r/err.$i" || rc=$?
       if grep -q "box '$B' up (" "$r/err.$i"; then
         skip "up and $how $sig while it waits for the shell" "up was done before the signal (load)"; ob down "$B" >/dev/null 2>&1; continue
       fi
