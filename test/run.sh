@@ -22216,7 +22216,8 @@ gpu_release_cases() {
   else
     skip "gpu release: a box with no record, by the node it holds" "no usable render node here"
   fi
-  check_eq "...those gone; the other GPU's, the interactive and the dead one kept" "b c e" "$(command find "$bx" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort | xargs)"
+  # (the hidden .commands beside them is the command log's, #447; box listings skip hidden names)
+  check_eq "...those gone; the other GPU's, the interactive and the dead one kept" "b c e" "$(command find "$bx" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%f\n' | LC_ALL=C sort | xargs)"
   check_eq "...by slot, written short" "1" "$(rel 0a:00.0 | grep -c "taking box 'b' down")"
   check "...and gone" test ! -e "$bx/b"
   check_match "...none on it: said, exit 0" "no headless box renders on $none" "$(rel "$none"; echo "rc=$?")"
