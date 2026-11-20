@@ -9873,6 +9873,72 @@ dbus_user_app() {
   check "it starts from the launcher" until_ok 5 ob run -b "$B" -- test -e /tmp/probe-started
 }
 
+# #446 (finding 732): snapshot and diff. An idle box diffs to no changes, from what up seeded and from
+# a snapshot (what its session, shell and Hyprland write on their own is noise); a program's leftovers
+# are listed by area, a new or gone folder as one line with its count; a link planted in the HOME is
+# listed with its target and never followed (the host folder it names is not walked), a FIFO listed
+# and never opened (a read of it would hang the diff); snapshots live in the box's folder, not its HOME.
+t_diff() {
+  local B=$P-df hd=$TMP/df-host D out want
+  rm -rf "$hd"; mkdir -p "$hd/inner"; echo secret > "$hd/inner/file"
+  check "up" ob up "$B" "${PSHELL[@]}" || return
+  D=$(ob path -b "$B")
+  check_match "snapshot" "^took snapshot 'idle' of box '$B''s HOME: [0-9]+ entries" "$(ob snapshot idle -b "$B")"
+  check "...kept in the box's folder, not its HOME" test -f "$D/snapshots/idle" -a ! -e "$D/home/snapshots"
+  check_eq "...the same name again replaces it" replaced "$(ob snapshot idle -b "$B" | cut -d' ' -f1)"
+  sleep 30
+  check_match "an idle box: no changes from a snapshot" "^no changes from snapshot 'idle' to now" "$(ob diff idle -b "$B")"
+  check_match "...nor from what up seeded" "^no changes from what up seeded to now" "$(ob diff --seed -b "$B")"
+  check_eq "...--json: an empty list" "seed now []" "$(ob diff --seed -b "$B" --json | jq -rc '"\(.from) \(.to) \(.changes)"')"
+  check_match "...--all shows what the box wrote on its own" "added" "$(ob diff --seed --all -b "$B")"
+  # A program's leftovers: an autostart entry, a folder of settings, a file outside the XDG dirs, one
+  # changed, a folder removed.
+  ob run -b "$B" -- sh -c 'mkdir -p ~/.config/df-app ~/df-gone/sub && echo 1 > ~/.config/df-app/keep.conf &&
+    echo a > ~/df-gone/sub/a && echo b > ~/df-gone/b' >/dev/null 2>&1
+  ob snapshot before -b "$B" >/dev/null
+  ob run -b "$B" -- sh -c 'mkdir -p ~/.config/autostart ~/.config/df-app/cache/x && echo e > ~/.config/autostart/df.desktop &&
+    echo 2 > ~/.config/df-app/keep.conf && echo c > ~/.config/df-app/cache/x/1 && echo s > ~/.df-state && rm -r ~/df-gone' >/dev/null 2>&1
+  want="autostart (~/.config/autostart)
+  + ~/.config/autostart/  (1 inside)
+~/.config
+  + ~/.config/df-app/cache/  (2 inside)
+  ~ ~/.config/df-app/keep.conf  (content)
+elsewhere in HOME
+  + ~/.df-state
+  - ~/df-gone/  (3 inside)
+3 added, 1 changed, 1 removed, from snapshot 'before' to now"
+  check_eq "a program's leftovers, by area" "$want" "$(ob diff before -b "$B")"
+  check_eq "...--json" "added ~/.config/autostart/ 1|changed ~/.config/df-app/keep.conf content|removed ~/df-gone/ 3" \
+    "$(ob diff before -b "$B" --json | jq -r '.changes[] | select(.path | test("autostart|keep|gone")) | "\(.change) \(.path) \(.inside // .what[0])"' | paste -sd '|')"
+  # shellcheck disable=SC2088 # (--ignore takes a ~/ of its own)
+  check_eq "...--ignore leaves a path out (a glob in one part too)" "1 changed" \
+    "$(ob diff before -b "$B" --ignore '~/.config/autostart' --ignore '~/*-gone' --ignore .df-state --ignore '.config/df-app/cache' | tail -n 1 | cut -d' ' -f3,4 | tr -d ,)"
+  ob snapshot after -b "$B" >/dev/null
+  check_eq "...between two snapshots" "3 added, 1 changed, 1 removed, from snapshot 'before' to snapshot 'after'" "$(ob diff before after -b "$B" | tail -n 1)"
+  # A link into the host's files and a FIFO, planted in the HOME (S7): the link listed with its target,
+  # what it leads to never walked; the FIFO listed, never opened.
+  ob snapshot plant -b "$B" >/dev/null
+  ob run -b "$B" -- sh -c 'ln -s "$1" ~/df-link && ln -s "$1" ~/.config/df-app/dirlink && mkfifo ~/df-fifo' _ "$hd" >/dev/null 2>&1
+  out=$(timeout 20 "$CLI" diff plant -b "$B" 2>&1)
+  # shellcheck disable=SC2088 # (the diff's own words: its ~ is not the shell's)
+  want="~/.config
+  + ~/.config/df-app/dirlink -> $hd
+elsewhere in HOME
+  + ~/df-fifo  (fifo)
+  + ~/df-link -> $hd
+3 added, 0 changed, 0 removed, from snapshot 'plant' to now"
+  check_eq "a link and a FIFO planted: listed, the link not followed, the FIFO not opened" "$want" "$out"
+  check "...a snapshot with them in it, at once" timeout 20 "$CLI" snapshot planted -b "$B"
+  check_fails "...nothing of the host folder in it" grep -q "inner" "$D/snapshots/planted"
+  # A name of the box's own bytes is printed plain.
+  ob run -b "$B" -- sh -c 'touch ~/"$(printf "df-\033[31mred")"' >/dev/null 2>&1
+  check_match "...a name with an escape printed plain" "\+ ~/df-\?\[31mred" "$(ob diff planted -b "$B")"
+  check_fails "a snapshot name that is a path is refused" ob snapshot ../x -b "$B"
+  check_match "diff of no such snapshot names the ones there are" "no snapshot 'nope' \(it has: after, before, idle, plant, planted\)" "$(ob diff nope -b "$B" 2>&1)"
+  check "down" ob down "$B"
+  rm -rf "$hd"
+}
+
 # The accessibility bus (#177, finding 264): at-spi-bus-launcher's default dbus-broker-launch exits at
 # once in a box (no journal), so up sets ATSPI_DBUS_IMPLEMENTATION=dbus-daemon. The bus is a socket
 # in the box's own runtime dir (on the host, under the box's dir: nothing of the host's a11y bus), and
@@ -24173,7 +24239,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_cmd t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_skill_tools t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_monitor_add_window t_unit_signal_cleanup t_unit_capture_errors t_unit_jailed_caller t_unit_broker_side t_unit_cli_opts t_unit_rust_ignored t_unit_saves t_unit_host_dispatch
   t_unit_aquamarine t_unit_aq_runpath t_unit_theme_check t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_standin_mounts t_unit_doctor t_unit_session_scan t_unit_desk_copy t_unit_autostart t_unit_desk_shell_lua)
-BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_plain t_plain_clean t_plain_auto t_plain_shell t_plain_dms t_desk_home t_desk_home_standin t_desk_dms t_desk_copy t_desk_idle_links t_desk_lua t_desk_omarchy t_desk_wallpaper t_desk_shell_slot t_desk_idle t_desk_refusals t_window t_window_resizing t_window_size t_window_fullscreen t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_in_changed t_wait_since t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_look t_jobs t_dbus_user_app t_tree t_wait_tree t_click_find t_tray t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_conf_host t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_polkit t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_net_host t_protect_ports t_protect_ports_ns t_seat_check t_mount_replaced t_helpers_replaced t_proto_error t_host_paths t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_log_rolling t_wait_log t_notifications t_stock_bar t_saves t_save_killed t_diff t_wait_tree_diff t_find_image t_wait_blink t_record_sheet_frames t_dnd_dock t_fixture t_drag_dnd t_shot_grid t_system_dirs
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_theme_links t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_hypr_notify t_hypr_old_dispatch t_plugin_link t_plugin_add t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_up_software t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_hyprland_folder t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_home_sweep t_jail t_jail_down_race t_inspect t_which t_pid t_cli_box t_brief t_link_out t_run_cwd t_clean t_check t_check_only t_check_proof t_doctor_smoke t_stock)
 
 # The tests of what only Omarchy has (#247): its shell, bar and widget, plugins, themes, the desk's
