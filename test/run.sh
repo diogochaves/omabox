@@ -23715,7 +23715,9 @@ look_plugin_checks() {
   check "...written" test -s "${shot%.png}-panel.png"
   check_match "...its state" $'\n''plugin: chaves.omabox loaded \((linked|mounted)\)' "$out"
   check_match "...no problems: the shell's own warnings about the box are not the plugin's" $'\n''problems: none' "$out"
-  check_match "...its text: none (it hides while no box is up), said" $'\n''text: none'$'\n'".*note: chaves.omabox is in the bar's layout but shows nothing now" "$out"
+  # (hidden while no box is up in a checkout's box, said in a note; an installed omabox is in the box
+  # too, /usr/bin/omabox, so the widget shows its icon there: no text either way)
+  check_match "...its text: none (an icon, or hidden while no box is up)" $'\n''text: none'$'\n' "$out"
   # #467 (finding 727): what a widget shows, worked out at run time, and its panel's, as text.
   if omarchy45; then
     t467_plugin "$TMP/$P-lookp-t467"

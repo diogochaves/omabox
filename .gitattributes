@@ -5,3 +5,6 @@ spike/ export-ignore
 .github/ export-ignore
 _config.yml export-ignore
 packaging/ export-ignore
+# (the benchmark of small models, test/bench/: its fixtures are apps of their own, with dependencies
+# a package of omabox does not have; the suite does not run it)
+test/bench/ export-ignore

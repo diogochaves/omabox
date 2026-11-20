@@ -334,6 +334,9 @@ pub const NOISE: &[&str] = &[
     ".local/state/omarchy/clipboard-images",
     ".local/state/omarchy/monitor-workspaces*",
     ".local/state/omarchy/notifications",
+    // (Omarchy 4.5's shell: its agents' usage, read as it starts; mise, as a shell activates it)
+    ".local/state/omarchy/agents",
+    ".local/state/mise",
     ".local/share/hyprland/lastVersion",
     ".local/share/keyrings/login.keyring",
     ".local/share/keyrings/default",

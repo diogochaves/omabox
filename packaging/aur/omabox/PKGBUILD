@@ -22,6 +22,7 @@ depends=('bash' 'glibc' 'libgcc' 'hyprland>=0.56' 'labwc' 'wlr-randr' 'bubblewra
          'coreutils' 'diffutils' 'findutils' 'gawk' 'grep' 'procps-ng' 'sed' 'tar')
 makedepends=('pkgconf' 'cargo' 'qt6-declarative')
 optdepends=("quickshell: a shell in a box (Omarchy's bar in Omarchy boxes; plain boxes with --shell)"
+            "qt6-declarative: the bar's text in tree --layer and look plugin (omabox-qtext)"
             'gtk3: GTK settings in Omarchy boxes'
             'xdg-terminal-exec: the terminal a box opens (else foot, alacritty, kitty or ghostty)'
             'foot: a terminal for plain boxes'

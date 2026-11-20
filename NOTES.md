@@ -14729,6 +14729,18 @@ from them.
     it. Finding 668's day saw the same race (a plain box's up waits for no shell, so the signal
     lands as it finishes); the test's own skip for it ("up was done before the signal") catches
     three of the six cases. Left as it is for 1.5.0.
+    (f) The package, built from the tree as a tarball, in an Omarchy 4.5.0 guest (Hyprland
+    0.56.2-4; record in the release's notes): check() failed on `index_names_every_command`, two
+    lines of help_index.txt over 80 columns (look's, log's): `cargo test` whole is not in the
+    suite's unit tier, and only filtered runs had been made. Everything 1.5 adds ran from the
+    package. The installed suite 6553/10/56; failing alone: t_diff, since a stock Omarchy 4.5
+    box's session writes `~/.local/state/mise` and `~/.local/state/omarchy/agents` as it starts,
+    which were no noise to `diff` (an idle box said 2 added; both in NOISE now); t_look's note
+    that the widget hides, which an installed omabox's box does not get (`/usr/bin/omabox` is
+    in the box, so it shows its icon; the check takes either); t_cli_box's `click --wait --json
+    --window`, as on older packages there. namcap: the benchmark's GTK fixture made the package
+    want gtk4 and python-gobject, so `test/bench/` is export-ignore; omabox-qtext links Qt 6
+    Quick at run time, an optional dependency in the recipe.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
