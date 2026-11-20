@@ -14588,6 +14588,45 @@ from them.
     found` is; the links-into-your-real-HOME note on `path` is a warning, not a refusal; omarchy's own
     `Usage:` lines are not omabox's.
 
+732. **`snapshot` and `diff`: what a program wrote into the box HOME** (2026-11-19, #446). `omabox
+    snapshot SNAP [-b BOX]` records the HOME; `omabox diff SNAP [SNAP2] [--ignore PATH]... [--all]
+    [--json]` lists what was added, changed or removed from SNAP to now (or SNAP2); `diff --seed`
+    starts from what `up` seeded. The leftovers case: `snapshot before`, `plugin add`, use it,
+    `plugin remove`, `diff before` (with omagauge: `+ plugins/chaves.omagauge/` and `~ shell.json`
+    after add, no changes after remove). Shape settled: a snapshot is a file in `<box dir>/snapshots`
+    (the runtime dir, which the box never sees; gone with the box), NUL-separated records of each
+    path's type, mode, size, mtime, a FNV-1a hash of a regular file up to 1 MiB (a change detector,
+    not a defence: the box writes the file anyway) and a link's target; the same name again replaces
+    it (no `--force`: it is cheap and agents reuse `before`). A file compares by hash, or by size and
+    mtime when either side has none (over 1 MiB, past 256 MiB hashed in one walk, or noise); a
+    folder by type and mode only; a link by target. Text: grouped by area (autostart, systemd user
+    units, mimeapps.list, desktop entries, `~/.config/omarchy`, `~/.config`, `~/.local/share`,
+    `~/.local/state`, `~/.cache`, elsewhere in HOME), `+`/`~`/`-` and the path as `~/...`, a new or
+    gone folder one line with `(N inside)`, then `A added, C changed, R removed, from X to Y; N left
+    out as noise`. Exit 0 with changes or without (it ran; the answer is the list). `--json`:
+    `{box, from, to, changes: [{path, change, type, area, what, target, inside}], left_out, cut}`.
+    Safety (S7): the walk opens each folder from its parent's fd with `O_NOFOLLOW|O_DIRECTORY`, looks
+    at each entry with `fstatat(AT_SYMLINK_NOFOLLOW)`, reads a link with `readlinkat` and never
+    follows it, opens only a regular file (`O_NOFOLLOW|O_NONBLOCK`, its own fstat checked) and so
+    never a FIFO; it starts from `HOMES/NAME/home`, not the box dir's link to it, stays on the HOME's
+    file system, stops at 100000 entries or 48 folders deep (said: "not the whole HOME"); names are
+    printed through `term::plain`. The noise, measured: an Omarchy box and a plain box each diffed
+    `--seed --all` right after `up`, then from a snapshot taken at once and again minutes later.
+    After `up`, an Omarchy box's shell writes ~/.cache for a minute or more (image-selector and
+    theme-selector previews, 31 entries in the first two minutes); nothing else changes while idle.
+    From the seed, the box's own writes: the logs at the HOME's top (events, journal, keyring, labwc,
+    notifications, shell, theme-gnome), session.sh's keyring (`login.keyring`, `default`), its
+    `.config/pipewire/client.conf.d/90-omabox.conf` (and WirePlumber's with `--audio`), an empty
+    `.local/bin`, dconf's `user` (the GNOME theme step), Hyprland's `.local/share/hyprland/
+    lastVersion`, and the Omarchy shell's state (`.local/state/omarchy/` `background-intro.*`,
+    `clipboard-images`, `monitor-workspaces*`, `notifications`). Those are the default noise
+    (`homesnap::NOISE`), narrow on purpose: the rest of `.local/state/omarchy` and of dconf's folder
+    stay visible, where a plugin may write. A folder that came (or went) holding only noise is noise
+    too (a plain box's `~/.config`, which the session made for PipeWire and dconf), and an empty
+    `.local/bin`. With it both boxes diff to "no changes" from the seed and from a snapshot, after
+    minutes idle (t_diff: 30 s). Left as they are: a folder that became a file lists what was in it
+    one by one; a keyring an app writes a secret to is noise (`--all` shows it).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

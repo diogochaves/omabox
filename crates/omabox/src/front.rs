@@ -55,6 +55,8 @@ pub const BOX_CMDS: &[&[u8]] = &[
     b"path",
     b"down",
     b"save",
+    b"snapshot",
+    b"diff",
     b"clip",
     b"brief",
 ];

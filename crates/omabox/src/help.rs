@@ -64,6 +64,8 @@ pub const COMMANDS: &[&str] = &[
     "pid",
     "save",
     "saves",
+    "snapshot",
+    "diff",
     "config",
     "guard",
     "host",

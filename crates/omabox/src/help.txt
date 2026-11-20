@@ -141,6 +141,10 @@ omabox: a contained, invisible Hyprland desktop for agents, Omarchy's or plain.
   omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
+  omabox snapshot SNAP [-b NAME]                         record the box HOME under SNAP, for diff
+  omabox diff SNAP [SNAP2] [-b NAME] [--ignore PATH]... [--all] [--json]   what was added, changed or
+                                                         removed in the box HOME from SNAP to now (or SNAP2)
+  omabox diff --seed [SNAP2] [-b NAME] [...]             the same from what up seeded
   omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit, protect-ports, desktop
   omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
   omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
@@ -163,7 +167,7 @@ is default-SESSION; with no box of that name, every command but `up` uses the se
 started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
 `down` whose name has no box, while the session has boxes up started elsewhere, names each with the
 `down -b` that takes it, and exits 1.
-@+ up run shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save clip brief
+@+ up run shot record pixel find calibrate windows window jobs stop tree tray check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb pid events peek restart-shell plugin dnd dock reload mode output monitor gpu cpu audio polkit ports env path down save snapshot diff clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -1188,6 +1192,20 @@ A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOM
 its logs, keyring included, paused for the copy. `up --from` starts with it, then seeds your Omarchy
 look on top as for any box (theme, bar, terminals: today's, or --theme's, not the save's). Close an
 app first for a clean save. Saves live in ~/.local/share/omabox/saves until `saves rm`.
+@ snapshot diff
+What a program left in the box HOME (#446): `snapshot before`, then `plugin add`, use it, `plugin
+remove`, and `diff before` lists what remove left. A snapshot records each path's type, size, mode
+and, for a file up to 1 MiB, a hash of its content; links are recorded with their target and never
+followed, FIFOs never opened. It is kept in the box's folder, not its HOME, and goes with the box;
+the same name again replaces it. diff groups the changes by area (autostart, systemd user units,
+mimeapps.list, desktop entries, the shell's settings, ~/.config, ~/.local/share, ~/.local/state,
+elsewhere in HOME), a new or gone folder as one line with how many entries are in it. Left out by
+default as noise, what a box writes on its own: ~/.cache, the logs at the HOME's top, the Omarchy
+shell's state (notifications, clipboard images, monitor workspaces, the wallpaper intro),
+Hyprland's lastVersion, what the box's session writes as it starts (its keyring, PipeWire's
+settings, dconf's database), and a folder that holds only those; --ignore PATH (a path in the
+HOME, `*` a glob in one part) adds to it, --all shows everything. --seed starts from what `up` seeded, recorded before the box started. --json:
+{box, from, to, changes: [{path, change, type, area, what, target, inside}], left_out, cut}.
 @+ exit-codes help
 Exit codes, the same in every command:
   0         done, or the condition held (wait, events --until; check run: nothing changed)
