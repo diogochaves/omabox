@@ -14718,6 +14718,17 @@ from them.
     need omabox's aquamarine build for the soname, which this checkout does not have for 0.56
     (`omabox setup --aquamarine`); not run to green here, the Omarchy VM runs them on a stock
     system.
+    (e) The suite in a plain-Arch VM (`test/distros-vm.sh --suite arch`; `OMABOX_VM_SUITE_ARGS`
+    reruns some tests there): 5821/35/117, then the failed ones one at a time. Test-only, of
+    1.5's own: `up-plain/`'s goldens predated `tools/qtext`'s bind (and box.json's helper list in
+    the desk one); a plain box's `--shell CMD` is not started with the text reader, so its bar
+    is empty to `tree` as before (cli_box); `look plugin`'s checks need Omarchy. Under load only
+    (they pass one at a time): t_plain_shell, t_up_killed, t_race. Still failing one at a time
+    there: three of t_up_signals' "while it waits for the shell" cases (TERM alone, HUP and INT
+    to the group): the up ends with the signal's code and the box is up, whole, its reaper with
+    it. Finding 668's day saw the same race (a plain box's up waits for no shell, so the signal
+    lands as it finishes); the test's own skip for it ("up was done before the signal") catches
+    three of the six cases. Left as it is for 1.5.0.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

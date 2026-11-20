@@ -297,6 +297,12 @@ OMABOX_DESK_SHELL
     {
       "dev": "N",
       "ino": "N",
+      "name": "qtext",
+      "src": "ROOT/tools/qtext/omabox-qtext"
+    },
+    {
+      "dev": "N",
+      "ino": "N",
       "name": "idlehold",
       "src": "ROOT/tools/idlehold/omabox-idlehold"
     }
